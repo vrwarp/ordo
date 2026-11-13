@@ -1,17 +1,17 @@
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
 import {
+  fixtures,
   goLive,
   json,
   OP,
-  operatorApi,
-  SONG,
-  fixtures,
   openRoleWindow,
+  operatorApi,
   outputs,
+  SONG,
   uploadMedia,
   waitCacheReady,
 } from './helpers.ts';
-import { login, launchOutputs, outputPages } from './linkhelpers.ts';
+import { launchOutputs, login, outputPages } from './linkhelpers.ts';
 
 /**
  * Service-safety fixes from the 2026-11-13 review, as a volunteer meets them at the venue (the e2e hub runs
@@ -197,4 +197,41 @@ test('after a reload at the venue the operator finds its output windows again', 
   } finally {
     await json(api.put('settings/outputs', { data: before }));
   }
+});
+
+test('Go live goes ahead without pre-service music that was deleted, and says so', async ({ page }) => {
+  const api = await operatorApi();
+  const song = await json<{ id: string }>(api.post('import/songselect', { data: { text: SONG } }));
+  const pl = await json<{ id: string }>(
+    api.post('playlists', {
+      data: {
+        name: `Music ${Date.now()}`,
+        items: [
+          // The music was deleted from the library since the playlist was made.
+          { id: 'i1', kind: 'presentation', presentationId: song.id, audioMediaId: 'deleted-music' },
+        ],
+      },
+    }),
+  );
+  const live = await liveState(api);
+  if (live.mode === 'live')
+    await json(
+      api.post('live/events', {
+        data: { id: `end-${Date.now()}`, event: { k: 'endService', at: Date.now() } },
+      }),
+    );
+  await login(page, OP);
+  await page.evaluate((id) => {
+    location.hash = `#/playlists/${id}`;
+  }, pl.id);
+  await page.getByRole('button', { name: 'Go live', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End service' })).toBeVisible({ timeout: 15_000 });
+  expect((await liveState(api)).mode).toBe('live');
+  await page.evaluate(() => {
+    location.hash = '#/live';
+  });
+  await expect(page.locator('[data-degraded]')).toContainText(
+    'Live with a warning: The music of "Amazing Test Song" is missing; the item plays without music',
+    { timeout: 15_000 },
+  );
 });

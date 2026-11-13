@@ -57,19 +57,21 @@ export function slideMediaIds(slide: Pick<Slide, 'objects' | 'audio'>): string[]
  * its own clip (`poster`: the editor's 'Add video to slide' shows the clip's poster frame), its sound, or the
  * background of a PowerPoint slide (`background`: the importer makes a looping, muted full-slide video the
  * slide's motion background, and a clip may still be transcoding when the service goes live); or that shows
- * its PowerPoint reference picture (`picture`, design/27 §5 'Show PowerPoint picture').
+ * its PowerPoint reference picture (`picture`, design/27 §5 'Show PowerPoint picture'). Or a playlist item's
+ * music (`music`, `PlaylistItem.audioMediaId`, the pre-service loop's), which has no `slideId`.
  */
 export type SlidePlay = {
   presentationId: string;
-  slideId: string;
-  role: 'video' | 'poster' | 'sound' | 'background' | 'picture';
+  slideId?: string;
+  role: 'video' | 'poster' | 'sound' | 'background' | 'picture' | 'music';
 };
 
 /**
  * Every media reference of a playlist's items and slides. A slide's pictures are the ones it draws
  * (`slideContent`, design/27 §5): on a slide set to show its PowerPoint picture, that picture and the
  * operator's own objects, not the imported objects it hides. `play` is set for what is optional at goLive:
- * the ids of `slideMediaIds`, an ImageObject's poster when that is its own clip, and the reference picture.
+ * the ids of `slideMediaIds`, an ImageObject's poster when that is its own clip, the reference picture, and
+ * an item's music (the service goes live without it, with a warning).
  */
 function visitPlaylistMedia(
   playlist: Playlist,
@@ -80,7 +82,7 @@ function visitPlaylistMedia(
     if (item.kind === 'media') visit(item.mediaId);
     if (item.kind !== 'presentation') continue;
     visit(item.backgroundMediaId);
-    visit(item.audioMediaId);
+    visit(item.audioMediaId, { presentationId: item.presentationId, role: 'music' });
     const p = presentations[item.presentationId];
     if (!p) continue;
     visit(p.backgroundMediaId);
@@ -118,12 +120,13 @@ export function referencedMediaIds(
 
 /**
  * Media that slides only play in place (`slideMediaIds`, a play object's poster when it is the clip itself,
- * and a PowerPoint slide's own background) or show as their PowerPoint reference picture, each with the
- * slides that use it. These are optional at goLive (design/27 §5, §8 "Domain"): a clip still processing or
- * failed is left out and its slide shows the poster; a PowerPoint slide's missing background leaves the
- * item's or presentation's background; a reference picture that is missing leaves its slide showing the
- * operator's own objects. An id that anything else in the playlist draws or plays stays required and is not
- * listed.
+ * and a PowerPoint slide's own background) or show as their PowerPoint reference picture, or that items play
+ * as their music, each with the slides (or items) that use it. These are optional at goLive (design/27 §5,
+ * §8 "Domain"): a clip still processing or failed is left out and its slide shows the poster; a PowerPoint
+ * slide's missing background leaves the item's or presentation's background; a reference picture that is
+ * missing leaves its slide showing the operator's own objects; an item whose music was deleted or is still
+ * processing plays without it. An id that anything else in the playlist draws or plays stays required and
+ * is not listed.
  */
 export function slideOnlyMedia(
   playlist: Playlist,

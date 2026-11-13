@@ -1301,7 +1301,7 @@ The extensions, in priority order (M4 unless noted):
     - sound: replace, start, loop, volume, 'continue for N slides', with a warning when it replaces running playlist audio;
     - SlideGrid shows a `video` / `audio` tag on slide thumbnails (the `.tag` already used for media cues, `SlideGrid.tsx:154`);
     - one playing video per slide is enforced: the panel says which object plays.
-15. **Media library hygiene (M3).** MediaTab hides media tagged `pptx` or `document` unless 'Show presentation pictures' is ticked. Deleting a media item that stored presentations reference asks for confirmation and names them, because a missing picture refuses goLive.
+15. **Media library hygiene (M3).** MediaTab hides media tagged `pptx` or `document` unless 'Show presentation pictures' is ticked. Deleting a media item that stored presentations or playlists reference asks for confirmation and names them, because a missing picture refuses goLive.
 16. **Later (M8):** 'Split reveal into slides'; 'Convert to song' (lyric objects → sections and arrangement, kind song) with a 'Re-flow lyrics' op using the stored but unused `linesPerSlide`; preset adjust handles from the compiled `ahLst`; a bilingual band that also shows the `role:'translation'` box.
 17. **Optional (M4):** a three-way merge per slide on 409 (base = `ed.base`, mine = draft, theirs = the 409 body's `current` once `ApiFailure` keeps it, `packages/client/src/api.ts:35-39`), so two volunteers editing different slides, or a volunteer and the version-2 patch, do not overwrite each other. Built in M4 (item H, `views/editor/merge.ts`): slide and object level, the rules in §15 M4 "As built, item H".
 

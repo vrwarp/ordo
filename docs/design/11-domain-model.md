@@ -536,7 +536,11 @@ the audio slot as `slideOwned` until the live cue leaves `[cueIndex, untilCue]`.
   failed is left out with a `degraded` note, and the slide shows its poster. So is the own
   background of a PowerPoint slide (`Slide.pptx` set: the importer makes a looping, muted
   full-slide video its motion background): left out, the cue shows the item's or the
-  presentation's background instead.
+  presentation's background instead. So is a playlist item's music (`audioMediaId`, the
+  pre-service loop's): deleted, failed or still processing, the item plays without it and goLive
+  carries a whole-service `degraded` note ("The music of "Welcome loop" is missing; the item plays
+  without music"), which the live view shows as "Live with a warning". The same media played by a
+  media item of the playlist stays required.
 
 ## Identifiers and content addressing
 

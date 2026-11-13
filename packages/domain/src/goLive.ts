@@ -247,7 +247,7 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
     if (m?.state !== 'ready') {
       // What a slide plays in place never refuses the service: the slide shows its poster (design/27 §8);
       // nor does a reference picture, optional like a look's holding slide (design/27 §5).
-      if (plays) for (const play of plays) problems.push(unplayable(play, id, m));
+      if (plays) for (const play of plays) problems.push(unplayable(play, id, m, presentations));
       else if (optional.has(id)) continue;
       else if (!m) missing.push(`media ${id} is missing`);
       else missing.push(`"${m.name}" is ${m.state === 'failed' ? 'failed' : 'still processing'}`);
@@ -296,9 +296,26 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
 
 /**
  * The degraded note of a slide whose clip, sound or PowerPoint reference picture is not ready, so the slide
- * goes live without it.
+ * goes live without it; or of an item whose music is not ready (deleted, failed or still processing), so the
+ * item plays without it: a whole-service warning, as an item's music belongs to no one slide.
  */
-function unplayable(play: SlidePlay, id: string, m: Media | undefined): GoLiveProblem {
+function unplayable(
+  play: SlidePlay,
+  id: string,
+  m: Media | undefined,
+  presentations: Record<string, Presentation>,
+): GoLiveProblem {
+  if (play.role === 'music') {
+    const title = (presentations[play.presentationId]?.title ?? '').slice(0, 200);
+    const of = title ? ` of "${title}"` : '';
+    const name = m ? `"${m.name.slice(0, 200)}" (the music${of})` : `The music${of}`;
+    const reason = !m
+      ? `${name} is missing; ${MUSIC_SHOWN}`
+      : m.state === 'failed'
+        ? `${name} failed; ${MUSIC_SHOWN}`
+        : `${name} is still processing; ${MUSIC_SHOWN}; Go live again once it is ready`;
+    return { reason };
+  }
   const what =
     play.role === 'sound'
       ? 'slide sound'
@@ -321,6 +338,9 @@ function unplayable(play: SlidePlay, id: string, m: Media | undefined): GoLivePr
       : `${name} is still processing; ${shown}; Go live again once it is ready`;
   return { presentationId: play.presentationId, slideId: play.slideId, reason };
 }
+
+/** What an item does without its music (the end of its degraded reason). */
+const MUSIC_SHOWN = 'the item plays without music';
 
 /**
  * A synchronous 96-bit digest (three FNV-1a lanes) for manifest ids resolved on the operator PC, where
@@ -351,7 +371,7 @@ export function localDigest(parts: string[]): string {
 export type DegradedKind = 'empty' | 'media' | 'drawing' | 'other';
 
 const MEDIA_REASON =
-  /; (?:showing its poster|the slide shows without it|the slide shows only the objects added in ordo)(?:; Go live again once it is ready)?$/;
+  /; (?:showing its poster|the slide shows without it|the slide shows only the objects added in ordo|the item plays without music)(?:; Go live again once it is ready)?$/;
 
 export function degradedKind(reason: string): DegradedKind {
   if (reason === PENDING_SLIDE_REASON || reason === FAILED_SLIDE_REASON) return 'drawing';

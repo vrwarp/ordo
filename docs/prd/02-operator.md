@@ -32,7 +32,9 @@ data at small sizes. Program thumbnails are video streamed from the outputs
   and run a service countdown. Entering the item clears the running background when the slide has none
   and the item does not keep it, and starts its countdown, whichever slide the item is entered on: past a
   hidden first slide with Next, with Next presentation, a go-to-item key or MIDI jump, a click on a later
-  slide in the continuous grid, or Prev back into it. Moving within the item does neither.
+  slide in the continuous grid, or Prev back into it. Moving within the item does neither. Music that
+  was deleted or is still processing never stops Go live: the item plays without it, and the live view
+  says so ("Live with a warning").
 
 ## Navigation and GO
 

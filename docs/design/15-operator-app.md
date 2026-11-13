@@ -427,9 +427,11 @@ it (the hub does not accept HEIC), videos as MOV or MP4.
 
 The Media tab hides the pictures imports make for presentations (pages tagged `document`, native-import
 pictures tagged `pptx`) unless 'Show presentation pictures' is ticked (design/27 §11 item 15). Deleting
-media that stored presentations use names them in the confirmation first, since a missing picture refuses
-goLive: the hub answers such a `DELETE /media/:id` with 409 `media_in_use` (the titles in its message)
-unless it carries `?force=1`, which the tab sends once the user has confirmed.
+media that stored presentations or playlists use (a playlist's media item, an item's background or its
+music) names them in the confirmation first, since a missing picture or media item refuses goLive and
+missing music leaves the pre-service loop silent: the hub answers such a `DELETE /media/:id` with 409
+`media_in_use` (the titles and names in its message, `presentations` and `playlists` in its body) unless
+it carries `?force=1`, which the tab sends once the user has confirmed.
 
 ## Settings
 
