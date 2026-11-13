@@ -73,6 +73,13 @@ export const CLIENT_M9_WRITES: ReadonlySet<M9Field> = new Set(
  */
 export const CLIENT_SHEETS = false;
 
+/**
+ * The import log's line for a deck classified as an announcement loop (PowerPoint plays it looping, every
+ * shown slide timed), on both paths: the import report says what a loop does and offers 'Treat as slides'.
+ */
+export const LOOP_IMPORT_NOTE =
+  'PowerPoint plays this deck as a loop with every slide timed: imported as an announcement loop (the import report can treat it as slides)';
+
 export const PPTX_CLIENT_LIMITS = {
   entries: 200_000,
   xmlPartBytes: 8 * 1024 * 1024,
@@ -883,6 +890,7 @@ export async function importPptxClient(
     p.loop = {
       defaultSlideMs: mostCommon(drafts.map((d) => d.slide.durationMs ?? 0).filter((v) => v > 0)),
     };
+    addLog('info', LOOP_IMPORT_NOTE);
   }
 
   const bgs = new Set(drafts.map((d) => d.slide.backgroundMediaId));

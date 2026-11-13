@@ -42,6 +42,7 @@ export {
   type PptxLoSlide,
   CLIENT_M9_WRITES,
   CLIENT_SHEETS,
+  LOOP_IMPORT_NOTE,
   CONVERTER_VERSION,
   PPTX_CLIENT_LIMITS,
 } from './pptx-client.ts';

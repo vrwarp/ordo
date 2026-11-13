@@ -11,12 +11,13 @@ import {
   importReport,
   missingSlideFonts,
   plural,
+  treatAsSlides,
 } from '../../lib/pptxImport.ts';
 import { planSummary, reimportPlan } from '../../lib/pptxReimport.ts';
 import { useLibrary } from '../../state/library.ts';
 import { errorText } from '../../state/toasts.ts';
 import { JobProgress } from '../library/PptxImportCard.tsx';
-import { selectSlide, useEditor } from './editorStore.ts';
+import { change, selectSlide, useEditor } from './editorStore.ts';
 import { type ReimportRun, reimportRunning, startReimport, useReimport } from './pptxJobs.ts';
 
 /**
@@ -64,6 +65,7 @@ export function PptxReport({ p, readOnly }: { p: Presentation; readOnly: boolean
         regionRef={region}
         onReimport={() => setOpen(true)}
         onOpenSlide={(id) => selectSlide(id)}
+        onTreatAsSlides={() => change(treatAsSlides, 'kind')}
       />
       {open && <ReimportDialog p={p} onClose={close} />}
     </>
@@ -82,6 +84,8 @@ export function PptxReportView(props: {
   regionRef?: RefObject<HTMLElement | null>;
   onReimport(): void;
   onOpenSlide(slideId: string): void;
+  /** 'Treat as slides' on an announcement loop (`ImportReport.loop`). */
+  onTreatAsSlides?(): void;
 }) {
   const { report: r, approx, run } = props;
   const running = reimportRunning(run);
@@ -115,6 +119,28 @@ export function PptxReportView(props: {
         <span>
           {plural(r.pages, 'picture slide')} from an earlier import: a re-import makes them editable.
         </span>
+      )}
+      {r.loop && (
+        <div className="banner small col" style={{ gap: 6 }} data-loop>
+          <span>
+            PowerPoint plays this deck as a loop, so it came in as an announcement loop. On the Audience
+            screens each slide moves on by itself after its time and starts over after the last. While it
+            runs, the Stage shows “Service Starting Soon” and the Bottom-Third Stream shows nothing.
+          </span>
+          <span>
+            If people should read its words (song lyrics, sermon points), treat it as slides: you move through
+            it yourself, and its words show on every screen.
+          </span>
+          <button
+            type="button"
+            className="small"
+            style={{ alignSelf: 'flex-start' }}
+            disabled={props.readOnly}
+            onClick={props.onTreatAsSlides}
+          >
+            Treat as slides
+          </button>
+        </div>
       )}
       {r.hidden > 0 && (
         <span className="muted">

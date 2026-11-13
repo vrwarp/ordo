@@ -85,7 +85,7 @@ import {
   type TextObject,
   utf8Bytes,
 } from '@ordo/domain';
-import { type PptxClientScene, remapMediaIds } from '@ordo/importers';
+import { LOOP_IMPORT_NOTE, type PptxClientScene, remapMediaIds } from '@ordo/importers';
 import { clampBox, sanitizePresentation } from '@ordo/importers/sanitize.ts';
 import {
   addNote,
@@ -1653,7 +1653,7 @@ class NativeImport {
       p.loop = {
         defaultSlideMs: mostCommon(drafts.map((d) => d.slide.durationMs ?? 0).filter((v) => v > 0)),
       };
-      this.log.add('info', 'a looping show with every slide timed: imported as a loop');
+      this.log.add('info', LOOP_IMPORT_NOTE);
     }
     // One background on every slide becomes the presentation's, so the pickers swap it (the pro7 pattern). A
     // motion background stays the slides': goLive does not wait for a slide's clip (design/27 §8).

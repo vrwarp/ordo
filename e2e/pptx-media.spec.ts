@@ -175,7 +175,10 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
     const broken = playOf(slides[10]!)!;
     const trimmed = playOf(slides[11]!)!;
     expect(trimmed).toMatchObject({ loop: true });
+    // An announcement loop (the loop census of 2026-11-13 keeps PowerPoint's looping shows loops): its import
+    // log says so, and the import report offers 'Treat as slides' (e2e/pptx-loop.spec.ts).
     expect(loop.kind).toBe('loop');
+    expect(loop.source?.log).toMatch(/PowerPoint plays this deck as a loop with every slide timed/);
     const loopSlides = loop.sections.flatMap((s) => s.slides);
     expect(loopSlides.map((s) => s.durationMs)).toEqual([2000, 2000, 2000, 2000]);
     expect(loopSlides[0]!.audio).toMatchObject({ loop: true, slides: 999 });

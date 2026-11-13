@@ -1184,6 +1184,22 @@ _As built (M3 wave 2, `packages/pptx-scene/src/media.ts`, `timing.ts`; `apps/hub
   creation order, and ids are random within a millisecond). Clip placeholders are `pptxmedia:clip<n>`, one per
   part and trim, listed in `EmittedSlide.clips`.
 
+**Looping shows (the census of 2026-11-13).** A deck PowerPoint plays as a loop (`p:showPr loop`) with every
+shown slide timed (`advTm`) imports as an announcement loop on both paths (`isLoop`), its slides advancing by
+their times and its music playing across the wrap (above). Since #17 a loop shows standby on the Stage
+('Service Starting Soon') and nothing on the Lobby or the Bottom-Third Stream (the owner's choice, kept), so a
+worship lyric deck saved that way loses its words on those screens. The census over the exit set E (273 decks:
+the 5 sermon decks and worship shards 0-2) and the public `golden-pptx` corpus (112 decks) found such decks
+rare: 1 of 385 decks is classified loop (a 6-slide worship deck that is mostly text); 4 set the loop flag
+without timing every slide, and 9 time every slide without the flag (they import as slides, the operator
+advancing them, `durationMs` stored but unused). One deck is no basis for telling lyric loops from announcement
+loops by their content, so the classification stays PowerPoint's own. Instead the import says what it did in
+plain words: the import log's line (`LOOP_IMPORT_NOTE`, both paths) and the import report of a PowerPoint loop
+(design/15: shown for loops too) explain that on the Audience screens each slide moves on by itself and starts
+over, that the Stage shows 'Service Starting Soon' and the Bottom-Third Stream shows nothing while it runs, and
+offer **Treat as slides** (`treatAsSlides`: kind 'slides', the loop's settings dropped, the slides' timings
+kept), one tap, after which the deck's words show on every screen (`e2e/pptx-loop.spec.ts`).
+
 ## 9. Builds, transitions and hidden slides
 
 - **Final state.** Every slide draws its final state, as LibreOffice and pptx-preview do. Exit, emphasis and motion effects are dropped (logged).

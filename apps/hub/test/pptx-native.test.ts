@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Presentation, type Slide, slideBytes, slideContent } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
+import { LOOP_IMPORT_NOTE } from '@ordo/importers';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
 import { RESCUE_NOTE } from '@ordo/pptx-scene/rescue.ts';
 import {
@@ -333,6 +334,8 @@ describe('pptx-native: classes, budgets and timing', () => {
     const { p } = await importDeck(parts);
     expect(p.kind).toBe('loop');
     expect(p.loop).toEqual({ defaultSlideMs: 8000 });
+    // The import report reads it (and offers 'Treat as slides'): the same line on the client path.
+    expect(p.source!.log).toContain(LOOP_IMPORT_NOTE);
     expect(slidesOf(p).map((s) => s.durationMs)).toEqual([8000, 8000, 4000, undefined]);
   });
 

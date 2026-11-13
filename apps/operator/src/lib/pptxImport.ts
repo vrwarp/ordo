@@ -528,13 +528,20 @@ export type ImportReport = {
   log: { text: string; warn: boolean }[];
   /** Log lines left out (older ones). */
   logMore: number;
+  /**
+   * The deck is an announcement loop (PowerPoint plays it looping with every slide timed, design/27 §8): the
+   * report says what a loop does on the screens and offers 'Treat as slides' (`treatAsSlides`).
+   */
+  loop?: boolean;
 };
 
 /** Import log lines the report shows. */
 export const LOG_LINES = 200;
 
 /** The report of a PowerPoint presentation; undefined for any other presentation. */
-export function importReport(p: Pick<Presentation, 'source' | 'sections'>): ImportReport | undefined {
+export function importReport(
+  p: Pick<Presentation, 'source' | 'sections'> & { kind?: Presentation['kind'] },
+): ImportReport | undefined {
   const src = p.source;
   if (src?.kind !== 'pptx') return undefined;
   let pages = 0;
@@ -578,7 +585,19 @@ export function importReport(p: Pick<Presentation, 'source' | 'sections'>): Impo
       t.startsWith('[warn] ') ? { text: t.slice(7), warn: true } : { text: t, warn: false },
     ),
     logMore: Math.max(0, all.length - LOG_LINES),
+    ...(p.kind === 'loop' ? { loop: true } : {}),
   };
+}
+
+/**
+ * An announcement loop made a slide deck ('Treat as slides' in the import report): the operator moves through
+ * it, and its words show on the Stage and the Bottom-Third Stream, which a loop leaves on standby and empty.
+ * The slides' own timings stay stored (a slide deck does not advance by them; 'loop' again would). Pure.
+ */
+export function treatAsSlides(p: Presentation): Presentation {
+  if (p.kind !== 'loop') return p;
+  const { loop: _loop, ...rest } = p;
+  return { ...rest, kind: 'slides' };
 }
 
 /**
