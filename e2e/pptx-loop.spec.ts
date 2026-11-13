@@ -33,9 +33,14 @@ test('a lyric deck that PowerPoint loops: the report explains it and "Treat as s
   expect(imported.kind).toBe('loop');
   expect(imported.source?.log).toMatch(/PowerPoint plays this deck as a loop with every slide timed/);
 
-  // The import report, in the Presentation panel: what a loop does on the screens, and the switch.
+  // The deck opens canvas-first with the drawer closed: a line on the stage says it is a loop, and leads to
+  // the report (the 2026-11-13 review: it was found only in the drawer, or during the service).
   await openEditor(page, PORT, id);
-  await page.getByRole('button', { name: 'Presentation', exact: true }).click();
+  const line = page.locator('[data-loop-banner]');
+  await expect(line).toContainText('PowerPoint plays this deck as a loop');
+  await expect(line.getByRole('button', { name: 'Treat as slides' })).toBeVisible();
+  // The import report, in the Presentation panel: what a loop does on the screens, and the switch.
+  await line.getByRole('button', { name: 'Import report' }).click();
   const report = page.getByRole('region', { name: 'Imported from PowerPoint' });
   await expect(report).toBeVisible();
   const loop = report.locator('[data-loop]');
@@ -48,6 +53,7 @@ test('a lyric deck that PowerPoint loops: the report explains it and "Treat as s
     .poll(async () => ((await editorState(page)).draft as unknown as { kind?: string } | undefined)?.kind)
     .toBe('slides');
   await expect(report.locator('[data-loop]')).toHaveCount(0);
+  await expect(line).toHaveCount(0);
   await save(page);
   const after = (await stored(a, id)) as unknown as { kind: string; loop?: unknown };
   expect(after.kind).toBe('slides');

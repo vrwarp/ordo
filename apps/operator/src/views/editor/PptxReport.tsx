@@ -72,6 +72,42 @@ export function PptxReport({ p, readOnly }: { p: Presentation; readOnly: boolean
   );
 }
 
+/**
+ * The stage's line on an imported deck PowerPoint plays as a loop (the 2026-11-13 review): imported decks open
+ * canvas-first with the drawer closed, so the report's explanation (`PptxReportView`, `data-loop`) was found
+ * only during a service, when the Stage showed standby and the stream was empty. One line on the stage says
+ * so, with 'Treat as slides' and the way to the report; 'Keep as a loop' hides it for this visit.
+ */
+export function LoopDeckBanner(props: {
+  readOnly: boolean;
+  onTreatAsSlides(): void;
+  onReport(): void;
+  onKeep(): void;
+}) {
+  return (
+    <div className="banner blue row" style={{ margin: 8, flexWrap: 'wrap', gap: 6 }} data-loop-banner>
+      <span className="grow">
+        PowerPoint plays this deck as a loop: on the Audience screens it moves on by itself, and the Stage and
+        the Bottom-Third Stream show none of its words.
+      </span>
+      <button
+        type="button"
+        className="small primary"
+        disabled={props.readOnly}
+        onClick={props.onTreatAsSlides}
+      >
+        Treat as slides
+      </button>
+      <button type="button" className="small" onClick={props.onReport}>
+        Import report
+      </button>
+      <button type="button" className="small" onClick={props.onKeep}>
+        Keep as a loop
+      </button>
+    </div>
+  );
+}
+
 export function PptxReportView(props: {
   report: ImportReport;
   approx: { slides: ApproximatedSlide[]; more: number };

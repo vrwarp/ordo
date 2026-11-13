@@ -706,7 +706,10 @@ the newest 200 lines, warnings tagged), all deck text shown as text. A deck Powe
 slide timed, comes in as an announcement loop: its panel shows the report too, with a banner that says in
 plain words what a loop does on the screens (each slide moves on by itself and starts over; the Stage shows
 'Service Starting Soon' and the Bottom-Third Stream nothing while it runs) and a 'Treat as slides' button
-(disabled while live) that makes it a slide deck in one undoable change (design/27 §8 "Looping shows"). 'Re-import from PowerPoint…' opens a
+(disabled while live) that makes it a slide deck in one undoable change (design/27 §8 "Looping shows"). Such a
+deck opens canvas-first with the drawer closed, so the stage carries one line too (`LoopDeckBanner`): it plays
+as a loop and the Stage and the Bottom-Third Stream show none of its words, with 'Treat as slides', 'Import
+report' (the Presentation drawer) and 'Keep as a loop' (hidden for this visit). 'Re-import from PowerPoint…' opens a
 dialog with the hub's plan (`GET /presentations/:id/pptx-reimport`, nothing written): slides rebuilt,
 picture slides made editable, edited slides kept, other slides kept, and what is always kept; slides made
 editable by an older build are listed, each with 'Slide N: keep as it is'. 'Re-import' saves unsaved edits

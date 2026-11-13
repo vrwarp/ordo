@@ -36,7 +36,7 @@ import { planSummary, readReimportResult, reimportMessage } from '../src/lib/ppt
 import { useToasts } from '../src/state/toasts.ts';
 import { setSlideShows } from '../src/views/editor/actions.ts';
 import { openPresentation, undo, useEditor } from '../src/views/editor/editorStore.ts';
-import { PptxReportView, ReimportDialogView } from '../src/views/editor/PptxReport.tsx';
+import { LoopDeckBanner, PptxReportView, ReimportDialogView } from '../src/views/editor/PptxReport.tsx';
 import { PptxSlideCardView } from '../src/views/editor/PptxSlideCard.tsx';
 import {
   followReimport,
@@ -342,6 +342,20 @@ describe('the import report', () => {
         ...o,
       }),
     );
+
+  it("a loop deck's line on the stage: what it does, Treat as slides (off while locked) and the report", () => {
+    const line = (readOnly: boolean) =>
+      renderToStaticMarkup(
+        createElement(LoopDeckBanner, { readOnly, onTreatAsSlides: noop, onReport: noop, onKeep: noop }),
+      );
+    const t = text(line(false));
+    expect(t).toContain('PowerPoint plays this deck as a loop');
+    expect(t).toContain('the Stage and the Bottom-Third Stream show none of its words');
+    expect(line(false)).toMatch(/<button[^>]*>Treat as slides<\/button>/);
+    expect(line(false)).toMatch(/<button[^>]*>Import report<\/button>/);
+    expect(line(false)).toMatch(/<button[^>]*>Keep as a loop<\/button>/);
+    expect(line(true)).toMatch(/<button[^>]*disabled=""[^>]*>Treat as slides<\/button>/);
+  });
 
   it('shows what the import made, what waits, what failed and the approximated slides', () => {
     const html = view({ missingFonts: ['Century Gothic'] });

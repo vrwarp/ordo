@@ -1210,7 +1210,9 @@ plain words: the import log's line (`LOOP_IMPORT_NOTE`, both paths) and the impo
 (design/15: shown for loops too) explain that on the Audience screens each slide moves on by itself and starts
 over, that the Stage shows 'Service Starting Soon' and the Bottom-Third Stream shows nothing while it runs, and
 offer **Treat as slides** (`treatAsSlides`: kind 'slides', the loop's settings dropped, the slides' timings
-kept), one tap, after which the deck's words show on every screen (`e2e/pptx-loop.spec.ts`).
+kept), one tap, after which the deck's words show on every screen (`e2e/pptx-loop.spec.ts`). Since the editor
+opens an imported deck canvas-first with its drawer closed, a line on the stage says so as well and offers the
+same switch (`LoopDeckBanner`), so a volunteer learns it before the service, not from a Stage on standby.
 
 ## 9. Builds, transitions and hidden slides
 

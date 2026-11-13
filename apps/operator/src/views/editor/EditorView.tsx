@@ -29,6 +29,7 @@ import {
   writeLastObjectClip,
 } from './actions.ts';
 import { previewLooks } from '../../lib/lookPreviews.ts';
+import { treatAsSlides } from '../../lib/pptxImport.ts';
 import { uploadFiles } from '../library/MediaTab.tsx';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { ConflictDialog } from './ConflictDialog.tsx';
@@ -58,6 +59,7 @@ import { ObjectPanel } from './ObjectPanel.tsx';
 import { getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
 import { hasGroup, htmlToRichText, pasteRichText } from './ops/index.ts';
 import { PresentationPanel } from './PresentationPanel.tsx';
+import { LoopDeckBanner } from './PptxReport.tsx';
 import { RevisionsDialog } from './RevisionsDialog.tsx';
 import { SlideCanvas } from './SlideCanvas.tsx';
 import { makeSlideEditable, SlidePanel } from './SlidePanel.tsx';
@@ -103,6 +105,8 @@ export function EditorView({ id }: { id: string }) {
   const [tab, setTab] = useState<'object' | 'slide' | 'presentation'>('slide');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [stageLens, setStageLens] = useState<'canvas' | string>('canvas');
+  // 'Keep as a loop' on the loop deck's stage line (`LoopDeckBanner`): hidden for this visit.
+  const [keepLoop, setKeepLoop] = useState(false);
   const [bgPick, setBgPick] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [songMode, setSongMode] = useState<'reflow' | 'canvas' | null>(null);
@@ -211,6 +215,8 @@ export function EditorView({ id }: { id: string }) {
   readOnlyNow.current = readOnly;
   const slide = p ? getSlide(p, ed.slideId) : undefined;
   const obj = slide?.objects.find((o) => o.id === ed.objectId);
+  // An imported deck PowerPoint plays as a loop (`importReport` `loop`): its line on the stage.
+  const loopDeck = p?.kind === 'loop' && p.source?.kind === 'pptx';
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -956,6 +962,17 @@ export function EditorView({ id }: { id: string }) {
                   ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
                   : 'This presentation is in the live playlist. Editing is locked until End service.'}
               </div>
+            )}
+            {loopDeck && !keepLoop && (
+              <LoopDeckBanner
+                readOnly={readOnly}
+                onTreatAsSlides={() => change(treatAsSlides, 'kind')}
+                onReport={() => {
+                  setTab('presentation');
+                  setDrawerOpen(true);
+                }}
+                onKeep={() => setKeepLoop(true)}
+              />
             )}
             {changedElsewhere && (
               <div className="banner blue row" style={{ margin: 8 }}>
