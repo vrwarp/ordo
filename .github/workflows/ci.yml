@@ -46,15 +46,6 @@ jobs:
         run: pnpm e2e
         env:
           ORDO_CI: "1"
-      # The faces the golden images were drawn with (golden/expected/meta.json); a missing one fails the run.
-      - name: Fonts of the golden images
-        run: sudo apt-get install -y --no-install-recommends fonts-dejavu-core fonts-freefont-ttf fonts-ipafont-gothic
-      - name: Golden images of the text rasterizer
-        run: pnpm --filter @ordo/renderer golden --strict
-      - name: Late-loaded fonts take effect without a worker restart
-        run: pnpm --filter @ordo/renderer late-font
-      - name: Compositor golden (WebGPU on SwiftShader against Canvas 2D and the scene reference)
-        run: pnpm --filter @ordo/renderer golden:compositor
       - name: ProPresenter 7 synthetic visual fidelity ratchet
         run: pnpm --filter @ordo/pro7-fidelity start -- --corpus --out test-results/pro7-fidelity --baseline tools/pro7-fidelity/pro7-baseline.json --ratchet
       - uses: actions/upload-artifact@v4
@@ -65,3 +56,43 @@ jobs:
             playwright-report
             test-results
           retention-days: 7
+
+  # The renderer's golden images are drawn and compared in one pinned image, here and on a developer machine
+  # (tools/golden-docker.sh): text rasterises differently on another machine, so the expected PNGs belong to
+  # this image (design/23 "Golden images"). A failing or new case is uploaded as the artifact golden-images;
+  # tools/golden-from-artifact.sh adopts its pictures.
+  goldens:
+    name: Goldens (pinned container)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      options: --ipc=host
+    steps:
+      - uses: actions/checkout@v4
+      # The runner's font list and the faces the golden images were drawn with (golden/expected/meta.json; a
+      # missing one fails the run). Keep in step with tools/golden-docker.sh.
+      - name: Fonts
+        run: apt-get update && apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter fonts-dejavu-core fonts-freefont-ttf fonts-ipafont-gothic
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Golden images of the text rasterizer
+        run: pnpm --filter @ordo/renderer golden --strict
+      - name: Late-loaded fonts take effect without a worker restart
+        if: success() || failure()
+        run: pnpm --filter @ordo/renderer late-font
+      - name: Compositor golden (WebGPU on SwiftShader against Canvas 2D and the scene reference)
+        if: success() || failure()
+        run: pnpm --filter @ordo/renderer golden:compositor
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: golden-images
+          path: |
+            test-results/golden
+            test-results/compositor-golden
+          retention-days: 14

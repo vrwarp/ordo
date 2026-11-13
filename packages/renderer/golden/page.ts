@@ -773,11 +773,13 @@ type Golden = {
   fonts(files: GoldenFace[]): Promise<number>;
   render(name: string, env?: 'legacy' | 'resolver'): Promise<string>;
   invariance(): Invariance;
+  /** With `picture`, also a PNG of the difference: red where a pixel is past the tolerance, the expected faded. */
   diff(
     name: string,
     expectedBase64: string,
     tolerance: number,
-  ): Promise<{ differing: number; total: number; maxDelta: number }>;
+    picture?: boolean,
+  ): Promise<{ differing: number; total: number; maxDelta: number; picture?: string }>;
 };
 
 const last = new Map<string, ImageData>();
@@ -827,7 +829,7 @@ const golden: Golden = {
     last.set(name, ctx.getImageData(0, 0, W, H));
     return blobToBase64(await c.convertToBlob({ type: 'image/png' }));
   },
-  async diff(name, expectedBase64, tolerance) {
+  async diff(name, expectedBase64, tolerance, picture) {
     const got = last.get(name);
     if (!got) throw new Error(`render ${name} first`);
     const bmp = await createImageBitmap(new Blob([b64ToBytes(expectedBase64)], { type: 'image/png' }));
@@ -836,6 +838,7 @@ const golden: Golden = {
     ctx.drawImage(bmp, 0, 0);
     const exp = ctx.getImageData(0, 0, W, H).data;
     const act = got.data;
+    const out = picture ? new ImageData(W, H) : undefined;
     let differing = 0;
     let maxDelta = 0;
     for (let i = 0; i < act.length; i += 4) {
@@ -843,8 +846,25 @@ const golden: Golden = {
       for (let k = 0; k < 4; k++) d = Math.max(d, Math.abs(act[i + k]! - exp[i + k]!));
       if (d > maxDelta) maxDelta = d;
       if (d > tolerance) differing++;
+      if (!out) continue;
+      if (d > tolerance) {
+        out.data[i] = 255;
+        out.data[i + 3] = 255;
+        continue;
+      }
+      // The expected picture, its luminance faded towards white over its alpha.
+      const a = exp[i + 3]! / 255;
+      const lum = (0.299 * exp[i]! + 0.587 * exp[i + 1]! + 0.114 * exp[i + 2]!) * a + 255 * (1 - a);
+      const v = 255 - (255 - lum) * 0.3;
+      out.data[i] = v;
+      out.data[i + 1] = v;
+      out.data[i + 2] = v;
+      out.data[i + 3] = 255;
     }
-    return { differing, total: act.length / 4, maxDelta };
+    if (!out) return { differing, total: act.length / 4, maxDelta };
+    ctx.putImageData(out, 0, 0);
+    const png = await blobToBase64(await c.convertToBlob({ type: 'image/png' }));
+    return { differing, total: act.length / 4, maxDelta, picture: png };
   },
   invariance,
 };

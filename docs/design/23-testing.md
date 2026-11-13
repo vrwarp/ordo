@@ -189,10 +189,39 @@ Text uses faces injected from the system so the result does not depend on instal
 DejaVu Sans ('Golden': Latin, Hebrew, Arabic), FreeSerif ('Golden Serif': Tamil) and
 IPAGothic ('Golden CJK'). `expected/meta.json` lists the files (path and SHA-256) the
 expected images were made with, and a comparison loads exactly those, so another font on
-the machine cannot change the run. When one is missing the run is skipped; in CI (`CI` set,
-or `--strict`) a skip, or a case without an expected image, fails the run. `--update`
-rewrites the expected images; a failing case writes `<case>.actual.png` next to the
-expected one.
+the machine cannot change the faces (the rasteriser's hinting still can). When one is missing the
+run is skipped; in CI (`CI` set, or `--strict`) a skip, or a case without an expected image, fails
+the run. `--update` rewrites the expected images; a failing case writes `<case>.actual.png` next to
+the expected one (git ignores it).
+
+The expected images belong to one pinned image, `mcr.microsoft.com/playwright:v1.63.0-noble` with the
+repository's font packages: CI's "Goldens (pinned container)" job draws and compares them there (with
+`late-font` and `golden:compositor`), and no other run is authoritative. Text drawn elsewhere differs in
+hinting and anti-aliasing with an identical layout (a local run of main fails 28 cases by up to 8 % of
+their pixels), so expected images are never made on a developer machine. Every failing case, and every
+case without an expected image, is also written to `test-results/golden/`: `<case>.actual.png`,
+`<case>.expected.png` and `<case>.diff.png` (red where a pixel is past the tolerance); a case compared
+with another case's image writes `<case>.against-<other>.png`, a legacy case drawn with the font resolver
+`<case>.resolver.png`. CI uploads that directory as the artifact `golden-images` when the job fails. An
+intended change, or a new case, is adopted from it:
+
+```
+gh run download <run-id> --name golden-images --dir /tmp/golden-images
+tools/golden-from-artifact.sh /tmp/golden-images [case ...]   # <case>.actual.png -> expected/<case>.png
+```
+
+The same run on a developer machine, in the same container (Docker; the working tree is copied in, so
+uncommitted changes count; the pictures land in `./test-results/golden`):
+
+```
+tools/golden-docker.sh                      # golden --strict, late-font, golden:compositor
+tools/golden-docker.sh golden               # one step
+tools/golden-from-artifact.sh test-results  # adopt what it drew
+```
+
+It runs, in `mcr.microsoft.com/playwright:v1.63.0-noble` with `CI=true`, `apt-get install` of the font
+list of `ci.yml`'s goldens job, `pnpm install --frozen-lockfile`, then `pnpm --filter @ordo/renderer
+golden --strict` and the other two steps.
 
 `pnpm --filter @ordo/renderer golden:compositor` is the compositor golden (design/27 §14.5). It has
 no expected images: in a worker in headless Chromium (WebGPU on SwiftShader, the flags above), two
@@ -207,7 +236,7 @@ with a budget of 24 rows a frame, every frame while new content uploads must be 
 picture whole and the flip must wait for the last strip. WebGPU must match Canvas 2D within
 40 per channel on all but 0.4 % of the pixels and the reference within 8 on all but 0.05 %.
 Failing cases write their three images to `test-results/compositor-golden/` (`--images` writes
-every case). `sprite.browser.test.ts` (vitest, headless Chromium) draws bands, rich and legacy
+every case), which the `golden-images` artifact carries too. `sprite.browser.test.ts` (vitest, headless Chromium) draws bands, rich and legacy
 text, shapes, the lower third, props and scene parts as tight sprites and full-frame and requires
 each sprite placed at its offset to be the full-frame picture.
 
