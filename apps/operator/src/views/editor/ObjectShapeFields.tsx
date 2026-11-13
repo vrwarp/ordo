@@ -601,17 +601,41 @@ function GradientFields({ o, g, disabled, set }: Props & { g: Gradient }) {
   );
 }
 
+const QUICK_DASHES: ReadonlyArray<{ dash: LineDash; glyph: string; title: string }> = [
+  { dash: 'solid', glyph: '───', title: 'Solid' },
+  { dash: 'dash', glyph: '- - -', title: 'Dash' },
+  { dash: 'sysDot', glyph: '• • •', title: 'Dot' },
+];
+
 /** The line's dash and, on an open outline, its arrowheads (shown with the Stroke toggle on). */
 export function ShapeLineFields({ o, disabled, set }: Props) {
+  const curDash = o.dash ?? 'solid';
   return (
     <>
-      <Select
-        label="Dash"
-        value={o.dash ?? 'solid'}
-        options={DASHES}
-        disabled={disabled}
-        onChange={(dash) => patch(set, (s) => withDash(s, dash))}
-      />
+      <div className="col" style={{ gap: 4 }}>
+        <div className="ed-seg-bar" role="group" aria-label="Quick dash style">
+          {QUICK_DASHES.map((d) => (
+            <button
+              key={d.dash}
+              type="button"
+              className={`small${curDash === d.dash ? ' on' : ''}`}
+              disabled={disabled}
+              title={d.title}
+              aria-label={d.title}
+              onClick={() => patch(set, (s) => withDash(s, d.dash))}
+            >
+              {d.glyph}
+            </button>
+          ))}
+        </div>
+        <Select
+          label="Dash"
+          value={curDash}
+          options={DASHES}
+          disabled={disabled}
+          onChange={(dash) => patch(set, (s) => withDash(s, dash))}
+        />
+      </div>
       {hasOpenOutline(o) && (
         <>
           <ArrowFields o={o} side="head" disabled={disabled} set={set} />

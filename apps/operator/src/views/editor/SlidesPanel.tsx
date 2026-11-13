@@ -300,23 +300,22 @@ export function SlidesPanel({
           </div>
         ))}
         {!readOnly && (
-          <div className="row" style={{ marginTop: 8, gap: 4 }}>
+          <div className="col" style={{ marginTop: 8, gap: 4 }}>
             <input
-              className="grow"
-              style={{ minWidth: 0 }}
+              style={{ width: '100%', minWidth: 0 }}
               placeholder={
                 p.kind === 'song'
-                  ? 'New section (Verse 2, C, Bridge…)'
+                  ? 'New section (Verse 2, Bridge…)'
                   : p.kind === 'loop'
-                    ? 'New section (Events, Giving, Youth…)'
-                    : 'New section (Intro, Scripture, Points…)'
+                    ? 'New section (Events, Giving…)'
+                    : 'New section (Intro, Scripture…)'
               }
               value={newSection}
               onChange={(e) => setNewSection(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && addNamedSection()}
             />
-            <button type="button" className="small" onClick={addNamedSection}>
-              Add
+            <button type="button" className="small" style={{ width: '100%' }} onClick={addNamedSection}>
+              + Add section
             </button>
           </div>
         )}
@@ -485,19 +484,15 @@ export function HideSlideToggle({
   onToggle: (hidden: boolean) => void;
 }) {
   return (
-    <div className="row" style={{ alignItems: 'center', gap: 6 }}>
-      <button
-        type="button"
-        className={`small ${hidden ? 'on' : ''}`}
-        aria-pressed={hidden}
-        onClick={() => onToggle(!hidden)}
-        data-hide-slide
-      >
-        Hidden
-      </button>
-      <span className="muted small grow" style={{ lineHeight: 1.2 }}>
-        {hidden ? 'Next skips this slide; a click in the slide grid shows it.' : 'Shown in the service.'}
-      </span>
-    </div>
+    <button
+      type="button"
+      className={`small ed-vis-pill ${hidden ? 'is-hidden' : 'is-visible'}`}
+      aria-pressed={hidden}
+      onClick={() => onToggle(!hidden)}
+      title={hidden ? 'Next skips this slide; a click in the slide grid shows it.' : 'Shown in the service.'}
+      data-hide-slide
+    >
+      {hidden ? 'Hidden in service' : 'Visible in service'}
+    </button>
   );
 }
