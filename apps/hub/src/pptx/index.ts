@@ -19,7 +19,9 @@ import {
 import { queueTextRepair, textRepairJob } from './textRepair.ts';
 
 export class PptxImports {
-  constructor(readonly deps: PptxDeps) {
+  readonly deps: PptxDeps;
+  constructor(deps: PptxDeps) {
+    this.deps = deps;
     const { jobs } = deps;
     // Abandoned after repeated crashes: the clips it stored still get their media jobs.
     jobs.register(PPTX_JOBS.native, nativeJob(deps), (payload: PptxNativePayload) =>

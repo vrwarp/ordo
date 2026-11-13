@@ -159,11 +159,13 @@ export class CoreEngine {
     libRev: number;
   } = { resolvedRev: 0, cuesRev: 0, libRev: -1 };
 
-  constructor(
-    private post: Post,
-    private store: JsonStore,
-    private now: () => number = () => Date.now(),
-  ) {
+  private post: Post;
+  private store: JsonStore;
+  private now: () => number;
+  constructor(post: Post, store: JsonStore, now: () => number = () => Date.now()) {
+    this.post = post;
+    this.store = store;
+    this.now = now;
     this.lib = new LibraryStore({
       fetchSnapshot: () => api<LibrarySnapshot>(ROUTES.snapshot),
       fetchSettings: () => api<Settings>(ROUTES.settings),

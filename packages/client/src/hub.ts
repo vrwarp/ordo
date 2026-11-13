@@ -107,8 +107,10 @@ export class HubConnection extends Emitter<HubEvents> {
   readonly clock: HubClock;
   connected = false;
 
-  constructor(private opts: HubConnectionOptions) {
+  private opts: HubConnectionOptions;
+  constructor(opts: HubConnectionOptions) {
     super();
+    this.opts = opts;
     this.clock = opts.clock ?? defaultClock;
   }
 

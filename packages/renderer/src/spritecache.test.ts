@@ -79,10 +79,11 @@ describe('SpriteCache', () => {
 
 class FakeCanvas {
   ctx: ReturnType<typeof traceCtx>;
-  constructor(
-    public width: number,
-    public height: number,
-  ) {
+  public width: number;
+  public height: number;
+  constructor(width: number, height: number) {
+    this.width = width;
+    this.height = height;
     this.ctx = traceCtx(width, height);
   }
   getContext() {

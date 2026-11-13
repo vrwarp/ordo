@@ -128,7 +128,10 @@ export class LayerStack<B> {
    */
   gated = false;
 
-  constructor(private release: (b: B) => void = () => undefined) {}
+  private release: (b: B) => void;
+  constructor(release: (b: B) => void = () => undefined) {
+    this.release = release;
+  }
 
   get liveStack(): Stack<B> {
     return this.stacks[this.live]!;

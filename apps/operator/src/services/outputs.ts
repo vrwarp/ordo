@@ -67,7 +67,9 @@ export class OutputWindows {
   private watch?: ReturnType<typeof setInterval>;
   readonly probeTracker: LocalWindowTracker;
 
-  constructor(private ctl: Controller) {
+  private ctl: Controller;
+  constructor(ctl: Controller) {
+    this.ctl = ctl;
     this.probeTracker = new LocalWindowTracker();
     this.watch = setInterval(() => this.refreshOpen(), 2000);
     this.ensureBroadcastRelays();

@@ -30,8 +30,10 @@ type Hooks = {
 
 /** The hub as the main thread sees it: the socket lives in the core worker. */
 export class HubProxy extends Emitter<{ welcome: { appVersion: string }; bye: { reason: string } }> {
-  constructor(private core: CoreClient) {
+  private core: CoreClient;
+  constructor(core: CoreClient) {
     super();
+    this.core = core;
   }
   get connected(): boolean {
     return useLive.getState().hubConnected && this.core.alive;
@@ -71,11 +73,13 @@ export class Controller {
   private recoveringGate = new RecoveringGate(SUPERVISION_MS);
   private offs: (() => void)[] = [];
 
+  readonly role: 'operate' | 'edit';
   constructor(
-    readonly role: 'operate' | 'edit',
+    role: 'operate' | 'edit',
     factory: () => Worker = () =>
       new Worker(new URL('../core/core.worker.ts', import.meta.url), { type: 'module', name: 'ordo-core' }),
   ) {
+    this.role = role;
     const test = testMode();
     this.core = new CoreClient(role, APP_VERSION, factory, { test });
     this.hub = new HubProxy(this.core);

@@ -23,8 +23,10 @@ const planArb = fc.record({
 });
 
 class FlakyStore extends MemoryStore {
-  constructor(private plans: Map<string, Plan>) {
+  private plans: Map<string, Plan>;
+  constructor(plans: Map<string, Plan>) {
     super();
+    this.plans = plans;
   }
   override async has(h: string) {
     if (this.plans.get(h)?.hasThrows) throw new Error('storage lost');

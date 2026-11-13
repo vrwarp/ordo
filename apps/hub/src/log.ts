@@ -4,8 +4,10 @@ import pino, { type Logger } from 'pino';
 /** Keeps the last N log lines in memory for the diagnostics export. */
 export class LogRing extends Writable {
   private lines: string[] = [];
-  constructor(private max = 2000) {
+  private max: number;
+  constructor(max = 2000) {
     super();
+    this.max = max;
   }
   override _write(chunk: Buffer | string, _enc: BufferEncoding, cb: () => void): void {
     const s = chunk.toString();

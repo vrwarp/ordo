@@ -23,10 +23,9 @@ export class WakeLockKeeper {
   requests = 0;
   private pending = false;
 
-  constructor(
-    private host: WakeLockHost,
-    retryMs = 30_000,
-  ) {
+  private host: WakeLockHost;
+  constructor(host: WakeLockHost, retryMs = 30_000) {
+    this.host = host;
     host.setInterval(() => void this.acquire(), retryMs);
   }
 

@@ -126,16 +126,28 @@ export class ImportService {
    */
   readonly tools: HubTools;
 
+  private lib: Library;
+  private store: Store;
+  private jobs: JobQueue;
+  private media: MediaService;
+  private cfg: HubConfig;
+  private log: Logger;
   /** `locked`: whether a presentation is frozen in the live session (ADR 0007); imports never write it then. */
   constructor(
-    private lib: Library,
-    private store: Store,
-    private jobs: JobQueue,
-    private media: MediaService,
-    private cfg: HubConfig,
-    private log: Logger,
+    lib: Library,
+    store: Store,
+    jobs: JobQueue,
+    media: MediaService,
+    cfg: HubConfig,
+    log: Logger,
     locked: (presentationId: string) => boolean,
   ) {
+    this.lib = lib;
+    this.store = store;
+    this.jobs = jobs;
+    this.media = media;
+    this.cfg = cfg;
+    this.log = log;
     this.imp = (cfg.importers as Importers | undefined) ?? (realImporters as unknown as Importers);
     jobs.register<Pro7Payload>('pro7-import', (ctx) => this.pro7Job(ctx));
     jobs.register<DocPayload>('document', (ctx) => this.documentJob(ctx));

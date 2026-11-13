@@ -5,10 +5,12 @@ import { join } from 'node:path';
 /** A hub process owned by a test, so the test can kill and restart it (hub-loss scenarios). */
 export class HubProcess {
   proc?: ChildProcess;
-  constructor(
-    readonly port: number,
-    readonly dataDir: string,
-  ) {}
+  readonly port: number;
+  readonly dataDir: string;
+  constructor(port: number, dataDir: string) {
+    this.port = port;
+    this.dataDir = dataDir;
+  }
 
   /**
    * Data under ORDO_E2E_DATA_ROOT when set (a scratch dir), else `test-results/.e2e-data-<port>`: with the

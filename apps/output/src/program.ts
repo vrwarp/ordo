@@ -14,7 +14,9 @@ export class ProgramSender {
   private pendingIce: RTCIceCandidateInit[] = [];
   onActiveChange?: (active: boolean) => void;
 
-  constructor(private sendToHub: (m: ClientMessageBody) => void) {
+  private sendToHub: (m: ClientMessageBody) => void;
+  constructor(sendToHub: (m: ClientMessageBody) => void) {
+    this.sendToHub = sendToHub;
     this.canvas = document.createElement('canvas');
     this.canvas.width = 320;
     this.canvas.height = 180;

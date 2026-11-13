@@ -33,10 +33,11 @@ const made: { canvas: FakeCanvas; ctx: TraceCtx }[] = [];
 
 class FakeCanvas {
   ctx: TraceCtx;
-  constructor(
-    public width: number,
-    public height: number,
-  ) {
+  public width: number;
+  public height: number;
+  constructor(width: number, height: number) {
+    this.width = width;
+    this.height = height;
     this.ctx = traceCtx(width, height);
     made.push({ canvas: this, ctx: this.ctx });
   }

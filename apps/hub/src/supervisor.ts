@@ -102,7 +102,9 @@ export class Supervisor {
   private stopping = false;
   private watchdog?: NodeJS.Timeout;
 
-  constructor(private opts: SupervisorOpts) {
+  private opts: SupervisorOpts;
+  constructor(opts: SupervisorOpts) {
+    this.opts = opts;
     mkdirSync(opts.dataDir, { recursive: true });
     const mk = (name: ChildName): Child => ({
       name,

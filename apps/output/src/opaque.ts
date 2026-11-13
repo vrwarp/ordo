@@ -41,7 +41,10 @@ export function opaqueImage(head: Uint8Array): boolean {
 export class OpaqueFiles {
   private known = new Map<string, boolean>();
 
-  constructor(private readonly max = 4096) {}
+  private readonly max: number;
+  constructor(max = 4096) {
+    this.max = max;
+  }
 
   async note(hash: string, blob: Blob): Promise<void> {
     let opaque = false;

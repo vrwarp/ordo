@@ -220,10 +220,11 @@ export async function hashFile(path: string): Promise<{ hash: string; bytes: num
 /** Content-addressed file store under the data directory. */
 export class Store {
   readonly uploads: string;
-  constructor(
-    readonly dataDir: string,
-    private lib: Library,
-  ) {
+  readonly dataDir: string;
+  private lib: Library;
+  constructor(dataDir: string, lib: Library) {
+    this.dataDir = dataDir;
+    this.lib = lib;
     this.uploads = join(dataDir, 'uploads');
   }
 

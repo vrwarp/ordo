@@ -214,11 +214,11 @@ class ScreenWatch {
   /** Epoch of the in-page series' origin (before the test injects the fault). */
   private pageT0 = 0;
 
-  private constructor(
-    private o: Page,
-    private xy: [number, number],
-    pre: { cue: number; px: Rgb },
-  ) {
+  private o: Page;
+  private xy: [number, number];
+  private constructor(o: Page, xy: [number, number], pre: { cue: number; px: Rgb }) {
+    this.o = o;
+    this.xy = xy;
     this.pre = pre;
   }
 

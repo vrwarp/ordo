@@ -21,10 +21,12 @@ type Matrix = [number, number, number, number, number, number];
 /** A gradient the trace context made: its arguments and colour stops, logged as they are added. */
 class TraceGradient {
   readonly stops: [number, string][] = [];
-  constructor(
-    readonly kind: 'linear' | 'radial',
-    readonly args: number[],
-  ) {}
+  readonly kind: 'linear' | 'radial';
+  readonly args: number[];
+  constructor(kind: 'linear' | 'radial', args: number[]) {
+    this.kind = kind;
+    this.args = args;
+  }
   addColorStop(at: number, color: string): void {
     this.stops.push([at, color]);
   }

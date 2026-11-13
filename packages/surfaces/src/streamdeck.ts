@@ -97,7 +97,10 @@ export class StreamDeckDriver {
   /** Optional off-thread key image renderer; local drawing is the fallback. */
   renderer?: DeckRenderer;
 
-  constructor(private dispatch: Dispatch) {}
+  private dispatch: Dispatch;
+  constructor(dispatch: Dispatch) {
+    this.dispatch = dispatch;
+  }
 
   static get supported(): boolean {
     return typeof navigator !== 'undefined' && 'hid' in navigator;

@@ -30,7 +30,10 @@ export class DualEndpoint implements BusEndpoint {
   /** When the main thread last offered a port to the window (for the re-offer watch). */
   lastOffer = 0;
 
-  constructor(private now: () => number = () => Date.now()) {}
+  private now: () => number;
+  constructor(now: () => number = () => Date.now()) {
+    this.now = now;
+  }
 
   get kind(): 'port' | 'window' {
     const a = this.active();

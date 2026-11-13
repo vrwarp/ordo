@@ -26,11 +26,14 @@ export class LibraryStatsCache {
   private last?: LibraryStats;
   private warned = false;
 
-  constructor(
-    private lib: Library,
-    private log: Logger,
-    private opts: { minIntervalMs?: number; now?: () => number } = {},
-  ) {}
+  private lib: Library;
+  private log: Logger;
+  private opts: { minIntervalMs?: number; now?: () => number };
+  constructor(lib: Library, log: Logger, opts: { minIntervalMs?: number; now?: () => number } = {}) {
+    this.lib = lib;
+    this.log = log;
+    this.opts = opts;
+  }
 
   get(): LibraryStats {
     const now = this.opts.now?.() ?? Date.now();

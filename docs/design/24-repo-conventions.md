@@ -29,6 +29,16 @@ ordo/
   dev:origins` adds hosts entries for `*.ordo.test` and serves each role on its origin for
   isolation testing.
 
+## TypeScript that Node can run as it is
+
+Node 22 runs a `.ts` file by stripping its types, without compiling it, and rejects syntax that has
+no JavaScript of its own (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`). A worker thread or a tool started
+without the tsx loader meets that rule, so every package keeps to erasable syntax: no parameter
+properties (`constructor(private readonly x: X)`: declare the field and assign it in the
+constructor), no `enum`, no `namespace` with code, no `import x = require()`. `erasableSyntaxOnly` in
+`tsconfig.base.json` makes `pnpm typecheck` fail on them, and Biome's `style/noParameterProperties`
+is an error in `pnpm lint`, tests and e2e specs included.
+
 ## Coding rules that protect the frame budget
 
 - `packages/renderer` and the output main thread: no allocation in per-frame code paths.

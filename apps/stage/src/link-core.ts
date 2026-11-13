@@ -91,7 +91,9 @@ export class StageLinkCore {
   private readonly now: () => number;
   private stopped = false;
 
-  constructor(private deps: CoreDeps) {
+  private deps: CoreDeps;
+  constructor(deps: CoreDeps) {
+    this.deps = deps;
     this.link = deps.link;
     this.clock = deps.clock ?? defaultClock;
     this.now = deps.now ?? (() => Date.now());

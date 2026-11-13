@@ -168,7 +168,9 @@ export class OutputHost {
   /** Whether the window was opened by the operator; Chrome nulls window.opener once that tab closes. */
   private readonly hadOpener = !!window.opener;
 
-  constructor(private opts: HostOptions) {
+  private opts: HostOptions;
+  constructor(opts: HostOptions) {
+    this.opts = opts;
     const env = appEnv();
     this.outputId = env.outputId ?? 'unknown';
     this.token = env.token ?? '';

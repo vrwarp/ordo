@@ -464,16 +464,32 @@ class NativeImport {
   /** LibreOffice can draw what ordo cannot (`HubTools`), decided once the tools are known (`steps`). */
   private lo = true;
 
+  private readonly deps: PptxDeps;
+  private readonly pool: Pick<CpuPool, 'run'>;
+  private readonly limits: Limits;
+  private readonly ctx: JobCtx<PptxNativePayload>;
+  private readonly done: PptxNativeProgress;
+  private readonly save: () => void;
+  private readonly only?: NativeJobEnv['only'];
+  private readonly reserve: number;
   constructor(
-    private readonly deps: PptxDeps,
-    private readonly pool: Pick<CpuPool, 'run'>,
-    private readonly limits: Limits,
-    private readonly ctx: JobCtx<PptxNativePayload>,
-    private readonly done: PptxNativeProgress,
-    private readonly save: () => void,
-    private readonly only?: NativeJobEnv['only'],
-    private readonly reserve = 0,
+    deps: PptxDeps,
+    pool: Pick<CpuPool, 'run'>,
+    limits: Limits,
+    ctx: JobCtx<PptxNativePayload>,
+    done: PptxNativeProgress,
+    save: () => void,
+    only?: NativeJobEnv['only'],
+    reserve = 0,
   ) {
+    this.deps = deps;
+    this.pool = pool;
+    this.limits = limits;
+    this.ctx = ctx;
+    this.done = done;
+    this.save = save;
+    this.only = only;
+    this.reserve = reserve;
     this.options = ctx.payload.options ?? {};
     // The upload's file name: one line, like every other string that reaches a list or a log.
     this.title = logSafe(baseName(ctx.payload.name), 300) || 'PowerPoint';

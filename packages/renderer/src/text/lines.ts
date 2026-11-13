@@ -179,11 +179,13 @@ const CLUSTER_WINDOW = 32;
 class ClusterCuts {
   readonly #cuts: number[] = [];
   #scanned: number;
-  constructor(
-    readonly text: string,
-    readonly start: number,
-    readonly end: number,
-  ) {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+  constructor(text: string, start: number, end: number) {
+    this.text = text;
+    this.start = start;
+    this.end = end;
     this.#scanned = start;
   }
 

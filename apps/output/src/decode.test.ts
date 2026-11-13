@@ -117,9 +117,9 @@ function platform(o: { refuseSmall?: boolean; fail?: 'scaled' | 'all' } = {}) {
     return f;
   };
   class FakeImageDecoder {
-    constructor(
-      private init: { data: unknown; type: string; desiredWidth?: number; desiredHeight?: number },
-    ) {
+    private init: { data: unknown; type: string; desiredWidth?: number; desiredHeight?: number };
+    constructor(init: { data: unknown; type: string; desiredWidth?: number; desiredHeight?: number }) {
+      this.init = init;
       asked.push({ w: init.desiredWidth, h: init.desiredHeight });
     }
     async decode() {

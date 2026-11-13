@@ -36,13 +36,17 @@ export class FontService {
    */
   readonly bundled: Promise<BundledResult | undefined>;
 
-  constructor(
-    private lib: Library,
-    private store: Store,
-    private jobs: JobQueue,
-    private cfg: HubConfig,
-    private log: Logger,
-  ) {
+  private lib: Library;
+  private store: Store;
+  private jobs: JobQueue;
+  private cfg: HubConfig;
+  private log: Logger;
+  constructor(lib: Library, store: Store, jobs: JobQueue, cfg: HubConfig, log: Logger) {
+    this.lib = lib;
+    this.store = store;
+    this.jobs = jobs;
+    this.cfg = cfg;
+    this.log = log;
     jobs.register<{ family: string }>('font-google', (ctx) => this.googleJob(ctx));
     this.bundled = cfg.fontsDir ? this.registerBundled(cfg.fontsDir) : Promise.resolve(undefined);
   }

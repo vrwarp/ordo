@@ -9,11 +9,12 @@ export class Diagnostics {
   private lines: string[] = [];
   visible = false;
 
-  constructor(
-    private snapshot: () => Record<string, unknown>,
-    /** Log lines kept elsewhere (the link worker's ring), shown after this thread's own. */
-    private external: () => string[] = () => [],
-  ) {
+  private snapshot: () => Record<string, unknown>;
+  /** Log lines kept elsewhere (the link worker's ring), shown after this thread's own. */
+  private external: () => string[];
+  constructor(snapshot: () => Record<string, unknown>, external: () => string[] = () => []) {
+    this.snapshot = snapshot;
+    this.external = external;
     this.el = document.createElement('div');
     this.el.className = 'diag';
     this.el.hidden = true;

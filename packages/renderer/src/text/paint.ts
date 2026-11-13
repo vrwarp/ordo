@@ -689,7 +689,10 @@ class TextState {
   #lang: string | null = null;
   #spacing = Number.NaN;
   #fill = '';
-  constructor(readonly ctx: Ctx2D) {}
+  readonly ctx: Ctx2D;
+  constructor(ctx: Ctx2D) {
+    this.ctx = ctx;
+  }
 
   /** Forget what was assigned (after a `restore`). */
   reset(): void {

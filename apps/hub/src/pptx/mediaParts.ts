@@ -42,7 +42,10 @@ const MAX_CANDIDATES = 64;
 
 /** The SHA-256 media hash index (db.ts migration 8, `media_hashes`). */
 export class MediaHashes {
-  constructor(private db: DB) {}
+  private db: DB;
+  constructor(db: DB) {
+    this.db = db;
+  }
 
   /** Media ids recorded for `hash` as `role`, oldest first. */
   ids(hash: string, role: HashRole): string[] {
