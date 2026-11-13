@@ -1,9 +1,9 @@
 {
-  "createdAt": "2026-11-12T10:04:44.614Z",
+  "createdAt": "2026-11-13T14:58:51.393Z",
   "exportCompat": true,
-  "meanSsim": 0.9997,
-  "syntheticMeanSsim": 0.9997,
-  "totalSlides": 10,
+  "meanSsim": 0.9998,
+  "syntheticMeanSsim": 0.9998,
+  "totalSlides": 18,
   "decks": [
     {
       "name": "pro7-synth-core",
@@ -22,7 +22,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M77KEZFCRN35JFA9HK2TJY18",
+              "objectId": "01M7APP2HM0YCJZRAVHF22S05M",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -47,7 +47,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M77KEZFDRSSZN08GTP8XK6K6",
+              "objectId": "01M7APP2HPQ3K64HVSPZZZ905C",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -58,7 +58,7 @@
               "mae": 0
             },
             {
-              "objectId": "01M77KEZFD1050NH0DT3CRSYJY",
+              "objectId": "01M7APP2HNCTCNV8E3PFDF800Q",
               "type": "shape",
               "box": {
                 "x": 480,
@@ -85,7 +85,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M77KEZFDJPXMZ28SYPFH57K2",
+              "objectId": "01M7APP2HP1N3439TG2FZJJXA0",
               "type": "shape",
               "box": {
                 "x": 160,
@@ -110,7 +110,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M77KEZFFCCW0Q3M5R0GTBG0N",
+              "objectId": "01M7APP2HRGSDSR6JSHD5J5920",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -150,7 +150,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M77KF06PB56VGR5GC9TBQZ5W",
+              "objectId": "01M7APP3NMPAJNXQK9PJ2512VW",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -161,7 +161,7 @@
               "mae": 0.000025350910039941902
             },
             {
-              "objectId": "01M77KF06NBK4SGNQNHJ5BB626",
+              "objectId": "01M7APP3NMFGDAKVJT517RHEGE",
               "type": "shape",
               "box": {
                 "x": 660,
@@ -186,7 +186,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M77KF06PY7055S3HTERF6ZPF",
+              "objectId": "01M7APP3NNMG2MA4NP8QTC5JRB",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -197,7 +197,7 @@
               "mae": 0.000008127855694747034
             },
             {
-              "objectId": "01M77KF06PNHSNXQ8MGWCXVP0R",
+              "objectId": "01M7APP3NMNDXR418PD122N9Y5",
               "type": "shape",
               "box": {
                 "x": 460,
@@ -222,7 +222,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M77KF06P3SJNB1JAB70J89S7",
+              "objectId": "01M7APP3NNHY9PG4J9D3SD1V0W",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -233,7 +233,7 @@
               "mae": 7.56475429678044e-7
             },
             {
-              "objectId": "01M77KF06PXQRVN0NX8B8XW58Q",
+              "objectId": "01M7APP3NN6JP865Q5ZFM1MWYQ",
               "type": "shape",
               "box": {
                 "x": 560,
@@ -273,7 +273,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M77KF0KZE9QW4VR6XD855M7J",
+              "objectId": "01M7APP4AQMSNNY0K27TZVMK66",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -298,7 +298,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M77KF0M02QPMPPM5EGFT9P0N",
+              "objectId": "01M7APP4AQN2PW2G15M05CHQ0Z",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -309,7 +309,7 @@
               "mae": 0.00022087711434882595
             },
             {
-              "objectId": "01M77KF0M0N894T7MG1TXZ2MZZ",
+              "objectId": "01M7APP4AQ8YYQJQDXN33643QY",
               "type": "image",
               "box": {
                 "x": 480,
@@ -327,14 +327,14 @@
         },
         {
           "n": 3,
-          "ssim": 0.999976066155878,
+          "ssim": 0.9999752408958229,
           "transparentRef": false,
-          "overallMae": 0.00001866508563301864,
+          "overallMae": 0.0000189118857419511,
           "backgroundMae": 0,
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M77KF0M2SEAHT69Z83KJNFK7",
+              "objectId": "01M7APP4ARPS9046V7PR1BD51G",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -342,10 +342,10 @@
                 "w": 1920,
                 "h": 1080
               },
-              "mae": 0.00001866508563301864
+              "mae": 0.0000189118857419511
             },
             {
-              "objectId": "01M77KF0M0EX85HWF906RY1X8V",
+              "objectId": "01M7APP4ARZN40KM551AVNMYJQ",
               "type": "image",
               "box": {
                 "x": 660,
@@ -353,7 +353,7 @@
                 "w": 600,
                 "h": 600
               },
-              "mae": 0.00010751089324618736
+              "mae": 0.00010893246187363834
             }
           ],
           "features": ["drawsBgColor", "nonRectShape", "mediaFill"],
@@ -367,14 +367,442 @@
         "[info] skipped slide labels (3)",
         "[info] imported \"pro7-synth-masks-and-crops\": 1 section(s), 3 slide(s), 1 arrangement(s)"
       ]
+    },
+    {
+      "name": "pro7-synth-text-and-masks",
+      "kind": "synthetic",
+      "title": "pro7-synth-text-and-masks",
+      "slideCount": 4,
+      "ssim": 1,
+      "minSlideSsim": 1,
+      "perSlide": [
+        {
+          "n": 1,
+          "ssim": 0.9999996766222918,
+          "transparentRef": false,
+          "overallMae": 3.9242162914548537e-7,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M7APP56C12SKZH9J05C4HV98",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 3.9242162914548537e-7
+            },
+            {
+              "objectId": "01M7APP56CPT5HQ74QMF471JXK",
+              "type": "shape",
+              "box": {
+                "x": 360,
+                "y": 300,
+                "w": 1200,
+                "h": 480
+              },
+              "mae": 0.0000014127178649237473
+            },
+            {
+              "objectId": "01M7APP5694JQX1XK6JAB7BWYF",
+              "type": "text",
+              "box": {
+                "x": 360,
+                "y": 300,
+                "w": 1200,
+                "h": 480
+              },
+              "mae": 0.0000014127178649237473
+            }
+          ],
+          "features": ["drawsBgColor"],
+          "refPngPath": "renders/pro7-synth-text-and-masks/1.ref.png",
+          "ordoPngPath": "renders/pro7-synth-text-and-masks/1.png",
+          "ms1920": 0
+        },
+        {
+          "n": 2,
+          "ssim": 0.9999873712658834,
+          "transparentRef": false,
+          "overallMae": 0.0000032254221132897604,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M7APP56D56AA2PDA5B6YQR0C",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.0000032254221132897604
+            },
+            {
+              "objectId": "01M7APP56D2BMSE26ZSCTCFMFT",
+              "type": "shape",
+              "box": {
+                "x": 360,
+                "y": 300,
+                "w": 1200,
+                "h": 480
+              },
+              "mae": 0.000011611519607843138
+            },
+            {
+              "objectId": "01M7APP56D7YBZ3VY5ENSKAGEK",
+              "type": "text",
+              "box": {
+                "x": 360,
+                "y": 300,
+                "w": 1200,
+                "h": 480
+              },
+              "mae": 0.000011611519607843138
+            }
+          ],
+          "features": ["drawsBgColor", "strokeBorder"],
+          "refPngPath": "renders/pro7-synth-text-and-masks/2.ref.png",
+          "ordoPngPath": "renders/pro7-synth-text-and-masks/2.png",
+          "ms1920": 0
+        },
+        {
+          "n": 3,
+          "ssim": 0.9999984294975919,
+          "transparentRef": false,
+          "overallMae": 0.000001068994341563786,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M7APP56EW1A1M6T6D2534NJJ",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.000001068994341563786
+            },
+            {
+              "objectId": "01M7APP56EPKXQKFMTY8YCW0RK",
+              "type": "text",
+              "box": {
+                "x": 480,
+                "y": 440,
+                "w": 960,
+                "h": 200
+              },
+              "mae": 0.000011545138888888888
+            }
+          ],
+          "features": ["drawsBgColor", "textLineMask"],
+          "refPngPath": "renders/pro7-synth-text-and-masks/3.ref.png",
+          "ordoPngPath": "renders/pro7-synth-text-and-masks/3.png",
+          "ms1920": 0
+        },
+        {
+          "n": 4,
+          "ssim": 0.9999913388079098,
+          "transparentRef": false,
+          "overallMae": 0.0002451457917271847,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M7APP56E6PSZDC4W1Q2ST40G",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.0002451457917271847
+            },
+            {
+              "objectId": "01M7APP56EZATSGJ9XPKGKJJ4K",
+              "type": "text",
+              "box": {
+                "x": 480,
+                "y": 440,
+                "w": 960,
+                "h": 200
+              },
+              "mae": 0.0004907118055555555
+            }
+          ],
+          "features": ["drawsBgColor", "gradientFill", "textLineMask"],
+          "refPngPath": "renders/pro7-synth-text-and-masks/4.ref.png",
+          "ordoPngPath": "renders/pro7-synth-text-and-masks/4.png",
+          "ms1920": 0
+        }
+      ],
+      "importNotes": [
+        "[info] ProPresenter 7 proto greyshirtguy/ProPresenter7-Proto@1c019ab18972",
+        "[info] skipped slide labels (4)",
+        "[info] imported \"pro7-synth-text-and-masks\": 1 section(s), 4 slide(s), 1 arrangement(s)"
+      ]
+    },
+    {
+      "name": "pro7-synth-picture-effects",
+      "kind": "synthetic",
+      "title": "pro7-synth-picture-effects",
+      "slideCount": 4,
+      "ssim": 0.9995,
+      "minSlideSsim": 0.9989,
+      "perSlide": [
+        {
+          "n": 1,
+          "ssim": 0.9999273737537065,
+          "transparentRef": false,
+          "overallMae": 0.00005375703522149601,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M7APP60NAXQC5M4HPVTND474",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.00005375703522149601
+            },
+            {
+              "objectId": "01M7APP60NANZSEVVH4QQ1ZNG3",
+              "type": "image",
+              "box": {
+                "x": 120,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.0002477124183006536
+            },
+            {
+              "objectId": "01M7APP60NWQDJR1894HGJRTDW",
+              "type": "image",
+              "box": {
+                "x": 710,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.0002477124183006536
+            },
+            {
+              "objectId": "01M7APP60K2GKAEZJ8Z55E3678",
+              "type": "image",
+              "box": {
+                "x": 1300,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.0002477124183006536
+            }
+          ],
+          "features": ["drawsBgColor", "nonRectShape", "mediaFill"],
+          "refPngPath": "renders/pro7-synth-picture-effects/1.ref.png",
+          "ordoPngPath": "renders/pro7-synth-picture-effects/1.png",
+          "ms1920": 0
+        },
+        {
+          "n": 2,
+          "ssim": 0.9989148144473622,
+          "transparentRef": false,
+          "overallMae": 0.0009878458038307916,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M7APP60N7G4F51NDEYRJ0SGH",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.0009878458038307916
+            },
+            {
+              "objectId": "01M7APP60NXV0WXMAYCNEWW48B",
+              "type": "image",
+              "box": {
+                "x": 120,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.0003510392156862745
+            },
+            {
+              "objectId": "01M7APP60N3CTFBFTNQBZXBHS9",
+              "type": "image",
+              "box": {
+                "x": 710,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.0003510392156862745
+            },
+            {
+              "objectId": "01M7APP60NB4JH3MWNDMCNK470",
+              "type": "image",
+              "box": {
+                "x": 1300,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.0003510392156862745
+            }
+          ],
+          "features": ["drawsBgColor", "elShadow", "nonRectShape", "mediaFill"],
+          "refPngPath": "renders/pro7-synth-picture-effects/2.ref.png",
+          "ordoPngPath": "renders/pro7-synth-picture-effects/2.png",
+          "ms1920": 0
+        },
+        {
+          "n": 3,
+          "ssim": 0.9998209861068548,
+          "transparentRef": false,
+          "overallMae": 0.0004366886801016703,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M7APP60TZ0MBMTJGZG7Z2SSN",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.0004366886801016703
+            },
+            {
+              "objectId": "01M7APP60THKCV0M1CBWR712Q0",
+              "type": "image",
+              "box": {
+                "x": 120,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.002012261437908497
+            },
+            {
+              "objectId": "01M7APP60T5APJ07R50FGB7XZM",
+              "type": "image",
+              "box": {
+                "x": 710,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.002012261437908497
+            },
+            {
+              "objectId": "01M7APP60TXBX02GFVCVAYC0EJ",
+              "type": "image",
+              "box": {
+                "x": 1300,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.002012261437908497
+            }
+          ],
+          "features": ["drawsBgColor", "elFeather", "mediaFill"],
+          "refPngPath": "renders/pro7-synth-picture-effects/3.ref.png",
+          "ordoPngPath": "renders/pro7-synth-picture-effects/3.png",
+          "ms1920": 0
+        },
+        {
+          "n": 4,
+          "ssim": 0.9995114842864522,
+          "transparentRef": false,
+          "overallMae": 0.0008691094203885258,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M7APP60TQG60WDMZFDVWK655",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.0008691094203885258
+            },
+            {
+              "objectId": "01M7APP60TPPS15RJ09QC3QT88",
+              "type": "image",
+              "box": {
+                "x": 120,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.003364078431372549
+            },
+            {
+              "objectId": "01M7APP60TBYMNXNTWXVE2089T",
+              "type": "image",
+              "box": {
+                "x": 710,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.003364078431372549
+            },
+            {
+              "objectId": "01M7APP60TVY0SKWNYNTCAM95K",
+              "type": "image",
+              "box": {
+                "x": 1300,
+                "y": 390,
+                "w": 500,
+                "h": 300
+              },
+              "mae": 0.003364078431372549
+            }
+          ],
+          "features": ["drawsBgColor", "elShadow", "elFeather", "nonRectShape", "mediaFill"],
+          "refPngPath": "renders/pro7-synth-picture-effects/4.ref.png",
+          "ordoPngPath": "renders/pro7-synth-picture-effects/4.png",
+          "ms1920": 0
+        }
+      ],
+      "importNotes": [
+        "[info] ProPresenter 7 proto greyshirtguy/ProPresenter7-Proto@1c019ab18972",
+        "[info] skipped slide labels (4)",
+        "[info] imported \"pro7-synth-picture-effects\": 1 section(s), 4 slide(s), 1 arrangement(s)"
+      ]
     }
   ],
   "clusters": [
     {
       "feature": "drawsBgColor",
-      "slideCount": 7,
+      "slideCount": 15,
       "meanSsim": 0.9998,
-      "recoverableGain": 0.0015,
+      "recoverableGain": 0.0033,
       "worstSlide": {
         "deck": "pro7-synth-masks-and-crops",
         "n": 2,
@@ -383,13 +811,35 @@
     },
     {
       "feature": "mediaFill",
-      "slideCount": 2,
-      "meanSsim": 0.9993,
-      "recoverableGain": 0.0014,
+      "slideCount": 6,
+      "meanSsim": 0.9995,
+      "recoverableGain": 0.0033,
       "worstSlide": {
         "deck": "pro7-synth-masks-and-crops",
         "n": 2,
         "ssim": 0.9985739765003399
+      }
+    },
+    {
+      "feature": "nonRectShape",
+      "slideCount": 7,
+      "meanSsim": 0.9998,
+      "recoverableGain": 0.0017,
+      "worstSlide": {
+        "deck": "pro7-synth-picture-effects",
+        "n": 2,
+        "ssim": 0.9989148144473622
+      }
+    },
+    {
+      "feature": "elShadow",
+      "slideCount": 2,
+      "meanSsim": 0.9992,
+      "recoverableGain": 0.0016,
+      "worstSlide": {
+        "deck": "pro7-synth-picture-effects",
+        "n": 2,
+        "ssim": 0.9989148144473622
       }
     },
     {
@@ -416,8 +866,8 @@
     },
     {
       "feature": "gradientFill",
-      "slideCount": 2,
-      "meanSsim": 0.9994,
+      "slideCount": 3,
+      "meanSsim": 0.9996,
       "recoverableGain": 0.0011,
       "worstSlide": {
         "deck": "pro7-synth-core",
@@ -437,14 +887,25 @@
       }
     },
     {
-      "feature": "nonRectShape",
-      "slideCount": 4,
-      "meanSsim": 1,
-      "recoverableGain": 0.0001,
+      "feature": "elFeather",
+      "slideCount": 2,
+      "meanSsim": 0.9997,
+      "recoverableGain": 0.0007,
       "worstSlide": {
-        "deck": "pro7-synth-masks-and-crops",
-        "n": 3,
-        "ssim": 0.999976066155878
+        "deck": "pro7-synth-picture-effects",
+        "n": 4,
+        "ssim": 0.9995114842864522
+      }
+    },
+    {
+      "feature": "textLineMask",
+      "slideCount": 2,
+      "meanSsim": 1,
+      "recoverableGain": 0,
+      "worstSlide": {
+        "deck": "pro7-synth-text-and-masks",
+        "n": 4,
+        "ssim": 0.9999913388079098
       }
     },
     {
@@ -456,6 +917,17 @@
         "deck": "pro7-synth-shapes",
         "n": 3,
         "ssim": 0.9999999814435948
+      }
+    },
+    {
+      "feature": "strokeBorder",
+      "slideCount": 1,
+      "meanSsim": 1,
+      "recoverableGain": 0,
+      "worstSlide": {
+        "deck": "pro7-synth-text-and-masks",
+        "n": 2,
+        "ssim": 0.9999873712658834
       }
     }
   ]

@@ -218,11 +218,22 @@ The harness produces:
   custom shape geometry, crop, or text styling).
 - Monotonic non-regression ratcheting against `tools/pro7-fidelity/pro7-baseline.json` via `--baseline`
   and `--ratchet` (failing the run if any deck drops by more than 0.2 % or any slide drops by more
-  than 0.5 %). A 10-slide synthetic probe suite (`--corpus`) across 3 decks (`pro7-synth-core`,
-  `pro7-synth-shapes`, `pro7-synth-masks-and-crops`) covers core fills and gradients, preset and custom
-  cubic bezier shapes, 315° gradients, media crops, and ellipse image masks; it is enforced in CI on
-  every run. Local evaluation can additionally run against real exported `.proPlaylist` bundles via
-  `--sample-dir <dir>`.
+  than 0.5 %, and, since PR #23, if a baseline deck or slide the run was meant to score is missing from it:
+  a deck that stops importing or rendering used to pass silently; a run is meant to score the baseline's
+  decks of the kinds it ran, `--corpus` synthetic and `--sample-dir` sample, within its `--decks` and
+  `--slides` filters). An 18-slide synthetic probe suite (`--corpus`) across 5 decks covers core fills and
+  gradients, preset and custom cubic bezier shapes, 315° gradients, media crops and ellipse image masks
+  (`pro7-synth-core`, `pro7-synth-shapes`, `pro7-synth-masks-and-crops`), text boxes with a fill and with a
+  border and full-width line masks in a colour and a gradient (`pro7-synth-text-and-masks`), and rounded
+  pictures, picture shadows, feathers and the three together (`pro7-synth-picture-effects`,
+  `corpus-effects.ts`): 12 of the 22 feature tags. It is enforced in CI on every run. The suite is
+  font-free: text is drawn in the colour of the box or strap behind it (or is one dot), and a line mask is
+  made taller than the slide, so only box and strap geometry count whatever face fontconfig picks. Its
+  references are computed from ordo's own drawing conventions (a stroke centred on the outline, a strap
+  the box width plus its offsets, LibreOffice's shadow σ = blur/√6 and eroded, blurred soft edge), so it
+  is a regression check of the importer and the renderer, not a measure of agreement with ProPresenter;
+  that is the sample run's job. Local evaluation can additionally run against real exported
+  `.proPlaylist` bundles via `--sample-dir <dir>`.
 
 ## CI
 

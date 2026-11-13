@@ -129,4 +129,45 @@ describe('compareBaseline', () => {
     expect(res.passed).toBe(true);
     expect(res.regressedSlides).toHaveLength(0);
   });
+
+  it('fails when a baseline deck is missing from the run (it stopped importing or rendering)', () => {
+    const base = makeReport([makeDeck('Deck A', [0.95, 0.96]), makeDeck('Deck B', [0.9, 0.91])]);
+    const curr = makeReport([makeDeck('Deck A', [0.95, 0.96])]);
+    const res = compareBaseline(curr, base, { maxSlideDrop: 0.005, maxDeckDrop: 0.002 });
+    expect(res.passed).toBe(false);
+    expect(res.missing).toEqual([{ deck: 'Deck B' }]);
+    expect(res.lines.join('\n')).toContain('"Deck B" (the whole deck)');
+  });
+
+  it('fails when a baseline slide is missing from the run, and not for one a filter leaves out', () => {
+    const base = makeReport([makeDeck('Deck A', [0.95, 0.96, 0.97])]);
+    const curr = makeReport([makeDeck('Deck A', [0.95, 0.96])]);
+    const res = compareBaseline(curr, base, { maxSlideDrop: 0.005, maxDeckDrop: 0.002 });
+    expect(res.passed).toBe(false);
+    expect(res.missing).toEqual([{ deck: 'Deck A', n: 3 }]);
+    // A run of slides 1-2 only (--slides) was not meant to score slide 3.
+    const filtered = compareBaseline(curr, base, {
+      maxSlideDrop: 0.005,
+      maxDeckDrop: 0.002,
+      slidesFilter: new Map([['deck a', new Set([1, 2])]]),
+    });
+    expect(filtered.passed).toBe(true);
+    expect(filtered.missing).toEqual([]);
+  });
+
+  it('expects only the decks the run was meant to score (its kinds and deck filter)', () => {
+    const sample = { ...makeDeck('Sample deck', [0.9]), kind: 'sample' as const };
+    const synthetic = { ...makeDeck('pro7-synth-core', [0.99]), kind: 'synthetic' as const };
+    const base = makeReport([sample, synthetic]);
+    const curr = makeReport([synthetic]);
+    // A --corpus run without --sample-dir: the sample deck is not expected.
+    const res = compareBaseline(curr, base, {
+      maxSlideDrop: 0.005,
+      maxDeckDrop: 0.002,
+      expected: (d) => d.kind === 'synthetic',
+    });
+    expect(res.passed).toBe(true);
+    expect(res.missing).toEqual([]);
+    expect(compareBaseline(curr, base, { maxSlideDrop: 0.005, maxDeckDrop: 0.002 }).passed).toBe(false);
+  });
 });
