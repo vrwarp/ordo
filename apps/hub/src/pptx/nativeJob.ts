@@ -57,9 +57,12 @@
  * how many slides have something missing. With LibreOffice each follow-up plan records those kinds
  * (`PptxLoSlide.kinds`) for a hub that loses LibreOffice later (`fallback.ts` `withoutLibreOffice`).
  *
- * **A scene parsed on the client** (`PptxNativePayload.sceneHash`, `stepsFromClientScene`) takes the place of
- * step 2's batches and follows the same rules: a slide past the client's bound on outline files loses the
+ * **A scene parsed on the client** (`PptxNativePayload.sceneHash`, `stepsFromClientScene`), once the pool has
+ * checked it (`clientScene.ts`), takes the place of step 2's batches and follows the same rules with the same
+ * import core (`@ordo/importers` `pptx-core.ts`): a slide past the client's bound on outline files loses the
  * objects naming the files it was not given, and a slide the client could not read gets the text rescue here.
+ * A scene the check refuses makes the job parse the deck itself; the scene file is released once version 1 is
+ * saved or the import fails.
  */
 import { open, rm, stat } from 'node:fs/promises';
 import { type Box, drawnGeomRefs, newId, type Presentation, type Slide } from '@ordo/domain';

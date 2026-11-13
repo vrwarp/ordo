@@ -5,6 +5,7 @@ import {
   clientScene,
   type ParseRequest,
   resetImportParse,
+  SCENE_MAX_BYTES,
   useImportParse,
   type WorkerFactory,
 } from './pptxParse.ts';
@@ -106,7 +107,12 @@ describe('the browser parse of a PowerPoint import (design/27 §2)', () => {
       throw new Error('no workers here');
     };
     expect(await clientScene(req(), { worker: none })).toBeUndefined();
-    expect(useImportParse.getState().hub).toEqual({ live: 0, timeout: 0, failed: 2, unavailable: 1 });
+    // A scene larger than the hub takes is not uploaded: the hub would drop it.
+    const huge = fake((w) =>
+      w.send({ t: 'done', scene: { byteLength: SCENE_MAX_BYTES + 1 } as ArrayBuffer, ms: 1, slides: 1 }),
+    );
+    expect(await clientScene(req(), { worker: huge.factory })).toBeUndefined();
+    expect(useImportParse.getState().hub).toEqual({ live: 0, timeout: 0, failed: 3, unavailable: 1 });
     expect(failing.workers[0]!.terminated && dying.workers[0]!.terminated).toBe(true);
     expect(logLines().some((l) => /could not read it: zip entries overlap/.test(l.text))).toBe(true);
   });

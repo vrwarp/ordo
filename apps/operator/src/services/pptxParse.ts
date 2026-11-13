@@ -21,6 +21,12 @@ import { log } from './log.ts';
 /** How long the import worker may parse one deck before it is terminated and the hub parses it. */
 export const PARSE_DEADLINE_MS = 90_000;
 
+/**
+ * The largest scene the hub takes (`apps/hub/src/pptx/clientScene.ts` `CLIENT_SCENE_LIMITS`): a larger one is
+ * not uploaded at all, since the hub would drop it and parse the deck itself.
+ */
+export const SCENE_MAX_BYTES = 128 * 1024 * 1024;
+
 /** Why a deck went to the hub without a scene. */
 export type HubReason = 'live' | 'timeout' | 'failed' | 'unavailable';
 
@@ -141,7 +147,10 @@ export async function clientScene(
       const m = ev.data;
       if (!m || typeof m !== 'object') return;
       if (m.t === 'progress') r.onProgress?.(Math.max(0, Math.min(1, m.pct)));
-      else if (m.t === 'done') finish(new Blob([m.scene], { type: 'application/json' }), 'parsed');
+      else if (m.t === 'done')
+        if (m.scene.byteLength > SCENE_MAX_BYTES)
+          finish(undefined, 'failed', 'its scene is larger than the hub takes');
+        else finish(new Blob([m.scene], { type: 'application/json' }), 'parsed');
       else if (m.t === 'error') finish(undefined, 'failed', m.message);
     };
     w.onerror = (e: ErrorEvent) => {

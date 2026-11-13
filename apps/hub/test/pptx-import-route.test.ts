@@ -6,12 +6,13 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PptxRenderer, type ShapeObject, type Slide } from '@ordo/domain';
+import { type Presentation, PptxRenderer, type ShapeObject, type Slide } from '@ordo/domain';
 import {
   CLIENT_M9_WRITES,
   CONVERTER_VERSION as CLIENT_CONVERTER_VERSION,
   importPptxClient,
   PPTX_CLIENT_LIMITS,
+  parsePptxScene,
   type PptxClientScene,
 } from '@ordo/importers';
 import type { Job } from '@ordo/protocol';
@@ -35,6 +36,7 @@ import {
   type SceneTaskInput,
 } from '../src/pptx/shared.ts';
 import { documentImportForm } from '../src/routes.ts';
+import { comparable, diffJson } from '../../../tools/pptx-fidelity/src/equivalence.ts';
 import { fixtures } from './fixtures.ts';
 import { type Client, EDIT_PIN, login, startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf } from './pptx-helpers.ts';
@@ -415,6 +417,59 @@ describe('POST /import/document', () => {
     expect(s2.pptx!.pending).toBeUndefined();
     expect(s2.pptx!.notes).toEqual(['over the import budget of shape outlines: 1 shape(s) left out']);
     expect(result.notes.some((n) => /slide 2's shape outlines pass/.test(n))).toBe(true);
+  });
+
+  it('stores what its own parse stores when it builds from a client scene (public golden decks)', async () => {
+    // The hub-vs-client equivalence of the import core (tools/pptx-fidelity `--equivalence` runs it over the
+    // worship corpus): each deck through the hub's own parse and through a browser scene, compared modulo ids,
+    // media ids (by file), times, the import log and digests.
+    const decks = [
+      'golden-pptx/challenging-features/tables/table_styles_and_cells.pptx',
+      'golden-pptx/challenging-features/charts/chart_2d_basic.pptx',
+      'golden-pptx/church-announcements-ministry/twc_worship_announcements.pptx',
+      'golden-pptx/church-worship-lyrics/hymn_dark_base_sans.pptx',
+    ];
+    const pool = {
+      run: (async (kind: string, input: unknown) =>
+        kind === 'pptx-client-scene'
+          ? clientSceneTask(input as ClientSceneTaskInput)
+          : sceneTask(input as SceneTaskInput)) as CpuPool['run'],
+    };
+    const run = async (payload: PptxNativePayload) => {
+      let cur = payload;
+      const logs: string[] = [];
+      const out = (await nativeJob(hub.imports.pptx.deps, { pool })({
+        id: `eq-${Math.random().toString(36).slice(2)}`,
+        payload: cur,
+        signal: new AbortController().signal,
+        progress: () => undefined,
+        log: (l: string) => {
+          logs.push(l);
+        },
+        setPayload: (next) => {
+          cur = next;
+        },
+      } as JobCtx<PptxNativePayload>)) as PptxNativeResult;
+      return { p: hub.lib.presentations.must(out.presentationId), logs };
+    };
+    for (const rel of decks) {
+      const bytes = new Uint8Array(readFileSync(join(import.meta.dirname, '../../..', rel)));
+      const name = rel.split('/').pop()!;
+      const scene = (await parsePptxScene(bytes)).scene;
+      const fd = new FormData();
+      fd.append('renderer', 'native');
+      fd.append('clientScene', new Blob([JSON.stringify(scene)], { type: 'application/json' }), 'scene.json');
+      fd.append('file', new Blob([bytes]), name);
+      const withScene = (await queued(await ed.fetch('/import/document', { method: 'POST', body: fd })))
+        .payload as PptxNativePayload;
+      const own = (await queued(await post(bytes, name))).payload as PptxNativePayload;
+      const client = await run(withScene);
+      expect(client.logs.join('\n')).toMatch(/parsed in the browser: the hub checked its scene/);
+      const hubOwn = await run(own);
+      const fileOf = (id: string) => hub.lib.media.get(id)?.original.hash;
+      const same = (p: Presentation) => comparable({ ...p, title: '' }, fileOf);
+      expect(diffJson(same(hubOwn.p), same(client.p)), rel).toEqual([]);
+    }
   });
 
   it('gives the text rescue to a slide the client could not read or did not send, never a picture (M9 ladder)', async () => {

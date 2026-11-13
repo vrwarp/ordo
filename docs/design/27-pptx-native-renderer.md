@@ -2505,6 +2505,12 @@ worker, the Pages demo and the fidelity harness:
   hub, so a table never measures differently by where it was parsed. This replaces the rebase note's "no
   font faces" above.
 - **The Pages demo** parses for a hub without LibreOffice and builds with `assemblePptxScene` (design/26).
+- **Measured** (2026-11-13, worship shard 0, 89 decks, `tools/pptx-fidelity` `hub-import --equivalence`, hub
+  without LibreOffice): every scene used, 89 of 89 decks store the same presentation by both paths (0
+  differences modulo ids, media ids by file, times, the log and digests); the parse in Node took p50 107 ms,
+  p95 1.6 s, at most 7.1 s per deck on a loaded 4-CPU machine. A test over four public decks of the golden
+  corpus (`pptx-import-route.test.ts`) and the Import tab's e2e (`pptx-import-tab.spec.ts`, a table measured
+  with the bundled faces) hold it in CI.
 <!-- /m9:import-core -->
 
 <!-- m9:tables-render -->

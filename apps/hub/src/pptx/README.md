@@ -79,6 +79,12 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `textRepair.ts`     | `pptx-text-repair` job, `pagesOf`, `readDeckText`, `slideBoxes`, `queueTextRepair`         | G      |
 | `reimport.ts`       | 'Re-import from PowerPoint': plan, merge and the `pptx-reimport` job (M4; editor/M4.md)    | M4 F   |
 | `digest.ts`         | `importDigest`, `digestMatches`: "unedited" over the objects with an origin, everywhere    | M4     |
+| `clientScene.ts`    | Pool task `pptx-client-scene`: a browser's scene parsed and checked off the event loop     | core   |
+
+The import core (`@ordo/importers`: `pptx-scan.ts`, `pptx-geoms.ts`, `pptx-pictures.ts`, `pptx-ladder.ts`,
+`pptx-core.ts`, `pptx-report.ts`, `pptx-faces.ts`) holds the pure steps the browser's parse shares;
+`ladder.ts`, `digest.ts` and parts of `geoms.ts`, `pictures.ts`, `report.ts`, `faces.ts` and `sceneTask.ts`
+re-export from it (design/27 m9:import-core).
 
 Contracts already in place (the scaffold):
 - `@ordo/domain`: `Slide.pptx` (`SlidePptx`: fileId, index, shown, class, version, digest, pending, notes,
@@ -751,8 +757,9 @@ the slide budgets are drawn natively, and a slide past 150 objects reaches the l
   consecutive slides per call at `RESCUE_SLIDE_MS` 2 s a slide, a failed run slide by slide, all within
   `RESCUE_TOTAL_MS` 2 minutes, each call stopped by an abort timer). A rescued slide is hybrid with
   `missing: ['slide']` and the rescue's note; one nothing could read is an empty slide that says so.
-- **A scene parsed on the client** (`stepsFromClientScene`, the operator's default path since main's #11)
-  follows the same rules. A slide past the client's bound on outline files (`PPTX_CLIENT_LIMITS.geomFileBytes`,
+- **A scene parsed on the client** (`stepsFromClientScene`, the operator's default path since main's #11,
+  checked in the pool first, `clientScene.ts`) follows the same rules, with the same core (`ImportCore`). A
+  slide past the client's bound on outline files (`PPTX_CLIENT_LIMITS.batchGeomBytes`,
   `PptxClientScene.geomOver`) keeps the placeholders of the files it was not given, so the hub leaves out the
   objects that name them (`withoutFiles`, `leftOut`) instead of keeping legacy shapes where traced outlines
   were. A slide the client read as `unreadable`, or one the scene lacks, gets the text rescue from its own

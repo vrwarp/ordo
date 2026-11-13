@@ -15,6 +15,7 @@ import {
   type DeckRecord,
   hubImportGates,
   type HubImportReport,
+  hubLibreOffice,
   officeSpawn,
   parseHubImportArgs,
   runHubImport,
@@ -71,6 +72,11 @@ describe('hub-import', () => {
       timeoutMs: 30_000,
       decks: ['x'],
     });
+    expect(parseHubImportArgs(['--client-scene', 'x'])).toMatchObject({ clientScene: true, equivalence: false });
+    expect(parseHubImportArgs(['--equivalence', 'x'])).toMatchObject({ clientScene: true, equivalence: true });
+    expect(hubLibreOffice({ libreoffice: { state: 'absent' } })).toBe(false);
+    expect(hubLibreOffice({ libreoffice: { state: 'available' } })).toBe(true);
+    expect(hubLibreOffice(undefined)).toBe(true);
     expect(() => parseHubImportArgs(['--hub', 'docker'])).toThrow(/dist or source/);
     expect(() => parseHubImportArgs(['--frobnicate'])).toThrow(/unknown option/);
   });

@@ -175,3 +175,35 @@ describe('parsePptxScene on hostile zips', () => {
     await expect(parsePptxScene(many)).rejects.toThrow(/more than 64 MB of slide XML/);
   });
 });
+
+describe('parsePptxScene on mutated decks (fuzz)', () => {
+  it('ends with a scene or an Error, within time, whatever bytes of a real deck change', async () => {
+    const { readFileSync } = await import('node:fs');
+    const deck = new Uint8Array(
+      readFileSync(
+        new URL('../../../golden-pptx/church-worship-lyrics/hymn_light_base_standard.pptx', import.meta.url),
+      ),
+    );
+    const t0 = performance.now();
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(fc.tuple(fc.nat(deck.length - 1), fc.integer({ min: 0, max: 255 })), {
+          minLength: 1,
+          maxLength: 8,
+        }),
+        async (edits) => {
+          const b = deck.slice();
+          for (const [i, x] of edits) b[i] = x;
+          try {
+            const p = await parsePptxScene(b);
+            expect(p.scene.listed.length).toBeGreaterThan(0);
+          } catch (e) {
+            expect(e).toBeInstanceOf(Error);
+          }
+        },
+      ),
+      { numRuns: 120, seed: 5 },
+    );
+    expect(performance.now() - t0).toBeLessThan(30_000 * CI);
+  });
+});
