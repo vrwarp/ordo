@@ -66,7 +66,7 @@ test('an imported PowerPoint deck draws like the harness, shows its text everywh
   const renderer = await NativeRenderer.start(chromium.executablePath());
   let rendered: Awaited<ReturnType<NativeRenderer['renderDeck']>>;
   try {
-    rendered = await renderer.renderDeck(converted, harnessDir, 0);
+    rendered = await renderer.renderDeck(converted, harnessDir, { repeats: 0 });
   } finally {
     await renderer.close();
   }

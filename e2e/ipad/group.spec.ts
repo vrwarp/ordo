@@ -61,9 +61,10 @@ async function finger(page: Page, from: Pt, to: Pt, holdMs = 0, steps = 12): Pro
         target.dispatchEvent(
           new TouchEvent(type, {
             ...init,
-            touches: list,
-            targetTouches: list,
-            changedTouches: doc.createTouchList(t),
+            // WebKit takes the TouchLists it made itself; the DOM types ask for Touch[].
+            touches: list as unknown as Touch[],
+            targetTouches: list as unknown as Touch[],
+            changedTouches: doc.createTouchList(t) as unknown as Touch[],
           }),
         );
       };

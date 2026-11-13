@@ -39,6 +39,13 @@ constructor), no `enum`, no `namespace` with code, no `import x = require()`. `e
 `tsconfig.base.json` makes `pnpm typecheck` fail on them, and Biome's `style/noParameterProperties`
 is an error in `pnpm lint`, tests and e2e specs included.
 
+`pnpm typecheck` checks the tests as strictly as the code they test: a package's `tsconfig.json` covers
+`src` (and the tests in it), its `tsconfig.test.json` what lies outside `src` with Node's types
+(`apps/operator/test`, the renderer's `golden/` and `bench/`, `apps/output/bench`,
+`apps/demo/scripts`), and the root `tsconfig.e2e.json` the e2e specs and the Playwright and Vitest
+configs. A test that calls a function with the wrong arguments, or builds a fixture with fields the
+schema does not have, fails the check rather than quietly testing something else.
+
 ## Coding rules that protect the frame budget
 
 - `packages/renderer` and the output main thread: no allocation in per-frame code paths.

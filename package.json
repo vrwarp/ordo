@@ -10,7 +10,7 @@
     "dev": "pnpm --filter @ordo/hub dev",
     "build": "pnpm -r --filter \"./apps/*\" build",
     "build:pages": "pnpm --filter @ordo/demo build:pages",
-    "typecheck": "pnpm -r --parallel typecheck",
+    "typecheck": "pnpm -r --parallel typecheck && tsc -p tsconfig.e2e.json",
     "lint": "biome check .",
     "format": "biome format --write .",
     "test": "vitest run",

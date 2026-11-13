@@ -40,7 +40,7 @@ const OBJECTS: SlideObject[] = [
     text: 'Verse 1',
     style: { fontFamily: 'Inter', fontSizePx: 40, color: { r: 0, g: 255, b: 0, a: 1 } } as never,
     opacity: 0.8,
-    runs: [{ start: 0, end: 5, bold: true }],
+    runs: [{ start: 0, end: 5, fontWeight: 700 }],
   } as SlideObject,
   {
     id: 'photo',

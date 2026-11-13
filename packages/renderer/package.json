@@ -10,7 +10,7 @@
     "./*": "./src/*"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "golden": "tsx golden/run.ts",
     "late-font": "tsx golden/late-font.ts",
     "bench:slides": "tsx bench/slides.ts",
