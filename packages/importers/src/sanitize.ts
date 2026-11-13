@@ -483,6 +483,16 @@ export function cutText(o: TextObject, max: number): TextObject {
   return out;
 }
 
+/**
+ * One slide object within the bounds every stored object keeps (the dispatch `sanitizePresentation` runs on
+ * each object, M9's fields included: tables, charts, decorations, warps, writing, 3-D looks): what the
+ * editor runs on objects pasted from the system clipboard (design/21), as on an import. Never throws on an
+ * object the schema accepted.
+ */
+export function sanitizeObject(o: SlideObject): SlideObject {
+  return clampObject(o);
+}
+
 function clampObject(o: SlideObject): SlideObject {
   const box = clampBox(o.box);
   const opacity = finite(o.opacity, 1, 0, 1);

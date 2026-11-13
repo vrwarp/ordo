@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { ConfirmHost } from './components/Confirm.tsx';
 import { Toasts } from './components/Toasts.tsx';
 import { UpdateFailedScreen, UpdatingOverlay } from './components/UpdatingScreen.tsx';
@@ -161,7 +162,28 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
   return (
     <div className={`app app-route-${route.name}`}>
       <Nav role={role} route={route} profile={profile} />
-      <div className="page">{body}</div>
+      <div className="page">
+        <ErrorBoundary
+          key={route.name}
+          name={`page ${route.name}`}
+          resetKey={JSON.stringify(route)}
+          fallback={(retry) => (
+            <div className="center">
+              <div className="banner red col" role="alert" data-page-error style={{ gap: 8 }}>
+                <span>
+                  This page could not be shown. The screens and the live controls are not affected: use the
+                  menu above to go on.
+                </span>
+                <button type="button" className="small" onClick={retry}>
+                  Try again
+                </button>
+              </div>
+            </div>
+          )}
+        >
+          {body}
+        </ErrorBoundary>
+      </div>
       <Toasts />
       <ConfirmHost />
       <UpdatingOverlay />

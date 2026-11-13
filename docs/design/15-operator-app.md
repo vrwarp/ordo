@@ -244,6 +244,40 @@ cells in place of the shape fields).
   `runs.<field>` (`runs.color`, `runs.sizeScale`, ...; `runs` keeps every one), so the next theme keeps it,
   as `style.<field>` keeps a box style field.
 - Property panel bound to the selected object's schema.
+- Clipboard (`views/editor/ops/clipboard.ts`, `actions.ts`): text copied in ordo keeps its runs and
+  paragraph styles (`data-ordo-rich`); HTML from other apps (Bible Gateway's verse numbers and red letters,
+  Word, Google Docs, web pages) becomes runs and paragraphs; slide objects copy as `data-ordo-objects`, so
+  they paste on another slide, another tab or another device. Both payloads carry their format (`v`,
+  `CLIPBOARD_FORMAT`): ordo reads its own and the unversioned first one and leaves a newer one alone (the
+  paste falls back to the HTML's text). Clipboard HTML is untrusted (design/21): the reader is a small
+  tokenizer, linear in the HTML whatever it holds, bounded by `CLIPBOARD_LIMITS` (4 M characters read,
+  100,000 nodes, 256 levels, 20,000 characters of text, 200 objects) and never throws (fuzzed in
+  `clipboardHtml.fuzz.test.ts`). An object pasted from the system clipboard is kept only if it passes the
+  slide object schema (its parsed data: unknown keys dropped), the importers' sanitize dispatch
+  (`@ordo/importers` `sanitizeObject`, loaded with the first such paste so it stays in the importer's chunk;
+  M9's tables, charts, decorations, warps and 3-D looks included) and the render clamp; its re-import
+  identity (`origin.shapeId`, `ph`, `role`) is dropped and only `origin.group` kept, renumbered, so a pasted
+  shape with its text still selects as one. A paste inside ordo (the in-memory copy) and Duplicate keep the
+  whole origin and `locked`, as before. A text paste never takes a box past 20,000 characters. When objects
+  of a `data-ordo-objects` payload are left out, a toast says how many ("2 pasted objects could not be used
+  on a slide: nothing was added"); a payload whose objects all fail is still an object paste (its HTML's text
+  is not pasted as a text box). #24's readers that need no open panel (the floating bar's `o.style` and
+  `o.text`, the hidden backing text field, the deck swatches) only ever see objects that passed: they and the
+  Object panel are server-rendered for thousands of mutated objects the paste keeps
+  (`untrustedReaders.test.ts`).
+- Every add stops at what the screens draw (`canAdd`, `ops/slides.ts`): the render clamp draws at most 200
+  objects and 16 distinct pictures of a slide and drops the topmost, which would be the volunteer's newest.
+  The toolbar's Text, Image, Video and shapes, a pasted picture, text or objects, and Duplicate check first
+  and say why they did not add ("This slide already has the most objects a slide can show (200)" or "…the
+  most pictures…"). A picture pasted from the clipboard is added when its upload finishes, unless the
+  presentation went live meanwhile.
+- Errors (`components/ErrorBoundary.tsx`): a render error stays in the part of the page it happened in. In
+  the canvas-first editor the stage (the Stage lens or the canvas), the Tune drawer's panel, the 4-screen
+  tray and the Lyric Script each sit in an error boundary whose fallback says that part could not be shown,
+  that the screens and the live controls are not affected, and offers Try again and Undo (a new slide or an
+  undo draws it again by itself). The floating bar has a boundary of its own whose fallback is no bar, so an
+  object the bar cannot read never blanks the canvas under it. The app puts one around each page, so the
+  navigation, the toasts and the sign-in overlay always stay. Each is logged.
 - Pictures are drawn with their crop, flips and mask (`ImageObject.crop`, `flipH`, `flipV`, `mask`) by the
   same `drawImageFit` every other drawer uses (design/27 §11 item 6; M4 item D, `CropControl.tsx`, pure ops
   in `ops/pictures.ts`, one undo step each, the crop fields coalescing per picture). The Object panel's

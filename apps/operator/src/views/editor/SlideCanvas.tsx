@@ -945,7 +945,7 @@ function syncBackingTextarea(start: number, end: number, caret: number): void {
  * formatting shortcuts (`Ctrl/Cmd + B/I/U`), undo/redo selection preservation, and rich clipboard paste work
  * identically without opening the drawer.
  */
-function CanvasBackingTextEditor({ obj, readOnly }: { obj: TextObject; readOnly: boolean }) {
+export function CanvasBackingTextEditor({ obj, readOnly }: { obj: TextObject; readOnly: boolean }) {
   const off = readOnly || isLocked(obj);
   return (
     <textarea

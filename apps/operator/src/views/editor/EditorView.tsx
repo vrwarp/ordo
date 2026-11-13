@@ -1,5 +1,7 @@
+import type { SlideObject } from '@ordo/domain';
 import { useEffect, useRef, useState } from 'react';
 import { FindReplaceDialog } from './FindReplaceDialog.tsx';
+import { ErrorBoundary, PaneError } from '../../components/ErrorBoundary.tsx';
 import { installKeepVisible } from '../../components/keepVisible.ts';
 import { Menu } from '../../components/Menu.tsx';
 import { useCoarsePointer, useMedia } from '../../components/pointer.ts';
@@ -9,6 +11,7 @@ import { useLibrary } from '../../state/library.ts';
 import { useSession } from '../../state/session.ts';
 import { toast } from '../../state/toasts.ts';
 import {
+  addToSlide,
   copySelection,
   copyTextSelection,
   cutSelection,
@@ -16,6 +19,7 @@ import {
   deleteSelection,
   duplicateSelection,
   handleTextPaste,
+  mayAdd,
   moveSelection,
   reorderSelection,
   tryPasteObjectsFromClipboard,
@@ -29,7 +33,7 @@ import { ConflictDialog } from './ConflictDialog.tsx';
 import { historyKey, keyPlace, slideNavKey, stepSlide } from './editorKeys.ts';
 import { FloatingContextBar } from './FloatingContextBar.tsx';
 import { LookPreviews, SingleLookStagePreview } from './LookPreviews.tsx';
-import { addVideo } from './mediaOps.ts';
+import { addVideo, newVideo } from './mediaOps.ts';
 import {
   adoptJobSaves,
   change,
@@ -49,7 +53,7 @@ import {
 // `window.__ordo.editor`, read by the end-to-end specs (e2e/editorhelpers.ts).
 import './inspect.ts';
 import { ObjectPanel } from './ObjectPanel.tsx';
-import { addObject, getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
+import { getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
 import { hasGroup, htmlToRichText, pasteRichText } from './ops/index.ts';
 import { PresentationPanel } from './PresentationPanel.tsx';
 import { RevisionsDialog } from './RevisionsDialog.tsx';
@@ -191,6 +195,9 @@ export function EditorView({ id }: { id: string }) {
 
   const p = ed.id === id ? ed.draft : undefined;
   const readOnly = locked.has(id);
+  // The lock as it is now, for what finishes later (a pasted picture's upload).
+  const readOnlyNow = useRef(readOnly);
+  readOnlyNow.current = readOnly;
   const slide = p ? getSlide(p, ed.slideId) : undefined;
   const obj = slide?.objects.find((o) => o.id === ed.objectId);
 
@@ -391,15 +398,16 @@ export function EditorView({ id }: { id: string }) {
             h: Math.min(1080, Math.round(h)),
             rotation: 0,
           });
-          change((q) => addObject(q, targetSlideId, imgObj));
-          selectObject(imgObj.id);
+          // The upload took a while: the editor may be locked by now (a service went live).
+          if (readOnlyNow.current) return;
+          addToSlide(targetSlideId, imgObj);
         });
         return;
       }
 
       // 3. Check for copied Ordo slide objects (`data-ordo-objects` or in-memory object clipboard).
-      const pastedIds = tryPasteObjectsFromClipboard(e.clipboardData);
-      if (pastedIds?.length) {
+      const pasting = tryPasteObjectsFromClipboard(e.clipboardData);
+      if (pasting) {
         e.preventDefault();
         return;
       }
@@ -414,9 +422,7 @@ export function EditorView({ id }: { id: string }) {
         e.preventDefault();
         const baseObj = newText(curTheme, '');
         const { object } = pasteRichText(baseObj, 0, 0, richSlice);
-        const targetSlideId = st.slideId;
-        change((q) => addObject(q, targetSlideId, object));
-        selectObject(object.id);
+        addToSlide(st.slideId, object);
       }
     };
 
@@ -458,10 +464,9 @@ export function EditorView({ id }: { id: string }) {
   const z = (zz: ZOrder) => obj && reorderSelection(zz);
   // 'Ungroup' applies while a selected object belongs to a group (a PowerPoint group, a shape with its text).
   const grouped = !!slide && hasGroup(slide.objects.filter((o) => ed.objectIds.includes(o.id)));
-  const add = (o: Parameters<typeof addObject>[2]) => {
+  const add = (o: SlideObject) => {
     if (!slide || readOnly) return;
-    change((q) => addObject(q, slide.id, o));
-    selectObject(o.id);
+    addToSlide(slide.id, o);
   };
   const bgId = slide?.backgroundMediaId ?? p.backgroundMediaId;
   const editText = (objectId?: string) => {
@@ -861,37 +866,43 @@ export function EditorView({ id }: { id: string }) {
         </div>
       )}
       {p.kind === 'song' && (songMode ?? (coarse ? 'canvas' : 'reflow')) === 'reflow' ? (
-        <SongReflowEditor
-          presentation={p}
-          readOnly={readOnly}
-          selectedSlideId={slide?.id}
-          onSwitchToCanvas={() => setSongMode('canvas')}
-          banners={
-            <>
-              {readOnly && (
-                <div className="banner" style={{ margin: '8px 16px 0' }} data-locked-banner>
-                  {profile === 'edit'
-                    ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
-                    : 'This presentation is in the live playlist. Editing is locked until End service.'}
-                </div>
-              )}
-              {changedElsewhere && (
-                <div className="banner blue row" style={{ margin: '8px 16px 0' }}>
-                  <span className="grow">
-                    Someone else saved this presentation (rev {libP.rev}) since you opened it. Saving combines
-                    your changes with theirs.
-                  </span>
-                  <button type="button" className="small" onClick={() => void reloadLatest()}>
-                    Reload theirs
-                  </button>
-                  <button type="button" className="small" onClick={() => setDismissedRev(libP.rev)}>
-                    Keep editing
-                  </button>
-                </div>
-              )}
-            </>
-          }
-        />
+        <ErrorBoundary
+          name="editor Lyric Script"
+          resetKey={p}
+          fallback={(retry) => <PaneError what="The Lyric Script" retry={retry} undo={undo} />}
+        >
+          <SongReflowEditor
+            presentation={p}
+            readOnly={readOnly}
+            selectedSlideId={slide?.id}
+            onSwitchToCanvas={() => setSongMode('canvas')}
+            banners={
+              <>
+                {readOnly && (
+                  <div className="banner" style={{ margin: '8px 16px 0' }} data-locked-banner>
+                    {profile === 'edit'
+                      ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
+                      : 'This presentation is in the live playlist. Editing is locked until End service.'}
+                  </div>
+                )}
+                {changedElsewhere && (
+                  <div className="banner blue row" style={{ margin: '8px 16px 0' }}>
+                    <span className="grow">
+                      Someone else saved this presentation (rev {libP.rev}) since you opened it. Saving
+                      combines your changes with theirs.
+                    </span>
+                    <button type="button" className="small" onClick={() => void reloadLatest()}>
+                      Reload theirs
+                    </button>
+                    <button type="button" className="small" onClick={() => setDismissedRev(libP.rev)}>
+                      Keep editing
+                    </button>
+                  </div>
+                )}
+              </>
+            }
+          />
+        </ErrorBoundary>
       ) : (
         <>
           <SlidesPanel
@@ -948,36 +959,45 @@ export function EditorView({ id }: { id: string }) {
               </div>
             )}
             {slide ? (
-              activeLensLook ? (
-                <SingleLookStagePreview
-                  look={activeLensLook}
-                  presentation={p}
-                  slideId={slide.id}
-                  onBackToCanvas={() => setStageLens('canvas')}
-                />
-              ) : (
-                <SlideCanvas
-                  slide={slide}
-                  backgroundMediaId={bgId}
-                  media={media}
-                  readOnly={readOnly}
-                  zoom={zoom}
-                  avoidTopRight={finding ? { w: 344, h: 430 } : undefined}
-                  onEditText={editText}
-                  objectTools={objectTools}
-                  hasExternalTextEditor={showProps && tab === 'object'}
-                  floatingBar={
-                    !coarse && obj && !(drawerOpen && tab === 'object') ? (
-                      <FloatingContextBar
-                        readOnly={readOnly}
-                        drawerOpen={drawerOpen && tab === 'object'}
-                        onToggleDrawer={() => openDrawerTab('object')}
-                      />
-                    ) : undefined
-                  }
-                  slideRect={p.source?.native?.slideRect}
-                />
-              )
+              <ErrorBoundary
+                name="editor stage"
+                resetKey={slide}
+                fallback={(retry) => <PaneError what="This slide" retry={retry} undo={undo} />}
+              >
+                {activeLensLook ? (
+                  <SingleLookStagePreview
+                    look={activeLensLook}
+                    presentation={p}
+                    slideId={slide.id}
+                    onBackToCanvas={() => setStageLens('canvas')}
+                  />
+                ) : (
+                  <SlideCanvas
+                    slide={slide}
+                    backgroundMediaId={bgId}
+                    media={media}
+                    readOnly={readOnly}
+                    zoom={zoom}
+                    avoidTopRight={finding ? { w: 344, h: 430 } : undefined}
+                    onEditText={editText}
+                    objectTools={objectTools}
+                    hasExternalTextEditor={showProps && tab === 'object'}
+                    floatingBar={
+                      !coarse && obj && !(drawerOpen && tab === 'object') ? (
+                        // Its own boundary: an object the bar cannot read costs the bar, never the canvas.
+                        <ErrorBoundary name="editor floating bar" resetKey={obj} fallback={() => null}>
+                          <FloatingContextBar
+                            readOnly={readOnly}
+                            drawerOpen={drawerOpen && tab === 'object'}
+                            onToggleDrawer={() => openDrawerTab('object')}
+                          />
+                        </ErrorBoundary>
+                      ) : undefined
+                    }
+                    slideRect={p.source?.native?.slideRect}
+                  />
+                )}
+              </ErrorBoundary>
             ) : (
               <div className="center muted">Add a slide to start.</div>
             )}
@@ -1029,12 +1049,18 @@ export function EditorView({ id }: { id: string }) {
 
             {looksShown && (
               <div className="ed-looks" data-looks-tray>
-                <LookPreviews
-                  presentation={p}
-                  slideId={slide?.id}
-                  compact
-                  onSelectLook={(lookId) => setStageLens(stageLens === lookId ? 'canvas' : lookId)}
-                />
+                <ErrorBoundary
+                  name="editor 4-screen tray"
+                  resetKey={slide}
+                  fallback={(retry) => <PaneError what="The 4-screen tray" retry={retry} />}
+                >
+                  <LookPreviews
+                    presentation={p}
+                    slideId={slide?.id}
+                    compact
+                    onSelectLook={(lookId) => setStageLens(stageLens === lookId ? 'canvas' : lookId)}
+                  />
+                </ErrorBoundary>
               </div>
             )}
           </div>
@@ -1078,10 +1104,17 @@ export function EditorView({ id }: { id: string }) {
                   </button>
                 )}
               </div>
-              {tab === 'object' && obj && <ObjectPanel o={obj} readOnly={readOnly} />}
-              {tab === 'object' && !obj && <span className="muted">Select an object on the slide.</span>}
-              {tab === 'slide' && slide && <SlidePanel slide={slide} p={p} readOnly={readOnly} />}
-              {tab === 'presentation' && <PresentationPanel p={p} readOnly={readOnly} />}
+              <ErrorBoundary
+                key={`${tab}:${ed.objectId ?? ''}`}
+                name={`editor ${tab} panel`}
+                resetKey={slide}
+                fallback={(retry) => <PaneError what="This panel" retry={retry} undo={undo} />}
+              >
+                {tab === 'object' && obj && <ObjectPanel o={obj} readOnly={readOnly} />}
+                {tab === 'object' && !obj && <span className="muted">Select an object on the slide.</span>}
+                {tab === 'slide' && slide && <SlidePanel slide={slide} p={p} readOnly={readOnly} />}
+                {tab === 'presentation' && <PresentationPanel p={p} readOnly={readOnly} />}
+              </ErrorBoundary>
             </aside>
           )}
         </>
@@ -1136,7 +1169,7 @@ export function EditorView({ id }: { id: string }) {
           onClose={() => setVideoPick(false)}
           onPick={(m) => {
             setVideoPick(false);
-            if (!slide || readOnly) return;
+            if (!slide || readOnly || !mayAdd(slide.id, newVideo(m))) return;
             let added: ReturnType<typeof addVideo> | undefined;
             change((q) => {
               added = addVideo(q, slide.id, m);

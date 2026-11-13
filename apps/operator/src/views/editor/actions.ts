@@ -1,7 +1,16 @@
 import type { Box, ImageCrop, ImageObject, Presentation, SlideObject, TextObject } from '@ordo/domain';
-import { change, currentObjects, selectObjects, selectSlide, useEditor } from './editorStore.ts';
 import {
+  change,
+  currentObjects,
+  selectObject,
+  selectObjects,
+  selectSlide,
+  useEditor,
+} from './editorStore.ts';
+import {
+  addRefusalText,
   applyStyleToSimilar,
+  canAdd,
   type BackgroundMedia,
   type BackgroundScope,
   clearSlideBackground,
@@ -17,6 +26,7 @@ import {
   MAX_OBJECTS,
   MAX_SECTION_SLIDES,
   moveObjects,
+  type ObjectSanitizer,
   newSlideLike,
   type ParaPatch,
   parseObjectsFromHtml,
@@ -49,7 +59,7 @@ import {
   withSlide,
 } from './ops/index.ts';
 import type { SlideRect } from './CanvasGuides.tsx';
-import { getSlide, type ZOrder } from './ops.ts';
+import { addObject, getSlide, type ZOrder } from './ops.ts';
 import { type AlignTo, alignedBox, placeObjects, placementArea } from './placement.ts';
 // F: the PowerPoint card's slide ops (pure, beside the card's other readers).
 import { showObjects, showPicture } from '../../lib/pptxImport.ts';
@@ -280,6 +290,7 @@ export function deleteSelection(): void {
 /** Duplicate the selection; the copies become the selection (the primary's copy the primary). */
 export function duplicateSelection(): void {
   const { objectIds, objectId } = useEditor.getState();
+  if (refused(currentObjects())) return;
   let copies: string[] = [];
   let tried = false;
   onSelection((p, slideId, ids) => {
@@ -384,11 +395,13 @@ export function pasteCopiedObjects(
   objects?: readonly SlideObject[],
   sourceSlideId?: string,
   pasteCount?: number,
+  targetSlideId?: string,
 ): string[] {
-  const slideId = openSlide();
+  const slideId = targetSlideId ?? openSlide();
   if (!slideId) return [];
   const srcObjs = objects ?? lastObjectClip?.objects;
   if (!srcObjs?.length) return [];
+  if (refused(srcObjs, slideId)) return [];
   const srcSlide = sourceSlideId ?? lastObjectClip?.sourceSlideId;
   let count = pasteCount;
   if (count === undefined) {
@@ -418,10 +431,23 @@ export function pasteCopiedObjects(
 }
 
 /**
- * Check `clipboardData` (or in-memory object clipboard) for copied Ordo slide objects and paste them.
- * Returns the pasted object IDs if slide objects were pasted, or null if the clipboard does not hold slide objects.
+ * The importers' sanitize dispatch (`@ordo/importers` `sanitizeObject`) for objects pasted from the system
+ * clipboard, loaded with the first such paste: it lives in the importer's own chunk, not the editor's.
  */
-export function tryPasteObjectsFromClipboard(clipboardData?: DataTransfer | null): string[] | null {
+let sanitizer: Promise<ObjectSanitizer> | undefined;
+export function loadObjectSanitizer(): Promise<ObjectSanitizer> {
+  sanitizer ??= import('@ordo/importers/sanitize.ts').then((m) => m.sanitizeObject);
+  return sanitizer;
+}
+
+/**
+ * Check `clipboardData` (or the in-memory object clipboard) for copied Ordo slide objects and paste them onto
+ * the open slide. Null when the clipboard holds no slide objects (the caller then pastes its text). Else a
+ * promise of the pasted ids: objects from the system clipboard (`data-ordo-objects`) are pasted once the
+ * sanitizer has loaded, and only those that pass it (`parseObjectsFromHtml`); ordo's own in-memory copy at
+ * once.
+ */
+export function tryPasteObjectsFromClipboard(clipboardData?: DataTransfer | null): Promise<string[]> | null {
   const slideId = openSlide();
   const html = clipboardData?.getData('text/html') ?? '';
   const plain = clipboardData?.getData('text/plain') ?? '';
@@ -436,17 +462,69 @@ export function tryPasteObjectsFromClipboard(clipboardData?: DataTransfer | null
     return lastObjectClip.pasteCount;
   };
   if (html) {
+    // The schema check now (it decides whether this is an object paste); the sanitizer once loaded.
     const parsed = parseObjectsFromHtml(html);
     if (parsed) {
       const count = lastObjectClip && lastObjectClip.plain === plain ? nextCount(parsed.sourceSlideId) : 1;
-      return pasteCopiedObjects(parsed.objects, parsed.sourceSlideId, count);
+      return loadObjectSanitizer().then(
+        (sanitize) => {
+          const clean = parseObjectsFromHtml(html, sanitize);
+          if (clean?.left) toast(leftOutText(clean.left, clean.objects.length), 'warn', 8000);
+          if (!clean?.objects.length) return [];
+          return pasteCopiedObjects(clean.objects, clean.sourceSlideId, count, slideId);
+        },
+        () => {
+          toast('The pasted objects could not be read: nothing was added.', 'warn', 8000);
+          return [];
+        },
+      );
     }
   }
   if (lastObjectClip && (!plain || plain === lastObjectClip.plain) && !html) {
     const count = nextCount(lastObjectClip.sourceSlideId);
-    return pasteCopiedObjects(lastObjectClip.objects, lastObjectClip.sourceSlideId, count);
+    return Promise.resolve(pasteCopiedObjects(lastObjectClip.objects, lastObjectClip.sourceSlideId, count));
   }
   return null;
+}
+
+/**
+ * What the editor says when objects pasted from the system clipboard were left out (`parseObjectsFromHtml`
+ * `left`): they did not pass the slide object schema, the sanitizer or the render clamp (design/21).
+ */
+export function leftOutText(left: number, kept: number): string {
+  const what = left === 1 ? '1 pasted object' : `${left} pasted objects`;
+  return kept
+    ? `${what} could not be used on a slide and ${left === 1 ? 'was' : 'were'} left out; the rest was pasted.`
+    : `${what} could not be used on a slide: nothing was added.`;
+}
+
+/**
+ * Whether adding `objects` to the open slide (or `slideId`) is refused (`canAdd`: the screens draw at most
+ * 200 objects and 16 pictures of a slide); a refusal is said in a toast.
+ */
+function refused(objects: readonly SlideObject[], slideId = openSlide()): boolean {
+  const s = useEditor.getState();
+  const slide = s.draft && slideId ? getSlide(s.draft, slideId) : undefined;
+  const why = slide ? canAdd(slide, objects) : null;
+  if (why) toast(addRefusalText(why), 'warn', 8000);
+  return !!why;
+}
+
+/**
+ * Add `o` on top of slide `slideId` and select it (the toolbar's Text, Image and shapes, a pasted picture or
+ * text), unless the slide already holds what the screens can draw (`canAdd`). Whether it was added.
+ */
+export function addToSlide(slideId: string, o: SlideObject): boolean {
+  if (refused([o], slideId)) return false;
+  change((p) => addObject(p, slideId, o));
+  const s = useEditor.getState();
+  if (s.draft && s.slideId === slideId) selectObject(o.id);
+  return true;
+}
+
+/** Whether `o` can be added to slide `slideId` (`canAdd`), saying why not in a toast. */
+export function mayAdd(slideId: string, o: SlideObject): boolean {
+  return !refused([o], slideId);
 }
 
 // ---- D: picture ops ----------------------------------------------------------------------------------

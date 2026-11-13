@@ -86,6 +86,12 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
 - Deck-derived strings (titles, file names, section and part names, hosts) reach a job log line or
   `source.log` only with control characters and line breaks removed and cut to 200 characters, so a deck
   cannot forge `[warn]`/`[error]` lines or a log line's time stamp.
+- Clipboard HTML pasted into the editor is untrusted (any page a volunteer copies from can write it,
+  `data-ordo-objects` included). The editor reads it with a bounded tokenizer (4 M characters, 100,000
+  nodes, 256 levels, linear time, no throw: `CLIPBOARD_LIMITS`, fuzzed), keeps only slide objects that pass
+  the schema, the importers' sanitizer and the render clamp, drops their re-import identity, and pastes at
+  most what a slide draws; an error boundary keeps a render error from unmounting the operator window
+  (design/15 "Clipboard", "Errors"). The hub's schema check on save stays the last line.
 
 ## Secrets and logs
 

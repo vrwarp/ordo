@@ -10,6 +10,7 @@ import {
   type TextRun,
   type TextStyle,
 } from '@ordo/domain';
+import { CLAMP } from '@ordo/renderer';
 import { cloneSlide, findSlide, getSlide, lyricObject, markOverride } from '../ops.ts';
 import { withEverySlide, withSlide } from './common.ts';
 import { type PictureSize, replacePicture } from './pictures.ts';
@@ -25,6 +26,35 @@ export const MAX_TEXT = 20_000;
 export const MAX_PARAS = 5000;
 /** The schema's bound on a section's slides (`Section.slides`): 'New slide like this' stops there. */
 export const MAX_SECTION_SLIDES = 5000;
+
+/**
+ * Why an add was refused (`canAdd`): the slide already holds the most objects the screens draw
+ * (`CLAMP.maxObjects`), or the most distinct pictures (`CLAMP.maxImagesPerSlide`).
+ */
+export type AddRefusal = 'objects' | 'pictures';
+
+/**
+ * Whether `adding` can go on slide `s` and every object still be drawn: the render clamp draws at most
+ * `CLAMP.maxObjects` objects of a slide and `CLAMP.maxImagesPerSlide` distinct pictures, dropping the
+ * topmost, which are the ones just added (design/27 §3.5). Null when it can; else why not. Every add path
+ * of the editor asks first (the toolbar, paste, duplicate, a picture or video added).
+ */
+export function canAdd(s: Pick<Slide, 'objects'>, adding: readonly SlideObject[]): AddRefusal | null {
+  if (!adding.length) return null;
+  if (s.objects.length + adding.length > CLAMP.maxObjects) return 'objects';
+  const pictures = new Set<string>();
+  for (const o of s.objects) if (o.type === 'image') pictures.add(o.mediaId);
+  const before = pictures.size;
+  for (const o of adding) if (o.type === 'image') pictures.add(o.mediaId);
+  return pictures.size > before && pictures.size > CLAMP.maxImagesPerSlide ? 'pictures' : null;
+}
+
+/** What the editor says when an add is refused (`canAdd`). */
+export function addRefusalText(r: AddRefusal): string {
+  return r === 'objects'
+    ? `This slide already has the most objects a slide can show (${CLAMP.maxObjects}): nothing was added. Delete an object or use a new slide.`
+    : `This slide already has the most pictures a slide can show (${CLAMP.maxImagesPerSlide}): nothing was added. Delete a picture or use a new slide.`;
+}
 
 /** Find options: `case` matches case; `wholeWord` matches only whole words (Unicode letters and digits). */
 export type FindOptions = { case?: boolean; wholeWord?: boolean };

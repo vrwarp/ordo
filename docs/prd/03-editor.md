@@ -51,6 +51,12 @@ Objects, in z-order, each selectable, movable, resizable, rotatable:
   selection together (a shape and its text, a table, a group), by what the screens show of a turned box,
   which stays turned; on a 4:3 deck they work inside the deck's own area. They are in the Tune drawer's
   Object panel and, for a selection of several objects, in the floating bar's Align menu.
+- Copy and paste: text keeps its formatting between boxes and from Bible Gateway, Word or a web page;
+  slide objects paste onto another slide (also in another tab). A slide holds what the screens can draw,
+  200 objects and 16 pictures: adding past that is refused with a message instead of the new object
+  silently missing on the screens. Something pasted that the editor cannot use is left out, and a part of
+  the editor that fails to draw shows a message there while the rest of the app, the live controls
+  included, keeps working.
 - Undo and redo within an editing session; save creates a presentation revision
   ([prd/05](05-library-media-import.md), version history).
 - Keyboard: arrow nudges, Shift for 10 px, Ctrl+D duplicate, Delete, Ctrl+Z, Ctrl+Y,
