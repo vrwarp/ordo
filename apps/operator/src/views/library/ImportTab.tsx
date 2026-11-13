@@ -16,7 +16,9 @@ import {
   writeImportChoice,
 } from '../../lib/pptxImport.ts';
 import { jobResultPresentationId, useJob } from '../../services/jobs.ts';
+import { clientScene } from '../../services/pptxParse.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
+import { useLive } from '../../state/live.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { navigate } from '../../useRoute.ts';
 import { DropZone } from './MediaTab.tsx';
@@ -166,6 +168,8 @@ export function ImportTab() {
   const [pasted, setPasted] = useState('');
   const [progress, setProgress] = useState<number>();
   const jobMap = useLibrary((s) => s.data.jobs);
+  const fonts = useLibrary((s) => s.data.fonts);
+  const live = useLive((s) => s.state.mode === 'live');
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   useEffect(() => {
     void api<Job[] | { jobs: Job[] }>('/jobs')
@@ -229,22 +233,21 @@ export function ImportTab() {
       for (const [k, v] of fields) fd.append(k, v);
       try {
         setProgress(0);
-        // Parsed here whenever the hub imports it natively (a remembered 'Pictures' choice on a hub without
-        // LibreOffice too), for the LibreOffice the hub has or lacks (design/27 M9).
+        // Parsed in the import worker whenever the hub imports it natively (a remembered 'Pictures' choice on a
+        // hub without LibreOffice too), for the LibreOffice the hub has or lacks (design/27 M9); never while a
+        // playlist is live, and on any failure or timeout the hub parses it (`services/pptxParse.ts`).
         const clientNative = fields.some(([k, v]) => k === 'renderer' && v === 'native');
         if (clientNative) {
-          const { importPptxClient } = await import('@ordo/importers');
-          const parsed = await importPptxClient(
-            f,
-            f.name,
-            { extendBackgrounds: choice.extendBackgrounds, libreoffice: hubHasLibreOffice(caps) },
-            (pct) => setProgress(pct * 0.5),
-          );
-          fd.append(
-            'clientScene',
-            new Blob([JSON.stringify(parsed.clientScene)], { type: 'application/json' }),
-            'scene.json',
-          );
+          const scene = await clientScene({
+            file: f,
+            name: f.name,
+            extendBackgrounds: choice.extendBackgrounds,
+            libreoffice: hubHasLibreOffice(caps),
+            fonts,
+            live,
+            onProgress: (pct) => setProgress(pct * 0.5),
+          });
+          if (scene) fd.append('clientScene', scene, 'scene.json');
         }
         fd.append('file', f, f.name);
         started(

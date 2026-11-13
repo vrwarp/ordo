@@ -54,9 +54,20 @@ The service worker answers every `/api/v1/*` request from the pages and workers 
   library go through the same `importPro7` as the hub, media included. Pasted SongSelect lyrics too.
 - Files: the visitor's from IndexedDB, the sample's from `/demo/files/<hash>`.
 - `/output/config` finds the output by its token, as the hub does.
-- What needs the hub's server tools answers 501 with "needs the ordo hub on a server": PowerPoint and
-  PDF import (LibreOffice, pdftoppm), media transcoding and its retry, adding fonts, backups, version
-  history, NAS folder imports, changing the PINs.
+- **PowerPoint import runs in the browser, without LibreOffice** (design/27 §2 "Where the deck is parsed"):
+  the operator's import worker parses the deck for a hub without LibreOffice (`/capabilities` answers
+  LibreOffice absent and `pptx.art` false) and sends the scene with the upload; the demo hub uses that scene
+  when it is of its converter, its stored fields and parsed without LibreOffice (else it parses the deck
+  itself, `parsePptxScene`) and builds version 1 with the import core (`assemblePptxScene`), as a hub without
+  LibreOffice does: what ordo draws is drawn, what it cannot draw is listed on the slide
+  (`Slide.pptx.missing`, the import card's "not drawn" line), nothing waits for LibreOffice, and no slide is a
+  picture for its size. Pictures are stored as they are (browsers read them), shape files as the hub stores
+  them, clips are left out (their posters stay). Only where a hub would show LibreOffice's picture of a whole
+  page (a 'Pictures (LibreOffice)' import, 'Show original', a picture-class slide, a PDF page) the demo shows
+  its placeholder page "Rendering Not Available in Browser Demo"; the "Object Not Available in Demo"
+  overlay is gone.
+- What needs the hub's server tools answers 501 with "needs the ordo hub on a server": media transcoding
+  and its retry, adding fonts, backups, version history, NAS folder imports, changing the PINs.
 
 ## The sample service
 
@@ -74,7 +85,9 @@ playlist. One audience output and the stage display are enabled.
 404) and drives it: the sample library, a ProPresenter bundle imported with its background, an SVG
 uploaded with its still (and the "moves in previews only" note), persistence across a reload, Go live,
 Launch outputs, a GO reaching the output window, the aurora moving on the Audience screen, End service,
-Reset demo. CI
+Reset demo; and a public deck of the golden corpus with a chart imported as editable slides (parsed in the
+import worker, its chart's slide hybrid with the chart listed missing and no overlay, the stage pill and
+the slide's PowerPoint panel) and another as pictures (the placeholder pages with their stage pill). CI
 builds the site before the end-to-end suite; locally the spec skips when `site/` is missing.
 
 ## Limits

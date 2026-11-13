@@ -205,17 +205,40 @@ presentation while it is live-locked (it re-queues itself with backoff, 30 s dou
 ### Native import (editable slides)
 
 The native import ([design/27](27-pptx-native-renderer.md), M3) turns a deck into ordinary, editable ordo
-objects instead of page pictures. The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
+objects instead of page pictures. Its steps are one **import core** in `@ordo/importers`, which runs in Node,
+browsers and Web Workers: the scan (`pptx-scan.ts`: limits, `scanDeck`, `clipParts` with its candidate bound,
+`extrasOf`), shape files (`pptx-geoms.ts`: `geomFileOf`, `nameGeoms`, `nameShapeFiles` with the kinds hook
+`SHAPE_FILE_KINDS` that decoration files join with `decor-render`), picture headers and display needs
+(`pptx-pictures.ts`), the one SHA-256 (`sha256.ts`, incremental), the budget ladder (`pptx-ladder.ts`), the
+drafts, budgets, provenance and assembly (`pptx-core.ts` `ImportCore`) and the import log (`pptx-report.ts`).
+The hub's job, its pool task and the browser's parse all call them; the converter's version and stored
+fields are one constant each in `@ordo/pptx-scene` (`version.ts`: `CONVERTER_VERSION`, `M9_WRITES` less
+`M9_HELD_BACK`, and `PPTX_SHEETS`).
+
+**Where the deck is parsed.** The operator parses a deck it imports as editable slides in a Web Worker
+(`parsePptxScene`, design/27 §2 "Where the deck is parsed") and uploads the scene with the deck
+(`clientScene`); the hub checks it in its pool and builds version 1 from it with the same core, or parses
+the deck itself (any failure, timeout or refusal on either side; a playlist live; an old browser). The
+browser's zip reader (`zip-bounded.ts`) reads the central directory itself (never JSZip's private sizes),
+refuses overlapping entries and more than 200,000, and counts inflated bytes as they come: an entry that
+inflates past its declared size, an XML part over 8 MB or 64 MB of XML in all stop the parse; pictures and
+clips are only read for their first bytes (a picture's pixel size, a clip's kind), within the hub's spill
+budget.
+
+The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
 
 - reads the XML and relationship parts (each ≤ 8 MB, ≤ 64 MB in all; a larger part makes its slide a
   picture slide) and only the pictures the slides, their layouts, masters and themes relate to (≤ 2,000,
   ≤ 1 GiB, under generated names); embeddings, macros, custom XML, document properties and printer settings
   are skipped;
 - parses and converts on the CPU pool with `@ordo/pptx-scene`: a scan (slide list, sections, referenced
-  pictures, metafiles, speaker notes, the show's loop flag), then batches of at most 150 slides. A batch that
-  fails or runs out of the import's pool time leaves its slides as picture slides, never the deck;
-- applies the size budgets of design/27 §3.4: a slide over 64 KB, and every slide once the presentation
-  passes 3 MiB, becomes a compact picture slide (logged, counted in the job result);
+  pictures, metafiles, speaker notes, the show's loop flag), then batches of at most 150 slides; or takes a
+  checked client scene instead (`clientScene.ts`). A batch that fails is converted again slide by slide, and
+  a slide that still fails, or one past the import's pool time, keeps its text (M9's rescue), never the deck;
+- applies the size budgets of design/27 §3.4 as M9's budget ladder: a slide over 64 KB is simplified to fit
+  (outlines re-gridded, text formatting, then decorations left out), and once the presentation passes
+  3 MiB the slides from there on keep their text, pictures and background; no slide becomes a picture for its
+  size (logged, counted in the job result as `simplified`);
 - stores the pictures (prepared to their display need, deduplicated) and saves version 1: every slide's
   native objects, `Slide.pptx` provenance (deck, place, class, converter version, the digest of the objects
   as stored, `pending` while LibreOffice work remains), speaker notes, `p14` sections in order with a Default

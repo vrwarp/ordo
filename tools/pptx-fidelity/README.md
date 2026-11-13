@@ -132,7 +132,7 @@ back. The census goes to `test-results/census-golden.jsonl` and the comparison t
 ## Hub import (M9)
 
 ```
-npx tsx src/hub-import.ts [--dry-run] [--libreoffice] [--out DIR] [--hub dist|source] [--sermons DIR]... <deck | folder>...
+npx tsx src/hub-import.ts [--dry-run] [--libreoffice] [--client-scene | --equivalence] [--out DIR] [--hub dist|source] [--sermons DIR]... <deck | folder>...
 ```
 
 The M9 exit's import of the whole worship set through a real hub (plan §6.3). It starts this checkout's hub
@@ -147,6 +147,14 @@ reference resolved, no LibreOffice command in the hub log, sermon decks at versi
 `--mem-limit-mb`). `--libreoffice` runs with LibreOffice on the PATH and counts the slides left to it.
 `--dry-run` lists the decks and the dangling links (unreadable) without a hub. Decks under `--sermons` are
 reported as `sermon-<k>`.
+
+`--client-scene` measures the path operators take (design/27 m9:import-core): each deck is parsed first as
+the operator's import worker parses it (`parsePptxScene` in Node, with the hub's library faces fetched from
+the hub, for the LibreOffice the hub reports) and posted with its scene; each record says whether the hub
+used it (`scene`: used, refused, none) and the parse's time (`clientMs`). `--equivalence` (implies it)
+imports each deck twice, with its scene and parsed by the hub itself, and lists every difference between the
+two stored presentations modulo ids, media ids (by file), times, the import log and digests
+(`src/equivalence.ts`) in `equivalence.json`.
 
 ## Registries (M9)
 

@@ -19,11 +19,19 @@
  * names a deck by its name below the folder given, except decks under a `--sermons` folder, which are
  * `sermon-<k>`: those are private, and only counts of them are ever written.
  *
+ * - **`--client-scene`**: each deck is parsed first as the operator's import worker parses it
+ *   (`parsePptxScene` in Node, the hub's library faces fetched from the hub, for the LibreOffice the hub
+ *   says it has) and posted with its scene (`clientScene`), so the run measures the path operators take;
+ *   each record says whether the hub used the scene (its job log) and the parse's time.
+ * - **`--equivalence`** (implies `--client-scene`): each deck is imported twice, with its scene and parsed by
+ *   the hub itself, and the two stored presentations are compared modulo ids, media ids (by file), times and
+ *   the import log (`equivalence.ts`); every difference is listed per deck in `equivalence.json`.
+ *
  * Options: `--out DIR` (default tmp/hub-import: `hub-import.json`, `hub-import.md`, the hub's data and log),
  * `--hub dist|source` (the built `apps/hub/dist/main.js`, the default when it exists, or the sources through
  * tsx), `--libreoffice`, `--dry-run`, `--sermons FOLDER` (repeatable; its decks are also posted),
  * `--timeout-s N` per job (default 600), `--mem-limit-mb N` (the compose file's `mem_limit`, default 4096),
- * `--keep-data` (leave the hub's data folder).
+ * `--keep-data` (leave the hub's data folder), `--client-scene`, `--equivalence`.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
 import { constants, existsSync, openAsBlob, readFileSync } from 'node:fs';
@@ -41,7 +49,9 @@ import {
   type Slide,
   utf8Bytes,
 } from '@ordo/domain';
+import { type FaceFile, loadDeckFaces, parsePptxScene } from '@ordo/importers';
 import { DECK_RE, listDecks } from './decks.ts';
+import { comparable, type Difference, diffJson } from './equivalence.ts';
 import { type NativeMedia, sniffPicture } from './native.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -206,9 +216,18 @@ export class HubClient {
     return new Uint8Array(await r.arrayBuffer());
   }
 
-  /** Post a deck through `POST /import/document` (editable slides), under `uploadName`. */
-  async importDeck(file: string, uploadName = basename(file)): Promise<HubJob> {
+  /**
+   * Post a deck through `POST /import/document` (editable slides), under `uploadName`, with a scene parsed as
+   * the operator parses one (`clientScene`) when given.
+   */
+  async importDeck(file: string, uploadName = basename(file), scene?: Uint8Array): Promise<HubJob> {
     const form = new FormData();
+    if (scene)
+      form.append(
+        'clientScene',
+        new Blob([scene as Uint8Array<ArrayBuffer>], { type: 'application/json' }),
+        'scene.json',
+      );
     form.append('file', await openAsBlob(file), uploadName);
     return this.json<HubJob>('import/document', { method: 'POST', body: form });
   }
@@ -452,10 +471,10 @@ export type HubImport = {
 export async function importDeck(
   client: HubClient,
   file: string,
-  o: { uploadName?: string; timeoutMs: number; followUp: boolean },
+  o: { uploadName?: string; timeoutMs: number; followUp: boolean; scene?: Uint8Array },
 ): Promise<HubImport> {
   const t0 = performance.now();
-  const queued = await client.importDeck(file, o.uploadName);
+  const queued = await client.importDeck(file, o.uploadName, o.scene);
   const job = await client.waitJob(queued.id, o.timeoutMs);
   const v1Ms = Math.round(performance.now() - t0);
   const result = job.result && typeof job.result === 'object' ? (job.result as NativeResult) : undefined;
@@ -477,6 +496,10 @@ export type HubImportArgs = {
   timeoutMs: number;
   memLimitMb: number;
   keepData: boolean;
+  /** Parse each deck as the operator does and post its scene (`clientScene`). */
+  clientScene: boolean;
+  /** Import each deck with its scene and without, and list the differences. */
+  equivalence: boolean;
   decks: string[];
 };
 
@@ -489,6 +512,8 @@ export function parseHubImportArgs(argv: readonly string[]): HubImportArgs {
     timeoutMs: 600_000,
     memLimitMb: 4096,
     keepData: false,
+    clientScene: false,
+    equivalence: false,
     decks: [],
   };
   const value = (i: number, name: string) => {
@@ -507,6 +532,8 @@ export function parseHubImportArgs(argv: readonly string[]): HubImportArgs {
     else if (v === '--dry-run') a.dryRun = true;
     else if (v === '--libreoffice') a.libreoffice = true;
     else if (v === '--keep-data') a.keepData = true;
+    else if (v === '--client-scene') a.clientScene = true;
+    else if (v === '--equivalence') a.equivalence = a.clientScene = true;
     else if (v === '--sermons') a.sermons.push(value(++i, v));
     else if (v === '--timeout-s') a.timeoutMs = num(value(++i, v), v) * 1000;
     else if (v === '--mem-limit-mb') a.memLimitMb = num(value(++i, v), v);
@@ -543,6 +570,16 @@ export type DeckRecord = {
   largestSlideBytes?: number;
   slidesOver64k?: number;
   manifest?: { files: number; unresolved: number; degraded: number; error?: string };
+  /**
+   * `--client-scene`: what the hub did with the scene ('used', 'refused': it parsed the deck itself, 'none':
+   * the parse failed and the deck was posted without one), the parse's time and its error.
+   */
+  scene?: 'used' | 'refused' | 'none';
+  clientMs?: number;
+  clientError?: string;
+  /** `--equivalence`: the differences between the hub's own parse and the scene's (at most 50 listed). */
+  differences?: number;
+  diff?: Difference[];
 };
 
 export type HubImportReport = {
@@ -694,6 +731,22 @@ export function hubImportMarkdown(r: HubImportReport): string {
     for (const g of r.gates) lines.push(`| ${g.name} | ${g.pass ? 'PASS' : 'FAIL'} | ${g.detail} |`);
     lines.push('');
   }
+  const scenes = r.decks.filter((d) => d.scene);
+  if (scenes.length) {
+    const n = (k: string) => scenes.filter((d) => d.scene === k).length;
+    const ms = scenes.map((d) => d.clientMs ?? 0).sort((x, y) => x - y);
+    const p = (q: number) => ms[Math.min(ms.length - 1, Math.floor(q * ms.length))] ?? 0;
+    lines.push(
+      `client scene: ${n('used')} used, ${n('refused')} refused, ${n('none')} not parsed; parse p50 ${p(0.5)} ms, p95 ${p(0.95)} ms`,
+      '',
+    );
+  }
+  const eq = r.decks.filter((d) => d.differences !== undefined);
+  if (eq.length)
+    lines.push(
+      `equivalence: ${eq.filter((d) => d.differences === 0).length} of ${eq.length} deck(s) equal; ${eq.reduce((x, d) => x + (d.differences ?? 0), 0)} difference(s) in all (equivalence.json)`,
+      '',
+    );
   if (!r.dryRun) {
     const done = r.decks.filter((d) => d.classes);
     const c = { native: 0, hybrid: 0, picture: 0 };
@@ -712,6 +765,37 @@ export function hubImportMarkdown(r: HubImportReport): string {
     );
   }
   return lines.join('\n');
+}
+
+/** Whether the hub has LibreOffice for an import, as the operator reads its capabilities (`hubHasLibreOffice`). */
+export function hubLibreOffice(caps: unknown): boolean {
+  const state = (caps as { libreoffice?: { state?: unknown } } | undefined)?.libreoffice?.state;
+  return state !== 'absent' && state !== 'off';
+}
+
+/**
+ * The scene the operator's import worker would upload for `file` (`parsePptxScene` in Node, with the hub's
+ * library faces fetched from the hub, `loadDeckFaces`), as JSON bytes. Throws when the parse fails (the
+ * operator then posts without one).
+ */
+export async function clientSceneOf(
+  client: HubClient,
+  file: string,
+  libreoffice: boolean,
+): Promise<Uint8Array> {
+  const fonts =
+    await client.json<{ family: string; weight: number; style: string; file: { hash: string } }[]>('fonts');
+  const faces: FaceFile[] = fonts.map((f) => ({
+    family: f.family,
+    weight: f.weight,
+    italic: f.style === 'italic',
+    url: f.file.hash,
+  }));
+  const parse = await parsePptxScene(await openAsBlob(file), {
+    libreoffice,
+    loadFaces: (parts) => loadDeckFaces(parts, faces, (hash) => client.file(hash)),
+  });
+  return new TextEncoder().encode(JSON.stringify(parse.scene));
 }
 
 /** The §6.3 run (or its dry run). Returns the report it wrote to `<out>/hub-import.json`. */
@@ -733,6 +817,20 @@ export async function runHubImport(argv: readonly string[]): Promise<HubImportRe
   const write = async () => {
     await writeFile(join(out, 'hub-import.json'), JSON.stringify(report, null, 1));
     await writeFile(join(out, 'hub-import.md'), hubImportMarkdown(report));
+    if (a.equivalence)
+      await writeFile(
+        join(out, 'equivalence.json'),
+        JSON.stringify(
+          report.decks.map((d) => ({
+            name: d.name,
+            scene: d.scene,
+            differences: d.differences,
+            diff: d.diff,
+          })),
+          null,
+          1,
+        ),
+      );
   };
   if (a.dryRun) {
     for (const d of readable)
@@ -770,11 +868,50 @@ export async function runHubImport(argv: readonly string[]): Promise<HubImportRe
       };
       report.decks.push(rec);
       try {
+        // `--client-scene`: parsed first as the operator's import worker parses it.
+        let scene: Uint8Array | undefined;
+        if (a.clientScene) {
+          const t0 = performance.now();
+          try {
+            scene = await clientSceneOf(session.client, d.file, hubLibreOffice(report.capabilities));
+            rec.clientMs = Math.round(performance.now() - t0);
+          } catch (e) {
+            rec.scene = 'none';
+            rec.clientError = (e as Error).message.slice(0, 300);
+          }
+        }
         const imp = await importDeck(session.client, d.file, {
           uploadName: `deck-${report.decks.length}.${rec.ext}`,
           timeoutMs: a.timeoutMs,
           followUp: false,
+          ...(scene ? { scene } : {}),
         });
+        if (scene)
+          rec.scene = imp.job.log.some((l) => /parsed in the browser: the hub checked/.test(l))
+            ? 'used'
+            : 'refused';
+        if (a.equivalence && scene && imp.presentationId) {
+          const own = await importDeck(session.client, d.file, {
+            uploadName: `deck-${report.decks.length}-hub.${rec.ext}`,
+            timeoutMs: a.timeoutMs,
+            followUp: false,
+          });
+          if (own.presentationId) {
+            const get = (id: string) =>
+              session.client.json<Presentation>(`presentations/${encodeURIComponent(id)}`);
+            const files = new Map(
+              (await session.client.json<Media[]>('media')).map((m) => [m.id, m.original.hash] as const),
+            );
+            const same = (p: Presentation) => comparable({ ...p, title: '' }, (id) => files.get(id));
+            const diff = diffJson(
+              same(await get(own.presentationId)),
+              same(await get(imp.presentationId)),
+              10_000,
+            );
+            rec.differences = diff.length;
+            if (diff.length) rec.diff = diff.slice(0, 50);
+          }
+        }
         rec.state = imp.job.state === 'done' ? 'done' : 'failed';
         rec.v1Ms = imp.v1Ms;
         if (imp.job.error) rec.error = imp.job.error.slice(0, 300);

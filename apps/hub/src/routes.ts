@@ -1,7 +1,7 @@
 import { createWriteStream } from 'node:fs';
 import { appendFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Readable } from 'node:stream';
+import { type Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { MultipartFile } from '@fastify/multipart';
 import {
@@ -54,6 +54,7 @@ import {
   PPTX_MIME,
   pro7TooLarge,
 } from './imports.ts';
+import { CLIENT_SCENE_LIMITS } from './pptx/clientScene.ts';
 import { NO_LIBREOFFICE_REFERENCE, NO_PDF_TOOLS } from './pptx/fallback.ts';
 import { planReimport } from './pptx/reimport.ts';
 import type { PptxImportOptions } from './pptx/shared.ts';
@@ -296,14 +297,41 @@ function needLibreOffice(tools: HubTools, absent: string): void {
 }
 
 /** Drain a multipart request: files go to uploads/ (hashed while streaming), fields are collected. */
+/**
+ * A file part read whole up to `limit` bytes; past it the rest of the part is read and discarded (the next
+ * parts still arrive) and what was written removed: undefined. For an optional part the hub can do without
+ * (`clientScene`), so a part too large never fails the upload.
+ */
+async function receiveOrDrop(
+  hub: Ctx,
+  stream: Readable,
+  limit: number,
+): Promise<{ path: string; hash: string; bytes: number } | undefined> {
+  let n = 0;
+  let over = false;
+  const capped = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      n += chunk.length;
+      if (n > limit) over = true;
+      cb(null, over ? undefined : chunk);
+    },
+  });
+  stream.on('error', (e) => capped.destroy(e));
+  const r = await hub.store.receive(stream.pipe(capped), Number.MAX_SAFE_INTEGER);
+  if (!over) return r;
+  await rm(r.path, { force: true });
+  return undefined;
+}
+
 async function readMultipart(
   hub: Ctx,
   req: FastifyRequest,
-  opts: { maxFiles?: number; limit?: number } = {},
-): Promise<{ files: Received[]; fields: Record<string, string> }> {
+  opts: { maxFiles?: number; limit?: number; optional?: Record<string, number> } = {},
+): Promise<{ files: Received[]; fields: Record<string, string>; dropped: string[] }> {
   if (!req.isMultipart()) throw badRequest('Expected multipart/form-data');
   const files: Received[] = [];
   const fields: Record<string, string> = {};
+  const dropped: string[] = [];
   try {
     for await (const part of req.parts()) {
       if (part.type === 'file') {
@@ -311,6 +339,14 @@ async function readMultipart(
         if (files.length >= (opts.maxFiles ?? 50)) {
           f.file.resume();
           throw badRequest('Too many files');
+        }
+        const cap =
+          opts.optional && Object.hasOwn(opts.optional, f.fieldname) ? opts.optional[f.fieldname] : undefined;
+        if (cap !== undefined) {
+          const kept = await receiveOrDrop(hub, f.file as Readable, cap);
+          if (kept) files.push({ ...kept, filename: f.filename || 'upload', fieldname: f.fieldname });
+          else dropped.push(f.fieldname);
+          continue;
         }
         const r = await hub.store.receive(f.file as Readable, opts.limit ?? MAX_UPLOAD_BYTES);
         files.push({ ...r, filename: f.filename || 'upload', fieldname: f.fieldname });
@@ -324,7 +360,7 @@ async function readMultipart(
     if (err.code === 'FST_REQ_FILE_TOO_LARGE') throw tooLarge(MAX_UPLOAD_BYTES);
     throw e;
   }
-  return { files, fields };
+  return { files, fields, dropped };
 }
 
 function sessionRole(p: Principal | null): 'operate' | 'edit' | undefined {
@@ -999,7 +1035,15 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
   route('POST', '/import/document', 'edit', async (req, reply) => {
     assertNotLive();
-    const { files, fields } = await readMultipart(hub, req, { maxFiles: 2, limit: 1024 ** 3 });
+    // A scene parsed in the browser (`clientScene`) is optional: past `CLIENT_SCENE_LIMITS.bytes` it is dropped
+    // before it is stored, and the hub parses the deck itself (design/27 §12).
+    const { files, fields, dropped } = await readMultipart(hub, req, {
+      maxFiles: 2,
+      limit: 1024 ** 3,
+      optional: { clientScene: CLIENT_SCENE_LIMITS.bytes },
+    });
+    if (dropped.length)
+      hub.log.info({ fields: dropped }, 'import/document: a client scene over its size bound was dropped');
     const f = files.find((x) => x.fieldname !== 'clientScene') ?? files[0];
     const sceneFile = files.find((x) => x.fieldname === 'clientScene' && x !== f);
     const cleanupFiles = async () => {

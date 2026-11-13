@@ -86,8 +86,8 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   `tools.run` timeout that kills its whole process group (`soffice.bin` included). The native
   import and the 'Pictures (LibreOffice)' import share this path.
 - Import zips: path traversal rejected; member count and total size capped.
-- PowerPoint decks for the native import (design/27 §12) are parsed only on the CPU pool (512 MB heap,
-  2 minutes per batch of slides, 15 minutes per import), never on the event loop; when the pool cannot start
+- PowerPoint decks for the native import (design/27 §12) are parsed on the hub only on the CPU pool (512 MB
+  heap, 2 minutes per batch of slides, 15 minutes per import), never on the event loop; when the pool cannot start
   the import fails cleanly (the picture import cannot build its render copy either, and LibreOffice never
   sees a deck as uploaded: a 'Pictures (LibreOffice)' import whose copy cannot be built fails too). Zip reading skips what is never read (embeddings,
   `vbaProject.bin`, custom XML, document properties), keeps XML parts within 8 MB each and 64 MB in all,
@@ -95,7 +95,20 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   the LibreOffice follow-up, reference pictures, the picture import and the text repair read decks the same
   way, and a zip whose entries' data overlap is refused. A picture is kept as it is only within its pixels'
   bytes (4 a pixel plus 1 MiB, at most 64 MiB); a larger one is re-encoded, so no deck ships padding.
-  A part or slide that cannot be read makes that slide a picture slide, never the deck.
+  A part or slide that cannot be read keeps its text (M9's rescue), never fails the deck.
+- A deck the operator imports as editable slides is also parsed in the uploading browser (design/27 §2
+  "Where the deck is parsed"), in a Web Worker with a deadline after which it is terminated, never on the
+  page's thread and never while a playlist is live; the browser's zip reader (`zip-bounded.ts`) reads the
+  central directory itself, refuses overlapping entries and more than 200,000, and counts inflated bytes
+  against the same caps as they come (an entry that inflates past its declared size stops the read), and
+  pictures and clips are only read for their first bytes. Any failure uploads the deck without a scene.
+- The hub trusts nothing of that scene (`clientScene`): a part over 128 MB is dropped before it is stored;
+  the stored scene is read, parsed and checked on the CPU pool (a zod schema with a bound on every list,
+  string and part name before any reaches the LibreOffice follow-up's payload; this hub's converter version,
+  stored fields and LibreOffice state; every slide through the `Slide` schema, sanitized and parsed again
+  when version 1 is assembled; every shape file checked again as the pool's own are and re-hashed), and a
+  scene it refuses makes it parse the deck itself. The scene file holds every slide's text and speaker notes,
+  so it is released once version 1 is saved or the import fails.
 - Deck-derived strings (titles, file names, section and part names, hosts) reach a job log line or
   `source.log` only with control characters and line breaks removed and cut to 200 characters, so a deck
   cannot forge `[warn]`/`[error]` lines or a log line's time stamp.

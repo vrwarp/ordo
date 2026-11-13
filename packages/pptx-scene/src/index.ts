@@ -65,6 +65,7 @@ export { DECOR_PREFIX, type PlatePlan, platePlan } from './decor.ts';
 export { type EmittedSheet, SHEET_DENSITY, SHEET_PREFIX } from './sheet.ts';
 export type { EmittedClip } from './media.ts';
 export { type PictureHeader, pictureSize } from './picture.ts';
+export { CONVERTER_VERSION, M9_HELD_BACK, M9_WRITES, PPTX_SHEETS } from './version.ts';
 export * from './ir.ts';
 export { addNote, type Log, SLIDE_NOTES } from './log.ts';
 export {

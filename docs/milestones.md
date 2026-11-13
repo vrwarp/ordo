@@ -103,7 +103,7 @@ M9 ships in pull requests on main, each published at once as the edge image and 
   back to is 0.5.0, whose schema the compatibility tests read M9's slides with (design/27 §3.2).
 - The PowerPoint parse runs in the operator (the client path) with the hub's own parse as the fallback; both
   convert with the same version and fields, and M9's exit is measured on the client path.
-- `M9_WRITES` (`apps/hub/src/pptx/shared.ts`) is the kill switch: a field the converter writes stays out of it
+- `M9_WRITES` (`@ordo/pptx-scene` `version.ts`, for the hub and the client parse) is the kill switch: a field the converter writes stays out of it
   until its drawer is on main, and can be taken out again without a release of the drawers. Decorations and
   picture sheets stay out until `decor-render` (design/27 §15 M9 "rollout").
 

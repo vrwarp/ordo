@@ -11,8 +11,7 @@ import type { ExtractedText, ImageObject } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import type { ArtInfo, ConvertResult, SlideClass } from '@ordo/pptx-scene';
 import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
-import { ALL_M9_FIELDS, type M9Field } from '@ordo/pptx-scene/emit-ctx.ts';
-import { MAX_XML_PART_BYTES } from '@ordo/pptx-scene/opc.ts';
+import { PPTX_IMPORT_LIMITS, type SceneScan, type SceneSlideExtra } from '@ordo/importers/pptx-scan.ts';
 import type { RenderCopyPage } from '@ordo/pptx-scene/rendercopy.ts';
 import type { Logger } from 'pino';
 import type { HubConfig } from '../config.ts';
@@ -23,76 +22,32 @@ import type { Store } from '../store.ts';
 import type { HubTools } from '../tools.ts';
 
 /**
- * The converter version written to `Slide.pptx.version` and `source.native.version`. 2 since M9 (design/27
- * §15 M9, decisions.md 1): the converter that writes the M9 fields (`M9_WRITES`) and draws 3-D flat.
+ * The converter version (`Slide.pptx.version`, `source.native.version`), the stored M9 fields the import
+ * writes (`EmitOptions.m9Writes`, the per-field kill switch of design/27 §15 M9 decision 13, less the fields
+ * held back until their drawers ship, `M9_HELD_BACK`) and whether it draws pictures from sheets
+ * (`PPTX_SHEETS`): one definition in `@ordo/pptx-scene` (`version.ts`), which the client parse records in its
+ * scene too, so the hub uses a client scene only from the converter it runs itself (`clientScene.ts`).
  */
-export const CONVERTER_VERSION = 2;
+export {
+  CONVERTER_VERSION,
+  M9_HELD_BACK,
+  M9_WRITES,
+  PPTX_SHEETS,
+} from '@ordo/pptx-scene/version.ts';
 
 /**
- * M9 fields that stay off until what reads them is on main (design/27 §15 M9 "Rollout"): 'decor' until
- * `decor-render` registers the decoration drawer (a `ShapeObject.decor` draws its legacy empty line until
- * then: the shapes would vanish), and 'decorFile' until it names decoration files here and on the client
- * (`geoms.ts`, the client's `nameGeoms`), so no `pptxdecor:<n>` placeholder is ever stored.
+ * design/27 §2 and §12: what one import may read, spill, create and spend. The import core's limits
+ * (`PPTX_IMPORT_LIMITS`, which the client parse keeps too) and the hub's pool's.
  */
-export const M9_HELD_BACK: ReadonlySet<M9Field> = new Set<M9Field>(['decor', 'decorFile']);
-
-/**
- * The stored M9 fields the import writes (design/27 §15 M9 decision 13, decisions.md 1), passed to the
- * converter as `EmitOptions.m9Writes` (`sceneTask.ts`), and to its parse, so the slide budgets plan only what
- * is written. The kill switch of the M9 rollout, per field: take one out and the import writes what an older
- * build draws for it instead (§3.2), so a field found wrong can be withheld without a release of the drawers.
- * Every field but `M9_HELD_BACK`.
- */
-export const M9_WRITES: ReadonlySet<M9Field> = new Set(
-  [...ALL_M9_FIELDS].filter((f) => !M9_HELD_BACK.has(f)),
-);
-
-/**
- * Whether the import draws pictures from sheets (`EmitOptions.sheets`: `pptxmedia:sheet<n>` composites and
- * atlases). False until `decor-render` stores sheets here and on the client: an unresolved sheet placeholder
- * would drop its pictures without a word. Without sheets every picture is its own object, and the slide
- * budgets leave the topmost past the render clamp's 16 out and list them (`budget.ts` `BudgetOptions`).
- */
-export const PPTX_SHEETS = false;
-
-const MiB = 1024 * 1024;
-
-/** design/27 §2 and §12: what one import may read, spill, create and spend. */
 export const PPTX_LIMITS = {
-  /** Zip entries (central directory). */
-  entries: 200_000,
-  /** One XML or relationships part in memory. */
-  xmlPartBytes: MAX_XML_PART_BYTES,
-  /** Every XML part in memory together. */
-  xmlTotalBytes: 64 * MiB,
-  /** Media and font parts spilled to disk for one import. */
-  spillBytes: 1024 * MiB,
-  /** Picture, clip and font parts extracted per deck; the rest are logged and keep posters or fallbacks. */
-  pictures: 2_000,
-  clips: 50,
+  ...PPTX_IMPORT_LIMITS,
+  /** Font parts extracted per deck. */
   fonts: 20,
-  /** Slides read per deck. */
-  slides: 2_000,
   /** Slides per `pptx-scene` pool task, and that task's timeout. */
   batchSlides: 150,
   batchMs: 2 * 60_000,
   /** Pool time one import may use; past it the remaining slides keep only their text (the rescue, M9). */
   importPoolMs: 15 * 60_000,
-  /** Longest part name in a payload pair. */
-  partName: 512,
-  /**
-   * Bytes of geometry files one import stores (`ShapeGeom.ref`, design/27 §15 M6 round 2; the largest of
-   * the worship decks measured needs 0.6 MB); the objects naming a file past it are left out (M9 `ladder`).
-   */
-  geomFileBytes: 32 * MiB,
-  /**
-   * Bytes of geometry files one `pptx-scene` batch may return (named in the worker, `sceneTask.ts`); a slide
-   * whose new files would pass it keeps none of them (the objects naming them are left out), so neither the
-   * worker's output nor the library
-   * process ever holds more than this of one batch (a layout's custGeom rebuilt at every slide's size made
-   * 0.5 MB a slide).
-   */
-  batchGeomBytes: 32 * MiB,
 } as const;
 
 /** The options of a native import: form fields of `POST /import/document`, kept in the job payload. */
@@ -424,40 +379,11 @@ export type SceneTaskOutput = {
   geomOver?: number[];
 };
 
-/** What the first `pptx-scene` call reads for the whole deck (`sceneTask.ts`). */
-export type SceneScan = {
-  /**
-   * Picture parts (image relationships, metafiles and SVG left out) of the listed slides, their layouts,
-   * masters and themes: what the job spills and prepares. Stored part names, at most `PPTX_LIMITS.pictures`.
-   */
-  pictures: string[];
-  /** Picture parts referenced past `PPTX_LIMITS.pictures` (logged, not extracted). */
-  picturesOver: number;
-  /** Metafile pictures (EMF, WMF) each slide may show (its own, its layout's, its master's): [index, parts]. */
-  metafiles: [number, string[]][];
-  /** Speaker notes (`notes.ts`): [`SlideRef.index`, text]. */
-  notes: [number, string][];
-  /** `p:showPr loop`: the show loops until Esc. */
-  loop: boolean;
-  /**
-   * Clip parts (video, sound and PowerPoint 2010 media relationships of the listed slides, those of
-   * `p14:media` and the video elements first), at most `PPTX_LIMITS.clips`: what the job spills and sniffs.
-   */
-  clips?: string[];
-  /** Clip parts past `PPTX_LIMITS.clips` (logged; their posters stay). */
-  clipsOver?: number;
-};
-
-/** A slide's transition and timing (`transition.ts`). */
-export type SceneSlideExtra = {
-  /** `SlideRef.index`. */
-  index: number;
-  transition?: { kind: 'cut' } | { kind: 'crossfade'; ms: number };
-  /** `advTm`. */
-  advanceMs?: number;
-  /** What was approximated. */
-  note?: string;
-};
+/**
+ * What the first `pptx-scene` call reads for the whole deck, and a slide's transition and timing: the import
+ * core's types (`@ordo/importers` `pptx-scan.ts`), which a client scene carries too.
+ */
+export type { SceneScan, SceneSlideExtra } from '@ordo/importers/pptx-scan.ts';
 
 /** `pptx-render-copy`: the minimal deck LibreOffice prints, written to `out` (item D, `renderCopyTask.ts`). */
 export type RenderCopyTaskInput = {

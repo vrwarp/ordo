@@ -1,6 +1,8 @@
 /**
- * Pure TypeScript SHA-256 implementation.
- * Runs synchronously in any environment (browser, Web Worker, Node.js).
+ * The import core's one SHA-256 (pure TypeScript): synchronous in any environment (browser, Web Worker,
+ * Node.js), where `crypto.subtle` is async and missing in insecure contexts (plain http on a LAN). Shape files
+ * are named with it (`pptx-geoms.ts`) on the hub and on the client alike. `Sha256` hashes in pieces, so a
+ * deck is hashed as it is read (`sha256Blob`) without a second copy of it.
  */
 
 const K = new Uint32Array([
@@ -18,91 +20,119 @@ function rotr(x: number, n: number): number {
   return (x >>> n) | (x << (32 - n));
 }
 
-export function sha256Bytes(data: Uint8Array): Uint8Array {
-  let h0 = 0x6a09e667;
-  let h1 = 0xbb67ae85;
-  let h2 = 0x3c6ef372;
-  let h3 = 0xa54ff53a;
-  let h4 = 0x510e527f;
-  let h5 = 0x9b05688c;
-  let h6 = 0x1f83d9ab;
-  let h7 = 0x5be0cd19;
+/** An incremental SHA-256: `update` with the bytes in order, then `digest` once. */
+export class Sha256 {
+  private readonly h = new Uint32Array([
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  ]);
+  private readonly block = new Uint8Array(64);
+  private readonly w = new Uint32Array(64);
+  private fill = 0;
+  private length = 0;
+  private done = false;
 
-  const len = data.length;
-  // Pad: data + 0x80 + zeros + 64-bit length in bits
-  const totalLen = (len + 9 + 63) & ~63;
-  const padded = new Uint8Array(totalLen);
-  padded.set(data);
-  padded[len] = 0x80;
+  update(data: Uint8Array): this {
+    if (this.done) throw new Error('sha256: digest was taken');
+    this.length += data.length;
+    let i = 0;
+    if (this.fill) {
+      const take = Math.min(64 - this.fill, data.length);
+      this.block.set(data.subarray(0, take), this.fill);
+      this.fill += take;
+      i = take;
+      if (this.fill < 64) return this;
+      this.compress(this.block, 0);
+      this.fill = 0;
+    }
+    for (; i + 64 <= data.length; i += 64) this.compress(data, i);
+    if (i < data.length) {
+      this.block.set(data.subarray(i), 0);
+      this.fill = data.length - i;
+    }
+    return this;
+  }
 
-  const view = new DataView(padded.buffer, padded.byteOffset, padded.byteLength);
-  const bitLength = BigInt(len) * 8n;
-  view.setBigUint64(totalLen - 8, bitLength, false);
+  digest(): Uint8Array {
+    if (this.done) throw new Error('sha256: digest was taken');
+    this.done = true;
+    const bits = BigInt(this.length) * 8n;
+    const tail = new Uint8Array(this.fill + 9 <= 64 ? 64 : 128);
+    tail.set(this.block.subarray(0, this.fill));
+    tail[this.fill] = 0x80;
+    new DataView(tail.buffer).setBigUint64(tail.length - 8, bits, false);
+    for (let i = 0; i < tail.length; i += 64) this.compress(tail, i);
+    const out = new Uint8Array(32);
+    const v = new DataView(out.buffer);
+    for (let j = 0; j < 8; j++) v.setUint32(j * 4, this.h[j]!, false);
+    return out;
+  }
 
-  const w = new Uint32Array(64);
-
-  for (let i = 0; i < totalLen; i += 64) {
+  private compress(b: Uint8Array, at: number): void {
+    const w = this.w;
     for (let j = 0; j < 16; j++) {
-      w[j] = view.getUint32(i + j * 4, false);
+      const o = at + j * 4;
+      w[j] = ((b[o]! << 24) | (b[o + 1]! << 16) | (b[o + 2]! << 8) | b[o + 3]!) >>> 0;
     }
     for (let j = 16; j < 64; j++) {
       const s0 = rotr(w[j - 15]!, 7) ^ rotr(w[j - 15]!, 18) ^ (w[j - 15]! >>> 3);
       const s1 = rotr(w[j - 2]!, 17) ^ rotr(w[j - 2]!, 19) ^ (w[j - 2]! >>> 10);
       w[j] = (w[j - 16]! + s0 + w[j - 7]! + s1) >>> 0;
     }
-
-    let a = h0;
-    let b = h1;
-    let c = h2;
-    let d = h3;
-    let e = h4;
-    let f = h5;
-    let g = h6;
-    let h = h7;
-
+    const h = this.h;
+    let a = h[0]!;
+    let bb = h[1]!;
+    let c = h[2]!;
+    let d = h[3]!;
+    let e = h[4]!;
+    let f = h[5]!;
+    let g = h[6]!;
+    let hh = h[7]!;
     for (let j = 0; j < 64; j++) {
       const s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
       const ch = (e & f) ^ (~e & g);
-      const temp1 = (h + s1 + ch + K[j]! + w[j]!) >>> 0;
+      const temp1 = (hh + s1 + ch + K[j]! + w[j]!) >>> 0;
       const s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
-      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const maj = (a & bb) ^ (a & c) ^ (bb & c);
       const temp2 = (s0 + maj) >>> 0;
-
-      h = g;
+      hh = g;
       g = f;
       f = e;
       e = (d + temp1) >>> 0;
       d = c;
-      c = b;
-      b = a;
+      c = bb;
+      bb = a;
       a = (temp1 + temp2) >>> 0;
     }
-
-    h0 = (h0 + a) >>> 0;
-    h1 = (h1 + b) >>> 0;
-    h2 = (h2 + c) >>> 0;
-    h3 = (h3 + d) >>> 0;
-    h4 = (h4 + e) >>> 0;
-    h5 = (h5 + f) >>> 0;
-    h6 = (h6 + g) >>> 0;
-    h7 = (h7 + h) >>> 0;
+    h[0] = (h[0]! + a) >>> 0;
+    h[1] = (h[1]! + bb) >>> 0;
+    h[2] = (h[2]! + c) >>> 0;
+    h[3] = (h[3]! + d) >>> 0;
+    h[4] = (h[4]! + e) >>> 0;
+    h[5] = (h[5]! + f) >>> 0;
+    h[6] = (h[6]! + g) >>> 0;
+    h[7] = (h[7]! + hh) >>> 0;
   }
+}
 
-  const out = new Uint8Array(32);
-  const outView = new DataView(out.buffer);
-  outView.setUint32(0, h0, false);
-  outView.setUint32(4, h1, false);
-  outView.setUint32(8, h2, false);
-  outView.setUint32(12, h3, false);
-  outView.setUint32(16, h4, false);
-  outView.setUint32(20, h5, false);
-  outView.setUint32(24, h6, false);
-  outView.setUint32(28, h7, false);
-  return out;
+const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+
+export function sha256Bytes(data: Uint8Array): Uint8Array {
+  return new Sha256().update(data).digest();
 }
 
 export function sha256Hex(data: Uint8Array | string): string {
   const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-  const hash = sha256Bytes(bytes);
-  return [...hash].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return hex(sha256Bytes(bytes));
+}
+
+/** Bytes hashed per read by `sha256Blob`. */
+const BLOB_CHUNK = 4 * 1024 * 1024;
+
+/** The SHA-256 (hex) of a `Blob` or bytes, read in pieces (a deck is never copied whole for it). */
+export async function sha256Blob(input: Blob | Uint8Array): Promise<string> {
+  const h = new Sha256();
+  if (input instanceof Uint8Array) return hex(h.update(input).digest());
+  for (let at = 0; at < input.size; at += BLOB_CHUNK)
+    h.update(new Uint8Array(await input.slice(at, Math.min(input.size, at + BLOB_CHUNK)).arrayBuffer()));
+  return hex(h.digest());
 }

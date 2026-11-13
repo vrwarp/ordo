@@ -645,6 +645,18 @@ editor) and the import's notes. Job results are read defensively (`lib/pptxImpor
 or a failed job shows less, never breaks the card, and deck text is only ever shown as text. Follow-up jobs
 (`pptx-lo`, `pptx-reference`, the text repair, the re-import) are not listed as imports.
 
+A PowerPoint imported as editable slides is parsed in this browser first (design/27 §2 "Where the deck is
+parsed"; `services/pptxParse.ts`): in the import worker (`workers/import.worker.ts`, a bundle of its own, so
+the importer never weighs on the page), one worker per deck, terminated when it answers or after 90 s, with
+the library's faces for the families a deck with a table names (fetched from the hub). The upload then
+carries the scene (`clientScene`) for the hub to check and build from; the import's progress bar shows the
+parse as its first half. The browser does not parse while a playlist is live (the hub refuses the import
+then, as before), and any failure, timeout or a table in a face only the hub can measure (WOFF, WOFF2)
+uploads the deck without a scene, so the hub parses it: the volunteer sees the same import either way.
+Settings › Diagnostics counts the decks parsed here and those left to the hub, by reason ('a playlist was
+live', 'the browser took too long', 'the browser could not read it', 'this browser cannot parse in the
+background'); each is in the operator log and its export too.
+
 In the editor, a slide imported natively has a 'From PowerPoint' card in the Slide panel
 (`PptxSlideCard.tsx`): its class, what was approximated, LibreOffice work still pending, and 'Show
 original', which lays the PowerPoint picture of the slide (`Slide.pptx.refMediaId`) over the canvas so a

@@ -6,6 +6,7 @@ import { BUDGET_INFO, type BudgetKind } from '../../lib/budgets.ts';
 import { outputDot, outputIssues, rasterText } from '../../lib/health.ts';
 import { APP_VERSION, controller } from '../../services/controller.ts';
 import { logLines, onLog } from '../../services/log.ts';
+import { useImportParse } from '../../services/pptxParse.ts';
 import { outputWindows, useLaunch } from '../../services/outputs.ts';
 import { runRedAction } from '../../services/redState.ts';
 import { useLibrary } from '../../state/library.ts';
@@ -36,6 +37,8 @@ export function downloadOperatorLog(): void {
     core: live.core,
     unacknowledged: live.unacknowledged,
     cacheCheck: live.cacheCheck,
+    /** PowerPoint files parsed in this browser, and those left to the hub with why (design/27 §2). */
+    importParse: useImportParse.getState(),
     log: logLines(),
     /** Last log lines of every output and stage window, as reported in health (prd/08). */
     outputLogs: Object.fromEntries(

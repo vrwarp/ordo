@@ -23,6 +23,7 @@ export {
   SFNT_LIMITS,
   type SfntTables,
   sfntMetrics,
+  tablesAt,
 } from '@ordo/renderer/text/sfnt/reader.ts';
 
 /**
