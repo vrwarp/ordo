@@ -17,6 +17,7 @@ import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { CropControl } from './CropControl.tsx';
 import { change, redo, setTextRange, stopInlineEditing, undo, useEditor } from './editorStore.ts';
 import { historyKey } from './editorKeys.ts';
+import { restoreFieldSelection } from './fieldSelection.ts';
 import { GroupNote, LockedNote, SelectionBox } from './GroupPanel.tsx';
 import { VideoPanel } from './MediaPanels.tsx';
 import {
@@ -216,14 +217,9 @@ function TextSection({ o: obj, readOnly, themed, marks, set }: ObjectSectionCont
             const el = e.currentTarget;
             const at = { start: el.selectionStart, end: el.selectionEnd };
             (step === 'undo' ? undo : redo)();
-            requestAnimationFrame(() => {
-              const f = document.getElementById('ordo-text-editor');
-              if (!(f instanceof HTMLTextAreaElement)) return;
-              const n = f.value.length;
-              const r = { start: Math.min(at.start, n), end: Math.min(at.end, n) };
-              f.setSelectionRange(r.start, r.end);
-              setRange(r);
-            });
+            // At once, not a frame later over a newer selection (`restoreFieldSelection`).
+            const r = restoreFieldSelection(at);
+            if (r) setRange(r);
           }}
           onChange={(e) => {
             const next = e.target.value;
@@ -244,10 +240,7 @@ function TextSection({ o: obj, readOnly, themed, marks, set }: ObjectSectionCont
             if (caret !== null) {
               e.preventDefault();
               setRange({ start: caret, end: caret, caret });
-              requestAnimationFrame(() => {
-                const f = document.getElementById('ordo-text-editor');
-                if (f instanceof HTMLTextAreaElement) f.setSelectionRange(caret, caret);
-              });
+              restoreFieldSelection({ start: caret, end: caret });
             }
           }}
           onPaste={(e) => {
@@ -257,10 +250,7 @@ function TextSection({ o: obj, readOnly, themed, marks, set }: ObjectSectionCont
             if (caret !== null) {
               e.preventDefault();
               setRange({ start: caret, end: caret, caret });
-              requestAnimationFrame(() => {
-                const f = document.getElementById('ordo-text-editor');
-                if (f instanceof HTMLTextAreaElement) f.setSelectionRange(caret, caret);
-              });
+              restoreFieldSelection({ start: caret, end: caret });
             }
           }}
         />

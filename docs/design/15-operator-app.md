@@ -299,7 +299,9 @@ cells in place of the shape fields).
   Ctrl+B / Ctrl+I / Ctrl+U work in the field; a button gives the field its focus and selection back, and a
   pointer never takes them away. Ctrl+Z and Ctrl+Y (Ctrl+Shift+Z) in the field are the editor's undo and
   redo, not the field's own (which knows nothing of a Bold), so Bold then Ctrl+Z takes the Bold back; the
-  caret stays where it was. The 'Paragraph' strip under the field styles the PowerPoint paragraphs the
+  caret stays where it was. The field's range is put back as the key is handled (after an undo, a redo, a
+  cut or a paste the editor made), never a frame later, so a click or keys that follow at once keep their
+  own selection (`fieldSelection.ts`). The 'Paragraph' strip under the field styles the PowerPoint paragraphs the
   selection touches: Align and Direction (Auto, Left to right, Right to left) as radio groups, List (bullets
   • ● ■ ▪ ➢ ✓, numbers 1. (1) 1) a. i. with 'Start at'; a list started on paragraphs without an indent gets
   a hanging one wide enough for its labels), Level and Indent − / + (each paragraph from its own value),

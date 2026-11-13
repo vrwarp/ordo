@@ -26,7 +26,7 @@ import { hubApi } from './linkhelpers.ts';
  * - the arrows in the Align radio group choose an alignment and do not nudge the box;
  * - Enter on the focused Bold button makes the selection bold (the editor no longer swallows it);
  * - Bold, then Ctrl+Z in the text field takes the Bold back (the editor's undo, not the field's), also after
- *   typing (the typed text stays); Ctrl+Y brings it back;
+ *   typing (the typed text stays); Ctrl+Y brings it back; a selection made in the same moment is kept;
  * - Backspace on a focused format button deletes nothing;
  * - in the Find dialog, Enter on 'Replace all' replaces, and Delete on its Close button does not delete the
  *   text box selected behind the dialog.
@@ -115,6 +115,33 @@ test('the editor by keyboard: radio arrows, Enter on buttons, Ctrl+Z after a for
     .poll(async () => JSON.stringify((await byId(page, note.id)).runs ?? []))
     .toBe(JSON.stringify(boldRuns));
   await page.keyboard.press('Control+z');
+  await expect
+    .poll(async () => JSON.stringify((await byId(page, note.id)).runs ?? []))
+    .toBe(JSON.stringify(runs0));
+
+  // ---- A selection made right after Ctrl+Y or Ctrl+Z (the next click, Shift+End, keys typed in the same
+  // frame) is kept: the editor puts the field's range back as it handles the key, never a frame later over
+  // a newer selection (which then took the next typing to the old place).
+  const kept = await field.evaluate(async (el) => {
+    const t = el as HTMLTextAreaElement;
+    const key = (k: string) =>
+      t.dispatchEvent(
+        new KeyboardEvent('keydown', { key: k, ctrlKey: true, bubbles: true, cancelable: true }),
+      );
+    const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    t.focus();
+    t.setSelectionRange(0, 7);
+    key('y');
+    t.setSelectionRange(3, 3);
+    await frames();
+    const afterRedo = [t.selectionStart, t.selectionEnd];
+    t.setSelectionRange(0, 7);
+    key('z');
+    t.setSelectionRange(5, 5);
+    await frames();
+    return { afterRedo, afterUndo: [t.selectionStart, t.selectionEnd] };
+  });
+  expect(kept).toEqual({ afterRedo: [3, 3], afterUndo: [5, 5] });
   await expect
     .poll(async () => JSON.stringify((await byId(page, note.id)).runs ?? []))
     .toBe(JSON.stringify(runs0));
