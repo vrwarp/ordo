@@ -7,6 +7,7 @@ import {
   type SlideObject,
   type TextStyle,
 } from '@ordo/domain';
+import { m9Slide, m9Table } from '@ordo/domain/m9.test-util.ts';
 import { clearGeomFiles, putGeomFile } from './geom/stored.ts';
 import type { PropsModel } from './props.ts';
 import { rasterLowerThird, rasterProps, rasterSlide } from './raster.ts';
@@ -15,6 +16,8 @@ import { type Reach, drawSprite, lowerThirdReach, propsReach, slideReach, sprite
 import { LEGACY_FONT_ENV, installFontEnv } from './text/fonts.ts';
 import type { FontEnv } from './text/types.ts';
 import type { Ctx2D, ImageLookup } from './text2d.ts';
+// The table drawer, registered as the outputs register it (M9).
+import './table/index.ts';
 
 /**
  * Browser side of sprite.browser.test.ts (design/27 §7.3, M7): draws slides, bands, the lower third and
@@ -407,6 +410,62 @@ const CASES: Case[] = [
               ],
             },
           }),
+        ],
+      },
+      look: LOOK_MAIN,
+    },
+    tight: true,
+  },
+  {
+    name: 'M9 table: rows grown past its box by their text, a diagonal, turned 8 degrees',
+    job: {
+      kind: 'slide',
+      slide: {
+        id: 'm9-table',
+        objects: [
+          {
+            id: 'tb',
+            type: 'shape',
+            box: box(360, 300, 1000, 150, 8),
+            shape: 'rect',
+            fill: { r: 255, g: 255, b: 255, a: 1 },
+            opacity: 1,
+            radius: 0,
+            table: m9Table(),
+          } as SlideObject,
+        ],
+      },
+      look: LOOK_MAIN,
+    },
+    tight: true,
+  },
+  {
+    name: 'M9 looks without their drawers: warped, vertical and centred text, a 3-D pie and picture, a chart',
+    job: {
+      kind: 'slide',
+      slide: {
+        id: 'm9-looks',
+        objects: [
+          ...m9Slide()
+            .objects.filter((o) => ['title', 'vertical', 'centred', 'pie', 'emf', 'chart'].includes(o.id))
+            .map((o) => {
+              // Gathered into the middle of the frame, the picture on the test picture. The pie is not turned:
+              // a turned 270° arc moved by the sprite's offset differs by a level on hundreds of edge pixels
+              // (float32 device coordinates, the real-like slides' noise), which this case does not test.
+              const at: Record<string, ReturnType<typeof box>> = {
+                title: box(400, 250, 900, 130),
+                vertical: box(1150, 520, 300, 100, 90),
+                centred: box(700, 420, 420, 260),
+                pie: box(420, 420, 240, 240),
+                emf: box(420, 700, 260, 160),
+                chart: box(1050, 720, 300, 120),
+              };
+              return {
+                ...o,
+                box: at[o.id]!,
+                ...(o.type === 'image' ? { mediaId: 'pic' } : {}),
+              } as SlideObject;
+            }),
         ],
       },
       look: LOOK_MAIN,

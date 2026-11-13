@@ -391,7 +391,12 @@ Arm sequence for a cue (asset worker, then render worker):
    shapes and pictures. The canvas is the size of what the layer reaches (`slideReach` and
    the other reaches of `sprite.ts`: each object as its drawer lays it out, text's lines grown
    by 0.3 em and united with the ink its glyphs measure, a PowerPoint shape by its geometry,
-   outline and effect layers (`geomShapeReach`), its effects, turned with its box), cut
+   outline and effect layers (`geomShapeReach`), its effects, turned with its box; M9's
+   fields are known too: a table by its registered drawer's reach (`tableReach`: its grown rows,
+   lines and each cell's text), a chart or decoration by its drawer's reach once one is
+   registered and by its legacy shape until then, warped, vertical or 3-D text and 3-D or
+   vector pictures as their plain text and box while no painter, face target or picture look
+   is registered for them; an object such a hook draws reaches the frame), cut
    to the frame and drawn at that offset; the sprite's origin is aligned to a multiple of
    8 device px (`SPRITE_ALIGN`), since Chromium dithers gradients by device position and a
    sprite at any other offset differed from the full-frame draw by a level on thousands of

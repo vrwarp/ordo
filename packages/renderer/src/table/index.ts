@@ -1,5 +1,6 @@
 import { registerShapeDrawer } from '../shape.ts';
 import { drawTable } from './draw.ts';
+import { tableReach } from './reach.ts';
 
 /*
  * The table object's drawer (design/27 M9 tables, `ShapeObject.table`): model, layout, drawing, hit test and
@@ -23,6 +24,7 @@ export {
   tableStrokes,
 } from './layout.ts';
 export { legacyGroup } from './legacy.ts';
+export { tableReach } from './reach.ts';
 export {
   type TableModel,
   cellIsVertical,
@@ -32,4 +34,4 @@ export {
   tableModelOf,
 } from './model.ts';
 
-registerShapeDrawer('table', (ctx, o, scale) => drawTable(ctx, o, scale) !== undefined);
+registerShapeDrawer('table', (ctx, o, scale) => drawTable(ctx, o, scale) !== undefined, tableReach);

@@ -153,6 +153,11 @@ export function registerPicturePost(step: PicturePostStep): () => void {
   return register(postSteps, step);
 }
 
+/** Whether a target extension or post step is registered (a picture's 3-D look may then reach past its box). */
+export function pictureLooksRegistered(): boolean {
+  return targetExtensions.length > 0 || postSteps.length > 0;
+}
+
 /**
  * `ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh)` for any picture: a canvas image directly, a vector
  * picture through the source step that accepts it (nothing when none does).

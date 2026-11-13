@@ -179,14 +179,52 @@ export type ShapeDrawKind = (typeof SHAPE_DRAW_KINDS)[number];
  */
 export type ShapeDrawer = (ctx: Ctx2D, o: ShapeObject, scale: number) => boolean;
 
-const drawers = new Map<ShapeDrawKind, ShapeDrawer>();
+/**
+ * Where a registered drawer draws a clamped shape of its kind (logical px, slide space, effects and rotation
+ * included), for the tight sprites (`sprite.ts` `objectReach`): null when that is not known (the layer stays
+ * full-frame); undefined when the drawer would not draw it (it falls to its geometry or legacy shape).
+ */
+export type ShapeReach = (
+  ctx: Ctx2D,
+  o: ShapeObject,
+) => { x: number; y: number; w: number; h: number } | null | undefined;
 
-/** Register the drawer of one kind (the last one registered wins); returns its unregistration. */
-export function registerShapeDrawer(kind: ShapeDrawKind, draw: ShapeDrawer): () => void {
+const drawers = new Map<ShapeDrawKind, ShapeDrawer>();
+const reaches = new Map<ShapeDrawKind, ShapeReach>();
+
+/**
+ * Register the drawer of one kind (the last one registered wins), with where it draws (`ShapeReach`; a
+ * drawer registered without one draws its shapes on a full-frame layer); returns its unregistration.
+ */
+export function registerShapeDrawer(kind: ShapeDrawKind, draw: ShapeDrawer, reach?: ShapeReach): () => void {
   drawers.set(kind, draw);
+  if (reach) reaches.set(kind, reach);
+  else reaches.delete(kind);
   return () => {
-    if (drawers.get(kind) === draw) drawers.delete(kind);
+    if (drawers.get(kind) !== draw) return;
+    drawers.delete(kind);
+    if (reaches.get(kind) === reach) reaches.delete(kind);
   };
+}
+
+/** Whether a drawer of `kind` is registered (its module is loaded). */
+export function shapeDrawerRegistered(kind: ShapeDrawKind): boolean {
+  return drawers.has(kind);
+}
+
+/**
+ * Where a shape's registered drawer draws it (`ShapeReach`): undefined when the shape has no `table`,
+ * `chart` or `decor`, when no drawer of its kind is registered, or when the drawer would not draw it (the
+ * shape then draws its geometry or legacy shape, and reaches as they do); null when the drawer gave no reach.
+ */
+export function shapeDrawerReach(
+  ctx: Ctx2D,
+  o: ShapeObject,
+): { x: number; y: number; w: number; h: number } | null | undefined {
+  const kind = shapeDrawKind(o);
+  if (!kind || !drawers.has(kind)) return undefined;
+  const reach = reaches.get(kind);
+  return reach ? reach(ctx, clampShapeObject(o)) : null;
 }
 
 /**
@@ -203,6 +241,11 @@ export function registerLook3d(resolve: Look3dResolver): () => void {
   return () => {
     if (look3dResolver === resolve) look3dResolver = undefined;
   };
+}
+
+/** Whether a 3-D look resolver is registered (a shape with `look3d` is then drawn with its rim and walls). */
+export function look3dRegistered(): boolean {
+  return look3dResolver !== undefined;
 }
 
 /** Which kind's field a shape is drawn by (`SHAPE_DRAW_KINDS` order, as clamped), else undefined. */
