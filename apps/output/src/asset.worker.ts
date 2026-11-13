@@ -2,6 +2,7 @@ import { OpfsStore } from '@ordo/cache';
 import { isControl, startHeartbeat } from '@ordo/client';
 import {
   type AssetJob,
+  type AssetToMain,
   type AssetToRender,
   BitmapCache,
   DEFAULT_BITMAP_BUDGET,
@@ -186,7 +187,45 @@ const decoder = createDecoder({
   createImageBitmap: (...a: unknown[]) =>
     (createImageBitmap as (...b: unknown[]) => Promise<ImageBitmap>)(...a),
   ImageDecoder: typeof ImageDecoder === 'undefined' ? undefined : ImageDecoder,
+  rasterSvg: svgFromWindow,
 });
+
+/** How long the window may take to draw an SVG for this worker before the decode fails. */
+const SVG_WINDOW_MS = 15_000;
+let svgSeq = 0;
+const svgWaits = new Map<
+  number,
+  { resolve: (b: ImageBitmap) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+>();
+
+/**
+ * Ask the output's window to draw an SVG (decode.ts `rasterSvg`, design/14 "Pictures"): this worker cannot
+ * decode one. The answer arrives as a `svgRaster` message on this worker's own port from the window.
+ */
+function svgFromWindow(hash: string, blob: Blob): Promise<ImageBitmap> {
+  const id = ++svgSeq;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      svgWaits.delete(id);
+      reject(new Error('the window did not draw it in time'));
+    }, SVG_WINDOW_MS);
+    svgWaits.set(id, { resolve, reject, timer });
+    scope.postMessage({ t: 'svgRaster', id, hash, blob } satisfies AssetToMain);
+  });
+}
+
+/** The window's answer to `svgFromWindow`. */
+function onSvgRaster(m: { id: number; bitmap?: ImageBitmap; error?: string }): void {
+  const w = svgWaits.get(m.id);
+  if (!w) {
+    m.bitmap?.close();
+    return;
+  }
+  svgWaits.delete(m.id);
+  clearTimeout(w.timer);
+  if (m.bitmap) w.resolve(m.bitmap);
+  else w.reject(new Error(m.error ?? 'the window could not draw it'));
+}
 
 /** The decoder as a job uses it: each whole-file decode within the lanes' bound on decodes at once. */
 function jobDecoder(steps: Steps): typeof decoder {
@@ -726,6 +765,9 @@ scope.onmessage = (ev) => {
     case 'resize':
       width = m.width;
       height = m.height;
+      return;
+    case 'svgRaster':
+      onSvgRaster(m);
       return;
     default:
       onJobMessage(m);

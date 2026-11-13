@@ -33,7 +33,7 @@ import { LiveService } from './live.ts';
 import { createLogger, LogRing } from './log.ts';
 import { createProxy, type Proxy as HubProxy } from './proxy.ts';
 import { registerLiveApi } from './routes.ts';
-import { sendFile } from './send.ts';
+import { isActiveMime, sendFile } from './send.ts';
 import { StaticApps } from './static.ts';
 import { SocketHub } from './ws.ts';
 
@@ -394,6 +394,7 @@ export async function createLiveProcess(
         mime: f.mime,
         etag: `"${hash}"`,
         cacheControl: 'private, max-age=31536000, immutable',
+        download: isActiveMime(f.mime),
       });
     },
   });

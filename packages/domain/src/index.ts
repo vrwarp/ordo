@@ -21,3 +21,4 @@ export * from './palette.ts';
 export * from './media.ts';
 export * from './m9-readers.ts';
 export * from './table.ts';
+export * from './svg.ts';

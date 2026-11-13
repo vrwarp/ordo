@@ -27,6 +27,14 @@
   at this venue and is a best-effort path.
 - Animated GIFs are converted to a looping H.264 video (opaque) or VP9 alpha video
   (transparent). Still GIFs become PNG.
+- SVG pictures are accepted and shown on Audience screens as a still picture: the operator app
+  draws each one into a PNG as it uploads it (at least 1920 px on its longer side, at most
+  3840 px wide), and an SVG from a library made before that is drawn by the output itself. An
+  animated SVG shows its first frame on the screens; it moves only in the operator's previews
+  (the media library, pickers, background swatches), and those places say so ("moves in
+  previews only"). A moving background should be a video.
+- An uploaded file opened from its link never runs as a page: SVGs download, and every hub API
+  response is a sandboxed document that may load nothing (design/21).
 - Audio files are normalised to a delivery format (AAC 256 kbps stereo). Audio files and
   video soundtracks are loudness measured so the audio engine plays them at one level
   (design/18 "Gain staging").
@@ -82,4 +90,7 @@
   intact and a readable log of what was skipped.
 - A 200 MB MOV uploaded from home is playable at the venue after transcoding, with a
   progress indicator in between.
+- An SVG background shows on every Audience screen, whether it was uploaded now or before
+  this release; an animated one shows its first frame there and moves in the operator's
+  previews (`e2e/svg-media.spec.ts`).
 - A font added from Google Fonts renders identically on every output with the WAN off.

@@ -5,7 +5,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { FileRef } from '@ordo/domain';
-import { newId } from '@ordo/domain';
+import { looksLikeSvg, newId } from '@ordo/domain';
 import { HttpError } from './errors.ts';
 import type { Library } from './library.ts';
 
@@ -108,10 +108,8 @@ export function sniff(b: Uint8Array): Sniffed | undefined {
   if (at(0, 'OTTO')) return { ext: 'otf', mime: 'font/otf', kind: 'font' };
   if ((u(0) === 0 && u(1) === 1 && u(2) === 0 && u(3) === 0) || at(0, 'true'))
     return { ext: 'ttf', mime: 'font/ttf', kind: 'font' };
-  const textHead = Buffer.from(b.subarray(0, 512)).toString('utf8');
-  if (/<svg[\s>]/i.test(textHead) || /<\?xml[\s\S]*?<svg[\s>]/i.test(textHead)) {
-    return { ext: 'svg', mime: 'image/svg+xml', kind: 'image' };
-  }
+  // The same rule outputs use to recognise an SVG they cannot decode (domain svg.ts).
+  if (looksLikeSvg(b)) return { ext: 'svg', mime: 'image/svg+xml', kind: 'image' };
   return undefined;
 }
 

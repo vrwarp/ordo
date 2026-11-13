@@ -2,8 +2,15 @@ import {
   DEFAULT_THEME,
   type Font,
   type ImageObject,
+  isSvgMime,
   type Media,
   newId,
+  pngSize,
+  SVG_DEFAULT_SIZE,
+  SVG_HEAD_BYTES,
+  svgIntrinsicSize,
+  svgRasterProblem,
+  svgRasterSizeFor,
   type Output,
   type Playlist,
   Playlist as PlaylistSchema,
@@ -187,7 +194,16 @@ async function mediaFromBlob(
     updatedAt: nowIso(),
   };
   if (kind !== 'image') m.delivery = ref;
-  if (kind === 'image') {
+  if (isSvgMime(mime)) {
+    // The size outputs draw it at (design/26): a service worker cannot decode an SVG.
+    const size = svgRasterSizeFor(
+      svgIntrinsicSize(await blob.slice(0, SVG_HEAD_BYTES).text()),
+      SVG_DEFAULT_SIZE,
+    );
+    m.width = size.width;
+    m.height = size.height;
+    m.hasAlpha = true;
+  } else if (kind === 'image') {
     try {
       const bmp = await createImageBitmap(blob);
       m.width = bmp.width;
@@ -198,6 +214,35 @@ async function mediaFromBlob(
     }
   }
   return m;
+}
+
+/** The type of a library file by its hash (media originals, deliveries and posters, fonts). */
+function mimeOfHash(l: Lib, hash: string): string | undefined {
+  for (const m of l.media)
+    for (const f of [m.original, m.delivery, m.poster]) if (f?.hash === hash) return f.mime;
+  for (const f of l.fonts as Font[]) if (f.file.hash === hash) return f.file.mime;
+  return undefined;
+}
+
+/**
+ * An SVG's still from the operator's upload (field "raster", design/12 "Media pipeline"), checked as the hub
+ * checks it, kept as the item's delivery: outputs draw it instead of the SVG. Throws for a raster with
+ * anything but one SVG, or one that is not a PNG of its shape within the caps.
+ */
+async function withRaster(m: Media, svg: Blob, raster: Blob): Promise<Media> {
+  if (!isSvgMime(m.original.mime)) throw new Error('a still picture can only come with an SVG');
+  const png = pngSize(new Uint8Array(await raster.slice(0, 64).arrayBuffer()));
+  if (!png) throw new Error('the still picture is not a PNG');
+  const problem = svgRasterProblem(svgIntrinsicSize(await svg.slice(0, SVG_HEAD_BYTES).text()), png);
+  if (problem) throw new Error(problem);
+  const hash = await sha256(raster);
+  await putFile(hash, new Blob([raster], { type: 'image/png' }));
+  return {
+    ...m,
+    delivery: { hash, bytes: raster.size, mime: 'image/png', path: `files/${hash}` },
+    width: png.width,
+    height: png.height,
+  };
 }
 
 function job(kind: string, result: unknown, log: string[], error?: string): Job {
@@ -616,10 +661,24 @@ export async function handle(req: Request): Promise<Res> {
 
     // ---- files: the visitor's own (IndexedDB), else the sample service's (on the site)
     if (seg[0] === 'files' && seg[1]) {
+      // As the hub serves them (design/21): a sandboxed document that loads nothing, and an SVG downloads
+      // when opened as a page, so a visitor's SVG never runs script on the demo's origin.
+      const safe = (type: string): Record<string, string> => ({
+        'content-type': type,
+        'content-security-policy': "default-src 'none'; sandbox",
+        'x-content-type-options': 'nosniff',
+        ...(isSvgMime(type) ? { 'content-disposition': 'attachment' } : {}),
+      });
       const own = await getFile(seg[1]);
-      if (own)
-        return new Response(own, { headers: { 'content-type': own.type || 'application/octet-stream' } });
-      return fetch(new URL(`demo/files/${seg[1]}`, scope));
+      if (own) return new Response(own, { headers: safe(own.type || 'application/octet-stream') });
+      const site = await fetch(new URL(`demo/files/${seg[1]}`, scope));
+      if (!site.ok) return site;
+      // The site serves the sample's files without an extension: their type is the library's.
+      const type = mimeOfHash(await library(), seg[1]) ?? site.headers.get('content-type');
+      return new Response(site.body, {
+        status: site.status,
+        headers: safe(type ?? 'application/octet-stream'),
+      });
     }
 
     const l = await library();
@@ -958,11 +1017,21 @@ export async function handle(req: Request): Promise<Res> {
         const form = await req.formData();
         const files = form.getAll('file').filter((f): f is File => f instanceof File);
         if (!files.length) return fail(400, 'bad_request', 'No file in the upload (field "file")');
+        const rasters = form.getAll('raster').filter((f): f is File => f instanceof File);
+        if (rasters.length && (rasters.length > 1 || files.length > 1))
+          return fail(400, 'bad_request', 'A still picture (field "raster") comes with exactly one file');
         const isBackground = form.get('isBackground') === 'true' || form.get('isBackground') === '1';
         const out: Media[] = [];
         let media = l.media;
         for (const f of files) {
-          const item = await mediaFromBlob(f, f.name, { isBackground });
+          let item = await mediaFromBlob(f, f.name, { isBackground });
+          if (rasters[0]) {
+            try {
+              item = await withRaster(item, f, rasters[0]);
+            } catch (e) {
+              return fail(400, 'bad_raster', `${f.name}: ${(e as Error).message}`);
+            }
+          }
           const same = media.find((x) => x.original.hash === item.original.hash);
           if (same) out.push(same);
           else {

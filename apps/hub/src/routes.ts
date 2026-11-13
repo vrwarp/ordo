@@ -51,7 +51,7 @@ import { NO_LIBREOFFICE_PICTURES, NO_PDF_IMPORT, PPTX_MIME } from './imports.ts'
 import { NO_LIBREOFFICE_REFERENCE, NO_PDF_TOOLS } from './pptx/fallback.ts';
 import { planReimport } from './pptx/reimport.ts';
 import type { PptxImportOptions } from './pptx/shared.ts';
-import { sendFile } from './send.ts';
+import { isActiveMime, sendFile } from './send.ts';
 import { extOf, MAX_UPLOAD_BYTES, readHead, sniff, tooLarge } from './store.ts';
 import type { HubTools } from './tools.ts';
 import { validate } from './validate.ts';
@@ -748,12 +748,19 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   route('GET', '/media', 'edit', async () => lib.media.list());
   route('GET', '/media/:id', 'edit', async (req) => lib.media.must(params(req).id!));
   route('POST', '/media', 'edit', async (req, reply) => {
-    const { files, fields } = await readMultipart(hub, req);
-    if (!files.length) throw badRequest('No file in the upload (field "file")');
+    const { files: parts, fields } = await readMultipart(hub, req);
+    // An SVG may come with its still (field "raster"): a PNG the uploading client drew, kept as the file
+    // outputs draw (design/12 "Media pipeline"). One SVG per upload then.
+    const files = parts.filter((f) => f.fieldname !== 'raster');
+    const rasters = parts.filter((f) => f.fieldname === 'raster');
     const out: Media[] = [];
     try {
+      if (!files.length) throw badRequest('No file in the upload (field "file")');
+      if (rasters.length && (rasters.length > 1 || files.length > 1))
+        throw badRequest('A still picture (field "raster") comes with exactly one file');
       for (let i = 0; i < files.length; i++) {
         const f = files[i]!;
+        const raster = rasters[0];
         const name = files.length === 1 && fields.name ? `${fields.name}.${extOf(f.filename)}` : f.filename;
         out.push(
           await hub.media.ingest(f, name, {
@@ -764,12 +771,14 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
                   .map((t) => t.trim())
                   .filter(Boolean)
               : [],
+            ...(raster ? { raster } : {}),
           }),
         );
         files[i] = { ...f, path: '' };
+        if (raster) rasters[0] = { ...raster, path: '' };
       }
     } finally {
-      await Promise.all(files.filter((f) => f.path).map((f) => rm(f.path, { force: true })));
+      await Promise.all([...files, ...rasters].filter((f) => f.path).map((f) => rm(f.path, { force: true })));
     }
     return reply.code(201).send(out.length === 1 ? out[0] : out);
   });
@@ -1111,6 +1120,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       mime: f.mime,
       etag: `"${hash}"`,
       cacheControl: 'private, max-age=31536000, immutable',
+      download: isActiveMime(f.mime),
     });
   });
 

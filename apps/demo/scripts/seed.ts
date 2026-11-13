@@ -9,7 +9,7 @@
  * English Bible; a welcome loop; backgrounds drawn here.
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { deflateSync } from 'node:zlib';
@@ -46,24 +46,10 @@ function chunk(type: string, data: Buffer): Buffer {
   crc.writeUInt32BE(crc32(td));
   return Buffer.concat([len, td, crc]);
 }
-/** A soft diagonal gradient between three colours with a little glow: a worship-style background. */
-function gradientPng(w: number, h: number, stops: [number, number, number][]): Buffer {
+/** An 8-bit RGB PNG of `raw` (rows of `w` RGB pixels, no filter bytes). */
+function rgbPng(w: number, h: number, rgb: Uint8Array): Buffer {
   const raw = Buffer.alloc((w * 3 + 1) * h);
-  for (let y = 0; y < h; y++) {
-    raw[y * (w * 3 + 1)] = 0;
-    for (let x = 0; x < w; x++) {
-      const t = (x / w) * 0.65 + (y / h) * 0.35;
-      const seg = t < 0.5 ? 0 : 1;
-      const f = seg === 0 ? t / 0.5 : (t - 0.5) / 0.5;
-      const a = stops[seg]!;
-      const b = stops[seg + 1]!;
-      const dx = x / w - 0.68;
-      const dy = y / h - 0.32;
-      const glow = Math.max(0, 1 - Math.sqrt(dx * dx + dy * dy) * 2.2) * 26;
-      const o = y * (w * 3 + 1) + 1 + x * 3;
-      for (let c = 0; c < 3; c++) raw[o + c] = Math.min(255, Math.round(a[c]! + (b[c]! - a[c]!) * f + glow));
-    }
-  }
+  for (let y = 0; y < h; y++) raw.set(rgb.subarray(y * w * 3, (y + 1) * w * 3), y * (w * 3 + 1) + 1);
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(w, 0);
   ihdr.writeUInt32BE(h, 4);
@@ -77,85 +63,192 @@ function gradientPng(w: number, h: number, stops: [number, number, number][]): B
   ]);
 }
 
-/** A vibrant multi-layer SVG background with glowing aurora ribbons and stars. */
-function animatedWaveSvg(): Buffer {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
-  <defs>
-    <!-- Deep celestial night sky -->
-    <linearGradient id="skyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#070c24" />
-      <stop offset="45%" stop-color="#0c173d" />
-      <stop offset="85%" stop-color="#121136" />
-      <stop offset="100%" stop-color="#08081a" />
-    </linearGradient>
+/** A soft diagonal gradient between three colours with a little glow: a worship-style background. */
+function gradientPng(w: number, h: number, stops: [number, number, number][]): Buffer {
+  const rgb = new Uint8Array(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const t = (x / w) * 0.65 + (y / h) * 0.35;
+      const seg = t < 0.5 ? 0 : 1;
+      const f = seg === 0 ? t / 0.5 : (t - 0.5) / 0.5;
+      const a = stops[seg]!;
+      const b = stops[seg + 1]!;
+      const dx = x / w - 0.68;
+      const dy = y / h - 0.32;
+      const glow = Math.max(0, 1 - Math.sqrt(dx * dx + dy * dy) * 2.2) * 26;
+      const o = (y * w + x) * 3;
+      for (let c = 0; c < 3; c++) rgb[o + c] = Math.min(255, Math.round(a[c]! + (b[c]! - a[c]!) * f + glow));
+    }
+  }
+  return rgbPng(w, h, rgb);
+}
 
-    <!-- Emerald / neon cyan aurora ribbon -->
-    <linearGradient id="auroraGreen" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#00f5a0" stop-opacity="0.85" />
-      <stop offset="35%" stop-color="#00e5ff" stop-opacity="0.9" />
-      <stop offset="70%" stop-color="#10b981" stop-opacity="0.85" />
-      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.8" />
-    </linearGradient>
+// ---------------------------------------------------------------- the aurora background (a looping video)
 
-    <!-- Purple / magenta / violet ribbons -->
-    <linearGradient id="auroraPurple" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#7c3aed" stop-opacity="0.8" />
-      <stop offset="40%" stop-color="#c026d3" stop-opacity="0.85" />
-      <stop offset="75%" stop-color="#6366f1" stop-opacity="0.9" />
-      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.8" />
-    </linearGradient>
+type RGB = [number, number, number];
+const hex = (h: string): RGB => [1, 3, 5].map((i) => Number.parseInt(h.slice(i, i + 2), 16)) as RGB;
+/** A colour along evenly spaced stops, `t` in 0..1. */
+function along(stops: RGB[], t: number): RGB {
+  const f = Math.min(0.9999, Math.max(0, t)) * (stops.length - 1);
+  const i = Math.floor(f);
+  const a = stops[i]!;
+  const b = stops[i + 1]!;
+  return [0, 1, 2].map((c) => a[c]! + (b[c]! - a[c]!) * (f - i)) as RGB;
+}
+const smooth = (e: number, v: number) => {
+  const t = Math.min(1, Math.max(0, v / e));
+  return t * t * (3 - 2 * t);
+};
 
-    <!-- Radiant golden-cyan highlight -->
-    <linearGradient id="auroraCyan" x1="0%" y1="50%" x2="100%" y2="50%">
-      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.85" />
-      <stop offset="50%" stop-color="#34d399" stop-opacity="0.9" />
-      <stop offset="100%" stop-color="#a855f7" stop-opacity="0.85" />
-    </linearGradient>
+/**
+ * A ribbon of the aurora: its top and bottom edges as waves across the frame (fractions of its height) that
+ * move with the phase, its colours from left to right, and its opacity. Every wave turns a whole number of
+ * times per loop, so the last frame runs into the first.
+ */
+type Ribbon = {
+  top: (x: number, p: number) => number;
+  bottom: (x: number, p: number) => number;
+  colors: RGB[];
+  alpha: number;
+};
+const TAU = Math.PI * 2;
+const RIBBONS: Ribbon[] = [
+  {
+    top: (x, p) => 0.38 + 0.07 * Math.sin(TAU * 1.1 * x + p) + 0.035 * Math.sin(TAU * 2.3 * x - 2 * p + 1),
+    bottom: () => 1.2,
+    colors: ['#7c3aed', '#c026d3', '#6366f1', '#3b82f6'].map(hex),
+    alpha: 0.68,
+  },
+  {
+    top: (x, p) => 0.46 + 0.065 * Math.sin(TAU * 1.3 * x + p + 2) + 0.03 * Math.sin(TAU * 2.9 * x + 2 * p),
+    bottom: (x, p) => 0.86 + 0.05 * Math.sin(TAU * 1.7 * x - p + 0.5),
+    colors: ['#00f5a0', '#00e5ff', '#10b981', '#06b6d4'].map(hex),
+    alpha: 0.78,
+  },
+  {
+    top: (x, p) => 0.55 + 0.06 * Math.sin(TAU * 1.5 * x - p + 4) + 0.025 * Math.sin(TAU * 3.1 * x + p),
+    bottom: (x, p) => 0.77 + 0.045 * Math.sin(TAU * 1.2 * x + 2 * p + 1),
+    colors: ['#38bdf8', '#34d399', '#a855f7'].map(hex),
+    alpha: 0.66,
+  },
+];
 
-    <radialGradient id="glowOrb1" cx="35%" cy="40%" r="55%">
-      <stop offset="0%" stop-color="#00f5a0" stop-opacity="0.45" />
-      <stop offset="60%" stop-color="#00e5ff" stop-opacity="0.15" />
-      <stop offset="100%" stop-color="#070c24" stop-opacity="0" />
-    </radialGradient>
+/** The sky the ribbons move over: a night gradient, two soft glows and a few stars (still). */
+function auroraSky(w: number, h: number): Float32Array {
+  const sky = new Float32Array(w * h * 3);
+  const stops = ['#070c24', '#0c173d', '#121136', '#08081a'].map(hex);
+  const glows: { cx: number; cy: number; r: number; c: RGB; a: number }[] = [
+    { cx: 0.35, cy: 0.4, r: 0.55, c: hex('#00f5a0'), a: 0.4 },
+    { cx: 0.7, cy: 0.45, r: 0.55, c: hex('#a855f7'), a: 0.36 },
+  ];
+  for (let y = 0; y < h; y++) {
+    const base = along(stops, y / h);
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 3;
+      const px = [...base];
+      for (const g of glows) {
+        const d = Math.hypot(x / w - g.cx, (y / h - g.cy) * (h / w)) / g.r;
+        const a = g.a * Math.max(0, 1 - d) ** 2;
+        for (let c = 0; c < 3; c++) px[c] = px[c]! + (g.c[c]! - px[c]!) * a;
+      }
+      sky[o] = px[0]!;
+      sky[o + 1] = px[1]!;
+      sky[o + 2] = px[2]!;
+    }
+  }
+  const stars: [number, number, number][] = [
+    [0.09, 0.08, 1.5],
+    [0.22, 0.14, 2.5],
+    [0.39, 0.07, 1.5],
+    [0.57, 0.12, 2],
+    [0.72, 0.06, 2.5],
+    [0.86, 0.15, 1.5],
+    [0.95, 0.09, 1.5],
+    [0.15, 0.2, 1.5],
+    [0.46, 0.19, 2],
+    [0.79, 0.22, 2],
+  ];
+  const k = w / 1920;
+  for (const [sx, sy, sr] of stars) {
+    const r = Math.max(1, sr * k);
+    for (let y = Math.floor(sy * h - r - 1); y <= sy * h + r + 1; y++)
+      for (let x = Math.floor(sx * w - r - 1); x <= sx * w + r + 1; x++) {
+        const a = 0.8 * Math.min(1, Math.max(0, r + 0.5 - Math.hypot(x - sx * w, y - sy * h)));
+        const o = (y * w + x) * 3;
+        for (let c = 0; c < 3; c++) sky[o + c] = sky[o + c]! + (255 - sky[o + c]!) * a;
+      }
+  }
+  return sky;
+}
 
-    <radialGradient id="glowOrb2" cx="70%" cy="45%" r="55%">
-      <stop offset="0%" stop-color="#a855f7" stop-opacity="0.4" />
-      <stop offset="55%" stop-color="#6366f1" stop-opacity="0.15" />
-      <stop offset="100%" stop-color="#070c24" stop-opacity="0" />
-    </radialGradient>
-  </defs>
+/** One frame of the aurora at phase `p` (radians; one loop is 2π) as RGB bytes. */
+function auroraFrame(w: number, h: number, sky: Float32Array, p: number, out: Uint8Array): void {
+  const px = Float32Array.from(sky);
+  const edge = 0.03 * h;
+  for (const rb of RIBBONS) {
+    for (let x = 0; x < w; x++) {
+      const fx = x / w;
+      const top = rb.top(fx, p) * h;
+      const bottom = rb.bottom(fx, p) * h;
+      const col = along(rb.colors, fx);
+      // A faint glow rises above the ribbon, as an aurora's light does.
+      const y0 = Math.max(0, Math.floor(top - 6 * edge));
+      const y1 = Math.min(h, Math.ceil(bottom));
+      for (let y = y0; y < y1; y++) {
+        const inside = smooth(edge, y - top) * smooth(edge, bottom - y);
+        const glow = (y < top ? 0.35 * (1 - (top - y) / (6 * edge)) ** 2 : 0.35) * smooth(edge, bottom - y);
+        const a = rb.alpha * Math.max(inside, glow);
+        if (a <= 0) continue;
+        const o = (y * w + x) * 3;
+        for (let c = 0; c < 3; c++) px[o + c] = px[o + c]! + (col[c]! - px[o + c]!) * a;
+      }
+    }
+  }
+  for (let i = 0; i < px.length; i++) out[i] = Math.min(255, Math.max(0, Math.round(px[i]!)));
+}
 
-  <!-- Sky background -->
-  <rect width="1920" height="1080" fill="url(#skyGrad)" />
-
-  <!-- Stars layer -->
-  <g opacity="0.8">
-    <circle cx="180" cy="90" r="1.5" fill="#fff" />
-    <circle cx="420" cy="150" r="2.5" fill="#dbeafe" />
-    <circle cx="750" cy="80" r="1.5" fill="#fff" />
-    <circle cx="1100" cy="130" r="2" fill="#fff" />
-    <circle cx="1380" cy="70" r="2.5" fill="#dbeafe" />
-    <circle cx="1650" cy="160" r="1.5" fill="#fff" />
-    <circle cx="1820" cy="100" r="1.5" fill="#fff" />
-    <circle cx="290" cy="220" r="1.5" fill="#fff" />
-    <circle cx="890" cy="210" r="2" fill="#fff" />
-    <circle cx="1520" cy="240" r="2" fill="#fff" />
-  </g>
-
-  <!-- Diffuse Aurora Ambient Background Glow -->
-  <rect width="1920" height="1080" fill="url(#glowOrb1)" />
-  <rect width="1920" height="1080" fill="url(#glowOrb2)" />
-
-  <!-- Lower Deep Violet Wave -->
-  <path d="M0,450 C350,300 700,520 1100,360 C1450,220 1720,420 1920,320 L1920,1080 L0,1080 Z" fill="url(#auroraPurple)" opacity="0.85" />
-
-  <!-- Middle Wave Ribbon (Cyan to Emerald) -->
-  <path d="M0,520 C320,380 680,600 1080,420 C1420,280 1700,500 1920,390 L1920,950 C1650,1020 1300,850 950,940 C580,1030 250,880 0,960 Z" fill="url(#auroraGreen)" opacity="0.9" />
-
-  <!-- Dynamic Highlight Swirl (Cyan to Radiant Purple) -->
-  <path d="M0,600 C380,480 760,660 1180,500 C1560,360 1780,540 1920,450 L1920,820 C1720,890 1450,780 1120,860 C750,940 320,810 0,890 Z" fill="url(#auroraCyan)" opacity="0.8" />
-</svg>`;
-  return Buffer.from(svg, 'utf8');
+/**
+ * The aurora as a seamless 8 s loop for song 2's background (720p H.264, which the hub transcodes like any
+ * upload): an SVG background shows only its first frame on Audience screens (design/14 "Pictures"), a video
+ * moves there. When ffmpeg cannot make it here, the first frame as a still picture.
+ */
+async function auroraBackground(): Promise<{ name: string; data: Buffer; mime: string }> {
+  const w = 1280;
+  const h = 720;
+  const fps = 24;
+  const frames = 8 * fps;
+  const sky = auroraSky(w, h);
+  const frame = new Uint8Array(w * h * 3);
+  const dir = mkdtempSync(join(tmpdir(), 'ordo-demo-aurora-'));
+  const file = join(dir, 'aurora.mp4');
+  try {
+    const ff = spawn(
+      'ffmpeg',
+      [
+        ...['-hide_banner', '-loglevel', 'error', '-y'],
+        ...['-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${w}x${h}`, '-r', String(fps), '-i', '-'],
+        ...['-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-pix_fmt', 'yuv420p'],
+        ...['-movflags', '+faststart', file],
+      ],
+      { stdio: ['pipe', 'ignore', 'inherit'] },
+    );
+    const done = new Promise<number>((res) => {
+      ff.on('error', () => res(-1));
+      ff.on('close', (code) => res(code ?? -1));
+    });
+    ff.stdin.on('error', () => undefined);
+    for (let i = 0; i < frames && ff.exitCode === null; i++) {
+      auroraFrame(w, h, sky, (TAU * i) / frames, frame);
+      if (!ff.stdin.write(frame)) await new Promise((r) => ff.stdin.once('drain', r));
+    }
+    ff.stdin.end();
+    if ((await done) === 0) return { name: 'Aurora Waves.mp4', data: readFileSync(file), mime: 'video/mp4' };
+    console.warn('demo seed: ffmpeg could not make the aurora video; using its first frame as a still');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  auroraFrame(w, h, sky, 0, frame);
+  return { name: 'Aurora Waves.png', data: rgbPng(w, h, frame), mime: 'image/png' };
 }
 
 // ---------------------------------------------------------------- content
@@ -273,7 +366,8 @@ async function main() {
       fd.append('isBackground', String(isBackground));
       fd.append('file', new Blob([new Uint8Array(buf)], { type: mime }), name);
       const m = await api<{ id: string }>('media', { method: 'POST', body: fd });
-      for (let i = 0; i < 300; i++) {
+      // A video is transcoded first: up to 3 minutes on a loaded runner.
+      for (let i = 0; i < 900; i++) {
         const s = await api<{ state: string }>(`media/${m.id}`);
         if (s.state === 'ready') return m;
         if (s.state === 'failed') throw new Error(`media ${name} failed`);
@@ -311,11 +405,12 @@ async function main() {
       'image/png',
       true,
     );
-    const auroraSvg = await upload('Aurora Waves (Animated).svg', animatedWaveSvg(), 'image/svg+xml', true);
+    const auroraFile = await auroraBackground();
+    const aurora = await upload(auroraFile.name, auroraFile.data, auroraFile.mime, true);
 
     const songs: { id: string; rev: number }[] = [];
     for (const h of HYMNS) songs.push(await api('import/songselect', { method: 'POST', json: { text: h } }));
-    // The first song gets the dusk background; the second gets the animated multi-layer SVG background.
+    // The first song gets the dusk background; the second the moving aurora.
     const first = await api<Record<string, unknown> & { rev: number }>(`presentations/${songs[0]!.id}`);
     await api(`presentations/${songs[0]!.id}`, {
       method: 'PUT',
@@ -325,7 +420,7 @@ async function main() {
       const second = await api<Record<string, unknown> & { rev: number }>(`presentations/${songs[1]!.id}`);
       await api(`presentations/${songs[1]!.id}`, {
         method: 'PUT',
-        json: { ...second, backgroundMediaId: auroraSvg.id },
+        json: { ...second, backgroundMediaId: aurora.id },
       });
     }
 

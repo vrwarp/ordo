@@ -12,7 +12,7 @@ The window follows design/25: a main thread that hosts and three supervised work
 | Main (host)   | The `<canvas>` (control transferred) and the 2D hold canvas, the `<video>`/`<audio>` elements and `requestVideoFrameCallback` → `VideoFrame` transfer, the audio engine, fullscreen, Wake Lock, keys, the diagnostics overlay, the program-view `RTCPeerConnection`, the opener's port offers, the supervisor | Networking, state, storage, planning, decoding, text, anything a worker can do  |
 | Link worker   | WebSocket and clock sync, the live mirror and reducer, the fallback-bus client, OPFS service-cache fill (streamed) and pruning, IndexedDB persistence, cue planning and arm orchestration, props scheduling, health assembly, preview, ended-event queueing                                                   | Touching the DOM; it drives the host's media elements with commands             |
 | Render worker | WebGPU device, `OffscreenCanvas`, the frame loop, layer stacks, transitions, uniform buffers                                                                                                                                                                                                                  | Fetching, decoding, allocation inside the loop                                  |
-| Asset worker  | OPFS reads, picture decoding (`createImageBitmap`, `ImageDecoder` for scaled JPEG decodes), font loading (`self.fonts`), layer rasterization to a software-backed `OffscreenCanvas` 2D, in raster lanes                                                                                                       | Touching the GPU device except to upload prepared bitmaps via the render worker |
+| Asset worker  | OPFS reads, picture decoding (`createImageBitmap`, `ImageDecoder` for scaled JPEG decodes; an SVG without a still is drawn by the window), font loading (`self.fonts`), layer rasterization to a software-backed `OffscreenCanvas` 2D, in raster lanes                                                        | Touching the GPU device except to upload prepared bitmaps via the render worker |
 
 Topology. The host creates the three workers and three `MessageChannel`s (asset↔render, link↔render,
 link↔asset) and hands the ends over with a `ports` message (`packages/renderer/src/messages.ts`), again
@@ -217,6 +217,21 @@ decodes two large photos never holds up the props layer, which flips on every se
   slice. A resize or a transfer leaves it transparent, so it is cleared only when a draw failed before
   taking it (0.2 ms at 1080p, 1.1 ms at 4K saved per job). Drawing the first opaque layer with `'copy'`
   saved nothing on this software surface (it cost 0.4-1.5 ms more), so it is not done.
+
+**Pictures that are SVGs** (`apps/output/src/decode.ts`, `apps/output/src/svg.ts`, review 2026-11-13 R5).
+`createImageBitmap` cannot decode an SVG, in a worker or on a window, and a canvas draw of an SVG is one
+still frame anyway, so outputs draw an SVG as a still. An SVG uploaded through the operator carries a PNG
+still the operator drew (its `delivery`, design/12 "Media pipeline"), which `playableFile` and `stillFile`
+pick like any delivery: the worker never sees the SVG. One without (a library from before) fails
+`createImageBitmap`; when its first bytes look like an SVG (`looksLikeSvg`, the hub's sniff), the decoder
+asks the window (`AssetToMain` `svgRaster`): the host draws it through an `<img>` (no script runs in an image)
+into a CPU-backed `OffscreenCanvas` at `svgRasterSizeFor` (the size the operator draws its still at: at least
+1920 px on the longer side, at most 3840 wide and 16.7 MP) and transfers the `ImageBitmap` back (`ToAsset`
+`svgRaster`). It is cached like any decode, counted in `DecodeStats.svg`, and logged on the window with its
+size and time (one main-thread draw per file per cache life). An SVG that taints the canvas (a
+`foreignObject`), does not decode, or takes more than 10 s on the window (15 s for the worker's wait) fails
+as an undecodable picture did before (retried, then quarantined). An animated SVG shows its first frame;
+a moving background is a video.
 
 **Crop-aware decode** (`apps/output/src/decode.ts`). The hub prepares pictures for a 3840 px output
 (design/27 §4), so a 1080p output decodes four times what it shows. When every use of a JPEG in a job
