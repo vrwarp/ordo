@@ -609,7 +609,10 @@ tainted canvas or no page sends the SVG alone) and posts the PNG beside it as `r
 its delivery: thumbnails, the editor canvas and outputs draw that still. Tiles where media is picked (the
 Media tab's rows and preview, the media pickers, the background swatches: `tileHash`) show the SVG itself, so
 an animated one moves there, and say "SVG · moves in previews only" (`svgNote`): Audience screens show its
-first frame.
+first frame. An SVG without a still (one over 24 MB goes through the resumable upload without one, or this
+browser could not draw it, or it predates stills) says instead that each Audience screen draws it itself when
+it is shown, or, over 2 MB (`SVG_SCREEN_MAX_BYTES`), that the screens do not show it: upload it again from a
+browser, or a PNG of it.
 
 ## Settings
 

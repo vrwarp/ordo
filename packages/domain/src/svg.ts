@@ -40,6 +40,15 @@ export const SVG_RASTER = {
 } as const;
 
 /**
+ * The largest SVG an Audience screen draws on its own window (`apps/output/src/svg.ts`) when it has no still
+ * (one uploaded in the resumable path, over 24 MB; one the uploading browser could not draw; a library's from
+ * before the stills). Its draw costs the output's main thread (the hub link, video slots) at a GO, unbounded
+ * by anything but its size, so a larger one is not drawn (as no SVG background was before) and the operator
+ * says so where it is picked (`svgNote`).
+ */
+export const SVG_SCREEN_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
  * What an SVG's root element declares: its size in CSS px (`width` and `height` in absolute units, one of them
  * completed from the viewBox's ratio), its viewBox's size (the user units it was designed in) and its aspect
  * ratio.

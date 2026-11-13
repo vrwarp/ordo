@@ -273,8 +273,9 @@ stored the hub checks it by its header: a PNG within those caps, at most 96 MB, 
 element declares (`svgIntrinsicSize` reads `width`, `height` and `viewBox` of the root only: never a
 child's `stroke-width`, a percentage counts as none); anything else is 400 `bad_raster`. The media job
 decodes the still's header with `ffprobe` and drops one that lies about its pixels (logged; the file is
-released). An SVG without a still (a library from before, a client that could not draw it) keeps no
-delivery, and outputs draw it on their window. The item's `width` and `height` are the still's, else
+released). An SVG without a still (a library from before, a client that could not draw it, one sent through the
+resumable upload, over 24 MB) keeps no delivery, and outputs draw it on their window, up to
+`SVG_SCREEN_MAX_BYTES` (2 MB; a larger one is not shown, and the operator says so where it is picked). The item's `width` and `height` are the still's, else
 `svgRasterSizeFor` with the browser's default 300x150 for an SVG that declares nothing. An animated SVG is
 a still on the screens (its first frame).
 

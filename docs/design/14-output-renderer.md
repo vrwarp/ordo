@@ -240,7 +240,10 @@ into a CPU-backed `OffscreenCanvas` at `svgRasterSizeFor` (the size the operator
 `svgRaster`). It is cached like any decode, counted in `DecodeStats.svg`, and logged on the window with its
 size and time (one main-thread draw per file per cache life). An SVG that taints the canvas (a
 `foreignObject`), does not decode, or takes more than 10 s on the window (15 s for the worker's wait) fails
-as an undecodable picture did before (retried, then quarantined). An animated SVG shows its first frame;
+as an undecodable picture did before (retried, then quarantined). One over `SVG_SCREEN_MAX_BYTES` (2 MB,
+`@ordo/domain` `svg.ts`) is refused before it is decoded: the window also runs the hub link and the video
+slots, and the SVGs that reach it are the ones the operator could not draw (the 2026-11-13 review), so its
+cost is bounded by size; the operator's `svgNote` tells a volunteer which SVG has no still. An animated SVG shows its first frame;
 a moving background is a video.
 
 **Crop-aware decode** (`apps/output/src/decode.ts`). The hub prepares pictures for a 3840 px output

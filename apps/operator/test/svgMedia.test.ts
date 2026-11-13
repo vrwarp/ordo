@@ -116,6 +116,10 @@ describe('SVG tiles', () => {
     expect(tileHash(undefined)).toBeUndefined();
     expect(svgNote(wave)).toMatch(/still picture.*first frame.*moves in previews only/);
     expect(svgNote(photo)).toBeUndefined();
+    // Without its still, each screen draws it itself (2026-11-13 review), and not at all past 2 MB.
+    expect(svgNote(legacy)).toMatch(/without a still picture: each Audience screen draws it itself/);
+    const big = { ...legacy, original: { ...legacy.original, bytes: 3 * 1024 * 1024 } };
+    expect(svgNote(big)).toMatch(/over 2 MB: Audience screens do not show it/);
   });
 
   it('the picker says so on an SVG’s tile', () => {
