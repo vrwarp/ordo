@@ -815,7 +815,15 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   or 200 objects and 16 pictures (`EmittedSlide.missing`, recorded on the LibreOffice path too: the import
   core's `ImportCore.budgetLeft`, for the hub's job and the client parse alike) and the ladder's
   (`Slide.pptx.missing`), so goLive's degraded list
-  names them; a slide hybrid only for them waits for nothing.
+  names them; a slide hybrid only for them waits for nothing. On a hub with LibreOffice a slide over 64 KB
+  that the ladder would simplify keeps LibreOffice's page instead (`ImportCore.pageForBudget`, above).
+- **Known costs of the hold-back until `decor-render`** (hub with LibreOffice, E's worship slides, against
+  wave 1): with decorations held back, the guard leaves out topmost objects that main sent to LibreOffice's
+  art, and LibreOffice draws no budget's art: an emoji game slide (aesthetic template slide 7: 0.956 at
+  wave 1, 0.907 with every field, 0.795 as stored: its connector lines and emojis listed missing) and a
+  picture slide of wave 1 (PICK_ME slide 5: 0.995, 0.932, 0.864: a connector group). A Christmas app slide
+  (gingerbread template slide 21: 0.969, 0.936, 0.696) is over 64 KB as stored and now keeps LibreOffice's
+  page instead. All three draw whole again once `decor-render` turns 'decor' on.
 - **The first paint stays as fast.** M9 adds no code to what the operator loads before its first paint: its
   drawers load per object kind (`registerShapeDrawerLoader`; the table's in the workers' prepare step and the
   editor canvas) and the Setup and settings pages load when opened (`React.lazy`). Measured on this PR's build:
@@ -2437,6 +2445,18 @@ class" now read "fitted by the ladder" and "stored minimal"._
   minimal, else as its text alone. What a level leaves out is `Slide.pptx.missing` ('decoration', 'chart'),
   with or without LibreOffice (LibreOffice draws no budget's art), and such a slide is hybrid but never
   `pending`. `PptxNativeResult.simplified` counts the slides changed; `compact` is 0.
+- **With LibreOffice, a slide over 64 KB keeps its page** (repair of 2026-11-13, `ImportCore.pageForBudget`,
+  both paths): where the ladder would fit a slide by leaving something out (`plain`, `minimal`), a hub with
+  LibreOffice stores it picture class and `pending` instead, its whole text in `pptx.artText`, and the
+  follow-up draws its page, as every such slide was before M9; only when that form (`compactSlideBytes`) is
+  within 64 KB and the presentation's plan still holds; the tail stays minimal. Why: the review measured
+  what a hub with LibreOffice showed of E's worship slides against wave 1 (`beforeHubSsim`, the exit gate of
+  decision 2): 22 slides stored plain or minimal fell from 0.90-0.999 to 0.13-0.94 (the tables of five study
+  sheets drawn as cell text without their grid on a black page at 0.13-0.32; Christmas and Easter templates
+  without their decorations at 0.70-0.94). A hub without LibreOffice stores them as before (nothing else
+  draws them). Measured with `--before hub` (which now asks the hub for every slide its budget fitted
+  plain or minimal, `HubBefore.budget`): all 22 show LibreOffice's page again, at or above wave 1 (0.931-0.999;
+  two above it: 0.901 → 0.975 and 0.969 → 0.995).
 - **Failures** (`nativeJob.ts` `convert`): a batch that fails is converted again slide by slide (30 s each);
   a slide that still fails, one the converter could not read, and the slides past the 15 minutes of pool time
   get the text rescue (`@ordo/pptx-scene` `rescueDeck`, pool task `pptx-scene` with `rescue: true`: the

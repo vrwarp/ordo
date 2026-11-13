@@ -421,7 +421,7 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
     withPart(parts, 'ppt/charts/chart3.xml', chartXml([3, 5, 2], 'C00000'), CHART_CONTENT_TYPE);
     withPart(parts, 'ppt/charts/chart4.xml', chartXml([2, 4], 'C00000'), CHART_CONTENT_TYPE);
     const { result, p } = await importDeck(parts, 'Four by three.pptx', { extendBackgrounds: false });
-    expect(result).toMatchObject({ native: 1, hybrid: 2, picture: 0, compact: 0, pending: 1 });
+    expect(result).toMatchObject({ native: 1, hybrid: 1, picture: 1, compact: 0, pending: 2 });
     const area = { x: 240, y: 0, w: 1440, h: 1080 };
     expect(p.source!.native!.slideRect).toEqual(area);
     const inArea = (o: SlideObject) =>
@@ -436,20 +436,23 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
     const want = logical43(...red);
     for (const k of ['x', 'y', 'w', 'h'] as const) expect(redBox[k]).toBeCloseTo(want[k], 6);
     expect(h2.objects.every(inArea)).toBe(true);
-    // The crowded slide: drawn natively within the slide area, what its budgets left out listed, never pending.
-    expect(p3.objects.length).toBeGreaterThan(0);
-    expect(p3.objects.every(inArea)).toBe(true);
-    // The ladder's decorations, and the elements the converter's guard left out past 200 objects: nothing draws
-    // them, LibreOffice included (it draws no budget art), so both are listed on this hub with LibreOffice.
-    expect(p3.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration', 'element'] });
-    expect(p3.pptx!.pending).toBeUndefined();
-    expect(p3.objects.some((o) => o.type === 'text' && o.text === 'Page three')).toBe(true);
+    // The crowded slide is over 64 KB, and its budget would leave its decorations out (with the elements the
+    // converter's guard left out past 200 objects): on this hub with LibreOffice it keeps LibreOffice's page
+    // instead, as before M9 (a hub without LibreOffice stores it minimal and lists them missing).
+    expect(p3.objects).toEqual([]);
+    expect(p3.pptx).toMatchObject({ class: 'picture', pending: true });
+    expect(p3.pptx!.missing).toBeUndefined();
+    expect(p3.pptx!.artText).toMatch(/Page three/);
 
     const lo = await waitJob(hub, result.loJobId!, 180_000);
     expect(lo.error).toBeUndefined();
-    expect(lo.result).toMatchObject({ art: 1, pages: 0 });
+    expect(lo.result).toMatchObject({ art: 1, pages: 1 });
     const v2 = hub.lib.presentations.must(p.id);
-    const [, h2b] = slidesOf(v2) as [Slide, Slide, Slide];
+    const [, h2b, p3b] = slidesOf(v2) as [Slide, Slide, Slide];
+    // Its page: LibreOffice's picture at the slide's aspect, in the slide area (the bars stay empty).
+    expect(p3b.pptx!.pending).toBeUndefined();
+    const page = hub.lib.media.must(p3b.imported!.imageMediaId);
+    expect(page.width! / page.height!).toBeCloseTo(4 / 3, 2);
     // Hybrid: the art inside the slide area, and the green box in it where PowerPoint puts it.
     expect(h2b.objects.every(inArea)).toBe(true);
     const art = h2b.objects.find((o): o is ImageObject => o.type === 'image')!;

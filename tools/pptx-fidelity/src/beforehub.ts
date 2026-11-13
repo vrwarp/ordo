@@ -38,6 +38,11 @@ export type HubBefore = {
   hub: 'native' | 'hybrid' | 'picture';
   art?: Box;
   metafiles?: readonly Box[];
+  /**
+   * Its slide budget fitted it by leaving something out (`plain`, `minimal`): a hub with LibreOffice keeps
+   * LibreOffice's page for it instead (`ImportCore.pageForBudget`), so the hub is asked whatever its class.
+   */
+  budget?: boolean;
 };
 
 /** Regions pasted in one picture at most; past it, their bounding box is pasted. */
@@ -162,7 +167,7 @@ export async function pasteSsim(
 
 /** A slide the hub does not show as the native column draws it: `--before hub` asks the hub for it. */
 export function needsHub(s: HubBefore | undefined): boolean {
-  return s?.hub !== 'native' || !!s.metafiles?.length;
+  return s?.hub !== 'native' || !!s.metafiles?.length || !!s.budget;
 }
 
 /** Past this much data, the hub is replaced by a fresh one before the next deck (disk is the limit). */

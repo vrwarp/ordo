@@ -341,8 +341,14 @@ async function nativeColumn(
   const before = (i: number): HubBefore | undefined => {
     const s = shown[i];
     const h = s ? hubOf.get(s.index) : undefined;
+    const budget = h?.hubWhy === 'slide' && (h.level === 'plain' || h.level === 'minimal');
     return s && h
-      ? { hub: h.hub, ...(s.art ? { art: s.art } : {}), ...(s.metafiles ? { metafiles: s.metafiles } : {}) }
+      ? {
+          hub: h.hub,
+          ...(s.art ? { art: s.art } : {}),
+          ...(s.metafiles ? { metafiles: s.metafiles } : {}),
+          ...(budget ? { budget } : {}),
+        }
       : undefined;
   };
   const asked = new Set<number>();

@@ -62,7 +62,9 @@ type HubInput = Pick<NativeDeck['slides'][number], 'class' | 'slide' | 'notes'> 
  * Each slide as the hub's import stores it (`nativeJob.ts` `budget`, design/27 §3.4, M9's budget ladder,
  * `native.ts` `hubLadder`): the objects naming outline files past `PPTX_LIMITS.geomFileBytes` left out
  * (`geoms`), each slide fitted to 64 KB (`slide`) and the presentation's tail stored minimal (`presentation`);
- * no slide becomes a picture for its size. Slides in deck order, hidden ones included, as the hub plans them.
+ * no slide becomes a picture for its size (as a hub without LibreOffice stores them; one with LibreOffice keeps
+ * its page for a slide over 64 KB stored plain or minimal, `ImportCore.pageForBudget`, which `--before hub`
+ * measures). Slides in deck order, hidden ones included, as the hub plans them.
  */
 export function hubClasses(
   slides: readonly HubInput[],

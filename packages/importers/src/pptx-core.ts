@@ -12,18 +12,23 @@
  *   without LibreOffice what it would have drawn is listed (`gaps`).
  * - **Budgets** (`ImportCore.budget`): the §3.4 budgets as M9's budget ladder (`pptx-ladder.ts`): outline
  *   files within the import's budget, each slide within 64 KB, the presentation within 4 MiB (its tail stored
- *   minimal). No slide becomes a picture for its size: the client's old compact step is gone.
+ *   minimal). Without LibreOffice no slide becomes a picture for its size: the client's old compact step is
+ *   gone. With LibreOffice, a slide over 64 KB that the ladder would store without its formatting or
+ *   decorations ('plain', 'minimal') keeps LibreOffice's page instead, as before M9 (`pageForBudget`): a hub
+ *   with LibreOffice never shows less of a slide than one without it, nor less than before M9.
  * - **Assembly** (`ImportCore.assemble`): placeholders remapped (`remapMediaIds`), a background with alpha
  *   laid on white, one background on every slide made the presentation's, provenance (`Slide.pptx`),
  *   sections and the Default arrangement, `sanitizePresentation`, `Slide.safeParse` (a refused slide stored
  *   minimal, else as its text), the digest of the import's objects (`importDigest`), the LibreOffice
  *   follow-up's plan (`loSlides`) and the families the library lacks.
  *
- * A slide is picture class only when the converter classes it so (more pictures than a slide may hold); no
- * budget and no failure makes one (M9, plan decision 3).
+ * A slide is picture class when the converter classes it so (more pictures than a slide may hold), or, with
+ * LibreOffice only, when its slide budget would store it plain or minimal; no failure makes one (M9, plan
+ * decision 3; the before-hub gate of decision 2 for hubs with LibreOffice).
  */
 import {
   type Box,
+  compactSlideBytes,
   drawnGeomRefs,
   formatBytes,
   IMPORT_RESERVE_BYTES,
@@ -60,7 +65,7 @@ import {
 import { digestOf, SLIDE_BUDGET_NOTE, SLIDE_BYTES_NOTE } from '@ordo/pptx-scene/emit.ts';
 import { CONVERTER_VERSION } from '@ordo/pptx-scene/version.ts';
 import type { NamedGeomFile } from './pptx-geoms.ts';
-import { planLadder, withoutFiles } from './pptx-ladder.ts';
+import { type LadderSlide, planLadder, withoutFiles } from './pptx-ladder.ts';
 import { type ImportLog, logSafe, missingFonts } from './pptx-report.ts';
 import type { SceneScan, SceneSlideExtra } from './pptx-scan.ts';
 import { remapMediaIds } from './remap.ts';
@@ -404,9 +409,31 @@ export class ImportCore {
   }
 
   /**
+   * With LibreOffice: the size of LibreOffice's page form of a slide the ladder stores as `r` (picture class,
+   * its text kept for search, the follow-up draws the page), when the slide keeps that form instead, as every
+   * slide over 64 KB did before M9; else undefined. Only for a slide over 64 KB that the ladder fitted by
+   * leaving something out ('plain': its formatting; 'minimal': its decorations), only when the page form
+   * (`compactSlideBytes`, with version 2's page record) is within 64 KB, and only while it grows the
+   * presentation by no more than `room`, so the presentation's plan still holds. The presentation's tail
+   * stays minimal on every hub (its slides are whole text slides past 3 MiB: editable, and no page to wait
+   * for), so a hub with LibreOffice shows it as one without does. The 2026-11-13 review measured 22 worship slides of E that
+   * a hub with LibreOffice showed far worse stored plain or minimal (0.13-0.94) than as LibreOffice's page
+   * (0.90-0.999): the exit gate of M9 decision 2 for such hubs.
+   */
+  pageForBudget(d: Draft, r: LadderSlide, room: number): number | undefined {
+    if (!this.lo || d.cls === 'picture' || r.tail) return undefined;
+    if ((r.level !== 'plain' && r.level !== 'minimal') || (!r.dropped && !r.plain)) return undefined;
+    const bytes = compactSlideBytes(record(d, DIGEST_STANDIN, true), d.artText);
+    if (bytes > SIZE_BUDGETS.slideMax || bytes - r.bytes > Math.max(0, room)) return undefined;
+    return bytes;
+  }
+
+  /**
    * Step 3: the §3.4 budgets, M9's budget ladder (`ladder.ts`): outline files within the import's budget,
-   * each slide within 64 KB (`fitSlideBudget`), the presentation within 4 MiB (its tail stored minimal). No
-   * slide becomes a picture. Returns how many slides it simplified (formatting or decorations left out).
+   * each slide within 64 KB (`fitSlideBudget`), the presentation within 4 MiB (its tail stored minimal).
+   * Without LibreOffice no slide becomes a picture; with it, a slide over 64 KB that would be stored plain or
+   * minimal keeps LibreOffice's page (`pageForBudget`). Returns how many slides it simplified (formatting or decorations left
+   * out).
    */
   budget(drafts: Draft[]): number {
     // Outline files, admitted one by one in slide order while the import's budget holds; what names one past
@@ -447,12 +474,28 @@ export class ImportCore {
       IMPORT_RESERVE_BYTES + this.reserve,
     );
     let simplified = 0;
+    let pages = 0;
+    // What the presentation may still grow by within its budget (LibreOffice's page forms, `pageForBudget`).
+    let room = SIZE_BUDGETS.presentationMax - (IMPORT_RESERVE_BYTES + this.reserve) - plan.total;
     drafts.forEach((d, i) => {
       const r = slides[i]!;
       if (d.cls === 'picture' || r.level === 'full') return;
+      const n = d.ref.index + 1;
+      const page = this.pageForBudget(d, r, room);
+      if (page !== undefined) {
+        // The slide as converted (not the ladder's form): its whole text is kept for search.
+        toPicture(d);
+        room -= page - r.bytes;
+        pages++;
+        addNote(d.notes, `over ${max / 1024} KB: LibreOffice draws its page`);
+        this.log.add(
+          'info',
+          `slide ${n} is over ${max / 1024} KB: LibreOffice draws its page (fitted, it would leave out ${r.level === 'plain' ? 'its formatting' : 'its decorations'})`,
+        );
+        return;
+      }
       const { pptx: _, ...slide } = r.slide;
       d.slide = slide;
-      const n = d.ref.index + 1;
       if (r.level === 'grid')
         this.log.add(
           'info',
@@ -487,6 +530,8 @@ export class ImportCore {
           : `slide ${n} is over ${max / 1024} KB: ${what} left out to fit`,
       );
     });
+    if (pages)
+      this.warn('budget', `${pages} slide(s) over their size budget show LibreOffice's page, as before M9`);
     if (plan.tailFrom >= 0)
       this.warn(
         'budget',

@@ -53,6 +53,8 @@ describe('which slides the hub is asked for', () => {
     expect(needsHub({ hub: 'native', metafiles: [{ x: 0, y: 0, w: 1, h: 1 }] })).toBe(true);
     expect(needsHub({ hub: 'hybrid', art: ART })).toBe(true);
     expect(needsHub({ hub: 'picture' })).toBe(true);
+    // Stored plain by its slide budget: native in the census, LibreOffice's page on a hub with LibreOffice.
+    expect(needsHub({ hub: 'native', budget: true })).toBe(true);
     // The converter did not emit it: the hub shows LibreOffice's picture of it.
     expect(needsHub(undefined)).toBe(true);
   });

@@ -1,6 +1,7 @@
 /**
  * The native import's budget ladder (design/27 §3.4, M9 `ladder`; plan decision 3, steps 4 and 5): what the
- * hub stores of each slide so that no slide is a picture for its size.
+ * hub stores of each slide so that no slide is a picture for its size (on a hub with LibreOffice, a slide this
+ * ladder would fit plain or minimal keeps LibreOffice's page instead: `pptx-core.ts` `ImportCore.pageForBudget`).
  *
  * - **A slide over 64 KB** as the hub stores it (`storedBytes`) takes the first level of `@ordo/domain`
  *   `fitSlideBudget` that fits: its outlines re-gridded, then its text formatting dropped (the largest first),

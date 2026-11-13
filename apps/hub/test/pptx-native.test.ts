@@ -419,8 +419,10 @@ describe('pptx-native: classes, budgets and timing', () => {
     return s2;
   }
 
-  it('drops the largest text formatting of a slide over 64 KB, never making it a picture', async () => {
+  it("keeps LibreOffice's page for a slide over 64 KB its budget would store plain (with LibreOffice only)", async () => {
     // Eight boxes of 400 differently coloured runs: past 64 KB with their formatting, within it without some.
+    // A hub without LibreOffice stores it plain (pptx-no-libreoffice.test.ts); this hub has LibreOffice, so the
+    // slide keeps LibreOffice's page, as before M9: a hub with LibreOffice never shows less of a slide.
     const runs = Array.from({ length: 400 }, (_, i) =>
       run(`w${i} `, '', solid(i % 2 ? 'FF0000' : '00FF00')),
     ).join('');
@@ -430,19 +432,19 @@ describe('pptx-native: classes, budgets and timing', () => {
     const { result, p } = await importDeck(
       buildDeck({ slides: [{ shapes: textBox(2, 'Small') }, { shapes: big }] }),
     );
-    expect(result).toMatchObject({ native: 2, hybrid: 0 });
-    const s2 = expectOneSimplified(
-      result,
-      p,
-      /over 64 KB: the formatting of \d text box\(es\) left out to fit/,
-    );
-    const texts = s2.objects.filter((o) => o.type === 'text');
-    expect(texts).toHaveLength(8);
-    expect(texts.every((t) => t.type === 'text' && t.text.startsWith('w0 w1'))).toBe(true);
-    // Only as many boxes as it takes lost their runs; the others keep them.
-    expect(texts.filter((t) => t.type === 'text' && t.runs).length).toBeGreaterThan(0);
-    expect(s2.pptx!.class).toBe('native');
+    expect(result).toMatchObject({ native: 1, hybrid: 0, picture: 1, simplified: 0, pending: 1 });
+    const [, s2] = slidesOf(p) as [Slide, Slide];
+    // Picture class: no objects, every word kept for search, LibreOffice's page to come.
+    expect(s2.objects).toEqual([]);
+    expect(s2.pptx).toMatchObject({ class: 'picture', pending: true });
     expect(s2.pptx!.missing).toBeUndefined();
+    expect(s2.pptx!.artText).toMatch(/^w0 w1 /);
+    expect(s2.pptx!.notes).toContain('over 64 KB: LibreOffice draws its page');
+    expect(slideBytes(s2)).toBeLessThanOrEqual(64 * 1024);
+    expect(result.notes).toContain("1 slide(s) over their size budget show LibreOffice's page, as before M9");
+    const lo = loJobs(p.id);
+    expect(lo).toHaveLength(1);
+    expect(lo[0]!.slides.map((x) => [x.index, x.class])).toEqual([[1, 'picture']]);
   });
 
   it('leaves out the largest decorations of a slide whose JSON passes 64 KB, keeping its text (M9)', async () => {

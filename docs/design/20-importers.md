@@ -237,8 +237,10 @@ The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
   a slide that still fails, or one past the import's pool time, keeps its text (M9's rescue), never the deck;
 - applies the size budgets of design/27 §3.4 as M9's budget ladder: a slide over 64 KB is simplified to fit
   (outlines re-gridded, text formatting, then decorations left out), and once the presentation passes
-  3 MiB the slides from there on keep their text, pictures and background; no slide becomes a picture for its
-  size (logged, counted in the job result as `simplified`);
+  3 MiB the slides from there on keep their text, pictures and background; without LibreOffice no slide
+  becomes a picture for its size (logged, counted in the job result as `simplified`), and with it a slide
+  over 64 KB that would lose formatting or decorations keeps LibreOffice's page, as before M9
+  (`ImportCore.pageForBudget`);
 - stores the pictures (prepared to their display need, deduplicated) and saves version 1: every slide's
   native objects, `Slide.pptx` provenance (deck, place, class, converter version, the digest of the objects
   as stored, `pending` while LibreOffice work remains), speaker notes, `p14` sections in order with a Default

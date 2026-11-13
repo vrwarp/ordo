@@ -582,7 +582,8 @@ class NativeImport {
     const texts = new Map([...converted].map(([index, c]) => [index, bodyTexts(c.s)]));
     const textBoxes = new Map([...converted].map(([index, c]) => [index, bodyBoxes(c.s)]));
 
-    // 3. Drafts, classes and the size budgets (M9: the budget ladder, never a picture).
+    // 3. Drafts, classes and the size budgets (M9: the budget ladder; with LibreOffice a slide over 64 KB it
+    // would simplify keeps its page, `ImportCore.pageForBudget`).
     const drafts = this.core.drafts(want ? listed.filter((r) => want.has(r.index)) : listed, converted, scan);
     const simplified = this.core.budget(drafts);
 
@@ -712,7 +713,8 @@ class NativeImport {
     const texts = new Map([...converted].map(([index, c]) => [index, bodyTexts(c.s)]));
     const textBoxes = new Map([...converted].map(([index, c]) => [index, bodyBoxes(c.s)]));
 
-    // The size budgets as for the hub's own parse (M9: the budget ladder, never a picture).
+    // The size budgets as for the hub's own parse (M9: the budget ladder; with LibreOffice a slide over 64 KB
+    // it would simplify keeps its page).
     const drafts = this.core.drafts(want ? listed.filter((r) => want.has(r.index)) : listed, converted, scan);
     const simplified = this.core.budget(drafts);
 

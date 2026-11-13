@@ -728,9 +728,11 @@ lo-dependencies §4.2-4.4, §4.6-4.11).
 <!-- m9:ladder -->
 ## M9 wave 2: the budget ladder (m9/ladder)
 
-No budget and no failure makes a picture slide (design/27 M9, plan decision 3); `toPicture` is left only for
-a slide the converter classes picture (since `decor-conv` only behind the harness's `ParseOptions.budgetArt`:
-the slide budgets are drawn natively, and a slide past 150 objects reaches the ladder instead).
+Without LibreOffice no budget and no failure makes a picture slide (design/27 M9, plan decision 3); `toPicture`
+is left for a slide the converter classes picture (since `decor-conv` only behind the harness's
+`ParseOptions.budgetArt`: the slide budgets are drawn natively, and a slide past 150 objects reaches the ladder
+instead) and, on a hub with LibreOffice, for a slide over 64 KB that the ladder would store plain or minimal
+(below).
 
 - **Step 3** (`nativeJob.ts` `budget`, pure parts in `ladder.ts`, which the harness's census also runs):
   - outline files are admitted one by one in slide order within `PPTX_LIMITS.geomFileBytes`; an object that
@@ -748,7 +750,15 @@ the slide budgets are drawn natively, and a slide past 150 objects reaches the l
     its size budget: only its text and pictures are kept') and one warning; what it lost is `Slide.pptx.missing`
     ('decoration', 'chart') with or without LibreOffice, the slide is hybrid and never `pending`
     (`provenance`: a hybrid slide waits for LibreOffice only for its art). `PptxNativeResult.simplified`
-    counts them; `compact` is 0.
+    counts them; `compact` is 0;
+  - **with LibreOffice** (the 2026-11-13 review, `ImportCore.pageForBudget`): a slide over 64 KB that the
+    ladder would fit by leaving something out ('plain': formatting; 'minimal': decorations) keeps
+    LibreOffice's page instead, as every such slide did before M9: picture class, `pending`, its whole text in
+    `pptx.artText`, the note 'over 64 KB: LibreOffice draws its page' and one warning for the import. Only when
+    the page form (`compactSlideBytes`) is within 64 KB and the presentation's plan still holds; the tail stays
+    minimal. A hub with LibreOffice so never shows less of a slide than one without it, nor less than before
+    M9 (22 worship slides of E stored plain or minimal scored 0.13-0.94 against LibreOffice; their page
+    0.90-0.999).
 - **Step 3b**: an object naming a file the store could not take is left out the same way (was: the slide a
   compact picture).
 - **Step 5**: a slide the schema refuses is stored minimal, else with its text objects rebuilt from their text
@@ -770,7 +780,7 @@ the slide budgets are drawn natively, and a slide past 150 objects reaches the l
   parts, read from the stored deck here (`rescueClientSlides`); nothing else of the deck runs on the pool.
 - Tests: `pptx-no-libreoffice.test.ts` ('the budget ladder without LibreOffice': over 64 KB, the 4 MiB tail,
   the outline-file budget, a schema refusal, the rescue, the retry), `pptx-native.test.ts` (the same with
-  LibreOffice: no follow-up for a budget), `pptx-geoms.test.ts`, `pptx-integrate.test.ts` (2,000-slide decks),
+  LibreOffice: no follow-up for a budget but a page for a slide stored plain), `pptx-geoms.test.ts`, `pptx-integrate.test.ts` (2,000-slide decks; a crowded 4:3 slide that keeps LibreOffice's page),
   `pptx-import-route.test.ts` (a client scene past its outline bound, and with slides it could not read).
 <!-- /m9:ladder -->
 
