@@ -624,8 +624,10 @@ tainted canvas or no page sends the SVG alone) and posts the PNG beside it as `r
 its delivery: thumbnails, the editor canvas and outputs draw that still. Tiles where media is picked (the
 Media tab's rows and preview, the media pickers, the background swatches: `tileHash`) show the SVG itself, so
 an animated one moves there, and say "SVG · moves in previews only" (`svgNote`): Audience screens show its
-first frame. An SVG without a still (one over 24 MB goes through the resumable upload without one, or this
-browser could not draw it, or it predates stills) says instead that each Audience screen draws it itself when
+first frame. An SVG over 24 MB goes through the resumable upload alone; once the hub has it the operator
+draws its still and sends it to `PUT /media/:id/still` (sent again while the hub is still processing the SVG;
+`sendStill`). An SVG without a still (this browser could not draw it, the hub refused it, or it predates
+stills: such a one keeps the advice below, nothing redraws it) says instead that each Audience screen draws it itself when
 it is shown, or, over 2 MB (`SVG_SCREEN_MAX_BYTES`), that the screens do not show it: upload it again from a
 browser, or a PNG of it. An SVG's media size is its still's (at least 1,920 px on its longer side), so '+ Image'
 and a paste start it at the size its root element declares (`insertBox.ts`: a 200 x 80 logo at 200 x 80, not
