@@ -1110,6 +1110,14 @@ process for every open editor. It is left for after P2's measurements (§11).
   that can start.
 - **Search** folds every combining mark (§2.4): "الله" finds "اللّٰه".
 
+Status (P0, as built by the compact shell): the compact layout's strings live in an English catalog
+(`apps/operator/src/i18n/en.ts`, read through `t(key, params)` with one/other plurals by `Intl.PluralRules`;
+`uiLanguage(navigator.languages)` answers `en`; times and dates through `Intl.DateTimeFormat` in the device's
+locale), the compact App sets `<html lang>` from it, `compact.css` uses logical properties only, and titles that
+come from content carry `dir="auto"` (brought forward from P1). P1 adds the next languages, the override in
+More, `<html dir>`, mirrored chevrons and the right-to-left layout pass, and `dir="auto"` on slide text, notes
+and textareas beyond titles. The regular layout keeps its inline English (the known gap above).
+
 ## 7. Performance budgets
 
 | Budget                                     | Target                                                                                                                  | Measured by                                 |
