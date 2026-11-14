@@ -16,6 +16,7 @@ import {
   prepareSlideUnits,
   putUnit,
   slideUnits,
+  UNIT_SLIDE_AREAS,
   UNIT_VERSION,
   unitCache,
   unitKey,
@@ -66,8 +67,11 @@ const shape = (id: string, extra: Partial<ShapeObject> = {}): ShapeObject => ({
 function busySlide(extra: Partial<ShapeObject> = {}): Slide {
   return {
     id: 'busy',
-    objects: Array.from({ length: 8 }, (_, i) =>
-      shape(`z${i}`, { box: { x: 100 + i, y: 50, w: 1600, h: 900, rotation: 0 }, ...extra }),
+    objects: Array.from({ length: 12 }, (_, i) =>
+      shape(`z${i}`, {
+        box: { x: 50 + (i % 4) * 400 + i, y: 50 + Math.floor(i / 4) * 250, w: 700, h: 500, rotation: 0 },
+        ...extra,
+      }),
     ),
   };
 }
@@ -99,9 +103,15 @@ describe('geometry units (M9 Slow-to-draw, Runtime)', () => {
     const slide = busySlide();
     const objects = objectsOf(slide);
     const over = [...overGeomBudget(objects)];
-    expect(over.length).toBeGreaterThanOrEqual(2);
+    expect(over.length).toBeGreaterThanOrEqual(4);
     const units = slideUnits(objects, 2);
-    expect(units.map((u) => u.object)).toEqual(over);
+    // In z-order, while their area stays within one frame: the rest keep their legacy copies.
+    expect(units.length).toBeGreaterThanOrEqual(2);
+    expect(units.length).toBeLessThan(over.length);
+    expect(units.map((u) => u.object)).toEqual(over.filter((o) => units.some((u) => u.object === o)));
+    expect(units.reduce((a, u) => a + u.rect.w * u.rect.h, 0)).toBeLessThanOrEqual(
+      3840 * 2160 * UNIT_SLIDE_AREAS,
+    );
     // Drawn whole without effects, at the device scale, over its reach cut to the frame at an integer origin.
     for (const u of units) {
       expect(u.scale).toBe(2);
@@ -129,10 +139,9 @@ describe('geometry units (M9 Slow-to-draw, Runtime)', () => {
     ).toBeUndefined();
   });
 
-  it('a slide past GEOM_COST.slide with a ready unit draws no legacy fill: each unit copied 1:1 at its origin', () => {
+  it('a slide past GEOM_COST.slide with ready units draws no legacy fill for them: each copied 1:1 at its origin', () => {
     const slide = busySlide();
     const objects = objectsOf(slide);
-    const over = overGeomBudget(objects);
     // Without units: the legacy copies are drawn (a fill each).
     const before = traceCtx(1920, 1080);
     drawSlide2D(before, slide, { scale: 1 });
@@ -150,9 +159,12 @@ describe('geometry units (M9 Slow-to-draw, Runtime)', () => {
         u.rect.y,
       ]),
     );
-    expect(paints(before).length - paints(after).length).toBe(over.size);
-    // The objects within the budget are drawn as before, in the same order around the copies.
-    const live = objects.filter((o) => !over.has(o));
+    expect(paints(before).length - paints(after).length).toBe(units.length);
+    // The other objects are drawn as before (within the budget, or as legacy copies past the units' frame), in
+    // the same order around the copies.
+    const copied = new Set(units.map((u) => u.object));
+    const drawn = withinDrawBudget(objects);
+    const live = objects.flatMap((o, i) => (copied.has(o) ? [] : [drawn[i]!]));
     const alone = traceCtx(1920, 1080);
     drawSlide2D(alone, { id: 'live', objects: live }, { scale: 1 });
     expect(paints(after)).toEqual(paints(alone));
@@ -197,14 +209,13 @@ describe('geometry units (M9 Slow-to-draw, Runtime)', () => {
     const f1 = unitKey({ ...a, geom: { ref: 'f'.repeat(64) } } as SlideObject, 1, rect);
     expect(f1).not.toBe(unitKey({ ...a, geom: { ref: 'e'.repeat(64) } } as SlideObject, 1, rect));
     // Effects are not drawn on a unit: a shadowed copy of a shape asks for the same unit.
-    const plain = slideUnits(objectsOf(busySlide()), 1);
-    const shadowed = slideUnits(
-      objectsOf(busySlide({ shadow: { dx: 4, dy: 4, blur: 8, color: { r: 0, g: 0, b: 0, a: 0.5 } } })),
-      1,
+    const plain = objectsOf(busySlide());
+    const shadowed = objectsOf(
+      busySlide({ shadow: { dx: 4, dy: 4, blur: 8, color: { r: 0, g: 0, b: 0, a: 0.5 } } }),
     );
-    expect(shadowed.length).toBeGreaterThan(0);
-    expect(shadowed.at(-1)!.key).toBe(plain.at(-1)!.key);
-    expect((shadowed.at(-1)!.drawn as ShapeObject).shadow).toBeUndefined();
+    const u = unitOf(shadowed.at(-1)!, 1)!;
+    expect(u.key).toBe(unitOf(plain.at(-1)!, 1)!.key);
+    expect((u.drawn as ShapeObject).shadow).toBeUndefined();
   });
 
   it("a geometry file not read yet makes no unit; once read, the slide's units are worked out again", () => {
@@ -242,15 +253,15 @@ describe('geometry units (M9 Slow-to-draw, Runtime)', () => {
   it("sizes a slide's reach by the unit's rect where the unit is drawn: its original's drawn bounds", () => {
     const slide = busySlide();
     const objects = objectsOf(slide);
-    const last = [...overGeomBudget(objects)].at(-1)!;
+    const last = slideUnits(objects, 1).at(-1)!.object;
     const lonely: Slide = { id: 'one', objects: [last] };
     // Within the budget alone: the slide reaches its original's drawn bounds.
     const original = slideReach(traceCtx(), lonely, { scale: 1 })!;
     // On the busy slide, the legacy copy reaches its box until the unit is ready, then its original's bounds.
-    const legacyOnly: Slide = { id: 'legacy', objects: [withinDrawBudget(objects).at(-1)!] };
-    expect(slideReach(traceCtx(), legacyOnly, { scale: 1 })).toEqual(
-      last.box && { x: last.box.x, y: 50, w: 1600, h: 900 },
-    );
+    const legacyOnly: Slide = { id: 'legacy', objects: [withinDrawBudget(objects)[objects.indexOf(last)]!] };
+    const { x, y, w, h } = last.box;
+    expect(slideReach(traceCtx(), legacyOnly, { scale: 1 })).toEqual({ x, y, w, h });
+
     ready(slide);
     const viaUnit = slideReach(traceCtx(), legacyOnly, { scale: 1 })!;
     const u = unitOf(last, 1)!;
@@ -287,14 +298,17 @@ describe('geometry units (M9 Slow-to-draw, Runtime)', () => {
     for (const c of copies) expect(legacyOf(c)?.original).toBeDefined();
     ready(slide);
     const scene = sceneSlides(traceCtx(), slide, LOOK_MAIN, 1, () => undefined, 'vid')!;
-    // The zigzags' original drawn bounds overlap the video: every one is in over, as their units draw them.
+    // Base and over hold the very legacy copies (clamping them again keeps them), so their units are found.
     const parts = [...scene.base.objects, ...(scene.over?.objects ?? [])];
     for (const c of copies) expect(parts).toContain(c);
-    expect(clampSlide(scene.over!).objects).toEqual(scene.over!.objects);
-    for (const o of clampSlide(scene.over!).objects) if (legacyOf(o)) expect(copies).toContain(o);
+    for (const part of [scene.base, scene.over].filter((p) => p !== null)) {
+      expect(clampSlide(part).objects).toEqual(part.objects);
+      for (const o of clampSlide(part).objects) if (legacyOf(o)) expect(copies).toContain(o);
+    }
     const t = traceCtx(1920, 1080);
-    drawSlide2D(t, scene.over!, { scale: 1 });
-    expect(images(t)).toHaveLength(copies.length);
+    drawSlide2D(t, scene.base, { scale: 1 });
+    if (scene.over) drawSlide2D(t, scene.over, { scale: 1 });
+    expect(images(t)).toHaveLength(slideUnits(objects, 1).length);
   });
 });
 
@@ -335,17 +349,18 @@ describe('making geometry units in slices', () => {
   it('draws a unit call by call on a scratch of the frame, then copies its rect, in turns, and keeps it', async () => {
     vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
     FakeOffscreenCanvas.made = [];
-    // Two paths and an outline: a fill and an outline each, four draw calls.
+    // Shapes of two paths and an outline: a fill and an outline each, four draw calls.
     const slide = busySlide({
       geom: {
         paths: [
-          { d: zigzag(250), w: 2000, h: 2000 },
-          { d: zigzag(200), w: 2000, h: 2000 },
+          { d: zigzag(150), w: 2000, h: 2000 },
+          { d: zigzag(100), w: 2000, h: 2000 },
         ],
       },
-      stroke: { width: 2, color: { r: 255, g: 0, b: 0, a: 1 } },
+      stroke: { width: 1, color: { r: 255, g: 0, b: 0, a: 1 } },
     });
-    const [u] = slideUnits(objectsOf(slide), 2);
+    const u = slideUnits(objectsOf(slide), 2)[0];
+    expect(u).toBeDefined();
     // A clock where each step takes 3 ms: about one step a turn (half of SLICE_MS is 5 ms).
     let clock = 0;
     const log = { slices: 0, checks: 0 };
@@ -400,7 +415,7 @@ describe('making geometry units in slices', () => {
     expect(unitReady(u!)).toBeUndefined();
   });
 
-  it('leaves the legacy copy without OffscreenCanvas, and bounds a job by time and bytes', async () => {
+  it('leaves the legacy copy without OffscreenCanvas, and bounds a job by its wait', async () => {
     const slide = busySlide();
     expect(await prepareSlideUnits(slide, 1, undefined, run({ slices: 0, checks: 0 }))).toMatchObject({
       made: 0,
@@ -410,26 +425,32 @@ describe('making geometry units in slices', () => {
     const units = unitsOfSlide(slide, 1);
     expect(units.length).toBeGreaterThanOrEqual(2);
     const pins: string[] = [];
-    // One unit's bytes allowed: the rest are left this time.
-    const one = await prepareSlideUnits(slide, 1, undefined, run({ slices: 0, checks: 0 }), {
-      maxBytes: units[0]!.bytes,
-      pin: (k) => pins.push(k),
-    });
-    expect(one).toMatchObject({ units: units.length, made: 1, left: units.length - 1 });
-    expect(pins).toEqual([units[0]!.key]);
-    // Past the wait, nothing more is started; what is ready is only pinned.
+    // Past the wait after the first unit, nothing more is started this time.
     let clock = 0;
-    const late = await prepareSlideUnits(
+    const one = await prepareSlideUnits(
       slide,
       1,
       undefined,
-      { ...run({ slices: 0, checks: 0 }), now: () => (clock += 600) },
-      { waitMs: 500, pin: (k) => pins.push(k) },
+      { ...run({ slices: 0, checks: 0 }), now: () => (clock += 100) },
+      { waitMs: 150, pin: (k) => pins.push(k) },
     );
-    expect(late).toMatchObject({ made: 0, ready: 1, left: units.length - 1 });
-    // And then the whole slide.
-    const all = await prepareSlideUnits(slide, 1, undefined, run({ slices: 0, checks: 0 }));
+    expect(one).toMatchObject({ units: units.length, made: 1, left: units.length - 1 });
+    expect(pins).toEqual([units[0]!.key]);
+    // The next job goes on; what is ready is only pinned.
+    const all = await prepareSlideUnits(slide, 1, undefined, run({ slices: 0, checks: 0 }), {
+      pin: (k) => pins.push(k),
+    });
     expect(all).toMatchObject({ made: units.length - 1, ready: 1, left: 0 });
+    expect(pins).toEqual([units[0]!.key, ...units.map((u) => u.key)]);
     expect(unitCache.bytes('unit')).toBe(units.reduce((n, u) => n + u.bytes, 0));
+  });
+
+  it('makes no unit for an object no task could draw: it keeps its legacy copy', () => {
+    // A 500 px outline on a zigzag: past GEOM_COST.slide alone.
+    const hostile = busySlide({ stroke: { width: 500, color: { r: 0, g: 0, b: 0, a: 1 } } });
+    const objects = objectsOf(hostile);
+    expect(overGeomBudget(objects).size).toBeGreaterThan(0);
+    for (const o of overGeomBudget(objects)) expect(unitOf(o, 1)).toBeUndefined();
+    expect(slideUnits(objects, 1)).toEqual([]);
   });
 });

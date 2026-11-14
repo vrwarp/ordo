@@ -3,9 +3,9 @@ import { clampLook, clampSlide, num } from './clamp.ts';
 import { drawableContent } from './content.ts';
 import type { Ctx2D } from './ctx.ts';
 import { digest } from './digest.ts';
-import { hasPart } from './geom/cost.ts';
+import { charged, GEOM_COST, hasPart } from './geom/cost.ts';
 import { geomAwaited, geomFilesVersion } from './geom/stored.ts';
-import { legacyCopy, legacyOf, overGeomBudget, withinDrawBudget } from './geombudget.ts';
+import { drawnCost, legacyCopy, legacyOf, overGeomBudget, withinDrawBudget } from './geombudget.ts';
 import { geomShapeReach } from './sprite.ts';
 import { geomShapeSteps, hasShapeExtras } from './shape.ts';
 import { type CachedSprite, SpriteCache } from './spritecache.ts';
@@ -17,10 +17,12 @@ import { drawObject, type ImageLookup, registerSlideObjectsDrawer } from './text
  * that no synchronous draw passes §13's 50 ms task. On the outputs and the desktop thumbnails such an object is
  * drawn whole instead, from a unit made beforehand in slices:
  *
- * - **What**: each shape `overGeomBudget` sends to a legacy copy ('geom' or 'both'), drawn whole without its
- *   effects (`slideUnits`): the geometry, gradient, dash, arrowheads and outline as `drawObject` draws them. Never
- *   text, and never a table, chart, decoration or 3-D look (their own drawers; effect units and decorations
- *   come with effect-units); a masked picture keeps its legacy copy (drawn without its mask).
+ * - **What**: each shape of a stored geometry `overGeomBudget` sends to a legacy copy ('geom' or 'both'), drawn
+ *   whole without its effects (`slideUnits`): the geometry, gradient, dash, arrowheads and outline as `drawObject`
+ *   draws them; in z-order while their area is within `UNIT_SLIDE_AREAS` frames. Never text, and never a table,
+ *   chart, decoration or 3-D look (their own drawers; effect units and decorations come with effect-units); a
+ *   plain shape past the budget for its paint keeps its legacy copy, so does a shape no task could draw (alone
+ *   past `GEOM_COST.slide`) and a masked picture (drawn without its mask).
  * - **Where**: at the job's device scale, over the object's reach (`geomShapeReach` of what it draws) rounded out
  *   to whole device px and cut to the frame (the logical frame at that scale), so its origin is an integer and a
  *   1:1 copy at that origin is the very pixels drawing it there would give.
@@ -29,8 +31,8 @@ import { drawObject, type ImageLookup, registerSlideObjectsDrawer } from './text
  *   a path's fill, its outline) at the frame's own transform, then its rect copied 1:1 into the unit's picture
  *   (`transferToImageBitmap`, no copy). The very pixels drawing the object on the frame gives: no clip and no
  *   other transform, which would move Skia's anti-aliasing (a band clipped out of a curve is flattened anew, up
- *   to a whole level at its edges: measured, design/27 §13). A step is at most one call, bounded by
- *   `GEOM_COST.geometry` (about 38 ms at 4K, cold), within §13's 50 ms task.
+ *   to a whole level at its edges: measured, design/27 §13). A step is at most one call of a shape within
+ *   `GEOM_COST.slide` (about 38 ms at 4K, cold), within §13's 50 ms task.
  * - **Keeping** (`unitCache`): one cache for every unit of the thread, `UNIT_CACHE_BYTES` (192 MiB, the owner's
  *   figure for all units: effect units extend it, never a second cache), least recently used first, with
  *   counted pins: the asset worker pins a job's units from its prepare step to its raster, and keeps a cue's
@@ -44,12 +46,17 @@ import { drawObject, type ImageLookup, registerSlideObjectsDrawer } from './text
 
 /** Bumped whenever a unit's pixels for the same key would change (keys of older units then miss). */
 export const UNIT_VERSION = 1;
-/** A unit's turn on the lane is cut after about this long (ms; each band is measured). */
+/** A unit's turn on the lane is cut after about this long (ms; each step is measured). */
 export const SLICE_MS = 10;
 /** Bytes of units kept for drawing, every kind together (a full-frame unit at 4K is 33 MB). */
 export const UNIT_CACHE_BYTES = 192 * 1024 * 1024;
-/** Units one job makes at most (bytes): a third of the cache, as the live, armed and warmed cues share it. */
-export const UNIT_JOB_BYTES = UNIT_CACHE_BYTES / 3;
+/**
+ * The area of a slide's units at most, in frames: a slide copies at most one frame of units, about 5 ms at 4K
+ * on the asset worker's software canvas (a 16 MB unit 1.7 ms), on top of a draw the drawing budget holds to
+ * about 38 ms; past it, later objects keep their legacy copies. So a cue holds at most one frame of units (33 MB
+ * at 4K), and the live, armed and warmed cues fit the cache.
+ */
+export const UNIT_SLIDE_AREAS = 1;
 /**
  * A job makes units for at most this long (ms of its lane's time): the rest of its objects are drawn as their
  * legacy copies this time, and a later job of the slide goes on with them (what is made stays cached).
@@ -128,10 +135,16 @@ export function unitReady(u: GeomUnit): UnitImage | undefined {
 
 // ── Which objects, where, under which key ───────────────────────────────────────────────────────────────
 
-/** Whether a unit can draw `o` whole: a shape drawn by the geometry engine alone (`drawGeomShape`), never text. */
+/**
+ * Whether a unit draws `o` whole: a shape of a stored geometry (custom or preset: its legacy copy is another
+ * shape, a rect, an ellipse or a line) drawn by the geometry engine alone (`drawGeomShape`); never text. A plain
+ * shape past the budget for its gradient, dash or arrowheads keeps its legacy copy (the same shape in its first
+ * colour, a plain outline) until effect units, as a unit's copy costs its area on top of the budget's draw.
+ */
 function unitShape(o: SlideObject): boolean {
   if (o.type !== 'shape' || !hasShapeExtras(o)) return false;
   const s = o as Record<string, unknown>;
+  if (s.geom === undefined) return false;
   return s.table === undefined && s.chart === undefined && s.decor === undefined && s.look3d === undefined;
 }
 
@@ -187,7 +200,9 @@ const unitMemo = new WeakMap<SlideObject, { version: number; byScale: Map<number
 /**
  * The unit of an object the budget sends to a legacy copy (`o` as the slide holds it, clamped), at `scale`:
  * undefined when a unit cannot draw it (`unitShape`), its geometry file is not read yet, it draws nothing on
- * the frame or its unit would be past half the cache. Memoised per object, scale and geometry files read.
+ * the frame, its unit would be past half the cache, or drawing it alone is past `GEOM_COST.slide` (a hostile
+ * object no task could draw: 24,000 arrowheads, a 500 px outline on a tiny path; it keeps its legacy copy, as
+ * the budget has it). Memoised per object, scale and geometry files read.
  */
 export function unitOf(o: SlideObject, scale: number): GeomUnit | undefined {
   if (!o || !unitShape(o)) return undefined;
@@ -198,7 +213,7 @@ export function unitOf(o: SlideObject, scale: number): GeomUnit | undefined {
   let u = m.byScale.get(s);
   if (u === undefined) {
     const drawn = hasPart(o, 'effects') ? legacyCopy(o, 'effects') : o;
-    const rect = rectOf(drawn, s);
+    const rect = charged(drawnCost(drawn)) <= GEOM_COST.slide ? rectOf(drawn, s) : undefined;
     const bytes = rect ? rect.w * rect.h * 4 : 0;
     u =
       rect && bytes <= UNIT_CACHE_BYTES / 2
@@ -214,11 +229,15 @@ const slideMemo = new WeakMap<
   readonly SlideObject[],
   { version: number; byScale: Map<number, GeomUnit[]> }
 >();
+/** The scales at which each object (a slide's, clamped) is drawn from its unit: what `slideUnits` planned. */
+const planned = new WeakMap<SlideObject, Set<number>>();
 
 /**
  * The units a slide's objects (`slideContent`'s, clamped, in z-order) ask for at `scale`: one for each object
  * the slide's drawing budget sends to a legacy copy ('geom' or 'both') that a unit can draw (`unitOf`), in
- * z-order. Memoised per objects array, scale and geometry files read.
+ * z-order, while their area stays within `UNIT_SLIDE_AREAS` frames (later ones keep their legacy copies). What
+ * the drawers copy (`drawSlide2D`, a scene's parts) is this plan. Memoised per objects array, scale and geometry
+ * files read.
  */
 export function slideUnits(objects: readonly SlideObject[], scale: number): readonly GeomUnit[] {
   const s = num(scale, 0.01, 8, 1);
@@ -229,11 +248,20 @@ export function slideUnits(objects: readonly SlideObject[], scale: number): read
   if (!out) {
     out = [];
     const over = overGeomBudget(objects);
+    const frame = frameAt(s);
+    let area = 0;
     if (over.size)
       for (const o of objects) {
         if (!over.has(o)) continue;
         const u = unitOf(o, s);
-        if (u) out.push(u);
+        if (!u) continue;
+        const a = (u.rect.w * u.rect.h) / (frame.w * frame.h);
+        if (area + a > UNIT_SLIDE_AREAS) continue;
+        area += a;
+        out.push(u);
+        let at = planned.get(o);
+        if (!at) planned.set(o, (at = new Set()));
+        at.add(s);
       }
     if (m.byScale.size >= 8) m.byScale.clear();
     m.byScale.set(s, out);
@@ -285,10 +313,10 @@ function canvas2d(
  * `SLICE_MS` (at least one): the scratch canvas of the frame made, then each draw call of the object
  * (`geomShapeSteps`: a path's fill, its outline) at the frame's own transform, then its rect copied 1:1 into the
  * unit's own picture, kept in `unitCache`. So the unit is the very pixels drawing the object on the frame gives,
- * and no step draws more than one call (at most `GEOM_COST.geometry`, about 38 ms at 4K, cold). Resolves with the
- * longest turn (ms), 0 when it was ready already, or undefined when no unit could be made (no canvas, a drawing
- * error): the object then keeps its legacy copy. A cancelled job (`run.check`) stops between turns, and nothing
- * is kept.
+ * and no step draws more than one call (of a shape within `GEOM_COST.slide`, about 38 ms at 4K, cold). Resolves
+ * with the longest turn (ms), 0 when it was ready already, or undefined when no unit could be made (no canvas, a
+ * drawing error): the object then keeps its legacy copy. A cancelled job (`run.check`) stops between turns, and
+ * nothing is kept.
  */
 export async function makeUnit(u: GeomUnit, run: UnitRun): Promise<number | undefined> {
   if (unitCache.has('unit', u.key)) return 0;
@@ -349,13 +377,13 @@ export async function makeUnit(u: GeomUnit, run: UnitRun): Promise<number | unde
 
 /** What `prepareSlideUnits` did. */
 export interface SlideUnitsMade {
-  /** Units the slide asks for. */
+  /** Units the slide's plan copies (`slideUnits`). */
   readonly units: number;
   /** Made by this call. */
   readonly made: number;
   /** Ready already. */
   readonly ready: number;
-  /** Left to their legacy copies this time (past `UNIT_WAIT_MS` or `UNIT_JOB_BYTES`, or not drawable). */
+  /** Left to their legacy copies this time (past `UNIT_WAIT_MS`, or not drawable here). */
   readonly left: number;
   /** Bytes of the slide's units held after it. */
   readonly bytes: number;
@@ -371,14 +399,13 @@ export interface SlideUnitsOptions {
   pin?(key: string): void;
   /** `UNIT_WAIT_MS` unless given. */
   waitMs?: number;
-  /** `UNIT_JOB_BYTES` unless given. */
-  maxBytes?: number;
 }
 
 /**
- * Make the units `drawSlide2D` with `look` at `scale` copies for `slide` (`unitsOfSlide`), in z-order, each in
- * the lane's turns of `run` (`makeUnit`); those ready already are only pinned. Bounded: past `waitMs` of making or
- * `maxBytes` of units, the rest are left to their legacy copies this time. Never throws but for a cancelled job.
+ * Make the units `drawSlide2D` with `look` at `scale` copies for `slide` (`unitsOfSlide`: the plan worked out in
+ * a turn of its own), in z-order, each in the lane's turns of `run` (`makeUnit`); those ready already are only
+ * pinned. Bounded: past `waitMs` of making, the rest are left to their legacy copies this time. Never throws but
+ * for a cancelled job.
  */
 export async function prepareSlideUnits(
   slide: Slide,
@@ -388,9 +415,11 @@ export async function prepareSlideUnits(
   opts: SlideUnitsOptions = {},
 ): Promise<SlideUnitsMade> {
   const now = run.now ?? (() => performance.now());
-  const units = unitsOfSlide(slide, scale, look);
+  // The plan (the budget, each unit's reach and key: a digest of its fields) in a turn of the lane.
+  const units = authoredObjects(slide, look).length
+    ? await run.slice(() => unitsOfSlide(slide, scale, look))
+    : [];
   const waitMs = opts.waitMs ?? UNIT_WAIT_MS;
-  const maxBytes = opts.maxBytes ?? UNIT_JOB_BYTES;
   const t0 = now();
   let made = 0;
   let ready = 0;
@@ -404,11 +433,12 @@ export async function prepareSlideUnits(
       bytes += u.bytes;
       continue;
     }
-    if (now() - t0 > waitMs || bytes + u.bytes > maxBytes) {
+    if (now() - t0 > waitMs) {
       left++;
       continue;
     }
     opts.pin?.(u.key);
+    run.check();
     const longest = await makeUnit(u, run);
     if (longest === undefined) {
       left++;
@@ -426,7 +456,7 @@ export async function prepareSlideUnits(
 /** The ready unit `drawSlide2D` copies for `o`, an object as the budget draws it, at `scale`; if any. */
 function readyFor(o: SlideObject, scale: number): { u: GeomUnit; img: UnitImage } | undefined {
   const from = legacyOf(o);
-  if (!from || from.part === 'effects') return undefined;
+  if (!from || from.part === 'effects' || !planned.get(from.original)?.has(scale)) return undefined;
   const u = unitOf(from.original, scale);
   if (!u) return undefined;
   const img = unitCache.get('unit', u.key);

@@ -11,9 +11,17 @@ import type { ShapeObject, Slide } from '@ordo/domain';
  * The path data of line art in a `w` x `h` path space (integers): an outer outline, then `cols` x `rows` holes,
  * each an oval of four cubic curves wound against the outline (so it is a hole under either fill rule), a
  * little different in each cell, with walls of `wall` of a cell between them. 13 points a hole: 20 x 15 holes
- * are 3,904 points (within a path's 4,096) and about 31,000 characters (within 40,000).
+ * are 3,904 points (within a path's 4,096) and about 31,000 characters (within 40,000). With `sides`, each hole is
+ * a polygon of that many corners instead (traced line art: no curve to flatten).
  */
-export function lineArtD(o: { w: number; h: number; cols: number; rows: number; wall?: number }): string {
+export function lineArtD(o: {
+  w: number;
+  h: number;
+  cols: number;
+  rows: number;
+  wall?: number;
+  sides?: number;
+}): string {
   const wall = o.wall ?? 0.14;
   const cw = o.w / o.cols;
   const ch = o.h / o.rows;
@@ -26,6 +34,15 @@ export function lineArtD(o: { w: number; h: number; cols: number; rows: number; 
       const cy = (r + 0.5) * ch;
       const rx = (cw / 2) * (1 - wall) * (0.9 + 0.1 * Math.sin(r * 7 + c * 3));
       const ry = (ch / 2) * (1 - wall) * (0.9 + 0.1 * Math.cos(r * 5 + c * 11));
+      if (o.sides) {
+        // Counter-clockwise (against the outline's clockwise turn).
+        for (let i = 0; i < o.sides; i++) {
+          const a = (-i / o.sides) * Math.PI * 2;
+          d += `${i ? 'L' : 'M'}${f(cx + rx * Math.cos(a))} ${f(cy + ry * Math.sin(a))}`;
+        }
+        d += 'Z';
+        continue;
+      }
       // Counter-clockwise from the right: up, left, down, right.
       d +=
         `M${f(cx + rx)} ${f(cy)}` +
@@ -44,13 +61,14 @@ const GRIDS = [
   { cols: 21, rows: 16, wall: 0.1 },
 ];
 
-/** A shape drawing line art (`paths` of `GRIDS`) over `box` (logical px) in `fill`. */
+/** A shape drawing line art (`paths` of `GRIDS`, polygon holes of `sides` corners if given) over `box` in `fill`. */
 export function lineArtShape(
   id: string,
   box: { x: number; y: number; w: number; h: number; rotation?: number },
   fill: { r: number; g: number; b: number; a: number },
   extra: Partial<ShapeObject> = {},
   paths = GRIDS.length,
+  sides?: number,
 ): ShapeObject {
   return {
     id,
@@ -62,7 +80,7 @@ export function lineArtShape(
     radius: 0,
     geom: {
       paths: GRIDS.slice(0, paths).map((g) => ({
-        d: lineArtD({ w: 4000, h: 3000, ...g }),
+        d: lineArtD({ w: 4000, h: 3000, ...g, sides }),
         w: 4000,
         h: 3000,
       })),
@@ -73,7 +91,7 @@ export function lineArtShape(
 
 /**
  * The leaf template's case, harder: five line-art shapes (white, black turned, navy flipped, black turned and
- * flipped, and a gradient one with a dashed outline below full opacity), together past `GEOM_COST.slide`, so the
+ * flipped, and a turned gradient one below full opacity), together past `GEOM_COST.slide`, so the
  * drawing budget sends the last ones to their legacy copies, and a title (text, never a unit).
  */
 export function lineArtSlide(): Slide {
@@ -100,8 +118,6 @@ export function lineArtSlide(): Slide {
             { at: 1, color: { r: 40, g: 40, b: 200, a: 0.9 } },
           ],
         },
-        stroke: { width: 3, color: { r: 250, g: 220, b: 0, a: 1 } },
-        dash: 'dash',
       } as Partial<ShapeObject>),
       {
         id: 'title',

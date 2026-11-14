@@ -1583,11 +1583,19 @@ never drop it). The drawing budget above bounds a slide's synchronous draw by se
 their legacy copies, so a slide past `GEOM_COST.slide` lost its line art (the leaf template's 309-hole outline
 became a black rect, later a line). Such a shape is now drawn whole from a unit made beforehand in slices; the
 budget only decides that it is drawn so.
-- **What a unit is.** For each shape `overGeomBudget` sends to a legacy copy ('geom' or 'both') that the geometry
-  engine draws (no table, chart, decoration or 3-D look; never text; a masked picture keeps its legacy copy): the
-  shape drawn without its effects at the job's device scale, over its reach (`geomShapeReach`) rounded out to
-  whole device px and cut to the frame (the logical frame at that scale). Its effects come with effect units
-  (r2b); a 'geom' shape's kept shadow, glow or soft edge is not drawn on it meanwhile.
+- **What a unit is.** For each shape of a stored geometry (custom or preset: its legacy copy is another shape)
+  `overGeomBudget` sends to a legacy copy ('geom' or 'both') that the geometry engine draws (no table, chart,
+  decoration or 3-D look; never text; a masked picture keeps its legacy copy): the shape drawn without its effects
+  at the job's device scale, over its reach (`geomShapeReach`) rounded out to whole device px and cut to the frame
+  (the logical frame at that scale). Its effects come with effect units (r2b); a 'geom' shape's kept shadow, glow
+  or soft edge is not drawn on it meanwhile. A plain shape past the budget for its gradient, dash or arrowheads
+  keeps its legacy copy (the same shape in its first colour) until effect units: a unit's copy costs its area on
+  top of the budget's draw, which on the M6 benches' gradient stacks (already at 45 to 50 ms at 4K) passed the
+  50 ms task. A shape that alone is past `GEOM_COST.slide` (the benches' 24,000 arrowheads or 500 px outline on a
+  tiny path: one call of it took 250 to 670 ms at 4K) keeps its legacy copy: no task could draw it.
+- **At most one frame a slide** (`UNIT_SLIDE_AREAS`): units in z-order while their area is within one frame; a
+  full-frame copy at 4K takes about 5 ms on the asset worker's software canvas (a 16 MB unit 1.7 ms), so the
+  slide's draw stays within the task the budget leaves room for, and a cue holds at most a frame of units.
 - **Made in steps of one draw call** (`makeUnit`): a scratch canvas of the frame, then each of the shape's draw
   calls (`shape.ts` `geomShapeSteps`: a path's fill, its outline, the open outlines last, as `drawGeom` orders
   them) at the frame's own transform, each flushed (a one-pixel read) so its time is its own, then the rect copied
@@ -1597,8 +1605,9 @@ budget only decides that it is drawn so.
   and flattens the pieces anew, and anti-aliased edges near each band's edge moved by up to a whole level (white
   line art at 1920: 533 to 17,453 pixels for bands of 300 to 7 rows); a canvas of the unit's own size, translated,
   moved a turned shape's edges (81 levels on 1,337 pixels at 12°); and every band traversed (and dashed) the whole
-  path again, so bands bounded no turn. One call is the smallest step: at most `GEOM_COST.geometry` (about 38 ms
-  at 4K, cold), within the 50 ms task, longer than the slice for one heavy path.
+  path again, so bands bounded no turn. One call is the smallest step: within `GEOM_COST.slide` (about 38 ms
+  at 4K, cold), so within the 50 ms task, longer than the slice for one heavy path. The plan (the budget, each
+  unit's reach and key) takes a turn of its own.
 - **Copied where the legacy copy would be drawn.** `drawSlide2D` asks the registered slide objects' drawer
   (`registerSlideObjectsDrawer`): each object the budget sends to a legacy copy whose unit is ready is a copy of
   the unit at its origin, under a context whose transform is a whole-pixel translation (the asset worker's tight
@@ -1612,8 +1621,8 @@ budget only decides that it is drawn so.
   scale, origin and cut), pinned by the asset worker from a job's prepare step to its raster and while its cue is
   armed or warmed (design/14 "Geometry units"). Made by the outputs' prepare step `geometry units` and a desktop's
   thumbnail worker; never on a phone, never in the editor (it keeps the legacy copies; leaf-editor), never stored.
-- **Bounded**: a job makes at most `UNIT_WAIT_MS` (1 s) and `UNIT_JOB_BYTES` (64 MiB) of units; the rest draw as
-  their legacy copies this time. An armed or warmed cue's GO does no unit work; a jump waits for its units (as
+- **Bounded**: a job makes units for at most `UNIT_WAIT_MS` (1 s); the rest draw as their legacy copies this
+  time. An armed or warmed cue's GO does no unit work; a jump waits for its units (as
   for its table layouts) until effect units make a late unit fade in instead.
 <!-- /m9:geometry-units -->
 

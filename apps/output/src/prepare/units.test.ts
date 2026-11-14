@@ -7,7 +7,6 @@ import {
   drawableContent,
   drawSlide2D,
   overGeomBudget,
-  UNIT_JOB_BYTES,
   unitCache,
   unitsOfSlide,
   unitWork,
@@ -122,7 +121,8 @@ describe('the geometry units prepare step (M9 Slow-to-draw, Runtime)', () => {
     expect(await geometryUnits.run({ slides: [slide], scale: 2 }, host(log))).toBeUndefined();
     const work = unitWork();
     expect(work.made - before.made).toBe(units.length);
-    expect(log.slices).toBe(work.turns - before.turns);
+    // The plan (one turn), then the units' turns.
+    expect(log.slices).toBe(1 + work.turns - before.turns);
     expect(log.slices).toBeGreaterThan(units.length);
     expect(log.slices).toBeLessThan(work.steps - before.steps);
     expect(log.checks).toBeGreaterThanOrEqual(log.slices);
@@ -132,17 +132,20 @@ describe('the geometry units prepare step (M9 Slow-to-draw, Runtime)', () => {
     expect(out.ops.filter((o) => o.startsWith('image:unit'))).toEqual(
       units.map((u) => `image:unit ${u.rect.w}x${u.rect.h}`),
     );
-    // Made again for the same slide (the GO after an arm): nothing is drawn, nothing is sliced.
+    // Made again for the same slide (the GO after an arm): nothing is drawn, one turn plans it.
     const again = { slices: 0, checks: 0 };
     await geometryUnits.run({ slides: [slide], scale: 2 }, host(again));
     expect(unitWork().made).toBe(work.made);
-    expect(again.slices).toBe(0);
+    expect(again.slices).toBe(1);
   });
 
   it('makes nothing for a slide within the budget, a look that does not draw it, or when turned off', async () => {
-    const log = { slices: 0, checks: 0 };
+    // A slide within the budget: its plan only (one turn).
     const calm: Slide = { id: 'calm', objects: lineArtSlide().objects.slice(0, 2) };
-    await geometryUnits.run({ slides: [calm], scale: 1 }, host(log));
+    const planned = { slices: 0, checks: 0 };
+    await geometryUnits.run({ slides: [calm], scale: 1 }, host(planned));
+    expect(planned).toEqual({ slices: 1, checks: 0 });
+    const log = { slices: 0, checks: 0 };
     const hidden = { ...LOOK_MAIN, layers: { ...LOOK_MAIN.layers, slide: { mode: 'hidden' } } } as Look;
     await geometryUnits.run({ slides: [lineArtSlide()], scale: 1, look: hidden }, host(log));
     setGeometryUnits(false);
@@ -187,7 +190,7 @@ describe('the geometry units prepare step (M9 Slow-to-draw, Runtime)', () => {
     expect(unitCache.count('unit')).toBeGreaterThan(0);
   });
 
-  it('bounds hostile slides: a job makes at most UNIT_JOB_BYTES of units and stops after its wait', async () => {
+  it('bounds hostile slides: a slide copies at most one frame of units, and a job stops after its wait', async () => {
     // Two hundred line-art shapes pushed far past the frame (clamped), each a frame-sized unit at 4K.
     const art = lineArtSlide().objects[1] as ShapeObject;
     const slide: Slide = {
@@ -206,7 +209,7 @@ describe('the geometry units prepare step (M9 Slow-to-draw, Runtime)', () => {
     const t0 = performance.now();
     await geometryUnits.run({ slides: [slide], scale: 2 }, host({ slices: 0, checks: 0 }));
     expect(performance.now() - t0).toBeLessThan(budgetMs(2_000));
-    expect(unitCache.bytes('unit')).toBeLessThanOrEqual(UNIT_JOB_BYTES);
+    expect(unitCache.bytes('unit')).toBeLessThanOrEqual(3840 * 2160 * 4);
   });
 
   it('pins what a job makes or finds until it lets it go, and only for a host that holds them', async () => {

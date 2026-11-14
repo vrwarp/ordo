@@ -7,6 +7,7 @@ import { drawableContent } from '@ordo/renderer/content.ts';
 import { clearEffectCache } from '@ordo/renderer/effects.ts';
 import { withinDrawBudget } from '@ordo/renderer/geombudget.ts';
 import { clearGeomFiles, putGeomFile } from '@ordo/renderer/geom/stored.ts';
+import { prepareSlideUnits } from '@ordo/renderer/units.ts';
 import { withoutExifOrientation } from './exif.ts';
 import { timeEach } from './objecttime.ts';
 import { type PictureTarget, pictureTarget, preparePicture } from '@ordo/renderer/picture.ts';
@@ -30,8 +31,8 @@ import '@ordo/renderer/table/index.ts';
  * cover-fit, then the real `drawSlide2D` of `@ordo/renderer`. The picture is taken at 1920x1080 and cut to
  * the deck's slide rectangle, so a 4:3 deck compares with LibreOffice's 4:3 page like for like. The slide is
  * then drawn again at 1920 and 3840 px for the raster timings: warm (the median of repeated draws, pictures
- * prepared) and cold (preparing the pictures the cache lacks plus the first draw, as an output pays it on a
- * slide change).
+ * prepared) and cold (preparing the pictures the cache lacks and making the slide's geometry units, plus the
+ * first draw, as an output pays it on a slide change: design/27 §13 "Geometry units").
  *
  * Fonts go through the renderer's `FontResolver`, installed as the page's font environment as the asset and
  * thumbnail workers install theirs (design/27 §10): each family's faces are registered under an internal
@@ -256,6 +257,14 @@ async function picturesOf(slide: Slide, missing: string[], widths: readonly numb
   return (id, t) => (t && cache.get(pictureKey(id, t))?.bmp) || cache.get(id)?.bmp;
 }
 
+/**
+ * The slide's geometry units at `width` (design/27 §13 "Geometry units"), made as an output's prepare step makes
+ * them before its draw, here at once: the shapes its drawing budget sends to legacy copies are drawn whole.
+ */
+async function unitsOf(slide: Slide, width: number): Promise<void> {
+  await prepareSlideUnits(slide, width / 1920, undefined, { slice: async (fn) => fn(), check: () => {} });
+}
+
 /** The thumbnail worker's drawing: black, background cover-fit, then the slide (`thumb.worker.ts`). */
 function draw(
   ctx: OffscreenCanvasRenderingContext2D,
@@ -394,9 +403,10 @@ const page: NativePage = {
   },
   async render(job) {
     const missing: string[] = [];
-    // Cold at 1920: the pictures the cache lacks, then the first draw and flush.
+    // Cold at 1920: the pictures the cache lacks and the geometry units, then the first draw and flush.
     const t0 = performance.now();
     const images = await picturesOf(job.slide, missing, [1920]);
+    await unitsOf(job.slide, 1920);
     const ctx = context(1920);
     draw(ctx, job.slide, 1920, images);
     ctx.getImageData(0, 0, 1, 1);
@@ -414,6 +424,7 @@ const page: NativePage = {
     if (job.repeats) {
       const t1 = performance.now();
       const big = await picturesOf(job.slide, missing, [3840]);
+      await unitsOf(job.slide, 3840);
       const ctx4 = context(3840);
       draw(ctx4, job.slide, 3840, big);
       ctx4.getImageData(0, 0, 1, 1);

@@ -644,7 +644,8 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
   const busy = (id: string, dx: number): Slide => {
     const art = lineArtSlide().objects.filter((o) => o.type === 'shape' && !('gradient' in o && o.gradient));
     const last = art.at(-1)!;
-    const objects = [...art, { ...last, id: `${last.id}-again`, box: { ...last.box, x: last.box.x - 300 } }];
+    const again = { ...last.box, x: last.box.x - 300, w: last.box.w / 2, h: last.box.h / 2 };
+    const objects = [...art, { ...last, id: `${last.id}-again`, box: again }];
     return { id, objects: objects.map((o) => ({ ...o, box: { ...o.box, x: o.box.x + dx } })) };
   };
   const unitsOf = (s: Slide) => unitsOfSlide(s, W / 1920, LOOK_MAIN);

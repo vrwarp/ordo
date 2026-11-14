@@ -91,7 +91,11 @@ describe('thumbnail worker: geometry units only for a fine pointer', () => {
     ...lineArtSlide(),
     objects: lineArtSlide().objects.filter((o) => !('gradient' in o && o.gradient)),
   };
-  slide.objects.push({ ...slide.objects[3]!, id: 'again', box: { ...slide.objects[3]!.box, x: 400 } });
+  slide.objects.push({
+    ...slide.objects[3]!,
+    id: 'again',
+    box: { ...slide.objects[3]!.box, x: 400, w: 500, h: 380 },
+  });
   const job: ThumbJob = { slide, isSong: false, images: {}, width: 640, height: 360 };
 
   it('a coarse pointer (and a worker the page has not told yet) makes no unit and draws the legacy copies', async () => {

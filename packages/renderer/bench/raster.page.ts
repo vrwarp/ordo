@@ -13,6 +13,7 @@ import { FontResolver, installFontEnv } from '../src/text/fonts.ts';
 import { WidthCache, canvasMeasurer, measurerFor } from '../src/text/measure.ts';
 import { paintRich } from '../src/text/paint.ts';
 import { clampTextObject, layoutRich } from '../src/text/rich.ts';
+import { clearUnits, prepareSlideUnits, unitsOfSlide } from '../src/units.ts';
 
 /**
  * Browser side of the raster bench (design/27 §13, §14 item 13): runs in a dedicated worker, as the outputs'
@@ -632,8 +633,21 @@ export type BenchReport = {
     chars: number;
     layoutColdMs: number;
     layoutWarmCache: Stats;
-    raster: Record<string, { first: number; steady: Stats; paintOnly: Stats }>;
+    raster: Record<string, { first: number; steady: Stats; paintOnly: Stats; units?: UnitsMade }>;
   }[];
+};
+
+/**
+ * The geometry units a slide's jobs copy (design/27 §13 "Geometry units"), made before its first job as the asset
+ * worker's prepare step makes them: how many, their bytes, the time to make them all (each slice a task of its
+ * own, the lane's turns) and the longest slice.
+ */
+export type UnitsMade = {
+  count: number;
+  bytes: number;
+  makeMs: number;
+  longestTurnMs: number;
+  turns: number;
 };
 
 function stats(xs: number[]): Stats {
@@ -744,9 +758,12 @@ export async function bench(
       const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
       // A cold case starts every job with an empty effect cache: its layers are made each time.
       const cold = name.includes(', cold');
+      // A slide with units is planned by the job's prepare step before its draw, as on the asset worker.
+      let planned = false;
       const job = () => {
         const s = clone(slide);
         if (cold) clearEffectCache();
+        if (planned) unitsOfSlide(s, scale, LOOK_MAIN);
         const t0 = performance.now();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, width, height);
@@ -754,6 +771,31 @@ export async function bench(
         canvas.transferToImageBitmap().close();
         return performance.now() - t0;
       };
+      // The slide's geometry units, made first as the asset worker's prepare step makes them (none for a slide
+      // within its drawing budget): the jobs then copy them.
+      clearUnits();
+      const turns: number[] = [];
+      const u0 = performance.now();
+      const made = await prepareSlideUnits(slide, scale, LOOK_MAIN, {
+        slice: async (fn) => {
+          await new Promise((r) => setTimeout(r, 0));
+          const t1 = performance.now();
+          const out = fn();
+          turns.push(performance.now() - t1);
+          return out;
+        },
+        check: () => {},
+      });
+      const units: UnitsMade | undefined = made.units
+        ? {
+            count: made.made + made.ready,
+            bytes: made.bytes,
+            makeMs: performance.now() - u0,
+            longestTurnMs: Math.max(0, ...turns),
+            turns: turns.length,
+          }
+        : undefined;
+      planned = units !== undefined;
       const first = job();
       for (let i = 0; i < 5; i++) job();
       const steady: number[] = [];
@@ -772,7 +814,12 @@ export async function bench(
         canvas.transferToImageBitmap().close();
         paint.push(performance.now() - t0);
       }
-      raster[String(width)] = { first, steady: stats(steady), paintOnly: stats(paint) };
+      raster[String(width)] = {
+        first,
+        steady: stats(steady),
+        paintOnly: stats(paint),
+        ...(units ? { units } : {}),
+      };
     }
     report.slides.push({ name, chars, layoutColdMs, layoutWarmCache: stats(warm), raster });
   }
