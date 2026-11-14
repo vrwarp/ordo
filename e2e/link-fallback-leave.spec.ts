@@ -1,7 +1,17 @@
 import { expect, test } from '@playwright/test';
 import { HubProcess } from './hubproc.ts';
 import { portOf } from './ports.ts';
-import { busOf, expectCue, go, hubApi, hubLive, launchOutputs, liveService, login } from './linkhelpers.ts';
+import {
+  busOf,
+  expectCue,
+  go,
+  hubApi,
+  hubLive,
+  launchOutputs,
+  leftBusAt,
+  liveService,
+  login,
+} from './linkhelpers.ts';
 
 const PORT = portOf('link-fallback-leave');
 const op = `http://op.localhost:${PORT}`;
@@ -33,9 +43,21 @@ test('outputs leave the fallback bus when the operator tab closes, and a new tab
     await expectCue(outs, 1);
     for (const o of outs) expect(await busOf(o)).toBe('fallback');
 
-    // The operator tab goes away while the hub is still down: the outputs leave the bus on their own.
+    // The operator tab goes away while the hub is still down: the outputs leave the bus on their own, because
+    // the operator went (its `pagehide`, or the host's 250 ms opener check: design/17), within 5 s of the
+    // close by their own clock. The time is read from each window's link log, not from when this test hears
+    // back: after a tab closes, Chrome's browser thread can wait seconds on the GPU process (SwiftShader
+    // keeps it busy drawing both outputs every frame), and nothing reaches the test meanwhile (up to 11 s
+    // seen on a loaded 4-core machine, while the windows had left within 260 ms).
+    const closedAt = Date.now();
     await page.close();
-    await expect.poll(() => busOf(outs[0]!), { timeout: 5000 }).toBe('none');
+    for (const o of outs) {
+      await expect.poll(() => busOf(o), { timeout: 20_000 }).toBe('none');
+      await expect.poll(async () => (await leftBusAt(o, closedAt)) !== undefined).toBe(true);
+      const left = (await leftBusAt(o, closedAt))!;
+      expect(['opener closed', 'operator says hub up']).toContain(left.reason);
+      expect(left.at - closedAt).toBeLessThan(5000);
+    }
 
     // The hub returns with its journalled state (cue 0): the outputs follow it again.
     await hub.start();

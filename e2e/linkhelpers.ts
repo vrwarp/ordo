@@ -1,5 +1,6 @@
 import { type APIRequestContext, type BrowserContext, expect, type Page, request } from '@playwright/test';
 import { SONG, shownSlideCue, waitCacheReady } from './helpers.ts';
+import { leftBusIn } from './linklog.ts';
 
 /** Shared steps for the operator-to-output link specs (items 1, 2 and 13 of the 2026-11-03 review). */
 
@@ -84,6 +85,22 @@ export async function busOf(p: Page): Promise<string> {
       () => (window as unknown as { __ordo?: { state(): { bus: string } } }).__ordo?.state().bus ?? '',
     )
     .catch(() => '');
+}
+
+/**
+ * When the window left its bus for none at or after `since` (epoch ms), by its own clock, and why: the first
+ * `bus: none (<reason>)` line of its link's recent log (`linklog.ts`). Undefined when it has not logged one
+ * (yet).
+ */
+export async function leftBusAt(p: Page, since: number): Promise<{ at: number; reason: string } | undefined> {
+  const log = await p
+    .evaluate(
+      () =>
+        (window as unknown as { __ordo?: { telemetry(): { recentLog?: string[] } } }).__ordo?.telemetry()
+          .recentLog ?? [],
+    )
+    .catch(() => [] as string[]);
+  return leftBusIn(log, since);
 }
 
 export async function go(page: Page): Promise<void> {
