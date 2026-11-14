@@ -579,3 +579,66 @@ export function lyricLoopDeck(dir: string, advanceMs = 4000): string {
   }));
   return zip(buildDeck({ slides }), join(dir, 'Amazing Grace.pptx'), true);
 }
+
+// ---- the crowded deck (M9 decorations, decor-render) ----------------------------------------------------
+
+/** The crowded deck's grid: 230 squares in 10 rows of 23 under a title band, in logical px (1920 x 1080). */
+export const CROWDED = { count: 230, cols: 23, x0: 30, y0: 190, pitch: 82, side: 60 } as const;
+
+/** The colour of square `i` of the crowded deck: 230 distinct ones (hue steps, two lightnesses). */
+export function crowdedColor(i: number): [number, number, number] {
+  const h = (i * 137.508) % 360;
+  const l = i % 2 ? 0.42 : 0.6;
+  const s = 0.85;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+}
+
+/** The centre of square `i` of the crowded deck, in logical px. */
+export function crowdedCentre(i: number): [number, number] {
+  const c = i % CROWDED.cols;
+  const r = Math.floor(i / CROWDED.cols);
+  return [
+    CROWDED.x0 + c * CROWDED.pitch + CROWDED.side / 2,
+    CROWDED.y0 + r * CROWDED.pitch + CROWDED.side / 2,
+  ];
+}
+
+/**
+ * One slide of 230 text-less squares, each its own colour (no two merge by look), bottom first, under a title:
+ * past the slide budgets' 190 objects and the render clamp's 200 (design/27 §15 M9 "the steps"), so an import
+ * keeps them only as decorations (`ShapeObject.decor`, in decoration files); without them the guard leaves the
+ * topmost out and lists them missing. Written with the converter's raw-XML test helpers; a white background.
+ */
+export function crowdedDeck(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  const EMU = 6_350; // EMU per logical px (12,192,000 / 1,920)
+  const hex = (c: [number, number, number]) => c.map((v) => v.toString(16).padStart(2, '0')).join('');
+  let shapes = '';
+  for (let i = 0; i < CROWDED.count; i++) {
+    const [cx, cy] = crowdedCentre(i);
+    shapes += sp({
+      id: 10 + i,
+      x: (cx - CROWDED.side / 2) * EMU,
+      y: (cy - CROWDED.side / 2) * EMU,
+      cx: CROWDED.side * EMU,
+      cy: CROWDED.side * EMU,
+      fill: solid(hex(crowdedColor(i))),
+    });
+  }
+  shapes += sp({
+    id: 2,
+    x: 60 * EMU,
+    y: 30 * EMU,
+    cx: 1800 * EMU,
+    cy: 130 * EMU,
+    txBox: true,
+    txBody: body(para(run('A crowded slide', 'sz="4400"', solid('202020')))),
+  });
+  const parts = buildDeck({ slides: [{ shapes, bg: solidBg('FFFFFF') }] });
+  const file = join(dir, 'Crowded.pptx');
+  writeFileSync(file, zipParts(parts));
+  return file;
+}
