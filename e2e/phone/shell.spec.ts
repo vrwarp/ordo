@@ -1,9 +1,25 @@
-import { type APIRequestContext, devices, expect, type Locator, type Page, test } from '@playwright/test';
+import {
+  type APIRequestContext,
+  devices,
+  expect,
+  type Locator,
+  type Page,
+  request,
+  test,
+} from '@playwright/test';
 import { fixtures, uploadMedia } from '../helpers.ts';
 import type { HubProcess } from '../hubproc.ts';
 import { portOf } from '../ports.ts';
 import { touchDevice } from '../touchdevice.ts';
-import { capsShim, layoutChecks, PIN, phoneSlot, signInPhone, startPhoneHub } from './phonehelpers.ts';
+import {
+  expectCappedSession,
+  layoutChecks,
+  PIN,
+  phoneSlot,
+  pinBodies,
+  signInPhone,
+  startPhoneHub,
+} from './phonehelpers.ts';
 
 /**
  * Phones P0, the compact shell (design/28 §2.2, §8 "Layout"): the frame (header with Back, `.page` the one
@@ -497,8 +513,10 @@ test('sign-in on a phone: cap light and never remembered, its line and host, the
   test.setTimeout(180_000);
   const { hub, api, url } = await hubFor(7);
   try {
-    // removed at integrate: the hub lane's /auth/me caps and cap (e2e/phone/phonehelpers.ts capsShim).
-    const shim = await capsShim(page);
+    // The hub lists caps (GET /auth/me `caps`), so the phone asks for 'light'.
+    const me = await json<{ caps?: unknown }>(api.get('auth/me'));
+    expect(me.caps).toEqual(['full', 'light', 'view']);
+    const pins = pinBodies(page);
     await touchDevice(page);
     await page.goto(url);
     await expect(page.locator('.keypad')).toBeVisible({ timeout: 20_000 });
@@ -516,7 +534,9 @@ test('sign-in on a phone: cap light and never remembered, its line and host, the
     await tapPin(page, PIN);
     await expect(page.locator('.keypad')).toHaveCount(0, { timeout: 20_000 });
     await expect(page.locator('nav.tabbar')).toBeVisible();
-    expect(shim.pins).toEqual([{ pin: PIN, cap: 'light' }]);
+    // The body asks for the cap and never for remember; the hub answers with a capped, unremembered session.
+    expect(pins).toEqual([{ pin: PIN, cap: 'light' }]);
+    await expectCappedSession(page);
 
     // The whole card is reachable in landscape (main's started at y -55 and could not be scrolled).
     await page.locator('nav.tabbar').getByRole('button', { name: 'More' }).tap();
@@ -553,7 +573,8 @@ test('sign-in on a phone: cap light and never remembered, its line and host, the
     expect(text).toMatch(
       /^Too many wrong PINs from this network\. Try again at \d{1,2}:\d{2}(\s?[AP]M)?\. Everyone on the same Wi-Fi may share this wait\.$/,
     );
-    expect(shim.pins.slice(1).every((b) => b.cap === 'light' && !('remember' in b))).toBe(true);
+    expect(pins.length).toBeGreaterThan(1);
+    expect(pins.slice(1).every((b) => b.cap === 'light' && !('remember' in b))).toBe(true);
   } finally {
     await api.dispose();
     hub.kill();
@@ -566,18 +587,26 @@ test('a phone signed in before caps is signed out once, and its next sign-in ask
   test.setTimeout(180_000);
   const { hub, api, url } = await hubFor(8);
   try {
-    // removed at integrate: first a hub that grants no caps (the session is uncapped, as before the upgrade).
-    const before = await capsShim(page, 'pre-upgrade');
-    await signInPhone(page, url);
-    expect(before.pins).toEqual([{ pin: PIN }]);
-    // The hub is upgraded: /auth/me lists caps, and this phone's session has none.
-    await page.unrouteAll({ behavior: 'wait' });
-    const after = await capsShim(page, 'upgraded');
-    const logouts: string[] = [];
-    page.on('request', (r) => {
-      if (r.method() === 'POST' && r.url().endsWith('/api/v1/auth/logout')) logouts.push(r.url());
+    // A real uncapped, remembered session, as a phone held before the upgrade: main's sign-in sent
+    // { pin, remember: true } (12 hours, a device cookie for a year). Its cookies are copied into the phone.
+    const old = await request.newContext({
+      baseURL: `${url}api/v1/`,
+      extraHTTPHeaders: { 'x-ordo': '1' },
     });
-    await page.reload();
+    const r = await old.post('auth/pin', { data: { pin: PIN, remember: true } });
+    expect(r.ok(), await r.text()).toBe(true);
+    expect(await r.json()).toEqual({ role: 'operate' });
+    const { cookies } = await old.storageState();
+    expect(cookies.map((c) => c.name).sort()).toEqual(['ordo_device', 'ordo_session']);
+    await old.dispose();
+    await page.context().addCookies(cookies);
+    const pins = pinBodies(page);
+    const logouts: string[] = [];
+    page.on('request', (q) => {
+      if (q.method() === 'POST' && q.url().endsWith('/api/v1/auth/logout')) logouts.push(q.url());
+    });
+    await touchDevice(page);
+    await page.goto(url);
     await expect(page.locator('[data-signin-again]')).toHaveText(
       'Phones now sign in for an hour at a time. Enter the PIN again.',
       { timeout: 20_000 },
@@ -585,46 +614,13 @@ test('a phone signed in before caps is signed out once, and its next sign-in ask
     expect(logouts).toHaveLength(1);
     await tapPin(page, PIN);
     await expect(page.locator('nav.tabbar')).toBeVisible({ timeout: 20_000 });
-    expect(after.pins).toEqual([{ pin: PIN, cap: 'light' }]);
+    expect(pins).toEqual([{ pin: PIN, cap: 'light' }]);
+    await expectCappedSession(page, 'after the pre-upgrade session signed in again');
     // Capped now: a reload keeps the session, with no second sign-out and no note.
     await page.reload();
     await expect(page.locator('nav.tabbar')).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('.keypad')).toHaveCount(0);
     expect(logouts).toHaveLength(1);
-  } finally {
-    await api.dispose();
-    hub.kill();
-  }
-});
-
-test('integrate: the hub caps a phone’s sign-in, and a real pre-upgrade session is signed out once', async ({
-  page,
-}) => {
-  test.setTimeout(120_000);
-  const { hub, api, url } = await hubFor(9);
-  try {
-    const me = await json<{ caps?: unknown }>(api.get('auth/me'));
-    test.skip(
-      !Array.isArray(me.caps),
-      'integrate-only: needs the hub lane’s caps (p0/hub); runs once the branches are merged',
-    );
-    // A real uncapped, remembered session, as a phone held before the upgrade.
-    const r = await page
-      .context()
-      .request.post(`${url}api/v1/auth/pin`, { data: { pin: PIN, remember: true } });
-    expect(r.ok()).toBe(true);
-    expect((await page.context().cookies()).some((c) => c.name === 'ordo_device')).toBe(true);
-    await touchDevice(page);
-    await page.goto(url);
-    await expect(page.locator('[data-signin-again]')).toBeVisible({ timeout: 20_000 });
-    await tapPin(page, PIN);
-    await expect(page.locator('nav.tabbar')).toBeVisible({ timeout: 20_000 });
-    const cookies = await page.context().cookies();
-    expect(cookies.find((c) => c.name === 'ordo_device')).toBeUndefined();
-    const session = cookies.find((c) => c.name === 'ordo_session')!;
-    expect(session.expires - Date.now() / 1000).toBeLessThanOrEqual(3600 + 30);
-    const after = await page.evaluate(() => fetch('/api/v1/auth/me').then((x) => x.json()));
-    expect(after).toMatchObject({ role: 'edit', cap: 'light' });
   } finally {
     await api.dispose();
     hub.kill();
@@ -639,7 +635,7 @@ test('an offline start reads the copy with its time; back online the strip and t
     test.info().project.name === 'webkit-iphone',
     'Playwright WebKit cannot reload a page while the context is offline ("internal error"); Chromium can',
   );
-  const { hub, api, url } = await hubFor(10);
+  const { hub, api, url } = await hubFor(9);
   try {
     await seed(api);
     await signInPhone(page, url);
