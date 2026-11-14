@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { allFiles, compactFiles, type SetBundle } from '../src/sw/sets.ts';
+import { COMPACT_START } from '../src/pageSets.ts';
 
 const ROOT = '/repo/apps/operator';
 const chunk = (fileName: string, imports: string[], o: { entry?: boolean; facade?: string } = {}) => ({
@@ -59,7 +60,8 @@ describe('precache sets', () => {
   });
 
   it('compact: the entry, the compact lazy modules, their imports, the compact workers and the rest', () => {
-    expect(compactFiles(bundle, { root: ROOT })).toEqual(
+    const lazy = ['src/views/playlists/PlaylistsView.tsx', 'src/views/editor/PreviewsView.tsx'];
+    expect(compactFiles(bundle, { root: ROOT, start: [], lazy })).toEqual(
       [
         'index.html',
         'assets/index.css',
@@ -85,6 +87,10 @@ describe('precache sets', () => {
       'assets/import.worker-dddd4444.js',
     ])
       expect(c).not.toContain(f);
+  });
+
+  it('the compact chunk starts with the shell', () => {
+    expect(COMPACT_START).toEqual(['src/views/compact/index.ts']);
   });
 
   it('a module the shell starts (COMPACT_START) joins with its imports', () => {

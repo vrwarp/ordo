@@ -8,6 +8,8 @@ import { installGlobalErrorLog } from './services/log.ts';
 import { browserSwEnv, registerServiceWorker } from './sw/register.ts';
 import './styles.css';
 import './ipad.css';
+// The compact layout's rules, every one under html[data-layout="compact"] (inert on the venue PC and the iPad).
+import './compact.css';
 
 installGlobalErrorLog();
 // The layout class before the session (design/28 §3.1): the sign-in screen is compact from the first paint on

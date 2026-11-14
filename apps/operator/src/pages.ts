@@ -132,6 +132,8 @@ export const PAGES = {
   import: chunk('./views/library/ImportTab.tsx', () =>
     import('./views/library/ImportTab.tsx').then((m) => m.ImportTab),
   ),
+  /** The compact layout's frame and P0 views (a phone's shell; never on the venue PC). */
+  compact: chunk('./views/compact/index.ts', () => import('./views/compact/index.ts')),
 };
 
 export type PageName = keyof typeof PAGES;
@@ -145,8 +147,8 @@ export const REGULAR_PAGES: Record<Profile, readonly PageName[]> = {
   edit: ['edit', 'playlists', 'previews', 'settings', 'themes', 'fonts', 'import'],
 };
 
-/** The compact layout's own pages (P0: none; the compact shell adds its chunk). */
-export const COMPACT_PAGES: readonly PageName[] = [];
+/** The compact layout's own pages: the compact chunk (its frame and P0 views). */
+export const COMPACT_PAGES: readonly PageName[] = ['compact'];
 
 /**
  * What a device loads at startup, beside the session request: a phone (on either layout) or the compact

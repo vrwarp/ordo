@@ -297,6 +297,19 @@ The rows marked P1 and later are not built.
   PC." Locked out (429): "Too many wrong PINs from this network. Try again at 21:40. Everyone on the same
   Wi-Fi may share this wait."
 
+Status (P0, as built by the compact shell): the compact frame is its own chunk (`apps/operator/src/views/compact/`,
+`PAGES.compact`, the compact first load's start module), which only the compact layout loads, so the venue PC
+and the iPad's regular layout never fetch it. `CompactFrame` renders the top block (padded by `--safe-top`) with
+the header (`[data-compact-header]`: the tab's name, or the plan's or presentation's name with a 44 px Back,
+`[data-back]`, that is the browser's own back when the previous screen is the one it leads to, else the parent
+by replace), `.page` as the one scroller (`overflow-x: hidden`; a detail screen padded by `--safe-bottom`) and
+`nav.tabbar` (Plans, Library, Media and a More button that opens a sheet; `aria-current="page"` on the active
+tab; 56 px plus `--safe-bottom`; labels under the mockups' icons; hidden on a detail screen). More holds the
+venue's host, "Signed in on this phone", the demo's About and Reset on the Pages demo, the version and Sign out.
+`src/compact.css` holds every rule, each under `html[data-layout="compact"]` (`.app` at `100dvh`, `min-width: 0`
+on the bars' children, toasts above the tab bar with a 44 px close, cards no wider than the screen, 44 px
+controls, `-apple-system-body` on the root under `@supports`, sizes in `rem`, logical properties only).
+
 ### 2.3 Plans and Plan (P1)
 
 <img src="28-mobile/01-plans-android.png" width="260" alt="Plans home on an Android phone: the next plan with its readiness, then the plans coming up">

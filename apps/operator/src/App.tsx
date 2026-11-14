@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { PageHost } from './components/PageHost.tsx';
+import { PageError } from './components/ErrorBoundary.tsx';
 import { UpdateFailedScreen } from './components/UpdatingScreen.tsx';
+import { t, uiLanguage } from './i18n/index.ts';
 import { deviceProfile, requestPersistentStorage, useProfile } from './lib/capabilities.ts';
 import { type Layout, thisIsPhone, useLayout } from './lib/layout.ts';
 import { pageFor, routeHash } from './lib/route.ts';
@@ -12,6 +14,7 @@ import {
   preloadFor,
   REGULAR_FULL,
   retryChunks,
+  useChunk,
   useChunkStatus,
   useChunks,
 } from './pages.ts';
@@ -197,6 +200,13 @@ function Shell({
   // layout a route allowedForRole refuses renders nothing and is pushed to the library, as before.
   const restricted = thisIsPhone();
   const decision = pageFor(route, { role, profile, layout, restricted });
+  // The compact layout's frame and views (src/pages.ts PAGES.compact): loaded only on the compact layout, so the
+  // venue PC and the iPad's regular layout never fetch them.
+  const compact = useChunk(PAGES.compact, layout === 'compact');
+  // The compact UI's language on <html lang> (design/28 §6; English in P0); the regular layout keeps index.html's.
+  useLayoutEffect(() => {
+    if (layout === 'compact') document.documentElement.lang = uiLanguage(navigator.languages);
+  }, [layout]);
   const redirect = 'redirect' in decision ? decision : undefined;
   const redirectKey = redirect
     ? `${redirect.replace ? 'replace' : 'push'} ${routeHash(redirect.redirect)}`
@@ -216,6 +226,42 @@ function Shell({
     decision.page && decision.page !== 'library' ? (PAGES[decision.page] as Chunk<unknown>) : undefined;
   const pageStatus = useChunkStatus(layout === 'regular' && !restricted ? pageChunk : undefined);
   const pageWaits = pageStatus === 'idle' || pageStatus === 'loading';
+
+  if (layout === 'compact') {
+    if (compact.status === 'failed')
+      return <PageError route="compact" retry={() => void PAGES.compact.load().catch(() => undefined)} />;
+    const C = compact.value;
+    if (!C)
+      return (
+        <div className="center muted" data-page-loading>
+          {t('shell.loading')}
+        </div>
+      );
+    // pageFor answers only the Library (Presentations, Media), the plans and a presentation's previews here.
+    let page: React.ReactNode = null;
+    if (!ready)
+      page = (
+        <div className="center muted" data-page-loading>
+          {t('shell.loading')}
+        </div>
+      );
+    else if (decision.page === 'library') page = <LibraryView tab={decision.props.tab} />;
+    else if (decision.page === 'playlists')
+      page = <PageHost name="playlists" chunk={PAGES.playlists} props={decision.props} />;
+    else if (decision.page === 'previews')
+      page = <PageHost name="previews" chunk={PAGES.previews} props={decision.props} />;
+    return (
+      <C.CompactFrame
+        role={role}
+        route={route}
+        profile={profile}
+        layout={layout}
+        signedOut={signedOut}
+        fallback={fallback}
+        body={page}
+      />
+    );
+  }
 
   let body: React.ReactNode = null;
   if (!ready || pageWaits) body = <div className="center muted">Loading library…</div>;

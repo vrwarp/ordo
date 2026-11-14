@@ -80,7 +80,8 @@ describe('bundle report: the compact first load', () => {
   it('sums the initial chunks, the core worker and the CSS; lists the precache', () => {
     const entry = 'import "./shared-BBBBBBBB.js";\nconsole.log(1);';
     const root = fakeRoot(tree(entry), BASE);
-    const { report, status } = run(root, '--check');
+    // No start module here (the default is the compact chunk, the next test's case).
+    const { report, status } = run(root, '--check', '--compact-start', '');
     const c = report.operator.compact;
     expect(c.firstLoad.files).toEqual([
       'core.worker-DDDDDDDD.js',

@@ -5,8 +5,8 @@
  * apps/operator, as a source map's sources are once their leading `../` are dropped (`normalizeSource`).
  */
 
-/** Modules the compact layout loads at startup, beside the entry (P0: none; the compact shell adds its own). */
-export const COMPACT_START: readonly string[] = [];
+/** Modules the compact layout loads at startup, beside the entry: the compact chunk (its frame and P0 views). */
+export const COMPACT_START: readonly string[] = ['src/views/compact/index.ts'];
 
 /** Modules the compact path opens later (and a phone precaches): the playlists and a presentation's previews. */
 export const COMPACT_LAZY: readonly string[] = [

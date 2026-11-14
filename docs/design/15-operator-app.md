@@ -603,7 +603,9 @@ Controls are 44 px with 16 px inputs (no focus zoom), the canvas-first editor's 
 list, and the Lyric Script's arrangement pills get 44 px back under a coarse pointer);
 `e2e/ipad/touch-targets.spec.ts` audits every visible control of the editor, the docked panel, the slides
 list, the paint picker and the Lyric Script in both orientations, the picker's 32 px swatch grid and the
-ramp's stop pins its named exceptions. In portrait the editor's property panel and the
+ramp's stop pins its named exceptions. The audit itself is `e2e/touchaudit.ts` (`auditTargets`); a phone's
+compact layout runs it on every compact route and sheet with links, `role="button"` and checkbox labels added
+and no exceptions (`layoutChecks` in `e2e/phone/phonehelpers.ts`, design/28 §8 "Layout"). In portrait the editor's property panel and the
 playlist's add panel move under the main pane. File pickers are a plain button to the native picker
 (Files, Photos): photos arrive as JPEG because Safari transcodes HEIC when the accept list does not name
 it (the hub does not accept HEIC), videos as MOV or MP4.

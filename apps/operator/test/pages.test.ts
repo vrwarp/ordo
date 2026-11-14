@@ -86,7 +86,7 @@ describe('chunk', () => {
 
 describe('preload sets', () => {
   it('a phone (either layout) and the compact layout preload the compact set only', () => {
-    expect(COMPACT_PAGES).toEqual([]);
+    expect(COMPACT_PAGES).toEqual(['compact']);
     for (const [layout, profile, phone] of [
       ['compact', 'edit', true],
       ['regular', 'edit', true],
@@ -98,7 +98,13 @@ describe('preload sets', () => {
   it('a regular device preloads what its capability profile can open; the operate services on full only', () => {
     expect(preloadSet('regular', 'full', false)).toEqual({ pages: REGULAR_PAGES.full, operate: true });
     expect(preloadSet('regular', 'edit', false)).toEqual({ pages: REGULAR_PAGES.edit, operate: false });
-    expect([...REGULAR_PAGES.full].sort()).toEqual(Object.keys(PAGES).sort());
+    // Every page but the compact chunk, which no regular device loads.
+    expect([...REGULAR_PAGES.full].sort()).toEqual(
+      Object.keys(PAGES)
+        .filter((k) => k !== 'compact')
+        .sort(),
+    );
+    expect(REGULAR_PAGES.edit).not.toContain('compact');
     // An iPad never opens the live view or Setup (allowedForRole on the edit profile).
     expect(REGULAR_PAGES.edit).not.toContain('live');
     expect(REGULAR_PAGES.edit).not.toContain('setup');
