@@ -1765,3 +1765,13 @@ Where this differs from the text above, this is what the code does. Three lanes 
   at `d0f49cb`); the compact first load 275,118 B gzip in 7 files (headroom 24,882 B; the phone spec measures the
   same files on the wire); the compact precache 10 files, 421.8 kB gzip; the regular total 1,877.4 kB (606.0 kB
   gzip) in 35 files. `APP_VERSION` stays 0.6.0, with the hub lane's protocol digest.
+- **Checks on the merged build** (2026-11-14, a shared machine): lint, typecheck, the whole vitest run (417 files),
+  build, the Pages build, the bundle budget and the goldens (no new case against the baseline) pass; the new P0
+  specs passed three times in all six projects (56 tests each); the whole e2e suite's only failures were timing
+  checks of SwiftShader media playback (`outputs`, `pptx-media`, `slide-media`), which pass alone and fail as
+  often at `d0f49cb`; the full profile's and the iPad's 34 screenshots are byte-identical to `d0f49cb`'s; the soak
+  smoke's phones pass (3 capped phones, no refusal, no output config request, the video waited). Renderer
+  benches over budget against the wave's baseline are this machine's (`d0f49cb` itself has the same rows; the
+  renderer is unchanged). Two timings are slower than `d0f49cb` by about 20 to 45 ms in three of four pairs: the
+  venue PC's sign-in to the live view (its DOMContentLoaded is about 110 ms faster) and the iPad's first editor
+  open, as the regular pages now evaluate after the sign-in.
