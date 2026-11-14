@@ -1203,7 +1203,12 @@ Following design/23.
 - **Hub**: renditions made and backfilled (never while live); deferred heavy jobs while live; location
   gone from stored originals and delivery files and a portrait photo upright with the right size; playlist
   revisions and restore (423 while live); retention caps; write budgets; `view` redaction in snapshots,
-  `?since=` and `/files`; the global bucket ignoring LAN addresses; `Origin` refusals.
+  `?since=` and `/files`; the global bucket ignoring LAN addresses; `Origin` refusals. (P0 as built: deferred
+  heavy jobs measured by `e2e/phones-live-load.spec.ts`: with Phones on, a phone's video uploaded during a
+  service stays `uploaded` with its job waiting, is ready within the grace after End service, and the live
+  output makes no config request for it or a photo; at `d0f49cb` the video transcoded during the service and
+  the output refetched its config six times. The LAN bucket and `Origin` refusals: `phones-rate.test.ts`,
+  `phones-origin.test.ts`.)
 - **Text**: line-break positions per paragraph in WebKit and Chromium agree over the fixture library
   (§3.8): synthetic fixtures plus the committed public decks of `golden-pptx/` (worship and sermon text,
   bilingual, pinyin, Spanish); the list of disagreements is the gate's evidence. A WebKit golden draws a
