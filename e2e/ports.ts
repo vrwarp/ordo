@@ -164,7 +164,7 @@ export const PORT_TABLE = {
     offset: 340,
     count: 2,
     spec: 'phone/live-boundary.spec.ts',
-    what: '0 chromium (p0/hub) or webkit-iphone, 1 chromium-android',
+    what: '0 webkit-iphone, 1 chromium-android',
   },
   'phones-live-load': { offset: 345, count: 1, spec: 'phones-live-load.spec.ts', what: 'hub' },
   'phones-writes': { offset: 346, count: 1, spec: 'phones-writes.spec.ts', what: 'hub' },
