@@ -780,7 +780,8 @@ whether.
   art, as at M9 wave 1: each element is made residual for its budget (`budget:shapes` for the guard's,
   `budget:pictures` for the pictures past the clamp; `budget.ts` `toArt`, `sentToArt`), emits nothing in
   version 1 (`emit.ts` `pastBudget`), and the art draws exactly those elements (with a kept element between
-  them that one of them covers, as for any art; `EmittedSlide.art`, the left-out text in `art.text`); so that
+  them that one of them covers, as for any art, and a SmartArt drawing it touches whole, `wholeDiagrams`;
+  `EmittedSlide.art`, the left-out text in `art.text`); so that
   the art itself is drawn, the guard keeps one of the clamp's objects for it, and without sheets one of its
   pictures when the slide had no art (the slide is classed hybrid, `art:budget:shapes` /
   `art:budget:pictures`, nothing missing). **Without LibreOffice** it is culled as `budget` and listed

@@ -520,4 +520,37 @@ describe('without decorations (the M9 rollout: no decoration drawer yet)', () =>
       `${lo.art?.elements.length} element(s) past the slide's budgets: LibreOffice draws them`,
     );
   });
+
+  it('with LibreOffice a SmartArt drawing the guard leaves partly out goes to the art whole, as at wave 1', () => {
+    // 170 squares under a SmartArt drawing of 30 shapes: 201 objects that are not text, so the guard leaves the
+    // drawing's topmost shapes out, a part of it.
+    let nodes = '';
+    for (let i = 0; i < 30; i++)
+      nodes += dspSp({
+        x: (i % 10) * (IN / 2),
+        y: Math.floor(i / 10) * (IN / 4),
+        cx: IN / 4,
+        cy: IN / 8,
+      }).replace(/<a:srgbClr val="[0-9A-F]+"\/>/, `<a:srgbClr val="${TWO[i % 2]}"/>`);
+    const frame = { id: 7, x: IN, y: 4 * IN, cx: 6 * IN, cy: 2 * IN, dmId: 'rIdDm1' };
+    const parts = withSmartArt(
+      buildDeck({
+        slides: [{ shapes: squares(170, 10, TWO) + smartArtFrame(frame), rels: smartArtRels(1) }],
+      }),
+      1,
+      drawingXml(nodes),
+    );
+    const s = parseDeck(parts, { m9Writes: noDecor }).slides[0]!;
+    const drawing = s.elements.filter((e) => e.diagram !== undefined);
+    expect(drawing).toHaveLength(30);
+    // Some of its shapes were the guard's, and the whole drawing is the art's: its render copy prints it whole.
+    expect(drawing.some((e) => e.reasons?.includes('budget:shapes'))).toBe(true);
+    expect(drawing.some((e) => !e.reasons?.includes('budget:shapes'))).toBe(true);
+    expect(drawing.every((e) => e.support === 'residual')).toBe(true);
+    const inArt = new Set(s.classification.art?.elements);
+    expect(
+      s.elements.flatMap((e, i) => (e.diagram !== undefined ? [i] : [])).every((i) => inArt.has(i)),
+    ).toBe(true);
+    expect(s.classification.reasons).toEqual(expect.arrayContaining(['art:budget:shapes', 'art:smartart']));
+  });
 });

@@ -1257,12 +1257,15 @@ export function classifySlide(
   if (opts.budgetArt) return classifyWithArt(ctx, elements, background, residual, tier, reasons);
   wholeDiagrams(ctx, elements, background, residual, false);
   const plan = fitBudgets(ctx, elements, background, opts.budget);
-  // With LibreOffice what the guard left out is the art's, for its budget (`budget.ts` `toArt`).
-  if (plan.art)
+  // With LibreOffice what the guard left out is the art's, for its budget (`budget.ts` `toArt`); a SmartArt
+  // drawing the art now touches goes with it whole, as at M9 wave 1 (its render copy prints the drawing whole).
+  if (plan.art) {
     elements.forEach((e, i) => {
       for (const r of sentToArt(e) ? (e.reasons ?? []) : [])
         if (r.startsWith('budget:') && !residual[i]!.includes(r)) residual[i] = [...residual[i]!, r];
     });
+    wholeDiagrams(ctx, elements, background, residual, false);
+  }
   const art = artRange(elements);
   const why: string[] = [];
   for (const i of art?.elements ?? []) for (const r of residual[i]!) why.push(`art:${r}`);

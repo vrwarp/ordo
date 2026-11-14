@@ -849,7 +849,8 @@ decision item 2: "guard left-outs get LibreOffice's art for the left-out objects
     residual for its budget (`budget:shapes` for the object guard's, `budget:pictures` for the picture
     guard's; `residual.ts`, `budget.ts` `toArt`), version 1 emits nothing for it and draws the rest, and
     version 2's art draws them (`EmittedSlide.art`; a kept object between them that one of them covers goes
-    into the art too, as for any art, to keep the z-order). So that the art itself is drawn, the guard keeps
+    into the art too, as for any art, to keep the z-order, and a SmartArt drawing the art touches goes whole,
+    as at wave 1). So that the art itself is drawn, the guard keeps
     one of the clamp's 200 objects free for it and, on a slide with no art before, one of its 16 pictures: a
     hub with LibreOffice leaves one object or picture more to the art than a hub without it leaves out, and
     draws them all. The slide is hybrid (`art:budget:shapes`, `art:budget:pictures`), waits for the
