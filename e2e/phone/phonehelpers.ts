@@ -25,13 +25,16 @@ export function phoneSlot(): number {
   return test.info().project.name === 'chromium-android' ? 1 : 0;
 }
 
-/** A fresh hub on `port`, with an operate API context signed in. */
+/** A fresh hub on `port`, with an operate API context signed in (sending x-ordo, as every ordo client does). */
 export async function startPhoneHub(
   port: number,
 ): Promise<{ hub: HubProcess; api: APIRequestContext; url: string }> {
   const hub = HubProcess.fresh(port);
   await hub.start();
-  const api = await request.newContext({ baseURL: `http://localhost:${port}/api/v1/` });
+  const api = await request.newContext({
+    baseURL: `http://localhost:${port}/api/v1/`,
+    extraHTTPHeaders: { 'x-ordo': '1' },
+  });
   const r = await api.post('auth/pin', { data: { pin: PIN } });
   expect(r.ok(), await r.text()).toBe(true);
   return { hub, api, url: `http://localhost:${port}/` };
