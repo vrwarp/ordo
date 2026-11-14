@@ -1,8 +1,9 @@
 /**
- * The session's cap as the client reads it (design/28 §3.2; state/session.ts), defensively until the protocol
- * carries the fields, and the one sign-out of a phone's pre-upgrade uncapped session (owner question 12): on a
+ * The session's cap as the client reads it (design/28 §3.2; state/session.ts), through the protocol's
+ * `AuthMeRes.cap`/`caps` and `SessionCap` but defensively (the hub may be an older or newer build), and the one sign-out of a phone's pre-upgrade uncapped session (owner question 12): on a
  * phone, from a hub that grants caps, once only; never on a tablet, the venue PC or a capped session.
  */
+import { SessionCap } from '@ordo/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let phone = true;
@@ -33,6 +34,13 @@ describe('capOf and hubGrants', () => {
     expect(capOf(asMe({ role: 'edit', cap: 'full' }))).toBe('full');
     expect(capOf(asMe({ role: 'edit', cap: 'admin' }))).toBe('view');
     expect(capOf(asMe({ role: 'edit', cap: 42 }))).toBe('view');
+  });
+
+  it('knows every cap the protocol names, as itself', () => {
+    for (const c of SessionCap.options) {
+      expect(capOf(asMe({ role: 'edit', cap: c }))).toBe(c);
+      expect(hubGrants(asMe({ caps: [c] }), c)).toBe(true);
+    }
   });
 
   it('reads caps: a list that names the cap; anything else grants none', () => {

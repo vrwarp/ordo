@@ -1,5 +1,5 @@
 import { ApiFailure, api } from '@ordo/client';
-import { type AuthPinRes, ROUTES } from '@ordo/protocol';
+import { type AuthPinReq, type AuthPinRes, ROUTES } from '@ordo/protocol';
 import { type FormatOptions, formatTime, t } from '../../i18n/index.ts';
 
 /**
@@ -8,10 +8,7 @@ import { type FormatOptions, formatTime, t } from '../../i18n/index.ts';
  * A hub behind a stale /auth/me that refuses the field (400 `invalid` naming `cap`: the strict PinBody of an
  * older hub) is asked once more without it. Any other refusal is the caller's to show; nothing is retried.
  */
-export type PinCall = <T>(
-  path: string,
-  init: { method: 'POST'; json: Record<string, unknown> },
-) => Promise<T>;
+export type PinCall = <T>(path: string, init: { method: 'POST'; json: AuthPinReq }) => Promise<T>;
 
 export async function phoneSignIn(
   pin: string,
@@ -20,7 +17,8 @@ export async function phoneSignIn(
 ): Promise<AuthPinRes> {
   if (!grantsLight) return call<AuthPinRes>(ROUTES.pin, { method: 'POST', json: { pin } });
   try {
-    return await call<AuthPinRes>(ROUTES.pin, { method: 'POST', json: { pin, cap: 'light' } });
+    const req: AuthPinReq = { pin, cap: 'light' };
+    return await call<AuthPinRes>(ROUTES.pin, { method: 'POST', json: req });
   } catch (e) {
     if (e instanceof ApiFailure && e.status === 400 && e.code === 'invalid' && /\bcap\b/i.test(e.message))
       return call<AuthPinRes>(ROUTES.pin, { method: 'POST', json: { pin } });

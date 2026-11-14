@@ -1,5 +1,5 @@
 import { api, ApiFailure } from '@ordo/client';
-import { type AuthPinRes, ROUTES } from '@ordo/protocol';
+import { type AuthPinReq, type AuthPinRes, ROUTES, type SessionCap } from '@ordo/protocol';
 import { useState } from 'react';
 import { t } from '../../i18n/index.ts';
 import { deviceProfile } from '../../lib/capabilities.ts';
@@ -15,7 +15,8 @@ import { phoneSignIn, safariNotInstalled, signInError } from './phoneSignIn.ts';
 
 /** This device signs in as a phone (design/28 §3.2): from the screen, so Request Desktop Website still is one. */
 function signsInAsPhone(): boolean {
-  return signInCap(deviceProfile(null), deviceScreen()) === 'light';
+  const cap: SessionCap | undefined = signInCap(deviceProfile(null), deviceScreen());
+  return cap === 'light';
 }
 
 /**
@@ -47,7 +48,8 @@ function RegularLoginView({ autoFocus }: { autoFocus: boolean }) {
     setBusy(true);
     setErr(undefined);
     try {
-      await api<AuthPinRes>(ROUTES.pin, { method: 'POST', json: { pin, remember } });
+      const req: AuthPinReq = { pin, remember };
+      await api<AuthPinRes>(ROUTES.pin, { method: 'POST', json: req });
       await refreshSession();
     } catch (e) {
       if (e instanceof ApiFailure && e.status === 429)

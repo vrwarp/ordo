@@ -1,27 +1,34 @@
 import { api, ApiFailure } from '@ordo/client';
-import { type AuthMeRes, ROUTES } from '@ordo/protocol';
+import { type AuthMeRes, ROUTES, type SessionCap } from '@ordo/protocol';
 import { create } from 'zustand';
 import { thisIsPhone } from '../lib/layout.ts';
 
 const LAST_ROLE = 'ordo.op.lastRole';
 
-/**
- * A session's cap (design/28 §3.2): 'full' (as today: the venue PC, an iPad), 'light' (a phone) or 'view'.
- * The hub lane adds `cap` and `caps` to GET /auth/me; until the integrator switches to the protocol's types
- * they are read here defensively: no cap is 'full' (an older hub, or an uncapped session), an unknown one is
- * 'view' (the narrowest).
- */
-export type SessionCap = 'full' | 'light' | 'view';
+export type { SessionCap };
 
+/** The caps a client knows (the protocol's SessionCap), for reading the hub's answer defensively. */
+const KNOWN_CAPS: readonly SessionCap[] = ['full', 'light', 'view'];
+const knownCap = (v: unknown): v is SessionCap => KNOWN_CAPS.includes(v as SessionCap);
+
+/**
+ * A session's cap (design/28 §3.2, the protocol's `SessionCap`): 'full' (as today: the venue PC, an iPad),
+ * 'light' (a phone) or 'view', from `AuthMeRes.cap`. Read defensively, as the hub's data may come from an older
+ * or newer build: no cap is 'full' (an older hub, or an uncapped session), an unknown one is 'view' (the
+ * narrowest).
+ */
 export function capOf(me: AuthMeRes | undefined | null): SessionCap {
-  const cap = (me as { cap?: unknown } | undefined | null)?.cap;
+  const cap: unknown = me?.cap satisfies AuthMeRes['cap'];
   if (cap === undefined || cap === null) return 'full';
-  return cap === 'full' || cap === 'light' || cap === 'view' ? cap : 'view';
+  return knownCap(cap) ? cap : 'view';
 }
 
-/** The hub grants this cap on sign-in (`caps` lists it; absent or malformed: an older hub that grants none). */
+/**
+ * The hub grants this cap on sign-in (`AuthMeRes.caps` lists it; absent or malformed: an older hub that grants
+ * none).
+ */
 export function hubGrants(me: AuthMeRes | undefined | null, cap: SessionCap): boolean {
-  const caps = (me as { caps?: unknown } | undefined | null)?.caps;
+  const caps: unknown = me?.caps satisfies AuthMeRes['caps'];
   if (!Array.isArray(caps) || caps.length > 16) return false;
   return caps.includes(cap);
 }
