@@ -42,7 +42,16 @@ function upsert<T extends { id: string }>(
   return out;
 }
 
-const SETTINGS_KEYS = ['general', 'looks', 'outputs', 'audio', 'keymap', 'surfaces'] as const;
+/** The settings keys a `library.delta` carries by value (`phones`: read as `settings.phones?.enabled === true`). */
+export const SETTINGS_KEYS = [
+  'general',
+  'looks',
+  'outputs',
+  'audio',
+  'keymap',
+  'surfaces',
+  'phones',
+] as const;
 
 /**
  * Apply a `library.delta` to the cached library. Returns the new data and whether settings need a

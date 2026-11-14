@@ -5,6 +5,7 @@ import {
   DEFAULT_GENERAL,
   DEFAULT_KEYMAP,
   DEFAULT_LOOKS,
+  DEFAULT_PHONES,
   DEFAULT_SURFACES,
   DEFAULT_THEME,
   Font,
@@ -14,6 +15,7 @@ import {
   Media,
   newId,
   Output,
+  PhoneSettings,
   Playlist,
   Presentation,
   SurfaceSettings,
@@ -52,6 +54,7 @@ export const SETTINGS_SCHEMAS: Record<SettingsKey, z.ZodType> = {
   audio: AudioSettings,
   keymap: KeyMap,
   surfaces: SurfaceSettings,
+  phones: PhoneSettings,
 };
 export const SETTINGS_KEYS = Object.keys(SETTINGS_SCHEMAS) as SettingsKey[];
 
@@ -267,6 +270,7 @@ export class Library {
       audio: DEFAULT_AUDIO,
       keymap: DEFAULT_KEYMAP,
       surfaces: DEFAULT_SURFACES,
+      phones: DEFAULT_PHONES,
     };
     const ins = this.db.prepare(
       `INSERT OR IGNORE INTO settings (key, rev, json, updated_at) VALUES (?, 1, ?, ?)`,
@@ -326,6 +330,7 @@ export class Library {
       audio: DEFAULT_AUDIO,
       keymap: DEFAULT_KEYMAP,
       surfaces: DEFAULT_SURFACES,
+      phones: DEFAULT_PHONES,
     };
   }
 

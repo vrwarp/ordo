@@ -18,6 +18,11 @@ must hold on a public address from M1.
   renewed on activity. Sessions are HTTP-only, Secure, SameSite cookies.
 - Rate limiting: 5 failed PIN attempts per IP per 15 minutes, then a lockout of 15 minutes
   with a clear message. Attempts are logged.
+- Phones (design/28 P0): Settings → PINs has "Phones are used during services", off by default. Phones can
+  sign in either way (they look at everything and make small changes, never run a service); on, videos and
+  other slow jobs uploaded during a service wait until it ends, and the hub accepts changes only from ordo
+  pages that are up to date (a tab left open across the upgrade is told to reload). Turn it on for the
+  rehearsal service with phones in use.
 - Output tokens are long random strings embedded in the output URL that the operator app
   generates when launching. Opening an output URL without a valid token shows nothing.
   Tokens can be rotated from settings, which relaunches outputs.

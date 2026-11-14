@@ -72,7 +72,10 @@ schema does not have, fails the check rather than quietly testing something else
 - No `await` inside the frame loop. Promises resolve into pre-allocated slots.
 - Every message type is a Zod schema; no untyped `postMessage`.
 - Reducer is pure; side effects live in bus adapters.
-- Feature flags are settings, not build flags.
+- Feature flags are settings, not build flags. Example: `settings.phones.enabled` (design/28 P0, "Phones are
+  used during services" in Settings → PINs, off by default, which is today's behaviour). On, the hub holds
+  heavy jobs while a service is live and needs the `x-ordo` header on writes from signed-in full sessions;
+  off, it does neither. Each hub process caches the value and updates it on the settings delta.
 
 ## How Claude Code sessions should work in this repo
 

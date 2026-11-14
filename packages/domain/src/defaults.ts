@@ -5,6 +5,7 @@ import type {
   Look,
   MidiMapping,
   Rgba,
+  PhoneSettings,
   SurfaceSettings,
   TextStyle,
   Theme,
@@ -217,6 +218,9 @@ export const DEFAULT_SURFACES: SurfaceSettings = {
   midiEnabled: false,
   messagePresets: ['Wrap up', 'Repeat chorus', 'One more time', 'Watch the leader', 'Mic check'],
 };
+
+/** Phones are not used during services until Settings → PINs says so (design/28 §9, owner question 5). */
+export const DEFAULT_PHONES: PhoneSettings = { enabled: false };
 
 /**
  * Stored surface settings written before MIDI became opt-in (2026-11-09) have no `midiEnabled`: MIDI always

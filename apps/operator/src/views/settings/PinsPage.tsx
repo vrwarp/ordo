@@ -1,6 +1,54 @@
 import { api } from '@ordo/client';
 import { useState } from 'react';
+import { Check } from '../../components/fields.tsx';
+import { useLibrary } from '../../state/library.ts';
 import { errorText, toast } from '../../state/toasts.ts';
+
+/** What the Phones switch says it does (design/28 §9, owner question 5: off by default). */
+export const PHONES_HELP =
+  'When this is on, videos and other slow jobs uploaded during a service wait until it ends, and the hub accepts changes only from ordo pages that are up to date: reload any ordo tab left open. Phones can sign in either way: they look at everything and make small changes, and never run a service.';
+
+/** The switch as drawn: the hub's value, or the one being saved. */
+export function PhonesSwitch(props: { enabled: boolean; saving?: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="col" style={{ gap: 8 }} data-section="phones">
+      <h2>Phones</h2>
+      <Check
+        label="Phones are used during services"
+        value={props.enabled}
+        disabled={props.saving}
+        onChange={props.onChange}
+      />
+      <span className="muted small">{PHONES_HELP}</span>
+    </div>
+  );
+}
+
+/**
+ * The Phones switch (`settings.phones.enabled`, design/24 "Feature flags are settings"): read from the library
+ * store, saved with PUT /settings/phones like the PIN form saves. The store follows the hub's settings delta.
+ */
+export function PhonesSection() {
+  const enabled = useLibrary((s) => s.data.settings.phones?.enabled === true);
+  const [pending, setPending] = useState<boolean | undefined>(undefined);
+  const save = async (next: boolean) => {
+    setPending(next);
+    try {
+      await api('/settings/phones', { method: 'PUT', json: { enabled: next } });
+    } catch (e) {
+      toast(errorText(e), 'error');
+    } finally {
+      setPending(undefined);
+    }
+  };
+  return (
+    <PhonesSwitch
+      enabled={pending ?? enabled}
+      saving={pending !== undefined}
+      onChange={(v) => void save(v)}
+    />
+  );
+}
 
 export function PinsPage() {
   const [which, setWhich] = useState<'operatePin' | 'editPin'>('operatePin');
@@ -62,6 +110,7 @@ export function PinsPage() {
       <button type="button" className="primary" disabled={!!problem || busy} onClick={() => void submit()}>
         Change PIN
       </button>
+      <PhonesSection />
     </div>
   );
 }
