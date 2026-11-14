@@ -52,7 +52,11 @@ export function outputPages(context: BrowserContext): Page[] {
   return context.pages().filter((p) => !p.isClosed() && /\/\/out\d\.localhost/.test(p.url()));
 }
 
-/** Click Launch (or Relaunch) and wait for `n` output windows with their caches filled. */
+/**
+ * Click Launch (or Relaunch) and wait for `n` output windows with their caches filled. The click waits until the
+ * operator lists its outputs (the Program pane): the button shows as soon as the live view does, and a Launch
+ * before the library has come from the hub opens nothing ("No outputs configured"), as seen on a loaded machine.
+ */
 export async function launchOutputs(
   page: Page,
   context: BrowserContext,
@@ -60,6 +64,7 @@ export async function launchOutputs(
   button: 'Launch outputs' | 'Relaunch' = 'Launch outputs',
 ): Promise<Page[]> {
   const before = new Set(outputPages(context));
+  await expect(page.locator('.program .pv').first()).toBeVisible({ timeout: 20_000 });
   await page.getByRole('button', { name: button }).click();
   await expect
     .poll(() => outputPages(context).filter((p) => !before.has(p)).length, { timeout: 20_000 })
