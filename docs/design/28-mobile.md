@@ -310,6 +310,21 @@ venue's host, "Signed in on this phone", the demo's About and Reset on the Pages
 on the bars' children, toasts above the tab bar with a 44 px close, cards no wider than the screen, 44 px
 controls, `-apple-system-body` on the root under `@supports`, sizes in `rem`, logical properties only).
 
+What each tab opens in P0 (owner question 6's minimum, read-only, all in the compact chunk; P1's Plans, Plan,
+Library with bottom search, Song or deck and Media grid replace them): **Library** (`#/library`,
+`LibraryP0`) a search field at the top, never focused on open, and the presentations the core's index finds
+(archived ones left out), each a 56 px row (title, "Live · locked" for the live plan's, kind and author) that
+opens its previews; **Media** (`#/library/media`, `MediaP0`) the media by name (import pictures left out) with
+its still, state in words and kind, a tap opening the preview as a sheet; **Plans** (`#/playlists`,
+`PlansP0`) the plans newest first with date and item count and "Live at the venue" on the live one, and a
+plan (`#/playlists/<id>`) its numbered items, a presentation linking to its previews, with "Live at the venue:
+locked until the service ends" on the live plan; a presentation's previews (`#/previews/<id>[/<slide>]`,
+`PreviewP0`) one slide at a time under every look (`LookPreviews` as it is, its loop rules and
+`bottomThirdText` included), Previous and Next replacing the history entry, "Slide 3 of 8". No compact screen
+offers a write in P0 (no Edit, New, Upload, Rename, Delete or Archive) and none reaches the editor but
+`LookPreviews` (`apps/operator/test/compactImports.test.ts`); `PlaylistsView` and `PreviewsView` left the
+compact path (`COMPACT_LAZY` is empty).
+
 ### 2.3 Plans and Plan (P1)
 
 <img src="28-mobile/01-plans-android.png" width="260" alt="Plans home on an Android phone: the next plan with its readiness, then the plans coming up">

@@ -237,7 +237,8 @@ function Shell({
           {t('shell.loading')}
         </div>
       );
-    // pageFor answers only the Library (Presentations, Media), the plans and a presentation's previews here.
+    // pageFor answers only the Library (Presentations, Media), the plans and a presentation's previews here: the
+    // P0 bodies of the compact chunk (read-only; P1's phone-first views replace them).
     let page: React.ReactNode = null;
     if (!ready)
       page = (
@@ -245,11 +246,11 @@ function Shell({
           {t('shell.loading')}
         </div>
       );
-    else if (decision.page === 'library') page = <LibraryView tab={decision.props.tab} />;
-    else if (decision.page === 'playlists')
-      page = <PageHost name="playlists" chunk={PAGES.playlists} props={decision.props} />;
+    else if (decision.page === 'library')
+      page = decision.props.tab === 'media' ? <C.MediaP0 /> : <C.LibraryP0 />;
+    else if (decision.page === 'playlists') page = <C.PlansP0 id={decision.props.id} />;
     else if (decision.page === 'previews')
-      page = <PageHost name="previews" chunk={PAGES.previews} props={decision.props} />;
+      page = <C.PreviewP0 id={decision.props.id} slideId={decision.props.slideId} />;
     return (
       <C.CompactFrame
         role={role}

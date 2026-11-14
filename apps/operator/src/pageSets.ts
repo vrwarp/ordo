@@ -8,11 +8,11 @@
 /** Modules the compact layout loads at startup, beside the entry: the compact chunk (its frame and P0 views). */
 export const COMPACT_START: readonly string[] = ['src/views/compact/index.ts'];
 
-/** Modules the compact path opens later (and a phone precaches): the playlists and a presentation's previews. */
-export const COMPACT_LAZY: readonly string[] = [
-  'src/views/playlists/PlaylistsView.tsx',
-  'src/views/editor/PreviewsView.tsx',
-];
+/**
+ * Modules the compact path opens later (and a phone precaches): none in P0, whose tab bodies are in the
+ * compact chunk (P1's phone-first views may add lazy ones here).
+ */
+export const COMPACT_LAZY: readonly string[] = [];
 
 /**
  * The workers a phone needs: the core (hub connection, library copy) and the thumbnails. A worker is its own

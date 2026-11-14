@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { allFiles, compactFiles, type SetBundle } from '../src/sw/sets.ts';
-import { COMPACT_START } from '../src/pageSets.ts';
+import { COMPACT_LAZY, COMPACT_START } from '../src/pageSets.ts';
 
 const ROOT = '/repo/apps/operator';
 const chunk = (fileName: string, imports: string[], o: { entry?: boolean; facade?: string } = {}) => ({
@@ -89,8 +89,13 @@ describe('precache sets', () => {
       expect(c).not.toContain(f);
   });
 
-  it('the compact chunk starts with the shell', () => {
+  it('P0: the compact chunk starts with the shell and nothing is lazy (its tab bodies are in that chunk)', () => {
     expect(COMPACT_START).toEqual(['src/views/compact/index.ts']);
+    expect(COMPACT_LAZY).toEqual([]);
+    // The defaults: the playlists and previews pages are no longer on the compact path.
+    const c = compactFiles(bundle, { root: ROOT });
+    expect(c).not.toContain('assets/PlaylistsView.js');
+    expect(c).not.toContain('assets/PreviewsView.js');
   });
 
   it('a module the shell starts (COMPACT_START) joins with its imports', () => {

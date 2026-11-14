@@ -31,6 +31,7 @@ export const en = {
   'library.locked': 'Live · locked',
   'library.empty': 'No songs yet.',
   'library.noMatch': 'No presentations match “{q}”.',
+  'library.more': { one: '1 more: search to find it.', other: '{n} more: search to find them.' },
   'kind.song': 'Song',
   'kind.slides': 'Slides',
   'kind.loop': 'Announcement loop',
@@ -43,7 +44,6 @@ export const en = {
   'media.state.processing': 'Processing',
   'media.state.ready': 'Ready',
   'media.state.failed': 'Failed',
-  'media.audioNote': 'Audio plays on the venue PC.',
   // ---- Plans ----
   'plans.empty': 'No plans yet. Plans are made on a computer or iPad.',
   'plans.items': { one: '{n} item', other: '{n} items' },
@@ -87,7 +87,6 @@ export const en = {
     'Too many wrong PINs from this network. Try again at {time}. Everyone on the same Wi-Fi may share this wait.',
   'signin.lockedSoon': 'Too many wrong PINs. Try again in a few minutes.',
   'signin.reSignIn': 'Phones now sign in for an hour at a time. Enter the PIN again.',
-  'signin.delete': 'Delete',
   // ---- first run on a phone ----
   'setup.phone': 'ordo is not set up yet. Set it up on the venue PC: it sets the PINs.',
 } as const;
