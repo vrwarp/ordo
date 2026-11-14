@@ -1366,32 +1366,32 @@ no refused phone request; real phones in the room do the same by hand. A two-min
 
 **P0 status (integrated 2026-11-14).** Where each exit criterion is checked, and what is still open:
 
-1. *Every compact route passes the layout and 44 px checks in WebKit and Chromium*: `e2e/phone/shell.spec.ts`
+1. _Every compact route passes the layout and 44 px checks in WebKit and Chromium_: `e2e/phone/shell.spec.ts`
    (`layoutChecks` with the shared audit, no exceptions) on `#/library`, `#/library/media`, `#/playlists`, a
    plan, a presentation's previews, the sign-in and every sheet, in `webkit-iphone` (390x844, 390x664, 844x390,
    320x568) and `chromium-android` (360x800), and at 200 % root text. Open: the bars inside the visual
    viewport with the keyboard open (a device check at the gate).
-2. *The compact first load is at most 300 KB gzip and fetches no editor chunk*: `e2e/phone/split.spec.ts`
+2. _The compact first load is at most 300 KB gzip and fetches no editor chunk_: `e2e/phone/split.spec.ts`
    (the built assets a phone fetches, no forbidden source, no thumbnail worker or font before a preview,
    `#/edit` and the settings routes fetch no chunk, Request Desktop Website never mounts the editor, the
    precache holds no forbidden file) in both phone projects, and `tools/bundle-report.mjs --check` (the
    compact first load against 300,000 B gzip, no compact violation). The hub serves the files uncompressed, so
    a phone downloads about 0.9 MB (owner question 10).
-3. *The full profile's screenshots are unchanged*: the 34 A/B screenshots against `d0f49cb` (the full profile at
+3. _The full profile's screenshots are unchanged_: the 34 A/B screenshots against `d0f49cb` (the full profile at
    1280x720, 1024x768, 1280x480 and 600x900; the iPad in both orientations), `e2e/layout-class.spec.ts`,
    `e2e/split-full.spec.ts` and the existing chromium and iPad suites.
-4. *Every refusal test of §8 "Live boundary" passes*: `apps/hub/test/phones-routes`, `phones-ws`,
+4. _Every refusal test of §8 "Live boundary" passes_: `apps/hub/test/phones-routes`, `phones-ws`,
    `phones-fields`, `phones-sessions`; `e2e/phone/live-boundary.spec.ts` in both phone projects, signed in on
    the keypad; `e2e/phone/split.spec.ts` (a forced `?profile=full` stays edit); `e2e/phone/shell.spec.ts` (a
    capped, unremembered sign-in; no Edit control and no slide text on any compact route); `phones-context`
    and `e2e/phones-live-load.spec.ts` (a media upload while live refetches no output config). The phone specs
    also fail on any refusal a compact screen meets (`watchRefusals`).
-5. *A 500 MB video uploaded during a rehearsal service waits for End service*: `apps/hub/test/phones-pacing`,
+5. _A 500 MB video uploaded during a rehearsal service waits for End service_: `apps/hub/test/phones-pacing`,
    `e2e/phones-live-load.spec.ts` and the soak smoke here (`waited`). Open: the 500 MB video at a rehearsal
    service (the owner's gate, the procedure above).
-6. *A photo upload makes no output refetch*: `phones-context` (no library delta to an output, three at
+6. _A photo upload makes no output refetch_: `phones-context` (no library delta to an output, three at
    `d0f49cb`) and `e2e/phones-live-load.spec.ts` (no `/output/config` request between Go live and End service).
-7. *The outputs report zero missed vsync*: printed by `e2e/phones-live-load.spec.ts` and the soak, asserted only
+7. _The outputs report zero missed vsync_: printed by `e2e/phones-live-load.spec.ts` and the soak, asserted only
    with `ORDO_E2E_REAL_GPU=1`; unproven until the rehearsal with real outputs.
 
 ## 10. What a phone must never do
