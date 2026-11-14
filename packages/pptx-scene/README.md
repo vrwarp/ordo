@@ -1004,7 +1004,8 @@ Done (design/27 §4, §15 M1):
   `p:style/a:fontRef` colour and major/minor font, master txStyles for placeholders, `defaultTextStyle` for
   everything else, never otherStyle): size, fill (the nearest decides; a picture or group fill gives the
   text colour tx1, as no fill does, marked `textFill` and noted once a slide), bold, italic, underline,
-  strike, caps, spacing, baseline,
+  strike, caps, spacing, baseline (the nearest, 0 included; a 0 under a farther non-zero one is
+  `escZero`, which LibreOffice reads as unset: `loCompat` writes that shift, design/27 §4 "Baseline 0"),
   Latin/EA/CS/sym typefaces through the theme (+mj for titles, +mn otherwise), outline (`a:ln`), outer
   shadow, highlight, lang. Paragraphs: algn, level, marL/indent, rtl, spcBef/spcAft/lnSpc, the nearest
   bullet setting (buNone wins). Bodies: insets, anchor, wrap, normAutofit/spAutoFit, vert, numCol,

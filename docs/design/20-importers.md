@@ -474,7 +474,10 @@ It writes `summary.json` and an HTML report with the pictures side by side, wors
 rounds a 960 pt slide up to 1921 pixels; its pictures are cut to the slide's proportions before scoring.
 
 Where LibreOffice is known to differ from PowerPoint, ordo follows PowerPoint and the score pays for it:
-LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" button), ordo does. The native
+LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" button), ordo does; and
+LibreOffice reads a run's `baseline="0"` as unset, so under a presentation default of -25000 it draws the
+text lowered at 58 % of its size, where PowerPoint and ordo draw it in place at full size (design/27 §4
+"Baseline 0"). The native
 column's `--lo-compat` draws the slides those policies change as LibreOffice would and as ordo does, and
 reports the means both ways and per rule (design/27 §14.1).
 

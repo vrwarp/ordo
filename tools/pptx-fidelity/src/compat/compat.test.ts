@@ -49,8 +49,15 @@ describe('the compat registry', () => {
   );
 
   it('rules register from their own files and hit as before', () => {
-    // The rules of M2 and M6, in report order; each its own file exporting one rule under its key.
-    expect(COMPAT_RULES).toEqual(['runShadow', 'textOutline', 'refit', 'inheritedFit', 'cellRows']);
+    // The rules of M2, M6 and r2a (escZero), in report order; each its own file exporting one rule under its key.
+    expect(COMPAT_RULES).toEqual([
+      'runShadow',
+      'textOutline',
+      'refit',
+      'inheritedFit',
+      'cellRows',
+      'escZero',
+    ]);
     expect(new Set(COMPAT_RULES).size).toBe(COMPAT_RULES.length);
     expect(ruleFiles.map((f) => f.replace(/\.ts$/, '')).sort()).toEqual([...COMPAT_RULES].sort());
     for (const f of ruleFiles) {
@@ -109,6 +116,16 @@ describe('compatRules', () => {
         ),
       ),
     }),
+    // 9: baseline 0 under a non-zero inherited baseline: LibreOffice reads the 0 as unset
+    sp({
+      id: 2,
+      ...box,
+      txBody: body(
+        para(run('Jeshua', 'sz="4000" baseline="0"')),
+        '',
+        '<a:lvl1pPr><a:defRPr baseline="-25000"/></a:lvl1pPr>',
+      ),
+    }),
   );
 
   it("names the rules each slide's text hits", () => {
@@ -118,6 +135,7 @@ describe('compatRules', () => {
       [5, ['refit']],
       [7, ['inheritedFit']],
       [8, ['textOutline']],
+      [9, ['escZero']],
     ]);
   });
 
@@ -138,6 +156,8 @@ describe('compatRules', () => {
     expect(texts(ordo[8]!)[0]!.style).toMatchObject({ color: { a: 1 }, outline: { width: 2 } });
     expect(texts(lo[8]!)[0]!.style).toMatchObject({ color: { a: 1 } });
     expect(texts(lo[8]!)[0]!.style.outline).toBeUndefined();
+    expect(texts(ordo[9]!)[0]!.runs).toBeUndefined();
+    expect(texts(lo[9]!)[0]!.runs).toEqual([{ start: 0, end: 6, baseline: -0.25 }]);
     // The slides no rule names draw alike; the others do not.
     const hit = compatRules(scene);
     for (const [k, s] of ordo.entries())

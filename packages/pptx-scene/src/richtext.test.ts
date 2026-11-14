@@ -528,6 +528,37 @@ describe('loCompat (the fidelity harness only)', () => {
     // An older build (main's 0.5.0 schema) draws it filled too: the colour is a legacy field.
     expect(prev.TextObject.parse(t).style.color.a).toBe(1);
   });
+
+  it('draws baseline 0 in place at full size; LibreOffice’s copy shifts it by the inherited baseline at 58 %', () => {
+    // The Dutch deck: runs set baseline="0" under a defaultTextStyle of -25000 (probe decks: LibreOffice 24.2
+    // reads the 0 as unset). PowerPoint's size is ordo's: no baseline written, no change to any size.
+    const spec: DeckSpec = {
+      defaultTextStyle: '<a:lvl1pPr><a:defRPr sz="3600" baseline="-25000"/></a:lvl1pPr>',
+      slides: [
+        {
+          shapes: box(
+            body(
+              para(
+                run('JESHUA DE MESSIAS', 'sz="6000" baseline="0"') + run(' 2', 'sz="6000" baseline="30000"'),
+              ),
+            ),
+            2,
+            { txBox: true },
+          ),
+        },
+      ],
+    };
+    const t = texts(spec).texts[0]!;
+    expect(t.style.fontSizePx).toBe(120);
+    expect(t.runs).toEqual([{ start: 17, end: 19, baseline: 0.3 }]);
+    const lo = emitSlides(parseDeck(buildDeck(spec)), { loCompat: true });
+    const l = lo.slides[0]!.slide.objects.find((o): o is TextObject => o.type === 'text')!;
+    expect(l.style.fontSizePx).toBe(120);
+    expect(l.runs).toEqual([
+      { start: 0, end: 17, baseline: -0.25 },
+      { start: 17, end: 19, baseline: 0.3 },
+    ]);
+  });
 });
 
 describe('legacy text (richText: false)', () => {

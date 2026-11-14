@@ -304,10 +304,13 @@ export function runStyle(
     underline: (firstAttr(props, 'u') ?? 'none') !== 'none',
     strike: (firstAttr(props, 'strike') ?? 'noStrike') !== 'noStrike',
     fill: fill ?? { kind: 'solid', color: tx1 ?? BLACK },
-    baseline: clamp((num(firstAttr(props, 'baseline')) ?? 0) / 100_000, -1, 1),
+    baseline: 0,
     spacingPt: clamp((num(firstAttr(props, 'spc')) ?? 0) / 100, -4_000, 4_000),
     caps: cap === 'all' ? 'all' : cap === 'small' ? 'small' : 'none',
   };
+  const shift = baselineOf(props);
+  out.baseline = shift.baseline;
+  if (shift.escZero !== undefined) out.escZero = shift.escZero;
   if (textFill) {
     out.textFill = textFill;
     ctx.log(
@@ -334,6 +337,28 @@ export function runStyle(
   const highlight = colorIn(firstChildOf(props, 'a:highlight'), ctx.color);
   if (highlight) out.highlight = highlight;
   return out;
+}
+
+/**
+ * A run's baseline shift: the nearest `baseline` of its chain over 100,000, within ±1 (0 when none sets
+ * one). When that nearest one is 0 and a farther one is not, `escZero` is the farther one: LibreOffice 24.2
+ * reads `baseline="0"` as unset at every level and draws the run raised or lowered by the next non-zero
+ * baseline, at 58 % of its size, while PowerPoint draws it in place at full size (probe decks, design/27 §4
+ * "Baseline 0"). Bounded by the chain's length.
+ */
+function baselineOf(props: readonly (XNode | undefined)[]): { baseline: number; escZero?: number } {
+  const shift = (v: string) => clamp((num(v) ?? 0) / 100_000, -1, 1);
+  let nearest: number | undefined;
+  for (const n of props) {
+    const v = n?.attrs.baseline;
+    if (v === undefined) continue;
+    const b = shift(v);
+    if (nearest === undefined) {
+      nearest = b;
+      if (b !== 0) break;
+    } else if (b !== 0) return { baseline: 0, escZero: b };
+  }
+  return { baseline: nearest ?? 0 };
 }
 
 /** A text outline (`a:ln` in run properties); undefined when it draws nothing (no fill, or noFill). */

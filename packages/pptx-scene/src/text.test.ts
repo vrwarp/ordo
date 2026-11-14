@@ -256,6 +256,45 @@ describe('run properties through the chain', () => {
     expect(s.notes).toContain('text with a group fill is drawn in the text colour');
   });
 
+  it('marks baseline 0 under a non-zero inherited baseline (escZero), where LibreOffice reads the 0 as unset', () => {
+    // The Dutch deck: every run sets baseline="0" under a defaultTextStyle of -25000. PowerPoint draws them in
+    // place at full size; LibreOffice 24.2 drops the 0 and draws them lowered by 25 % at 58 % (probe decks).
+    const [t] = bodies({
+      defaultTextStyle: '<a:lvl1pPr><a:defRPr sz="3600" baseline="-25000"/></a:lvl1pPr>',
+      slides: [
+        {
+          shapes: box(
+            body(para(run('zero', 'baseline="0"') + run('default') + run('sup', 'baseline="30000"'))),
+            { txBox: true },
+          ),
+        },
+      ],
+    });
+    const [zero, dflt, sup] = t!.paras[0]!.runs;
+    expect(zero!.style).toMatchObject({ baseline: 0, escZero: -0.25 });
+    expect(dflt!.style.baseline).toBe(-0.25);
+    expect(dflt!.style.escZero).toBeUndefined();
+    expect(sup!.style.baseline).toBe(0.3);
+    expect(sup!.style.escZero).toBeUndefined();
+    // A list style's 0 counts as the run's own does; a 0 with nothing farther is no shift for both programs.
+    const [listed, alone] = bodies({
+      defaultTextStyle: '<a:lvl1pPr><a:defRPr baseline="-25000"/></a:lvl1pPr>',
+      slides: [
+        {
+          shapes:
+            box(body(para(run('listed')), '', '<a:lvl1pPr><a:defRPr baseline="0"/></a:lvl1pPr>'), {
+              txBox: true,
+            }) + box(body(para(run('alone', 'baseline="0"'))), { id: 3 }),
+        },
+      ],
+    });
+    expect(listed!.paras[0]!.runs[0]!.style).toMatchObject({ baseline: 0, escZero: -0.25 });
+    expect(alone!.paras[0]!.runs[0]!.style.escZero).toBe(-0.25); // a shape: defaultTextStyle too
+    const [none] = bodies({ slides: [{ shapes: box(body(para(run('alone', 'baseline="0"')))) }] });
+    expect(none!.paras[0]!.runs[0]!.style).toMatchObject({ baseline: 0 });
+    expect(none!.paras[0]!.runs[0]!.style.escZero).toBeUndefined();
+  });
+
   it('reads hostile run fills and baselines without throwing, every run with a fill and a bounded baseline', () => {
     // A seeded mix of fill elements (several at once, empty, nested, unknown), baselines and lists styles.
     const parts = [
