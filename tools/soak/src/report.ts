@@ -25,13 +25,42 @@ export type OutputSummary = {
   pass: boolean;
 };
 
+/**
+ * The phones phase (`--phones N`, design/28 §5.3 and §9): N phones signed in with a cap, each with one socket
+ * and the Live now poll; optional uploads during the service. `waited`: the video stayed `uploaded` (its job
+ * waiting for the service) for as long as the service ran; `outputConfigFetches`: config requests the outputs
+ * made during the phones phase (a phone's upload must make none); `refused`: phone requests the hub answered
+ * with an error.
+ */
+export type PhonesSummary = {
+  phones: number;
+  capped: boolean;
+  requests: number;
+  refused: number;
+  outputConfigFetches: number;
+  video?: { mb: number; waited: boolean; states: string[] };
+  photo?: { state: string };
+};
+
 export type SoakReport = {
   startedAt: string;
   minutes: number;
   gos: number;
   outputs: OutputSummary[];
+  phones?: PhonesSummary;
   pass: boolean;
 };
+
+/** The phones phase passes with no config refetch, no refused request, and the video held for the service. */
+export function phonesPass(p: PhonesSummary | undefined): boolean {
+  if (!p) return true;
+  return p.outputConfigFetches === 0 && p.refused === 0 && (p.video ? p.video.waited : true);
+}
+
+/** Whether the video stayed uploaded for every sample taken while the service was live. */
+export function videoWaited(states: readonly string[]): boolean {
+  return states.length > 0 && states.every((s) => s === 'uploaded');
+}
 
 /** Counters are cumulative per window; a window reload resets them, so sum positive deltas. */
 export function summarize(samples: Sample[], names: Record<string, string>): OutputSummary[] {
@@ -74,6 +103,14 @@ export function toMarkdown(r: SoakReport): string {
     )
     .join('\n');
   const errs = r.outputs.flatMap((o) => o.errors.map((e) => `- ${o.name}: ${e}`)).join('\n');
+  const p = r.phones;
+  const phones = p
+    ? `
+## Phones
+
+${p.phones} phone(s), ${p.capped ? 'capped sessions' : 'uncapped (the hub grants no caps)'}: ${p.requests} requests, ${p.refused} refused. Output config requests during the phones phase: ${p.outputConfigFetches}.${p.video ? ` Video (${p.video.mb} MB): ${p.video.waited ? 'waited for the service' : 'did NOT wait for the service'} (${p.video.states.join(', ')}).` : ''}${p.photo ? ` Photo: ${p.photo.state}.` : ''} ${phonesPass(p) ? 'PASS' : 'FAIL'}
+`
+    : '';
   return `# Soak test ${r.pass ? 'PASSED' : 'FAILED'}
 
 Started ${r.startedAt}, ran ${r.minutes} minutes, ${r.gos} GOs.
@@ -81,7 +118,7 @@ Started ${r.startedAt}, ran ${r.minutes} minutes, ${r.gos} GOs.
 | Output | Frames presented | Missed frames | Long tasks | Late flips | GPU losses | Video frames dropped | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 ${rows}
-${errs ? `\n## Errors reported\n\n${errs}\n` : ''}
-A pass requires zero missed frames, zero long tasks and zero GPU losses on every output (docs/prd/08-reliability.md).
+${errs ? `\n## Errors reported\n\n${errs}\n` : ''}${phones}
+A pass requires zero missed frames, zero long tasks and zero GPU losses on every output (docs/prd/08-reliability.md)${p ? ', and in the phones phase no output config request, no refused phone request and a video that waited for the service (design/28 §9)' : ''}.
 `;
 }

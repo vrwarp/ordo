@@ -212,6 +212,21 @@ every 10 s through the HTTP bridge, collects health each second, and writes
 tasks, late flips, GPU losses, video dropped frames; pass or fail. The rehearsal gate in
 [milestones.md](../milestones.md) requires a passing report from the venue PC.
 
+**With phones** (design/28 §5.3, §9): `--phones N` signs in N phones as the P0 compact client does (a capped
+session, `cap: 'light'`, where the hub grants caps; `GET /library/snapshot` once; one socket with `hello edit`,
+which receives the stripped library delta; `GET /live/summary` every 8 s, staggered). `--upload-video MB` has
+the first phone upload a generated Matroska rawvideo of that size by the resumable API during the service,
+`--upload-photo` a photo by `POST /media`. The report adds a Phones section: requests and `refused` (phone
+requests the hub answered with an error), `outputConfigFetches` (config requests the outputs made during the
+phones phase) and, for the video, `waited` (it stayed `uploaded` for as long as the service ran). A pass also
+needs no refetch, no refusal and a video that waited. The smoke run (headless, any machine, under the bench
+lock): `pnpm soak --hub http://localhost:<port> --pin <operate PIN> --playlist Sunday --phones 3
+--upload-video 50 --upload-photo --headless --minutes 2`; headless outputs on SwiftShader miss frames, so
+only its Phones section is read there. **The P0 gate** is a rehearsal service on the venue PC with Phones on
+(Settings → PINs) and real phones in the room: `pnpm soak --phones 20 --upload-video 500 --upload-photo
+--minutes 60` beside them, passing with zero missed frames on every output, the video waiting for End service
+and no output config refetch; the hub's health shows no late supervisor heartbeat.
+
 ## Golden images
 
 `pnpm --filter @ordo/renderer golden` bundles `packages/renderer/golden/page.ts` with

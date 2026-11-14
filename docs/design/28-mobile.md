@@ -1246,6 +1246,14 @@ first makes write through `editText` (§2.7). #24's own touch-target regressions
 If the church values band access more than phone editing, P3 can come before P2; the view PIN of P1 is the
 cheap step until then.
 
+**The P0 rehearsal (hub side, as built).** Turn **Phones are used during services** on in Settings → PINs
+(owner question 11), run a rehearsal service on the venue PC with its outputs, and beside it `pnpm soak
+--phones 20 --upload-video 500 --upload-photo --minutes 60` (design/23 "Soak test"): 20 capped phones with a
+socket each and the Live now poll, one uploading a 500 MB video and a photo during the service. It passes with
+zero missed frames on every output, the video waiting for End service (`waited`), no output config refetch and
+no refused phone request; real phones in the room do the same by hand. A two-minute smoke of the same
+(`--phones 3 --upload-video 50`) runs headless on any machine.
+
 ## 10. What a phone must never do
 
 1. Send anything on the live path (`live.event`, `/actions`, `/live/events`, `preview`, `live.adopt`,
