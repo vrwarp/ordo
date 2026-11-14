@@ -82,6 +82,24 @@ export function useChunk<T>(c: Chunk<T>, enabled = true): ChunkState<T> {
   return s;
 }
 
+const noSubscribe = () => () => undefined;
+
+/**
+ * A chunk's status, loading it if idle ('loaded' for none): the regular layout's "Loading library…" gate waits
+ * on the page's module, so the page itself must be what starts it when no preload did.
+ */
+export function useChunkStatus(c: Chunk<unknown> | undefined): ChunkState<unknown>['status'] {
+  const status = useSyncExternalStore(
+    c?.subscribe ?? noSubscribe,
+    () => c?.state().status ?? 'loaded',
+    () => c?.state().status ?? 'loaded',
+  );
+  useEffect(() => {
+    if (c) loadIfEnabled(c, true);
+  }, [c]);
+  return status;
+}
+
 /** useChunk's effect: start the load of an idle chunk, only while enabled (a failed one waits for Retry). */
 export function loadIfEnabled(c: Chunk<unknown>, enabled: boolean): void {
   if (enabled && c.state().status === 'idle') void c.load().catch(() => undefined);
@@ -151,6 +169,13 @@ export function preloadFor(layout: Layout, capabilityProfile: Profile, phone: bo
   for (const c of chunks) void c.load().catch(() => undefined);
   return chunks;
 }
+
+/** What the venue PC (the full profile, operate role) waits for before its Shell mounts: every regular page and
+ * the operate services (App's gate; preloaded from main.tsx in parallel with the session request). */
+export const REGULAR_FULL: readonly Chunk<unknown>[] = [
+  ...REGULAR_PAGES.full.map((k) => PAGES[k] as Chunk<unknown>),
+  OPERATE as Chunk<unknown>,
+];
 
 /** Every chunk a set needs, loaded (true), with the first error if one failed. */
 export function setState(chunks: readonly Chunk<unknown>[]): { ready: boolean; error?: unknown } {

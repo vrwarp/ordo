@@ -5,7 +5,16 @@ import { deviceProfile, requestPersistentStorage, useProfile } from './lib/capab
 import { type Layout, thisIsPhone, useLayout } from './lib/layout.ts';
 import { pageFor, routeHash } from './lib/route.ts';
 import { watchVenueLive } from './lib/venueLive.ts';
-import { OPERATE, PAGES, useChunk } from './pages.ts';
+import {
+  type Chunk,
+  OPERATE,
+  PAGES,
+  preloadFor,
+  REGULAR_FULL,
+  retryChunks,
+  useChunkStatus,
+  useChunks,
+} from './pages.ts';
 import { controller, startController } from './services/controller.ts';
 import { syncFonts } from './services/fonts.ts';
 import { installUpdateGuard, useUpdate } from './services/update.ts';
@@ -27,6 +36,12 @@ import { RegularFrame } from './views/RegularFrame.tsx';
 export function App() {
   // The layout class, once, from the device's capability profile (never the session's: lib/layout.ts).
   const layout = useLayout(deviceProfile('operate'), useRoute().name);
+  // A compact device that is not a phone (an iPad leaving a narrow Split View) turns regular: load the regular
+  // pages it can now open (a no-op where main.tsx already started them; a regular device turning compact keeps
+  // what it has).
+  useEffect(() => {
+    if (layout === 'regular' && !thisIsPhone()) preloadFor('regular', deviceProfile('operate'), false);
+  }, [layout]);
   const session = useSession();
   const updateFailed = useUpdate((u) => u.phase === 'failed');
   useEffect(() => {
@@ -72,9 +87,12 @@ export function App() {
 }
 
 /**
- * An operator core installs the operate services synchronously when its Shell mounts (the keyboard effect
- * after it must find the surfaces): on the full profile, keep "Connecting to the hub…" until their module has
- * loaded, and show the error card with Retry if it cannot.
+ * The venue PC (the operate role on the full profile) mounts its Shell once every regular page and the operate
+ * services have loaded (preloaded from main.tsx, in parallel with the session request): its live view and
+ * editor then render at once, and the Shell's controller effect installs the operate services synchronously,
+ * so the keyboard effect after it finds the surfaces. Until then "Connecting to the hub…"; a chunk that cannot
+ * load shows the error card with Retry, never a blank page or an endless "Connecting…". Every other session
+ * mounts its Shell at once.
  */
 function OperateGate({
   role,
@@ -87,8 +105,8 @@ function OperateGate({
 }) {
   const profile = useProfile(role);
   const operate = role === 'operate' && profile === 'full';
-  const s = useChunk(OPERATE, operate);
-  if (operate && s.status === 'failed')
+  const s = useChunks(REGULAR_FULL, operate);
+  if (operate && s.error !== undefined)
     return (
       <div className="center">
         <div className="card col" style={{ width: 380 }}>
@@ -96,13 +114,13 @@ function OperateGate({
           <div className="banner red">
             Part of ordo could not be loaded from the hub. Check the connection, then Retry.
           </div>
-          <button type="button" onClick={() => void OPERATE.load().catch(() => undefined)}>
+          <button type="button" onClick={() => retryChunks(REGULAR_FULL)}>
             Retry
           </button>
         </div>
       </div>
     );
-  if (operate && s.status !== 'loaded')
+  if (operate && !s.ready)
     return (
       <div className="center">
         <span className="muted">Connecting to the hub…</span>
@@ -171,7 +189,8 @@ function Shell({
   // What this route shows (lib/route.ts pageFor): on the compact layout or a phone a refused route is decided
   // here, before any body, and replaced (its chunk is never requested, history does not grow); on the regular
   // layout a route allowedForRole refuses renders nothing and is pushed to the library, as before.
-  const decision = pageFor(route, { role, profile, layout, restricted: thisIsPhone() });
+  const restricted = thisIsPhone();
+  const decision = pageFor(route, { role, profile, layout, restricted });
   const redirect = 'redirect' in decision ? decision : undefined;
   const redirectKey = redirect
     ? `${redirect.replace ? 'replace' : 'push'} ${routeHash(redirect.redirect)}`
@@ -185,8 +204,15 @@ function Shell({
     if (redirect && !redirect.replace) navigate(redirect.redirect);
   }, [redirectKey]);
 
+  // On the regular layout the page's module loads under "Loading library…" (preloaded from main.tsx, so it is
+  // usually there before the library): the first page appears without a "Loading…" in between.
+  const pageChunk =
+    decision.page && decision.page !== 'library' ? (PAGES[decision.page] as Chunk<unknown>) : undefined;
+  const pageStatus = useChunkStatus(layout === 'regular' && !restricted ? pageChunk : undefined);
+  const pageWaits = pageStatus === 'idle' || pageStatus === 'loading';
+
   let body: React.ReactNode = null;
-  if (!ready) body = <div className="center muted">Loading library…</div>;
+  if (!ready || pageWaits) body = <div className="center muted">Loading library…</div>;
   else
     switch (decision.page) {
       case 'live':
