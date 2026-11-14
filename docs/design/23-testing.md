@@ -106,7 +106,12 @@ announcement deck whose music does not restart on the wrap. `e2e/pptx-import-tab
 operators take (design/27 §2 "Where the deck is parsed"): a deck with a table, a picture and a clip dropped on
 the Import tab in Editable mode is parsed in the import worker and built by the hub from its scene, equal to
 the hub's own parse of the same deck; while a playlist is live the browser does not parse. The Pages demo's
-spec imports a public golden deck the same way, without LibreOffice.
+spec imports a public golden deck the same way, without LibreOffice. `e2e/pptx-text.spec.ts` covers PowerPoint text a volunteer
+would see drawn wrong (design/27 §4): a 200 pt 'HIH' filled with a picture (`a:blipFill` in its run
+properties, written as raw XML by `pptxdecks.ts` `pictureTextDeck`, which pptxgenjs cannot), outlined and
+bevelled, imported both through the Import tab and through the hub's route on a hub of its own without
+LibreOffice (`ORDO_E2E_PICTEXT_PORT`, default 8415); both store the letters in the text colour with their
+outline, and Audience 1 at 1920x1080 (WebGPU) draws the I's stem within 40/255 of black (it was hollow).
 
 ## Chaos tests
 
