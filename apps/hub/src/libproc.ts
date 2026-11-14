@@ -123,8 +123,8 @@ export async function createLibraryProcess(
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
 
   // The live service's locks, as last reported (idle until the live process says otherwise).
-  let locks: LocksMsg = { t: 'locks', mode: 'idle', presentations: [], media: [] };
-  let lockSets = { presentations: new Set<string>(), media: new Set<string>() };
+  let locks: LocksMsg = { t: 'locks', mode: 'idle', presentations: [], media: [], fonts: [] };
+  let lockSets = { presentations: new Set<string>(), media: new Set<string>(), fonts: new Set<string>() };
   const liveView: LiveView = {
     locks: () => ({ playlistId: locks.playlistId, ...lockSets }),
     mode: () => locks.mode,
@@ -281,7 +281,11 @@ export async function createLibraryProcess(
     url,
     setLocks(m) {
       locks = m;
-      lockSets = { presentations: new Set(m.presentations), media: new Set(m.media) };
+      lockSets = {
+        presentations: new Set(m.presentations),
+        media: new Set(m.media),
+        fonts: new Set(Array.isArray(m.fonts) ? m.fonts : []),
+      };
     },
     setLiveUrl(u) {
       liveUrl = u;

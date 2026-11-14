@@ -15,6 +15,8 @@ export type LocksMsg = {
   playlistId?: string;
   presentations: string[];
   media: string[];
+  /** The font ids the frozen live copy draws with (absent from an older live process: none locked). */
+  fonts?: string[];
 };
 
 export type ChildState = 'starting' | 'up' | 'down' | 'failed' | 'stopped';

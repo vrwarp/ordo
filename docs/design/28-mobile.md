@@ -968,7 +968,8 @@ Phones is on.)
   version the service uses (§2.12).
 - What does reach the outputs mid-service is their **config**: settings, fonts and the logo (design/12 "Data
   between them"). Phones cannot write settings, fonts or themes (`light`), fonts the live copy uses are
-  locked (P0), and media changes no longer refresh the outputs' config unless they touch the logo or a
+  locked (P0; as built: `DELETE /fonts/:id` answers 423 for a face of the frozen copy, in both processes,
+  `LiveService.locks().fonts`), and media changes no longer refresh the outputs' config unless they touch the logo or a
   holding image (P0).
 
 ### 5.2 Protecting the next service

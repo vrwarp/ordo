@@ -270,12 +270,15 @@ export class LiveService {
   }
 
   /** Playlist, presentations, media and fonts currently frozen in the live session (edit locks). */
-  locks(): { playlistId?: string; presentations: Set<string>; media: Set<string> } {
+  locks(): { playlistId?: string; presentations: Set<string>; media: Set<string>; fonts: Set<string> } {
     const r = this.state.mode === 'live' ? this.state.resolved : undefined;
     return {
       playlistId: r?.playlist.id,
       presentations: new Set(Object.keys(r?.presentations ?? {})),
       media: new Set(Object.keys(r?.media ?? {})),
+      // The faces the frozen copy draws with (goLive keeps the families its slides and looks name): a font
+      // removed under a running service would leave an output that reloads without it (design/28 §5.1).
+      fonts: new Set((r?.fonts ?? []).map((f) => f.id)),
     };
   }
 

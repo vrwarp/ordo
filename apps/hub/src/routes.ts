@@ -220,7 +220,7 @@ export function documentImportForm(fields: Readonly<Record<string, string>>): Do
 
 /** The live service as the library side sees it: edit locks and the mode (from IPC in the library process). */
 export type LiveView = {
-  locks(): { playlistId?: string; presentations: Set<string>; media: Set<string> };
+  locks(): { playlistId?: string; presentations: Set<string>; media: Set<string>; fonts: Set<string> };
   mode(): 'idle' | 'live';
 };
 
@@ -1072,6 +1072,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     return reply.code(201).send(out);
   });
   route('DELETE', '/fonts/:id', 'edit', 'full', async (req, reply) => {
+    if (live.locks().fonts.has(params(req).id!)) throw locked('This font is used by the live playlist');
     if (!(await hub.fonts.remove(params(req).id!))) throw notFound();
     return reply.code(204).send();
   });

@@ -363,6 +363,7 @@ export async function createLiveProcess(
       playlistId: l.playlistId,
       presentations: [...l.presentations],
       media: [...l.media],
+      fonts: [...l.fonts],
     };
   };
   const reportLocks = () => opts.onLocks?.(locks());
