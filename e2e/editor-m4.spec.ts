@@ -7,7 +7,6 @@ import {
   churchDeck,
   editorHub,
   importDeck,
-  M4_PORT,
   openEditor,
   openSlide,
   saveAndReload,
@@ -15,6 +14,9 @@ import {
   selectText,
   slidesOf,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
+
+const PORT = portOf('editor-m4');
 import { hubApi } from './linkhelpers.ts';
 
 /**
@@ -22,7 +24,7 @@ import { hubApi } from './linkhelpers.ts';
  * editor as M3 left it: the church deck imported as editable slides carries where each object came from
  * (`origin`: a shape and its text as one group), and a typo fixed inside its bold coloured date keeps the
  * date's formatting and its text size through Save and a reload, with the presentation JSON identical.
- * Each M4 item adds its own spec on `M4_PORT + n` with the same helpers. Port 8900.
+ * Each M4 item adds its own spec with the same helpers and a row of its own in e2e/ports.ts.
  */
 const OUT = 'test-results/editor-m4';
 
@@ -33,9 +35,9 @@ test('an imported church deck: fix a typo inside a bold coloured date, save, rel
   rmSync(OUT, { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
   const deck = await churchDeck(join(OUT, 'deck'));
-  const hub = await editorHub(M4_PORT);
+  const hub = await editorHub(PORT);
   try {
-    const a = await hubApi(M4_PORT);
+    const a = await hubApi(PORT);
     const p = await importDeck(a, deck);
     const slides = slidesOf(p);
     expect(slides).toHaveLength(6);
@@ -64,7 +66,7 @@ test('an imported church deck: fix a typo inside a bold coloured date, save, rel
     const style = { ...note.style };
 
     // ---- The editor: the announcement slide, its text box, the typo '12' → '19' typed over the '2'.
-    await openEditor(page, M4_PORT, p.id);
+    await openEditor(page, PORT, p.id);
     await openSlide(page, 2);
     await selectText(page, note);
     const two = dateAt + 'Sunday 1'.length;

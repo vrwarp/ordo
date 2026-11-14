@@ -3,7 +3,9 @@
 How faithfully ordo draws PowerPoint decks (design/27 §14). LibreOffice 24.2 is the reference: each deck is
 drawn by LibreOffice (as the hub draws it: outline repair, PDF export, 144 dpi pages), by pptx-preview and
 natively (`@ordo/pptx-scene` drawn by `@ordo/renderer` in headless Chromium), and every slide is scored
-against LibreOffice's page with SSIM of greyscale pictures at 960x540 (1 = identical, ffmpeg).
+against LibreOffice's page with SSIM of greyscale pictures at 960x540 (1 = identical, ffmpeg). The native
+page's browser draws text with glyph hinting off, whatever the machine's fontconfig asks for
+(`unhintedFontconfig` in `native.ts`), so lines keep the fonts' own advances as an output draws them.
 
 Real decks stay outside the repository: pass their paths. Decks are untrusted input; the harness reads them
 only through the converter and the hub's zip reader.
@@ -35,7 +37,7 @@ by the next run with the same `--out` (they are the slow part); `--fresh-lo` dra
 | `--corpus`                   | add the synthetic decks of `src/corpus.ts`                                                                                                                      |
 | `--raw`                      | also draw with pptx-preview unmodified                                                                                                                          |
 | `--script-stand-ins`         | serve a missing script fallback family with fontconfig's face for the script                                                                                    |
-| `--chromium PATH`            | the Chromium to drive (else `ORDO_CHROMIUM`, Playwright's, or the system's)                                                                                     |
+| `--chromium PATH`            | the Chromium to drive (else `ORDO_CHROMIUM`, Playwright's, `ORDO_TEST_CHROMIUM`, or the system's)                                                               |
 
 The run writes `<dir>/summary.json`, `<dir>/native-baseline.json` and `<dir>/report.html`, and prints the
 means. Native pictures are `<dir>/<deck>/native/slide-NNNN.png`; delete them after measuring when disk is

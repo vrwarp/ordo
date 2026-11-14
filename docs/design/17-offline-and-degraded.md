@@ -37,8 +37,11 @@ cache expires. Two defences, both required:
 
 ## Hub loss: degraded mode
 
-Trigger: the operator's WebSocket closes or misses three consecutive `time.pong`s
-(30 s), or fails to reconnect within 5 s of a close. A hub that answers with `bye unauthorized` or
+Trigger: the operator's WebSocket closes, or goes 9 s without a `time.pong` while a service is live (pinged
+every 3 s; 30 s when idle), and does not reconnect within the 5 s grace. Liveness is judged once a second by
+the time since the last pong. A check that runs more than 2 s late (the operator's own thread was blocked: a
+long task, a garbage collection) does not judge: pongs may be queued behind it, so it pings and judges one
+ping period later, at most 12 s after the last pong; a dead hub is still lost within 12 s. A hub that answers with `bye unauthorized` or
 `forbidden` (an expired session) is not lost: the grace is not armed, the outputs stay on the hub,
 and the operator signs in again ([design/15](15-operator-app.md), Session expiry). Outputs enter degraded mode when
 their own socket closes and they receive a `fallback.hello` from the operator. A refusal that arrives while

@@ -96,10 +96,40 @@ export function mediaForm(
   return fd;
 }
 
+/** How often, and how far apart, a still is sent again while the hub is still processing its SVG (409 busy). */
+const STILL_TRIES = 10;
+const STILL_RETRY_MS = 1000;
+
+/**
+ * Send an SVG's still after the SVG (`PUT /media/:id/still`, design/12 "Media pipeline"): the resumable upload
+ * carries the SVG alone. Sent again while the hub is processing the SVG (409 `busy`). The updated item, or
+ * undefined when the hub refused the still (the SVG then stays without one, and the screens draw it themselves
+ * within their cap).
+ */
+export async function sendStill(
+  mediaId: string,
+  name: string,
+  raster: Blob,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<Media | undefined> {
+  for (let i = 0; i < STILL_TRIES; i++) {
+    const fd = new FormData();
+    fd.append('raster', raster, `${name.replace(/\.[^.]*$/, '') || 'still'}.png`);
+    try {
+      return await api<Media>(`/media/${encodeURIComponent(mediaId)}/still`, { method: 'PUT', body: fd });
+    } catch (e) {
+      if (!(e instanceof ApiFailure) || e.status !== 409 || e.code !== 'busy') return undefined;
+      await wait(STILL_RETRY_MS);
+    }
+  }
+  return undefined;
+}
+
 /**
  * Upload one media file with progress. Large files use the hub's resumable upload (create, then PATCH
  * chunks with Upload-Offset), so an interrupted upload from home continues where it stopped. An SVG goes in
- * one request with the still the screens draw (`rasterizeSvg`); one too large for that goes alone.
+ * one request with the still the screens draw (`rasterizeSvg`); one too large for that goes alone, and its
+ * still follows once the hub has it (`sendStill`).
  */
 export async function uploadMedia(
   file: File,
@@ -151,7 +181,9 @@ export async function uploadMedia(
       delete map[key];
       saveResume(map);
       onProgress(1);
-      return m;
+      if (!isSvgFile(file)) return m;
+      const raster = await rasterize(file);
+      return (raster && (await sendStill(m.id, file.name, raster))) || m;
     }
     if (res.status === 204) {
       offset = Number.isFinite(next) && next > offset ? next : end;

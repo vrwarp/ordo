@@ -9,13 +9,13 @@ import {
   editorState,
   frames,
   importDeck,
-  M4_PORT,
   type Obj,
   openEditor,
   openSlide,
   saveAndReload,
   slidesOf,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import { uploadMedia } from './helpers.ts';
 import { hubApi } from './linkhelpers.ts';
 import { ffmpeg } from './pptxdecks.ts';
@@ -27,9 +27,9 @@ import { apiJson } from './pptxlive.ts';
  * the numeric fields, then with the canvas handles (the picture scaled at its aspect and moved behind its
  * box, which stays), masked and flipped, and replaced by a portrait picture, which lands cover-cropped to the
  * box, undistorted, keeping the mask and the flip. Save and a reload give the same presentation JSON, and
- * no other slide changed. Port M4_PORT + 4.
+ * no other slide changed. Its port: e2e/ports.ts row 'editor-pictures'.
  */
-const PORT = M4_PORT + 4;
+const PORT = portOf('editor-pictures');
 const OUT = 'test-results/editor-pictures';
 
 type Crop = { l: number; t: number; r: number; b: number };

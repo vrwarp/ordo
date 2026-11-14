@@ -13,10 +13,14 @@ import { decodePng, type Pixels } from './png.ts';
  * comparison.
  */
 
-/** A hub on `port` that registers the bundled fonts (the image sets ORDO_FONTS_DIR the same way). */
+/**
+ * A hub on `port` that registers the bundled fonts (the image sets ORDO_FONTS_DIR the same way). The variable
+ * goes into this hub's environment only: the test worker's `process.env` stays as it was, so a later spec's hub
+ * in the same worker does not inherit it.
+ */
 export async function pptxHub(port: number): Promise<HubProcess> {
-  process.env.ORDO_FONTS_DIR ??= '/usr/share/fonts';
   const hub = HubProcess.fresh(port);
+  hub.env.ORDO_FONTS_DIR = process.env.ORDO_FONTS_DIR ?? '/usr/share/fonts';
   await hub.start();
   return hub;
 }

@@ -192,4 +192,98 @@ describe('SVG media', () => {
     expect(isActiveMime('image/png')).toBe(false);
     expect(isActiveMime(undefined)).toBe(false);
   });
+
+  describe('a still sent after the SVG (PUT /media/:id/still: the resumable upload carries the SVG alone)', () => {
+    async function putStill(id: string, data: Buffer, field = 'raster'): Promise<Response> {
+      const fd = new FormData();
+      fd.append(field, new Blob([new Uint8Array(data)]), 'still.png');
+      return ed.fetch(`/media/${id}/still`, { method: 'PUT', body: fd });
+    }
+    const message = async (res: Response) =>
+      ((await res.json()) as { error: { message: string } }).error.message;
+
+    it('stores a good still as the delivery, processes the SVG again and sends the media delta', async () => {
+      const m = await ready(
+        await upload([{ field: 'file', name: 'big.svg', data: svg('viewBox="0 0 1600 900"') }]),
+      );
+      expect(m.delivery).toBeUndefined();
+      // The media deltas the hub sends its clients (the library's change listeners).
+      const seen: Media[] = [];
+      hub.lib.onChange((changes) => {
+        for (const c of changes)
+          if (c.kind === 'media' && c.id === m.id && c.entity) seen.push(c.entity as Media);
+      });
+      const res = await putStill(m.id, png(1920, 1080, 'still-good.png'));
+      expect(res.status, await res.clone().text()).toBe(200);
+      const back = (await res.json()) as Media;
+      expect(back.delivery?.mime).toBe('image/png');
+      await hub.jobs.idle();
+      const done = hub.lib.media.must(m.id);
+      expect(done.state).toBe('ready');
+      expect(done.delivery?.hash).toBe(back.delivery?.hash);
+      expect([done.width, done.height]).toEqual([1920, 1080]);
+      expect(jobLog(m.id)).toMatch(/still picture from the upload/);
+      expect(seen.some((e) => e.delivery?.hash === back.delivery?.hash)).toBe(true);
+      expect(seen.at(-1)?.state).toBe('ready');
+      // It has one now: a second still is refused, and the first stays.
+      const again = await putStill(m.id, png(1920, 1080, 'still-again.png'));
+      expect(again.status).toBe(409);
+      expect(((await again.json()) as { error: { code: string } }).error.code).toBe('has_still');
+      expect(hub.lib.media.must(m.id).delivery?.hash).toBe(done.delivery?.hash);
+      expect(uploadsLeft()).toEqual([]);
+    });
+
+    it('asks to send it again while the SVG is being processed', async () => {
+      const m = await ready(
+        await upload([{ field: 'file', name: 'busy.svg', data: svg('viewBox="0 0 16 9"') }]),
+      );
+      hub.lib.media.update(m.id, { ...hub.lib.media.must(m.id), state: 'processing' });
+      const res = await putStill(m.id, png(1920, 1080, 'busy.png'));
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('busy');
+      expect(hub.lib.media.must(m.id).delivery).toBeUndefined();
+      hub.lib.media.update(m.id, { ...hub.lib.media.must(m.id), state: 'ready' });
+      expect(uploadsLeft()).toEqual([]);
+    });
+
+    it('refuses one for a picture that is not an SVG, not a PNG, of the wrong shape, too large, or no still', async () => {
+      const photo = await ready(
+        await upload([{ field: 'file', name: 'p2.png', data: png(64, 48, 'p2.png') }]),
+      );
+      const plain = await ready(
+        await upload([{ field: 'file', name: 'q.svg', data: svg('viewBox="0 0 16 9"') }]),
+      );
+      const cases: [string, string, () => Promise<Response>, number, RegExp][] = [
+        [
+          'not an SVG',
+          photo.id,
+          () => putStill(photo.id, png(64, 48, 'r3.png')),
+          400,
+          /only come with an SVG/,
+        ],
+        ['not a PNG', plain.id, () => putStill(plain.id, Buffer.from('<svg width="1"/>')), 400, /not a PNG/],
+        ['wrong shape', plain.id, () => putStill(plain.id, png(1080, 1920)), 400, /not the shape/],
+        ['too wide', plain.id, () => putStill(plain.id, png(4000, 2250)), 400, /limit/],
+        ['unknown item', 'nope', () => putStill('nope', png(1600, 900, 'r6.png')), 404, /./],
+        ['another field', plain.id, () => putStill(plain.id, png(1600, 900, 'r5.png'), 'file'), 400, /alone/],
+        // Last, in the last test of the file: the hub answers before reading the whole body, which leaves the
+        // test client's keep-alive socket unusable for what follows.
+        [
+          'over 96 MB',
+          plain.id,
+          () => putStill(plain.id, Buffer.concat([png(1600, 900, 'r4.png'), Buffer.alloc(97 * 1024 * 1024)])),
+          413,
+          /./,
+        ],
+      ];
+      for (const [what, id, send, status, msg] of cases) {
+        const res = await send();
+        expect(res.status, what).toBe(status);
+        expect(await message(res), what).toMatch(msg);
+        const cur = hub.lib.media.get(id);
+        if (cur) expect(cur.delivery?.hash, what).toBe(id === photo.id ? photo.delivery?.hash : undefined);
+      }
+      expect(uploadsLeft()).toEqual([]);
+    });
+  });
 });

@@ -173,6 +173,13 @@ playlists and library screens). Each open dialog marks Escape handled in the cap
 were added in) and closes in the bubble phase (`components/dialogEscape.ts`). A popover inside the dialog
 (a menu, the colour picker) that stops Escape to close itself keeps the dialog open.
 
+Every dialog is modal (`aria-modal`), closable or not: while one is open no live key acts, not even with focus
+outside it (the keyboard driver's `blocked()` asks the dialogs' registry, `modalOpen`, and so does the Clear
+all hold), and a key pressed inside it is the dialog's (`data-keys="off"` on its root). Space or Enter on a
+focused button presses that button: Space on End service's confirmation ends the service (it was Next, and
+the button never pressed). A dialog takes the focus when it opens unless one of its controls did (autoFocus).
+The Stream Deck and MIDI are not keys and keep working with a dialog open (design/19).
+
 ## Launching outputs
 
 1. The operator clicks Launch outputs (a user gesture).
@@ -617,8 +624,10 @@ tainted canvas or no page sends the SVG alone) and posts the PNG beside it as `r
 its delivery: thumbnails, the editor canvas and outputs draw that still. Tiles where media is picked (the
 Media tab's rows and preview, the media pickers, the background swatches: `tileHash`) show the SVG itself, so
 an animated one moves there, and say "SVG · moves in previews only" (`svgNote`): Audience screens show its
-first frame. An SVG without a still (one over 24 MB goes through the resumable upload without one, or this
-browser could not draw it, or it predates stills) says instead that each Audience screen draws it itself when
+first frame. An SVG over 24 MB goes through the resumable upload alone; once the hub has it the operator
+draws its still and sends it to `PUT /media/:id/still` (sent again while the hub is still processing the SVG;
+`sendStill`). An SVG without a still (this browser could not draw it, the hub refused it, or it predates
+stills: such a one keeps the advice below, nothing redraws it) says instead that each Audience screen draws it itself when
 it is shown, or, over 2 MB (`SVG_SCREEN_MAX_BYTES`), that the screens do not show it: upload it again from a
 browser, or a PNG of it. An SVG's media size is its still's (at least 1,920 px on its longer side), so '+ Image'
 and a paste start it at the size its root element declares (`insertBox.ts`: a 200 x 80 logo at 200 x 80, not
@@ -827,8 +836,8 @@ which drops the cached thumbnails, and the editor redraws.
 ### Tests
 
 The Playwright projects `webkit-ipad` (iPad Pro 11 landscape) and `webkit-ipad-portrait` run
-`e2e/ipad/*.spec.ts` in WebKit with touch, each test on its own hub (`ORDO_E2E_IPAD_PORT`, default
-8700 + n, path mode `http://localhost:<port>/`); the Chromium project ignores `e2e/ipad/`. The two
+`e2e/ipad/*.spec.ts` in WebKit with touch, each test on its own hub (its port from the e2e port table, design/23 "Ports";
+path mode `http://localhost:<port>/`); the Chromium project ignores `e2e/ipad/`. The two
 projects exist only when WebKit is installed (`npx playwright install webkit`; CI does), so a plain
 `pnpm e2e` after `playwright install chromium` still runs; `ORDO_E2E_WEBKIT=1` insists on them.
 `ORDO_E2E_SHOTS=<dir>` keeps a screenshot of each screen per orientation.

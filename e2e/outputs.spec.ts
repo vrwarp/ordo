@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import {
   OP,
+  PORT,
   shownSlideCue,
   fixtures,
   goLive,
@@ -175,7 +176,7 @@ test.describe('outputs follow the live state', () => {
     const api = await operatorApi();
     const outs = await outputs(api);
     const o = { ...outs.find((x) => x.hostIndex === 1)!, token: 'not-the-token' };
-    const r = await page.request.get(`http://localhost:${process.env.ORDO_E2E_PORT ?? 8090}/api/v1/live`, {
+    const r = await page.request.get(`http://localhost:${PORT}/api/v1/live`, {
       headers: { 'x-ordo-token': o.token },
     });
     expect(r.status()).toBe(401);

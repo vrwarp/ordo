@@ -1796,7 +1796,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
 
 **Exit.**
 - Each of the 5 sermon decks: version 1 is saved ≤ 5 s after job start in the container and ≤ 12 s on the reference NAS, before any soffice process starts. At least 72 of 73 slides are native class; the sp3d slide is native if its bevel is a no-op, else hybrid with only that slide sent to LibreOffice. Text has runs where the deck mixes styles; `lyricObjectId` and notes are set; no picture exceeds its prepared size.
-- After goLive, an e2e capture of three imported slides from an output at 1080p and 4K matches the harness rendering at SSIM ≥ 0.99. As run on CI (2026-11-13): the harness page draws with the outputs' own font files (`outputFaces`) and the captures leave out the outputs' full-screen prompt; the title and picture slides are held to 0.99, the verse slide to 0.96 on its own floor while the CI runner draws its text about 0.4 % narrower than the harness (not seen in the dev container, 1.000), the spec logging each text line's width on both sides until the floor can go to 0.99.
+- After goLive, an e2e capture of three imported slides from an output at 1080p and 4K matches the harness rendering at SSIM ≥ 0.99. As run on CI (2026-11-13): the harness page draws with the outputs' own font files (`outputFaces`) and the captures leave out the outputs' full-screen prompt; all three slides are held to 0.99. The verse slide was on a floor of its own (0.96) while the CI runner drew its text about 0.4 % narrower than the harness: the harness's browser took glyph hinting from the runner's fontconfig and rounded advances, the outputs' did not; the harness now draws with hinting off (`unhintedFontconfig`, tools/pptx-fidelity), and the spec logs each text line's width on both sides.
 - Stage, lower-third and stream looks, cue labels and search show the slide text, with verse numbers.
 - A 4:3 deck aligns with LibreOffice within 2 px, and its bars stay empty on native, hybrid and picture slides.
 - A deck with a hidden slide keeps notes, pictures and text aligned. Next skips the hidden slide, and a click shows it.
@@ -1972,7 +1972,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   (which never merges). Tests: `apps/operator/test/merge.test.ts` (rules and properties: a side that changed
   nothing takes the other whole, edits to different slides always merge, the merge is the same whichever
   side is mine), `mergeSave.test.ts` (the save flow against a fake hub, the dialog);
-  `e2e/editor-merge.spec.ts` (two editor pages, port 8908).
+  `e2e/editor-merge.spec.ts` (two editor pages).
 - **As built, the integration** (`m4/integrate`): the eight items merged in the order A-H, the scaffold's
   stub expectations replaced by the items' own tests (`apps/operator/test/m4-scaffold.test.ts` keeps the
   wiring and the ops' identity when they change nothing), item E's re-crop tests run on item D's
@@ -1990,7 +1990,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   every key, a button or radio its Enter, arrows and Delete, the canvas gets them all; since #24 the
   non-modal Find card is not a dialog for this, the hidden backing text field gives the keys back when
   inline editing ends, and keys an input method composes with are its own: design/15 "Keyboard"), and Ctrl+Z / Ctrl+Y
-  in the text field are the editor's undo and redo (`e2e/editor-keys.spec.ts`, port 8909); taking a job's
+  in the text field are the editor's undo and redo (`e2e/editor-keys.spec.ts`); taking a job's
   revision over moves the undo steps with the draft, a re-import's through the three-way merge; Find and
   replace changes only the part of each match that differs (typing's rule) and marks matches the screens
   do not show; the picture pickers of Replace and the background replace wait for a picture's size (and

@@ -3011,3 +3011,8 @@ tr.rev-row-selected td {
 .ed-panels-menu .menu > button.on {
   background: #1e3a8a;
 }
+
+/* A dialog takes the focus when it opens (components/Dialog.tsx): no ring around the whole box. */
+.dialog:focus {
+  outline: none;
+}

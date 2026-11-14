@@ -1,7 +1,12 @@
 import { DEFAULT_KEYMAP } from '@ordo/domain';
 import { KeyboardDriver } from '@ordo/surfaces';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { installDialogEscape, openDialogCount } from '../src/components/dialogEscape.ts';
+import {
+  installDialogEscape,
+  modalOpen,
+  openDialogCount,
+  registerModal,
+} from '../src/components/dialogEscape.ts';
 
 type Fn = (e: Event) => void;
 
@@ -67,9 +72,7 @@ describe('Escape in a dialog (review 2026-11-13: it closed the dialog and cleare
     expect(close).toHaveBeenCalledTimes(1);
     expect(e.defaultPrevented).toBe(true);
     expect(dispatch).not.toHaveBeenCalled();
-    // Other live keys still work while a dialog is open, and Escape clears the slide again once it is closed.
-    w.press('Space');
-    expect(dispatch).toHaveBeenLastCalledWith({ id: 'next' }, 'keyboard');
+    // Once it is closed, Escape clears the slide again.
     offs.pop()!();
     w.press('Escape');
     expect(dispatch).toHaveBeenLastCalledWith({ id: 'clearSlide' }, 'keyboard');
@@ -112,5 +115,41 @@ describe('Escape in a dialog (review 2026-11-13: it closed the dialog and cleare
     const e = w.press('Enter');
     expect(close).not.toHaveBeenCalled();
     expect(e.defaultPrevented).toBe(false);
+  });
+
+  it("no live key acts while a modal dialog is open, closable or not; Space stays the focused button's", () => {
+    const w = new FakeWindow();
+    const dispatch = vi.fn();
+    // The operator's driver (services/surfaces.ts): blocked while a modal is open.
+    const keys = new KeyboardDriver(DEFAULT_KEYMAP, dispatch, { blocked: modalOpen });
+    keys.attach(w as unknown as Window);
+    expect(modalOpen()).toBe(false);
+    // A Confirm (closable) over Diagnostics (closable), then a dialog without a close button.
+    const offDiag = registerModal();
+    offs.push(installDialogEscape(vi.fn(), w));
+    const offConfirm = registerModal();
+    expect(modalOpen()).toBe(true);
+    for (const key of ['Space', 'PageDown', 'ArrowRight', 'F1', 'Enter']) {
+      const e = w.press(key);
+      // Left alone, default included: Space on the Confirm's autofocused OK presses OK.
+      expect(e.defaultPrevented, key).toBe(false);
+    }
+    expect(dispatch).not.toHaveBeenCalled();
+    offConfirm();
+    expect(modalOpen()).toBe(true);
+    w.press('Space');
+    expect(dispatch).not.toHaveBeenCalled();
+    offDiag();
+    offs.pop()!();
+    const offBare = registerModal();
+    w.press('PageDown');
+    expect(dispatch).not.toHaveBeenCalled();
+    offBare();
+    // Every dialog closed: the keys are live again.
+    expect(modalOpen()).toBe(false);
+    const e = w.press('Space');
+    expect(dispatch).toHaveBeenLastCalledWith({ id: 'next' }, 'keyboard');
+    expect(e.defaultPrevented).toBe(true);
+    keys.detach(w as unknown as Window);
   });
 });

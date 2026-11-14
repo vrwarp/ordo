@@ -3,13 +3,13 @@ import {
   content,
   editorHub,
   editorState,
-  M4_PORT,
   type Obj,
   opOrigin,
   type PresentationRec,
   save,
   slidesOf,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import type { HubProcess } from './hubproc.ts';
 import { hubApi, login } from './linkhelpers.ts';
 
@@ -22,9 +22,9 @@ import { hubApi, login } from './linkhelpers.ts';
  *   paragraph style (never typed into the words: '1. 1. Amazing grace') and the bold on its word, on both
  *   halves, through Save and a reload. The slide's MIDI cue and Bottom-Third Stream text stay on the first
  *   half only: the lighting GO fires once and the second half's strap is its own words.
- * Lyrics: "Amazing Grace" (John Newton, 1779), public domain. Port M4_PORT + 10.
+ * Lyrics: "Amazing Grace" (John Newton, 1779), public domain. Its port: e2e/ports.ts row 'editor-script'.
  */
-const PORT = M4_PORT + 10;
+const PORT = portOf('editor-script');
 let hub: HubProcess;
 test.beforeAll(async () => {
   hub = await editorHub(PORT);

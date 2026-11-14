@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import { describe, expect, it } from 'vitest';
 import type { TableTiming } from './table.page.test-util.ts';
+import { findChromium } from '../../../../tools/find-chromium.ts';
 
 /**
  * Headless check of the table object's sliced preparation (design/27 M9 tables): bundles
@@ -23,18 +24,6 @@ const root = resolve(here, '../../../..');
 const FACE = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
 /** Ten times §13's task: a slice or a draw this long means the preparation stopped slicing. */
 const RUNAWAY_MS = 500;
-
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
-  try {
-    const { chromium } = await import('@playwright/test');
-    const exe = chromium.executablePath();
-    if (existsSync(exe)) return exe;
-  } catch {
-    /* Playwright not installed */
-  }
-  return existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : undefined;
-}
 
 type Esbuild = {
   build(o: Record<string, unknown>): Promise<{ outputFiles: { text: string }[] }>;

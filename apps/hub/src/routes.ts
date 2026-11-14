@@ -44,7 +44,7 @@ import type { JobQueue } from './jobs.ts';
 import { FolderSchema, type Library, newToken, SETTINGS_KEYS, stripTokens } from './library.ts';
 import { LiveRejection, type LiveService } from './live.ts';
 import type { LogRing } from './log.ts';
-import type { MediaService } from './media/service.ts';
+import { MAX_SVG_RASTER_BYTES, type MediaService } from './media/service.ts';
 import type { Store } from './store.ts';
 import { searchGoogleFonts } from './fonts/google.ts';
 import {
@@ -868,6 +868,20 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     return reply.code(204).send();
   });
   route('POST', '/media/:id/retry', 'edit', async (req) => hub.media.retry(params(req).id!));
+  // An SVG's still sent after the SVG (field "raster"): the resumable upload carries the SVG alone, then the
+  // uploading client draws its still and sends it here (design/12 "Media pipeline", MediaService.attachStill).
+  route('PUT', '/media/:id/still', 'edit', async (req) => {
+    const id = params(req).id!;
+    const { files } = await readMultipart(hub, req, { maxFiles: 1, limit: MAX_SVG_RASTER_BYTES });
+    try {
+      const raster = files[0];
+      if (raster?.fieldname !== 'raster') throw badRequest('Send the still picture alone (field "raster")');
+      if (live.locks().media.has(id)) throw locked('This media is used by the live playlist');
+      return await hub.media.attachStill(id, raster);
+    } finally {
+      await Promise.all(files.map((f) => rm(f.path, { force: true })));
+    }
+  });
 
   // Resumable uploads: create, then PATCH chunks with Upload-Offset; the last chunk returns the Media.
   route('POST', '/media/uploads', 'edit', async (req, reply) => {

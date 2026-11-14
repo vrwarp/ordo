@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useRef } from 'react';
-import { installDialogEscape } from './dialogEscape.ts';
+import { installDialogEscape, registerModal } from './dialogEscape.ts';
 
 export function Dialog(props: {
   title: ReactNode;
@@ -14,9 +14,30 @@ export function Dialog(props: {
   close.current = onClose;
   const closable = !!onClose;
   useEffect(() => (closable ? installDialogEscape(() => close.current?.()) : undefined), [closable]);
+  // Modal: no live key acts while it is open (dialogEscape.ts `modalOpen`), and a key pressed inside it is its
+  // own (`data-keys="off"`): Space on its focused OK presses OK, never Next. Focus moves into it unless a
+  // control of its own took it (autoFocus), so Space can never press the button that opened it.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const off = registerModal();
+    const el = box.current;
+    if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });
+    return off;
+  }, []);
   return (
-    <div className="backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div className="dialog" style={props.width ? { width: props.width } : undefined} role="dialog">
+    <div
+      className="backdrop"
+      data-keys="off"
+      onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}
+    >
+      <div
+        ref={box}
+        className="dialog"
+        style={props.width ? { width: props.width } : undefined}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+      >
         <header>
           <h3>{props.title}</h3>
           {onClose && (

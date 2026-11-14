@@ -28,8 +28,9 @@
  * The deck is untrusted: the page fetches only from the harness's own origin, which answers from a fixed
  * table of generated names, and every other request is refused.
  */
-import { closeSync, openSync, readSync } from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { copyFile, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -682,6 +683,40 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   ]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * A fontconfig file for the harness's browser: this machine's configuration (`FONTCONFIG_FILE`, else the
+ * system's), then glyph hinting off for every face. Chromium's full headless browser takes hinting from
+ * fontconfig, and medium or full hinting rounds glyph advances at the drawing size (Carlito at 58.67 px: a line
+ * 0.2 % to 0.4 % wider than the font's own advances), while the outputs' headless shell, like an output drawing
+ * at another size, keeps the font's advances (FaceMetrics x size). With hinting on, the page's lines were wider
+ * than an output's on such machines (the CI runner: e2e/pptx-native.spec.ts cue 1, width output/harness
+ * 0.994 to 0.998 at 1080p and 4K alike). Undefined when there is no configuration file to start from (the
+ * browser then keeps the machine's defaults). The caller removes `dir`.
+ */
+export function unhintedFontconfig(): { file: string; dir: string } | undefined {
+  const base = process.env.FONTCONFIG_FILE || '/etc/fonts/fonts.conf';
+  if (!existsSync(base)) return undefined;
+  const xml = (v: string) => v.replace(/[<>&'"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const dir = mkdtempSync(join(tmpdir(), 'ordo-harness-fc-'));
+  const file = join(dir, 'fonts.conf');
+  writeFileSync(
+    file,
+    [
+      '<?xml version="1.0"?>',
+      '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">',
+      '<fontconfig>',
+      `  <include ignore_missing="yes">${xml(resolve(base))}</include>`,
+      '  <match target="font">',
+      '    <edit name="hinting" mode="assign"><bool>false</bool></edit>',
+      '    <edit name="hintstyle" mode="assign"><const>hintnone</const></edit>',
+      '  </match>',
+      '</fontconfig>',
+      '',
+    ].join('\n'),
+  );
+  return { file, dir };
+}
+
 /** Headless Chromium with the native page; one page per deck. */
 export class NativeRenderer {
   /** How each script fallback family was served, over the run (by family). */
@@ -689,12 +724,14 @@ export class NativeRenderer {
 
   private browser: Browser;
   private script: string;
+  private fcDir?: string;
   readonly version: string;
 
-  private constructor(browser: Browser, script: string, version: string) {
+  private constructor(browser: Browser, script: string, version: string, fcDir?: string) {
     this.browser = browser;
     this.script = script;
     this.version = version;
+    this.fcDir = fcDir;
   }
 
   static async start(executable: string): Promise<NativeRenderer> {
@@ -708,19 +745,31 @@ export class NativeRenderer {
       // Nothing resolves: the page's own origin is answered by the route below, before any lookup.
       '--host-resolver-rules=MAP * ~NOTFOUND',
     ];
+    // Text with the fonts' own advances, as an output draws it, whatever hinting this machine configures.
+    const fc = unhintedFontconfig();
+    const env = fc ? { ...process.env, FONTCONFIG_FILE: fc.file } : undefined;
+    const launch = (executablePath: string) =>
+      chromium.launch({ headless: true, executablePath, args, ...(env ? { env } : {}) });
     let browser: Browser;
     try {
-      browser = await chromium.launch({ headless: true, executablePath: executable, args });
+      try {
+        browser = await launch(executable);
+      } catch (e) {
+        // The default (`chromium` on the PATH) is often missing where Chrome is installed.
+        if (executable === '/usr/bin/google-chrome') throw e;
+        browser = await launch('/usr/bin/google-chrome');
+      }
     } catch (e) {
-      // The default (`chromium` on the PATH) is often missing where Chrome is installed.
-      if (executable === '/usr/bin/google-chrome') throw e;
-      browser = await chromium.launch({ headless: true, executablePath: '/usr/bin/google-chrome', args });
+      if (fc) rmSync(fc.dir, { recursive: true, force: true });
+      throw e;
     }
-    return new NativeRenderer(browser, script, browser.version());
+    return new NativeRenderer(browser, script, browser.version(), fc?.dir);
   }
 
   async close(): Promise<void> {
     await this.browser.close().catch(() => undefined);
+    if (this.fcDir) rmSync(this.fcDir, { recursive: true, force: true });
+    this.fcDir = undefined;
   }
 
   /** The script fallbacks the run used, and the face this machine gave each. */

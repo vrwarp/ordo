@@ -1,8 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { HubProcess } from './hubproc.ts';
+import { portOf } from './ports.ts';
 import { busOf, expectCue, go, hubApi, hubLive, launchOutputs, liveService, login } from './linkhelpers.ts';
 
-const PORT = 8384;
+const PORT = portOf('link-fallback-leave');
 const op = `http://op.localhost:${PORT}`;
 
 /**

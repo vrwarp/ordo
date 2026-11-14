@@ -71,6 +71,24 @@ function keydown(
 }
 
 describe('KeyboardDriver', () => {
+  it('does nothing at all while blocked (a modal dialog is open): no action, the default left alone', () => {
+    const got: unknown[] = [];
+    let blocked = true;
+    const d = new KeyboardDriver(DEFAULT_KEYMAP, (a) => got.push(a), {
+      now: () => 0,
+      blocked: () => blocked,
+    });
+    const t = new FakeTarget();
+    d.attach(t as unknown as Window);
+    for (const code of ['Space', 'PageDown', 'Escape', 'F2'])
+      expect(keydown(t, code).defaultPrevented).toBe(false);
+    expect(got).toEqual([]);
+    blocked = false;
+    expect(keydown(t, 'Space').defaultPrevented).toBe(true);
+    expect(got).toEqual([{ id: 'next' }]);
+    d.detach(t as unknown as Window);
+  });
+
   it('dispatches mapped actions and prevents default', () => {
     const got: Action[] = [];
     const d = new KeyboardDriver(DEFAULT_KEYMAP, (a, src) => {
