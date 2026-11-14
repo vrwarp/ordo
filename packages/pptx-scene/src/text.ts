@@ -297,6 +297,7 @@ export function runStyle(
   const size = num(firstAttr(props, 'sz')) ?? DEFAULT_SIZE_PT * 100;
   const tx1 = ctx.color.scheme.get(ctx.color.map.get('tx1') ?? 'dk1');
   const cap = firstAttr(props, 'cap');
+  const shift = baselineOf(props);
   const out: RunStyle = {
     sizePt: clamp(size / 100, MIN_SIZE_PT, MAX_SIZE_PT),
     bold: on(firstAttr(props, 'b')),
@@ -304,12 +305,10 @@ export function runStyle(
     underline: (firstAttr(props, 'u') ?? 'none') !== 'none',
     strike: (firstAttr(props, 'strike') ?? 'noStrike') !== 'noStrike',
     fill: fill ?? { kind: 'solid', color: tx1 ?? BLACK },
-    baseline: 0,
+    baseline: shift.baseline,
     spacingPt: clamp((num(firstAttr(props, 'spc')) ?? 0) / 100, -4_000, 4_000),
     caps: cap === 'all' ? 'all' : cap === 'small' ? 'small' : 'none',
   };
-  const shift = baselineOf(props);
-  out.baseline = shift.baseline;
   if (shift.escZero !== undefined) out.escZero = shift.escZero;
   if (textFill) {
     out.textFill = textFill;
