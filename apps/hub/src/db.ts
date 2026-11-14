@@ -167,6 +167,20 @@ CREATE TABLE IF NOT EXISTS theme_revisions (
   saved_by TEXT, saved_at TEXT NOT NULL, PRIMARY KEY (theme_id, rev));
 `,
   },
+  {
+    version: 11,
+    name: 'capped-sessions',
+    // Sessions with a cap below full (design/28 §3.2: a phone's 'light'): role 'edit' whatever PIN matched,
+    // `pin` the PIN that did (a PIN change ends them), never remembered. A side table rather than a column of
+    // `sessions`, so a hub downgraded past this migration never finds a capped cookie (401: fail closed).
+    sql: `
+CREATE TABLE IF NOT EXISTS capped_sessions (
+  id TEXT PRIMARY KEY, role TEXT NOT NULL, cap TEXT NOT NULL, pin TEXT NOT NULL, ua_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS capped_sessions_expiry ON capped_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS capped_sessions_pin ON capped_sessions(pin);
+`,
+  },
 ];
 
 /**
@@ -205,9 +219,13 @@ export function openSharedDb(file: string): DB {
   return db;
 }
 
-export function migrate(db: DB): number {
+/** Apply `migrations` (an older build's list in tests) past the database's `user_version`. */
+export function migrate(
+  db: DB,
+  migrations: readonly { version: number; sql: string }[] = MIGRATIONS,
+): number {
   const current = db.pragma('user_version', { simple: true }) as number;
-  for (const m of MIGRATIONS) {
+  for (const m of migrations) {
     if (m.version <= current) continue;
     db.transaction(() => {
       db.exec(m.sql);

@@ -595,7 +595,9 @@ so nothing could open.
 
 ### 3.2 Sessions, caps and credentials
 
-Every session gets a **cap**, stored on its row in `ordo.db` and checked by both processes:
+Every session gets a **cap**, checked by both processes: a session as today is `full`; a capped one is a row of
+the side table `capped_sessions` in `ordo.db` (P0 as built: a side table rather than a column of `sessions`, so a
+hub downgraded past it never finds a capped cookie and answers 401):
 
 | Cap     | Who                                                 | Can                                                                                                                          |
 | ------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |

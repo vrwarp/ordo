@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { emptyLibrary, withDefaults } from '../src/core/libraryStore.ts';
 import { applyLibraryDelta, fromSnapshot, type LibraryData, SETTINGS_KEYS } from '../src/lib/libraryData.ts';
 import { useLibrary } from '../src/state/library.ts';
-import { PHONES_HELP, PhonesSwitch, PinsPage } from '../src/views/settings/PinsPage.tsx';
+import { PHONES_HELP, PhonesSwitch, PinsPage, pinChangedText } from '../src/views/settings/PinsPage.tsx';
 
 const draw = (enabled: boolean) =>
   renderToStaticMarkup(createElement(PhonesSwitch, { enabled, onChange: () => undefined }));
@@ -27,6 +27,13 @@ describe('the Phones switch', () => {
     expect(withDefaults(emptyLibrary().settings).phones).toEqual({ enabled: false });
     expect(withDefaults({ phones: { enabled: true } }).phones).toEqual({ enabled: true });
     expect(useLibrary.getState().data.settings.phones?.enabled === true).toBe(false);
+  });
+
+  it('a PIN change says phones that signed in with it are signed out too', () => {
+    expect(pinChangedText('operatePin')).toBe(
+      'Operate PIN changed. Sessions that signed in with it, phones included, are signed out.',
+    );
+    expect(pinChangedText('editPin')).toMatch(/^Edit PIN changed\. .*phones included/);
   });
 
   it('sits on the PINs page under the PIN form', () => {

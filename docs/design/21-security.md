@@ -13,11 +13,12 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
 
 ## Authentication
 
-| Credential            | Storage                                                 | Lifetime                                           |
-| --------------------- | ------------------------------------------------------- | -------------------------------------------------- |
-| Operate PIN, Edit PIN | Argon2id hashes in `settings`                           | Until changed                                      |
-| Session cookie        | Random 32 bytes, SQLite `sessions` with role and expiry | 12 h on remembered devices, 1 h otherwise, sliding |
-| Output token          | Random 32 bytes, hashed per output                      | Until rotated                                      |
+| Credential            | Storage                                                                            | Lifetime                                                   |
+| --------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Operate PIN, Edit PIN | Argon2id hashes in `settings`                                                      | Until changed                                              |
+| Session cookie        | Random 32 bytes, SQLite `sessions` with role and expiry                            | 12 h on remembered devices, 1 h otherwise, sliding         |
+| Capped session cookie | Random 32 bytes, SQLite `capped_sessions` (role `edit`, cap, the PIN that matched) | 1 h, sliding, never remembered; ends when that PIN changes |
+| Output token          | Random 32 bytes, hashed per output                                                 | Until rotated                                              |
 
 - `POST /auth/pin` compares against both hashes and returns the matching role, so there is
   one login form.

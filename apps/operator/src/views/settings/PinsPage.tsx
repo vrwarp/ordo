@@ -8,6 +8,11 @@ import { errorText, toast } from '../../state/toasts.ts';
 export const PHONES_HELP =
   'When this is on, videos and other slow jobs uploaded during a service wait until it ends, and the hub accepts changes only from ordo pages that are up to date: reload any ordo tab left open. Phones can sign in either way: they look at everything and make small changes, and never run a service.';
 
+/** What changing a PIN does (design/28 §3.2: phones that signed in with it are signed out too). */
+export function pinChangedText(which: 'operatePin' | 'editPin'): string {
+  return `${which === 'operatePin' ? 'Operate' : 'Edit'} PIN changed. Sessions that signed in with it, phones included, are signed out.`;
+}
+
 /** The switch as drawn: the hub's value, or the one being saved. */
 export function PhonesSwitch(props: { enabled: boolean; saving?: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -64,11 +69,7 @@ export function PinsPage() {
     setBusy(true);
     try {
       await api('/auth/pins', { method: 'PUT', json: { [which]: a } });
-      toast(
-        `${which === 'operatePin' ? 'Operate' : 'Edit'} PIN changed. Other sessions with that role are signed out.`,
-        'ok',
-        8000,
-      );
+      toast(pinChangedText(which), 'ok', 8000);
       setA('');
       setB('');
     } catch (e) {

@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hash as argonHash, verify as argonVerify } from '@node-rs/argon2';
 import type { Output } from '@ordo/domain';
+import type { SessionCap } from '@ordo/protocol';
 import type { Logger } from 'pino';
 import type { DB } from './db.ts';
 import { badRequest, HttpError } from './errors.ts';
@@ -13,9 +14,28 @@ export type AuthStore = {
 };
 
 export type SessionRole = 'operate' | 'edit';
+/**
+ * `cap`: what the session may do beyond its role (design/28 §3.2). A `sessions` row is 'full'; a capped one
+ * (`capped_sessions`, a phone's sign-in) is 'light' or 'view' with role 'edit'.
+ */
 export type Principal =
-  | { kind: 'session'; role: SessionRole; sessionId: string }
+  | { kind: 'session'; role: SessionRole; sessionId: string; cap: SessionCap }
   | { kind: 'token'; role: 'output' | 'stage'; outputId: string; output: Output };
+
+/** A cap below full: the ones a device may ask for at sign-in. */
+export type LowerCap = Exclude<SessionCap, 'full'>;
+
+const CAP_RANK: Record<SessionCap, number> = { view: 0, light: 1, full: 2 };
+
+/** Does a session's cap reach what a route or message needs? view < light < full. */
+export function capAtLeast(have: SessionCap, need: SessionCap): boolean {
+  return CAP_RANK[have] >= CAP_RANK[need];
+}
+
+/** A stored cap value as the hub reads it: an unknown one is 'view' (the lowest: fail closed). */
+export function readCap(v: unknown): LowerCap {
+  return v === 'light' ? 'light' : 'view';
+}
 
 export const SESSION_MS = 3600_000;
 export const REMEMBERED_SESSION_MS = 12 * 3600_000;
@@ -33,6 +53,16 @@ type SessionRow = {
   last_seen: number;
   expires_at: number;
 };
+type CappedRow = {
+  id: string;
+  role: SessionRole;
+  cap: string;
+  pin: string;
+  last_seen: number;
+  expires_at: number;
+};
+/** A resolved session cookie. */
+export type SessionInfo = { id: string; role: SessionRole; cap: SessionCap };
 
 export function sha256(s: string): string {
   return createHash('sha256').update(s).digest('hex');
@@ -96,8 +126,10 @@ export class Auth {
     const other = role === 'operate' ? cur.edit : cur.operate;
     if (await argonVerify(other, pin)) throw badRequest('Operate and edit PINs must differ', 'same_pin');
     this.lib.putInternal('_auth.pins', { ...cur, [role]: await argonHash(pin) });
-    // Changing a PIN ends every other session of that role.
+    // Changing a PIN ends every other session of that role, and every capped session (a phone) that signed in
+    // with that PIN, whatever its role.
     this.db.prepare(`DELETE FROM sessions WHERE role = ? AND id != ?`).run(role, keepSessionId ?? '');
+    this.db.prepare(`DELETE FROM capped_sessions WHERE pin = ? AND id != ?`).run(role, keepSessionId ?? '');
   }
 
   /** `operate[:edit]`. Without an edit part the edit PIN is the operate PIN reversed (or +9 if a palindrome). */
@@ -151,8 +183,28 @@ export class Auth {
   }
 
   // ---- sessions ----
-  createSession(role: SessionRole, ua: string, remembered: boolean, now = Date.now()): string {
+  /**
+   * A session cookie's token. With `capped` (design/28 §3.2) the session goes to `capped_sessions`: role
+   * `edit` whatever PIN matched (`capped.pin`, so a change of that PIN ends it), its cap, never remembered (one
+   * hour, sliding); expired capped rows are pruned then.
+   */
+  createSession(
+    role: SessionRole,
+    ua: string,
+    remembered: boolean,
+    now = Date.now(),
+    capped?: { cap: LowerCap; pin: SessionRole },
+  ): string {
     const token = randomBytes(32).toString('base64url');
+    if (capped) {
+      this.db
+        .prepare(
+          `INSERT INTO capped_sessions (id, role, cap, pin, ua_hash, created_at, last_seen, expires_at) VALUES (?, 'edit', ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(sha256(token), capped.cap, capped.pin, sha256(ua), now, now, now + SESSION_MS);
+      this.db.prepare(`DELETE FROM capped_sessions WHERE expires_at < ?`).run(now);
+      return token;
+    }
     const ttl = remembered ? REMEMBERED_SESSION_MS : SESSION_MS;
     this.db
       .prepare(
@@ -163,12 +215,20 @@ export class Auth {
     return token;
   }
 
+  /**
+   * A capped session's row. A database without the table (the live process opened ordo.db before the library
+   * process migrated it) throws, which `principal()` reads in shared mode as no session (401).
+   */
+  private cappedRow(id: string): CappedRow | undefined {
+    return this.db.prepare(`SELECT * FROM capped_sessions WHERE id = ?`).get(id) as CappedRow | undefined;
+  }
+
   /** Resolve a session cookie; slides the expiry forward on activity. */
-  session(token: string | undefined, now = Date.now()): { id: string; role: SessionRole } | null {
+  session(token: string | undefined, now = Date.now()): SessionInfo | null {
     if (!token) return null;
     const id = sha256(token);
     const row = this.db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id) as SessionRow | undefined;
-    if (!row) return null;
+    if (!row) return this.cappedSession(id, now);
     if (row.expires_at < now) {
       this.write(() => this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id));
       return null;
@@ -181,7 +241,24 @@ export class Auth {
           .run(now, now + ttl, id),
       );
     }
-    return { id, role: row.role };
+    return { id, role: row.role, cap: 'full' };
+  }
+
+  /** A capped session (one hour, sliding as a `sessions` row does after 30 s); its role is always 'edit'. */
+  private cappedSession(id: string, now: number): SessionInfo | null {
+    const row = this.cappedRow(id);
+    if (!row) return null;
+    if (row.expires_at < now) {
+      this.write(() => this.db.prepare(`DELETE FROM capped_sessions WHERE id = ?`).run(id));
+      return null;
+    }
+    if (now - row.last_seen > 30_000)
+      this.write(() =>
+        this.db
+          .prepare(`UPDATE capped_sessions SET last_seen = ?, expires_at = ? WHERE id = ?`)
+          .run(now, now + SESSION_MS, id),
+      );
+    return { id, role: 'edit', cap: readCap(row.cap) };
   }
 
   /**
@@ -198,7 +275,7 @@ export class Auth {
       if (this.opts.shared) return true;
       throw e;
     }
-    if (!row) return false;
+    if (!row) return this.touchCapped(id, now);
     if (row.expires_at < now) {
       this.write(() => this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id));
       return false;
@@ -212,8 +289,32 @@ export class Auth {
     return true;
   }
 
+  private touchCapped(id: string, now: number): boolean {
+    let row: CappedRow | undefined;
+    try {
+      row = this.cappedRow(id);
+    } catch (e) {
+      if (this.opts.shared) return true;
+      throw e;
+    }
+    if (!row) return false;
+    if (row.expires_at < now) {
+      this.write(() => this.db.prepare(`DELETE FROM capped_sessions WHERE id = ?`).run(id));
+      return false;
+    }
+    this.write(() =>
+      this.db
+        .prepare(`UPDATE capped_sessions SET last_seen = ?, expires_at = ? WHERE id = ?`)
+        .run(now, now + SESSION_MS, id),
+    );
+    return true;
+  }
+
   endSession(token: string | undefined): void {
-    if (token) this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(sha256(token));
+    if (!token) return;
+    const id = sha256(token);
+    this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+    this.db.prepare(`DELETE FROM capped_sessions WHERE id = ?`).run(id);
   }
 
   // ---- remembered devices ----
@@ -224,6 +325,11 @@ export class Auth {
       .run(sha256(token), sha256(ua), now, now);
     return token;
   }
+  /** Forget a remembered device (a capped sign-in clears its cookie: design/28 §3.2 "Never remembered"). */
+  forgetDevice(token: string | undefined): void {
+    if (token) this.db.prepare(`DELETE FROM devices WHERE id = ?`).run(sha256(token));
+  }
+
   /** A device cookie is valid only with the same user agent and within a year of last use. */
   deviceValid(token: string | undefined, ua: string, now = Date.now()): boolean {
     if (!token) return false;
@@ -253,14 +359,14 @@ export class Auth {
       if (o)
         return { kind: 'token', role: o.kind === 'stage' ? 'stage' : 'output', outputId: o.id, output: o };
     }
-    let s: { id: string; role: SessionRole } | null = null;
+    let s: SessionInfo | null = null;
     try {
       s = this.session(opts.cookie);
     } catch (e) {
       if (!this.opts.shared) throw e;
       this.log.warn({ err: (e as Error).message }, 'sessions unreadable');
     }
-    if (s) return { kind: 'session', role: s.role, sessionId: s.id };
+    if (s) return { kind: 'session', role: s.role, sessionId: s.id, cap: s.cap };
     return null;
   }
 }
