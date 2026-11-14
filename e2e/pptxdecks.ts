@@ -579,3 +579,77 @@ export function lyricLoopDeck(dir: string, advanceMs = 4000): string {
   }));
   return zip(buildDeck({ slides }), join(dir, 'Amazing Grace.pptx'), true);
 }
+
+// ---- the guard deck (M9, lo-forms) ------------------------------------------------------------------------
+
+/** The guard deck: 24 full-slide pictures, each its own colour, past the render clamp's 16 distinct ones. */
+export const GUARD = { pictures: 24, title: 'Pictures past the guard' } as const;
+
+/** The colour of picture `i` of the guard deck (bottom first): 24 hues 15 degrees apart. */
+export function guardColor(i: number): [number, number, number] {
+  const h = (i * 15) % 360;
+  const l = 0.5;
+  const s = 0.8;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+}
+
+/** An opaque PNG of one colour: its rows deflated in a zlib stream (header and Adler-32). */
+function solidPng(w: number, h: number, [r, g, b]: [number, number, number]): Buffer {
+  const row = Buffer.alloc(1 + 3 * w);
+  for (let x = 0; x < w; x++) row.set([r, g, b], 1 + 3 * x);
+  const raw = Buffer.concat(Array.from({ length: h }, () => row));
+  let s1 = 1;
+  let s2 = 0;
+  for (const v of raw) {
+    s1 = (s1 + v) % 65_521;
+    s2 = (s2 + s1) % 65_521;
+  }
+  const adler = Buffer.alloc(4);
+  adler.writeUInt32BE(((s2 << 16) | s1) >>> 0);
+  const chunk = (type: string, data: Buffer) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', Buffer.concat([Buffer.from([0x78, 0x01]), deflateRawSync(raw), adler])),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/**
+ * One slide of a title over 24 distinct full-slide pictures (`GUARD`), past the render clamp's 16 distinct
+ * pictures with decorations on and no picture sheets (the hub stores none), so the slide budgets' guard leaves
+ * the topmost pictures out (`budget.ts` P): on a hub with LibreOffice they are its art (`budget:pictures`,
+ * version 2), on one without it they are listed missing. Written with pptxgenjs; the title on top.
+ */
+export async function guardDeck(dir: string): Promise<string> {
+  mkdirSync(dir, { recursive: true });
+  const p = new pptxgen();
+  p.layout = 'LAYOUT_WIDE';
+  const s = p.addSlide();
+  for (let i = 0; i < GUARD.pictures; i++)
+    s.addImage({
+      data: `data:image/png;base64,${solidPng(64, 36, guardColor(i)).toString('base64')}`,
+      x: 0,
+      y: 0,
+      w: 13.333,
+      h: 7.5,
+    });
+  s.addText(GUARD.title, { x: 0.5, y: 0.3, w: 12.3, h: 1, fontSize: 40, color: 'FFFFFF', bold: true });
+  const file = join(dir, 'Pictures.pptx');
+  writeFileSync(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+  return file;
+}
