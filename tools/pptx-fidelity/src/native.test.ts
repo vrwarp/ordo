@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Slide, TextObject } from '@ordo/domain';
 import { blankFont } from '@ordo/renderer/text/blankface.ts';
+import { sfntMetrics } from '@ordo/pptx-scene';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { familiesOf, fcFamily, fcMatch, isStandIn } from './fonts.ts';
@@ -20,6 +21,7 @@ import {
   spilledPictureSize,
   spillPart,
   still,
+  unhintedFontconfig,
 } from './native.ts';
 import { dataUri, testPicture } from './png.ts';
 import { beatsBlack, type DeckScore, featureRows, nativeStats } from './report.ts';
@@ -311,6 +313,62 @@ const chromium = await findChromium();
 
 describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
   const pngSize = (b: Buffer) => [b.readUInt32BE(16), b.readUInt32BE(20)];
+
+  it("draws text with the font's own advances, whatever hinting the machine's fontconfig asks for", async () => {
+    // A machine whose fontconfig asks for full hinting (the CI runner rounds advances like this): the full
+    // headless browser takes it from fontconfig and rounds every advance at the drawing size, the outputs'
+    // headless shell does not. The page must measure what the font says (FaceMetrics x size).
+    const face = await fcMatch('sans-serif');
+    const base = unhintedFontconfig();
+    if (!face || !base) return; // no fontconfig here: nothing to override
+    await rm(base.dir, { recursive: true, force: true });
+    const dir = await work();
+    const hinted = join(dir, 'hinted.conf');
+    await writeFile(
+      hinted,
+      `<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig>
+<include ignore_missing="yes">${process.env.FONTCONFIG_FILE || '/etc/fonts/fonts.conf'}</include>
+<match target="font"><edit name="hinting" mode="assign"><bool>true</bool></edit>
+<edit name="hintstyle" mode="assign"><const>hintfull</const></edit></match></fontconfig>`,
+    );
+    const bytes = await readFile(face.file);
+    const metrics = sfntMetrics(new Uint8Array(bytes), face.index);
+    const texts = ['For God so loved the world, that he gave his one', "and only Son. For God didn't send"];
+    const px = 58.67;
+    const own = texts.map(
+      (t) => [...t].reduce((w, ch) => w + (metrics?.advance(ch.codePointAt(0)!) ?? 0), 0) * px,
+    );
+    const before = process.env.FONTCONFIG_FILE;
+    process.env.FONTCONFIG_FILE = hinted;
+    let r: NativeRenderer;
+    try {
+      r = await NativeRenderer.start(chromium!);
+    } finally {
+      if (before === undefined) delete process.env.FONTCONFIG_FILE;
+      else process.env.FONTCONFIG_FILE = before;
+    }
+    try {
+      const page = await (r as unknown as { browser: import('@playwright/test').Browser }).browser.newPage();
+      const widths = await page.evaluate(
+        async ({ b64, texts, px }) => {
+          const data = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+          const f = new FontFace('HarnessProbe', data.buffer);
+          await f.load();
+          document.fonts.add(f);
+          const c = document.createElement('canvas').getContext('2d')!;
+          c.font = `${px}px HarnessProbe`;
+          c.fontKerning = 'none';
+          return texts.map((t) => c.measureText(t).width);
+        },
+        { b64: bytes.toString('base64'), texts, px },
+      );
+      // Within 0.05 % of the font's advances (shaping rounds positions to 1/64 px); hinting moves a line by
+      // 0.2 % to 0.6 %.
+      for (const [i, w] of widths.entries()) expect(Math.abs(w / own[i]! - 1), texts[i]).toBeLessThan(0.0005);
+    } finally {
+      await r.close();
+    }
+  }, 60_000);
 
   it('draws every shown slide cut to the slide area, with raster timings', async () => {
     const r = await NativeRenderer.start(chromium!);

@@ -30,7 +30,7 @@ import { portOf } from './ports.ts';
  * probe deck (`pptxdecks.ts` `textDeck`) goes through the real upload route, goes live, and
  * - Audience 1 at 1920x1080 (WebGPU) and Audience 2 at 3840x2160 (Canvas 2D) draw three of its slides as
  *   the fidelity harness's native page draws them (tools/pptx-fidelity, greyscale 960x540): SSIM ≥ 0.99 on
- *   the title and picture slides, the verse slide on a floor of its own (`CUE1_FLOOR`, below). The page is
+ *   the title, verse and picture slides (the verse slide's text lines as wide on both sides). The page is
  *   given the outputs' own faces (`outputFaces`), so both sides draw with the same font files on any
  *   machine, and the captures leave out the outputs' "Enter full screen" prompt;
  * - the stage, the Lobby (lower-third) and Stream looks, the cue labels and the library search show the
@@ -44,20 +44,14 @@ import { portOf } from './ports.ts';
  */
 const PORT = portOf('pptx-native', 0);
 const OUT = 'test-results/pptx-native';
-/** The outputs draw what the harness draws: the title over a picture (cue 0), picture and shapes (cue 3). */
-const FLOOR = 0.99;
 /**
- * The verse slide (cue 1), tracked on its own floor until the CI runner's drift is gone. On the CI runner
- * (ubuntu-24.04, runs 121-154) the outputs' text on this slide is about 0.4 % narrower than the harness's:
- * the same glyph shapes, a horizontal offset growing along each line (+1 px at x = 140 to -5 px at
- * x = 1300 on a 1920 px slide), so a size or advance difference, not another face. It scored 0.9711 /
- * 0.9641 (1080p / 4K) before the full-screen prompt existed and 0.9658 / 0.9626 with it, against 1.0000
- * in the dev container, where it never happened. The harness now draws with the outputs' own font files
- * (outputFaces), which rules out a face picked by the runner's fontconfig; the log below prints each text
- * line's width on both sides, so the next CI run says whether the drift remains. When it reads 1.000 on
- * every line, this floor goes to FLOOR.
+ * The outputs draw what the harness draws: the title over a picture (cue 0), the verse (cue 1), picture and
+ * shapes (cue 3). The verse slide was on a floor of its own (0.96) while the CI runner's harness page drew its
+ * text 0.2 % to 0.6 % wider than the outputs: its browser took glyph hinting from the runner's fontconfig
+ * (tools/pptx-fidelity `unhintedFontconfig` now turns it off). The log below prints each text line's width on
+ * both sides (1.000: the same advances).
  */
-const CUE1_FLOOR = 0.96;
+const FLOOR = 0.99;
 
 type Slide = {
   id: string;
@@ -111,6 +105,29 @@ test('an imported PowerPoint deck draws like the harness, shows its text everywh
       | { text?: string; runs?: { baseline?: number }[] }
       | undefined;
     expect(lyric?.text).toBe(VERSE_TEXT);
+    // The hub's stored verse object is the harness's own conversion of it (size, runs, fit, box, spacing): the
+    // drawings below compare like with like, so a difference in them is the drawing's, not the converter's.
+    const harnessLyric = (converted.slides[1]?.slide.objects ?? []).find(
+      (o) => o.type === 'text' && (o as { text?: string }).text === VERSE_TEXT,
+    );
+    // Every field but the id, keys sorted, numbers to 1e-4 px (the hub's copy has been through its clamp and
+    // storage: 115.2 against the harness's 115.19999999999993, its own key order).
+    const layout = (o: unknown) => {
+      const { id: _id, ...rest } = (o ?? {}) as Record<string, unknown>;
+      return JSON.stringify(rest, (_k, v: unknown) => {
+        if (typeof v === 'number') return Math.round(v * 1e4) / 1e4;
+        if (!v || typeof v !== 'object' || Array.isArray(v)) return v;
+        const r = v as Record<string, unknown>;
+        return Object.fromEntries(
+          Object.keys(r)
+            .sort()
+            .map((k) => [k, r[k]]),
+        );
+      });
+    };
+    if (layout(lyric) !== layout(harnessLyric))
+      console.log(`verse object: hub ${layout(lyric)}\nverse object: harness ${layout(harnessLyric)}`);
+    expect(layout(lyric), 'the hub stores the verse object the harness converts').toBe(layout(harnessLyric));
     // Rich text since M2's second wave: the verse numbers are raised runs of the text's own digits.
     expect(lyric?.runs?.filter((r) => (r.baseline ?? 0) > 0)).toHaveLength(VERSES.length);
 
@@ -241,7 +258,6 @@ test('an imported PowerPoint deck draws like the harness, shows its text everywh
         await settledOn(w, cue);
         const file = join(OUT, `cue${cue}-${name}.png`);
         let s = 0;
-        const floor = cue === 1 ? CUE1_FLOOR : FLOOR;
         await expect
           .poll(
             async () => {
@@ -251,7 +267,7 @@ test('an imported PowerPoint deck draws like the harness, shows its text everywh
             },
             { timeout: 15_000, intervals: [200, 500, 1000] },
           )
-          .toBeGreaterThanOrEqual(floor);
+          .toBeGreaterThanOrEqual(FLOOR);
         scores.push(`cue ${cue} ${name} ${s.toFixed(4)}`);
         if (cue === 1) {
           // Each text line's width on the output against the harness (1.000: the same advances).
@@ -264,7 +280,6 @@ test('an imported PowerPoint deck draws like the harness, shows its text everywh
           console.log(
             `cue 1 ${name}: ${mine.length} text lines (harness ${theirs.length}), width output/harness ${widths.join(', ')}`,
           );
-          if (s >= FLOOR) console.log(`cue 1 ${name} reaches ${FLOOR}: raise CUE1_FLOOR to FLOOR`);
         }
       }
     }

@@ -112,10 +112,14 @@ harness's native page (`tools/pptx-fidelity` `convertDeck` and `NativeRenderer`)
 font files (`outputFaces`: their config's library fonts, so both sides draw with the same files whatever
 the machine's fontconfig would pick), and asks three slides captured from Audience 1 at 1920x1080 (WebGPU)
 and Audience 2 at 3840x2160 (Canvas 2D) for SSIM ≥ 0.99 against it, without the outputs' "Enter full
-screen" prompt (`capture` hides `.fs-prompt`; a test window is never full screen). The verse slide has a
-floor of its own, 0.96 (`CUE1_FLOOR`): on the CI runner the outputs draw its text about 0.4 % narrower than
-the harness (a size or advance difference, glyph shapes identical; 1.000 in the dev container), and the
-spec logs each text line's width on both sides until it is gone; it checks the stage text, the Lobby and Stream bands against the same text typed in ordo
+screen" prompt (`capture` hides `.fs-prompt`; a test window is never full screen). The verse slide is held to
+the same 0.99: its text lines must be as wide on the outputs as on the page (the spec logs each line's width
+on both sides), and the hub must store the verse object the harness converts (size, runs, fit, box,
+spacing). The page's browser draws with glyph hinting off whatever the machine's fontconfig says
+(`unhintedFontconfig`): Chromium's full headless browser takes medium or full hinting from fontconfig and
+rounds advances at the drawing size, the outputs' headless shell does not, which once made the CI runner's
+page draw the verse 0.2 % to 0.6 % wider than every output (SSIM 0.966, reproduced here with a hinting
+fontconfig); it checks the stage text, the Lobby and Stream bands against the same text typed in ordo
 (set as the deck sets it, its verse numbers raised, so both bands go through the rich engine; and against
 the text without its verse numbers, which must differ), cue labels, library search, and the
 hidden slide (Next and Prev skip it, a double-click in the grid shows it). `pptx-media` plays the M5 exit

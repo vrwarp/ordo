@@ -9,6 +9,8 @@ export class HubProcess {
   readonly dataDir: string;
   /** Where the hub's log lines go (appended across restarts); none: next to the data, `<data>.log`. */
   readonly logFile: string;
+  /** Variables of this hub's own environment, over the test worker's (never written into `process.env`). */
+  readonly env: Record<string, string> = {};
   constructor(port: number, dataDir: string, logFile = `${dataDir}.log`) {
     this.port = port;
     this.dataDir = dataDir;
@@ -63,6 +65,7 @@ export class HubProcess {
     this.proc = spawn(cmd!, args, {
       env: {
         ...process.env,
+        ...this.env,
         ORDO_DATA: this.dataDir,
         ORDO_DOMAIN: 'localhost',
         ORDO_PORT: String(this.port),

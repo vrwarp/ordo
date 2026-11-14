@@ -3,7 +3,9 @@
 How faithfully ordo draws PowerPoint decks (design/27 §14). LibreOffice 24.2 is the reference: each deck is
 drawn by LibreOffice (as the hub draws it: outline repair, PDF export, 144 dpi pages), by pptx-preview and
 natively (`@ordo/pptx-scene` drawn by `@ordo/renderer` in headless Chromium), and every slide is scored
-against LibreOffice's page with SSIM of greyscale pictures at 960x540 (1 = identical, ffmpeg).
+against LibreOffice's page with SSIM of greyscale pictures at 960x540 (1 = identical, ffmpeg). The native
+page's browser draws text with glyph hinting off, whatever the machine's fontconfig asks for
+(`unhintedFontconfig` in `native.ts`), so lines keep the fonts' own advances as an output draws them.
 
 Real decks stay outside the repository: pass their paths. Decks are untrusted input; the harness reads them
 only through the converter and the hub's zip reader.
