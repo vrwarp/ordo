@@ -49,9 +49,12 @@ const OUT = 'test-results/pptx-native';
  * shapes (cue 3). The verse slide was on a floor of its own (0.96) while the CI runner's outputs drew its text
  * 0.25 % to 0.6 % narrower than the harness's page (SSIM 0.971 at 1080p): Playwright's headless shell defaults
  * to full hinting, which rounds every glyph advance to a whole pixel (Carlito at 88 px: "For God didn't send
- * his Son into the world" 1495 px against the font's 1501.76). The suite's browser now runs with
- * `--font-render-hinting=none` (playwright.config.ts), so both sides keep the fonts' advances on every machine.
- * The log below prints each text line's width on both sides (1.000: the same advances).
+ * his Son into the world" 1495 px against the font's 1501.76). The runner's environment, not the drawing: the
+ * harness's page was the same pixels on the runner as in the dev container, and the shell started there
+ * without the switch below drew Audience 1's capture byte for byte as the runner did (0.971072; main's CI drew
+ * 0.971 too, under the old floor). The suite's browser now runs with `--font-render-hinting=none`
+ * (playwright.config.ts), so both sides keep the fonts' advances on every machine. The log below prints each
+ * text line's width on both sides (1.000: the same advances).
  */
 const FLOOR = 0.99;
 
