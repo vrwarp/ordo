@@ -92,6 +92,12 @@ hub of its own in path mode (`http://localhost:<port>/`):
 | `webkit-iphone`        | WebKit, iPhone 13, viewport and screen 390x844 | `e2e/phone/*.spec` |
 | `chromium-android`     | Chromium, Pixel 5, viewport and screen 360x800 | `e2e/phone/*.spec` |
 
+The three Chromium projects launch with the suite's switches in the top-level `use.launchOptions` (WebGPU on
+SwiftShader, sRGB, `--font-render-hinting=none`, autoplay, no background throttling): a project's `use`
+replaces only the keys it names, and none of them names `launchOptions`. The WebKit projects set
+`launchOptions: {}`, as the switches are Chromium's; no tablet or phone spec compares text against another
+renderer.
+
 The Chromium tablet and phone model Android Chrome with `e2e/touchdevice.ts` `touchDevice(page)`, which the
 sign-in helpers call before a context's first navigation: an init script deletes `Navigator.prototype.hid`
 and `getScreenDetails` (an own property of `window`, Window being a [Global] interface; also from
