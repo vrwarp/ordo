@@ -1555,3 +1555,50 @@ The code split (branch p0/client, `d0f49cb` to its last split commit):
   `?profile=full` meets the guard, so the `?profile=edit` fallback was not needed. Playwright WebKit reports a
   context's given `screen` (390x844 in a 980x2120 viewport), so the Request Desktop Website test runs; a real
   iPhone's `screen` under Request Desktop Website is still the device check of §3.2.
+
+The compact shell (branch p0/client, after the code split; §2.2 and §6 have the status lines):
+
+- **Frame** (`apps/operator/src/views/compact/`, the chunk `PAGES.compact`, the compact first load's start
+  module): the Live now strip, the freshness line, the header with Back, `.page` as the one scroller and the tab
+  bar (Plans, Library, Media, More), in `compact.css`, every rule under `html[data-layout="compact"]`, logical
+  properties only. The venue PC and the iPad's regular layout never load the chunk (`e2e/split-full.spec.ts`,
+  `e2e/layout-class.spec.ts`); the full profile's and the iPad's 34 screenshots are byte-identical to
+  `d0f49cb`'s (three runs: 34, 33 and 34 of 34; the one difference of the second run was the key look's
+  thumbnail on the 1024x768 Previews page, at most 23 levels in one channel, and the third run matched again).
+- **Sheets**: every dialog on the compact layout (`components/Dialog.tsx`'s compact branch, the regular markup
+  byte for byte as before): portalled, full width from the bottom, `#root` inert, Escape, focus back on the
+  opener (the control pressed just before, where Safari did not focus it).
+- **P0 tab bodies**, read-only and replaced by P1: the Library with its search, Media with the preview sheet,
+  Plans and a plan, a presentation's previews one slide at a time through `LookPreviews` as it is. Their
+  captions are `LookPreviews`' own ("Main screen", "Lobby / overflow lower third", "Livestream key"), not yet
+  the owner's Audience, Stage and Bottom-Third Stream: P1's Stage-lens previews caption by role and look (§2.5),
+  and `views/editor/` is not edited in P0.
+- **Live now and freshness** from the 8 s `/live/summary` poll (`status` after two failures; immediate polls on
+  `pageshow` and `online`), never the cue label; the last contact in `ordo.op.lastContact`.
+- **Sign-in**: no Remember on a phone, `cap: 'light'` to a hub that lists it (else the PIN alone; one retry
+  without `cap` when an older hub refuses it), the venue's host, the phone line, Safari's home-screen note, the
+  lockout's end by scope; the one sign-out of a pre-upgrade uncapped session (`sessionStorage`
+  `ordo.op.phoneSignIn`); Setup's note on a phone. `capOf` and `hubGrants` read `/auth/me` defensively until the
+  integrator switches to the protocol's types; `e2e/phone/phonehelpers.ts` `capsShim` stands in for the hub
+  lane's `/auth/me` on this branch and goes at integration, where the marked integrate-only test runs.
+- **Strings**: `src/i18n` (`en.ts` in the entry: sign-in, Setup's note, the wait; `enCompact.ts` with the compact
+  chunk), `t` with one/other plurals, `formatTime`/`formatDayTime`/`formatDate` through Intl, `<html lang>` on
+  compact; titles `dir="auto"` (brought forward from P1).
+- **Numbers** (`tools/bundle-report.mjs --check`): the operator's initial chunk 510.8 kB (+1.7 % on the split's
+  baseline; the compact strings left it after a first measure at +2.2 %); the compact first load 274,817 B gzip in
+  7 files (entry, CSS, core worker, the compact chunk at 17.2 kB, 5.5 kB gzip, and its imports), headroom
+  25,183 B; the compact precache 10 files, 421.5 kB gzip. The report found the start module by its source map,
+  which never lists a re-export-only barrel: it now finds a barrel by its folder's files and fails on a start
+  module no chunk holds.
+- **Tests**: `e2e/phone/shell.spec.ts` (18 tests in the two phone projects, one hub each; every one fails at
+  `d0f49cb`), `e2e/phone/demo.spec.ts` (the Pages demo), `e2e/layout-class.spec.ts`, `e2e/touchaudit.ts` (the
+  iPad audit, shared), `layoutChecks`; unit tests `compactCss`, `compactImports`, `compactTabs`, `dialogSheet`,
+  `i18n`, `liveStrip`, `freshness`, `venueLive`, `loginView`, `session`.
+- **Not in P0, and where it goes**: axe on every compact screen (P1: axe-core is not in the lockfile, and a new
+  dependency is a design/21 decision); the bars inside the visual viewport with the keyboard open, and the
+  VoiceOver and TalkBack passes, including VoiceOver's escape gesture arriving as Escape (device checks at the
+  gate); right-to-left layouts, `<html dir>`, mirrored chevrons and the language override (P1); `dir="auto"`
+  beyond titles (P1); the venue push and `library.poke` behind `liveStrip`'s input, Plans by service time, the
+  offline expiry and wipe, "Getting the library (1.4 MB)" with progress, the view PIN (P1); every edit (P2). The
+  200 % check covers the shell and the P0 bodies; the pieces they reuse at fixed px sizes (`LookPreviews`,
+  `MediaPreview`) scale with P1's views.
