@@ -142,11 +142,11 @@ describe('the venue PC’s gate', () => {
     expect(await retryOrReload([flaky], { reachable: async () => false, reload })).toBe('failed');
     expect(reloads).toBe(0);
     expect(tries).toBe(2);
-    // A service runs from this page: no reload.
+    // A service runs from this page: no reload, and it says why ('held', which the page's error shows).
     const gone = failing();
     await gone.load().catch(() => undefined);
     expect(await retryOrReload([gone], { reachable: async () => true, reload, safe: () => false })).toBe(
-      'failed',
+      'held',
     );
     expect(reloads).toBe(0);
     // Chromium's case: the import fails again although the hub answers: reload.

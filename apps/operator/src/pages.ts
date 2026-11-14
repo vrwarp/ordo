@@ -226,16 +226,18 @@ export function gateState(
  * PC's browser) keeps a failed dynamic import for the life of the document and never fetches it again, so a
  * Retry that only imports again can never succeed there (review of P0, measured; WebKit fetches again). The
  * reload happens only when the hub answers (`reachable`: a reload while it is down would leave the browser's
- * own error page) and `safe` says so (no service runs from this page).
+ * own error page) and `safe` says so (no service runs from this page). 'held': a chunk still fails and a
+ * service runs from this page, so it did not reload (the page's error says so: PageHost); 'failed': the hub
+ * does not answer.
  */
 export async function retryOrReload(
   chunks: readonly Chunk<unknown>[],
   deps: { reachable: () => Promise<boolean>; reload: () => void; safe?: () => boolean },
-): Promise<'loaded' | 'reloading' | 'failed'> {
+): Promise<'loaded' | 'reloading' | 'held' | 'failed'> {
   const failed = chunks.filter((c) => c.state().status === 'failed');
   const results = await Promise.allSettled(failed.map((c) => c.load()));
   if (results.every((r) => r.status === 'fulfilled')) return 'loaded';
-  if (deps.safe && !deps.safe()) return 'failed';
+  if (deps.safe && !deps.safe()) return 'held';
   if (!(await deps.reachable().catch(() => false))) return 'failed';
   deps.reload();
   return 'reloading';

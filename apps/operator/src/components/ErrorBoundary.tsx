@@ -46,12 +46,18 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
   }
 }
 
+/** What a page's error adds when Try again held back from reloading because a service runs (PageHost). */
+export const PAGE_HELD_TEXT =
+  'While a service runs, ordo does not reload this window (the screens and the keys keep working), so this page comes back after it: press Try again once the service has ended.';
+
 /**
  * The fallback of a page (the app's boundary around each route): 'Try again' first. On the Live page the live
  * controls are the page itself, so it says what still works there (the screens, the keys and pedals) instead
- * of pointing to the menu, which leads away from them (the 2026-11-13 review).
+ * of pointing to the menu, which leads away from them (the 2026-11-13 review). `held`: the last Try again could
+ * not load the page and did not reload it because a service runs from this window; it says so, rather than
+ * leaving the card unchanged.
  */
-export function PageError(props: { route: string; retry: () => void }) {
+export function PageError(props: { route: string; retry: () => void; held?: boolean }) {
   const live = props.route === 'live';
   return (
     <div className="center">
@@ -61,6 +67,7 @@ export function PageError(props: { route: string; retry: () => void }) {
             ? 'The live page could not be shown. The screens keep showing what is live, and the keyboard and pedals still work. Press Try again.'
             : 'This page could not be shown. The screens and the live controls are not affected: use the menu above to go on.'}
         </span>
+        {props.held && <span data-page-held>{PAGE_HELD_TEXT}</span>}
         <button type="button" className="small" onClick={props.retry}>
           Try again
         </button>

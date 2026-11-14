@@ -11,7 +11,7 @@ import {
   windowFeatures,
   windowName,
 } from '../lib/screens.ts';
-import { saveSettings, settings } from '../state/library.ts';
+import { saveSettings, settings, useLibrary } from '../state/library.ts';
 import { useLive } from '../state/live.ts';
 import { toast } from '../state/toasts.ts';
 import type { Controller } from './controller.ts';
@@ -60,6 +60,10 @@ export const useLaunch = create<LaunchStore>((set) => ({
 }));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** What Launch outputs says when pressed before the library (and so the outputs) has loaded. */
+export const LAUNCH_LOADING_TEXT =
+  'The library is still loading, so ordo does not know the outputs yet. Press Launch outputs again in a moment.';
 
 /** Opens, tracks and relaunches the output and stage windows (design/15, Launching outputs). */
 export class OutputWindows {
@@ -180,7 +184,10 @@ export class OutputWindows {
       this.ensureBroadcastRelays();
       const outputs = settings().outputs;
       if (!outputs.length) {
-        toast('No outputs configured. Add outputs in Settings → Outputs.', 'warn');
+        // Before the library has come (from the cache or the hub) the outputs are not known yet: say so, not
+        // that none are configured (a Launch pressed as the live view appears, seen on a loaded machine).
+        if (!useLibrary.getState().loaded) toast(LAUNCH_LOADING_TEXT, 'info');
+        else toast('No outputs configured. Add outputs in Settings → Outputs.', 'warn');
         return;
       }
       const screens = await this.screens();

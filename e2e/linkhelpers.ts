@@ -58,7 +58,8 @@ export function outputPages(context: BrowserContext): Page[] {
 /**
  * Click Launch (or Relaunch) and wait for `n` output windows with their caches filled. The click waits until the
  * operator lists its outputs (the Program pane): the button shows as soon as the live view does, and a Launch
- * before the library has come from the hub opens nothing ("No outputs configured"), as seen on a loaded machine.
+ * before the library has come from the hub opens nothing (it says the library is still loading), as seen on a
+ * loaded machine.
  */
 export async function launchOutputs(
   page: Page,

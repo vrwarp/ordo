@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ErrorBoundary,
   type ErrorBoundaryProps,
+  PAGE_HELD_TEXT,
   PageError,
   PaneError,
 } from '../src/components/ErrorBoundary.tsx';
@@ -68,5 +69,16 @@ describe('ErrorBoundary', () => {
     expect(live).toMatch(/<button[^>]*>Try again<\/button>/);
     const library = renderToStaticMarkup(createElement(PageError, { route: 'library', retry }));
     expect(library).toContain('use the menu above to go on');
+    expect(library).not.toContain('data-page-held');
+  });
+
+  it("a page's Try again held back during a service: the card says why and when it comes back", () => {
+    const retry = () => undefined;
+    const held = renderToStaticMarkup(createElement(PageError, { route: 'import', retry, held: true }));
+    expect(held).toContain('data-page-held');
+    expect(held).toContain(PAGE_HELD_TEXT);
+    expect(PAGE_HELD_TEXT).toContain('does not reload this window');
+    expect(PAGE_HELD_TEXT).toContain('once the service has ended');
+    expect(held).toMatch(/<button[^>]*>Try again<\/button>/);
   });
 });

@@ -1517,6 +1517,10 @@ need if the church wants it after the first service.
     link-local and ULA too) gets 5 more per address, about one try per Argon2 verification. Mitigated by the
     6 to 12 digit PINs, the logged lockouts, split DNS (which keeps phones on their own addresses) and passes in
     P3; owner question 15 decides a shared LAN ceiling.
+11. **A lost phone empties a plan.** A `light` session may save a whole plan before P2 (no P0 screen writes
+    one), and plans have no revisions until then. §4's row "A lost phone empties a plan" holds the threat and
+    the restore from a backup; owner question 16 decides whether plan saves stay at `full` until P2's playlist
+    revisions.
 
 ## 14. Documents to update with each phase
 
@@ -1864,15 +1868,20 @@ before it):
 - **Copy in the phone's words**: "Connecting to ordo…" and "Can't reach ordo. Trying again…" before the shell on
   the compact layout; More's "Signed in on this phone" or "on this device" (an iPad in a narrow Split View); a
   video held for the service reads "Waiting for the service to end" (`views/compact/mediaState.ts`, from the
-  item, the Live now summary and the switch, as the hub's rule holds it). The previews' captions stay
-  `LookPreviews`' own until P1 (above).
+  item, the Live now summary and the switch, as the hub's rule holds it). That label follows the switch only:
+  with Phones off the hub also holds a heavy job a capped session queued (`job_paced`), which the phone would
+  read as "Queued". No P0 screen uploads, so nothing a volunteer sees is wrong; when P1 adds uploads the state
+  comes from the hub (a `waiting` flag on the media item or on what a light session receives), not from the
+  phone's copy of the rule. The previews' captions stay `LookPreviews`' own until P1 (above).
 - **The sign-in's phone class is the page's** (`LoginView`'s `phone = thisIsPhone()`): a tablet whose `screen`
   shrinks under the keyboard never signs in capped (`loginView.test.ts`).
 - **A chunk that fails on the venue PC**: the gate waits for every regular page to settle but holds the Shell
   only for the live view and the operate services (`VENUE_CRITICAL`, `gateState`); a page that failed is its own
   page's error. Retry, there and on a page's error, loads again and, when that cannot work (Chromium keeps a
   failed import for the document), reloads the page if the hub answers and no service runs from it
-  (`retryOrReload`). `e2e/split-full.spec.ts` (f) fails the Import tab once: the live view and its keys come up at
+  (`retryOrReload`). While one runs, a page's Try again that cannot load it says so on the page's error (it
+  loads again after the service; `PageHost`'s `retryPage`, `pageHost.test.ts`) instead of leaving the card as
+  it was. `e2e/split-full.spec.ts` (f) fails the Import tab once: the live view and its keys come up at
   once, the tab shows its error and loads on Try again; (g) fails the live view's chunk once: the error card, and
   Retry brings up the live view (by a reload).
 - **The rehearsal tool sees the uploads**: `tools/soak` samples every output before the phones sign in, runs the
