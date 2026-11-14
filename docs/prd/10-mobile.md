@@ -63,6 +63,8 @@ Setup, Screens and the Banner belong to the venue PC.
   marks changes made from phones. Media that is not ready cannot be added within 12 hours of a service.
 - Phones never slow a service: heavy processing and large uploads wait until it ends, and the load of
   phones in use is measured at a rehearsal before each phase ships.
+- A phone downloads only what it shows: never the slide editor, the live view, Setup or the settings
+  (at most 300 KB compressed to start).
 
 ## Access
 

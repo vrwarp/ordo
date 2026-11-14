@@ -102,7 +102,10 @@ The numbers replace the measurements of 2026-11-07 (8ea4456), which predate the 
   or a mouse reports a fine pointer with hover (`lib/capabilities.ts:56`, `:79-83`) and so gets the
   desktop's canvas-first editor, whose top bar needs about 1,250 px (`e2e/editor-fit.spec.ts`).
 - **The bundle.** The operator's initial chunk is 1,713.5 kB (535.2 kB gzip; 1,713.3 and 535.1 kB at #24's
-  merge, `1764e05`), and nothing in the editor is lazy (§7).
+  merge, `1764e05`), and nothing in the editor is lazy (§7). Measured again on `d0f49cb` before P0: 1,710.9
+  kB (537.1 kB gzip); a phone's first load (sign in, the Library, 3 s idle) 778.9 kB gzip with the
+  thumbnail worker. After P0's code split: 502.1 kB (159.2 kB gzip), a phone's first load 262.5 kB gzip
+  (§7, §16 "P0 as built").
 - With the operate PIN a phone gets an operate session. The edit profile never offers live control, but
   the hub accepts `live.event` from any operate socket (`apps/hub/src/ws.ts:416-418` refuses only `edit`)
   and `POST /live/events` from any operate cookie.
@@ -597,6 +600,24 @@ The rows marked P1 and later are not built.
   field reaches it through `ColorPicker`); editor-ux (PR #23) hands the deck to the pickers through a React
   context instead. Settings and Setup are already lazy routes in PR #23 (a1-prep), whose
   `tools/bundle-report.mjs` and CI budget (design/24 "Bundle budget", `24-repo-conventions.md`) will also guard the compact path.
+
+  Status (P0, as built): every page leaves the entry through a page registry (`src/pages.ts`: `chunk`,
+  `useChunk`, `PAGES`), not `React.lazy` (its Suspense fallback holds about 300 ms on every first open, even
+  from cache, which made the venue PC's live view after sign-in 0.75 s later in a prototype); a loaded page
+  renders synchronously. A regular device preloads at startup every regular page its capability profile can
+  open (and the operate services on the full profile, `services/operateServices.ts`), in parallel with the
+  session request, and the venue PC mounts its Shell once they have loaded, so `installOperate` stays
+  synchronous and nothing it opens shows a "Loading…"; a phone or the compact layout preloads nothing of that
+  set. The service worker precaches by device class, chosen once at startup (`./sw.js?set=compact` on a
+  phone: the entry, the playlists and previews, the core and thumbnail workers). The thumbnail worker starts
+  with the first preview on the compact layout and the document's fonts load on the regular layout only, so
+  a phone's first load holds neither. Import sites moved instead of the editor: `services/fonts.ts` imports
+  the renderer's font module, not its barrel; `ColorField` has its own module (so the deck swatches edge no
+  longer reaches every number field); the playlist item titles left `PlaylistPane`. `LookPreviews` and
+  `SingleLookStagePreview` stay in `views/editor` until P1: the Previews chunk on the compact path imports
+  them without the editor. Three checks keep it so: `apps/operator/test/entry.test.ts` (no static import from
+  the entry into editor, live, settings, Setup or output code), the bundle report's compact violations, and
+  `e2e/phone/split.spec.ts` (what a phone requests and precaches).
 
 ### 3.2 Sessions, caps and credentials
 
@@ -1129,6 +1150,31 @@ with the first preview and counts against "Opening a song" above, not the first 
 initial chunk to 1,708.0 kB (535.9 kB gzip) with M9 inside: lazy M9 drawers and lazy Setup (a1-prep, 1,684.6
 kB) and then its editor, live and media fixes (23.4 kB).
 
+**Measured after P0's code split** (`d0f49cb` against p0/client; sizes from `tools/bundle-report.mjs` and
+`e2e/phone/split.spec.ts`; timings from the planner's probe, Chromium 1280x720 for the venue PC with the
+operate PIN and WebKit iPad Pro 11 landscape, 5 runs each in two interleaved pairs on a shared machine at load
+average 6 to 8, so medians of each pair):
+
+| Measure                                                 | `d0f49cb`                                             | P0                                                |
+| ------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------- |
+| Initial operator chunk                                  | 1,710.9 kB (537.1 kB gzip)                            | 502.1 kB (159.2 kB gzip)                          |
+| A phone's first load (sign in, Library, 3 s idle)       | 778.9 kB gzip: entry, CSS, core and thumbnail workers | 262.5 kB gzip: entry, CSS, core worker            |
+| Headroom under 300 KB gzip                              | none                                                  | 37,475 B (the compact shell and P1's views)       |
+| A phone's precache                                      | every built file (the import worker, the editor)      | 13 files, 426.8 kB gzip, no forbidden source      |
+| Venue PC: every script but the workers                  | 1,837.3 kB (580.0 kB gzip) in 6 files                 | 1,849.6 kB (597.0 kB gzip) in 33 files, preloaded |
+| Venue PC: DOMContentLoaded                              | 295 / 209 ms                                          | 153 / 174 ms                                      |
+| Venue PC: OK on the PIN to the live view                | 380 / 293 ms                                          | 292 / 367 ms                                      |
+| Venue PC: first editor open                             | 34 / 33 ms                                            | 36 / 38 ms                                        |
+| Venue PC: first Settings open                           | 313 / 313 ms ("Loading…", the `React.lazy` fallback)  | 20 / 13 ms                                        |
+| iPad: first editor open                                 | 134 / 127 ms                                          | 134 / 153 ms                                      |
+| iPad: PIN tapped 1.5 s after load, first tap to Library | 843 / 923 ms                                          | 695 / 926 ms                                      |
+
+With the PIN tapped the instant the page has loaded (a script, not a person) the iPad reaches the Library about
+150 to 230 ms later than `d0f49cb` (medians 1,049 / 1,093 against 870 / 822 ms): the regular pages it preloads
+evaluate during that sign-in, where `d0f49cb` evaluated them inside its entry before the sign-in screen showed;
+from the navigation's start to the Library it is the same (2,600 / 3,080 against 2,721 / 2,967 ms with the
+pause). Throttled 4G timings ("interactive ≤ 3 s", "Opening a song") are P1's (§9).
+
 ## 8. Testing
 
 Following design/23.
@@ -1426,3 +1472,37 @@ editor-fixes docks the Find card in the stage pane, so it no longer covers the t
 Lyric Script's splits cut at the caret and keep the song's own text (§2.7, `e2e/editor-script.spec.ts`). The phone's own
 problems (the 160x90 slide, the 18 px script fields, the cut nav, the panned Library) are this design's P0
 and P2, not fixes to the iPad layout.
+
+### P0 as built
+
+The code split (branch p0/client, `d0f49cb` to its last split commit):
+
+- **Layout class and phone class** (`apps/operator/src/lib/layout.ts`): `layoutFor(capabilityProfile,
+  compactViewport)` from `deviceProfile('operate')` (the device's capability profile, never the session's:
+  the edit role gives every device the edit profile); `useLayout` once at the top of `App`, deferring regular
+  to compact while the editor is open; `startLayout`/`applyLayout` in `main.tsx` before the first render;
+  `html[data-layout="compact"]` on the compact layout only; `window.__ordo.layout`. `isPhone` and `signInCap`
+  read `screen`, never the viewport. The forced-profile guard is in `profileFor`.
+- **Routes** (`lib/route.ts` `pageFor`, `compactRedirect`): on the compact layout or on a phone (Request Desktop
+  Website included; the shell adds a capped session) refused routes are decided during render and replaced, so
+  their chunks are never requested; `#/edit/<id>` opens `#/previews/<id>` until P1's `#/view`.
+- **The code split** (§3.1 status, §7 table): the page registry (`src/pages.ts`, no `React.lazy`), the startup
+  preload and the venue PC's strict gate, the operate services in their own module, the import sites moved
+  (`services/fonts.ts`, `components/ColorField.tsx`, `lib/playlistItems.ts`), the thumbnail worker and the
+  document's fonts on first use on the compact layout, the service worker's precache by device class
+  (`src/sw/sets.ts`, `src/sw/register.ts`), the bundle report's compact section and CI budget (300,000 B gzip,
+  `tools/bundle-baseline.json` `compact`), and `apps/operator/test/entry.test.ts`. Nothing under
+  `views/editor/` changed. The full profile's 34 screenshots (Chromium 1280x720, 1024x768, 1280x480, 600x900;
+  WebKit iPad in both orientations) are byte-identical to `d0f49cb`'s.
+- **Where it differs from the plan**: `COMPACT_FORBIDDEN` applies to the page's files, and a compact worker must
+  be the core or the thumbnail worker (the thumbnail worker draws with the preset geometry, the core worker
+  holds the Stream Deck key renderer); the phone's service worker still serves every app file cache-first once
+  fetched (it precaches the compact set only).
+- **Projects** (design/23 "Projects"): `webkit-iphone` (390x844), `chromium-android` (Pixel 5 at 360x800) and
+  `chromium-tablet` (Galaxy Tab S4 at 800x1280, the iPad specs), in the CI job `e2e-phones`. The Chromium
+  projects model Android Chrome with `e2e/touchdevice.ts`, an init script that deletes `Navigator.prototype.hid`
+  and `getScreenDetails`; measured on Chromium 1243, `getScreenDetails` is an own property of `window` (Window is
+  a [Global] interface), so it is deleted there too. With it both projects detect the edit profile and a forced
+  `?profile=full` meets the guard, so the `?profile=edit` fallback was not needed. Playwright WebKit reports a
+  context's given `screen` (390x844 in a 980x2120 viewport), so the Request Desktop Website test runs; a real
+  iPhone's `screen` under Request Desktop Website is still the device check of §3.2.

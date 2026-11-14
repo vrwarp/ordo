@@ -809,6 +809,16 @@ Split View is not. A phone's sign-in asks for the `light` cap (`signInCap`, desi
   Import, and Previews without a presentation to the Library, and the canvas editor to the presentation's
   previews (`#/edit/<id>` -> `#/previews/<id>`), replacing the history entry (`navigate(r, { replace:
   true })`), so the refused page's chunk is never requested (design/28 §2.1, §3.1).
+- **Page sets** (`src/pages.ts`, `src/pageSets.ts`): the entry holds the shell, the Library's Presentations
+  and Media tabs and the sign-in; every other page is a registry module. A regular device preloads the
+  pages its capability profile can open at startup (the full profile: the live view, the editor,
+  playlists, previews, settings, Setup, Themes, Fonts, Import and the operate services; the edit profile
+  the same without the live view, Setup and the operate services), so the iPad opens them as before. A
+  phone, on either layout, never loads or precaches the canvas editor (`SlideCanvas`, #24's floating bar,
+  the Tune drawer, `PaintPopover`, the docked panel), the live view, Setup, the settings pages, the output
+  and control-surface services, the preset geometry or the import worker; its first load is the entry, the
+  stylesheet and the core worker (262.5 kB gzip), and the thumbnail worker and the library's fonts wait for
+  the first preview.
 - A playlist shows "Go live from the venue PC." instead of Go live; the nav says "This device edits;
   run services from the venue PC" (operate PIN, wide screens).
 - **Live now.** The hub sends live state only to operators and outputs, so an iPad (edit or operate PIN)
