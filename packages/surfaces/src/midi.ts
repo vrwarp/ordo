@@ -159,7 +159,10 @@ export class MidiDriver {
   /** Called on access errors (error budgets). */
   onError?: (detail: string) => void;
 
-  constructor(private dispatch: Dispatch) {}
+  private dispatch: Dispatch;
+  constructor(dispatch: Dispatch) {
+    this.dispatch = dispatch;
+  }
 
   static get supported(): boolean {
     return typeof navigator !== 'undefined' && typeof navigator.requestMIDIAccess === 'function';

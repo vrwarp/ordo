@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "esbuild": ["../../apps/hub/node_modules/esbuild"]
+    }
+  },
+  "include": ["golden", "bench"]
+}

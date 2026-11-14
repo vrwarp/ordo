@@ -96,12 +96,15 @@ export class LibraryLink implements LiveSource {
   /** Last fetch failure (diagnostics). */
   lastError?: string;
 
-  constructor(
-    private db: DB,
-    private log: Logger,
-    private secret: string,
-    private fetcher: typeof fetch = globalThis.fetch,
-  ) {
+  private db: DB;
+  private log: Logger;
+  private secret: string;
+  private fetcher: typeof fetch;
+  constructor(db: DB, log: Logger, secret: string, fetcher: typeof fetch = globalThis.fetch) {
+    this.db = db;
+    this.log = log;
+    this.secret = secret;
+    this.fetcher = fetcher;
     this.load();
   }
 

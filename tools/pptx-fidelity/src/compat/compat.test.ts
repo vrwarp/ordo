@@ -11,8 +11,11 @@ import {
   tableFrame,
   tc,
 } from '@ordo/pptx-scene/test-util.ts';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { compatRules, drawingKey } from './compat.ts';
+import { COMPAT_REGISTRY, COMPAT_RULE_TEXT, COMPAT_RULES, compatRules, drawingKey } from './index.ts';
 
 const SHADOW =
   '<a:effectLst><a:outerShdw blurRad="38100" dist="38100" dir="2700000"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst>';
@@ -38,6 +41,28 @@ function deck(...shapes: string[]): DeckScene {
 }
 
 const texts = (s: Slide) => s.objects.filter((o): o is TextObject => o.type === 'text');
+
+describe('the compat registry', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const ruleFiles = readdirSync(here).filter(
+    (f) => /^[a-z]\w*\.ts$/i.test(f) && !/^(index|rule)\.ts$/.test(f),
+  );
+
+  it('rules register from their own files and hit as before', () => {
+    // The rules of M2 and M6, in report order; each its own file exporting one rule under its key.
+    expect(COMPAT_RULES).toEqual(['runShadow', 'textOutline', 'refit', 'inheritedFit', 'cellRows']);
+    expect(new Set(COMPAT_RULES).size).toBe(COMPAT_RULES.length);
+    expect(ruleFiles.map((f) => f.replace(/\.ts$/, '')).sort()).toEqual([...COMPAT_RULES].sort());
+    for (const f of ruleFiles) {
+      const src = readFileSync(join(here, f), 'utf8');
+      const key = f.replace(/\.ts$/, '');
+      expect(src, f).toContain(`export const ${key} = compatRule({`);
+      expect(src, f).toContain(`key: '${key}'`);
+    }
+    for (const r of COMPAT_REGISTRY) expect(COMPAT_RULE_TEXT[r.key]).toBe(r.text);
+    // The hits are those of the single-file rules they replace (the cases below, unchanged).
+  });
+});
 
 describe('compatRules', () => {
   const scene = deck(

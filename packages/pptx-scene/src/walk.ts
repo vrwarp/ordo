@@ -23,6 +23,10 @@
  *   objects form a group of their own, or join the top-level group they are in; and SmartArt whose deck
  *   holds PowerPoint's drawing of it (M6, `smartart.ts`): its shapes are read like these, as the frame's
  *   own group.
+ * - M9 seams (`conv-seams`): a chart frame goes through `chart.ts` `readChart` and an OLE frame through
+ *   `ole.ts` `readOle` first (residual when they read nothing, as every one does until `charts-conv` and
+ *   `metafile-a`), and every shape and picture through `three3d.ts` `read3d` (its 3-D, until `three-model`
+ *   none: real 3-D is drawn flat, approx `3d`, `classify.ts`).
  *
  * Owned by work item C (inherit-emit).
  */
@@ -46,7 +50,14 @@ import {
 import type { Affine, Element, ElementBase, Fill, Line, ShapeElement, Support } from './ir.ts';
 import { chooseAlternate } from './markup.ts';
 import { CANVAS_H, CANVAS_W } from '@ordo/renderer/geom/bounds.ts';
-import { type DrawnGeom, drawCost, GEOM_COST, maskCost, slowGradient } from '@ordo/renderer/geom/cost.ts';
+import {
+  type DrawnGeom,
+  type DrawSpec,
+  drawCost,
+  GEOM_COST,
+  maskCost,
+  slowGradient,
+} from '@ordo/renderer/geom/cost.ts';
 import { outlineOf } from '@ordo/renderer/geom/outline.ts';
 import {
   customPaths,
@@ -58,10 +69,13 @@ import {
   presetDrawn,
   readCxnRef,
 } from './geom.ts';
+import { readChart } from './chart.ts';
+import { readOle } from './ole.ts';
 import { blipReader, blipReaderOf, readPicture } from './picture.ts';
 import { readSmartArt, type Walker } from './smartart.ts';
 import { readTable } from './tables.ts';
 import { readShadow, readTextBody, textChars } from './text.ts';
+import { read3d } from './three3d.ts';
 import { child, num, path, type XNode } from './xml.ts';
 
 /** Group nesting followed (design/27 §12). */
@@ -98,6 +112,12 @@ export interface WalkState {
    * `chargeDrawing`).
    */
   geomCost?: number;
+  /**
+   * The legacy copies of what is kept so far (renderer `geom/cost.ts` `slidePlan`'s floor: every drawer draws
+   * at least these, counted first and never refused), the background's first (`chargeDrawing`,
+   * `chargeFloor`).
+   */
+  floors?: number;
   /** SmartArt drawings read so far (M6, `smartart.ts`: `ElementBase.diagram` numbers them). */
   diagrams?: number;
   /**
@@ -119,7 +139,9 @@ export function walkSlide(ctx: SlideCtx): Element[] {
   const st: WalkState = { out: [], count: 0, groups: 0 };
   // The background is emitted under everything, a full-slide fill laid on white (`emit.ts`
   // `emitBackground`): its pixels are charged first, as every drawer's budget counts them.
-  st.geomCost = backgroundCost(readBackground(ctx).fill);
+  const bg = readBackground(ctx).fill;
+  st.geomCost = backgroundCost(bg);
+  st.floors = backgroundCost(bg, true);
   if (shows(ctx.slide)) decorations(ctx, st);
   walkTree(ctx, treeOf(ctx.slide), 'slide', IDENTITY, undefined, 0, st);
   // Connector ends glued to shapes move to their connection sites (M6).
@@ -129,15 +151,18 @@ export function walkSlide(ctx: SlideCtx): Element[] {
 
 /**
  * What drawing a slide's background costs as emitted (renderer `geom/cost.ts` `drawCost`): a full-slide rect,
- * opaque (a colour or a gradient laid on white; a picture's white under it), at most the canvas.
+ * opaque (a colour or a gradient laid on white; a picture's white under it), at most the canvas. `legacy`:
+ * as its legacy copy (a colour).
  */
-function backgroundCost(fill: Fill): number {
+function backgroundCost(fill: Fill, legacy = false): number {
   const g = presetDrawn('rect', undefined, CANVAS_W, CANVAS_H);
+  const gradient = fill.kind === 'gradient' && !legacy;
   return drawCost(g, {
     fill: true,
     paint: {
-      gradient: fill.kind === 'gradient',
-      ...(fill.kind === 'gradient' && slowGradient(fill.stops.slice(0, 16)) ? { slow: true } : {}),
+      gradient,
+      ...(gradient && slowGradient(fill.stops.slice(0, 16)) ? { slow: true } : {}),
+      ...(gradient && fill.path !== undefined ? { radial: true } : {}),
       translucent: false,
     },
     place: { box: { x: 0, y: 0, w: CANVAS_W, h: CANVAS_H } },
@@ -152,6 +177,7 @@ interface Decorations {
   notes: string[];
   points: number;
   geomCost: number;
+  floors: number;
 }
 
 /**
@@ -186,10 +212,12 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     st.points = known.points;
     // What the decorations charge on top of this slide's background.
     st.geomCost = (st.geomCost ?? 0) + known.geomCost;
+    st.floors = (st.floors ?? 0) + known.floors;
     return;
   }
   const notes: string[] = [];
   const before = st.geomCost ?? 0;
+  const floorsBefore = st.floors ?? 0;
   walk({
     ...ctx,
     log: (msg) => {
@@ -209,6 +237,7 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     notes,
     points: st.points ?? 0,
     geomCost: (st.geomCost ?? 0) - before,
+    floors: (st.floors ?? 0) - floorsBefore,
   });
   for (let i = 0; i < st.out.length; i++) st.out[i] = { ...st.out[i]! };
 }
@@ -345,7 +374,12 @@ export function walkTree(
       case 'p:sp':
       case 'p:cxnSp': {
         const shape = readShape(ctx, el, base, chain, st, groupFill);
-        if (shape) st.out.push(shape);
+        if (shape) {
+          // M9 (`three-model`): the shape's 3-D.
+          const look3d = read3d(ctx, chain);
+          if (look3d) shape.look3d = look3d;
+          st.out.push(shape);
+        }
         if (
           from === 'slide' &&
           shape?.kind === 'shape' &&
@@ -359,6 +393,9 @@ export function walkTree(
         const pic = readPicture(ctx, el, base);
         if (pic) {
           if (pic.kind === 'picture') {
+            // M9 (`three-model`): the picture's 3-D.
+            const look3d = read3d(ctx, chain);
+            if (look3d) pic.look3d = look3d;
             const line = readLine(ctx, chain);
             if (line) pic.line = line;
             const custNode = pic.geom === 'custom' ? firstChildOf(spPrChain(chain), 'a:custGeom') : undefined;
@@ -367,8 +404,10 @@ export function walkTree(
             const outline = line ? outlineOf(outlineFields(ctx.frame, line)) : undefined;
             const rate = (g: DrawnGeom) =>
               maskCost(g) + (outline ? drawCost(g, { fill: false, outline }) : 0);
+            // Its legacy copy: the picture without its mask (free), its outline a plain one around its box.
+            const floor = outline ? legacyCost(ctx, base.xf, { fill: false, outline }) : 0;
             if (custNode) {
-              pic.custom = slideCustom(ctx, custNode, base, st, rate, line ? 2 : 1);
+              pic.custom = slideCustom(ctx, custNode, base, st, rate, line ? 2 : 1, floor);
               if (pic.custom.over) {
                 pic.support = pic.support === 'residual' ? 'residual' : 'approx';
                 pic.reasons = [...(pic.reasons ?? []), 'mask:custom'];
@@ -376,8 +415,9 @@ export function walkTree(
             } else if (pic.geom !== 'rect' || line) {
               const p = decompose(base.xf);
               const g = presetDrawn(pic.geom, pic.adj, p.w * ctx.frame.s, p.h * ctx.frame.s);
-              // Past the budget the emitted slide's own check (`emit.ts` `fitDrawing`) draws it as a rect.
-              chargeDrawing(st, rate(g));
+              // Past the budget it is kept whole, charged as its legacy copy: the emitted slide's own plan
+              // (`emit.ts` `fitDrawing`) names it for the slide's decoration plate (M9, `decor-conv`).
+              if (!chargeDrawing(st, rate(g), floor)) chargeFloor(st, floor);
             }
           }
           st.out.push(pic);
@@ -421,6 +461,17 @@ export function walkTree(
               ...(st.autogrow ? { afterAutogrow: true } : {}),
             }),
           );
+          break;
+        }
+        // M9 seams: a chart or an OLE object ordo reads (`chart.ts`, `ole.ts`; none yet), else residual.
+        const read =
+          what === 'chart'
+            ? readChart(ctx, el, from, base)
+            : what === 'ole'
+              ? readOle(ctx, el, from, base)
+              : undefined;
+        if (read) {
+          st.out.push(read);
           break;
         }
         // M6: SmartArt with PowerPoint's drawing of it is drawn natively (`smartart.ts`), its own group.
@@ -520,37 +571,25 @@ function readShape(
   const spec = drawSpecOf(ctx.frame, { fill, ...(line ? { line } : {}), ...fx }, base.xf);
   const pictureFill = fill.kind === 'picture';
   const rate = (g: DrawnGeom) => drawCost(g, spec) + (pictureFill ? maskCost(g) : 0);
+  // What it draws at least, past any budget (`slidePlan`'s floor): its legacy shape.
+  const floor = legacyCost(ctx, base.xf, spec);
   const custom = custNode
-    ? slideCustom(ctx, custNode, base, st, rate, pictureFill && line ? 2 : 1)
+    ? slideCustom(ctx, custNode, base, st, rate, pictureFill && line ? 2 : 1, floor)
     : undefined;
-  let complex = false;
   if (!custNode && (fill.kind !== 'none' || line)) {
     const p = decompose(base.xf);
     const g = presetDrawn(geom, adj, p.w * ctx.frame.s, p.h * ctx.frame.s);
-    if (!chargeDrawing(st, rate(g))) {
-      ctx.log(
-        "a shape past the slide's drawing budget (its outline, dashes or arrowheads) is drawn by LibreOffice",
-      );
-      complex = true;
-    }
+    // M9 (`decor-conv`, decisions.md "Slow-to-draw elements"): a shape past the slide's drawing budget (its
+    // pixels, its outline, dashes or arrowheads) is kept whole, never sent to the art: the budget decides how
+    // it is drawn, not whether. It is charged as its legacy copy (what every drawer draws at least), and the
+    // emitted slide's own plan (`emit.ts` `fitDrawing`) names it for the slide's decoration plate; until a
+    // plate holds it each drawer draws it natively where the slide's plan has room, else as its legacy shape.
+    if (!chargeDrawing(st, rate(g), floor)) chargeFloor(st, floor);
   }
   // A shape not drawn natively but still emitted (`emit.ts`: its legacy rect, ellipse or line, under its text)
   // is charged as that legacy shape: every drawer draws it, and no budget refuses it (renderer
-  // `geom/cost.ts` `slidePlan` counts it first). One past the drawing budget without text emits nothing.
-  const legacy = (custom?.over === true || complex) && !pictureFill;
-  if (legacy && (chars > 0 || !(complex || custom?.complex))) {
-    const p = decompose(base.xf);
-    const g = presetDrawn('rect', undefined, p.w * ctx.frame.s, p.h * ctx.frame.s);
-    const o = spec.outline;
-    st.geomCost =
-      (st.geomCost ?? 0) +
-      drawCost(g, {
-        fill: spec.fill,
-        paint: { translucent: spec.paint?.translucent !== false },
-        ...(spec.place ? { place: spec.place } : {}),
-        ...(o ? { outline: { width: o.width, join: 'miter', cap: 'butt', miterLimit: o.miterLimit } } : {}),
-      });
-  }
+  // `geom/cost.ts` `slidePlan` counts it first).
+  if (custom?.over === true && !pictureFill) chargeFloor(st, floor);
   const reasons: string[] = [];
   let support: Support = 'native';
   // M6: every preset of the table, custom geometry within the bounds, gradients and line styles are drawn;
@@ -559,11 +598,7 @@ function readShape(
   if (fill.kind === 'pattern') reasons.push('pattFill');
   if (reasons.length) support = 'approx';
   if (custom?.over) {
-    reasons.push(custom.complex ? 'custGeom:complex' : 'custGeom');
-    support = 'residual';
-  }
-  if (complex) {
-    reasons.push('geom:complex');
+    reasons.push('custGeom');
     support = 'residual';
   }
   const cxn =
@@ -610,11 +645,13 @@ function readShape(
  * A custom geometry built for an element (`geom.ts`), its points (times `times`: the objects that store
  * them) counted against the slide's 64k, its fill estimate against `GEOM_COST.geometry` and what drawing it
  * costs as emitted (`rate`: renderer `geom/cost.ts` `drawCost`, fill, outline and effects, with
- * `GEOM_COST.point` a stored point) against the slide's `GEOM_COST.slide` (`chargeDrawing`); past them it is
- * marked over the bounds (residual: LibreOffice draws it into the art; `complex` for the drawing budgets),
- * and charges nothing. The renderer holds a slide to the same budgets the same way (`geom/cost.ts`
- * `slidePlan`, `geombudget.ts`) and the emitted slide is checked by them again (`emit.ts` `fitDrawing`), so a
- * geometry kept native here is drawn natively there. Its compile notes go to the slide's log.
+ * `GEOM_COST.point` a stored point) against the slide's `GEOM_COST.slide` (`chargeDrawing`). Past the slide's
+ * points it is over the bounds (residual), and charges nothing. Past the drawing budgets (M9, `decor-conv`,
+ * decisions.md "Slow-to-draw elements") it is kept whole (`complex`), charged as its legacy copy (`floor`):
+ * the slide's decoration plate holds it, and until then the renderer, which holds a slide to the same budgets
+ * the same way (`geom/cost.ts` `slidePlan`, `geombudget.ts`, `stored.ts` past `GEOM_COST.geometry`), draws
+ * it as its legacy shape; the emitted slide's plan names it (`emit.ts` `fitDrawing`). Its compile notes go to
+ * the slide's log.
  */
 export function slideCustom(
   ctx: SlideCtx,
@@ -623,6 +660,7 @@ export function slideCustom(
   st: WalkState,
   rate?: (g: DrawnGeom) => number,
   times = 1,
+  floor?: number,
 ) {
   const p = decompose(base.xf);
   const custom = customPaths(node, p.w, p.h, ctx.frame.s, rate);
@@ -636,29 +674,59 @@ export function slideCustom(
     return { ...custom, over: true };
   }
   // A margin under the renderer's budgets, for the rounding of the stored coordinates.
-  if ((custom.fillCost ?? 0) > GEOM_COST.geometry * COST_MARGIN) {
+  const costly = (custom.fillCost ?? 0) > GEOM_COST.geometry * COST_MARGIN;
+  if (costly)
     ctx.log(
-      'a custom geometry too costly to draw (its edges cross the box many times) is drawn by LibreOffice',
+      "a custom geometry too costly to draw at once (its edges cross the box many times) is drawn from the slide's decoration plate",
     );
-    return { ...custom, over: true, complex: true };
-  }
-  if (!chargeDrawing(st, (custom.cost ?? 0) + points * GEOM_COST.point)) {
-    ctx.log("custom geometry past the slide's drawing budget is drawn by LibreOffice");
-    return { ...custom, over: true, complex: true };
-  }
   st.points = (st.points ?? 0) + points;
+  if (costly || !chargeDrawing(st, (custom.cost ?? 0) + points * GEOM_COST.point, floor)) {
+    chargeFloor(st, floor ?? 0);
+    return { ...custom, complex: true };
+  }
   return custom;
 }
 
 /**
  * Charges what drawing an element costs (`drawCost`, its stored points' share included) against the slide's
- * `GEOM_COST.slide` (within COST_MARGIN of it): false, with nothing charged, past it.
+ * `GEOM_COST.slide` (within COST_MARGIN of it), and its legacy copy (`floor`, default `cost`) against the
+ * floors: false, with nothing charged, past it.
  */
-function chargeDrawing(st: WalkState, cost: number): boolean {
+function chargeDrawing(st: WalkState, cost: number, floor = cost): boolean {
   const total = (st.geomCost ?? 0) + cost;
   if (!(total <= GEOM_COST.slide * COST_MARGIN)) return false;
   st.geomCost = total;
+  st.floors = (st.floors ?? 0) + floor;
   return true;
+}
+
+/**
+ * Charges an element the drawing budget cannot take whole as its legacy copy (`floor`), what every drawer
+ * draws for it at least (renderer `geom/cost.ts` `slidePlan`: counted first and never refused). Since M9
+ * (`decor-conv`, decisions.md "Slow-to-draw elements") such an element is always kept whole: past the floors
+ * too (a stack of full-slide fills: 140 legacy fills took 300 ms at 4K) the slide's decoration plate draws
+ * it, or the asset worker's sliced sprite until one exists (`decor-render`), never LibreOffice.
+ */
+function chargeFloor(st: WalkState, floor: number): void {
+  st.floors = (st.floors ?? 0) + floor;
+  st.geomCost = (st.geomCost ?? 0) + floor;
+}
+
+/**
+ * What an element's legacy copy costs (renderer `geom/cost.ts` `slidePlan`'s floor, `withoutPart` 'both'): a
+ * rect of its box in its legacy colour with a plain outline, without effects, what every drawer draws for it
+ * at least. A rect for every legacy kind (an ellipse or a line costs no more).
+ */
+function legacyCost(ctx: SlideCtx, xf: Affine, spec: DrawSpec): number {
+  const p = decompose(xf);
+  const g = presetDrawn('rect', undefined, p.w * ctx.frame.s, p.h * ctx.frame.s);
+  const o = spec.outline;
+  return drawCost(g, {
+    fill: spec.fill,
+    paint: { translucent: spec.paint?.translucent !== false },
+    ...(spec.place ? { place: spec.place } : {}),
+    ...(o ? { outline: { width: o.width, join: 'miter', cap: 'butt', miterLimit: o.miterLimit } } : {}),
+  });
 }
 
 /** The share of the renderer's drawing budgets the converter fills (rounding of stored coordinates aside). */

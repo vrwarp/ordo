@@ -17,6 +17,7 @@ import {
   resolvedGeom,
   storedGeometry,
 } from './stored.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 /** Stored geometries (design/27 §3.1 ShapeGeom): presets by name, re-tokenised paths, the legacy shapes. */
 
@@ -203,7 +204,7 @@ describe('traceUnionPath', () => {
     const t0 = performance.now();
     const q = new RecPath();
     traceUnionPath(q, rings(...big));
-    expect(performance.now() - t0).toBeLessThan(1_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(1_000));
     expect(new Set(areas(q))).toEqual(new Set([1]));
   });
 

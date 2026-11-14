@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { ErrorBoundary, PageError } from './components/ErrorBoundary.tsx';
 import { ConfirmHost } from './components/Confirm.tsx';
 import { Toasts } from './components/Toasts.tsx';
 import { UpdateFailedScreen, UpdatingOverlay } from './components/UpdatingScreen.tsx';
@@ -20,14 +21,25 @@ import { navigate, useRoute } from './useRoute.ts';
 import { LoginView } from './views/auth/LoginView.tsx';
 import { SetupView } from './views/auth/SetupView.tsx';
 import { Nav } from './views/Nav.tsx';
-import { DeviceSetupView } from './views/setup/DeviceSetupView.tsx';
 import { EditorView } from './views/editor/EditorView.tsx';
 import { LibraryView } from './views/library/LibraryView.tsx';
 import { LiveView } from './views/live/LiveView.tsx';
 import { PlaylistsView } from './views/playlists/PlaylistsView.tsx';
 import { PreviewsView } from './views/editor/PreviewsView.tsx';
-import { SettingsView } from './views/settings/SettingsView.tsx';
 import { reacquireOnFirstGesture } from './services/reacquire.ts';
+
+/*
+ * Pages loaded when first opened (the operator's initial bundle budget, `tools/bundle-report.mjs`): the device
+ * checklist and the Setup pages (settings) are opened before or after a service, never in its hot path. The
+ * service worker precaches every built file, so they open offline as the rest of the app does.
+ */
+const SettingsView = lazy(() =>
+  import('./views/settings/SettingsView.tsx').then((m) => ({ default: m.SettingsView })),
+);
+const DeviceSetupView = lazy(() =>
+  import('./views/setup/DeviceSetupView.tsx').then((m) => ({ default: m.DeviceSetupView })),
+);
+const pageLoading = <div className="center muted">Loading…</div>;
 
 export function App() {
   const session = useSession();
@@ -148,11 +160,20 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
         body = <PlaylistsView id={route.id} />;
         break;
       case 'settings':
-        body = role === 'operate' ? <SettingsView page={route.page} profile={profile} /> : null;
+        body =
+          role === 'operate' ? (
+            <Suspense fallback={pageLoading}>
+              <SettingsView page={route.page} profile={profile} />
+            </Suspense>
+          ) : null;
         break;
       case 'setup':
       case 'checklist':
-        body = <DeviceSetupView />;
+        body = (
+          <Suspense fallback={pageLoading}>
+            <DeviceSetupView />
+          </Suspense>
+        );
         break;
       case 'previews':
         body = <PreviewsView id={route.id} slideId={route.slideId} />;
@@ -161,7 +182,16 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
   return (
     <div className={`app app-route-${route.name}`}>
       <Nav role={role} route={route} profile={profile} />
-      <div className="page">{body}</div>
+      <div className="page">
+        <ErrorBoundary
+          key={route.name}
+          name={`page ${route.name}`}
+          resetKey={JSON.stringify(route)}
+          fallback={(retry) => <PageError route={route.name} retry={retry} />}
+        >
+          {body}
+        </ErrorBoundary>
+      </div>
       <Toasts />
       <ConfirmHost />
       <UpdatingOverlay />

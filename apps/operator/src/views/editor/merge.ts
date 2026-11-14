@@ -259,16 +259,31 @@ type Pick<T> = { ok: true; value: T } | { ok: false };
 class Merge {
   readonly conflicts: MergeConflict[] = [];
 
+  private readonly base: Presentation;
+  private readonly mine: Presentation;
+  private readonly theirs: Presentation;
+  private readonly b: Index;
+  private readonly m: Index;
+  private readonly t: Index;
+  /** theirs' value is base's, remembered under `key` across the drafts merged onto the same version. */
+  private readonly theirsKept: (key: string, tv: unknown, bv: unknown) => boolean;
   constructor(
-    private readonly base: Presentation,
-    private readonly mine: Presentation,
-    private readonly theirs: Presentation,
-    private readonly b: Index,
-    private readonly m: Index,
-    private readonly t: Index,
-    /** theirs' value is base's, remembered under `key` across the drafts merged onto the same version. */
-    private readonly theirsKept: (key: string, tv: unknown, bv: unknown) => boolean,
-  ) {}
+    base: Presentation,
+    mine: Presentation,
+    theirs: Presentation,
+    b: Index,
+    m: Index,
+    t: Index,
+    theirsKept: (key: string, tv: unknown, bv: unknown) => boolean,
+  ) {
+    this.base = base;
+    this.mine = mine;
+    this.theirs = theirs;
+    this.b = b;
+    this.m = m;
+    this.t = t;
+    this.theirsKept = theirsKept;
+  }
 
   run(): MergeResult {
     const out = this.fields(

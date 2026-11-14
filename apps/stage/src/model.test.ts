@@ -38,6 +38,7 @@ import {
   textCss,
 } from './model.ts';
 import { buildView } from './view.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 function song(): Presentation {
   return songFromParsed(
@@ -881,7 +882,7 @@ describe('the notes the stage shows', () => {
     const huge = 'x'.repeat(200_000);
     const started = performance.now();
     for (let i = 0; i < 100; i++) cutNotes(huge);
-    expect(performance.now() - started).toBeLessThan(500);
+    expect(performance.now() - started).toBeLessThan(budgetMs(500));
     expect(cutNotes(huge)!.length).toBe(NOTES_MAX + 1);
     // Never inside a surrogate pair.
     const emoji = 'a'.repeat(NOTES_MAX - 1) + '🙏'.repeat(4);

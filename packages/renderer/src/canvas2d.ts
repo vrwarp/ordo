@@ -93,11 +93,13 @@ export class Canvas2DCompositor implements Compositor {
   /** The layers of the last frame: which masks are still held when the cache is full. */
   private held: LayerStack<ImageBitmap>[] | null = null;
 
-  constructor(
-    readonly canvas: OffscreenCanvas,
-    readonly width: number,
-    readonly height: number,
-  ) {
+  readonly canvas: OffscreenCanvas;
+  readonly width: number;
+  readonly height: number;
+  constructor(canvas: OffscreenCanvas, width: number, height: number) {
+    this.canvas = canvas;
+    this.width = width;
+    this.height = height;
     const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
     if (!ctx) throw new Error('2D context unavailable');
     this.ctx = ctx;

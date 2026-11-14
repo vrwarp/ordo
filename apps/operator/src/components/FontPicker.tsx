@@ -6,20 +6,48 @@ import { useLibrary } from '../state/library.ts';
 import { errorText, toast } from '../state/toasts.ts';
 import { Dialog } from './Dialog.tsx';
 
-/** Family picker: library fonts plus system fallbacks, with Google Fonts search and add (prd/05). */
-export function FontPicker(props: { value: string; onChange: (family: string) => void; compact?: boolean }) {
+/** The value of the placeholder option a mixed selection shows (never a family: families are not empty). */
+const MIXED = '';
+
+/** The select's accessible name: its label, with "(mixed)" while the selection mixes fonts (design/15). */
+export function fontLabel(label: string, mixed: boolean | undefined): string {
+  return mixed ? `${label} (mixed)` : label;
+}
+
+/**
+ * Family picker: library fonts plus system fallbacks, with Google Fonts search and add (prd/05).
+ * `label` names the select (aria-label; default "Font"). `mixed`: the selected text has more than one font,
+ * shown as "Mixed" (not one of them) and named "Font (mixed)"; picking a family applies it to all of it.
+ */
+export function FontPicker(props: {
+  value: string;
+  onChange: (family: string) => void;
+  compact?: boolean;
+  label?: string;
+  mixed?: boolean;
+}) {
   const fonts = useLibrary((s) => s.data.fonts);
   const [search, setSearch] = useState(false);
   const families = fontFamilies(fonts);
   if (props.value && !families.includes(props.value)) families.unshift(props.value);
-  const missing = props.value && !fonts.some((f) => f.family === props.value);
+  const missing = !props.mixed && props.value && !fonts.some((f) => f.family === props.value);
   return (
     <span className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
       <select
-        value={props.value}
-        onChange={(e) => (e.target.value === '__google' ? setSearch(true) : props.onChange(e.target.value))}
-        style={{ fontFamily: props.value, maxWidth: props.compact ? 104 : 180 }}
+        aria-label={fontLabel(props.label ?? 'Font', props.mixed)}
+        value={props.mixed ? MIXED : props.value}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === '__google') setSearch(true);
+          else if (v !== MIXED) props.onChange(v);
+        }}
+        style={{ fontFamily: props.mixed ? undefined : props.value, maxWidth: props.compact ? 104 : 180 }}
       >
+        {props.mixed && (
+          <option value={MIXED} disabled>
+            Mixed
+          </option>
+        )}
         {families.map((f) => (
           <option key={f} value={f} style={{ fontFamily: f }}>
             {f}

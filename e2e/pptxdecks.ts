@@ -59,7 +59,8 @@ export const TEXT_DECK: TextDeckSlide[] = [
 /**
  * The text deck: a title over a full-slide picture, the verse slide (raised verse numbers, notes), a hidden
  * slide, a slide with a picture and shapes, an announcement. Fonts are Calibri, which an output draws with
- * the bundled Carlito and the harness with fontconfig's Carlito.
+ * the bundled Carlito where it is installed (else with its fallback chain); pptx-native.spec.ts gives the
+ * harness the output's faces, so both draw with the same files.
  */
 export async function textDeck(dir: string): Promise<string> {
   mkdirSync(dir, { recursive: true });
@@ -546,4 +547,35 @@ export function loopDeck(dir: string, m: ProbeMedia, advanceMs = 2000): string {
     'ppt/media/music.mp3': readFileSync(m.music),
   };
   return zip(buildDeck({ slides, media }), join(dir, 'Probe loop.pptx'), true);
+}
+
+/** The lyric loop's slide texts. */
+export const LYRIC_LOOP = [
+  'Amazing grace, how sweet the sound',
+  'That saved a wretch like me',
+  'I once was lost',
+];
+
+/**
+ * A worship lyric deck as some churches save it: a looping show (`p:showPr loop`) with every slide timed by
+ * `advTm`, so the import makes it an announcement loop (a1-prep: the import report explains it and treats it
+ * as slides in one tap).
+ */
+export function lyricLoopDeck(dir: string, advanceMs = 4000): string {
+  mkdirSync(dir, { recursive: true });
+  const slides: SlideSpec[] = LYRIC_LOOP.map((text, i) => ({
+    bg: solidBg('102040'),
+    shapes: sp({
+      id: 2,
+      x: IN,
+      y: 2.5 * IN,
+      cx: 11.33 * IN,
+      cy: 2 * IN,
+      txBox: true,
+      txBody: body(para(run(text, 'sz="4400"', solid('FFFFFF')))),
+      name: `Lyric ${i + 1}`,
+    }),
+    after: `${CLRMAP_OVR}<p:transition advTm="${advanceMs}"><p:fade/></p:transition>`,
+  }));
+  return zip(buildDeck({ slides }), join(dir, 'Amazing Grace.pptx'), true);
 }

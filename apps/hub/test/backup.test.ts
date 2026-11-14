@@ -91,6 +91,7 @@ describe('backups', () => {
     expect(res.headers.get('content-type')).toBe('application/zip');
     const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
     expect(Object.keys(zip.files).sort()).toEqual([
+      'capabilities.json',
       'health.json',
       'hub.json',
       'journal.json',

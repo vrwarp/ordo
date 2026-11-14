@@ -4,6 +4,7 @@ import {
   DEFAULT_KEYMAP,
   DEFAULT_LOOKS,
   DEFAULT_SURFACES,
+  upgradeStoredSurfaces,
 } from '@ordo/domain';
 import type { LibraryDelta, LibrarySnapshot, Settings } from '@ordo/protocol';
 import { applyLibraryDelta, fromSnapshot, type LibraryData } from '../lib/libraryData.ts';
@@ -40,7 +41,11 @@ export function withDefaults(s: Partial<Settings> | undefined): Settings {
     outputs: s?.outputs ?? [],
     audio: { ...DEFAULT_AUDIO, ...(s?.audio ?? {}) },
     keymap: s?.keymap && Object.keys(s.keymap).length ? s.keymap : DEFAULT_KEYMAP,
-    surfaces: { ...DEFAULT_SURFACES, ...(s?.surfaces ?? {}) },
+    // A copy cached before MIDI became opt-in reads as the hub reads it (`upgradeStoredSurfaces`).
+    surfaces: {
+      ...DEFAULT_SURFACES,
+      ...((upgradeStoredSurfaces(s?.surfaces) as Settings['surfaces']) ?? {}),
+    },
   };
 }
 
@@ -160,7 +165,10 @@ export class LibraryStore {
    */
   private early: LibOp[] = [];
 
-  constructor(private deps: LibraryStoreDeps) {}
+  private deps: LibraryStoreDeps;
+  constructor(deps: LibraryStoreDeps) {
+    this.deps = deps;
+  }
 
   async loadCached(): Promise<boolean> {
     try {

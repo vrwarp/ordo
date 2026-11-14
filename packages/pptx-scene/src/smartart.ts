@@ -7,7 +7,11 @@
  * - **Finding the drawing** as PowerPoint and LibreOffice do: the frame's `dgm:relIds r:dm` names the data
  *   model part; its `dgm:extLst` holds `dsp:dataModelExt relId`, a relationship of the part holding the frame
  *   (slide, layout or master) to the drawing part (`diagramDrawing`). Anything missing, external or malformed
- *   on the way: no drawing (residual).
+ *   on the way: no drawing (residual). A drawing whose `dsp:spTree` holds no `dsp:sp` at any depth is no drawing
+ *   either: PowerPoint writes such empty caches. LibreOffice counts top-level `dsp:sp` only
+ *   (`DiagramShapeCounter`) and lays a diagram without them out itself; ordo also accepts grouped ones, as
+ *   PowerPoint draws them. An empty cache whose data model holds no text and no picture draws nothing in
+ *   PowerPoint or LibreOffice: the frame is native and blank (M9), not residual.
  * - **The drawing's shapes** (`dsp:sp`, `dsp:grpSp` in `dsp:spTree`) have PresentationML's vocabulary, so they
  *   are read as one: a copy of the tree with the `dsp:` shape elements named `p:` (`p:sp`, `p:spPr`,
  *   `p:style`, `p:txBody`, …; DrawingML children shared, never copied) goes through the ordinary shape walk
@@ -26,7 +30,9 @@
  * - **Identity.** Every element of one drawing has `diagram` (a number per frame on the slide) and the
  *   frame's `cNvPr id`, so the render copy finds the frame again, and the frame's flattened group. The XML
  *   node of each shape is kept on it (`ShapeElement.node`), so classification rates the drawing's shapes by
- *   their own XML (3D, vertical text …), never a slide shape that shares an id.
+ *   their own XML (vertical text, warps …), never a slide shape that shares an id. Since M9 a bevel is no
+ *   longer a residual (`residual.ts`: real 3-D is approx, drawn flat), so a drawing of bevelled shapes, as
+ *   PowerPoint's 3-D quick styles write them, is drawn natively instead of going to the art whole.
  * - **Emission** (`lockDiagram`): `origin { src: 'pptx', shapeId, role: 'diagram', group }` on every object,
  *   `locked` on all but the text objects (move, resize, delete and z-order only; the text stays editable).
  * - Classification (`classify.ts` `wholeDiagrams`) keeps a drawing whole: native, or entirely in the art.
@@ -41,7 +47,7 @@ import { childSpace, type Xfrm } from './frame.ts';
 import type { Affine, ElementBase, ShapeElement } from './ir.ts';
 import { type Package, relType } from './opc.ts';
 import type { WalkState } from './walk.ts';
-import { child, num, path, type XNode } from './xml.ts';
+import { child, num, path, textOf, type XNode } from './xml.ts';
 import type { SlideObject } from '@ordo/domain';
 
 /** The extension URI under which a data model names its drawing (`dsp:dataModelExt`). */
@@ -240,12 +246,17 @@ export function modelDrawingRelId(
   return undefined;
 }
 
-/** The SmartArt drawing's tree and part of a graphic frame, or undefined when the deck holds none. */
+/**
+ * The SmartArt drawing's tree and part of a graphic frame, or undefined when the deck holds none or the
+ * drawing holds no shape (an empty cache is no drawing: the frame stays residual), or 'blank' when the
+ * drawing holds no shape and the data model nothing to draw (no text, no picture): such a frame draws
+ * nothing anywhere, so it is native and blank.
+ */
 export function smartArtDrawing(
   ctx: SlideCtx,
   from: Source,
   frame: XNode,
-): { part: string; tree: XNode } | undefined {
+): { part: string; tree: XNode } | 'blank' | undefined {
   const source = partOf(ctx, from);
   if (source === undefined) return undefined;
   const id = drawingRelId(ctx, source, frame);
@@ -261,7 +272,71 @@ export function smartArtDrawing(
     return undefined;
   }
   const tree = root?.name === 'dsp:drawing' ? child(root, 'dsp:spTree') : undefined;
-  return tree ? { part: rel.target, tree } : undefined;
+  if (!tree) return undefined;
+  // PowerPoint writes empty caches. LibreOffice counts top-level `dsp:sp` (`DiagramShapeCounter`) and lays
+  // a diagram without them out itself; ordo also accepts grouped ones, as PowerPoint draws them. Without
+  // either, the frame stays residual rather than native and blank, unless its data model has nothing to
+  // draw: then nothing draws anything for it.
+  if (!holdsShape(tree)) {
+    if (!modelHoldsContent(ctx, source, frame)) {
+      ctx.log('a SmartArt graphic holds no shapes, text or pictures: nothing is drawn');
+      return 'blank';
+    }
+    ctx.log('a SmartArt drawing holds no shapes: LibreOffice lays the diagram out');
+    return undefined;
+  }
+  return { part: rel.target, tree };
+}
+
+/** Elements of a data model looked at for its content (a deck can make one of any size). */
+const MAX_MODEL_SCAN = 200_000;
+const contentCache = new WeakMap<XNode, boolean>();
+
+/**
+ * Whether a frame's data model holds something a layout would draw: a text run with visible characters
+ * (`a:t`) or a picture (`a:blip`), anywhere in it; true when the part cannot be read or is larger than
+ * `MAX_MODEL_SCAN` elements (the frame then stays residual, as before). Iterative, memoised per part.
+ */
+function modelHoldsContent(ctx: SlideCtx, source: string, frame: XNode): boolean {
+  const dm = path(frame, 'a:graphic', 'a:graphicData', 'dgm:relIds')?.attrs['r:dm'];
+  const rel = dm ? ctx.pkg.rel(source, dm) : undefined;
+  if (!rel || rel.external || !ctx.pkg.has(rel.target)) return true;
+  let model: XNode | undefined;
+  try {
+    model = ctx.pkg.xml(rel.target);
+  } catch {
+    return true;
+  }
+  if (!model) return true;
+  const known = contentCache.get(model);
+  if (known !== undefined) return known;
+  let found = false;
+  let seen = 0;
+  const stack = [model];
+  while (stack.length && !found) {
+    const x = stack.pop()!;
+    if (++seen > MAX_MODEL_SCAN) {
+      found = true;
+      break;
+    }
+    if (x.name === 'a:blip' || (x.name === 'a:t' && textOf(x).trim())) found = true;
+    else for (const c of x.children) if (c.name !== '#text') stack.push(c);
+  }
+  contentCache.set(model, found);
+  return found;
+}
+
+/** Whether a drawing's tree holds a `dsp:sp` at any depth (groups included); stops at the first. */
+function holdsShape(tree: XNode): boolean {
+  const stack = [tree];
+  while (stack.length) {
+    const x = stack.pop()!;
+    for (const c of x.children) {
+      if (c.name === 'dsp:sp') return true;
+      if (c.name === 'dsp:grpSp') stack.push(c);
+    }
+  }
+  return false;
 }
 
 /** The context the drawing's shapes are read in: their relationships are the drawing part's. */
@@ -309,6 +384,8 @@ export function readSmartArt(
 ): boolean {
   const drawing = smartArtDrawing(ctx, from, frame);
   if (!drawing) return false;
+  // Nothing to draw (no shapes, text or pictures): read, and blank.
+  if (drawing === 'blank') return true;
   const cost = (spent.get(ctx.pkg) ?? 0) + sizeOf(drawing.tree);
   if (cost > DIAGRAM_NODE_BUDGET) {
     ctx.log('more SmartArt than an import reads natively: LibreOffice draws the rest');

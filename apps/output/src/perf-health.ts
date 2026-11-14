@@ -20,19 +20,35 @@ export type DoneTiming = { key: string; ms: number; rasterMs?: number; heavy?: b
 /** The performance figures of a health report. */
 type Perf = Pick<
   OutputHealth,
-  'gpuMB' | 'rasterMs' | 'rasterHeavy' | 'uploadMs' | 'wholeUploads' | 'budgets' | 'alarms' | 'fontCoverage'
+  | 'gpuMB'
+  | 'rasterMs'
+  | 'rasterHeavy'
+  | 'rasterAlarmMs'
+  | 'uploadMs'
+  | 'wholeUploads'
+  | 'budgets'
+  | 'alarms'
+  | 'fontCoverage'
 >;
 
 const ALARM_TEXT: Record<PerfAlarm, (h: Perf) => string> = {
-  raster: (h) =>
-    `slide raster p95 ${h.rasterMs?.p95} ms is over the ${h.budgets?.rasterP95Ms} ms budget (p50 ${h.rasterMs?.p50} ms, ${h.rasterMs?.n} slides${heavyText(h)})`,
+  raster: (h) => {
+    // The figures the alarm read: the slides whose content fits the budget when some do not, else every slide.
+    const r = h.rasterAlarmMs ?? h.rasterMs;
+    return `slide raster p95 ${r?.p95} ms is over the ${h.budgets?.rasterP95Ms} ms budget (p50 ${r?.p50} ms, ${r?.n} slides${heavyText(h)})`;
+  },
   upload: (h) =>
     `texture upload in strips ${h.uploadMs} ms per frame (last minute) is over the ${h.budgets?.uploadMs} ms budget`,
 };
 
-/** ", k of them past the budget by their content, not counted": the slides `rasterHeavy` leaves out of the alarm. */
+/**
+ * "; k more past the budget by their content, not counted (p95 of all n: x ms)": the slides `rasterHeavy`
+ * leaves out of the alarm's figures.
+ */
 function heavyText(h: Perf): string {
-  return h.rasterHeavy ? `, ${h.rasterHeavy} of them past the budget by their content, not counted` : '';
+  if (!h.rasterHeavy) return '';
+  const all = h.rasterMs;
+  return `; ${h.rasterHeavy} more past the budget by their content, not counted${all ? ` (p95 of all ${all.n}: ${all.p95} ms)` : ''}`;
 }
 
 export class PerfHealth {
@@ -137,7 +153,7 @@ export function perfDiagnostics(h: Perf): Record<string, string> {
   const fc = h.fontCoverage;
   return {
     raster: r
-      ? `slides p50 ${r.p50} ms, p95 ${r.p95} ms, max ${r.max} ms over ${r.n}${b ? ` (budget p95 ${b.rasterP95Ms} ms)` : ''}${h.rasterHeavy ? `; ${h.rasterHeavy} past the budget by their content (drawing estimate), left out of the alarm` : ''}`
+      ? `slides p50 ${r.p50} ms, p95 ${r.p95} ms, max ${r.max} ms over ${r.n}${b ? ` (budget p95 ${b.rasterP95Ms} ms)` : ''}${h.rasterHeavy ? `; ${h.rasterHeavy} past the budget by their content (drawing estimate), left out of the alarm${h.rasterAlarmMs ? `, which reads p50 ${h.rasterAlarmMs.p50} ms, p95 ${h.rasterAlarmMs.p95} ms over ${h.rasterAlarmMs.n}` : ''}` : ''}`
       : '-',
     upload:
       h.uploadMs !== undefined

@@ -1,7 +1,7 @@
 import { createWriteStream } from 'node:fs';
-import { appendFile, rm } from 'node:fs/promises';
+import { appendFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Readable } from 'node:stream';
+import { type Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { MultipartFile } from '@fastify/multipart';
 import {
@@ -47,11 +47,20 @@ import type { LogRing } from './log.ts';
 import type { MediaService } from './media/service.ts';
 import type { Store } from './store.ts';
 import { searchGoogleFonts } from './fonts/google.ts';
-import { PPTX_MIME } from './imports.ts';
+import {
+  MAX_INLINE_BYTES,
+  NO_LIBREOFFICE_PICTURES,
+  NO_PDF_IMPORT,
+  PPTX_MIME,
+  pro7TooLarge,
+} from './imports.ts';
+import { CLIENT_SCENE_LIMITS } from './pptx/clientScene.ts';
+import { NO_LIBREOFFICE_REFERENCE, NO_PDF_TOOLS } from './pptx/fallback.ts';
 import { planReimport } from './pptx/reimport.ts';
 import type { PptxImportOptions } from './pptx/shared.ts';
-import { sendFile } from './send.ts';
-import { extOf, MAX_UPLOAD_BYTES, readHead, sniff } from './store.ts';
+import { isActiveMime, sendFile } from './send.ts';
+import { extOf, MAX_UPLOAD_BYTES, readHead, sniff, tooLarge } from './store.ts';
+import type { HubTools } from './tools.ts';
 import { validate } from './validate.ts';
 
 export const DEVICE_COOKIE = 'ordo_device';
@@ -129,6 +138,58 @@ export type DocumentImportForm = {
   options: PptxImportOptions;
 };
 
+/**
+ * The PowerPoint family the import reads (design/27 M9): decks, shows (.ppsx), templates (.potx) and
+ * macro-enabled decks (.pptm), whose macro part is never read (`deckParts.ts` `SKIPPED_PART`).
+ */
+export const PPTX_EXTS: ReadonlySet<string> = new Set(['pptx', 'ppsx', 'potx', 'pptm']);
+/** The compound-file signature of PowerPoint 97-2003 (.ppt, .pps, .pot). */
+const CFB_MAGIC = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+const ODP_MIME = 'application/vnd.oasis.opendocument.presentation';
+/** What a volunteer does with a presentation the import cannot read. */
+export const SAVE_AS_PPTX =
+  'Open it in PowerPoint, Keynote or LibreOffice Impress and save it as .pptx, then import that file.';
+/** An uploaded PDF of reference pictures (PowerPoint's own export of the deck, design/27 M9). */
+export const MAX_REFERENCE_PDF_BYTES = 256 * 1024 * 1024;
+
+/**
+ * The `mimetype` an OpenDocument zip stores first and uncompressed (ODF 1.2 §3.3), from the upload's first
+ * bytes; undefined for any other zip.
+ */
+function zipMimetype(b: Uint8Array): string | undefined {
+  const u16 = (o: number) => (b[o] ?? 0) | ((b[o + 1] ?? 0) << 8);
+  if (b[0] !== 0x50 || b[1] !== 0x4b || b[2] !== 3 || b[3] !== 4 || u16(8) !== 0) return undefined;
+  const nameLen = u16(26);
+  const extra = u16(28);
+  const size = u16(18) + u16(20) * 65_536;
+  if (nameLen !== 8 || size > 100) return undefined;
+  const at = 30 + nameLen + extra;
+  if (String.fromCharCode(...b.subarray(30, 38)) !== 'mimetype' || at + size > b.length) return undefined;
+  return String.fromCharCode(...b.subarray(at, at + size));
+}
+
+/**
+ * What `POST /import/document` does with an upload, from its first bytes and its name (design/27 M9): a PDF,
+ * a PowerPoint of the OOXML family (a zip named .pptx, .ppsx, .potx or .pptm), or a refusal. PowerPoint
+ * 97-2003 (compound file), OpenDocument (.odp) and Keynote (.key) files are refused with how to save them as
+ * .pptx: converting them would hand an upload nothing can sanitise to an office suite (design/21).
+ */
+export function documentKind(
+  head: Uint8Array,
+  filename: string,
+): { kind: 'pdf' | 'pptx' } | { refused: string } {
+  const s = sniff(head);
+  if (s?.kind === 'pdf') return { kind: 'pdf' };
+  const ext = extOf(filename);
+  if (CFB_MAGIC.every((x, i) => head[i] === x) || ext === 'ppt' || ext === 'pps' || ext === 'pot')
+    return { refused: `PowerPoint 97-2003 files (.ppt, .pps) cannot be imported. ${SAVE_AS_PPTX}` };
+  if (ext === 'odp' || (s?.kind === 'zip' && zipMimetype(head) === ODP_MIME))
+    return { refused: `OpenDocument presentations (.odp) cannot be imported. ${SAVE_AS_PPTX}` };
+  if (ext === 'key') return { refused: `Keynote presentations (.key) cannot be imported. ${SAVE_AS_PPTX}` };
+  if (s?.kind === 'zip' && PPTX_EXTS.has(ext)) return { kind: 'pptx' };
+  return { refused: 'Upload a PowerPoint file (.pptx, .ppsx, .potx or .pptm) or a .pdf file' };
+}
+
 /** `POST /import/document`'s form fields; an unknown value is refused (400), absent fields are defaults. */
 export function documentImportForm(fields: Readonly<Record<string, string>>): DocumentImportForm {
   const own = (k: string) => (Object.hasOwn(fields, k) ? fields[k] : undefined);
@@ -201,15 +262,76 @@ type Ctx = LibraryApiCtx;
 
 type Received = { path: string; hash: string; bytes: number; filename: string; fieldname: string };
 
+/** The wait a 503 asks for while LibreOffice is still being checked (`Retry-After`, s). */
+const LIBREOFFICE_CHECKING_RETRY_S = 30;
+/** The wait a 503 asks for while LibreOffice does not answer (`HubTools.recheck` probes it once a minute). */
+const LIBREOFFICE_BROKEN_RETRY_S = 120;
+
+/**
+ * Refuse a request that needs LibreOffice when this hub cannot run it now (design/27 M9), once the caller
+ * waited for the probes (`tools.settled()`): 501 `libreoffice_unavailable` with `absent` when it has none
+ * ('absent', 'off'); 503 with a retry hint while it is still being checked after that wait (a slow cold
+ * start) or does not answer ('broken': probed again in the background, `recheck`), since it may be there in a
+ * minute.
+ */
+function needLibreOffice(tools: HubTools, absent: string): void {
+  if (tools.has('libreoffice')) return;
+  const state = tools.libreoffice().state;
+  if (state === 'checking')
+    throw new HttpError(
+      503,
+      'libreoffice_checking',
+      'LibreOffice is still starting on this hub. Try again in a minute.',
+      { retryAfterS: LIBREOFFICE_CHECKING_RETRY_S },
+    );
+  if (state === 'broken') {
+    void tools.recheck();
+    throw new HttpError(
+      503,
+      'libreoffice_not_answering',
+      'LibreOffice does not answer on this hub. Try again in a few minutes.',
+      { retryAfterS: LIBREOFFICE_BROKEN_RETRY_S },
+    );
+  }
+  throw new HttpError(501, 'libreoffice_unavailable', absent);
+}
+
 /** Drain a multipart request: files go to uploads/ (hashed while streaming), fields are collected. */
+/**
+ * A file part read whole up to `limit` bytes; past it the rest of the part is read and discarded (the next
+ * parts still arrive) and what was written removed: undefined. For an optional part the hub can do without
+ * (`clientScene`), so a part too large never fails the upload.
+ */
+async function receiveOrDrop(
+  hub: Ctx,
+  stream: Readable,
+  limit: number,
+): Promise<{ path: string; hash: string; bytes: number } | undefined> {
+  let n = 0;
+  let over = false;
+  const capped = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      n += chunk.length;
+      if (n > limit) over = true;
+      cb(null, over ? undefined : chunk);
+    },
+  });
+  stream.on('error', (e) => capped.destroy(e));
+  const r = await hub.store.receive(stream.pipe(capped), Number.MAX_SAFE_INTEGER);
+  if (!over) return r;
+  await rm(r.path, { force: true });
+  return undefined;
+}
+
 async function readMultipart(
   hub: Ctx,
   req: FastifyRequest,
-  opts: { maxFiles?: number; limit?: number } = {},
-): Promise<{ files: Received[]; fields: Record<string, string> }> {
+  opts: { maxFiles?: number; limit?: number; optional?: Record<string, number> } = {},
+): Promise<{ files: Received[]; fields: Record<string, string>; dropped: string[] }> {
   if (!req.isMultipart()) throw badRequest('Expected multipart/form-data');
   const files: Received[] = [];
   const fields: Record<string, string> = {};
+  const dropped: string[] = [];
   try {
     for await (const part of req.parts()) {
       if (part.type === 'file') {
@@ -217,6 +339,14 @@ async function readMultipart(
         if (files.length >= (opts.maxFiles ?? 50)) {
           f.file.resume();
           throw badRequest('Too many files');
+        }
+        const cap =
+          opts.optional && Object.hasOwn(opts.optional, f.fieldname) ? opts.optional[f.fieldname] : undefined;
+        if (cap !== undefined) {
+          const kept = await receiveOrDrop(hub, f.file as Readable, cap);
+          if (kept) files.push({ ...kept, filename: f.filename || 'upload', fieldname: f.fieldname });
+          else dropped.push(f.fieldname);
+          continue;
         }
         const r = await hub.store.receive(f.file as Readable, opts.limit ?? MAX_UPLOAD_BYTES);
         files.push({ ...r, filename: f.filename || 'upload', fieldname: f.fieldname });
@@ -227,11 +357,10 @@ async function readMultipart(
   } catch (e) {
     await Promise.all(files.map((f) => rm(f.path, { force: true })));
     const err = e as { code?: string; statusCode?: number };
-    if (err.code === 'FST_REQ_FILE_TOO_LARGE')
-      throw new HttpError(413, 'too_large', 'File exceeds the 4 GB upload limit');
+    if (err.code === 'FST_REQ_FILE_TOO_LARGE') throw tooLarge(MAX_UPLOAD_BYTES);
     throw e;
   }
-  return { files, fields };
+  return { files, fields, dropped };
 }
 
 function sessionRole(p: Principal | null): 'operate' | 'edit' | undefined {
@@ -484,16 +613,60 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     if (job) return reply.code(202).send(job);
     return hub.imports.makeEditable(id, params(req).slideId!, by(req));
   });
-  // 'Show PowerPoint picture' (design/27 §5 "Operator fallback"): LibreOffice pictures of every shown slide.
+  // 'Show PowerPoint picture' (design/27 §5 "Operator fallback"): LibreOffice pictures of every shown slide,
+  // or (M9, multipart with one PDF) the pages of PowerPoint's own PDF export, which needs no LibreOffice.
   route('POST', '/presentations/:id/pptx-reference', 'edit', async (req, reply) => {
     const id = params(req).id!;
     assertPresentationUnlocked(id);
     const p = lib.presentations.must(id);
     const fileId = p.source?.kind === 'pptx' ? p.source.fileId : undefined;
-    if (!fileId || !lib.getFile(fileId))
-      throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
+    const stored = !!fileId && !!lib.getFile(fileId);
+    const tools = hub.imports.tools;
+    if (req.isMultipart()) {
+      const { files, fields } = await readMultipart(hub, req, {
+        maxFiles: 1,
+        limit: MAX_REFERENCE_PDF_BYTES,
+      });
+      const f = files[0];
+      let showPicture: string[] | undefined;
+      try {
+        if (!f) throw badRequest('No PDF');
+        if (!stored) throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
+        // The upload took a while: the presentation may have gone live meanwhile.
+        assertPresentationUnlocked(id);
+        if (sniff(await readHead(f.path))?.kind !== 'pdf')
+          throw new HttpError(415, 'unsupported', 'Add the PDF PowerPoint exports (File, Export, PDF)');
+        await tools.settled();
+        if (!tools.has('pdfinfo')) throw new HttpError(501, 'pdf_unavailable', NO_PDF_TOOLS);
+        if (fields.showPicture !== undefined) {
+          let v: unknown;
+          try {
+            v = JSON.parse(fields.showPicture);
+          } catch {
+            throw badRequest('showPicture must be a JSON array of slide ids');
+          }
+          showPicture = validate(PptxReferenceBody, { showPicture: v }).showPicture;
+        }
+      } catch (e) {
+        if (f) await rm(f.path, { force: true });
+        throw e;
+      }
+      const ref = await hub.store.put(f.path, {
+        ext: 'pdf',
+        mime: 'application/pdf',
+        hash: f.hash,
+        bytes: f.bytes,
+      });
+      return reply
+        .code(202)
+        .send(hub.imports.pptx.queueReference(id, fileId!, by(req), showPicture, ref.hash));
+    }
+    if (!stored) throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
     const body = validate(PptxReferenceBody, req.body ?? {});
-    return reply.code(202).send(hub.imports.pptx.queueReference(id, fileId, by(req), body.showPicture));
+    // M9: LibreOffice draws these; a hub without it says how to get PowerPoint's own pictures instead.
+    await tools.settled();
+    needLibreOffice(tools, NO_LIBREOFFICE_REFERENCE);
+    return reply.code(202).send(hub.imports.pptx.queueReference(id, fileId!, by(req), body.showPicture));
   });
   // 'Re-import from PowerPoint' (design/27 §11, M4 item F): the plan, then the job on the stored deck.
   const storedDeck = (id: string) => {
@@ -617,12 +790,19 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   route('GET', '/media', 'edit', async () => lib.media.list());
   route('GET', '/media/:id', 'edit', async (req) => lib.media.must(params(req).id!));
   route('POST', '/media', 'edit', async (req, reply) => {
-    const { files, fields } = await readMultipart(hub, req);
-    if (!files.length) throw badRequest('No file in the upload (field "file")');
+    const { files: parts, fields } = await readMultipart(hub, req);
+    // An SVG may come with its still (field "raster"): a PNG the uploading client drew, kept as the file
+    // outputs draw (design/12 "Media pipeline"). One SVG per upload then.
+    const files = parts.filter((f) => f.fieldname !== 'raster');
+    const rasters = parts.filter((f) => f.fieldname === 'raster');
     const out: Media[] = [];
     try {
+      if (!files.length) throw badRequest('No file in the upload (field "file")');
+      if (rasters.length && (rasters.length > 1 || files.length > 1))
+        throw badRequest('A still picture (field "raster") comes with exactly one file');
       for (let i = 0; i < files.length; i++) {
         const f = files[i]!;
+        const raster = rasters[0];
         const name = files.length === 1 && fields.name ? `${fields.name}.${extOf(f.filename)}` : f.filename;
         out.push(
           await hub.media.ingest(f, name, {
@@ -633,12 +813,14 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
                   .map((t) => t.trim())
                   .filter(Boolean)
               : [],
+            ...(raster ? { raster } : {}),
           }),
         );
         files[i] = { ...f, path: '' };
+        if (raster) rasters[0] = { ...raster, path: '' };
       }
     } finally {
-      await Promise.all(files.filter((f) => f.path).map((f) => rm(f.path, { force: true })));
+      await Promise.all([...files, ...rasters].filter((f) => f.path).map((f) => rm(f.path, { force: true })));
     }
     return reply.code(201).send(out.length === 1 ? out[0] : out);
   });
@@ -670,11 +852,16 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const id = params(req).id!;
     if (live.locks().media.has(id)) throw locked('This media is used by the live playlist');
     const m = lib.media.must(id);
-    // A missing picture refuses goLive (design/27 §11 item 15): media that stored presentations use is
-    // deleted only with `?force=1`, which the operator sends once the user has confirmed.
+    // A missing picture refuses goLive (design/27 §11 item 15): media that stored presentations or playlists
+    // use (an item's media, background or music) is deleted only with `?force=1`, which the operator sends
+    // once the user has confirmed.
     const users = presentationsUsingMedia(lib, id);
-    if (users.length && !isForced(req.query))
-      throw new HttpError(409, 'media_in_use', mediaInUseMessage(m.name, users), { presentations: users });
+    const lists = playlistsUsingMedia(lib, id);
+    if ((users.length || lists.length) && !isForced(req.query))
+      throw new HttpError(409, 'media_in_use', mediaInUseMessage(m.name, users, lists), {
+        presentations: users,
+        playlists: lists,
+      });
     lib.media.delete(id);
     lib.emit([{ kind: 'media', id, deleted: true }]);
     for (const h of [m.original.hash, m.delivery?.hash, m.poster?.hash]) await hub.store.release(h);
@@ -833,6 +1020,14 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
           'Upload a .pro file, .proPlaylist, .probundle or a .zip of the ProPresenter library',
         );
       }
+      // A single document is read into memory by the job: past MAX_INLINE_BYTES it is refused here, unread.
+      if (!isZip) {
+        const size = (await stat(f.path)).size;
+        if (size > MAX_INLINE_BYTES) {
+          await rm(f.path, { force: true });
+          throw pro7TooLarge(f.filename, size);
+        }
+      }
       return reply.code(202).send(hub.imports.queuePro7FromUpload(f.path, f.filename));
     }
     const b = validate(z.object({ path: z.string().min(1).max(1000) }).strict(), req.body);
@@ -840,7 +1035,15 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
   route('POST', '/import/document', 'edit', async (req, reply) => {
     assertNotLive();
-    const { files, fields } = await readMultipart(hub, req, { maxFiles: 2, limit: 1024 ** 3 });
+    // A scene parsed in the browser (`clientScene`) is optional: past `CLIENT_SCENE_LIMITS.bytes` it is dropped
+    // before it is stored, and the hub parses the deck itself (design/27 §12).
+    const { files, fields, dropped } = await readMultipart(hub, req, {
+      maxFiles: 2,
+      limit: 1024 ** 3,
+      optional: { clientScene: CLIENT_SCENE_LIMITS.bytes },
+    });
+    if (dropped.length)
+      hub.log.info({ fields: dropped }, 'import/document: a client scene over its size bound was dropped');
     const f = files.find((x) => x.fieldname !== 'clientScene') ?? files[0];
     const sceneFile = files.find((x) => x.fieldname === 'clientScene' && x !== f);
     const cleanupFiles = async () => {
@@ -858,14 +1061,25 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       await cleanupFiles();
       throw e;
     }
-    const s = sniff(await readHead(f.path));
-    const ext = extOf(f.filename);
-    let kind: 'pdf' | 'pptx';
-    if (s?.kind === 'pdf') kind = 'pdf';
-    else if (s?.kind === 'zip' && ext === 'pptx') kind = 'pptx';
-    else {
+    const what = documentKind(await readHead(f.path), f.filename);
+    if ('refused' in what) {
       await cleanupFiles();
-      throw new HttpError(415, 'unsupported', 'Upload a .pptx or .pdf file');
+      throw new HttpError(415, 'unsupported', what.refused);
+    }
+    const kind = what.kind;
+    // M9: what this hub's tools cannot do is refused before anything is stored (the upload removed first).
+    const tools = hub.imports.tools;
+    await tools.settled();
+    if (kind === 'pptx' && form.renderer === 'libreoffice')
+      try {
+        needLibreOffice(tools, NO_LIBREOFFICE_PICTURES);
+      } catch (e) {
+        await cleanupFiles();
+        throw e;
+      }
+    if (kind === 'pdf' && !tools.has('pdftoppm')) {
+      await cleanupFiles();
+      throw new HttpError(501, 'pdf_unavailable', NO_PDF_IMPORT);
     }
     const ref = await hub.store.put(f.path, {
       ext: kind,
@@ -892,6 +1106,13 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     // A PDF is always pictures: the PowerPoint choice does not apply to it.
     const renderer = form.renderer === 'native' ? 'libreoffice' : form.renderer;
     return reply.code(202).send(hub.imports.queueDocument(ref.hash, f.filename, kind, renderer));
+  });
+
+  // What this hub's server tools allow (design/27 M9: LibreOffice is optional): the operator offers only what
+  // works. Not in the public /health: no tool versions to the world.
+  route('GET', '/capabilities', 'edit', async () => {
+    await hub.imports.tools.settled();
+    return hub.imports.tools.capabilities();
   });
 
   // ---------------- jobs ----------------
@@ -957,6 +1178,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       mime: f.mime,
       etag: `"${hash}"`,
       cacheControl: 'private, max-age=31536000, immutable',
+      download: isActiveMime(f.mime),
     });
   });
 
@@ -970,6 +1192,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     zip.file('journal.json', JSON.stringify(d?.journal ?? 'the live process did not answer', null, 1));
     zip.file('settings.json', JSON.stringify(s, null, 1));
     zip.file('health.json', JSON.stringify(d?.health ?? {}, null, 1));
+    zip.file('capabilities.json', JSON.stringify(hub.imports.tools.capabilities(), null, 1));
     zip.file(
       'hub.json',
       JSON.stringify(
@@ -1085,12 +1308,62 @@ export function presentationsUsingMedia(
   return out;
 }
 
-/** What the operator shows before deleting media that presentations use. */
-function mediaInUseMessage(name: string, users: { title: string }[]): string {
-  const shown = users.slice(0, 5).map((u) => `“${u.title}”`);
-  const more = users.length > shown.length ? ` and ${users.length - shown.length} more` : '';
-  const what = users.length === 1 ? 'the presentation' : `${users.length} presentations:`;
-  return `“${name}” is used by ${what} ${shown.join(', ')}${more}. Without it they cannot go live until it is replaced.`;
+/**
+ * The playlists whose items use a media item, by name: any JSON string equal to its id (a media item, an
+ * item's background or its music), the same test as `presentationsUsingMedia`.
+ */
+export function playlistsUsingMedia(
+  lib: Library,
+  mediaId: string,
+  limit = 1000,
+): { id: string; name: string }[] {
+  const quoted = JSON.stringify(mediaId);
+  const like = `%${quoted.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const rows = lib.db
+    .prepare(`SELECT id, name, json FROM playlists WHERE json LIKE ? ESCAPE '\\' ORDER BY name, id`)
+    .all(like) as { id: string; name: string; json: string }[];
+  const out: { id: string; name: string }[] = [];
+  for (const r of rows) {
+    if (!r.json.includes(quoted)) continue;
+    out.push({ id: r.id, name: r.name });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** "the presentation “A”", "3 playlists: “A”, “B”, “C”" (five named at most). */
+function usersText(kind: string, names: string[]): string {
+  const shown = names.slice(0, 5).map((n) => `“${n}”`);
+  const more = names.length > shown.length ? ` and ${names.length - shown.length} more` : '';
+  const what = names.length === 1 ? `the ${kind}` : `${names.length} ${kind}s:`;
+  return `${what} ${shown.join(', ')}${more}`;
+}
+
+/** What the operator shows before deleting media that presentations or playlists use. */
+function mediaInUseMessage(name: string, users: { title: string }[], lists: { name: string }[] = []): string {
+  const parts = [
+    ...(users.length
+      ? [
+          usersText(
+            'presentation',
+            users.map((u) => u.title),
+          ),
+        ]
+      : []),
+    ...(lists.length
+      ? [
+          usersText(
+            'playlist',
+            lists.map((l) => l.name),
+          ),
+        ]
+      : []),
+  ];
+  // A playlist's music is left out with a warning at Go live; a missing picture or media item refuses it.
+  const after = lists.length
+    ? 'Until it is replaced they go live without it, or cannot go live.'
+    : 'Without it they cannot go live until it is replaced.';
+  return `“${name}” is used by ${parts.join(' and ')}. ${after}`;
 }
 
 function isForced(query: unknown): boolean {

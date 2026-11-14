@@ -47,6 +47,15 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   on the operator origin (keeps the opener for popups it opens while isolating from
   others), and a CSP:
   `default-src 'self'; connect-src 'self' https://hub.<venue>.synology.me wss://hub.<venue>.synology.me; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self' blob:; worker-src 'self' blob:; frame-ancestors 'none'`.
+- API responses (`/api/v1/*`, `securityHeaders('api')`) carry `Content-Security-Policy: default-src 'none';
+  sandbox` and `X-Content-Type-Options: nosniff` instead: opened as a page, any of them (a stored file's link,
+  an error) is a document with an opaque origin that may load and run nothing. A CSP applies only to the
+  document it arrives with, so pictures, video, fonts and `fetch()` that use these responses are unaffected.
+  `GET /files/:hash` also sends an active type (SVG, the only one the hub stores) as
+  `Content-Disposition: attachment`, so opening it downloads it (review 2026-11-13 R4: an edit-PIN holder
+  could upload an SVG with a `<script>` that ran on the operator origin with the viewer's session when an
+  operator opened its link; `e2e/svg-media.spec.ts`). The Pages demo's service-worker hub sends the same
+  headers for its files (design/26).
 - `Permissions-Policy`: operator origin `hid=(self), midi=(self), window-management=(self), fullscreen=(self)`; output origins `fullscreen=(self), screen-wake-lock=(self), window-management=(self)`; stage `screen-wake-lock=(self), fullscreen=(self)`.
 - Cookies: `Secure; HttpOnly; SameSite=Lax; Domain=.<venue>.synology.me; Path=/`.
 - WebSocket origin check: the `Origin` header must be one of the known role origins.
@@ -60,7 +69,11 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   (without a media job) must be a still PNG, JPEG, GIF or WebP within 8,192 px a side and 40 MP, and one
   import decodes at most 6,000 MP.
 - Uploads: size limit 4 GB, extension and sniffed MIME must agree, stored under a hash
-  name, never executed. ffmpeg, LibreOffice and pdftoppm run with a timeout, a memory
+  name, never executed. An SVG is only ever drawn as an image (an `<img>`, a CSS background: no script
+  runs, nothing external loads) or served as a download (above); the PNG still that may come with it
+  (design/12 "Media pipeline") is checked by its header (a PNG within 3840 px wide and 16.7 MP, at most
+  96 MB, of the shape the SVG's root element declares) before anything is stored, and decoded by `ffprobe`
+  in the media job. ffmpeg, LibreOffice and pdftoppm run with a timeout, a memory
   limit, and no network.
 - LibreOffice never sees a deck as uploaded (design/27 §5 "Render copy", §12). A CPU-pool task writes
   a render copy: every XML part re-written from the bounded parser's tree (no declaration or entity
@@ -73,8 +86,8 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   `tools.run` timeout that kills its whole process group (`soffice.bin` included). The native
   import and the 'Pictures (LibreOffice)' import share this path.
 - Import zips: path traversal rejected; member count and total size capped.
-- PowerPoint decks for the native import (design/27 §12) are parsed only on the CPU pool (512 MB heap,
-  2 minutes per batch of slides, 15 minutes per import), never on the event loop; when the pool cannot start
+- PowerPoint decks for the native import (design/27 §12) are parsed on the hub only on the CPU pool (512 MB
+  heap, 2 minutes per batch of slides, 15 minutes per import), never on the event loop; when the pool cannot start
   the import fails cleanly (the picture import cannot build its render copy either, and LibreOffice never
   sees a deck as uploaded: a 'Pictures (LibreOffice)' import whose copy cannot be built fails too). Zip reading skips what is never read (embeddings,
   `vbaProject.bin`, custom XML, document properties), keeps XML parts within 8 MB each and 64 MB in all,
@@ -82,10 +95,29 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   the LibreOffice follow-up, reference pictures, the picture import and the text repair read decks the same
   way, and a zip whose entries' data overlap is refused. A picture is kept as it is only within its pixels'
   bytes (4 a pixel plus 1 MiB, at most 64 MiB); a larger one is re-encoded, so no deck ships padding.
-  A part or slide that cannot be read makes that slide a picture slide, never the deck.
+  A part or slide that cannot be read keeps its text (M9's rescue), never fails the deck.
+- A deck the operator imports as editable slides is also parsed in the uploading browser (design/27 §2
+  "Where the deck is parsed"), in a Web Worker with a deadline after which it is terminated, never on the
+  page's thread and never while a playlist is live; the browser's zip reader (`zip-bounded.ts`) reads the
+  central directory itself, refuses overlapping entries and more than 200,000, and counts inflated bytes
+  against the same caps as they come (an entry that inflates past its declared size stops the read), and
+  pictures and clips are only read for their first bytes. Any failure uploads the deck without a scene.
+- The hub trusts nothing of that scene (`clientScene`): a part over 32 MB is dropped before it is stored;
+  the stored scene is read, parsed and checked on the CPU pool (a zod schema with a bound on every list,
+  string and part name before any reaches the LibreOffice follow-up's payload; this hub's converter version,
+  stored fields and LibreOffice state; every slide through the `Slide` schema, the hub building from what
+  that parse returns, never the raw object, and sanitized and parsed again when version 1 is assembled; every shape file checked again as the pool's own are and re-hashed), and a
+  scene it refuses makes it parse the deck itself. The scene file holds every slide's text and speaker notes,
+  so it is released once version 1 is saved or the import fails.
 - Deck-derived strings (titles, file names, section and part names, hosts) reach a job log line or
   `source.log` only with control characters and line breaks removed and cut to 200 characters, so a deck
   cannot forge `[warn]`/`[error]` lines or a log line's time stamp.
+- Clipboard HTML pasted into the editor is untrusted (any page a volunteer copies from can write it,
+  `data-ordo-objects` included). The editor reads it with a bounded tokenizer (4 M characters, 100,000
+  nodes, 256 levels, linear time, no throw: `CLIPBOARD_LIMITS`, fuzzed), keeps only slide objects that pass
+  the schema, the importers' sanitizer and the render clamp, drops their re-import identity, and pastes at
+  most what a slide draws; an error boundary keeps a render error from unmounting the operator window
+  (design/15 "Clipboard", "Errors"). The hub's schema check on save stays the last line.
 
 ## Secrets and logs
 

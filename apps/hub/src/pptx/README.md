@@ -79,6 +79,12 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `textRepair.ts`     | `pptx-text-repair` job, `pagesOf`, `readDeckText`, `slideBoxes`, `queueTextRepair`         | G      |
 | `reimport.ts`       | 'Re-import from PowerPoint': plan, merge and the `pptx-reimport` job (M4; editor/M4.md)    | M4 F   |
 | `digest.ts`         | `importDigest`, `digestMatches`: "unedited" over the objects with an origin, everywhere    | M4     |
+| `clientScene.ts`    | Pool task `pptx-client-scene`: a browser's scene parsed and checked off the event loop     | core   |
+
+The import core (`@ordo/importers`: `pptx-scan.ts`, `pptx-geoms.ts`, `pptx-pictures.ts`, `pptx-ladder.ts`,
+`pptx-core.ts`, `pptx-report.ts`, `pptx-faces.ts`) holds the pure steps the browser's parse shares;
+`ladder.ts`, `digest.ts` and parts of `geoms.ts`, `pictures.ts`, `report.ts`, `faces.ts` and `sceneTask.ts`
+re-export from it (design/27 m9:import-core).
 
 Contracts already in place (the scaffold):
 - `@ordo/domain`: `Slide.pptx` (`SlidePptx`: fileId, index, shown, class, version, digest, pending, notes,
@@ -623,6 +629,22 @@ slide as this job stores it. The job (`geoms.ts`):
   slides through the real job: one file each, the slides native and under 16 KB, the manifest and the live
   process; the same deck again storing nothing new; the import budget).
 
+<!-- m9:conv-seams -->
+## M9 wave 1: converter version 2 and the M9 field gate (m9/conv-seams)
+
+- `CONVERTER_VERSION` is 2 (`@ordo/pptx-scene` `version.ts`, re-exported by `shared.ts`): the converter that
+  draws 3-D flat and writes the M9 fields.
+- `M9_WRITES` (`version.ts`, re-exported by `shared.ts`, the client parse's too): the M9 stored fields the import writes, every one (M9 decision 1) but those whose
+  drawer or reader is not on main yet (`M9_HELD_BACK`: 'decor' and 'decorFile' until `decor-render` draws
+  decorations and names their files); `sceneTask.ts` passes it as `EmitOptions.m9Writes` with
+  `sheets: PPTX_SHEETS` (false until `decor-render` stores composites and atlases), so the slide budgets plan
+  neither (design/27 §15 M9 "rollout"). Taking a field out is the kill switch: the import then writes what an
+  older build draws for it. In wave 1 no converter part writes an M9 field yet (the stubs of
+  `@ordo/pptx-scene`), so nothing stored changes.
+- `EmitOptions.libreoffice` (default true) is `lo-detect`'s to set: with false the converter plans no art and
+  no metafile conversion and lists `EmittedSlide.missing` and `artText` instead.
+<!-- /m9:conv-seams -->
+
 ## Not in this wave
 
 Waiting for M2's second wave to merge: rich text emission (runs and paragraphs) from the converter; bundled
@@ -630,3 +652,135 @@ substitutes in drawers (M2's font resolver). Later in M3 wave 2: recoloured pict
 recolouring), noted on the slide; flipped pictures and ellipse and roundRect picture masks are written and
 drawn since M4 item D. Hub budgets measured on a reference NAS. 'Re-import from PowerPoint' (M4). A copy of a hybrid
 slide made before LibreOffice finished keeps no art.
+
+<!-- m9:lo-detect -->
+## M9 wave 1: LibreOffice optional at run time (m9/lo-detect)
+
+The hub detects its server tools and keeps every PowerPoint path working without LibreOffice (design/27 M9;
+lo-dependencies §4.2-4.4, §4.6-4.11).
+
+- **Detection** (`../tools.ts`, one `HubTools` per library process, owned by `ImportService`, given to every job
+  as `PptxDeps.tools`): `ORDO_LIBREOFFICE` = `auto` (default: `soffice`, else `libreoffice`, on the PATH; no
+  process started to find it), `off` (`0`/`false`/`no`: no office code ever runs on a deck), or soffice's
+  absolute path. In the background it asks `soffice --version` through the same hardened command as the
+  conversions (`sofficeCommand(args, home, mb, exe)`, 30 s) and `pdftoppm -v` (with `pdfinfo` found on the
+  PATH); `ready` settles once both answered and the jobs await it. One log line per tool. States: `checking`,
+  `available` (with its version), `absent`, `off`, `broken` (installed, but its version command fails).
+  `ToolError.missing` (spawn ENOENT/EACCES, a launcher's exit 126/127 'failed to execute') marks a tool absent
+  from then on (`markMissing`), so a hub whose image lost LibreOffice says so without a restart. Only
+  `absent` and `off` mean no LibreOffice: a `broken` one (its 30 s probe timed out on a slow cold start, or its
+  version command failed once) is probed again by the jobs that need it (`HubTools.recheck`, one probe at a time,
+  at most once a minute), and becomes `available` without a restart when it answers.
+- **`GET /capabilities`** (edit role; `HubCapabilities` in `@ordo/protocol`; also in the diagnostics zip):
+  LibreOffice's state and version, `pdf` (pdftoppm), the extensions `/import/document` accepts and
+  `pptx.{pictures, reference, referencePdf, art}`. Not in the public `/health`.
+- **The native import** (`nativeJob.ts`) awaits the tools (a broken LibreOffice probed again first; while it
+  does not answer the art is still planned and waits for it), tells the converter (`SceneTaskInput.libreoffice:
+  false` → `EmitOptions.libreoffice`) and, without LibreOffice, sets no slide `pending` and queues no
+  `pptx-lo`: what the art or a metafile conversion would have drawn is listed in `Slide.pptx.missing`
+  (the converter's `EmittedSlide.missing`, or, from a converter that still plans art, the kinds of the art's
+  `art:<reason>` reasons, `artKinds`, read through the converter's decision table `residual.ts` so both
+  lists agree); such a slide is hybrid with no art object (M9 decision 8), a picture-class slide lists
+  `slide` and keeps its text for search. The result says `libreoffice` and how many slides have something
+  `missing`. With LibreOffice each follow-up plan records those kinds (`PptxLoSlide.kinds`). The slide's
+  notes are added with the converter's `addNote`, so they stay within 16 with 'and N more' last.
+- **A follow-up on a hub without LibreOffice** (`fallback.ts` `withoutLibreOffice`: queued before it went
+  away, a restored revision, or soffice found gone mid-run): one save (never while live-locked) clears
+  `pending` on the deck's waiting slides and sets `missing` from the plan, and in the same transaction the
+  re-import of those slides is queued, which redraws the unedited ones with this converter and keeps the
+  edited ones. Never retried, LibreOffice never runs. A restored revision's follow-up goes on the light queue
+  when LibreOffice is known to be missing. A slide whose plan recorded no kinds (its art only improved on what
+  version 1 draws: real 3-D past the object budget, drawn flat) stops waiting with nothing missing and is
+  native; the note is added with `addNote`. A follow-up that finds LibreOffice `broken` defers itself with
+  backoff instead (`LO_PROBE_RETRIES`, about half an hour, `PptxLoPayload.probes`), probing it again each time,
+  and past the last attempt marks the slides `failed` as after any LibreOffice failure, never `missing`.
+- **Refusals in words, never a tool's output**: `renderer=libreoffice` without LibreOffice is 501
+  `libreoffice_unavailable` (the upload removed first); a PDF without pdftoppm is 501 `pdf_unavailable`; a
+  queued picture import, reference job or PDF import on a hub that lost the tool fails with the same words.
+  While LibreOffice is still `checking` after the routes' 5 s wait, or `broken`, the routes that need it answer
+  503 with `Retry-After` (`libreoffice_checking`, 30 s; `libreoffice_not_answering`, 120 s, and a probe again in
+  the background) instead. An upload past a route's own limit is 413 in that limit's words (`tooLarge`: 'the
+  256 MB upload limit' for the reference PDF).
+- **'Show original' from PowerPoint's own PDF**: `POST /presentations/:id/pptx-reference` as multipart with
+  one PDF (sniffed `%PDF`, ≤ 256 MB, optional field `showPicture` as a JSON array; 423 while live) queues the
+  same job with `PptxReferencePayload.pdf`. `pdfinfo` gives the page count, which must be the shown slides
+  (PowerPoint's default) or every listed one ('print hidden slides'), else the job fails with both counts;
+  every page must be shaped like the slides (within 1 %); pdftoppm draws each page the presentation needs at
+  the size LibreOffice's pages have. The PDF is released when the pictures are on the slides or the job
+  fails for good, unless another queued or running reference job names it (two presentations from one deck
+  given the same PDF: `releaseReferencePdf`); a job given up after repeated crashes releases it in its give-up.
+  A job is aborted only by a shutdown (the queue has no cancel), after which it runs again with the PDF. A JSON request (LibreOffice draws them) without LibreOffice is 501
+  `libreoffice_unavailable`: "This hub has no LibreOffice. Add a PDF exported from PowerPoint instead."
+- **Formats** (`routes.ts` `documentKind`): .pptx, .ppsx, .potx and .pptm import natively (`vbaProject.bin`
+  is never read: `deckParts.ts` `SKIPPED_PART`); .ppt/.pps/.pot (compound file), .odp (by name or its
+  `mimetype`) and .key are refused with 415 `unsupported` and "Open it in PowerPoint, Keynote or LibreOffice
+  Impress and save it as .pptx, then import that file."
+- **Re-import** (`reimport.ts`): without LibreOffice it queues no follow-up and never waits for one.
+- Tests: `apps/hub/test/tools.test.ts` (the six detection cases), `apps/hub/test/pptx-no-libreoffice.test.ts`
+  (`ORDO_LIBREOFFICE=off` with a recording soffice first on the PATH that never runs), `apps/hub/test/pptx-lo-broken.test.ts`
+  (a LibreOffice that does not answer: `recheck`, the deferred follow-up, the 503s). Test hubs see the tools
+  as available (`helpers.ts` `TEST_TOOLS`) unless a test says otherwise, so the suites behave the same on any
+  machine.
+- Not in this track: the budget ladder that replaces picture slides (`ladder`), the image without
+  LibreOffice and the CI leg (`lite-image`), the harness's `--no-libreoffice` and hub import (`harness`).
+<!-- /m9:lo-detect -->
+
+<!-- m9:ladder -->
+## M9 wave 2: the budget ladder (m9/ladder)
+
+Without LibreOffice no budget and no failure makes a picture slide (design/27 M9, plan decision 3); `toPicture`
+is left for a slide the converter classes picture (since `decor-conv` only behind the harness's
+`ParseOptions.budgetArt`: the slide budgets are drawn natively, and a slide past 150 objects reaches the ladder
+instead) and, on a hub with LibreOffice, for a slide over 64 KB that the ladder would store plain or minimal
+(below).
+
+- **Step 3** (`nativeJob.ts` `budget`, pure parts in `ladder.ts`, which the harness's census also runs):
+  - outline files are admitted one by one in slide order within `PPTX_LIMITS.geomFileBytes`; an object that
+    names one past it (or one dropped as its batch arrived, or one its batch's bound left out, `geomOver`) is
+    left out, a picture keeps its box without the mask (`withoutFiles`);
+  - every slide is measured as stored (`storedBytes`: one-slide `sanitizePresentation`, `Slide.safeParse`,
+    ULID ids and SHA-256 refs; `quickBytes` for slides well within 64 KB) and fitted with
+    `fitSlideBudget` (grid, plain, minimal: a background's shape, origin role 'bg', stays; the tail's
+    `minimalSlide` keeps it as a plain rect in its colour, about 200 bytes);
+    `planImportSizes` then takes the fitted sizes and each slide's
+    minimal form (`minimalSlide`) as its compact size, and the tail is stored minimal. A deck that does not fit
+    with the pages is planned again with minimal forms without them (`planLadder`); one too large even then
+    has its tail's text cut to 200 characters a box (as the compact slides' search text was);
+  - each simplified slide gets one note ('simplified to fit the slide budget: …', 'the presentation reached
+    its size budget: only its text and pictures are kept') and one warning; what it lost is `Slide.pptx.missing`
+    ('decoration', 'chart') with or without LibreOffice, the slide is hybrid and never `pending`
+    (`provenance`: a hybrid slide waits for LibreOffice only for its art). `PptxNativeResult.simplified`
+    counts them; `compact` is 0;
+  - **with LibreOffice** (the 2026-11-13 review, `ImportCore.pageForBudget`): a slide over 64 KB that the
+    ladder would fit by leaving something out ('plain': formatting; 'minimal': decorations) keeps
+    LibreOffice's page instead, as every such slide did before M9: picture class, `pending`, its whole text in
+    `pptx.artText`, the note 'over 64 KB: LibreOffice draws its page' and one warning for the import. Only when
+    the page form (`compactSlideBytes`) is within 64 KB and the presentation's plan still holds; the tail stays
+    minimal. A hub with LibreOffice so never shows less of a slide than one without it, nor less than before
+    M9 (22 worship slides of E stored plain or minimal scored 0.13-0.94 against LibreOffice; their page
+    0.90-0.999).
+- **Step 3b**: an object naming a file the store could not take is left out the same way (was: the slide a
+  compact picture).
+- **Step 5**: a slide the schema refuses is stored minimal, else with its text objects rebuilt from their text
+  and box (`rescuedTexts`), with a note and a warning (was: a compact picture).
+- **Step 2c, failures** (`convert`, `batch`, `oneByOne`, `rescue`): a batch's slide parts are sent as copies,
+  so a failed batch is converted again slide by slide (`RETRY_SLIDE_MS`, 30 s each, within the pool-time
+  budget); a slide that still fails, one the converter read as `unreadable`, and the slides past
+  `PPTX_LIMITS.importPoolMs` go to the text rescue: pool task `pptx-scene` with `SceneTaskInput.rescue`
+  (`sceneTask.ts` → `@ordo/pptx-scene` `rescueDeck`: own text bodies and table text, no geometry; runs of
+  consecutive slides per call at `RESCUE_SLIDE_MS` 2 s a slide, a failed run slide by slide, all within
+  `RESCUE_TOTAL_MS` 2 minutes, each call stopped by an abort timer). A rescued slide is hybrid with
+  `missing: ['slide']` and the rescue's note; one nothing could read is an empty slide that says so.
+- **A scene parsed on the client** (`stepsFromClientScene`, the operator's default path since main's #11,
+  checked in the pool first, `clientScene.ts`) follows the same rules, with the same core (`ImportCore`). A
+  slide past the client's bound on outline files (`PPTX_CLIENT_LIMITS.batchGeomBytes`,
+  `PptxClientScene.geomOver`) keeps the placeholders of the files it was not given, so the hub leaves out the
+  objects that name them (`withoutFiles`, `leftOut`) instead of keeping legacy shapes where traced outlines
+  were. A slide the client read as `unreadable`, or one the scene lacks, gets the text rescue from its own
+  parts, read from the stored deck here (`rescueClientSlides`); nothing else of the deck runs on the pool.
+- Tests: `pptx-no-libreoffice.test.ts` ('the budget ladder without LibreOffice': over 64 KB, the 4 MiB tail,
+  the outline-file budget, a schema refusal, the rescue, the retry), `pptx-native.test.ts` (the same with
+  LibreOffice: no follow-up for a budget but a page for a slide stored plain), `pptx-geoms.test.ts`, `pptx-integrate.test.ts` (2,000-slide decks; a crowded 4:3 slide that keeps LibreOffice's page),
+  `pptx-import-route.test.ts` (a client scene past its outline bound, and with slides it could not read).
+<!-- /m9:ladder -->
+

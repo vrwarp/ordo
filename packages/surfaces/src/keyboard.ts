@@ -48,11 +48,11 @@ export class KeyboardDriver {
   private now: () => number;
   private repeatIntervalMs: number;
   private lastRepeatAt = Number.NEGATIVE_INFINITY;
-  constructor(
-    private map: KeyMap,
-    private dispatch: Dispatch,
-    opts: KeyboardOptions = {},
-  ) {
+  private map: KeyMap;
+  private dispatch: Dispatch;
+  constructor(map: KeyMap, dispatch: Dispatch, opts: KeyboardOptions = {}) {
+    this.map = map;
+    this.dispatch = dispatch;
     this.now = opts.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this.repeatIntervalMs = opts.repeatIntervalMs ?? KEY_REPEAT_INTERVAL_MS;
   }

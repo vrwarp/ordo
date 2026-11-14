@@ -6,8 +6,9 @@ import { drawSlide2D } from './text2d.ts';
 import { recordingCtx } from './text/test-util.ts';
 
 /**
- * design/27 §14.7: a slide written with the new fields, as the previous release reads it (every new key
- * stripped), still draws its text; and the rich slide itself draws through the rich engine.
+ * design/27 §14.7: a slide written with the new fields, as the previous release reads it (main's 0.5.0:
+ * every key it does not know stripped), still draws its text; and the rich slide itself draws through the
+ * rich engine. 0.5.0 already has rich text, so it keeps the rich slide whole (clamp.m9.test.ts checks M9's).
  */
 
 const img = { width: 160, height: 90 } as unknown as CanvasImageSource;
@@ -19,11 +20,12 @@ function drawn(slide: Slide) {
 }
 
 describe('previous-release compatibility (design/27 §14.7)', () => {
-  it('the stripped slide still draws its text, shapes and pictures', () => {
+  it('the slide as the previous release reads it still draws its text, shapes and pictures', () => {
     const stripped = prev.Slide.parse(richSlide()) as Slide;
     const ops = drawn(stripped);
     const text = ops.filter((o) => o.op === 'fillText').map((o) => o.args[0] as string);
-    expect(text.join(' ')).toContain('For God so loved');
+    // Lines wrap between words: compare the letters.
+    expect(text.join('').replace(/\s+/g, '')).toContain('ForGodsoloved');
     expect(ops.some((o) => o.op === 'fill')).toBe(true);
     expect(ops.some((o) => o.op === 'drawImage')).toBe(true);
   });

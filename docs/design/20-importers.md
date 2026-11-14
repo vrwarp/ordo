@@ -19,7 +19,7 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
 | `Slide.elements` of type text: `rect` and `text` (RTF)                             | `TextObject`: multi-run rich text (`runs`), per-paragraph styles (`paras`), `lineMask` overlays; empty-RTF boxes with fills/strokes route to `ShapeObject` |
 | `Slide.elements` of type shape                                                     | `ShapeObject`: box, preset shapes, custom cubic bezier paths (`geom`), solid and gradient fills, strokes, shadows, soft edges                              |
 | `Slide.elements` of type image or video                                            | `ImageObject` or slide background; path masks, crop insets, custom bounds, shadows, soft edges; media located relative to import root and uploaded         |
-| `Presentation.background`                                                          | `backgroundMediaId`                                                                                                                                        |
+| `Presentation.background`                                                          | a backdrop shape on each slide without its own colour (`role: 'bg'`, below); media → `backgroundMediaId`                                                   |
 | `arrangements`                                                                     | `Arrangement[]`                                                                                                                                            |
 | Playlists referencing `.pro` by UUID                                               | `Playlist` items referencing imported presentations                                                                                                        |
 | Builds, transitions per slide, macros, timers, looks, stage layouts, audio routing | Skipped, logged                                                                                                                                            |
@@ -53,7 +53,10 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
   - Non-rectangular `Path.shape` presets (`TYPE_ELLIPSE`, `TYPE_ROUNDED_RECTANGLE`, isosceles and right
     triangles, rhombus, single and double arrows, polygons, stars) and `TYPE_CUSTOM` cubic bezier paths
     become `ShapeObject` or element `ShapeGeom`. Element drop `shadow` and `feather` (`softEdge = radius ×
-    min(w, h) × 0.5`) are carried on shapes and images.
+    min(w, h) × 0.5`) are carried on shapes and images, and a shape and a picture with the same fields look
+    the same: both are drawn by the renderer's effects path (design/27 §7.1 "Picture effects": the shadow
+    blurred by σ = blur/√6, the soft edge eroding the element's own outline, its round corners included,
+    on every engine, WebKit too).
   - Text line masks (`textLineMask`) support `fullWidth`, `lineWidth`, and `maxLineWidth` styles with solid
     or gradient fills, horizontal/vertical/width/height offsets, and Cocoa `0.065 × F` intra-strap baseline
     centering on middle-aligned masks.
@@ -99,6 +102,16 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
     A slide that stops a running background gets `clearBackground`, which clears the
     output's background layer when it is shown. The `exportCompat` option isolates each cue's
     background for slide-for-slide export comparison without changing live background continuation.
+  - A slide's own colour (`drawsBackgroundColor`), else the presentation's background colour or
+    gradient (`Presentation.background`, as #20 intended), is part of the slide above the background
+    media, as in ProPresenter: a full-slide shape at the bottom of its objects, so a running picture or
+    video is hidden behind it. It is marked as the slide's backdrop (`origin: { src: 'pro7', role: 'bg' }`,
+    unlocked, as a PowerPoint slide's solid background is), so ordo's background changes replace it rather
+    than sit behind it: the editor's Background button and Slide panel "Replace…" (`replaceBackground`)
+    remove it when they give the slide a picture, and a playlist item's Background override draws the slide
+    without it (`Cue.backgroundOverride`, `withoutBackdrops`) on screens that show backgrounds and in the
+    live slide grid. Before PR #23 the shape carried no mark and a replaced background or an override did
+    not show on such songs.
 - Not carried (logged per document): slide labels, cue hot keys, group colours, builds,
   per-slide transitions, macros, timers, linked text (imported as last saved), title case /
   one-word-per-line transforms, text-box borders without a backing fill.
@@ -106,8 +119,16 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
   scan of real 7.x and 21.x files found only cosmetic fields it lacks (ligature style, an
   image alpha-type flag); `autogen-proto/` in the same repository tracks ProPresenter 21.4
   and is the set to move to when a file shows fields that matter.
-- Import root: a zip uploaded from the operator app or a NAS path the hub can read. The
-  log groups by presentation: imported, partially imported (with reasons), skipped.
+- Import root: a zip uploaded from the operator app, a single `.pro`, `.proPlaylist` or `.probundle`
+  upload (since #10), or a NAS path the hub can read inside its import roots: a library folder, or one
+  of those files or a library `.zip` (any other file is refused, 415). A single document is read into
+  memory only after its size is checked (stat before read): past 64 MB (`MAX_INLINE_BYTES`, the size past
+  which the zip and folder readers treat a file as media) it is refused, 413, by the route and again by
+  the job. A single `.pro` from a NAS path brings its media from its folder: the media files in it and
+  up to two levels below (at most 20,000 entries looked at, dot entries skipped) are offered to the
+  importer as a folder import's are, so "Media found alongside is uploaded" holds for one song too;
+  other documents beside it are not imported. The log groups by presentation: imported, partially
+  imported (with reasons), skipped.
 
 ## SongSelect files
 
@@ -184,17 +205,42 @@ presentation while it is live-locked (it re-queues itself with backoff, 30 s dou
 ### Native import (editable slides)
 
 The native import ([design/27](27-pptx-native-renderer.md), M3) turns a deck into ordinary, editable ordo
-objects instead of page pictures. The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
+objects instead of page pictures. Its steps are one **import core** in `@ordo/importers`, which runs in Node,
+browsers and Web Workers: the scan (`pptx-scan.ts`: limits, `scanDeck`, `clipParts` with its candidate bound,
+`extrasOf`), shape files (`pptx-geoms.ts`: `geomFileOf`, `nameGeoms`, `nameShapeFiles` with the kinds hook
+`SHAPE_FILE_KINDS` that decoration files join with `decor-render`), picture headers and display needs
+(`pptx-pictures.ts`), the one SHA-256 (`sha256.ts`, incremental), the budget ladder (`pptx-ladder.ts`), the
+drafts, budgets, provenance and assembly (`pptx-core.ts` `ImportCore`) and the import log (`pptx-report.ts`).
+The hub's job, its pool task and the browser's parse all call them; the converter's version and stored
+fields are one constant each in `@ordo/pptx-scene` (`version.ts`: `CONVERTER_VERSION`, `M9_WRITES` less
+`M9_HELD_BACK`, and `PPTX_SHEETS`).
+
+**Where the deck is parsed.** The operator parses a deck it imports as editable slides in a Web Worker
+(`parsePptxScene`, design/27 §2 "Where the deck is parsed") and uploads the scene with the deck
+(`clientScene`); the hub checks it in its pool and builds version 1 from it with the same core, or parses
+the deck itself (any failure, timeout or refusal on either side; a playlist live; an old browser). The
+browser's zip reader (`zip-bounded.ts`) reads the central directory itself (never JSZip's private sizes),
+refuses overlapping entries and more than 200,000, and counts inflated bytes as they come: an entry that
+inflates past its declared size, an XML part over 8 MB or 64 MB of XML in all stop the parse; pictures and
+clips are only read for their first bytes (a picture's pixel size, a clip's kind), within the hub's spill
+budget.
+
+The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
 
 - reads the XML and relationship parts (each ≤ 8 MB, ≤ 64 MB in all; a larger part makes its slide a
   picture slide) and only the pictures the slides, their layouts, masters and themes relate to (≤ 2,000,
   ≤ 1 GiB, under generated names); embeddings, macros, custom XML, document properties and printer settings
   are skipped;
 - parses and converts on the CPU pool with `@ordo/pptx-scene`: a scan (slide list, sections, referenced
-  pictures, metafiles, speaker notes, the show's loop flag), then batches of at most 150 slides. A batch that
-  fails or runs out of the import's pool time leaves its slides as picture slides, never the deck;
-- applies the size budgets of design/27 §3.4: a slide over 64 KB, and every slide once the presentation
-  passes 3 MiB, becomes a compact picture slide (logged, counted in the job result);
+  pictures, metafiles, speaker notes, the show's loop flag), then batches of at most 150 slides; or takes a
+  checked client scene instead (`clientScene.ts`). A batch that fails is converted again slide by slide, and
+  a slide that still fails, or one past the import's pool time, keeps its text (M9's rescue), never the deck;
+- applies the size budgets of design/27 §3.4 as M9's budget ladder: a slide over 64 KB is simplified to fit
+  (outlines re-gridded, text formatting, then decorations left out), and once the presentation passes
+  3 MiB the slides from there on keep their text, pictures and background; without LibreOffice no slide
+  becomes a picture for its size (logged, counted in the job result as `simplified`), and with it a slide
+  over 64 KB that would lose formatting or decorations keeps LibreOffice's page, as before M9
+  (`ImportCore.pageForBudget`);
 - stores the pictures (prepared to their display need, deduplicated) and saves version 1: every slide's
   native objects, `Slide.pptx` provenance (deck, place, class, converter version, the digest of the objects
   as stored, `pending` while LibreOffice work remains), speaker notes, `p14` sections in order with a Default

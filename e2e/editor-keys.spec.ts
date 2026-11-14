@@ -26,7 +26,7 @@ import { hubApi } from './linkhelpers.ts';
  * - the arrows in the Align radio group choose an alignment and do not nudge the box;
  * - Enter on the focused Bold button makes the selection bold (the editor no longer swallows it);
  * - Bold, then Ctrl+Z in the text field takes the Bold back (the editor's undo, not the field's), also after
- *   typing (the typed text stays); Ctrl+Y brings it back;
+ *   typing (the typed text stays); Ctrl+Y brings it back; a selection made in the same moment is kept;
  * - Backspace on a focused format button deletes nothing;
  * - in the Find dialog, Enter on 'Replace all' replaces, and Delete on its Close button does not delete the
  *   text box selected behind the dialog.
@@ -119,6 +119,33 @@ test('the editor by keyboard: radio arrows, Enter on buttons, Ctrl+Z after a for
     .poll(async () => JSON.stringify((await byId(page, note.id)).runs ?? []))
     .toBe(JSON.stringify(runs0));
 
+  // ---- A selection made right after Ctrl+Y or Ctrl+Z (the next click, Shift+End, keys typed in the same
+  // frame) is kept: the editor puts the field's range back as it handles the key, never a frame later over
+  // a newer selection (which then took the next typing to the old place).
+  const kept = await field.evaluate(async (el) => {
+    const t = el as HTMLTextAreaElement;
+    const key = (k: string) =>
+      t.dispatchEvent(
+        new KeyboardEvent('keydown', { key: k, ctrlKey: true, bubbles: true, cancelable: true }),
+      );
+    const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    t.focus();
+    t.setSelectionRange(0, 7);
+    key('y');
+    t.setSelectionRange(3, 3);
+    await frames();
+    const afterRedo = [t.selectionStart, t.selectionEnd];
+    t.setSelectionRange(0, 7);
+    key('z');
+    t.setSelectionRange(5, 5);
+    await frames();
+    return { afterRedo, afterUndo: [t.selectionStart, t.selectionEnd] };
+  });
+  expect(kept).toEqual({ afterRedo: [3, 3], afterUndo: [5, 5] });
+  await expect
+    .poll(async () => JSON.stringify((await byId(page, note.id)).runs ?? []))
+    .toBe(JSON.stringify(runs0));
+
   // ---- Typed text, then a Bold by mouse, then Ctrl+Z: the Bold goes, the typed text stays.
   await select(page, ANNOUNCEMENT_TEXT.length, ANNOUNCEMENT_TEXT.length);
   await page.keyboard.type(' today');
@@ -177,6 +204,48 @@ test('the editor by keyboard: radio arrows, Enter on buttons, Ctrl+Z after a for
   const saved = await saveAndReload(page, a, p.id);
   const after = slidesOf(saved)[1]!.objects.find((o) => o.id === note.id)!;
   expect(after.text).toBe(typed.replace('12 May', '19 May'));
+});
+
+test('with the non-modal Find open the canvas keeps its shortcuts, and Escape closes Find first', async ({
+  page,
+}) => {
+  const a = await hubApi(PORT);
+  const p = await importDeck(a, deck);
+  const note = slidesOf(p)[1]!.objects.find((o) => o.type === 'text' && o.text === ANNOUNCEMENT_TEXT)!;
+  await openEditor(page, PORT, p.id);
+  await openSlide(page, 2);
+  const count = (await slideObjects(page)).length;
+  const find = page.getByRole('dialog');
+  /** Select the note on the canvas, open Find with Ctrl+F, then leave the focus on the page (a canvas click). */
+  const selectThenFind = async () => {
+    await expect(async () => {
+      await clickObject(page, note);
+      expect((await editorState(page)).objectId).toBe(note.id);
+    }).toPass({ timeout: 15_000 });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press('Control+f');
+    await expect(find.getByLabel('Find', { exact: true })).toBeFocused();
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  };
+
+  // One Escape closes Find and keeps the selection; the next one drops the selection.
+  await selectThenFind();
+  await page.keyboard.press('Escape');
+  await expect(find).toHaveCount(0);
+  expect((await editorState(page)).objectId).toBe(note.id);
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await editorState(page)).objectId).toBeUndefined();
+
+  // With Find open, Delete and Ctrl+Z still act on the slide, and Find stays open. The next click must not be
+  // a double-click with the first (Konva's 400 ms window): that would start editing the text, whose hidden
+  // field takes the focus a frame later, after Ctrl+F has opened Find.
+  await page.waitForTimeout(500);
+  await selectThenFind();
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await slideObjects(page)).length).toBe(count - 1);
+  await page.keyboard.press('Control+z');
+  await expect.poll(async () => (await slideObjects(page)).length).toBe(count);
+  await expect(find).toBeVisible();
 });
 
 test('arrow up and down navigate slides when nothing has focus', async ({ page }) => {

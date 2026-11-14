@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { convertDeck, parseDeck } from './index.ts';
 import type { ShapeElement } from './ir.ts';
 import { body, buildDeck, type DeckSpec, para, run, sp, xfrm } from './test-util.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
 /** About 7 MB of one attribute: within the 8 MB part budget, with the rest of the part. */
@@ -19,7 +20,7 @@ function within5s(spec: DeckSpec) {
   const t0 = performance.now();
   const out = convertDeck(parts);
   const ms = performance.now() - t0;
-  expect(ms).toBeLessThan(5_000);
+  expect(ms).toBeLessThan(budgetMs(5_000));
   return out;
 }
 
@@ -44,7 +45,7 @@ describe('deck strings in a shared style node, read again by every run and parag
       const parts = buildDeck(textDeck(font, para(run('x')).repeat(3_000)));
       const t0 = performance.now();
       const s = parseDeck(parts);
-      expect(performance.now() - t0).toBeLessThan(5_000);
+      expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
       return s;
     })();
     const p = (scene.slides[0]!.elements[0] as ShapeElement).text!.paras[0]!;
@@ -103,7 +104,7 @@ describe('large shared nodes, read again by every shape, run or slide', () => {
     const parts = buildDeck({ layouts: [{ shapes: deco }], slides: Array.from({ length: 300 }, () => ({})) });
     const t0 = performance.now();
     const scene = parseDeck(parts);
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     const texts = scene.slides.map((s) => (s.elements[0] as ShapeElement).text);
     expect(texts[0]!.paras[0]!.runs).toHaveLength(60_000);
     // Shared, not read again: every slide's element holds the same text body.

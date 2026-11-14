@@ -176,7 +176,12 @@ export type SlideRec = {
   hidden?: boolean;
   lyricObjectId?: string;
   backgroundMediaId?: string;
+  /** The theme fields this slide overrides (`Slide.overrides`). */
+  overrides?: string[];
   pptx?: { index: number; shown?: number; class: string; digest?: string };
+  /** The slide's outgoing MIDI cues and Bottom-Third Stream text (`Slide.midiCues`, `bottomThirdText`). */
+  midiCues?: { id: string; channel: number; type: string; number?: number; value?: number }[];
+  bottomThirdText?: string;
 };
 export type PresentationRec = {
   id: string;

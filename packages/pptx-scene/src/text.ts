@@ -104,7 +104,7 @@ export function readTextBody(ctx: SlideCtx, c: Chain, styled?: XNode): TextBody 
   if (numCol !== undefined && numCol > 1) out.numCol = Math.min(16, Math.floor(numCol));
   if (on(firstAttr(body, 'anchorCtr'))) out.anchorCtr = anchorCtrMoves(out);
   const warp = firstChildOf(body, 'a:prstTxWarp')?.attrs.prst;
-  if (warp && warp !== 'textNoShape') out.warp = warp;
+  if (warp && warp !== 'textNoShape') out.warp = { preset: warp };
   return out;
 }
 

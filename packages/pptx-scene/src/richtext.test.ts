@@ -73,10 +73,10 @@ describe('box style', () => {
       { start: 0, end: 1, fontWeight: 700, sizeScale: 0.5, color: { r: 0, g: 0, b: 0, a: 1 } },
       { start: 31, end: 32, fontWeight: 700, sizeScale: 0.5, color: { r: 0, g: 0, b: 0, a: 1 } },
     ]);
-    // The previous release strips the new fields and keeps a drawable text in the dominant style.
+    // The previous release (0.5.0) keeps the runs; the box style beside them is the dominant run, what an
+    // earlier build without runs drew.
     const old = prev.TextObject.parse(t);
-    expect(old).not.toHaveProperty('runs');
-    expect(old.style).not.toHaveProperty('lineModel');
+    expect(old.runs).toEqual(t.runs);
     expect(old.style).toMatchObject({ fontSizePx: 64, color: RED });
     expect(old.text).toBe(t.text);
   });

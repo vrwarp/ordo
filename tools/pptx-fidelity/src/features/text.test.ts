@@ -1,6 +1,7 @@
 import { body, para, run, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import { describe, expect, it } from 'vitest';
-import { deckTextFeatures, TEXT_FEATURES, textFeatures } from './features.ts';
+import { deckTextFeatures, TEXT_FEATURES, textFeatures } from './text.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const shape = (txBody: string) => sp({ id: 2, x: 0, y: 0, cx: 100, cy: 100, txBody });
 
@@ -44,7 +45,7 @@ describe('textFeatures', () => {
     const hostile = '<p:txBody><a:r><a:t>x</a:t>'.repeat(200_000);
     const t0 = performance.now();
     expect(textFeatures(hostile)).toEqual([]);
-    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(2000));
   });
 
   it('stays linear on unclosed autofit and run property tags (a part of 2 MB each)', () => {
@@ -56,7 +57,7 @@ describe('textFeatures', () => {
     for (const hostile of cases) {
       const t0 = performance.now();
       textFeatures(hostile);
-      expect(performance.now() - t0).toBeLessThan(2000);
+      expect(performance.now() - t0).toBeLessThan(budgetMs(2000));
     }
     // Still found where a tag is whole, and only on its own attributes.
     expect(textFeatures('<a:normAutofit lnSpcReduction="10000"/><a:t>fontScale=</a:t>')).toEqual([]);

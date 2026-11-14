@@ -8,6 +8,7 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { extractPptxText, PPTX_MAX_SLIDES } from './pptx.ts';
 import { IMPORT_LIMITS } from './sanitize.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const NS =
   'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
@@ -238,7 +239,7 @@ describe('extractPptxText regressions found by fuzzing', () => {
         'ppt/slides/slide1.xml': bomb,
       }),
     );
-    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(Date.now() - t0).toBeLessThan(budgetMs(5000));
   });
 
   it('long trailing whitespace in a text body is linear', async () => {
@@ -251,6 +252,6 @@ describe('extractPptxText regressions found by fuzzing', () => {
         'ppt/slides/slide1.xml': slide,
       }),
     );
-    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(Date.now() - t0).toBeLessThan(budgetMs(3000));
   });
 });

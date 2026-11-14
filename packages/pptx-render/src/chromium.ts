@@ -216,12 +216,12 @@ class Browser {
     this.rejectFailed = reject;
   });
 
-  private constructor(
-    private proc: ChildProcess,
-    private out: Writable,
-    input: Readable,
-  ) {
+  private proc: ChildProcess;
+  private out: Writable;
+  private constructor(proc: ChildProcess, out: Writable, input: Readable) {
     // Raced by whoever waits on the browser; not an unhandled rejection when nobody is waiting.
+    this.proc = proc;
+    this.out = out;
     this.failed.catch(() => undefined);
     input.on('data', (d: Buffer) => this.onData(d));
     // A write after Chromium has gone (EPIPE) fails the pending calls instead of crashing the process.
@@ -392,10 +392,12 @@ class Browser {
 }
 
 class Page {
-  constructor(
-    private browser: Browser,
-    private sessionId: string,
-  ) {}
+  private browser: Browser;
+  private sessionId: string;
+  constructor(browser: Browser, sessionId: string) {
+    this.browser = browser;
+    this.sessionId = sessionId;
+  }
 
   send<T = unknown>(method: string, params: object = {}): Promise<T> {
     return this.browser.send<T>(method, params, this.sessionId);

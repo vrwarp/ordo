@@ -234,6 +234,58 @@ export type PptxReimportResult = {
   userObjects: number;
 };
 
+/** The states of a server tool the hub may use (design/27 M9, the hub's `tools.ts`). */
+export const HUB_TOOL_STATES = ['checking', 'available', 'absent', 'off', 'broken'] as const;
+
+/**
+ * GET /capabilities (edit role, the library process; design/27 M9 "LibreOffice optional"): what this hub's
+ * server tools allow, so the operator offers only what works. Parsed with `.catch` defaults everywhere, so an
+ * operator reads whatever a newer or older hub sends; the tool's version is never in the public `/health`.
+ * - `libreoffice`: 'available' (with its version), 'absent' (not installed), 'off' (`ORDO_LIBREOFFICE=off`),
+ *   'broken' (installed but its version command fails), 'checking' (the hub is still asking, just after start).
+ * - `pdf`: pdftoppm (poppler-utils) is there: PDF import.
+ * - `documents`: the extensions `POST /import/document` accepts.
+ * - `pptx.pictures`: 'Pictures (LibreOffice)'; `pptx.reference`: 'Show original' drawn by LibreOffice;
+ *   `pptx.referencePdf`: reference pictures from PowerPoint's own PDF export (poppler-utils only);
+ *   `pptx.art`: LibreOffice draws what ordo cannot (the `pptx-lo` follow-up). Without it the import lists
+ *   what it could not draw (`Slide.pptx.missing`).
+ *
+ * POST /presentations/:id/pptx-reference with a JSON body needs `pptx.reference` (else 501
+ * `libreoffice_unavailable`); as multipart with one PDF (field `file`, optional field `showPicture`: a JSON
+ * array of slide ids) it needs `pptx.referencePdf` (else 501 `pdf_unavailable`). POST /import/document answers
+ * 501 `libreoffice_unavailable` for `renderer=libreoffice` without LibreOffice, 501 `pdf_unavailable` for a
+ * PDF without pdftoppm, and 415 `unsupported` with a save-as hint for .ppt, .pps, .odp and .key files. Both
+ * answer 503 with `Retry-After` while LibreOffice is still being checked (`libreoffice_checking`) or does not
+ * answer (`libreoffice_not_answering`, state 'broken'): it may be there in a minute.
+ */
+export const HubCapabilities = z.object({
+  libreoffice: z
+    .object({
+      state: z.enum(HUB_TOOL_STATES).catch('absent'),
+      version: z.string().max(100).optional().catch(undefined),
+    })
+    .catch({ state: 'absent' }),
+  pdf: z.boolean().catch(false),
+  documents: z.array(z.string().max(8)).max(16).catch(['pptx', 'pdf']),
+  pptx: z
+    .object({
+      pictures: z.boolean().catch(false),
+      reference: z.boolean().catch(false),
+      referencePdf: z.boolean().catch(false),
+      art: z.boolean().catch(false),
+    })
+    .catch({ pictures: false, reference: false, referencePdf: false, art: false }),
+});
+export type HubCapabilities = z.infer<typeof HubCapabilities>;
+
+/** What a hub before M9 can do (it answers GET /capabilities with 404): it always had LibreOffice. */
+export const LEGACY_CAPABILITIES: HubCapabilities = {
+  libreoffice: { state: 'available' },
+  pdf: true,
+  documents: ['pptx', 'pdf'],
+  pptx: { pictures: true, reference: true, referencePdf: false, art: true },
+};
+
 export const ROUTES = {
   outputConfig: '/output/config',
   me: '/auth/me',
@@ -254,4 +306,5 @@ export const ROUTES = {
   jobs: '/jobs',
   actions: '/actions',
   health: '/health',
+  capabilities: '/capabilities',
 } as const;

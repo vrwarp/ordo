@@ -1,4 +1,4 @@
-import { GEOM_COST } from './geom/cost.ts';
+import type { SlideDrawCost } from './geombudget.ts';
 
 /**
  * Health aggregation for an output window: counters from the render worker plus main-thread state,
@@ -102,6 +102,12 @@ export type HealthReport = {
    * their times are in `rasterMs`, but the `raster` alarm leaves them out. Absent when none is.
    */
   rasterHeavy?: number;
+  /**
+   * The raster times the `raster` alarm read (`HealthInputs.rasterAlarm`: the slides whose content fits the
+   * budget): what an alarm's text quotes. Absent when the caller does not tell the slides apart, or when it
+   * equals `rasterMs` (no heavy slide in the window).
+   */
+  rasterAlarmMs?: TimingSummary;
   uploadMs?: number;
   wholeUploads?: { count: number; maxMs: number };
   /** This output's performance budgets at its size (design/27 §13). */
@@ -123,7 +129,9 @@ export class TimingWindow {
   private count = 0;
   private at = 0;
 
-  constructor(readonly size = 64) {
+  readonly size: number;
+  constructor(size = 64) {
+    this.size = size;
     this.ring = new Float64Array(Math.max(1, Math.floor(size)));
   }
 
@@ -194,42 +202,120 @@ export type PerfAlarm = 'raster' | 'upload';
 export const RASTER_ALARM_MIN = 20;
 
 /**
- * A fresh full-frame bitmap of a 4K output, ms (sizing the surface, a new backing, the transfer: what a blank
- * full-frame job costs, 9 to 10.5 ms on the bench machine), scaled by pixel count to other sizes.
- */
-const FRAME_MS_4K = 10;
-
-/**
- * The share of the raster p95 budget past which a slide's drawing estimate makes it heavy (`heavySlide`): the
- * estimate is within about 20 % of the asset worker's warm raster time on the bench machine.
+ * The share of the raster p95 budget past which a slide's drawing estimate makes it heavy (`heavySlide`).
  */
 const HEAVY_SHARE = 0.8;
 
 /**
- * What the drawing estimate of a slide's content predicts its raster takes at `width` x `height` on the
- * bench machine, ms (design/27 §12 drawing cost, §13): a fresh full-frame bitmap, and its geometry's and
- * fills' units (`geombudget.ts` `slideDrawCost`, the units the slide's drawing budget charges) at
- * `GEOM_COST.nsPerUnit` at 4K, 0.4 of that at 1080p and below (the units are logical px: the edges' rows halve
- * with the output's height, the painted pixels quarter), by pixel count between. Text, pictures and cached
- * effect layers are not in it. Fitted over 343 full-frame slides of the converted worship decks (M6 merge
- * review): 10.9 ms + 32.8 ns a unit at 4K, 2.8 ms + 12.4 ns at 1080p; a traced-decoration slide of 1.23M units
- * predicts 45.7 ms at 4K (42 to 45 ms measured warm) and 16.8 ms at 1080p (17 to 20 ms).
+ * What a slide job's raster costs by its content, for the estimate (`rasterEstimateMs`): what its objects draw
+ * (`slideJobCost`), and the effect sprites the draw had to make (`effectsMade`, from `effects.ts` `effectWork`
+ * across the draw; absent: none, as when they are cached).
  */
-export function rasterEstimateMs(cost: { units: number }, width: number, height: number): number {
+export type RasterCost = Pick<SlideDrawCost, 'units'> &
+  Partial<Omit<SlideDrawCost, 'units'>> & {
+    readonly effectsMade?: { readonly full: number; readonly reduced: number };
+  };
+
+/**
+ * The raster estimate's constants at 1080p (`hd`) and at 4K (`uhd`), ms: `frame` a fresh full-frame bitmap with a
+ * first raster's own costs; `units` per million drawing units (`GEOM_COST`); `effects` per slide area of effect
+ * layers copied or enlarged from the cache; `textEffects` per slide area of glyphs drawn blurred (a shadow or a
+ * glow); `chars` per thousand characters laid out and drawn; `pictures` per slide area of prepared pictures
+ * copied 1:1, `sourcePictures` of pictures drawn from their source (resampled); `madeFull` and `madeReduced`
+ * per slide area of effect canvases a draw makes (composites and bodies at full resolution; blur layers and masks
+ * at their reduced one: `effects.ts` `effectWork`), which only a draw that finds them uncached pays.
+ *
+ * Fitted (M6 merge re-review; design/27 §13) on the bench container over 500 slides of 31 converted decks: the
+ * re-review's 22 worship decks (traced decorations, gradients, shadows, soft edges) with 7 ordinary shard decks
+ * and 2 sermon decks, each slide drawn as the asset worker draws it, first in deck order with the sprite cache
+ * emptied at the deck's start (what health's window holds: each slide key is drawn once) and then warm, by
+ * non-negative least squares over both; then divided by 1.31, the container's slowdown that day against the M6
+ * review's (job-warm intercepts 14.3 / 3.7 ms against its 10.9 / 2.8), so that they are the bench machine's.
+ * Measured over estimated, first rasters: p50 0.89, p90 1.44 at 1080p; 0.99, 1.24 at 4K. `pictures` at 1080p
+ * and `sourcePictures` are picture.ts's measurements (0.7 ms a full slide copied at 1080p; 4.5 and 20 ms resampled
+ * at 1080p and 4K): too few such slides to fit. The text's glyph area unblurred fitted to 0 at both sizes.
+ */
+export const RASTER_ESTIMATE = {
+  hd: {
+    frame: 4.1,
+    units: 9.9,
+    effects: 0,
+    textEffects: 3.3,
+    chars: 5.1,
+    pictures: 0.7,
+    sourcePictures: 4.5,
+    madeFull: 11.1,
+    madeReduced: 27,
+  },
+  uhd: {
+    frame: 13.3,
+    units: 25.6,
+    effects: 3.8,
+    textEffects: 18.1,
+    chars: 10.8,
+    pictures: 2.5,
+    sourcePictures: 20,
+    madeFull: 35,
+    madeReduced: 62.2,
+  },
+} as const;
+
+type EstimateTerm = keyof (typeof RASTER_ESTIMATE)['hd'];
+
+/** A non-negative finite input (else 0). */
+const amount = (v: number | undefined): number =>
+  Number.isFinite(v) && (v as number) > 0 ? (v as number) : 0;
+
+/**
+ * What the drawing estimate of a slide's content predicts its raster takes at `width` x `height` on the bench
+ * machine, ms (design/27 §12 drawing cost, §13): `RASTER_ESTIMATE`'s terms over the content (`RasterCost`), the
+ * 1080p and 4K constants interpolated by pixel count between (the 1080p ones below it). A slide of traced
+ * decorations at the drawing budget (1.23M units) predicts about 16 ms at 1080p and 45 ms at 4K; a full-slide
+ * photo with a title about 5 / 16 ms; the first draw of a slide area of shadowed shapes, its layers and
+ * composite made, about 45 ms more at 4K than the draws after it.
+ */
+export function rasterEstimateMs(cost: RasterCost, width: number, height: number): number {
   const px = Math.max(1, width) * Math.max(1, height);
   const t = Math.min(1, Math.max(0, (px - PX_1080) / (PX_4K - PX_1080)));
-  const units = Number.isFinite(cost.units) && cost.units > 0 ? cost.units : 0;
-  return (FRAME_MS_4K * px) / PX_4K + units * GEOM_COST.nsPerUnit * 1e-6 * (0.4 + 0.6 * t);
+  const c = (k: EstimateTerm) => RASTER_ESTIMATE.hd[k] + (RASTER_ESTIMATE.uhd[k] - RASTER_ESTIMATE.hd[k]) * t;
+  const made = cost.effectsMade;
+  return (
+    c('frame') +
+    (c('units') * amount(cost.units)) / 1e6 +
+    c('effects') * amount(cost.effects) +
+    c('textEffects') * amount(cost.textEffects) +
+    (c('chars') * amount(cost.chars)) / 1e3 +
+    c('pictures') * amount(cost.pictures) +
+    c('sourcePictures') * amount(cost.sourcePictures) +
+    c('madeFull') * amount(made?.full) +
+    c('madeReduced') * amount(made?.reduced)
+  );
+}
+
+/**
+ * The effect sprites a draw made, in slide areas at `scale` device px per logical px: the difference of
+ * `effects.ts` `effectWork` before and after it.
+ */
+export function effectsMade(
+  before: { readonly full: number; readonly reduced: number },
+  after: { readonly full: number; readonly reduced: number },
+  scale: number,
+): { full: number; reduced: number } {
+  const area = Math.max(1e-9, scale * scale * PX_1080);
+  return {
+    full: amount(after.full - before.full) / area,
+    reduced: amount(after.reduced - before.reduced) / area,
+  };
 }
 
 /**
  * Whether a slide's content is past the raster budget by its drawing estimate (`rasterEstimateMs` over
  * `HEAVY_SHARE` of `PerfBudgets.rasterP95Ms` at this size): a slide the drawing budget keeps whole may take up
- * to the 50 ms of an asset-worker task (design/27 §13's named exception, the M6 merge review: traced
- * decorations of 100 shapes or more, 42 to 48 ms at 4K and 17 to 21 ms at 1080p on the bench machine). Its
- * time is reported, but the `raster` alarm, which tells the operator the computer is slow, leaves it out.
+ * to the 50 ms of an asset-worker task (design/27 §13's named exception: traced decorations of 100 shapes or
+ * more, effect sprites made the first time, large shadowed text). Its time is reported, but the `raster`
+ * alarm, which tells the operator the computer is slow, leaves it out.
  */
-export function heavySlide(cost: { units: number }, width: number, height: number): boolean {
+export function heavySlide(cost: RasterCost, width: number, height: number): boolean {
   return rasterEstimateMs(cost, width, height) > HEAVY_SHARE * perfBudgets(width, height).rasterP95Ms;
 }
 
@@ -292,12 +378,21 @@ export function buildHealth(i: HealthInputs): HealthReport {
 }
 
 /** The performance part of a health report: measured figures, the budgets at this size, and the alarms. */
-type PerfPart = 'rasterMs' | 'rasterHeavy' | 'uploadMs' | 'wholeUploads' | 'budgets' | 'alarms';
+type PerfPart =
+  | 'rasterMs'
+  | 'rasterHeavy'
+  | 'rasterAlarmMs'
+  | 'uploadMs'
+  | 'wholeUploads'
+  | 'budgets'
+  | 'alarms';
 
 function perf(i: HealthInputs): Pick<HealthReport, PerfPart> {
   const out: Pick<HealthReport, PerfPart> = {};
   if (i.raster) out.rasterMs = i.raster;
   if (i.rasterHeavy) out.rasterHeavy = i.rasterHeavy;
+  // What the alarm reads, when it is not every slide's.
+  if (i.rasterHeavy && i.rasterAlarm) out.rasterAlarmMs = i.rasterAlarm;
   if (i.render.uploadMs !== undefined) out.uploadMs = Math.round(i.render.uploadMs * 100) / 100;
   const w = i.render.wholeUploads;
   if (w?.count) out.wholeUploads = { count: w.count, maxMs: Math.round(w.maxMs * 100) / 100 };

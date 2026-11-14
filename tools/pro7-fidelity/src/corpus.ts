@@ -1,4 +1,5 @@
 import { pro7Type } from '@ordo/importers/proto.ts';
+import { buildEffectsCorpus } from './corpus-effects.ts';
 import { encodePng, makePng } from './png.ts';
 import type { RgbaImage } from './types.ts';
 
@@ -750,5 +751,6 @@ export function buildSyntheticCorpus(): SyntheticDeck[] {
     referenceSlides: [masksRef1, masksRef2, masksRef3],
   };
 
-  return [coreDeck, shapesDeck, masksDeck];
+  // Text boxes, line masks, rounded pictures, picture shadows and feathers (corpus-effects.ts).
+  return [coreDeck, shapesDeck, masksDeck, ...buildEffectsCorpus()];
 }

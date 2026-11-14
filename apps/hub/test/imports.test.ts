@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdirSync, writeFileSync, copyFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, truncateSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { newId, type Playlist, type Presentation, slideContent, type TextObject } from '@ordo/domain';
 import { readZip, remapMediaIds } from '@ordo/importers';
@@ -8,7 +8,7 @@ import JSZip from 'jszip';
 import pptxgen from 'pptxgenjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { annotatePptx } from '@ordo/pptx-render';
-import { annotatePptxInWorker, type Importers, type Pro7Result } from '../src/imports.ts';
+import { annotatePptxInWorker, type Importers, MAX_INLINE_BYTES, type Pro7Result } from '../src/imports.ts';
 import { fixtures } from './fixtures.ts';
 import { type Client, EDIT_PIN, login, song, startHub, type TestHub, tempDir } from './helpers.ts';
 
@@ -158,8 +158,12 @@ describe('ProPresenter 7 import', () => {
     });
   });
 
-  it('imports an individual .pro file from a NAS path', async () => {
+  it('imports an individual .pro file from a NAS path with the media in its folder', async () => {
     const filePath = join(hub.dir, 'import', 'lib1', 'Song.pro');
+    // Another document beside it is not imported; a dot folder is not looked into.
+    writeFileSync(join(hub.dir, 'import', 'lib1', 'Other.pro'), new Uint8Array([2]));
+    mkdirSync(join(hub.dir, 'import', 'lib1', '.cache'), { recursive: true });
+    writeFileSync(join(hub.dir, 'import', 'lib1', '.cache', 'thumb.png'), new Uint8Array([3]));
     const job = await ed.json<Job>('/import/pro7', { method: 'POST', json: { path: filePath } });
     await hub.jobs.idle();
     const done = await ed.json<Job>(`/jobs/${job.id}`);
@@ -167,7 +171,46 @@ describe('ProPresenter 7 import', () => {
     expect(done.result).toMatchObject({
       presentations: 1,
       presentationId: expect.any(String),
+      // Media/bg.png, from the document's folder ("Media found alongside is uploaded").
+      media: 1,
     });
+    const log = done.log.join('\n');
+    expect(log).toContain('files: Media/bg.png,Song.pro');
+    expect(log).not.toMatch(/media Media\/bg\.png: file not in the import/);
+  });
+
+  it('takes only ProPresenter files from a NAS path, and a document only within the in-memory size', async () => {
+    const dir = join(hub.dir, 'import', 'lib2');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'notes.txt'), 'not a ProPresenter file');
+    const txt = await ed.fetch('/import/pro7', { method: 'POST', json: { path: join(dir, 'notes.txt') } });
+    expect(txt.status).toBe(415);
+    // A document past MAX_INLINE_BYTES (sparse: nothing is written) is refused before it is read.
+    const big = join(dir, 'Huge.pro');
+    writeFileSync(big, new Uint8Array([1]));
+    truncateSync(big, MAX_INLINE_BYTES + 1);
+    const res = await ed.fetch('/import/pro7', { method: 'POST', json: { path: big } });
+    expect(res.status).toBe(413);
+    expect(await res.text()).toMatch(/Huge\.pro is larger than 64 MB \(65 MB\)/);
+  });
+
+  it('refuses a single document past the in-memory size when its job runs (stat before readFile)', async () => {
+    // A file that grew after it was queued (or an upload the route did not check): the job stats it first.
+    const big = join(tempDir('ordo-pro7-big-'), 'Grown.pro');
+    writeFileSync(big, new Uint8Array([1]));
+    truncateSync(big, MAX_INLINE_BYTES + 1);
+    const job = hub.imports.queuePro7FromUpload(big, 'Grown.pro');
+    await hub.jobs.idle();
+    const done = await ed.json<Job>(`/jobs/${job.id}`);
+    expect(done.state).toBe('failed');
+    expect(done.error).toMatch(/Grown\.pro is larger than 64 MB \(65 MB\)/);
+  });
+
+  it('refuses an uploaded document past the in-memory size before queueing it', async () => {
+    const fd = new FormData();
+    fd.append('file', new Blob([new Uint8Array(MAX_INLINE_BYTES + 1)]), 'Huge Song.pro');
+    const res = await ed.fetch('/import/pro7', { method: 'POST', body: fd });
+    expect(res.status).toBe(413);
   });
 
   it('rejects unsupported file uploads', async () => {

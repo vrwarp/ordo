@@ -332,7 +332,7 @@ describe('body properties', () => {
       autofit: { kind: 'shrink', fontScale: 0.625, lnSpcReduction: 0.2 },
     });
     expect(b!.autofit).toEqual({ kind: 'shape' });
-    expect(c!.warp).toBe('textArchUp');
+    expect(c!.warp).toEqual({ preset: 'textArchUp' });
   });
 
   it('records anchorCtr as moving text only when a paragraph that draws something is not centred', () => {

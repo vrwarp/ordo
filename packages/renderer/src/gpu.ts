@@ -426,15 +426,27 @@ export class GpuCompositor implements Compositor {
   /** Layer draws encoded (the venue bench checks its compositions draw what they time). */
   layerDraws = 0;
 
+  readonly device: GPUDevice;
+  private context: GPUCanvasContext;
+  private format: GPUTextureFormat;
+  readonly width: number;
+  readonly height: number;
+  private layerCount: number;
   constructor(
-    readonly device: GPUDevice,
-    private context: GPUCanvasContext,
-    private format: GPUTextureFormat,
-    readonly width: number,
-    readonly height: number,
-    private layerCount: number,
+    device: GPUDevice,
+    context: GPUCanvasContext,
+    format: GPUTextureFormat,
+    width: number,
+    height: number,
+    layerCount: number,
     budget: { bytes?: number; ms?: number } = {},
   ) {
+    this.device = device;
+    this.context = context;
+    this.format = format;
+    this.width = width;
+    this.height = height;
+    this.layerCount = layerCount;
     this.budgetBytes =
       budget.bytes !== undefined && Number.isFinite(budget.bytes) && budget.bytes >= 0
         ? budget.bytes

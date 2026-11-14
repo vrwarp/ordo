@@ -11,6 +11,7 @@ import {
   type TextObject,
 } from '@ordo/domain';
 import {
+  caretPosition,
   drawImageFit,
   drawObject,
   drawTextEditingOverlay,
@@ -18,15 +19,27 @@ import {
   geomPending,
   hitTestText,
   isRichText,
+  loadShapeDrawers,
   moveCaretVertically,
+  objectReach,
   paraRangeAt,
   readGeomFiles,
+  shapeDrawersWanted,
   slideBudget,
   toLocalBoxPoint,
   wordRangeAt,
 } from '@ordo/renderer';
 import type Konva from 'konva';
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
 import { useCoarsePointer } from '../../components/pointer.ts';
 import { onFontsChanged } from '../../services/fonts.ts';
@@ -46,7 +59,7 @@ import {
   undo,
   useEditor,
 } from './editorStore.ts';
-import { historyKey } from './editorKeys.ts';
+import { BACKING_FIELD, composing, historyKey, releaseBackingField } from './editorKeys.ts';
 import { barState, shortcutOf, togglePatch } from './FormatBar.tsx';
 import { refocusText, textField } from './formatControls.tsx';
 import {
@@ -103,6 +116,16 @@ function readGeomOf(o: SlideObject): void {
     return b.size > GEOM_FILE_MAX_BYTES ? null : b.text();
   }).then((left) => {
     if (!left.size) for (const l of imageListeners) l();
+  });
+}
+/**
+ * Load the drawer an M9 object needs (a table's, loaded per kind: `loadShapeDrawers`) if it is not yet; the
+ * canvas draws again once it is (the object draws its legacy shape meanwhile, as an older build does).
+ */
+function loadDrawerOf(o: SlideObject): void {
+  if (!shapeDrawersWanted([o]).length) return;
+  void loadShapeDrawers([o]).then((loaded) => {
+    if (loaded) for (const l of imageListeners) l();
   });
 }
 function useImageTick(): number {
@@ -170,6 +193,37 @@ function moveObjectCaretVertically(
     return moveCaretVertically(ctx, unrotatedFor(o), offset, dir, preferredX);
   }
   return moveCaretVertically(ctx, { ...o, box: local(o.box) }, offset, dir, preferredX);
+}
+
+/**
+ * The caret of text object `o` at `offset` in slide units, turned with its box: the point and height where an
+ * input method's candidate window should open (the hidden backing text field sits there).
+ */
+export function caretOnSlide(o: TextObject, offset: number): { x: number; y: number; h: number } {
+  const ctx = getMeasureCtx();
+  const b = o.box;
+  let lx: number;
+  let ly: number;
+  let h: number;
+  if (isRichText(o)) {
+    const c = caretPosition(ctx, unrotatedFor(o), offset);
+    lx = c.x - b.x;
+    ly = c.y - b.y;
+    h = c.height;
+  } else {
+    const c = caretPosition(ctx, { ...o, box: local(b) }, offset);
+    lx = c.x;
+    ly = c.y;
+    h = c.height;
+  }
+  const a = ((b.rotation ?? 0) * Math.PI) / 180;
+  const dx = lx - b.w / 2;
+  const dy = ly - b.h / 2;
+  const x = b.x + b.w / 2 + dx * Math.cos(a) - dy * Math.sin(a);
+  const y = b.y + b.h / 2 + dx * Math.sin(a) + dy * Math.cos(a);
+  return Number.isFinite(x) && Number.isFinite(y)
+    ? { x, y, h: Number.isFinite(h) ? h : 0 }
+    : { x: b.x, y: b.y, h: 0 };
 }
 
 /**
@@ -279,12 +333,49 @@ type NodeHandlers = {
   transformEnd: (o: SlideObject, e: Konva.KonvaEventObject<Event>) => void;
 };
 
-type NodeTextOverlay = {
-  start: number;
-  end: number;
-  caret: number;
-  showCaret: boolean;
-};
+/**
+ * Device px a cached node may hold (its scene canvas): a node larger than this at the canvas's density is
+ * drawn live instead (a full-slide shape at a large zoom on a 2x screen).
+ */
+export const NODE_CACHE_MAX_PX = 8_000_000;
+
+/**
+ * The rectangle a non-text object's node is cached over (Konva `cache()`, node-local logical px: the box at
+ * the origin, unrotated, as its `sceneFunc` draws it): what its drawer can reach (`objectReach`: effects,
+ * strokes, arrowheads, a geometry past its box) united with its hit area, a little margin for antialiasing.
+ * Undefined when it is not to be cached: text (its raster is cached already, `textCanvas`), an object whose
+ * reach the renderer does not know (fields it does not bound: it is drawn live, never clipped), or one past
+ * `NODE_CACHE_MAX_PX` at `density`.
+ */
+export function nodeCacheRect(
+  o: SlideObject,
+  drawAs: SlideObject | undefined,
+  density: number,
+  ctx?: Parameters<typeof objectReach>[0],
+): { x: number; y: number; width: number; height: number } | undefined {
+  if (o.type === 'text' || !(density > 0)) return undefined;
+  const measure = ctx ?? (typeof document === 'undefined' ? undefined : getMeasureCtx());
+  if (!measure) return undefined;
+  const d = drawAs ?? o;
+  let r: ReturnType<typeof objectReach>;
+  try {
+    r = objectReach(measure, { ...d, box: { ...d.box, x: 0, y: 0, rotation: 0 } } as SlideObject, density);
+  } catch {
+    return undefined;
+  }
+  if (!r) return undefined;
+  const w = o.box.w;
+  const h = Math.max(o.box.h, 12);
+  const x0 = Math.floor(Math.min(r.x, 0) - 2);
+  const y0 = Math.floor(Math.min(r.y, 0) - 2);
+  const x1 = Math.ceil(Math.max(r.x + r.w, w) + 2);
+  const y1 = Math.ceil(Math.max(r.y + r.h, h) + 2);
+  const width = x1 - x0;
+  const height = y1 - y0;
+  if (!(width > 0 && height > 0) || !Number.isFinite(width + height + x0 + y0)) return undefined;
+  if (width * height * density * density > NODE_CACHE_MAX_PX) return undefined;
+  return { x: x0, y: y0, width, height };
+}
 
 function ObjectNode(props: {
   o: SlideObject;
@@ -306,14 +397,32 @@ function ObjectNode(props: {
   onEditText?: () => void;
   onStartInlineEdit?: (id: string, range?: CanvasTextSelection) => void;
   isEditingInline?: boolean;
-  textOverlay?: NodeTextOverlay;
   registerNode: (id: string, n: Konva.Shape | null) => void;
 }) {
   const { o, tick, on } = props;
   const b = o.box;
+  const node = useRef<Konva.Shape | null>(null);
+  // A non-text object is drawn once into a cached bitmap at the canvas's density, so a redraw of the objects
+  // layer (a keystroke in a text box, a drag) copies it instead of drawing it again (a gradient, a blurred
+  // shadow, a table, a decoration); it is drawn again only when it, its picture or geometry file, the fonts
+  // or the density change (design/15 "Canvas drawing").
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tick and media change what sceneFunc draws
+  useLayoutEffect(() => {
+    const n = node.current;
+    if (!n) return;
+    const rect = nodeCacheRect(o, props.drawAs, props.density);
+    if (!rect) {
+      if (n.isCached()) n.clearCache();
+      return;
+    }
+    n.cache({ ...rect, pixelRatio: props.density, hitCanvasPixelRatio: Math.min(1, props.scale) });
+  }, [o, props.drawAs, props.density, props.scale, props.badge, props.media, tick]);
   return (
     <Shape
-      ref={(n) => props.registerNode(o.id, n)}
+      ref={(n) => {
+        node.current = n;
+        props.registerNode(o.id, n);
+      }}
       x={b.x + b.w / 2}
       y={b.y + b.h / 2}
       width={b.w}
@@ -326,20 +435,11 @@ function ObjectNode(props: {
       sceneFunc={(context) => {
         const ctx = context._context as CanvasRenderingContext2D;
         readGeomOf(o);
+        loadDrawerOf(o);
         const d = props.drawAs ?? o;
         if (o.type === 'text') {
           const t = textCanvas(o, tick, props.density);
           ctx.drawImage(t.canvas, -MARGIN, -MARGIN, t.canvas.width / t.density, t.canvas.height / t.density);
-          if (props.textOverlay) {
-            ctx.save();
-            if (isRichText(o)) {
-              ctx.translate(-b.x, -b.y);
-              drawTextEditingOverlay(ctx, unrotatedFor(o), props.textOverlay);
-            } else {
-              drawTextEditingOverlay(ctx, { ...o, box: local(b) }, props.textOverlay);
-            }
-            ctx.restore();
-          }
         } else if (o.type === 'image') {
           const img = imageFor(stillHash(props.media(o.mediaId)));
           // Flips and the mask as every drawer applies them (design/27 §3.1); what the slide's drawing budget
@@ -397,6 +497,116 @@ function ObjectNode(props: {
   );
 }
 
+/** The inline editor's caret blink (ms per phase). */
+const CARET_BLINK_MS = 530;
+
+/**
+ * The text editing overlay (design/15 "Canvas drawing"): the selection highlight and the blinking caret of
+ * the text box being edited (or a selection in the selected box), on a Konva layer of its own that takes no
+ * pointer events. Its blink re-renders and redraws only this layer, never SlideCanvas or the slide's
+ * objects (before, every 530 ms blink re-rendered the canvas and redrew every object). It draws in its
+ * object's node's frame, so it follows a drag or a transform (`overlayFollow` redraws it then).
+ */
+function TextEditingOverlay(props: {
+  objects: readonly SlideObject[];
+  scale: number;
+  nodes: Map<string, Konva.Shape>;
+  layerRef: RefObject<Konva.Layer | null>;
+}) {
+  const inlineEditingId = useEditor((s) => s.inlineEditingId);
+  const selectedId = useEditor((s) => s.objectId);
+  const selectedCount = useEditor((s) => s.objectIds.length);
+  const range = useEditor((s) => s.textRange);
+  const targetId = inlineEditingId ?? (selectedCount === 1 ? selectedId : undefined);
+  const o = targetId
+    ? props.objects.find((x): x is TextObject => x.id === targetId && x.type === 'text')
+    : undefined;
+  const editing = !!o && inlineEditingId === o.id;
+  const [visible, setVisible] = useState(true);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new caret, selection or text restarts the blink
+  useEffect(() => {
+    if (!editing) return;
+    setVisible(true);
+    const timer = setInterval(() => setVisible((v) => !v), CARET_BLINK_MS);
+    return () => clearInterval(timer);
+  }, [editing, o?.id, o?.text, range.start, range.end, range.caret]);
+  const show = !!o && (editing || range.start < range.end);
+  return (
+    <Layer
+      ref={props.layerRef}
+      name="text-editing"
+      scaleX={props.scale}
+      scaleY={props.scale}
+      listening={false}
+    >
+      {show && o && (
+        <Shape
+          listening={false}
+          perfectDrawEnabled={false}
+          sceneFunc={(context) => {
+            const ctx = context._context as CanvasRenderingContext2D;
+            const b = o.box;
+            const n = props.nodes.get(o.id);
+            ctx.save();
+            if (n) {
+              const [ma, mb, mc, md, me, mf] = n.getTransform().getMatrix() as [
+                number,
+                number,
+                number,
+                number,
+                number,
+                number,
+              ];
+              ctx.transform(ma, mb, mc, md, me, mf);
+            } else {
+              ctx.translate(b.x + b.w / 2, b.y + b.h / 2);
+              ctx.rotate(((b.rotation ?? 0) * Math.PI) / 180);
+              ctx.translate(-b.w / 2, -b.h / 2);
+            }
+            const overlay = {
+              start: range.start,
+              end: range.end,
+              caret: range.caret,
+              showCaret: editing && visible,
+            };
+            if (isRichText(o)) {
+              ctx.translate(-b.x, -b.y);
+              drawTextEditingOverlay(ctx, unrotatedFor(o), overlay);
+            } else drawTextEditingOverlay(ctx, { ...o, box: local(b) }, overlay);
+            ctx.restore();
+          }}
+        />
+      )}
+    </Layer>
+  );
+}
+
+/**
+ * An element's size, kept by a ResizeObserver from when it mounts (a callback ref): read when it changes, not
+ * on every render of its parent (#24's floating bar was measured by a layout effect with no dependencies, a
+ * layout read on every render, the caret's blink included).
+ */
+function useMeasuredSize(initial: { w: number; h: number }) {
+  const [size, setSize] = useState(initial);
+  const ro = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((el: HTMLElement | null) => {
+    ro.current?.disconnect();
+    ro.current = null;
+    if (!el) return;
+    const read = () => {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      setSize((s) => (s.w === w && s.h === h ? s : { w, h }));
+    };
+    read();
+    if (typeof ResizeObserver === 'undefined') return;
+    ro.current = new ResizeObserver(read);
+    ro.current.observe(el);
+  }, []);
+  useEffect(() => () => ro.current?.disconnect(), []);
+  return [ref, size] as const;
+}
+
 /** The 1920x1080 slide canvas, scaled to fit, with selection, transforms and snapping guides. */
 export function SlideCanvas(props: {
   slide: Slide;
@@ -421,10 +631,8 @@ export function SlideCanvas(props: {
   const box = useRef<HTMLDivElement>(null);
   const coarse = useCoarsePointer();
   const [pane, setPane] = useState({ w: 984, h: 580 });
-  const bar = useRef<HTMLDivElement>(null);
-  const [barSize, setBarSize] = useState({ w: 480, h: 52 });
-  const fbar = useRef<HTMLDivElement>(null);
-  const [fbarSize, setFbarSize] = useState({ w: 540, h: 34 });
+  const [bar, barSize] = useMeasuredSize({ w: 480, h: 52 });
+  const [fbar, fbarSize] = useMeasuredSize({ w: 540, h: 34 });
   const objectIds = useEditor((s) => s.objectIds);
   const guides = useEditor((s) => s.guides);
   const tick = useImageTick();
@@ -571,6 +779,7 @@ export function SlideCanvas(props: {
       drag.current = box ? { leader: o.id, from, box } : undefined;
     },
     dragMove(o, e, others) {
+      overlayFollow();
       const n = e.target;
       if (inGroup(o.id)) {
         const d = drag.current;
@@ -653,20 +862,6 @@ export function SlideCanvas(props: {
   const rotAngle = coarse && selBox ? rotaterAngle(selBox, scale, TOUCH_ROTATE_OFFSET) : 0;
   const showTools = !!props.objectTools && !!selBox;
   const showFloatingBar = !!props.floatingBar && !!selBox;
-  useLayoutEffect(() => {
-    const el = bar.current;
-    if (el) {
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
-      if (w !== barSize.w || h !== barSize.h) setBarSize({ w, h });
-    }
-    const fel = fbar.current;
-    if (fel) {
-      const fw = fel.offsetWidth;
-      const fh = fel.offsetHeight;
-      if (fw !== fbarSize.w || fh !== fbarSize.h) setFbarSize({ w: fw, h: fh });
-    }
-  });
   const toolsAt =
     showTools && selBox
       ? objectToolsSpot(
@@ -681,7 +876,6 @@ export function SlideCanvas(props: {
   const bg = imageFor(stillHash(props.backgroundMediaId ? props.media(props.backgroundMediaId) : undefined));
   const picture = imageFor(drawn.pictureHash);
   const inlineEditingId = useEditor((s) => s.inlineEditingId);
-  const textRange = useEditor((s) => s.textRange);
   const selectedId = useEditor((s) => s.objectId);
   const selectedCount = useEditor((s) => s.objectIds.length);
   const editingObj = inlineEditingId
@@ -707,22 +901,18 @@ export function SlideCanvas(props: {
     (selectedCount === 1 && selectedId
       ? drawn.objects.find((x): x is TextObject => x.id === selectedId && x.type === 'text')
       : undefined);
-  const [caretVisible, setCaretVisible] = useState(true);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset blink phase on any cursor or text change
-  useEffect(() => {
-    if (!editingObj) return;
-    setCaretVisible(true);
-    const timer = setInterval(() => setCaretVisible((v) => !v), 530);
-    return () => clearInterval(timer);
-  }, [editingObj?.id, editingObj?.text, textRange.start, textRange.end, textRange.caret]);
-
-  // Repaint the Konva layer whenever selection range, caret position, or blink visibility changes.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional redraw trigger
-  useEffect(() => {
-    const targetId = inlineEditingId ?? selectedId;
-    if (!targetId) return;
-    nodes.current.get(targetId)?.getLayer()?.batchDraw();
-  }, [inlineEditingId, selectedId, textRange.start, textRange.end, textRange.caret, caretVisible]);
+  // Inline editing ended (Escape, a click away): the hidden backing field gives the keys back to the slide.
+  // A layout effect: done with the commit that ends editing, before the next key can arrive.
+  const wasEditing = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    const was = wasEditing.current;
+    wasEditing.current = inlineEditingId;
+    if (was && !inlineEditingId) releaseBackingField();
+  }, [inlineEditingId]);
+  // The editing overlay's layer: redrawn by itself (the caret's blink, a selection), and with the objects
+  // when one of them moves under it (a drag, a transform).
+  const overlay = useRef<Konva.Layer>(null);
+  const overlayFollow = () => overlay.current?.batchDraw();
 
   // 'Show original' (PptxSlideCard): the PowerPoint picture over the slide, to compare; it takes the pointer.
   const originalId = useOriginalOver(slide);
@@ -764,8 +954,6 @@ export function SlideCanvas(props: {
             {drawn.objects.map((o) => {
               const isInline = inlineEditingId === o.id;
               const isPrimarySelected = selectedId === o.id && selectedCount === 1;
-              const showOverlay =
-                o.type === 'text' && (isInline || (isPrimarySelected && textRange.start < textRange.end));
               return (
                 <ObjectNode
                   key={o.id}
@@ -782,16 +970,6 @@ export function SlideCanvas(props: {
                   badge={22 / scale}
                   on={on}
                   isEditingInline={isInline}
-                  textOverlay={
-                    showOverlay
-                      ? {
-                          start: textRange.start,
-                          end: textRange.end,
-                          caret: textRange.caret,
-                          showCaret: isInline && caretVisible,
-                        }
-                      : undefined
-                  }
                   onStartInlineEdit={(id, range) => startInlineEditing(id, range)}
                   onEditText={
                     o.type === 'text' && !props.readOnly && props.onEditText
@@ -857,6 +1035,7 @@ export function SlideCanvas(props: {
                 t.nodes(t.nodes());
                 transformSelection(from, to);
               }}
+              onTransform={overlayFollow}
               rotationSnaps={[0, 90, 180, 270]}
               boundBoxFunc={(oldB, newB) => (newB.width < 8 || newB.height < 8 ? oldB : newB)}
               anchorSize={coarse ? TOUCH_ANCHOR : 10}
@@ -868,6 +1047,12 @@ export function SlideCanvas(props: {
               anchorStroke="#3b82f6"
             />
           </Layer>
+          <TextEditingOverlay
+            objects={drawn.objects}
+            scale={scale}
+            nodes={nodes.current}
+            layerRef={overlay}
+          />
           {original && (
             <Layer scaleX={scale} scaleY={scale}>
               <Shape
@@ -890,7 +1075,11 @@ export function SlideCanvas(props: {
           )}
         </Stage>
         {!props.hasExternalTextEditor && backingTextObj && (
-          <CanvasBackingTextEditor obj={backingTextObj} readOnly={props.readOnly} />
+          <CanvasBackingTextEditor
+            obj={backingTextObj}
+            readOnly={props.readOnly}
+            stage={{ scale, w: size.w, h: size.h }}
+          />
         )}
         {editingObj && (
           <CanvasTextEditor
@@ -928,6 +1117,26 @@ export function SlideCanvas(props: {
   );
 }
 
+/**
+ * The hidden backing field's place in the stage container: at the caret of `o` (`caretOnSlide` × the stage
+ * scale), kept inside the stage, so the IME's candidate window opens by the text being typed, not at the
+ * window's bottom-left corner.
+ */
+function backingAt(
+  o: TextObject,
+  caret: number,
+  scale: number,
+  size: { w: number; h: number },
+): { left: number; top: number; height: number } {
+  const c = caretOnSlide(o, Math.max(0, Math.min(o.text.length, caret)));
+  const height = Math.max(1, Math.min(size.h, c.h * scale));
+  return {
+    left: Math.max(0, Math.min(size.w - 1, c.x * scale)),
+    top: Math.max(0, Math.min(size.h - height, c.y * scale)),
+    height,
+  };
+}
+
 /** Sync the backing `#ordo-text-editor` textarea's focus and selection with `[start, end)` and `caret`. */
 function syncBackingTextarea(start: number, end: number, caret: number): void {
   const el = textField();
@@ -945,20 +1154,40 @@ function syncBackingTextarea(start: number, end: number, caret: number): void {
  * formatting shortcuts (`Ctrl/Cmd + B/I/U`), undo/redo selection preservation, and rich clipboard paste work
  * identically without opening the drawer.
  */
-function CanvasBackingTextEditor({ obj, readOnly }: { obj: TextObject; readOnly: boolean }) {
+export function CanvasBackingTextEditor({
+  obj,
+  readOnly,
+  stage,
+}: {
+  obj: TextObject;
+  readOnly: boolean;
+  /** The stage's scale and size: the field sits at the caret, so an input method's window opens there. */
+  stage?: { scale: number; w: number; h: number };
+}) {
   const off = readOnly || isLocked(obj);
+  const caret = useEditor((s) => s.textRange.caret);
+  const at = stage
+    ? backingAt(obj, caret, stage.scale, { w: stage.w, h: stage.h })
+    : { left: 0, top: 0, height: 1 };
   return (
     <textarea
       id="ordo-text-editor"
       aria-label="Text"
+      {...{ [BACKING_FIELD]: '' }}
+      // No soft wrapping in a field 1 px wide: Home and End go to the ends of the paragraph, not of a word.
+      wrap="off"
       value={obj.text}
       disabled={readOnly}
       style={{
-        position: 'fixed',
-        left: 0,
-        bottom: 0,
+        position: 'absolute',
+        left: at.left,
+        top: at.top,
         width: 1,
-        height: 1,
+        height: at.height,
+        fontSize: at.height,
+        lineHeight: 1,
+        resize: 'none',
+        overflow: 'hidden',
         opacity: 0.01,
         pointerEvents: 'none',
         padding: 0,
@@ -972,6 +1201,7 @@ function CanvasBackingTextEditor({ obj, readOnly }: { obj: TextObject; readOnly:
         setTextRange({ start, end, caret });
       }}
       onKeyDown={(e) => {
+        if (composing(e)) return;
         const step = historyKey(e);
         if (step) {
           e.preventDefault();
@@ -1069,13 +1299,17 @@ function CanvasTextEditor({
     y: 0,
   });
 
-  // Focus the backing textarea on mount and place the caret where the double-click landed.
+  // Focus the backing textarea on mount and place the caret where the double-click landed: on the next
+  // frame, unless editing ended meanwhile (an Escape pressed at once must leave the keys with the slide).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once, for the object being edited
   useEffect(() => {
-    requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
+      if (useEditor.getState().inlineEditingId !== obj.id) return;
       const r = useEditor.getState().textRange;
       anchorRef.current = r.start;
       syncBackingTextarea(r.start, r.end, r.caret);
     });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   // Intercept ArrowUp / ArrowDown on `#ordo-text-editor` so vertical navigation follows the canvas lines.
@@ -1085,9 +1319,13 @@ function CanvasTextEditor({
     const el = textField();
     if (!el) return;
     const onKeyDown = (e: KeyboardEvent) => {
+      // The input method's keys (a candidate chosen with the arrows, Escape cancelling it) are its own.
+      if (composing(e)) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         onCommit();
+        // The keys go back to the slide at once (b1; the layout effect after the commit does it too).
+        releaseBackingField();
         return;
       }
       if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.ctrlKey && !e.metaKey && !e.altKey) {

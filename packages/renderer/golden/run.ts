@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,7 +7,8 @@ import { chromium } from '@playwright/test';
 
 /**
  * Golden-image test of the text rasterizer and looks (design/14, design/23, design/27 §14 item 4). Bundles
- * golden/page.ts, runs it in headless Chromium, renders every case to a PNG and compares it to
+ * golden/page.ts (its own cases, rich-cases.ts, content-cases.ts, shape-cases.ts and the M9 areas' files listed
+ * in golden/areas.ts), runs it in headless Chromium, renders every case to a PNG and compares it to
  * golden/expected/<case>.png with a per-pixel tolerance (anti-aliasing differs slightly between Chromium
  * builds). It also draws the legacy cases again with the font resolver installed, against the same PNGs,
  * and runs the line-break invariance check (identical text drawing at 320, 960, 1920 and 3840 px wide).
@@ -23,11 +24,21 @@ import { chromium } from '@playwright/test';
  * whatever else the machine has (a font added to the system can no longer turn the run into a skip). When
  * one of them is missing the run is skipped; under --strict or CI that is a failure, as is a case without
  * an expected PNG.
+ *
+ * Every case that fails, and every case drawn without an expected PNG, is also written to
+ * <repo>/test-results/golden/ (cleared at the start of a run): `<case>.actual.png` (what this machine drew),
+ * `<case>.expected.png` and `<case>.diff.png` (red: pixels past the tolerance). CI uploads test-results when a
+ * job fails, and tools/golden-from-artifact.sh copies the `*.actual.png` of a downloaded artifact into
+ * expected/: the way to adopt the images of the pinned golden container (design/23 "Golden images"). A case
+ * compared with another case's PNG (`SAME_AS`) writes `<case>.against-<other>.png`, and a legacy case that
+ * differs only with the font resolver `<case>.resolver.png`; neither is an expected image to adopt.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../..');
 const expectedDir = join(here, 'expected');
+/** Where failing and new cases are written for CI's artifact (see the header). */
+const exportDir = join(root, 'test-results/golden');
 const update = process.argv.includes('--update');
 const strict = process.argv.includes('--strict') || !!process.env.CI;
 const TOLERANCE = 40; // per channel, 0..255
@@ -58,6 +69,13 @@ const FONTS = [
     weight: 400,
     style: 'normal' as const,
     path: '/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf',
+  },
+  // Hangul (the M9 table-korean case): Unifont (fonts-unifont, which Playwright's Chromium deps install).
+  {
+    family: 'Golden KR',
+    weight: 400,
+    style: 'normal' as const,
+    path: '/usr/share/fonts/opentype/unifont/unifont.otf',
   },
 ];
 
@@ -98,7 +116,14 @@ async function loadEsbuild(): Promise<typeof import('esbuild')> {
   }
 }
 
+/** Write a picture (base64 PNG) to the export directory. */
+function exportPng(file: string, base64: string): void {
+  mkdirSync(exportDir, { recursive: true });
+  writeFileSync(join(exportDir, file), Buffer.from(base64, 'base64'));
+}
+
 async function main(): Promise<number> {
+  rmSync(exportDir, { recursive: true, force: true });
   const metaPath = join(expectedDir, 'meta.json');
   const meta: Meta | null = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, 'utf8')) : null;
   // The faces to load: on --update every face the cases use; else exactly the files meta.json lists, plus
@@ -185,12 +210,13 @@ async function main(): Promise<number> {
         if (!update) {
           created++;
           if (strict) failures++;
+          exportPng(`${name}.actual.png`, png);
         }
         continue;
       }
       const expected = readFileSync(file).toString('base64');
       const d = await page.evaluate(
-        ([n, e, t]) => window.__golden.diff(n as string, e as string, t as number),
+        ([n, e, t]) => window.__golden.diff(n as string, e as string, t as number, true),
         [name, expected, TOLERANCE] as const,
       );
       const frac = d.differing / d.total;
@@ -198,19 +224,26 @@ async function main(): Promise<number> {
       if (!ok) {
         failures++;
         writeFileSync(join(expectedDir, `${name}.actual.png`), Buffer.from(png, 'base64'));
+        exportPng(alias ? `${name}.against-${alias}.png` : `${name}.actual.png`, png);
+        copyFileSync(file, join(exportDir, `${alias ?? name}.expected.png`));
+        if (d.picture) exportPng(`${name}.diff.png`, d.picture);
       }
       console.log(
         `  ${name}: ${ok ? 'ok' : 'MISMATCH'} (${d.differing} of ${d.total} pixels over ${TOLERANCE}, ${(frac * 100).toFixed(3)}%, max delta ${d.maxDelta})`,
       );
       // The legacy cases again, with the font resolver installed as every drawer now has it.
       if (!legacy.has(name)) continue;
-      await page.evaluate((n) => window.__golden.render(n, 'resolver'), name);
+      const rpng = await page.evaluate((n) => window.__golden.render(n, 'resolver'), name);
       const r = await page.evaluate(
-        ([n, e, t]) => window.__golden.diff(n as string, e as string, t as number),
+        ([n, e, t]) => window.__golden.diff(n as string, e as string, t as number, true),
         [name, expected, TOLERANCE] as const,
       );
       const rok = r.differing / r.total <= MAX_DIFFERING;
-      if (!rok) failures++;
+      if (!rok) {
+        failures++;
+        exportPng(`${name}.resolver.png`, rpng);
+        if (r.picture) exportPng(`${name}.resolver.diff.png`, r.picture);
+      }
       console.log(
         `  ${name} (font resolver): ${rok ? 'ok' : 'MISMATCH'} (${r.differing} pixels over ${TOLERANCE}, max delta ${r.maxDelta})`,
       );
@@ -241,7 +274,8 @@ async function main(): Promise<number> {
   }
   if (failures)
     console.error(
-      `golden: ${failures} case(s) differ; see expected/*.actual.png, or run with --update if intended`,
+      `golden: ${failures} case(s) differ; see test-results/golden/ (actual, expected, diff), or run with --update if intended. ` +
+        'Expected images come from the golden container (design/23): adopt its pictures with tools/golden-from-artifact.sh',
     );
   return failures ? 1 : 0;
 }
@@ -267,7 +301,8 @@ declare global {
         name: string,
         expectedBase64: string,
         tolerance: number,
-      ): Promise<{ differing: number; total: number; maxDelta: number }>;
+        picture?: boolean,
+      ): Promise<{ differing: number; total: number; maxDelta: number; picture?: string }>;
     };
   }
 }

@@ -98,12 +98,21 @@ export class LiveService {
   /** Warnings from the last restore (tests and diagnostics). */
   restoreWarnings: string[] = [];
 
+  private db: DB;
+  private source: LiveSource;
+  private log: Logger;
+  private opts: { snapshotIntervalMs: number; now?: () => number };
   constructor(
-    private db: DB,
-    private source: LiveSource,
-    private log: Logger,
-    private opts: { snapshotIntervalMs: number; now?: () => number },
-  ) {}
+    db: DB,
+    source: LiveSource,
+    log: Logger,
+    opts: { snapshotIntervalMs: number; now?: () => number },
+  ) {
+    this.db = db;
+    this.source = source;
+    this.log = log;
+    this.opts = opts;
+  }
 
   now(): number {
     return this.opts.now ? this.opts.now() : Date.now();

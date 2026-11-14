@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  causeOf,
+  causeRows,
   type DeckScore,
+  inF,
   nativeStats,
   nativeTables,
   policyRows,
@@ -129,5 +132,128 @@ describe('writeReport', () => {
     expect(html).toContain('(--slides): a: 1, 2');
     expect(html).toContain('Noto Sans Hebrew (Hebr): DejaVu Sans standing in');
     expect(html).toContain("Noto Naskh Arabic (Arab): not installed, the browser's fallback draws it");
+  });
+});
+
+describe('cause groups of F', () => {
+  const T = { tier: 'T3', libreoffice: 'lo.png' } as const;
+  const f: DeckScore[] = [
+    deck('d', {}, [
+      // 3-D first: a slide with 3-D and a warp is in the 3-D group, as exit_ssim.py puts it.
+      {
+        n: 1,
+        ...T,
+        class: 'hybrid',
+        reasons: ['art:3d', 'art:warp'],
+        nativeSsim: 0.8,
+        beforeHubSsim: 0.96,
+        beforeHubFrom: 'hub',
+        beforeHubPaste: 0.99,
+        noLoSsim: 0.8,
+        blackSsim: 0.1,
+      },
+      {
+        n: 2,
+        ...T,
+        class: 'hybrid',
+        reasons: ['art:warp'],
+        nativeSsim: 0.9,
+        beforeHubSsim: 0.98,
+        beforeHubFrom: 'paste',
+        beforeHubPaste: 0.98,
+        blackSsim: 0.2,
+      },
+      {
+        n: 3,
+        ...T,
+        class: 'hybrid',
+        reasons: ['art:warp'],
+        nativeSsim: 0.7,
+        beforeHubSsim: 0.94,
+        beforeHubFrom: 'hub',
+        beforeHubPaste: 0.97,
+        blackSsim: 0.1,
+        maxObjectMs: { '1920': 3, '3840': 9 },
+      },
+      // A native slide whose metafile waits for LibreOffice is in F, in the metafile group.
+      {
+        n: 4,
+        ...T,
+        class: 'native',
+        reasons: ['pic:emf'],
+        metafiles: 1,
+        nativeSsim: 0.6,
+        beforeHubSsim: 0.93,
+        beforeHubFrom: 'hub',
+        blackSsim: 0.1,
+      },
+      // Native, no metafile: not in F.
+      { n: 5, ...T, class: 'native', reasons: [], nativeSsim: 0.99, beforeHubSsim: 0.99, blackSsim: 0.1 },
+      // The hub's budget made this native slide a picture; no listed reason: the ladder's.
+      {
+        n: 6,
+        ...T,
+        class: 'native',
+        hub: 'picture',
+        reasons: [],
+        nativeSsim: 0.85,
+        beforeHubSsim: 0.95,
+        beforeHubFrom: 'hub',
+        noLoSsim: 0.2,
+        blackSsim: 0.2,
+        exception: 'named',
+      },
+      // The converter did not emit it: the hub shows LibreOffice's picture.
+      {
+        n: 7,
+        libreoffice: 'lo.png',
+        nativeSsim: 0,
+        beforeHubSsim: 1,
+        beforeHubFrom: 'paste',
+        beforeHubPaste: 1,
+      },
+    ]),
+  ];
+
+  it("counts real 3-D past the object budget ('art:budget:3d', M9) in the 3d group", () => {
+    const s = (reasons: string[]) => ({ ...T, n: 1, class: 'picture' as const, reasons, nativeSsim: 0.9 });
+    expect(causeOf(s(['art:budget:3d', 'more than 64 KB as stored']))).toBe('3d');
+    expect(causeOf(s(['art:3d']))).toBe('3d');
+    expect(causeOf(s(['more than 64 KB as stored']))).toBe('ladder');
+  });
+
+  it('groups by cause with before-harness and before-hub means', () => {
+    const slides = f[0]!.perSlide;
+    expect(slides.map(inF)).toEqual([true, true, true, true, false, true, true]);
+    expect(slides.filter(inF).map(causeOf)).toEqual([
+      '3d',
+      'warp',
+      'warp',
+      'metafile/ole',
+      'ladder',
+      'not converted',
+    ]);
+    const rows = causeRows(f);
+    expect(rows.map((r) => [r.key, r.count])).toEqual([
+      ['all of F', 6],
+      ['3d', 1],
+      ['warp', 2],
+      ['metafile/ole', 1],
+      ['ladder', 1],
+      ['not converted', 1],
+    ]);
+    const warp = rows.find((r) => r.key === 'warp')!;
+    expect(warp.harness).toBeCloseTo(0.8, 9);
+    expect(warp.hub).toBeCloseTo(0.96, 9);
+    expect(warp).toMatchObject({ hubCount: 2, fromHub: 1, maxObjectMs3840: 9, missing: 0, exceptions: 0 });
+    expect(warp.paste).toBeCloseTo(0.975, 9);
+    expect(warp.noLo).toBeUndefined();
+    const all = rows[0]!;
+    expect(all.harness).toBeCloseTo((0.8 + 0.9 + 0.7 + 0.6 + 0.85 + 0) / 6, 9);
+    expect(all.hub).toBeCloseTo((0.96 + 0.98 + 0.94 + 0.93 + 0.95 + 1) / 6, 9);
+    expect(all).toMatchObject({ fromHub: 4, exceptions: 1 });
+    expect(all.noLo).toBeCloseTo(0.5, 9);
+    // The tables summary.json keeps carry the groups.
+    expect(nativeTables(f).causes).toEqual(rows);
   });
 });

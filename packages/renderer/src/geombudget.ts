@@ -1,5 +1,5 @@
-import type { Look, SlideObject } from '@ordo/domain';
-import { clampLook } from './clamp.ts';
+import { LOGICAL_HEIGHT, LOGICAL_WIDTH, type Look, type SlideObject, type TextObject } from '@ordo/domain';
+import { CLAMP, clampLook, num } from './clamp.ts';
 import { drawableContent } from './content.ts';
 import { drawnBounds } from './geom/bounds.ts';
 import { legacyGeometry } from './geom/built.ts';
@@ -15,6 +15,7 @@ import {
 import { outlineOf } from './geom/outline.ts';
 import type { BuiltGeom } from './geom/path.ts';
 import { geomFilesVersion, storedCost, storedGeometry } from './geom/stored.ts';
+import { pictureTarget } from './picture.ts';
 import { clampShapeObject } from './shape.ts';
 
 /*
@@ -28,9 +29,12 @@ import { clampShapeObject } from './shape.ts';
  *   shape without its stored geometry, gradient (its first stop), dash, arrowheads, joins and caps; a picture
  *   without its mask), as an older build draws it. A stored geometry whose fill alone is over `GEOM_COST.geometry` is already its
  *   legacy shape (`storedGeometry`).
- * - Effects: shapes keep their shadow, glow and soft edge while the area of their layers (`effectArea`, over
- *   what each shape draws: `bounds.ts` `drawnBounds`, the bounds `drawGeomShape` makes its layers over) stays
- *   within `EFFECT_COST.slide`; later ones are drawn without them.
+ * - Effects: shapes keep their shadow, glow and soft edge, and pictures their shadow and soft edge, while the
+ *   area of their layers (`effectArea`, over what each shape draws: `bounds.ts` `drawnBounds`, the bounds
+ *   `drawGeomShape` makes its layers over; over a picture's box, as `drawPictureEffected` makes them) stays
+ *   within `EFFECT_COST.slide`; later ones are drawn without them. A picture the outputs prepare
+ *   (`pictureTarget`) weighs its soft edge as a shadow layer (`EFFECT_COST.preparedSoftEdge`): the asset
+ *   worker feathers it once, then copies it.
  * The loop is `slidePlan`, which the converter runs on what it emits (`pptx-scene` `emit.ts`), after keeping
  * native slides within the same budgets as it reads them (`walk.ts` `slideCost`, `fitEffects`), so this
  * changes only what an edit, a save or a hostile file makes. Worked out again once a geometry file the slide
@@ -43,6 +47,18 @@ export interface SlideDrawCost {
   readonly units: number;
   /** The area of the effect layers drawn, in slide areas, weighted (`effectArea`). */
   readonly effects: number;
+  /**
+   * The glyphs drawn again blurred (`contentCost`: a box or run shadow, or a glow): each such character's em
+   * square (its size squared), in slide areas; health's raster estimate reads it and the next ones
+   * (`rasterEstimateMs`). Absent: none.
+   */
+  readonly textEffects?: number;
+  /** The characters drawn (not white space): what laying the text out measures and drawing it fills. */
+  readonly chars?: number;
+  /** The pictures copied 1:1 from a prepared bitmap (`pictureTarget`): their area on the slide, in slide areas. */
+  readonly pictures?: number;
+  /** The pictures drawn from their source through a transform (turned, round corners, past 16 MP), likewise. */
+  readonly sourcePictures?: number;
 }
 
 const memo = new WeakMap<
@@ -101,9 +117,12 @@ function ratedOf(o: SlideObject): { r: Rated; area: number } {
     const c = o.type === 'shape' ? clampShapeObject(o) : o;
     const { g, points } = drawnGeometry(c);
     r = { est: objectCost(c, g), points };
-    // The effect layers cover what the shape draws, as `drawGeomShape` makes them.
+    // The effect layers cover what the shape draws, as `drawGeomShape` makes them; a picture's its box
+    // (`picture-effects.ts`), its soft edge paid once where the outputs prepare it (`pictureTarget`).
     if (c.type === 'shape' && g && (c.shadow || c.glow || c.softEdge))
       area = effectArea(c, drawnBounds(g, outlineOf(c)));
+    else if (c.type === 'image' && (c.shadow || c.softEdge))
+      area = effectArea(c, undefined, pictureTarget(c, 1) !== undefined);
   }
   const out = { version, r, area };
   rated.set(o, out);
@@ -153,8 +172,89 @@ function planOf(objects: readonly SlideObject[]) {
     drawn.set(o, d);
     if (part !== 'effects') over.add(o);
   });
-  const out = { version, drawn, over, cost: { units, effects } };
+  const out = { version, drawn, over, cost: { units, effects, ...contentCost(objects) } };
   memo.set(objects, out);
+  return out;
+}
+
+const SLIDE_AREA = LOGICAL_WIDTH * LOGICAL_HEIGHT;
+
+/** A box's area on the slide (logical px², cut to the frame), in slide areas. */
+function onSlide(b: { x: number; y: number; w: number; h: number }): number {
+  const x0 = Math.max(0, num(b.x, -1e6, 1e6, 0));
+  const y0 = Math.max(0, num(b.y, -1e6, 1e6, 0));
+  const x1 = Math.min(LOGICAL_WIDTH, num(b.x, -1e6, 1e6, 0) + num(b.w, 0, 1e6, 0));
+  const y1 = Math.min(LOGICAL_HEIGHT, num(b.y, -1e6, 1e6, 0) + num(b.h, 0, 1e6, 0));
+  return x1 > x0 && y1 > y0 ? ((x1 - x0) * (y1 - y0)) / SLIDE_AREA : 0;
+}
+
+/** Characters that draw a glyph (not white space), counted to `CLAMP.maxTextChars`. */
+function inked(text: string, from: number, to: number): number {
+  let n = 0;
+  const end = Math.min(to, text.length, CLAMP.maxTextChars);
+  for (let i = Math.max(0, from); i < end; i++) {
+    const c = text.charCodeAt(i);
+    if (c > 32 && c !== 0xa0 && !(c >= 0x2000 && c <= 0x200b) && c !== 0x3000) n++;
+  }
+  return n;
+}
+
+/** A text object's glyph area drawn again blurred (`contentCost`), in logical px², and its characters. */
+function textCost(o: TextObject): { blurred: number; chars: number } {
+  if (typeof o.text !== 'string' || !o.text.trim() || !(num(o.opacity, 0, 1, 1) > 0))
+    return { blurred: 0, chars: 0 };
+  const style = o.style ?? ({} as TextObject['style']);
+  const size = num(style.fontSizePx, 1, CLAMP.maxFontPx, 48);
+  const glow = !!style.glow && style.glow.radius > 0;
+  const boxShadow = !!style.shadow;
+  let blurred = 0;
+  let chars = 0;
+  let at = 0;
+  const add = (n: number, px: number, shadow: boolean) => {
+    chars += n;
+    if (shadow || glow) blurred += n * px * px;
+  };
+  // Runs in order (stored sorted, not overlapping); what they leave is in the box's style.
+  for (const r of Array.isArray(o.runs) ? o.runs.slice(0, CLAMP.maxRuns) : []) {
+    const start = num(r?.start, 0, CLAMP.maxTextChars, 0);
+    const end = num(r?.end, start, CLAMP.maxTextChars, start);
+    if (start > at) add(inked(o.text, at, start), size, boxShadow);
+    const px = Math.min(CLAMP.maxFontPx, size * num(r.sizeScale, 0.01, 100, 1));
+    add(inked(o.text, Math.max(start, at), end), px, r.shadow === null ? false : !!r.shadow || boxShadow);
+    at = Math.max(at, end);
+  }
+  add(inked(o.text, at, o.text.length), size, boxShadow);
+  return { blurred, chars };
+}
+
+/**
+ * The text and pictures of a slide's objects (`SlideDrawCost` textEffects, chars, pictures, sourcePictures),
+ * for health's raster estimate: what the geometry units leave out. Text objects as stored (an autofit's
+ * stored scale is not applied: a little high); a picture copied from a prepared bitmap where `pictureTarget`
+ * prepares one at the logical size, else drawn from its source.
+ */
+function contentCost(objects: readonly SlideObject[]): Partial<SlideDrawCost> {
+  let textEffects = 0;
+  let chars = 0;
+  let pictures = 0;
+  let sourcePictures = 0;
+  for (const o of objects) {
+    if (!o?.box) continue;
+    if (o.type === 'text') {
+      const t = textCost(o);
+      textEffects += t.blurred;
+      chars += t.chars;
+    } else if (o.type === 'image' && num(o.opacity, 0, 1, 1) > 0) {
+      const a = onSlide(o.box);
+      if (pictureTarget(o, 1)) pictures += a;
+      else sourcePictures += a;
+    }
+  }
+  const out: { -readonly [K in keyof SlideDrawCost]?: number } = {};
+  if (textEffects > 0) out.textEffects = textEffects / SLIDE_AREA;
+  if (chars > 0) out.chars = chars;
+  if (pictures > 0) out.pictures = pictures;
+  if (sourcePictures > 0) out.sourcePictures = sourcePictures;
   return out;
 }
 
@@ -177,13 +277,21 @@ export function slideDrawCost(objects: readonly SlideObject[]): SlideDrawCost {
 const NO_COST: SlideDrawCost = { units: 0, effects: 0 };
 
 /**
- * What a slide job draws (`slideDrawCost` of the objects `drawSlide2D` draws for `look`; nothing of the kind
- * for a look that draws lyric bands or hides the slide), for health's `heavySlide`. Shares the drawers' memo.
+ * What a slide job draws (`slideDrawCost` of the objects `drawSlide2D` draws for `look`, with its reference or
+ * page picture, contain-fitted over the frame, among the pictures; nothing of the kind for a look that draws
+ * lyric bands or hides the slide), for health's `heavySlide`. Shares the drawers' memo.
  */
 export function slideJobCost(slide: unknown, look?: Look): SlideDrawCost {
   if (look && clampLook(look).layers.slide.mode !== 'authored') return NO_COST;
-  return slideDrawCost(drawableContent(slide).objects);
+  const drawn = drawableContent(slide);
+  const cost = slideDrawCost(drawn.objects);
+  if (!drawn.pictureMediaId) return cost;
+  let hit = withPicture.get(cost);
+  if (!hit) withPicture.set(cost, (hit = { ...cost, pictures: (cost.pictures ?? 0) + 1 }));
+  return hit;
 }
+
+const withPicture = new WeakMap<SlideDrawCost, SlideDrawCost>();
 
 /** `objects` as the slide's drawing budget draws them (the same array when it changes none). */
 export function withinDrawBudget(objects: readonly SlideObject[]): readonly SlideObject[] {

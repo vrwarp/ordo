@@ -3,11 +3,11 @@ import type { Box, ShapeObject } from '@ordo/domain';
 import { CLAMP, clampObject, isClamped, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
 import { digest } from './digest.ts';
-import { drawEffected } from './effects.ts';
+import { drawEffected, type Look3dPlan } from './effects.ts';
 import { type Bounds, drawnBounds, geomBounds } from './geom/bounds.ts';
 import { drawGeom, type GeomFill, type GeomStroke, geomFillPath2D, geomPath2D } from './geom/draw.ts';
 import { arrowFor, arrowReach } from './geom/ends.ts';
-import { lineStyleOf, outlineOf, SHAPE_MITER_LIMIT } from './geom/outline.ts';
+import { hasShapeExtras, lineStyleOf, outlineOf, SHAPE_MITER_LIMIT } from './geom/outline.ts';
 import { gradientStyle } from './geom/paint.ts';
 import type { BuiltGeom } from './geom/path.ts';
 import { geomAwaited, geomPending, legacyGeometry, storedGeometry } from './geom/stored.ts';
@@ -27,6 +27,14 @@ import { geomAwaited, geomPending, legacyGeometry, storedGeometry } from './geom
  * - Placement: box space (0..w, 0..h, logical px) flipped about the box's centre, rotated about it, scaled to
  *   the device.
  * - Effects (effects.ts): shadow, glow and soft edge through sprites, the whole shape at its opacity.
+ *
+ * Draw dispatch (M9 plan decision 10, `drawShapeObject`): a shape is drawn by the first of its `table`, `chart`
+ * and `decor` (the clamp keeps one of them, in that order) whose drawer is registered (`registerShapeDrawer`:
+ * the table, chart and decoration tracks of M9), else through its geometry (`hasShapeExtras`), else by the
+ * legacy path. Until a kind's drawer is registered, such a shape draws what an older build draws once it
+ * strips the field (design/27 §3.2): its legacy shape (a table's background rect, a chart's area, a
+ * decoration's empty line). A registered 3-D look (`registerLook3d`, three-rim) decorates the geometry path:
+ * a shape with `look3d` goes through `drawGeomShape` and hands the effect composite its resolved plan.
  */
 
 export { geomBounds } from './geom/bounds.ts';
@@ -160,6 +168,181 @@ function effectKey(o: ShapeObject): string | undefined {
   return key;
 }
 
+/** The M9 fields a registered drawer draws a shape by, in precedence order (plan decision 10). */
+export const SHAPE_DRAW_KINDS = ['table', 'chart', 'decor'] as const;
+export type ShapeDrawKind = (typeof SHAPE_DRAW_KINDS)[number];
+
+/**
+ * Draws a clamped shape that holds its kind's field (`o.table`, `o.chart` or `o.decor`) at `scale` device px
+ * per logical px, under the caller's transform. False: nothing was drawn, and the shape falls to its legacy
+ * shape (the drawer's own fallback, for a field it cannot draw yet).
+ */
+export type ShapeDrawer = (ctx: Ctx2D, o: ShapeObject, scale: number) => boolean;
+
+/**
+ * Where a registered drawer draws a clamped shape of its kind (logical px, slide space, effects and rotation
+ * included), for the tight sprites (`sprite.ts` `objectReach`): null when that is not known (the layer stays
+ * full-frame); undefined when the drawer would not draw it (it falls to its geometry or legacy shape).
+ */
+export type ShapeReach = (
+  ctx: Ctx2D,
+  o: ShapeObject,
+) => { x: number; y: number; w: number; h: number } | null | undefined;
+
+const drawers = new Map<ShapeDrawKind, ShapeDrawer>();
+const reaches = new Map<ShapeDrawKind, ShapeReach>();
+
+/**
+ * Register the drawer of one kind (the last one registered wins), with where it draws (`ShapeReach`; a
+ * drawer registered without one draws its shapes on a full-frame layer); returns its unregistration.
+ */
+export function registerShapeDrawer(kind: ShapeDrawKind, draw: ShapeDrawer, reach?: ShapeReach): () => void {
+  drawers.set(kind, draw);
+  if (reach) reaches.set(kind, reach);
+  else reaches.delete(kind);
+  return () => {
+    if (drawers.get(kind) !== draw) return;
+    drawers.delete(kind);
+    if (reaches.get(kind) === reach) reaches.delete(kind);
+  };
+}
+
+/** Whether a drawer of `kind` is registered (its module is loaded). */
+export function shapeDrawerRegistered(kind: ShapeDrawKind): boolean {
+  return drawers.has(kind);
+}
+
+/*
+ * Drawers loaded per object kind (M9 bundle budget): a kind's drawer lives in its own module, fetched the first
+ * time a slide holds that kind, so pages and workers that never meet a table (most services) never load its
+ * code. The renderer's index registers each kind's loader (`registerShapeDrawerLoader`); the workers' slide
+ * prepare steps (`apps/output/src/prepare`) and the editor canvas call `loadShapeDrawers` before they draw.
+ * Until a kind's module is loaded its shapes draw what an older build draws (the legacy shape, design/27 §3.2).
+ */
+
+/** Imports the module that registers a kind's drawer. */
+export type ShapeDrawerLoader = () => Promise<unknown>;
+
+const loaders = new Map<ShapeDrawKind, ShapeDrawerLoader>();
+const loading = new Map<ShapeDrawKind, Promise<boolean>>();
+
+/** Register how a kind's drawer is loaded (the last one registered wins); returns its unregistration. */
+export function registerShapeDrawerLoader(kind: ShapeDrawKind, load: ShapeDrawerLoader): () => void {
+  loaders.set(kind, load);
+  return () => {
+    if (loaders.get(kind) === load) loaders.delete(kind);
+  };
+}
+
+/**
+ * The kinds the objects hold (`table`, `chart`, `decor`) whose drawer is not registered but has a loader: what
+ * `loadShapeDrawers` would load. Reads only whether each field is there (a damaged value costs nothing here).
+ */
+export function shapeDrawersWanted(objects: readonly unknown[]): ShapeDrawKind[] {
+  const out: ShapeDrawKind[] = [];
+  for (const o of objects) {
+    if (!o || typeof o !== 'object' || (o as { type?: unknown }).type !== 'shape') continue;
+    for (const kind of SHAPE_DRAW_KINDS)
+      if (
+        (o as Record<string, unknown>)[kind] !== undefined &&
+        !drawers.has(kind) &&
+        loaders.has(kind) &&
+        !out.includes(kind)
+      )
+        out.push(kind);
+    if (out.length === SHAPE_DRAW_KINDS.length) break;
+  }
+  return out;
+}
+
+/**
+ * Load the drawers the objects need (`shapeDrawersWanted`), each module once: resolves true when one was
+ * registered by this call (the caller draws again), false when there was nothing to load. A load that fails
+ * (offline, a stale chunk) resolves false and is tried again next time; the shapes keep their legacy look.
+ */
+export async function loadShapeDrawers(objects: readonly unknown[]): Promise<boolean> {
+  const kinds = shapeDrawersWanted(objects);
+  if (!kinds.length) return false;
+  const loads = kinds.map((kind) => {
+    let p = loading.get(kind);
+    if (!p) {
+      const load = loaders.get(kind)!;
+      p = load().then(
+        () => {
+          loading.delete(kind);
+          return drawers.has(kind);
+        },
+        () => {
+          loading.delete(kind);
+          return false;
+        },
+      );
+      loading.set(kind, p);
+    }
+    return p;
+  });
+  return (await Promise.all(loads)).some(Boolean);
+}
+
+/**
+ * Where a shape's registered drawer draws it (`ShapeReach`): undefined when the shape has no `table`,
+ * `chart` or `decor`, when no drawer of its kind is registered, or when the drawer would not draw it (the
+ * shape then draws its geometry or legacy shape, and reaches as they do); null when the drawer gave no reach.
+ */
+export function shapeDrawerReach(
+  ctx: Ctx2D,
+  o: ShapeObject,
+): { x: number; y: number; w: number; h: number } | null | undefined {
+  const kind = shapeDrawKind(o);
+  if (!kind || !drawers.has(kind)) return undefined;
+  const reach = reaches.get(kind);
+  return reach ? reach(ctx, clampShapeObject(o)) : null;
+}
+
+/**
+ * Resolves a shape's 3-D look for the transform it is drawn under (three-rim): the plan the effect composite
+ * draws its face, rim and walls from, or undefined to draw it flat. Called only for a shape with `look3d`.
+ */
+export type Look3dResolver = (o: ShapeObject, m: DOMMatrix, built: BuiltGeom) => Look3dPlan | undefined;
+
+let look3dResolver: Look3dResolver | undefined;
+
+/** Register the 3-D look's resolver (one at a time); returns its unregistration. */
+export function registerLook3d(resolve: Look3dResolver): () => void {
+  look3dResolver = resolve;
+  return () => {
+    if (look3dResolver === resolve) look3dResolver = undefined;
+  };
+}
+
+/** Whether a 3-D look resolver is registered (a shape with `look3d` is then drawn with its rim and walls). */
+export function look3dRegistered(): boolean {
+  return look3dResolver !== undefined;
+}
+
+/** Which kind's field a shape is drawn by (`SHAPE_DRAW_KINDS` order, as clamped), else undefined. */
+export function shapeDrawKind(o: ShapeObject): ShapeDrawKind | undefined {
+  if (o.table === undefined && o.chart === undefined && o.decor === undefined) return undefined;
+  const c = clampShapeObject(o);
+  return c.table ? 'table' : c.chart ? 'chart' : c.decor ? 'decor' : undefined;
+}
+
+/**
+ * Draw a shape object as dispatched (see the header): `table` → `chart` → `decor` → geometry → legacy. True
+ * when one of the first four drew it; false leaves it to the legacy path (`drawShape`).
+ */
+export function drawShapeObject(ctx: Ctx2D, o: ShapeObject, scale: number): boolean {
+  const kind = shapeDrawKind(o);
+  if (kind) {
+    if (drawers.get(kind)?.(ctx, clampShapeObject(o), scale)) return true;
+  }
+  if (hasShapeExtras(o) || (o.look3d !== undefined && look3dResolver)) {
+    drawGeomShape(ctx, o, scale);
+    return true;
+  }
+  return false;
+}
+
 /** Draw a shape with M6 fields (`hasShapeExtras`) at `scale` device px per logical px. */
 export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void {
   const o = clampShapeObject(raw);
@@ -171,7 +354,11 @@ export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void
   const s = num(scale, 0.01, 8, 1);
   ctx.save();
   placeBox(ctx, o.box, s, o.flipH === true, o.flipV === true);
-  if ((o.shadow || o.glow || o.softEdge) && typeof ctx.getTransform === 'function') {
+  const look3d =
+    o.look3d && look3dResolver && typeof ctx.getTransform === 'function'
+      ? look3dResolver(o, ctx.getTransform(), plan.built)
+      : undefined;
+  if ((o.shadow || o.glow || o.softEdge || look3d) && typeof ctx.getTransform === 'function') {
     const m = ctx.getTransform();
     const device = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
     const drawn = drawEffected(
@@ -202,6 +389,7 @@ export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void
         softEdge: o.softEdge,
         // A shape still waiting for its geometry file is not cached under the key it will draw with.
         key: geomPending(o.geom) ? undefined : effectKey(o),
+        ...(look3d ? { look3d } : {}),
       },
       opacity,
     );

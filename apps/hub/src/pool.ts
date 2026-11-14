@@ -21,6 +21,7 @@ import { Worker } from 'node:worker_threads';
 import type { Annotation } from '@ordo/pptx-render/annotate.ts';
 import type { Pro7ImportOptions, Pro7Result, PptxText } from './imports.ts';
 import type { FontFace } from './fonts/sfnt.ts';
+import type { ClientSceneTaskInput, ClientSceneTaskOutput } from './pptx/clientScene.ts';
 import type {
   ArtTaskInput,
   ArtTaskOutput,
@@ -49,6 +50,8 @@ export type CpuTasks = {
   'pptx-art': { input: ArtTaskInput; output: ArtTaskOutput };
   /** A recoloured picture or a tiled fill, derived at import (design/27 §4, M6; `pptx/bakeTask.ts`). */
   'pptx-bake': { input: BakeTaskInput; output: BakeTaskOutput };
+  /** A scene parsed in the uploading browser: read, parsed and checked off the event loop (`pptx/clientScene.ts`). */
+  'pptx-client-scene': { input: ClientSceneTaskInput; output: ClientSceneTaskOutput };
 };
 export type CpuTaskKind = keyof CpuTasks;
 
@@ -61,6 +64,7 @@ export const TASK_TIMEOUT_MS: Record<CpuTaskKind, number> = {
   'pptx-render-copy': 2 * 60_000,
   'pptx-art': 60_000,
   'pptx-bake': 60_000,
+  'pptx-client-scene': 60_000,
 };
 const IDLE_MS = 30_000;
 /**
@@ -116,10 +120,12 @@ export class CpuPool {
   private stats_ = { completed: 0, failed: 0, restarts: 0, oom: 0 };
   private closed = false;
 
-  constructor(
-    readonly size = 1,
-    private url: URL = cpuWorkerUrl(),
-  ) {}
+  readonly size: number;
+  private url: URL;
+  constructor(size = 1, url: URL = cpuWorkerUrl()) {
+    this.size = size;
+    this.url = url;
+  }
 
   stats(): PoolStats {
     return {

@@ -1,9 +1,15 @@
 import {
   DEFAULT_THEME,
   type Font,
-  type ImageObject,
+  isSvgMime,
   type Media,
   newId,
+  pngSize,
+  SVG_DEFAULT_SIZE,
+  SVG_HEAD_BYTES,
+  svgIntrinsicSize,
+  svgRasterProblem,
+  svgRasterSizeFor,
   type Output,
   type Playlist,
   Playlist as PlaylistSchema,
@@ -13,16 +19,23 @@ import {
   Theme as ThemeSchema,
 } from '@ordo/domain';
 import {
-  importPptxClient,
+  assemblePptxScene,
+  BoundedZip,
+  CONVERTER_VERSION,
   importPro7,
+  M9_WRITES,
+  type PptxClientScene,
+  parsePptxScene,
   parseSongFile,
   PRO7_MEDIA_PREFIX,
   readZip,
   remapMediaIds,
+  zipSource,
 } from '@ordo/importers';
 import { initialState } from '@ordo/live-state';
 import { clearAll, deleteFile, getDoc, getFile, putDoc, putFile } from './store.ts';
 import {
+  type HubCapabilities,
   type Job,
   type LibrarySnapshot,
   SETTINGS_BODY,
@@ -186,7 +199,16 @@ async function mediaFromBlob(
     updatedAt: nowIso(),
   };
   if (kind !== 'image') m.delivery = ref;
-  if (kind === 'image') {
+  if (isSvgMime(mime)) {
+    // The size outputs draw it at (design/26): a service worker cannot decode an SVG.
+    const size = svgRasterSizeFor(
+      svgIntrinsicSize(await blob.slice(0, SVG_HEAD_BYTES).text()),
+      SVG_DEFAULT_SIZE,
+    );
+    m.width = size.width;
+    m.height = size.height;
+    m.hasAlpha = true;
+  } else if (kind === 'image') {
     try {
       const bmp = await createImageBitmap(blob);
       m.width = bmp.width;
@@ -197,6 +219,35 @@ async function mediaFromBlob(
     }
   }
   return m;
+}
+
+/** The type of a library file by its hash (media originals, deliveries and posters, fonts). */
+function mimeOfHash(l: Lib, hash: string): string | undefined {
+  for (const m of l.media)
+    for (const f of [m.original, m.delivery, m.poster]) if (f?.hash === hash) return f.mime;
+  for (const f of l.fonts as Font[]) if (f.file.hash === hash) return f.file.mime;
+  return undefined;
+}
+
+/**
+ * An SVG's still from the operator's upload (field "raster", design/12 "Media pipeline"), checked as the hub
+ * checks it, kept as the item's delivery: outputs draw it instead of the SVG. Throws for a raster with
+ * anything but one SVG, or one that is not a PNG of its shape within the caps.
+ */
+async function withRaster(m: Media, svg: Blob, raster: Blob): Promise<Media> {
+  if (!isSvgMime(m.original.mime)) throw new Error('a still picture can only come with an SVG');
+  const png = pngSize(new Uint8Array(await raster.slice(0, 64).arrayBuffer()));
+  if (!png) throw new Error('the still picture is not a PNG');
+  const problem = svgRasterProblem(svgIntrinsicSize(await svg.slice(0, SVG_HEAD_BYTES).text()), png);
+  if (problem) throw new Error(problem);
+  const hash = await sha256(raster);
+  await putFile(hash, new Blob([raster], { type: 'image/png' }));
+  return {
+    ...m,
+    delivery: { hash, bytes: raster.size, mime: 'image/png', path: `files/${hash}` },
+    width: png.width,
+    height: png.height,
+  };
 }
 
 function job(kind: string, result: unknown, log: string[], error?: string): Job {
@@ -310,10 +361,13 @@ function stripPlaceholders(p: Presentation): void {
     }
 }
 
-/** Fallback media for the browser demo when server-side LibreOffice rendering is needed. */
-async function ensureDemoFallbackMedia(l: Lib): Promise<{ full: Media; overlay: Media; nextLib: Lib }> {
+/**
+ * The demo's placeholder page where a hub would show LibreOffice's picture of a slide ('Pictures (LibreOffice)',
+ * 'Show original', a picture-class slide). What ordo cannot draw on a native slide is listed on it instead
+ * (`Slide.pptx.missing`), as on a hub without LibreOffice.
+ */
+async function ensureDemoFallbackMedia(l: Lib): Promise<{ full: Media; nextLib: Lib }> {
   let full = l.media.find((m) => m.name === 'Demo Fallback Slide');
-  let overlay = l.media.find((m) => m.name === 'Demo Fallback Object');
   let mediaList = l.media;
 
   if (!full) {
@@ -341,33 +395,7 @@ async function ensureDemoFallbackMedia(l: Lib): Promise<{ full: Media; overlay: 
     mediaList = [...mediaList, full];
   }
 
-  if (!overlay) {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
-  <rect width="800" height="600" rx="16" fill="rgba(30, 41, 59, 0.9)" stroke="#475569" stroke-width="3" stroke-dasharray="8 6"/>
-  <text x="400" y="280" text-anchor="middle" fill="#f1f5f9" font-family="system-ui, -apple-system, sans-serif" font-size="32" font-weight="600">Object Not Available in Demo</text>
-  <text x="400" y="330" text-anchor="middle" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-size="20">Rendered by LibreOffice on the Ordo Hub server</text>
-</svg>`;
-    const blob = new Blob([svg], { type: 'image/svg+xml' });
-    overlay = await mediaFromBlob(blob, 'Demo Fallback Object.svg', { tags: ['demo-fallback'] });
-    overlay.width ??= 800;
-    overlay.height ??= 600;
-    overlay.hasAlpha = true;
-    mediaList = [...mediaList, overlay];
-  }
-
-  return { full, overlay, nextLib: { ...l, media: mediaList } };
-}
-
-function slideObjectsDigest(objects: readonly unknown[]): string {
-  const s = JSON.stringify(objects);
-  let h1 = 0x811c9dc5;
-  let h2 = 0x01000193 ^ 0x5bd1e995;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    h1 = Math.imul(h1 ^ c, 0x01000193);
-    h2 = Math.imul(h2 ^ c, 0x01000193) ^ (h2 >>> 13);
-  }
-  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+  return { full, nextLib: { ...l, media: mediaList } };
 }
 
 /** Import PowerPoint or PDF in the browser demo. */
@@ -422,10 +450,16 @@ async function importDocumentUpload(file: File, form: FormData): Promise<Job> {
     );
   }
 
-  // PowerPoint import:
+  // PowerPoint import: the scene the operator's import worker parsed (`clientScene`), else parsed here, both for
+  // a hub without LibreOffice (design/26: the demo draws what ordo draws and lists the rest), then version 1
+  // with the import core, as a hub builds it (`assemblePptxScene`).
   const renderer = form.get('renderer');
   const extendBackgrounds = form.get('extendBackgrounds') !== '0';
-  const parsed = await importPptxClient(file, file.name, { extendBackgrounds });
+  const parse = await demoParse(file, form.get('clientScene'), extendBackgrounds);
+  const parsed = await assemblePptxScene(parse, file, {
+    fileName: file.name,
+    libraryFamilies: l.fonts.map((f) => f.family),
+  });
 
   // Store uploaded PPTX file by hash
   await putFile(parsed.deckHash, file);
@@ -495,60 +529,19 @@ async function importDocumentUpload(file: File, form: FormData): Promise<Job> {
   // Apply media mapping across presentation (backgroundMediaId, slide backgrounds, image objects)
   parsed.presentation = remapMediaIds(parsed.presentation, mediaMap);
 
-  // If there are loSlides, apply demo fallback images to those slides
-  if (parsed.loSlides.length > 0) {
-    for (const lo of parsed.loSlides) {
-      for (const sec of parsed.presentation.sections) {
-        const sl = sec.slides.find((s) => s.id === lo.slideId);
-        if (!sl) continue;
-        if (lo.class === 'picture') {
-          sl.imported = {
-            fileId: parsed.deckHash,
-            page: lo.index + 1,
-            imageMediaId: fallbacks.full.id,
-            textBoxes: [],
-            textAligned: true,
-          };
-          if (sl.pptx) delete sl.pptx.pending;
-        } else if (lo.class === 'hybrid' && lo.art) {
-          const artBox = { ...lo.art.box, rotation: 0 };
-          const artImg: ImageObject = {
-            id: newId(),
-            type: 'image',
-            box: artBox,
-            mediaId: fallbacks.overlay.id,
-            fit: 'contain',
-            opacity: 1,
-            radius: 0,
-            origin: { src: 'pptx', role: 'art' },
-          };
-          const replaces = new Set(lo.art.replaces);
-          sl.objects = sl.objects.filter((o) => !replaces.has(o.id));
-          const beforeIdx = lo.art.before ? sl.objects.findIndex((o) => o.id === lo.art!.before) : -1;
-          if (beforeIdx >= 0) sl.objects.splice(beforeIdx, 0, artImg);
-          else sl.objects.push(artImg);
-          if (sl.pptx) delete sl.pptx.pending;
-        }
-        if (lo.metafileObjects?.length && lo.class !== 'picture') {
-          for (const mo of lo.metafileObjects) {
-            const mfObj: ImageObject = { ...mo.object, mediaId: fallbacks.overlay.id };
-            const beforeIdx = mo.before ? sl.objects.findIndex((o) => o.id === mo.before) : -1;
-            if (beforeIdx >= 0) sl.objects.splice(beforeIdx, 0, mfObj);
-            else sl.objects.push(mfObj);
-          }
-          if (sl.pptx) delete sl.pptx.pending;
-        }
-      }
-    }
-  }
-
-  for (const sec of parsed.presentation.sections) {
-    for (const sl of sec.slides) {
-      if (sl.pptx) {
-        sl.pptx.digest = slideObjectsDigest(sl.objects.filter((o) => o.origin));
-      }
-    }
-  }
+  // Without LibreOffice nothing waits for it: what ordo cannot draw is listed on its slide
+  // (`Slide.pptx.missing`). Only a picture-class slide (more pictures than a slide may hold), which no build
+  // draws natively yet, shows the demo's placeholder page, as a hub would show LibreOffice's.
+  for (const sec of parsed.presentation.sections)
+    for (const sl of sec.slides)
+      if (sl.pptx?.class === 'picture' && !sl.objects.length)
+        sl.imported = {
+          fileId: parsed.deckHash,
+          page: sl.pptx.index + 1,
+          imageMediaId: fallbacks.full.id,
+          textBoxes: [],
+          textAligned: true,
+        };
 
   // Save presentation
   const savedPres = PresentationSchema.parse({
@@ -559,20 +552,61 @@ async function importDocumentUpload(file: File, form: FormData): Promise<Job> {
   l = { ...l, media: mediaList, presentations: upsert(l.presentations, savedPres) };
   await save(l);
 
+  const slides = savedPres.sections.flatMap((s) => s.slides);
   const jobResult = {
     presentationId: savedPres.id,
     slides: parsed.classes.length,
     native: parsed.classes.filter((c) => c === 'native').length,
     hybrid: parsed.classes.filter((c) => c === 'hybrid').length,
     picture: parsed.classes.filter((c) => c === 'picture').length,
-    compact: parsed.compact,
+    compact: 0,
+    simplified: parsed.simplified,
     pending: 0,
+    missing: slides.filter((sl) => sl.pptx?.missing?.length).length,
+    libreoffice: false,
     missingFonts: parsed.missingFonts,
-    notes: ['Imported natively in browser demo', ...parsed.notes],
+    notes: [
+      parse.fromClient ? 'Parsed in this browser and built in the demo' : 'Parsed and built in the demo',
+      ...parsed.notes,
+    ],
   };
 
   return saveJob(job('pptx-native', jobResult, parsed.log));
 }
+
+/**
+ * The deck's scene: the one the operator's import worker sent (`clientScene`) when it is of this converter,
+ * its stored fields and parsed without LibreOffice (the demo has none), else parsed here. A scene that is not
+ * readable is never used.
+ */
+async function demoParse(
+  file: File,
+  sent: FormDataEntryValue | null,
+  extendBackgrounds: boolean,
+): Promise<{ scene: PptxClientScene; zip: BoundedZip; fromClient: boolean }> {
+  if (sent instanceof Blob && sent.size <= CLIENT_SCENE_MAX_BYTES) {
+    try {
+      const scene = JSON.parse(await sent.text()) as PptxClientScene;
+      const fields = new Set(Array.isArray(scene?.m9Writes) ? scene.m9Writes : []);
+      if (
+        scene?.version === CONVERTER_VERSION &&
+        scene.libreoffice === false &&
+        fields.size === M9_WRITES.size &&
+        [...M9_WRITES].every((f) => fields.has(f)) &&
+        Array.isArray(scene.listed) &&
+        Array.isArray(scene.slides)
+      )
+        return { scene, zip: await BoundedZip.open(zipSource(file)), fromClient: true };
+    } catch {
+      // not a usable scene: parsed here
+    }
+  }
+  const parse = await parsePptxScene(file, { extendBackgrounds, libreoffice: false });
+  return { scene: parse.scene, zip: parse.zip, fromClient: false };
+}
+
+/** The largest scene the demo reads (as a hub's bound, `clientScene.ts`). */
+const CLIENT_SCENE_MAX_BYTES = 32 * 1024 * 1024;
 
 function outputByToken(l: Lib, token: string | null) {
   return l.settings.outputs.find((o) => o.token && o.token === token);
@@ -591,6 +625,18 @@ export async function handle(req: Request): Promise<Res> {
     if (path === '/auth/pins') return notInDemo('Changing the PINs');
     if (seg[0] === 'auth') return json({ ok: true });
     if (path === '/health') return json({ ok: true, demo: true, version: VERSION });
+    // design/27 M9: what the server tools allow. The pages demo has no LibreOffice and no poppler-utils, but
+    // it imports PowerPoint (parsed in the browser, without LibreOffice: `art` false, so what ordo cannot draw
+    // is listed on its slide) and PDF files, and shows its placeholder pictures where a hub's tools would draw
+    // a whole page (a picture import, 'Show original', a picture-class slide, a PDF page), so the operator
+    // offers those (`importDocumentUpload`, the pptx-reference route).
+    if (path === '/capabilities')
+      return json({
+        libreoffice: { state: 'absent' },
+        pdf: true,
+        documents: ['pptx', 'ppsx', 'potx', 'pptm', 'pdf'],
+        pptx: { pictures: true, reference: true, referencePdf: false, art: false },
+      } satisfies HubCapabilities);
 
     // ---- the reset button
     if (path === '/demo/reset' && m === 'POST') {
@@ -604,10 +650,24 @@ export async function handle(req: Request): Promise<Res> {
 
     // ---- files: the visitor's own (IndexedDB), else the sample service's (on the site)
     if (seg[0] === 'files' && seg[1]) {
+      // As the hub serves them (design/21): a sandboxed document that loads nothing, and an SVG downloads
+      // when opened as a page, so a visitor's SVG never runs script on the demo's origin.
+      const safe = (type: string): Record<string, string> => ({
+        'content-type': type,
+        'content-security-policy': "default-src 'none'; sandbox",
+        'x-content-type-options': 'nosniff',
+        ...(isSvgMime(type) ? { 'content-disposition': 'attachment' } : {}),
+      });
       const own = await getFile(seg[1]);
-      if (own)
-        return new Response(own, { headers: { 'content-type': own.type || 'application/octet-stream' } });
-      return fetch(new URL(`demo/files/${seg[1]}`, scope));
+      if (own) return new Response(own, { headers: safe(own.type || 'application/octet-stream') });
+      const site = await fetch(new URL(`demo/files/${seg[1]}`, scope));
+      if (!site.ok) return site;
+      // The site serves the sample's files without an extension: their type is the library's.
+      const type = mimeOfHash(await library(), seg[1]) ?? site.headers.get('content-type');
+      return new Response(site.body, {
+        status: site.status,
+        headers: safe(type ?? 'application/octet-stream'),
+      });
     }
 
     const l = await library();
@@ -946,11 +1006,21 @@ export async function handle(req: Request): Promise<Res> {
         const form = await req.formData();
         const files = form.getAll('file').filter((f): f is File => f instanceof File);
         if (!files.length) return fail(400, 'bad_request', 'No file in the upload (field "file")');
+        const rasters = form.getAll('raster').filter((f): f is File => f instanceof File);
+        if (rasters.length && (rasters.length > 1 || files.length > 1))
+          return fail(400, 'bad_request', 'A still picture (field "raster") comes with exactly one file');
         const isBackground = form.get('isBackground') === 'true' || form.get('isBackground') === '1';
         const out: Media[] = [];
         let media = l.media;
         for (const f of files) {
-          const item = await mediaFromBlob(f, f.name, { isBackground });
+          let item = await mediaFromBlob(f, f.name, { isBackground });
+          if (rasters[0]) {
+            try {
+              item = await withRaster(item, f, rasters[0]);
+            } catch (e) {
+              return fail(400, 'bad_raster', `${f.name}: ${(e as Error).message}`);
+            }
+          }
           const same = media.find((x) => x.original.hash === item.original.hash);
           if (same) out.push(same);
           else {

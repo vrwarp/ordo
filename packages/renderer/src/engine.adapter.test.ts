@@ -9,10 +9,12 @@ import { RenderEngine, isFallbackAdapter } from './engine.ts';
  */
 
 class FakeCanvas {
-  constructor(
-    public width = 1920,
-    public height = 1080,
-  ) {}
+  public width: number;
+  public height: number;
+  constructor(width = 1920, height = 1080) {
+    this.width = width;
+    this.height = height;
+  }
   getContext(): unknown {
     return new Proxy({}, { get: () => () => undefined, set: () => true });
   }

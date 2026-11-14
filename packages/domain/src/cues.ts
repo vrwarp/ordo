@@ -1,7 +1,8 @@
 import type { Cue, ResolvedPlaylist } from './live.ts';
+import { extraText } from './m9-readers.ts';
 import { readableText } from './readable.ts';
 import { playingObject } from './resolve.ts';
-import type { Arrangement, Presentation, Section, Slide, TextObject } from './schemas.ts';
+import type { Arrangement, Presentation, Section, Slide, SlideObject, TextObject } from './schemas.ts';
 
 /** The arrangement used by a playlist item: the named one, else the first, else authoring order. */
 export function arrangementFor(p: Presentation, arrangementId?: string): Arrangement {
@@ -43,10 +44,15 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
       const until = soundEnds(slides.map((x) => x.slide));
       slides.forEach(({ section, arrangementPos, slide, slideIndexInSection }, k) => {
         const text = firstText(slide);
-        const bgId = slideBackground(slide, resolved.media) ?? item.backgroundMediaId ?? p.backgroundMediaId;
-        const clearBackground =
-          (slide.clearBackground && !slide.backgroundMediaId) ||
-          (k === 0 && !bgId && itemIndex > 0 && !item.keepBackground);
+        const own = slideBackground(slide, resolved.media);
+        const bgId = own ?? item.backgroundMediaId ?? p.backgroundMediaId;
+        // The item's Background override shows on this slide: the slide's backdrops (an imported colour
+        // or gradient under its objects, `withoutBackdrops`) are not drawn over it.
+        const backgroundOverride = !own && !!item.backgroundMediaId;
+        const clearBackground = slide.clearBackground && !slide.backgroundMediaId;
+        // Entering the item (by any of its cues: a hidden first slide, a click further in, Prev back into
+        // it) clears the running background when this slide has none, unless the item keeps it.
+        const clearOnEntry = !bgId && !item.keepBackground;
         const mediaCues = slideCueMedia(slide, resolved.media, first + k, first + until(k));
         let itemSlideAudio = mediaCues.slideAudio;
         if (!itemSlideAudio && item.audioMediaId && resolved.media[item.audioMediaId]) {
@@ -74,12 +80,13 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
           slideId: slide.id,
           slideIndexInSection,
           backgroundMediaId: bgId,
+          ...(backgroundOverride ? { backgroundOverride: true } : {}),
           ...(clearBackground ? { clearBackground: true } : {}),
+          ...(clearOnEntry ? { clearOnEntry: true } : {}),
           transition: item.transition ?? slide.transition ?? p.transition,
           autoAdvanceMs: p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,
-          ...(k === 0 && item.countdownTimer
-            ? { timer: item.countdownTimer, timerId: `${item.id}-timer` }
-            : {}),
+          // On every cue of the item: the reducer starts it on whichever cue enters the item.
+          ...(item.countdownTimer ? { timer: item.countdownTimer, timerId: `${item.id}-timer` } : {}),
           // A hidden PowerPoint slide stays in the service (design/27 §9): sequential navigation skips its
           // cue (`nextShownCue`), a GO with its index shows it.
           ...(slide.hidden === true ? { hidden: true } : {}),
@@ -229,7 +236,9 @@ function soundEnds(slides: Slide[]): (k: number) => number {
 
 /**
  * The text a slide is known by (cue labels, lyric-only bands, thumbnails): its lyric object, else its
- * first text box, as people read it (`readableText`: automatic numbers and bullets written as text).
+ * first text box, as people read it (`readableText`: automatic numbers and bullets written as text). A
+ * slide without text of its own: the text of its picture (`importedText`), else of its first table or chart
+ * (M9, `extraText`).
  */
 export function firstText(slide: {
   objects: { type: string; text?: string; id: string; paras?: TextObject['paras'] }[];
@@ -241,6 +250,10 @@ export function firstText(slide: {
   if (!slide.objects.some((x) => x.type === 'text' && x.text)) {
     const t = importedText(slide);
     if (t) return t;
+    for (const o of slide.objects) {
+      const x = extraText(o as unknown as SlideObject);
+      if (x) return x;
+    }
   }
   if (slide.lyricObjectId) {
     const o = slide.objects.find((x) => x.id === slide.lyricObjectId);
@@ -248,6 +261,17 @@ export function firstText(slide: {
   }
   const t = slide.objects.find((x) => x.type === 'text');
   return t?.text ? readableText({ text: t.text, paras: t.paras }) : '';
+}
+
+/**
+ * The text a slide's Bottom-Third strap shows when the operator wrote none (`bottomThirdText`): its
+ * `firstText`, but never M9's table or chart text (`extraText`: tab-separated cells and chart labels read as
+ * noise on the lobby's and the stream's band). A slide whose only text is in a table or a chart has no strap
+ * of its own; the text of its picture (`importedText`) still is one.
+ */
+export function strapText(slide: Parameters<typeof firstText>[0]): string {
+  if (!slide.objects.some((x) => x.type === 'text' && x.text) && !importedText(slide)) return '';
+  return firstText(slide);
 }
 
 /** Auto-advance delay of a loop slide, bounded to [0.5 s, 1 h] whatever the stored values. */

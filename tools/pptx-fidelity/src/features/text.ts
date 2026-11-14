@@ -1,5 +1,8 @@
+import { featureFamily } from './family.ts';
+import { startTags } from './xml.ts';
+
 /**
- * Text features of a slide, read from its own XML (design/27 §15 M2 exit): the rules of the validation
+ * The text family (`index.ts`): text features of a slide, read from its own XML (design/27 §15 M2 exit): the rules of the validation
  * suite's inventory (`superSub`, `lnSpcPct`, `normAutofitScaled`, `rtl`, `rtlScriptText`, `bulletsAuto`),
  * which gave pptx-preview's per-feature means the M2 exit compares with, and the census's `mixedRuns` (the
  * classifier's rule, `packages/pptx-scene/src/classify.ts`: runs of one text body whose explicit
@@ -47,38 +50,6 @@ const PATTERNS: readonly [TextFeature, RegExp][] = [
   ['rtl', /\srtl="1"/],
   ['bulletsAuto', /<a:buAutoNum/],
 ];
-
-/** The longest start tag read for its attributes; a longer one is not taken as a tag. */
-const MAX_TAG_CHARS = 4_096;
-
-/**
- * The attributes of each `<name ...>` start tag in `xml` (name followed by whitespace, '/' or '>'), up to
- * its own '>', and whether it closes itself. Linear: each tag is read once, at most `MAX_TAG_CHARS` long.
- */
-function* startTags(
-  xml: string,
-  name: string,
-): Generator<{ attrs: string; at: number; end: number; empty: boolean }> {
-  const open = `<${name}`;
-  let at = 0;
-  // The next '>' found so far: starts before it share it, so each part of `xml` is searched once.
-  let gt = -1;
-  for (;;) {
-    const start = xml.indexOf(open, at);
-    if (start < 0) return;
-    at = start + open.length;
-    const next = xml.charCodeAt(at);
-    // The name must end here (`<a:rPr` is not `<a:rPrX`).
-    if (!(next === 0x3e || next === 0x2f || next === 0x20 || next === 0x09 || next === 0x0a || next === 0x0d))
-      continue;
-    if (gt < at) gt = xml.indexOf('>', at);
-    if (gt < 0) return;
-    if (gt - at > MAX_TAG_CHARS) continue;
-    const empty = xml.charCodeAt(gt - 1) === 0x2f;
-    yield { attrs: xml.slice(at, empty ? gt - 1 : gt), at: start, end: gt + 1, empty };
-    at = gt + 1;
-  }
-}
 
 /** The inventory's `<a:normAutofit[^>]*fontScale=`, read tag by tag. */
 function hasScaledAutofit(xml: string): boolean {
@@ -182,3 +153,11 @@ export function deckTextFeatures(
   for (const s of slides) for (const f of s) all.add(f);
   return TEXT_FEATURES.filter((f) => all.has(f));
 }
+
+/** The text family of the registry: `perSlide.textFeatures` in `summary.json`, with the M2 targets. */
+export const text = featureFamily({
+  key: 'text',
+  features: TEXT_FEATURES,
+  targets: M2_FEATURE_TARGETS,
+  detect: (src) => textFeatures(src.xml),
+});

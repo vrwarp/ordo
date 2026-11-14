@@ -339,10 +339,12 @@ describe('rasterScene with prepared pictures (the asset worker, design/27 §7.1)
   function stubPrepare(): void {
     class FakeOffscreen {
       private readonly ctx = fakeCtx();
-      constructor(
-        public width: number,
-        public height: number,
-      ) {}
+      public width: number;
+      public height: number;
+      constructor(width: number, height: number) {
+        this.width = width;
+        this.height = height;
+      }
       getContext() {
         return this.ctx;
       }

@@ -25,7 +25,10 @@ type MovableHandle = FileSystemFileHandle & { move?: (name: string) => Promise<v
 export class OpfsStreamStore implements StreamStore {
   readonly kind = 'opfs';
   private dir?: Promise<Dir>;
-  constructor(private dirName = 'ordo-cache') {}
+  private dirName: string;
+  constructor(dirName = 'ordo-cache') {
+    this.dirName = dirName;
+  }
 
   private root(): Promise<Dir> {
     if (!this.dir) {
@@ -127,7 +130,10 @@ export class OpfsStreamStore implements StreamStore {
 export class MemoryStreamStore implements StreamStore {
   readonly kind = 'memory';
   map = new Map<string, Blob>();
-  constructor(private keepNothing = false) {}
+  private keepNothing: boolean;
+  constructor(keepNothing = false) {
+    this.keepNothing = keepNothing;
+  }
   async probe(): Promise<void> {}
   async size(hash: string) {
     return this.map.get(hash)?.size;

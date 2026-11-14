@@ -5,6 +5,7 @@ import { ColorPill, PaintPill, type PaintValue } from '../../components/ColorPic
 import { FontPicker } from '../../components/FontPicker.tsx';
 import { Menu } from '../../components/Menu.tsx';
 import {
+  alignSelection,
   deleteSelection,
   duplicateSelection,
   formatSelection,
@@ -24,7 +25,18 @@ import { getSlide, markOverride, updateObject, updateSlide } from './ops.ts';
 import { hasGroup, isLocked } from './ops/group.ts';
 import { coversSlide } from './ops/slides.ts';
 import { CLEAR_FORMATTING, type RunPatch, selectionStyle } from './ops/text.ts';
+import type { AlignTo } from './placement.ts';
 import { fitMessage } from './textFit.ts';
+
+/** The multi-selection bar's Align menu: where, what it says, its accessible name. */
+const ALIGN_ITEMS: readonly [AlignTo, string, string][] = [
+  ['left', '⇤ Align left', 'Align left'],
+  ['cx', '⇹ Center horizontally', 'Center horizontally'],
+  ['right', '⇥ Align right', 'Align right'],
+  ['top', '⤒ Align top', 'Align top'],
+  ['cy', '⇳ Center vertically', 'Center vertically'],
+  ['bottom', '⤓ Align bottom', 'Align bottom'],
+];
 
 export interface FloatingContextBarProps {
   readOnly: boolean;
@@ -64,11 +76,13 @@ export function FloatingContextBar({ readOnly, drawerOpen, onToggleDrawer }: Flo
       (!slide?.lyricObjectId && slide?.objects.find((x) => x.type === 'text')?.id === o.id));
   const themed = isLyric && !!draft.themeId;
 
-  const setObj = (fn: (x: SlideObject) => SlideObject, key?: string, overridePath?: string) => {
-    if (readOnly || (locked && overridePath !== 'box')) return;
+  const setObj = (fn: (x: SlideObject) => SlideObject, key?: string, overridePath?: string | string[]) => {
+    const paths =
+      overridePath === undefined ? [] : typeof overridePath === 'string' ? [overridePath] : overridePath;
+    if (readOnly || (locked && !(paths.length === 1 && paths[0] === 'box'))) return;
     change((p) => {
       let q = updateObject(p, slideId, o.id, fn);
-      if (themed && overridePath) q = updateSlide(q, slideId, (s) => markOverride(s, overridePath));
+      if (themed && paths.length) q = updateSlide(q, slideId, (s) => paths.reduce(markOverride, s));
       return q;
     }, key);
   };
@@ -138,9 +152,19 @@ export function FloatingContextBar({ readOnly, drawerOpen, onToggleDrawer }: Flo
   );
 
   if (multi) {
+    // Align to slide for the whole selection as one block (placement.ts), as the drawer's align bar does.
     return (
       <div className="ed-floating-inner">
         <span className="ed-scope-pill">{objectIds.length} selected</span>
+        <Menu
+          label="Align"
+          disabled={readOnly}
+          items={ALIGN_ITEMS.map(([to, label, name]) => ({
+            label,
+            name,
+            onSelect: () => alignSelection(to),
+          }))}
+        />
         {tailActions}
       </div>
     );
@@ -319,7 +343,7 @@ function TextFloatingControls({
   o: TextObject;
   range: { start: number; end: number };
   off: boolean;
-  setObj: (fn: (x: SlideObject) => SlideObject, key?: string, overridePath?: string) => void;
+  setObj: (fn: (x: SlideObject) => SlideObject, key?: string, overridePath?: string | string[]) => void;
   tailActions: React.ReactNode;
 }) {
   const s = o.style;
@@ -358,28 +382,13 @@ function TextFloatingControls({
   const contrastLabel =
     s.outline && s.shadow ? 'Heavy' : s.outline ? 'Outline' : s.shadow ? 'Shadow' : 'Clean';
 
-  const setContrast = (mode: 'clean' | 'shadow' | 'outline' | 'heavy') => {
+  const setContrast = (mode: ContrastMode) => {
     if (off) return;
-    const nextStyle: TextStyle =
-      mode === 'clean'
-        ? { ...s, outline: undefined, shadow: undefined }
-        : mode === 'shadow'
-          ? {
-              ...s,
-              outline: undefined,
-              shadow: { dx: 0, dy: 4, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.7 } },
-            }
-          : mode === 'outline'
-            ? { ...s, outline: { width: 4, color: { r: 0, g: 0, b: 0, a: 1 } }, shadow: undefined }
-            : {
-                ...s,
-                outline: { width: 4, color: { r: 0, g: 0, b: 0, a: 1 } },
-                shadow: { dx: 0, dy: 4, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.7 } },
-              };
+    const choice = contrastChoice(s, mode);
     setObj(
-      (x) => (x.type === 'text' ? { ...x, style: nextStyle } : x),
+      (x) => (x.type === 'text' ? { ...x, style: choice.style } : x),
       `style:${o.id}:contrast`,
-      'style.outline',
+      choice.overrides,
     );
   };
 
@@ -414,6 +423,8 @@ function TextFloatingControls({
           <FontPicker
             value={shownFont}
             compact
+            label="Font"
+            mixed={hasSelection && st.font === undefined}
             onChange={(f) => {
               if (hasSelection) applyRun(valuePatch.font(o, f), false);
               else setBox('fontFamily', f);
@@ -604,4 +615,25 @@ function TextFloatingControls({
       )}
     </div>
   );
+}
+
+export type ContrastMode = 'clean' | 'shadow' | 'outline' | 'heavy';
+
+/**
+ * The contrast menu's choice on box style `s`: the style it sets, and the theme overrides it marks on a
+ * themed lyric box. Every choice sets both the outline and the shadow, so both are the volunteer's and the
+ * next theme keeps them (marking only `style.outline` let a theme change drop a 'Soft shadow').
+ */
+export function contrastChoice(s: TextStyle, mode: ContrastMode): { style: TextStyle; overrides: string[] } {
+  const outline = { width: 4, color: { r: 0, g: 0, b: 0, a: 1 } };
+  const shadow = { dx: 0, dy: 4, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.7 } };
+  const style: TextStyle =
+    mode === 'clean'
+      ? { ...s, outline: undefined, shadow: undefined }
+      : mode === 'shadow'
+        ? { ...s, outline: undefined, shadow }
+        : mode === 'outline'
+          ? { ...s, outline, shadow: undefined }
+          : { ...s, outline, shadow };
+  return { style, overrides: ['style.outline', 'style.shadow'] };
 }

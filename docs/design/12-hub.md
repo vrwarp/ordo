@@ -134,9 +134,9 @@ All under `https://hub.<venue>.synology.me/api/v1`. JSON bodies validated with t
 | `GET                                                                                                                   | POST                                                 | PUT                                                                                                                                                                                                                                                                          | DELETE /presentations[/:id]` | edit | CRUD; PUT requires `rev` and returns 409 on mismatch |
 | `GET /presentations/:id/revisions`, `POST /presentations/:id/restore/:rev`                                             | edit                                                 | Version history                                                                                                                                                                                                                                                              |
 | `GET                                                                                                                   | POST                                                 | PUT                                                                                                                                                                                                                                                                          | DELETE /playlists[/:id]`     | edit | CRUD; live playlist returns 423 Locked on PUT        |
-| `POST /media` (multipart, resumable via `Upload-Offset`)                                                               | edit                                                 | Upload; returns media in `uploaded` state                                                                                                                                                                                                                                    |
-| `GET /media/:id`, `PUT /media/:id`, `DELETE /media/:id`                                                                | edit                                                 | Metadata; `DELETE` of media that stored presentations use answers 409 `media_in_use` naming them, unless `?force=1`                                                                                                                                                          |
-| `GET /files/:hash`                                                                                                     | output token or any role                             | Content-addressed file delivery with long cache headers and range support                                                                                                                                                                                                    |
+| `POST /media` (multipart, resumable via `Upload-Offset`)                                                               | edit                                                 | Upload; returns media in `uploaded` state. An SVG may come with its still (part `raster`, see "Media pipeline"); a bad one is 400 `bad_raster`                                                                                                                               |
+| `GET /media/:id`, `PUT /media/:id`, `DELETE /media/:id`                                                                | edit                                                 | Metadata; `DELETE` of media that stored presentations or playlists use answers 409 `media_in_use` naming them (`presentations`, `playlists`), unless `?force=1`                                                                                                              |
+| `GET /files/:hash`                                                                                                     | output token or any role                             | Content-addressed file delivery with long cache headers and range support; an SVG as `Content-Disposition: attachment` (design/21)                                                                                                                                           |
 | `POST /fonts/upload`, `POST /fonts/google { family }`, `GET /fonts`                                                    | edit                                                 | Fonts                                                                                                                                                                                                                                                                        |
 | `POST /import/pro7` (zip or NAS path), `POST /import/songselect` (file or text), `POST /import/document` (pptx or pdf) | edit                                                 | Import jobs; return a job id. `document`: form field `renderer`, `native` by default (editable slides, `pptx-native`, design/27), `libreoffice` or `pptx-preview` (page pictures); native options `extendBackgrounds`, `transitionSounds` (`1`/`0`)                          |
 | `GET /jobs/:id`                                                                                                        | edit                                                 | Job state and log                                                                                                                                                                                                                                                            |
@@ -151,6 +151,19 @@ All under `https://hub.<venue>.synology.me/api/v1`. JSON bodies validated with t
 | `GET /cache/manifest`                                                                                                  | operate, output                                      | The live service cache manifest                                                                                                                                                                                                                                              |
 | `GET /health`, `GET /diagnostics/export`                                                                               | operate                                              | Hub health; zip of logs, journal tail, settings                                                                                                                                                                                                                              |
 | `POST /backup/run`, `GET /backup/list`                                                                                 | operate                                              | Backups                                                                                                                                                                                                                                                                      |
+
+<!-- m9:lo-detect -->
+_M9 (design/27, track `lo-detect`): LibreOffice is optional._ `GET /capabilities` (edit, operate) answers
+what the hub's server tools allow (`HubCapabilities` in `@ordo/protocol`: LibreOffice's state and version,
+`pdf`, the `documents` extensions, `pptx.{pictures, reference, referencePdf, art}`); the operator offers only
+that. `POST /import/document` takes .pptx, .ppsx, .potx and .pptm as PowerPoint, refuses .ppt, .pps, .odp and
+.key with 415 `unsupported` and a save-as hint, and answers 501 `libreoffice_unavailable` for
+`renderer=libreoffice` without LibreOffice and 501 `pdf_unavailable` for a PDF without pdftoppm (the upload
+removed first). `POST /presentations/:id/pptx-reference` also takes multipart with one PDF (PowerPoint's own
+export, ≤ 256 MB, field `showPicture` a JSON array): the reference pictures then come from its pages
+(pdftoppm, pdfinfo), with no LibreOffice; its JSON form answers 501 `libreoffice_unavailable` on a hub
+without LibreOffice. The diagnostics zip holds `capabilities.json`.
+<!-- /m9:lo-detect -->
 
 ## WebSocket
 
@@ -174,7 +187,8 @@ Command validation on the hub (`live.ts`):
   outputs and the stage display are rejected. With no master configured any output is
   believed.
 - `preview` (prd/03 "Send to preview") is relayed from the operator to the one output named
-  in `to`, with `from: "operator"` stamped, exactly like `rtc.signal`.
+  in `to`, with `from: "operator"` stamped, exactly like `rtc.signal`. The editor no longer sends it
+  (removed from the UI in #7, deliberately); the relay stays.
 
 `GET /library/snapshot?since=<seq>` answers with `{ seq, since, changes[] }` from the
 `library_changes` log (the last 20,000 seqs) when it still covers `since`; otherwise, and
@@ -238,6 +252,7 @@ resumes them.
 | `transcode-video`  | `ffmpeg -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -g 60 -movflags +faststart -c:a aac -b:a 256k` scaled to fit 1920x1080, fps capped at 60; a trim is read with `-ss`/`-to` before `-i`                                                                                                                                                                                                    | delivery MP4                                                                              |
 | `transcode-alpha`  | `ffmpeg -c:v libvpx-vp9 -pix_fmt yuva420p`                                                                                                                                                                                                                                                                                                                                                            | delivery WebM with alpha                                                                  |
 | `gif`              | ffmpeg: animated GIF to H.264 loop (opaque) or VP9 alpha (transparent); still GIF to PNG                                                                                                                                                                                                                                                                                                              | delivery file                                                                             |
+| `svg`              | kept as uploaded; its still is the PNG the uploading client drew (`rasterizeSvg`), checked at upload and probed here (below)                                                                                                                                                                                                                                                                          | delivery PNG or none; size of the still, else `svgRasterSizeFor`                          |
 | `poster`           | ffmpeg frame at 1 s, 640x360 JPEG                                                                                                                                                                                                                                                                                                                                                                     | poster                                                                                    |
 | `audio`            | ffmpeg loudnorm measurement (also of video soundtracks), AAC 256k delivery                                                                                                                                                                                                                                                                                                                            | delivery and LUFS                                                                         |
 | `pdf-render`       | `pdftoppm -r 144 -png` then scale to 1920x1080                                                                                                                                                                                                                                                                                                                                                        | one PNG media per page                                                                    |
@@ -250,13 +265,36 @@ resumes them.
 | `pro7-import`      | `packages/importers` (protobuf decode) in a `worker_threads` worker, 500 documents per task so the worker's 512 MB heap bounds a task, not the library (the playlists are a last task against the index of every document decoded); zip uploads are streamed from disk, media entries spilled to `tmp/`, documents capped at 256 MB in memory                                                         | presentations, playlists, media uploads                                                   |
 | `font-google`      | fetch the family's CSS from Google Fonts with a desktop UA, download referenced woff2 files, store each unicode-range subset as a `Font` row with `unicodeRange` (at most 400 per family; then only the weights nearest 400 and 700), and drop the family's earlier Google faces                                                                                                                      | fonts                                                                                     |
 
+**SVG** (review 2026-11-13 R4, R5, R13). Outputs cannot decode an SVG (design/14 "Pictures that are SVGs"),
+so an SVG's delivery is a PNG still: the operator draws the SVG through an `<img>` into a canvas at
+`svgRasterSizeFor` (at least 1920 px on the longer side, at most 3840 wide and 16.7 MP) and posts it as part
+`raster` of `POST /media` (one SVG with one still; the resumable upload carries none). Before anything is
+stored the hub checks it by its header: a PNG within those caps, at most 96 MB, of the shape the SVG's root
+element declares (`svgIntrinsicSize` reads `width`, `height` and `viewBox` of the root only: never a
+child's `stroke-width`, a percentage counts as none); anything else is 400 `bad_raster`. The media job
+decodes the still's header with `ffprobe` and drops one that lies about its pixels (logged; the file is
+released). An SVG without a still (a library from before, a client that could not draw it, one sent through the
+resumable upload, over 24 MB) keeps no delivery, and outputs draw it on their window, up to
+`SVG_SCREEN_MAX_BYTES` (2 MB; a larger one is not shown, and the operator says so where it is picked). The item's `width` and `height` are the still's, else
+`svgRasterSizeFor` with the browser's default 300x150 for an SVG that declares nothing. An animated SVG is
+a still on the screens (its first frame).
+
 The Docker image includes `ffmpeg`, `poppler-utils`, LibreOffice (`libreoffice-impress`
 with a minimal font set plus the venue's uploaded fonts mounted so PPTX renders use them) and headless
 Chromium for the pptx-preview PowerPoint renderer (design/20 "PPTX and PDF").
 
 The native PowerPoint import (`pptx-native`, light; [design/27](27-pptx-native-renderer.md) §2) reads the
 deck's XML into memory within its caps, parses and converts it on the CPU pool (a scan call, then batches
-of at most 150 slides, 2 minutes each and 15 minutes of pool time per import), stores the pictures the
+of at most 150 slides, 2 minutes each and 15 minutes of pool time per import), or takes the scene the
+uploading browser parsed (`POST /import/document` part `clientScene`, design/27 §2 "Where the deck is
+parsed"): the route drops a `clientScene` part over 32 MB before it is stored, the pool task
+`pptx-client-scene` reads, parses and checks the stored scene off the event loop (`pptx/clientScene.ts`: a
+zod schema with a bound on every list, string and part name; this hub's `CONVERTER_VERSION`, `M9_WRITES` and
+LibreOffice state; every shape file checked again with `geomFileOf` and re-hashed), and any doubt about it
+makes the hub parse the deck itself (the job's log says why); the scene file is released once version 1 is
+saved or the import fails. Steps 3-5 are the import core's in `@ordo/importers` (`pptx-core.ts`,
+`pptx-scan.ts`, `pptx-geoms.ts`, `pptx-pictures.ts`, `pptx-ladder.ts`), which the browser's parse and the Pages
+demo share, so both paths store the same presentation. The job then stores the pictures the
 slides use (recoloured pictures and tiled fills baked into new prepared pictures first: ffmpeg decodes the
 source to RGBA at the size the bake needs, pool task `pptx-bake` applies the recipe and encodes a PNG, at
 most 16 MP in and out and 60 s, deduplicated by the source's hash and the recipe; design/27 §4), and saves
@@ -267,8 +305,8 @@ written in one transaction. The deck's clips are stored before the save without 
 (`IngestOpts.queue: false`), and those jobs are queued in the same transaction right after `pptx-lo`, each
 created at least a millisecond after the job before it (`JobQueue.enqueue` `after`): jobs of a class start in
 creation order, and ids alone would order two jobs of one millisecond at random. The import never waits for
-a clip's transcode; an import that fails after storing clips queues their jobs anyway. When the CPU pool cannot start, the import fails cleanly: a deck is never parsed
-on the event loop, and never handed to LibreOffice as uploaded. The follow-up retries a LibreOffice run that
+a clip's transcode; an import that fails after storing clips queues their jobs anyway. When the CPU pool cannot start, the import fails cleanly: a deck (or a
+client scene) is never parsed on the event loop, and never handed to LibreOffice as uploaded. The follow-up retries a LibreOffice run that
 fails (twice, deferred with backoff), then marks the slides it could not draw (`Slide.pptx.failed`, named by
 goLive). A save from the editor (or a restored revision) that brings back slides still `pending` while no
 follow-up is queued or running queues one, planned as the last one was and reusing its pictures.
@@ -291,7 +329,11 @@ crash or restart; `document` records the stored page images the same way; `pptx-
 stored pictures and never saves a second presentation. ProPresenter
 presentations and playlists are saved under their ProPresenter UUIDs, so importing the same
 library twice updates the earlier copies instead of duplicating them. `POST /import/pro7`
-and `POST /import/document` answer 423 while a playlist is live. `tmp/` is wiped at
+and `POST /import/document` answer 423 while a playlist is live. `POST /import/pro7` takes a zip, a single
+`.pro`, `.proPlaylist` or `.probundle` upload, or a NAS path naming a folder or one such file or a library
+zip (any other file 415); a single document is stat-ed before it is read and refused past 64 MB (413,
+by the route and again by the job, as the zip and folder readers treat a file that size as media, not a
+document), and a single NAS `.pro` takes the media of its folder (design/20 "ProPresenter"). `tmp/` is wiped at
 startup: everything in it belongs to a job that is re-queued anyway.
 
 ## Service cache manifest
@@ -387,6 +429,15 @@ whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`)
 
 - A native import stays within 4 MiB: a slide over 64 KB, and every slide once the presentation passes its
   budget, becomes compact picture class (logged, counted on the import card).
+  <!-- m9:ladder -->
+  Since M9's budget ladder (`pptx/ladder.ts`, design/27 M9) a hub without LibreOffice makes no slide a
+  picture for a budget: a slide over 64 KB as stored is re-gridded, then loses its largest text formatting,
+  then its largest decorations (`fitSlideBudget`), the tail past 3 MiB is stored minimal (text, pictures,
+  background), and what is left out is listed in `Slide.pptx.missing` and counted in the result's
+  `simplified`. A hub with LibreOffice keeps LibreOffice's page instead for a slide over 64 KB that would lose
+  formatting or decorations (picture class, as before M9; `ImportCore.pageForBudget`), so it never shows less
+  than a hub without it; its tail is minimal too. A slide whose conversion fails keeps its text (the rescue).
+  <!-- /m9:ladder -->
 - A resolved playlist over 12 MiB goes live with a `degraded` warning (`cueIndex` -1): too large for an
   operator takeover, whose hand-back the operator never sends above 15 MiB (design/17 "Hub returns").
 - `preview` carries only the previewed slide's section; the editor warns on save above 4 MiB and refuses
@@ -414,3 +465,14 @@ and its labels, `127.0.0.1`/`::1`, and `ORDO_ALLOWED_HOSTS`; anything else gets 
 HTTP and on the WebSocket upgrade. Behind the trusted proxy the browser's host arrives in
 `X-Forwarded-Host`, which the hub uses for the allow-list, app routing and the CSP
 `connect-src`; from any other peer the header is ignored.
+
+<!-- m9:lo-detect -->
+`ORDO_LIBREOFFICE` (design/27 M9): `auto` (the default: `soffice`, else `libreoffice`, on the PATH), `off`
+(also `0`, `false`, `no`: no office code runs on a deck), or soffice's absolute path; anything else is a
+start-up warning and auto. The library process looks the tools up at start and asks their version in the
+background (soffice through its hardened command, 30 s), logging one line each (`libreoffice: available
+(LibreOffice 24.2.7.2)`, or `libreoffice: absent: ordo draws PowerPoint slides itself; …`). Without
+LibreOffice the native import leaves nothing waiting: no `pptx-lo` follow-up is queued, and what ordo cannot
+draw is listed on its slide (`Slide.pptx.missing`); a follow-up left from when LibreOffice was there clears
+`pending` and queues the re-import of those slides instead of running.
+<!-- /m9:lo-detect -->

@@ -7,10 +7,12 @@ export class History<T> {
   private future: T[] = [];
   private lastKey?: string;
   private lastAt = 0;
-  constructor(
-    private limit = 200,
-    private coalesceMs = 800,
-  ) {}
+  private limit: number;
+  private coalesceMs: number;
+  constructor(limit = 200, coalesceMs = 800) {
+    this.limit = limit;
+    this.coalesceMs = coalesceMs;
+  }
 
   push(before: T, key?: string, now = Date.now()): void {
     if (key && key === this.lastKey && now - this.lastAt < this.coalesceMs) {

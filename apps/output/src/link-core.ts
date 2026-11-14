@@ -163,7 +163,10 @@ export class SlotMirror {
   /** The current load was told to play since it loaded: it is off its first frame. */
   played = false;
   waiter?: { key: string; promise: Promise<void>; resolve: () => void; reject: (e: Error) => void };
-  constructor(readonly id: number) {}
+  readonly id: number;
+  constructor(id: number) {
+    this.id = id;
+  }
 }
 
 /**
@@ -332,7 +335,9 @@ export class LinkCore {
   /** The persisted state has been read (or timed out): planning may start. */
   private persistedRead = false;
 
-  constructor(private deps: LinkCoreDeps) {
+  private deps: LinkCoreDeps;
+  constructor(deps: LinkCoreDeps) {
+    this.deps = deps;
     this.link = deps.link;
     this.store = deps.store;
     this.json = deps.json;

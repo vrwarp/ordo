@@ -1,4 +1,4 @@
-import { type Media, type Presentation, readableText } from '@ordo/domain';
+import { type Media, objectSearchText, type Presentation } from '@ordo/domain';
 
 import { importedText } from '@ordo/domain';
 
@@ -35,9 +35,13 @@ export function presentationDoc(p: Presentation): SearchDoc {
   if (hit) return hit;
   const parts: string[] = [p.title, p.meta.ccli ?? '', p.meta.author ?? '', ...(p.meta.tags ?? [])];
   for (const sec of p.sections) {
-    // As people read it: verse numbers and list numbers are searchable.
+    // As people read it: verse numbers and list numbers are searchable, and so are a table's cells and a
+    // chart's titles, series and categories (M9: `ShapeObject.table`, `.chart`).
     for (const sl of sec.slides)
-      for (const o of sl.objects) if (o.type === 'text') parts.push(readableText(o));
+      for (const o of sl.objects) {
+        const t = objectSearchText(o);
+        if (t) parts.push(t);
+      }
   }
   // Picture slides: the text of the picture, once it is known to be that slide's (design/27 §11).
   for (const sec of p.sections) for (const sl of sec.slides) parts.push(importedText(sl));

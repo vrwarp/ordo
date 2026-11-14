@@ -76,6 +76,37 @@ describe('FallbackHost', () => {
     expect(host.hold).toBe(false);
   });
 
+  it('says in every hello and heartbeat that the hub refuses this operator, until it accepts it again', () => {
+    host.register('o1', out as unknown as Window, OUT);
+    host.activate(state(5));
+    op.deliver(out, { t: 'fallback.ready', v: 1, outputId: 'o1', appliedSeq: 5 });
+    out.posted = [];
+    // Refused: the ready windows hear it at once, a re-introduction carries it, so does every heartbeat.
+    host.setHubRefused(true);
+    expect(out.posted.map((p) => p.m)).toEqual([{ t: 'fallback.hub', v: 1, hubUp: false, hubRefused: true }]);
+    host.reintroduce('o1');
+    expect(out.posted.at(-1)!.m).toMatchObject({ t: 'fallback.hello', seq: 5, hubRefused: true });
+    op.deliver(out, { t: 'fallback.ready', v: 1, outputId: 'o1', appliedSeq: 5 });
+    out.posted = [];
+    vi.advanceTimersByTime(FALLBACK_HEARTBEAT_MS);
+    expect(out.posted.map((p) => p.m)).toEqual([{ t: 'fallback.hub', v: 1, hubUp: false, hubRefused: true }]);
+    // Accepted again (signed in): said at once, and the heartbeats no longer carry it.
+    out.posted = [];
+    host.setHubRefused(false);
+    vi.advanceTimersByTime(FALLBACK_HEARTBEAT_MS);
+    expect(out.posted.map((p) => p.m)).toEqual([
+      { t: 'fallback.hub', v: 1, hubUp: false },
+      { t: 'fallback.hub', v: 1, hubUp: false },
+    ]);
+    // In hub mode nothing is announced; a later authority starts with what the hub last said.
+    host.deactivate();
+    out.posted = [];
+    host.setHubRefused(true);
+    expect(out.posted).toEqual([]);
+    host.activate(state(6));
+    expect(out.posted.at(-1)!.m).toMatchObject({ t: 'fallback.hello', hubRefused: true });
+  });
+
   it('reintroduces a window whose endpoint now reaches a new page (a reload or a re-offered port)', () => {
     host.register('o1', out as unknown as Window, OUT);
     host.activate(state(3));

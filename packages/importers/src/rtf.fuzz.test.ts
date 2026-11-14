@@ -6,6 +6,7 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { REAL_RTF } from './fuzz-fixtures.test-util.ts';
 import { parseRtf, RTF_FONT_NAME_MAX, splitFontName } from './rtf.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const enc = new TextEncoder();
 
@@ -387,7 +388,7 @@ describe('parseRtf regressions found by fuzzing', () => {
     ]) {
       const t0 = Date.now();
       checkResult(parseRtf(s));
-      expect(Date.now() - t0).toBeLessThan(1500);
+      expect(Date.now() - t0).toBeLessThan(budgetMs(1500));
     }
   });
 

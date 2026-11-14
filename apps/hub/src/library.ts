@@ -18,6 +18,7 @@ import {
   Presentation,
   SurfaceSettings,
   Theme,
+  upgradeStoredSurfaces,
 } from '@ordo/domain';
 import type {
   Folder,
@@ -119,12 +120,21 @@ type Row = { id: string; rev: number; json: string; created_at: string; updated_
 
 /** A JSON entity table with id/rev/json/created_at/updated_at plus optional indexed columns. */
 class EntityTable<T extends { id: string; rev?: number }> {
+  private db: DB;
+  private table: string;
+  private schema: z.ZodType<T>;
+  private columns: (e: T) => Record<string, string | number | null>;
   constructor(
-    private db: DB,
-    private table: string,
-    private schema: z.ZodType<T>,
-    private columns: (e: T) => Record<string, string | number | null> = () => ({}),
-  ) {}
+    db: DB,
+    table: string,
+    schema: z.ZodType<T>,
+    columns: (e: T) => Record<string, string | number | null> = () => ({}),
+  ) {
+    this.db = db;
+    this.table = table;
+    this.schema = schema;
+    this.columns = columns;
+  }
 
   private parse(r: Row): T {
     const e = JSON.parse(r.json) as T;
@@ -196,10 +206,9 @@ export class Library {
 
   private timeZone: string;
 
-  constructor(
-    readonly db: DB,
-    opts: { timeZone: string },
-  ) {
+  readonly db: DB;
+  constructor(db: DB, opts: { timeZone: string }) {
+    this.db = db;
     this.timeZone = opts.timeZone;
     this.presentations = new EntityTable(db, 'presentations', Presentation, (p) => ({
       title: p.title,
@@ -281,6 +290,8 @@ export class Library {
     } catch {
       raw = undefined;
     }
+    // Surfaces stored before MIDI became opt-in: a venue with MIDI mappings keeps its pedals.
+    if (key === 'surfaces') raw = upgradeStoredSurfaces(raw);
     if (raw !== undefined) {
       const r = schema.safeParse(raw);
       if (r.success) return r.data as Settings[K];

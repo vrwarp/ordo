@@ -5,11 +5,24 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { FileRef } from '@ordo/domain';
-import { newId } from '@ordo/domain';
+import { looksLikeSvg, newId } from '@ordo/domain';
 import { HttpError } from './errors.ts';
 import type { Library } from './library.ts';
 
 export const MAX_UPLOAD_BYTES = 4 * 1024 ** 3;
+
+/** The 413 for an upload past `limit` bytes, in the words of that limit ('the 256 MB upload limit'). */
+export function tooLarge(limit: number = MAX_UPLOAD_BYTES): HttpError {
+  const gb = 1024 ** 3;
+  const mb = 1024 ** 2;
+  const size =
+    limit >= gb && limit % gb === 0
+      ? `${limit / gb} GB`
+      : limit >= mb
+        ? `${Math.round(limit / mb)} MB`
+        : `${Math.max(1, Math.round(limit / 1024))} KB`;
+  return new HttpError(413, 'too_large', `File exceeds the ${size} upload limit`);
+}
 
 export type Sniffed = {
   ext: string;
@@ -95,10 +108,8 @@ export function sniff(b: Uint8Array): Sniffed | undefined {
   if (at(0, 'OTTO')) return { ext: 'otf', mime: 'font/otf', kind: 'font' };
   if ((u(0) === 0 && u(1) === 1 && u(2) === 0 && u(3) === 0) || at(0, 'true'))
     return { ext: 'ttf', mime: 'font/ttf', kind: 'font' };
-  const textHead = Buffer.from(b.subarray(0, 512)).toString('utf8');
-  if (/<svg[\s>]/i.test(textHead) || /<\?xml[\s\S]*?<svg[\s>]/i.test(textHead)) {
-    return { ext: 'svg', mime: 'image/svg+xml', kind: 'image' };
-  }
+  // The same rule outputs use to recognise an SVG they cannot decode (domain svg.ts).
+  if (looksLikeSvg(b)) return { ext: 'svg', mime: 'image/svg+xml', kind: 'image' };
   return undefined;
 }
 
@@ -207,10 +218,11 @@ export async function hashFile(path: string): Promise<{ hash: string; bytes: num
 /** Content-addressed file store under the data directory. */
 export class Store {
   readonly uploads: string;
-  constructor(
-    readonly dataDir: string,
-    private lib: Library,
-  ) {
+  readonly dataDir: string;
+  private lib: Library;
+  constructor(dataDir: string, lib: Library) {
+    this.dataDir = dataDir;
+    this.lib = lib;
     this.uploads = join(dataDir, 'uploads');
   }
 
@@ -249,15 +261,14 @@ export class Store {
         async function* (src: AsyncIterable<Buffer>) {
           for await (const chunk of src) {
             bytes += chunk.length;
-            if (bytes > limit) throw new HttpError(413, 'too_large', 'File exceeds the 4 GB upload limit');
+            if (bytes > limit) throw tooLarge(limit);
             h.update(chunk);
             yield chunk;
           }
         },
         out,
       );
-      if ((stream as { truncated?: boolean }).truncated)
-        throw new HttpError(413, 'too_large', 'File exceeds the 4 GB upload limit');
+      if ((stream as { truncated?: boolean }).truncated) throw tooLarge(limit);
     } catch (e) {
       await rm(path, { force: true });
       throw e;

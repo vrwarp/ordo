@@ -37,12 +37,28 @@ export const RICH_STYLE_KEYS = [
 ] as const satisfies readonly (keyof TextStyle)[];
 
 /**
+ * TextObject fields that only the rich engine draws (design/27 M9): the looks that live on the object, never
+ * on its style (a WordArt warp, vertical writing, a centred block, 3-D). The legacy `drawText` draws none of
+ * them, so an object with any of them goes through the rich engine.
+ */
+export const RICH_OBJECT_KEYS = [
+  'warp',
+  'writing',
+  'centerBlock',
+  'look3d',
+] as const satisfies readonly (keyof TextObject)[];
+
+/**
  * Whether a text object is drawn by the rich engine: it has `runs` or `paras` (even empty ones, so an
- * object never switches engines because its last run was cleared), or a style with a rich field. Objects
- * without any of them are drawn by `drawText` exactly as before these fields existed.
+ * object never switches engines because its last run was cleared), a rich object field (`RICH_OBJECT_KEYS`)
+ * or a style with a rich field. Objects without any of them are drawn by `drawText` exactly as before these
+ * fields existed.
  */
 export function isRichText(o: TextObject): boolean {
-  return o.runs !== undefined || o.paras !== undefined || isRichStyle(o.style);
+  if (o.runs !== undefined || o.paras !== undefined) return true;
+  const x = o as Partial<Record<(typeof RICH_OBJECT_KEYS)[number], unknown>>;
+  for (const k of RICH_OBJECT_KEYS) if (x[k] !== undefined) return true;
+  return isRichStyle(o.style);
 }
 
 /** Whether a style has a field only the rich engine draws (a look's band style can, too). */

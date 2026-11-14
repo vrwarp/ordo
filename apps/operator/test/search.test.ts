@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseLyrics, songFromParsed, type Media, type Presentation } from '@ordo/domain';
+import { m9Slide } from '@ordo/domain/m9.test-util.ts';
 import { normalize, SearchIndex } from '../src/lib/search.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 function song(title: string, lyrics: string, extra: Partial<Presentation> = {}): Presentation {
   return { ...songFromParsed(parseLyrics(`Verse 1\n${lyrics}`), { title }), ...extra };
@@ -23,6 +25,28 @@ describe('search index', () => {
     expect(idx.search('hymn').map((d) => d.id)).toEqual([a.id]);
     expect(idx.search('amazing', { includeArchived: true })).toHaveLength(3);
     expect(idx.search('', { tag: 'hymn' }).map((d) => d.id)).toEqual([a.id]);
+  });
+
+  it("finds a presentation by its tables' cells and its charts' titles, series and categories (M9)", () => {
+    const base = song('Service order', 'welcome');
+    const slide = m9Slide();
+    // Only the table and the chart: no text object says these words.
+    slide.objects = slide.objects.filter((o) => o.id === 'table' || o.id === 'chart');
+    const p: Presentation = { ...base, sections: [{ ...base.sections[0]!, slides: [slide] }] };
+    const idx = new SearchIndex();
+    idx.update([p], []);
+    for (const q of [
+      'benediction',
+      'pastor kim',
+      'good shepherd',
+      'our church in 2026',
+      'visitors',
+      'week 12',
+    ])
+      expect(
+        idx.search(q).map((d) => d.id),
+        q,
+      ).toEqual([p.id]);
   });
 
   it('searches media and filters by kind', () => {
@@ -86,7 +110,7 @@ describe('search index', () => {
     changed[3] = { ...list[3]!, title: 'Renamed hymn' };
     const t1 = performance.now();
     idx.update(changed, []);
-    expect(performance.now() - t1).toBeLessThan(50);
+    expect(performance.now() - t1).toBeLessThan(budgetMs(50));
     expect(idx.search('renamed').map((d) => d.id)).toEqual([list[3]!.id]);
   });
 });

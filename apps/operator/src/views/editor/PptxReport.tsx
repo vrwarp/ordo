@@ -11,17 +11,19 @@ import {
   importReport,
   missingSlideFonts,
   plural,
+  treatAsSlides,
 } from '../../lib/pptxImport.ts';
 import { planSummary, reimportPlan } from '../../lib/pptxReimport.ts';
 import { useLibrary } from '../../state/library.ts';
 import { errorText } from '../../state/toasts.ts';
 import { JobProgress } from '../library/PptxImportCard.tsx';
-import { selectSlide, useEditor } from './editorStore.ts';
+import { change, selectSlide, useEditor } from './editorStore.ts';
 import { type ReimportRun, reimportRunning, startReimport, useReimport } from './pptxJobs.ts';
 
 /**
  * The Presentation panel's PowerPoint report (design/27 §11 item 12, §15 M4; M4 item F): what the import
- * made of the deck (`source.native` counts, legacy picture pages), what waits for LibreOffice or failed, the
+ * made of the deck (`source.native` counts, legacy picture pages), what waits for LibreOffice or failed, what
+ * nothing draws (design/27 M9, `Slide.pptx.missing`: a hub without LibreOffice lists it instead), the
  * fonts the hub lacks, the slides it approximated (each opens its slide), the import log (`source.log`), and
  * 'Re-import from PowerPoint…' with its dialog (the plan, made-editable slides each with 'Keep as it is').
  * Only for a presentation imported from PowerPoint.
@@ -63,9 +65,46 @@ export function PptxReport({ p, readOnly }: { p: Presentation; readOnly: boolean
         regionRef={region}
         onReimport={() => setOpen(true)}
         onOpenSlide={(id) => selectSlide(id)}
+        onTreatAsSlides={() => change(treatAsSlides, 'kind')}
       />
       {open && <ReimportDialog p={p} onClose={close} />}
     </>
+  );
+}
+
+/**
+ * The stage's line on an imported deck PowerPoint plays as a loop (the 2026-11-13 review): imported decks open
+ * canvas-first with the drawer closed, so the report's explanation (`PptxReportView`, `data-loop`) was found
+ * only during a service, when the Stage showed standby and the stream was empty. One line on the stage says
+ * so, with 'Treat as slides' and the way to the report; 'Keep as a loop' hides it for this visit.
+ */
+export function LoopDeckBanner(props: {
+  readOnly: boolean;
+  onTreatAsSlides(): void;
+  onReport(): void;
+  onKeep(): void;
+}) {
+  return (
+    <div className="banner blue row" style={{ margin: 8, flexWrap: 'wrap', gap: 6 }} data-loop-banner>
+      <span className="grow">
+        PowerPoint plays this deck as a loop: on the Audience screens it moves on by itself, and the Stage and
+        the Bottom-Third Stream show none of its words.
+      </span>
+      <button
+        type="button"
+        className="small primary"
+        disabled={props.readOnly}
+        onClick={props.onTreatAsSlides}
+      >
+        Treat as slides
+      </button>
+      <button type="button" className="small" onClick={props.onReport}>
+        Import report
+      </button>
+      <button type="button" className="small" onClick={props.onKeep}>
+        Keep as a loop
+      </button>
+    </div>
   );
 }
 
@@ -81,6 +120,8 @@ export function PptxReportView(props: {
   regionRef?: RefObject<HTMLElement | null>;
   onReimport(): void;
   onOpenSlide(slideId: string): void;
+  /** 'Treat as slides' on an announcement loop (`ImportReport.loop`). */
+  onTreatAsSlides?(): void;
 }) {
   const { report: r, approx, run } = props;
   const running = reimportRunning(run);
@@ -115,6 +156,28 @@ export function PptxReportView(props: {
           {plural(r.pages, 'picture slide')} from an earlier import: a re-import makes them editable.
         </span>
       )}
+      {r.loop && (
+        <div className="banner small col" style={{ gap: 6 }} data-loop>
+          <span>
+            PowerPoint plays this deck as a loop, so it came in as an announcement loop. On the Audience
+            screens each slide moves on by itself after its time and starts over after the last. While it
+            runs, the Stage shows “Service Starting Soon” and the Bottom-Third Stream shows nothing.
+          </span>
+          <span>
+            If people should read its words (song lyrics, sermon points), treat it as slides: you move through
+            it yourself, and its words show on every screen.
+          </span>
+          <button
+            type="button"
+            className="small"
+            style={{ alignSelf: 'flex-start' }}
+            disabled={props.readOnly}
+            onClick={props.onTreatAsSlides}
+          >
+            Treat as slides
+          </button>
+        </div>
+      )}
       {r.hidden > 0 && (
         <span className="muted">
           {plural(r.hidden, 'hidden slide')}: Next skips them, a click in the slide grid shows them.
@@ -129,6 +192,12 @@ export function PptxReportView(props: {
       {r.pending > 0 && (
         <div className="banner small" role="status">
           LibreOffice is still drawing part of {plural(r.pending, 'slide')}.
+        </div>
+      )}
+      {r.missing > 0 && (
+        <div className="banner small" data-missing>
+          {plural(r.missing, 'slide')} {r.missing === 1 ? 'has' : 'have'} something ordo cannot draw: it is
+          left out, and each slide's PowerPoint card says what.
         </div>
       )}
       {r.failed > 0 && (

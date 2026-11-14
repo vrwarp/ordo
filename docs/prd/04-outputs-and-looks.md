@@ -10,7 +10,7 @@ what each output renders.
 | --------------------------- | -------------------------------- | ----------- | ---------------------------------------------------------------------------- |
 | Audience 1 and 2 (and more) | Projectors or TVs, 1080p60       | Main        | Identical content                                                            |
 | Stage                       | TV facing the platform           | Stage       | Lyrics, clock, timers, messages                                              |
-| Lobby, Overflow             | TVs in other rooms               | Lower third | Lower-third lyrics over a holding slide or announcement loop                 |
+| Lobby, Overflow             | TVs in other rooms               | Lower third | Lower-third lyrics over a holding slide (during a loop: see below)           |
 | Stream                      | Captured by OBS (window capture) | Stream      | Lower-third lyrics on a solid key colour, everything else transparent to OBS |
 
 The stream output can be a window on a display OBS captures, or a window on the
@@ -21,15 +21,15 @@ method; WebRTC push is out of scope.
 
 A look is a per-output configuration:
 
-| Setting           | Main                                          | Stage                                                                    | Lower third                                              | Stream                  |
-| ----------------- | --------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------- | ----------------------- |
-| Background layer  | Shown                                         | Hidden                                                                   | Hidden; a holding slide or the announcement loop instead | Hidden; key colour fill |
-| Slide layer       | Full slide as authored                        | Lyric text only, restyled: current slide large, next slide smaller below | Lyric text only, restyled into a band at the bottom      | Same as lower third     |
-| Lower third layer | Shown if the operator sends one               | Hidden                                                                   | Shown                                                    | Shown                   |
-| Media layer       | Shown                                         | Hidden, except video remaining time                                      | Hidden by default, per-item option                       | Hidden                  |
-| Props layer       | Shown (logo, countdown to service)            | Clock, timers, messages                                                  | Countdown to service                                     | Hidden                  |
-| Clear to black    | Black                                         | Black                                                                    | Black                                                    | Key colour              |
-| Transition        | Crossfade, duration per look (default 300 ms) | Cut                                                                      | Crossfade                                                | Crossfade               |
+| Setting           | Main                                          | Stage                                                                    | Lower third                                         | Stream                  |
+| ----------------- | --------------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------- | ----------------------- |
+| Background layer  | Shown                                         | Hidden                                                                   | Hidden; the look's holding slide instead, if set    | Hidden; key colour fill |
+| Slide layer       | Full slide as authored                        | Lyric text only, restyled: current slide large, next slide smaller below | Lyric text only, restyled into a band at the bottom | Same as lower third     |
+| Lower third layer | Shown if the operator sends one               | Hidden                                                                   | Shown                                               | Shown                   |
+| Media layer       | Shown                                         | Hidden, except video remaining time                                      | Hidden by default, per-item option                  | Hidden                  |
+| Props layer       | Shown (logo, countdown to service)            | Clock, timers, messages                                                  | Countdown to service                                | Hidden                  |
+| Clear to black    | Black                                         | Black                                                                    | Black                                               | Key colour              |
+| Transition        | Crossfade, duration per look (default 300 ms) | Cut                                                                      | Crossfade                                           | Crossfade               |
 
 - The Main look renders the slide as authored, every object.
 - Lyric-only looks read the slide's lyric box text and typeset it with the look's own
@@ -43,6 +43,24 @@ A look is a per-output configuration:
   assigned screen (remembered by the Window Management API's screen label and position),
   a look, and an enabled flag.
 - Adding a look or output needs no code change; the renderer is data-driven.
+
+## Screens and announcement loops
+
+The Screens page (Setup) groups the outputs into three roles by their look: **Audience** (the Main look
+and looks authored for the audience), **Stage** (the Stage look) and **Bottom-Third Stream** (the Lower
+third look of the lobby and overflow TVs, the Stream look, and any other lyric-only look).
+
+During an announcement loop (a presentation of type loop, typically the pre-service loop, including a
+PowerPoint deck saved to loop on its own), by the owner's deliberate choice (#17, 2026-11-10):
+
+- Audience outputs show the loop as authored, with its background.
+- The Stage shows "Service Starting Soon" with the loop's title and what comes next, not the loop's text.
+- Bottom-Third Stream outputs show no lyric band for a loop slide. The lobby shows its look's holding
+  slide when one is set (else black), the countdown to service, and a lower third the operator sends;
+  the stream shows its key colour.
+
+A lobby or overflow TV that should show the announcement loop before the service is set up as an
+Audience screen (Main look), not with the Lower third look.
 
 ## Transitions
 

@@ -3,10 +3,12 @@ import { BitmapCache, bitmapBytes, downscaleFor, pictureKey, pictureKeyHash } fr
 
 class Bmp {
   closed = false;
-  constructor(
-    public width: number,
-    public height: number,
-  ) {}
+  public width: number;
+  public height: number;
+  constructor(width: number, height: number) {
+    this.width = width;
+    this.height = height;
+  }
   close(): void {
     this.closed = true;
   }

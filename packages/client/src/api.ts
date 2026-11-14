@@ -1,18 +1,19 @@
 import { API_PREFIX, type ApiError } from '@ordo/protocol';
 
 export class ApiFailure extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-    /**
-     * The other fields of the hub's error body (`{ error: { code, message, ...details } }`), when there are
-     * any: a save refused with 409 carries the stored presentation's `rev` and `current` (the version that
-     * won, design/27 §11 item 17); a 429 its `retryAfterS`. Hub data, read defensively.
-     */
-    public details?: Record<string, unknown>,
-  ) {
+  public status: number;
+  public code: string;
+  /**
+   * The other fields of the hub's error body (`{ error: { code, message, ...details } }`), when there are
+   * any: a save refused with 409 carries the stored presentation's `rev` and `current` (the version that
+   * won, design/27 §11 item 17); a 429 its `retryAfterS`. Hub data, read defensively.
+   */
+  public details?: Record<string, unknown>;
+  constructor(status: number, code: string, message: string, details?: Record<string, unknown>) {
     super(message);
+    this.status = status;
+    this.code = code;
+    this.details = details;
   }
 }
 

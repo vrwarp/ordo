@@ -11,7 +11,7 @@ import type { ExtractedText, ImageObject } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import type { ArtInfo, ConvertResult, SlideClass } from '@ordo/pptx-scene';
 import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
-import { MAX_XML_PART_BYTES } from '@ordo/pptx-scene/opc.ts';
+import { PPTX_IMPORT_LIMITS, type SceneScan, type SceneSlideExtra } from '@ordo/importers/pptx-scan.ts';
 import type { RenderCopyPage } from '@ordo/pptx-scene/rendercopy.ts';
 import type { Logger } from 'pino';
 import type { HubConfig } from '../config.ts';
@@ -19,47 +19,35 @@ import type { JobClass, JobQueue } from '../jobs.ts';
 import type { Library } from '../library.ts';
 import type { MediaService } from '../media/service.ts';
 import type { Store } from '../store.ts';
+import type { HubTools } from '../tools.ts';
 
-/** The converter version written to `Slide.pptx.version` and `source.native.version`. */
-export const CONVERTER_VERSION = 1;
+/**
+ * The converter version (`Slide.pptx.version`, `source.native.version`), the stored M9 fields the import
+ * writes (`EmitOptions.m9Writes`, the per-field kill switch of design/27 §15 M9 decision 13, less the fields
+ * held back until their drawers ship, `M9_HELD_BACK`) and whether it draws pictures from sheets
+ * (`PPTX_SHEETS`): one definition in `@ordo/pptx-scene` (`version.ts`), which the client parse records in its
+ * scene too, so the hub uses a client scene only from the converter it runs itself (`clientScene.ts`).
+ */
+export {
+  CONVERTER_VERSION,
+  M9_HELD_BACK,
+  M9_WRITES,
+  PPTX_SHEETS,
+} from '@ordo/pptx-scene/version.ts';
 
-const MiB = 1024 * 1024;
-
-/** design/27 §2 and §12: what one import may read, spill, create and spend. */
+/**
+ * design/27 §2 and §12: what one import may read, spill, create and spend. The import core's limits
+ * (`PPTX_IMPORT_LIMITS`, which the client parse keeps too) and the hub's pool's.
+ */
 export const PPTX_LIMITS = {
-  /** Zip entries (central directory). */
-  entries: 200_000,
-  /** One XML or relationships part in memory. */
-  xmlPartBytes: MAX_XML_PART_BYTES,
-  /** Every XML part in memory together. */
-  xmlTotalBytes: 64 * MiB,
-  /** Media and font parts spilled to disk for one import. */
-  spillBytes: 1024 * MiB,
-  /** Picture, clip and font parts extracted per deck; the rest are logged and keep posters or fallbacks. */
-  pictures: 2_000,
-  clips: 50,
+  ...PPTX_IMPORT_LIMITS,
+  /** Font parts extracted per deck. */
   fonts: 20,
-  /** Slides read per deck. */
-  slides: 2_000,
   /** Slides per `pptx-scene` pool task, and that task's timeout. */
   batchSlides: 150,
   batchMs: 2 * 60_000,
-  /** Pool time one import may use; past it the remaining slides are picture class (or a clean failure). */
+  /** Pool time one import may use; past it the remaining slides keep only their text (the rescue, M9). */
   importPoolMs: 15 * 60_000,
-  /** Longest part name in a payload pair. */
-  partName: 512,
-  /**
-   * Bytes of geometry files one import stores (`ShapeGeom.ref`, design/27 §15 M6 round 2; the largest of
-   * the worship decks measured needs 0.6 MB); a slide whose new files would pass it is a compact picture.
-   */
-  geomFileBytes: 32 * MiB,
-  /**
-   * Bytes of geometry files one `pptx-scene` batch may return (named in the worker, `sceneTask.ts`); a slide
-   * whose new files would pass it is a compact picture, so neither the worker's output nor the library
-   * process ever holds more than this of one batch (a layout's custGeom rebuilt at every slide's size made
-   * 0.5 MB a slide).
-   */
-  batchGeomBytes: 32 * MiB,
 } as const;
 
 /** The options of a native import: form fields of `POST /import/document`, kept in the job payload. */
@@ -80,6 +68,11 @@ export type PptxDeps = {
   log: Logger;
   /** Whether a presentation is frozen in the live session (ADR 0007): no pptx job writes it then. */
   locked(presentationId: string): boolean;
+  /**
+   * The server tools and what they allow (design/27 M9, `tools.ts`): LibreOffice is optional. Jobs that need
+   * a tool await `tools.ready`, then never run one whose state is not 'available'.
+   */
+  tools: HubTools;
 };
 
 // ── Jobs ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -135,8 +128,16 @@ export type PptxNativeResult = {
   native: number;
   hybrid: number;
   picture: number;
-  /** Slides made compact picture class to keep the presentation within its budget (design/27 §3.4). */
+  /**
+   * Slides made compact picture class to keep the presentation within its budget (design/27 §3.4): 0 since
+   * M9's budget ladder, which makes no picture (`simplified` counts what it changed).
+   */
   compact: number;
+  /**
+   * M9 `ladder`: slides the budget ladder simplified (formatting or decorations left out, or kept minimal as
+   * the presentation's tail). Absent from older hubs' results.
+   */
+  simplified?: number;
   /** Slides waiting for the LibreOffice follow-up (`Slide.pptx.pending`). */
   pending: number;
   loJobId?: string;
@@ -144,6 +145,13 @@ export type PptxNativeResult = {
   missingFonts: string[];
   /** The first notes of the import, sanitised; `source.log` keeps them all. */
   notes: string[];
+  /**
+   * M9: slides with PowerPoint elements nothing draws (`Slide.pptx.missing`): on a hub without LibreOffice,
+   * what ordo cannot draw is listed instead of waiting for LibreOffice. Absent from older hubs' results.
+   */
+  missing?: number;
+  /** M9: whether LibreOffice was there to draw what ordo cannot (`HubTools`). Absent from older results. */
+  libreoffice?: boolean;
 };
 
 /**
@@ -182,6 +190,12 @@ export type PptxLoSlide = {
    * edited meanwhile the art still replaces those that are exactly as they were.
    */
   replaced?: [string, string][];
+  /**
+   * M9: what the slide lacks if LibreOffice never draws it (`Slide.pptx.missing` entries, `@ordo/domain`
+   * `MISSING_KINDS`): written when a hub that lost LibreOffice clears `pending` (`withoutLibreOffice`).
+   * Absent in plans made before M9 (the kinds are then read from the slide's class).
+   */
+  kinds?: string[];
 };
 
 export type PptxLoPayload = {
@@ -197,6 +211,11 @@ export type PptxLoPayload = {
    * (`LO_RETRIES`); past them the slides are marked `failed`.
    */
   retries?: number;
+  /**
+   * Times the job found LibreOffice 'broken' (`HubTools.recheck`) and deferred itself to probe it again
+   * (`LO_PROBE_RETRIES`); past them the slides are marked `failed`.
+   */
+  probes?: number;
   /** Pictures already stored by an earlier attempt: [`<slideId>:<what>`, media id] pairs. */
   done?: [string, string][];
   /**
@@ -219,8 +238,15 @@ export type PptxReferencePayload = {
   showPicture?: string[];
   /** Reference pictures already stored: [`SlideRef.index`, media id] pairs. */
   done?: [number, string][];
+  /** Times the job found LibreOffice 'broken' and deferred itself to probe it again (`HubTools.recheck`). */
+  probes?: number;
   /** Times the job found the presentation live-locked and deferred itself (the backoff step). */
   deferrals?: number;
+  /**
+   * M9: the pictures come from this PDF (a stored file's SHA-256), PowerPoint's own export of the deck, drawn
+   * by pdftoppm; absent: LibreOffice draws them (design/27 M9 "'Show original' without LibreOffice").
+   */
+  pdf?: string;
 };
 
 export type TextRepairPayload = {
@@ -323,6 +349,16 @@ export type SceneTaskInput = {
   fonts?: SceneFontFile[];
   /** Bytes of geometry files the batch may return (`PPTX_LIMITS.batchGeomBytes`; tests set less). */
   geomBytes?: number;
+  /**
+   * M9: false on a hub without LibreOffice (`EmitOptions.libreoffice`): the converter plans no art and no
+   * metafile conversion and lists what they would have drawn (`EmittedSlide.missing`). Absent: true.
+   */
+  libreoffice?: boolean;
+  /**
+   * M9 `ladder`: the text rescue of slides whose conversion failed (`@ordo/pptx-scene` `rescueDeck`): only their
+   * text bodies, no geometry read. Absent: the full conversion.
+   */
+  rescue?: boolean;
 };
 export type SceneTaskOutput = {
   result: ConvertResult;
@@ -339,44 +375,15 @@ export type SceneTaskOutput = {
    * `result.geoms` is emptied. At most `PPTX_LIMITS.batchGeomBytes` of distinct files.
    */
   geomFiles?: { id: string; hash: string; bytes: Uint8Array }[];
-  /** Slides whose new geometry files would pass `PPTX_LIMITS.batchGeomBytes`: compact pictures. */
+  /** Slides whose new geometry files would pass `PPTX_LIMITS.batchGeomBytes`: their objects naming them are left out. */
   geomOver?: number[];
 };
 
-/** What the first `pptx-scene` call reads for the whole deck (`sceneTask.ts`). */
-export type SceneScan = {
-  /**
-   * Picture parts (image relationships, metafiles and SVG left out) of the listed slides, their layouts,
-   * masters and themes: what the job spills and prepares. Stored part names, at most `PPTX_LIMITS.pictures`.
-   */
-  pictures: string[];
-  /** Picture parts referenced past `PPTX_LIMITS.pictures` (logged, not extracted). */
-  picturesOver: number;
-  /** Metafile pictures (EMF, WMF) each slide may show (its own, its layout's, its master's): [index, parts]. */
-  metafiles: [number, string[]][];
-  /** Speaker notes (`notes.ts`): [`SlideRef.index`, text]. */
-  notes: [number, string][];
-  /** `p:showPr loop`: the show loops until Esc. */
-  loop: boolean;
-  /**
-   * Clip parts (video, sound and PowerPoint 2010 media relationships of the listed slides, those of
-   * `p14:media` and the video elements first), at most `PPTX_LIMITS.clips`: what the job spills and sniffs.
-   */
-  clips?: string[];
-  /** Clip parts past `PPTX_LIMITS.clips` (logged; their posters stay). */
-  clipsOver?: number;
-};
-
-/** A slide's transition and timing (`transition.ts`). */
-export type SceneSlideExtra = {
-  /** `SlideRef.index`. */
-  index: number;
-  transition?: { kind: 'cut' } | { kind: 'crossfade'; ms: number };
-  /** `advTm`. */
-  advanceMs?: number;
-  /** What was approximated. */
-  note?: string;
-};
+/**
+ * What the first `pptx-scene` call reads for the whole deck, and a slide's transition and timing: the import
+ * core's types (`@ordo/importers` `pptx-scan.ts`), which a client scene carries too.
+ */
+export type { SceneScan, SceneSlideExtra } from '@ordo/importers/pptx-scan.ts';
 
 /** `pptx-render-copy`: the minimal deck LibreOffice prints, written to `out` (item D, `renderCopyTask.ts`). */
 export type RenderCopyTaskInput = {

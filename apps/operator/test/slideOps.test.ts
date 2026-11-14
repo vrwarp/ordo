@@ -15,6 +15,7 @@ import {
   type TextObject,
   type TextRun,
 } from '@ordo/domain';
+import { importPro7, pro7Type } from '@ordo/importers';
 import fc from 'fast-check';
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -26,6 +27,7 @@ import {
   FindReplaceView,
   type FindReplaceViewProps,
   findRows,
+  goToMatch,
   LIST_LIMIT,
   matchSummary,
   replacedMessage,
@@ -516,6 +518,86 @@ describe('replaceBackground: backgroundMediaId (cover-fit, never distorted)', ()
   });
 });
 
+describe("replaceBackground on an imported ProPresenter song (its colour is the slide's backdrop)", () => {
+  /** A ProPresenter song on its presentation's background colour, one slide on a colour of its own. */
+  function proSong(): Presentation {
+    const enc = new TextEncoder();
+    const rtf = (t: string) =>
+      enc.encode(
+        `{\\rtf1\\ansi{\\fonttbl\\f0\\fnil Helvetica;}{\\colortbl;\\red255\\green255\\blue255;}\\f0\\fs96\\cf1 ${t}}`,
+      );
+    const cue = (id: string, words: string, own?: { red: number; green: number; blue: number }) => ({
+      uuid: { string: id },
+      isEnabled: true,
+      actions: [
+        {
+          uuid: { string: `A-${id}` },
+          type: 'ACTION_TYPE_PRESENTATION_SLIDE',
+          isEnabled: true,
+          slide: {
+            presentation: {
+              baseSlide: {
+                size: { width: 1920, height: 1080 },
+                ...(own ? { drawsBackgroundColor: true, backgroundColor: { ...own, alpha: 1 } } : {}),
+                elements: [
+                  {
+                    element: {
+                      uuid: { string: `E-${id}` },
+                      bounds: { origin: { x: 100, y: 150 }, size: { width: 1720, height: 780 } },
+                      opacity: 1,
+                      text: { rtfData: rtf(words) },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+    const t = pro7Type('rv.data.Presentation');
+    const doc = t
+      .encode(
+        t.fromObject({
+          uuid: { string: 'P-SONG' },
+          name: 'Holy Holy Holy',
+          background: { isEnabled: true, color: { red: 0.1, green: 0.2, blue: 0.5, alpha: 1 } },
+          cues: [
+            cue('C1', 'Holy, holy, holy'),
+            cue('C2', 'Lord God almighty', { red: 0, green: 0, blue: 0 }),
+          ],
+        }),
+      )
+      .finish();
+    const r = importPro7(new Map([['Holy Holy Holy.pro', doc]]));
+    return r.presentations[0]!;
+  }
+  const drawn = (p: Presentation, id: string) => {
+    const s = sl(p, id);
+    // What the slide shows: its objects, over its own background picture or the presentation's.
+    return { objects: s.objects.map((o) => o.type), background: s.backgroundMediaId ?? p.backgroundMediaId };
+  };
+
+  it('this slide: the picture shows, no longer hidden by the colour the slide was imported on', () => {
+    const p = proSong();
+    const [s1, s2] = p.sections.flatMap((x) => x.slides);
+    expect(drawn(p, s1!.id)).toEqual({ objects: ['shape', 'text'], background: undefined });
+    expect(s1!.objects[0]!.origin).toEqual({ src: 'pro7', role: 'bg' });
+    const q = replaceBackground(p, s1!.id, SERIES, 'slide');
+    expect(drawn(q, s1!.id)).toEqual({ objects: ['text'], background: 'series' });
+    // The other slide (its own black) is as imported.
+    expect(sl(q, s2!.id)).toBe(sl(p, s2!.id));
+  });
+
+  it("every slide: the picture becomes the presentation's background and every backdrop goes", () => {
+    const p = proSong();
+    const ids = p.sections.flatMap((x) => x.slides).map((s) => s.id);
+    const q = replaceBackground(p, ids[0]!, SERIES, 'all');
+    expect(q.backgroundMediaId).toBe('series');
+    for (const id of ids) expect(drawn(q, id)).toEqual({ objects: ['text'], background: 'series' });
+  });
+});
+
 describe('replaceBackground: role bg pictures go through the picture replace rule', () => {
   /** An imported 4:3 deck: every slide's background a stretched bottom picture over the slide area. */
   const area = { x: 240, y: 0, w: 1440, h: 1080, rotation: 0 };
@@ -997,6 +1079,42 @@ function seed<T extends object>(
   Object.assign(store.getInitialState(), p);
   store.setState(p);
 }
+
+describe("Find's match rows open the match for inline editing (goToMatch)", () => {
+  const p = deck([
+    slide('s1', [text('t1', 'Welcome')]),
+    slide('s2', [announcement(), text('art', 'Sunday 12 May', { locked: true })]),
+  ]);
+  beforeEach(() => openPresentation(p));
+  const row = (objectId: string, unseen = false) =>
+    ({ ...findRows(p, findText(p, '12 May')).find((r) => r.objectId === objectId)!, unseen }) as Parameters<
+      typeof goToMatch
+    >[0];
+
+  it('opens the slide, selects the match and starts inline editing on the canvas with it selected', () => {
+    const r = row(announcement().id);
+    expect(goToMatch(r, false)).toBe(true);
+    const st = useEditor.getState();
+    expect(st).toMatchObject({ slideId: 's2', objectId: r.objectId, inlineEditingId: r.objectId });
+    expect(st.textRange).toEqual({ start: r.start, end: r.end, caret: r.end });
+  });
+
+  it('only highlights the match when it cannot be edited: live-locked, a locked box, not drawn', () => {
+    for (const [r, ro] of [
+      [row(announcement().id), true],
+      // A locked box (Find leaves PowerPoint art out; a row for one would still only highlight).
+      [{ ...row(announcement().id), objectId: 'art', start: 7, end: 13 }, false],
+      [row(announcement().id, true), false],
+    ] as const) {
+      openPresentation(p);
+      expect(goToMatch(r, ro)).toBe(false);
+      const st = useEditor.getState();
+      expect(st.objectId).toBe(r.objectId);
+      expect(st.textRange).toMatchObject({ start: r.start, end: r.end });
+      expect(st.inlineEditingId).toBeUndefined();
+    }
+  });
+});
 
 describe('the Find and replace dialog', () => {
   const p = deck([

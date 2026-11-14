@@ -6,9 +6,11 @@
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { Presentation, type Slide, slideContent } from '@ordo/domain';
+import { Presentation, type Slide, slideBytes, slideContent } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
+import { LOOP_IMPORT_NOTE } from '@ordo/importers';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
+import { RESCUE_NOTE } from '@ordo/pptx-scene/rescue.ts';
 import {
   body,
   buildDeck,
@@ -31,6 +33,7 @@ import type { JobCtx, JobQueue } from '../src/jobs.ts';
 import { CpuPool, WorkerStartError } from '../src/pool.ts';
 import { type NativeJobEnv, nativeJob } from '../src/pptx/nativeJob.ts';
 import {
+  CONVERTER_VERSION,
   PPTX_LIMITS,
   type PptxLoPayload,
   type PptxNativeFallback,
@@ -215,7 +218,7 @@ describe('pptx-native: a synthetic service deck', () => {
     expect(media).toMatchObject({ kind: 'image', state: 'ready', tags: ['pptx'] });
     // Provenance: the deck, the place, the converter version and the digest of the objects as stored.
     for (const [i, s] of [s1, s2, s3, s4].entries()) {
-      expect(s.pptx).toMatchObject({ fileId: hash, index: i, version: 1 });
+      expect(s.pptx).toMatchObject({ fileId: hash, index: i, version: CONVERTER_VERSION });
       expect(s.pptx!.digest).toBe(digestOf(s.objects));
     }
     // Every imported object is marked as the import's (`origin`), so a slide set to show its PowerPoint
@@ -234,7 +237,7 @@ describe('pptx-native: a synthetic service deck', () => {
       kind: 'pptx',
       fileId: hash,
       native: {
-        version: 1,
+        version: CONVERTER_VERSION,
         slides: 4,
         native: 3,
         hybrid: 1,
@@ -251,7 +254,7 @@ describe('pptx-native: a synthetic service deck', () => {
     expect(lo).toMatchObject({
       presentationId: p.id,
       hash,
-      version: 1,
+      version: CONVERTER_VERSION,
       slides: [{ slideId: s4.id, index: 3, shown: 2, class: 'hybrid', digest: s4.pptx!.digest }],
     });
   });
@@ -331,63 +334,121 @@ describe('pptx-native: classes, budgets and timing', () => {
     const { p } = await importDeck(parts);
     expect(p.kind).toBe('loop');
     expect(p.loop).toEqual({ defaultSlideMs: 8000 });
+    // The import report reads it (and offers 'Treat as slides'): the same line on the client path.
+    expect(p.source!.log).toContain(LOOP_IMPORT_NOTE);
     expect(slidesOf(p).map((s) => s.durationMs)).toEqual([8000, 8000, 4000, undefined]);
   });
 
-  it('stores picture-class and unreadable slides without objects, their text for search, pending LibreOffice', async () => {
+  it('keeps a slide of 160 text boxes native and fits it, never a picture, and rescues an unreadable one (M9)', async () => {
     const many = Array.from({ length: 160 }, (_, i) => textBox(10 + i, `Item ${i}`, (i % 6) * 0.9)).join('');
     const parts = buildDeck({
       slides: [{ shapes: many }, { shapes: textBox(2, 'Fine') }, { shapes: textBox(2, 'Bad') }],
     });
     parts.set('ppt/slides/slide3.xml', enc.encode('<!DOCTYPE x [<!ENTITY a "aaaa">]><p:sld/>'));
     const { result, p } = await importDeck(parts);
-    // Picture class for its object count, not made compact by the size budgets.
-    expect(result).toMatchObject({ slides: 3, native: 1, picture: 2, compact: 0, pending: 2 });
+    // M9: the converter keeps 160 text boxes (the text ceiling, 190: `decor-conv`), and the hub's budget
+    // ladder (`ladder`) finds the slide over 64 KB as stored with nothing to leave out but its white page,
+    // which stays (the background is kept): the slide keeps all of it, over the budget, said once, and is
+    // never a picture. The unreadable slide goes to the text rescue, which cannot read it either: an empty
+    // slide that says so, never a picture.
+    expect(result).toMatchObject({
+      slides: 3,
+      native: 2,
+      hybrid: 1,
+      picture: 0,
+      compact: 0,
+      simplified: 0,
+      pending: 0,
+    });
+    expect(result.notes.filter((n) => /\bslide 1\b/.test(n))).toEqual([
+      expect.stringMatching(/^slide 1 is over 64 KB with only its text and pictures .*: it keeps them all$/),
+    ]);
     const [budget, fine, bad] = slidesOf(p) as [Slide, Slide, Slide];
-    expect(budget.objects).toEqual([]);
-    expect(budget.lyricObjectId).toBeUndefined();
-    expect(budget.pptx).toMatchObject({ class: 'picture', pending: true });
-    expect(budget.pptx!.artText).toMatch(/^Item 0\nItem 1\n/);
+    expect(budget.objects.filter((o) => o.type === 'text')).toHaveLength(160);
+    expect(budget.objects[0]).toMatchObject({ type: 'shape', origin: { role: 'bg' } });
+    expect(budget.objects.find((o) => o.id === budget.lyricObjectId)).toBeDefined();
+    expect(budget.pptx).toMatchObject({ class: 'native' });
+    expect(budget.pptx!.pending).toBeUndefined();
+    expect(budget.pptx!.missing).toBeUndefined();
+    expect(slideBytes(budget)).toBeGreaterThan(64 * 1024);
     expect(fine.pptx!.class).toBe('native');
     expect(bad.objects).toEqual([]);
-    expect(bad.pptx).toMatchObject({ class: 'picture', pending: true });
+    expect(bad.pptx).toMatchObject({ class: 'hybrid', missing: ['slide'] });
+    expect(bad.pptx!.pending).toBeUndefined();
     expect(bad.pptx!.notes!.join(' ')).toMatch(/could not be read/);
-    expect(loJobs(p.id)[0]!.slides.map((s) => [s.index, s.class])).toEqual([
-      [0, 'picture'],
-      [2, 'picture'],
-    ]);
+    expect(bad.pptx!.notes).toContain(RESCUE_NOTE);
+    // Nothing is left to LibreOffice.
+    expect(loJobs(p.id)).toEqual([]);
   });
 
-  /** Slide 2 of an import is a compact picture slide over 64 KB: picture class, logged once, counted once. */
-  function expectOneOversized(result: PptxNativeResult, p: Presentation): void {
-    expect(result).toMatchObject({ native: 1, picture: 1, compact: 1, pending: 1 });
-    expect(result.notes.filter((n) => n.includes('slide 2'))).toEqual([
-      'slide 2 is over 64 KB: shown as a LibreOffice picture',
-    ]);
+  it('lists what the slide budgets leave out with LibreOffice too: it draws no budget art (M9)', async () => {
+    // 208 text boxes: past the 200 the render clamp draws, the topmost are left out by the converter's guard.
+    const many = Array.from({ length: 208 }, (_, i) =>
+      sp({
+        id: 10 + i,
+        x: (i % 10) * 1.2 * IN,
+        y: Math.floor(i / 10) * 0.3 * IN,
+        cx: IN,
+        cy: IN / 4,
+        txBox: true,
+        txBody: body(para(run('Word'))),
+      }),
+    ).join('');
+    const { result, p } = await importDeck(buildDeck({ slides: [{ shapes: many }] }), 'Crowded.pptx');
+    const [s] = slidesOf(p) as [Slide];
+    expect(s.objects.filter((o) => o.type === 'text').length).toBeLessThan(208);
+    // This hub has LibreOffice, and still nothing draws them: listed, the slide hybrid, nothing waits.
+    expect(s.pptx).toMatchObject({ class: 'hybrid', missing: ['element'] });
+    expect(s.pptx!.pending).toBeUndefined();
+    expect(s.pptx!.notes!.join(' ')).toMatch(/element\(s\) past the slide's budgets are not drawn/);
+    expect(result).toMatchObject({ hybrid: 1, pending: 0 });
+    expect(loJobs(p.id)).toEqual([]);
+  });
+
+  /** Slide 2 of an import is over 64 KB: simplified by the budget ladder (M9), logged once, counted once. */
+  function expectOneSimplified(result: PptxNativeResult, p: Presentation, what: RegExp): Slide {
+    expect(result).toMatchObject({ picture: 0, compact: 0, simplified: 1, pending: 0 });
+    expect(result.notes.filter((n) => n.includes('slide 2'))).toHaveLength(1);
+    expect(result.notes.find((n) => n.includes('slide 2'))).toMatch(what);
     const [, s2] = slidesOf(p) as [Slide, Slide];
-    expect(s2.objects).toEqual([]);
-    expect(s2.pptx).toMatchObject({ class: 'picture', pending: true });
-    expect(s2.pptx!.artText!.length).toBeGreaterThan(1000);
-    expect(s2.pptx!.notes).toEqual(['over the slide size budget: a LibreOffice picture']);
+    expect(s2.pptx!.pending).toBeUndefined();
+    expect(slideBytes(s2)).toBeLessThanOrEqual(64 * 1024);
+    expect(s2.pptx!.notes!.filter((n) => /slide budget/.test(n))).toHaveLength(1);
     const log = p.source!.log!.split('\n');
-    expect(log.filter((l) => /\bslide 2\b/.test(l) && /64 KB|picture class/.test(l))).toEqual([
-      '[warn] slide 2 is over 64 KB: shown as a LibreOffice picture',
-    ]);
+    expect(log.filter((l) => /\bslide 2\b/.test(l) && /64 KB/.test(l))).toHaveLength(1);
+    return s2;
   }
 
-  it('makes a slide over 64 KB a compact picture slide, logged and counted', async () => {
-    // Its text formatting alone passes 64 KB: the converter classes it picture, the budget counts it.
+  it("keeps LibreOffice's page for a slide over 64 KB its budget would store plain (with LibreOffice only)", async () => {
+    // Eight boxes of 400 differently coloured runs: past 64 KB with their formatting, within it without some.
+    // A hub without LibreOffice stores it plain (pptx-no-libreoffice.test.ts); this hub has LibreOffice, so the
+    // slide keeps LibreOffice's page, as before M9: a hub with LibreOffice never shows less of a slide.
+    const runs = Array.from({ length: 400 }, (_, i) =>
+      run(`w${i} `, '', solid(i % 2 ? 'FF0000' : '00FF00')),
+    ).join('');
     const big = Array.from({ length: 8 }, (_, i) =>
-      textBox(2 + i, `${'Grace '.repeat(1500)}${i}`, i * 0.6),
+      sp({ id: 2 + i, x: IN, y: i * 0.6 * IN, cx: 6 * IN, cy: IN / 2, txBody: body(para(runs)) }),
     ).join('');
     const { result, p } = await importDeck(
       buildDeck({ slides: [{ shapes: textBox(2, 'Small') }, { shapes: big }] }),
     );
-    expectOneOversized(result, p);
+    expect(result).toMatchObject({ native: 1, hybrid: 0, picture: 1, simplified: 0, pending: 1 });
+    const [, s2] = slidesOf(p) as [Slide, Slide];
+    // Picture class: no objects, every word kept for search, LibreOffice's page to come.
+    expect(s2.objects).toEqual([]);
+    expect(s2.pptx).toMatchObject({ class: 'picture', pending: true });
+    expect(s2.pptx!.missing).toBeUndefined();
+    expect(s2.pptx!.artText).toMatch(/^w0 w1 /);
+    expect(s2.pptx!.notes).toContain('over 64 KB: LibreOffice draws its page');
+    expect(slideBytes(s2)).toBeLessThanOrEqual(64 * 1024);
+    expect(result.notes).toContain("1 slide(s) over their size budget show LibreOffice's page, as before M9");
+    const lo = loJobs(p.id);
+    expect(lo).toHaveLength(1);
+    expect(lo[0]!.slides.map((x) => [x.index, x.class])).toEqual([[1, 'picture']]);
   });
 
-  it('counts a slide whose JSON passes 64 KB with its text formatting within it the same way', async () => {
-    // About 55 KB of text (the converter's budget is not reached) and 120 rectangles: about 75 KB of JSON.
+  it('leaves out the largest decorations of a slide whose JSON passes 64 KB, keeping its text (M9)', async () => {
+    // About 55 KB of text and 120 rectangles: about 75 KB of JSON, the rectangles past the budget.
     const text = Array.from({ length: 6 }, (_, i) =>
       textBox(2 + i, `${'Grace '.repeat(1500)}${i}`, i * 0.6),
     ).join('');
@@ -404,7 +465,15 @@ describe('pptx-native: classes, budgets and timing', () => {
     const { result, p } = await importDeck(
       buildDeck({ slides: [{ shapes: textBox(2, 'Small') }, { shapes: text + rects }] }),
     );
-    expectOneOversized(result, p);
+    expect(result).toMatchObject({ native: 1, hybrid: 1 });
+    const s2 = expectOneSimplified(result, p, /over 64 KB: \d+ decoration shape\(s\) left out to fit/);
+    // Every text kept; some rectangles left out (listed as missing decoration), no art waits for LibreOffice.
+    expect(s2.objects.filter((o) => o.type === 'text')).toHaveLength(6);
+    const shapes = s2.objects.filter((o) => o.type === 'shape').length;
+    expect(shapes).toBeGreaterThan(0);
+    expect(shapes).toBeLessThan(120);
+    expect(s2.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(loJobs(p.id)).toEqual([]);
   });
 });
 
@@ -430,25 +499,42 @@ async function runHandler(
 }
 
 describe('pptx-native: the presentation budget', () => {
-  it('keeps a long deck within 4 MiB: the tail becomes compact picture slides, logged and counted', async () => {
-    // 360 slides of about 10 KB each: 3 pool batches, and the running total passes 3 MiB near slide 300.
+  it('keeps a long deck within 4 MiB: the tail keeps only its text and pictures, logged and counted (M9)', async () => {
+    // 360 slides of about 10 KB each and a picture each: 3 pool batches, and the running total passes 3 MiB
+    // near slide 300; from there on the slides are minimal (no decoration), every text and picture kept.
     const slides = Array.from({ length: 360 }, (_, i) => ({
-      shapes: textBox(2, `Slide ${i + 1} ${'Lorem ipsum dolor sit amet. '.repeat(340)}`),
+      shapes:
+        textBox(2, `Slide ${i + 1} ${'Lorem ipsum dolor sit amet. '.repeat(340)}`) +
+        sp({ id: 3, x: 0, y: 6 * IN, cx: 10 * IN, cy: IN / 10, fill: solid('336699') }),
     }));
     const { result, p } = await importDeck(buildDeck({ slides }), 'Long.pptx');
     expect(result.slides).toBe(360);
-    expect(result.compact).toBeGreaterThan(30);
-    expect(result.native + result.picture).toBe(360);
-    expect(result.picture).toBe(result.compact);
+    expect(result).toMatchObject({ picture: 0, compact: 0, pending: 0 });
+    expect(result.simplified).toBeGreaterThan(30);
     expect(JSON.stringify(p).length).toBeLessThanOrEqual(4 * 1024 * 1024);
     const all = slidesOf(p);
-    const firstCompact = all.findIndex((s) => s.pptx!.class === 'picture');
-    // Only the tail is compact; each keeps its text for search.
-    expect(all.slice(firstCompact).every((s) => s.pptx!.class === 'picture' && s.objects.length === 0)).toBe(
-      true,
+    const first = all.findIndex((s) => s.pptx!.missing?.includes('decoration'));
+    expect(first).toBeGreaterThan(200);
+    expect(result.simplified).toBe(360 - first);
+    // Only the tail is minimal: its decoration left out, its text still a text object, its white page kept
+    // as a plain rect (the slide's background colour: dark text never lands on the output's black).
+    for (const s of all.slice(first)) {
+      expect(s.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+      const shapes = s.objects.filter((o) => o.type === 'shape');
+      expect(shapes).toHaveLength(1);
+      expect(shapes[0]).toMatchObject({
+        shape: 'rect',
+        fill: { r: 255, g: 255, b: 255 },
+        origin: { role: 'bg' },
+      });
+      expect(s.objects[0]).toBe(shapes[0]);
+    }
+    for (const s of all.slice(0, first)) expect(s.pptx!.class).toBe('native');
+    const last = all.at(-1)!.objects.find((o) => o.type === 'text');
+    expect(last?.type === 'text' && last.text).toMatch(/^Slide 360 Lorem/);
+    expect(result.notes.join('\n')).toMatch(
+      new RegExp(`slide ${first + 1} and later keep only their text and pictures`),
     );
-    expect(all.at(-1)!.pptx!.artText).toMatch(/^Slide 360 Lorem/);
-    expect(result.notes.join('\n')).toMatch(new RegExp(`slide ${firstCompact + 1} and later are compact`));
   }, 60_000);
 });
 
@@ -554,42 +640,72 @@ describe('pptx-native: pool batches, budgets and fallbacks', () => {
     expect(all[0]!.notes).toBe('Opening prayer');
   });
 
-  it('makes the slides of a failed batch picture class, the rest of the deck native', async () => {
+  it('a failed batch is retried slide by slide; a slide that fails again keeps its text (rescue)', async () => {
     const hash = await stored(deckOf(6));
     const calls: Call[] = [];
+    // Every conversion of slide 1 fails (as a slide that exhausts the worker would); its rescue does not.
     const timeout = (input: SceneTaskInput) =>
-      input.range.from === 0 && !input.scan ? new Error('pptx-scene task timed out after 120 s') : undefined;
+      input.range.from === 0 && !input.scan && !input.rescue
+        ? new Error('pptx-scene task timed out after 120 s')
+        : undefined;
     const { out, lines } = await runHandler(
       { hash, name: 'Six.pptx' },
       { pool: spy(calls, timeout), limits: { batchSlides: 2 } },
     );
     const r = out as PptxNativeResult;
-    expect(calls.filter((c) => !c.scan)).toHaveLength(3);
-    expect(r).toMatchObject({ slides: 6, native: 4, picture: 2, pending: 2 });
+    // The scan, batch 1 (failed), slides 1 and 2 alone, batches 2 and 3, the rescue of slide 1.
+    expect(calls.map((c) => [c.scan, c.range.from, c.range.to])).toEqual([
+      [true, 0, 0],
+      [false, 0, 2],
+      [false, 0, 1],
+      [false, 1, 2],
+      [false, 2, 4],
+      [false, 4, 6],
+      [false, 0, 1],
+    ]);
+    expect(r).toMatchObject({ slides: 6, native: 5, hybrid: 1, picture: 0, pending: 0 });
     expect(lines.join('\n')).toMatch(
-      /\[warn\] slides 1-2 could not be converted \(pptx-scene task timed out/,
+      /\[warn\] slides 1-2 could not be converted together \(pptx-scene task timed out[^)]*\): each is converted on its own/,
+    );
+    expect(lines.join('\n')).toMatch(
+      /\[warn\] slide 1 could not be converted \(pptx-scene task timed out[^)]*\): only its text is kept/,
     );
     const p = hub.lib.presentations.must(r.presentationId);
     const [s1, s2, s3] = slidesOf(p) as [Slide, Slide, Slide];
-    for (const s of [s1, s2])
-      expect(s).toMatchObject({ objects: [], pptx: { class: 'picture', pending: true } });
+    // Slide 1 keeps its words as a text object, says what is missing, and waits for nothing.
+    expect(s1.objects.flatMap((o) => (o.type === 'text' ? [o.text] : []))).toEqual(['Slide 1']);
+    expect(s1.pptx).toMatchObject({ class: 'hybrid', missing: ['slide'] });
+    expect(s1.pptx!.pending).toBeUndefined();
+    expect(s2.pptx!.class).toBe('native');
+    expect(s2.objects.flatMap((o) => (o.type === 'text' ? [o.text] : []))).toEqual(['Slide 2']);
     expect(s3.pptx!.class).toBe('native');
-    // Notes come from the scan, so an unconverted slide keeps them.
+    // Notes come from the scan, so a rescued slide keeps them.
     expect(s1.notes).toBe('Opening prayer');
-    expect(loJobs(p.id)[0]!.slides.map((s) => s.index)).toEqual([0, 1]);
+    expect(loJobs(p.id)).toEqual([]);
   });
 
-  it('makes the slides past the pool-time budget picture class', async () => {
+  it('rescues the text of the slides past the pool-time budget, never making them pictures', async () => {
     const hash = await stored(deckOf(4));
     const calls: Call[] = [];
     const { out, lines } = await runHandler(
       { hash, name: 'Four.pptx' },
       { pool: spy(calls), limits: { batchSlides: 2, importPoolMs: 0 } },
     );
-    // The scan spent the budget: no batch was sent.
-    expect(calls.map((c) => c.scan)).toEqual([true]);
-    expect(out).toMatchObject({ slides: 4, native: 0, picture: 4, pending: 4 });
+    // The scan spent the budget: no batch was sent, the four slides went to the rescue, a batch's worth a call.
+    expect(calls.map((c) => [c.scan, c.range.from, c.range.to])).toEqual([
+      [true, 0, 0],
+      [false, 0, 2],
+      [false, 2, 4],
+    ]);
+    expect(out).toMatchObject({ slides: 4, native: 0, hybrid: 4, picture: 0, pending: 0 });
     expect(lines.filter((l) => /were not converted: the import used its/.test(l))).toHaveLength(2);
+    const p = hub.lib.presentations.must((out as PptxNativeResult).presentationId);
+    expect(slidesOf(p).map((s) => s.objects.flatMap((o) => (o.type === 'text' ? [o.text] : [])))).toEqual([
+      ['Slide 1'],
+      ['Slide 2'],
+      ['Slide 3'],
+      ['Slide 4'],
+    ]);
   });
 
   it('fails cleanly when the pool cannot start: never parsed inline, never sent to LibreOffice as uploaded', async () => {

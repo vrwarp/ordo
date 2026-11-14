@@ -4,13 +4,12 @@ import {
   LOGICAL_HEIGHT,
   type Look,
   type Rgba,
-  type ShapeGeom,
   type Slide,
   type SlideObject,
   type TextObject,
   type TextStyle,
-  firstText,
   readableText,
+  strapText,
   rgbaCss,
   textScripts,
 } from '@ordo/domain';
@@ -30,19 +29,23 @@ import { drawableContent } from './content.ts';
 import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
 import {
   type PictureShape,
+  type PictureSource,
   type PictureTarget,
   paintPicture,
   paintShapedPicture,
   pictureFit,
+  hasPictureEffects,
   pictureShape,
   pictureTarget,
   preparedKey,
+  roundCornerMask,
 } from './picture.ts';
 import { EFFECT_MAX_PIXELS } from './effects.ts';
+import { drawPictureEffected } from './picture-effects.ts';
 import { GEOM_CLIP_RULE, geomFillPath2D } from './geom/draw.ts';
 import { geomAwaited, storedGeometry } from './geom/stored.ts';
 import { withinDrawBudget } from './geombudget.ts';
-import { drawGeomShape, hasShapeExtras, placeBox } from './shape.ts';
+import { drawShapeObject, placeBox } from './shape.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
 import { metricsInk } from './text/measure.ts';
@@ -53,9 +56,10 @@ export type { Ctx2D } from './ctx.ts';
 /**
  * Decoded pictures by media id. The drawers pass the `pictureTarget` each picture is drawn at (undefined
  * for one drawn from its source: rotated, round corners, oversized). Given a target, a lookup returns the
- * source or a bitmap `preparePicture` made for a target with the same key; a lookup may ignore targets.
+ * source or a bitmap `preparePicture` made for a target with the same key; a lookup may ignore targets. A
+ * source may be a vector picture (`PictureSource`, M9), which a registered source step draws.
  */
-export type ImageLookup = (mediaId: string, target?: PictureTarget) => CanvasImageSource | undefined;
+export type ImageLookup = (mediaId: string, target?: PictureTarget) => PictureSource | undefined;
 
 /**
  * The CSS font of legacy text. With a font resolver installed (design/27 §10: the asset worker, the thumbnail
@@ -383,16 +387,22 @@ export function drawText(
  * same fields, so the editor, the thumbnails and the outputs cut and mirror a picture alike. Without a mask
  * or flips the picture is drawn exactly as before.
  *
+ * `shape`'s effects (`ImageObject.shadow`, `softEdge`) go through the shapes' effects path
+ * (`picture-effects.ts` `drawPictureEffected`, `effects.ts`): the shadow is the picture's alpha blurred as a
+ * shape's is, under it; the soft edge feathers the picture's silhouette (its mask, else the box with its round
+ * corners). Where that path cannot draw (Node, a sprite past EFFECT_MAX_PIXELS) the picture is drawn without
+ * them, as a shape is.
+ *
  * `target` is the `pictureTarget` the caller asked its image lookup for. When `img` is a bitmap
- * `preparePicture` made for that target (same key: size, sub-pixel offset, fit and crop), it already holds
- * what the box shows at
- * device size: it is copied 1:1 at the target's whole-pixel origin, with no resampling and no clip
- * (design/27 §7.1). Any other image is drawn as the source, as above. A prepared bitmap of a masked or
- * flipped picture already holds it cut and mirrored (`pictureTarget`).
+ * `preparePicture` made for that target (same key: size, sub-pixel offset, fit, crop and soft edge), it
+ * already holds what the box shows at device size: it is copied 1:1 at the target's whole-pixel origin, with
+ * no resampling and no clip (design/27 §7.1), over its shadow if it has one. Any other image is drawn as the
+ * source, as above. A prepared bitmap of a masked, flipped or soft-edged picture already holds it cut,
+ * mirrored and feathered (`pictureTarget`).
  */
 export function drawImageFit(
   ctx: Ctx2D,
-  img: CanvasImageSource,
+  img: PictureSource,
   box: Box,
   scale: number,
   fit: 'contain' | 'cover' | 'stretch',
@@ -403,15 +413,27 @@ export function drawImageFit(
   shape?: PictureShape,
 ): void {
   opacity = num(opacity, 0, 1, 1);
-  if (target && preparedKey(img) === target.key) {
+  const prepared = !!target && preparedKey(img) === target.key;
+  const shaped = shape ? pictureShape(shape) : undefined;
+  if (shaped && hasPictureEffects(shaped)) {
+    const b = clampBox(box);
+    const s = num(scale, 0.01, 8, 1);
+    const c = clampCrop(crop);
+    // Round corners with effects are cut as the outputs prepare them (`roundCornerMask`).
+    const round = roundCornerMask(radius, b.w, b.h, shaped);
+    const cut = round ? { ...shaped, mask: round } : shaped;
+    if (drawPictureEffected(ctx, img, b, s, pictureFit(fit), opacity, c, cut, prepared ? target : undefined))
+      return;
+  }
+  if (prepared && target) {
     ctx.save();
     ctx.globalAlpha = opacity;
-    ctx.drawImage(img, target.x, target.y);
+    // A prepared bitmap (`preparePicture`): a canvas image, copied 1:1.
+    ctx.drawImage(img as CanvasImageSource, target.x, target.y);
     ctx.restore();
     return;
   }
-  const shaped = shape ? pictureShape(shape) : undefined;
-  if (shaped) {
+  if (shaped && (shaped.mask || shaped.flipH || shaped.flipV)) {
     drawShapedPicture(
       ctx,
       img,
@@ -442,54 +464,10 @@ export function drawImageFit(
   ctx.restore();
 }
 
-/** Feathers the edges of a picture on an OffscreenCanvas over softEdge logical px. */
-function applyPictureSoftEdge(
-  sprite: OffscreenCanvasRenderingContext2D,
-  W: number,
-  H: number,
-  box: Box,
-  m: DOMMatrix,
-  X: number,
-  Y: number,
-  softEdge: number,
-  scale: number,
-  mask?: ShapeGeom,
-): void {
-  const maskCanvas = new OffscreenCanvas(W, H);
-  const mc = maskCanvas.getContext('2d');
-  if (!mc) return;
-  const e = softEdge;
-  const blurPx = Math.max(0.5, (softEdge * scale) / 2);
-  mc.setTransform(m.a, m.b, m.c, m.d, m.e - X, m.f - Y);
-  mc.fillStyle = '#000';
-  if ('filter' in mc) {
-    try {
-      mc.filter = `blur(${blurPx}px)`;
-    } catch {
-      // ignore
-    }
-  }
-  if (mask) {
-    const built = storedGeometry(mask, box.w, box.h);
-    if (built) {
-      mc.fill(geomFillPath2D(built), GEOM_CLIP_RULE);
-    } else {
-      mc.fillRect(e, e, Math.max(0, box.w - 2 * e), Math.max(0, box.h - 2 * e));
-    }
-  } else {
-    mc.fillRect(e, e, Math.max(0, box.w - 2 * e), Math.max(0, box.h - 2 * e));
-  }
-  sprite.save();
-  sprite.setTransform(1, 0, 0, 1, 0, 0);
-  sprite.globalCompositeOperation = 'destination-in';
-  sprite.drawImage(maskCanvas, 0, 0);
-  sprite.restore();
-}
-
-/** A masked or flipped picture from its source (`drawImageFit` with a `shape`). */
+/** A masked or flipped picture from its source (`drawImageFit` with a `shape`), without its effects. */
 function drawShapedPicture(
   ctx: Ctx2D,
-  img: CanvasImageSource,
+  img: PictureSource,
   box: Box,
   scale: number,
   fit: 'contain' | 'cover' | 'stretch',
@@ -499,14 +477,10 @@ function drawShapedPicture(
   shape: PictureShape,
 ): void {
   const c = clampCrop(crop);
-  const sized = { ...shape, w: box.w, h: box.h };
+  const sized = { mask: shape.mask, flipH: shape.flipH, flipV: shape.flipV, w: box.w, h: box.h };
   ctx.save();
   placeBox(ctx, box, scale);
-  if (
-    (shape.mask || (shape.softEdge && shape.softEdge > 0) || shape.shadow) &&
-    typeof OffscreenCanvas !== 'undefined' &&
-    typeof ctx.getTransform === 'function'
-  ) {
+  if (shape.mask && typeof OffscreenCanvas !== 'undefined' && typeof ctx.getTransform === 'function') {
     const m = ctx.getTransform();
     const xs = [m.e, m.a * box.w + m.e, m.c * box.h + m.e, m.a * box.w + m.c * box.h + m.e];
     const ys = [m.f, m.b * box.w + m.f, m.d * box.h + m.f, m.b * box.w + m.d * box.h + m.f];
@@ -527,17 +501,8 @@ function drawShapedPicture(
         sprite.imageSmoothingQuality = 'medium';
         sprite.setTransform(m.a, m.b, m.c, m.d, m.e - X, m.f - Y);
         paintShapedPicture(sprite, img, 0, 0, box.w, box.h, fit, c, sized);
-        if (shape.softEdge && shape.softEdge > 0) {
-          applyPictureSoftEdge(sprite, W, H, box, m, X, Y, shape.softEdge, scale, shape.mask);
-        }
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.globalAlpha = opacity;
-        if (shape.shadow) {
-          ctx.shadowColor = rgbaCss(shape.shadow.color);
-          ctx.shadowBlur = shape.shadow.blur * scale;
-          ctx.shadowOffsetX = shape.shadow.dx * scale;
-          ctx.shadowOffsetY = shape.shadow.dy * scale;
-        }
         ctx.drawImage(sprite.canvas, X, Y);
         ctx.restore();
         return;
@@ -561,21 +526,13 @@ function drawShapedPicture(
     roundRect(ctx, 0, 0, box.w, box.h, num(radius, 0, CLAMP.maxRadius, 0));
     ctx.clip();
   }
-  if (shape.shadow) {
-    ctx.shadowColor = rgbaCss(shape.shadow.color);
-    ctx.shadowBlur = shape.shadow.blur * scale;
-    ctx.shadowOffsetX = shape.shadow.dx * scale;
-    ctx.shadowOffsetY = shape.shadow.dy * scale;
-  }
   paintShapedPicture(ctx, img, 0, 0, box.w, box.h, fit, c, { ...sized, mask: undefined });
   ctx.restore();
 }
 
 export function drawShape(ctx: Ctx2D, o: Extract<SlideObject, { type: 'shape' }>, scale: number): void {
-  if (hasShapeExtras(o)) {
-    drawGeomShape(ctx, o, scale);
-    return;
-  }
+  // M9 draw dispatch (shape.ts): table, chart, decoration, geometry; else the legacy shape below.
+  if (drawShapeObject(ctx, o, scale)) return;
   const box = clampBox(o.box);
   ctx.save();
   ctx.globalAlpha = num(o.opacity, 0, 1, 1);
@@ -699,7 +656,8 @@ export function lyricTextFor(
     const refStr = `${r.book} ${r.chapter}:${r.verseFrom}${r.verseTo ? `-${r.verseTo}` : ''}`;
     return `${refStr}\n${slide.scripture.text}`;
   }
-  const t = firstText(slide);
+  // M9: a table's or a chart's text is never a strap (`strapText`).
+  const t = strapText(slide);
   return t.trim() ? t : null;
 }
 

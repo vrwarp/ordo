@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { firstText, importedText } from './cues.ts';
+import { firstText, importedText, strapText } from './cues.ts';
+import { m9Slide } from './m9.test-util.ts';
 import type { Slide } from './schemas.ts';
 
 const box = { x: 0, y: 0, w: 100, h: 50, rotation: 0 };
@@ -38,6 +39,30 @@ describe('the gated text fallback of picture slides (design/27 §11)', () => {
     expect(firstText(pptx('picture'))).toBe('Q3 giving');
   });
 
+  it("labels a slide whose only text is a table's or a chart's with it (M9)", () => {
+    const s = m9Slide();
+    // A native slide (no art text) with only a table or only a chart.
+    const only = (id: string) => ({
+      id: s.id,
+      objects: s.objects.filter((o) => o.id === id),
+    });
+    expect(firstText(only('table')).split('\n')[0]).toBe('Time\tPart\tLeader');
+    expect(firstText(only('chart')).split('\n')[0]).toBe('Our church in 2026');
+    // The slide's own text first, and a picture's text before a table's.
+    expect(firstText(s)).not.toContain('Time\tPart');
+    const pic = {
+      ...only('table'),
+      imported: {
+        fileId: 'f',
+        page: 1,
+        imageMediaId: 'm',
+        textBoxes: [{ text: 'Page text', box }],
+        textAligned: true,
+      },
+    } as Slide;
+    expect(firstText(pic)).toBe('Page text');
+  });
+
   it('never replaces the slide’s own text', () => {
     const own = {
       ...page(true, 'Page text'),
@@ -59,5 +84,19 @@ describe('the gated text fallback of picture slides (design/27 §11)', () => {
     expect(t.endsWith('a')).toBe(true);
     const odd = { id: 's', objects: [], imported: { textAligned: true, textBoxes: [{ text: 5 }, null] } };
     expect(importedText(odd as never)).toBe('');
+  });
+});
+
+describe('the Bottom-Third strap text (strapText)', () => {
+  it("is the slide's own text or its picture's, never a table's or a chart's (M9 extraText)", () => {
+    const table = m9Slide().objects.find((o) => o.id === 'table')!;
+    const chart = m9Slide().objects.find((o) => o.id === 'chart')!;
+    expect(firstText({ objects: [table] })).not.toBe('');
+    expect(strapText({ objects: [table] })).toBe('');
+    expect(strapText({ objects: [chart] })).toBe('');
+    expect(strapText(page(true, 'Welcome', 'Pastor Sam'))).toBe('Welcome\nPastor Sam');
+    const titled = m9Slide();
+    expect(strapText(titled)).toBe(firstText(titled));
+    expect(strapText(titled)).not.toBe('');
   });
 });

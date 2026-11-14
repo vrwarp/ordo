@@ -33,6 +33,7 @@ import {
 import type { PptxDeps } from '../src/pptx/shared.ts';
 import { ffmpeg } from './fixtures.ts';
 import { startHub, type TestHub, tempDir } from './helpers.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const fx = tempDir('ordo-pictures-');
 afterAll(() => rmSync(fx, { recursive: true, force: true }));
@@ -436,7 +437,7 @@ describe('picture preparation', () => {
     expect(await head(p.path)).toMatchObject({ format: 'jpeg', width: 1920, height: 1440 });
     expect(p.notes.join(' ')).toMatch(/8000x6000 downscaled to 1920x1440 \(display need 1920 px\)/);
     expect(p.sourceHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(ms).toBeLessThan(20_000);
+    expect(ms).toBeLessThan(budgetMs(20_000));
     // At the widest need it is still held to 40 MP.
     const wide = await preparePicture(pic.photo48(), 8192, opts());
     expect(wide.width * wide.height).toBeLessThanOrEqual(40e6);

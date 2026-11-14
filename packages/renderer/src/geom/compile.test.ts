@@ -26,6 +26,7 @@ import {
   SLOT_R,
   SLOT_T,
 } from './ops.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const B = BUILTIN_COUNT;
 const slotOf = (name: string): number => guideSlot({ k: [], a: [], g: [], n: [], r: [], p: [] }, name);
@@ -302,6 +303,6 @@ describe('untrusted text', () => {
     expect(g.k).toEqual([5, 0]);
     expect(g.p[0]!.w).toBe(9);
     expect(formulaTokens(`val ${spaces}`)).toEqual([]);
-    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(2000));
   });
 });

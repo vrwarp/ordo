@@ -235,6 +235,8 @@ describe('convertDeck (the hub pool task entry, M3)', () => {
           slideRect: one.slideRect,
           notes: one.notes,
           geoms: one.geoms,
+          decors: one.decors,
+          sheets: one.sheets,
         }),
       ).toEqual(strip(two));
     }

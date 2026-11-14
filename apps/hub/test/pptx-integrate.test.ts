@@ -46,7 +46,7 @@ import {
 } from '@ordo/pptx-scene/test-util.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { drawSlide2D } from '../../../packages/renderer/src/text2d.ts';
-import type { PptxDeps, PptxLoPayload, PptxNativeResult } from '../src/pptx/shared.ts';
+import type { PptxDeps, PptxNativeResult } from '../src/pptx/shared.ts';
 import { ffmpeg } from './fixtures.ts';
 import { EDIT_PIN, login, startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
@@ -372,10 +372,11 @@ describe.skipIf(!tools)('a chart over a photo background (design/27 §15 M3 exit
 });
 
 describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
-  it('keeps its bars empty on native, hybrid and picture slides and aligns with LibreOffice within 2 px', async () => {
+  it('keeps its bars empty on native, hybrid and crowded slides and aligns with LibreOffice within 2 px', async () => {
     const chartRel = (n: number) => ({ id: `rId${n}`, type: 'chart', target: `../charts/chart${n}.xml` });
-    // Slide 3 holds more objects than a native slide may (150), each with text, which never goes to the art
-    // (plain shapes past the budget would): picture class.
+    // Slide 3 holds more objects than a native slide may (150), each with text. It was a picture slide (a
+    // LibreOffice page); since M9 the slide budgets keep it native (`decor-conv`: what passes them is left
+    // out and listed) and the ladder fits it within 64 KB (`ladder`): no slide is a picture any more.
     let crowd = '';
     for (let i = 0; i < 160; i++)
       crowd += sp({
@@ -420,7 +421,7 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
     withPart(parts, 'ppt/charts/chart3.xml', chartXml([3, 5, 2], 'C00000'), CHART_CONTENT_TYPE);
     withPart(parts, 'ppt/charts/chart4.xml', chartXml([2, 4], 'C00000'), CHART_CONTENT_TYPE);
     const { result, p } = await importDeck(parts, 'Four by three.pptx', { extendBackgrounds: false });
-    expect(result).toMatchObject({ native: 1, hybrid: 1, picture: 1 });
+    expect(result).toMatchObject({ native: 1, hybrid: 1, picture: 1, compact: 0, pending: 2 });
     const area = { x: 240, y: 0, w: 1440, h: 1080 };
     expect(p.source!.native!.slideRect).toEqual(area);
     const inArea = (o: SlideObject) =>
@@ -435,13 +436,23 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
     const want = logical43(...red);
     for (const k of ['x', 'y', 'w', 'h'] as const) expect(redBox[k]).toBeCloseTo(want[k], 6);
     expect(h2.objects.every(inArea)).toBe(true);
+    // The crowded slide is over 64 KB, and its budget would leave its decorations out (with the elements the
+    // converter's guard left out past 200 objects): on this hub with LibreOffice it keeps LibreOffice's page
+    // instead, as before M9 (a hub without LibreOffice stores it minimal and lists them missing).
     expect(p3.objects).toEqual([]);
+    expect(p3.pptx).toMatchObject({ class: 'picture', pending: true });
+    expect(p3.pptx!.missing).toBeUndefined();
+    expect(p3.pptx!.artText).toMatch(/Page three/);
 
     const lo = await waitJob(hub, result.loJobId!, 180_000);
     expect(lo.error).toBeUndefined();
     expect(lo.result).toMatchObject({ art: 1, pages: 1 });
     const v2 = hub.lib.presentations.must(p.id);
     const [, h2b, p3b] = slidesOf(v2) as [Slide, Slide, Slide];
+    // Its page: LibreOffice's picture at the slide's aspect, in the slide area (the bars stay empty).
+    expect(p3b.pptx!.pending).toBeUndefined();
+    const page = hub.lib.media.must(p3b.imported!.imageMediaId);
+    expect(page.width! / page.height!).toBeCloseTo(4 / 3, 2);
     // Hybrid: the art inside the slide area, and the green box in it where PowerPoint puts it.
     expect(h2b.objects.every(inArea)).toBe(true);
     const art = h2b.objects.find((o): o is ImageObject => o.type === 'image')!;
@@ -450,17 +461,6 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
     expect(g).toBeDefined();
     const gErr = edgeErrors(g!, artPx, art.box, logical43(...green));
     expect(Math.max(...gErr)).toBeLessThanOrEqual(2);
-    // Picture class: the page at the slide's aspect (contain-fit leaves the bars empty), the blue box aligned,
-    // the text keyed to its own page.
-    const page = hub.lib.media.must(p3b.imported!.imageMediaId);
-    expect([page.width, page.height]).toEqual([2880, 2160]);
-    const pagePx = pixels(page);
-    const bl = bounds(pagePx, isBlue);
-    const bErr = edgeErrors(bl!, pagePx, area, logical43(...blue));
-    expect(Math.max(...bErr)).toBeLessThanOrEqual(2);
-    expect(p3b.imported).toMatchObject({ page: 3, textAligned: true });
-    expect(p3b.imported!.textBoxes!.map((t) => t.text)).toContain('Page three');
-    expect(p3b.imported!.textBoxes!.every((t) => t.box.x >= 240)).toBe(true);
 
     // LibreOffice's picture of the native slide ('Show original': nothing switched) puts the red box where
     // ordo draws it.
@@ -476,9 +476,16 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
     const refPx = pixels(hub.lib.media.must(v3[0]!.pptx!.refMediaId!));
     const rErr = edgeErrors(bounds(refPx, isRed)!, refPx, area, redBox);
     expect(Math.max(...rErr)).toBeLessThanOrEqual(2);
+    // LibreOffice's picture of the crowded slide (what its page was): at the slide's aspect (contain-fit leaves
+    // the bars empty), the blue box where PowerPoint puts it.
+    const crowded = hub.lib.media.must(v3[2]!.pptx!.refMediaId!);
+    expect([crowded.width, crowded.height]).toEqual([2880, 2160]);
+    const crowdedPx = pixels(crowded);
+    const bErr = edgeErrors(bounds(crowdedPx, isBlue)!, crowdedPx, area, logical43(...blue));
+    expect(Math.max(...bErr)).toBeLessThanOrEqual(2);
     const fmt = (e: number[]) => e.map((v) => v.toFixed(2)).join('/');
     console.info(
-      `4:3 edge errors (left/top/right/bottom, logical px): native ${fmt(rErr)}, art ${fmt(gErr)}, page ${fmt(bErr)}`,
+      `4:3 edge errors (left/top/right/bottom, logical px): native ${fmt(rErr)}, art ${fmt(gErr)}, crowded ${fmt(bErr)}`,
     );
     saved.push({ name: '4:3', p: hub.lib.presentations.must(p.id) });
   }, 300_000);
@@ -565,42 +572,40 @@ describe('a deck with a hidden slide (design/27 §4, §15 M3 exit)', () => {
 });
 
 describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
-  /** Import a 2,000-slide deck with its LibreOffice follow-up held for good (some 1,500 pages). */
+  /**
+   * Import a 2,000-slide deck. Since M9's budget ladder the tail is never a picture: its slides are stored
+   * minimal (their text, pictures and background), so nothing waits for LibreOffice.
+   */
   async function importLong(slide: (i: number) => string, name: string) {
     const slides = Array.from({ length: 2000 }, (_, i) => ({ shapes: slide(i) }));
-    const hold = holdFollowUps();
     const t0 = performance.now();
-    let imported: Awaited<ReturnType<typeof importDeck>> | undefined;
-    try {
-      imported = await importDeck(buildDeck({ slides }), name);
-      await waitDeferred(imported.result.loJobId!);
-    } finally {
-      hold.release(imported?.p.id ?? '');
-    }
-    const { result, p } = imported;
+    const { result, p } = await importDeck(buildDeck({ slides }), name);
     const all = slidesOf(p);
     let largest = 0;
     for (const s of all) largest = Math.max(largest, jsonBytes(previewSlice(p, s.id)));
-    const first = all.findIndex((s) => s.pptx!.class === 'picture');
+    const first = all.findIndex((s) => s.pptx!.notes?.some((n) => /reached its size budget/.test(n)));
     console.info(
-      `${name}: ${Math.round(performance.now() - t0)} ms, ${presentationBytes(p)} bytes, ${result.compact} compact from slide ${first + 1}, largest preview ${largest} bytes`,
+      `${name}: ${Math.round(performance.now() - t0)} ms, ${presentationBytes(p)} bytes, ${result.simplified} simplified from slide ${first + 1}, largest preview ${largest} bytes`,
     );
     expect(result.slides).toBe(2000);
+    expect(result).toMatchObject({ picture: 0, compact: 0, pending: 0 });
+    expect(result.loJobId).toBeUndefined();
     expect(presentationBytes(p)).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
     expect(largest).toBeLessThan(SIZE_BUDGETS.previewMax);
-    // Only the tail is compact, and the follow-up was planned for exactly the slides waiting for it.
-    expect(all.slice(first).every((s) => s.pptx!.class === 'picture' && s.objects.length === 0)).toBe(true);
-    const lo = hub.lib.db.prepare('SELECT payload FROM jobs WHERE id = ?').get(result.loJobId!) as {
-      payload: string;
-    };
-    expect((JSON.parse(lo.payload) as PptxLoPayload).slides).toHaveLength(result.pending);
+    // Only the tail is minimal: no shape, every text box still there. A deck this large does not fit 4 MiB
+    // even minimal with each slide's page (its background colour, about 200 bytes), so the ladder leaves the
+    // pages out rather than cut the text of every slide (`ladder.ts` `planLadder`).
+    for (const s of all.slice(first)) {
+      expect(s.objects.some((o) => o.type === 'shape')).toBe(false);
+      expect(s.objects.filter((o) => o.type === 'text').length).toBeGreaterThan(0);
+    }
     return { result, p, first };
   }
 
-  it('keeps a 2,000-slide sermon-like deck within 4 MiB: the tail compact, the preview of any slide under 1 MiB', async () => {
+  it('keeps a 2,000-slide sermon-like deck within 4 MiB: the tail minimal, the preview of any slide under 1 MiB', async () => {
     const verse =
       'For God so loved the world, that he gave his only begotten Son, that whosoever believeth. ';
-    const { result, first } = await importLong(
+    const { result, p, first } = await importLong(
       (i) =>
         textBox(2, `Point ${i + 1}`, IN, 0) +
         textBox(3, `${i + 1} ${verse.repeat(4)}`) +
@@ -609,20 +614,32 @@ describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
           .join(''),
       'Sermon series.pptx',
     );
-    expect(result.compact).toBeGreaterThan(0);
-    expect(first).toBeGreaterThan(500);
+    expect(result.simplified).toBe(2000 - first);
+    // A minimal slide keeps its text as objects, so it is larger than the compact picture slide of before M9
+    // (whose tail began past slide 500): the all-minimal deck is near 4 MiB, and the tail starts earlier.
+    expect(first).toBeGreaterThan(250);
+    // Every lyric stays editable: the last slide's text is whole.
+    const last = slidesOf(p).at(-1)!;
+    expect(last.objects.flatMap((o) => (o.type === 'text' ? [o.text] : []))).toEqual([
+      'Point 2000',
+      `2000 ${verse.repeat(4)}`,
+    ]);
+    expect(last.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
   }, 300_000);
 
-  it('keeps even a deck too large when compact within 4 MiB: the text kept for search is cut', async () => {
+  it('keeps even a deck too large when minimal within 4 MiB: the text of its tail is cut', async () => {
     const line = 'Holy, holy, holy, Lord God almighty, early in the morning our song shall rise to thee. ';
     const { result, p, first } = await importLong(
       (i) => textBox(2, `Slide ${i + 1}`, IN, 0) + textBox(3, `${i + 1} ${line.repeat(30)}`),
       'Hymnal.pptx',
     );
     expect(first).toBe(0);
-    expect(result.compact).toBe(2000);
+    expect(result.simplified).toBe(2000);
     expect(result.notes.join('\n')).toMatch(/cut to 200 characters/);
-    expect(slidesOf(p)[5]!.pptx!.artText).toMatch(/^Slide 6\n6 Holy/);
+    const s6 = slidesOf(p)[5]!.objects.flatMap((o) => (o.type === 'text' ? [o.text] : []));
+    expect(s6[0]).toBe('Slide 6');
+    expect(s6[1]).toMatch(/^6 Holy/);
+    expect(s6[1]!.length).toBe(200);
   }, 300_000);
 });
 
@@ -657,7 +674,7 @@ function recordingCtx(): { ctx: CanvasRenderingContext2D; ops: string[] } {
 }
 
 describe('the rolled-back schema (design/27 §3.2, §14.7)', () => {
-  it('the previous release reads every imported presentation, stripped, and its slides still draw', () => {
+  it('the previous release (0.5.0) reads every imported presentation, M9 stripped, and its slides still draw', () => {
     expect(saved.map((s) => s.name)).toEqual(
       tools ? ['chart over photo', '4:3', 'hidden slide'] : ['hidden slide'],
     );
@@ -666,15 +683,26 @@ describe('the rolled-back schema (design/27 §3.2, §14.7)', () => {
       const r = prev.Presentation.safeParse(p);
       expect(r.success, name).toBe(true);
       const old = r.data!;
-      // Not quarantined: the source stays a PowerPoint import, the native record is stripped.
-      expect(old.source).toMatchObject({ kind: 'pptx', fileId: p.source!.fileId });
-      expect(old.source).not.toHaveProperty('native');
+      // Not quarantined: the source stays a PowerPoint import with its native record (0.5.0 has M3's).
+      expect(old.source).toEqual(p.source);
       const before = slidesOf(p);
       old.sections
         .flatMap((s) => s.slides)
         .forEach((s, i) => {
-          for (const k of ['pptx', 'hidden', 'transition']) expect(s, `${name} ${i}`).not.toHaveProperty(k);
-          if (s.imported) expect(s.imported).not.toHaveProperty('textAligned');
+          // 0.5.0 keeps the provenance, hidden and transition; M9's missing list and object fields go.
+          expect(s.pptx ?? {}, `${name} ${i}`).not.toHaveProperty('missing');
+          for (const o of s.objects)
+            for (const k of [
+              'table',
+              'chart',
+              'decor',
+              'look3d',
+              'warp',
+              'writing',
+              'centerBlock',
+              'vectorFonts',
+            ])
+              expect(o, `${name} ${i}`).not.toHaveProperty(k);
           // Every object survives (legacy values only), and the slide still draws.
           expect(s.objects.map((o) => o.id)).toEqual(before[i]!.objects.map((o) => o.id));
           const { ctx, ops } = recordingCtx();

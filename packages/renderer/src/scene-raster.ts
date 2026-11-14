@@ -10,7 +10,7 @@ import {
 import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
 import { drawableContent } from './content.ts';
 import { withinDrawBudget } from './geombudget.ts';
-import { pictureTarget, sourceSize } from './picture.ts';
+import { type PictureSource, pictureTarget, sourceSize } from './picture.ts';
 import { rasterSlide } from './raster.ts';
 import {
   PLANE_FLOATS,
@@ -134,7 +134,7 @@ function turnedBounds(
  * The size a drawer fits a picture with (`drawImageFit`): a prepared bitmap's source size, else its own
  * (`sourceSize`); 0 x 0 when there is none.
  */
-function pictureSize(img: CanvasImageSource | undefined): [number, number] {
+function pictureSize(img: PictureSource | undefined): [number, number] {
   if (!img) return [0, 0];
   const [iw, ih] = sourceSize(img);
   const w = num(iw, 0, 1e6, 0);

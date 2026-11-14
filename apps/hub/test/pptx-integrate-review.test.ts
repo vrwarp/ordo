@@ -78,13 +78,6 @@ afterAll(async () => {
 
 const textBox = (id: number, text: string, y = 0) =>
   sp({ id, x: IN, y: IN + y, cx: 8 * IN, cy: IN, txBody: body(para(run(text, 'sz="2000"'))) });
-/** A slide too large for one native slide (§3.4: 64 KB): picture class. */
-const pictureSlide = () => {
-  const big = 'x'.repeat(19_000);
-  return {
-    shapes: textBox(2, big) + textBox(3, big, IN) + textBox(5, big, 2 * IN) + textBox(6, big, 3 * IN),
-  };
-};
 const chartSlide = (text = 'Giving') => ({
   shapes:
     textBox(2, text) +
@@ -460,8 +453,12 @@ describe.skipIf(!tools)('the LibreOffice follow-up when LibreOffice fails (desig
     const real = timeouts().soffice;
     timeouts().soffice = 1;
     try {
-      const { result } = await importDeck(withChart(buildDeck({ slides: [chartSlide(), pictureSlide()] })));
-      expect(result).toMatchObject({ hybrid: 1, picture: 1, pending: 2 });
+      // Two slides whose art LibreOffice draws (since M9 no import makes a picture slide: `decor-conv`'s
+      // budgets keep a crowded slide native and the ladder fits one too large in bytes).
+      const { result } = await importDeck(
+        withChart(buildDeck({ slides: [chartSlide(), chartSlide('Offering')] })),
+      );
+      expect(result).toMatchObject({ hybrid: 2, picture: 0, pending: 2 });
       for (let i = 0; i < 2; i++) {
         await waitDeferred(result.loJobId!);
         expect(hub.jobs.get(result.loJobId!).log.at(-1)).toMatch(
@@ -553,25 +550,44 @@ describe.skipIf(!tools)('version 2 is never lost to a stale editor (design/27 §
   }, 300_000);
 
   it('a picture slide duplicated before LibreOffice ran gets its page too', async () => {
+    // Since M9 no import makes a picture slide (`decor-conv`, `ladder`): a picture slide still waiting for its
+    // page is one an earlier build stored, whose follow-up runs after the upgrade. It is made here as that
+    // build stored it (no objects, class picture, pending), and copied while its follow-up waits.
+    const { result } = await importDeck(buildDeck({ slides: [{ shapes: textBox(2, 'Welcome') }] }));
+    expect(result.loJobId).toBeUndefined();
     const hold = holdFollowUps();
-    let result: PptxNativeResult;
+    let loJobId: string;
     try {
-      ({ result } = await importDeck(buildDeck({ slides: [pictureSlide()] })));
-      await waitDeferred(result.loJobId!);
-      const p = hub.lib.presentations.must(result.presentationId);
-      const s = p.sections[0]!.slides[0]!;
-      const { digest: _d, ...pptx } = s.pptx!;
-      const copy: Slide = { ...structuredClone(s), id: newId(), pptx };
       const ed = await login(hub.url, EDIT_PIN);
+      const p = hub.lib.presentations.must(result.presentationId);
+      const native = p.sections[0]!.slides[0]!;
+      const { lyricObjectId: _l, ...rest } = native;
+      const s: Slide = { ...rest, objects: [], pptx: { ...native.pptx!, class: 'picture', pending: true } };
       await ed.json(`/presentations/${p.id}`, {
         method: 'PUT',
-        json: { ...p, sections: [{ ...p.sections[0]!, slides: [s, copy] }] },
+        json: { ...p, sections: [{ ...p.sections[0]!, slides: [s] }] },
+      });
+      const queued = hub.lib.db
+        .prepare(
+          `SELECT id FROM jobs WHERE kind = 'pptx-lo' AND json_extract(payload, '$.presentationId') = ?`,
+        )
+        .all(p.id) as { id: string }[];
+      expect(queued).toHaveLength(1);
+      loJobId = queued[0]!.id;
+      await waitDeferred(loJobId);
+      const v = hub.lib.presentations.must(p.id);
+      const held = v.sections[0]!.slides[0]!;
+      const { digest: _d, ...pptx } = held.pptx!;
+      const copy: Slide = { ...structuredClone(held), id: newId(), pptx };
+      await ed.json(`/presentations/${p.id}`, {
+        method: 'PUT',
+        json: { ...v, sections: [{ ...v.sections[0]!, slides: [held, copy] }] },
       });
     } finally {
       hold.release();
     }
-    hub.jobs.undefer(result!.loJobId!);
-    const lo = await waitJob(hub, result!.loJobId!, 120_000);
+    hub.jobs.undefer(loJobId!);
+    const lo = await waitJob(hub, loJobId!, 120_000);
     expect(lo.result).toMatchObject({ pages: 2, failed: 0 });
     const [a, b] = slidesOf(hub.lib.presentations.must(result!.presentationId));
     for (const s of [a!, b!]) {

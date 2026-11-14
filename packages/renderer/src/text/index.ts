@@ -1,6 +1,7 @@
 /** ordo's text engine (design/27 §6): the public surface. README.md describes the pipeline. */
 export type { FaceRequest, FontEnv, Ink, LaidLine, Measurer, RichLayout, Seg } from './types.ts';
 export {
+  RICH_OBJECT_KEYS,
   RICH_STYLE_KEYS,
   clampTextObject,
   drawRichText,
@@ -8,7 +9,27 @@ export {
   layoutRich,
   storedFitHolds,
 } from './rich.ts';
-export { paintRich } from './paint.ts';
+export type {
+  FaceTarget,
+  GlyphPainter,
+  GlyphPass,
+  PaintHooks,
+  PaintPasses,
+  PaintPlan,
+  PlannedGlyphs,
+  PlannedRect,
+  RectPass,
+} from './paint.ts';
+export {
+  DIRECT_TARGET,
+  PLAIN_PAINTER,
+  faceTargetFor,
+  glyphPainterFor,
+  paintPlan,
+  paintRich,
+  registerFaceTarget,
+  registerGlyphPainter,
+} from './paint.ts';
 export type { FaceLike, FontChange, FontFile, FontHost, FontSyncResult } from './fonts.ts';
 export {
   FontResolver,

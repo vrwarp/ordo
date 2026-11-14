@@ -63,12 +63,31 @@ export function parseRange(
   return { start, end };
 }
 
-/** Send a file with ETag/304, Range (206/416) and the given caching headers. */
+/**
+ * Whether a stored file of this mime would be an active document if opened as a page (it can hold script):
+ * such a file is served as a download (`Content-Disposition: attachment`) from the files route. SVG is the
+ * only one the hub stores (an image upload); the others are refused at upload and listed for safety.
+ */
+export function isActiveMime(mime: string | undefined): boolean {
+  const m = (mime ?? '').split(';')[0]!.trim().toLowerCase();
+  return (
+    m === 'image/svg+xml' ||
+    m === 'text/html' ||
+    m === 'application/xhtml+xml' ||
+    m === 'text/xml' ||
+    m === 'application/xml'
+  );
+}
+
+/**
+ * Send a file with ETag/304, Range (206/416) and the given caching headers. `download`: opened as a page it
+ * downloads instead (`Content-Disposition: attachment`); as a picture, video or fetch() it works as before.
+ */
 export async function sendFile(
   req: FastifyRequest,
   reply: FastifyReply,
   path: string,
-  opts: { mime?: string; etag?: string; cacheControl: string },
+  opts: { mime?: string; etag?: string; cacheControl: string; download?: boolean },
 ): Promise<FastifyReply> {
   const st = await stat(path).catch(() => undefined);
   if (!st?.isFile()) throw notFound();
@@ -78,6 +97,7 @@ export async function sendFile(
   reply.header('Accept-Ranges', 'bytes');
   reply.header('Last-Modified', st.mtime.toUTCString());
   reply.type(opts.mime ?? mimeFor(path));
+  if (opts.download) reply.header('Content-Disposition', 'attachment');
   const inm = req.headers['if-none-match'];
   if (inm?.split(',').some((t) => t.trim() === etag)) return reply.code(304).send();
   const ifRange = req.headers['if-range'];

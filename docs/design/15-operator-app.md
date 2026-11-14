@@ -87,12 +87,18 @@ core reconnects at once and rejoins as the hub's client.
 A refusal while the operator is already the fallback authority (the hub came back after the
 fallback took over, and this operator's session had expired meanwhile) keeps it the authority until
 the hand-back after sign-in: the outputs stay on the fallback bus and never jump back to the hub's
-older state. One window can still slip away: a hub that restarts with a state equal to the window's
-makes the window follow the hub (design/17, "hub caught up"), and with the session refused no
-hand-back ever catches it up, so it would show the hub's older state from then on. The core
-therefore re-introduces the bus (`fallback.hello`) to every window the moment the refusal arrives,
-and, while refused and the authority, to any proven window that has said nothing on the bus for
-`RECALL_MS` (3 s; a window on the bus reports health every second), at most once per 3 s per window.
+older state. A hub that restarts with a state equal to a window's would make the window follow it
+(design/17, "hub caught up"), and with the session refused no hand-back ever catches it up, so the
+window would drop the operator's next GO and show the hub's older state from then on. So from the
+refusal until the hub accepts the operator again (a welcome) every `fallback.hello` and heartbeat
+carries `hubRefused`, and a window on the bus takes nothing from the hub meanwhile: not that equal
+state, and not the answer to a resync it asked for when it followed the hub a moment before the
+refusal (the race behind `chaos-operator.spec.ts:818`). The operator's silence or `hubUp` ends it, as
+any fallback. The core also re-introduces the bus (`fallback.hello`) to every window the moment the
+refusal arrives, which brings back a window that followed the hub just before, and, while refused and
+the authority, to any proven window that has said nothing on the bus for `RECALL_MS` (3 s; a window
+on the bus reports health every second), at most once per 3 s per window: a safety net for a window
+that does not know the flag.
 In that state the UI must not block the service: the top bar reads "Running from this
 PC — session ended; sign in to hand back to the hub", the sign-in is a non-modal card in the corner
 of the live view (`.signin-overlay.nonmodal`) whose banner says the same, the PIN field is not
@@ -161,6 +167,12 @@ A single `keydown` listener on `window` with the key map from settings. Handled 
 `preventDefault`. Text inputs opt out by focus. The handler only maps the key and posts the action
 to the core worker (plus the clear-all hold timer); the core applies it optimistically and sends it.
 
+Dialogs: Escape closes the dialog opened last and does nothing else (it is also Clear slide on the live,
+playlists and library screens). Each open dialog marks Escape handled in the capture phase on `window`
+(`preventDefault`, so the live keys, which skip handled events, never see it whatever order the listeners
+were added in) and closes in the bubble phase (`components/dialogEscape.ts`). A popover inside the dialog
+(a menu, the colour picker) that stops Escape to close itself keeps the dialog open.
+
 ## Launching outputs
 
 1. The operator clicks Launch outputs (a user gesture).
@@ -181,8 +193,22 @@ to the core worker (plus the clear-all hold timer); the core applies it optimist
 6. Stage opens the same way with the stage origin.
 
 Window names are stable so a reload of the operator can re-acquire windows by opening
-the same name (Chrome returns the existing window for a matching name, re-navigating it;
-outputs tolerate a navigation by re-arming from the hub state).
+the same name with an empty URL (`window.open('', 'ordo-out-' + id)` returns the existing window of that
+name without navigating it; a fresh blank window means there was none, and it is closed at once).
+`window.open` needs a user gesture, so re-acquisition runs on gestures while live
+(`services/reacquire.ts`), on the top bar's "fallback link n/m" button, on Relaunch (which first takes
+the old windows over so it can close them) and on Diagnostics' "Re-acquire output windows". Which names
+are tried:
+
+- Path mode (one origin): only windows a BroadcastChannel probe confirms running in this browser, so no
+  blank window flashes and no focus is stolen.
+- Domain mode (op./outN./stage. hosts, the venue setup): a channel never crosses origins, so the probe
+  confirms nothing. A gesture tries the outputs this browser session launched (a sessionStorage flag kept
+  across reloads) that the hub reports connected; the explicit actions try every output launched here or
+  reported connected. A window that is not in this browser (another tab or another computer runs it) stays
+  missing, and the fallback link says so: "could not be reached from this tab: opened by another operator
+  tab or another computer. Use Relaunch to take them over." Each output is tried at most once a minute
+  on gestures.
 
 ## Program view
 
@@ -191,13 +217,59 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
 
 ## Editor
 
+<!-- m9:render-seams -->
+_Object panel sections (M9 render-seams; `views/editor/objectSections.ts`, `ObjectPanel.tsx`)._ The Object panel
+renders a list of sections, each a component given one context (the object, `readOnly` for the live lock or a
+locked object, `liveLocked` alone, the slide and draft, whether it is the themed lyric box and its override marks,
+and `set`, the one way a section changes the object as an undo step). The built-in sections keep today's order and
+markup (heading, lock and group notes, text, position and size, opacity, text style, picture, video, slide
+operations, shape; `OBJECT_SECTION_ORDER` 100 to 1000), and the markup of every panel is unchanged
+(`test/ObjectPanel.test.ts` pins it). M9's editor tracks add their sections with one line in
+`OBJECT_SECTIONS` (or `registerObjectSection` at run time): a section has an `order` among the built-ins, applies
+to the objects it says, and may stand in for built-in sections for those objects (`replaces`, such as a table's
+cells in place of the shape fields).
+<!-- /m9:render-seams -->
+
 - Canvas-based editor with `react-konva` for selection, transforms and guides; the
   visual preview inside the editor uses the shared rasterizer for text so WYSIWYG holds.
   Rich text objects (design/27) are drawn by the rich engine into their cached canvas at the stage
   scale × `devicePixelRatio` (keyed by the font generation), legacy ones at 1:1 as before.
+- Canvas drawing (SlideCanvas.tsx): the stage has the background layer, the objects layer (with the
+  Transformer, guides and crop handles) and a text editing layer of its own that takes no pointer events
+  (`TextEditingOverlay`): the selection highlight and the blinking caret of the box being edited are drawn
+  there, in that object's node's frame (so they follow a drag or a transform), and the caret's 530 ms blink
+  re-renders and redraws only that layer. A non-text object's node is cached as a bitmap at the stage's
+  density (`nodeCacheRect`: what its drawer reaches, `objectReach`, with its hit area; text has its own
+  raster cache; an object whose reach the renderer does not know, or one over 8 M device px, is drawn live)
+  and drawn again only when it, its picture or geometry file, the fonts or the density change, so a
+  keystroke or a drag copies the slide's other objects instead of drawing them. The floating bar's and the
+  touch tools' sizes are kept by a ResizeObserver (`useMeasuredSize`), not read on every render. On a slide
+  of 181 objects (90 shapes with gradients, dashed strokes and shadows, 91 text boxes) an idle caret cost
+  192-247 ms of main-thread time per 6 s before (about 20 ms a blink: SlideCanvas re-rendered and the
+  objects layer was redrawn) and 32-59 ms after (CDP Performance TaskDuration, headless Chromium, two runs
+  of three rounds each).
 - Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).
+- Lyric Script (`SongReflowEditor.tsx`, pure parts in `songScript.ts`; songs open in it on a desktop,
+  'Slide Canvas' switches): the sections as cards, each slide's words in a field, the arrangement pills,
+  chords and notes, and the screen previews beside them. A field shows the slide's lyric object's own stored
+  text (`scriptText`: its `lyricObjectId`, else its first text box), never `firstText`, which writes
+  automatic numbers and bullets into the text for bands and labels; it writes through the same `editText` as
+  the Object panel's field, placed by the field's `selectionEnd` (`typeScript`), and an unchanged value
+  records no undo step. So typing in a numbered or formatted song keeps its numbers a paragraph style
+  (before, each keystroke stored the labels again: '1. 1. Amazing grace') and bold or italic on their
+  letters; a plain song stays plain. Every split cuts that raw text through the domain's slide split
+  (`splitSlidePieces`, as the slide list's 'Split lyrics' does: the new slides are copies of the slide with
+  their piece of the lyric object, runs and paragraph styles kept on both sides; a copy keeps the slide's
+  other objects, background, notes and hidden flag, but its MIDI cues, Bottom-Third Stream text and own sound
+  stay on the first piece only, so a lighting GO fires once and each piece's strap shows its own words,
+  `e2e/editor-script.spec.ts`), one undo step, the focus
+  then in the first new slide's field: '---' and Enter (the typed value is stored first); ✂ Split at Cursor
+  and Alt+Enter (Opt+Enter) at the caret of the field that has the focus only (a field never focused
+  reports a caret at 0), an empty next slide when the caret is at the end, nothing at the start or without
+  the focus (never a cut in the middle of a word); Auto-Split (2 lines) by the raw lines that hold words.
+  The stream tag ('⚠ 3 lines · Clips 2-line Stream') counts those raw lines.
 - Text ops (M4; `views/editor/ops/text.ts`, applied through `actions.ts`, one undo step each, nothing
   recorded when nothing changes): `formatRange` formats the textarea's selection (runs split, normalised,
   equal neighbours merged, at most 2,000, values bounded as the schema bounds them; Clear formatting
@@ -213,8 +285,55 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   and the verse superscripts (`baseline`) and paragraph styles, and drops the stored fit scale (the theme's
   box is fitted again). Formatting the lyric object of a themed presentation marks the slide's override
   `runs.<field>` (`runs.color`, `runs.sizeScale`, ...; `runs` keeps every one), so the next theme keeps it,
-  as `style.<field>` keeps a box style field.
+  as `style.<field>` keeps a box style field. A choice that sets several fields marks every one of them: each
+  contrast choice (the floating bar's Clean, Shadow, Outline and Heavy, `contrastChoice`; the drawer's four
+  readability cards, which name both fields through TextStyleEditor's `onChange(style, key, also)`) sets the
+  outline and the shadow and marks `style.outline` and `style.shadow`, so the next theme keeps exactly what
+  was chosen (before, the floating bar marked only the outline and a theme change dropped its Soft shadow;
+  the drawer's Soft Shadow got the theme's outline back).
+- The canvas-first top bar's Background (beside + Text, + Image, + Video and Shapes) is the Slide panel's
+  'Replace…' for this slide (`replaceBackgroundWith(slide, media, 'slide')`, one undo step, the picker asks
+  for media with a known size): on a slide imported from PowerPoint its bottom background shapes go and its
+  background picture is re-cropped to the new one, a video becomes the slide's motion background, so the
+  picked background shows on the canvas and the screens (before, it set `backgroundMediaId` under the
+  slide's own PowerPoint background shape, which still covered it).
 - Property panel bound to the selected object's schema.
+- Clipboard (`views/editor/ops/clipboard.ts`, `actions.ts`): text copied in ordo keeps its runs and
+  paragraph styles (`data-ordo-rich`); HTML from other apps (Bible Gateway's verse numbers and red letters,
+  Word, Google Docs, web pages) becomes runs and paragraphs; slide objects copy as `data-ordo-objects`, so
+  they paste on another slide, another tab or another device. Both payloads carry their format (`v`,
+  `CLIPBOARD_FORMAT`): ordo reads its own and the unversioned first one and leaves a newer one alone (the
+  paste falls back to the HTML's text). Clipboard HTML is untrusted (design/21): the reader is a small
+  tokenizer, linear in the HTML whatever it holds, bounded by `CLIPBOARD_LIMITS` (4 M characters read,
+  100,000 nodes, 256 levels, 20,000 characters of text, 200 objects) and never throws (fuzzed in
+  `clipboardHtml.fuzz.test.ts`). An object pasted from the system clipboard is kept only if it passes the
+  slide object schema (its parsed data: unknown keys dropped), the importers' sanitize dispatch
+  (`@ordo/importers` `sanitizeObject`, loaded with the first such paste so it stays in the importer's chunk;
+  M9's tables, charts, decorations, warps and 3-D looks included) and the render clamp; its re-import
+  identity (`origin.shapeId`, `ph`, `role`) is dropped and only `origin.group` kept, renumbered, so a pasted
+  shape with its text still selects as one. A paste inside ordo (the in-memory copy) and Duplicate keep the
+  whole origin and `locked`, as before. A text paste never takes a box past 20,000 characters. When objects
+  of a `data-ordo-objects` payload are left out, a toast says how many ("2 pasted objects could not be used
+  on a slide: nothing was added"); a payload whose objects all fail is still an object paste (its HTML's text
+  is not pasted as a text box). #24's readers that need no open panel (the floating bar's `o.style` and
+  `o.text`, the hidden backing text field, the deck swatches) only ever see objects that passed: they and the
+  Object panel are server-rendered for thousands of mutated objects the paste keeps
+  (`untrustedReaders.test.ts`).
+- Every add stops at what the screens draw (`canAdd`, `ops/slides.ts`): the render clamp draws at most 200
+  objects and 16 distinct pictures of a slide and drops the topmost, which would be the volunteer's newest.
+  The toolbar's Text, Image, Video and shapes, a pasted picture, text or objects, and Duplicate check first
+  and say why they did not add ("This slide already has the most objects a slide can show (200)" or "…the
+  most pictures…"). A picture pasted from the clipboard is added when its upload finishes, unless the
+  presentation went live meanwhile.
+- Errors (`components/ErrorBoundary.tsx`): a render error stays in the part of the page it happened in. In
+  the canvas-first editor the stage (the Stage lens or the canvas), the Tune drawer's panel, the 4-screen
+  tray and the Lyric Script each sit in an error boundary whose fallback says that part could not be shown,
+  that the screens and the live controls are not affected, and offers Try again and Undo (a new slide or an
+  undo draws it again by itself). The floating bar has a boundary of its own whose fallback is no bar, so an
+  object the bar cannot read never blanks the canvas under it. The app puts one around each page, so the
+  navigation, the toasts and the sign-in overlay always stay (`PageError`: 'Try again', and the menu to go
+  on; on the Live page, whose slide grid and buttons are the live controls, it says instead that the screens
+  keep showing what is live and the keyboard and pedals still work, and to press Try again). Each is logged.
 - Pictures are drawn with their crop, flips and mask (`ImageObject.crop`, `flipH`, `flipV`, `mask`) by the
   same `drawImageFit` every other drawer uses (design/27 §11 item 6; M4 item D, `CropControl.tsx`, pure ops
   in `ops/pictures.ts`, one undo step each, the crop fields coalescing per picture). The Object panel's
@@ -257,7 +376,20 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   its own keys (Ctrl+S still saves); a focused button, link, radio or menu item keeps Enter, Space, the
   arrows (a radio group moves between its choices without nudging the box) and Delete, and only the Ctrl
   commands (undo, redo, duplicate, find) apply; with the focus on the slide canvas or the page, Delete, the
-  arrow nudges, Enter (edit the text) and Escape (drop the selection) apply too.
+  arrow nudges, Enter (edit the text) and Escape (drop the selection) apply too. The non-modal Find card
+  (`data-nonmodal`) is not a dialog for this: its fields are fields and the canvas keeps every shortcut
+  while it is open. In the canvas-first layout a selected text box has a hidden backing text field
+  (`#ordo-text-editor` marked `data-backing-text`, SlideCanvas.tsx), which the inline editor and the
+  floating bar type and format through; when inline editing ends (Escape, a click away) and that field
+  still has the focus, it is blurred (`releaseBackingField`), so the next ArrowRight nudges the box, Delete
+  deletes it and Escape drops the selection, instead of moving an invisible caret or deleting letters
+  nobody sees. The backing field sits on the stage at the caret (`caretOnSlide` × the stage scale, turned
+  with its box), so an input method's candidate window opens by the text being typed. Keys an input method
+  is composing with (Chinese, Japanese, Korean: `isComposing`, or key code 229) are its own in every editor
+  key handler (`composing`, editorKeys.ts: the inline editor, the backing field, the Object panel's text
+  field, the typography card's shortcuts, Find's Enter and Escape, the Lyric Script's Alt+Enter): Escape
+  cancels a candidate without ending inline editing, Enter confirms it without jumping to the next match or
+  splitting a slide, and the arrows choose a candidate.
 - Groups and locked objects (design/27 §11 item 5 and "Locked objects"; pure ops in `views/editor/ops/group.ts`,
   the panel's parts in `GroupPanel.tsx`). The selection is a set of objects with a primary one, which the
   Object panel edits. A click on an object of a group (`origin.group`: a flattened PowerPoint group, or a
@@ -275,6 +407,19 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   the canvas and 'From PowerPoint (not editable)' in the panel: it can be moved, resized (art keeps its
   aspect: corner handles only, W and H linked), deleted and reordered; it does not turn, and its text, style
   and geometry fields are disabled.
+- 'Align to slide' (the box section's bar in the Tune drawer: left, centre, right, top, middle, bottom; and,
+  for a selection of several objects, the floating bar's Align menu) and 'Screen placement' (a text box's
+  cards: Center Screen, Lower Third, Bottom Third, Top Banner) act on the whole selection as one block, as
+  the box fields and the Transformer do (`actions.ts` `placeSelection` through `placement.ts`
+  `placeObjects`, one undo step): a
+  PowerPoint shape with its text, a group or a table's cells never come apart. The block is the
+  selection's bounds as drawn (`groupBox`: each member turned about its centre), so a turned box aligns by
+  what the screens show and keeps its turn; a placement card scales the block onto its box (members keep
+  their place in it, a locked picture its aspect). On a deck that is not 16:9 both work inside the deck's
+  own area (`source.native.slideRect`, the canvas's 4:3 guide), the cards' boxes scaled into it
+  (`presetIn`); the card whose box the block is near shows as active. Placing a themed song's lyric box
+  marks its `box` override, as the box fields do. Nothing moves under the live lock; a locked object's box
+  may.
 - Formatting text (M4; `views/editor/FormatBar.tsx` and `ParagraphStrip.tsx` around the text field,
   applying `ops/text.ts` through `actions.ts`, one undo step each). The 'Text format' toolbar over the
   field formats its selection: font, Size − / +, Bold, Italic, Underline, Strikethrough, Superscript and
@@ -286,7 +431,9 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   Ctrl+B / Ctrl+I / Ctrl+U work in the field; a button gives the field its focus and selection back, and a
   pointer never takes them away. Ctrl+Z and Ctrl+Y (Ctrl+Shift+Z) in the field are the editor's undo and
   redo, not the field's own (which knows nothing of a Bold), so Bold then Ctrl+Z takes the Bold back; the
-  caret stays where it was. The 'Paragraph' strip under the field styles the PowerPoint paragraphs the
+  caret stays where it was. The field's range is put back as the key is handled (after an undo, a redo, a
+  cut or a paste the editor made), never a frame later, so a click or keys that follow at once keep their
+  own selection (`fieldSelection.ts`). The 'Paragraph' strip under the field styles the PowerPoint paragraphs the
   selection touches: Align and Direction (Auto, Left to right, Right to left) as radio groups, List (bullets
   • ● ■ ▪ ➢ ✓, numbers 1. (1) 1) a. i. with 'Start at'; a list started on paragraphs without an indent gets
   a hanging one wide enough for its labels), Level and Indent − / + (each paragraph from its own value),
@@ -310,7 +457,12 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   Whole words (letters, marks and digits are word characters; a typed space also finds a no-break space);
   the count ('3 matches on 2 slides', a polite live region) and every match listed by slide number with the
   text around it before anything is replaced, hidden slides included and tagged, locked objects left out; a
-  listed match opens its slide with the match selected in the text field; Replace all replaces every match
+  listed match opens its slide and starts inline editing on the canvas with the match selected
+  (`goToMatch`; under the live lock, on a locked box or on a slide that shows its PowerPoint picture the
+  match is only highlighted), so what is typed next shows where it lands. The card is non-modal and docked
+  at the top right of the stage pane (in the Lyric Script, which has no stage, it floats over the page): it
+  never covers the slide list or the open Tune drawer's tabs, and the floating bar keeps clear of it. Escape
+  ends inline editing first, then closes the card, then drops the selection. Replace all replaces every match
   as typing the same change in the text field would: only the part of the match that differs is replaced
   and takes the formatting of the text it replaces (a bold red date stays bold and red, the plain words a
   match also covers stay plain; the box style and its stored fit are untouched). A match on a slide that
@@ -362,6 +514,60 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   keeps its legacy drawing. Shadow on adds PowerPoint's 'Offset: Bottom Right' outer shadow, or keeps an
   imported one. A locked shape's style fields are read-only; its box stays editable.
 
+### Canvas-first layout
+
+The desktop editor (a fine pointer; #24) puts the slide first. A touch device keeps the docked panel
+described under Touch: the classes below are set for a fine pointer only, and the floating bar never shows
+under a finger.
+
+- **Columns and the Tune drawer.** Two columns, the slide list (224 px) and the stage. The panels (Object,
+  Slide, Presentation) are a drawer of 316 px, closed by default, opened from the top bar or the floating
+  bar's More…, closed by its ✕ or the top bar's 'Tune ✕'. Selecting an object does not open it.
+- **Top bar, three zones.** Left: Library, the title (edited in place), Save with the revision pill
+  (History), a song's Lyric Script | Slide Canvas switch, Undo, Redo. Centre, the insert island: '+ Text',
+  '+ Image', '+ Video', Shapes, Background. Right: zoom (Fit, 50 %, 75 %, 100 % = Fit), Find…, the drawer
+  triggers Slide, Presentation and Tune, and Full screen. The bar fits any window (`e2e/editor-fit.spec.ts`): below about
+  1,250 px (about 1,450 px for a song, whose mode switch takes about 190 px) the three triggers are one
+  'Panels ▾' menu (`components/Menu.tsx`: Slide, Presentation, Tune), and the title gives way (190 px down
+  to 64 px) before anything moves; if the bar still does not fit (a song at 1024 px, a wider system font),
+  the right zone wraps to a second row as one unit, at the right. Nothing is cut off: every control can be
+  clicked at 1024x768 and 1280x720, and the editor clips rather than scrolls (`overflow: clip`), so
+  focusing a control by keyboard never shifts the slide list off screen (`e2e/editor-fit.spec.ts`).
+- **Floating bar** (`FloatingContextBar.tsx`, placed by `floatingBarSpot` in `touchGeometry.ts`). It shows
+  while an object is selected, unless the drawer is open on Object; text, shape, picture and multi-selection
+  bars end with Layer, Duplicate, Delete and More…. Its tiers: above the box and its rotate handle; below a
+  box near the top of the slide; docked inside the top edge of a tall box (the top bezel while its text is
+  edited inline); clear of an open Find card. It fits its pane (`e2e/editor-fit.spec.ts`): its width is its one-row width,
+  at most the pane's less 16 px whatever its offset, and a wider row wraps to a second row instead of
+  running under the slide list or the drawer (the drawer open at 1024 px leaves a 484 px pane). SlideCanvas
+  measures that size and `floatingBarSpot` clamps the bar inside the pane, so it never starts past the
+  pane's left edge, and it never covers the selection's handles at Fit, 75 % and 50 %.
+- **Font select.** The family select is named 'Font' wherever it is shown (the floating bar, the Typography
+  card, the text style editor, the Themes tab); over a selection of several fonts it shows 'Mixed' and is
+  named 'Font (mixed)' (`e2e/editor-fit.spec.ts`), and a family picked there applies to the whole selection.
+- **Paint picker** (`PaintPopover` in `components/ColorPicker.tsx`; every colour field opens it). Tabs
+  None (where the field allows it), Solid, Linear, Radial; the colour square, hue and alpha sliders, the hex
+  and % fields and the eyedropper act on the solid colour or the active stop; then the deck's swatches and
+  Recent; a gradient has its ramp (a click adds a stop there, pins drag), the angle chips and one bar for the
+  active stop (hex, position, + in the widest gap, ×). Each edit is a pure function of `paintStops.ts`: the
+  stops stay sorted by position and the stop being edited stays active, so a pin dragged past another keeps
+  moving the same stop; a gradient keeps 2 to 16 stops; Linear ↔ Radial keeps the stops, the angle, the
+  focus (`center`) and `scaled`; Solid keeps the colour shown; a gradient from a colour runs to a darker
+  shade of it. The sliders follow the colour by value, so an open picker on None is idle (#24's
+  re-rendered for as long as it was open; `e2e/editor-fit.spec.ts`).
+- **Deck swatches** (`components/deckSwatches.ts`). Up to 8: the applied theme's text colour, then the
+  deck's most used colours (text and run colours, shape fills, gradient stops of shapes and gradient text,
+  and M9's palettes: a table's text, run and fill colours, a decoration's fills, gradients and outlines, a
+  chart's fills), then the curated defaults. The scan stops after 50,000 colours and skips anything that
+  is not a colour (a deck's objects are untrusted). The editor hands the deck to the pickers through a
+  React context (`DeckSwatchesSource`), so no shared component imports the editor's store and the editor
+  route can be loaded on its own; a picker outside the editor offers the curated defaults.
+- **Stage lens.** Under the stage, 'Canvas' and one pill per look (`previewLooks`: Main, Lobby,
+  Livestream, Stage) and 'All 4 screens ▴', the tray of look previews. A look's pill replaces the canvas
+  with that look drawn at 1280 px by the thumbnail worker (`SingleLookStagePreview`, 100 ms after the last
+  change); a key look is drawn over a simulated camera picture ('CAM SIM', or 'RAW KEY' to see the key
+  alone).
+
 ### Touch
 
 Under a finger (iPad Safari) every gesture has a button and nothing depends on hover, `title` tooltips
@@ -385,7 +591,12 @@ rotate handle, or at the pane edge away from a box that fills the slide (`object
 `touchGeometry.ts`); the bar overlays the pane, so the stage never moves when a selection starts. A mouse
 keeps the full toolbar. A focused
 field scrolls back into the visual viewport when the software keyboard shrinks it (`keepVisible.ts`).
-Controls are 44 px with 16 px inputs (no focus zoom); in portrait the editor's property panel and the
+Controls are 44 px with 16 px inputs (no focus zoom), the canvas-first editor's compact controls included
+(the paint picker's tabs, the Stage lens pills, the selected slide card's actions, which wrap in the slide
+list, and the Lyric Script's arrangement pills get 44 px back under a coarse pointer);
+`e2e/ipad/touch-targets.spec.ts` audits every visible control of the editor, the docked panel, the slides
+list, the paint picker and the Lyric Script in both orientations, the picker's 32 px swatch grid and the
+ramp's stop pins its named exceptions. In portrait the editor's property panel and the
 playlist's add panel move under the main pane. File pickers are a plain button to the native picker
 (Files, Photos): photos arrive as JPEG because Safari transcodes HEIC when the accept list does not name
 it (the hub does not accept HEIC), videos as MOV or MP4.
@@ -394,15 +605,39 @@ it (the hub does not accept HEIC), videos as MOV or MP4.
 
 The Media tab hides the pictures imports make for presentations (pages tagged `document`, native-import
 pictures tagged `pptx`) unless 'Show presentation pictures' is ticked (design/27 §11 item 15). Deleting
-media that stored presentations use names them in the confirmation first, since a missing picture refuses
-goLive: the hub answers such a `DELETE /media/:id` with 409 `media_in_use` (the titles in its message)
-unless it carries `?force=1`, which the tab sends once the user has confirmed.
+media that stored presentations or playlists use (a playlist's media item, an item's background or its
+music) names them in the confirmation first, since a missing picture or media item refuses goLive and
+missing music leaves the pre-service loop silent: the hub answers such a `DELETE /media/:id` with 409
+`media_in_use` (the titles and names in its message, `presentations` and `playlists` in its body) unless
+it carries `?force=1`, which the tab sends once the user has confirmed.
+
+**SVG pictures** (design/14 "Pictures that are SVGs"). `uploadMedia` (`src/services/upload.ts`) draws an SVG
+through an `<img>` into a canvas at `svgRasterSizeFor` (`rasterizeSvg`: 10 s at most; a decode error, a
+tainted canvas or no page sends the SVG alone) and posts the PNG beside it as `raster`, which the hub keeps as
+its delivery: thumbnails, the editor canvas and outputs draw that still. Tiles where media is picked (the
+Media tab's rows and preview, the media pickers, the background swatches: `tileHash`) show the SVG itself, so
+an animated one moves there, and say "SVG · moves in previews only" (`svgNote`): Audience screens show its
+first frame. An SVG without a still (one over 24 MB goes through the resumable upload without one, or this
+browser could not draw it, or it predates stills) says instead that each Audience screen draws it itself when
+it is shown, or, over 2 MB (`SVG_SCREEN_MAX_BYTES`), that the screens do not show it: upload it again from a
+browser, or a PNG of it. An SVG's media size is its still's (at least 1,920 px on its longer side), so '+ Image'
+and a paste start it at the size its root element declares (`insertBox.ts`: a 200 x 80 logo at 200 x 80, not
+slide-wide), half the slide wide at its ratio when it declares only a viewBox; any other picture starts at its
+pixel size, at most the slide's width.
 
 ## Settings
 
 Outputs and looks, audio devices and pairs, key map, Stream Deck pages, MIDI mappings,
 PINs, output tokens, backups, diagnostics export. Each page is a form over the matching
 `/settings/*` resource.
+
+- **Screens** (`views/settings/OutputsPage.tsx`, #17): each output is badged by the role its look gives it:
+  Stage (a stage output or look), Bottom-Third Stream (a lower-third or stream look, or any lyric-only
+  look) and Audience (the rest). The role decides what an output shows during an announcement loop
+  (prd/04 "Screens and announcement loops"): the loop on Audience, 'Service Starting Soon' on Stage, no
+  band on Bottom-Third Stream (`lyricTextFor` returns no text for a loop on a non-stage look; the lobby
+  shows its holding slide). This is the owner's choice, kept deliberately; a lobby that should show the
+  loop uses the Main look.
 
 - **The stage look's notes** (design/27 §11 item 13, M4). The look page's 'Stage screen' card
   (`src/views/settings/StageNotesOptions.tsx`, shown for a look of kind stage, and for any look whose notes
@@ -427,6 +662,18 @@ editor) and the import's notes. Job results are read defensively (`lib/pptxImpor
 or a failed job shows less, never breaks the card, and deck text is only ever shown as text. Follow-up jobs
 (`pptx-lo`, `pptx-reference`, the text repair, the re-import) are not listed as imports.
 
+A PowerPoint imported as editable slides is parsed in this browser first (design/27 §2 "Where the deck is
+parsed"; `services/pptxParse.ts`): in the import worker (`workers/import.worker.ts`, a bundle of its own, so
+the importer never weighs on the page), one worker per deck, terminated when it answers or after 90 s, with
+the library's faces for the families a deck with a table names (fetched from the hub). The upload then
+carries the scene (`clientScene`) for the hub to check and build from; the import's progress bar shows the
+parse as its first half. The browser does not parse while a playlist is live (the hub refuses the import
+then, as before), and any failure, timeout or a table in a face only the hub can measure (WOFF, WOFF2)
+uploads the deck without a scene, so the hub parses it: the volunteer sees the same import either way.
+Settings › Diagnostics counts the decks parsed here and those left to the hub, by reason ('a playlist was
+live', 'the browser took too long', 'the browser could not read it', 'this browser cannot parse in the
+background'); each is in the operator log and its export too.
+
 In the editor, a slide imported natively has a 'From PowerPoint' card in the Slide panel
 (`PptxSlideCard.tsx`): its class, what was approximated, LibreOffice work still pending, and 'Show
 original', which lays the PowerPoint picture of the slide (`Slide.pptx.refMediaId`) over the canvas so a
@@ -435,7 +682,7 @@ nothing stored. When there are no pictures yet, turning it on saves unsaved edit
 (`POST /presentations/:id/pptx-reference` with `{ showPicture: [] }`: no slide switches to its picture) and
 follows the job; when it is done the editor takes the pictures over, keeping edits made meanwhile. A slide
 set to show its PowerPoint picture on the screens (`Slide.pptx.show`) says so, with 'Show the objects
-instead'. The canvas, the thumbnails, the look previews and 'Send to preview' draw a slide as the outputs
+instead'. The canvas, the thumbnails and the look previews draw a slide as the outputs
 do (design/27 §5 "One rule for every drawer", `slideContent`): a slide set to show its PowerPoint picture
 shows that picture and only the objects added in ordo (the imported objects, marked by `origin`, are
 neither drawn nor selectable on the canvas), and a picture slide its page picture under its objects.
@@ -452,8 +699,8 @@ of the box, such as Carlito for Calibri, is a library font) with 'Upload font' (
 - 'Reset slide from PowerPoint', for an edited slide or one LibreOffice could not draw: after a
   confirmation it saves unsaved edits and runs the hub's re-import of that slide (`pptx-reimport` with
   `{ slideIds, reset }`), its progress in the card (a live region); the slide gets the deck's objects back,
-  keeping its id, notes, timing, background and the objects added in ordo on top. History keeps the slide
-  as it was.
+  keeping its id, notes, timing, background, Bottom-Third Stream text, MIDI cues and the objects added in
+  ordo on top. History keeps the slide as it was.
 
 'Make editable' on a legacy PowerPoint page (a picture import from before M3) rebuilds the page from the
 stored deck: the hub reroutes it to the re-import of that slide (202 and the job), the editor follows the
@@ -464,7 +711,14 @@ The Presentation panel of a PowerPoint presentation ends with its import report 
 slides per class (`source.native`) or, for a legacy import, that its slides are pictures; legacy pages
 left; hidden and edited slides; slides waiting for LibreOffice or that it could not draw; the fonts to
 upload; the approximated slides (each a button that opens the slide); and the import log (`source.log`,
-the newest 200 lines, warnings tagged), all deck text shown as text. 'Re-import from PowerPoint…' opens a
+the newest 200 lines, warnings tagged), all deck text shown as text. A deck PowerPoint plays as a loop, every
+slide timed, comes in as an announcement loop: its panel shows the report too, with a banner that says in
+plain words what a loop does on the screens (each slide moves on by itself and starts over; the Stage shows
+'Service Starting Soon' and the Bottom-Third Stream nothing while it runs) and a 'Treat as slides' button
+(disabled while live) that makes it a slide deck in one undoable change (design/27 §8 "Looping shows"). Such a
+deck opens canvas-first with the drawer closed, so the stage carries one line too (`LoopDeckBanner`): it plays
+as a loop and the Stage and the Bottom-Third Stream show none of its words, with 'Treat as slides', 'Import
+report' (the Presentation drawer) and 'Keep as a loop' (hidden for this visit). 'Re-import from PowerPoint…' opens a
 dialog with the hub's plan (`GET /presentations/:id/pptx-reimport`, nothing written): slides rebuilt,
 picture slides made editable, edited slides kept, other slides kept, and what is always kept; slides made
 editable by an older build are listed, each with 'Slide N: keep as it is'. 'Re-import' saves unsaved edits
@@ -472,6 +726,21 @@ first, queues the job and closes the dialog (focus goes back to the button, or t
 runs); the report shows its progress, and when it is done the editor takes its revision over like a
 PowerPoint follow-up's (`PPTX_JOB_SAVERS` includes 'pptx-reimport': an unsaved edit of a slide stays, every
 other slide shows the re-import) and says what changed. Nothing runs while the presentation is live.
+
+<!-- m9:lo-detect -->
+_M9 (design/27, track `lo-detect`): a hub without LibreOffice._ The operator reads what the hub's tools allow
+(`lib/hubCaps.ts`: `GET /capabilities` with the protocol's `.catch` defaults, 404 meaning a hub before M9 with
+LibreOffice, a network error keeping the last answer, asked again on every reconnect) and offers only that:
+- the import screen hides 'Pictures (LibreOffice)'; a choice remembered from a hub that had it imports as
+  editable slides and the screen says "This hub has no LibreOffice, so PowerPoint files are imported as
+  editable slides"; the drop zone takes .pptx, .ppsx, .potx, .pptm and, with poppler-utils, .pdf;
+- the import card says nothing of LibreOffice on such a hub (nothing waits for it) and names the slides with
+  something ordo cannot draw and what it is ("2 slides have something ordo cannot draw: a chart, a vector
+  picture"); the import report counts them;
+- the slide card shows "Not drawn: a chart" (`Slide.pptx.missing`), keeps 'Show original' for a slide that
+  already has its picture, and offers 'Add PowerPoint's pictures (PDF)…' (the deck exported as PDF from
+  PowerPoint, sent to `pptx-reference` as multipart) where LibreOffice would have drawn them.
+<!-- /m9:lo-detect -->
 
 ## Service checklist
 

@@ -218,6 +218,20 @@ export const DEFAULT_SURFACES: SurfaceSettings = {
   messagePresets: ['Wrap up', 'Repeat chorus', 'One more time', 'Watch the leader', 'Mic check'],
 };
 
+/**
+ * Stored surface settings written before MIDI became opt-in (2026-11-09) have no `midiEnabled`: MIDI always
+ * started then. A venue that has MIDI mappings keeps its pedals working after the upgrade: such settings read
+ * as enabled (the first save of the settings writes the key, and from then on it is read as stored). A venue
+ * without mappings stays off, so its browser does not ask for MIDI access. Anything else is returned as is,
+ * for the schema to read.
+ */
+export function upgradeStoredSurfaces(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const o = raw as Record<string, unknown>;
+  if ('midiEnabled' in o || !Array.isArray(o.midi) || o.midi.length === 0) return raw;
+  return { ...o, midiEnabled: true };
+}
+
 /** ProPresenter 7 compatible default MIDI layout with velocity parameterization. */
 export const PROPRESENTER_MIDI_MAPPINGS: MidiMapping[] = [
   { id: 'pro-next', kind: 'note', number: 0, threshold: 1, action: { id: 'next' } },

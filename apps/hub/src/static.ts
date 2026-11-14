@@ -51,7 +51,14 @@ export function securityHeaders(
     'Cross-Origin-Resource-Policy': 'same-site',
   };
   if (opts.https) h['Strict-Transport-Security'] = 'max-age=31536000';
-  if (app === 'api') return h;
+  if (app === 'api') {
+    // An API response opened as a page (a stored file's link, an error) is a sandboxed document with an
+    // opaque origin that may load nothing: an uploaded SVG's script never runs with the viewer's session
+    // (review 2026-11-13 R4). Pictures, video, fonts and fetch() that use these responses are unaffected:
+    // a CSP applies only to the document it arrives with.
+    h['Content-Security-Policy'] = "default-src 'none'; sandbox";
+    return h;
+  }
   const host = opts.host;
   const ws = host ? ` ws://${host} wss://${host}` : '';
   h['Content-Security-Policy'] = [
@@ -92,10 +99,12 @@ function placeholder(app: AppName): string {
 }
 
 export class StaticApps {
-  constructor(
-    private appsDir: string,
-    private domain: string,
-  ) {}
+  private appsDir: string;
+  private domain: string;
+  constructor(appsDir: string, domain: string) {
+    this.appsDir = appsDir;
+    this.domain = domain;
+  }
 
   distOf(app: AppName): string {
     return join(this.appsDir, app, 'dist');

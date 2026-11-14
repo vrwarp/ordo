@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { chartSchemas } from './chart.ts';
+import { BEVEL_PRESETS, CAMERA_PRESETS, LIGHT_DIRECTIONS, LIGHT_RIGS, MATERIALS } from './three-names.ts';
 
 /**
  * Bounds (design/25 "validate at entry"): every string, array, record and number has a limit far above any
@@ -160,19 +162,31 @@ export const ShapeGeom = z.object({
     .optional(),
   paths: z.array(ShapeGeomPath).max(8).optional(),
   ref: z.string().min(1).max(100).optional().catch(undefined),
+  /**
+   * Adjust values past `adj`'s ±1e7 (M9): the angles of arc, pie, chord, blockArc and circularArrow go to
+   * 21,599,999 (60,000ths of a degree). A build that reads it prefers a pair here over the pair of the same
+   * name in `adj`; `adj` beside it holds the value clamped to ±1e7, which an older build draws.
+   */
+  adjWide: z
+    .array(z.tuple([z.string().max(16), z.number().min(-21_600_000).max(21_600_000)]))
+    .max(10)
+    .optional()
+    .catch(undefined),
 });
 export type ShapeGeom = z.infer<typeof ShapeGeom>;
 
 /**
  * A geometry file (`ShapeGeom.ref`, M6 round 2): one geometry's paths, the JSON the content store holds under
- * its SHA-256 (`application/json`, at most `GEOM_FILE_MAX_BYTES`). Bounded as `ShapeGeom.paths` is, and
- * re-tokenised by every reader as inline paths are.
+ * its SHA-256 (`application/json`, at most `GEOM_FILE_MAX_BYTES`). Each path is bounded as an inline path is
+ * and re-tokenised by every reader. M9 widens a file to 64 paths (262,144 points), a traced outline too large
+ * for 8: a file is not part of a slide, so the inline `ShapeGeom.paths` keeps its 8, and an older build that
+ * refuses a widened file draws the inline paths, else the legacy shape.
  */
-export const GeomFile = z.object({ paths: z.array(ShapeGeomPath).min(1).max(8) });
+export const GeomFile = z.object({ paths: z.array(ShapeGeomPath).min(1).max(64) });
 export type GeomFile = z.infer<typeof GeomFile>;
 
-/** The largest geometry file a reader parses: 8 paths of 40,000 characters and their fields. */
-export const GEOM_FILE_MAX_BYTES = 400_000;
+/** The largest geometry or decoration file a reader parses: 64 paths of 40,000 characters and their fields. */
+export const GEOM_FILE_MAX_BYTES = 2_600_000;
 
 /** A geometry file's name in the content store (`ShapeGeom.ref` as the hub writes it): a SHA-256 in hex. */
 export function isGeomFileRef(ref: unknown): ref is string {
@@ -214,6 +228,68 @@ export const ArrowEnd = z.object({
   len: ArrowSize.catch('med').optional(),
 });
 export type ArrowEnd = z.infer<typeof ArrowEnd>;
+
+/*
+ * PowerPoint 3-D (design/27 M9, `look3d` on shapes, pictures and text objects): the bevelled, extruded and
+ * turned look of `a:scene3d` and `a:sp3d`, in degrees and logical px, names from `three-names.ts`. An older
+ * build strips it and draws the object flat (LibreOffice's own look for most worship 3-D); the converter folds
+ * a front camera's `rev` into `box.rotation`, so the flat object keeps its turn in the plane.
+ */
+
+/** Degrees, a turn on any axis (OOXML 60,000ths of a degree ÷ 60,000). */
+const deg = z.number().min(-36_000).max(36_000);
+
+export const BevelPreset = z.enum(BEVEL_PRESETS);
+export type BevelPreset = z.infer<typeof BevelPreset>;
+
+/** A bevel: its profile and its width and height in logical px (OOXML's default 76,200 EMU is 12 px). */
+export const Bevel = z.object({
+  prst: BevelPreset.catch('circle'),
+  w: z.number().min(0).max(1_000),
+  h: z.number().min(0).max(1_000),
+});
+export type Bevel = z.infer<typeof Bevel>;
+
+export const Camera3d = z.object({
+  prst: z.enum(CAMERA_PRESETS).catch('orthographicFront'),
+  /** Degrees (OOXML fov ÷ 60,000). */
+  fov: z.number().min(0).max(180).optional(),
+  /** lat, lon, rev in degrees: replaces the preset's angles. */
+  rot: z.tuple([deg, deg, deg]).optional(),
+  zoom: z.number().min(0.01).max(100).optional(),
+});
+export type Camera3d = z.infer<typeof Camera3d>;
+
+export const Light3d = z.object({
+  rig: z.enum(LIGHT_RIGS).catch('threePt'),
+  dir: z.enum(LIGHT_DIRECTIONS).catch('t').optional(),
+  rot: z.tuple([deg, deg, deg]).optional(),
+});
+export type Light3d = z.infer<typeof Light3d>;
+
+export const Look3d = z.object({
+  /** bevelT: the lit rim of the front face. */
+  bevel: Bevel.optional(),
+  /** bevelB: seen only past a quarter turn. */
+  back: Bevel.optional(),
+  /** extrusionH, logical px. */
+  depth: z.number().min(0).max(1_000).optional(),
+  /** sp3d z: towards the camera (seen with a perspective camera only). */
+  lift: z.number().min(-1_000).max(1_000).optional(),
+  contour: z.object({ width: z.number().min(0).max(500), color: Rgba }).optional(),
+  /** extrusionClr, resolved; absent: the line colour, else the fill colour. */
+  side: Rgba.optional(),
+  material: z.enum(MATERIALS).catch('warmMatte').optional(),
+  /** Absent: threePt from the top. */
+  light: Light3d.optional(),
+  /** Absent: orthographicFront. */
+  camera: Camera3d.optional(),
+  /** The silhouette's edge lies this far outside the object's own edge (a picture under its frame). */
+  grow: z.number().min(0).max(500).optional(),
+  /** Text: a:flatTx, stays flat on a turned shape. */
+  flat: z.boolean().optional(),
+});
+export type Look3d = z.infer<typeof Look3d>;
 
 /*
  * Rich text and PowerPoint fields (design/27 §3). Every new field is optional and bounded, and enums inside
@@ -342,6 +418,85 @@ export const TextPara = z.object({
 });
 export type TextPara = z.infer<typeof TextPara>;
 
+/*
+ * Looks of a text object that live on the object, never on `TextStyle` (design/27 M9): a style is also a
+ * theme's, a text box default, a look's band and stage style and a prop's, and none of those may warp, turn
+ * or stand text up. So themes, bands and 'apply style to similar' never carry them.
+ */
+
+/** ECMA-376 ST_TextShapeType without textNoShape: the 40 WordArt warps (presetTextWarpDefinitions). */
+export const TEXT_WARPS = [
+  'textPlain',
+  'textStop',
+  'textTriangle',
+  'textTriangleInverted',
+  'textChevron',
+  'textChevronInverted',
+  'textRingInside',
+  'textRingOutside',
+  'textArchUp',
+  'textArchDown',
+  'textCircle',
+  'textButton',
+  'textArchUpPour',
+  'textArchDownPour',
+  'textCirclePour',
+  'textButtonPour',
+  'textCurveUp',
+  'textCurveDown',
+  'textCanUp',
+  'textCanDown',
+  'textWave1',
+  'textWave2',
+  'textDoubleWave1',
+  'textWave4',
+  'textInflate',
+  'textDeflate',
+  'textInflateBottom',
+  'textDeflateBottom',
+  'textInflateTop',
+  'textDeflateTop',
+  'textDeflateInflate',
+  'textDeflateInflateDeflate',
+  'textFadeRight',
+  'textFadeLeft',
+  'textFadeUp',
+  'textFadeDown',
+  'textSlantUp',
+  'textSlantDown',
+  'textCascadeUp',
+  'textCascadeDown',
+] as const;
+export type TextWarpPreset = (typeof TEXT_WARPS)[number];
+
+/**
+ * A WordArt warp (`a:bodyPr/a:prstTxWarp`): the text is drawn bent to the preset's shape at raster time, so
+ * it stays canonical and editable. An unknown name still warps, stretched to the box (textPlain). `adj` are
+ * the preset's adjust values by name (pairs: no deck string is a key), angles in 60,000ths of a degree.
+ * An older build strips it and draws plain rich text; the converter writes beside an affine or envelope warp
+ * the style an unwarped box best fills.
+ */
+export const TextWarp = z.object({
+  preset: z.enum(TEXT_WARPS).catch('textPlain'),
+  adj: z
+    .array(z.tuple([z.string().max(16), z.number().min(-21_600_000).max(21_600_000)]))
+    .max(4)
+    .optional(),
+});
+export type TextWarp = z.infer<typeof TextWarp>;
+
+/**
+ * Vertical text in a box turned a quarter (`a:bodyPr vert`): which clusters stand upright (none: every glyph
+ * turns with the box, mongolianVert; cjk: UAX #50 upright clusters stand, eaVert; all: every grapheme stands,
+ * stacked, wordArtVert), and `reverse`: lines advance the other way across the turned box (left to right on
+ * the slide). An older build strips it and draws horizontal text in the turned box.
+ */
+export const Writing = z.object({
+  upright: z.enum(['none', 'cjk', 'all']).catch('cjk'),
+  reverse: z.boolean().optional(),
+});
+export type Writing = z.infer<typeof Writing>;
+
 /** Where an object came from (an imported PowerPoint shape), for grouping, re-import and 'apply to similar'. */
 export const ObjectOrigin = z.object({
   /** 'pptx' */
@@ -351,8 +506,10 @@ export const ObjectOrigin = z.object({
   /** 'title' | 'body' | 'body:2' | 'subTitle' ... */
   ph: z.string().max(40).optional(),
   /**
-   * title|body|text|picture|shape|bg|deco|poster|cell|grid|art (a string: the list can grow). cell: a
-   * table cell's text; grid: a table's locked fills and lines.
+   * title|body|text|picture|shape|bg|deco|poster|cell|grid|art|table|chart|decor|ole|ink|math (a string: the
+   * list can grow). cell: a table cell's text; grid: a table's locked fills and lines (M6); table, chart: the
+   * object carries `table` or `chart` (M9); decor: a decoration (`ShapeObject.decor`); ole, ink, math: the
+   * deck's own fallback picture of an embedded object, ink or an equation, locked.
    */
   role: z.string().max(20).optional(),
   /** A flattened group or a shape+text pair: selected together. */
@@ -372,6 +529,17 @@ export const TextObject = z.object({
   opacity: z.number().min(0).max(1).default(1),
   runs: z.array(TextRun).max(2000).optional(),
   paras: z.array(TextPara.nullable()).max(5000).optional(),
+  /** M9: the text drawn bent to a WordArt shape. */
+  warp: TextWarp.optional().catch(undefined),
+  /** M9: vertical text in its quarter-turned box. */
+  writing: Writing.optional().catch(undefined),
+  /**
+   * M9, PowerPoint anchorCtr: the text block, as wide as its widest line, is centred in the box and the
+   * paragraphs align inside it. Older builds draw the lines at their own alignment.
+   */
+  centerBlock: z.boolean().optional().catch(undefined),
+  /** M9: the text's 3-D look (with its shape's, unless `flat`). */
+  look3d: Look3d.optional().catch(undefined),
   ...common,
 });
 export type TextObject = z.infer<typeof TextObject>;
@@ -409,9 +577,238 @@ export const ImageObject = z.object({
   mask: ShapeGeom.optional(),
   shadow: Shadow.optional(),
   softEdge: length.optional(),
+  /** M9: the picture's 3-D look (a bevelled or turned picture frame). */
+  look3d: Look3d.optional().catch(undefined),
+  /**
+   * M9: the families the text of a vector picture uses (an EMF or WMF the hub converted, `VECTOR_MIME`):
+   * shipped and awaited like text fonts. Older builds strip it; they do not draw vector pictures.
+   */
+  vectorFonts: z.array(z.string().max(300)).max(8).optional().catch(undefined),
   ...common,
 });
 export type ImageObject = z.infer<typeof ImageObject>;
+
+/** A palette index below `n` (tables, charts, decorations: `palette.ts`). */
+const ix = (n: number) =>
+  z
+    .number()
+    .int()
+    .min(0)
+    .max(n - 1);
+
+/*
+ * A table drawn and edited by ordo (design/27 M9, `ShapeObject.table`, origin.role 'table'). Cells sit
+ * row-major, each at the next grid slot no earlier cell covers (as in OOXML and HTML); a span is cut where it
+ * would reach a covered slot or the grid's edge, and cells past the grid are dropped. Indices refer to the
+ * table's own palettes (`styles`, `runStyles`, `fills`, `lineStyles`), whose entries hold only what differs
+ * from `base`. An older build strips `table` and draws the shape's legacy fields: a rect filled with the
+ * table's background (decision 4 of M9: no legacy group is written).
+ */
+export const TABLE_LIMITS = {
+  rows: 256,
+  cols: 64,
+  /** Grid slots, rows × columns. */
+  grid: 4_096,
+  /** Characters of one cell's text (the render clamp's per-cell bound) and of all the table's cells. */
+  cellText: 10_000,
+  tableText: 60_000,
+  cellRuns: 2_000,
+  tableRuns: 8_000,
+  cellParas: 1_000,
+  tableParas: 8_000,
+  cellStyles: 64,
+  runStyles: 256,
+  fills: 64,
+  lineStyles: 32,
+  /** Edge segments, `h` and `v` each. */
+  edges: 8_192,
+} as const;
+
+/** A row or column edge index (0 .. rows), or a column or row index of a segment's ends. */
+const edge = z.number().int().min(0).max(TABLE_LIMITS.rows);
+
+/** A cell's text box style, sparse over `TableData.base`: an absent field is the base's. */
+export const CellStyle = z.object({
+  fontFamily: z.string().max(300).optional(),
+  fontWeight: z.number().int().min(1).max(1000).optional(),
+  fontSizePx: z.number().min(1).max(1_000).optional(),
+  color: Rgba.optional(),
+  /** a:tcPr marL, marT, marR, marB. */
+  insets: z.object({ l: length, t: length, r: length, b: length }).optional(),
+  lang: z.string().max(35).optional(),
+  fallbackFonts: z.array(z.string().max(300)).max(8).optional(),
+  fontStyle: z.enum(['normal', 'italic']).catch('normal').optional(),
+  align: z.enum(['left', 'center', 'right', 'justify']).catch('left').optional(),
+  /** a:tcPr anchor */
+  valign: z.enum(['top', 'middle', 'bottom']).catch('top').optional(),
+  direction: z.enum(['auto', 'ltr', 'rtl']).catch('auto').optional(),
+  /** a:tcPr vert: drawn by the vertical text engine. */
+  vert: z.enum(['horz', 'vert', 'vert270', 'eaVert']).catch('horz').optional(),
+});
+export type CellStyle = z.infer<typeof CellStyle>;
+
+/** A run's formatting without its range: what `TextRun` holds besides start and end. */
+export const TableRunStyle = TextRun.omit({ start: true, end: true });
+export type TableRunStyle = z.infer<typeof TableRunStyle>;
+
+/** [start, end, runStyle] over the cell's text (UTF-16 offsets), sorted and not overlapping, as `TextRun`. */
+export const TableRun = z.tuple([
+  z.number().int().min(0).max(TABLE_LIMITS.cellText),
+  z.number().int().min(0).max(TABLE_LIMITS.cellText),
+  ix(TABLE_LIMITS.runStyles),
+]);
+export type TableRun = z.infer<typeof TableRun>;
+
+/** A fill: `color` is the solid colour, or a gradient's first stop. */
+export const TableFill = z.object({ color: Rgba, gradient: Gradient.optional() });
+export type TableFill = z.infer<typeof TableFill>;
+
+export const TableLineStyle = z.object({
+  width: length,
+  color: Rgba,
+  dash: LineDash.catch('solid').optional(),
+});
+export type TableLineStyle = z.infer<typeof TableLineStyle>;
+
+/** A drawn cell. */
+export const TableCell = z.object({
+  /** Absent: an empty cell. */
+  text: z.string().max(TABLE_LIMITS.cellText).optional(),
+  runs: z.array(TableRun).max(TABLE_LIMITS.cellRuns).optional(),
+  /** As `TextObject.paras`: paras[i] styles text.split('\n')[i]. */
+  paras: z.array(TextPara.nullable()).max(TABLE_LIMITS.cellParas).optional(),
+  /** Into `styles`; absent: the base alone. */
+  style: ix(TABLE_LIMITS.cellStyles).optional(),
+  /** Into `fills`; absent: no fill. */
+  fill: ix(TABLE_LIMITS.fills).optional(),
+  colSpan: z.number().int().min(1).max(TABLE_LIMITS.cols).optional(),
+  rowSpan: z.number().int().min(1).max(TABLE_LIMITS.rows).optional(),
+  /** a:lnTlToBr (down) and a:lnBlToTr (up), into `lineStyles`. */
+  diag: z
+    .object({ down: ix(TABLE_LIMITS.lineStyles).optional(), up: ix(TABLE_LIMITS.lineStyles).optional() })
+    .optional(),
+});
+export type TableCell = z.infer<typeof TableCell>;
+
+export const TableData = z.object({
+  /** Column widths, drawn scaled to box.w. */
+  cols: z.array(length).min(1).max(TABLE_LIMITS.cols),
+  /** Minimum row heights (a:tr h), drawn scaled by box.h ÷ their sum. */
+  rows: z.array(length).min(1).max(TABLE_LIMITS.rows),
+  cells: z.array(TableCell).max(TABLE_LIMITS.grid),
+  /** The cells' text box style: the office line model, wrapping, no autofit. */
+  base: TextStyle,
+  styles: z.array(CellStyle).max(TABLE_LIMITS.cellStyles).optional(),
+  runStyles: z.array(TableRunStyle).max(TABLE_LIMITS.runStyles).optional(),
+  fills: z.array(TableFill).max(TABLE_LIMITS.fills).optional(),
+  lineStyles: z.array(TableLineStyle).max(TABLE_LIMITS.lineStyles).optional(),
+  /** Horizontal edge segments: [row edge 0..rows, from column, to column (exclusive), line style]. */
+  h: z
+    .array(z.tuple([edge, edge, edge, ix(TABLE_LIMITS.lineStyles)]))
+    .max(TABLE_LIMITS.edges)
+    .optional(),
+  /** Vertical edge segments: [column edge 0..cols, from row, to row (exclusive), line style]. */
+  v: z
+    .array(z.tuple([edge, edge, edge, ix(TABLE_LIMITS.lineStyles)]))
+    .max(TABLE_LIMITS.edges)
+    .optional(),
+  /** a:tblPr's fill, else the table style's tblBg, into `fills`. */
+  background: ix(TABLE_LIMITS.fills).optional(),
+  /** a:tblPr rtl: column 0 on the right. */
+  rtl: z.boolean().optional(),
+  /** fixed: rows as stored, never grown (the fidelity harness's LibreOffice rows). */
+  rowRule: z.enum(['grow', 'fixed']).catch('grow').optional(),
+});
+export type TableData = z.infer<typeof TableData>;
+
+/* A chart drawn by ordo (design/27 M9, `ShapeObject.chart`, origin.role 'chart'): `chart.ts`. */
+const charts = chartSchemas({ Rgba, length, Gradient, LineDash, TextRun, TextPara });
+export const ChartFill = charts.ChartFill;
+export type ChartFill = z.infer<typeof ChartFill>;
+export const ChartLine = charts.ChartLine;
+export type ChartLine = z.infer<typeof ChartLine>;
+export const ChartText = charts.ChartText;
+export type ChartText = z.infer<typeof ChartText>;
+export const ChartBox = charts.ChartBox;
+export type ChartBox = z.infer<typeof ChartBox>;
+export const ChartLabels = charts.ChartLabels;
+export type ChartLabels = z.infer<typeof ChartLabels>;
+export const ChartMarker = charts.ChartMarker;
+export type ChartMarker = z.infer<typeof ChartMarker>;
+export const ChartPoint = charts.ChartPoint;
+export type ChartPoint = z.infer<typeof ChartPoint>;
+export const ChartSeries = charts.ChartSeries;
+export type ChartSeries = z.infer<typeof ChartSeries>;
+export const ChartGroup = charts.ChartGroup;
+export type ChartGroup = z.infer<typeof ChartGroup>;
+export const ChartTitle = charts.ChartTitle;
+export type ChartTitle = z.infer<typeof ChartTitle>;
+export const ChartAxis = charts.ChartAxis;
+export type ChartAxis = z.infer<typeof ChartAxis>;
+export const ChartData = charts.ChartData;
+export type ChartData = z.infer<typeof ChartData>;
+
+/*
+ * A decoration (design/27 M9, `ShapeObject.decor`, origin.role 'decor', locked): a z-run of plain PowerPoint
+ * shapes drawn as one object, each part a path in the decoration's own `w × h` space with one of its paints.
+ * Older builds strip it and draw the object's legacy fields, a line with no stroke: nothing. `ref` names a
+ * decoration file (`DecorFile`), stored, named, collected and shipped as geometry files are (`pptxdecor:<n>`
+ * from the converter, a SHA-256 from the hub); while it is read, its parts are drawn and `parts` is ignored.
+ */
+export const DECOR_LIMITS = {
+  paints: 64,
+  parts: 256,
+  /** Path points of all its parts. */
+  points: 16_384,
+  /** Source shapes with a shadow (each is its own sprite). */
+  shadowed: 24,
+} as const;
+
+/** One look of a decoration: what one PowerPoint shape drew. */
+export const DecorPaint = z.object({
+  /** A solid fill; alpha allowed. */
+  fill: Rgba.optional(),
+  /** Over `fill`, laid on each part's `frame`. */
+  gradient: Gradient.optional(),
+  stroke: z.object({ width: length, color: Rgba }).optional(),
+  dash: LineDash.catch('solid').optional(),
+  /** Under each source shape of this paint. */
+  shadow: Shadow.optional(),
+});
+export type DecorPaint = z.infer<typeof DecorPaint>;
+
+/** One path of a decoration, in its `w × h` space; parts are drawn in order. */
+export const DecorPart = z.object({
+  /** M L C Q Z and numbers (`cleanPathData`), at most 4,096 points. */
+  d: z.string().max(40_000),
+  /** Paint index; one out of the palette is not drawn. */
+  p: ix(DECOR_LIMITS.paints),
+  /** The first part of a source shape: its unit of shadow and stroke. */
+  s: z.literal(1).optional(),
+  /** A preset path's own fill mode. */
+  fill: PathFillMode.catch('norm').optional(),
+  /** false: not stroked (preset paths that only fill). */
+  stroke: z.boolean().optional(),
+  /** Continues the part before it (one path stored in pieces), as `ShapeGeomPath.cont`. */
+  cont: z.boolean().optional().catch(undefined),
+  /** The gradient frame: the source shape's x, y, w, h and rotation in the decoration's space. */
+  frame: z.tuple([coord, coord, length, length, z.number().min(-360).max(360)]).optional(),
+});
+export type DecorPart = z.infer<typeof DecorPart>;
+
+export const DecorData = z.object({
+  w: z.number().min(0).max(1e9),
+  h: z.number().min(0).max(1e9),
+  paints: z.array(DecorPaint).min(1).max(DECOR_LIMITS.paints),
+  /** Ignored while the file `ref` names is read (as `ShapeGeom.paths` beside `ShapeGeom.ref`). */
+  parts: z.array(DecorPart).max(DECOR_LIMITS.parts),
+  ref: z.string().min(1).max(100).optional().catch(undefined),
+});
+export type DecorData = z.infer<typeof DecorData>;
+
+/** A decoration file (`DecorData.ref`): its parts, JSON of at most `GEOM_FILE_MAX_BYTES` in the content store. */
+export const DecorFile = z.object({ parts: z.array(DecorPart).min(1).max(DECOR_LIMITS.parts) });
+export type DecorFile = z.infer<typeof DecorFile>;
 
 /**
  * `shape` stays rect, ellipse or line and `fill` a solid colour: what an older build draws. The M6 fields
@@ -439,6 +836,15 @@ export const ShapeObject = z.object({
   shadow: Shadow.optional(),
   glow: Glow.optional(),
   softEdge: length.optional(),
+  /*
+   * M9: what the shape draws instead of its geometry. A drawer keeps at most one, in this order (table,
+   * chart, decor), and draws no `look3d` with any of them; an older build draws the legacy fields above.
+   */
+  table: TableData.optional().catch(undefined),
+  chart: ChartData.optional().catch(undefined),
+  decor: DecorData.optional().catch(undefined),
+  /** M9: the shape's 3-D look. */
+  look3d: Look3d.optional().catch(undefined),
   ...common,
 });
 export type ShapeObject = z.infer<typeof ShapeObject>;
@@ -504,6 +910,12 @@ export const SlidePptx = z.object({
   artText: z.string().max(MAX.text).optional(),
   /** LibreOffice picture of the whole slide, made on demand ('Show PowerPoint picture'). */
   refMediaId: Id.optional(),
+  /**
+   * M9: PowerPoint elements on this slide that nothing draws (no ordo drawing, no fallback picture in the deck,
+   * no LibreOffice): '<kind>' or '<kind>:<subtype>' with a kind of `MISSING_KINDS` ('chart:surface', 'ole').
+   * Such a slide is class hybrid; its notes say what is left out and `artText` keeps the elements' text.
+   */
+  missing: z.array(z.string().max(40)).max(16).optional().catch(undefined),
   /** What every drawer shows: the objects (default) or the reference picture (`refMediaId`). */
   show: z.enum(['objects', 'picture']).catch('objects').optional(),
 });

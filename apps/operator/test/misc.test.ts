@@ -107,8 +107,18 @@ describe('things to check on an output (design/27 §13, M7)', () => {
     // GPU memory over its budget is no issue (ordo's own fixed allocation; design/27 §13).
     expect(outputIssues(entry({ ...perf, alarms: ['gpuMemory'] }))).toEqual([]);
     // Slides past the budget by their content are named in the detail, never in the label (M6 merge review).
-    const heavy = outputIssues(entry({ ...perf, alarms: ['raster'], rasterHeavy: 7 }));
-    expect(heavy[0]!.detail).toMatch(/over the last 40 slides \(7 of them past the budget by their content/);
+    // The figures are those the alarm read: the slides whose content fits the budget (M6 merge re-review).
+    const heavy = outputIssues(
+      entry({
+        ...perf,
+        alarms: ['raster'],
+        rasterHeavy: 7,
+        rasterAlarmMs: { n: 33, p50: 11, p95: 31.5, max: 40 },
+      }),
+    );
+    expect(heavy[0]!.detail).toMatch(
+      /p50 11 ms, p95 31.5 ms over the last 33 slides whose content fits the budget \(7 more are past it by their content.*p95 34 ms with them\)/,
+    );
     expect(heavy[0]!.label).toBe(issues[0]!.label);
   });
 

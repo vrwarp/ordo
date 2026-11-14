@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { decodeMarker, encodeMarker, MARK_START } from './markers.ts';
 import { takeMarkers } from './page.ts';
+import { budgetMs } from './timing.test-util.ts';
 
 describe('takeMarkers (run markers in the rendered page)', () => {
   it('removes every marker and returns the id of the first', () => {
@@ -29,6 +30,6 @@ describe('takeMarkers (run markers in the rendered page)', () => {
     const many = MARK_START.repeat(400_000);
     const t = performance.now();
     expect(takeMarkers(`${many}${encodeMarker(1)}${many}`)).toEqual({ text: many + many, id: 1 });
-    expect(performance.now() - t).toBeLessThan(2000);
+    expect(performance.now() - t).toBeLessThan(budgetMs(2000));
   });
 });

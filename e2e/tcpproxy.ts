@@ -13,10 +13,12 @@ export class TcpProxy {
   private pairs = new Set<Pair>();
   mode: 'pass' | 'freeze' | 'blackhole' = 'pass';
 
-  constructor(
-    readonly port: number,
-    readonly hubPort: number,
-  ) {}
+  readonly port: number;
+  readonly hubPort: number;
+  constructor(port: number, hubPort: number) {
+    this.port = port;
+    this.hubPort = hubPort;
+  }
 
   start(): Promise<void> {
     return new Promise((resolve, reject) => {

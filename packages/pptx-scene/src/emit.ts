@@ -48,7 +48,8 @@
  *   geometry's JSON times the times the slide draws it), and then the largest others while the slide as the
  *   hub stores it is within 4 KB of `MAX_SLIDE_BYTES`, are written once in a geometry file (`ShapeGeom.ref`, placeholder
  *   `pptxgeom:<n>`, one per distinct file, listed in `EmitResult.geoms`) instead of in the slide. A slide
- *   still past it (its text formatting, or its objects with every path in files) is picture class.
+ *   still past it (its text formatting, or its objects with every path in files) keeps its class and is
+ *   flagged `overBudget` for the importer's budget ladder (M9; it was picture class before).
  * - **SmartArt** drawn from its drawing cache (M6, `smartart.ts`): its objects are a locked group (origin
  *   role 'diagram'; text objects unlocked), and its text is never the lyric box.
  * - **Backgrounds**: a plain stretched picture known to be opaque whose aspect is known and matches a 16:9
@@ -75,10 +76,21 @@
  *   from, its placeholder, its role and its group (`originOf`), so the editor selects a flattened group or a
  *   shape with its text together, restyles similar boxes, and a re-import tells imported objects from the
  *   operator's own. The M1 emission (`richText: false`) writes none.
+ * - **M9 seams** (design/27 §15 M9, `conv-seams`). The emitter is split so that each M9 area owns its part:
+ *   `emit-ctx.ts` (the context, the M9 field gate and the box and colour helpers), `emit-text.ts` (text
+ *   bodies; `text-conv`), `emit-budget.ts` (the slide's JSON budget; `ladder`), `emit-table.ts` (tables;
+ *   `tables-conv`), and this module (the slide, backgrounds, shapes, pictures, origin, lyric box). Each new
+ *   stored field is written by a dispatch stub its area fills: `emitTableObject` (`emit-table.ts`),
+ *   `emitChart` (`chart.ts`), `emitDecor` (`decor.ts`), `look3dOf` (`three3d.ts`), `warpOf` and `writingOf`
+ *   (`emit-text.ts`), each only for a field `EmitOptions.m9Writes` names (`M9_FIELDS`; default all), each
+ *   writing nothing yet. `EmitOptions.libreoffice: false` (a hub without LibreOffice) plans no art and no
+ *   metafile conversion on any slide: what they would draw is listed in `EmittedSlide.missing`, and the
+ *   notes say 'not drawn' where they would name LibreOffice (`hybrid.ts`).
  *
  * Owned by work item C (inherit-emit).
  */
 import type {
+  DecorFile,
   GeomFile,
   Gradient as OrdoGradient,
   ImageObject,
@@ -103,9 +115,31 @@ import {
 } from '@ordo/renderer/geom/cost.ts';
 import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from '@ordo/renderer/geom/ops.ts';
 import { outlineOf } from '@ordo/renderer/geom/outline.ts';
-import { apply, boxPx, decompose, lenPx, multiply, ptPx, slideRect } from './frame.ts';
-import { bakeKey, bakeOf, type PictureBake } from './bake.ts';
+import { apply, boxPx, decompose, lenPx, multiply, slideRect } from './frame.ts';
+import { bakeKey, bakeOf, type PictureBake, type SheetBake, sheetKey } from './bake.ts';
+import { emitChart } from './chart.ts';
 import { boundsOf, unionBox } from './classify.ts';
+import { DECOR_PREFIX, decorFiles, emitDecor, type PlatePlan, platePlan } from './decor.ts';
+import { slideBudget } from './emit-budget.ts';
+import {
+  ALL_M9_FIELDS,
+  BOX_FACTOR,
+  type Box,
+  bound,
+  boxOf,
+  CANVAS_H,
+  CANVAS_W,
+  clampBox,
+  type EmitCtx,
+  legacyColor,
+  type M9Field,
+  MAX_COORD,
+  ordo,
+  shape,
+  visibleChars,
+} from './emit-ctx.ts';
+import { emitTableOf } from './emit-table.ts';
+import { textObject } from './emit-text.ts';
 import {
   adjPairs,
   dashOf,
@@ -118,10 +152,9 @@ import {
   presetRoute,
   type ShapePiece,
   shapePiece,
-  textRectOf,
   transformedPaths,
 } from './geom.ts';
-import { artInfo } from './hybrid.ts';
+import { artInfo, noteWithoutLibreOffice, withoutLibreOffice } from './hybrid.ts';
 import { isFooter, isTitle, masterClass } from './inherit.ts';
 import { type EmittedClip, emitMedia } from './media.ts';
 import type {
@@ -131,29 +164,42 @@ import type {
   CustomPaths,
   DeckScene,
   Element,
-  Fill,
-  Frame,
   Insets,
   Line,
-  Para,
   PictureElement,
   PictureFill,
   RectEmu,
-  Rgba,
-  RunStyle,
   Shadow,
   ShapeElement,
   SlideScene,
-  TableElement,
-  TextBody,
 } from './ir.ts';
-import { EMU_PER_PT } from './ir.ts';
-import { noteList } from './log.ts';
+import { type Log, noteList } from './log.ts';
 import { scriptClasses } from './fontmap.ts';
 import { BAKED_EFFECTS, extensionOf, METAFILE_EXTENSIONS } from './picture.ts';
-import { richText } from './richtext.ts';
+import { atlasSlide, emitComposite, type EmittedSheet, SHEET_PREFIX } from './sheet.ts';
 import { lockDiagram } from './smartart.ts';
-import { emitTable } from './tables.ts';
+import { look3dOf } from './three3d.ts';
+
+// The parts split out of this module in M9 (`conv-seams`), under the names they always had here.
+export {
+  compactRuns,
+  GEOM_FILE_CHARS,
+  MAX_SLIDE_BYTES,
+  SLIDE_BUDGET_NOTE,
+  SLIDE_BYTES_NOTE,
+  storedSlideBytes,
+  TEXT_BUDGET_BYTES,
+} from './emit-budget.ts';
+export { ALL_M9_FIELDS, insetBox, legacyColor, M9_FIELDS, type M9Field } from './emit-ctx.ts';
+export {
+  dominant,
+  legacyText,
+  MAX_FONT_PX,
+  MAX_TEXT,
+  marginOf,
+  MIN_FONT_PX,
+  SINGLE_LINE,
+} from './emit-text.ts';
 
 /** The prefix of placeholder media ids. */
 export const MEDIA_PREFIX = 'pptxmedia:';
@@ -169,58 +215,8 @@ export const BAKE_PREFIX = `${MEDIA_PREFIX}bake`;
  * file, listed in `EmitResult.geoms` with its content; the hub stores each and names it by its SHA-256.
  */
 export const GEOM_PREFIX = 'pptxgeom:';
-/**
- * A geometry whose paths take more than this many characters of a slide's JSON (its own times the times the
- * slide draws it) is written in a geometry file (`ShapeGeom.ref`, M6 round 2). Smaller ones stay inline
- * unless the slide comes within 4 KB of `MAX_SLIDE_BYTES` with them: then the largest go to files too.
- */
-export const GEOM_FILE_CHARS = 2_048;
-/** Longest text an ordo `TextObject` holds (`@ordo/domain` MAX.text). */
-export const MAX_TEXT = 20_000;
-/** Stored font sizes in logical px (design/27 §4 "Sizes"). */
-export const MIN_FONT_PX = 4;
-export const MAX_FONT_PX = 1_000;
 /** Objects one ordo slide holds (`Slide.objects` in `@ordo/domain`). */
 export const MAX_OBJECTS = 1_000;
-/**
- * A slide's JSON budget (design/27 §3.4: hard 64 KB, else picture class). Rich text formatting (runs and
- * paragraph styles) is written while the slide's text objects stay within it; past it, the slide's further
- * text is written without its formatting and the slide is classed picture, so a deck whose layouts repeat
- * thousands of formatted runs on every slide never builds megabytes the hub would discard.
- */
-export const MAX_SLIDE_BYTES = 64 * 1024;
-/** The note a slide gets when it passes `MAX_SLIDE_BYTES` (an importer that logs the budget itself drops it). */
-export const SLIDE_BUDGET_NOTE = `the slide has more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting: its further text is written without it (picture class)`;
-/**
- * The note a slide gets when it is over `MAX_SLIDE_BYTES` as the hub stores it (`storedSlideBytes`) with
- * its large geometries in files (an importer that logs the budget itself drops it, as `SLIDE_BUDGET_NOTE`).
- */
-export const SLIDE_BYTES_NOTE = `the slide is more than ${MAX_SLIDE_BYTES / 1024} KB as stored, with its shape outlines in files (picture class)`;
-/** What `storedSlideBytes` adds for a slide's provenance (`Slide.pptx` without notes) and as a margin. */
-const PROVENANCE_BYTES = 400;
-/** Characters of an id as the hub writes it (a ULID) and of a geometry file's name (a SHA-256 in hex). */
-const STORED_ID_CHARS = 26;
-const STORED_REF_CHARS = 64;
-/**
- * Geometries go to files until the slide is this far within `MAX_SLIDE_BYTES`: room for what the hub adds
- * that the converter does not know (speaker notes, timing, a transition).
- */
-const SLIDE_BYTES_ROOM = 4 * 1024;
-/** `"ref":"<64>"` and the two braces of a file's JSON (`{"paths":…}`) it no longer has around its paths. */
-const REF_JSON_BYTES = 7 + STORED_REF_CHARS + 2;
-/** The provenance notes the hub keeps per slide (`Slide.pptx.notes`), each cut to 200 characters. */
-const STORED_NOTES = 16;
-const STORED_NOTE_CHARS = 200;
-/** Single line spacing in the office line model: 1.2 × the font size (`pptx-render/src/page.ts`). */
-export const SINGLE_LINE = 1.2;
-/** Logical coordinates are bounded by the schema (`coord`). */
-const MAX_COORD = 100_000;
-/** The render clamp keeps box edges within ±2× the logical canvas (`@ordo/renderer` `CLAMP.boxFactor`). */
-const CANVAS_W = 1_920;
-const CANVAS_H = 1_080;
-const BOX_FACTOR = 2;
-/** How far a `wrap="none"` box grows on the side its alignment extends to, in logical px. */
-const NO_WRAP_GROWTH = 1_920;
 /**
  * Custom geometry is drawn as its legacy rect only when its paths fill at least this share of the box: a
  * rect over a thin silhouette or swoosh is further from it than nothing (M6 draws the paths).
@@ -262,6 +258,24 @@ export interface EmitOptions {
    * `pptxmedia:bake<n>`, numbered from 1 in first-use order. Asked once per part and recipe.
    */
   bakeId?: (part: string, bake: PictureBake) => string;
+  /**
+   * M9 (`decor-conv`): the placeholder of a decoration file (`DecorData.ref`) by its JSON (`DecorFile`);
+   * default `pptxdecor:<n>`, numbered from 1 in first-use order. Asked once per distinct file. With
+   * `geomFiles: false`, or without 'decorFile' in `m9Writes`, decorations keep their parts in the slide.
+   */
+  decorId?: (json: string) => string;
+  /**
+   * M9 (`decor-conv`, `sheet.ts`): the placeholder media id of a sheet (a composite or an atlas) by its recipe;
+   * default `pptxmedia:sheet<n>`, numbered from 1 in first-use order. Asked once per distinct recipe.
+   */
+  sheetId?: (bake: SheetBake) => string;
+  /**
+   * M9 (`decor-conv`): draw pictures from sheets where the slide budgets plan them (composites and atlases,
+   * `EmitResult.sheets`; default true). With false every picture is its own object, as an importer that
+   * cannot make sheets needs (the slide may then hold more than 150 objects and 12 pictures, within the
+   * render clamp's 200 and 16 as planned by the budgets' guard).
+   */
+  sheets?: boolean;
   /** Solid backgrounds cover the whole 1920x1080 frame instead of the slide area (default true). */
   extendBackgrounds?: boolean;
   /**
@@ -284,6 +298,20 @@ export interface EmitOptions {
    * compares like for like with LibreOffice's pictures. Never set by the hub.
    */
   loCompat?: boolean;
+  /**
+   * M9: whether LibreOffice can draw what ordo does not (default true: the art of a hybrid slide and the
+   * metafile pictures are planned for the follow-up, `EmittedSlide.art` and `.metafiles`). With false (a hub
+   * without LibreOffice, design/27 §15 M9) neither is planned on any slide, a picture-class one's included:
+   * the slide keeps what version 1 draws, what the art or the conversion would have drawn is listed in
+   * `EmittedSlide.missing`, and the notes never name LibreOffice (`hybrid.ts` `withoutLibreOffice`,
+   * `noteWithoutLibreOffice`).
+   */
+  libreoffice?: boolean;
+  /**
+   * M9: the stored fields the converter may write (`M9_FIELDS`; default every one, the hub's `M9_WRITES`), a
+   * kill switch per field: without one, the converter writes what an older build draws for it (§3.2).
+   */
+  m9Writes?: ReadonlySet<M9Field>;
 }
 
 /** An image object with the crop of design/27 §3.1 (now `ImageObject.crop` in `@ordo/domain`). */
@@ -301,24 +329,47 @@ export interface EmittedSlide {
   notes: string[];
   /** Time spent emitting this slide, in ms. */
   ms: number;
-  /** Hybrid slides: what the art holds, for the LibreOffice follow-up (M3 item D). */
+  /** Hybrid slides: what the art holds, for the LibreOffice follow-up (M3 item D). Never without LibreOffice. */
   art?: ArtInfo;
   /**
    * Metafile pictures, left out of `slide` until LibreOffice converts them (M3 item D): each as the image
    * object it becomes (`mediaId` `METAFILE_MEDIA`, replaced by the converted picture's) and the object it
-   * goes just under (absent: on top). The shape of the hub's `PptxLoSlide.metafileObjects`.
+   * goes just under (absent: on top). The shape of the hub's `PptxLoSlide.metafileObjects`. Never without
+   * LibreOffice.
    */
   metafiles?: { part: string; object: ImageObject; before?: string }[];
   /**
-   * Classed picture by the slide budget alone (design/27 §3.4): its text formatting passed `MAX_SLIDE_BYTES`,
-   * or the slide as the hub stores it did with its large geometries in files (`storedSlideBytes`), and it
-   * would be native or hybrid otherwise. An importer counts and logs it exactly as its own slide budget
-   * would (the hub: a compact picture slide, one warning), and drops `SLIDE_BUDGET_NOTE` and
-   * `SLIDE_BYTES_NOTE`.
+   * Over the slide budget (design/27 §3.4): its text formatting passed `TEXT_BUDGET_BYTES` (its further text
+   * written plain), or the slide as the hub stores it is over `MAX_SLIDE_BYTES` with its large geometries in
+   * files (`storedSlideBytes`). Its class is not changed (M9: no budget makes a picture); an importer fits it
+   * with its own budget ladder (`@ordo/domain` `fitSlideBudget`), logs that itself and drops
+   * `SLIDE_BUDGET_NOTE` and `SLIDE_BYTES_NOTE`.
    */
   overBudget?: true;
   /** The clips the slide plays or names (`media.ts`): what the hub ingests and puts in place of placeholders. */
   clips?: EmittedClip[];
+  /**
+   * M9, `EmitOptions.libreoffice: false` only: what nothing draws on this slide (`Slide.pptx.missing`
+   * entries: '<kind>' of `@ordo/domain` `MISSING_KINDS`), the art and the metafiles left unplanned. The
+   * slide is then class hybrid with a `missing:<kind>` reason per kind (`hybrid.ts`).
+   */
+  missing?: string[];
+  /** M9, `EmitOptions.libreoffice: false` only: the text of what the art would have drawn (`Slide.pptx.artText`). */
+  artText?: string;
+  /**
+   * M9 (`decor-conv`, `sheet.ts`): the sheets the slide draws pictures from (`pptxmedia:sheet<n>`), each with
+   * the objects drawn from it and those objects as they are without it, which an importer that cannot make
+   * the sheet puts back (`EmitResult.sheets` has each recipe once).
+   */
+  sheets?: EmittedSheet[];
+  /**
+   * M9 (`decor-conv`, decisions.md "Slow-to-draw elements"): what the client bakes into the slide's
+   * decoration plates (`decor.ts` `platePlan`: the static decoration stack and the objects above it with
+   * effect layers), and `pastBudget`, the objects the slide's drawing budgets draw live past them (as their
+   * legacy shapes or without their effects, `geom/cost.ts` `slidePlan`) until a plate holds them. Kept whole:
+   * the converter never flattens, drops or leaves to LibreOffice what is only slow to draw.
+   */
+  plate?: PlatePlan & { pastBudget: string[] };
 }
 
 /** The placeholder media id of a metafile's object until it is converted (`EmittedSlide.metafiles`). */
@@ -341,29 +392,19 @@ export interface EmitResult {
    * placeholder (the hub: the file's SHA-256); one that cannot leaves the shape drawing its legacy form.
    */
   geoms: { id: string; file: GeomFile }[];
-}
-
-/** What one slide's emission needs. */
-interface EmitCtx {
-  frame: Frame;
-  newId: () => string;
-  mediaId: (part: string) => string;
-  extend: boolean;
-  crop: boolean;
-  rich: boolean;
-  lo: boolean;
-  media: Map<string, string>;
-  /** The placeholder id of a baked picture (M6); undefined: nothing is baked. */
-  bake?: (part: string, bake: PictureBake) => string;
-  log: (msg: string) => void;
-  /** Metafile pictures set aside, with the index in the slide's objects where each would go. */
-  metafiles?: { part: string; object: ImageObject; at: number }[];
-  /** UTF-8 bytes of the slide's rich text objects so far (`MAX_SLIDE_BYTES`). */
-  textBytes: number;
-  clipId: (key: string) => string;
-  transitionSounds: boolean;
-  /** The slide's clips (`media.ts`). */
-  clips?: EmittedClip[];
+  /**
+   * M9 (`decor-conv`): the decoration files the slides name (`DecorData.ref`, `pptxdecor:<n>`), each once in
+   * first-use order. An importer stores each as it stores geometry files (`decor-render`) and puts its name in
+   * place of the placeholder; one that cannot leaves the decoration drawing nothing.
+   */
+  decors: { id: string; file: DecorFile }[];
+  /**
+   * M9 (`decor-conv`, `sheet.ts`): the sheets the slides draw pictures from, each recipe once in first-use
+   * order with its placeholder media id (`pptxmedia:sheet<n>`): pictures made of the cells' parts
+   * (`bake.ts` `applySheet`). An importer that cannot make one puts back the objects
+   * `EmittedSlide.sheets` lists for it.
+   */
+  sheets: { id: string; bake: SheetBake }[];
 }
 
 export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
@@ -406,9 +447,47 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
           }
           return f.id;
         };
+  const decorFileList = new Map<string, { id: string; file: DecorFile }>();
+  // M9: decoration files only where the importer stores them (the 'decorFile' field): a placeholder no one
+  // names would be stored as it is, and the decoration would draw nothing.
+  const decorRef =
+    opts.geomFiles === false || !(opts.m9Writes ?? ALL_M9_FIELDS).has('decorFile')
+      ? undefined
+      : (json: string, file: DecorFile) => {
+          let f = decorFileList.get(json);
+          if (!f) {
+            f = { id: opts.decorId ? opts.decorId(json) : `${DECOR_PREFIX}${decorFileList.size + 1}`, file };
+            decorFileList.set(json, f);
+          }
+          return f.id;
+        };
+  const sheets = new Map<string, { id: string; bake: SheetBake }>();
+  const sheet = (recipe: SheetBake) => {
+    const key = sheetKey(recipe);
+    let b = sheets.get(key);
+    if (!b) {
+      b = { id: opts.sheetId ? opts.sheetId(recipe) : `${SHEET_PREFIX}${sheets.size + 1}`, bake: recipe };
+      sheets.set(key, b);
+    }
+    return b.id;
+  };
+  // What a placeholder media id stands for (the sheets' cells name parts and recipes).
+  const mediaPart = (id: string): { part: string; bake?: PictureBake } | undefined => {
+    for (const b of bakes.values()) if (b.id === id) return { part: b.part, bake: b.bake };
+    for (const [part, m] of media) if (m === id) return { part };
+    return undefined;
+  };
   const slides = scene.slides.map((s) => {
     const t0 = performance.now();
-    const { notes, log } = noteList();
+    const { notes, log: put } = noteList();
+    // M9: a hub without LibreOffice says what is not drawn, never that LibreOffice draws it.
+    const log: Log =
+      opts.libreoffice === false
+        ? (msg) => {
+            const note = noteWithoutLibreOffice(msg);
+            if (note !== undefined) put(note);
+          }
+        : put;
     for (const note of s.notes) log(note);
     const ctx: EmitCtx = {
       frame: scene.frame,
@@ -418,33 +497,54 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       crop: opts.crop ?? true,
       rich: opts.richText ?? true,
       lo: opts.loCompat === true,
+      libreoffice: opts.libreoffice !== false,
+      m9: opts.m9Writes ?? ALL_M9_FIELDS,
       media,
       bake,
       log,
       textBytes: 0,
       clipId,
       transitionSounds: opts.transitionSounds ?? false,
+      ...(opts.sheets === false ? {} : { sheet, sheets: [] }),
+      mediaPart,
     };
     const spans: [number, number][] = [];
     ctx.metafiles = [];
     ctx.clips = [];
     const slide = emitSlide(ctx, s, spans);
-    const overText = ctx.textBytes > MAX_SLIDE_BYTES;
-    // The slide's whole JSON as the hub stores it, its large geometries in files (design/27 §3.4).
-    const overBytes = !overText && fitBytes(slide, notes, geomRef) > MAX_SLIDE_BYTES;
-    if (overBytes) log(SLIDE_BYTES_NOTE);
-    const over = overText || overBytes;
-    const art = artInfo(s, scene.frame, spans, slide.objects);
-    const metafiles = ctx.metafiles.map(({ part, object, at }) => {
+    // M9 (`decor-conv`): large decorations in decoration files first, so the slide's budget below counts
+    // them as stored (`storedSlideBytes`), as its large geometries go to geometry files there.
+    decorFiles(slide, decorRef);
+    // The slide's whole JSON as the hub stores it, its large geometries in files (design/27 §3.4); one still
+    // over the budget keeps its class and is fitted by the importer (M9 `ladder`).
+    const { over } = slideBudget(ctx, slide, notes, geomRef);
+    let art = artInfo(s, scene.frame, spans, slide.objects);
+    let metafiles = ctx.metafiles.map(({ part, object, at }) => {
       const before = slide.objects[at]?.id;
       return { part, object, ...(before !== undefined ? { before } : {}) };
     });
+    let classification = s.classification;
+    // M9: without LibreOffice nothing draws the art or converts the metafiles: neither is planned, on any
+    // slide, and what they would draw is listed as missing (a picture-class slide's by the importer).
+    const gaps = ctx.libreoffice
+      ? undefined
+      : withoutLibreOffice(s, classification, art, metafiles.length, log);
+    if (!ctx.libreoffice) {
+      art = undefined;
+      metafiles = [];
+    }
+    if (gaps) classification = gaps.classification;
+    // M9: what the slide budgets' guard left out (`budget.ts`), whatever draws the rest.
+    const left = s.classification.missing ?? [];
+    const missing = [...new Set([...left, ...(gaps?.missing ?? [])])];
+    const plate = ctx.plate;
+    ctx.plate = undefined;
     return {
       index: s.index,
       ...(s.shown !== undefined ? { shown: s.shown } : {}),
       hidden: s.hidden,
       slide,
-      classification: over ? overBudget(s.classification, overText) : s.classification,
+      classification,
       digest: digestOf(slide.objects),
       notes,
       ms: performance.now() - t0,
@@ -452,6 +552,10 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       ...(metafiles.length ? { metafiles } : {}),
       ...(over && s.classification.class !== 'picture' ? { overBudget: true as const } : {}),
       ...(ctx.clips.length ? { clips: ctx.clips } : {}),
+      ...(missing.length ? { missing } : {}),
+      ...(gaps?.artText ? { artText: gaps.artText } : {}),
+      ...(ctx.sheets?.length ? { sheets: ctx.sheets } : {}),
+      ...(plate ? { plate } : {}),
     };
   });
   return {
@@ -463,82 +567,12 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     slideRect: slideRect(scene.frame),
     notes: [...scene.notes],
     geoms: [...files.values()],
+    decors: [...decorFileList.values()],
+    sheets: [...sheets.values()],
   };
 }
 
 // ── Geometry files and the slide's JSON budget (M6 round 2, design/27 §3.4) ───────────────────────────────
-
-/** A geometry in a slide's objects: its owner's field (`ShapeObject.geom`, `ImageObject.mask`) and its JSON. */
-type GeomSite = { o: SlideObject; key: 'geom' | 'mask'; g: ShapeGeom; json: string };
-
-/**
- * What a slide's JSON is as the hub stores it (`planImportSizes`'s size): its objects with ids of a ULID's
- * length and geometry files named by SHA-256, an origin on every object, and its provenance (`Slide.pptx`
- * with up to 16 of `notes`). An estimate a few hundred bytes over the hub's own, never under it.
- */
-export function storedSlideBytes(slide: Slide, notes: readonly string[]): number {
-  let n = utf8Bytes(JSON.stringify(slide)) + PROVENANCE_BYTES;
-  const id = (v: unknown) => (typeof v === 'string' ? Math.max(0, STORED_ID_CHARS - v.length) : 0);
-  n += id(slide.id) + id(slide.lyricObjectId);
-  for (const o of slide.objects) {
-    n += id(o.id);
-    if (!o.origin) n += 24; // ,"origin":{"src":"pptx"}
-    const g = o.type === 'shape' ? o.geom : o.type === 'image' ? o.mask : undefined;
-    if (typeof g?.ref === 'string') n += Math.max(0, STORED_REF_CHARS - g.ref.length);
-  }
-  if (notes.length)
-    n +=
-      10 + utf8Bytes(JSON.stringify(notes.slice(0, STORED_NOTES).map((t) => t.slice(0, STORED_NOTE_CHARS))));
-  return n;
-}
-
-/**
- * Moves a slide's large geometries into geometry files (`ref`, through `geomRef`; none without it): first
- * every geometry whose paths take more than `GEOM_FILE_CHARS` of the slide (its JSON times the times the
- * slide draws it), then, while the slide as stored (`storedSlideBytes`) passes `MAX_SLIDE_BYTES` less
- * `SLIDE_BYTES_ROOM`, the largest of the others whose paths are longer than a ref. Returns the slide's
- * stored size after it.
- */
-function fitBytes(
-  slide: Slide,
-  notes: readonly string[],
-  geomRef: ((json: string, file: GeomFile) => string) | undefined,
-): number {
-  if (!geomRef) return storedSlideBytes(slide, notes);
-  const sites: GeomSite[] = [];
-  const times = new Map<string, number>();
-  for (const o of slide.objects) {
-    const key = o.type === 'shape' ? 'geom' : o.type === 'image' ? 'mask' : undefined;
-    const g = key ? (o as { geom?: ShapeGeom; mask?: ShapeGeom })[key] : undefined;
-    if (!key || !g?.paths?.length || g.ref !== undefined) continue;
-    const json = JSON.stringify({ paths: g.paths });
-    sites.push({ o, key, g, json });
-    times.set(json, (times.get(json) ?? 0) + 1);
-  }
-  const toFile = (site: GeomSite) => {
-    const { paths, ...rest } = site.g;
-    const ref = geomRef(site.json, { paths: paths! });
-    (site.o as { geom?: ShapeGeom; mask?: ShapeGeom })[site.key] = { ...rest, ref };
-  };
-  const rest: GeomSite[] = [];
-  for (const site of sites)
-    if (site.json.length * times.get(site.json)! > GEOM_FILE_CHARS) toFile(site);
-    else rest.push(site);
-  let bytes = storedSlideBytes(slide, notes);
-  const target = MAX_SLIDE_BYTES - SLIDE_BYTES_ROOM;
-  if (bytes <= target) return bytes;
-  // `"ref":"<64>"` takes the place of `"paths":[…]` (the file's JSON less its braces): only longer paths
-  // are worth a file. Counted as it goes, then measured once more.
-  rest.sort((a, b) => b.json.length - a.json.length);
-  let moved = false;
-  for (const site of rest) {
-    if (bytes <= target || site.json.length <= REF_JSON_BYTES + 16) break;
-    toFile(site);
-    bytes -= site.json.length - REF_JSON_BYTES;
-    moved = true;
-  }
-  return moved ? storedSlideBytes(slide, notes) : bytes;
-}
 
 /** A text object with the element it came from, for the lyric box. */
 interface Emitted {
@@ -569,10 +603,39 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
     run.push(e);
     runs.set(e.merge, run);
   });
+  // M9 (`decor-conv`): runs drawn as one decoration (`ElementBase.decor`), written at the run's first
+  // element when `emitDecor` writes it; otherwise each member is emitted as below.
+  const decors = new Map<number, Element[]>();
+  s.elements.forEach((e) => {
+    if (e.decor === undefined || e.hidden) return;
+    const run = decors.get(e.decor) ?? [];
+    run.push(e);
+    decors.set(e.decor, run);
+  });
+  const decorated = new Set<number>();
+  // M9 (`decor-conv`): runs of plain pictures drawn as one composite picture (`ElementBase.sheet`, `sheet.ts`).
+  const sheetRuns = new Map<number, Element[]>();
+  s.elements.forEach((e) => {
+    if (e.sheet === undefined || e.hidden) return;
+    const run = sheetRuns.get(e.sheet) ?? [];
+    run.push(e);
+    sheetRuns.set(e.sheet, run);
+  });
+  const composited = new Set<number>();
+  // A member of a decoration or a composite, as the single-element emitter writes it.
+  const emitOne = (x: Element, sink: SlideObject[]) => emitElement(ctx, x, sink, texts);
   s.elements.forEach((e, i) => {
     const at = objects.length;
     const mf = ctx.metafiles?.length ?? 0;
-    if (e.kind === 'shape' && e.merge !== undefined && !e.hidden) {
+    const decor = e.decor !== undefined && !e.hidden ? decors.get(e.decor) : undefined;
+    if (decor && e.decor === i && emitDecor(ctx, decor, objects, emitOne)) decorated.add(i);
+    const sheet = e.sheet !== undefined && !e.hidden ? sheetRuns.get(e.sheet) : undefined;
+    if (sheet && e.sheet === i && emitComposite(ctx, sheet, objects, emitOne)) composited.add(i);
+    if (decor && e.decor !== undefined && decorated.has(e.decor)) {
+      // Drawn by its run's decoration.
+    } else if (sheet && e.sheet !== undefined && composited.has(e.sheet)) {
+      // Drawn by its run's composite.
+    } else if (e.kind === 'shape' && e.merge !== undefined && !e.hidden) {
       const run = runs.get(i);
       if (e.merge === i && run) emitMerged(ctx, run, objects, texts);
     } else if (!e.hidden && !pastBudget(e)) emitElement(ctx, e, objects, texts);
@@ -595,8 +658,19 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
     ctx.log(`more than ${MAX_OBJECTS} objects: the top ones are not drawn`);
     objects.length = MAX_OBJECTS;
   }
-  fitEffects(ctx, objects);
-  fitDrawing(ctx, objects);
+  // M9 (`decor-conv`): the slide's picture budget, its fewest smallest pictures in one atlas (`sheet.ts`).
+  if (s.classification.atlas?.length) atlasSlide(ctx, objects, s.classification.atlas);
+  // A composite's members as they are without it carry the origin it has.
+  for (const sh of ctx.sheets ?? []) {
+    const at = objects.find((o) => o.id === sh.uses[0]);
+    if (at?.origin) for (const o of sh.objects) o.origin ??= { ...at.origin };
+  }
+  // M9: what is only slow to draw is kept whole (decisions.md "Slow-to-draw elements"): the drawing budgets
+  // choose how it is drawn, from a decoration plate or live, never whether (`fitEffects`, `fitDrawing`).
+  const slow = new Set([...fitEffects(ctx, objects), ...fitDrawing(ctx, objects)]);
+  const plan = platePlan(slide);
+  if (plan.stack.length || plan.effects.length || slow.size)
+    ctx.plate = { ...plan, pastBudget: objects.filter((o) => slow.has(o.id)).map((o) => o.id) };
   // A SmartArt node's text is a fragment of a diagram, never the lyric box.
   const lyric = lyricOf(texts.filter((t) => objects.includes(t.o) && t.e.diagram === undefined));
   if (lyric) slide.lyricObjectId = lyric.id;
@@ -629,13 +703,15 @@ function effectAreaOf(o: SlideObject): number {
 
 /**
  * The slide's effect budget (renderer `geom/cost.ts` `EFFECT_COST`, design/27 §12 drawing cost): shapes keep
- * their shadow, glow and soft edge, bottom first, while the area of their layers stays within it; later ones
- * lose them, with a note, as the renderer would draw them (`geombudget.ts`). The corpus's most effected
- * slides use 7.7 of its 10 slide areas.
+ * their shadow, glow and soft edge, bottom first, while the area of their layers stays within it. The
+ * corpus's most effected slides use 7.7 of its 10 slide areas. Since M9 (`decor-conv`, decisions.md
+ * "Slow-to-draw elements") the shapes past it keep their effects too: the slide's decoration plate holds
+ * their effect layers (`platePlan`), and until it is made the renderer draws them without, as every drawer
+ * does past the budget (`geombudget.ts`). Returns their ids, with a note.
  */
-function fitEffects(ctx: EmitCtx, objects: SlideObject[]): void {
+function fitEffects(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
   let area = 0;
-  let dropped = 0;
+  const past: string[] = [];
   for (const o of objects) {
     if (o.type !== 'shape') continue;
     const a = effectAreaOf(o);
@@ -644,57 +720,55 @@ function fitEffects(ctx: EmitCtx, objects: SlideObject[]): void {
       area += a;
       continue;
     }
-    delete o.shadow;
-    delete o.glow;
-    delete o.softEdge;
-    dropped++;
+    past.push(o.id);
   }
-  if (dropped) ctx.log(`the effects of ${dropped} shape(s) past the slide's effect budget are not drawn`);
+  if (past.length)
+    ctx.log(
+      `the effects of ${past.length} shape(s) past the slide's effect budget are drawn from its decoration plate`,
+    );
+  return past;
 }
 
 /**
- * The slide's drawing budget (renderer `geom/cost.ts` `slidePlan`, design/27 §12 drawing cost) applied to the
- * objects as emitted, exactly as every drawer applies it (`geombudget.ts`): the walk already sent what passes
- * it to the art (`walk.ts` `slideCustom`, `chargeDrawing`), within a margin, so this changes only what the
- * walk could not see (shapes merged into one object past the object budget, a picture's mask and outline,
- * a table's cells and grid, the background's fill).
- * An object it changes is stored as the drawers would draw it (`withoutPart`), with a note.
+ * The slide's drawing budget (renderer `geom/cost.ts` `slidePlan`, design/27 §12 drawing cost) on the objects
+ * as emitted, exactly as every drawer applies it (`geombudget.ts`): which objects a drawer draws past it, as
+ * their legacy shapes or without their effects. Since M9 (`decor-conv`, decisions.md "Slow-to-draw
+ * elements", the wave 1 re-review) they are stored whole, never flattened to their legacy copy (their
+ * gradient, geometry, dash and ends kept, so the editor still edits them and a centre-white radial glow
+ * stays a glow): the slide's decoration plate holds them (`platePlan`), and until it is made each drawer
+ * draws them as its budget allows. Returns their ids, with a note.
  */
-function fitDrawing(ctx: EmitCtx, objects: SlideObject[]): void {
+function fitDrawing(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
   const rate = (o: SlideObject, part?: LegacyPart): Rated => {
     const x = part ? withoutPart(o, part) : o;
     const at = geometryOf(x);
     return { est: objectCost(x, at?.built), points: at?.points ?? 0 };
   };
   const parts = slidePlan(objects, rate, effectAreaOf);
-  let changed = 0;
+  const past: string[] = [];
   parts.forEach((part, i) => {
-    if (!part) return;
-    const o = objects[i] as SlideObject & Record<string, unknown>;
-    const legacy = withoutPart(o, part);
-    for (const k of Object.keys(o)) if (!(k in legacy)) delete o[k];
-    changed++;
+    const o = objects[i]!;
+    // A stored geometry too costly to fill at once is drawn as its legacy shape by every drawer, whatever
+    // the slide's budget (`stored.ts`, past `GEOM_COST.geometry`): the plate holds it too.
+    const g = o.type === 'shape' ? o.geom : o.type === 'image' ? o.mask : undefined;
+    const costly = !!g?.paths?.length && g.ref === undefined && !geometryAt(g, o.box.w, o.box.h);
+    if (part || costly) past.push(o.id);
   });
-  if (changed)
-    ctx.log(`${changed} object(s) past the slide's drawing budget are drawn as their legacy shapes`);
+  if (past.length)
+    ctx.log(
+      `${past.length} object(s) past the slide's drawing budget are drawn from its decoration plate (as their legacy shapes until it is made)`,
+    );
+  return past;
 }
 
 /**
- * An element the object budget sent to the art (`classify.ts` `fitShapes`, 'budget:shapes'): like a residual
- * table it emits nothing, so version 1 stays within the budget (and the render clamp's 200 objects) with the
- * slide's own text drawn, until the art replaces what it draws. So too a shape without text the drawing
- * budget sent there (`walk.ts`: 'custGeom:complex', 'geom:complex'): its legacy shape, which every drawer
- * draws and no budget refuses, would cost what the budget held back (a stack of 140 full-slide fills as
- * their legacy colours took 300 ms at 4K) and cover its box where the geometry did not.
+ * An element the object budget sent to the art (`classify.ts` `fitShapes`, 'budget:shapes', only behind
+ * `ParseOptions.budgetArt`, the harness's A/B): like a residual table it emits nothing, so version 1 stays
+ * within the budget with the slide's own text drawn, until the art replaces what it draws. Since M9 nothing
+ * else is left to the art for a budget, and nothing at all for being slow to draw (`walk.ts`).
  */
 function pastBudget(e: Element): boolean {
-  if (e.support !== 'residual' || !e.reasons) return false;
-  if (e.reasons.includes('budget:shapes')) return true;
-  return (
-    e.kind === 'shape' &&
-    !e.text &&
-    (e.reasons.includes('custGeom:complex') || e.reasons.includes('geom:complex'))
-  );
+  return e.support === 'residual' && !!e.reasons?.includes('budget:shapes');
 }
 
 /**
@@ -721,12 +795,6 @@ function leaveOut(ctx: EmitCtx, slide: Slide, spans: [number, number][], remove:
 }
 
 // ── Lyric box ───────────────────────────────────────────────────────────────────────────────────────────
-
-function visibleChars(s: string): number {
-  let n = 0;
-  for (const ch of s) if (ch.trim()) n++;
-  return n;
-}
 
 /** A lyric box candidate with its visible characters counted once. */
 interface Candidate {
@@ -823,26 +891,7 @@ function scriptClassOf(text: string): 'latin' | 'ea' | 'cs' {
   return n.ea > n.latin && n.ea >= n.cs ? 'ea' : n.cs > n.latin ? 'cs' : 'latin';
 }
 
-/** A slide over `MAX_SLIDE_BYTES` (its text formatting, else its JSON as stored): picture class (design/27 §3.4), with why. */
-function overBudget(c: Classification, text = true): Classification {
-  const reason = text
-    ? `more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting`
-    : `more than ${MAX_SLIDE_BYTES / 1024} KB as stored`;
-  return { ...c, class: 'picture', reasons: [...c.reasons.filter((r) => r !== reason), reason] };
-}
-
-/** UTF-8 length of `s`. */
-function utf8Bytes(s: string): number {
-  let n = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c >= 0xd800 && c <= 0xdbff ? 2 : 3; // a pair counts 2 + 2
-  }
-  return n;
-}
-
 // ── Backgrounds ─────────────────────────────────────────────────────────────────────────────────────────
-
 function emitBackground(ctx: EmitCtx, s: SlideScene, slide: Slide): void {
   const fill = s.background.fill;
   const rect = { ...slideRect(ctx.frame), rotation: 0 };
@@ -1001,38 +1050,11 @@ function emitElement(ctx: EmitCtx, e: Element, out: SlideObject[], texts: Emitte
     emitTableOf(ctx, e, out);
     return;
   }
-  emitShape(ctx, e, out, texts);
-}
-
-/**
- * A table (`tables.ts`): its cells' text is rich text in the slide's budget like any other (written plain
- * past it), drawn with the harness's LibreOffice policies when asked; the legacy text emission has no
- * table of its own and writes the same cells.
- */
-function emitTableOf(ctx: EmitCtx, e: TableElement, out: SlideObject[]): void {
-  const texts = emitTable(
-    {
-      frame: ctx.frame,
-      newId: ctx.newId,
-      log: ctx.log,
-      color: legacyColor,
-      ...(ctx.lo ? { lo: true } : {}),
-      cellText: (body) =>
-        richText(body, {
-          frame: ctx.frame,
-          log: ctx.log,
-          ...(ctx.lo ? { lo: true } : {}),
-          ...(ctx.textBytes > MAX_SLIDE_BYTES ? { plain: true } : {}),
-        }),
-    },
-    e,
-    out,
-  );
-  for (const o of texts) {
-    if (ctx.textBytes > MAX_SLIDE_BYTES) break;
-    ctx.textBytes += utf8Bytes(JSON.stringify(o));
-    if (ctx.textBytes > MAX_SLIDE_BYTES) ctx.log(SLIDE_BUDGET_NOTE);
+  if (e.kind === 'chart') {
+    emitChart(ctx, e, out);
+    return;
   }
+  emitShape(ctx, e, out, texts);
 }
 
 function emitPicture(ctx: EmitCtx, e: PictureElement, out: SlideObject[]): void {
@@ -1041,7 +1063,12 @@ function emitPicture(ctx: EmitCtx, e: PictureElement, out: SlideObject[]): void 
   if (e.picture.effects?.some((name) => !BAKED_EFFECTS.has(name)))
     ctx.log('a picture is drawn without some of its effects');
   const img = pictureObject(ctx, e.xf, e.picture, e.geom, e.adj, e.custom);
-  if (img) out.push(img);
+  if (img) {
+    // M9 (`three-model`): the picture's 3-D.
+    const look3d = look3dOf(ctx, e.look3d, img.box);
+    if (look3d) img.look3d = look3d;
+    out.push(img);
+  }
   const stroke = e.line ? legacyColor(e.line.fill) : undefined;
   if (e.line && stroke) {
     // The outline: a stroke-only shape above the picture, along the same geometry (M6).
@@ -1125,6 +1152,9 @@ function styleShape(ctx: EmitCtx, o: ShapeObject, e: ShapeElement, geom: ShapeGe
   if (e.shadow) o.shadow = shadowPx(ctx, e.shadow);
   if (e.glow) o.glow = { radius: bound(lenPx(ctx.frame, e.glow.radius), 0, 500), color: ordo(e.glow.color) };
   if (e.softEdge) o.softEdge = bound(lenPx(ctx.frame, e.softEdge), 0, 500);
+  // M9 (`three-model`): the shape's 3-D.
+  const look3d = look3dOf(ctx, e.look3d, o.box);
+  if (look3d) o.look3d = look3d;
 }
 
 /** Straight lines: one `line` object from the start (0, 0) of the unit square to its end (1, 1). */
@@ -1513,363 +1543,7 @@ function mediaOf(ctx: EmitCtx, part: string): string {
 
 // ── Text ────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The text of a body as `TextObject.text`: paragraphs and breaks as '\n', tabs as spaces. */
-export function legacyText(body: TextBody): string {
-  return body.paras
-    .map((p) => p.runs.map((r) => (r.kind === 'break' ? '\n' : r.text.replaceAll('\t', ' '))).join(''))
-    .join('\n');
-}
-
-/** A key for "the same look" when counting characters per style. */
-function styleKey(s: RunStyle): string {
-  const f =
-    s.fill.kind === 'solid'
-      ? `${s.fill.color.r},${s.fill.color.g},${s.fill.color.b},${s.fill.color.a}`
-      : s.fill.kind;
-  return [
-    s.sizePt,
-    s.bold,
-    s.italic,
-    s.latin ?? '',
-    f,
-    s.caps,
-    s.spacingPt,
-    s.outline ? s.outline.width : '',
-    s.shadow ? 1 : 0,
-  ].join('|');
-}
-
-/** The dominant run style (most characters) and the paragraph holding most of the text. */
-export function dominant(body: TextBody): { style: RunStyle; para: Para; text: string } | undefined {
-  const count = new Map<string, { n: number; style: RunStyle; text: string }>();
-  let top: { n: number; style: RunStyle; text: string } | undefined;
-  let para: Para | undefined;
-  let paraChars = -1;
-  for (const p of body.paras) {
-    let pc = 0;
-    for (const r of p.runs) {
-      if (r.kind === 'break') continue;
-      const n = visibleChars(r.text);
-      pc += n;
-      if (!n) continue;
-      const k = styleKey(r.style);
-      let c = count.get(k);
-      if (!c) count.set(k, (c = { n: 0, style: r.style, text: '' }));
-      c.n += n;
-      if (c.text.length < 400) c.text += r.text;
-      if (!top || c.n > top.n) top = c;
-    }
-    if (pc > paraChars) {
-      para = p;
-      paraChars = pc;
-    }
-  }
-  if (!para) return undefined;
-  return { style: top?.style ?? para.end, para, text: top?.text ?? '' };
-}
-
-/** Text mostly in East Asian scripts, or in complex scripts (Arabic, Hebrew, Indic, Thai). */
-function scriptOf(text: string): 'latin' | 'ea' | 'cs' {
-  let ea = 0;
-  let cs = 0;
-  let other = 0;
-  for (const ch of text) {
-    const c = ch.codePointAt(0)!;
-    if (
-      (c >= 0x2e80 && c <= 0x9fff) ||
-      (c >= 0xac00 && c <= 0xd7af) ||
-      (c >= 0xf900 && c <= 0xfaff) ||
-      (c >= 0xff00 && c <= 0xffef) ||
-      c >= 0x20000
-    )
-      ea++;
-    else if (
-      (c >= 0x0590 && c <= 0x08ff) ||
-      (c >= 0x0900 && c <= 0x0e7f) ||
-      (c >= 0xfb1d && c <= 0xfdff) ||
-      (c >= 0xfe70 && c <= 0xfeff)
-    )
-      cs++;
-    else if (ch.trim()) other++;
-  }
-  return ea > other && ea >= cs ? 'ea' : cs > other ? 'cs' : 'latin';
-}
-
-function textObject(ctx: EmitCtx, e: ShapeElement, shapeVisible: boolean): TextObject | undefined {
-  if (ctx.rich) return richTextObject(ctx, e, shapeVisible);
-  const body = e.text!;
-  let text = legacyText(body);
-  if (!text.trim()) return undefined;
-  if (text.length > MAX_TEXT) {
-    ctx.log(`a text box was cut to ${MAX_TEXT} characters`);
-    text = text.slice(0, MAX_TEXT);
-  }
-  const dom = dominant(body);
-  if (!dom) return undefined;
-  const st = dom.style;
-  const f = ctx.frame;
-  const fit = body.autofit.kind === 'shrink' ? body.autofit : undefined;
-  const fontPx = bound(ptPx(f, st.sizePt * (fit?.fontScale ?? 1)), MIN_FONT_PX, MAX_FONT_PX);
-
-  // The text rectangle: the preset's, minus the insets; padding is the smallest inset, the rest is folded.
-  let box = textBox(ctx, e);
-  const ins = body.insets;
-  const l = lenPx(f, ins.l);
-  const t = lenPx(f, ins.t);
-  const r = lenPx(f, ins.r);
-  const b = lenPx(f, ins.b);
-  const pad = Math.min(l, t, r, b);
-  box = insetBox(box, l - pad, t - pad, r - pad, b - pad);
-  const margin = marginOf(body);
-  if (margin.l || margin.r) box = insetBox(box, lenPx(f, margin.l), 0, lenPx(f, margin.r), 0);
-  const para = dom.para;
-  const align =
-    para.align === 'center' || para.align === 'distribute'
-      ? 'center'
-      : para.align === 'right'
-        ? 'right'
-        : 'left';
-  if (para.align === 'justify' || para.align === 'distribute')
-    ctx.log(`${para.align} text is drawn ${align}-aligned (M2)`);
-  if (!body.wrap) {
-    const g = NO_WRAP_GROWTH;
-    box =
-      align === 'left'
-        ? insetBox(box, 0, 0, -g, 0)
-        : align === 'right'
-          ? insetBox(box, -g, 0, 0, 0)
-          : insetBox(box, -g / 2, 0, -g / 2, 0);
-  }
-  if (
-    body.vert === 'vert' ||
-    body.vert === 'eaVert' ||
-    body.vert === 'mongolianVert' ||
-    body.vert === 'vert270'
-  )
-    box = quarterTurn(box, body.vert === 'vert270' ? -90 : 90);
-  if (body.vert || body.warp || body.numCol)
-    ctx.log('vertical, warped or multi-column text is drawn as plain text (M8)');
-
-  const face = scriptOf(dom.text);
-  const family = (face === 'ea' ? st.ea : face === 'cs' ? st.cs : undefined) ?? st.latin ?? 'Calibri';
-  let color = legacyColor(st.fill);
-  if (st.fill.kind === 'none') color = { r: 0, g: 0, b: 0, a: 0 }; // hollow: only the outline shows
-  const style: TextObject['style'] = {
-    fontFamily: family.slice(0, 300),
-    fontWeight: st.bold ? 700 : 400,
-    fontStyle: st.italic ? 'italic' : 'normal',
-    fontSizePx: fontPx,
-    color: color ?? { r: 0, g: 0, b: 0, a: 1 },
-    align,
-    valign: body.anchor,
-    lineHeight: lineHeightOf(para, fontPx, f, fit?.lnSpcReduction ?? 0),
-    letterSpacing: bound(ptPx(f, st.spacingPt), -1000, 1000),
-    padding: bound(pad, 0, MAX_COORD),
-    transform: st.caps === 'none' ? 'none' : 'uppercase',
-  };
-  const outline = st.outline && st.outline.fill.kind === 'solid' ? ordo(st.outline.fill.color) : undefined;
-  if (st.outline && outline)
-    style.outline = { width: bound(lenPx(f, st.outline.width) / 2, 0, 500), color: outline };
-  const shadow = st.shadow ?? (shapeVisible ? undefined : e.shadow);
-  if (shadow) {
-    const dir = (shadow.dir * Math.PI) / 180;
-    const dist = lenPx(f, shadow.dist);
-    style.shadow = {
-      dx: bound(dist * Math.cos(dir), -500, 500),
-      dy: bound(dist * Math.sin(dir), -500, 500),
-      blur: bound(lenPx(f, shadow.blur), 0, 500),
-      color: ordo(shadow.color),
-    };
-  }
-  if (st.caps === 'small') ctx.log('small caps are drawn as capitals (M2)');
-  return { id: ctx.newId(), type: 'text', box: clampBox(box), text, style, opacity: 1 };
-}
-
-/**
- * A body as a rich `TextObject` (`richtext.ts`): the box is the shape's text rectangle (the preset's, turned
- * a quarter for vertical text), the insets and paragraph margins are written as they are.
- */
-function richTextObject(ctx: EmitCtx, e: ShapeElement, shapeVisible: boolean): TextObject | undefined {
-  const body = e.text!;
-  // Past the slide's budget the text is written without runs and paragraph styles (picture class anyway).
-  const over = ctx.textBytes > MAX_SLIDE_BYTES;
-  const rich = richText(body, {
-    frame: ctx.frame,
-    ...(shapeVisible || !e.shadow ? {} : { shapeShadow: e.shadow }),
-    log: ctx.log,
-    ...(ctx.lo ? { lo: true } : {}),
-    ...(over ? { plain: true } : {}),
-  });
-  if (!rich) return undefined;
-  let box = textBox(ctx, e);
-  if (
-    body.vert === 'vert' ||
-    body.vert === 'eaVert' ||
-    body.vert === 'mongolianVert' ||
-    body.vert === 'vert270'
-  )
-    box = quarterTurn(box, body.vert === 'vert270' ? -90 : 90);
-  if (body.vert || body.warp || body.numCol)
-    ctx.log('vertical, warped or multi-column text is drawn as plain text (M8)');
-  const o: TextObject = {
-    id: ctx.newId(),
-    type: 'text',
-    box: clampBox(box),
-    text: rich.text,
-    style: rich.style,
-    opacity: 1,
-  };
-  if (rich.runs) o.runs = rich.runs;
-  if (rich.paras) o.paras = rich.paras;
-  if (!over) {
-    ctx.textBytes += utf8Bytes(JSON.stringify(o));
-    if (ctx.textBytes > MAX_SLIDE_BYTES) ctx.log(SLIDE_BUDGET_NOTE);
-  }
-  return o;
-}
-
-/**
- * The paragraph margin to fold into a legacy text box, in EMU, on the start side of the paragraphs: the
- * least that every paragraph with text keeps clear of (`marL`, or the first line's `marL + indent` when a
- * paragraph has no bullet and that is less; bullets are not drawn in M1, so text starts at `marL`). Left
- * for left-to-right paragraphs, right for right-to-left ones; none when they are mixed.
- */
-export function marginOf(body: TextBody): { l: number; r: number } {
-  let least = Number.POSITIVE_INFINITY;
-  let ltr = false;
-  let rtl = false;
-  for (const p of body.paras) {
-    if (!p.runs.some((r) => r.kind !== 'break' && r.text.trim())) continue;
-    const m = p.bullet ? p.marL : Math.min(p.marL, p.marL + p.indent);
-    least = Math.min(least, Math.max(0, m));
-    if (p.rtl) rtl = true;
-    else ltr = true;
-  }
-  if (!Number.isFinite(least) || least <= 0 || (ltr && rtl)) return { l: 0, r: 0 };
-  return rtl ? { l: 0, r: least } : { l: least, r: 0 };
-}
-
-/** `TextStyle.lineHeight` (a multiple of the font size) from the paragraph's line spacing. */
-function lineHeightOf(p: Para, fontPx: number, f: Frame, reduction: number): number {
-  const ls = p.lineSpacing;
-  let h: number;
-  if (ls && 'pts' in ls) h = (ls.pts * EMU_PER_PT * f.s) / fontPx;
-  else h = SINGLE_LINE * Math.max(0, (ls?.pct ?? 1) - reduction);
-  return bound(h, 0.1, 10);
-}
-
-/**
- * The shape's text rectangle as a box (M6): its geometry's `a:rect` (every preset of POI's table, a custom
- * geometry's own) placed through the shape's affine, so a flipped shape's rectangle is mirrored with it
- * (and its text turned half a turn by a vertical flip, as PowerPoint draws it); the whole box for a rect or
- * a preset the table does not know.
- */
-function textBox(ctx: EmitCtx, e: ShapeElement): Box {
-  const [l, t, r, b] = textRectOf(e);
-  if (l === 0 && t === 0 && r === 1 && b === 1) return boxOf(ctx, e.xf);
-  return boxOf(ctx, multiply(e.xf, [Math.max(0, r - l), 0, 0, Math.max(0, b - t), l, t]));
-}
-
 // ── Boxes and colours ───────────────────────────────────────────────────────────────────────────────────
-
-type Box = { x: number; y: number; w: number; h: number; rotation: number };
-
-/** `v` within [lo, hi]; NaN and infinities become `lo` clamped to 0. */
-function bound(v: number, lo: number, hi: number): number {
-  return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : Math.min(hi, Math.max(lo, 0));
-}
-
-function clampBox(b: Box): Box {
-  const c = (v: number) => bound(v, -MAX_COORD, MAX_COORD);
-  return {
-    x: c(b.x),
-    y: c(b.y),
-    w: bound(b.w, 0, MAX_COORD),
-    h: bound(b.h, 0, MAX_COORD),
-    rotation: bound(b.rotation, -36_000, 36_000),
-  };
-}
-
-function boxOf(ctx: EmitCtx, xf: Affine): Box {
-  return clampBox(boxPx(ctx.frame, xf));
-}
-
-/**
- * A box narrowed by `l`, `t`, `r`, `b` along its own (rotated) axes; negative values grow it. The size never
- * goes below zero.
- */
-export function insetBox(box: Box, l: number, t: number, r: number, b: number): Box {
-  const w = Math.max(0, box.w - l - r);
-  const h = Math.max(0, box.h - t - b);
-  const lx = (l - r) / 2;
-  const ly = (t - b) / 2;
-  const a = (box.rotation * Math.PI) / 180;
-  const cx = box.x + box.w / 2 + lx * Math.cos(a) - ly * Math.sin(a);
-  const cy = box.y + box.h / 2 + lx * Math.sin(a) + ly * Math.cos(a);
-  return { x: cx - w / 2, y: cy - h / 2, w, h, rotation: box.rotation };
-}
-
-/** The same centre, the sides swapped and turned by `deg` (vertical text laid out along the long side). */
-function quarterTurn(box: Box, deg: number): Box {
-  const cx = box.x + box.w / 2;
-  const cy = box.y + box.h / 2;
-  let rotation = box.rotation + deg;
-  if (rotation > 180) rotation -= 360;
-  if (rotation <= -180) rotation += 360;
-  return { x: cx - box.h / 2, y: cy - box.w / 2, w: box.h, h: box.w, rotation };
-}
-
-function ordo(c: Rgba): OrdoRgba {
-  const ch = (v: number) => (Number.isFinite(v) ? Math.min(255, Math.max(0, v)) : 0);
-  return { r: ch(c.r), g: ch(c.g), b: ch(c.b), a: Number.isFinite(c.a) ? Math.min(1, Math.max(0, c.a)) : 1 };
-}
-
-/** The share of the foreground in a `pctNN` pattern; 0.5 for the others. */
-function patternShare(preset: string): number {
-  const m = /^pct(\d{1,2})$/.exec(preset);
-  return m ? Number(m[1]) / 100 : 0.5;
-}
-
-/**
- * The legacy solid colour of a fill (design/27 §3.2): solid as it is, a gradient's first stop, a pattern's
- * foreground and background blended by coverage. Undefined for none, pictures and group fills.
- */
-export function legacyColor(f: Fill): OrdoRgba | undefined {
-  switch (f.kind) {
-    case 'solid':
-      return ordo(f.color);
-    case 'gradient': {
-      let first = f.stops[0];
-      for (const s of f.stops) if (first && s.at < first.at) first = s;
-      return first ? ordo(first.color) : undefined;
-    }
-    case 'pattern': {
-      const k = patternShare(f.preset);
-      const mix = (a: number, b: number) => a * k + b * (1 - k);
-      return ordo({
-        r: mix(f.fg.r, f.bg.r),
-        g: mix(f.fg.g, f.bg.g),
-        b: mix(f.fg.b, f.bg.b),
-        a: mix(f.fg.a, f.bg.a),
-      });
-    }
-    default:
-      return undefined;
-  }
-}
-
-function shape(ctx: EmitCtx, box: Box, kind: ShapeObject['shape'], fill: OrdoRgba | undefined): ShapeObject {
-  return {
-    id: ctx.newId(),
-    type: 'shape',
-    box: clampBox(box),
-    shape: kind,
-    ...(fill ? { fill } : {}),
-    opacity: 1,
-    radius: 0,
-  };
-}
-
 /** FNV-1a over the objects' JSON, two 32-bit lanes: 16 hex digits. */
 export function digestOf(objects: readonly SlideObject[]): string {
   const s = JSON.stringify(objects);

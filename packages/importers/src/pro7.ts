@@ -1430,56 +1430,39 @@ function slideFromCue(cue: Msg, ctx: Ctx, docBackground?: Msg): Slide | null {
   // ProPresenter lists a slide's elements front to back (the first is on top); ordo draws its objects back
   // to front. (A full-screen picture listed after a verse sits behind it.)
   objects.reverse();
+  // The slide's own colour (`drawsBackgroundColor`), else the presentation's background colour or gradient
+  // (`Presentation.background`), is part of the slide, above the background media: a running background
+  // picture or video is hidden behind it, as in ProPresenter. Drawn as a full-slide rectangle under every
+  // other object and marked as the slide's background (`origin.role: 'bg'`, as a PowerPoint slide's solid
+  // or gradient background), so ordo's background changes replace it: the editor's Replace background and a
+  // playlist item's Background override (`Cue.backgroundOverride`) show the new picture instead of a slide
+  // covered by the old colour.
+  const fullSlide = scaleBox(
+    { origin: { x: 0, y: 0 }, size: { width: size.width, height: size.height } },
+    size,
+    0,
+  );
+  const backdrop = (fill: Rgba, gradient?: Gradient): ShapeObject => ({
+    id: newId(),
+    type: 'shape',
+    shape: 'rect',
+    box: fullSlide,
+    fill,
+    ...(gradient ? { gradient } : {}),
+    opacity: 1,
+    radius: 0,
+    origin: { src: 'pro7', role: 'bg' },
+  });
   if (base?.drawsBackgroundColor) {
-    // The slide's own colour is part of the slide, above the background media: a running background
-    // picture or video is hidden behind it. Drawn as a full-slide rectangle under every other object.
     const c = colorOf(base.backgroundColor as Msg | undefined) ?? { r: 0, g: 0, b: 0, a: 1 };
-    if (c.a > 0)
-      objects.unshift({
-        id: newId(),
-        type: 'shape',
-        shape: 'rect',
-        box: scaleBox({ origin: { x: 0, y: 0 }, size: { width: size.width, height: size.height } }, size, 0),
-        fill: c,
-        opacity: 1,
-        radius: 0,
-      });
+    if (c.a > 0) objects.unshift(backdrop(c));
   } else if (docBackground?.isEnabled) {
     if (docBackground.gradient) {
       const grad = gradientFrom(docBackground.gradient as Msg);
-      if (grad) {
-        objects.unshift({
-          id: newId(),
-          type: 'shape',
-          shape: 'rect',
-          box: scaleBox(
-            { origin: { x: 0, y: 0 }, size: { width: size.width, height: size.height } },
-            size,
-            0,
-          ),
-          fill: grad.stops[0]?.color,
-          gradient: grad,
-          opacity: 1,
-          radius: 0,
-        });
-      }
+      if (grad?.stops[0]) objects.unshift(backdrop(grad.stops[0].color, grad));
     } else if (docBackground.color) {
       const c = colorOf(docBackground.color as Msg | undefined) ?? { r: 0, g: 0, b: 0, a: 1 };
-      if (c.a > 0) {
-        objects.unshift({
-          id: newId(),
-          type: 'shape',
-          shape: 'rect',
-          box: scaleBox(
-            { origin: { x: 0, y: 0 }, size: { width: size.width, height: size.height } },
-            size,
-            0,
-          ),
-          fill: c,
-          opacity: 1,
-          radius: 0,
-        });
-      }
+      if (c.a > 0) objects.unshift(backdrop(c));
     }
   }
   const slide: Slide = { id: newId(), objects };

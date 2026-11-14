@@ -114,13 +114,20 @@ const rectsOf = (o: ShapeObject): Rect[] =>
 /** Convert one slide; it must be an ordinary ordo slide. */
 function convert(
   shapes: string,
-  opts: { styles?: string; fontFace?: FaceSource; deck?: Partial<DeckSpec>; loCompat?: boolean } = {},
+  opts: {
+    styles?: string;
+    fontFace?: FaceSource;
+    deck?: Partial<DeckSpec>;
+    loCompat?: boolean;
+    budgetArt?: boolean;
+  } = {},
 ) {
   let parts = buildDeck({ slides: [{ shapes }], ...opts.deck });
   if (opts.styles !== undefined) parts = withTableStyles(parts, opts.styles);
   const out = convertDeck(parts, {
     fontFace: opts.fontFace ?? HALF_EM,
     ...(opts.loCompat ? { loCompat: true } : {}),
+    ...(opts.budgetArt ? { budgetArt: true } : {}),
   });
   const s = out.slides[0]!;
   expect(Slide.parse(s.slide)).toEqual(s.slide);
@@ -465,11 +472,12 @@ describe('tables: grid objects (one per fill and line look, fidelity round 2)', 
     expect(texts).toHaveLength(9);
     expect(tableOf(shapes).objects).toBe(objects.length);
     expect(objects).toHaveLength(10);
-    // An older build strips the geometry and draws the table's outline in the line.
+    // The previous release (0.5.0) keeps the geometry; beside it, the legacy shape is the table's outline in
+    // the line (what a build without geometry drew).
     const old = (prev.Slide.parse(s.slide) as Slide).objects.find((x) => x.id === o.id) as ShapeObject;
     expect(old).toMatchObject({ shape: 'rect', box: o.box, stroke: o.stroke });
     expect(old.fill).toBeUndefined();
-    expect('geom' in old).toBe(false);
+    expect(old.geom).toEqual(o.geom);
   });
 
   it('splits looks by direction when there are several, so vertical lines stay over horizontal ones', () => {
@@ -513,9 +521,11 @@ describe('tables: grid objects (one per fill and line look, fidelity round 2)', 
     );
     expect(tableOf(shapes).objects).toBe(objects.length);
     expect(objects).toHaveLength(3 + 10);
-    // An older build draws each as its box: the header over the bands, the second band over the first.
+    // The previous release (0.5.0) keeps each fill's geometry; its legacy shape is its box (the header over
+    // the bands, the second band over the first).
     const old = (prev.Slide.parse(s.slide) as Slide).objects.filter((o) => o.type === 'shape');
-    expect(old.slice(1).map((o) => 'geom' in o)).toEqual([false, false, false]);
+    expect(old.slice(1).map((o) => 'geom' in o)).toEqual([true, true, true]);
+    expect(old.slice(1).map((o) => (o.type === 'shape' ? o.shape : ''))).toEqual(['rect', 'rect', 'rect']);
   });
 
   it('turns the grid with its table: the same lines and fills, rotated about the group', () => {
@@ -957,7 +967,9 @@ describe('tables: what stays residual', () => {
     expect(texts).toHaveLength(90);
   });
 
-  it('sends the same table to the art once its objects pass the slide budget (budget:table)', () => {
+  it('sends the same table to the art once its objects pass the slide budget behind budgetArt (budget:table)', () => {
+    // M9 (`decor-conv`): a table is one object of the slide's budget (`ShapeObject.table`); the M6 art
+    // stays for the harness's A/B only.
     // A fill of its own in every cell: the grid draws one object per fill (gridObjects), so the 90 cells
     // are 90 fill objects and 90 text objects.
     const rows = Array.from({ length: 10 }, (_, r) => ({
@@ -966,7 +978,7 @@ describe('tables: what stays residual', () => {
         tcWith('x', solid((0x100000 + r * 9 + c).toString(16).toUpperCase())),
       ),
     }));
-    const { s, texts, rects } = convert(table({ cols: Array(9).fill(IN / 2), rows }));
+    const { s, texts, rects } = convert(table({ cols: Array(9).fill(IN / 2), rows }), { budgetArt: true });
     expect(s.classification.class).toBe('hybrid');
     expect(s.classification.reasons).toContain('art:budget:table');
     expect(texts).toHaveLength(0);
@@ -1006,7 +1018,7 @@ describe('tables: what stays residual', () => {
     expect(s.notes).toContain('a table with vertical cell text is drawn by LibreOffice (M8)');
   });
 
-  it('sends the largest tables to the art when the slide would pass its object budget', () => {
+  it('sends the largest tables to the art when the slide would pass its object budget behind budgetArt', () => {
     // Every cell its own fill: no two join or share an object, so each table is a fill and a text per cell.
     const cell = (r: number, c: number) =>
       tcWith('x', solid((r * 16 + c + 1).toString(16).padStart(2, '0').repeat(3)));
@@ -1021,7 +1033,7 @@ describe('tables: what stays residual', () => {
           cells: Array.from({ length: cols }, (_, c) => cell(r, c)),
         })),
       });
-    const { s, texts, rects } = convert(big(7, 0, 5) + big(8, 2 * IN, 6));
+    const { s, texts, rects } = convert(big(7, 0, 5) + big(8, 2 * IN, 6), { budgetArt: true });
     // 100 and 120 objects: the larger table goes to the art and the slide keeps 100 under the budget.
     expect(s.classification.class).toBe('hybrid');
     expect(s.classification.reasons).toContain('art:budget:table');

@@ -22,6 +22,7 @@ import { digestOf } from '../../../packages/pptx-scene/src/emit.ts';
 import {
   approximatedSlides,
   importReport,
+  treatAsSlides,
   isImportJob,
   missingSlideFonts,
   objectsDigest,
@@ -35,7 +36,7 @@ import { planSummary, readReimportResult, reimportMessage } from '../src/lib/ppt
 import { useToasts } from '../src/state/toasts.ts';
 import { setSlideShows } from '../src/views/editor/actions.ts';
 import { openPresentation, undo, useEditor } from '../src/views/editor/editorStore.ts';
-import { PptxReportView, ReimportDialogView } from '../src/views/editor/PptxReport.tsx';
+import { LoopDeckBanner, PptxReportView, ReimportDialogView } from '../src/views/editor/PptxReport.tsx';
 import { PptxSlideCardView } from '../src/views/editor/PptxSlideCard.tsx';
 import {
   followReimport,
@@ -342,6 +343,20 @@ describe('the import report', () => {
       }),
     );
 
+  it("a loop deck's line on the stage: what it does, Treat as slides (off while locked) and the report", () => {
+    const line = (readOnly: boolean) =>
+      renderToStaticMarkup(
+        createElement(LoopDeckBanner, { readOnly, onTreatAsSlides: noop, onReport: noop, onKeep: noop }),
+      );
+    const t = text(line(false));
+    expect(t).toContain('PowerPoint plays this deck as a loop');
+    expect(t).toContain('the Stage and the Bottom-Third Stream show none of its words');
+    expect(line(false)).toMatch(/<button[^>]*>Treat as slides<\/button>/);
+    expect(line(false)).toMatch(/<button[^>]*>Import report<\/button>/);
+    expect(line(false)).toMatch(/<button[^>]*>Keep as a loop<\/button>/);
+    expect(line(true)).toMatch(/<button[^>]*disabled=""[^>]*>Treat as slides<\/button>/);
+  });
+
   it('shows what the import made, what waits, what failed and the approximated slides', () => {
     const html = view({ missingFonts: ['Century Gothic'] });
     expect(html).toContain('aria-label="Imported from PowerPoint"');
@@ -359,10 +374,52 @@ describe('the import report', () => {
     expect(html).toMatch(/<button[^>]*>Re-import from PowerPoint…<\/button>/);
   });
 
+  it('says what an announcement loop does on the screens and treats it as slides in one tap', () => {
+    const loopP = { ...nativeP, kind: 'loop', loop: { defaultSlideMs: 6000 } } as Presentation;
+    expect(importReport(nativeP)!.loop).toBeUndefined();
+    const r = importReport(loopP)!;
+    expect(r.loop).toBe(true);
+    const html = renderToStaticMarkup(
+      createElement(PptxReportView, {
+        report: r,
+        approx: { slides: [], more: 0 },
+        missingFonts: [],
+        readOnly: false,
+        onReimport: noop,
+        onOpenSlide: noop,
+        onTreatAsSlides: noop,
+      }),
+    );
+    expect(html).toContain('data-loop');
+    const t = text(html);
+    expect(t).toContain('PowerPoint plays this deck as a loop');
+    expect(t).toContain('the Stage shows “Service Starting Soon” and the Bottom-Third Stream shows nothing');
+    expect(html).toMatch(/<button type="button" class="small"[^>]*>Treat as slides<\/button>/);
+    expect(view()).not.toContain('data-loop');
+    // Read-only (live): the button is there, disabled.
+    const ro = renderToStaticMarkup(
+      createElement(PptxReportView, {
+        report: r,
+        approx: { slides: [], more: 0 },
+        missingFonts: [],
+        readOnly: true,
+        onReimport: noop,
+        onOpenSlide: noop,
+      }),
+    );
+    expect(ro).toMatch(/<button[^>]*disabled=""[^>]*>Treat as slides<\/button>/);
+    // The switch: a slide deck, without the loop's settings, its slides (and their timings) as they were.
+    const s = treatAsSlides(loopP);
+    expect(s.kind).toBe('slides');
+    expect(s).not.toHaveProperty('loop');
+    expect(s.sections).toBe(loopP.sections);
+    expect(treatAsSlides(nativeP)).toBe(nativeP);
+  });
+
   it('says what a legacy import is and when the re-import cannot run', () => {
     const legacy = renderToStaticMarkup(
       createElement(PptxReportView, {
-        report: { pages: 3, pending: 0, failed: 0, hidden: 0, edited: 0, log: [], logMore: 0 },
+        report: { pages: 3, pending: 0, failed: 0, missing: 0, hidden: 0, edited: 0, log: [], logMore: 0 },
         approx: { slides: [], more: 0 },
         missingFonts: [],
         readOnly: true,

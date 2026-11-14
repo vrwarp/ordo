@@ -142,6 +142,77 @@ describe("a slide's drawing budget (design/27 §12 drawing cost)", () => {
     expect(effectArea(shape('x', ''))).toBe(0);
   });
 
+  it('counts pictures with a shadow or soft edge in the effect budget and draws later ones without them', () => {
+    // ProPresenter picture elements with a shadow and a feather, a quarter of the slide each, turned: drawn
+    // from their source (`pictureTarget` prepares no turned picture without a mask).
+    const photo = (id: string, rotation = 5): SlideObject => ({
+      id,
+      type: 'image',
+      box: { x: 480, y: 270, w: 960, h: 540, rotation },
+      mediaId: 'photo',
+      fit: 'cover',
+      opacity: 1,
+      radius: 0,
+      softEdge: 54,
+      shadow: { dx: 10, dy: 10, blur: 30, color: { r: 0, g: 0, b: 0, a: 0.6 } },
+    });
+    const objects = Array.from({ length: 12 }, (_, i) => photo(`p${i}`));
+    const area = drawnEffectArea(objects[0]!);
+    // A shadow (1) and a soft edge (EFFECT_COST.softEdge, as a shape's: drawn from the source, its body is cut
+    // at full resolution on every raster as a shape's is) over a quarter of a slide (its turned bounds).
+    expect(area).toBeGreaterThan((1 + EFFECT_COST.softEdge) / 4);
+    expect(area).toBeLessThan((1 + EFFECT_COST.softEdge) / 2);
+    const fit = Math.floor(EFFECT_COST.slide / area);
+    expect(fit).toBeGreaterThanOrEqual(1);
+    expect(fit).toBeLessThan(objects.length);
+    const drawn = withinDrawBudget(objects) as readonly {
+      shadow?: unknown;
+      softEdge?: unknown;
+      box: { rotation: number };
+    }[];
+    expect(drawn.map((o) => !!o.shadow && !!o.softEdge)).toEqual(objects.map((_, i) => i < fit));
+    // Past the budget the picture is drawn as it is, turned.
+    expect(drawn[fit]).toMatchObject({ id: `p${fit}`, box: { rotation: 5 } });
+    expect(drawn[fit]!.softEdge).toBeUndefined();
+    // A picture without effects weighs nothing.
+    expect(drawnEffectArea({ ...objects[0]!, shadow: undefined, softEdge: undefined } as SlideObject)).toBe(
+      0,
+    );
+  });
+
+  it('weighs the soft edge of a picture the outputs prepare as a cached layer (2026-11-13 review)', () => {
+    // The outputs' asset worker feathers a prepared picture once (`SOFT_EDGE_STEP`) and copies it after; its
+    // shadow is a cached layer under it. Unturned (or masked, or with round corners) it is prepared.
+    const img = (id: string, softEdge: number, w = 1920, h = 1080, shadow = false): SlideObject => ({
+      id,
+      type: 'image',
+      box: { x: 0, y: 0, w, h, rotation: 0 },
+      mediaId: id,
+      fit: 'cover',
+      opacity: 1,
+      radius: 0,
+      softEdge,
+      ...(shadow ? { shadow: { dx: 10, dy: 10, blur: 20, color: { r: 0, g: 0, b: 0, a: 0.5 } } } : {}),
+    });
+    // A full-frame feathered photo: one slide area at EFFECT_COST.preparedSoftEdge, not EFFECT_COST.softEdge.
+    expect(drawnEffectArea(img('a', 54))).toBeCloseTo(EFFECT_COST.preparedSoftEdge, 1);
+    // Two full-frame feathered photos (a ProPresenter slide): both keep their feather (b229bff and main drew
+    // both; at a soft edge's 8 the second lost it).
+    const two = withinDrawBudget([img('a', 54), img('b', 54)]) as readonly { softEdge?: number }[];
+    expect(two.map((o) => o.softEdge)).toEqual([54, 54]);
+    // A feathered background and a shadowed, feathered photo of 1400 x 800 over it: both kept.
+    const photo = withinDrawBudget([img('bg', 30), img('fg', 24, 1400, 800, true)]) as readonly {
+      softEdge?: number;
+      shadow?: unknown;
+    }[];
+    expect(photo[1]).toMatchObject({ softEdge: 24, shadow: expect.anything() });
+    // The same photo turned is drawn from its source: its soft edge weighs a shape's.
+    const turned = { ...img('t', 54), box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 3 } } as SlideObject;
+    expect(drawnEffectArea(turned)).toBeGreaterThan(EFFECT_COST.softEdge);
+    // Health's raster estimate reads the same weights: a full-frame feathered photo is no longer 'heavy'.
+    expect(slideDrawCost([img('a', 54)]).effects).toBeCloseTo(EFFECT_COST.preparedSoftEdge, 1);
+  });
+
   it("draws the re-review's hostile outlines as legacy shapes (M6 finish)", () => {
     const rand = (() => {
       let x = 7;

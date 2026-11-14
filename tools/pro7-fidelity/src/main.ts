@@ -379,6 +379,11 @@ async function main(): Promise<number> {
       maxDeckDrop: args.maxDeckDrop,
       requireGain: args.requireGain,
       slidesFilter: args.slides,
+      // The baseline decks this run was meant to score: the kinds it ran, within the deck and slide filters.
+      expected: (d) =>
+        (d.kind === 'synthetic' ? args.corpus : !!args.sampleDir) &&
+        matchesDeckFilter(d.name, args.decks) &&
+        (!args.slides || args.slides.size === 0 || !!slideFilterForDeck(d.name, args.slides)),
     });
     console.log('\n[pro7-fidelity] Baseline Comparison:');
     for (const line of cmp.lines) console.log(`  ${line}`);

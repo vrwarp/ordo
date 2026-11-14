@@ -37,14 +37,17 @@ export function smartArtFrame(o: {
   );
 }
 
-/** A data model whose extension names the drawing as relationship `drawingId` (none: no drawing cache). */
-export function dataModelXml(drawingId?: string): string {
+/**
+ * A data model whose extension names the drawing as relationship `drawingId` (none: no drawing cache), its
+ * points the document's (no text) and `points` (`dgm:pt` elements) after it.
+ */
+export function dataModelXml(drawingId?: string, points = ''): string {
   const ext = drawingId
     ? `<dgm:extLst><a:ext uri="${NS_DSP}"><dsp:dataModelExt xmlns:dsp="${NS_DSP}" relId="${drawingId}" minVer="${NS_DGM}"/></a:ext></dgm:extLst>`
     : '';
   return (
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<dgm:dataModel xmlns:dgm="${NS_DGM}" xmlns:a="${NS_A}">` +
-    `<dgm:ptLst><dgm:pt modelId="{0}" type="doc"><dgm:prSet/><dgm:spPr/><dgm:t><a:bodyPr/><a:p><a:endParaRPr/></a:p></dgm:t></dgm:pt></dgm:ptLst>` +
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<dgm:dataModel xmlns:dgm="${NS_DGM}" xmlns:a="${NS_A}" xmlns:r="${NS_R}">` +
+    `<dgm:ptLst><dgm:pt modelId="{0}" type="doc"><dgm:prSet/><dgm:spPr/><dgm:t><a:bodyPr/><a:p><a:endParaRPr/></a:p></dgm:t></dgm:pt>${points}</dgm:ptLst>` +
     `<dgm:cxnLst/><dgm:bg/><dgm:whole/>${ext}</dgm:dataModel>`
   );
 }

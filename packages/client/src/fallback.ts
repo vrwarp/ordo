@@ -180,7 +180,8 @@ const RECENT_EVENT_IDS = 200;
  * outputs that stop hearing it for 5 s leave the bus by themselves (design/17), so a closed or crashed
  * operator tab cannot leave them stuck. While inactive (hub mode) every window it registers or hears
  * from is told `fallback.hub { hubUp: true }`, so a window left in fallback by an earlier tab follows
- * the hub again as soon as this tab acquires it.
+ * the hub again as soon as this tab acquires it. Hellos and heartbeats carry `hold` while the operator
+ * holds a service it started itself, and `hubRefused` while the hub refuses this operator's session.
  */
 export class FallbackHost extends Emitter<{
   health: { outputId: string; health: OutputHealth };
@@ -192,6 +193,11 @@ export class FallbackHost extends Emitter<{
   active = false;
   /** The operator holds the service it started without the hub: windows ignore the hub until released. */
   hold = false;
+  /**
+   * The hub refuses this operator's session (`FallbackHello.hubRefused`): it cannot be handed the service, so
+   * windows on the bus take nothing from it until the operator is accepted again.
+   */
+  hubRefused = false;
   private lastState?: LiveStateMsg;
   private timer?: ReturnType<typeof setInterval>;
   private seenEvents: string[] = [];
@@ -226,6 +232,7 @@ export class FallbackHost extends Emitter<{
       seq: this.lastState?.seq ?? 0,
       operatorMs: Date.now(),
       ...(this.hold ? { hold: true } : {}),
+      ...(this.hubRefused ? { hubRefused: true } : {}),
     };
   }
 
@@ -277,6 +284,16 @@ export class FallbackHost extends Emitter<{
     if (this.active) this.announce();
   }
 
+  /**
+   * The hub refuses (on) or accepts again (off) this operator's session. While the authority, the windows
+   * hear it at once (the next heartbeat would be up to 2 s late) and in every hello and heartbeat after.
+   */
+  setHubRefused(on: boolean): void {
+    if (this.hubRefused === on) return;
+    this.hubRefused = on;
+    if (this.active) this.announce();
+  }
+
   /** Hub is back: tell windows to return to their hub connection. */
   deactivate(): void {
     this.active = false;
@@ -298,7 +315,13 @@ export class FallbackHost extends Emitter<{
     for (const w of this.windows.values()) {
       if (!w.ep.alive()) continue;
       if (w.ready)
-        this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: false, ...(this.hold ? { hold: true } : {}) });
+        this.postTo(w, {
+          t: 'fallback.hub',
+          v: 1,
+          hubUp: false,
+          ...(this.hold ? { hold: true } : {}),
+          ...(this.hubRefused ? { hubRefused: true } : {}),
+        });
       else this.postTo(w, this.hello());
     }
   }
@@ -361,10 +384,10 @@ export class FallbackHost extends Emitter<{
  * Output and stage side of the fallback bus. Accepts messages only from window.opener at the operator origin.
  */
 export class FallbackClient extends Emitter<{
-  hello: { seq: number; hold: boolean };
+  hello: { seq: number; hold: boolean; hubRefused: boolean };
   state: LiveStateMsg;
   delta: LiveDeltaMsg;
-  hub: { hubUp: boolean; hold: boolean };
+  hub: { hubUp: boolean; hold: boolean; hubRefused: boolean };
 }> {
   private pendingFiles = new Map<string, (b: Blob | undefined) => void>();
   private ep: BusEndpoint;
@@ -454,7 +477,7 @@ export class FallbackClient extends Emitter<{
     this.lastTraffic = Date.now();
     switch (m.t) {
       case 'fallback.hello':
-        this.emit('hello', { seq: m.seq, hold: m.hold === true });
+        this.emit('hello', { seq: m.seq, hold: m.hold === true, hubRefused: m.hubRefused === true });
         return;
       case 'live.state':
         this.emit('state', m);
@@ -463,7 +486,7 @@ export class FallbackClient extends Emitter<{
         this.emit('delta', m);
         return;
       case 'fallback.hub':
-        this.emit('hub', { hubUp: m.hubUp, hold: m.hold === true });
+        this.emit('hub', { hubUp: m.hubUp, hold: m.hold === true, hubRefused: m.hubRefused === true });
         return;
       case 'fallback.file.res': {
         const r = this.pendingFiles.get(m.reqId);

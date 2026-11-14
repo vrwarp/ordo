@@ -54,7 +54,7 @@ export function outputIssues(h: OutputHealthEntry | undefined): HealthIssue[] {
       id: 'raster',
       level: 'warn',
       label: 'This computer is slow to prepare slides, so a slide may appear a moment late.',
-      detail: `Slide drawing p50 ${h.rasterMs?.p50 ?? '?'} ms, p95 ${h.rasterMs?.p95 ?? '?'} ms over the last ${h.rasterMs?.n ?? '?'} slides${h.rasterHeavy ? ` (${h.rasterHeavy} of them past the budget by their content, such as large traced decorations, and not counted)` : ''}; budget p95 ${b?.rasterP95Ms ?? '?'} ms (design/27 §13). Check the computer's power plan and other running programs.`,
+      detail: `Slide drawing p50 ${alarmed(h)?.p50 ?? '?'} ms, p95 ${alarmed(h)?.p95 ?? '?'} ms over the last ${alarmed(h)?.n ?? '?'} slides${h.rasterHeavy ? ` whose content fits the budget (${h.rasterHeavy} more are past it by their content, such as large traced decorations, and not counted: p95 ${h.rasterMs?.p95 ?? '?'} ms with them)` : ''}; budget p95 ${b?.rasterP95Ms ?? '?'} ms (design/27 §13). Check the computer's power plan and other running programs.`,
     });
   if (alarms.has('upload'))
     out.push({
@@ -64,6 +64,11 @@ export function outputIssues(h: OutputHealthEntry | undefined): HealthIssue[] {
       detail: `Texture upload in strips up to ${h.uploadMs ?? '?'} ms of the render worker's time in one frame over the last minute; budget ${b?.uploadMs ?? '?'} ms (design/27 §13).${wholeText(h)} Check the computer's power plan and other running programs; bench:venue measures the GPU itself.`,
     });
   return out;
+}
+
+/** The raster figures the alarm read: the slides whose content fits the budget when some do not, else all. */
+function alarmed(h: OutputHealthEntry): OutputHealthEntry['rasterMs'] {
+  return h.rasterAlarmMs ?? h.rasterMs;
 }
 
 /** Whole uploads made by design (a refresh, recovery after a GPU reset), for an upload detail. */
@@ -196,14 +201,19 @@ export function cacheIntegrityMessage(rows: CacheIntegrity[]): string | null {
  */
 export class CacheCheckTracker {
   private last = new Map<string, { key: string; at: number }>();
+  private readonly started: number;
+  private readonly opts: { settleMs: number; unknownMs: number; timeoutMs: number };
   constructor(
-    private readonly started: number,
-    private readonly opts: { settleMs: number; unknownMs: number; timeoutMs: number } = {
+    started: number,
+    opts: { settleMs: number; unknownMs: number; timeoutMs: number } = {
       settleMs: 5000,
       unknownMs: 15_000,
       timeoutMs: 60_000,
     },
-  ) {}
+  ) {
+    this.started = started;
+    this.opts = opts;
+  }
 
   /** Feed the latest rows; true when the check should report now. */
   update(rows: CacheIntegrity[], now: number): boolean {

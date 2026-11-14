@@ -658,9 +658,47 @@ describe('ProPresenter export details', () => {
       shape: 'rect',
       box: { x: 0, y: 0, w: 1920, h: 1080 },
       fill: { r: 0, g: 0, b: 0, a: 1 },
+      // The slide's background (a backdrop): a background put over the slide replaces it.
+      origin: { src: 'pro7', role: 'bg' },
     });
     expect(text!.type).toBe('text');
     expect(res.log.some((l) => /background colour/.test(l.message))).toBe(false);
+  });
+
+  it("draws the presentation's background colour or gradient as each slide's backdrop, replaceable", () => {
+    for (const background of [
+      { isEnabled: true, color: { red: 0.2, green: 0.4, blue: 0.6, alpha: 1 } },
+      {
+        isEnabled: true,
+        gradient: {
+          type: 'TYPE_LINEAR',
+          angle: 90,
+          stops: [
+            { color: { red: 1, green: 0, blue: 0, alpha: 1 }, position: 0 },
+            { color: { red: 0, green: 0, blue: 1, alpha: 1 }, position: 1 },
+          ],
+        },
+      },
+    ]) {
+      const doc = encodePresentation({
+        uuid: uuid('P-BG'),
+        name: 'On a colour',
+        background,
+        cues: [cue('C1', [textElement('Verse', 'Holy, holy, holy')])],
+      });
+      const res = importPro7(new Map([['On a colour.pro', doc]]));
+      const [rect, text] = res.presentations[0]!.sections[0]!.slides[0]!.objects;
+      expect(rect).toMatchObject({
+        type: 'shape',
+        box: { x: 0, y: 0, w: 1920, h: 1080 },
+        origin: { src: 'pro7', role: 'bg' },
+      });
+      expect(rect!.locked).toBeUndefined();
+      if (background.gradient)
+        expect((rect as { gradient?: { stops: unknown[] } }).gradient?.stops).toHaveLength(2);
+      else expect((rect as { fill?: unknown }).fill).toMatchObject({ r: 51, g: 102, b: 153, a: 1 });
+      expect(text!.type).toBe('text');
+    }
   });
 
   it('reads a ProPresenter zip whose central directory size counts its Zip64 end records', async () => {

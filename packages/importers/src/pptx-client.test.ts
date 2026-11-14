@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { body, buildDeck, imageRel, para, pic, run, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
-import { importPptxClient } from './pptx-client.ts';
+import { CONVERTER_VERSION, importPptxClient, LOOP_IMPORT_NOTE } from './pptx-client.ts';
 import { remapMediaIds } from './remap.ts';
 
 const IN = 914_400;
@@ -42,8 +42,36 @@ describe('importPptxClient', () => {
     expect(result.classes).toEqual(['native']);
     expect(result.deckHash).toMatch(/^[0-9a-f]{64}$/);
     expect(result.loSlides.length).toBe(0);
-    expect(result.clientScene.version).toBe(1);
+    expect(result.clientScene.version).toBe(CONVERTER_VERSION);
+    expect(CONVERTER_VERSION).toBe(2);
+    expect(result.clientScene.libreoffice).toBeUndefined();
     expect(result.clientScene.slides.length).toBe(1);
+  });
+
+  it('parses for a hub without LibreOffice as the hub does (M9): nothing pending, what is not drawn listed', async () => {
+    const chart =
+      `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="Chart 9"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>` +
+      `<p:xfrm><a:off x="${4 * IN}" y="${IN}"/><a:ext cx="${3 * IN}" cy="${2 * IN}"/></p:xfrm>` +
+      `<a:graphic><a:graphicData uri="${CHART}"/></a:graphic></p:graphicFrame>`;
+    const bytes = await makeDeck([
+      sp({ id: 4, x: IN, y: IN, cx: 4 * IN, cy: IN, txBody: body(para(run('Hybrid Slide'))) }),
+      chart,
+    ]);
+    const withLo = await importPptxClient(bytes, 'chart.pptx');
+    expect(withLo.classes).toEqual(['hybrid']);
+    expect(withLo.pending).toBe(1);
+
+    const lite = await importPptxClient(bytes, 'chart.pptx', { libreoffice: false });
+    expect(lite.clientScene.libreoffice).toBe(false);
+    expect(lite.clientScene.slides[0]!.art).toBeUndefined();
+    expect(lite.clientScene.slides[0]!.missing?.length).toBeGreaterThan(0);
+    expect(lite.pending).toBe(0);
+    expect(lite.loSlides).toEqual([]);
+    const slide = lite.presentation.sections[0]!.slides[0]!;
+    expect(slide.pptx?.class).toBe('hybrid');
+    expect(slide.pptx?.pending).toBeUndefined();
+    expect(slide.pptx?.missing).toEqual(lite.clientScene.slides[0]!.missing);
+    expect(slide.objects.some((o) => o.type === 'text' && o.text === 'Hybrid Slide')).toBe(true);
   });
 
   it('extracts embedded pictures with remappable placeholders and plans loSlides for hybrid slides', async () => {
@@ -94,5 +122,38 @@ describe('importPptxClient', () => {
     expect(result.loSlides[0]!.class).toBe('hybrid');
     expect(result.loSlides[0]!.art).toBeDefined();
     expect(result.pending).toBe(1);
+  });
+});
+
+describe('a looping PowerPoint show with every slide timed (the client path)', () => {
+  it('imports an announcement loop and says so in the import log, as the hub does', async () => {
+    const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const timed = (text: string) => ({
+      shapes: sp({ id: 2, x: IN, y: IN, cx: 6 * IN, cy: IN, txBody: body(para(run(text))) }),
+      after: '<p:transition advTm="5000"><p:fade/></p:transition>',
+    });
+    const parts = buildDeck({ slides: [timed('Amazing grace'), timed('How sweet the sound')] });
+    const enc = new TextEncoder();
+    const rels = new TextDecoder()
+      .decode(parts.get('ppt/_rels/presentation.xml.rels')!)
+      .replace(
+        '</Relationships>',
+        `<Relationship Id="rId90" Type="${NS_R}/presProps" Target="presProps.xml"/></Relationships>`,
+      );
+    parts.set('ppt/_rels/presentation.xml.rels', enc.encode(rels));
+    parts.set(
+      'ppt/presProps.xml',
+      enc.encode(
+        '<p:presentationPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="' +
+          NS_R +
+          '" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:showPr loop="1"/></p:presentationPr>',
+      ),
+    );
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    const result = await importPptxClient(await z.generateAsync({ type: 'uint8array' }), 'Grace.pptx');
+    expect(result.presentation.kind).toBe('loop');
+    expect(result.presentation.loop).toEqual({ defaultSlideMs: 5000 });
+    expect(result.presentation.source?.log).toContain(LOOP_IMPORT_NOTE);
   });
 });

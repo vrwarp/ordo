@@ -29,6 +29,7 @@ measured rehearsal (see [milestones.md](../milestones.md)).
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Volunteer operator, alone                | Open Chrome, launch outputs with one click, run the service with Space and arrows or a Stream Deck, clear text between songs, send messages and timers to the stage, recover from any fault without touching the OS, and switch to ProPresenter as a last resort |
 | Worship lead, from home                  | Sign in through the public hostname with the edit PIN, build next Sunday's playlist, import SongSelect files, pick arrangements, place backgrounds                                                                                                               |
+| Team members, on their phones            | Outside the service: look up the library and plans with previews as the Audience, Bottom-Third Stream and Stage screens show them, and make light changes; never live control ([prd/10](10-mobile.md))                                                           |
 | Speaker or sermon author                 | Drop a PPTX or PDF into the library and have it appear as image slides, optionally editable                                                                                                                                                                      |
 | Band and speakers                        | Stage screen with current and next lyrics, a clock, elapsed and countdown timers, and operator messages                                                                                                                                                          |
 | Stream and lobby viewers                 | Lyrics as a lower third over camera video or a holding slide                                                                                                                                                                                                     |
@@ -51,7 +52,13 @@ measured rehearsal (see [milestones.md](../milestones.md)).
 - Broadcast SDI, NDI, Syphon, Spout, Art-Net or sACN from the browser.
 - Planning Center and Bible API integration (scripture data model is designed, lookup is a later milestone).
 - Per-object build animations.
-- Phone or tablet remote control.
+- Phone or tablet remote control, and any live view on a phone (stage or confidence view, audience
+  lyrics): see [design/28](../design/28-mobile.md) §11 "Not now". Phones serve the week instead:
+  viewing the library and light changes outside the service ([prd/10](10-mobile.md)), in the phases
+  of design/28 §9 (P0 a phone is safe to sign in, with 44 px controls and without the canvas editor's
+  code; P1 the library in your pocket; P2 light changes, the words editor reusing the Lyric Script's
+  operations; P3 passes for the whole team), after the first live service. Canvas editing stays on
+  computers and tablets.
 - Outputs on machines other than the presentation PC (the design allows it; it is not exercised).
 - Multi-tenant or cloud-hosted hub.
 - Right-to-left text and auto-shrink (the editor leaves room for them).

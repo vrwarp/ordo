@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { elementRefs } from './hybrid.ts';
+import { elementRefs, noteWithoutLibreOffice } from './hybrid.ts';
+import { drawingXml, dspSp, smartArtFrame, smartArtRels, withSmartArt } from './smartart.test-util.ts';
 import { convertDeck } from './index.ts';
 import type { Element } from './ir.ts';
 import {
@@ -8,7 +9,10 @@ import {
   CHART_CONTENT_TYPE,
   chartFrame,
   chartXml,
+  imageRel,
   para,
+  pic,
+  pngHeader,
   run,
   solid,
   sp,
@@ -113,5 +117,239 @@ describe('hybrid art (EmittedSlide.art)', () => {
       { from: 'layout', shapeId: 4, nth: 0 },
       { from: 'master', shapeId: 4, nth: 0 },
     ]);
+  });
+});
+
+describe('without LibreOffice (EmitOptions.libreoffice: false, M9)', () => {
+  it('libreoffice:false leaves the art out, lists missing kinds, class hybrid with reason missing:<kind>, artText kept', () => {
+    const withLo = convertDeck(deck()).slides[0]!;
+    const out = convertDeck(deck(), { libreoffice: false });
+    const s = out.slides[0]!;
+    // No art is planned: nothing would draw it.
+    expect(s.art).toBeUndefined();
+    // The chart and the table (one ordo cannot read) are what nothing draws.
+    expect(s.missing).toEqual(['chart', 'element']);
+    expect(s.classification.class).toBe('hybrid');
+    expect(s.classification.reasons).toEqual([
+      ...withLo.classification.reasons,
+      'missing:chart',
+      'missing:element',
+    ]);
+    // The art's text stays for search; version 1's objects are those a hub with LibreOffice writes.
+    expect(s.artText).toBe('Total');
+    expect(s.slide.objects).toEqual(withLo.slide.objects);
+    expect(s.digest).toBe(withLo.digest);
+    expect(s.notes.some((n) => n === 'not drawn: a chart, an element')).toBe(true);
+    // With LibreOffice (the default) nothing of this is written.
+    expect(withLo.art).toBeDefined();
+    expect(withLo.missing).toBeUndefined();
+    expect(withLo.artText).toBeUndefined();
+  });
+
+  it('lists metafile pictures as missing instead of setting them aside, and a slide with nothing missing is unchanged', () => {
+    const parts = buildDeck({
+      slides: [
+        {
+          rels: [imageRel('rId2', 'logo.emf')],
+          shapes:
+            sp({ id: 2, x: 0, y: 0, cx: 4 * EMU, cy: EMU, txBody: body(para(run('Welcome'))) }) +
+            pic({ id: 3, x: 0, y: 2 * EMU, cx: 2 * EMU, cy: 2 * EMU, rId: 'rId2' }),
+        },
+        { shapes: sp({ id: 2, x: 0, y: 0, cx: EMU, cy: EMU, fill: solid('00FF00') }) },
+      ],
+    });
+    withPart(parts, 'ppt/media/logo.emf', new Uint8Array([1, 0, 0, 0]));
+    const withLo = convertDeck(parts).slides;
+    expect(withLo[0]!.metafiles).toHaveLength(1);
+    expect(withLo[0]!.classification.class).toBe('native');
+    const [s, plain] = convertDeck(parts, { libreoffice: false }).slides;
+    expect(s!.metafiles).toBeUndefined();
+    expect(s!.missing).toEqual(['metafile']);
+    expect(s!.classification).toMatchObject({ class: 'hybrid' });
+    expect(s!.classification.reasons.at(-1)).toBe('missing:metafile');
+    expect(s!.artText).toBeUndefined();
+    expect(plain!.missing).toBeUndefined();
+    expect(plain!.classification).toEqual(withLo[1]!.classification);
+  });
+
+  it('names the elements of a SmartArt drawing in the art smartart', () => {
+    const drawing = drawingXml(
+      dspSp({ x: 0, y: 0, cx: 2 * EMU, cy: 2 * EMU, paras: para(run('Rise')), bodyPr: 'vert="vert270"' }) +
+        dspSp({ x: 3 * EMU, y: 0, cx: 2 * EMU, cy: 2 * EMU, paras: para(run('Shine')) }),
+    );
+    const parts = buildDeck({
+      slides: [
+        {
+          rels: smartArtRels(1),
+          shapes: smartArtFrame({ id: 7, x: EMU, y: EMU, cx: 8 * EMU, cy: 4 * EMU, dmId: 'rIdDm1' }),
+        },
+      ],
+    });
+    withSmartArt(parts, 1, drawing);
+    const s = convertDeck(parts, { libreoffice: false }).slides[0]!;
+    expect(s.missing).toEqual(['smartart']);
+    expect(s.classification.reasons).toContain('missing:smartart');
+    expect(s.artText).toBe('Rise\nShine');
+  });
+
+  it('leaves picture slides to the budget', () => {
+    let shapes = '';
+    for (let i = 0; i < 160; i++)
+      shapes += sp({ id: i + 2, x: 0, y: 0, cx: EMU, cy: EMU, txBody: body(para(run(`t${i}`))) });
+    const deck = buildDeck({ slides: [{ shapes }] });
+    // M9: no budget makes this slide a picture any more: 160 text boxes are within the text ceiling (190,
+    // `decor-conv`), and a slide over 64 KB keeps its class for the importer's ladder (`ladder`).
+    const kept = convertDeck(deck, { libreoffice: false }).slides[0]!;
+    expect(kept.classification.class).toBe('native');
+    expect(kept.missing).toBeUndefined();
+    // Behind the harness's A/B (`budgetArt`, M6's budgets) it is a picture for its object count, and a
+    // picture slide lists nothing missing: the importer leaves it to the budget.
+    const big = convertDeck(deck, { libreoffice: false, budgetArt: true }).slides[0]!;
+    expect(big.classification.class).toBe('picture');
+    expect(big.classification.reasons).toContain('budget:objects');
+    expect(big.missing).toBeUndefined();
+  });
+
+  it('plans no art on a picture-class slide either (M9 wave 1 repair)', () => {
+    // A chart (residual) and 13 distinct pictures, past the slide's 12: behind the harness's A/B (`budgetArt`,
+    // M6's budgets) the emitted slide is a picture for its budget. (No byte budget makes a picture since M9's
+    // ladder: before it, a chart slide past 64 KB of text formatting was a picture with its art still planned;
+    // and since `decor-conv` the picture budget packs an atlas instead: the slide is not a picture.)
+    const n = 13;
+    const media: Record<string, Uint8Array> = {};
+    for (let i = 0; i < n; i++) media[`ppt/media/p${i}.png`] = pngHeader(64 + i, 64, true);
+    const parts = buildDeck({
+      slides: [
+        {
+          rels: [
+            { id: 'rId3', type: 'chart', target: '../charts/chart1.xml' },
+            ...Array.from({ length: n }, (_, i) => imageRel(`rId${10 + i}`, `p${i}.png`)),
+          ],
+          shapes:
+            chartFrame({ id: 4, x: 0, y: 0, cx: 4 * EMU, cy: 3 * EMU, rId: 'rId3' }) +
+            Array.from({ length: n }, (_, i) =>
+              pic({
+                id: 20 + i,
+                x: i * EMU * 0.5,
+                y: 4 * EMU,
+                cx: EMU / 2,
+                cy: EMU / 2,
+                rId: `rId${10 + i}`,
+              }),
+            ).join(''),
+        },
+      ],
+      media,
+    });
+    withPart(parts, 'ppt/charts/chart1.xml', chartXml(), CHART_CONTENT_TYPE);
+    expect(convertDeck(parts).slides[0]!.classification.class).not.toBe('picture');
+    const withLo = convertDeck(parts, { budgetArt: true }).slides[0]!;
+    expect(withLo.classification.class).toBe('picture');
+    expect(withLo.classification.reasons).toContain('budget:pictures');
+    const s = convertDeck(parts, { libreoffice: false, budgetArt: true }).slides[0]!;
+    expect(s.classification.class).toBe('picture');
+    expect(s.art).toBeUndefined();
+    expect(s.metafiles).toBeUndefined();
+    expect(s.missing).toBeUndefined();
+  });
+
+  it('draws real 3-D past the object budget flat without LibreOffice: nothing missing, never named (M9 wave 1 repair)', () => {
+    let shapes = '';
+    for (let i = 0; i < 170; i++)
+      shapes += sp({
+        id: i + 2,
+        x: (i % 17) * EMU,
+        y: Math.floor(i / 17) * EMU,
+        cx: EMU / 2,
+        cy: EMU / 2,
+        fill:
+          '<a:solidFill><a:srgbClr val="3366CC"/></a:solidFill><a:scene3d><a:camera prst="orthographicFront"/>' +
+          '<a:lightRig rig="threePt" dir="t"/></a:scene3d><a:sp3d><a:bevelT w="38100" h="38100"/></a:sp3d>',
+      });
+    const parts = buildDeck({ slides: [{ shapes }] });
+    // M9 (`decor-conv`): shapes of one 3-D look whose boxes do not overlap merge (plan decision 6), so the
+    // slide fits its budget natively with LibreOffice too: nothing goes to the art.
+    const native = convertDeck(parts).slides[0]!;
+    expect(native.classification).toMatchObject({ class: 'native' });
+    expect(native.art).toBeUndefined();
+    expect(native.slide.objects.length).toBeLessThanOrEqual(150);
+    // Behind budgetArt (the A/B), with LibreOffice the art draws the bevels (`budget:3d`); version 1 draws
+    // them flat meanwhile.
+    const withLo = convertDeck(parts, { budgetArt: true }).slides[0]!;
+    expect(withLo.classification).toMatchObject({ class: 'hybrid' });
+    expect(withLo.classification.reasons).toContain('art:budget:3d');
+    expect(withLo.art).toBeDefined();
+    const s = convertDeck(parts, { libreoffice: false, budgetArt: true }).slides[0]!;
+    // Without it version 1 is the slide: every shape drawn flat, as approx 3-D within the budget is.
+    expect(s.classification.class).toBe('native');
+    expect(s.classification.reasons.some((r) => r.startsWith('art:') || r.startsWith('missing:'))).toBe(
+      false,
+    );
+    expect(s.missing).toBeUndefined();
+    expect(s.art).toBeUndefined();
+    expect(s.slide.objects).toEqual(withLo.slide.objects);
+    expect(s.notes).toContain('3-D is drawn flat (an approximation)');
+    expect(s.notes.some((n) => /LibreOffice|not drawn/.test(n))).toBe(false);
+  });
+
+  it("never names LibreOffice in a slide's notes without it (M9 wave 1 repair)", () => {
+    // A chart, a table it cannot read and an EMF: residual, each with its converter note.
+    const parts = buildDeck({
+      slides: [
+        {
+          rels: [{ id: 'rId3', type: 'chart', target: '../charts/chart1.xml' }, imageRel('rId2', 'logo.emf')],
+          shapes:
+            chartFrame({ id: 4, x: 0, y: 0, cx: 4 * EMU, cy: 3 * EMU, rId: 'rId3' }) +
+            tableFrame({ id: 5, x: 0, y: 4 * EMU, cx: 4 * EMU, cy: 2 * EMU }) +
+            pic({ id: 6, x: 5 * EMU, y: 0, cx: 2 * EMU, cy: 2 * EMU, rId: 'rId2' }),
+        },
+      ],
+    });
+    withPart(parts, 'ppt/charts/chart1.xml', chartXml(), CHART_CONTENT_TYPE);
+    withPart(parts, 'ppt/media/logo.emf', new Uint8Array([1, 0, 0, 0]));
+    const withLo = convertDeck(parts).slides[0]!;
+    expect(withLo.notes.some((n) => /LibreOffice/.test(n))).toBe(true);
+    const s = convertDeck(parts, { libreoffice: false }).slides[0]!;
+    expect(
+      s.notes.some((n) => /LibreOffice/.test(n)),
+      s.notes.join(' | '),
+    ).toBe(false);
+    expect(s.notes).toContain('chart not drawn');
+    expect(s.notes.some((n) => /^not drawn: /.test(n))).toBe(true);
+  });
+
+  it('rewrites every converter note that names LibreOffice', () => {
+    const cases: [string, string | undefined][] = [
+      ['170 3-D shape(s) on a slide past its object budget: LibreOffice draws them', undefined],
+      [
+        "a SmartArt graphic of 300 objects passes the slide's budget: LibreOffice draws it",
+        "a SmartArt graphic of 300 objects passes the slide's budget: not drawn",
+      ],
+      [
+        "12 shapes and pictures pass the slide's object budget: LibreOffice draws them",
+        "12 shapes and pictures pass the slide's object budget: not drawn",
+      ],
+      [
+        'more SmartArt than an import reads natively: LibreOffice draws the rest',
+        'more SmartArt than an import reads natively: the rest is not drawn',
+      ],
+      [
+        'a SmartArt drawing holds no shapes: LibreOffice lays the diagram out',
+        'a SmartArt drawing holds no shapes: not drawn',
+      ],
+      [
+        "custom geometry past the slide's drawing budget is drawn by LibreOffice",
+        "custom geometry past the slide's drawing budget is not drawn",
+      ],
+      ['chart drawn by LibreOffice as a picture', 'chart not drawn'],
+      ['table drawn by LibreOffice as a picture', 'table not drawn'],
+      ['a emf picture is converted by LibreOffice', 'a emf picture is not drawn'],
+      [
+        'a shape turned in an unevenly scaled group is placed as LibreOffice places it',
+        'a shape turned in an unevenly scaled group is placed without the shear',
+      ],
+      ['3-D is drawn flat (an approximation)', '3-D is drawn flat (an approximation)'],
+    ];
+    for (const [note, want] of cases) expect(noteWithoutLibreOffice(note), note).toBe(want);
   });
 });

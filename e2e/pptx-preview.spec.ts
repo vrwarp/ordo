@@ -105,3 +105,50 @@ test('a PowerPoint sent with renderer=pptx-preview is drawn by pptx-preview', as
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/**
+ * A hub without LibreOffice (design/27 M9, `ORDO_LIBREOFFICE=off`): the import screen has no 'Pictures
+ * (LibreOffice)' choice; a choice remembered on this device from a hub that had it imports as editable slides,
+ * and the screen says so; the route refuses pictures with 501. Port 8393.
+ */
+test('without LibreOffice the import screen offers editable slides only', async ({ page }) => {
+  test.setTimeout(120_000);
+  const before = process.env.ORDO_LIBREOFFICE;
+  process.env.ORDO_LIBREOFFICE = 'off';
+  const hub = HubProcess.fresh(8393);
+  await hub.start();
+  try {
+    await login(page, 'http://op.localhost:8393');
+    await page.evaluate(() => {
+      localStorage.setItem('ordo.pptxImport', 'libreoffice');
+      location.hash = '#/library/import';
+    });
+    await page.reload();
+    await page.evaluate(() => {
+      location.hash = '#/library/import';
+    });
+    await expect(page.getByRole('radio', { name: /Editable \(recommended\)/ })).toBeChecked();
+    await expect(page.getByRole('radio', { name: /Pictures \(LibreOffice\)/ })).toHaveCount(0);
+    await expect(
+      page.getByText('This hub has no LibreOffice, so PowerPoint files are imported as editable slides.'),
+    ).toBeVisible();
+    await expect(page.getByRole('checkbox', { name: /Extend plain backgrounds to 16:9/ })).toBeEnabled();
+    const a = await hubApi(8393);
+    const res = await a.post('import/document', {
+      multipart: {
+        renderer: 'libreoffice',
+        file: {
+          name: 'Sermon.pptx',
+          mimeType: 'application/octet-stream',
+          buffer: Buffer.from('PK\x03\x04'),
+        },
+      },
+    });
+    expect(res.status()).toBe(501);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('libreoffice_unavailable');
+  } finally {
+    hub.kill();
+    if (before === undefined) delete process.env.ORDO_LIBREOFFICE;
+    else process.env.ORDO_LIBREOFFICE = before;
+  }
+});

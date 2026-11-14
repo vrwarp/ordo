@@ -266,6 +266,9 @@ type PlaylistItem =
       arrangementId?: Id;
       transition?: Transition;
       backgroundMediaId?: Id;
+      keepBackground?: boolean; // entering the item keeps the running background (no clear on entry)
+      audioMediaId?: Id; // item music (the pre-service loop's): plays on every slide without a sound of its own
+      countdownTimer?: TimerSpec; // started when the item is entered; a countdownTo also shows as the countdown prop
     }
   | {
       id: Id;
@@ -352,6 +355,82 @@ type ScriptureSlideSource = { ref: ScriptureRef; text: string; fetchedAt: string
 // milestone adds a provider interface (API.Bible, ESV) in the hub that creates such presentations.
 ```
 
+<!-- m9:schema -->
+### M9 fields: what ordo draws instead of LibreOffice (design/27 M9)
+
+All optional, each with `.catch(undefined)`, so a malformed one is dropped without failing the slide, and
+every enum inside them degrades to its default. An older build strips them and draws the legacy fields the
+converter writes beside them (design/27 §3.2). No `SlideObject` member and no stored enum is added.
+
+```ts
+type ShapeObject += {
+  // What the shape draws instead of its geometry; a drawer keeps at most one, in this order, and no look3d
+  // with any of them. Legacy: table → a rect of the table's background; chart → the chart area's rect;
+  // decor → a line without a stroke (nothing).
+  table?: TableData; // origin.role 'table'
+  chart?: ChartData; // origin.role 'chart' (packages/domain/src/chart.ts)
+  decor?: DecorData; // origin.role 'decor', locked: a z-run of plain shapes as one object
+  look3d?: Look3d; // bevel, extrusion, contour, material, light, camera (names: three-names.ts)
+};
+type ImageObject += { look3d?: Look3d; vectorFonts?: string[] /* ≤ 8: the families of a vector picture */ };
+type TextObject += {
+  warp?: { preset: TextWarpPreset /* 40 names */; adj?: [string, number][] }; // WordArt
+  writing?: { upright: 'none' | 'cjk' | 'all'; reverse?: boolean }; // vertical text in a quarter-turned box
+  centerBlock?: boolean; // PowerPoint anchorCtr
+  look3d?: Look3d;
+}; // never on TextStyle: themes, bands, the stage and props never warp, stand up or turn text
+type ShapeGeom += { adjWide?: [string, number][] }; // angles past adj's ±1e7, up to ±21,600,000
+type SlidePptx += { missing?: string[] }; // '<kind>' | '<kind>:<subtype>' (MISSING_KINDS), ≤ 16 of ≤ 40
+
+type TableData = {
+  cols: number[]; rows: number[]; // widths and minimum heights, scaled to the box
+  cells: TableCell[]; // row-major, each at the next grid slot no earlier cell covers
+  base: TextStyle; // the cells' style; palettes hold only what differs from it
+  styles?: CellStyle[]; runStyles?: TableRunStyle[]; fills?: TableFill[]; lineStyles?: TableLineStyle[];
+  h?: [edge, from, to, line][]; v?: [edge, from, to, line][];
+  background?: number; rtl?: boolean; rowRule?: 'grow' | 'fixed';
+};
+type TableCell = {
+  text?: string; runs?: [start, end, runStyle][]; paras?: (TextPara | null)[];
+  style?: number; fill?: number; colSpan?: number; rowSpan?: number; diag?: { down?: number; up?: number };
+};
+type DecorData = { w: number; h: number; paints: DecorPaint[]; parts: DecorPart[]; ref?: string /* DecorFile */ };
+// Files in the content store, read like pictures: GeomFile { paths } (≤ 64 paths since M9) and
+// DecorFile { parts } (≤ 256), each ≤ GEOM_FILE_MAX_BYTES (2,600,000).
+// Media: a vector picture is kind 'image' with original.mime VECTOR_MIME ('application/vnd.ordo.vector').
+```
+
+Limits: `TABLE_LIMITS` (256 rows, 64 columns, 4,096 grid slots, 10,000 characters a cell and 60,000 a table),
+`CHART_LIMITS` (64 series of 1,024 points, 4 groups and axes, labels 255, titles 1,000), `DECOR_LIMITS`
+(64 paints, 256 parts, 16,384 points, 24 shadows). Readers (`m9-readers.ts`): `tableText`, `chartText` and
+`objectSearchText` for search and labels, `extraFontFamilies` and `extraText` for goLive's font scan,
+`drawnShapeFileRefs` for the geometry and decoration files a slide draws; `palette.ts` dedupes palettes.
+<!-- /m9:schema -->
+
+<!-- m9:tables-render -->
+**Tables: placement and edits** (`packages/domain/src/table.ts`, M9 tables-render). A table's cells have no
+coordinates: walking the grid row-major, each takes the next slot no earlier cell covers (`placeCells`; a span
+is cut where it would reach a covered slot or the grid's edge, cells past the grid are dropped). A cell is
+read and written as a rich text body: `cellRich(t, i)` gives `{ text, style, runs?, paras? }` with the style
+`cellTextStyle(base, styles[cell.style])` (no autofit: rows grow instead) and the runs expanded from
+`runStyles`; `setCell(o, i, body)` writes an edited body back into the palettes (`cellStyleOf`: the fields
+that differ from `base`). Ops on a table shape, each returning a new object or the same one when refused:
+
+```ts
+setCell(o, i, body);
+setCellFill(o, cells, color | null);
+insertRow(o, at, from);
+deleteRow(o, r);
+insertCol(o, at, from);
+deleteCol(o, c);
+gcTable(t); // palette entries nothing uses removed, indices renumbered (every op ends with it)
+```
+
+Row and column ops keep every slot covered once, grow or shrink the spans they cross, copy the source row's or
+column's size, cell styles, fills and lines, keep no line inside a merged cell, keep the table's width and add
+or remove a row's height to `box.h`; they refuse past `TABLE_LIMITS` and at the last row or column.
+<!-- /m9:tables-render -->
+
 ## Live state
 
 Owned by the hub (or the operator in fallback), produced by the pure reducer in
@@ -393,6 +472,12 @@ type Cue = {
   slideId?: Id;
   label: string;
   hidden?: boolean; // true on a hidden slide (design/27 §9): sequential navigation skips it, `go` reaches it
+  backgroundMediaId?: Id; // the slide's own background, else the item's Background override, else the presentation's
+  backgroundOverride?: true; // it is the item's override: the slide is drawn without its backdrops (below)
+  clearBackground?: boolean; // the slide itself clears the running background (ProPresenter clear actions)
+  clearOnEntry?: boolean; // no background of its own, item's or presentation's: entering the item here clears it
+  timer?: TimerSpec;
+  timerId?: Id; // a timer cue's timer, or the item's countdown on every slide cue of the item
 };
 type LayerContent = { kind: 'slide' | 'media' | 'logo' | 'lowerThird'; ref: Id; sinceSeq: number };
 type Timer = { id: Id; spec: TimerSpec; startedAtHub?: number; endsAtHub?: number; running: boolean };
@@ -416,12 +501,28 @@ The reducer handles events: `goLive(playlistId)`, `endService`, `select(cueIndex
 `output.register|health`. It is deterministic so hub, operator and outputs compute the
 same state from the same event sequence.
 
+A slide's backdrops are the unlocked `origin.role: 'bg'` shapes at the bottom of its objects: the
+solid or gradient background an importer drew under the slide (a PowerPoint slide's fill, a ProPresenter
+slide's own colour or its presentation's background, design/20). Over a playlist item's Background
+override (`Cue.backgroundOverride`) the screens that show backgrounds and the live slide grid draw the slide
+without them (`withoutBackdrops`), and the editor's background replace removes them, so the picture shows.
+An older build draws them, as before.
+
 A hidden slide keeps its cue, flagged `hidden` (design/27 §9). `next`, `prev`, the cue a GO
 arms, `autoAdvance` (wrapping within the item), onEnd 'advance', `nextItem` and `prevItem` skip
 hidden cues (`nextShownCue`, `prevShownCue`; an item whose slides are all hidden is passed by);
 `goToSection` lands on the section's first cue that is not hidden, else its first cue
 (`sectionsOfItem().entry`); `go` and `select` reach any cue. A slide sound's `untilCue` counts
 shown slides only, so a hidden cue inside its range keeps the sound playing when a click shows it.
+
+Item-entry effects apply on whichever cue enters a playlist item (the live cue's item changes): the
+running background is cleared when the entered slide has no background (its own, its item's or its
+presentation's) and the item does not keep it (`clearOnEntry`), and the item's countdown starts
+(`timer` on every slide cue of the item). So Next past a hidden first slide, Next item, a go-to-item key
+or MIDI jump, a click on a later slide of the continuous grid, Prev back into an earlier item and a loop
+started part-way all behave like entering on the first slide. Moving within the item does neither: a
+loop that wraps to its first slide keeps its countdown's start, and a background started within the item
+keeps running.
 
 A slide cue can carry its own media (design/27 §8): the playing ImageObject's clip
 (`mediaObjectId`, `mediaStart`, `mediaShowWhenStopped` with the cue's media fields) goes on
@@ -444,7 +545,11 @@ the audio slot as `slideOwned` until the live cue leaves `[cueIndex, untilCue]`.
   failed is left out with a `degraded` note, and the slide shows its poster. So is the own
   background of a PowerPoint slide (`Slide.pptx` set: the importer makes a looping, muted
   full-slide video its motion background): left out, the cue shows the item's or the
-  presentation's background instead.
+  presentation's background instead. So is a playlist item's music (`audioMediaId`, the
+  pre-service loop's): deleted, failed or still processing, the item plays without it and goLive
+  carries a whole-service `degraded` note ("The music of "Welcome loop" is missing; the item plays
+  without music"), which the live view shows as "Live with a warning". The same media played by a
+  media item of the playlist stays required.
 
 ## Identifiers and content addressing
 

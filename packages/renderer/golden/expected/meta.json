@@ -27,6 +27,13 @@
       "style": "normal",
       "file": "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
       "sha256": "503af4a8b84d1079b8e2e358dc7f7a7fb8cb7a1f212f35eaef6782dbfc75a55e"
+    },
+    {
+      "family": "Golden KR",
+      "weight": 400,
+      "style": "normal",
+      "file": "/usr/share/fonts/opentype/unifont/unifont.otf",
+      "sha256": "2498b80f9664fef91e6988d7e082146a2082a7e7bb4a2deb2fbf9a365aa2970c"
     }
   ],
   "chromium": "153.0.8010.12",

@@ -1,5 +1,14 @@
 import { fileUrl, isControl, type Supervisor } from '@ordo/client';
-import { type Font, type Look, type Media, type Slide, drawnMediaIds, stillFile } from '@ordo/domain';
+import {
+  type Font,
+  type Look,
+  type Media,
+  type Slide,
+  drawnMediaIds,
+  isSvgMime,
+  SVG_SCREEN_MAX_BYTES,
+  stillFile,
+} from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import type { ThumbIn, ThumbJob, ThumbOut } from '../workers/thumb.worker.ts';
 
@@ -30,6 +39,29 @@ function slideHash(s: Slide): string {
  */
 export function stillHash(m: Media | undefined): string | undefined {
   return m ? stillFile(m)?.hash : undefined;
+}
+
+/**
+ * The file a media tile shows in the library, a picker or a background swatch: an SVG itself, where an
+ * animated one moves (its still is what the screens draw, design/14 "Pictures"), else `stillHash`.
+ */
+export function tileHash(m: Media | undefined): string | undefined {
+  return m && isSvgMime(m.original.mime) ? m.original.hash : stillHash(m);
+}
+
+/**
+ * What a volunteer is told where an SVG is picked (design/15 "Media library"): the screens show it as a still,
+ * an animated one at its first frame. One without its still (`delivery`: uploaded over 24 MB, or one this
+ * browser could not draw, or from before) is drawn by each Audience screen itself, during the service, and
+ * not at all past `SVG_SCREEN_MAX_BYTES`.
+ */
+export function svgNote(m: Pick<Media, 'original' | 'delivery'> | undefined): string | undefined {
+  if (!m || !isSvgMime(m.original.mime)) return undefined;
+  if (!m.delivery)
+    return m.original.bytes > SVG_SCREEN_MAX_BYTES
+      ? `SVG without a still picture, over ${SVG_SCREEN_MAX_BYTES / 1024 ** 2} MB: Audience screens do not show it. Upload it again from this browser, or a PNG of it.`
+      : 'SVG without a still picture: each Audience screen draws it itself when it is shown. Upload it again from this browser to give it one.';
+  return 'SVG: Audience screens show it as a still picture (an animated one at its first frame); it moves in previews only.';
 }
 
 type Pending = { resolve: (url: string | undefined) => void };

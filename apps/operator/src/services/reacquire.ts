@@ -10,37 +10,55 @@ import { outputWindows } from './outputs.ts';
  * missing: when this browser session launched them earlier (sessionStorage flag), when confirmed locally
  * via BroadcastChannel probe, or when the hub reports an output connected that this page holds no handle for.
  *
- * Windows are only re-acquired if confirmed to be running locally in this browser via BroadcastChannel
- * ping/pong before window.open is ever called, preventing blank tabs and focus stealing.
- * Each output is tried at most once per RETRY_MS.
+ * In path mode windows are only re-acquired once the BroadcastChannel probe confirms them running in this
+ * browser, before window.open is ever called, so no blank tab opens and no focus is stolen. In domain mode
+ * (op./outN./stage. hosts, the venue setup) every output has its own origin and the probe sees nothing: a
+ * gesture then re-acquires the outputs this browser session launched that the hub reports connected, and an
+ * explicit request (the fallback link, Relaunch, Diagnostics) every output launched or connected; a name
+ * with no window behind it opens a blank window that is closed at once.
+ * Each output is tried at most once per RETRY_MS, unless forced.
  */
 export const RETRY_MS = 60_000;
 
 const attempted = new Map<string, number>();
 
-/** Enabled outputs that need a handle: known to exist (connected, launched earlier, or confirmed local) and not held. */
-export function missingHandles(now = Date.now()): { ids: string[]; due: string[] } {
+/**
+ * Enabled outputs that need a handle: known to exist (connected, launched earlier, or confirmed local) and
+ * not held. Without a probe (domain mode) a gesture (`explicit` false) asks for more: launched from this
+ * browser session and connected to the hub, so a window that is gone, or runs on another computer, does not
+ * flash a blank window on every click of the service.
+ */
+export function missingHandles(now = Date.now(), explicit = false): { ids: string[]; due: string[] } {
   const ow = outputWindows();
   if (!ow) return { ids: [], due: [] };
   const launched = launchedEarlier();
   const health = useLive.getState().health;
+  const probe = ow.canProbe;
   const ids = ow
     .missing()
-    .filter((o) => launched || !!health[o.id]?.connected || ow.isConfirmedLocal(o.id))
+    .filter((o) => {
+      const connected = !!health[o.id]?.connected;
+      if (probe) return launched || connected || ow.isConfirmedLocal(o.id);
+      return explicit ? launched || connected : launched && connected;
+    })
     .map((o) => o.id);
   const due = ids.filter((id) => now - (attempted.get(id) ?? 0) >= RETRY_MS);
   return { ids, due };
 }
 
-/** Try to re-acquire missing windows by name now (must run inside a user gesture). `force` ignores the throttle. */
+/**
+ * Try to re-acquire missing windows by name now (must run inside a user gesture). `force` (an explicit
+ * request: the fallback link) ignores the throttle.
+ */
 export async function reacquireMissing(force = false, now = Date.now()): Promise<number> {
   const ow = outputWindows();
   if (!ow) return 0;
-  const m = missingHandles(now);
+  const m = missingHandles(now, force);
   const due = force ? m.ids : m.due;
   if (!due.length) return 0;
   for (const id of due) attempted.set(id, now);
-  const found = await ow.probeLocal(due, 40);
+  // In path mode only the windows the probe finds in this browser; in domain mode no probe can see them.
+  const found = ow.canProbe ? await ow.probeLocal(due, 40) : new Set(due);
   if (!found.size) return 0;
   const n = ow.reacquire(found);
   if (n) log('info', `re-acquired ${n} output windows`);

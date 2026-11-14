@@ -16,6 +16,7 @@ import {
   XML_NODE_BYTES,
 } from './opc.ts';
 import { body, buildDeck, grpSp, imageRel, para, pic, run, scheme, solid, solidBg, sp } from './test-util.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
 const IN = 914_400;
@@ -26,7 +27,7 @@ const rels = (list: string) => `<Relationships xmlns="${REL}">${list}</Relations
 function within<T>(ms: number, f: () => T): T {
   const t0 = performance.now();
   const v = f();
-  expect(performance.now() - t0).toBeLessThan(ms);
+  expect(performance.now() - t0).toBeLessThan(budgetMs(ms));
   return v;
 }
 

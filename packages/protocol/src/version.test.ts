@@ -18,8 +18,8 @@ import { APP_VERSION } from './index.ts';
  * - otherwise (a refactor with the same results), record the new digest with the same version.
  */
 const RECORDED = {
-  version: '0.5.0',
-  digest: '676e9b9da0496c9e3a303d6fb3aa97a0ae0ca466471ef97d18f2499950ebd97e',
+  version: '0.6.0',
+  digest: '7a3587f9a8e5d14a7592a757a7b2e4e4a437fdec4a4e208f12309850e6c943ac',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */
@@ -27,10 +27,12 @@ const SHARED = [
   'packages/live-state/src/index.ts',
   'packages/live-state/src/actions.ts',
   'packages/live-state/src/invariants.ts',
+  'packages/domain/src/chart.ts',
   'packages/domain/src/content.ts',
   'packages/domain/src/cues.ts',
   'packages/domain/src/live.ts',
   'packages/domain/src/schemas.ts',
+  'packages/domain/src/three-names.ts',
   'packages/protocol/src/index.ts',
   'packages/renderer/src/plan.ts',
 ];

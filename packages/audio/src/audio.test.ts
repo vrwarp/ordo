@@ -105,7 +105,10 @@ describe('resolveDevice', () => {
 type Conn = { to: FakeNode; out: number; in: number };
 class FakeParam {
   events: string[] = [];
-  constructor(public value = 1) {}
+  public value: number;
+  constructor(value = 1) {
+    this.value = value;
+  }
   cancelScheduledValues() {
     return this;
   }
@@ -127,11 +130,14 @@ class FakeNode {
   gain = new FakeParam();
   fftSize = 2048;
   fill = 0;
-  constructor(
-    public kind: string,
-    public context: unknown,
-    public n = 0,
-  ) {}
+  public kind: string;
+  public context: unknown;
+  public n: number;
+  constructor(kind: string, context: unknown, n = 0) {
+    this.kind = kind;
+    this.context = context;
+    this.n = n;
+  }
   connect(to: FakeNode, out = 0, inp = 0) {
     this.conns.push({ to, out, in: inp });
     return to;
@@ -156,11 +162,9 @@ class FakeContext {
   resumes = 0;
   /** Device ids the fake refuses to route to (the context silently stays where it was). */
   deadSinks = new Set<string>();
-  constructor(
-    opts: { sinkId?: string },
-    public channelsFor: (id: string) => number,
-    dead: string[] = [],
-  ) {
+  public channelsFor: (id: string) => number;
+  constructor(opts: { sinkId?: string }, channelsFor: (id: string) => number, dead: string[] = []) {
+    this.channelsFor = channelsFor;
     for (const d of dead) this.deadSinks.add(d);
     this.sinkId = opts.sinkId && !this.deadSinks.has(opts.sinkId) ? opts.sinkId : '';
     this.destination = Object.assign(new FakeNode('destination', this), {

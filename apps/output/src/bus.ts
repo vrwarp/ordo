@@ -16,7 +16,9 @@ export class MuxEndpoint implements BusEndpoint {
   private subs = new Set<(m: FallbackMessage) => void>();
   private lastFrom: 'port' | 'bridge' = 'bridge';
 
-  constructor(private bridge: BusEndpoint) {
+  private bridge: BusEndpoint;
+  constructor(bridge: BusEndpoint) {
+    this.bridge = bridge;
     this.unsubBridge = bridge.onMessage((m) => {
       this.lastFrom = 'bridge';
       this.deliver(m);

@@ -4,6 +4,7 @@ import { AlignIcon, VAlignIcon } from '../../components/AlignIcons.tsx';
 import { ColorPill } from '../../components/ColorPicker.tsx';
 import { FontPicker } from '../../components/FontPicker.tsx';
 import { formatSelection, resizeSelection } from './actions.ts';
+import { composing } from './editorKeys.ts';
 import { barState, HIGHLIGHTS, shortcutOf, SIZE_STEP, togglePatch, valuePatch } from './FormatBar.tsx';
 import { refocusText, Toggle, textField } from './formatControls.tsx';
 import { CLEAR_FORMATTING, type RunPatch, selectionStyle, type TextRange } from './ops/text.ts';
@@ -37,6 +38,7 @@ export function UnifiedTypography({ o, range, readOnly, marks, onChangeStyle }: 
     const el = textField();
     if (!el) return;
     const onKey = (e: KeyboardEvent) => {
+      if (composing(e)) return;
       const t = shortcutOf(e);
       if (!t) return;
       e.preventDefault();
@@ -122,6 +124,8 @@ export function UnifiedTypography({ o, range, readOnly, marks, onChangeStyle }: 
         <div style={{ flex: 1, minWidth: 0 }}>
           <FontPicker
             value={shownFont}
+            label="Font"
+            mixed={hasSelection && st.font === undefined}
             onChange={(f) => {
               if (hasSelection) applyRun(valuePatch.font(o, f), false);
               else setBox('fontFamily', f);

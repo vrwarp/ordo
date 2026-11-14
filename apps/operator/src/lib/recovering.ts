@@ -12,7 +12,10 @@ export class RecoveringGate {
   private last = Number.NaN;
   private quietUntil = 0;
 
-  constructor(private periodMs: number) {}
+  private periodMs: number;
+  constructor(periodMs: number) {
+    this.periodMs = periodMs;
+  }
 
   judge(now: number, restarting: boolean, sinceHeartbeatMs: number): boolean {
     if (now - this.last > this.periodMs * 1.5) this.quietUntil = now + LATE_BEAT_MS;

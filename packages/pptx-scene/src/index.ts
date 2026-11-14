@@ -11,8 +11,11 @@ import { classifySlide } from './classify.ts';
 import { slideContext } from './context.ts';
 import { type DeckInfo, readDeck, type SlideRef } from './deck.ts';
 import { readBackground } from './background.ts';
-import { bakeKey, type PictureBake } from './bake.ts';
+import { bakeKey, type PictureBake, type SheetBake, sheetKey } from './bake.ts';
+import { DECOR_PREFIX } from './decor.ts';
+import { SHEET_PREFIX } from './sheet.ts';
 import {
+  ALL_M9_FIELDS,
   BAKE_PREFIX,
   CLIP_PREFIX,
   type EmitOptions,
@@ -20,6 +23,7 @@ import {
   type EmittedSlide,
   emitDeck,
   GEOM_PREFIX,
+  type M9Field,
   MEDIA_PREFIX,
 } from './emit.ts';
 import { frameOf, slideRect } from './frame.ts';
@@ -35,29 +39,58 @@ import { walkSlide } from './walk.ts';
 export type { BlipReader, ColorCtx } from './color.ts';
 export type { SlideCtx, Source } from './context.ts';
 export type { DeckInfo, SlideRef } from './deck.ts';
-export type { EmitOptions, EmitResult, EmittedSlide } from './emit.ts';
+export type { EmitOptions, EmitResult, EmittedSlide, M9Field } from './emit.ts';
 export {
+  ALL_M9_FIELDS,
   BAKE_PREFIX,
   CLIP_PREFIX,
   GEOM_FILE_CHARS,
   GEOM_PREFIX,
+  M9_FIELDS,
   MEDIA_PREFIX,
   SLIDE_BYTES_NOTE,
   storedSlideBytes,
+  TEXT_BUDGET_BYTES,
 } from './emit.ts';
-export type { BakeRaster, PictureBake, TileBake } from './bake.ts';
+export type { BakeRaster, PictureBake, SheetBake, SheetCell, TileBake } from './bake.ts';
+export { applySheet, cellSourceSize, checkSheet, SHEET_LIMITS } from './bake.ts';
+export {
+  type BudgetOptions,
+  type BudgetPlan,
+  MAX_DRAWN_OBJECTS,
+  MAX_DRAWN_PICTURES,
+  MAX_SLIDE_OBJECTS_TEXT,
+} from './budget.ts';
+export { DECOR_PREFIX, type PlatePlan, platePlan } from './decor.ts';
+export { type EmittedSheet, SHEET_DENSITY, SHEET_PREFIX } from './sheet.ts';
 export type { EmittedClip } from './media.ts';
 export { type PictureHeader, pictureSize } from './picture.ts';
+export { CONVERTER_VERSION, M9_HELD_BACK, M9_WRITES, PPTX_SHEETS } from './version.ts';
 export * from './ir.ts';
-export type { Log } from './log.ts';
+export { addNote, type Log, SLIDE_NOTES } from './log.ts';
 export {
+  advanceOf,
+  type BodyMeasure,
+  ESTIMATED_ADVANCE,
   type FaceMetrics,
   type FaceSource,
+  type FaceStyle,
+  heightOf,
   metricsOfTables,
   type SfntTables,
   sfntMetrics,
 } from './metrics.ts';
+export {
+  type Decision,
+  decisionOf,
+  drawnWithoutArt,
+  missingKindOf,
+  RESIDUAL_ROWS,
+  type ResidualRow,
+  rowOf,
+} from './residual.ts';
 export type { Package, PartSource, Rel } from './opc.ts';
+export { RESCUE_DEPTH, RESCUE_NOTE, rescueDeck } from './rescue.ts';
 export type { Theme } from './theme.ts';
 
 export interface ParseOptions {
@@ -92,29 +125,67 @@ export interface ParseOptions {
    * family it has no face for is undefined, and its text is measured with estimated widths (noted).
    */
   fontFace?: FaceSource;
+  /**
+   * The fidelity harness's A/B only (`--budget-art`; never the hub): the slide budgets of M6 and M9 wave 1,
+   * which send tables, SmartArt drawings, real 3-D and shapes without text past the object budget to
+   * LibreOffice's art, instead of M9's native decorations, composites and atlases (`classify.ts`
+   * `ClassifyOptions.budgetArt`). Plan §4 names it an emit option; it is read here because a slide is
+   * classified as it is parsed.
+   */
+  budgetArt?: boolean;
+  /**
+   * M9: the stored fields the converter may write (`EmitOptions.m9Writes`, the same set). Read here too
+   * because a slide's budgets are planned as it is parsed: without 'decor' no decoration is planned
+   * (`budget.ts` `BudgetOptions.decorations`).
+   */
+  m9Writes?: ReadonlySet<M9Field>;
+  /**
+   * M9: whether pictures are drawn from sheets (`EmitOptions.sheets`, the same flag). Read here too: without
+   * sheets no composite or atlas is planned (`BudgetOptions.sheets`).
+   */
+  sheets?: boolean;
 }
 
 /** Families, weights and slants `ParseOptions.fontFace` is asked for per call (a deck can name thousands). */
 export const MAX_FACE_LOOKUPS = 256;
+/** Scripts `FaceSource.script` is asked for per call (M9; ISO 15924 codes, at most a few dozen exist in decks). */
+export const MAX_SCRIPT_LOOKUPS = 64;
 
-/** `ParseOptions.fontFace` asked once per family, weight and slant (case-insensitive), its answer checked. */
-function faceSources(get: FaceSource | undefined): FaceSource | undefined {
+/**
+ * `ParseOptions.fontFace` asked once per family, weight and slant (case-insensitive), and once per script
+ * when it answers `script` (M9), each answer checked. Exported for its tests.
+ */
+export function faceSources(get: FaceSource | undefined): FaceSource | undefined {
   if (!get) return undefined;
+  const checked = (ask: () => FaceMetrics | undefined): FaceMetrics | undefined => {
+    try {
+      const got = ask();
+      return got && typeof got.advance === 'function' ? got : undefined;
+    } catch {
+      return undefined; // a face the caller cannot read is missing
+    }
+  };
   const known = new Map<string, FaceMetrics | undefined>();
-  return (family, bold, italic) => {
+  const out: FaceSource = (family, bold, italic) => {
     const key = `${family.trim().toLowerCase()}|${bold ? 1 : 0}|${italic ? 1 : 0}`;
     if (known.has(key)) return known.get(key);
     if (known.size >= MAX_FACE_LOOKUPS) return undefined;
-    let v: FaceMetrics | undefined;
-    try {
-      const got = get(family, bold, italic);
-      v = got && typeof got.advance === 'function' ? got : undefined;
-    } catch {
-      v = undefined; // a face the caller cannot read is missing
-    }
+    const v = checked(() => get(family, bold, italic));
     known.set(key, v);
     return v;
   };
+  const script = get.script;
+  if (typeof script === 'function') {
+    const scripts = new Map<string, FaceMetrics | undefined>();
+    out.script = (code) => {
+      if (scripts.has(code)) return scripts.get(code);
+      if (scripts.size >= MAX_SCRIPT_LOOKUPS) return undefined;
+      const v = checked(() => script.call(get, code));
+      scripts.set(code, v);
+      return v;
+    };
+  }
+  return out;
 }
 
 /** `ParseOptions.mediaKind` asked once per part, its answer checked. */
@@ -221,7 +292,10 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
       ctx.timing = readSlideTiming(ctx.slide);
       const elements = walkSlide(ctx);
       const background = readBackground(ctx);
-      const classification = classifySlide(ctx, elements, background);
+      const classification = classifySlide(ctx, elements, background, {
+        budgetArt: opts.budgetArt === true,
+        budget: { decorations: (opts.m9Writes ?? ALL_M9_FIELDS).has('decor'), sheets: opts.sheets !== false },
+      });
       return {
         ...base,
         layoutPart: ctx.layoutPart,
@@ -317,13 +391,37 @@ export function convertDeck(src: PartSource, opts: ConvertOptions = {}): Convert
     }
     return id;
   };
+  // M9 (`decor-conv`): decoration files and sheets numbered across the call too (one per distinct one).
+  const decorIds = new Map<string, string>();
+  const decorId = (json: string) => {
+    let id = decorIds.get(json);
+    if (id === undefined) {
+      id = opts.decorId ? opts.decorId(json) : `${DECOR_PREFIX}${decorIds.size + 1}`;
+      decorIds.set(json, id);
+    }
+    return id;
+  };
+  const sheetIds = new Map<string, string>();
+  const sheetId = (bake: SheetBake) => {
+    const key = sheetKey(bake);
+    let id = sheetIds.get(key);
+    if (id === undefined) {
+      id = opts.sheetId ? opts.sheetId(bake) : `${SHEET_PREFIX}${sheetIds.size + 1}`;
+      sheetIds.set(key, id);
+    }
+    return id;
+  };
   const geoms = new Map<string, EmitResult['geoms'][number]>();
+  const decors = new Map<string, EmitResult['decors'][number]>();
+  const sheets = new Map<string, EmitResult['sheets'][number]>();
   const slides: EmittedSlide[] = [];
   for (const ref of r.refs) {
     const scene: DeckScene = { frame: r.frame, slides: [r.readSlide(ref)], sections: [], notes: [] };
-    const one = emitDeck(scene, { ...opts, newId, mediaId, clipId, bakeId, geomId });
+    const one = emitDeck(scene, { ...opts, newId, mediaId, clipId, bakeId, geomId, decorId, sheetId });
     slides.push(one.slides[0]!);
     for (const g of one.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
+    for (const d of one.decors) if (!decors.has(d.id)) decors.set(d.id, d);
+    for (const b of one.sheets) if (!sheets.has(b.id)) sheets.set(b.id, b);
   }
   return {
     slides,
@@ -334,6 +432,8 @@ export function convertDeck(src: PartSource, opts: ConvertOptions = {}): Convert
     slideRect: slideRect(r.frame),
     notes: [...r.notes],
     geoms: [...geoms.values()],
+    decors: [...decors.values()],
+    sheets: [...sheets.values()],
     frame: r.frame,
     sections: r.deck.sections,
     listed: r.deck.slides,

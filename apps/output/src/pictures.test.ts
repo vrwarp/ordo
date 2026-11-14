@@ -18,11 +18,14 @@ import {
 
 class Bmp {
   closed = false;
-  constructor(
-    public width: number,
-    public height: number,
-    public what: string,
-  ) {}
+  public width: number;
+  public height: number;
+  public what: string;
+  constructor(width: number, height: number, what: string) {
+    this.width = width;
+    this.height = height;
+    this.what = what;
+  }
   close(): void {
     this.closed = true;
   }

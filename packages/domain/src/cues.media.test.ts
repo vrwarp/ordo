@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { expandCues } from './cues.ts';
 import { DEFAULT_GENERAL, DEFAULT_LOOKS } from './defaults.ts';
-import { type GoLiveInputs, GoLiveRejection, localDigest, resolvePlaylist } from './goLive.ts';
+import { degradedKind, type GoLiveInputs, GoLiveRejection, localDigest, resolvePlaylist } from './goLive.ts';
 import { referencedMediaIds, slideOnlyMedia } from './resolve.ts';
 import type { Media, Playlist, Presentation, Slide, SlideObject } from './schemas.ts';
 
@@ -395,6 +395,48 @@ describe('media slides play are referenced and optional at goLive', () => {
     );
   });
 
+  it("goes live without an item's music that is not ready, with a whole-service warning", () => {
+    const p1 = deck('p1', [[slide('s1'), slide('s2')]], { title: 'Welcome loop' });
+    const item = {
+      id: 'i1',
+      kind: 'presentation' as const,
+      presentationId: 'p1',
+      audioMediaId: 'music',
+      countdownTimer: { kind: 'countdownTo' as const, timeOfDay: '10:00', label: 'Starts in' },
+    };
+    const pl: Playlist = { id: 'pl', rev: 1, name: 'Service', items: [item] };
+    const go = (lib: Media[]) => resolvePlaylist(inputs(lib, pl, p1), 'pl', { digest: localDigest });
+    // Deleted: the loop plays silent, its countdown still runs.
+    const gone = go([]);
+    expect(gone.media.music).toBeUndefined();
+    expect(gone.degraded).toEqual([
+      { cueIndex: -1, reason: 'The music of "Welcome loop" is missing; the item plays without music' },
+    ]);
+    const cues = expandCues(gone);
+    expect(cues.map((c) => c.slideAudio)).toEqual([undefined, undefined]);
+    expect(cues.map((c) => c.timerId)).toEqual(['i1-timer', 'i1-timer']);
+    // Still processing, or failed.
+    const named = { name: 'Organ prelude' };
+    expect(go([media('music', 'audio', { ...named, state: 'processing' })]).degraded?.[0]?.reason).toBe(
+      '"Organ prelude" (the music of "Welcome loop") is still processing; the item plays without music; Go live again once it is ready',
+    );
+    expect(go([media('music', 'audio', { ...named, state: 'failed' })]).degraded?.[0]?.reason).toBe(
+      '"Organ prelude" (the music of "Welcome loop") failed; the item plays without music',
+    );
+    expect(degradedKind(gone.degraded![0]!.reason)).toBe('media');
+    // Ready: it plays, no warning.
+    const ok = go([media('music', 'audio')]);
+    expect(ok.degraded).toBeUndefined();
+    expect(expandCues(ok)[0]?.slideAudio?.mediaId).toBe('music');
+    // The same media played as a playlist item of its own stays required.
+    const both: Playlist = { ...pl, items: [item, { id: 'i2', kind: 'media', mediaId: 'music' }] };
+    expect(() =>
+      resolvePlaylist(inputs([media('music', 'audio', { state: 'processing' })], both, p1), 'pl', {
+        digest: localDigest,
+      }),
+    ).toThrow(/still processing/);
+  });
+
   it('scopes backgrounds to playlist items by clearing background when an item has none', () => {
     const p1 = deck('p1', [[slide('s1')]], { backgroundMediaId: 'bg1' });
     const p2 = deck('p2', [[slide('s2'), slide('s3')]]);
@@ -415,12 +457,20 @@ describe('media slides play are referenced and optional at goLive', () => {
     const cues = expandCues(resolved);
     expect(cues[0]?.backgroundMediaId).toBe('bg1');
     expect(cues[0]?.clearBackground).toBeUndefined();
-    // Entry cue of p2 (which has no background) clears the running background from p1
-    expect(cues[1]?.backgroundMediaId).toBeUndefined();
-    expect(cues[1]?.clearBackground).toBe(true);
-    // Subsequent slides in p2 do not re-clear
-    expect(cues[2]?.backgroundMediaId).toBeUndefined();
-    expect(cues[2]?.clearBackground).toBeUndefined();
+    expect(cues[0]?.clearOnEntry).toBeUndefined();
+    // Every cue of p2 (which has no background) clears the running background from p1 when the GO that
+    // enters the item lands on it (the reducer applies it only on entry), not only its first one.
+    for (const c of [cues[1], cues[2]]) {
+      expect(c?.backgroundMediaId).toBeUndefined();
+      expect(c?.clearBackground).toBeUndefined();
+      expect(c?.clearOnEntry).toBe(true);
+    }
+    // An item that keeps the running background never clears it.
+    const kept = expandCues({
+      ...resolved,
+      playlist: { ...pl, items: [pl.items[0]!, { ...pl.items[1]!, keepBackground: true }] },
+    });
+    expect(kept.map((c) => c.clearOnEntry)).toEqual([undefined, undefined, undefined]);
   });
 
   it('attaches item-level background audio and countdown timer to cues', () => {
@@ -466,9 +516,11 @@ describe('media slides play are referenced and optional at goLive', () => {
       loop: true,
       untilCue: 1,
     });
-    // Second cue in p1 continues the music
+    // Second cue in p1 continues the music, and carries the countdown too: whichever cue enters the item
+    // starts it (the reducer starts it only on entry).
     expect(cues[1]?.slideAudio?.untilCue).toBe(1);
-    expect(cues[1]?.timer).toBeUndefined();
+    expect(cues[1]?.timer?.label).toBe('Starts in');
+    expect(cues[1]?.timerId).toBe('i1-timer');
     // p2 has no item-level audio or timer
     expect(cues[2]?.slideAudio).toBeUndefined();
     expect(cues[2]?.timer).toBeUndefined();

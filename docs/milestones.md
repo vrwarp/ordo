@@ -53,7 +53,7 @@ lobby and stream looks, video with audio to the house pair; OBS keying verified.
 | 2.2  | `apps/stage`: layout from the Stage look, clock, timers, messages, health, fallback bus                                                      | design/16                   |
 | 2.3  | Timers and messages in the reducer, operator stage tools, props rasterization once per second                                                | prd/02, design/14           |
 | 2.4  | Countdown-to-service cue on main and lobby looks; logo prop; elapsed timer started by a playlist timer item                                  | prd/02, prd/04              |
-| 2.5  | Announcement loop presentations with auto-advance, used by the lobby look pre-service                                                        | prd/03                      |
+| 2.5  | Announcement loop presentations with auto-advance, shown pre-service on Audience screens (lobby and stream show none of it since #17)        | prd/03, prd/04              |
 | 2.6  | `packages/audio`: context with sinkId, channel matrix, pairs, item gain, loudness, master, meters, device loss; settings page                | design/18, prd/06, adr/0008 |
 | 2.7  | Audio cues in playlists; operator preview on a separate device                                                                               | prd/06                      |
 | 2.8  | Full slide editor: canvas, objects (text, image, shape), property panel, themes with overrides, guides, undo, revisions UI, live lock banner | prd/03, design/15           |
@@ -90,20 +90,42 @@ login page and lockout behaviour; first live service scheduled.
 ## After the first service
 
 Candidates, not commitments: WebCodecs decode path if telemetry warrants; Planning
-Center; Bible provider; phone remote; outputs on separate machines; auto-shrink and RTL
-text; per-object builds; cloud sync and user accounts.
+Center; Bible provider; phones for the week (viewing the library and light changes, phases
+P0 to P3 of [design/28](design/28-mobile.md), revised against main on 2026-11-13: touch targets
+and a code split that keeps the canvas editor off phones in P0, previews through the editor's
+Stage lens in P1, a words editor on the Lyric Script's operations in P2); a phone remote
+(design/28 §11 "Not now");
+outputs on separate machines; auto-shrink and RTL text; per-object builds; cloud sync and
+user accounts.
+
+## PowerPoint without LibreOffice (design/27 M9)
+
+M9 ships in pull requests on main, each published at once as the edge image and the Pages demo:
+
+- `APP_VERSION` is 0.6.0 for M9's first pull request (waves 0-1 and the slide budgets); the build a venue rolls
+  back to is 0.5.0, whose schema the compatibility tests read M9's slides with (design/27 §3.2).
+- The PowerPoint parse runs in the operator (the client path) with the hub's own parse as the fallback; both
+  convert with the same version and fields, and M9's exit is measured on the client path.
+- `M9_WRITES` (`@ordo/pptx-scene` `version.ts`, for the hub and the client parse) is the kill switch: a field the converter writes stays out of it
+  until its drawer is on main, and can be taken out again without a release of the drawers. Decorations and
+  picture sheets stay out until `decor-render` (design/27 §15 M9 "rollout").
 
 ## Implementation status
 
 All tasks in M1, M2 and M3 are implemented in this repository, with these exceptions and open items:
 
-| Item                                                     | Status                                                                                                                                                                                                             |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1.1 Verify hostnames and wildcard certificate on the NAS | Venue task; deploy/README.md describes it                                                                                                                                                                          |
-| 1.25, 2.13, 3.12 Rehearsals and venue soak runs          | Venue tasks; the soak tool is ready                                                                                                                                                                                |
-| WebGPU compositor on real hardware                       | Implemented; the build container has no GPU, so only the Canvas 2D path was observed rendering                                                                                                                     |
-| Docker image                                             | Dockerfile written and its runtime layout verified with `pnpm deploy`; not built here (no Docker daemon). CI builds it                                                                                             |
-| Editor "send to preview" to an idle output               | Done: the editor's preview control sends the selected slide to an idle output through the hub's `preview` relay (`PreviewControl.tsx`; `apps/operator/test/preview.test.ts`, `apps/hub/test/review-fixes.test.ts`) |
-| Per-window log lines in the operator diagnostics         | Done: outputs and the stage send their last 20 log lines in `health.recentLog`; the diagnostics panel lists them per window                                                                                        |
-| Golden-image tests of the text rasterizer                | `pnpm --filter @ordo/renderer golden` (Playwright + OffscreenCanvas, design/23); runs in CI                                                                                                                        |
-| Memory caps on ffmpeg, LibreOffice and pdftoppm          | Timeouts only; set a container memory limit (deploy/compose.yaml)                                                                                                                                                  |
+| Item                                                     | Status                                                                                                                                                                                                                                                                                                       |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1.1 Verify hostnames and wildcard certificate on the NAS | Venue task; deploy/README.md describes it                                                                                                                                                                                                                                                                    |
+| 1.25, 2.13, 3.12 Rehearsals and venue soak runs          | Venue tasks; the soak tool is ready                                                                                                                                                                                                                                                                          |
+| WebGPU compositor on real hardware                       | Implemented; the build container has no GPU, so only the Canvas 2D path was observed rendering                                                                                                                                                                                                               |
+| Docker image                                             | Dockerfile written and its runtime layout verified with `pnpm deploy`; not built here (no Docker daemon). CI builds it                                                                                                                                                                                       |
+| Editor "send to preview" to an idle output               | Built (the hub's `preview` relay, `PreviewControl.tsx`; `apps/operator/test/preview.test.ts`, `apps/hub/test/review-fixes.test.ts`), then removed from the editor UI by the owner's editor rework (#7), deliberately: the look previews and the Previews page show a slide under every look instead (prd/03) |
+| Per-window log lines in the operator diagnostics         | Done: outputs and the stage send their last 20 log lines in `health.recentLog`; the diagnostics panel lists them per window                                                                                                                                                                                  |
+| Golden-image tests of the text rasterizer                | `pnpm --filter @ordo/renderer golden` (Playwright + OffscreenCanvas, design/23); runs in CI                                                                                                                                                                                                                  |
+| Memory caps on ffmpeg, LibreOffice and pdftoppm          | Timeouts only; set a container memory limit (deploy/compose.yaml)                                                                                                                                                                                                                                            |
+
+3.4 grew past its first scope: ProPresenter visual fidelity (#20: shapes, gradients, masks, crops, line masks,
+picture shadows and feathers; PR #23: one effects path for shapes and pictures) is gated in CI by a font-free
+synthetic ratchet of 18 slides that fails on a drop or a missing deck (`tools/pro7-fidelity`, design/23);
+agreement with a real library is measured locally with `--sample-dir`.

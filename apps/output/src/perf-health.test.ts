@@ -81,6 +81,35 @@ describe('performance health in the link (design/27 §13, M7)', () => {
     ]);
   });
 
+  it('quotes the figures the raster alarm read, with every slide’s apart (M6 merge re-review)', () => {
+    const p = new PerfHealth();
+    const budgets = { rasterP95Ms: 30, uploadMs: 4, gpuMB: 400 };
+    // Heavy slides in the window: the alarm read the others (`rasterAlarmMs`), and says so.
+    const h = {
+      rasterMs: { n: 29, p50: 22, p95: 41.4, max: 48 },
+      rasterAlarmMs: { n: 20, p50: 19, p95: 34.5, max: 36 },
+      rasterHeavy: 9,
+      budgets,
+      alarms: ['raster'],
+    };
+    expect(p.alarmChanges(h, '3840x2160')).toEqual([
+      'performance alarm at 3840x2160: slide raster p95 34.5 ms is over the 30 ms budget (p50 19 ms, 20 slides; 9 more past the budget by their content, not counted (p95 of all 29: 41.4 ms))',
+    ]);
+    expect(perfDiagnostics(h).raster).toBe(
+      'slides p50 22 ms, p95 41.4 ms, max 48 ms over 29 (budget p95 30 ms); 9 past the budget by their content (drawing estimate), left out of the alarm, which reads p50 19 ms, p95 34.5 ms over 20',
+    );
+    // None heavy: the alarm read every slide.
+    const q = new PerfHealth();
+    expect(
+      q.alarmChanges(
+        { rasterMs: { n: 40, p50: 20, p95: 35, max: 40 }, budgets, alarms: ['raster'] },
+        '3840x2160',
+      ),
+    ).toEqual([
+      'performance alarm at 3840x2160: slide raster p95 35 ms is over the 30 ms budget (p50 20 ms, 40 slides)',
+    ]);
+  });
+
   it('writes diagnostics lines', () => {
     expect(
       perfDiagnostics({

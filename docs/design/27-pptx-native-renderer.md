@@ -20,7 +20,7 @@ Each PowerPoint slide becomes one 1920x1080 picture, drawn at import by LibreOff
 ## What this design does
 
 It makes PowerPoint slides native to ordo:
-- The hub parses the deck on the CPU pool (the deck is untrusted input) and writes ordinary ordo slide objects, extended with optional fields.
+- The deck is parsed where it is uploaded, in the operator's import worker, or on the hub's CPU pool when the browser cannot (the deck, and a scene a browser sends, are untrusted input; §2 "Where the deck is parsed"), into ordinary ordo slide objects, extended with optional fields, with one import core on both sides.
 - A volunteer can edit them: fix a lyric typo, change an announcement date, swap the series background, add a verse.
 - Every screen draws them with the same code. They stay sharp at any output resolution.
 - Embedded clips play in place.
@@ -385,6 +385,74 @@ export const SlideSound = z.object({                     // M5: one sound per sl
   notes: z.boolean().optional(),                         // stage notes region, drawn in style['notes']
 ```
 
+<!-- m9:schema -->
+_Built for M9 (schema track; every stored field of M9 in one change, `packages/domain/src/schemas.ts`):_
+
+```ts
+// Every field below is .optional().catch(undefined); every enum inside .catch()es; arrays, strings, numbers bounded.
+ShapeGeom  += { adjWide: [name ≤ 16, ±21_600_000][] ≤ 10 }        // preferred by name over adj (which stays ±1e7)
+GeomFile    = { paths: ShapeGeomPath[1..64] }                      // was 8; inline ShapeGeom.paths keeps .max(8)
+GEOM_FILE_MAX_BYTES = 2_600_000                                    // was 400_000; also bounds a DecorFile
+Look3d      = { bevel?, back?: { prst: BEVEL_PRESETS, w, h ≤ 1_000 }, depth? ≤ 1_000, lift? ±1_000,
+                contour?: { width ≤ 500, color }, side?, material?: MATERIALS, light?: { rig: LIGHT_RIGS,
+                dir?, rot? }, camera?: { prst: CAMERA_PRESETS, fov?, rot?: [lat, lon, rev], zoom? },
+                grow? ≤ 500, flat? }                               // names: domain/src/three-names.ts (62/27/15/12)
+ShapeObject += { table?: TableData, chart?: ChartData, decor?: DecorData, look3d?: Look3d }
+ImageObject += { look3d?: Look3d, vectorFonts?: string[] ≤ 8 }
+TextObject  += { warp?: { preset: TEXT_WARPS (40), adj? ≤ 4 }, writing?: { upright: none|cjk|all, reverse? },
+                 centerBlock?: boolean, look3d?: Look3d }          // on the object, never on TextStyle (decision 5)
+TableData   = plan §3 (TABLE_LIMITS: 256 rows, 64 columns, 4,096 slots, 10,000 / 60,000 characters, palettes)
+ChartData   = charts.md §3.2 in domain/src/chart.ts (CHART_LIMITS), built over schemas.ts's own pieces
+DecorData   = { w, h, paints: DecorPaint[1..64], parts: DecorPart[≤ 256], ref? } ; DecorFile = { parts[1..256] }
+SlidePptx  += { missing: string[] ≤ 16 of ≤ 40 }                   // '<kind>[:<subtype>]', MISSING_KINDS (missing.ts)
+// media.ts: VECTOR_MIME = 'application/vnd.ordo.vector' (Media stays kind 'image').
+```
+
+- **Not written** (M9 decision 4: no legacy table group): `TableData.shadow` and `ChartData.shadow` are left
+  out, and so is `content.ts`'s `tableShadows`; an older build draws a table's background rect, a chart's
+  area. A table's edge indices are bounded by 256 (the row count, which covers the column edges too).
+- **`chart.ts`** cannot import `schemas.ts` (which imports it for `ShapeObject.chart`), so `chartSchemas()`
+  takes `Rgba`, `length`, `Gradient`, `LineDash`, `TextRun` and `TextPara` from `schemas.ts`, which exports the
+  resulting `Chart*` schemas. `chart.ts` and `three-names.ts` are fingerprinted with the schema for
+  `APP_VERSION` (`packages/protocol/src/version.test.ts`).
+- **Clamp** (`renderer/src/clamp.ts` dispatching to `clamp/{table,chart,decor,look3d,warp,writing,vector}.ts`):
+  each area file re-validates its field with the schema and keeps it (a decoration's path strings are
+  re-tokenised, vector picture families cleaned through the object's `FontBudget`); the area tracks fill in
+  the full clamps. `clampObject` keeps at most one of `table` > `chart` > `decor` on a shape, the first usable
+  one, and drops `look3d` on any of them; `clampGeom` keeps `adjWide` within ±21,600,000. `isRichText` is true
+  for a text object with any of `RICH_OBJECT_KEYS` (warp, writing, centerBlock, look3d), so the legacy
+  `drawText` never meets them.
+- **Sanitize** (`importers/src/sanitize.ts` dispatching to `sanitize/{table,chart,decor,look3d,warp,writing}.ts`):
+  cell texts cut to 10,000 with their runs and paragraph styles and the table to 60,000 (later cells emptied);
+  runs sorted, inside their text and naming a run style that exists; chart names, categories and labels to
+  255, titles to 1,000 with their runs and paras, format codes to 64; decoration paths re-tokenised; palette
+  indices that name no entry dropped; numbers finite and bounded; `missing` entries one line of ≤ 40, once each.
+- **Readers** (`domain/src/m9-readers.ts`): `tableText` (rows by '\n', cells by '\t', readable numbers),
+  `chartText`, `objectSearchText`; `extraFontFamilies` and `extraText`, which `referencedFontFamilies` and
+  `scriptFontFamilies` read, so goLive ships the faces of table, chart and vector picture text;
+  `drawnShapeFileRefs` (geometry and decoration files), which goLive's manifest uses. `palette.ts`:
+  `canonicalJson`, `Palette` (Map-deduped, capped) and `paletteIndex`. `firstText` reads a table's or a
+  chart's text for a slide with no text of its own (cue labels, thumbnails, search); a Bottom-Third strap
+  never does (`cues.ts` `strapText`, read by `lyricTextFor` and the Slide panel's default strap): the Lobby and
+  the Bottom-Third Stream show no band of tab-separated cells or chart labels, only the slide's own text, its
+  picture's or a strap the operator wrote (`bottomThirdText`).
+- **goLive**: a slide with `pptx.missing` goes live with a `degraded` entry naming what is left out
+  (`missingSlideReason`: 'PowerPoint slide with something ordo cannot draw (a chart, …): it is left out',
+  kind 'drawing'); a slide waiting for LibreOffice is reported as waiting instead.
+- **Older builds**: `schemas.prev.test-util.ts` is main's 0.5.0 schema, as published (M9 is 0.6.0; every push
+  to main publishes the edge image and the Pages demo, so 0.5.0 is what a venue rolls back to). It strips every
+  M9 field (`table`, `chart`, `decor`, `look3d`, `warp`, `writing`, `centerBlock`, `vectorFonts`, `adjWide`,
+  `SlidePptx.missing`) and keeps what 0.5.0 already had: geometry and its files, rich text, provenance,
+  `midiCues`, `bottomThirdText`, a playlist item's `keepBackground`, `audioMediaId` and `countdownTimer`, a
+  text box's `lineMask` and a picture's `shadow` and `softEdge` (`schemas.compat.test.ts`). The M9 fixture slide
+  (`domain/src/m9.test-util.ts`, 10.8 KB) still parses and draws its legacy shapes and text
+  (`schemas.m9.test.ts`, `clamp.m9.test.ts`), and so does every presentation the hub test imports
+  (`pptx-integrate.test.ts`). 0.5.0 reads at most 8 paths of a geometry file of at most 400 KB; M9 writes up
+  to 64 paths and 2.6 MB, so after a rollback 0.5.0 draws the first 8 paths of a larger file, and nothing for a
+  shape whose only geometry is a file over 400 KB (it waits for a file it never reads), until the presentation
+  is imported again.
+<!-- /m9:schema -->
+
 ### 3.2 Compatibility rules
 
 - **`TextObject.text` stays canonical.** Runs and paragraph styles annotate it. `firstText`, cue labels, search, stage `slideText`, lyric-only looks, 'Make lyric box' and themes keep working. Readers that show text to people go through `readableText(o)`, which writes automatic numbers and bullets as text, so verse numbers survive on the stage and the stream.
@@ -603,8 +671,45 @@ As built in M3 (`packages/domain/src/size.ts`):
   - vertical text (until M9);
   - tables (until M6; since M6 only those with vertical cell text or past the slide's object budget, a table of more drawn cells than a slide may have objects among them);
   - a metafile that fails conversion.
-- **Approx** (drawn natively, logged): reflection, inner shadow, soft edge on pictures before M8, kerning differences, unknown transitions.
+- **Approx** (drawn natively, logged): reflection, inner shadow, soft edge on pictures before M8 (the renderer draws a picture's `softEdge` since PR #23, §7.1; the converter does not write it yet), kerning differences, unknown transitions.
 - Everything else is native.
+
+<!-- m9:conv-seams -->
+_As built (M9 wave 1, track `conv-seams`):_
+- **One decision table** (`pptx-scene` `residual.ts`, `RESIDUAL_ROWS`): a row per reason the classifier and
+  the readers write (`ElementBase.reasons`, the census's `art:<reason>`), with its decision (`native`,
+  `approx`, `residual`, or `unread`: not in the IR, such as ink), the census features it is a case of, who
+  rates it (the classifier from the XML, a reader's own verdict, a slide budget) and, for a residual one, the
+  kind a hub without LibreOffice records (`MISSING_KINDS`: `chart`, `smartart`, `ole`, `metafile`, `math`,
+  `ink`, `decoration`, else `element`). `classify.ts` rates elements through it (`decisionOf`); every
+  `FALLBACK_FEATURES` entry has a row, and the census features and tiers do not change with a decision. The
+  M9 areas change their own rows.
+- **Real 3-D is approx, never residual**: a bevel with a size or an extrusion is `3d`, or `3d:camera` when
+  its `a:scene3d` camera turns the face (a preset other than `orthographicFront`, `perspectiveFront`,
+  `legacyObliqueFront`, `legacyPerspectiveFront`, or a rotation with a latitude or longitude). It is drawn
+  flat, as version 1 already drew it and as LibreOffice's art shows 63 of the 68 `art:3d` slides, with the
+  note "3-D is drawn flat (an approximation)". A SmartArt drawing with bevels (3-D quick styles) is therefore
+  native rather than sent whole to the art. Only on a slide past the 150-object budget does real 3-D still go
+  to the art first (`budget:3d`, reason `art:budget:3d`), drawn flat in version 1 until the art replaces it,
+  as all real 3-D did before: the budget's other steps then choose as they did (where 3-D shapes go past the
+  budget once decorations hold its shapes is `decor-conv`'s, M9 decision 6).
+- **Measured** with the census over E at wave 1: `art:3d` on 74 slides → 0. 59 worship slides
+  and the sermon 3-D slide go hybrid → native (worship native 2,620 → 2,679 of 2,820, 95.00 %; sermons 73 of
+  73); 3 hybrid slides keep their other residual (OLE, vertical text, a warp); the 11 picture slides with
+  3-D stay pictures for their budgets alone (10 + 1 `budget:pictures`; 1 over 64 KB as stored, `art:budget:3d`
+  in place of `art:3d`). No slide's class got worse; no slide's objects changed (the 63 that were hybrid
+  store one note more). The harness (`--lo-compat --before hub`) draws all 74 slides exactly as before:
+  their score equals the before-harness one on every slide (mean 0.8719 hybrid, 0.9311 picture). Their
+  before-hub score, LibreOffice's own pixels pasted in the art box, stays higher (0.9556 on the 60 now
+  native; 39 of them more than 0.02 above): the 3-D look of `three-rim` and `three-turned` is what closes it.
+- **Without LibreOffice** (`EmitOptions.libreoffice: false`, `hybrid.ts` `withoutLibreOffice`): neither the
+  art nor the metafile conversion is planned (`EmittedSlide.art` and `.metafiles` absent, so nothing is
+  pending). Version 1's objects stay as they are, and what nothing draws is listed by kind
+  (`EmittedSlide.missing`: each residual element of the art range, `smartart` for a SmartArt drawing's, and
+  `metafile` for pictures waiting for conversion); the slide is class hybrid (decision 8) with a reason
+  `missing:<kind>` per kind after its own, `EmittedSlide.artText` keeps the art's text, and one note says
+  what is not drawn. A picture-class slide is left to the budget ladder (`ladder`).
+<!-- /m9:conv-seams -->
 
 **Slide class.**
 - **native:** no residual element, ≤ 150 objects, ≤ 12 distinct pictures, ≤ 64 KB of JSON, every path ≤ 4,096 points.
@@ -622,6 +727,115 @@ As built in M3 (`packages/domain/src/size.ts`):
     - Measured: of the 44 shown worship slides of shards 0-2 that were picture class for `budget:objects` (12 decks, 150-784 objects), 10 are native, 6 hybrid for residuals they already had (sheared group children, custom geometry past the bounds, a table) with their runs merged, 27 hybrid with `art:budget:shapes`, and one picture for its 64 KB of text formatting; all native and hybrid ones have at most 150 objects in version 2. Against LibreOffice 24.2 (`--engine native --lo-compat`): the native ones 0.964 → 0.981 (before, the renderer's 200-object clamp cut their top objects in the harness), the hybrid ones 0.833 → 0.913 without the art and 0.989 with LibreOffice's pixels in the art box (an estimate of version 2). No other slide of the shards or the sermon decks changes (the sermon decks stay 0.955; shard 0 goes 0.843 → 0.842, all of it the one picture slide, drawn by LibreOffice in the hub). Version 1 of 6 of the hybrid slides still passes 150 objects, from the residual shapes (shear, 3D) every hybrid slide draws natively until its art arrives.
 
 The budgets keep slides inside the render clamps (200 objects, 16 images, 192 MiB, `clamp.ts:22-38`), so nothing is silently dropped.
+
+<!-- m9:decor-conv -->
+_As built (M9 wave 2, track `decor-conv`; `pptx-scene` `budget.ts`, `decor.ts`, `sheet.ts`, `bake.ts`; decisions.md
+"Slow-to-draw elements"):_ **the budgets never make a slide hybrid or a picture.** Nothing is sent to the art for
+a budget, and nothing for being slow to draw: the drawing budgets choose how an element is drawn (from the
+slide's decoration plate, or live), never whether. The M6 steps above stay only behind `ParseOptions.budgetArt`,
+the fidelity harness's A/B.
+- **Culling** (always, before anything is counted): an element whose bounds, grown by its shadow, glow and half
+  its outline, miss the slide area (the deck's, not the frame: a 4:3 deck's side bars are off the slide), or a
+  shape that shows nothing (no visible fill, line, text or effect), is not imported, as a hidden element: not
+  emitted, counted, put in the art or its text. Clips, sounds and SmartArt drawings' elements are never culled;
+  groups per leaf. On the shown slides of E: 3,059 elements on 287 worship slides, 2 invisible shapes on 2
+  sermon slides (no drawing change).
+- **The steps**, each after the first only while the slide passes 150 objects as version 1 draws it (the art
+  range's elements counted as themselves: version 1, and a hub without LibreOffice for good, draws them), the
+  runs that save most first, stopping as soon as it fits: a table or a chart is one object; shapes of one look
+  merge as above; **decorations** of one SmartArt drawing, top-level group or layout/master source, then of one
+  source (the slide's own ungrouped shapes too), each one locked `ShapeObject.decor`; between them
+  **composites** of z-adjacent plain pictures (any rotation) as one picture over their union box; and, only for
+  a slide still over, real 3-D drawn flat in decorations (`3d:flat-in-decoration`; otherwise 3-D never joins a
+  decoration, and merges by look only with an equal 3-D digest and disjoint boxes, decision 6). Objects left
+  that are text or that no step can merge stay up to 190; past that, and never past the render clamp's 200,
+  the guard leaves the topmost elements without text out, then text (class hybrid, `missing:<kind>`; never
+  reached on E). Past 12 distinct pictures an **atlas** packs the fewest smallest into one sheet, each object
+  keeping its box and showing its cell through its crop.
+- **A decoration draws what its shapes draw**: each member is emitted as a single shape is, then its geometry
+  built at its box as the renderer builds it and placed (flips, rotation) into the decoration's own space (its
+  box in logical px); parts in z-order, a member's first marked `s: 1`; its look a paint (fill; gradient laid on
+  the member's own box, `DecorPart.frame`, mirrored by its flips; stroke; dash; shadow), equal paints shared;
+  a path too long for one part a `cont` chain. A member is drawn as `drawGeomShape` draws a shape: its shadow,
+  then its fills and stroke, with miter joins and flat caps, so an outline with round or bevel joins or round
+  or square caps joins only when it is at most 2 logical px wide (`THIN_LINE_PX`; `DecorPaint` has no joins or
+  caps). Caps: 256 parts, 64 paints, 16,384 points, 24 shadowed shapes. Legacy: an empty line, locked (an older
+  build draws nothing, §3.2). A large decoration is a decoration file (`DecorData.ref`, `pptxdecor:<n>`), only
+  with the 'decorFile' field. The hub's and the client's `M9_WRITES` leave out 'decor' and 'decorFile' until
+  `decor-render` registers the decoration drawer and names decoration files (the M9 rollout below): their
+  budgets then plan no decoration at all (`BudgetOptions.decorations`), so a slide past 150 objects keeps
+  its merges and each shape, and the guard leaves the topmost past 190 out and lists them, instead of
+  decorations that would draw nothing.
+- **Sheets** (`pptxmedia:sheet<n>`, `EmitResult.sheets`, `SheetBake`, made by the hub and the harness,
+  `decor-render`): cells at the 3840 density, in z-order, each the picture as its object draws it (crop,
+  recolour, flips, a turn by quarter turns exactly or by any angle sampled bilinearly, opacity), at most 64
+  cells, 8,192 px a side, 16 MP out and 32 MP decoded; the objects as they are without the sheet go with it
+  (`EmittedSlide.sheets`), for an importer that cannot make it. The hub and the client make none yet
+  (`PPTX_SHEETS`, `CLIENT_SHEETS` false until `decor-render` stores them): their budgets plan no composite or
+  atlas (`BudgetOptions.sheets`), every picture is its own object, and past the render clamp's 16 distinct
+  pictures (`MAX_DRAWN_PICTURES`) the topmost are left out and listed, never dropped without a word.
+- **Kept whole** (the wave 1 re-review): an object past the slide's drawing or effect budget is stored as it
+  is, its gradient, geometry, dash, ends and effects kept (`emit.ts` `fitDrawing`, `fitEffects` no longer
+  flatten it to its legacy copy), and a shape past the drawing budget is never sent to the art
+  (`custGeom:complex`, `geom:complex` are no longer written): every drawer draws it as its own budget allows
+  until the slide's decoration plate holds it. `EmittedSlide.plate` names the slide's static decoration stack
+  (its bottom objects up to the first text, table, chart or picture that plays), the objects above it with
+  effect layers, and those its drawing budgets draw past them (`pastBudget`): what the client bakes.
+- **Measured** (`scratchpad m9/w2a/decor-conv/`): census of E, worship native 2,679 → 2,729 of 2,820 (96.77 %),
+  hybrid 104 → 74, picture 37 → 17 (all 17 for 64 KB, the ladder's: 10 of text formatting, 7 as stored);
+  `art:budget:shapes` 30 → 0, `budget:pictures` 13 → 0, `art:custGeom:complex` 16 → 0, `art:budget:3d` 1 → 0;
+  BannerStyle 225 → 41 objects (culled 205 elements off the slide; its 3-D shapes merge); one slide over 150
+  objects, a 96-cell table counted as one object and emitted as its M6 group until `tables-conv`'s table object.
+  Sermons: 73 of 73 native, unchanged.
+<!-- /m9:decor-conv -->
+
+<!-- m9:rollout -->
+_The M9 rollout (regroup 2026-11-13; PR #23 lands M9 waves 0-1 and wave 2a)._ Every push to main publishes the
+edge Docker image and the Pages demo, so each M9 PR ships on its own:
+- **Version.** M9 is `APP_VERSION` 0.6.0 for the whole PR (one bump; a later PR bumps again at its merge).
+  The build a venue rolls back to is main's 0.5.0, whose schema is the older-build fixture
+  (`schemas.prev.test-util.ts`, §3.2 "Older builds"): it strips every M9 field and draws the legacy shapes and
+  text written beside them.
+- **The client path.** A PowerPoint is parsed in the operator (`@ordo/importers` `importPptxClient`, sent as
+  the upload's `clientScene`) with the hub's pool as the fallback; both run the same converter
+  (`CONVERTER_VERSION` 2) with the same fields and the same sheet switch, one constant each in
+  `@ordo/pptx-scene` `version.ts` (`M9_WRITES`, `M9_HELD_BACK`, `PPTX_SHEETS`; the client's `CLIENT_M9_WRITES`
+  and `CLIENT_SHEETS` are the same values, and hub tests check both), and both build version 1 with one import
+  core (`@ordo/importers` `pptx-core.ts`). The M9 exit is measured on the client path, and the fidelity
+  harness and its census convert with the same switches (`tools/pptx-fidelity` `native.ts`), so what they
+  measure is what an import stores.
+- **`M9_WRITES` is the kill switch.** A converter field stays out of it until its drawer is on main, and the
+  drawer's PR turns it on: 'decor' (no decoration drawer until `decor-render`) and 'decorFile' are held back
+  (`M9_HELD_BACK`), and pictures are drawn from no sheet (`PPTX_SHEETS` false). A field found wrong after a
+  release is withheld the same way, with no release of the drawers: imports from then on write what an older
+  build draws for it; presentations imported before keep what they stored. The fields left on draw on main
+  today (a table by its registered drawer, `tables-render`; 3-D flat by decision; the other converter seams
+  write nothing yet).
+- **What the budgets leave out is always listed**, with LibreOffice or without: the guard's elements past 190
+  or 200 objects and 16 pictures (`EmittedSlide.missing`, recorded on the LibreOffice path too: the import
+  core's `ImportCore.budgetLeft`, for the hub's job and the client parse alike) and the ladder's
+  (`Slide.pptx.missing`), so goLive's degraded list
+  names them; a slide hybrid only for them waits for nothing. On a hub with LibreOffice a slide over 64 KB
+  that the ladder would simplify keeps LibreOffice's page instead (`ImportCore.pageForBudget`, above).
+- **Known costs of the hold-back until `decor-render`** (hub with LibreOffice, E's worship slides, against
+  wave 1): with decorations held back, the guard leaves out topmost objects that main sent to LibreOffice's
+  art, and LibreOffice draws no budget's art: an emoji game slide (0.956 at wave 1, 0.907 with every field,
+  0.795 as stored: its connector lines and emojis listed missing) and a slide wave 1 showed as LibreOffice's
+  picture (0.995, 0.932, 0.864: a group of connectors). A Christmas template's app slide (0.969, 0.936, 0.696)
+  is over 64 KB as stored and now keeps LibreOffice's page instead (0.995). All three draw whole again once
+  `decor-render` turns 'decor' on.
+- **The first paint stays as fast.** M9 adds no code to what the operator loads before its first paint: its
+  drawers load per object kind (`registerShapeDrawerLoader`; the table's in the workers' prepare step and the
+  editor canvas) and the Setup and settings pages load when opened (`React.lazy`). Measured on this PR's build:
+  operator initial JavaScript 1,708.0 kB (gzip 535.9) against main's 1,713.3 kB (535.1) (1,684.6 kB with the
+  lazy drawers alone; the PR's editor, live and media fixes add 23.4 kB, and the PowerPoint parse runs in an
+  import worker of its own, 659.7 kB, loaded when a deck is imported); CI fails a PR whose initial JavaScript
+  grows more than 2 % over `tools/bundle-baseline.json` (design/24 "Bundle budget"), recorded from this build.
+- **The tail keeps its page.** The presentation's tail (§3.4) stores each slide minimal with its page, the
+  background drawn as a shape, as a plain rect in its colour (`minimalSlide`), so its dark text is never drawn
+  on the output's black; a deck that does not fit 4 MiB even so (about 2,000 slides) leaves the pages out
+  before any text is cut (`ladder.ts` `planLadder`).
+<!-- /m9:rollout -->
 
 **One rule for every drawer.** `slideContent(slide): { pictureMediaId?: string; objects: SlideObject[] }` in `packages/renderer/src/content.ts`:
 - `pptx.show === 'picture'` and `pptx.refMediaId`: the reference picture plus only the objects without `origin` (the operator's own additions);
@@ -786,7 +1000,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
     - A bullet is drawn at `sizePct` × F within 4-1,000 px, in its paragraph's direction and its first run's language, so a Hebrew or Arabic number reads as the band's `readableText` writes it ('.1' for '1.' in a right-to-left paragraph). It takes the first run's shadow, outline and glow (passes 2-4) and its colour, as PowerPoint gives it the first run's character formatting.
 
 **Paint passes.** In today's order, under the scale transform:
-1. text fill box (`style.fill`) and highlight;
+1. text fill box (`style.fill`), the line mask's straps (`style.lineMask`, a ProPresenter line fill: one per visible line, through the glyph painter's `rect` in pass `'lineMask'` like a highlight, so an upright or warped painter places them its way) and highlight;
 2. shadow of every line (run shadow, else box shadow);
 3. glow (`shadowBlur` with zero offset);
 4. outline (`strokeText` at 2× width, round joins);
@@ -811,6 +1025,7 @@ Hidden paragraphs (M8) are laid out but not painted, so revealed lines never mov
   - Smoothing is `imageSmoothingQuality` 'medium' (bilinear, mipmapped when reducing), the closest to LibreOffice's bitmap scaling (bilinear when enlarging, area-averaging when reducing). Over the sermon decks and worship shard 0 it scored higher than 'high' (bicubic when enlarging) on 58 slides and lower on 3, by at most 0.0007; 'low' scored lower in the mean.
   - `drawImageFit` copies a bitmap prepared for exactly that target 1:1 at the target's origin, with no resampling and no clip. The image lookup receives the target, and `slidePictures` lists what `drawSlide2D` will ask for, so a decoder prepares before the synchronous draw.
   - A rotated picture, one with round corners and one over 16 MP keep the source path: decoded to cover the output (`downscaleFor`) and drawn through the transform and the clip.
+  - _Picture effects (2026-11, PR #23 after main's #20):_ a picture's shadow and soft edge (`ImageObject.shadow`, `softEdge`, written by the ProPresenter importer) are drawn by the shapes' effects path (`effects.ts` `drawEffected`, `picture-effects.ts`), so a picture and a shape with the same fields look alike: the shadow is the picture's alpha blurred by σ = blur/√6 in its colour and offset, the soft edge multiplies the picture by its silhouette (its mask, else its box with its round corners) eroded by `softEdge` and blurred by it, both made with Canvas shadows (no `ctx.filter`, which WebKit lacks on OffscreenCanvas), at a reduced resolution, cached in the sprite cache and counted in the slide's effect budget (`geombudget.ts`; past it later pictures are drawn without them). A picture with effects and round corners is cut to a 'roundRect' mask of that radius, so it is prepared too. The soft edge is part of what is prepared (a post step after the registered ones, banded with the picture, design/14 "Turns"); the shadow is a layer drawn under the prepared bitmap. Main's #20 drew them with a Canvas `shadowBlur` of `blur` (σ = blur/2), an inset rectangle blurred by `ctx.filter`, never prepared nor cached, and lost the round corners.
   - The decode cache is keyed by hash and target (`pictureKey`). A full-slide picture takes 8.3 MB at 1080p and 33 MB at 4K, within the 256 MiB LRU.
   - The asset worker (`apps/output/src/pictures.ts`) groups a cue's uses by file: a file whose targets are not all cached is decoded once and every missing target is prepared from that decode, which is then closed (a slide showing one photo at 200 sizes decodes it once). What the draw holds is pinned in the LRU from the preload until the draw is done, so no insert or prune of the same cue closes a bitmap the draw is about to use (drawing a closed bitmap throws and loses the slide). A cue prepares at most 32 targets (the LRU holds 64) and checks each against the cue's bitmap budget before preparing it (`w × h × 4`); a target past either is drawn from the source, reduced to cover the output.
   - Why: Chromium's rasterizer resamples a picture drawn at any other size on every draw, and converts a picture that kept its colour profile on every draw. A full-slide picture cost 4.4-5.2 ms at 1920 and 17-23 ms at 3840 that way (12.8 and 46 ms with a profile), against 0.7 and 2.7 ms for a 1:1 copy. Before, a picture was decoded just large enough to cover the output and redrawn at the box's size on every draw. Harness raster p95 (median of 3 draws, Chromium's software rasterizer): on the 73 sermon slides from 10.5 to 3.4 ms at 1920 and from 44.3 to 12.4 ms at 3840; on the 924 slides of worship shard 0 from 15.6 to 5.2 ms and from 49.9 to 21.2 ms. Mean native SSIM rose slightly on both (0.9438 to 0.9439, 0.7947 to 0.7954).
@@ -989,6 +1204,24 @@ _As built (M3 wave 2, `packages/pptx-scene/src/media.ts`, `timing.ts`; `apps/hub
   creation order, and ids are random within a millisecond). Clip placeholders are `pptxmedia:clip<n>`, one per
   part and trim, listed in `EmittedSlide.clips`.
 
+**Looping shows (the census of 2026-11-13).** A deck PowerPoint plays as a loop (`p:showPr loop`) with every
+shown slide timed (`advTm`) imports as an announcement loop on both paths (`isLoop`), its slides advancing by
+their times and its music playing across the wrap (above). Since #17 a loop shows standby on the Stage
+('Service Starting Soon') and nothing on the Lobby or the Bottom-Third Stream (the owner's choice, kept), so a
+worship lyric deck saved that way loses its words on those screens. The census over the exit set E (273 decks:
+the 5 sermon decks and worship shards 0-2) and the public `golden-pptx` corpus (112 decks) found such decks
+rare: 1 of 385 decks is classified loop (a 6-slide worship deck that is mostly text); 4 set the loop flag
+without timing every slide, and 9 time every slide without the flag (they import as slides, the operator
+advancing them, `durationMs` stored but unused). One deck is no basis for telling lyric loops from announcement
+loops by their content, so the classification stays PowerPoint's own. Instead the import says what it did in
+plain words: the import log's line (`LOOP_IMPORT_NOTE`, both paths) and the import report of a PowerPoint loop
+(design/15: shown for loops too) explain that on the Audience screens each slide moves on by itself and starts
+over, that the Stage shows 'Service Starting Soon' and the Bottom-Third Stream shows nothing while it runs, and
+offer **Treat as slides** (`treatAsSlides`: kind 'slides', the loop's settings dropped, the slides' timings
+kept), one tap, after which the deck's words show on every screen (`e2e/pptx-loop.spec.ts`). Since the editor
+opens an imported deck canvas-first with its drawer closed, a line on the stage says so as well and offers the
+same switch (`LoopDeckBanner`), so a volunteer learns it before the service, not from a Stage on standby.
+
 ## 9. Builds, transitions and hidden slides
 
 - **Final state.** Every slide draws its final state, as LibreOffice and pptx-preview do. Exit, emphasis and motion effects are dropped (logged).
@@ -1154,7 +1387,7 @@ The extensions, in priority order (M4 unless noted):
     - sound: replace, start, loop, volume, 'continue for N slides', with a warning when it replaces running playlist audio;
     - SlideGrid shows a `video` / `audio` tag on slide thumbnails (the `.tag` already used for media cues, `SlideGrid.tsx:154`);
     - one playing video per slide is enforced: the panel says which object plays.
-15. **Media library hygiene (M3).** MediaTab hides media tagged `pptx` or `document` unless 'Show presentation pictures' is ticked. Deleting a media item that stored presentations reference asks for confirmation and names them, because a missing picture refuses goLive.
+15. **Media library hygiene (M3).** MediaTab hides media tagged `pptx` or `document` unless 'Show presentation pictures' is ticked. Deleting a media item that stored presentations or playlists reference asks for confirmation and names them, because a missing picture refuses goLive.
 16. **Later (M8):** 'Split reveal into slides'; 'Convert to song' (lyric objects → sections and arrangement, kind song) with a 'Re-flow lyrics' op using the stored but unused `linesPerSlide`; preset adjust handles from the compiled `ahLst`; a bilingual band that also shows the `role:'translation'` box.
 17. **Optional (M4):** a three-way merge per slide on 409 (base = `ed.base`, mine = draft, theirs = the 409 body's `current` once `ApiFailure` keeps it, `packages/client/src/api.ts:35-39`), so two volunteers editing different slides, or a volunteer and the version-2 patch, do not overwrite each other. Built in M4 (item H, `views/editor/merge.ts`): slide and object level, the rules in §15 M4 "As built, item H".
 
@@ -1200,12 +1433,13 @@ The extensions, in priority order (M4 unless noted):
 ## 12. Security bounds (the deck is untrusted)
 
 **Process**
-- Parse only on the CPU pool: 512 MB heap, 2 minutes per batch of ≤150 slides, at most 15 minutes of pool time per import (beyond it, the remaining slides become picture class, or the import fails cleanly when nothing is saved yet), termination on timeout.
+- Parse on the hub only on the CPU pool: 512 MB heap, 2 minutes per batch of ≤150 slides, at most 15 minutes of pool time per import (beyond it, the remaining slides keep their text, M9's rescue, or the import fails cleanly when nothing is saved yet), termination on timeout.
+- Parse in the browser only in the operator's import worker, with a deadline after which the worker is terminated, never while a playlist is live, and through `zip-bounded.ts` (below, "Zip"); any failure uploads the deck without a scene. The scene is checked on the hub's pool (`pptx-client-scene`, `clientScene.ts`): a `clientScene` part over 32 MB is dropped before it is stored (the largest of 370 real decks' scenes is 2.4 MB; the checked scene's one message back from the pool costs the library's event loop about 7 ms a MB, off-service only), a zod schema bounds every list, string and part name (≤ 512 characters) before any reaches the `pptx-lo` payload, the converter's version, stored fields and LibreOffice state must be the hub's, every slide passes `Slide` and is used as that parse returns it (a slide without its objects is refused), and every shape file is checked again (`geomFileOf`: `sanitizeGeom`, `GeomFile`, `GEOM_FILE_MAX_BYTES`) and re-hashed; anything else makes the hub parse the deck itself. The scene file is released once version 1 is saved or the import fails.
 - If the pool cannot start, the import fails with a clean message (nothing is saved; it can be tried again). Never parse inline on the event loop (which `extractPptx` and `pptxForRendering` did), and never hand the upload to LibreOffice instead: its render copy needs the pool too, and LibreOffice never sees a deck as uploaded (§5).
 
 **Zip** (`extractZip` semantics)
-- Trust the central directory only.
-- Refuse encrypted entries and unknown methods; count inflated bytes against declared sizes.
+- Trust the central directory only (the browser reads it itself, `zip-bounded.ts`, never JSZip's private sizes).
+- Refuse encrypted entries and unknown methods; count inflated bytes against declared sizes as they inflate (the browser too: an entry that inflates past its declared size stops the read; pictures and clips are read only for their first bytes there).
 - ≤ 200k entries; XML ≤ 8 MB per part and ≤ 64 MB in all; spilled media ≤ 1 GiB per import.
 - At most 2,000 picture parts, 50 clips and 20 font parts per deck are extracted; the rest are logged and keep their posters or fallbacks. This bounds the Media rows and jobs one deck can create. The clip limit counts clips as stored, one per part and trim, so one part trimmed differently on every slide still makes at most 50.
 - Add a `skip` filter (only referenced media and font parts spill) and `nested:false`.
@@ -1225,7 +1459,7 @@ The extensions, in priority order (M4 unless noted):
 - slide side 1-51,206,400 EMU; logical coordinates ±100,000; box span ±2× the canvas; font 1-4,000 pt in the parser, 4-1,000 px stored for a box and 2-1,000 px for a run;
 - per text object at most 16 distinct run and bullet families and 64 distinct size scales (`FontBudget` in `clamp.ts`, the same in `sanitizePresentation`): later families take the box's, later scales the nearest kept one. Each new family name costs the browser a platform font lookup (about 1 ms in Chromium), so 2,000 runs with 2,000 families would cost seconds per object. Family names lose every control character (a form feed is a CSS newline that voids the whole `ctx.font` assignment). A family is keyed by that cleaned name, trimmed and lower-cased, and every name with the key takes the spelling first kept, so names differing in case, surrounding spaces, quotes or control characters neither take more places nor make more font strings;
 - adj ±1e7; ≤ 256 guides per shape; ≤ 4,096 path points per stored path (8 stored paths; a `cont` chain draws as one path of at most 8 × 4,096) and 64k per slide; ≤ 16 gradient stops;
-- **drawing cost** (M6 repair, finish and finish review; renderer `geom/cost.ts`, `geom/outline.ts`, `geom/bounds.ts`, `geombudget.ts`): the counts above do not bound the time a shape takes (a zigzag of 4,000 points across its box took 1.5 s at 1920, a 21,600-point chain 22.7 s; a tiny custGeom stroked 400 px wide 3.9 s at 3840, 24,000 arrowheads on short open sub-paths 2.6 s). One estimate, in logical px of edge, rates a shape as it is drawn: each filled path or chain (its edges' length along their longer axis × (1 + the most edges active at once / 64)); each outline as the polygon Canvas fills for it (two offset edges a leg, every vertex's join, every open sub-path's caps, `GEOM_COST.dash` a dash, an arrowhead's own fill or, open, its own stroke, and its area), rated the same way, with `GEOM_COST.leg` a leg for the stroker's own work; the pixels each fill paints (the span of its points cut to the canvas; a logical px² `GEOM_COST.area` for a translucent colour, `opaqueArea` for an opaque one, `gradientArea` or `opaqueGradientArea` for a gradient, about five times a colour's: a full-slide translucent gradient takes about 11.7 ms at 4K, a translucent colour 2 ms; _M6 merge repair:_ `GEOM_COST.slowGradient`, twice that, for a gradient Skia cannot draw on its two-stop fast path, of three stops or more or two at one position (`slowGradient`): a full-slide translucent 4-stop gradient took 17 to 19 ms at 4K past a blank job, 8 to 11 for two stops at 0 and 1, and three of them 67 to 69 ms while the budget kept all three; two stops inside 0..1, such as PowerPoint's radial decorations at 0 and 60 % (29.7 ms a full slide before, 19.8 after), are drawn as two at 0 and 1 over that part of the gradient line, so they cost what a two-stop gradient does, and end stops repeating their neighbour's colour are dropped first (`stops.ts`); the converter follows: on the 2,713 shown worship slides, 8 slides of two traced-decoration templates, whose 3-stop backgrounds now count twice, send their last decorations to the art (`custGeom:complex`, native 2,525 → 2,517; 0.01 to 0.02 lower against LibreOffice on those slides; their 4K raster 42 → 30 ms on one template, unchanged on the other), and a deck's 0..60 % radial decorations draw 30 % faster at 4K with the same pixels) and the area each outline covers (`area`), legacy shapes included; the passes a shadow, a glow and a soft edge make over the shape's silhouette; and `GEOM_COST.point` (10) a stored point for parsing, rating and tracing it (about 0.25 µs at 4K). At most about 29 ns a unit at 4K over the worst arrangements measured (outlines are upper bounds: Chromium strokes most hostile ones 5 to 500 times faster than rated, thin dashes and arrowheads within 0.2 to 0.7). A stored geometry's fill is at most 1.3M, past which the converter sends it to the art (`custGeom:complex`) and the renderer draws the legacy shape; a slide's shapes (custom and preset geometries, picture masks and the outlines along them) at most 1.3M with their stored points, and the points at most 64k, past which later shapes go to the art (`custGeom:complex`, `geom:complex`) or draw as legacy shapes (without their stored geometry, gradient (its first stop), dash, arrowheads, joins and caps). Every object's legacy copy is counted first and never refused (`slidePlan`), and what is drawn on top of it must fit: a slide draws within the budget whenever its legacy copies do, and one within it is drawn as it is, whatever the order (legacy fills are bounded by the object budget alone, about 2 ms a translucent full-slide fill at 4K, as an older build draws them). A slide at the budget draws its geometry and fills in at most about 38 ms at 4K cold, within 50 ms with the clear and the copy out. The converter charges the slide's background first (a full-slide fill laid on white), and a shape it sends to the art for this budget emits nothing in version 1 unless it has text (then its legacy shape under its text, charged), as `budget:shapes` does. The converter rates what it will emit with the same functions (`slideCustom`, and `fitDrawing` on the emitted objects), so every drawer (asset worker, thumbnails, editor canvas, each part of a scene slide after the slide is planned once) draws natively what the converter kept. A dashed outline is drawn at least 0.5 px wide (`clamp.ts`). A slide's shape effects: their layers' area at most 10 slide areas (a soft edge counts 8 times: its body is cut by its mask at full resolution on every raster, its reduced mask is cached), past which later shapes lose them (the converter notes it; the renderer leaves them out). Each layer is sized by what the shape draws (`bounds.ts` `drawnBounds`: its geometry's points, past its box included, grown by its outline's sharpest miter within the limit, its caps and arrowheads), placed on the slide and cut to the canvas and the effect's reach as `effects.ts` cuts it, in the converter (`fitEffects`, `fitDrawing`), the renderer's budget and the drawers alike (the M6 finish review: a 10 px custGeom whose path covers the slide weighed 0.0005 slide areas a shadow, a 10 px rect with a 500 px outline 0.001). Not in the estimate: the clamp of inline path text (about 0.5 µs a point; the converter stores large geometries in files, read and clamped once);
+- **drawing cost** (M6 repair, finish and finish review; renderer `geom/cost.ts`, `geom/outline.ts`, `geom/bounds.ts`, `geombudget.ts`): the counts above do not bound the time a shape takes (a zigzag of 4,000 points across its box took 1.5 s at 1920, a 21,600-point chain 22.7 s; a tiny custGeom stroked 400 px wide 3.9 s at 3840, 24,000 arrowheads on short open sub-paths 2.6 s). One estimate, in logical px of edge, rates a shape as it is drawn: each filled path or chain (its edges' length along their longer axis × (1 + the most edges active at once / 64)); each outline as the polygon Canvas fills for it (two offset edges a leg, every vertex's join, every open sub-path's caps, `GEOM_COST.dash` a dash, an arrowhead's own fill or, open, its own stroke, and its area), rated the same way, with `GEOM_COST.leg` a leg for the stroker's own work; the pixels each fill paints (the span of its points cut to the canvas; a logical px² `GEOM_COST.area` for a translucent colour, `opaqueArea` for an opaque one, `gradientArea` or `opaqueGradientArea` for a gradient, about five times a colour's: a full-slide translucent gradient takes about 11.7 ms at 4K, a translucent colour 2 ms; _M6 merge repair:_ `GEOM_COST.slowGradient`, twice that, for a gradient Skia cannot draw on its two-stop fast path, of three stops or more or two at one position (`slowGradient`): a full-slide translucent 4-stop gradient took 17 to 19 ms at 4K past a blank job, 8 to 11 for two stops at 0 and 1, and three of them 67 to 69 ms while the budget kept all three; two stops inside 0..1, such as PowerPoint's radial decorations at 0 and 60 % (29.7 ms a full slide before, 19.8 after), are drawn as two at 0 and 1 over that part of the gradient line, so they cost what a two-stop gradient does, and end stops repeating their neighbour's colour are dropped first (`stops.ts`); the converter follows: on the 2,713 shown worship slides, 8 slides of two traced-decoration templates, whose 3-stop backgrounds now count twice, send their last decorations to the art (`custGeom:complex`, native 2,525 → 2,517; 0.01 to 0.02 lower against LibreOffice on those slides; their 4K raster 42 → 30 ms on one template, unchanged on the other), and a deck's 0..60 % radial decorations draw 30 % faster at 4K with the same pixels) and the area each outline covers (`area`), legacy shapes included; the passes a shadow, a glow and a soft edge make over the shape's silhouette; and `GEOM_COST.point` (10) a stored point for parsing, rating and tracing it (about 0.25 µs at 4K). At most about 29 ns a unit at 4K over the worst arrangements measured (outlines are upper bounds: Chromium strokes most hostile ones 5 to 500 times faster than rated, thin dashes and arrowheads within 0.2 to 0.7). A stored geometry's fill is at most 1.3M, past which the converter sends it to the art (`custGeom:complex`) and the renderer draws the legacy shape; a slide's shapes (custom and preset geometries, picture masks and the outlines along them) at most 1.3M with their stored points, and the points at most 64k, past which later shapes go to the art (`custGeom:complex`, `geom:complex`) or draw as legacy shapes (without their stored geometry, gradient (its first stop), dash, arrowheads, joins and caps). Every object's legacy copy is counted first and never refused (`slidePlan`), and what is drawn on top of it must fit: a slide draws within the budget whenever its legacy copies do, and one within it is drawn as it is, whatever the order (legacy fills are bounded by the object budget alone, about 2 ms a translucent full-slide fill at 4K, as an older build draws them). A slide at the budget draws its geometry and fills in at most about 38 ms at 4K cold, within 50 ms with the clear and the copy out. The converter charges the slide's background first (a full-slide fill laid on white), and a shape it sends to the art for this budget emits nothing in version 1 unless it has text (then its legacy shape under its text, charged), as `budget:shapes` does. _M9 wave 1 repair:_ a preset shape without text that only its pixels put past the budget (no dash and no arrowhead, whose cost is the path's) is not sent there while the legacy copies of everything kept, its own included, fit the budget (`walk.ts` `keepPastBudget`, `WalkState.floors`: the floor `slidePlan` counts first): it is emitted as it is and charged as its legacy copy, and the emitted slide's own plan (`fitDrawing`) draws what fits natively in z-order and the rest as legacy shapes, exactly as the renderer draws a slide past its budget. So a full-slide radial panel over a radial background (two opaque slow radials, past `GEOM_COST.slide` since render-seams' raster repair), or a plain panel after a large translucent 3-stop decoration (a worship lyric template, 10 % costlier since `gradientArea` 0.22), stays on a hub without LibreOffice, in its legacy colour where no gradient fits; the floors still bound a stack of full-slide fills (13 of the review's 140, 26 ms at 4K). A change to `GEOM_COST` or `areaWeight` changes what the converter sends to the art beyond the exit set: its wave runs the census of the 667-deck suite before and after. The converter rates what it will emit with the same functions (`slideCustom`, and `fitDrawing` on the emitted objects), so every drawer (asset worker, thumbnails, editor canvas, each part of a scene slide after the slide is planned once) draws natively what the converter kept. A dashed outline is drawn at least 0.5 px wide (`clamp.ts`). A slide's shape effects: their layers' area at most 10 slide areas (a soft edge counts 8 times: its body is cut by its mask at full resolution on every raster, its reduced mask is cached; a picture's soft edge counts once where the outputs prepare the picture, `pictureTarget`: the asset worker feathers it once and copies it after, `EFFECT_COST.preparedSoftEdge`, the 2026-11-13 review), past which later shapes lose them (the converter notes it; the renderer leaves them out). Each layer is sized by what the shape draws (`bounds.ts` `drawnBounds`: its geometry's points, past its box included, grown by its outline's sharpest miter within the limit, its caps and arrowheads), placed on the slide and cut to the canvas and the effect's reach as `effects.ts` cuts it, in the converter (`fitEffects`, `fitDrawing`), the renderer's budget and the drawers alike (the M6 finish review: a 10 px custGeom whose path covers the slide weighed 0.0005 slide areas a shadow, a 10 px rect with a 500 px outline 0.001). Not in the estimate: the clamp of inline path text (about 0.5 µs a point; the converter stores large geometries in files, read and clamped once);
 - geometry files (`ShapeGeom.ref`, M6 round 2): ≤ 400 KB each, parsed only by drawers that asked for them by name, their paths re-tokenised and bounded as inline paths are; a drawer keeps at most 4,096 files and 32M characters of their path text; an import stores at most 32 MB of them. _M6 repair:_ the pool task names them (re-tokenised, serialised and hashed off the library's event loop) and returns at most 32 MB a batch; the job applies the 32 MB as batches arrive, so it never holds more; a slide whose file is dropped or could not be stored is a compact picture; a shape whose only geometry is a file not read yet draws nothing until it is (an older build still draws the legacy shape); the editor refuses a file over 400 KB unread;
 - recolour and tile bakes (M6 repair): at most 500 distinct bakes an import (the rest show their source pictures, noted), each charging the picture budget with what it decodes and makes (source, read size and output, in megapixels) and its pool time against the import's 15 minutes;
 - colour maths clamped to 0..1; NaN and Infinity become 0.
@@ -1274,7 +1508,7 @@ The current JSZip text path takes 1.17 s per 100 slides.
 | LibreOffice work                               | proportional to the slides that need it; one soffice run per import (art slides counted twice as pages)                                                                                         | job log                                                                                                                                                                                                                                                                                                                                                                |
 | JSON sizes                                     | per §3.4                                                                                                                                                                                        | importer, tests                                                                                                                                                                                                                                                                                                                                                        |
 | Asset worker slide raster p95                  | ≤ 10 ms at 1080p, ≤ 30 ms at 4K; after M7 ≤ 12 ms at 4K for text over photo; a slide past it by its drawing estimate ≤ 50 ms (named exception below)                                            | `bench:slides` (six slide kinds, M6's two included, `--check`), health `rasterMs` p50/p95 over the last 64 slides with the `raster` alarm (M7) over those within the budget by their content (`rasterHeavy` counts the rest)                                                                                                                                           |
-| Longest asset-worker task                      | ≤ 50 ms; props flip never > 1 frame late during a slide decode (M7; as built: longest slice 41 ms and props bitmap ≤ 36 ms after sending at 4K, `bench:lanes`)                                  | health long tasks; `asset.lanes.browser.test.ts`; per-lane `longestMs` in telemetry                                                                                                                                                                                                                                                                                    |
+| Longest asset-worker task                      | ≤ 50 ms; props flip never > 1 frame late during a slide decode (M7; as built: longest slice 41 ms and props bitmap ≤ 36 ms after sending at 4K, `bench:lanes`)                                  | health long tasks; `asset.lanes.browser.test.ts`; per-lane `longestMs` in telemetry; tables: `bench:tables` (the largest tables' longest prepare slice and draw at 3840, median of five runs)                                                                                                                                                                          |
 | Rich layout                                    | ≤ 1 ms warm, ≤ 5 ms cold per 400 characters; autofit ≤ 12 layouts                                                                                                                               | unit bench                                                                                                                                                                                                                                                                                                                                                             |
 | Render worker                                  | zero missed vsync; no task ≥ 50 ms; nothing allocates or compiles on GO; static slides add 0 draws; in-slide video adds 1 external texture + 1 bind group per frame, same single pass per layer | hot-lint, soak, e2e                                                                                                                                                                                                                                                                                                                                                    |
 | Uploads                                        | ≤ 4 ms per frame at 4K on the reference venue GPU (M7)                                                                                                                                          | health `uploadMs` with the `upload` alarm (M7); `bench:venue` on the venue machine                                                                                                                                                                                                                                                                                     |
@@ -1284,6 +1518,64 @@ The current JSZip text path takes 1.17 s per 100 slides.
 | Sync                                           | in-slide video start skew within design/23 bounds (17 ms real GPU, 100 ms SwiftShader)                                                                                                          | e2e                                                                                                                                                                                                                                                                                                                                                                    |
 
 **Named exception to the asset worker slide raster p95** (M6 merge review): _a slide whose drawing estimate is past the raster budget._ The drawing budget keeps a slide whole up to `GEOM_COST.slide` (about 38 ms of geometry and fills at 4K, within the 50 ms of an asset-worker task with the clear and the copy out), not up to the 10 / 30 ms raster p95. The worship decks' traced decorations reach it: a template slide of about 100 geometry-file shapes and 36 path shapes over a 4-stop background takes 19 to 21 ms at 1080p and 45 to 48 ms at 4K job-warm, and 55 of 100 traced-outline slides take over 50 ms cold at 4K. Such a slide is held to the 50 ms task, not to the p95: the asset worker marks it `heavy` when its drawing estimate (`health.ts` `rasterEstimateMs`: a fresh full-frame bitmap, 10 ms at 4K by pixel count, and the units the budget charges at 29 ns at 4K, 0.4 of that at 1080p; fitted over 343 full-frame converted slides at 10.9 ms + 32.8 ns a unit at 4K and 2.8 ms + 12.4 ns at 1080p) is past 80 % of the p95 budget at the output's size (`heavySlide`), and health reports its time in `rasterMs` and counts it in `rasterHeavy`, but the `raster` alarm, which tells the operator the computer is slow, reads only the other slides (`rasterAlarm`). `bench:slides` has a traced-decoration kind (a 3-stop background, eight filled outlines of 1,000 to 2,000 points and 70 thin strokes; heavy, checked at 50 ms: 43 ms p50 and 46 p95 at 4K, 19 and 22 ms at 1080p when added) and a gradient-decoration kind (two large radial decorations at 0 and 60 %, within 10 / 30 ms: 17 ms p50 at 4K). The estimate is not an upper bound for every part of such a slide: 110 thin round-joined open strokes of 10 to 25 points cost about 64 ns a unit at 4K and the filled outlines of cubic curves about 50, against the 29 the budget assumes, which the background's and the traced outlines' points (rated well above their cost) make up for on the worship decks' slides. Tables (warm p95 5.1 / 14.8 ms) and SmartArt drawings (5.8 / 17.2 ms) are within the p95 on their own. The way out is the same as the effect budget's: a draw that yields between objects, or composites of heavy effect-free shapes cached by content key as `effects.ts` caches effect layers.
+
+<!-- m9:render-seams -->
+_M6 merge re-review, fixed in M9 wave 1 (render-seams)._
+- **What the heavy-slide estimate counts.** `rasterEstimateMs` (`health.ts`) is no longer the geometry units alone:
+  it adds the effect layers copied or enlarged from the cache (`SlideDrawCost.effects`), the glyphs drawn blurred
+  (`textEffects`: a box or run shadow, or a glow, each character's em square), the characters laid out and drawn
+  (`chars`), the pictures copied 1:1 and those drawn from their source (`pictures`, `sourcePictures`; a slide's
+  reference picture counts as one copied), and the effect sprites the draw had to make, which the asset worker
+  reads from `effects.ts` `effectWork` across the job (`effectsMade`: canvases at full resolution and reduced),
+  so a slide's first raster that builds its shadow layers is heavy by its content, not a slow computer. The
+  constants (`RASTER_ESTIMATE`) are the estimate's own fit: non-negative least squares over 500 slides of 31
+  converted decks (the re-review's 22 worship decks, 7 ordinary shard decks, 2 sermon decks), each drawn as the
+  asset worker draws it, first in deck order with the sprite cache emptied at each deck's start and then warm,
+  divided by 1.31 (the container ran that much slower that day than in the M6 review's session, by both
+  sessions' job-warm intercepts: 14.3 / 3.7 ms against 10.9 / 2.8). At 4K a fresh frame with a first raster's own
+  costs is 13.3 ms, a million units 25.6 ms, a slide area of effects copied 3.8 ms, of glyphs blurred 18.1 ms, a
+  thousand characters 10.8 ms, a slide area of pictures copied 2.5 ms, of effect canvases made 35 (full) and 62
+  (reduced); at 1080p 4.1, 9.9, 0, 3.3, 5.1, 0.7, 11.1 and 27 ms. Measured over estimated on first rasters: p50 0.99,
+  p90 1.24 at 4K; 0.86, 1.41 at 1080p. The alarm simulated deck by deck on those first rasters at the reference
+  speed (`scratchpad m9/w1/render-seams/fit`): at 4K it fires on 2 of the 26 decks of five slides or more (was 10)
+  and the slides it reads have a p95 of 27.7 ms (was 55.3); at 1080p on 5 (was 10), p95 12.7 ms (was 21.0). What is
+  left at 1080p is first-raster cost the content does not explain (an ordinary 20-slide deck draws its first
+  rasters in 14 to 23 ms against 5 to 7 ms warm, at about 300 characters a slide).
+- **The figures the alarm quotes.** The report carries the window the alarm read (`HealthReport.rasterAlarmMs`,
+  when heavy slides are left out of it); the alarm's log line and the operator's detail quote it, with every
+  slide's p95 beside (`slide raster p95 34.5 ms is over the 30 ms budget (p50 19 ms, 20 slides; 9 more past the
+  budget by their content, not counted (p95 of all 29: 41.4 ms))`).
+- **Opaque slow radial gradients.** `areaWeight` gives an opaque radial gradient off Skia's fast path no opaque
+  discount (`FillPaint.radial`; the converter's `drawSpecOf` and background cost say radial for a path gradient):
+  two opaque full-slide 4-stop radials took 49.7 ms p50 at 4K while rated 1.17M units; now one is kept and the
+  other drawn as its legacy colour (the converter now emits such a shape for the renderer's plan to draw so,
+  rather than send it to the art, wave 1 repair: on the suite, 55 slides of 10 decks had lost a textless shape
+  to `geom:complex` and 21 of them went hybrid, a hub without LibreOffice showing them without it). The raster
+  bench checks a stack of three (`OPAQUE_RADIAL_GRADIENTS`): 31.8 to 35.9 ms p50 and 33.3 to 42.9 p95 at 3840
+  in three runs, 8.1 to 9.3 / 8.3 to 11.2 at 1920. _(M9 wave 2, `decor-conv`: such a shape is stored whole,
+  never flattened to its legacy colour; the renderer's plan draws it so until the slide's decoration plate
+  holds it.)_
+- **The share the heavy-slide estimate leaves out of the alarm** (wave 1 review, measured over E, warm draws,
+  no effect sprites made): 689 of the 2,820 worship slides (24.4 %) are heavy at 1080p and 723 (25.6 %) at 4K,
+  against 149 with the geometry units alone; of the 73 sermon slides 10 at 1080p and 17 at 4K (none before).
+  The typical one is a photo background under about 250 characters of shadowed lyric (at 4K: frame 13.3, blurred
+  glyphs about 9, characters 2.7 and the picture 2.5 ms, past 24 ms), which the harness draws warm in 3.0 / 10.6 ms
+  p95 (sermons, 1920 / 3840) against estimates of 7.1 to 8.9 and 24 to 31 ms. So the raster alarm reads about
+  three quarters of an ordinary worship deck. The constants were checked only on the 500 slides they were fitted
+  on; open for the renderer: refit them on first rasters outside the fit (E through the asset worker's path), or
+  judge a slow computer by measured over predicted time (the M6 re-review's proposal), so that ordinary
+  shadowed text stays in the alarm.
+- **Headroom for stacked translucent gradients.** `GEOM_COST.gradientArea` is 0.22 (was 0.2): over one another
+  such gradients cost about 12.6 ms a full slide each at 4K, not the 11.7 of one over a clear canvas, and three
+  full-slide ones at 0 and 60 % (all kept at 0.2, 47.7 ms p50 and 52.7 p95 at 4K in the re-review) left the 50 ms
+  task no headroom. Now two are kept: in three runs of `bench/raster.ts --check` each, alternating with the base
+  build on one quiet machine, the row took 36.3 to 36.6 ms p50 and 37.1 to 38.8 p95 at 3840 (base: 40.3 to 45.9 p50,
+  47.1 to 54.2 p95, over the bound in two runs), 9.2 to 9.6 p50 at 1920. The six translucent full-slide gradients
+  row drops the same way (36.6 to 42.8 ms p50 at 3840; base 41.9 to 44.3, over the bound once). Every other row is
+  within the runs' noise of the base build (`scratchpad m9/w1/render-seams/bench-cmp.txt`).
+- **No converted slide changes**: the census of E is identical to the base's in every slide's class, reasons,
+  objects, geometry count and bytes (the converter rates its emitted shapes with the same functions).
+<!-- /m9:render-seams -->
 
 **Named exception to the editor's 15 ms thumbnail at 640 px** (M6 merge review): _the first thumbnail of a heavy traced-outline slide_, which builds its geometry paths and its effect layers: 22.6 ms for a slide of 136 shadowed geometry-file shapes, 19.2 ms and 13.9 ms for two others; later draws take 1 to 8 ms. The thumbnail worker draws in a worker of its own, so the editor's main thread does not wait for it.
 
@@ -1307,6 +1599,49 @@ The current JSZip text path takes 1.17 s per 100 slides.
      - _As built (M2):_ the converter writes the text with LibreOffice 24.2's policies (`EmitOptions.loCompat`, never set by the hub): no run shadows (an unfilled shape's shadow on its text stays), no outline on filled text (the reference pictures come from `pptxForRendering`'s copy, which strips them, so hollow letters never appear in them), shrink-to-fit re-fitted from full size, and only for a shape's own `normAutofit` (LibreOffice ignores one inherited from a layout or master placeholder; measured with a probe deck). The harness emits each deck both ways and records per slide the rules that change its drawing (`runShadow`, `textOutline`, `refit`, `inheritedFit`); with `--lo-compat` such a slide is drawn both ways, and `summary.json` and the report give the means both ways, per rule and overall. `--baseline` compares ordo's own drawings.
    - _Also built in M2:_ per-slide text features read from the slide's XML with the suite inventory's rules (superSub, lnSpcPct, normAutofitScaled, rtl, rtlScriptText, bulletsAuto) and the census's mixedRuns, with means per feature, per tier and per deck next to the M2 targets; `--slides [DECK:]LIST` scores only some slides.
    - Decks with embedded fonts are excluded from means; LibreOffice 24.2 ignores them (it drew Inter).
+   <!-- m9:base -->
+   - _Built for M9 (base track; `tools/pptx-fidelity/README.md`):_
+     - `src/census.ts`: the census as a harness tool. It reads every file of `DECK_RE` (`.pptx`, `.pptm`,
+       `.ppsx`, `.ppsm`, `.potx`, `.potm`, as a fidelity run does), converts each deck in the harness's worker,
+       and writes per shown slide the converter's tier, class and reasons and the hub's view: `stored`
+       (`storedSlideBytes`), `hub` and `hubWhy` (`hubClasses`: the import's geometry-file budget, then
+       `planImportSizes`, as `nativeJob.ts` runs them). A link whose deck is gone is a row
+       `unreadable: "missing target"`, never an error.
+     - `--before hub` (`src/beforehub.ts`) writes `perSlide.beforeHubSsim`: what a hub with LibreOffice showed
+       before M9. A slide the hub stores as a picture shows LibreOffice's page (1). A hybrid slide is scored
+       with LibreOffice's pixels pasted over its art box, and a slide with metafile pictures with them pasted
+       over the metafiles' boxes, on the native page. `nativeSsim` stays the harness's before: residual
+       elements draw nothing.
+     - `maxObjectMs` (`src/native-page.ts`, §13's 50 ms task): once a deck's slides are timed, each slide is
+       drawn again object by object as `drawSlide2D` draws them, cold (a copy of the slide, the effect sprites
+       cleared, its pictures prepared outside the times). Each `drawObject` is timed with its flush, at 1920
+       and 3840 px, and the largest is kept with its object's id.
+   <!-- /m9:base -->
+   <!-- m9:harness -->
+   - _Built for M9 (harness track; `tools/pptx-fidelity/README.md`):_
+     - `--before hub` now takes the hub's real picture: each deck with a slide the hub does not store native,
+       with pending metafiles, or that the converter did not emit, is imported once through this checkout's
+       hub with LibreOffice (`src/hub-import.ts`), and its version 2 of those slides is drawn by the harness's
+       renderer and scored (`beforeHubFrom: 'hub'`). The wave-0 pixel paste is kept as `beforeHubPaste`, a
+       labelled fallback where the hub gives no score (`--before paste` alone). It was no bound of version 2:
+       it took LibreOffice's background inside the art box, missed the art's spill past the box, and stood at
+       1 for picture slides, which really show the hub's stored page.
+     - F, the exit's set, is every slide not stored native, every slide with metafiles left to LibreOffice
+       (`perSlide.metafiles`), and every shown slide the converter did not emit (scored as the hub's
+       LibreOffice picture). `native.all.causes` tables F by cause as `exit_ssim.py` groups it.
+     - `--no-libreoffice` scores what a hub without LibreOffice shows (`noLoSsim`, `missing`), drawn from the
+       deck emitted with `EmitOptions.libreoffice: false` as the hub stores it; `--hub-budget` draws every slide
+       as the hub stores it (`hubStoredSlide`, the hook the budget ladder fills).
+     - Registries: `src/compat/` (one LibreOffice policy rule per file) and `src/features/` (one XML feature
+       family per file, with the parts a slide names), each listed once; `src/exceptions.ts` (named
+       exceptions by deck SHA-256 prefix, slide and reason, lifting gate 2 only unless the entry says 'all');
+       `src/libreoffice.ts` (`pptxToPdf`, moved out of the hub's `media/ffmpeg.ts`: the hub keeps only its
+       sandboxed LibreOffice path).
+     - `maxObjectMs` reads the deck's geometry files again before each slide's object pass, so a geometry in a
+       file is built inside the times.
+     - `src/hub-import.ts` is also the exit's soffice-less import of the whole worship set (§15 M9 exit,
+       plan §6.3), with `--dry-run`.
+   <!-- /m9:harness -->
 2. **Committed probe decks.** Synthetic generators, as in `corpus.ts`, one per verified rule:
    - tint/shade (#454545);
    - defaultTextStyle for non-placeholders;
@@ -1322,7 +1657,7 @@ The current JSZip text path takes 1.17 s per 100 slides.
    - a chart slide with a photo background and a video below the chart (art z-range, transparent art, background swap);
    - a 48 MP photo (picture preparation).
 
-   CI runs `--engine native --corpus` and fails on a drop of more than 0.01 against the committed baseline.
+   Planned: CI runs `--engine native --corpus` and fails on a drop of more than 0.01 against the committed baseline (`native-baseline.json`); not wired yet (2026-11-13). What CI runs today is the golden-pptx census ratchet (`census-ratchet.ts`, design/23 "Fidelity"): no shown slide of the public corpus may get a worse class, native or in the hub, and no deck may go missing.
 3. **Parser fuzz and limits** (patterns of `pptx.fuzz.test.ts`): billion laughs, DOCTYPE, `a:__proto__`/`a:constructor`, depth, huge parts, lying zip headers, cyclic rels, External targets, 5,001 shapes, NaN and huge numbers, 10k path points, hidden-only decks, 10,000 tiny media parts, control characters in names. Each must finish in under 5 s.
 4. **Renderer goldens** (`golden/page.ts`).
    - Legacy cases stay byte-identical.
@@ -1461,7 +1796,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
 
 **Exit.**
 - Each of the 5 sermon decks: version 1 is saved ≤ 5 s after job start in the container and ≤ 12 s on the reference NAS, before any soffice process starts. At least 72 of 73 slides are native class; the sp3d slide is native if its bevel is a no-op, else hybrid with only that slide sent to LibreOffice. Text has runs where the deck mixes styles; `lyricObjectId` and notes are set; no picture exceeds its prepared size.
-- After goLive, an e2e capture of three imported slides from an output at 1080p and 4K matches the harness rendering at SSIM ≥ 0.99.
+- After goLive, an e2e capture of three imported slides from an output at 1080p and 4K matches the harness rendering at SSIM ≥ 0.99. As run on CI (2026-11-13): the harness page draws with the outputs' own font files (`outputFaces`) and the captures leave out the outputs' full-screen prompt; the title and picture slides are held to 0.99, the verse slide to 0.96 on its own floor while the CI runner draws its text about 0.4 % narrower than the harness (not seen in the dev container, 1.000), the spec logging each text line's width on both sides until the floor can go to 0.99.
 - Stage, lower-third and stream looks, cue labels and search show the slide text, with verse numbers.
 - A 4:3 deck aligns with LibreOffice within 2 px, and its bars stay empty on native, hybrid and picture slides.
 - A deck with a hidden slide keeps notes, pictures and text aligned. Next skips the hidden slide, and a click shows it.
@@ -1535,7 +1870,12 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   dashed red edge of a box whose text does not fit, laid out as the drawers lay it out, the panel's note,
   and the area of a deck that is not 16:9) and `formatControls.tsx` (the shared toggles, radio groups and
   the text field's refocusing). Each component is a store-bound wrapper and a props-only view. Tests:
-  `apps/operator/test/formatUi.test.ts`, `e2e/editor-format.spec.ts`.
+  `apps/operator/test/formatUi.test.ts`, `e2e/editor-format.spec.ts`. _As changed by the canvas-first
+  editor (#24):_ the 'Text format' toolbar is no longer shown; the Tune drawer's typography card
+  (`UnifiedTypography.tsx`, the whole box or the selected characters) and the floating bar over the
+  selection (`FloatingContextBar.tsx`) format text with `FormatBar.tsx`'s pure parts (`barState`,
+  `togglePatch`, `valuePatch`), and a selected text box is typed and formatted through a hidden backing
+  text field on the stage (design/15 "Keyboard" and "Canvas drawing").
 - **As built, item D (pictures):** `ImageObject.flipH`, `flipV` and `mask` (a `ShapeGeom`) in the schema,
   `clampObject` (`clampMask`: a preset and 10 adjust pairs) and `drawImageFit` (mirrored about the box's
   centre inside the rotation, then cut by an ellipse or a rounded-rect clip, `pictureCut` reading masks as
@@ -1568,7 +1908,9 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   `fitScale`, which a target keeps when only colour, fill, alignment and the like change; paragraph styles
   by level, each paragraph keeping `soft`, `hidden` and its own numbering start), `newSlideLike`,
   `useAsBackground` (an unrotated unlocked picture covering the slide area; the `role: 'bg'` objects below
-  it removed), `clearSlideBackground`. UI: `FindReplaceDialog.tsx` ('Find…', Ctrl+F), `BackgroundReplace.tsx`
+  it removed), `clearSlideBackground`. UI: `FindReplaceDialog.tsx` ('Find…', Ctrl+F; since #24 a non-modal
+  card, docked at the top right of the stage pane, whose match rows start inline editing at the match on
+  the canvas: design/15), `BackgroundReplace.tsx`
   (the Slide panel's background with its scope, the Presentation panel's 'Replace on all slides…'),
   `ObjectSlideOps.tsx` ('Apply to similar boxes…', 'Use as background'), the slide list's dimmed hidden
   slides, 'New slide like this' and 'Hidden'. Tests: `apps/operator/test/slideOps.test.ts` (find and replace
@@ -1586,7 +1928,8 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   added in ordo are kept on top and are not an edit); a slide the
   same converter would write again with its LibreOffice work done is left alone, so a re-import that changes
   nothing saves nothing; slide-level settings (timing, transition, hidden, sound, background, the reference
-  picture) stay, on a legacy slide only where the operator set them; a legacy page whose deck slide is a
+  picture, the Bottom-Third Stream text, the outgoing MIDI cues; `reimport.ts` `KEPT`) stay through a
+  re-import and a 'Reset slide' alike, on a legacy slide only where the operator set them; a legacy page whose deck slide is a
   picture again stays; a made-editable slide is placed by its picture's name ('<title> – N', the picture
   import's page) else by the deck slide whose text its boxes repeat (whitespace folded); a legacy deck
   converted whole gets its one background back as the presentation's; the presentation becomes a native
@@ -1644,7 +1987,9 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   editor canvas's text rasters and node transforms (`edited-slide-editor`), all against one PNG
   (`SAME_AS`). Every exit item below is a Playwright spec ending in `saveAndReload`.
 - **As built, the review round:** the editor's shortcuts follow the focus (`editorKeys.ts`: a dialog keeps
-  every key, a button or radio its Enter, arrows and Delete, the canvas gets them all), and Ctrl+Z / Ctrl+Y
+  every key, a button or radio its Enter, arrows and Delete, the canvas gets them all; since #24 the
+  non-modal Find card is not a dialog for this, the hidden backing text field gives the keys back when
+  inline editing ends, and keys an input method composes with are its own: design/15 "Keyboard"), and Ctrl+Z / Ctrl+Y
   in the text field are the editor's undo and redo (`e2e/editor-keys.spec.ts`, port 8909); taking a job's
   revision over moves the undo steps with the draft, a re-import's through the three-way merge; Find and
   replace changes only the part of each match that differs (typing's rule) and marks matches the screens
@@ -1847,6 +2192,17 @@ _As built (M6 wave 2, item D: SmartArt and baked pictures; `pptx-scene` `smartar
   text rule the walk has; a drawing goes native or into the art whole, and over the 150-object budget it is
   the drawing that goes to the art. The render copy keeps the drawing with its frame. Per batch at most
   2,000,000 elements of drawings are read (a shared drawing named from every slide), the rest left residual.
+  <!-- m9:base -->
+  A drawing whose `dsp:spTree` holds no `dsp:sp` at any depth is no drawing (M9 base). PowerPoint writes
+  such empty caches. LibreOffice counts top-level `dsp:sp` only (`DiagramShapeCounter`) and lays a diagram
+  without them out itself; ordo also accepts grouped ones, as PowerPoint draws them. ordo used to class those
+  frames native and draw nothing. They are residual now: 3 slides of shard 0 go native → hybrid.
+  <!-- /m9:base -->
+  <!-- m9:conv-seams -->
+  An empty cache whose data model holds no text (`a:t` with visible characters) and no picture (`a:blip`) is
+  native and blank (M9 wave 1, base review): PowerPoint and LibreOffice draw nothing for it either, so the
+  slide is not sent to the art for nothing. No slide of E has one.
+  <!-- /m9:conv-seams -->
 - Recolour and tile bakes as §4 says; `pptx-bake` decodes nothing itself (ffmpeg does, at the bake's size)
   and is bounded at 8,192 px a side and 16 MP in and out, 60 s, and the import's decode budget. No schema
   field is added: a baked picture is an ordinary media item, so an older build draws it too.
@@ -2032,10 +2388,152 @@ LibreOffice becomes optional at run time. Every element that M3 to M6 leave resi
 - Charts: bar, column, line and pie from the chart part's cached values (`c:numCache`, `c:strCache`) as a locked group of native shapes and text; other chart types draw their fallback image.
 - LibreOffice optional at run time: the hub detects `soffice`, hides options that need it, and keeps working without it; the Docker image takes a build argument to leave it out.
 
+<!-- m9:lo-detect -->
+_Built for M9 (wave 1, track `lo-detect`): LibreOffice optional at run time, without the budget ladder._
+- **Detection** (hub `tools.ts`): `ORDO_LIBREOFFICE=auto|off|<path>`, an executable looked up on the PATH
+  (no process started), then `soffice --version` through the hardened command in the background; states
+  `checking`, `available`, `absent`, `off`, `broken`; a run that finds soffice gone (`ToolError.missing`) marks
+  it absent. `GET /capabilities` (`HubCapabilities`) tells the operator. _Wave 1 repair:_ only `absent` and
+  `off` mean no LibreOffice. A `broken` one (a probe that timed out on a slow cold start, a version command
+  that failed once) is probed again by the jobs that need it (`HubTools.recheck`, at most once a minute): the
+  native import still plans the art, the follow-up defers with backoff while it does not answer
+  (`LO_PROBE_RETRIES`, about half an hour) and then marks the slides `failed` as after any LibreOffice
+  failure, never `missing`; the routes answer 503 with `Retry-After` while it is `checking` after their 5 s
+  wait or `broken`, and 501 only when it is absent or off.
+- **Policy without LibreOffice** (decision 8): nothing is `pending` and no `pptx-lo` is queued; what the art
+  or a metafile conversion would have drawn is listed in `Slide.pptx.missing` (class hybrid, no art object;
+  a picture-class slide lists `slide` until the `ladder` track makes it native), the card, the editor and
+  goLive name it. A follow-up left from when LibreOffice was there clears `pending`, sets `missing` from its
+  plan (`PptxLoSlide.kinds`) and re-imports those slides with this converter. _Wave 1 repair:_ the converter
+  plans no art on any slide without LibreOffice (a picture-class one included), says 'not drawn' where its
+  notes named LibreOffice (`noteWithoutLibreOffice`), and records nothing for real 3-D past the object budget
+  (`budget:3d`, `ResidualRow.drawn`): version 1 draws it flat, as approx 3-D is drawn, so a slide whose art holds
+  only that is native without LibreOffice (and a follow-up plan records no kinds for it). A reference PDF is
+  released only once no other queued or running reference job names it, and by a job given up after crashes.
+- **'Show original' without LibreOffice**: the PDF PowerPoint exports, sent to `pptx-reference` as multipart;
+  its pages (the shown slides, or every listed slide) become the reference pictures through pdftoppm.
+- **Formats**: .ppsx, .potx and .pptm import natively (macros never read); .ppt, .pps, .odp and .key are
+  refused with a save-as hint (converting them would hand an unsanitisable upload to LibreOffice).
+<!-- /m9:lo-detect -->
+
+<!-- m9:ladder -->
+_Built for M9 (wave 2, track `ladder`): the budget ladder. No budget and no failure makes a picture slide
+(plan decision 3); §3.4's "hard 64 KB, else picture class" and "the remaining slides use the compact picture
+class" now read "fitted by the ladder" and "stored minimal"._
+- **The converter** (`emit-budget.ts`): every rich text object is made lossless-compact before it is counted
+  (`compactRuns`: run fields that say what the box style says dropped, never a run merged or removed, since
+  the text engine cuts its pieces at run ends; `layoutRich` and the paint plan are identical, tested). The
+  text budget is a memory guard now, 128 KB (`TEXT_BUDGET_BYTES`): past it the further text is written plain.
+  A slide over 64 KB as stored (`storedSlideBytes`, its large geometries in files) keeps its class and is
+  flagged `EmittedSlide.overBudget`. On E the converter's own runs carry nothing redundant (`richtext.ts`
+  writes runs as what differs from the box), so `compactRuns` saves 0 bytes there.
+- **`fitSlideBudget`** (`@ordo/domain` `size.ts`): `full` → `grid` (inline outlines on an integer grid of
+  1/16 logical px of their box, no point moved more than 1/32 px; only past the budget; lo-dependencies'
+  quarter pixel moved the anti-aliasing of thin full-width rules by up to 0.009 SSIM on three slides of E,
+  over the exit's 0.002) → `plain` (runs and
+  paragraph styles of text objects and tables dropped, the largest first, only as many as it takes) →
+  `minimal` (shapes left out, the largest first, tables kept, then formatting; text, pictures and the
+  background always stay, the background's own shapes too: origin role 'bg', the converter's solid or extended
+  background and the hub's white under a picture with alpha, so a slide's text is not left on the output's
+  black; `minimalSlide`, the presentation's tail, still leaves those out, about 200 bytes a slide). Pure, never throws; a property test holds it to "within the limit or minimal,
+  schema-valid, every text and picture kept". `minimalSlide` is the smallest such form.
+- **The hub** (`nativeJob.ts`, `ladder.ts`): a slide's size is measured as stored (`storedBytes`: sanitized,
+  parsed, ULID ids and SHA-256 refs; the converter's estimate was about 10 % high on shape-heavy slides, which
+  made nine slides of E pictures they were not); the tail past 3 MiB is stored minimal (`planImportSizes` with
+  the minimal form as the compact size); an object naming an outline file past the import's budget, or one
+  the store refused, is left out (a shape) or loses its mask (a picture); a slide the schema refuses is stored
+  minimal, else as its text alone. What a level leaves out is `Slide.pptx.missing` ('decoration', 'chart'),
+  with or without LibreOffice (LibreOffice draws no budget's art), and such a slide is hybrid but never
+  `pending`. `PptxNativeResult.simplified` counts the slides changed; `compact` is 0.
+- **With LibreOffice, a slide over 64 KB keeps its page** (repair of 2026-11-13, `ImportCore.pageForBudget`,
+  both paths): where the ladder would fit a slide by leaving something out (`plain`, `minimal`), a hub with
+  LibreOffice stores it picture class and `pending` instead, its whole text in `pptx.artText`, and the
+  follow-up draws its page, as every such slide was before M9; only when that form (`compactSlideBytes`) is
+  within 64 KB and the presentation's plan still holds; the tail stays minimal. Why: the review measured
+  what a hub with LibreOffice showed of E's worship slides against wave 1 (`beforeHubSsim`, the exit gate of
+  decision 2): 22 slides stored plain or minimal fell from 0.90-0.999 to 0.13-0.94 (the tables of five study
+  sheets drawn as cell text without their grid on a black page at 0.13-0.32; Christmas and Easter templates
+  without their decorations at 0.70-0.94). A hub without LibreOffice stores them as before (nothing else
+  draws them). Measured with `--before hub` (which now asks the hub for every slide its budget fitted
+  plain or minimal, `HubBefore.budget`): all 22 show LibreOffice's page again, at or above wave 1 (0.931-0.999;
+  two above it: 0.901 → 0.975 and 0.969 → 0.995).
+- **Failures** (`nativeJob.ts` `convert`): a batch that fails is converted again slide by slide (30 s each);
+  a slide that still fails, one the converter could not read, and the slides past the 15 minutes of pool time
+  get the text rescue (`@ordo/pptx-scene` `rescueDeck`, pool task `pptx-scene` with `rescue: true`: the
+  slide's own text bodies and table text as text objects in their boxes, no geometry read, groups to depth 4;
+  2 s a slide, 2 minutes an import), class hybrid with `missing: ['slide']`. A slide nothing could read is
+  empty and says so.
+- **A scene parsed on the client** (`stepsFromClientScene`, see "Rebased onto main" below) follows the same
+  rules: a slide past the client's bound on outline files keeps the placeholders of the files it was not
+  given (`PptxClientScene.geomOver`), so the hub leaves out the objects naming them, and a slide the client
+  could not read, or did not send, gets the text rescue from its parts in the stored deck.
+- **Measured** (census over E, `census.ts --hub-budget --no-libreoffice`, against wave 1's): picture slides
+  37 → 13, the 13 all `budget:pictures` (decor-conv's sheets); none made by bytes, the tail or a failure. Of
+  the 24 budget pictures: 9 store within 64 KB as they are (the estimate), 4 drop text formatting (`plain`,
+  native), 11 leave decorations out (`minimal`, hybrid); 5 of those (cells drawn as text objects, about 125
+  each) are 65-88 KB even with only their text and pictures, kept whole (the table object of `tables-conv`
+  makes them small). No slide reaches the tail; the sermon decks do not change. The grid alone, forced on
+  every slide of E whose inline outlines it shortens (416 slides), changes none by more than 0.001 SSIM
+  (lowest 0.99918; at a quarter pixel 3 of 479 fell to 0.9915-0.9959).
+<!-- /m9:ladder -->
+
 **Exit.**
 - ≥ 99% of shown worship slides are native; the rest are hybrid with a reason, and none is a picture slide.
 - Every slide that was hybrid or picture before M9 is at least as faithful to LibreOffice (SSIM) as before.
 - The whole worship validation set imports with `soffice` absent.
+
+<!-- m9:conv-seams -->
+_Built for M9 (wave 1, track `conv-seams`): the converter's seams, so that each later area owns its files._
+- **The emitter in parts.** `emit.ts` (the slide, backgrounds, shapes, pictures, origin, lyric box),
+  `emit-ctx.ts` (`EmitCtx`, the M9 field gate, box and colour helpers), `emit-text.ts` (text bodies),
+  `emit-budget.ts` (`storedSlideBytes`, `fitBytes`, the text budget `chargeText`) and `emit-table.ts`, moved
+  verbatim (the strict goldens, the census and the fidelity of E are unchanged by the move). `emit.ts`
+  re-exports every name it exported before.
+- **Dispatch stubs**, each in the file of the area that fills it, each writing nothing yet:
+  `emit-table.ts` `emitTableObject`, `chart.ts` `readChart` and `emitChart`, `decor.ts` `emitDecor` (runs of
+  `ElementBase.decor`), `three3d.ts` `read3d` and `look3dOf`, `emit-text.ts` `warpOf` and `writingOf`, and
+  `ole.ts` `readOle`; `walk.ts` asks `readChart` and `readOle` before a frame is left residual and `read3d`
+  for every shape and picture.
+- **Every M9 IR type** (`ir.ts`): `Look3dIR` on shapes, pictures and text bodies; `TextBody.warp` as
+  `{ preset, adj }` (was the preset's name), `writing`, `rot`, `upright`; `ChartElement` in `Element` (one
+  object in `slideCost`); `PictureFill.metafile`; `ElementBase.culled` and `.decor`; the table extras (`rtl`,
+  `storedRows`, a cell's `vert` and diagonals).
+- **The field gate.** `EmitOptions.m9Writes` (`M9_FIELDS`: table, chart, decor, decorFile, look3d, warp,
+  writing, centerBlock, vectorFonts, adjWide, geomFile64; default every one) is consulted by each stub: without
+  a field the converter writes what an older build draws for it (§3.2). The hub passes `M9_WRITES`
+  (`apps/hub/src/pptx/shared.ts`, decisions.md 1) from `sceneTask.ts`, and `CONVERTER_VERSION` is 2. A field
+  stays out of `M9_WRITES` until what reads it is in (the M9 rollout below): 'decor' and 'decorFile'
+  (`M9_HELD_BACK`) until `decor-render` draws decorations and names their files on the hub and the client.
+  The parse reads the same set (`ParseOptions.m9Writes`, `sheets`), so the slide budgets plan only what is
+  written.
+- **Notes.** `log.ts` `addNote` keeps a slide's stored notes within `Slide.pptx.notes`' 16: 15 and
+  'and N more'.
+- **Text measured on the hub.** The sfnt reader and cmap are `@ordo/renderer/text/sfnt/{reader,cmap}.ts`
+  (decision 12), which `metrics.ts` re-exports (the same functions, so `FaceMetrics` are byte-identical);
+  `FaceSource.script(code)` (a script's fallback face, asked once per script), `advanceOf` (a line's advance
+  in em through the family and its fallbacks, kerned, 0.55 em per character no face has) and `heightOf`
+  (paragraphs' height at a size through `tables.ts` `Measure`) are the measurement seams of tables, warps
+  and SmartArt.
+<!-- /m9:conv-seams -->
+
+<!-- m9:decor-conv -->
+_Built for M9 (wave 2, track `decor-conv`): the slide budgets drawn natively (§5 "Slide class", as built)._
+- `pptx-scene` `budget.ts` (`cullElements`, `fitBudgets`, `budgetCost`, `MAX_SLIDE_OBJECTS_TEXT` 190,
+  `MAX_DRAWN_OBJECTS` 200), `decor.ts` (`decorable`, `decorRuns`, `emitDecor`, `decorFiles`, `platePlan`),
+  `sheet.ts` (`pictureRuns`, `emitComposite`, `atlasParts`, `atlasSlide`), `bake.ts` (`SheetBake`, `SheetCell`,
+  `SHEET_LIMITS`, `checkSheet`, `applySheet`); `classify.ts` culls first, then `fitBudgets`, the M6 budget halves
+  behind `ParseOptions.budgetArt`; `slideCost` counts a table or a chart as one object.
+- The job payload grows (not stored): `EmitResult.decors` (decoration files), `EmitResult.sheets` (each sheet's
+  recipe once), `EmittedSlide.sheets` (each sheet's uses and the objects to put back), `EmittedSlide.plate`
+  (the plate plan); `EmitOptions.decorId`, `sheetId`, `sheets` (false: no sheets, for an importer that cannot
+  make them). The hub's storing of decoration files and sheets is `decor-render`'s (`geoms.ts`, `bakes.ts`
+  `storeSheets`); until it lands the hub and the client convert with `sheets: false` and without 'decor' and
+  'decorFile' in `M9_WRITES` (the M9 rollout below), so no `pptxmedia:sheet<n>` or `pptxdecor:<n>` placeholder
+  is ever written and no decoration is stored that nothing draws (`decor-render` turns each back on with its
+  drawer and its storing).
+- Decisions.md "Slow-to-draw elements": the converter keeps every element and its full vector source, names
+  the slide's plate candidates, and leaves "plate or live" to the drawers (`decor-render`).
+<!-- /m9:decor-conv -->
 
 **Parallel.**
 - ∥ 3D and shear;
@@ -2045,6 +2543,147 @@ LibreOffice becomes optional at run time. Every element that M3 to M6 leave resi
 - ∥ charts and SmartArt layouts;
 - ∥ vertical text and anchorCtr;
 - ∥ optional LibreOffice in the hub and the image.
+
+<!-- m9:render-seams -->
+**Built for M9 wave 1: the renderer seams (render-seams track).** So that each area track owns its files, the
+renderer's hot files gained registries, each empty (or today's behaviour) until a track registers into it; the
+renderer, compositor, canvas-scene, late-font and preset goldens are byte-identical, and each seam's test pins its
+calls by digest against the code before it:
+- `shape.ts` `drawShapeObject`: `table` → `chart` → `decor` → geometry → legacy (plan decision 10), the drawers
+  registered by kind (`registerShapeDrawer`; until then the legacy shape an older build draws), and a 3-D look
+  resolver decorating the geometry path (`registerLook3d` → `EffectSource.look3d`, a type until three-rim).
+- `text/paint.ts`: a glyph painter (`PLAIN_PAINTER`; upright and warp registered by kind, warp first) and a face
+  target (`DIRECT_TARGET`; a face sprite registered by the 3-D look) chosen independently per object (decision 6);
+  planned glyph runs and rectangles carry their layout line and segment for painters that place lines.
+- `spritecache.ts`: one 64 MiB LRU with counted pins for every kind of sprite (decision 9); the effect layers
+  and composites live in it.
+- `picture.ts`: `PictureSource = CanvasImageSource | VectorPicture`, drawn by a registered source step wherever
+  `drawImage` would (`ImageLookup` returns either); target extensions widen a target's key (or refuse to prepare
+  it) and hand data to post steps, which run after the mask's cut before the bitmap is taken.
+- `raster.ts` `jobFontFamilies` waits for the families of tables, charts and vector pictures
+  (`extraFontFamilies`).
+- `apps/output/src/prepare/index.ts`: the slide prepare steps of the asset worker (in its lane turns) and the
+  thumbnail worker (at once), the shape drawers the slides need (`loadShapeDrawers`) and geometry files built in.
+- `renderer/src/shape.ts` `registerShapeDrawerLoader`: a kind's drawer module loaded the first time a slide
+  holds that kind (the table's registered by the renderer's index), so M9 drawers stay out of the operator's
+  first paint (design/24 "Bundle budget").
+- `apps/operator/src/views/editor/objectSections.ts`: the Object panel's sections (design/15).
+- `golden/areas.ts` and `bench/cases/index.ts`: one line per area's golden cases and bench slides.
+<!-- /m9:render-seams -->
+
+<!-- m9:rebase -->
+_Rebased onto main 0.5.0 (d07fe12)._ Main parses a PowerPoint in the operator before the upload
+(`@ordo/importers` `importPptxClient`, the `clientScene` part of `POST /import/document`), and the hub then
+builds version 1 from that scene without its pool (`nativeJob.ts` `stepsFromClientScene`). That parse is M9's
+too: the client's `CONVERTER_VERSION` is 2 and its `CLIENT_M9_WRITES` are the hub's `M9_WRITES` (a hub test
+checks both); the operator parses for the LibreOffice the hub has (`hubHasLibreOffice`, the hub's own rule:
+only absent or off means none; `PptxClientOptions.libreoffice`, recorded as `PptxClientScene.libreoffice`), and
+the hub uses a scene only when it was parsed for what the hub has, else it parses the deck itself. Without
+LibreOffice the client's own presentation (the pages demo's) lists `Slide.pptx.missing` and leaves nothing
+`pending`, as the hub's import does. The client parse is given no font faces (`ParseOptions.fontFace`: the hub
+passes its library's), so the text it measures (table rows, autofit, and M9's warps, vertical text and
+SmartArt layouts) is measured with estimated widths: until the operator loads the hub's faces for it, a deck
+the operator parsed can lay text out differently from one the hub parsed.
+<!-- /m9:rebase -->
+
+<!-- m9:import-core -->
+**Where the deck is parsed (the regroup's import core, 2026-11-13; amends the M9 rebase note above and ADR
+0012).** One import core in `@ordo/importers`, used by the hub's job and pool task, the operator's import
+worker, the Pages demo and the fidelity harness:
+- `pptx-scan.ts` (`PPTX_IMPORT_LIMITS`, `scanDeck`, `clipParts` with `CLIP_CANDIDATES`, `extrasOf`),
+  `pptx-geoms.ts` (`geomFileOf`, `nameGeoms`, `nameShapeFiles`, and `SHAPE_FILE_KINDS`, the hook decoration
+  files join when `decor-render` names them on both sides), `pptx-pictures.ts` (the hub's header checks and
+  display needs, one copy), `sha256.ts` (one SHA-256, incremental), `pptx-ladder.ts` (the budget ladder),
+  `pptx-core.ts` (`ImportCore`: drafts, budgets, provenance, assembly, the follow-up's plan) and
+  `pptx-report.ts` (`source.log`, missing fonts). The converter's version and stored fields are one constant
+  each, `@ordo/pptx-scene` `version.ts` (`CONVERTER_VERSION`, `M9_WRITES` less `M9_HELD_BACK`, and
+  `PPTX_SHEETS`), and a client scene records the version and the fields.
+- `parsePptxScene` (the browser): the zip through `zip-bounded.ts`, the deck facts and scan, the pictures'
+  pixel sizes and clips' kinds from their first bytes within the hub's spill budget, `convertDeck` over the
+  whole deck, transitions, shape files named and bounded as a batch's. `assemblePptxScene` builds version 1
+  from a scene with `ImportCore`, as the hub does (the Pages demo, the harness, tests): the client's old
+  compact step that made picture slides is gone. Without LibreOffice no slide is a picture for a budget on
+  either side; with it, both sides keep LibreOffice's page for the same slides over 64 KB that the ladder
+  would store plain or minimal (`ImportCore.pageForBudget`).
+- The hub builds version 1 from a checked scene with the same `ImportCore` (§12 "Process"), so both paths
+  store the same presentation modulo ids and times (the equivalence check of `tools/pptx-fidelity`).
+- **The operator** parses in its import worker (`apps/operator/src/workers/import.worker.ts`, a bundle of
+  its own: 659 kB, the page's initial bundle 1,752 kB from 1,758 kB, and the lazy importer chunk of
+  706.8 kB is gone), one worker per deck with a 90 s deadline after which it is terminated, never while a
+  playlist is live, and uploads without a scene on any failure (counted in Settings › Diagnostics and logged,
+  design/15 "PowerPoint imports"). It sends the scene as JSON bytes the worker made, so the page never
+  serializes it.
+- **Faces** (`pptx-faces.ts`): one selection rule for the hub's pool (`faces.ts`, files read lazily) and the
+  browser (`loadDeckFaces`: only a deck with a table needs faces; the families its parts name, their metric
+  substitutes, the script fallbacks of its text and ordo's default face, at most 64 files and 256 MB,
+  fetched from the hub and read with the hub's table limits, `sfntFaceMetrics`). A table that needs a face
+  stored as WOFF or WOFF2 (Google Fonts' files), which a browser cannot measure from, sends the deck to the
+  hub, so a table never measures differently by where it was parsed. This replaces the rebase note's "no
+  font faces" above.
+- **The Pages demo** parses for a hub without LibreOffice and builds with `assemblePptxScene` (design/26).
+- **Measured** (2026-11-13, worship shard 0, 89 decks, `tools/pptx-fidelity` `hub-import --equivalence`, hub
+  without LibreOffice): every scene used, 89 of 89 decks store the same presentation by both paths (0
+  differences modulo ids, media ids by file, times, the log and digests); the parse in Node took p50 107 ms,
+  p95 1.6 s, at most 7.1 s per deck on a loaded 4-CPU machine. A test over four public decks of the golden
+  corpus (`pptx-import-route.test.ts`) and the Import tab's e2e (`pptx-import-tab.spec.ts`, a table measured
+  with the bundled faces) hold it in CI.
+<!-- /m9:import-core -->
+
+<!-- m9:tables-render -->
+**Built for M9 wave 2: the table object drawn and edited by ordo (tables-render track).** `ShapeObject.table`
+(the schema track's `TableData`) is laid out and drawn by the renderer, its cells edited by pure ops in the
+domain; the converter writes it from the tables-conv track on (until then nothing writes one).
+- **Model** (`domain/src/table.ts`): placement is implicit (row-major, each cell at the next slot no earlier
+  cell covers, a span cut at a covered slot or the grid's edge, cells past the grid dropped: `placeCells`,
+  O(grid)); a cell is drawn and edited as a rich text body (`cellRich`: `base` with its style entry over it,
+  never shrinking, its runs expanded from the run palette). `setCell` compacts an edited body back into the
+  palettes (the style's differences from `base`, each run's formatting), `setCellFill` fills cells, and
+  `insertRow`/`deleteRow`/`insertCol`/`deleteCol` work on the grid made explicit: spans across the row or
+  column grow or shrink, a new row or column copies its source's height or width, styles, fills and lines, no
+  line is kept inside a merged cell, the table keeps its width (columns rescaled) and a row adds or removes its
+  height to the box; every op removes palette entries nothing uses (`gcTable`) and refuses past `TABLE_LIMITS`
+  or at the last row or column. A property test runs 10,000 random ops. Not built (decision 4): the legacy
+  group, its digest (`tableShadows`) and 'Rebuild table from cells'.
+- **Clamp** (`renderer/src/clamp/table.ts`, by hand, as the rest of the render clamp, so a slide sent to a
+  worker again costs a fraction of a millisecond): palettes keep their indices (a malformed entry becomes an
+  empty one), an index naming no entry falls back (the base style, no fill, no line, no run), one
+  `FontBudget` for the whole table (16 families, 64 size scales), text ≤ 10,000 a cell and 60,000 a table
+  (later cells emptied), runs ≤ 2,000 a cell and 8,000 a table, edges in the grid with `from < to`, rows past
+  4,096 grid slots cut; a valid table comes out equal.
+- **Layout** (`renderer/src/table/layout.ts`), table-local logical px: columns `cols × box.w / Σcols` (column
+  0 on the right when `rtl`); rows at least `rows × box.h / Σrows`, grown to their single-row cells' needs
+  (the text's height at the cell's width less its insets, plus its top and bottom insets; an empty cell one
+  line of its style's size), then each merge's need beyond its rows added to its last row (LibreOffice's
+  `TableLayouter`, PowerPoint's growth); `rowRule: 'fixed'` keeps the stored rows and lets text overflow as
+  its anchor says. A cell's text is laid out once at the top of its cell and moved by its anchor (`dy`), as
+  `layoutBox` anchors a box. Each cell's layout is kept in a bounded cache by its content (text, runs,
+  paragraph styles, digests of its resolved style and of the run palette, width), and each whole table by its
+  content and box size: editing one cell lays out that cell, a slide sent to a worker again lays out nothing,
+  a master grid's 640 empty cells are one layout. Cells asking for vertical text are laid out horizontally
+  until wave 3 (editor-table wires the writing engine).
+- **Draw** (`table/draw.ts`, registered with the shape dispatch by importing the renderer): M6's order and
+  primitives, so the object draws what the M6 group drew wherever their rows agree (golden `table-vs-group`:
+  identical pixels): the background over the grown table, solid fills as one path of rects per fill (row
+  neighbours joined, largest first), gradient fills per cell, one stroke per line style (per direction when
+  there are several), each segment stretched by half the widest crossing line at its vertices (a per-vertex
+  array, linear where M6 compared every pair), none inside a merge, at least 0.5 px, dashed, then diagonals,
+  then each cell's text through `paintRich` at the device scale. Turned about the box's centre; drawn at its
+  opacity. A table the clamp drops draws the shape's legacy rect.
+- **Editor seams** (wave 3 builds the panel): `tableHit`/`tablePoint` (the cell under a slide point),
+  `cellText` (a cell's view as a text object), `TableLayout.height` (the drawn height).
+- **Preparation** (`apps/output/src/prepare/tables.ts`): the asset and thumbnail workers lay a slide's tables
+  out in 8 ms slices of the job's turns before the synchronous draw, which then lays out nothing.
+- **Measured** (`scratchpad m9/w2a/tables-render`, a shared 4-CPU machine; the converter writes no table yet,
+  so the exit's raster figures come from the raster bench's table cases, each drawn as the object and as its
+  M6 group, a fresh copy of the slide every job). Warm raster p50 / p95 ms at 1920 and 3840, object against
+  group, last run: 96-cell bulletin 4.6 / 11.9 and 15.5 / 16.5 against 6.6 / 12.5 and 17.8 / 41.7; 640-cell
+  master grid 4.1 / 6.3 and 16.2 / 21.2 against 4.2 / 6.8 and 16.7 / 18.7; 13,782-character chart 6.3 / 9.9
+  and 18.8 / 28.2 against 9.9 / 21.6 and 22.0 / 32.5 (three runs: the object's p50 is at or below the group's
+  in each). Preparation in Chromium, in words never measured before: the chart in one or two 8 ms slices
+  (longest 5.7 to 9.9 ms; a cold layout in one call 9 to 41 ms), the bulletin and the master grid in one of 1
+  to 11 ms; the prepared chart draws at 3840 in 24 to 32 ms: no task over 50 ms. The fuzz test of hostile
+  tables runs in about 1.2 s.
+<!-- /m9:tables-render -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 
@@ -2085,7 +2724,7 @@ LibreOffice becomes optional at run time. Every element that M3 to M6 leave resi
 The `PptxRenderer` enum values stay forever, so stored presentations validate. A 'pptx-preview' request maps to native.
 
 **Kept:**
-- the LibreOffice tools: `pptxToPdf`, `pdfToPngs` (gains page ranges and 288 dpi), `fitPage`, `addReadyImage`, used for fallbacks, art, references and metafiles;
+- the LibreOffice tools: the hub's bounded `sofficeToPdf` (`pptx/fallback.ts`, with the executable `tools.ts` found; M9: optional), `pdfToPngs` (gains page ranges and 288 dpi), `fitPage`, `addReadyImage`, used for fallbacks, art, references and metafiles; the unbounded `pptxToPdf` moved to the fidelity harness in M9 (`tools/pptx-fidelity/src/libreoffice.ts`), its only user;
 - the whole-deck LibreOffice path, for PDF and the 'Pictures (LibreOffice)' option, always through the worker-built render copy (it fails closed when the copy cannot be built);
 - `tools/pptx-fidelity` (`ssim()`, corpus builder, report), extended;
 - `extractZip` and its limits, `sanitizePresentation` (extended for runs and paras), `remapMediaIds` (generalised prefix), `mediaFor` (generalised: tags, names, hash index);

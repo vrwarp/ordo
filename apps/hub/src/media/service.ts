@@ -1,6 +1,15 @@
-import { readFile, rm, writeFile } from 'node:fs/promises';
-import type { Media, MediaTrim } from '@ordo/domain';
-import { newId } from '@ordo/domain';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
+import type { FileRef, Media, MediaTrim } from '@ordo/domain';
+import {
+  isSvgMime,
+  newId,
+  pngSize,
+  SVG_DEFAULT_SIZE,
+  SVG_HEAD_BYTES,
+  svgIntrinsicSize,
+  svgRasterProblem,
+  svgRasterSizeFor,
+} from '@ordo/domain';
 import type { Logger } from 'pino';
 import type { HubConfig } from '../config.ts';
 import { errorMessage, HttpError } from '../errors.ts';
@@ -21,6 +30,14 @@ import {
 } from './ffmpeg.ts';
 
 export const MAX_IMAGE_WIDTH = 3840;
+
+/** The largest PNG accepted as an SVG's still (a 16.7 MP picture of noise is about 64 MB). */
+export const MAX_SVG_RASTER_BYTES = 96 * 1024 * 1024;
+
+/** The first `SVG_HEAD_BYTES` of a stored SVG as text: its root element's size is read from it. */
+async function svgHead(path: string): Promise<string> {
+  return Buffer.from(await readHead(path, SVG_HEAD_BYTES)).toString('utf8');
+}
 
 /**
  * Decode-time limits (design/25 "Files"). A file beyond them fails its media job with a clear reason and
@@ -70,6 +87,12 @@ export type IngestOpts = {
    * and recorded as Media.trim. Normalised by normTrim; images ignore it.
    */
   trim?: MediaTrim;
+  /**
+   * An SVG's still, drawn by the uploading client (design/12 "Media pipeline"): a PNG within `SVG_RASTER`'s caps
+   * of the shape the SVG declares. Kept as the item's delivery, the file outputs draw (they cannot decode an
+   * SVG). Refused with 400 for anything that is not an SVG, or a raster that is not such a PNG.
+   */
+  raster?: { path: string; hash?: string; bytes?: number };
   /**
    * false: the item is stored ('uploaded') but its processing job is not queued; the caller queues it with
    * `queue` (the PowerPoint import queues its clips after its LibreOffice follow-up, design/27 §5). Default
@@ -124,13 +147,17 @@ export function baseName(name: string): string {
 
 /** Media ingest (upload → content store → `media` job) and the processing job itself. */
 export class MediaService {
-  constructor(
-    private lib: Library,
-    private store: Store,
-    private jobs: JobQueue,
-    private cfg: HubConfig,
-    private log: Logger,
-  ) {
+  private lib: Library;
+  private store: Store;
+  private jobs: JobQueue;
+  private cfg: HubConfig;
+  private log: Logger;
+  constructor(lib: Library, store: Store, jobs: JobQueue, cfg: HubConfig, log: Logger) {
+    this.lib = lib;
+    this.store = store;
+    this.jobs = jobs;
+    this.cfg = cfg;
+    this.log = log;
     jobs.register<{ mediaId: string }>(
       'media',
       (ctx) => this.process(ctx),
@@ -165,8 +192,12 @@ export class MediaService {
     let s: Sniffed;
     try {
       s = await this.identify(file.path, name, opts.checkExtension !== false);
+      if (opts.raster) await this.checkRaster(file.path, s, opts.raster, name);
     } catch (e) {
-      await rm(file.path, { force: true });
+      await Promise.all([
+        rm(file.path, { force: true }),
+        opts.raster && rm(opts.raster.path, { force: true }),
+      ]);
       throw e;
     }
     const original = await this.store.put(file.path, {
@@ -175,6 +206,14 @@ export class MediaService {
       hash: file.hash,
       bytes: file.bytes,
     });
+    let delivery: FileRef | undefined;
+    if (opts.raster)
+      delivery = await this.store.put(opts.raster.path, {
+        ext: 'png',
+        mime: 'image/png',
+        hash: opts.raster.hash,
+        bytes: opts.raster.bytes,
+      });
     const kind = s.kind as Media['kind'];
     const trim = kind === 'image' ? undefined : normTrim(opts.trim);
     const media = this.lib.media.insert({
@@ -184,6 +223,7 @@ export class MediaService {
       tags: opts.tags ?? [],
       kind,
       original,
+      ...(delivery ? { delivery } : {}),
       state: 'uploaded',
       loop: opts.loop ?? false,
       isBackground: opts.isBackground ?? false,
@@ -193,6 +233,28 @@ export class MediaService {
     this.lib.emit([{ kind: 'media', id: media.id, rev: media.rev, entity: media }]);
     if (opts.queue !== false) this.queue(media.id);
     return media;
+  }
+
+  /**
+   * Check an SVG's still (`IngestOpts.raster`) before anything is stored: the original must be an SVG and the
+   * raster a PNG within the caps, of the shape the SVG declares (`svgRasterProblem`). Header reads only: the
+   * media job decodes it (ffprobe) before the item is ready.
+   */
+  private async checkRaster(
+    svgPath: string,
+    s: Sniffed,
+    raster: { path: string; bytes?: number },
+    name: string,
+  ): Promise<void> {
+    if (!isSvgMime(s.mime))
+      throw new HttpError(400, 'bad_raster', `${name}: a still picture can only come with an SVG`);
+    const bytes = raster.bytes ?? (await stat(raster.path)).size;
+    if (bytes > MAX_SVG_RASTER_BYTES)
+      throw new HttpError(413, 'too_large', `${name}: the still picture is larger than 96 MB`);
+    const png = pngSize(await readHead(raster.path, 64));
+    if (!png) throw new HttpError(400, 'bad_raster', `${name}: the still picture is not a PNG`);
+    const problem = svgRasterProblem(svgIntrinsicSize(await svgHead(svgPath)), png);
+    if (problem) throw new HttpError(400, 'bad_raster', `${name}: ${problem}`);
   }
 
   /**
@@ -329,17 +391,7 @@ export class MediaService {
   }
 
   private async transform(m: Media, ctx: JobCtx<unknown>): Promise<Media> {
-    if (m.original.mime === 'image/svg+xml') {
-      const input = this.store.abs(m.original.path);
-      const svgText = (await readFile(input)).toString('utf8');
-      const wMatch = /\bwidth=["']?(\d+)/i.exec(svgText);
-      const hMatch = /\bheight=["']?(\d+)/i.exec(svgText);
-      const vbMatch = /\bviewBox=["']?[\d.-]+[\s,]+[\d.-]+[\s,]+([\d.-]+)[\s,]+([\d.-]+)/i.exec(svgText);
-      const width = wMatch ? Number(wMatch[1]) : vbMatch ? Math.round(Number(vbMatch[1])) : 1920;
-      const height = hMatch ? Number(hMatch[1]) : vbMatch ? Math.round(Number(vbMatch[2])) : 1080;
-      ctx.log(`SVG ${width}x${height}`);
-      return { ...m, delivery: undefined, width, height, hasAlpha: true };
-    }
+    if (isSvgMime(m.original.mime)) return this.svg(m, ctx);
     const t = this.cfg.timeouts;
     const input = this.store.abs(m.original.path);
     const info = await probe(input, t.probe);
@@ -421,6 +473,41 @@ export class MediaService {
       };
     }
     throw new Error('No playable video or audio stream');
+  }
+
+  /**
+   * An SVG (design/12 "Media pipeline"): kept as uploaded, never decoded here. Its still, when the uploading
+   * client sent one, is checked by decoding its header with ffprobe; one that does not decode as the PNG it
+   * claimed is dropped (outputs then draw the SVG on their main thread, design/14 "Pictures"). The item's size
+   * is its still's, else the size an output draws it at (`svgRasterSizeFor`).
+   */
+  private async svg(m: Media, ctx: JobCtx<unknown>): Promise<Media> {
+    const declared = svgIntrinsicSize(await svgHead(this.store.abs(m.original.path)));
+    let delivery = m.delivery;
+    let size: { width: number; height: number } | undefined;
+    if (delivery) {
+      try {
+        const v = (await probe(this.store.abs(delivery.path), this.cfg.timeouts.probe)).video;
+        const head = pngSize(await readHead(this.store.abs(delivery.path), 64));
+        if (!v?.width || !v.height || !head || v.width !== head.width || v.height !== head.height)
+          throw new Error('it does not decode as a PNG of its header size');
+        size = { width: v.width, height: v.height };
+      } catch (e) {
+        if (ctx.signal.aborted) throw e;
+        ctx.log(`still picture dropped (${errorMessage(e)}): outputs draw the SVG itself`);
+        delivery = undefined;
+      }
+    }
+    size ??= svgRasterSizeFor(declared, SVG_DEFAULT_SIZE);
+    ctx.log(
+      `SVG ${size.width}x${size.height}${delivery ? ', still picture from the upload' : ', no still picture'}`,
+    );
+    if (m.delivery && !delivery) {
+      const saved = this.save({ ...m, delivery: undefined });
+      await this.store.release(m.delivery.hash);
+      return { ...saved, delivery: undefined, width: size.width, height: size.height, hasAlpha: true };
+    }
+    return { ...m, delivery, width: size.width, height: size.height, hasAlpha: true };
   }
 
   private async video(

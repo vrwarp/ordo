@@ -9,8 +9,11 @@
  * the job: when it is done the editor takes the job's revision over (`adoptJobSaves`, unsaved edits kept). When
  * someone else saved meanwhile, only the pictures go into the draft (`withReferences`) and the next save
  * meets the usual conflict dialog.
+ *
+ * On a hub without LibreOffice (design/27 M9) the pictures come from the PDF PowerPoint exports instead
+ * (`requestOriginalsPdf`: the same job, with the PDF as multipart), followed the same way.
  */
-import { api } from '@ordo/client';
+import { api, upload } from '@ordo/client';
 import type { Presentation, Slide } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import { create } from 'zustand';
@@ -145,15 +148,45 @@ export async function requestOriginals(
     toast(`Could not ask for the PowerPoint pictures: ${errorText(e)}`, 'error');
     return false;
   }
-  track(p.id, job);
-  setShowOriginal(p.id, true);
+  follow(p.id, job, 'LibreOffice could not draw the PowerPoint pictures');
+  return true;
+}
+
+/**
+ * 'Add PowerPoint's pictures (PDF)…' (design/27 M9): the PDF PowerPoint exported from the deck becomes the
+ * presentation's reference pictures, on a hub without LibreOffice (poppler-utils only). Unsaved edits are
+ * saved first; no slide switches to its picture (`showPicture: []`); the job is followed as LibreOffice's is.
+ * Resolves once the request is queued (true) or refused (false).
+ */
+export async function requestOriginalsPdf(p: Pick<Presentation, 'id'>, file: File): Promise<boolean> {
+  if (referenceRunning(useOriginal.getState().jobs[p.id])) return true;
+  if (useEditor.getState().dirty && !(await save())) return false;
+  const fd = new FormData();
+  fd.append('showPicture', '[]');
+  fd.append('file', file, file.name);
+  let job: Job;
+  try {
+    job = await upload<Job>(`/presentations/${p.id}/pptx-reference`, fd);
+  } catch (e) {
+    toast(`Could not add the PowerPoint pictures: ${errorText(e)}`, 'error');
+    return false;
+  }
+  follow(p.id, job, "The PDF's pages could not be used as the PowerPoint pictures");
+  return true;
+}
+
+/** Follow a reference job: its progress on the card, its pictures into the editor when done. */
+function follow(pid: string, job: Job, failed: string): void {
+  track(pid, job);
+  setShowOriginal(pid, true);
+  const p = { id: pid };
   void followJob(job.id, {
     getJob: (id) => api<Job>(`/jobs/${id}`),
     wait: (ms) => new Promise((r) => setTimeout(r, ms)),
     seen: (j) => track(p.id, j),
     ended: async (j) => {
       if (j.state === 'failed') {
-        toast(`LibreOffice could not draw the PowerPoint pictures: ${j.error ?? 'unknown error'}`, 'error');
+        toast(`${failed}: ${j.error ?? 'unknown error'}`, 'error');
         return;
       }
       try {
@@ -167,5 +200,4 @@ export async function requestOriginals(
       }
     },
   });
-  return true;
 }

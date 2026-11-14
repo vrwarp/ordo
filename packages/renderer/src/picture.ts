@@ -7,9 +7,10 @@ import {
   type ShapeGeom,
 } from '@ordo/domain';
 
-import { CLAMP, clampBox, clampCrop, clampGeom, num } from './clamp.ts';
+import { CLAMP, clampBox, clampCrop, clampGeom, clampShadow, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
 import { digest } from './digest.ts';
+import { multiplySoftMask, pictureSoftMask } from './effects.ts';
 import { GEOM_CLIP_RULE, geomFillPath2D } from './geom/draw.ts';
 import { geomPending, storedGeometry } from './geom/stored.ts';
 
@@ -39,6 +40,12 @@ import { geomPending, storedGeometry } from './geom/stored.ts';
  * A rotated picture and one with round corners keep being drawn from the source through the transform and
  * the clip path (`drawImageFit`).
  *
+ * A picture's soft edge (`ImageObject.softEdge`) is part of what is prepared too: a post step of its own
+ * (`SOFT_EDGE_STEP`, after the registered ones) multiplies the finished pixels by the picture's silhouette
+ * eroded and blurred as a shape's soft edge is (`effects.ts` `pictureSoftMask`), so a feathered picture is copied
+ * 1:1 and prepared in bands like any other. Its shadow is not: it is an effect layer drawn under the picture
+ * (`picture-effects.ts`), so the same prepared bitmap serves the picture with and without one.
+ *
  * A picture's mask and flips (design/27 §3.1 `ImageObject.mask`, `flipH`, `flipV`) are part of what is
  * prepared: the bitmap holds the picture mirrored about the box's centre and cut to the mask's filled paths
  * (their union, `geomFillPath2D`) by an anti-aliased fill, not a clip (a 2D clip on an OffscreenCanvas is not
@@ -46,13 +53,160 @@ import { geomPending, storedGeometry } from './geom/stored.ts';
  * bitmap covers the turned box's bounds; a slide of four large turned photos in masks drew in 297 ms at 4K
  * from the source, each through a frame-sized sprite). The mask is evaluated at the logical box (a resized
  * picture keeps its corners) and scaled to the device box.
+ *
+ * The pipeline's seams (M9; design/27 M9 render-seams), each empty until a track registers into it, so with
+ * none registered every picture is prepared and drawn exactly as before:
+ * - source steps (`registerPictureSource`): a picture that is not a canvas image (`PictureSource`: a
+ *   `VectorPicture`, the metafiles' vector player) is drawn by the step that accepts it wherever a canvas
+ *   image is drawn with `drawImage`, at the device size it lands at, so it stays sharp;
+ * - target extensions (`registerPictureTarget`): what else a target's pixels depend on (the 3-D look of a
+ *   front-camera picture) widens its key, and an extension may refuse to prepare a picture (it is then drawn
+ *   from its source);
+ * - post steps (`registerPicturePost`): after a target is painted and cut to its mask, before the bitmap is
+ *   taken, in a step of their own (the rim of a front-camera picture).
  */
 
 export type PictureFit = 'contain' | 'cover' | 'stretch';
 
 /**
- * How a picture is cut and mirrored in its box (design/27 §3.1 `ImageObject.mask`, `flipH`, `flipV`, `shadow`, `softEdge`):
- * mirrored about the box's centre before the box's rotation, mask included, with shadow and soft edge effects.
+ * A picture a canvas cannot draw by itself (M9 vector pictures): the source step that accepts it draws it
+ * (`registerPictureSource`). Its own size is `width` x `height`; `bytes` is what it holds, for the decoders'
+ * budgets; `close` releases it, as an ImageBitmap's does.
+ */
+export interface VectorPicture {
+  readonly kind: 'vector';
+  readonly width: number;
+  readonly height: number;
+  readonly bytes: number;
+  close(): void;
+}
+
+/** What a decoder hands the drawers: a canvas image (a bitmap, an image, a video frame) or a vector picture. */
+export type PictureSource = CanvasImageSource | VectorPicture;
+
+/** Whether a picture is a vector picture (a source step draws it), not a canvas image. */
+export function isVectorPicture(img: unknown): img is VectorPicture {
+  return typeof img === 'object' && img !== null && (img as { kind?: unknown }).kind === 'vector';
+}
+
+/**
+ * Draws pictures a canvas cannot: the rectangle (sx, sy, sw, sh) of `src` (its own pixels) onto the
+ * rectangle (dx, dy, dw, dh) of `ctx` under its transform and state, as the 9-argument `drawImage` would.
+ */
+export interface PictureSourceStep {
+  readonly name: string;
+  accepts(src: PictureSource): boolean;
+  draw(
+    ctx: Ctx2D,
+    src: PictureSource,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+    dx: number,
+    dy: number,
+    dw: number,
+    dh: number,
+  ): void;
+}
+
+/**
+ * Widens a target with what else its pixels depend on: a key part (appended to the target's key, so the
+ * decoders cache it apart) and data for the post steps (`PictureTarget.ext[name]`); `false` refuses to
+ * prepare the picture (it is drawn from its source); undefined adds nothing.
+ */
+export interface PictureTargetExtension {
+  readonly name: string;
+  extend(o: PictureDraw, t: Readonly<PictureTarget>): { key: string; data?: unknown } | false | undefined;
+}
+
+/**
+ * Changes a prepared picture's pixels after they are painted and cut to the mask, before the bitmap is taken
+ * (`ctx` is the bitmap's canvas, untransformed, its state saved around the call).
+ */
+export interface PicturePostStep {
+  readonly name: string;
+  applies(t: PictureTarget): boolean;
+  run(ctx: Ctx2D, t: PictureTarget, src: PictureSource): void;
+  /**
+   * The step in bands (optional), for a target prepared in bands: makes what every band needs (in a step of
+   * its own) and returns what draws one band of whole rows, `y` to `y + rows` (`ctx` clipped to them, its
+   * state saved around each call), called once per band in steps of their own; the bands must give the
+   * pixels `run` gives. Undefined: nothing to do. Without it the step runs whole, in one step.
+   */
+  bands?(
+    ctx: Ctx2D,
+    t: PictureTarget,
+    src: PictureSource,
+  ): ((ctx: Ctx2D, y: number, rows: number) => void) | undefined;
+}
+
+const sourceSteps: PictureSourceStep[] = [];
+const targetExtensions: PictureTargetExtension[] = [];
+const postSteps: PicturePostStep[] = [];
+
+/** Add `x` to `list` (one per name: a later one replaces it); returns its removal. */
+function register<T extends { readonly name: string }>(list: T[], x: T): () => void {
+  const at = list.findIndex((y) => y.name === x.name);
+  if (at >= 0) list[at] = x;
+  else list.push(x);
+  return () => {
+    const i = list.indexOf(x);
+    if (i >= 0) list.splice(i, 1);
+  };
+}
+
+/** Register a source step (the vector player); returns its unregistration. */
+export function registerPictureSource(step: PictureSourceStep): () => void {
+  return register(sourceSteps, step);
+}
+
+/** Register a target extension (the 3-D look of a picture); returns its unregistration. */
+export function registerPictureTarget(ext: PictureTargetExtension): () => void {
+  return register(targetExtensions, ext);
+}
+
+/** Register a post step (the rim of a front-camera picture); returns its unregistration. */
+export function registerPicturePost(step: PicturePostStep): () => void {
+  return register(postSteps, step);
+}
+
+/** Whether a target extension or post step is registered (a picture's 3-D look may then reach past its box). */
+export function pictureLooksRegistered(): boolean {
+  return targetExtensions.length > 0 || postSteps.length > 0;
+}
+
+/**
+ * `ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh)` for any picture: a canvas image directly, a vector
+ * picture through the source step that accepts it (nothing when none does).
+ */
+export function drawPictureSource(
+  ctx: Ctx2D,
+  img: PictureSource,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+): void {
+  if (!isVectorPicture(img)) {
+    ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+    return;
+  }
+  for (const step of sourceSteps)
+    if (step.accepts(img)) {
+      step.draw(ctx, img, sx, sy, sw, sh, dx, dy, dw, dh);
+      return;
+    }
+}
+
+/**
+ * How a picture is cut and mirrored in its box, and its effects (design/27 §3.1 `ImageObject.mask`, `flipH`,
+ * `flipV`, `shadow`, `softEdge`): mirrored about the box's centre before the box's rotation, mask included; a
+ * soft edge and a shadow as a shape's (`effects.ts`, `picture-effects.ts`).
  */
 export type PictureShape = {
   mask?: ShapeGeom;
@@ -96,6 +250,8 @@ export type PictureTarget = {
    * bitmap covers the turned box's bounds and holds the picture turned and cut to its mask.
    */
   rotation?: number;
+  /** What the target extensions added (`PictureTargetExtension`), by their names; absent when none did. */
+  ext?: Readonly<Record<string, unknown>>;
 };
 
 /** Clamped masks and their key digests, by the stored mask object (a slide's pictures are asked for often). */
@@ -118,7 +274,7 @@ export function pictureShape(o: PictureShape): PictureShape | undefined {
   const mask = maskOf(o.mask).mask;
   const flipH = o.flipH === true;
   const flipV = o.flipV === true;
-  const shadow = o.shadow;
+  const shadow = o.shadow && typeof o.shadow === 'object' ? clampShadow(o.shadow) : undefined;
   const softEdge = num(o.softEdge, 0, CLAMP.maxEffectPx, 0);
   if (!mask && !flipH && !flipV && !shadow && !(softEdge > 0)) return undefined;
   const out: PictureShape = {};
@@ -128,6 +284,44 @@ export function pictureShape(o: PictureShape): PictureShape | undefined {
   if (shadow) out.shadow = shadow;
   if (softEdge > 0) out.softEdge = softEdge;
   return out;
+}
+
+/** Whether a picture's effects draw anything: a shadow with some alpha, a soft edge. */
+export function hasPictureEffects(s: PictureShape | undefined): boolean {
+  return (
+    !!s &&
+    ((!!s.shadow && num(s.shadow.color?.a, 0, 1, 0) > 0) || num(s.softEdge, 0, CLAMP.maxEffectPx, 0) > 0)
+  );
+}
+
+const roundMasks = new Map<string, ShapeGeom>();
+
+/**
+ * The mask a picture with effects is cut to when it has round corners and no mask: the 'roundRect' preset
+ * with the corner `radius` (capped at half the shorter side), the very geometry a shape with that radius
+ * draws (`geom/built.ts` `legacyGeometry`). So its soft edge erodes its round corners, its shadow follows
+ * them, it is prepared (anti-aliased, 1:1, in bands) and a ProPresenter shape and picture with the same
+ * corner look alike. Undefined for anything else: a picture without effects keeps its clip.
+ */
+export function roundCornerMask(
+  radius: number | undefined,
+  w: number,
+  h: number,
+  s: PictureShape | undefined,
+): ShapeGeom | undefined {
+  if (!s || s.mask || !hasPictureEffects(s)) return undefined;
+  const ss = Math.min(w, h);
+  const r = num(radius, 0, CLAMP.maxRadius, 0);
+  if (!(r > 0 && ss > 0)) return undefined;
+  const adj = Math.round((Math.min(r, ss / 2) / ss) * 100_000);
+  const key = String(adj);
+  let mask = roundMasks.get(key);
+  if (!mask) {
+    mask = { preset: 'roundRect', adj: [['adj', adj]] };
+    if (roundMasks.size >= 256) roundMasks.clear();
+    roundMasks.set(key, mask);
+  }
+  return mask;
 }
 
 /**
@@ -153,12 +347,21 @@ export function pictureFit(fit: unknown): PictureFit {
  * `MAX_PREPARED_PIXELS`. Those are drawn from the source as before. A masked picture is prepared with round
  * corners (the mask replaces them) and rotated (the bitmap covers the turned box's bounds). Edges within
  * 1e-6 px of a pixel boundary are taken as on it, so float noise never widens a box by a pixel.
+ *
+ * The registered target extensions see every picture, effects or not; then a soft edge is added to what the
+ * target says (its key and `shape.softEdge`: `SOFT_EDGE_STEP` feathers the finished pixels). A shadow is not
+ * part of the target (it is drawn under the picture), so a shadowed picture shares its prepared bitmap.
  */
 export function pictureTarget(o: PictureDraw, scale: number): PictureTarget | undefined {
-  if (o.shadow || (o.softEdge ?? 0) > 0) return undefined;
   if (!(Number.isFinite(scale) && scale > 0)) return undefined;
   const box = clampBox(o.box);
-  const shape = pictureShape(o);
+  let effected = pictureShape(o);
+  // Round corners with effects are cut as a mask is (`roundCornerMask`), so such a picture is prepared too.
+  const round = roundCornerMask(o.radius, box.w, box.h, effected);
+  if (round && effected) effected = { ...effected, mask: maskOf(round).mask ?? round };
+  const softEdge = effected?.softEdge ?? 0;
+  const shape =
+    effected && (effected.mask || effected.flipH || effected.flipV) ? cutAndMirror(effected) : undefined;
   // A rotated picture is prepared only with a mask, which cuts it (anti-aliased) wherever the box turns.
   if (box.rotation && !shape?.mask) return undefined;
   if (!shape?.mask && num(o.radius, 0, CLAMP.maxRadius, 0) > 0) return undefined;
@@ -203,7 +406,113 @@ export function pictureTarget(o: PictureDraw, scale: number): PictureTarget | un
   if (crop) t.crop = crop;
   if (shape) t.shape = { ...shape, w: box.w, h: box.h };
   if (box.rotation) t.rotation = box.rotation;
-  return t;
+  const out = targetExtensions.length ? extended(o, t) : t;
+  // The effects after the extensions: a soft edge feathers what they made (`SOFT_EDGE_STEP`).
+  if (!out || !(softEdge > 0)) return out;
+  return {
+    ...out,
+    key: `${out.key} e${softEdge}`,
+    shape: { ...(out.shape ?? { w: box.w, h: box.h }), softEdge },
+  };
+}
+
+/** A picture's mask and flips alone (what cuts and mirrors its pixels), without its effects. */
+function cutAndMirror(s: PictureShape): PictureShape {
+  const out: PictureShape = {};
+  if (s.mask) out.mask = s.mask;
+  if (s.flipH) out.flipH = true;
+  if (s.flipV) out.flipV = true;
+  return out;
+}
+
+/**
+ * The silhouette of a picture in its box (logical px, 0..w x 0..h, before its flips): the union of its
+ * mask's filled paths (nonzero), else the box with its round corners (`radius`, the canvas's `roundRect`
+ * clamp: at most half the shorter side), else the box. What its soft edge erodes and an isolated draw cuts it
+ * to (`picture-effects.ts`). Undefined where there is no Path2D (Node).
+ */
+export function pictureSilhouette(
+  w: number,
+  h: number,
+  mask: ShapeGeom | undefined,
+  radius = 0,
+): Path2D | undefined {
+  if (typeof Path2D === 'undefined') return undefined;
+  if (mask) {
+    const built = storedGeometry(mask, w, h);
+    if (built) return geomFillPath2D(built);
+  }
+  const p = new Path2D();
+  const r = Math.min(Math.max(0, Number.isFinite(radius) ? radius : 0), w / 2, h / 2);
+  if (r > 0 && typeof (p as { roundRect?: unknown }).roundRect === 'function') p.roundRect(0, 0, w, h, r);
+  else if (r > 0) {
+    p.moveTo(r, 0);
+    p.arcTo(w, 0, w, h, r);
+    p.arcTo(w, h, 0, h, r);
+    p.arcTo(0, h, 0, 0, r);
+    p.arcTo(0, 0, w, 0, r);
+    p.closePath();
+  } else p.rect(0, 0, w, h);
+  return p;
+}
+
+/**
+ * A prepared picture's soft edge (design/27 §3.1 `ImageObject.softEdge`; the brief of picture effects in
+ * design/20 "ProPresenter"): the finished pixels, turned and mirrored as the target says, multiplied by the
+ * picture's silhouette (its mask, else its box) eroded by the soft edge and blurred by it, as a shape's soft
+ * edge is (`effects.ts` `pictureSoftMask`: Canvas shadows, no `ctx.filter`, so WebKit feathers too). Runs
+ * after the registered post steps. In bands for a target prepared in bands: the mask (at most a megapixel,
+ * reduced) in a step of its own, then the multiply one band of rows a step (at 4K a full-frame multiply was
+ * 50-90 ms as one task on a loaded 4-core container), the same pixels as one multiply.
+ */
+export const SOFT_EDGE_STEP: PicturePostStep = {
+  name: 'softEdge',
+  applies: (t) => (t.shape?.softEdge ?? 0) > 0,
+  run(ctx, t) {
+    softEdgeBands(ctx, t)?.(ctx, 0, t.h);
+  },
+  bands: (ctx, t) => softEdgeBands(ctx, t),
+};
+
+/** `SOFT_EDGE_STEP`'s mask, made for `ctx` (the prepared canvas), and what multiplies a band of it by it. */
+function softEdgeBands(
+  ctx: Ctx2D,
+  t: PictureTarget,
+): ((ctx: Ctx2D, y: number, rows: number) => void) | undefined {
+  const sh = t.shape;
+  const e = sh?.softEdge ?? 0;
+  if (!sh || !(e > 0) || !(t.bw > 0 && t.bh > 0)) return undefined;
+  if (!('canvas' in ctx) || typeof OffscreenCanvas === 'undefined') return undefined;
+  const c = ctx as OffscreenCanvasRenderingContext2D;
+  const lw = sh.w > 0 ? sh.w : t.bw;
+  const lh = sh.h > 0 ? sh.h : t.bh;
+  c.save();
+  if (t.rotation) {
+    const cx = t.bx + t.bw / 2;
+    const cy = t.by + t.bh / 2;
+    c.translate(cx, cy);
+    c.rotate((t.rotation * Math.PI) / 180);
+    c.translate(-cx, -cy);
+  }
+  placeShape(c, t.bx, t.by, t.bw, t.bh, sh);
+  const fill = pictureSilhouette(lw, lh, sh.mask);
+  const mask = fill ? pictureSoftMask(c, fill, e, t.bw / lw) : undefined;
+  c.restore();
+  return mask ? (into) => multiplySoftMask(into as OffscreenCanvasRenderingContext2D, mask) : undefined;
+}
+
+/** `t` with what the registered target extensions add, or undefined when one refuses it. */
+function extended(o: PictureDraw, t: PictureTarget): PictureTarget | undefined {
+  let key = t.key;
+  let ext: Record<string, unknown> | undefined;
+  for (const e of targetExtensions) {
+    const r = e.extend(o, t);
+    if (r === false) return undefined;
+    if (!r) continue;
+    key += ` ${e.name}:${r.key}`;
+    if (r.data !== undefined) (ext ??= {})[e.name] = r.data;
+  }
+  return key === t.key && !ext ? t : { ...t, key, ...(ext ? { ext } : {}) };
 }
 
 /**
@@ -232,7 +541,7 @@ function placeShape(
  */
 export function paintShapedPicture(
   ctx: Ctx2D,
-  img: CanvasImageSource,
+  img: PictureSource,
   bx: number,
   by: number,
   bw: number,
@@ -270,12 +579,12 @@ function cutToMask(ctx: Ctx2D, lw: number, lh: number, shape: PictureShape): voi
 const prepared = new WeakMap<object, { key: string; w: number; h: number }>();
 
 /** The target key a bitmap was prepared for (`preparePicture`), else undefined: a source. */
-export function preparedKey(img: CanvasImageSource): string | undefined {
+export function preparedKey(img: PictureSource): string | undefined {
   return typeof img === 'object' && img !== null ? prepared.get(img)?.key : undefined;
 }
 
-/** A picture's own pixel size (an image's, a bitmap's or a video's), 0 when it has none. */
-function ownSize(img: CanvasImageSource): [number, number] {
+/** A picture's own pixel size (an image's, a bitmap's, a video's or a vector picture's), 0 when it has none. */
+function ownSize(img: PictureSource): [number, number] {
   return [
     (img as { width?: number }).width || (img as HTMLVideoElement).videoWidth || 0,
     (img as { height?: number }).height || (img as HTMLVideoElement).videoHeight || 0,
@@ -289,7 +598,7 @@ function ownSize(img: CanvasImageSource): [number, number] {
  * with (the poster's size, design/27 §7.2), whichever of the two the image lookup hands back. Raw numbers:
  * 0 (or whatever the image says) when it has none; callers clamp.
  */
-export function sourceSize(img: CanvasImageSource): [number, number] {
+export function sourceSize(img: PictureSource): [number, number] {
   const p = typeof img === 'object' && img !== null ? prepared.get(img) : undefined;
   return p ? [p.w, p.h] : ownSize(img);
 }
@@ -325,7 +634,7 @@ export const PREPARE_STEP_PIXELS = 1 << 21;
  * there never reads a texture back.
  */
 export function preparePicture(
-  src: CanvasImageSource,
+  src: PictureSource,
   t: PictureTarget,
   from?: PictureFrom,
 ): ImageBitmap | undefined {
@@ -345,7 +654,7 @@ export function preparePicture(
  * (`asset.lanes.browser.test.ts`). Abandoning the generator drops the canvas.
  */
 export function* preparePictureSteps(
-  src: CanvasImageSource,
+  src: PictureSource,
   t: PictureTarget,
   from?: PictureFrom,
   stepPixels = PREPARE_STEP_PIXELS,
@@ -360,20 +669,72 @@ export function* preparePictureSteps(
   if (rows >= t.h) paintTarget(ctx, src, t, from);
   else {
     for (let y = 0; y < t.h; y += rows) {
-      if (y > 0) yield;
+      if (y > 0) yield settle(ctx);
       ctx.save();
       paintTarget(ctx, src, t, from, { y, rows: Math.min(rows, t.h - y) });
       ctx.restore();
     }
     if (t.shape?.mask) {
-      yield;
+      yield settle(ctx);
       ctx.save();
       paintTarget(ctx, src, t, from, 'cut');
       ctx.restore();
     }
   }
+  // Post steps (none registered by default), then the soft edge, over the finished pixels: in a step of their
+  // own, or for a target drawn in bands each in steps of its own (one band a step where it has bands).
+  const post = postSteps.length ? postSteps.filter((p) => p.applies(t)) : [];
+  if (SOFT_EDGE_STEP.applies(t)) post.push(SOFT_EDGE_STEP);
+  if (post.length && rows >= t.h) {
+    yield settle(ctx);
+    for (const p of post) {
+      ctx.save();
+      p.run(ctx, t, src);
+      ctx.restore();
+    }
+  } else {
+    // Prepared in bands: each post step in a step of its own, one with bands one band a step.
+    for (const p of post) {
+      yield settle(ctx);
+      if (!p.bands) {
+        ctx.save();
+        p.run(ctx, t, src);
+        ctx.restore();
+        continue;
+      }
+      ctx.save();
+      const band = p.bands(ctx, t, src);
+      ctx.restore();
+      if (!band) continue;
+      for (let y = 0; y < t.h; y += rows) {
+        yield settle(ctx);
+        const n = Math.min(rows, t.h - y);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, y, t.w, n);
+        ctx.clip();
+        band(ctx, y, n);
+        ctx.restore();
+      }
+    }
+  }
   const bmp = canvas.transferToImageBitmap();
   const [w, h] = from ? [from.iw, from.ih] : ownSize(src);
+
+  /**
+   * Makes the canvas draw what was recorded on it, before a step ends: Chromium records 2D calls and draws them
+   * when something reads the pixels, so without it a band recorded cheaply (a soft edge's small mask enlarged
+   * over the picture) is drawn in a later step, and the last step (`transferToImageBitmap`) paid for every band
+   * at once (a full-frame feather at 4K: 60-120 ms). Reading one pixel back is a copy of four bytes on this
+   * CPU-backed canvas (`willReadFrequently`).
+   */
+  function settle(ctx: OffscreenCanvasRenderingContext2D): void {
+    try {
+      ctx.getImageData(0, 0, 1, 1);
+    } catch {
+      // Nothing to read back (a lost context): the step just ends.
+    }
+  }
   prepared.set(bmp, { key: t.key, w, h });
   return bmp;
 }
@@ -386,7 +747,7 @@ export function* preparePictureSteps(
  */
 function paintTarget(
   ctx: Ctx2D,
-  src: CanvasImageSource,
+  src: PictureSource,
   t: PictureTarget,
   from?: PictureFrom,
   step?: { y: number; rows: number } | 'cut',
@@ -546,7 +907,7 @@ export function decodePlan(
  */
 export function paintPicture(
   ctx: Ctx2D,
-  img: CanvasImageSource,
+  img: PictureSource,
   bx: number,
   by: number,
   bw: number,
@@ -559,11 +920,13 @@ export function paintPicture(
   const l = pictureLayout(iw, ih, bx, by, bw, bh, fit, c);
   if (!l) return;
   if (!c) {
-    ctx.drawImage(img, l.dx, l.dy, l.dw, l.dh);
+    if (isVectorPicture(img)) drawPictureSource(ctx, img, 0, 0, iw, ih, l.dx, l.dy, l.dw, l.dh);
+    else ctx.drawImage(img, l.dx, l.dy, l.dw, l.dh);
     return;
   }
   // The part of the cropped rect that lies on the picture, and where it lands; the rest stays clear.
-  ctx.drawImage(
+  drawPictureSource(
+    ctx,
     img,
     l.x0,
     l.y0,
@@ -584,7 +947,7 @@ export function paintPicture(
  */
 export function paintPictureFrom(
   ctx: Ctx2D,
-  img: CanvasImageSource,
+  img: PictureSource,
   from: PictureFrom,
   bx: number,
   by: number,
@@ -603,7 +966,8 @@ export function paintPictureFrom(
   const [iw, ih] = ownSize(img);
   const ux = iw / from.w;
   const uy = ih / from.h;
-  ctx.drawImage(
+  drawPictureSource(
+    ctx,
     img,
     (x0 - from.x) * ux,
     (y0 - from.y) * uy,

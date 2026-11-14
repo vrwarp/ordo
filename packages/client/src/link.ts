@@ -36,7 +36,10 @@ const HELD_REFRESH_MS = 60_000;
  *
  * The window leaves the fallback bus on its own (design/17) when any of these holds:
  * - the hub socket is up and the hub's state sequence is at or above the applied one (the hub only
- *   reaches that after adopting the operator's state, or when nothing changed while it was away);
+ *   reaches that after adopting the operator's state, or when nothing changed while it was away),
+ *   unless the operator says the hub refuses its session (`hubRefused`): then the hub cannot have been
+ *   handed the service, and a hub restarted from its journal at the window's own sequence is not a
+ *   catch-up (chaos-operator.spec.ts:818);
  * - no message has arrived from the operator for 5 s (the host heartbeats every 2 s);
  * - the opener window is closed.
  * It also leaves when the operator posts `fallback.hub { hubUp: true }`.
@@ -67,6 +70,14 @@ export class OutputLink extends Emitter<{
    */
   held = false;
   private heldRefreshedAt = 0;
+  /**
+   * The operator, the authority on this bus, says the hub refuses its session (design/15 "Session expiry"):
+   * nothing the hub sends is a catch-up while it does, not a state at this window's own sequence either (the
+   * hub restarted from its journal, or the answer to a resync this window asked for when it followed that hub
+   * just before the operator re-introduced the bus). Set by the operator's hello and heartbeats, cleared by
+   * one without it, by `hubUp` and whenever the window leaves the bus.
+   */
+  private hubRefused = false;
 
   constructor(opts: {
     role: 'output' | 'stage';
@@ -108,7 +119,8 @@ export class OutputLink extends Emitter<{
     this.hub.on('state', (m) => {
       if (this.held) return;
       if (this.bus === 'fallback') {
-        if (m.seq < this.mirror.state.seq) return; // the hub has not caught up (adopted) yet
+        // The hub has not caught up (adopted) yet, or cannot while it refuses the operator.
+        if (this.hubRefused || m.seq < this.mirror.state.seq) return;
         this.leaveFallback('hub caught up');
       }
       this.mirror.applyState(m.state);
@@ -116,7 +128,7 @@ export class OutputLink extends Emitter<{
     this.hub.on('delta', (m) => {
       if (this.held) return;
       if (this.bus === 'fallback') {
-        if (m.fromSeq < this.mirror.state.seq) return;
+        if (this.hubRefused || m.fromSeq < this.mirror.state.seq) return;
         this.leaveFallback('hub caught up');
       }
       if (!this.mirror.applyDelta(m)) this.requestResync();
@@ -131,8 +143,9 @@ export class OutputLink extends Emitter<{
     this.hub.on('library', (m) => this.emit('library', m));
     this.hub.on('rtc', (m) => this.emit('rtc', m));
 
-    this.fallback?.on('hello', ({ hold }) => {
+    this.fallback?.on('hello', ({ hold, hubRefused }) => {
       this.setHeld(hold);
+      this.hubRefused = hubRefused;
       this.setBus('fallback', 'operator hello');
       clock.fallback = true;
       this.fallback!.ready(this.mirror.state.seq);
@@ -144,10 +157,11 @@ export class OutputLink extends Emitter<{
       if (this.bus !== 'fallback') return;
       if (!this.mirror.applyDelta(m)) this.requestResync({ fallbackSeq: this.mirror.state.seq });
     });
-    this.fallback?.on('hub', ({ hubUp, hold }) => {
+    this.fallback?.on('hub', ({ hubUp, hold, hubRefused }) => {
       if (hubUp) {
         if (DEMO) return; // In demo mode there is no WebSocket hub; stay on fallback bus
         this.setHeld(false);
+        this.hubRefused = false;
         if (this.bus === 'fallback') this.leaveFallback('operator says hub up');
         else clock.fallback = false;
         return;
@@ -155,6 +169,7 @@ export class OutputLink extends Emitter<{
       if (this.bus === 'fallback') {
         this.setHeld(hold);
         if (hold && this.held) this.refreshHeld();
+        this.hubRefused = hubRefused;
       }
     });
   }
@@ -279,6 +294,7 @@ export class OutputLink extends Emitter<{
 
   private leaveFallback(reason: string): void {
     clock.fallback = false;
+    this.hubRefused = false;
     // A held window keeps its picture: it does not ask the hub for a state it would not apply.
     this.setBus(this.hub.connected && !this.held ? 'hub' : 'none', reason);
     if (!this.held) this.hub.send({ t: 'live.resync' });

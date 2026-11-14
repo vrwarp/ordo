@@ -28,7 +28,10 @@ export const MAX_CACHED_TEXT = 256;
 /** A least-recently-used map of measured widths. */
 export class WidthCache {
   readonly #map = new Map<string, number>();
-  constructor(readonly limit = WIDTH_CACHE_SIZE) {}
+  readonly limit: number;
+  constructor(limit = WIDTH_CACHE_SIZE) {
+    this.limit = limit;
+  }
 
   get size(): number {
     return this.#map.size;

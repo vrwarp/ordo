@@ -1,12 +1,13 @@
 /** An error that maps to an HTTP status and the `{ error: { code, message } }` body. */
 export class HttpError extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-    public extra?: Record<string, unknown>,
-  ) {
+  public status: number;
+  public code: string;
+  public extra?: Record<string, unknown>;
+  constructor(status: number, code: string, message: string, extra?: Record<string, unknown>) {
     super(message);
+    this.status = status;
+    this.code = code;
+    this.extra = extra;
   }
 }
 

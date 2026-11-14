@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises';
-import { COMPAT_RULE_TEXT, COMPAT_RULES, type CompatRule } from './compat.ts';
-import { M2_FEATURE_TARGETS, TEXT_FEATURES } from './features.ts';
+import { COMPAT_RULE_TEXT, COMPAT_RULES, type CompatRule } from './compat/index.ts';
+import { M2_FEATURE_TARGETS, TEXT_FEATURES, xmlFeatureOrder } from './features/index.ts';
 import type { ScriptFace } from './fonts.ts';
 
 export type SlideScore = {
@@ -19,10 +19,12 @@ export type SlideScore = {
   /** With `--lo-compat`, on a slide a policy rule changes: the slide drawn as ordo does, and its SSIM. */
   nativePolicy?: string;
   policySsim?: number;
-  /** LibreOffice policy rules that change how the slide is drawn (`compat.ts`), whether applied or not. */
+  /** LibreOffice policy rules that change how the slide is drawn (`compat/`), whether applied or not. */
   compat?: string[];
-  /** Text features of the slide's own XML (`features.ts`). */
+  /** Text features of the slide's own XML (`features/text.ts`). */
   textFeatures?: string[];
+  /** The other registered feature families' (`features/index.ts`). */
+  xmlFeatures?: string[];
   /** An all-black frame scored the same way: the floor native has to beat. */
   blackSsim?: number;
   tier?: string;
@@ -34,10 +36,43 @@ export type SlideScore = {
   rasterMs?: { '1920': number; '3840': number };
   /** Cold: preparing the pictures the deck's cache lacks plus the first draw, in ms. */
   coldMs?: { '1920': number; '3840': number };
+  /** The largest single object's cold draw and flush at 1920 and 3840 px, in ms (`native-page.ts`). */
+  maxObjectMs?: { '1920': number; '3840': number };
+  /** The id of that object at 3840 px. */
+  maxObjectId?: string;
+  /** The slide's class in the hub when its budgets made it differ from `class` (`census.ts` `hubClasses`). */
+  hub?: string;
+  /**
+   * `--before hub`: what a hub with LibreOffice showed, scored against LibreOffice (`beforehub.ts`): its
+   * version 2 drawn (`beforeHubFrom: 'hub'`), else the pixel paste (`'paste'`); a slide the hub stores native
+   * without metafiles has its `nativeSsim` (and no `beforeHubFrom`).
+   */
+  beforeHubSsim?: number;
+  beforeHubFrom?: 'hub' | 'paste';
+  /**
+   * `--before hub`: LibreOffice could not draw this slide in the hub (its follow-up gave up), so the hub
+   * showed it without its art; `beforeHubSsim` scores that.
+   */
+  beforeHubFailed?: true;
+  /** `--before`: the pixel paste's score of a slide the hub does not store native (the labelled fallback). */
+  beforeHubPaste?: number;
+  /** `--no-libreoffice`: what a hub without LibreOffice shows (its picture, when it differs from `native`). */
+  noLoSsim?: number;
+  nativeNoLo?: string;
+  /** `--no-libreoffice`: what nothing draws without LibreOffice (`EmittedSlide.missing` kinds). */
+  missing?: string[];
+  /** Metafile pictures the hub leaves to LibreOffice (pending; such a slide is in F even when native). */
+  metafiles?: number;
+  /** A named exception (`exceptions.ts`): why this slide may score below its gate. */
+  exception?: string;
+  /** Set when the exception lifts gate 1 (before-harness) too; otherwise it lifts gate 2 (before-hub) only. */
+  exceptionGate?: 'all';
 };
 
 export type DeckScore = {
   name: string;
+  /** The deck file's SHA-256 (`exceptions.ts` names decks by it). */
+  sha256?: string;
   /** Pages LibreOffice drew. */
   slides: number;
   ppvSlides?: number;
@@ -51,8 +86,14 @@ export type DeckScore = {
   nativeSsim?: number;
   /** With `--lo-compat`: the mean with every slide drawn as ordo does. */
   nativePolicySsim?: number;
+  /** With `--before`: the mean of `SlideScore.beforeHubSsim`. */
+  beforeHubSsim?: number;
+  /** With `--no-libreoffice`: the mean of `SlideScore.noLoSsim`. */
+  noLoSsim?: number;
   /** Text features of any slide (and the presentation part), as the suite's inventory reads a deck. */
   textFeatures?: string[];
+  /** The other registered feature families' features of any slide (`features/index.ts`). */
+  xmlFeatures?: string[];
   /** The whole native column for this deck (convert, fonts, draw), and the converter alone, in ms. */
   nativeMs?: number;
   convertMs?: number;
@@ -79,6 +120,14 @@ export type Summary = {
   loCompat?: boolean;
   /** With `--lo-compat`: `nativeMean` with every slide drawn as ordo does. */
   nativePolicyMean?: number;
+  /** With `--before hub|paste`: how before-hub was taken, and `nativeMean` of what that hub showed. */
+  before?: 'hub' | 'paste';
+  beforeHubMean?: number;
+  /** With `--no-libreoffice`: `nativeMean` of what a hub without LibreOffice shows. */
+  noLibreOffice?: boolean;
+  noLoMean?: number;
+  /** `--hub-budget`: every slide drawn as the hub stores it. */
+  hubBudget?: boolean;
   /** The native column's tables (`nativeTables`): all decks, and worship decks when a manifest says. */
   native?: { all: NativeTables; worship?: NativeTables };
   /** How this machine served each script fallback family (`fonts.ts`). */
@@ -123,6 +172,11 @@ export type NativeStats = {
   rasterMs: { '1920': { p50: number; p95: number }; '3840': { p50: number; p95: number } };
   /** Cold times (`SlideScore.coldMs`): what an output pays on a slide change, decode included. */
   coldMs: { '1920': { p50: number; p95: number }; '3840': { p50: number; p95: number } };
+  /** The largest single object per slide (`SlideScore.maxObjectMs`), and the largest of all. */
+  maxObjectMs: {
+    '1920': { p50: number; p95: number; max: number };
+    '3840': { p50: number; p95: number; max: number };
+  };
   tiers: GroupRow[];
   /** T1 and T2 together (the M2 exit compares them with pptx-preview). */
   t1t2?: GroupRow;
@@ -158,7 +212,35 @@ export type PolicyRow = GroupRow & {
 export type NativeTables = {
   stats: NativeStats;
   textFeatures: TextFeatureRow[];
+  /** The other registered feature families (`xmlFeatures`), as the text features are tabled. */
+  xmlFeatures: TextFeatureRow[];
   policy: PolicyRow[];
+  /** F, the slides a hub without LibreOffice does not show as a LibreOffice hub does, by cause. */
+  causes: CauseRow[];
+};
+
+/**
+ * One cause group of F (`causeRows`): slides, and their means before-harness (`nativeSsim`, what a hub without
+ * LibreOffice drew: the art box blank), before-hub (`beforeHubSsim`) and without LibreOffice (`noLoSsim`).
+ */
+export type CauseRow = {
+  key: string;
+  count: number;
+  /** Mean `nativeSsim`: the harness's before. */
+  harness: number;
+  /** Mean `beforeHubSsim` over the slides that have it, and how many of those the hub itself gave. */
+  hub?: number;
+  hubCount: number;
+  fromHub: number;
+  /** Mean `beforeHubPaste` (the pixel paste) over the slides that have it. */
+  paste?: number;
+  /** Mean `noLoSsim` over the slides that have it. */
+  noLo?: number;
+  black?: number;
+  /** Slides with `missing` kinds, slides named as exceptions, and the largest object at 3840 px. */
+  missing: number;
+  exceptions: number;
+  maxObjectMs3840?: number;
 };
 
 const TIER_ORDER = ['T1', 'T2', 'T3', 'T4', 'T5', 'fallback'];
@@ -235,10 +317,12 @@ export function nativeStats(decks: DeckScore[]): NativeStats {
       const t = of(x.s);
       return t ? [t[w]] : [];
     });
-    return { p50: quantile(xs, 0.5), p95: quantile(xs, 0.95) };
+    return { p50: quantile(xs, 0.5), p95: quantile(xs, 0.95), max: xs.length ? Math.max(...xs) : 0 };
   };
   const warm = (s: SlideScore) => s.rasterMs;
   const cold = (s: SlideScore) => s.coldMs;
+  const largest = (s: SlideScore) => s.maxObjectMs;
+  const two = (r: { p50: number; p95: number }) => ({ p50: r.p50, p95: r.p95 });
   const conv = slides.flatMap((x) => (x.s.convertMs !== undefined ? [x.s.convertMs] : []));
   return {
     slides: slides.length,
@@ -248,8 +332,9 @@ export function nativeStats(decks: DeckScore[]): NativeStats {
     ...(ppv.length ? { meanPpv: mean(ppv.map((s) => s.ssim!)) } : {}),
     ...(scored.some((s) => s.policySsim !== undefined) ? { meanPolicy: mean(scored.map(policyOf)) } : {}),
     convertMs: { p50: quantile(conv, 0.5), p95: quantile(conv, 0.95) },
-    rasterMs: { '1920': raster('1920', warm), '3840': raster('3840', warm) },
-    coldMs: { '1920': raster('1920', cold), '3840': raster('3840', cold) },
+    rasterMs: { '1920': two(raster('1920', warm)), '3840': two(raster('3840', warm)) },
+    coldMs: { '1920': two(raster('1920', cold)), '3840': two(raster('3840', cold)) },
+    maxObjectMs: { '1920': raster('1920', largest), '3840': raster('3840', largest) },
     tiers: groupRows(slides, (s) => [s.tier!], TIER_ORDER),
     ...(t1t2[0] ? { t1t2: t1t2[0] } : {}),
     classes: groupRows(slides, (s) => [s.class ?? '?'], ['native', 'hybrid', 'picture', '?']),
@@ -266,11 +351,30 @@ const policyOf = (s: SlideScore) => s.policySsim ?? s.nativeSsim!;
  * over the decks that have it anywhere, as the suite's numbers (and the M2 targets) were taken.
  */
 export function textFeatureRows(decks: DeckScore[]): TextFeatureRow[] {
+  return featureTable(decks, TEXT_FEATURES, 'textFeatures', M2_FEATURE_TARGETS);
+}
+
+/** The other registered families' features (`xmlFeatures`), in their report order, as text features are. */
+export function xmlFeatureRows(decks: DeckScore[]): TextFeatureRow[] {
+  const found = new Set<string>();
+  for (const d of decks) {
+    for (const k of d.xmlFeatures ?? []) found.add(k);
+    for (const s of d.perSlide) for (const k of s.xmlFeatures ?? []) found.add(k);
+  }
+  return featureTable(decks, xmlFeatureOrder(found), 'xmlFeatures', {});
+}
+
+function featureTable(
+  decks: DeckScore[],
+  keys: readonly string[],
+  field: 'textFeatures' | 'xmlFeatures',
+  targets: Readonly<Partial<Record<string, number>>>,
+): TextFeatureRow[] {
   const slides = shownSlides(decks);
   const counted = decks.filter((d) => !d.embeddedFonts && d.nativeSsim !== undefined);
-  return TEXT_FEATURES.flatMap((f): TextFeatureRow[] => {
-    const g = slides.filter((x) => x.s.textFeatures?.includes(f));
-    const dg = counted.filter((d) => d.textFeatures?.includes(f));
+  return keys.flatMap((f): TextFeatureRow[] => {
+    const g = slides.filter((x) => x.s[field]?.includes(f));
+    const dg = counted.filter((d) => d[field]?.includes(f));
     if (!g.length && !dg.length) return [];
     const scored = scoredOf(g);
     const ppv = scored.filter((s) => s.ssim !== undefined);
@@ -287,7 +391,7 @@ export function textFeatureRows(decks: DeckScore[]): TextFeatureRow[] {
       };
     }
     const dppv = dg.filter((d) => d.ssim !== undefined);
-    const target = M2_FEATURE_TARGETS[f];
+    const target = targets[f];
     return [
       {
         key: f,
@@ -330,9 +434,94 @@ export function policyRows(decks: DeckScore[]): PolicyRow[] {
   });
 }
 
+/**
+ * The cause groups of `exit_ssim.py` (the M9 plan §6.2), first match wins: a slide is in one group, by the
+ * first of these whose reasons it carries.
+ */
+export const CAUSE_GROUPS: readonly (readonly [string, readonly string[]])[] = [
+  ['3d', ['art:3d', 'art:budget:3d']],
+  ['warp', ['art:warp']],
+  ['table', ['art:table', 'art:budget:table']],
+  ['decorations', ['art:budget:shapes', 'budget:objects']],
+  ['pictures', ['budget:pictures']],
+  ['vertical', ['art:vert']],
+  ['metafile/ole', ['art:ole', 'pic:emf', 'pic:wmf']],
+  ['chart', ['art:chart']],
+  ['smartart', ['art:smartart']],
+];
+
+/** The slide's class in the hub: `hub` where the hub's budgets changed it, else the converter's. */
+const hubClassOf = (s: SlideScore) => s.hub ?? s.class;
+
+/**
+ * Whether a slide is in F: the hub does not store it native (hybrid or picture), it has metafile pictures
+ * left to LibreOffice, or the converter did not emit it (the hub shows LibreOffice's picture).
+ */
+export function inF(s: SlideScore): boolean {
+  if (s.libreoffice === undefined && s.nativeSsim === undefined) return false;
+  if (s.tier === undefined) return true;
+  return hubClassOf(s) !== 'native' || (s.metafiles ?? 0) > 0;
+}
+
+/** A slide of F's cause group (`CAUSE_GROUPS`; `ladder` for a picture slide without one of them). */
+export function causeOf(s: SlideScore): string {
+  if (s.tier === undefined) return 'not converted';
+  const r = new Set(s.reasons ?? []);
+  for (const [g, keys] of CAUSE_GROUPS) if (keys.some((k) => r.has(k))) return g;
+  return hubClassOf(s) === 'picture' ? 'ladder' : 'other';
+}
+
+/** F's slides by cause, after a row for all of F, means as `CauseRow` says. */
+export function causeRows(decks: DeckScore[]): CauseRow[] {
+  const f = decks.flatMap((d) => d.perSlide.filter((s) => s.nativeSsim !== undefined && inF(s)));
+  if (!f.length) return [];
+  const row = (key: string, g: SlideScore[]): CauseRow => {
+    const has = (k: keyof SlideScore) => g.filter((s) => typeof s[k] === 'number');
+    const m = (k: keyof SlideScore) => {
+      const h = has(k);
+      return h.length ? mean(h.map((s) => s[k] as number)) : undefined;
+    };
+    const big = g.flatMap((s) => (s.maxObjectMs ? [s.maxObjectMs['3840']] : []));
+    const hub = m('beforeHubSsim');
+    const paste = m('beforeHubPaste');
+    const noLo = m('noLoSsim');
+    const black = m('blackSsim');
+    return {
+      key,
+      count: g.length,
+      harness: mean(g.map((s) => s.nativeSsim!)),
+      ...(hub !== undefined ? { hub } : {}),
+      hubCount: has('beforeHubSsim').length,
+      fromHub: g.filter((s) => s.beforeHubFrom === 'hub').length,
+      ...(paste !== undefined ? { paste } : {}),
+      ...(noLo !== undefined ? { noLo } : {}),
+      ...(black !== undefined ? { black } : {}),
+      missing: g.filter((s) => s.missing?.length).length,
+      exceptions: g.filter((s) => s.exception).length,
+      ...(big.length ? { maxObjectMs3840: Math.max(...big) } : {}),
+    };
+  };
+  const groups = new Map<string, SlideScore[]>();
+  for (const s of f) {
+    const k = causeOf(s);
+    groups.set(k, [...(groups.get(k) ?? []), s]);
+  }
+  const order = [...CAUSE_GROUPS.map(([g]) => g), 'ladder', 'other', 'not converted'];
+  return [
+    row('all of F', f),
+    ...[...groups].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map(([k, g]) => row(k, g)),
+  ];
+}
+
 /** The native column's tables over `decks`, as `summary.json` keeps them. */
 export function nativeTables(decks: DeckScore[]): NativeTables {
-  return { stats: nativeStats(decks), textFeatures: textFeatureRows(decks), policy: policyRows(decks) };
+  return {
+    stats: nativeStats(decks),
+    textFeatures: textFeatureRows(decks),
+    xmlFeatures: xmlFeatureRows(decks),
+    policy: policyRows(decks),
+    causes: causeRows(decks),
+  };
 }
 
 /** Mean native SSIM per manifest feature, over decks (decks with embedded fonts left out). */
@@ -377,7 +566,7 @@ function table(title: string, unit: string, rows: GroupRow[], ppv: boolean): str
 }
 
 /** Text features: slides, means, per-tier means, and the deck-level means the M2 targets are. */
-function textFeatureTable(rows: TextFeatureRow[], ppv: boolean): string {
+function textFeatureTable(rows: TextFeatureRow[], ppv: boolean, title = 'Text features (slide XML'): string {
   if (!rows.length) return '';
   const tiers = TIER_ORDER.filter((t) => rows.some((r) => r.tiers[t]));
   const policy = rows.some((r) => r.policy !== undefined);
@@ -403,7 +592,7 @@ function textFeatureTable(rows: TextFeatureRow[], ppv: boolean): string {
     )
     .join('');
   return (
-    `<div><h3>Text features (slide XML; per tier: native${ppv ? ' / pptx-preview' : ''} (slides))</h3>` +
+    `<div><h3>${esc(title)}; per tier: native${ppv ? ' / pptx-preview' : ''} (slides))</h3>` +
     `<table>${head}${body}</table></div>`
   );
 }
@@ -434,6 +623,26 @@ function policyTable(rows: PolicyRow[], ppv: boolean, loCompat: boolean): string
 
 const signed = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
 
+/** F by cause: before-harness, before-hub (and how it was taken), the paste, without LibreOffice. */
+function causeTable(rows: CauseRow[]): string {
+  if (!rows.length) return '';
+  const noLo = rows.some((r) => r.noLo !== undefined);
+  const head =
+    '<tr><th>cause</th><th>slides</th><th>before-harness</th><th>before-hub</th><th>from the hub</th><th>paste</th>' +
+    `${noLo ? '<th>without LibreOffice</th>' : ''}<th>black</th><th>missing</th><th>exceptions</th><th>largest object 3840 (ms)</th></tr>`;
+  const body = rows
+    .map(
+      (r) =>
+        `<tr><td>${esc(r.key)}</td><td>${r.count}</td><td>${f3(r.harness)}</td><td>${f3(r.hub)}</td><td>${r.hubCount ? `${r.fromHub} of ${r.hubCount}` : ''}</td><td>${f3(r.paste)}</td>` +
+        `${noLo ? `<td>${f3(r.noLo)}</td>` : ''}<td>${f3(r.black)}</td><td>${r.missing}</td><td>${r.exceptions}</td><td>${r.maxObjectMs3840 !== undefined ? ms(r.maxObjectMs3840) : ''}</td></tr>`,
+    )
+    .join('');
+  return (
+    '<div><h3>Formerly residual slides (F: hub class hybrid or picture, metafiles pending, or not converted), ' +
+    `by cause (exit_ssim.py's groups)</h3><table>${head}${body}</table></div>`
+  );
+}
+
 function statsHtml(title: string, decks: DeckScore[], loCompat: boolean): string {
   const st = nativeStats(decks);
   if (!st.slides) return '';
@@ -445,7 +654,9 @@ function statsHtml(title: string, decks: DeckScore[], loCompat: boolean): string
     `<p>${st.slides} shown slides, ${st.scored} scored · native ${f3(st.meanNative)}${st.meanPolicy !== undefined ? ` (ordo's policies ${f3(st.meanPolicy)})` : ''}${ppv ? ` · pptx-preview ${f3(st.meanPpv)}` : ''} · beats an all-black frame on ${pct(st.beatsBlack)}${t ? ` · T1+T2 ${t.count} slides: native ${f3(t.native)}${t.ppv !== undefined ? `, pptx-preview ${f3(t.ppv)}` : ''}` : ''} · convert p50 ${ms(st.convertMs.p50)} ms, p95 ${ms(st.convertMs.p95)} ms · raster 1920 p50 ${ms(r['1920'].p50)} ms, p95 ${ms(r['1920'].p95)} ms · 3840 p50 ${ms(r['3840'].p50)} ms, p95 ${ms(r['3840'].p95)} ms · cold (pictures prepared + first draw) p95 ${ms(st.coldMs['1920'].p95)} / ${ms(st.coldMs['3840'].p95)} ms</p>` +
     `<div class="tables">${table('Tiers', 'tier', st.tiers, ppv)}${table('Classes', 'class', st.classes, ppv)}${table('Reasons (classifier features), worst first', 'reason', st.reasons, ppv)}</div>` +
     `<div class="tables">${textFeatureTable(textFeatureRows(decks), ppv)}</div>` +
-    `<div class="tables">${policyTable(policyRows(decks), ppv, loCompat)}</div>`
+    `<div class="tables">${textFeatureTable(xmlFeatureRows(decks), ppv, 'Other XML features (slide XML and the parts it names')}</div>` +
+    `<div class="tables">${policyTable(policyRows(decks), ppv, loCompat)}</div>` +
+    `<div class="tables">${causeTable(causeRows(decks))}</div>`
   );
 }
 
@@ -501,16 +712,27 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
             p.nativeSsim !== undefined ? `native ${f3(p.nativeSsim)}` : '',
             p.policySsim !== undefined ? `ordo's policies ${f3(p.policySsim)}` : '',
             p.blackSsim !== undefined ? `black ${f3(p.blackSsim)}` : '',
+            p.beforeHubSsim !== undefined && p.beforeHubFrom
+              ? `before hub ${f3(p.beforeHubSsim)} (${p.beforeHubFrom}${p.beforeHubFailed ? ', LibreOffice failed there' : ''}${p.beforeHubPaste !== undefined && p.beforeHubFrom === 'hub' ? `; paste ${f3(p.beforeHubPaste)}` : ''})`
+              : '',
+            p.noLoSsim !== undefined && p.nativeNoLo ? `without LibreOffice ${f3(p.noLoSsim)}` : '',
+            p.missing?.length ? `missing: ${p.missing.join(', ')}` : '',
+            p.metafiles ? `${p.metafiles} metafile(s) pending` : '',
+            p.exception ? `exception: ${p.exception}` : '',
             p.ssim !== undefined ? `pptx-preview ${f3(p.ssim)}` : '',
             p.raw !== undefined ? `unmodified ${f3(p.raw)}` : '',
             p.tier
               ? `${p.tier} ${p.class ?? ''}${p.reasons?.length ? ` (${p.reasons.join(', ')})` : ''}`
               : '',
             p.textFeatures?.length ? `text: ${p.textFeatures.join(', ')}` : '',
+            p.xmlFeatures?.length ? `features: ${p.xmlFeatures.join(', ')}` : '',
             p.compat?.length ? `LibreOffice policies: ${p.compat.join(', ')}` : '',
             p.convertMs !== undefined ? `convert ${ms(p.convertMs)} ms` : '',
             p.rasterMs ? `raster ${ms(p.rasterMs['1920'])} / ${ms(p.rasterMs['3840'])} ms` : '',
             p.coldMs ? `cold ${ms(p.coldMs['1920'])} / ${ms(p.coldMs['3840'])} ms` : '',
+            p.maxObjectMs
+              ? `largest object ${ms(p.maxObjectMs['1920'])} / ${ms(p.maxObjectMs['3840'])} ms${p.maxObjectId ? ` (${p.maxObjectId})` : ''}`
+              : '',
           ]
             .filter(Boolean)
             .join(' · ');
@@ -528,6 +750,7 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
                 )
               : '') +
             (p.nativePolicy ? img(p.nativePolicy, 'native, drawn as ordo does') : '') +
+            (p.nativeNoLo ? img(p.nativeNoLo, 'native, as a hub without LibreOffice stores it') : '') +
             '</div></section>'
           );
         })
@@ -541,6 +764,8 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
         `${d.slides} slides`,
         d.nativeSsim !== undefined ? `native ${f3(d.nativeSsim)}` : '',
         d.nativePolicySsim !== undefined ? `ordo's policies ${f3(d.nativePolicySsim)}` : '',
+        d.beforeHubSsim !== undefined ? `before hub ${f3(d.beforeHubSsim)}` : '',
+        d.noLoSsim !== undefined ? `without LibreOffice ${f3(d.noLoSsim)}` : '',
         d.textFeatures?.length ? `text: ${d.textFeatures.join(', ')}` : '',
         d.ssim !== undefined
           ? `pptx-preview ${f3(d.ssim)}${d.rawSsim !== undefined ? ` (unmodified ${f3(d.rawSsim)})` : ''}`
@@ -575,6 +800,8 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
   const means = [
     s.nativeMean !== undefined ? `native ${f3(s.nativeMean)}` : '',
     s.nativePolicyMean !== undefined ? `native with ordo's policies ${f3(s.nativePolicyMean)}` : '',
+    s.beforeHubMean !== undefined ? `before hub (${s.before ?? 'hub'}) ${f3(s.beforeHubMean)}` : '',
+    s.noLoMean !== undefined ? `without LibreOffice ${f3(s.noLoMean)}` : '',
     s.mean !== undefined ? `pptx-preview ${f3(s.mean)}` : '',
   ]
     .filter(Boolean)

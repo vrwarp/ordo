@@ -1,5 +1,5 @@
 import { api } from '@ordo/client';
-import { firstText, type Presentation, type Slide } from '@ordo/domain';
+import { type Presentation, type Slide, strapText } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import { useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
@@ -65,7 +65,7 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
   const texts = slide.objects.filter((o) => o.type === 'text');
   const defaultStrap = slide.scripture
     ? `${slide.scripture.ref.book} ${slide.scripture.ref.chapter}:${slide.scripture.ref.verseFrom}${slide.scripture.ref.verseTo ? `-${slide.scripture.ref.verseTo}` : ''}\n${slide.scripture.text}`
-    : firstText(slide);
+    : strapText(slide);
   const strapShown =
     editingStrapFor === slide.id ||
     (slide.bottomThirdText !== undefined

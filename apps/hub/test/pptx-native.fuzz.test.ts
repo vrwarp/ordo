@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PptxNativeResult } from '../src/pptx/shared.ts';
 import { startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
 const enc = new TextEncoder();
@@ -40,7 +41,7 @@ async function importFile(file: string, name = 'Deck.pptx'): Promise<Job> {
   const hash = await storeDeck(hub, file);
   const t0 = Date.now();
   const job = await waitJob(hub, hub.imports.pptx.queueNative(hash, name).id, 20_000);
-  expect(Date.now() - t0).toBeLessThan(5_000);
+  expect(Date.now() - t0).toBeLessThan(budgetMs(5_000));
   return job;
 }
 const importParts = async (parts: Map<string, Uint8Array>, name?: string) =>
@@ -111,7 +112,7 @@ describe('pptx-native: broken decks fail cleanly', () => {
 });
 
 describe('pptx-native: hostile slides are quarantined, never the deck', () => {
-  it('a DOCTYPE, a billion laughs and an 8 MB part make only their slides picture class', async () => {
+  it('a DOCTYPE, a billion laughs and an 8 MB part make only their slides empty, never the deck (M9: no picture)', async () => {
     const parts = deck(5);
     parts.set(
       'ppt/slides/slide1.xml',
@@ -133,8 +134,13 @@ describe('pptx-native: hostile slides are quarantined, never the deck', () => {
     const job = await importParts(parts);
     const p = expectClean(job)!;
     const cls = slidesOf(p).map((s) => s.pptx!.class);
-    // Slide 2 nests 20,000 levels: the reader drops what is deeper than 256 and reads an empty slide.
-    expect(cls).toEqual(['picture', 'native', 'native', 'picture', 'native']);
+    // Slide 2 nests 20,000 levels: the reader drops what is deeper than 256 and reads an empty slide. Slides 1
+    // and 4 cannot be read even by the text rescue (M9 ladder): empty hybrid slides that say so.
+    expect(cls).toEqual(['hybrid', 'native', 'native', 'hybrid', 'native']);
+    for (const i of [0, 3]) {
+      expect(slidesOf(p)[i]!.objects).toEqual([]);
+      expect(slidesOf(p)[i]!.pptx!.missing).toEqual(['slide']);
+    }
     expect(slidesOf(p)[1]!.objects.filter((o) => o.type === 'text')).toEqual([]);
     expect(slidesOf(p).map((s) => s.pptx!.index)).toEqual([0, 1, 2, 3, 4]);
     expect(job.log.join('\n')).toMatch(/\[warn\] ppt\/slides\/slide4\.xml is over 8 MB: not read/);

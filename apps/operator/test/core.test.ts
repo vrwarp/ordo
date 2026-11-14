@@ -111,7 +111,11 @@ describe('library posting by reference identity', () => {
       presentations: [{ id: 'p1' }, { id: 'p2' }] as never[],
       media: [{ id: 'm1' }] as never[],
     };
-    let b = applyLibOp(a, { k: 'upsert', key: 'presentations', entity: { id: 'p2', title: 'x' } });
+    let b = applyLibOp(a, {
+      k: 'upsert',
+      key: 'presentations',
+      entity: { id: 'p2', title: 'x' } as { id: string },
+    });
     b = applyLibOp(b, { k: 'upsert', key: 'presentations', entity: { id: 'p3' } });
     b = applyLibOp(b, { k: 'remove', key: 'media', id: 'm1' });
     b = applyLibOp(b, { k: 'settings', key: 'audio', value: { ...EMPTY_SETTINGS.audio, masterDb: -6 } });

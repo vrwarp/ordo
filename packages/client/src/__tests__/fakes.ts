@@ -16,7 +16,9 @@ export class FakeWebSocket {
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
 
-  constructor(readonly url: string) {
+  readonly url: string;
+  constructor(url: string) {
+    this.url = url;
     FakeWebSocket.instances.push(this);
   }
 
@@ -89,7 +91,10 @@ export class FakeWindow {
   posted: { m: Record<string, unknown>; origin: string }[] = [];
   private listeners = new Map<string, Set<Listener>>();
 
-  constructor(readonly origin: string) {}
+  readonly origin: string;
+  constructor(origin: string) {
+    this.origin = origin;
+  }
 
   addEventListener(type: string, fn: Listener): void {
     let s = this.listeners.get(type);

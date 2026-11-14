@@ -64,11 +64,11 @@ function makeDeck(): Presentation {
     fill: { r: 30, g: 60, b: 120, a: 1 },
     opacity: 1,
     radius: 8,
-    origin: { group: 1 },
+    origin: { src: 'pptx', group: 1 },
   };
   const label: TextObject = {
     ...makeRichTextObject(),
-    origin: { group: 1 },
+    origin: { src: 'pptx', group: 1 },
   };
   const pic: ImageObject = {
     id: 'img1',
@@ -328,13 +328,13 @@ describe('Layer 3: Slide canvas object copy, cut & paste', () => {
     expect(copyShape!.origin?.group).toBe(copyText!.origin?.group);
   });
 
-  it('copies objects on slide 1 (offsetting on same slide) and pastes at original coordinates on slide 2', () => {
+  it('copies objects on slide 1 (offsetting on same slide) and pastes at original coordinates on slide 2', async () => {
     const clip = mockClipboardData();
     selectObjects(['sh1', 't1'], 't1');
     expect(actions.copySelection(clip.data)).toBe(true);
 
     // Paste onto the same slide (s1): offsets by (+20, +20)
-    const idsSame = actions.tryPasteObjectsFromClipboard(clip.data);
+    const idsSame = await actions.tryPasteObjectsFromClipboard(clip.data);
     expect(idsSame).toHaveLength(2);
     const pastedOnS1 = currentObjects();
     expect(pastedOnS1[0]!.box.x).toBe(120);
@@ -345,20 +345,20 @@ describe('Layer 3: Slide canvas object copy, cut & paste', () => {
     const freshClip = mockClipboardData();
     freshClip.data.setData('text/html', clip.store.get('text/html')!);
     freshClip.data.setData('text/plain', clip.store.get('text/plain')!);
-    const idsOther = actions.tryPasteObjectsFromClipboard(freshClip.data);
+    const idsOther = await actions.tryPasteObjectsFromClipboard(freshClip.data);
     expect(idsOther).toHaveLength(2);
     const pastedOnS2 = currentObjects();
     expect(pastedOnS2[0]!.box.x).toBe(100);
     expect(pastedOnS2[0]!.box.y).toBe(100);
   });
 
-  it('cuts objects from a slide and pastes them back at their original position', () => {
+  it('cuts objects from a slide and pastes them back at their original position', async () => {
     const clip = mockClipboardData();
     selectObjects(['img1']);
     expect(actions.cutSelection(clip.data)).toBe(true);
     expect(getSlide(useEditor.getState().draft!, 's1')!.objects.some((o) => o.id === 'img1')).toBe(false);
 
-    const ids = actions.tryPasteObjectsFromClipboard(clip.data);
+    const ids = await actions.tryPasteObjectsFromClipboard(clip.data);
     expect(ids).toHaveLength(1);
     const restored = currentObjects()[0]!;
     expect(restored.type).toBe('image');

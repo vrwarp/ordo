@@ -1,4 +1,5 @@
-import { type ReactNode, useEffect } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
+import { installDialogEscape } from './dialogEscape.ts';
 
 export function Dialog(props: {
   title: ReactNode;
@@ -8,14 +9,11 @@ export function Dialog(props: {
   width?: number;
 }) {
   const { onClose } = props;
-  useEffect(() => {
-    if (!onClose) return;
-    const h = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
+  // The latest callback, read on Escape: registering again on every render would reorder stacked dialogs.
+  const close = useRef(onClose);
+  close.current = onClose;
+  const closable = !!onClose;
+  useEffect(() => (closable ? installDialogEscape(() => close.current?.()) : undefined), [closable]);
   return (
     <div className="backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
       <div className="dialog" style={props.width ? { width: props.width } : undefined} role="dialog">

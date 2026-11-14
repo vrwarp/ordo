@@ -4,7 +4,10 @@
  */
 export class DoublePressGuard {
   private armedAt?: number;
-  constructor(private windowMs = 2000) {}
+  private windowMs: number;
+  constructor(windowMs = 2000) {
+    this.windowMs = windowMs;
+  }
 
   /** Returns true when this press should fire. */
   press(now: number): boolean {
@@ -38,11 +41,18 @@ type Timer = unknown;
 export class HoldGuard {
   private timer?: Timer;
   private fired = false;
+  private holdMs: number;
+  private setTimer: (fn: () => void, ms: number) => Timer;
+  private clearTimer: (t: Timer) => void;
   constructor(
-    private holdMs = 1000,
-    private setTimer: (fn: () => void, ms: number) => Timer = (fn, ms) => setTimeout(fn, ms),
-    private clearTimer: (t: Timer) => void = (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
-  ) {}
+    holdMs = 1000,
+    setTimer: (fn: () => void, ms: number) => Timer = (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (t: Timer) => void = (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+  ) {
+    this.holdMs = holdMs;
+    this.setTimer = setTimer;
+    this.clearTimer = clearTimer;
+  }
 
   /** Start holding; `fire` runs once if the press is still held after `holdMs`. */
   down(fire: () => void): void {

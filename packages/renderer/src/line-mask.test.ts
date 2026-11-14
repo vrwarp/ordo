@@ -168,7 +168,6 @@ describe('paintPlan and paintRich with lineMask', () => {
     ]);
     const plan = paintPlan(o, layout);
     expect(plan.lineMask).not.toBeNull();
-    expect(plan.lineMasks).toBe(plan.lineMask?.straps);
     expect(plan.lineMask?.straps).toHaveLength(2);
 
     // F = 20
@@ -177,8 +176,8 @@ describe('paintPlan and paintRich with lineMask', () => {
     // w = max(0, 400 + 20) = 420
     // x = 100 - 20 / 2 + 5 = 95
     const [s1, s2] = plan.lineMask!.straps as [LineMaskStrap, LineMaskStrap];
-    expect(s1).toEqual({ x: 95, y: 80 - 18, w: 420, h: 28 });
-    expect(s2).toEqual({ x: 95, y: 110 - 18, w: 420, h: 28 });
+    expect(s1).toMatchObject({ x: 95, y: 80 - 18, w: 420, h: 28 });
+    expect(s2).toMatchObject({ x: 95, y: 110 - 18, w: 420, h: 28 });
   });
 
   it('calculates lineWidth straps per individual line width', () => {
@@ -217,9 +216,9 @@ describe('paintPlan and paintRich with lineMask', () => {
     const plan = paintPlan(o, layout);
     const [s1, s2] = plan.lineMask!.straps as [LineMaskStrap, LineMaskStrap];
     // Line 1: w = 100 + 10 = 110, x = 120 - 5 = 115
-    expect(s1).toEqual({ x: 115, y: 80 - 18, w: 110, h: 24 });
+    expect(s1).toMatchObject({ x: 115, y: 80 - 18, w: 110, h: 24 });
     // Line 2: w = 180 + 10 = 190, x = 120 - 5 = 115
-    expect(s2).toEqual({ x: 115, y: 110 - 18, w: 190, h: 24 });
+    expect(s2).toMatchObject({ x: 115, y: 110 - 18, w: 190, h: 24 });
   });
 
   it('calculates maxLineWidth straps with alignments (left, center, right)', () => {
@@ -420,7 +419,8 @@ describe('ImageObject shadow and softEdge', () => {
     expect(shape?.softEdge).toBe(15);
   });
 
-  it('pictureTarget returns undefined when shadow or softEdge is present', () => {
+  it('prepares pictures with a shadow or a soft edge: the soft edge in the bitmap, the shadow outside it', () => {
+    const plain = pictureTarget({ box: { x: 0, y: 0, w: 200, h: 200, rotation: 0 }, fit: 'contain' }, 1)!;
     const withShadow = pictureTarget(
       {
         box: { x: 0, y: 0, w: 200, h: 200, rotation: 0 },
@@ -429,7 +429,8 @@ describe('ImageObject shadow and softEdge', () => {
       },
       1,
     );
-    expect(withShadow).toBeUndefined();
+    // The shadow is drawn under the prepared bitmap: the same pixels, the same key.
+    expect(withShadow).toEqual(plain);
 
     const withSoftEdge = pictureTarget(
       {
@@ -439,10 +440,12 @@ describe('ImageObject shadow and softEdge', () => {
       },
       1,
     );
-    expect(withSoftEdge).toBeUndefined();
+    expect(withSoftEdge).toBeDefined();
+    expect(withSoftEdge!.key).not.toBe(plain.key);
+    expect(withSoftEdge!.shape).toEqual({ w: 200, h: 200, softEdge: 10 });
   });
 
-  it('draws image with shadow on RecordingCtx without throwing', () => {
+  it('draws a picture without its effects where they cannot be made (no OffscreenCanvas), never a Canvas shadow', () => {
     const ctx = recordingCtx();
     const fakeImg = { width: 400, height: 300 } as unknown as CanvasImageSource;
     drawImageFit(
@@ -462,10 +465,10 @@ describe('ImageObject shadow and softEdge', () => {
     );
     const drawCalls = ctx.ops.filter((op) => op.op === 'drawImage');
     expect(drawCalls.length).toBeGreaterThanOrEqual(1);
-    expect(drawCalls[0]!.state.shadowColor).toBe(rgbaCss({ r: 10, g: 20, b: 30, a: 0.9 }));
-    expect(drawCalls[0]!.state.shadowBlur).toBe(6);
-    expect(drawCalls[0]!.state.shadowOffsetX).toBe(8);
-    expect(drawCalls[0]!.state.shadowOffsetY).toBe(12);
+    // Effects go through the effect layers (`drawEffected`), which need an OffscreenCanvas: here the picture
+    // is drawn as a shape is without them, with no Canvas shadow left on it.
+    expect(drawCalls[0]!.state.shadowBlur ?? 0).toBe(0);
+    expect(drawCalls[0]!.state.shadowColor).not.toBe(rgbaCss({ r: 10, g: 20, b: 30, a: 0.9 }));
   });
 });
 
@@ -484,13 +487,13 @@ describe('sprite planning and objectReach', () => {
     };
     const reach = objectReach(ctx, img, 1);
     expect(reach).not.toBeNull();
-    // Blur pad: 2 * 10 = 20
-    // x0 = min(100, 100 + 20 - 20) = 100
-    // y0 = min(100, 100 + 30 - 20) = 100
-    // x1 = max(300, 300 + 20 + 20) = 340
-    // y1 = max(250, 250 + 30 + 20) = 300
-    expect(reach!.x).toBeLessThanOrEqual(100);
-    expect(reach!.w).toBeGreaterThanOrEqual(240);
+    // As the effect layers reach (`drawEffected`): 3σ past the offset box (σ = blur/√6), the reduced
+    // layer's slack (2 + 8 device px) and a pixel of anti-aliasing.
+    const pad = (3 * 10) / Math.sqrt(6) + 10 + 1;
+    expect(reach!.x).toBeCloseTo(Math.min(100, 120 - pad), 6);
+    expect(reach!.y).toBeCloseTo(Math.min(100, 130 - pad), 6);
+    expect(reach!.x + reach!.w).toBeCloseTo(320 + pad, 6);
+    expect(reach!.y + reach!.h).toBeCloseTo(280 + pad, 6);
   });
 
   it('richTextReach extends bounds for lineMask straps', () => {

@@ -68,6 +68,11 @@ import type { GeomPath } from './path.ts';
  * budget bounds it. A slide at the budget draws its geometry and fills in at most about 38 ms at 4K, with the
  * clear and the copy out (about 11 ms) within design/27 §13's 50 ms for an asset-worker task, cold (geometry
  * not yet built, nothing cached). The converter fills 0.98 of it (rounding of stored coordinates).
+ *
+ * These constants and `areaWeight` decide what the converter keeps native and what it sends to the art, on
+ * every deck, not only on the slides a bench measures: a change to them runs the census of the whole suite
+ * (pptx-suite/suite and the table decks) before and after, and explains every slide it moves (M9 wave 1
+ * review: the gradient repair moved 55 slides outside the exit set).
  */
 
 export const GEOM_COST = {
@@ -107,10 +112,18 @@ export const GEOM_COST = {
   opaqueArea: 0.025,
   /**
    * A logical px² a translucent gradient paints (the shape's opacity or a stop below 1; linear and radial
-   * alike, about 11.6 to 11.8 ms a full slide at 4K: a slide of 140 took 1.3 s).
+   * alike, about 11.6 to 11.8 ms a full slide at 4K over a clear canvas: a slide of 140 took 1.3 s; stacked
+   * over one another about 12.6 ms each, M6 merge re-review: three full-slide ones at 0 and 60 % took 47.7 ms
+   * p50 at 4K, a blank job's 10 ms included, and passed the 50 ms task at p95 while the budget kept all three
+   * at 0.2). Rated at 13.2 ms a full slide, the budget keeps two of the three (about 37 ms) and draws the
+   * third as its legacy colour, as an older build does.
    */
-  gradientArea: 0.2,
-  /** A logical px² an opaque gradient paints (7.2 to 8 ms a full slide at 4K). */
+  gradientArea: 0.22,
+  /**
+   * A logical px² an opaque gradient paints (7.2 to 8 ms a full slide at 4K), on Skia's fast path or linear.
+   * An opaque radial one off the fast path costs a translucent one's (`areaWeight`; M6 merge re-review: two
+   * opaque full-slide 4-stop radials took 49.7 ms p50 at 4K, about 20 ms each past a blank job).
+   */
   opaqueGradientArea: 0.14,
   /**
    * What a pixel of a gradient Skia cannot draw on its two-stop fast path costs, as a multiple of
@@ -498,6 +511,8 @@ export interface FillPaint {
   readonly gradient?: boolean;
   /** A gradient off Skia's two-stop fast path (`slowGradient`): `GEOM_COST.slowGradient` times the cost. */
   readonly slow?: boolean;
+  /** A radial gradient (a path gradient): off the fast path, opaque costs what translucent does. */
+  readonly radial?: boolean;
   /** Below full alpha somewhere: the shape's opacity, the colour's alpha or a stop's. */
   readonly translucent?: boolean;
 }
@@ -595,12 +610,16 @@ export function maskCost(g: DrawnGeom): number {
   return unitCost(u.cmds, u.pts).est;
 }
 
-/** What a logical px² of a fill costs (`GEOM_COST` area weights): a colour or a gradient, opaque or not. */
+/**
+ * What a logical px² of a fill costs (`GEOM_COST` area weights): a colour or a gradient, opaque or not. An
+ * opaque radial gradient off Skia's fast path gets no opaque discount: it searches its stops and works out
+ * each pixel's distance as a translucent one does.
+ */
 export function areaWeight(paint: FillPaint | undefined): number {
   const translucent = paint?.translucent !== false;
   if (paint?.gradient)
     return (
-      (translucent ? GEOM_COST.gradientArea : GEOM_COST.opaqueGradientArea) *
+      (translucent || (paint.slow && paint.radial) ? GEOM_COST.gradientArea : GEOM_COST.opaqueGradientArea) *
       (paint.slow ? GEOM_COST.slowGradient : 1)
     );
   return translucent ? GEOM_COST.area : GEOM_COST.opaqueArea;
@@ -690,13 +709,16 @@ export interface CostedObject {
 /** How a shape's fill paints (`FillPaint`): its gradient or colour, below full alpha anywhere or not. */
 export function fillPaintOf(o: CostedObject): FillPaint {
   const opacity = typeof o.opacity === 'number' ? o.opacity : 1;
-  const g = o.gradient as { stops?: readonly { at?: number; color?: { a?: number } }[] } | undefined;
+  const g = o.gradient as
+    | { kind?: unknown; stops?: readonly { at?: number; color?: { a?: number } }[] }
+    | undefined;
   if (g !== undefined && g !== null) {
     const stops = Array.isArray(g.stops) ? g.stops : [];
     const translucent = opacity < 1 || !stops.length || stops.some((st) => !((st?.color?.a ?? 1) >= 1));
+    const radial = g.kind === 'radial' ? { radial: true } : {};
     return slowGradient(stops)
-      ? { gradient: true, slow: true, translucent }
-      : { gradient: true, translucent };
+      ? { gradient: true, slow: true, ...radial, translucent }
+      : { gradient: true, ...radial, translucent };
   }
   return { translucent: opacity < 1 || !((o.fill?.a ?? 1) >= 1) };
 }
@@ -755,15 +777,17 @@ export function hasPart(o: object, part: LegacyPart): boolean {
     if (type === 'shape' && GEOM_FIELDS.some((k) => r[k] !== undefined)) return true;
     if (type === 'image' && r.mask !== undefined) return true;
   }
-  return part !== 'geom' && type === 'shape' && EFFECT_FIELDS.some((k) => r[k] !== undefined);
+  return (
+    part !== 'geom' && (type === 'shape' || type === 'image') && EFFECT_FIELDS.some((k) => r[k] !== undefined)
+  );
 }
 
 /**
  * An object as drawn past a budget (a shallow copy): `geom` leaves out a shape's stored geometry, its gradient
  * (its `fill`, the first stop, is drawn: about five times cheaper a pixel) and the outline fields that
  * multiply its cost (dash, arrowheads, joins, caps), a picture's mask; `effects` a shape's shadow, glow and
- * soft edge. What is left is drawn as an older build draws it (a legacy rect, ellipse or line in its colour
- * with a plain outline), whose cost the geometry no longer drives.
+ * soft edge, a picture's shadow and soft edge. What is left is drawn as an older build draws it (a legacy rect,
+ * ellipse or line in its colour with a plain outline), whose cost the geometry no longer drives.
  */
 export function withoutPart<T extends object>(o: T, part: LegacyPart): T {
   const out = { ...o } as T & Record<string, unknown>;
@@ -772,7 +796,7 @@ export function withoutPart<T extends object>(o: T, part: LegacyPart): T {
     if (type === 'shape') for (const k of GEOM_FIELDS) delete out[k];
     else if (type === 'image') delete out.mask;
   }
-  if (part !== 'geom' && type === 'shape') for (const k of EFFECT_FIELDS) delete out[k];
+  if (part !== 'geom' && (type === 'shape' || type === 'image')) for (const k of EFFECT_FIELDS) delete out[k];
   return out;
 }
 
@@ -861,7 +885,7 @@ export function slidePlan<T>(
 // ── Effects ───────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * A slide's shape effects (design/27 §12 drawing cost, §13): the area their layers cover, in slides of
+ * A slide's shape and picture effects (design/27 §12 drawing cost, §13): the area their layers cover, in slides of
  * 1920 x 1080, at most `EFFECT_COST.slide` (weighted: a shadow and a glow 1 each, a soft edge
  * `EFFECT_COST.softEdge`: its body is made and cut by its enlarged mask at full resolution on every raster
  * past the composite cache, about 55 ms a slide area at 4K, against 25 ms cold and a few ms warm a slide area
@@ -872,8 +896,14 @@ export function slidePlan<T>(
  * shapes without their effects (`slidePlan`) and the converter leaves them out with a note. The worship
  * corpus's most effected slides reach 7.7 (Slidesmania templates of 8-9 large shadowed shapes; p99 7.3, p90
  * 1.2), its most soft-edged 1.0 slide area of soft edges (9.2 weighted).
+ *
+ * A picture the outputs prepare (`picture.ts` `pictureTarget`: unturned, or masked) pays its soft edge once,
+ * in the asset worker's prepare step (`SOFT_EDGE_STEP`), and is copied 1:1 after, its shadow a cached layer
+ * under it: its soft edge weighs `preparedSoftEdge`, as a shadow layer does (the 2026-11-13 review: at 8, a
+ * ProPresenter slide of two full-frame feathered photos drew the second without its feather, and health
+ * rated a feathered photo 'heavy', 46.5 ms estimated at 3840 against 14-19 ms measured).
  */
-export const EFFECT_COST = { slide: 10, softEdge: 8 } as const;
+export const EFFECT_COST = { slide: 10, softEdge: 8, preparedSoftEdge: 1 } as const;
 
 /** The fields of a shape `effectArea` reads. */
 export interface EffectedObject {
@@ -889,10 +919,12 @@ export interface EffectedObject {
  * What an object's effects weigh against `EFFECT_COST.slide`: their layers' area in slide areas, weighted.
  * `drawn` is what the shape draws in box space (`drawnBounds`; default: its box), placed on the slide and
  * grown and cut as the drawer grows and cuts its layers (`effects.ts` `drawEffected`; logical px, the reach's
- * 2 device px taken as 2).
+ * 2 device px taken as 2). `prepared`: a picture the outputs prepare, whose soft edge weighs
+ * `EFFECT_COST.preparedSoftEdge`.
  */
-export function effectArea(o: EffectedObject, drawn?: Bounds): number {
-  const weight = (o.shadow ? 1 : 0) + (o.glow ? 1 : 0) + (o.softEdge ? EFFECT_COST.softEdge : 0);
+export function effectArea(o: EffectedObject, drawn?: Bounds, prepared = false): number {
+  const soft = prepared ? EFFECT_COST.preparedSoftEdge : EFFECT_COST.softEdge;
+  const weight = (o.shadow ? 1 : 0) + (o.glow ? 1 : 0) + (o.softEdge ? soft : 0);
   if (!weight || !o.box) return 0;
   const fin = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
   const box = { x: fin(o.box.x), y: fin(o.box.y), w: Math.abs(fin(o.box.w)), h: Math.abs(fin(o.box.h)) };

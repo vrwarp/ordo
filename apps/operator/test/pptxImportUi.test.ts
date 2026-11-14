@@ -3,11 +3,17 @@
  * H), rendered to markup: what each shows for the states a native import goes through.
  */
 import type { Slide } from '@ordo/domain';
-import type { Job } from '@ordo/protocol';
+import { type HubCapabilities, type Job, LEGACY_CAPABILITIES } from '@ordo/protocol';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PPTX_CHOICE, type NativeImportResult } from '../src/lib/pptxImport.ts';
+import {
+  DEFAULT_PPTX_CHOICE,
+  documentAccept,
+  documentFields,
+  isPptxName,
+  type NativeImportResult,
+} from '../src/lib/pptxImport.ts';
 import { PptxSlideCardView } from '../src/views/editor/PptxSlideCard.tsx';
 import { PptxImportChoices } from '../src/views/library/ImportTab.tsx';
 import { PptxImportCardView } from '../src/views/library/PptxImportCard.tsx';
@@ -26,7 +32,11 @@ const text = (html: string) =>
 describe('the PowerPoint choice on the import screen', () => {
   it('offers Editable (recommended), checked by default, and Pictures (LibreOffice)', () => {
     const html = renderToStaticMarkup(
-      createElement(PptxImportChoices, { value: DEFAULT_PPTX_CHOICE, onChange: noop }),
+      createElement(PptxImportChoices, {
+        value: DEFAULT_PPTX_CHOICE,
+        onChange: noop,
+        caps: LEGACY_CAPABILITIES,
+      }),
     );
     expect(html).toContain('<fieldset');
     expect(text(html)).toContain('PowerPoint slides');
@@ -51,6 +61,7 @@ describe('the PowerPoint choice on the import screen', () => {
       createElement(PptxImportChoices, {
         value: { mode: 'libreoffice', extendBackgrounds: true },
         onChange: noop,
+        caps: LEGACY_CAPABILITIES,
       }),
     );
     expect(html.match(/<input type="radio"[^>]*>/g)![1]).toContain('checked');
@@ -277,5 +288,144 @@ describe('the PowerPoint card in the editor', () => {
     );
     expect(html).toContain('role="alert"');
     expect(text(html)).toContain('LibreOffice could not draw the PowerPoint pictures: soffice timed out');
+  });
+});
+
+/** A hub without LibreOffice (design/27 M9): the lite image, with poppler-utils. */
+const LITE: HubCapabilities = {
+  libreoffice: { state: 'absent' },
+  pdf: true,
+  documents: ['pptx', 'ppsx', 'potx', 'pptm', 'pdf'],
+  pptx: { pictures: false, reference: false, referencePdf: true, art: false },
+};
+
+describe('without LibreOffice on the hub (design/27 M9)', () => {
+  it('the Pictures (LibreOffice) choice is hidden', () => {
+    const html = renderToStaticMarkup(
+      createElement(PptxImportChoices, { value: DEFAULT_PPTX_CHOICE, onChange: noop, caps: LITE }),
+    );
+    const radios = html.match(/<input type="radio"[^>]*>/g) ?? [];
+    expect(radios).toHaveLength(1);
+    expect(radios[0]).toContain('value="native"');
+    expect(radios[0]).toContain('checked');
+    const t = text(html);
+    expect(t).not.toContain('LibreOffice');
+    expect(t).toContain('anything it cannot draw is listed on the import card');
+    expect(html.match(/<input type="checkbox"[^>]*>/)![0]).not.toContain('disabled');
+    // Not known yet (no answer from the hub): nothing that needs LibreOffice is offered either.
+    const unknown = renderToStaticMarkup(
+      createElement(PptxImportChoices, { value: DEFAULT_PPTX_CHOICE, onChange: noop }),
+    );
+    expect(unknown.match(/<input type="radio"[^>]*>/g)).toHaveLength(1);
+  });
+
+  it('a stored libreoffice choice imports as editable and says so', () => {
+    const stored = { mode: 'libreoffice' as const, extendBackgrounds: true };
+    const html = renderToStaticMarkup(
+      createElement(PptxImportChoices, { value: stored, onChange: noop, caps: LITE }),
+    );
+    expect(html.match(/<input type="radio"[^>]*>/g)![0]).toContain('checked');
+    expect(text(html)).toContain(
+      'This hub has no LibreOffice, so PowerPoint files are imported as editable slides.',
+    );
+    expect(html.match(/<input type="checkbox"[^>]*>/)![0]).not.toContain('disabled');
+    expect(documentFields('Sunday.pptx', stored, LITE)).toEqual([
+      ['renderer', 'native'],
+      ['extendBackgrounds', '1'],
+    ]);
+    // A hub with LibreOffice gets the choice as made. One that has not answered yet gets what the screen
+    // shows meanwhile: 'Editable' (M9 wave 1 repair: one rule for the screen and the upload).
+    expect(documentFields('Sunday.pptx', stored, LEGACY_CAPABILITIES)).toEqual([['renderer', 'libreoffice']]);
+    const before = renderToStaticMarkup(createElement(PptxImportChoices, { value: stored, onChange: noop }));
+    expect(before.match(/<input type="radio"[^>]*>/g)).toHaveLength(1);
+    expect(before.match(/<input type="radio"[^>]*>/g)![0]).toContain('checked');
+    expect(documentFields('Sunday.pptx', stored)).toEqual([
+      ['renderer', 'native'],
+      ['extendBackgrounds', '1'],
+    ]);
+    // The OOXML family carries the choice; a PDF never does.
+    for (const name of ['Show.ppsx', 'Template.potx', 'Macros.pptm', 'DECK.PPTX'])
+      expect(isPptxName(name)).toBe(true);
+    expect(isPptxName('Old.ppt')).toBe(false);
+    expect(documentFields('Notes.pdf', stored, LITE)).toEqual([]);
+    expect(documentAccept(LITE)).toBe('.pptx,.ppsx,.potx,.pptm,.pdf');
+    expect(documentAccept({ ...LITE, pdf: false, documents: ['pptx', 'ppsx', 'potx', 'pptm'] })).toBe(
+      '.pptx,.ppsx,.potx,.pptm',
+    );
+    expect(documentAccept(undefined)).toBe('.pptx,.pdf');
+  });
+
+  it('the import card names what ordo cannot draw and says nothing of LibreOffice', () => {
+    const slide = (id: string, index: number, missing?: string[]): Slide => ({
+      id,
+      objects: [],
+      pptx: {
+        fileId: 'f',
+        index,
+        class: missing ? 'hybrid' : 'native',
+        version: 2,
+        ...(missing ? { missing } : {}),
+      },
+    });
+    const html = card({
+      result: result({ native: 2, hybrid: 2, picture: 0, slides: 4, missing: 2, libreoffice: false }),
+      presentation: {
+        sections: [
+          {
+            id: 's',
+            label: 'Slides',
+            short: 'S',
+            slides: [slide('a', 0), slide('b', 1, ['chart']), slide('c', 2), slide('d', 3, ['metafile'])],
+          },
+        ],
+      },
+    });
+    const t = text(html);
+    expect(t).toContain('2 partly drawn');
+    expect(t).toContain(
+      '2 slides have something ordo cannot draw: a chart, a vector picture. It is left out; open them in the editor to see what.',
+    );
+    expect(t).not.toContain('LibreOffice');
+    expect(html).toContain('data-missing');
+    // Without the presentation the result's count still says it.
+    expect(text(card({ result: result({ missing: 1, libreoffice: false }) }))).toContain(
+      '1 slide has something ordo cannot draw. It is left out; open it in the editor to see what.',
+    );
+  });
+
+  it("the slide card lists what is not drawn and offers PowerPoint's PDF instead of LibreOffice", () => {
+    const gap = { id: 's', objects: [], pptx: pptx({ class: 'hybrid', missing: ['chart', 'ole'] }) };
+    const html = slideCard(gap, { caps: LITE, onAddPdf: noop });
+    const t = text(html);
+    expect(t).toContain('Partly drawn');
+    expect(t).toContain('Not drawn: a chart, an embedded object.');
+    expect(t).not.toContain('LibreOffice first draws');
+    expect(toggle(html)).toContain('disabled');
+    expect(t).toContain('Export the deck as PDF from PowerPoint to compare with the original.');
+    expect(html).toContain('data-reference-pdf');
+    expect(t).toContain("Add PowerPoint's pictures (PDF)…");
+    expect(html).toMatch(/<input type="file" accept=".pdf,application\/pdf"/);
+    // A slide that has its picture already: 'Show original' works without LibreOffice, and no PDF is asked.
+    const has = slideCard(
+      { ...gap, pptx: pptx({ class: 'hybrid', refMediaId: 'ref' }) },
+      { caps: LITE, onAddPdf: noop },
+    );
+    expect(toggle(has)).not.toContain('disabled');
+    expect(has).not.toContain('data-reference-pdf');
+    // No LibreOffice and no poppler-utils: nothing to offer but the reason.
+    const bare = slideCard(gap, {
+      caps: { ...LITE, pdf: false, pptx: { ...LITE.pptx, referencePdf: false } },
+      onAddPdf: noop,
+    });
+    expect(bare).not.toContain('data-reference-pdf');
+    expect(text(bare)).toContain('This hub has no LibreOffice to draw the PowerPoint pictures.');
+    // A slide nothing could rebuild on such a hub keeps only its text.
+    const lost = slideCard(
+      { id: 's', objects: [], pptx: pptx({ class: 'picture', missing: ['slide'] }) },
+      { caps: LITE },
+    );
+    expect(text(lost)).toContain('Not drawn');
+    expect(text(lost)).toContain('only its text is kept, for search');
+    expect(text(lost)).toContain('Not drawn: the slide itself.');
   });
 });

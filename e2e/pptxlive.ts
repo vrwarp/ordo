@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { type APIRequestContext, type BrowserContext, expect, type Page } from '@playwright/test';
+import type { HarnessFont } from '../tools/pptx-fidelity/src/fonts.ts';
 import { shownSlideCue } from './helpers.ts';
 import { HubProcess } from './hubproc.ts';
 import { decodePng, type Pixels } from './png.ts';
@@ -140,10 +141,15 @@ export async function settledOn(p: Page, cue: number): Promise<void> {
 }
 
 /** A screenshot of the output (rAF runs only in the page in front), written to `file`. */
+/**
+ * A screenshot of an output window, without its "Enter full screen" prompt (`.fs-prompt`, shown while the
+ * window is not full screen, which a test window never is): the capture is the slide the audience sees on a
+ * full-screen output, the comparisons are about the slide, not the prompt.
+ */
 export async function capture(p: Page, file: string): Promise<Pixels> {
   await p.bringToFront();
   await p.waitForTimeout(300);
-  const png = await p.screenshot();
+  const png = await p.screenshot({ style: '.fs-prompt { display: none !important; }' });
   writeFileSync(file, png);
   return decodePng(png);
 }
@@ -181,6 +187,92 @@ export function diffShare(a: Pixels, b: Pixels, tol = 40): number {
       n++;
   }
   return n / (a.width * a.height);
+}
+
+/** A library font as an output's config lists it (`OutputConfigRes.fonts`). */
+type ConfigFont = {
+  family: string;
+  weight: number;
+  style: 'normal' | 'italic';
+  file: { hash: string; path: string };
+  unicodeRange?: string;
+};
+
+/**
+ * The faces output `o` of the hub on `port` draws with: its config's fonts (`GET /output/config`, as the
+ * output hands them to its asset worker), each file fetched from the hub into `dir`. Given to the fidelity
+ * harness's native page (`RenderOptions.fonts`), they make it draw with the output's own files rather than
+ * with the faces this machine's fontconfig picks for the deck's families, which the output never uses.
+ */
+export async function outputFaces(port: number, o: OutputRec, dir: string): Promise<HarnessFont[]> {
+  const api = `http://localhost:${port}/api/v1`;
+  const headers = { 'x-ordo-token': o.token ?? '' };
+  const res = await fetch(`${api}/output/config`, { headers });
+  expect(res.status, 'the output config').toBe(200);
+  const { fonts } = (await res.json()) as { fonts: ConfigFont[] };
+  mkdirSync(dir, { recursive: true });
+  const out: HarnessFont[] = [];
+  for (const f of fonts) {
+    const r = await fetch(`${api}/files/${f.file.hash}`, { headers });
+    expect(r.status, `font file of ${f.family} ${f.weight} ${f.style}`).toBe(200);
+    const ext = /\.(otf|ttf|ttc|woff2?)$/i.exec(f.file.path)?.[0] ?? '';
+    const file = join(dir, `${f.file.hash}${ext}`);
+    writeFileSync(file, Buffer.from(await r.arrayBuffer()));
+    out.push({
+      family: f.family,
+      weight: f.weight,
+      style: f.style,
+      hash: f.file.hash,
+      ...(f.unicodeRange ? { unicodeRange: f.unicodeRange } : {}),
+      file,
+    });
+  }
+  return out;
+}
+
+/**
+ * The text lines of a picture of dark text on a light ground: for each band of rows with ink (a pixel darker
+ * than `ink` in every channel), its top and bottom row and its leftmost and rightmost ink column, as shares
+ * of the picture's width and height (so pictures of other sizes compare). Bands shorter than 1 % of the
+ * height (stray pixels) are left out.
+ */
+export function textLines(
+  px: Pixels,
+  ink = 128,
+): { top: number; bottom: number; left: number; right: number }[] {
+  const { width: w, height: h, data } = px;
+  const rows: [number, number][] = [];
+  for (let y = 0; y < h; y++) {
+    let l = -1;
+    let r = -1;
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      if (data[i]! < ink && data[i + 1]! < ink && data[i + 2]! < ink) {
+        if (l < 0) l = x;
+        r = x;
+      }
+    }
+    rows.push([l, r]);
+  }
+  const lines: { top: number; bottom: number; left: number; right: number }[] = [];
+  let y = 0;
+  while (y < h) {
+    if (rows[y]![0] < 0) {
+      y++;
+      continue;
+    }
+    const top = y;
+    let left = w;
+    let right = -1;
+    while (y < h && rows[y]![0] >= 0) {
+      left = Math.min(left, rows[y]![0]);
+      right = Math.max(right, rows[y]![1]);
+      y++;
+    }
+    if (y - top >= h * 0.01)
+      lines.push({ top: top / h, bottom: y / h, left: left / w, right: (right + 1) / w });
+  }
+  return lines;
 }
 
 export type RGB = [number, number, number];

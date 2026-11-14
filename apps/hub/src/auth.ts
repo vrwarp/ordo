@@ -43,17 +43,21 @@ export function validPin(pin: unknown): pin is string {
 }
 
 export class Auth {
-  constructor(
-    private db: DB,
-    private lib: AuthStore,
-    private log: Logger,
-    /**
-     * `shared`: the live process's connection to the library's ordo.db. Session reads work as usual;
-     * the sliding writes are best effort (skipped when the library process holds the write lock), so a
-     * busy library can never stall or fail a request in the live process.
-     */
-    private opts: { shared?: boolean } = {},
-  ) {}
+  private db: DB;
+  private lib: AuthStore;
+  private log: Logger;
+  /**
+   * `shared`: the live process's connection to the library's ordo.db. Session reads work as usual;
+   * the sliding writes are best effort (skipped when the library process holds the write lock), so a
+   * busy library can never stall or fail a request in the live process.
+   */
+  private opts: { shared?: boolean };
+  constructor(db: DB, lib: AuthStore, log: Logger, opts: { shared?: boolean } = {}) {
+    this.db = db;
+    this.lib = lib;
+    this.log = log;
+    this.opts = opts;
+  }
 
   /** Run a session-table write; in shared mode a failure (SQLITE_BUSY) is logged and skipped. */
   private write(fn: () => void): void {

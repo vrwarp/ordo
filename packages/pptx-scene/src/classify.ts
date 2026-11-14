@@ -11,24 +11,26 @@
  * **Support** (`native` / `approx` / `residual`) is per element: the reader's own verdict (`walk.ts`: since M6
  * every preset of the table, custom geometry, gradients and line styles are native; a preset the table does
  * not know, a pattern fill and sheared group children are approx; custom geometry past the bounds is
- * residual) combined with the rules of §5 (charts, the tables and SmartArt the walk leaves residual, OLE, maths,
- * real 3D, WordArt warps, vertical and multi-column text, HD Photo pictures are residual;
- * reflections, inner shadows, soft edges on pictures and metafiles waiting for conversion are approx).
+ * residual) combined with the rules of §5, each a row of the decision table (`residual.ts`, M9): charts, the
+ * tables and SmartArt the walk leaves residual, OLE, maths, WordArt warps, vertical and multi-column text,
+ * HD Photo pictures are residual; reflections, inner shadows, soft edges on pictures, metafiles waiting for
+ * conversion and (since M9) real 3D, drawn flat, are approx.
  *
  * **Class**: native without residual elements; hybrid with them, the residuals and what they overlap baked
- * into one art picture over the range [Rmin, Rmax]; picture when the objects or pictures left after the
- * split exceed the slide budgets (or the slide could not be read, `index.ts`). A table read natively
- * (`tables.ts`, M6) counts the objects it emits: its cells, its background, and one grid object per fill and
- * per line look (`gridObjects`), not one per run. A slide past the object budget counts its z-adjacent shapes
- * of one look as one object each run (`shapeRuns`, drawn so by `emit.ts`); while it still passes the budget,
- * tables go to the art first (`budget:table`), then whole SmartArt drawings (`budget:smartart`,
- * `wholeDiagrams`), then decorations and runs of shapes and pictures without text (`budget:shapes`,
- * `fitShapes`), so the slide becomes hybrid rather than picture.
+ * into one art picture over the range [Rmin, Rmax] (or, without LibreOffice, listed as missing). Since M9
+ * (`decor-conv`) the slide budgets never make a slide hybrid or a picture: what draws nothing on the slide is
+ * culled, and a slide past the object or picture budget is kept native by merges, decorations, composites,
+ * the text ceiling and an atlas (`budget.ts` `fitBudgets`; a table or a chart is one object). Only its
+ * guard, never reached in the corpus, leaves anything out (hybrid, `missing:<kind>`). The budgets of M6 and
+ * M9 wave 1 (a table's M6 group counted, tables, SmartArt drawings, real 3-D and shapes without text past
+ * the budget sent to the art, `budget:*`, and a picture when still over) stay behind
+ * `ClassifyOptions.budgetArt`, the harness's A/B.
  *
  * Every walk here is iterative and linear in the size of the parsed tree; deck strings are only compared,
  * never used as plain-object keys.
  */
 import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
+import { type BudgetOptions, cullElements, fitBudgets, leftKinds } from './budget.ts';
 import { rootOf, type SlideCtx } from './context.ts';
 import { endsOf, MAX_PATH_CHARS, mergedChars, type ShapePiece, shapePiece } from './geom.ts';
 import { bodyPrChain, chainOf, firstAttr, firstChildOf, nvOf } from './inherit.ts';
@@ -46,6 +48,7 @@ import type {
   Tier,
 } from './ir.ts';
 import { clean } from './log.ts';
+import { decisionOf } from './residual.ts';
 import { child, num, path, textOf, type XNode } from './xml.ts';
 
 /** Reasons are short words; one built from a deck string is cleaned and cut to this (design/27 §12 "Logs"). */
@@ -53,7 +56,10 @@ const MAX_REASON_CHARS = 60;
 
 // ── Census features and tiers ───────────────────────────────────────────────────────────────────────────
 
-/** Features that send a slide to LibreOffice (picture or residual art) whatever the milestone. */
+/**
+ * The census's fallback features: the tier they put a slide in measures their use, whatever the milestone
+ * draws. What ordo does with each is the decision table's (`residual.ts`, which has a row for every one).
+ */
 export const FALLBACK_FEATURES: ReadonlySet<string> = new Set([
   'table',
   'chart',
@@ -395,7 +401,7 @@ export function slideFeatures(ctx: SlideCtx): Set<string> {
 // ── Element support ─────────────────────────────────────────────────────────────────────────────────────
 
 /** Whether an `a:sp3d` really draws in 3D: a bevel with a size, or an extrusion (else it is ignored). */
-function isReal3d(sp3d: XNode): boolean {
+export function isReal3d(sp3d: XNode): boolean {
   if ((num(sp3d.attrs.extrusionH) ?? 0) > 0) return true;
   for (const name of ['a:bevelT', 'a:bevelB']) {
     const b = child(sp3d, name);
@@ -403,6 +409,30 @@ function isReal3d(sp3d: XNode): boolean {
     if (b && (num(b.attrs.w) ?? 76_200) > 0 && (num(b.attrs.h) ?? 76_200) > 0) return true;
   }
   return false;
+}
+
+/** Reasons of real 3-D (`residual.ts`): approx, drawn flat, since M9. */
+const REAL_3D = (r: string) => r === '3d' || r === '3d:camera';
+
+/** Camera presets that look at the face straight on (`3d.md` §3.2): any other one turns it. */
+const FRONT_CAMERAS: ReadonlySet<string> = new Set([
+  'orthographicFront',
+  'perspectiveFront',
+  'legacyObliqueFront',
+  'legacyPerspectiveFront',
+]);
+
+/**
+ * Whether an `a:scene3d`'s camera turns the face (`3d:camera`): a preset that is not a front one, or a
+ * rotation with a latitude or longitude (a revolution alone is a plain turn in the plane).
+ */
+export function turnedCamera(scene3d: XNode | undefined): boolean {
+  const camera = child(scene3d, 'a:camera');
+  if (!camera) return false;
+  if (camera.attrs.prst !== undefined && !FRONT_CAMERAS.has(camera.attrs.prst)) return true;
+  const rot = child(camera, 'a:rot');
+  const angle = (v: string | undefined) => (num(v) ?? 0) % 21_600_000;
+  return !!rot && (angle(rot.attrs.lat) !== 0 || angle(rot.attrs.lon) !== 0);
 }
 
 /** The picture part an element draws: a `p:pic`'s, or a shape's picture fill. */
@@ -416,13 +446,16 @@ function picturePart(e: Element): string | undefined {
  * The support of one element by design/27 §5, from the IR element and, when known, its XML (`p:sp`,
  * `p:pic`, `p:graphicFrame`, `p:cxnSp`). Reasons are short words.
  *
- * - residual: chart, table, SmartArt, OLE, other graphic frames, maths, a real 3D bevel or extrusion,
- *   a WordArt warp (not `textNoShape`), text that is vertical, in columns or `anchorCtr` (until M8), an
- *   HD Photo picture (`pic:wdp`, `pic:hdp`); custom geometry past the bounds is the reader's verdict
- *   (`walk.ts`), as a sheared group child's approx is;
+ * - residual: chart, table, SmartArt, OLE, other graphic frames, maths, a WordArt warp (not `textNoShape`),
+ *   text that is vertical, in columns or `anchorCtr` (until M8), an HD Photo picture (`pic:wdp`,
+ *   `pic:hdp`); custom geometry past the bounds is the reader's verdict (`walk.ts`), as a sheared group
+ *   child's approx is;
  * - approx: reflection, inner shadow, a soft edge on a picture, a metafile (converted by LibreOffice in the
- *   follow-up job);
+ *   follow-up job), and since M9 a real 3D bevel or extrusion (`3d`; `3d:camera` when the camera turns the
+ *   face), drawn flat;
  * - everything else native. The element's own `support` (the reader's verdict) is not part of this.
+ *
+ * Each of these is a row of the decision table (`residual.ts` `decisionOf`), which this reads.
  */
 export function elementSupport(
   ctx: SlideCtx,
@@ -454,16 +487,23 @@ function marksOf(node: XNode): NodeMarks {
   if (m) return m;
   const residual = new Set<string>();
   const approx = new Set<string>();
+  const rate = (reason: string) => {
+    const d = decisionOf(reason, 'native');
+    if (d === 'residual') residual.add(reason);
+    else if (d === 'approx') approx.add(reason);
+  };
   let softEdge = false;
-  const stack = [node];
+  // Each node with its parent: a real `a:sp3d`'s camera is its sibling `a:scene3d`'s (`p:spPr`, `a:bodyPr`).
+  const stack: [XNode, XNode | undefined][] = [[node, undefined]];
   while (stack.length) {
-    const n = stack.pop()!;
-    if (n.name === 'a14:m' || n.name.startsWith('m:oMath')) residual.add('math');
-    else if (n.name === 'a:sp3d' && isReal3d(n)) residual.add('3d');
-    else if (n.name === 'a:reflection') approx.add('reflection');
-    else if (n.name === 'a:innerShdw') approx.add('innerShdw');
+    const [n, parent] = stack.pop()!;
+    if (n.name === 'a14:m' || n.name.startsWith('m:oMath')) rate('math');
+    else if (n.name === 'a:sp3d' && isReal3d(n))
+      rate(turnedCamera(child(parent, 'a:scene3d')) ? '3d:camera' : '3d');
+    else if (n.name === 'a:reflection') rate('reflection');
+    else if (n.name === 'a:innerShdw') rate('innerShdw');
     else if (n.name === 'a:softEdge') softEdge = true;
-    pushChildren(stack, n);
+    for (const c of n.children) if (c.name !== '#text') stack.push([c, n]);
   }
   m = { residual: [...residual], approx: [...approx], softEdge };
   marksCache.set(node, m);
@@ -478,30 +518,37 @@ function supportReasons(
 ): { residual: string[]; approx: string[] } {
   const residual: string[] = [];
   const approx: string[] = [];
+  // Each reason goes where the decision table puts it (`residual.ts`); one it does not draw at all is no
+  // verdict here.
+  const rate = (reason: string) => {
+    const d = decisionOf(reason, 'native');
+    if (d === 'residual') residual.push(reason);
+    else if (d === 'approx') approx.push(reason);
+  };
   // A metafile waits for conversion (approx); every other residual element is residual, for the budget
   // the reader found it past when there is one (`tables.ts`: a table of more cells than a slide's objects).
-  if (e.kind === 'residual')
-    (e.what === 'metafile' ? approx : residual).push(
-      e.reasons?.find((r) => r.startsWith('budget:')) ?? e.what,
-    );
+  if (e.kind === 'residual') {
+    const reason = e.reasons?.find((r) => r.startsWith('budget:')) ?? e.what;
+    (decisionOf(reason) === 'approx' ? approx : residual).push(reason);
+  }
   const part = picturePart(e);
   const ext = part === undefined ? '' : extOf(part);
-  if (ext === 'wdp' || ext === 'hdp') residual.push(`pic:${ext}`);
-  if (ext === 'emf' || ext === 'wmf') approx.push('metafile');
+  if (ext === 'wdp' || ext === 'hdp') rate(`pic:${ext}`);
+  if (ext === 'emf' || ext === 'wmf') rate('metafile');
   if (node) {
     const marks = marksOf(node);
     residual.push(...marks.residual);
     approx.push(...marks.approx);
-    if (marks.softEdge && part !== undefined) approx.push('softEdge');
+    if (marks.softEdge && part !== undefined) rate('softEdge');
     if (e.kind === 'shape' && e.text) {
       const body = bodyPrChain(chainOf(ctx, node, e.from));
       const vert = e.text.vert ?? firstAttr(body, 'vert');
-      if (vert !== undefined && vert !== 'horz') residual.push('vert');
-      if ((e.text.numCol ?? num(firstAttr(body, 'numCol')) ?? 1) > 1) residual.push('numCol');
+      if (vert !== undefined && vert !== 'horz') rate('vert');
+      if ((e.text.numCol ?? num(firstAttr(body, 'numCol')) ?? 1) > 1) rate('numCol');
       const ctr = firstAttr(body, 'anchorCtr');
-      if (e.text.anchorCtr ?? (ctr === '1' || ctr === 'true')) residual.push('anchorCtr');
-      const warp = e.text.warp ?? firstChildOf(body, 'a:prstTxWarp')?.attrs.prst;
-      if (warp !== undefined && warp !== 'textNoShape') residual.push('warp');
+      if (e.text.anchorCtr ?? (ctr === '1' || ctr === 'true')) rate('anchorCtr');
+      const warp = e.text.warp?.preset ?? firstChildOf(body, 'a:prstTxWarp')?.attrs.prst;
+      if (warp !== undefined && warp !== 'textNoShape') rate('warp');
     }
   }
   return { residual: [...new Set(residual)], approx: [...new Set(approx)] };
@@ -578,7 +625,7 @@ export function refineSupport(ctx: SlideCtx, elements: Element[]): string[][] {
     if (e.kind === 'shape' && e.node) nodes = [e.node];
     else {
       const c = candidatesOf(rootOf(ctx, e.from))?.get(e.shapeId);
-      if (c) nodes = e.kind === 'residual' || e.kind === 'table' ? c.any : c[e.kind];
+      if (c) nodes = e.kind === 'shape' || e.kind === 'picture' ? c[e.kind] : c.any;
     }
     const residual: string[] = [];
     const approx: string[] = [];
@@ -599,8 +646,43 @@ export function refineSupport(ctx: SlideCtx, elements: Element[]): string[][] {
     const reasons = [...new Set([...own, ...residual, ...approx].map((r) => clean(r, MAX_REASON_CHARS)))];
     e.support = support;
     if (reasons.length) e.reasons = reasons;
+    // M9: real 3-D is drawn flat, never left to the art (`residual.ts`); shapes of one 3-D look may merge
+    // (`shapeRuns`), so its XML is kept as a digest.
+    if (approx.some(REAL_3D) && nodes[0]) threeDigests.set(e, threeDigest(nodes[0]));
+    if (!e.hidden && approx.some(REAL_3D)) ctx.log('3-D is drawn flat (an approximation)');
     return support === 'residual' ? [...new Set(residual)] : [];
   });
+}
+
+/** The 3-D XML of each element with real 3-D (`threeDigest`), set by `refineSupport`. */
+const threeDigests = new WeakMap<Element, string>();
+
+/** Elements of a shape's XML that make its 3-D look. */
+const THREE_D = new Set(['a:scene3d', 'a:sp3d']);
+/** Characters of a 3-D digest kept (a deck's 3-D XML is small; a hostile one is cut, never merged on). */
+const MAX_DIGEST_CHARS = 4_096;
+
+/**
+ * The 3-D look of a shape's XML as one string (M9, plan decision 6): its `a:scene3d` and `a:sp3d` subtrees
+ * in document order, attributes sorted; shapes merge only with an equal one. Iterative and bounded.
+ */
+export function threeDigest(node: XNode): string {
+  let out = '';
+  const stack: [XNode, boolean][] = [[node, false]];
+  while (stack.length && out.length <= MAX_DIGEST_CHARS) {
+    const [n, inside] = stack.pop()!;
+    if (n.name === '#text') continue;
+    const here = inside || THREE_D.has(n.name);
+    if (here) {
+      const attrs = Object.keys(n.attrs)
+        .sort()
+        .map((k) => `${k}=${JSON.stringify(n.attrs[k])}`)
+        .join(' ');
+      out += `<${n.name} ${attrs}>`;
+    }
+    for (let i = n.children.length - 1; i >= 0; i--) stack.push([n.children[i]!, here]);
+  }
+  return out.length > MAX_DIGEST_CHARS ? `\u0000${out.length}` : out;
 }
 
 // ── Slide class and art range ───────────────────────────────────────────────────────────────────────────
@@ -687,15 +769,18 @@ function videoUnderArt(elements: readonly Element[], art: ArtRange): boolean {
 
 /**
  * What a slide costs against the budgets once the art is split off: the ordo objects it emits (a shape with
- * a fill or line and text is two) and its distinct pictures (the background's and the art included). With
- * the slide's `frame`, a slide that would pass `MAX_SLIDE_OBJECTS` counts each of its runs of shapes of one
- * look (`shapeRuns`) as the one object `emit.ts` draws it as.
+ * a fill or line and text is two; a table or a chart one, M9, unless `m6Tables`: a table's M6 group, for
+ * the art A/B of `ParseOptions.budgetArt`) and its distinct pictures (the background's and the art
+ * included). With the slide's `frame`, a slide that would pass `MAX_SLIDE_OBJECTS` counts each of its runs
+ * of shapes of one look (`shapeRuns`) as the one object `emit.ts` draws it as. The M9 budgets plan with
+ * `budget.ts` `budgetCost`, which counts their decorations and composites too.
  */
 export function slideCost(
   elements: readonly Element[],
   background: Background,
   art: ArtRange | undefined,
   frame?: Frame,
+  m6Tables = false,
 ): { objects: number; pictures: number } {
   const inArt = new Set(art?.elements);
   const pictures = new Set<string>();
@@ -707,7 +792,10 @@ export function slideCost(
     const part = picturePart(e);
     if (part !== undefined) pictures.add(part);
     if (e.kind === 'picture') objects++;
-    else if (e.kind === 'table') objects += e.objects;
+    // M9: a table is one object (`ShapeObject.table`, tables-conv); its M6 group for the art A/B.
+    else if (e.kind === 'table') objects += m6Tables ? e.objects : 1;
+    // M9: a chart is one object (`ShapeObject.chart`, charts-conv).
+    else if (e.kind === 'chart') objects++;
     else objects += (e.fill.kind !== 'none' || e.line ? 1 : 0) + (e.text ? 1 : 0);
   });
   if (frame && objects > MAX_SLIDE_OBJECTS)
@@ -728,6 +816,8 @@ interface Mergeable {
   key: string;
   piece: ShapePiece;
   box: RectEmu;
+  /** Real 3-D (M9): its 3-D look's digest (`threeDigest`, part of `key`); it merges only where disjoint. */
+  three?: string;
 }
 
 /** Each shape's `Mergeable` (null: never merged), memoised: none of what it reads changes after the walk. */
@@ -755,7 +845,12 @@ function mergeable(e: Element, frame: Frame): Mergeable | undefined {
     m = mergeLook(e, frame) ?? null;
     mergeables.set(e, m);
   }
-  return m && !e.hidden && e.support === 'native' ? m : undefined;
+  if (!m || e.hidden) return undefined;
+  if (e.support === 'native') return m;
+  // M9 (plan decision 6, `3d.md` §3.1): real 3-D, drawn flat, merges with shapes of an equal 3-D look whose
+  // boxes it does not overlap (`shapeRuns`), the rim being worked out on the merged silhouette.
+  if (e.support === 'approx' && m.three !== undefined && (e.reasons ?? []).every(REAL_3D)) return m;
+  return undefined;
 }
 
 function mergeLook(e: ShapeElement, frame: Frame): Mergeable | undefined {
@@ -776,7 +871,13 @@ function mergeLook(e: ShapeElement, frame: Frame): Mergeable | undefined {
   const x1 = x0 + box.cx * frame.s;
   const y1 = y0 + box.cy * frame.s;
   if (!(x0 >= -CLAMP_W && x1 <= CLAMP_W && y0 >= -CLAMP_H && y1 <= CLAMP_H)) return undefined;
-  return { key: JSON.stringify([e.from, e.group ?? null, fill ?? null, line ?? null]), piece, box };
+  const three = threeDigests.get(e);
+  return {
+    key: JSON.stringify([e.from, e.group ?? null, fill ?? null, line ?? null, three ?? null]),
+    piece,
+    box,
+    ...(three !== undefined ? { three } : {}),
+  };
 }
 
 /** The bounding box of two boxes. */
@@ -792,7 +893,8 @@ export function unionBox(p: RectEmu, q: RectEmu): RectEmu {
  * most `GEOM_LIMITS.paths` and every path string within the schema's 40,000 characters once written in the
  * run's box (`mergedChars`). Hidden elements draw nothing and do not end a run. Greedy, bottom first, linear;
  * each run has at least two elements (indexes, bottom first). The object (`emit.ts`) draws the run's paths
- * in z-order in their union box, so it looks as the shapes do.
+ * in z-order in their union box, so it looks as the shapes do. Shapes with real 3-D (M9, drawn flat) merge
+ * only with shapes of an equal 3-D look (`threeDigest`) whose boxes they do not overlap (plan decision 6).
  */
 export function shapeRuns(
   elements: readonly Element[],
@@ -808,6 +910,8 @@ export function shapeRuns(
     coords: number;
     box: RectEmu;
     extent: RectEmu;
+    /** Real 3-D runs (M9): every member's box, none overlapping another. */
+    boxes?: RectEmu[];
   };
   let run: Run | undefined;
   const end = () => {
@@ -823,7 +927,8 @@ export function shapeRuns(
       continue;
     }
     const p = m.piece;
-    if (run && run.key === m.key && run.paths + p.paths.length <= GEOM_LIMITS.paths) {
+    const apart = !run?.boxes?.some((b) => overlaps(b, m.box));
+    if (run && run.key === m.key && apart && run.paths + p.paths.length <= GEOM_LIMITS.paths) {
       const box = unionBox(run.box, m.box);
       const extent = unionBox(run.extent, p.extent);
       const cmds = Math.max(run.cmds, p.cmds);
@@ -831,6 +936,7 @@ export function shapeRuns(
       if (mergedChars(box, extent, cmds, coords, frame.s) <= MAX_PATH_CHARS) {
         run.list.push(i);
         run.paths += p.paths.length;
+        run.boxes?.push(m.box);
         Object.assign(run, { box, extent, cmds, coords });
         continue;
       }
@@ -844,6 +950,7 @@ export function shapeRuns(
       coords: p.coords,
       box: m.box,
       extent: p.extent,
+      ...(m.three !== undefined ? { boxes: [m.box] } : {}),
     };
   }
   end();
@@ -855,7 +962,8 @@ const NO_BACKGROUND: Background = { fill: { kind: 'none' }, from: 'none' };
 
 /**
  * SmartArt drawings stay whole (M6, `smartart.ts`): one is drawn natively, or by LibreOffice into the art,
- * never partly both. A drawing with a residual element (3D, vertical text …), or one the art takes an element
+ * never partly both. A drawing with a residual element (vertical text, a warp …; since M9 not 3D, which is
+ * drawn flat, so a drawing with bevels is native), or one the art takes an element
  * of (an overlap with a residual above it), goes to the art entirely ('smartart'); then, while the slide's
  * objects pass `MAX_SLIDE_OBJECTS`, the native drawing with the most objects goes too ('budget:smartart'),
  * so the slide is hybrid rather than picture (design/27 §15 M6). `residual` (per element, `refineSupport`)
@@ -866,6 +974,7 @@ export function wholeDiagrams(
   elements: Element[],
   background: Background,
   residual: string[][],
+  budget = true,
 ): void {
   // By source and number: a layout's drawings are numbered in its own walk, shared by every slide.
   const members = new Map<string, number[]>();
@@ -901,7 +1010,9 @@ export function wholeDiagrams(
       }
     }
     if (moved) continue;
-    if (slideCost(elements, background, art, ctx.frame).objects <= MAX_SLIDE_OBJECTS) return;
+    // M9: the budget sends nothing to the art (`budget.ts`), but behind `ParseOptions.budgetArt`.
+    if (!budget) return;
+    if (slideCost(elements, background, art, ctx.frame, true).objects <= MAX_SLIDE_OBJECTS) return;
     let worst: number[] | undefined;
     let most = 0;
     for (const list of members.values()) {
@@ -910,6 +1021,8 @@ export function wholeDiagrams(
         list.map((i) => elements[i]!),
         NO_BACKGROUND,
         undefined,
+        undefined,
+        true,
       ).objects;
       if (n > most) {
         most = n;
@@ -931,7 +1044,8 @@ export function wholeDiagrams(
  */
 function fitTables(ctx: SlideCtx, elements: Element[], background: Background, residual: string[][]): void {
   for (;;) {
-    if (slideCost(elements, background, artRange(elements), ctx.frame).objects <= MAX_SLIDE_OBJECTS) return;
+    if (slideCost(elements, background, artRange(elements), ctx.frame, true).objects <= MAX_SLIDE_OBJECTS)
+      return;
     let worst = -1;
     elements.forEach((e, i) => {
       if (e.kind !== 'table' || e.hidden || e.support === 'residual') return;
@@ -959,6 +1073,28 @@ function textless(e: Element): boolean {
 }
 
 /**
+ * Real 3-D on a slide past the object budget goes to the art first (M9, 'budget:3d'), as all real 3-D did
+ * before M9: drawn flat in version 1 until the art replaces it, so the budget's later steps (`fitTables`,
+ * `wholeDiagrams`, `fitShapes`) see the slide as they did, and such a slide keeps its drawing. On a slide
+ * within the budget real 3-D is approx, drawn flat (`residual.ts`). Where 3-D shapes go past the budget once
+ * decorations hold the budget's shapes is `decor-conv`'s (plan decision 6). `residual` (per element,
+ * `refineSupport`) gets the reason.
+ */
+function fit3d(ctx: SlideCtx, elements: Element[], background: Background, residual: string[][]): void {
+  if (slideCost(elements, background, artRange(elements), ctx.frame, true).objects <= MAX_SLIDE_OBJECTS)
+    return;
+  let n = 0;
+  elements.forEach((e, i) => {
+    if (e.hidden || e.support === 'residual' || !e.reasons?.some(REAL_3D)) return;
+    e.support = 'residual';
+    e.reasons = [...e.reasons, 'budget:3d'];
+    residual[i] = [...residual[i]!, 'budget:3d'];
+    n++;
+  });
+  if (n) ctx.log(`${n} 3-D shape(s) on a slide past its object budget: LibreOffice draws them`);
+}
+
+/**
  * Plain shapes and pictures over the object budget go to the art (design/27 §5 "picture", §15 M6: no slide
  * passes `MAX_SLIDE_OBJECTS` without becoming hybrid). While the slide passes it, its shapes of one look
  * merged (`shapeRuns`), elements without text are made residual ('budget:shapes'), LibreOffice drawing them:
@@ -972,7 +1108,7 @@ function textless(e: Element): boolean {
  */
 function fitShapes(ctx: SlideCtx, elements: Element[], background: Background, residual: string[][]): void {
   const frame = ctx.frame;
-  const objects = () => slideCost(elements, background, artRange(elements), frame).objects;
+  const objects = () => slideCost(elements, background, artRange(elements), frame, true).objects;
   if (objects() <= MAX_SLIDE_OBJECTS) return;
   const before = elements.map((e) => ({ support: e.support, reasons: e.reasons }));
   const mark = (list: readonly number[]) => {
@@ -1062,7 +1198,7 @@ function textlessRuns(
   const end = () => {
     if (!list.length) return;
     const members = list.map((i) => elements[i]!);
-    let cost = slideCost(members, NO_BACKGROUND, undefined).objects;
+    let cost = slideCost(members, NO_BACKGROUND, undefined, undefined, true).objects;
     for (const r of shapeRuns(members, frame)) cost -= r.length - 1;
     if (cost > 0) out.push({ list, cost, grouped: members[0]!.group !== undefined });
     list = [];
@@ -1083,16 +1219,75 @@ function textlessRuns(
   return out.sort((p, q) => Number(q.grouped) - Number(p.grouped) || q.cost - p.cost);
 }
 
+/** How a slide is classified (`ParseOptions`). */
+export interface ClassifyOptions {
+  /**
+   * The fidelity harness's A/B only (`ParseOptions.budgetArt`): the slide budgets of M6 and M9 wave 1, which
+   * send tables, SmartArt drawings, real 3-D and shapes without text past the object budget to
+   * LibreOffice's art (`fitTables`, `wholeDiagrams`, `fit3d`, `fitShapes`) and make a slide still past a
+   * budget a picture, instead of drawing them natively (`budget.ts` `fitBudgets`). Never set by the hub.
+   */
+  budgetArt?: boolean;
+  /** What the importer stores, so the budgets plan only reliefs that draw (`budget.ts` `BudgetOptions`). */
+  budget?: BudgetOptions;
+}
+
 /**
- * Tier, class and reasons of a slide that was read. Sets each element's `support` and `reasons` first
- * (`refineSupport`), and on a slide over the object budget marks its runs of shapes of one look
- * (`ShapeElement.merge`, `shapeRuns`). Reasons: the tier's (features that keep the slide out of the tier
- * below), then `art:<reason>` for what made it hybrid and `budget:objects` / `budget:pictures` for what made
- * it a picture.
+ * Tier, class and reasons of a slide that was read. Culls what draws nothing on the slide (`budget.ts`
+ * `cullElements`), sets each element's `support` and `reasons` (`refineSupport`), keeps SmartArt drawings
+ * whole, then fits the slide budgets natively (`budget.ts` `fitBudgets`: merges, decorations, composites,
+ * the text ceiling, the guard and the atlas). Reasons: the tier's (features that keep the slide out of the
+ * tier below), then `art:<reason>` for what made it hybrid and `missing:<kind>` for what the guard left out.
+ * With `budgetArt`, the art A/B of M6 (`classifyWithArt`).
  */
-export function classifySlide(ctx: SlideCtx, elements: Element[], background: Background): Classification {
+export function classifySlide(
+  ctx: SlideCtx,
+  elements: Element[],
+  background: Background,
+  opts: ClassifyOptions = {},
+): Classification {
   const { tier, reasons } = tierOf(slideFeatures(ctx));
+  // M9: what draws nothing on the slide is not imported, before anything is counted (`budget.ts`).
+  const culled = cullElements(ctx.frame, elements);
+  if (culled.offSlide) ctx.log(`${culled.offSlide} element(s) outside the slide are not imported`);
+  if (culled.invisible) ctx.log(`${culled.invisible} shape(s) that show nothing are not imported`);
   const residual = refineSupport(ctx, elements);
+  if (opts.budgetArt) return classifyWithArt(ctx, elements, background, residual, tier, reasons);
+  wholeDiagrams(ctx, elements, background, residual, false);
+  const plan = fitBudgets(ctx, elements, background, opts.budget);
+  const art = artRange(elements);
+  const why: string[] = [];
+  for (const i of art?.elements ?? []) for (const r of residual[i]!) why.push(`art:${r}`);
+  if (art && videoUnderArt(elements, art)) ctx.log('a residual element above a video is drawn under it');
+  const missing = leftKinds(elements);
+  const cls: SlideClass = art || missing.length ? 'hybrid' : 'native';
+  return {
+    tier,
+    class: cls,
+    reasons: [...reasons, ...[...new Set(why)].sort(), ...missing.map((k) => `missing:${k}`)].map((r) =>
+      clean(r, MAX_REASON_CHARS),
+    ),
+    ...(art ? { art } : {}),
+    ...(plan.atlas.length ? { atlas: plan.atlas } : {}),
+    ...(missing.length ? { missing } : {}),
+  };
+}
+
+/**
+ * The slide budgets of M6 and M9 wave 1 (`ClassifyOptions.budgetArt`, the harness's A/B): on a slide over
+ * the object budget its runs of shapes of one look are merged (`ShapeElement.merge`, `shapeRuns`), and
+ * real 3-D, tables, SmartArt drawings and shapes without text go to the art; a slide still past a budget is
+ * a picture (`budget:objects` / `budget:pictures`).
+ */
+function classifyWithArt(
+  ctx: SlideCtx,
+  elements: Element[],
+  background: Background,
+  residual: string[][],
+  tier: Tier,
+  reasons: string[],
+): Classification {
+  fit3d(ctx, elements, background, residual);
   fitTables(ctx, elements, background, residual);
   wholeDiagrams(ctx, elements, background, residual);
   fitShapes(ctx, elements, background, residual);
@@ -1102,7 +1297,7 @@ export function classifySlide(ctx: SlideCtx, elements: Element[], background: Ba
   const why: string[] = [];
   for (const i of art?.elements ?? []) for (const r of residual[i]!) why.push(`art:${r}`);
   if (art && videoUnderArt(elements, art)) ctx.log('a residual element above a video is drawn under it');
-  if (slideCost(elements, background, art).objects > MAX_SLIDE_OBJECTS) {
+  if (slideCost(elements, background, art, undefined, true).objects > MAX_SLIDE_OBJECTS) {
     const runs = shapeRuns(elements, ctx.frame, new Set(art?.elements));
     for (const run of runs) for (const i of run) (elements[i] as ShapeElement).merge = run[0]!;
     if (runs.length) {
@@ -1110,7 +1305,7 @@ export function classifySlide(ctx: SlideCtx, elements: Element[], background: Ba
       ctx.log(`${n} shapes of one look are drawn as ${runs.length} objects (the slide's object budget)`);
     }
   }
-  const cost = slideCost(elements, background, art, ctx.frame);
+  const cost = slideCost(elements, background, art, ctx.frame, true);
   const over: string[] = [];
   if (cost.objects > MAX_SLIDE_OBJECTS) over.push('budget:objects');
   if (cost.pictures > MAX_SLIDE_PICTURES) over.push('budget:pictures');

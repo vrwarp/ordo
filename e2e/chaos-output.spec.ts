@@ -579,10 +579,12 @@ class FileOutageProxy {
   refused = 0;
   private server?: Server;
   private sockets = new Set<Socket>();
-  constructor(
-    readonly port: number,
-    readonly hubPort: number,
-  ) {}
+  readonly port: number;
+  readonly hubPort: number;
+  constructor(port: number, hubPort: number) {
+    this.port = port;
+    this.hubPort = hubPort;
+  }
 
   start(): Promise<void> {
     const server = createServer((req, res) => {

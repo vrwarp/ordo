@@ -254,3 +254,96 @@ describe('the next slide skips hidden slides (design/27 §9)', () => {
     expect(planPreview(deck, 'h', LOOK_STAGE).slide.desc?.nextSlide?.id).toBe('b');
   });
 });
+
+describe('a Background override over slides imported on a colour (Cue.backgroundOverride)', () => {
+  /** A ProPresenter song on its presentation's colour: each slide's bottom object is that colour. */
+  const onColour: Presentation = {
+    id: 'pro',
+    rev: 1,
+    title: 'Holy',
+    kind: 'song',
+    meta: { tags: [] },
+    sections: [
+      {
+        id: 'v',
+        label: 'Verse',
+        short: 'V',
+        slides: [
+          {
+            id: 'v1',
+            objects: [
+              {
+                id: 'bd',
+                type: 'shape',
+                box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+                shape: 'rect',
+                fill: { r: 20, g: 40, b: 120, a: 1 },
+                opacity: 1,
+                radius: 0,
+                origin: { src: 'pro7', role: 'bg' },
+              },
+              {
+                id: 'lyric',
+                type: 'text',
+                box: { x: 100, y: 400, w: 1720, h: 300, rotation: 0 },
+                text: 'Holy, holy, holy',
+                style: DEFAULT_LYRIC_STYLE,
+                opacity: 1,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    arrangements: [],
+    archived: false,
+  };
+  const live = (override: boolean) => {
+    const r: ResolvedPlaylist = {
+      ...resolved,
+      playlist: {
+        ...resolved.playlist,
+        items: [
+          {
+            id: 'i1',
+            kind: 'presentation',
+            presentationId: 'pro',
+            ...(override ? { backgroundMediaId: 'bgv' } : {}),
+          },
+        ],
+      },
+      presentations: { pro: onColour },
+    };
+    const cues = expandCues(r);
+    const base = liveState({ resolved: r, cues });
+    return {
+      ...base,
+      live: 0,
+      layers: {
+        ...base.layers,
+        slide: {
+          content: { kind: 'slide' as const, cueIndex: 0, presentationId: 'pro', slideId: 'v1' },
+          at: 1,
+          seq: 1,
+        },
+        background: override
+          ? { content: { kind: 'background' as const, mediaId: 'bgv' }, at: 1, seq: 1 }
+          : base.layers.background,
+      },
+    };
+  };
+  const ids = (s: Slide | undefined) => s?.objects.map((o) => o.id);
+
+  it('draws the slide without its backdrop over the override, as imported otherwise', () => {
+    const over = planFrame(live(true), LOOK_MAIN);
+    expect(over.background.desc?.mediaId).toBe('bgv');
+    expect(ids(over.slide.desc?.slide)).toEqual(['lyric']);
+    expect(ids(planFrame(live(false), LOOK_MAIN).slide.desc?.slide)).toEqual(['bd', 'lyric']);
+    // A look that hides backgrounds keeps the slide as imported (its colour, not the look's clear colour).
+    const hidden: Look = {
+      ...LOOK_MAIN,
+      layers: { ...LOOK_MAIN.layers, background: { ...LOOK_MAIN.layers.background, visible: false } },
+    };
+    expect(ids(planFrame(live(true), hidden).slide.desc?.slide)).toEqual(['bd', 'lyric']);
+  });
+});

@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { runBounded } from './bounded-run.test-util.ts';
 import { extractPptxText, PPTX_MAX_SHAPES_PER_SLIDE } from './pptx.ts';
 import { IMPORT_LIMITS } from './sanitize.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const PPTX = fileURLToPath(new URL('./pptx.ts', import.meta.url));
 const NS =
@@ -144,7 +145,7 @@ describe('extractPptxText resource bounds', () => {
     expect(v.skipped).toEqual([
       { index: 1, reason: expect.stringMatching(/slide1\.xml expands to over 8 MB/) },
     ]);
-    expect(r.ms).toBeLessThan(500);
+    expect(r.ms).toBeLessThan(budgetMs(500));
   }, 30_000);
 
   it('stops a slide whose header understates its size once it passes 8 MB', async () => {
@@ -153,7 +154,7 @@ describe('extractPptxText resource bounds', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect((r.value as Out).skipped[0]!.reason).toMatch(/slide1\.xml expands to over 8 MB/);
-    expect(r.ms).toBeLessThan(1000);
+    expect(r.ms).toBeLessThan(budgetMs(1000));
   }, 30_000);
 
   it('bounds the XML read from one file to 64 MB in total', async () => {
@@ -179,7 +180,7 @@ describe('extractPptxText resource bounds', () => {
         { name: 'ppt/slides/slide2.xml', chunks: once(`${HEAD}Amazing grace${TAIL}`) },
       ]),
     );
-    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(1000));
     expect(r.skipped).toEqual([{ index: 1, reason: 'slide 1 has more than 5,000 shapes' }]);
     expect(r.slides.map((s) => s.boxes.length)).toEqual([0, 1]);
     expect(r.slides[1]!.boxes[0]!.text).toBe('Amazing grace');
@@ -197,7 +198,7 @@ describe('extractPptxText resource bounds', () => {
     const r = await extractBounded(await deck([{ name: 'ppt/slides/slide1.xml', chunks }]));
     expect(r.ok).toBe(true);
     if (r.ok) expect((r.value as Out).skipped).toHaveLength(1);
-    expect(r.ms).toBeLessThan(500);
+    expect(r.ms).toBeLessThan(budgetMs(500));
   }, 30_000);
 
   it('rejects a part with more tags than the limit (a run flood in one shape)', async () => {

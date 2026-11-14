@@ -25,6 +25,13 @@ import {
   fromImport,
   referencePicture,
 } from '@ordo/domain';
+import { clampChart } from './clamp/chart.ts';
+import { clampDecor } from './clamp/decor.ts';
+import { clampLook3d } from './clamp/look3d.ts';
+import { clampTable } from './clamp/table.ts';
+import { clampVectorFonts, MAX_VECTOR_FONTS } from './clamp/vector.ts';
+import { clampWarp } from './clamp/warp.ts';
+import { clampCenterBlock, clampWriting } from './clamp/writing.ts';
 
 /**
  * Render-plan clamps (design/25 "validate at entry, clamp at use"). Whatever reaches the planner is treated
@@ -210,7 +217,8 @@ export function clampLang(v: unknown): string {
   return typeof v === 'string' ? v.slice(0, 35).replace(/[^A-Za-z0-9-]/g, '') : '';
 }
 
-function clampShadow(v: Partial<NonNullable<TextStyle['shadow']>>): NonNullable<TextStyle['shadow']> {
+/** A shadow within the clamp bounds (offsets ±maxEffectPx, blur 0..maxEffectPx, a valid colour). */
+export function clampShadow(v: Partial<NonNullable<TextStyle['shadow']>>): NonNullable<TextStyle['shadow']> {
   return {
     dx: num(v.dx, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0),
     dy: num(v.dy, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0),
@@ -380,7 +388,8 @@ const PATH_FILL_MODES: readonly PathFillMode[] = [
 
 /**
  * A stored geometry (design/27 §3.1 `ShapeGeom`, §12): a preset name of letters and digits (at most 40), at
- * most 10 finite adjust pairs, at most 8 paths, each path string re-tokenised (`cleanPathData`: only M L Q C Z
+ * most 10 finite adjust pairs (`adj` within ±1e7; M9's `adjWide`, the angles past it, within ±21,600,000),
+ * at most 8 paths, each path string re-tokenised (`cleanPathData`: only M L Q C Z
  * and numbers, at most 4,096 points) with its space within 0..1e9, `cont` kept when true (the stored pieces
  * of one path), `ref` (a geometry file, M6 round 2: `geom/stored.ts` draws its paths once read) kept when
  * it is 1-100 characters without control characters. Unknown fill modes are 'norm' (the schema's .catch).
@@ -394,15 +403,23 @@ export function clampGeom(g: unknown): ShapeGeom | undefined {
     const preset = x.preset.slice(0, 40).replace(/[^A-Za-z0-9]/g, '');
     if (preset) out.preset = preset;
   }
-  if (Array.isArray(x.adj)) {
+  const pairs = (list: unknown[], max: number): [string, number][] => {
     const adj: [string, number][] = [];
-    for (let i = 0; i < x.adj.length && adj.length < CLAMP.maxGeomAdjust; i++) {
-      const p = x.adj[i];
+    for (let i = 0; i < list.length && adj.length < CLAMP.maxGeomAdjust; i++) {
+      const p = list[i];
       if (!Array.isArray(p) || typeof p[0] !== 'string' || typeof p[1] !== 'number') continue;
       if (!Number.isFinite(p[1])) continue;
-      adj.push([p[0].slice(0, 16), num(p[1], -1e7, 1e7, 0)]);
+      adj.push([p[0].slice(0, 16), num(p[1], -max, max, 0)]);
     }
+    return adj;
+  };
+  if (Array.isArray(x.adj)) {
+    const adj = pairs(x.adj, 1e7);
     if (adj.length) out.adj = adj;
+  }
+  if (Array.isArray(x.adjWide)) {
+    const adjWide = pairs(x.adjWide, 21_600_000);
+    if (adjWide.length) out.adjWide = adjWide;
   }
   if (Array.isArray(x.paths)) {
     const paths: NonNullable<ShapeGeom['paths']> = [];
@@ -499,9 +516,31 @@ function clampShapeExtras(s: Partial<ShapeObj>, out: ShapeObj): void {
     const soft = num(s.softEdge, 0, CLAMP.maxEffectPx, 0);
     if (soft > 0) out.softEdge = soft;
   }
+  clampShapeKind(s, out);
 }
 
-/** A picture's mask, flips, shadow and soft edge (design/27 §3.1), each only when present and usable. */
+/**
+ * What a shape draws instead of its geometry (design/27 M9), clamped by its area's file in `clamp/`: at most
+ * one of `table`, `chart` and `decor`, the first usable one in that order (the others are dropped), and its
+ * `look3d` only without any of them (a table, a chart or a decoration is never drawn in 3-D).
+ */
+function clampShapeKind(s: Partial<ShapeObj>, out: ShapeObj): void {
+  const table = s.table === undefined ? undefined : clampTable(s.table);
+  const chart = table || s.chart === undefined ? undefined : clampChart(s.chart);
+  const decor = table || chart || s.decor === undefined ? undefined : clampDecor(s.decor);
+  if (table) out.table = table;
+  else if (chart) out.chart = chart;
+  else if (decor) out.decor = decor;
+  else if (s.look3d !== undefined) {
+    const look3d = clampLook3d(s.look3d);
+    if (look3d) out.look3d = look3d;
+  }
+}
+
+/**
+ * A picture's mask, flips, shadow and soft edge (design/27 §3.1) and its M9 fields, each only when present
+ * and usable.
+ */
 function clampImageExtras(i: Partial<ImageObj>, out: ImageObj): void {
   if (i.flipH === true) out.flipH = true;
   if (i.flipV === true) out.flipV = true;
@@ -511,6 +550,35 @@ function clampImageExtras(i: Partial<ImageObj>, out: ImageObj): void {
   if (i.softEdge !== undefined) {
     const soft = num(i.softEdge, 0, CLAMP.maxEffectPx, 0);
     if (soft > 0) out.softEdge = soft;
+  }
+  if (i.look3d !== undefined) {
+    const look3d = clampLook3d(i.look3d);
+    if (look3d) out.look3d = look3d;
+  }
+  if (i.vectorFonts !== undefined) {
+    const budget = new FontBudget(MAX_VECTOR_FONTS);
+    const fonts = clampVectorFonts(i.vectorFonts, (f) => budget.family(f));
+    if (fonts) out.vectorFonts = fonts;
+  }
+}
+
+/**
+ * The M9 looks of a text object (design/27 M9: they live on the object, never on its style), each only when
+ * present and usable: its warp, its vertical writing, its centred block and its 3-D look.
+ */
+function clampTextExtras(t: Partial<TextObject>, out: TextObject): void {
+  if (t.warp !== undefined) {
+    const warp = clampWarp(t.warp);
+    if (warp) out.warp = warp;
+  }
+  if (t.writing !== undefined) {
+    const writing = clampWriting(t.writing);
+    if (writing) out.writing = writing;
+  }
+  if (clampCenterBlock(t.centerBlock)) out.centerBlock = true;
+  if (t.look3d !== undefined) {
+    const look3d = clampLook3d(t.look3d);
+    if (look3d) out.look3d = look3d;
   }
 }
 
@@ -725,6 +793,7 @@ function clampObjectOf(o: unknown): SlideObject | undefined {
     const budget = new FontBudget();
     if (Array.isArray(t.runs)) out.runs = clampRuns(t.runs, text.length, style.fontSizePx, budget);
     if (Array.isArray(t.paras)) out.paras = clampParas(t.paras, text, budget);
+    clampTextExtras(t, out);
     return clampCommon(x, out);
   }
   if (x.type === 'image') {

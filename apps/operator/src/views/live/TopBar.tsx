@@ -68,13 +68,15 @@ export function TopBar() {
   // Peak main-thread stall of the last minute as the core worker saw it (250 ms watchdog tick; design/25).
   const stall = live.core?.mainThreadStallMaxMs ?? 0;
   const onFallbackLink = async () => {
-    await reacquireMissing(true);
-    if (missingHandles().ids.length)
+    const n = await reacquireMissing(true);
+    const still = missingHandles(Date.now(), true).ids.length;
+    if (still)
       toast(
-        'Some output windows were opened by another operator tab and cannot be reached from this one. Use Relaunch to take them over.',
+        `${still} output window${still === 1 ? '' : 's'} could not be reached from this tab: opened by another operator tab or another computer. Use Relaunch to take ${still === 1 ? 'it' : 'them'} over.`,
         'warn',
         10_000,
       );
+    else if (n) toast(`Re-acquired ${n} output window${n === 1 ? '' : 's'}: the fallback link is back.`);
   };
   return (
     <div className={`topbar ${tone}`}>

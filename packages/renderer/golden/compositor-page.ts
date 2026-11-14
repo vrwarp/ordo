@@ -552,10 +552,9 @@ class Side {
   /** Source pixels of every bitmap and frame handed to this engine (reference only). */
   readonly px = new WeakMap<object, Px>();
 
-  constructor(
-    readonly gpu: boolean,
-    uploadBudgetBytes?: number,
-  ) {
+  readonly gpu: boolean;
+  constructor(gpu: boolean, uploadBudgetBytes?: number) {
+    this.gpu = gpu;
     this.engine = new RenderEngine(
       {
         canvas: this.canvas,

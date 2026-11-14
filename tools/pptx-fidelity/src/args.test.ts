@@ -24,6 +24,14 @@ describe('parseArgs', () => {
     expect(() => parseArgs(['--slides', '--lo-compat'])).toThrow(/needs a value/);
   });
 
+  it('reads --before hub or paste and refuses anything else', () => {
+    expect(parseArgs(['decks']).before).toBeUndefined();
+    expect(parseArgs(['--before', 'hub', 'decks'])).toMatchObject({ before: 'hub', decks: ['decks'] });
+    expect(parseArgs(['--before', 'paste', 'decks'])).toMatchObject({ before: 'paste', decks: ['decks'] });
+    expect(() => parseArgs(['--before', 'harness'])).toThrow(/--before takes hub or paste/);
+    expect(() => parseArgs(['--before'])).toThrow(/needs a value/);
+  });
+
   it('refuses slide lists that are not numbers or ranges', () => {
     for (const bad of ['', '0', '3-1', 'a', '1,,2', ':3', '1-200000', '2.5', '-1'])
       expect(() => parseSlideSpec(bad), bad).toThrow();
@@ -46,5 +54,16 @@ describe('slidesFor', () => {
 
   it('leaves out decks no list names when every list names a deck', () => {
     expect(slidesFor([parseSlideSpec('hymn:2')], 'other')!.size).toBe(0);
+  });
+
+  it('reads the M9 flags: --no-libreoffice, --hub-budget and the hub to import through', () => {
+    expect(parseArgs(['d'])).toMatchObject({ noLibreOffice: false, hubBudget: false });
+    expect(parseArgs(['--no-libreoffice', '--hub-budget', '--hub', 'dist', 'd'])).toMatchObject({
+      noLibreOffice: true,
+      hubBudget: true,
+      hub: 'dist',
+      decks: ['d'],
+    });
+    expect(() => parseArgs(['--hub', 'docker'])).toThrow(/dist or source/);
   });
 });

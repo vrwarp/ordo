@@ -26,7 +26,8 @@ import type { FontEnv, RichLayout, RunStyle } from './types.ts';
  * passes it in `scale` rather than scaling the context itself.
  *
  * The passes, in `drawText`'s order:
- * 1. the text fill box (`style.fill`, the ink grown by the insets) and run highlights;
+ * 1. the text fill box (`style.fill`, the ink grown by the insets), the line mask's straps (`style.lineMask`,
+ *    one per visible line, through the painter in pass 'lineMask') and run highlights;
  * 2. shadows of every line: the run's shadow, else the box's (a run's `shadow: null` turns it off),
  *    underlines and strikes included;
  * 3. glow (`style.glow`): the glyphs blurred with `shadowBlur` = radius and zero offset;
@@ -45,6 +46,14 @@ import type { FontEnv, RichLayout, RunStyle } from './types.ts';
  * layout in a `PaintPlan`, memoised by layout identity; layouts themselves are memoised per object and font
  * generation (rich.ts), so repainting at another scale, in a thumbnail or in the editor costs only the draw
  * calls. Context state (font, direction, language, spacing, fill) is assigned only when it changes.
+ *
+ * Seams (M9 plan decision 6): the passes put glyphs on the context through a glyph painter (`GlyphPainter`:
+ * plain `fillText`/`strokeText`; upright graphemes of vertical text, the writing engine; warped glyphs, the
+ * warp painter), and they draw on a face target (`FaceTarget`: the context itself; or a face sprite the 3-D
+ * look shades, whose alpha makes the shadow and glow). Both are chosen per object from what is registered
+ * (`registerGlyphPainter`, `registerFaceTarget`), independently, so a bevelled warped title gets its rim on
+ * the warped glyphs. With nothing registered it is the plain painter on the direct target: the calls above,
+ * exactly as before the seam (paint.hooks.test.ts).
  */
 
 /** Underline and strike thickness, × the segment's drawn size (LibreOffice's F/18). */
@@ -57,8 +66,12 @@ export const STRIKE_RISE = 0.25;
 export const HIGHLIGHT_ASCENT = 0.9;
 export const HIGHLIGHT_DESCENT = 0.3;
 
-/** One segment's glyphs, ready to draw. */
-type Glyphs = {
+/** One segment's glyphs (or one bullet), ready to draw. */
+export type PlannedGlyphs = {
+  /** The layout line it is on (`RichLayout.lines` index). */
+  line: number;
+  /** Its segment in that line (`RichLine.segs` index); absent for a bullet. */
+  seg?: number;
   text: string;
   x: number;
   /** Baseline y, the segment's shift included. */
@@ -78,7 +91,9 @@ type Glyphs = {
   outline: { width: number; color: string } | null;
 };
 
-type Rect = {
+/** A highlight, underline or strike rectangle (logical px), on one layout line. */
+export type PlannedRect = {
+  line: number;
   x: number;
   y: number;
   w: number;
@@ -88,7 +103,12 @@ type Rect = {
   shadowColor: string;
 };
 
-export type LineMaskStrap = { x: number; y: number; w: number; h: number };
+/**
+ * One strap of a line mask (`style.lineMask`): a planned rectangle on its layout line, filled in pass 1 with
+ * the mask's colour (`color`) or its gradient over the object box (`LineMaskPlan.gradient`, `color` empty),
+ * through the painter (`GlyphPainter.rect`, pass 'lineMask') like a highlight; never shadowed.
+ */
+export type LineMaskStrap = PlannedRect;
 export type LineMaskPlan = {
   straps: LineMaskStrap[];
   fill?: string;
@@ -99,26 +119,142 @@ export type LineMaskPlan = {
 export type PaintPlan = {
   /** The text fill box (logical px), or null. */
   box: { x: number; y: number; w: number; h: number; radius: number; color: string } | null;
-  highlights: Rect[];
+  highlights: PlannedRect[];
   /** Glyphs of every visible, non-blank segment, in line then visual order. */
-  glyphs: Glyphs[];
+  glyphs: PlannedGlyphs[];
   /** Underlines and strikes. */
-  decorations: Rect[];
+  decorations: PlannedRect[];
   /** Bullets and numbers, with their paragraph's first run's effects. */
-  bullets: Glyphs[];
+  bullets: PlannedGlyphs[];
   glow: { radius: number; color: string; fill: string } | null;
   /** The box's gradient text paint (`style.paint`), or null. */
   paint: Gradient | null;
   /** ProPresenter line-fill mask straps (`style.lineMask`), or null. */
   lineMask: LineMaskPlan | null;
-  lineMasks?: LineMaskStrap[];
 };
 
 const plans = new WeakMap<RichLayout, { o: TextObject; plan: PaintPlan }>();
 
+/** The pass a glyph run is drawn in (the header's 2 to 5 and 7). */
+export type GlyphPass = 'shadow' | 'glow' | 'outline' | 'fill' | 'bullet';
+/**
+ * The pass a rectangle is drawn in: a line mask's strap or a highlight (1), a shadowed underline or strike
+ * (2), a line (6).
+ */
+export type RectPass = 'lineMask' | 'highlight' | 'shadow' | 'decoration';
+
+/**
+ * Puts a plan's glyphs and rectangles on a context (M9 plan decision 6). The passes set the context's state
+ * (font, direction, language, letter spacing, paint, shadow, outline width) before each call, under the
+ * object's transform in logical px; the painter draws with it.
+ */
+export interface GlyphPainter {
+  readonly kind: 'plain' | 'upright' | 'warp';
+  /** The plan to paint for `o` laid out as `l` (default `paintPlan(o, l)`): a warp lays text out its way. */
+  plan?(o: TextObject, l: RichLayout): PaintPlan;
+  /** A glyph run's text: stroked in the 'outline' pass, filled in every other. */
+  glyphs(ctx: Ctx2D, g: PlannedGlyphs, pass: GlyphPass): void;
+  /** A line mask's strap, a highlight, an underline or a strike, filled. */
+  rect(ctx: Ctx2D, r: PlannedRect, pass: RectPass): void;
+}
+
+/** Today's painter: each run at its reference position, `fillText`, `strokeText` and `fillRect`. */
+export const PLAIN_PAINTER: GlyphPainter = {
+  kind: 'plain',
+  glyphs(ctx, g, pass) {
+    if (pass === 'outline') ctx.strokeText(g.text, g.x, g.y);
+    else ctx.fillText(g.text, g.x, g.y);
+  },
+  rect(ctx, r) {
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+  },
+};
+
+/** The passes after the fill box and highlights, for a face target to draw where it needs them. */
+export interface PaintPasses {
+  /** Passes 2 and 3 (shadows, glow) on `c`, which the target has set up as `ctx` (transform and alpha). */
+  effects(c: Ctx2D): void;
+  /** Passes 4 to 7 (outline, fill, underline and strike, bullets) on `c`. */
+  face(c: Ctx2D): void;
+}
+
+/**
+ * Where the face of a text object is drawn (M9 plan decision 6): on the context (`direct`), or into a face
+ * sprite (`sprite`, the 3-D look: shaded, then its alpha casts the shadow and glow).
+ */
+export interface FaceTarget {
+  readonly kind: 'direct' | 'sprite';
+  /** Draws the passes onto `ctx`, which holds the object's transform (scale, rotation) and opacity. */
+  draw(ctx: Ctx2D, o: TextObject, plan: PaintPlan, passes: PaintPasses, scale: number): void;
+}
+
+/** Today's target: effects, then the face, on the context itself. */
+export const DIRECT_TARGET: FaceTarget = {
+  kind: 'direct',
+  draw(ctx, _o, _plan, passes) {
+    passes.effects(ctx);
+    passes.face(ctx);
+  },
+};
+
+type Hooked<T> = { applies: (o: TextObject) => boolean; hook: T };
+const painters = new Map<'upright' | 'warp', Hooked<GlyphPainter>>();
+let spriteTarget: Hooked<FaceTarget> | undefined;
+
+/**
+ * Register the glyph painter of a kind for the objects `applies` says (the writing engine: upright; the warp
+ * painter: warp). The last one registered for a kind wins; returns its unregistration.
+ */
+export function registerGlyphPainter(
+  kind: 'upright' | 'warp',
+  applies: (o: TextObject) => boolean,
+  painter: GlyphPainter,
+): () => void {
+  const entry = { applies, hook: painter };
+  painters.set(kind, entry);
+  return () => {
+    if (painters.get(kind) === entry) painters.delete(kind);
+  };
+}
+
+/** Register the face sprite target (the 3-D look) for the objects `applies` says; returns its unregistration. */
+export function registerFaceTarget(applies: (o: TextObject) => boolean, target: FaceTarget): () => void {
+  const entry = { applies, hook: target };
+  spriteTarget = entry;
+  return () => {
+    if (spriteTarget === entry) spriteTarget = undefined;
+  };
+}
+
+/** The painter of an object: a warp's, else upright's when they apply, else the plain painter. */
+export function glyphPainterFor(o: TextObject): GlyphPainter {
+  for (const kind of ['warp', 'upright'] as const) {
+    const p = painters.get(kind);
+    if (p?.applies(o)) return p.hook;
+  }
+  return PLAIN_PAINTER;
+}
+
+/** The face target of an object: the sprite target when it applies, else the direct one. */
+export function faceTargetFor(o: TextObject): FaceTarget {
+  return spriteTarget?.applies(o) ? spriteTarget.hook : DIRECT_TARGET;
+}
+
+/** A painter and target chosen by the caller instead of the registered ones. */
+export type PaintHooks = { painter?: GlyphPainter; target?: FaceTarget };
+
 /** Paint a layout of `o` (made by `layoutRich` for the same object) at `scale` device px per logical px. */
-export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: number, _env: FontEnv): void {
-  const plan = paintPlan(o, l);
+export function paintRich(
+  ctx: Ctx2D,
+  o: TextObject,
+  l: RichLayout,
+  scale: number,
+  _env: FontEnv,
+  hooks?: PaintHooks,
+): void {
+  const painter = hooks?.painter ?? glyphPainterFor(o);
+  const target = hooks?.target ?? faceTargetFor(o);
+  const plan = painter.plan?.(o, l) ?? paintPlan(o, l);
   ctx.save();
   ctx.globalAlpha = num(o.opacity, 0, 1, 1);
   ctx.scale(scale, scale);
@@ -126,6 +262,18 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'left';
     const state = new TextState(ctx);
+    // A target's own context (a face sprite) keeps its own record of what was assigned.
+    const states = new Map<Ctx2D, TextState>([[ctx, state]]);
+    const stateOf = (c: Ctx2D): TextState => {
+      let st = states.get(c);
+      if (!st) {
+        c.textBaseline = 'alphabetic';
+        c.textAlign = 'left';
+        st = new TextState(c);
+        states.set(c, st);
+      }
+      return st;
+    };
     // 1. Fill box, line masks and highlights.
     if (plan.box) {
       const b = plan.box;
@@ -143,94 +291,125 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
       } else if (lm.fill) {
         state.fill(lm.fill);
       }
-      for (const r of lm.straps) {
-        ctx.fillRect(r.x, r.y, r.w, r.h);
-      }
+      // Through the painter, as highlights are: an upright or warped painter places them its way.
+      for (const r of lm.straps) painter.rect(ctx, r, 'lineMask');
     }
     for (const r of plan.highlights) {
       state.fill(r.color);
-      ctx.fillRect(r.x, r.y, r.w, r.h);
+      painter.rect(ctx, r, 'highlight');
     }
-    // 2. Shadows: the casting glyphs, bullets and decorations, one shadow setting per run of equal shadows.
     const cast = [...plan.glyphs, ...plan.bullets];
-    if (cast.some((g) => g.shadow) || plan.decorations.some((d) => d.shadow)) {
-      ctx.save();
-      let cur: Shadow | null = null;
-      const use = (s: Shadow, color: string) => {
-        if (s === cur) return;
-        cur = s;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = s.blur * scale;
-        ctx.shadowOffsetX = s.dx * scale;
-        ctx.shadowOffsetY = s.dy * scale;
-      };
-      for (const g of cast) {
-        if (!g.shadow) continue;
-        use(g.shadow, g.shadowColor);
-        state.text(g);
-        state.fill(g.cast);
-        ctx.fillText(g.text, g.x, g.y);
-      }
-      for (const d of plan.decorations) {
-        if (!d.shadow) continue;
-        use(d.shadow, d.shadowColor);
-        state.fill(d.color);
-        ctx.fillRect(d.x, d.y, d.w, d.h);
-      }
-      ctx.restore();
-      state.reset();
-    }
-    // 3. Glow: the glyphs in the glow colour, blurred around themselves.
-    if (plan.glow && cast.length) {
-      ctx.save();
-      ctx.shadowColor = plan.glow.color;
-      ctx.shadowBlur = plan.glow.radius * scale;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 0;
-      state.fill(plan.glow.fill);
-      for (const g of cast) {
-        state.text(g);
-        ctx.fillText(g.text, g.x, g.y);
-      }
-      ctx.restore();
-      state.reset();
-    }
-    // 4. Outline.
-    if (cast.some((g) => g.outline)) {
-      ctx.lineJoin = 'round';
-      ctx.miterLimit = 2;
-      for (const g of cast) {
-        if (!g.outline) continue;
-        state.text(g);
-        ctx.lineWidth = g.outline.width * 2;
-        ctx.strokeStyle = g.outline.color;
-        ctx.strokeText(g.text, g.x, g.y);
-      }
-    }
-    // 5. Fill.
-    let grad: ReturnType<typeof gradientStyle> | undefined;
-    for (const g of plan.glyphs) {
-      state.text(g);
-      if (g.grad && plan.paint) {
-        const b = o.box;
-        grad ??= gradientStyle(ctx, plan.paint, b.w, b.h, 0, { x0: b.x, y0: b.y });
-        state.paint(grad as CanvasGradient);
-      } else state.fill(g.fill);
-      ctx.fillText(g.text, g.x, g.y);
-    }
-    // 6. Underline and strike.
-    for (const d of plan.decorations) {
-      state.fill(d.color);
-      ctx.fillRect(d.x, d.y, d.w, d.h);
-    }
-    // 7. Bullets: in the paragraph's direction, no spacing, the bullet's own font and colour.
-    for (const b of plan.bullets) {
-      state.text(b);
-      state.fill(b.fill);
-      ctx.fillText(b.text, b.x, b.y);
-    }
+    target.draw(
+      ctx,
+      o,
+      plan,
+      {
+        effects: (c) => paintEffects(c, stateOf(c), plan, cast, scale, painter),
+        face: (c) => paintFace(c, stateOf(c), o, plan, cast, painter),
+      },
+      scale,
+    );
   });
   ctx.restore();
+}
+
+/** Passes 2 and 3: shadows of the casting glyphs, bullets and decorations, then the glow. */
+function paintEffects(
+  ctx: Ctx2D,
+  state: TextState,
+  plan: PaintPlan,
+  cast: readonly PlannedGlyphs[],
+  scale: number,
+  painter: GlyphPainter,
+): void {
+  // 2. Shadows: one shadow setting per run of equal shadows.
+  if (cast.some((g) => g.shadow) || plan.decorations.some((d) => d.shadow)) {
+    ctx.save();
+    let cur: Shadow | null = null;
+    const use = (s: Shadow, color: string) => {
+      if (s === cur) return;
+      cur = s;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = s.blur * scale;
+      ctx.shadowOffsetX = s.dx * scale;
+      ctx.shadowOffsetY = s.dy * scale;
+    };
+    for (const g of cast) {
+      if (!g.shadow) continue;
+      use(g.shadow, g.shadowColor);
+      state.text(g);
+      state.fill(g.cast);
+      painter.glyphs(ctx, g, 'shadow');
+    }
+    for (const d of plan.decorations) {
+      if (!d.shadow) continue;
+      use(d.shadow, d.shadowColor);
+      state.fill(d.color);
+      painter.rect(ctx, d, 'shadow');
+    }
+    ctx.restore();
+    state.reset();
+  }
+  // 3. Glow: the glyphs in the glow colour, blurred around themselves.
+  if (plan.glow && cast.length) {
+    ctx.save();
+    ctx.shadowColor = plan.glow.color;
+    ctx.shadowBlur = plan.glow.radius * scale;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    state.fill(plan.glow.fill);
+    for (const g of cast) {
+      state.text(g);
+      painter.glyphs(ctx, g, 'glow');
+    }
+    ctx.restore();
+    state.reset();
+  }
+}
+
+/** Passes 4 to 7: outline, fill, underline and strike, bullets. */
+function paintFace(
+  ctx: Ctx2D,
+  state: TextState,
+  o: TextObject,
+  plan: PaintPlan,
+  cast: readonly PlannedGlyphs[],
+  painter: GlyphPainter,
+): void {
+  // 4. Outline.
+  if (cast.some((g) => g.outline)) {
+    ctx.lineJoin = 'round';
+    ctx.miterLimit = 2;
+    for (const g of cast) {
+      if (!g.outline) continue;
+      state.text(g);
+      ctx.lineWidth = g.outline.width * 2;
+      ctx.strokeStyle = g.outline.color;
+      painter.glyphs(ctx, g, 'outline');
+    }
+  }
+  // 5. Fill.
+  let grad: ReturnType<typeof gradientStyle> | undefined;
+  for (const g of plan.glyphs) {
+    state.text(g);
+    if (g.grad && plan.paint) {
+      const b = o.box;
+      grad ??= gradientStyle(ctx, plan.paint, b.w, b.h, 0, { x0: b.x, y0: b.y });
+      state.paint(grad as CanvasGradient);
+    } else state.fill(g.fill);
+    painter.glyphs(ctx, g, 'fill');
+  }
+  // 6. Underline and strike.
+  for (const d of plan.decorations) {
+    state.fill(d.color);
+    painter.rect(ctx, d, 'decoration');
+  }
+  // 7. Bullets: in the paragraph's direction, no spacing, the bullet's own font and colour.
+  for (const b of plan.bullets) {
+    state.text(b);
+    state.fill(b.fill);
+    painter.glyphs(ctx, b, 'bullet');
+  }
 }
 
 /** The scale-independent part of painting `l`, memoised by layout. */
@@ -266,26 +445,28 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
   const lo = -CLAMP.boxFactor * LOGICAL_HEIGHT;
   const hi = CLAMP.boxFactor * LOGICAL_HEIGHT;
   const hidden = hiddenParas(o);
-  const lines = l.lines.filter(
-    (line) => !hidden[line.para] && line.top + line.height >= lo && line.top <= hi,
-  );
+  // Lines with their index in the layout (painters that place lines their own way read it).
+  const lines = l.lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => !hidden[line.para] && line.top + line.height >= lo && line.top <= hi);
   let lineMask: LineMaskPlan | null = null;
   const lm = o.style.lineMask;
   if (lm && (lm.fill || lm.gradient)) {
     const visibleLines = lines.filter(
-      (ln) =>
+      ({ line: ln }) =>
         ln.segs.some((seg) => /[^\s\u200b-\u200d\ufeff]/.test(segText(o.text, seg.start, seg.end, 'none'))) ||
         !!ln.bullet,
     );
     if (visibleLines.length > 0) {
-      const maxLineW = Math.max(...visibleLines.map((ln) => ln.w));
+      const maxLineW = Math.max(...visibleLines.map(({ line: ln }) => ln.w));
+      const color = lm.gradient ? '' : lm.fill ? css(lm.fill) : '';
       const straps: LineMaskStrap[] = [];
       const hOff = lm.heightOffsetPx ?? 0;
       const vOff = lm.vOffsetPx ?? 0;
       const wOff = lm.widthOffsetPx ?? 0;
       const hShift = lm.hOffsetPx ?? 0;
       const maskStyle = lm.style ?? 'fullWidth';
-      for (const ln of visibleLines) {
+      for (const { line: ln, index } of visibleLines) {
         const F = ln.segs.length
           ? Math.max(...ln.segs.map((s) => s.sizePx))
           : o.style.fontSizePx * l.fontScale;
@@ -309,7 +490,7 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
                 : o.box.x + (o.box.w - maxLineW) / 2;
           x = baseX - wOff / 2 + hShift;
         }
-        straps.push({ x, y, w, h });
+        straps.push({ line: index, x, y, w, h, color, shadow: null, shadowColor: '' });
       }
       lineMask = {
         straps,
@@ -327,7 +508,6 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
     glow: null,
     paint: style.paint ?? null,
     lineMask,
-    lineMasks: lineMask?.straps ?? [],
   };
   if (style.fill && o.text.trim()) {
     const ins = insetsOf(style);
@@ -347,11 +527,11 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
       color: css({ ...style.glow.color, a: 1 }),
       fill: css(style.glow.color),
     };
-  for (const line of lines) {
+  for (const { line, index } of lines) {
     // The line's content without hanging whitespace: highlights and decorations stop at its edges.
     const left = line.x;
     const right = line.x + line.w;
-    const marks = new Marks();
+    const marks = new Marks(index);
     line.segs.forEach((s, i) => {
       const st = styleOf(s.run);
       const x0 = Math.max(s.x, left);
@@ -390,6 +570,8 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
       if (!text.trim()) return;
       const grad = plan.paint !== null && (s.run < 0 || o.runs?.[s.run]?.color === undefined);
       plan.glyphs.push({
+        line: index,
+        seg: i,
         ...(grad ? { grad: true as const } : {}),
         text,
         x: s.x,
@@ -413,6 +595,7 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
       const st = styleOf(b.run ?? -1);
       const fill = css(b.color);
       plan.bullets.push({
+        line: index,
         text: b.text,
         x: b.x,
         y: line.baseline,
@@ -455,10 +638,14 @@ export function hiddenParas(o: TextObject): boolean[] {
  * underline or highlight runs unbroken across word gaps and justification.
  */
 class Marks {
-  readonly #last = new Map<string, { rect: Rect; seg: number }>();
+  readonly #last = new Map<string, { rect: PlannedRect; seg: number }>();
+  readonly line: number;
+  constructor(line: number) {
+    this.line = line;
+  }
 
   add(
-    out: Rect[],
+    out: PlannedRect[],
     kind: string,
     seg: number,
     x0: number,
@@ -484,7 +671,8 @@ class Marks {
       return;
     }
     if (x1 <= x0) return;
-    const rect: Rect = {
+    const rect: PlannedRect = {
+      line: this.line,
       x: x0,
       y,
       w: x1 - x0,
@@ -505,7 +693,10 @@ class TextState {
   #lang: string | null = null;
   #spacing = Number.NaN;
   #fill = '';
-  constructor(readonly ctx: Ctx2D) {}
+  readonly ctx: Ctx2D;
+  constructor(ctx: Ctx2D) {
+    this.ctx = ctx;
+  }
 
   /** Forget what was assigned (after a `restore`). */
   reset(): void {

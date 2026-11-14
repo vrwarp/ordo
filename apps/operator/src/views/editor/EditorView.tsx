@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { SVG_HEAD_BYTES, type SlideObject } from '@ordo/domain';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FindReplaceDialog } from './FindReplaceDialog.tsx';
+import { ErrorBoundary, PaneError } from '../../components/ErrorBoundary.tsx';
+import { DeckSwatchesSource, type SwatchSource } from '../../components/deckSwatches.ts';
 import { installKeepVisible } from '../../components/keepVisible.ts';
 import { Menu } from '../../components/Menu.tsx';
 import { useCoarsePointer, useMedia } from '../../components/pointer.ts';
@@ -9,6 +12,7 @@ import { useLibrary } from '../../state/library.ts';
 import { useSession } from '../../state/session.ts';
 import { toast } from '../../state/toasts.ts';
 import {
+  addToSlide,
   copySelection,
   copyTextSelection,
   cutSelection,
@@ -16,20 +20,23 @@ import {
   deleteSelection,
   duplicateSelection,
   handleTextPaste,
+  mayAdd,
   moveSelection,
+  replaceBackgroundWith,
   reorderSelection,
   tryPasteObjectsFromClipboard,
   ungroupSelection,
   writeLastObjectClip,
 } from './actions.ts';
 import { previewLooks } from '../../lib/lookPreviews.ts';
+import { treatAsSlides } from '../../lib/pptxImport.ts';
 import { uploadFiles } from '../library/MediaTab.tsx';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { ConflictDialog } from './ConflictDialog.tsx';
 import { historyKey, keyPlace, slideNavKey, stepSlide } from './editorKeys.ts';
 import { FloatingContextBar } from './FloatingContextBar.tsx';
 import { LookPreviews, SingleLookStagePreview } from './LookPreviews.tsx';
-import { addVideo } from './mediaOps.ts';
+import { addVideo, newVideo } from './mediaOps.ts';
 import {
   adoptJobSaves,
   change,
@@ -49,9 +56,11 @@ import {
 // `window.__ordo.editor`, read by the end-to-end specs (e2e/editorhelpers.ts).
 import './inspect.ts';
 import { ObjectPanel } from './ObjectPanel.tsx';
-import { addObject, getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
+import { getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
 import { hasGroup, htmlToRichText, pasteRichText } from './ops/index.ts';
 import { PresentationPanel } from './PresentationPanel.tsx';
+import { LoopDeckBanner } from './PptxReport.tsx';
+import { insertBox, svgDeclared } from './insertBox.ts';
 import { RevisionsDialog } from './RevisionsDialog.tsx';
 import { SlideCanvas } from './SlideCanvas.tsx';
 import { makeSlideEditable, SlidePanel } from './SlidePanel.tsx';
@@ -97,10 +106,21 @@ export function EditorView({ id }: { id: string }) {
   const [tab, setTab] = useState<'object' | 'slide' | 'presentation'>('slide');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [stageLens, setStageLens] = useState<'canvas' | string>('canvas');
+  // 'Keep as a loop' on the loop deck's stage line (`LoopDeckBanner`): hidden for this visit.
+  const [keepLoop, setKeepLoop] = useState(false);
   const [bgPick, setBgPick] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [songMode, setSongMode] = useState<'reflow' | 'canvas' | null>(null);
   const [zoom, setZoom] = useState<'fit' | 0.5 | 0.75 | 1>('fit');
+  // The paint pickers' deck swatches: components/deckSwatches.ts reads the deck from this context, so the
+  // shared components never import the editor's store.
+  const swatchSource = useMemo<SwatchSource>(
+    () => ({
+      presentation: ed.draft,
+      theme: ed.draft?.themeId ? themes.find((t) => t.id === ed.draft?.themeId) : undefined,
+    }),
+    [ed.draft, themes],
+  );
 
   const toggleFullScreen = async () => {
     try {
@@ -133,6 +153,9 @@ export function EditorView({ id }: { id: string }) {
   const [videoPick, setVideoPick] = useState(false);
   // 'Find…' (Ctrl+F outside a text field): find and replace across the presentation (M4 item E).
   const [finding, setFinding] = useState(false);
+  // The window key handler reads it without re-binding (its effect depends on readOnly only).
+  const findingRef = useRef(false);
+  findingRef.current = finding;
   const [dismissedRev, setDismissedRev] = useState(0);
   // The newest revision found saved by someone else (not only by the hub's PowerPoint jobs): the banner's.
   const [otherRev, setOtherRev] = useState(0);
@@ -188,8 +211,13 @@ export function EditorView({ id }: { id: string }) {
 
   const p = ed.id === id ? ed.draft : undefined;
   const readOnly = locked.has(id);
+  // The lock as it is now, for what finishes later (a pasted picture's upload).
+  const readOnlyNow = useRef(readOnly);
+  readOnlyNow.current = readOnly;
   const slide = p ? getSlide(p, ed.slideId) : undefined;
   const obj = slide?.objects.find((o) => o.id === ed.objectId);
+  // An imported deck PowerPoint plays as a loop (`importReport` `loop`): its line on the stage.
+  const loopDeck = p?.kind === 'loop' && p.source?.kind === 'pptx';
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -205,6 +233,12 @@ export function EditorView({ id }: { id: string }) {
         return;
       }
       if (place === 'field' || place === 'dialog') return;
+      // Escape closes an open Find & replace card first (one Escape, one thing), even when the focus left it.
+      if (e.key === 'Escape' && !ctrl && findingRef.current) {
+        e.preventDefault();
+        setFinding(false);
+        return;
+      }
       if (ctrl && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         setFinding(true);
@@ -370,27 +404,22 @@ export function EditorView({ id }: { id: string }) {
             ? new File([rawFile], `pasted-${Date.now()}.${ext}`, { type: rawFile.type })
             : rawFile;
         const targetSlideId = st.slideId;
-        void uploadFiles([named]).then((uploaded) => {
+        void uploadFiles([named]).then(async (uploaded) => {
           const m = uploaded[0];
           if (!m) return;
-          const w = m.width && m.height ? Math.min(1920, m.width) : 960;
-          const h = m.width && m.height ? (w * m.height) / m.width : 540;
-          const imgObj = newImage(m.id, {
-            x: Math.round((1920 - w) / 2),
-            y: Math.max(0, Math.round((1080 - h) / 2)),
-            w: Math.round(w),
-            h: Math.min(1080, Math.round(h)),
-            rotation: 0,
-          });
-          change((q) => addObject(q, targetSlideId, imgObj));
-          selectObject(imgObj.id);
+          // An SVG starts at the size it declares (its media size is its still's, `insertBox`).
+          const declared = await svgDeclared(m, () => named.slice(0, SVG_HEAD_BYTES).text());
+          const imgObj = newImage(m.id, insertBox(m, declared));
+          // The upload took a while: the editor may be locked by now (a service went live).
+          if (readOnlyNow.current) return;
+          addToSlide(targetSlideId, imgObj);
         });
         return;
       }
 
       // 3. Check for copied Ordo slide objects (`data-ordo-objects` or in-memory object clipboard).
-      const pastedIds = tryPasteObjectsFromClipboard(e.clipboardData);
-      if (pastedIds?.length) {
+      const pasting = tryPasteObjectsFromClipboard(e.clipboardData);
+      if (pasting) {
         e.preventDefault();
         return;
       }
@@ -405,9 +434,7 @@ export function EditorView({ id }: { id: string }) {
         e.preventDefault();
         const baseObj = newText(curTheme, '');
         const { object } = pasteRichText(baseObj, 0, 0, richSlice);
-        const targetSlideId = st.slideId;
-        change((q) => addObject(q, targetSlideId, object));
-        selectObject(object.id);
+        addToSlide(st.slideId, object);
       }
     };
 
@@ -449,10 +476,9 @@ export function EditorView({ id }: { id: string }) {
   const z = (zz: ZOrder) => obj && reorderSelection(zz);
   // 'Ungroup' applies while a selected object belongs to a group (a PowerPoint group, a shape with its text).
   const grouped = !!slide && hasGroup(slide.objects.filter((o) => ed.objectIds.includes(o.id)));
-  const add = (o: Parameters<typeof addObject>[2]) => {
+  const add = (o: SlideObject) => {
     if (!slide || readOnly) return;
-    change((q) => addObject(q, slide.id, o));
-    selectObject(o.id);
+    addToSlide(slide.id, o);
   };
   const bgId = slide?.backgroundMediaId ?? p.backgroundMediaId;
   const editText = (objectId?: string) => {
@@ -480,6 +506,9 @@ export function EditorView({ id }: { id: string }) {
     if (obj && slide) deleteSelection();
   };
   const looksShown = looksOpen ?? touchLandscape;
+  // A song in the Lyric Script has no stage pane: the Find card floats over the page there.
+  const reflow = p.kind === 'song' && (songMode ?? (coarse ? 'canvas' : 'reflow')) === 'reflow';
+  const findDocked = !reflow;
   // Touch: the keyboard-only actions as buttons, floating by the selected object (SlideCanvas places them).
   const objectTools =
     coarse && obj && !readOnly ? (
@@ -522,7 +551,7 @@ export function EditorView({ id }: { id: string }) {
 
   const showProps = coarse || drawerOpen;
 
-  return (
+  const page = (
     <div
       className={`editor ${focusMode ? 'focus-mode' : ''} ${!coarse ? (drawerOpen ? 'drawer-open' : 'canvas-first') : ''}`}
       ref={root}
@@ -612,7 +641,7 @@ export function EditorView({ id }: { id: string }) {
           </button>
         </div>
       ) : (
-        <div className="toolbar ed-toolbar-calm">
+        <div className={`toolbar ed-toolbar-calm${p.kind === 'song' ? ' has-modes' : ''}`}>
           {/* Left Zone: Back, Inline-Editable Title, Unified Save + Revision History Pill, Undo/Redo */}
           <a className="btn small ghost" href="#/library">
             ← Library
@@ -770,119 +799,146 @@ export function EditorView({ id }: { id: string }) {
 
           <span className="spacer" />
 
-          {/* Right Zone: Search, Zoom, On-Demand Drawer Triggers, Focus Mode */}
-          {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
-            <select
-              aria-label="Canvas zoom"
-              className="ed-zoom-select"
-              value={String(zoom)}
-              onChange={(e) => {
-                const v = e.target.value;
-                setZoom(v === 'fit' ? 'fit' : (Number(v) as 0.5 | 0.75 | 1));
-              }}
-              title="Canvas zoom"
+          {/* Right Zone: Zoom, Find, the drawer triggers (folded into one Panels menu on a narrow window),
+              Full screen. One unit: when the bar does not fit it wraps to a second row, kept at the right. */}
+          <div className="ed-zone-right">
+            {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
+              <select
+                aria-label="Canvas zoom"
+                className="ed-zoom-select"
+                value={String(zoom)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setZoom(v === 'fit' ? 'fit' : (Number(v) as 0.5 | 0.75 | 1));
+                }}
+                title="Canvas zoom"
+              >
+                <option value="fit">Fit</option>
+                <option value="0.5">50%</option>
+                <option value="0.75">75%</option>
+                <option value="1">100%</option>
+              </select>
+            )}
+            <button
+              type="button"
+              className={`small ghost ${finding ? 'on' : ''}`}
+              onClick={() => setFinding((v) => !v)}
+              title="Find and replace (Ctrl+F)"
             >
-              <option value="fit">Fit</option>
-              <option value="0.5">50%</option>
-              <option value="0.75">75%</option>
-              <option value="1">100%</option>
-            </select>
-          )}
-          <button
-            type="button"
-            className={`small ghost ${finding ? 'on' : ''}`}
-            onClick={() => setFinding((v) => !v)}
-            title="Find and replace (Ctrl+F)"
-          >
-            Find…
-          </button>
-          {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
-            <div className="ed-drawer-triggers" role="group" aria-label="Inspector panels">
-              {!drawerOpen ? (
+              Find…
+            </button>
+            {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') &&
+              (!drawerOpen ? (
                 <>
-                  <button
-                    type="button"
-                    className="small ghost"
-                    disabled={!slide}
-                    onClick={() => openDrawerTab('slide')}
-                    title="Slide cues, background, and notes"
+                  <div
+                    className="ed-drawer-triggers ed-panels-wide"
+                    role="group"
+                    aria-label="Inspector panels"
                   >
-                    Slide
-                  </button>
-                  <button
-                    type="button"
-                    className="small ghost"
-                    onClick={() => openDrawerTab('presentation')}
-                    title="Deck theme, arrangements, and PowerPoint settings"
-                  >
-                    Presentation
-                  </button>
-                  <button
-                    type="button"
-                    className="small ghost"
-                    onClick={() => openDrawerTab(obj ? 'object' : 'slide')}
-                    title="Open fine-tune inspector drawer"
-                  >
-                    Tune
-                  </button>
+                    <button
+                      type="button"
+                      className="small ghost"
+                      disabled={!slide}
+                      onClick={() => openDrawerTab('slide')}
+                      title="Slide cues, background, and notes"
+                    >
+                      Slide
+                    </button>
+                    <button
+                      type="button"
+                      className="small ghost"
+                      onClick={() => openDrawerTab('presentation')}
+                      title="Deck theme, arrangements, and PowerPoint settings"
+                    >
+                      Presentation
+                    </button>
+                    <button
+                      type="button"
+                      className="small ghost"
+                      onClick={() => openDrawerTab(obj ? 'object' : 'slide')}
+                      title="Open fine-tune inspector drawer"
+                    >
+                      Tune
+                    </button>
+                  </div>
+                  {/* Below ~1,250 px (~1,450 px with a song's mode switch) the three triggers are one menu
+                      (styles.css), so the bar keeps one calm row on a 1024 px booth PC (e2e/editor-fit.spec.ts). */}
+                  <div className="ed-drawer-triggers ed-panels-menu">
+                    <Menu
+                      label="Panels"
+                      align="right"
+                      items={[
+                        { label: 'Slide', disabled: !slide, onSelect: () => openDrawerTab('slide') },
+                        { label: 'Presentation', onSelect: () => openDrawerTab('presentation') },
+                        { label: 'Tune', onSelect: () => openDrawerTab(obj ? 'object' : 'slide') },
+                      ]}
+                    />
+                  </div>
                 </>
               ) : (
-                <button
-                  type="button"
-                  className="small on"
-                  aria-label="Tune"
-                  aria-pressed={true}
-                  onClick={() => setDrawerOpen(false)}
-                  title="Close fine-tune inspector drawer"
-                >
-                  Tune ✕
-                </button>
-              )}
-            </div>
-          )}
-          <button
-            type="button"
-            className={`small ghost ${focusMode ? 'on' : ''}`}
-            onClick={() => void toggleFullScreen()}
-            title="Toggle full screen canvas (hide side panels)"
-            aria-label={focusMode ? 'Exit Full Screen' : 'Full Screen'}
-          >
-            {focusMode ? 'Exit Full Screen' : '⛶'}
-          </button>
+                <div className="ed-drawer-triggers" role="group" aria-label="Inspector panels">
+                  <button
+                    type="button"
+                    className="small on"
+                    aria-label="Tune"
+                    aria-pressed={true}
+                    onClick={() => setDrawerOpen(false)}
+                    title="Close fine-tune inspector drawer"
+                  >
+                    Tune ✕
+                  </button>
+                </div>
+              ))}
+            <button
+              type="button"
+              className={`small ghost ${focusMode ? 'on' : ''}`}
+              onClick={() => void toggleFullScreen()}
+              title="Toggle full screen canvas (hide side panels)"
+              aria-label={focusMode ? 'Exit Full Screen' : 'Full Screen'}
+            >
+              {focusMode ? 'Exit Full Screen' : '⛶'}
+            </button>
+          </div>
         </div>
       )}
-      {p.kind === 'song' && (songMode ?? (coarse ? 'canvas' : 'reflow')) === 'reflow' ? (
-        <SongReflowEditor
-          presentation={p}
-          readOnly={readOnly}
-          selectedSlideId={slide?.id}
-          onSwitchToCanvas={() => setSongMode('canvas')}
-          banners={
-            <>
-              {readOnly && (
-                <div className="banner" style={{ margin: '8px 16px 0' }} data-locked-banner>
-                  {profile === 'edit'
-                    ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
-                    : 'This presentation is in the live playlist. Editing is locked until End service.'}
-                </div>
-              )}
-              {changedElsewhere && (
-                <div className="banner blue row" style={{ margin: '8px 16px 0' }}>
-                  <span className="grow">
-                    Someone else saved this presentation (rev {libP.rev}) since you opened it. Saving combines
-                    your changes with theirs.
-                  </span>
-                  <button type="button" className="small" onClick={() => void reloadLatest()}>
-                    Reload theirs
-                  </button>
-                  <button type="button" className="small" onClick={() => setDismissedRev(libP.rev)}>
-                    Keep editing
-                  </button>
-                </div>
-              )}
-            </>
-          }
-        />
+      {reflow ? (
+        <ErrorBoundary
+          name="editor Lyric Script"
+          resetKey={p}
+          fallback={(retry) => <PaneError what="The Lyric Script" retry={retry} undo={undo} />}
+        >
+          <SongReflowEditor
+            presentation={p}
+            readOnly={readOnly}
+            selectedSlideId={slide?.id}
+            onSwitchToCanvas={() => setSongMode('canvas')}
+            banners={
+              <>
+                {readOnly && (
+                  <div className="banner" style={{ margin: '8px 16px 0' }} data-locked-banner>
+                    {profile === 'edit'
+                      ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
+                      : 'This presentation is in the live playlist. Editing is locked until End service.'}
+                  </div>
+                )}
+                {changedElsewhere && (
+                  <div className="banner blue row" style={{ margin: '8px 16px 0' }}>
+                    <span className="grow">
+                      Someone else saved this presentation (rev {libP.rev}) since you opened it. Saving
+                      combines your changes with theirs.
+                    </span>
+                    <button type="button" className="small" onClick={() => void reloadLatest()}>
+                      Reload theirs
+                    </button>
+                    <button type="button" className="small" onClick={() => setDismissedRev(libP.rev)}>
+                      Keep editing
+                    </button>
+                  </div>
+                )}
+              </>
+            }
+          />
+        </ErrorBoundary>
       ) : (
         <>
           <SlidesPanel
@@ -891,12 +947,27 @@ export function EditorView({ id }: { id: string }) {
             onSwitchToReflow={p.kind === 'song' ? () => setSongMode('reflow') : undefined}
           />
           <div className="stagewrap">
+            {/* Docked in the stage pane: it never covers the slide list or the open Tune drawer's tabs. */}
+            {finding && findDocked && (
+              <FindReplaceDialog readOnly={readOnly} onClose={() => setFinding(false)} />
+            )}
             {readOnly && (
               <div className="banner" style={{ margin: 8 }} data-locked-banner>
                 {profile === 'edit'
                   ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
                   : 'This presentation is in the live playlist. Editing is locked until End service.'}
               </div>
+            )}
+            {loopDeck && !keepLoop && (
+              <LoopDeckBanner
+                readOnly={readOnly}
+                onTreatAsSlides={() => change(treatAsSlides, 'kind')}
+                onReport={() => {
+                  setTab('presentation');
+                  setDrawerOpen(true);
+                }}
+                onKeep={() => setKeepLoop(true)}
+              />
             )}
             {changedElsewhere && (
               <div className="banner blue row" style={{ margin: 8 }}>
@@ -939,36 +1010,45 @@ export function EditorView({ id }: { id: string }) {
               </div>
             )}
             {slide ? (
-              activeLensLook ? (
-                <SingleLookStagePreview
-                  look={activeLensLook}
-                  presentation={p}
-                  slideId={slide.id}
-                  onBackToCanvas={() => setStageLens('canvas')}
-                />
-              ) : (
-                <SlideCanvas
-                  slide={slide}
-                  backgroundMediaId={bgId}
-                  media={media}
-                  readOnly={readOnly}
-                  zoom={zoom}
-                  avoidTopRight={finding ? { w: 344, h: 430 } : undefined}
-                  onEditText={editText}
-                  objectTools={objectTools}
-                  hasExternalTextEditor={showProps && tab === 'object'}
-                  floatingBar={
-                    !coarse && obj && !(drawerOpen && tab === 'object') ? (
-                      <FloatingContextBar
-                        readOnly={readOnly}
-                        drawerOpen={drawerOpen && tab === 'object'}
-                        onToggleDrawer={() => openDrawerTab('object')}
-                      />
-                    ) : undefined
-                  }
-                  slideRect={p.source?.native?.slideRect}
-                />
-              )
+              <ErrorBoundary
+                name="editor stage"
+                resetKey={slide}
+                fallback={(retry) => <PaneError what="This slide" retry={retry} undo={undo} />}
+              >
+                {activeLensLook ? (
+                  <SingleLookStagePreview
+                    look={activeLensLook}
+                    presentation={p}
+                    slideId={slide.id}
+                    onBackToCanvas={() => setStageLens('canvas')}
+                  />
+                ) : (
+                  <SlideCanvas
+                    slide={slide}
+                    backgroundMediaId={bgId}
+                    media={media}
+                    readOnly={readOnly}
+                    zoom={zoom}
+                    avoidTopRight={finding ? { w: 344, h: 430 } : undefined}
+                    onEditText={editText}
+                    objectTools={objectTools}
+                    hasExternalTextEditor={showProps && tab === 'object'}
+                    floatingBar={
+                      !coarse && obj && !(drawerOpen && tab === 'object') ? (
+                        // Its own boundary: an object the bar cannot read costs the bar, never the canvas.
+                        <ErrorBoundary name="editor floating bar" resetKey={obj} fallback={() => null}>
+                          <FloatingContextBar
+                            readOnly={readOnly}
+                            drawerOpen={drawerOpen && tab === 'object'}
+                            onToggleDrawer={() => openDrawerTab('object')}
+                          />
+                        </ErrorBoundary>
+                      ) : undefined
+                    }
+                    slideRect={p.source?.native?.slideRect}
+                  />
+                )}
+              </ErrorBoundary>
             ) : (
               <div className="center muted">Add a slide to start.</div>
             )}
@@ -1020,12 +1100,18 @@ export function EditorView({ id }: { id: string }) {
 
             {looksShown && (
               <div className="ed-looks" data-looks-tray>
-                <LookPreviews
-                  presentation={p}
-                  slideId={slide?.id}
-                  compact
-                  onSelectLook={(lookId) => setStageLens(stageLens === lookId ? 'canvas' : lookId)}
-                />
+                <ErrorBoundary
+                  name="editor 4-screen tray"
+                  resetKey={slide}
+                  fallback={(retry) => <PaneError what="The 4-screen tray" retry={retry} />}
+                >
+                  <LookPreviews
+                    presentation={p}
+                    slideId={slide?.id}
+                    compact
+                    onSelectLook={(lookId) => setStageLens(stageLens === lookId ? 'canvas' : lookId)}
+                  />
+                </ErrorBoundary>
               </div>
             )}
           </div>
@@ -1069,32 +1155,35 @@ export function EditorView({ id }: { id: string }) {
                   </button>
                 )}
               </div>
-              {tab === 'object' && obj && <ObjectPanel o={obj} readOnly={readOnly} />}
-              {tab === 'object' && !obj && <span className="muted">Select an object on the slide.</span>}
-              {tab === 'slide' && slide && <SlidePanel slide={slide} p={p} readOnly={readOnly} />}
-              {tab === 'presentation' && <PresentationPanel p={p} readOnly={readOnly} />}
+              <ErrorBoundary
+                key={`${tab}:${ed.objectId ?? ''}`}
+                name={`editor ${tab} panel`}
+                resetKey={slide}
+                fallback={(retry) => <PaneError what="This panel" retry={retry} undo={undo} />}
+              >
+                {tab === 'object' && obj && <ObjectPanel o={obj} readOnly={readOnly} />}
+                {tab === 'object' && !obj && <span className="muted">Select an object on the slide.</span>}
+                {tab === 'slide' && slide && <SlidePanel slide={slide} p={p} readOnly={readOnly} />}
+                {tab === 'presentation' && <PresentationPanel p={p} readOnly={readOnly} />}
+              </ErrorBoundary>
             </aside>
           )}
         </>
       )}
       {revisions && <RevisionsDialog id={p.id} readOnly={readOnly} onClose={() => setRevisions(false)} />}
-      {finding && <FindReplaceDialog readOnly={readOnly} onClose={() => setFinding(false)} />}
+      {finding && !findDocked && <FindReplaceDialog readOnly={readOnly} onClose={() => setFinding(false)} />}
       {bgPick && slide && !readOnly && (
         <MediaPickerDialog
           title="Choose slide background"
           kinds={['image', 'video']}
           backgroundsFirst
+          needsSize
           onClose={() => setBgPick(false)}
           onPick={(m) => {
-            change((q) => ({
-              ...q,
-              sections: q.sections.map((sec) => ({
-                ...sec,
-                slides: sec.slides.map((sl) =>
-                  sl.id === slide.id ? { ...sl, backgroundMediaId: m.id } : sl,
-                ),
-              })),
-            }));
+            // The Slide panel's Replace… for this slide (one undo step): an imported slide's bottom
+            // background shapes go, its background picture is re-cropped to the new one, a video becomes
+            // the slide's motion background (writing backgroundMediaId alone left them drawn over it).
+            replaceBackgroundWith(slide.id, m, 'slide');
             setBgPick(false);
           }}
         />
@@ -1105,18 +1194,12 @@ export function EditorView({ id }: { id: string }) {
           kinds={['image']}
           onClose={() => setImagePick(false)}
           onPick={(m) => {
-            const w = m.width && m.height ? Math.min(1920, m.width) : 960;
-            const h = m.width && m.height ? (w * m.height) / m.width : 540;
-            add(
-              newImage(m.id, {
-                x: (1920 - w) / 2,
-                y: Math.max(0, (1080 - h) / 2),
-                w,
-                h: Math.min(1080, h),
-                rotation: 0,
-              }),
-            );
             setImagePick(false);
+            // An SVG starts at the size it declares (its media size is its still's, `insertBox`).
+            void svgDeclared(m).then((declared) => {
+              if (readOnlyNow.current) return;
+              add(newImage(m.id, insertBox(m, declared)));
+            });
           }}
         />
       )}
@@ -1127,7 +1210,7 @@ export function EditorView({ id }: { id: string }) {
           onClose={() => setVideoPick(false)}
           onPick={(m) => {
             setVideoPick(false);
-            if (!slide || readOnly) return;
+            if (!slide || readOnly || !mayAdd(slide.id, newVideo(m))) return;
             let added: ReturnType<typeof addVideo> | undefined;
             change((q) => {
               added = addVideo(q, slide.id, m);
@@ -1148,4 +1231,5 @@ export function EditorView({ id }: { id: string }) {
       {ed.conflict && <ConflictDialog />}
     </div>
   );
+  return <DeckSwatchesSource.Provider value={swatchSource}>{page}</DeckSwatchesSource.Provider>;
 }

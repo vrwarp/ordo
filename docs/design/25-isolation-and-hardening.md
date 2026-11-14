@@ -102,7 +102,7 @@ thread renders DOM from a view model. Low priority: the stage is not an audience
 supervisor (tini + a small Node parent)
   ├── live process: WebSocket, live service, journal, time       (restart budget: 1 s, state from snapshot)
   └── library process: HTTP API, SQLite, media jobs, imports
-        ├── worker_threads pool: ProPresenter decode, RTF, PPTX XML, font parsing
+        ├── worker_threads pool: ProPresenter decode, RTF, PPTX XML, a browser's PPTX scene check, font parsing
         └── child processes: ffmpeg, pdftoppm, soffice (timeouts, memory limits, cgroup)
 ```
 
@@ -113,7 +113,12 @@ supervisor (tini + a small Node parent)
   process is the front door on the hub port and streams everything it does not answer itself to the
   library process over loopback, so DSM needs no extra rules (design/12 "Processes").
 - **Worker threads for CPU work** (new, partly in the current fix pass): no request handler decodes a
-  library or parses a PPTX on the event loop.
+  library or parses a PPTX on the event loop, and no import job parses the scene a browser sent with a deck
+  there (`pptx-client-scene`, design/27 §12). The operator parses a PowerPoint it imports in a Web Worker of
+  its own with a deadline, never on the thread that runs GO, and not at all while a playlist is live.
+- **Untrusted output of a client**: a scene parsed in the browser is input like the deck itself: bounded
+  (32 MB), checked on the pool (schema, part names, shape files re-hashed) and refused, never trusted, so the
+  hub parses the deck itself when in doubt (design/21).
 - **Restart budget**: the supervisor restarts a crashed child within a second, at most five times a minute,
   then stays down and reports. A library process past its budget stays down (`/health` says `library:
   failed`, library calls answer 503) while the service runs on; a live process past its budget is not left
@@ -153,7 +158,8 @@ visible indicator for the operator, and the system continues. Nothing retries wi
   armed is live+1 or undefined, the held keys match the plan). A failed assertion triggers resync, then
   restart, never silent drift.
 - **Fuzzing**: property tests already cover the reducer; extend them to the lyric parser, the ProPresenter
-  decoder (random bytes and mutated fixtures), the RTF reader, the PPTX extractor and the render planner
+  decoder (random bytes and mutated fixtures), the RTF reader, the PPTX extractor, the browser's zip reader
+  and the hub's check of a client scene, and the render planner
   (random slides within and beyond the clamps). The acceptance criterion is "never throws, output within
   bounds".
 - **Chaos in end-to-end tests**: kill a worker, corrupt an OPFS file, send a malformed delta, freeze a

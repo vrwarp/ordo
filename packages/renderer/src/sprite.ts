@@ -19,15 +19,22 @@ import { drawnBounds, placedBounds } from './geom/bounds.ts';
 import { hasShapeExtras, outlineOf } from './geom/outline.ts';
 import { geomAwaited } from './geom/stored.ts';
 import { withinDrawBudget } from './geombudget.ts';
-import { sourceSize } from './picture.ts';
+import { pictureLooksRegistered, sourceSize } from './picture.ts';
 import type { PropsModel } from './props.ts';
 import { lowerThirdStyle } from './raster.ts';
 import { rotatedBounds } from './scene.ts';
-import { clampShapeObject, shapeGeometry } from './shape.ts';
+import { clampShapeObject, look3dRegistered, shapeDrawerReach, shapeGeometry } from './shape.ts';
 import { hasStrongRtl } from './text/bidi.ts';
 import { currentFontEnv } from './text/fonts.ts';
 import { measurerFor } from './text/measure.ts';
-import { type PaintPlan, paintPlan } from './text/paint.ts';
+import {
+  DIRECT_TARGET,
+  faceTargetFor,
+  glyphPainterFor,
+  PLAIN_PAINTER,
+  type PaintPlan,
+  paintPlan,
+} from './text/paint.ts';
 import {
   BAND_MIN_FONT_SCALE,
   type RichLayoutOptions,
@@ -36,7 +43,7 @@ import {
   isRichText,
   layoutRich,
 } from './text/rich.ts';
-import type { Measurer } from './text/types.ts';
+import type { Measurer, RichLayout } from './text/types.ts';
 import { bandSource, baselineOffset, layoutText, lyricTextFor } from './text2d.ts';
 
 /**
@@ -54,8 +61,13 @@ import { bandSource, baselineOffset, layoutText, lyricTextFor } from './text2d.t
  * measure (`TextMetrics.actualBoundingBox*`: legacy lines carry theirs in the layout, rich segments are
  * measured once per paint plan), which is what bounds glyph parts that are shapes of their own beyond the
  * line box (tone marks stacked over a circumflex on a capital, Thai marks above a vowel, with tight line
- * spacing). Anything this cannot bound (an object with fields it does not know, a slide's PowerPoint
- * picture, an opaque logo) reaches the whole frame, and the layer stays full-frame. `drawSprite` draws into
+ * spacing). M9's fields are known (`KNOWN`): a table, chart or decoration reaches where its registered drawer
+ * says (`shapeDrawerReach`; the table's `tableReach`), else as its legacy shape; text with a warp, vertical
+ * writing, a centred block or a 3-D look, and a picture with a 3-D look or vector fonts, reach as their plain
+ * text and box while no hook draws them. Anything this cannot bound (an object with fields it does not know,
+ * text a registered glyph painter or face target draws, a picture or shape whose registered 3-D look may
+ * reach past it, a drawer registered without a reach, a slide's PowerPoint picture, an opaque logo) reaches
+ * the whole frame, and the layer stays full-frame. `drawSprite` draws into
  * a surface of the box (with a margin) and checks that nothing touches the surface's edges where they are
  * not the frame's: if anything does, the reach was short, and the layer is drawn again full-frame. The edge
  * ring sees only drawing that crosses it, never a shape that lies wholly beyond it, so the reach itself must
@@ -97,7 +109,24 @@ const FRAME: Box = { x: 0, y: 0, w: LOGICAL_WIDTH, h: LOGICAL_HEIGHT, rotation: 
 
 /** Fields of the objects whose reach is known; an object with any other field reaches the whole frame. */
 const KNOWN: Record<SlideObject['type'], ReadonlySet<string>> = {
-  text: new Set(['id', 'type', 'box', 'text', 'style', 'opacity', 'runs', 'paras', 'origin', 'locked']),
+  text: new Set([
+    'id',
+    'type',
+    'box',
+    'text',
+    'style',
+    'opacity',
+    'runs',
+    'paras',
+    'origin',
+    'locked',
+    // M9 (`RICH_OBJECT_KEYS`): drawn by the rich engine; while a warp or upright painter or the 3-D face
+    // target applies, the object reaches the whole frame (`textHooked`).
+    'warp',
+    'writing',
+    'centerBlock',
+    'look3d',
+  ]),
   image: new Set([
     'id',
     'type',
@@ -115,6 +144,10 @@ const KNOWN: Record<SlideObject['type'], ReadonlySet<string>> = {
     'softEdge',
     'origin',
     'locked',
+    // M9: a picture's 3-D look reaches past its box only through a registered target extension or post step
+    // (`pictureLooksRegistered`); a vector picture's families change nothing of where it is drawn.
+    'look3d',
+    'vectorFonts',
   ]),
   shape: new Set([
     'id',
@@ -139,6 +172,12 @@ const KNOWN: Record<SlideObject['type'], ReadonlySet<string>> = {
     'softEdge',
     'origin',
     'locked',
+    // M9: a table, chart or decoration reaches where its registered drawer says (`shapeDrawerReach`), its
+    // geometry or legacy shape until one is registered; a 3-D look with a registered resolver, the frame.
+    'table',
+    'chart',
+    'decor',
+    'look3d',
   ]),
 };
 
@@ -151,8 +190,11 @@ function union(a: Reach, b: Reach): Reach {
   return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
 }
 
-/** Axis-aligned bounds of [x0, x1] x [y0, y1] turned `deg` clockwise about (cx, cy), grown by `m`. */
-function turned(x0: number, y0: number, x1: number, y1: number, box: Box, m: number): Reach {
+/**
+ * Axis-aligned bounds of [x0, x1] x [y0, y1] (logical px, slide space) turned by `box.rotation` clockwise
+ * about the box's centre, grown by `m`.
+ */
+export function turned(x0: number, y0: number, x1: number, y1: number, box: Box, m: number): Reach {
   const deg = num(box.rotation, -36_000, 36_000, 0);
   if (!deg) return { x: x0 - m, y: y0 - m, w: x1 - x0 + 2 * m, h: y1 - y0 + 2 * m };
   const cx = box.x + box.w / 2;
@@ -249,10 +291,33 @@ export function legacyTextReach(
  */
 export function richTextReach(ctx: Ctx2D, o: TextObject, opts?: RichLayoutOptions): Reach {
   const c = clampTextObject(o);
+  if (textHooked(c)) return null;
   const m = measurerFor(ctx);
   const l = layoutRich(m, c, currentFontEnv(), opts);
+  const k = richLayoutBounds(m, c, l);
+  if (!k) return EMPTY;
+  return turned(k.x0, k.y0, k.x1, k.y1, c.box, k.fx);
+}
+
+/**
+ * Whether a text object is painted by a registered hook (M9 plan decision 6): a warp or upright glyph
+ * painter, or the 3-D face sprite target. They lay out and draw glyphs their own way, so the plain paint
+ * plan does not bound them: such an object reaches the whole frame.
+ */
+export function textHooked(o: TextObject): boolean {
+  return glyphPainterFor(o) !== PLAIN_PAINTER || faceTargetFor(o) !== DIRECT_TARGET;
+}
+
+/** Unturned bounds (logical px, the layout's own space) and the largest effect reach. */
+export type RichBounds = { x0: number; y0: number; x1: number; y1: number; fx: number };
+
+/**
+ * Where a rich layout `l` of the clamped text object `c` draws with the plain painter, unturned, in the
+ * layout's own space (`richTextReach`'s bounds before the box's rotation), and its largest effect; null when
+ * it draws nothing. Table cells (`table/reach.ts`) place it at their corners.
+ */
+export function richLayoutBounds(m: Measurer, c: TextObject, l: RichLayout): RichBounds | null {
   const plan = paintPlan(c, l);
-  const b = c.box;
   let x0 = Number.POSITIVE_INFINITY;
   let y0 = Number.POSITIVE_INFINITY;
   let x1 = Number.NEGATIVE_INFINITY;
@@ -292,7 +357,7 @@ export function richTextReach(ctx: Ctx2D, o: TextObject, opts?: RichLayoutOption
   for (const g of plan.bullets) fx = Math.max(fx, effectReach(g));
   for (const d of plan.decorations) fx = Math.max(fx, effectReach(d));
   if (plan.glow) fx = Math.max(fx, 2 * num(plan.glow.radius, 0, CLAMP.maxEffectPx, 0));
-  if (!(x1 >= x0 && y1 >= y0)) return EMPTY;
+  if (!(x1 >= x0 && y1 >= y0)) return null;
   const over = em * (OVERHANG_EM + shift);
   x0 -= over;
   y0 -= over;
@@ -305,7 +370,7 @@ export function richTextReach(ctx: Ctx2D, o: TextObject, opts?: RichLayoutOption
     x1 = Math.max(x1, ink.x1);
     y1 = Math.max(y1, ink.y1);
   }
-  return turned(x0, y0, x1, y1, b, fx);
+  return { x0, y0, x1, y1, fx };
 }
 
 type InkBox = { x0: number; y0: number; x1: number; y1: number };
@@ -356,18 +421,28 @@ export function objectReach(ctx: Ctx2D, o: SlideObject, scale: number): Reach {
     if (isRichText(o) || isRichStyle(o.style)) return richTextReach(ctx, o);
     return legacyTextReach(ctx, o.text, o.style, o.box, scale, false);
   }
-  if (o.type === 'shape' && hasShapeExtras(o)) return geomShapeReach(o, scale);
+  if (o.type === 'shape') {
+    // `drawShapeObject`'s order: a registered table, chart or decoration drawer, then the geometry (with a
+    // 3-D look when its resolver is registered), then the legacy shape.
+    const drawn = shapeDrawerReach(ctx, o);
+    if (drawn !== undefined) return drawn;
+    if (o.look3d !== undefined && look3dRegistered()) return null;
+    if (hasShapeExtras(o)) return geomShapeReach(o, scale);
+  }
   if (o.type === 'image') {
+    if (o.look3d !== undefined && pictureLooksRegistered()) return null;
     const r = rotatedBounds(clampBox(o.box));
     let x0 = r.x;
     let y0 = r.y;
     let x1 = r.x + r.w;
     let y1 = r.y + r.h;
-    if (o.shadow) {
+    // A shadow is the picture's alpha blurred and offset as a shape's (`picture-effects.ts`, `drawEffected`:
+    // 3σ past it, σ = blur/√6); a soft edge only fades the picture inside its box.
+    if (o.shadow && num(o.shadow.color?.a, 0, 1, 0) > 0) {
       const dx = num(o.shadow.dx, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0);
       const dy = num(o.shadow.dy, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0);
       const blur = num(o.shadow.blur, 0, CLAMP.maxEffectPx, 0);
-      const pad = 2 * blur;
+      const pad = 3 * blur * STACK_BLUR_SIGMA + BLUR_SLACK_PX / num(scale, 0.01, 8, 1) + INK_SLACK;
       x0 = Math.min(x0, r.x + dx - pad);
       y0 = Math.min(y0, r.y + dy - pad);
       x1 = Math.max(x1, r.x + r.w + dx + pad);

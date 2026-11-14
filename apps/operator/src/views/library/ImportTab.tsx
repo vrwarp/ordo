@@ -1,19 +1,24 @@
 import { api, upload } from '@ordo/client';
 import type { Presentation } from '@ordo/domain';
-import type { Job } from '@ordo/protocol';
+import type { HubCapabilities, Job } from '@ordo/protocol';
 import { useEffect, useState } from 'react';
+import { useHubCaps } from '../../lib/hubCaps.ts';
 import {
+  documentAccept,
   documentFields,
+  hubHasLibreOffice,
   importJobTitle,
   isImportJob,
-  isPptxName,
   PPTX_NATIVE_JOB,
   type PptxImportChoice,
+  picturesOffered,
   readImportChoice,
   writeImportChoice,
 } from '../../lib/pptxImport.ts';
 import { jobResultPresentationId, useJob } from '../../services/jobs.ts';
+import { clientScene } from '../../services/pptxParse.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
+import { useLive } from '../../state/live.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { navigate } from '../../useRoute.ts';
 import { DropZone } from './MediaTab.tsx';
@@ -76,12 +81,19 @@ const storage = () => (typeof localStorage === 'undefined' ? undefined : localSt
 /**
  * How PowerPoint files are imported (design/27 §2, M3): 'Editable (recommended)', the native import, or
  * 'Pictures (LibreOffice)'; 'Extend plain backgrounds to 16:9' for the native import. Remembered per device.
+ * 'Pictures (LibreOffice)' is offered only by a hub with LibreOffice (design/27 M9, `caps`; undefined: not
+ * known yet); a choice remembered from another hub then imports as editable slides, and the screen says so.
  */
 export function PptxImportChoices(props: {
   value: PptxImportChoice;
   onChange: (c: PptxImportChoice) => void;
+  caps?: HubCapabilities;
 }) {
+  // One rule with the upload (`documentFields`): unknown caps offer no pictures.
+  const offered = picturesOffered(props.caps);
   const c = props.value;
+  // A remembered 'Pictures' choice where the hub cannot make them: editable slides.
+  const mode = c.mode === 'libreoffice' && !offered ? 'native' : c.mode;
   const set = (patch: Partial<PptxImportChoice>) => props.onChange({ ...c, ...patch });
   return (
     <fieldset className="col" style={{ gap: 6, border: 0, margin: 0, padding: 0 }} data-pptx-import-mode>
@@ -93,38 +105,46 @@ export function PptxImportChoices(props: {
           type="radio"
           name="pptx-import-mode"
           value="native"
-          checked={c.mode === 'native'}
+          checked={mode === 'native'}
           onChange={() => set({ mode: 'native' })}
         />
         <span className="col" style={{ gap: 2 }}>
           <span>Editable (recommended)</span>
           <span className="muted small">
-            Text, pictures and shapes become objects you can edit. What ordo cannot draw (a chart, SmartArt,
-            3D) becomes a picture on its slide.
+            {props.caps && !props.caps.pptx.art
+              ? 'Text, pictures, shapes, charts, SmartArt, 3D and WordArt become objects ordo draws; anything it cannot draw is listed on the import card.'
+              : 'Text, pictures and shapes become objects you can edit. What ordo cannot draw (a chart, SmartArt, 3D) becomes a picture on its slide.'}
           </span>
         </span>
       </label>
-      <label className="check" style={{ alignItems: 'flex-start' }}>
-        <input
-          type="radio"
-          name="pptx-import-mode"
-          value="libreoffice"
-          checked={c.mode === 'libreoffice'}
-          onChange={() => set({ mode: 'libreoffice' })}
-        />
-        <span className="col" style={{ gap: 2 }}>
-          <span>Pictures (LibreOffice)</span>
-          <span className="muted small">
-            Each slide becomes one picture, as LibreOffice draws it. Its text can be made editable later,
-            slide by slide.
+      {offered && (
+        <label className="check" style={{ alignItems: 'flex-start' }}>
+          <input
+            type="radio"
+            name="pptx-import-mode"
+            value="libreoffice"
+            checked={mode === 'libreoffice'}
+            onChange={() => set({ mode: 'libreoffice' })}
+          />
+          <span className="col" style={{ gap: 2 }}>
+            <span>Pictures (LibreOffice)</span>
+            <span className="muted small">
+              Each slide becomes one picture, as LibreOffice draws it. Its text can be made editable later,
+              slide by slide.
+            </span>
           </span>
+        </label>
+      )}
+      {props.caps && !offered && c.mode === 'libreoffice' && (
+        <span className="muted small" data-no-libreoffice>
+          This hub has no LibreOffice, so PowerPoint files are imported as editable slides.
         </span>
-      </label>
+      )}
       <label className="check" style={{ alignItems: 'flex-start' }}>
         <input
           type="checkbox"
           checked={c.extendBackgrounds}
-          disabled={c.mode !== 'native'}
+          disabled={mode !== 'native'}
           onChange={(e) => set({ extendBackgrounds: e.target.checked })}
         />
         <span className="col" style={{ gap: 2 }}>
@@ -140,6 +160,7 @@ export function PptxImportChoices(props: {
 
 /** ProPresenter 7, SongSelect and PPTX/PDF imports with job progress and logs (prd/05, design/20). */
 export function ImportTab() {
+  const caps = useHubCaps();
   const [jobs, setJobs] = useState<Started[]>([]);
   const [choice, setChoice] = useState<PptxImportChoice>(() => readImportChoice(storage()));
   const [recent, setRecent] = useState<Job[]>([]);
@@ -147,6 +168,8 @@ export function ImportTab() {
   const [pasted, setPasted] = useState('');
   const [progress, setProgress] = useState<number>();
   const jobMap = useLibrary((s) => s.data.jobs);
+  const fonts = useLibrary((s) => s.data.fonts);
+  const live = useLive((s) => s.state.mode === 'live');
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   useEffect(() => {
     void api<Job[] | { jobs: Job[] }>('/jobs')
@@ -206,23 +229,25 @@ export function ImportTab() {
   const documents = async (files: File[]) => {
     for (const f of files) {
       const fd = new FormData();
-      for (const [k, v] of documentFields(f.name, choice)) fd.append(k, v);
+      const fields = documentFields(f.name, choice, caps);
+      for (const [k, v] of fields) fd.append(k, v);
       try {
         setProgress(0);
-        const clientNative = isPptxName(f.name) && choice.mode === 'native';
+        // Parsed in the import worker whenever the hub imports it natively (a remembered 'Pictures' choice on a
+        // hub without LibreOffice too), for the LibreOffice the hub has or lacks (design/27 M9); never while a
+        // playlist is live, and on any failure or timeout the hub parses it (`services/pptxParse.ts`).
+        const clientNative = fields.some(([k, v]) => k === 'renderer' && v === 'native');
         if (clientNative) {
-          const { importPptxClient } = await import('@ordo/importers');
-          const parsed = await importPptxClient(
-            f,
-            f.name,
-            { extendBackgrounds: choice.extendBackgrounds },
-            (pct) => setProgress(pct * 0.5),
-          );
-          fd.append(
-            'clientScene',
-            new Blob([JSON.stringify(parsed.clientScene)], { type: 'application/json' }),
-            'scene.json',
-          );
+          const scene = await clientScene({
+            file: f,
+            name: f.name,
+            extendBackgrounds: choice.extendBackgrounds,
+            libreoffice: hubHasLibreOffice(caps),
+            fonts,
+            live,
+            onProgress: (pct) => setProgress(pct * 0.5),
+          });
+          if (scene) fd.append('clientScene', scene, 'scene.json');
         }
         fd.append('file', f, f.name);
         started(
@@ -299,21 +324,28 @@ export function ImportTab() {
           <div className="card col">
             <h3>PowerPoint and PDF</h3>
             <span className="muted small">
-              PowerPoint slides become slides you can edit, or one picture each if you prefer. PDF pages
-              become picture slides at 1920×1080.
+              PowerPoint slides (.pptx, .ppsx, .potx, .pptm) become slides you can edit
+              {caps?.pptx.pictures === false ? '' : ', or one picture each if you prefer'}. PDF pages become
+              picture slides at 1920×1080.
             </span>
+            {caps && !caps.pdf && (
+              <span className="muted small" data-no-pdf>
+                PDF import needs poppler-utils on the hub.
+              </span>
+            )}
             <PptxImportChoices
               value={choice}
+              caps={caps}
               onChange={(c) => {
                 setChoice(c);
                 writeImportChoice(storage(), c);
               }}
             />
             <DropZone
-              accept=".pptx,.pdf"
-              touchAccept=".pptx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-              label="Drop .pptx or .pdf files"
-              touchLabel="Choose .pptx or .pdf files"
+              accept={documentAccept(caps)}
+              touchAccept={`${documentAccept(caps)},application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation`}
+              label={caps && !caps.pdf ? 'Drop PowerPoint files' : 'Drop PowerPoint or PDF files'}
+              touchLabel={caps && !caps.pdf ? 'Choose PowerPoint files' : 'Choose PowerPoint or PDF files'}
               onFiles={(f) => void documents(f)}
             />
           </div>
