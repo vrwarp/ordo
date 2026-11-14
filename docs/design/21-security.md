@@ -25,7 +25,13 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
 - Remembered device: a checkbox sets a second long-lived cookie bound to the user agent
   hash; it only extends the session lifetime, it does not skip the PIN.
 - Rate limiting: a token bucket per forwarded IP (5 per 15 min) and a global bucket (50
-  per 15 min) on `/auth/pin`. Lockouts are logged with the IP.
+  per 15 min) on `/auth/pin`. Lockouts are logged with the IP. Since design/28 P0 the global bucket counts
+  failures from public addresses only (`auth_global_failures`) and never locks out a LAN or loopback address
+  (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, ::1, fc00::/7, fe80::/10; carrier-grade NAT 100.64/10 is
+  public), so a scanner on the public name cannot lock out the venue PC or a phone on church Wi-Fi. The 429
+  carries `scope`: `network` (this address's bucket) or `everyone` (the global one). The trade-off: a guest on
+  the LAN rotating addresses gets more tries than before, still 5 per address per 15 minutes, each an Argon2
+  verification.
 
 ## Authorisation
 

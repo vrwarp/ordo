@@ -5,6 +5,7 @@ import type { SessionCap } from '@ordo/protocol';
 import type { Logger } from 'pino';
 import type { DB } from './db.ts';
 import { badRequest, HttpError } from './errors.ts';
+import { isPrivateAddress } from './net.ts';
 
 /** What Auth reads besides the sessions table: the PIN hashes and the output tokens. The Library fits. */
 export type AuthStore = {
@@ -143,7 +144,11 @@ export class Auth {
   }
 
   // ---- rate limit ----
-  /** Throws 429 when the IP or the hub as a whole is locked out. */
+  /**
+   * Throws 429 when the IP or the hub as a whole is locked out. The hub-wide bucket counts failures from public
+   * addresses only and never locks out a LAN address (design/28 §4): a scanner on the public name cannot lock
+   * out the venue PC; each LAN address keeps its own bucket. The 429 says which (`scope`).
+   */
   checkRate(ip: string, now = Date.now()): void {
     const since = now - RATE_WINDOW_MS;
     const ipFails = this.db
@@ -151,17 +156,22 @@ export class Auth {
       .all(ip, since) as { at: number }[];
     if (ipFails.length >= RATE_PER_IP) {
       const until = ipFails[0]!.at + RATE_WINDOW_MS;
-      throw lockout(until, now);
+      throw lockout(until, now, 'network');
     }
+    if (isPrivateAddress(ip)) return;
     const global = this.db
-      .prepare(`SELECT COUNT(*) n, MAX(at) last FROM auth_attempts WHERE ok = 0 AND at > ?`)
+      .prepare(`SELECT COUNT(*) n, MAX(at) last FROM auth_global_failures WHERE at > ?`)
       .get(since) as { n: number; last: number | null };
-    if (global.n >= RATE_GLOBAL) throw lockout((global.last ?? now) + RATE_WINDOW_MS, now);
+    if (global.n >= RATE_GLOBAL) throw lockout((global.last ?? now) + RATE_WINDOW_MS, now, 'everyone');
   }
 
   recordAttempt(ip: string, ok: boolean, now = Date.now()): void {
     this.db.prepare(`INSERT INTO auth_attempts (ip, at, ok) VALUES (?, ?, ?)`).run(ip, now, ok ? 1 : 0);
     this.db.prepare(`DELETE FROM auth_attempts WHERE at < ?`).run(now - 7 * 86400_000);
+    if (!ok && !isPrivateAddress(ip)) {
+      this.db.prepare(`INSERT INTO auth_global_failures (at) VALUES (?)`).run(now);
+      this.db.prepare(`DELETE FROM auth_global_failures WHERE at < ?`).run(now - 7 * 86400_000);
+    }
     if (!ok) {
       const n = (
         this.db

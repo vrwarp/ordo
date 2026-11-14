@@ -22,7 +22,8 @@ must hold on a public address from M1.
   renewed on activity) and ends when the PIN it signed in with changes. The cap protects the phone's cookie,
   not the PIN: anyone who knows the operate PIN can still use it at a computer.
 - Rate limiting: 5 failed PIN attempts per IP per 15 minutes, then a lockout of 15 minutes
-  with a clear message. Attempts are logged.
+  with a clear message. Attempts are logged. The hub-wide limit (50 per 15 minutes) counts only attempts from
+  the internet and never locks out a device on the church network (design/28 P0).
 - Phones (design/28 P0): Settings → PINs has "Phones are used during services", off by default. Phones can
   sign in either way (they look at everything and make small changes, never run a service); on, videos and
   other slow jobs uploaded during a service wait until it ends, and the hub accepts changes only from ordo

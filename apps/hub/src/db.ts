@@ -181,6 +181,16 @@ CREATE INDEX IF NOT EXISTS capped_sessions_expiry ON capped_sessions(expires_at)
 CREATE INDEX IF NOT EXISTS capped_sessions_pin ON capped_sessions(pin);
 `,
   },
+  {
+    version: 12,
+    name: 'auth-global-failures',
+    // The hub-wide PIN bucket's own rows (design/28 §4): failures from public addresses only, so a scanner on
+    // the public name can no longer lock out the venue PC or a phone on church Wi-Fi.
+    sql: `
+CREATE TABLE IF NOT EXISTS auth_global_failures (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS auth_global_failures_at ON auth_global_failures(at);
+`,
+  },
 ];
 
 /**
