@@ -44,9 +44,12 @@ confirmation: two dispatches within 2 s, or a surface marks the control as a hol
 Key map `{ combo: Action }` from settings, defaults in [prd/02](../prd/02-operator.md).
 Combos are normalised (`Ctrl+Shift+L`). The driver skips a key event whose default is already
 prevented: an open dialog takes Escape that way, so closing it never also clears the slide
-([design/15](15-operator-app.md) "Keyboard"). It takes a `blocked()` option and does nothing at all
-(default included) while it says so: the operator blocks every live key while a modal dialog is open, so
-Space on a dialog's focused button presses the button. The Stream Deck and MIDI drivers are not blocked.
+([design/15](15-operator-app.md) "Keyboard"). It takes a `blocked()` option and acts on no key while it
+says so: the operator blocks every live key while a modal dialog is open. A key pressed inside a
+`data-keys="off"` element (the dialog) is left alone, default included, so Space on a dialog's focused button
+presses the button; one that reached the page behind it also loses its default when it would press or scroll
+a control (Space, Enter, the arrows, Page Up/Down, Home, End) or is mapped. The Stream Deck and MIDI drivers
+are not blocked.
 
 ## Stream Deck driver (WebHID)
 

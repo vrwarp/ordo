@@ -41,13 +41,21 @@ export type KeyboardOptions = {
   now?: () => number;
   repeatIntervalMs?: number;
   /**
-   * True while no key may act (the operator: a modal dialog is open, design/15 "Dialogs"). A blocked key is
-   * left alone entirely, default included, so Space or Enter on a dialog's focused button presses it.
+   * True while no key may act (the operator: a modal dialog is open, design/15 "Dialogs"). A blocked key
+   * pressed inside a `[data-keys="off"]` element (the dialog) is left alone, default included, so Space or Enter
+   * on a dialog's focused button presses it; one pressed elsewhere is kept from its default too when that
+   * default would press or scroll a control (Space, Enter, arrows, Page Up/Down, Home, End) or the key is mapped.
    */
   blocked?: () => boolean;
 };
 
-/** Keyboard driver: keydown on window, no debounce; ignores events from text inputs and while `blocked()`. */
+/** Keys whose browser default presses or scrolls the focused control: kept from the page behind a modal. */
+const BEHIND_MODAL = /^(Space|Enter|NumpadEnter|Arrow(Up|Down|Left|Right)|Page(Up|Down)|Home|End)$/;
+
+/**
+ * Keyboard driver: keydown on window, no debounce; ignores events from text inputs, and while `blocked()` acts on
+ * none (a key that reached the page behind a modal is also kept from its browser default).
+ */
 export class KeyboardDriver {
   private handler = (e: Event) => this.onKey(e as KeyboardEvent);
   private now: () => number;
@@ -74,14 +82,17 @@ export class KeyboardDriver {
   }
   private onKey(e: KeyboardEvent): void {
     if (e.defaultPrevented || e.isComposing) return;
-    if (this.blocked?.()) return;
     const t = e.target as HTMLElement | null;
-    if (
-      t &&
-      (t.isContentEditable ||
-        /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName ?? '') ||
-        (typeof t.closest === 'function' && t.closest('[data-keys="off"]')))
-    ) {
+    const keysOff = !!t && typeof t.closest === 'function' && !!t.closest('[data-keys="off"]');
+    if (this.blocked?.()) {
+      // A modal dialog is open: no live key acts. A key pressed in it is its own (its focused button takes
+      // Space and Enter); one that reaches the page behind it (the focus outside the dialog) does nothing at
+      // all, its browser default included: Space or Enter would press, and an arrow scroll, whatever control
+      // behind the dialog has the focus (Clear all, a slide).
+      if (!keysOff && (BEHIND_MODAL.test(e.code) || this.map[normalizeCombo(e)])) e.preventDefault();
+      return;
+    }
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName ?? '') || keysOff)) {
       return;
     }
     if (isModifierOnly(e)) return;

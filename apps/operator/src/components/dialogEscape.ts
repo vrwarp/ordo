@@ -16,18 +16,95 @@ const open: object[] = [];
 /**
  * Every mounted Dialog, closable or not. While one is open no live key acts (`modalOpen`, the operator's
  * KeyboardDriver and its Clear all hold): a key pressed in a dialog is the dialog's (Space or Enter on its
- * focused button presses that button), and a key pressed with focus elsewhere does nothing. The Stream Deck
- * and MIDI are not keys and keep working (design/15 "Dialogs", design/19).
+ * focused button presses that button), and a key pressed with focus elsewhere does nothing, its browser
+ * default included (the KeyboardDriver keeps Space, Enter and the arrows from a control behind the dialog).
+ * The focus stays in the topmost dialog (`registerModal` with its box): Tab and Shift+Tab cycle over its own
+ * controls, and focus that lands outside it comes back. The Stream Deck and MIDI are not keys and keep working
+ * (design/15 "Dialogs", design/19).
  */
-const modals: object[] = [];
+const modals: { box?: FocusBox }[] = [];
 
-/** Register a mounted modal dialog; returns its removal. */
-export function registerModal(): () => void {
-  const me = {};
+/** What the focus trap needs of a dialog's box (an HTMLElement; tests pass a fake). */
+export interface FocusBox {
+  contains(n: unknown): boolean;
+  focus(o?: FocusOptions): void;
+  querySelectorAll(selector: string): ArrayLike<unknown>;
+  addEventListener(type: 'keydown', fn: (e: KeyboardEvent) => void): void;
+  removeEventListener(type: 'keydown', fn: (e: KeyboardEvent) => void): void;
+}
+
+/** A control the focus can land on. */
+export interface FocusControl {
+  readonly tabIndex: number;
+  readonly disabled?: boolean;
+  focus(o?: FocusOptions): void;
+  closest(selector: string): unknown;
+}
+
+/** What the focus trap needs of the document. */
+export interface FocusDoc {
+  readonly activeElement: unknown;
+  addEventListener(type: 'focusin', fn: (e: FocusEvent) => void, o: { capture: boolean }): void;
+  removeEventListener(type: 'focusin', fn: (e: FocusEvent) => void, o: { capture: boolean }): void;
+}
+
+const TABBABLE = 'a[href], button, input, select, textarea, [tabindex], [contenteditable="true"]';
+
+/** The controls of `box` Tab moves over, in document order. */
+export function tabbables(box: FocusBox): FocusControl[] {
+  return (Array.from(box.querySelectorAll(TABBABLE)) as FocusControl[]).filter(
+    (el) => el.tabIndex >= 0 && !el.disabled && !el.closest('[hidden], [inert]'),
+  );
+}
+
+/**
+ * Where focus that left the topmost dialog may stay: a popover the dialog opened elsewhere in the page (the
+ * colour picker's, portalled to the body: a `role="dialog"` that is not a Dialog's box).
+ */
+function inPopover(t: unknown): boolean {
+  const el = t as { closest?: (s: string) => unknown } | null;
+  return !!el && typeof el.closest === 'function' && !!el.closest('[role="dialog"]:not(.dialog)');
+}
+
+/**
+ * Register a mounted modal dialog; returns its removal. With its `box`, the focus stays in it while it is the
+ * topmost: Tab past its last control goes to its first and Shift+Tab before its first to its last (from the box
+ * itself, to the first or the last), and focus that lands outside it (Tab from the page, a script, a click on
+ * nothing) is put back on the box. When it closes, the dialog below it (if any) gets the focus back.
+ */
+export function registerModal(box?: FocusBox, doc?: FocusDoc): () => void {
+  const me: { box?: FocusBox } = box ? { box } : {};
   modals.push(me);
+  const top = () => modals[modals.length - 1] === me;
+  const onKey = (e: KeyboardEvent) => {
+    if (!box || e.key !== 'Tab' || e.defaultPrevented || !top()) return;
+    const all = tabbables(box);
+    const active = doc?.activeElement;
+    const i = all.indexOf(active as FocusControl);
+    if (!all.length) {
+      e.preventDefault();
+      box.focus({ preventScroll: true });
+      return;
+    }
+    if (e.shiftKey ? i <= 0 : i < 0 || i === all.length - 1) {
+      e.preventDefault();
+      (e.shiftKey ? all[all.length - 1]! : all[0]!).focus();
+    }
+  };
+  const onFocus = (e: FocusEvent) => {
+    if (!box || !top() || box.contains(e.target) || inPopover(e.target)) return;
+    box.focus({ preventScroll: true });
+  };
+  if (box) box.addEventListener('keydown', onKey);
+  if (box && doc) doc.addEventListener('focusin', onFocus, { capture: true });
   return () => {
+    if (box) box.removeEventListener('keydown', onKey);
+    if (box && doc) doc.removeEventListener('focusin', onFocus, { capture: true });
+    const wasTop = top();
     const i = modals.indexOf(me);
     if (i >= 0) modals.splice(i, 1);
+    const below = modals[modals.length - 1]?.box;
+    if (wasTop && below && doc && !below.contains(doc.activeElement)) below.focus({ preventScroll: true });
   };
 }
 

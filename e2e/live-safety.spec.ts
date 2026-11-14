@@ -16,7 +16,8 @@ import { launchOutputs, login, outputPages } from './linkhelpers.ts';
 /**
  * Service-safety fixes from the 2026-11-13 review, as a volunteer meets them at the venue (the e2e hub runs
  * in domain mode: op./outN. hosts): Escape that closes a dialog leaves the screens alone; no live key acts
- * while a dialog is open (Space presses the dialog's own button, never Next); entering an item
+ * while a dialog is open (Space presses the dialog's own button, never Next), and the focus stays in it
+ * (Shift+Tab never reaches Clear all behind it); entering an item
  * past a hidden first slide clears the song's background and starts the item's countdown; after a reload
  * the operator finds its output windows again; pre-service music that is gone does not stop Go live.
  */
@@ -140,6 +141,76 @@ test('with Diagnostics open, Space and PageDown change nothing; closed, they are
   await expect(dialog).toHaveCount(0);
   await page.keyboard.press('Space');
   await expect.poll(async () => (await liveState(api)).live).toBe(1);
+});
+
+/** Where the operator's focus is: in the open dialog, or (its text) on the page behind it. */
+async function focusIn(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const a = document.activeElement as HTMLElement | null;
+    if (a?.closest('.dialog')) return 'dialog';
+    return `behind: ${(a?.textContent ?? a?.tagName ?? 'none').trim().slice(0, 40)}`;
+  });
+}
+
+test('with Diagnostics open, Shift+Tab keeps the focus in it: two Spaces press nothing behind it', async ({
+  page,
+}) => {
+  const api = await operatorApi();
+  await goLive(api, await songPlaylist(api, 'Diagnostics focus'));
+  await liveView(page);
+  await page.keyboard.press('Space');
+  await expect.poll(async () => (await liveState(api)).live).toBe(0);
+  const before = await json<{ seq: number }>(api.get('live'));
+
+  const dialog = page.getByRole('dialog');
+  await page.getByTitle('Diagnostics', { exact: true }).click();
+  await expect(dialog).toBeVisible();
+  // Shift+Tab from the dialog's box: its last control, never Clear all on the page behind it (review r2a:
+  // there, two Spaces blacked every Audience screen while the dialog stayed open).
+  await page.keyboard.press('Shift+Tab');
+  expect(await focusIn(page)).toBe('dialog');
+  await page.keyboard.press('Space');
+  await page.keyboard.press('Space');
+  // Long enough for a Clear all to have reached the hub.
+  await page.waitForTimeout(1000);
+  expect(await focusIn(page)).toBe('dialog');
+  const during = await json<{ seq: number; state: LiveState & { black?: boolean } }>(api.get('live'));
+  expect(during.seq).toBe(before.seq);
+  expect(during.state.live).toBe(0);
+  expect(during.state.black ?? false).toBe(false);
+  expect(during.state.layers.slide.content).not.toBeNull();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+});
+
+test('the End service confirmation holds the focus: Shift+Tab past Cancel wraps to its own button', async ({
+  page,
+}) => {
+  const api = await operatorApi();
+  await goLive(api, await songPlaylist(api, 'Confirm focus'));
+  await liveView(page);
+  await page.keyboard.press('Space');
+  await expect.poll(async () => (await liveState(api)).live).toBe(0);
+  const before = await json<{ seq: number }>(api.get('live'));
+
+  const dialog = page.getByRole('dialog');
+  await page.getByRole('button', { name: 'End service' }).click();
+  await expect(dialog).toContainText('Clear every output');
+  const ok = dialog.getByRole('button', { name: 'End service' });
+  await expect(ok).toBeFocused();
+  // OK, Cancel, Close, then out of the dialog without a trap (onto Clear all); with it, back to OK.
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press('Shift+Tab');
+    expect(await focusIn(page), `Shift+Tab ${i + 1}`).toBe('dialog');
+  }
+  await expect(ok).toBeFocused();
+  // Nothing behind it moved meanwhile.
+  expect((await json<{ seq: number }>(api.get('live'))).seq).toBe(before.seq);
+  // Space presses the dialog's own button: the service ends, one event, and nothing else reached the hub.
+  await page.keyboard.press('Space');
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(async () => (await liveState(api)).mode).not.toBe('live');
+  expect((await json<{ seq: number }>(api.get('live'))).seq).toBe(before.seq + 1);
 });
 
 test('Next item past a hidden first slide clears the song background and starts the countdown', async ({

@@ -16,11 +16,12 @@ export function Dialog(props: {
   useEffect(() => (closable ? installDialogEscape(() => close.current?.()) : undefined), [closable]);
   // Modal: no live key acts while it is open (dialogEscape.ts `modalOpen`), and a key pressed inside it is its
   // own (`data-keys="off"`): Space on its focused OK presses OK, never Next. Focus moves into it unless a
-  // control of its own took it (autoFocus), so Space can never press the button that opened it.
+  // control of its own took it (autoFocus), so Space can never press the button that opened it, and stays in
+  // it (`registerModal` with the box): Tab and Shift+Tab cycle over its own controls, never out to Clear all.
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const off = registerModal();
     const el = box.current;
+    const off = registerModal(el ?? undefined, document);
     if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });
     return off;
   }, []);

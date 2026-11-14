@@ -177,8 +177,15 @@ Every dialog is modal (`aria-modal`), closable or not: while one is open no live
 outside it (the keyboard driver's `blocked()` asks the dialogs' registry, `modalOpen`, and so does the Clear
 all hold), and a key pressed inside it is the dialog's (`data-keys="off"` on its root). Space or Enter on a
 focused button presses that button: Space on End service's confirmation ends the service (it was Next, and
-the button never pressed). A dialog takes the focus when it opens unless one of its controls did (autoFocus).
-The Stream Deck and MIDI are not keys and keep working with a dialog open (design/19).
+the button never pressed). A dialog takes the focus when it opens unless one of its controls did (autoFocus),
+and keeps it while it is the topmost (`registerModal` with its box): Tab past its last control goes to its
+first and Shift+Tab before its first to its last, focus that lands outside it comes back to it (a popover it
+opened, the colour picker's, keeps it), and when it closes the dialog below it gets the focus back. A key that
+still reaches the page behind it (focus on the body) acts on nothing and, for Space, Enter, the arrows, Page
+Up/Down, Home, End and every mapped key, loses its browser default too (`KeyboardDriver`), so it can never press
+or scroll a control behind the dialog (review r2a: one Shift+Tab from Diagnostics reached Clear all, and two
+Spaces blacked every Audience screen). The Stream Deck and MIDI are not keys and keep working with a dialog
+open (design/19).
 
 ## Launching outputs
 
