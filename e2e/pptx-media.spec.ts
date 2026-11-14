@@ -431,23 +431,31 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
     await expect.poll(async () => (await live()).live, { timeout: 15_000 }).toBe(2);
     await expect.poll(async () => (await live()).layers.media.content).toBeNull();
 
-    // ---- [3] The motion background: a muted looping video behind the slide's text, moving.
+    // ---- [3] The motion background: a muted looping video behind the slide's text, moving from each capture to
+    // the next. Its clip (12 s, `probeMedia`) shows no frame twice in a loop, so two captures differ unless they
+    // are a whole loop apart, and one capture with its waits takes 2 to 6 s (CI runner, a loaded machine). With
+    // a 4 s clip the CI runner's first and last captures were once a loop apart and saw the same frame.
+    const bgId = slides[3]!.backgroundMediaId!;
+    const clipTime = async (p: Page) => (await slots(p)).find((s) => s.key.includes(bgId))?.t;
     await go(3);
     for (const p of both) {
       await expect.poll(() => cueOn(p), { timeout: 20_000 }).toBe(3);
       const shots = [];
+      const times: (number | undefined)[] = [];
       for (let i = 0; i < 3; i++) {
         shots.push(await frame(p, `motion-${i}`));
+        times.push(await clipTime(p));
         await p.waitForTimeout(400);
       }
       const blue = at(shots[0]!, [200, 1000]);
       expect(blue[2] > 150 && blue[0] < 40, `${name(p)}: the blue motion background (${blue})`).toBe(true);
-      const moved = diffShare(shots[0]!, shots[2]!);
-      expect(moved, `${name(p)}: it moves (${(moved * 100).toFixed(2)}% of pixels changed)`).toBeGreaterThan(
-        0.005,
-      );
+      const moved = [diffShare(shots[0]!, shots[1]!), diffShare(shots[1]!, shots[2]!)];
+      const said =
+        `${moved.map((m) => `${(m * 100).toFixed(2)}%`).join(', ')} of pixels changed from one capture to the ` +
+        `next; clip time after each capture ${times.map((t) => t?.toFixed(2) ?? '-').join(', ')} s`;
+      console.log(`${name(p)}: motion background ${said}`);
+      for (const m of moved) expect(m, `${name(p)}: it moves (${said})`).toBeGreaterThan(0.005);
     }
-    const bgId = slides[3]!.backgroundMediaId!;
     await expect
       .poll(async () => (await slots(gpu)).some((s) => s.key.includes(bgId) && !s.paused), {
         timeout: 10_000,

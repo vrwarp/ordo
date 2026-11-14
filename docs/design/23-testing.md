@@ -139,8 +139,10 @@ numbers raised, so both bands go through the rich engine; and against the text w
 which must differ), cue labels, library search, and the
 hidden slide (Next and Prev skip it, a double-click in the grid shows it). `pptx-media` plays the M5 exit
 with PowerPoint decks: a boxed autoplay clip turned, cropped and rounded under a title, a click-start clip
-(F8, Shift+F8, onEnd 'advance' set in ordo, the stage's remaining time), a muted motion background, a
-`numSld=3` sound across a hidden slide, a clip that is not a video (`[warn]`, poster), a clip whose
+(F8, Shift+F8, onEnd 'advance' set in ordo, the stage's remaining time), a muted motion background (moving
+from each capture to the next: its 12 s clip shows no frame twice in a loop, so captures 2 to 6 s apart
+never meet the same frame, as those of a 4 s clip once did on the CI runner), a `numSld=3` sound across a
+hidden slide, a clip that is not a video (`[warn]`, poster), a clip whose
 processing fails (degraded note, poster, and the operator's banner giving that reason rather than an
 empty slide), a looping clip trimmed by `p14:trim`, and a looping
 announcement deck whose music does not restart on the wrap. `e2e/pptx-import-tab.spec.ts` runs the path
