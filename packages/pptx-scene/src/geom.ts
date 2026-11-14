@@ -488,9 +488,10 @@ export function customPaths(
 
 /**
  * The share of its box a built geometry fills (`CustomPaths.ink`): the even-odd area of each filled path
- * (renderer `nesting.ts` `evenOddArea`: sub-paths signed by their nesting, holes taken away), summed and capped at 1, over
- * the box. Undefined when a path's nesting is past the renderer's bounds (`UNION_NESTING_LIMIT`,
- * `UNION_NESTING_WORK`), a point is not a number or the box has no area; 0 when no path is filled.
+ * (renderer `nesting.ts` `evenOddArea`: sub-paths signed by their nesting, holes taken away), summed and
+ * capped at 1, over the box. Undefined when a path's nesting is past the renderer's bounds
+ * (`UNION_NESTING_LIMIT`, `UNION_NESTING_WORK`), a point is not a number or the box has no area; 0 when no
+ * path is filled.
  */
 export function inkOf(g: { w: number; h: number; paths: readonly GeomPath[] }): number | undefined {
   const box = g.w * g.h;
