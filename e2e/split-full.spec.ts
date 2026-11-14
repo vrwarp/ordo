@@ -118,6 +118,7 @@ test('(d) every regular chunk has loaded before the Shell first paints', async (
   const names = (at ?? []).map((p) => p.name).sort();
   expect(names).toEqual(
     [
+      'compact',
       'edit',
       'fonts',
       'import',
@@ -130,7 +131,13 @@ test('(d) every regular chunk has loaded before the Shell first paints', async (
       'themes',
     ].sort(),
   );
-  expect((at ?? []).filter((p) => p.status !== 'loaded')).toEqual([]);
+  // Every regular chunk loaded; the phone's compact chunk never requested on the venue PC.
+  expect((at ?? []).filter((p) => p.name !== 'compact' && p.status !== 'loaded')).toEqual([]);
+  expect((at ?? []).find((p) => p.name === 'compact')?.status).toBe('idle');
+  const now = await page.evaluate(() =>
+    (window as unknown as { __ordo: { pages(): { name: string; status: string }[] } }).__ordo.pages(),
+  );
+  expect(now.find((p) => p.name === 'compact')?.status).toBe('idle');
 });
 
 test('(e) the service worker precaches every built file, as before', async ({ page }) => {

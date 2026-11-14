@@ -69,8 +69,11 @@ between 16000 and 32767.
   from it; rows for specs not written yet hold their ports reserved.
 - Phones P0 (design/28) holds offsets 300-359: the code split's rows `split-full` (300), `ipad-split`
   (301-303: `webkit-ipad`, `webkit-ipad-portrait`, `chromium-tablet`) and `phone-split` (305-306), the
-  compact shell's specs 310-339, the hub's 340-349 and the integration's 350-359. `ipad-group` and
-  `ipad-touch-targets` have three ports (slot 2 is `chromium-tablet`).
+  compact shell's `phone-shell` (310-329: one hub per test and phone project, test k on 2k in `webkit-iphone`
+  and 2k+1 in `chromium-android`, so its sign-ins, lockouts and services never meet; it may grow to 26 ports)
+  and `phone-demo` (336-337: the Pages build's static server per phone project), the hub's 340-349 and the
+  integration's 350-359. `ipad-group` and `ipad-touch-targets` have three ports (slot 2 is
+  `chromium-tablet`). `e2e/layout-class.spec.ts` (the venue PC never compact) uses the shared server.
 
 ### Projects
 
@@ -95,6 +98,13 @@ the edit profile and a forced `?profile=full` meets the forced-profile guard (`e
 `contextOptions` (the test runner does not pass a device descriptor's `screen`); the phone class reads it.
 WebKit projects exist only where WebKit is installed. The iPad touch and group specs dispatch WebKit
 TouchLists and skip outside WebKit.
+
+The phone specs check layout with `layoutChecks` (`e2e/phone/phonehelpers.ts`, design/28 §8 "Layout": no
+sideways scroll of the document, `.page` or any pane, also after each field is focused; every visible control
+inside the viewport and at least 44x44 by the shared touch audit `e2e/touchaudit.ts`, with no exceptions; the
+Live now strip, the header and the tab bar inside the visual viewport) on every compact route and sheet, at
+390x844 and 390x664 (WebKit), 360x800 (Chromium), 844x390, 320x568 and 200 % text. `capsShim` stands in for
+the hub lane's `/auth/me` caps on the phone shell's branch and is removed when the hub's contract is merged.
 
 ## Timing assertions
 
