@@ -869,6 +869,27 @@ decision item 2: "guard left-outs get LibreOffice's art for the left-out objects
 - **Rollout.** No stored field; `M9_WRITES` and `CONVERTER_VERSION` (2) unchanged. A scene of a converter
   before this rule (the same version) lists its left-outs, and the hub lists them, as then. An older build
   (main's 0.5.0) draws version 2's art as the picture it is.
+- **Measured** (b50d486 with this rule, decorations still held back; `regroup/r2a/lo-forms`). Census of E
+  (`--hub-budget`) with LibreOffice: the guard's `missing:decoration` on 16 worship slides becomes the art's
+  (`art:budget:shapes` 14, `art:budget:pictures` 2), none of them `missing:element` before or after, classes
+  unchanged; without LibreOffice not one slide changes, golden-pptx none either way, the sermons none. Of the 16,
+  5 are stored in full; on a hub with LibreOffice (its version 2 against LibreOffice's page): the emoji game
+  slide 7 0.795 → 0.953 (wave 1 0.956), animal-crossing 1 0.887 → 0.995 (0.998), PICK_ME 5 0.864 → 0.982
+  (0.995), absalom 1 0.701 → 0.940 (0.953), a clipart collection's slide 1 0.984 → 0.998 (0.998); without
+  LibreOffice each as before (within 0.0002). The other 11 are over 64 KB, where a hub with LibreOffice keeps
+  LibreOffice's page (`pageForBudget`) as before: unchanged. The owner was asked about 2 left-out slides (the
+  emoji game slide and animal-crossing 1); the rule moves 4 that the r1 review counted below wave 1 (also
+  PICK_ME 5 and absalom 1, picture slides at wave 1) and the clipart slide, which was not, so on a hub with
+  LibreOffice E's slides below wave 1 by more than 0.02 go from 23 to 19 (the leaf template's 8, the 11 below).
+  Version 1 of the two picture-guard slides keeps one picture fewer (the art's room): a hub that has not drawn
+  version 2 yet shows 0.817 and 0.663 there (0.864 and 0.701 before). Hub and client store the same: shard0 89
+  of 89 decks without LibreOffice, the 8 budget decks and the guard decks (these 5 and the e2e deck) with it.
+  The sermons and the 30 table decks: no slide moved on either kind of hub. With decorations drawn
+  (`decor-render`, measured on a scratch merge of both branches) the guard is reached on 3 worship slides of E,
+  all past the clamp's 16 pictures (the emoji game slide 7, PICK_ME 5, absalom 1); they become
+  `art:budget:pictures` (without LibreOffice nothing changes against decor-render alone), and on a hub with
+  LibreOffice they score 0.953, 0.982 and 0.940 (decor-render alone 0.950, 0.864, 0.701); animal-crossing 1 and
+  the clipart slide are then drawn natively whole (0.996, 0.998).
 - **Known costs, by the owner's choice.** On a hub with LibreOffice the slides main showed as LibreOffice's
   page only for their picture count stay native and editable (G2, keeping that page, is not built): 13 at the
   r1 review, 0.70-0.94 against 0.96-0.98 at wave 1; two of them were guard left-outs (PICK_ME 5, absalom 1)
