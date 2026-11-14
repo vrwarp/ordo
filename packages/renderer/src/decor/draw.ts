@@ -63,7 +63,11 @@ import { decorFilesVersion, decorParts, decorPending } from './files.ts';
  *   direct, so a slide drawn once pays nothing for it), keyed by a digest of the clamped decoration and the
  *   device transform with its whole pixels taken out: a layout's decorations repeat on every slide, and a
  *   slide is drawn again for every look and refresh. None larger than a 4K frame; none while `withDirectDecor`
- *   runs (a caller that cuts its work into slices, `drawDecorRange`, which a sprite made at once would not).
+ *   runs (a caller that cuts its work into slices, `drawDecorRange`, which a sprite made at once would not);
+ *   none the cache would not keep (`SpriteCache.room`: beside the sprites the slide's raster holds already, and
+ *   within `DECOR_SPRITE.share` of the budget for all decorations): such a decoration is drawn directly, so a
+ *   slide whose sprites pass the cache (a 4K slide of four large decorations and 220 shadowed shapes) never
+ *   makes, on every draw, sprites the cache then drops (r2a repair: 208 ms a warm draw at 3840, now 20-30).
  * - **Files.** `ref` names a decoration file (`DecorFile`, stored as a geometry file is; read into the store of
  *   `files.ts` before the slide is drawn); while it is read its parts are drawn and `parts` is ignored; until
  *   then the decoration draws its inline parts (the converter leaves them empty: nothing).
@@ -101,6 +105,8 @@ export const DECOR_SPRITE = {
   shadowed: 4,
   /** Device pixels of a sprite at most: one 4K frame. */
   pixels: 3840 * 2160,
+  /** The share of the sprite cache's budget the decorations' sprites hold at most. */
+  share: 0.5,
 } as const;
 
 /** One source shape of a decoration, built in its space. */
@@ -510,12 +516,16 @@ function drawDecorSprite(ctx: Ctx2D, d: DecorData, geo: DecorGeometry, opacity: 
   let sprite = spriteCache.get('decor', key) as DecorSprite | undefined;
   if (!sprite) {
     // Made the second time the decoration is drawn so (a slide drawn once, the common case, pays no sprite):
-    // a marker of no bytes in the cache says it was drawn, and goes with it when the cache is cleared.
-    const seen = `${key}|seen`;
-    if (!spriteCache.has('decor', seen)) {
-      spriteCache.set('decor', seen, { bytes: 0 });
+    // the cache's mark says it was drawn (its own small LRU, cleared with the decorations' sprites).
+    if (!spriteCache.marked('decor', key)) {
+      spriteCache.mark('decor', key);
       return false;
     }
+    // Never made only to be dropped: a sprite the cache would not keep beside what this raster holds (or past
+    // the decorations' share) would cost its drawing and a copy on every draw, more than drawing it directly.
+    const bytes = W * H * 4;
+    if (spriteCache.bytes('decor') + bytes > DECOR_SPRITE.share * spriteCache.budgetBytes) return false;
+    if (!spriteCache.room(bytes)) return false;
     const c = new OffscreenCanvas(W, H);
     // Software-backed, as the effect sprites are: copied to a software canvas, drawn by the CPU.
     const s2 = c.getContext('2d', { willReadFrequently: true });
@@ -523,9 +533,8 @@ function drawDecorSprite(ctx: Ctx2D, d: DecorData, geo: DecorGeometry, opacity: 
     s2.setTransform(m.a, m.b, m.c, m.d, m.e - X, m.f - Y);
     styleLines(s2 as unknown as Ctx2D);
     for (const s of geo.shapes) drawDecorShape(s2 as unknown as Ctx2D, s, d, opacity, 1);
-    sprite = { canvas: c, bytes: W * H * 4 };
-    spriteCache.set('decor', key, sprite);
-    spriteCache.delete('decor', seen);
+    sprite = { canvas: c, bytes };
+    if (spriteCache.set('decor', key, sprite)) spriteCache.unmark('decor', key);
   }
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);

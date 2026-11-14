@@ -22,7 +22,8 @@ import {
   splitScene,
 } from './scene.ts';
 import { type DrawnSprite, drawSprite, slideReach, spriteRect } from './sprite.ts';
-import { type Ctx2D, type ImageLookup, layoutText } from './text2d.ts';
+import { spriteCache } from './spritecache.ts';
+import { type Ctx2D, frameBytes, type ImageLookup, layoutText } from './text2d.ts';
 
 /**
  * The asset worker's half of a scene stack (design/27 §7.2, SCENE.md item E): a slide job that carries
@@ -238,14 +239,17 @@ export function rasterScene<B>(
 ): { base: B; over: B | null; plane: Float32Array } | undefined {
   const scene = sceneSlides(ctx, slide, look, scale, images, objectId, opts.clip);
   if (!scene) return undefined;
-  rasterSlide(ctx, scene.base, look, scale, images, opts);
-  const base = take();
-  let over: B | null = null;
-  if (scene.over) {
-    rasterSlide(ctx, scene.over, look, scale, images, opts);
-    over = take();
-  }
-  return { base, over, plane: scene.plane };
+  // Base and over are one raster of the sprite cache (spritecache.ts): neither evicts the other's sprites.
+  return spriteCache.raster(() => {
+    rasterSlide(ctx, scene.base, look, scale, images, opts);
+    const base = take();
+    let over: B | null = null;
+    if (scene.over) {
+      rasterSlide(ctx, scene.over, look, scale, images, opts);
+      over = take();
+    }
+    return { base, over, plane: scene.plane };
+  }, frameBytes(scale));
 }
 
 /**
@@ -283,6 +287,9 @@ export function rasterSceneSprites<B>(
       spriteRect(slideReach(ctx, s, { scale, look, ...o }), scale, frame.width, frame.height),
       (c) => rasterSlide(c, s, look, scale, images, o),
     );
-  const base = part(scene.base);
-  return { base, over: scene.over ? part(scene.over) : null, plane: scene.plane };
+  // Base and over are one raster of the sprite cache (spritecache.ts): neither evicts the other's sprites.
+  return spriteCache.raster(() => {
+    const base = part(scene.base);
+    return { base, over: scene.over ? part(scene.over) : null, plane: scene.plane };
+  }, frameBytes(scale));
 }

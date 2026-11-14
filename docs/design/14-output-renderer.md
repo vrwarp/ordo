@@ -315,8 +315,13 @@ are byte-identical, and the tests pin each seam's calls by digest against the co
   highlights, underlines and strikes: `rect` with the pass) and draws its face on a face target
   (`DIRECT_TARGET`; a face sprite registered by the 3-D look, whose alpha casts the shadow and glow), chosen per
   object and independently.
-- **One sprite cache** (`renderer/src/spritecache.ts`): 64 MiB for every kind of sprite (effects today; geometry,
+- **One sprite cache** (`renderer/src/spritecache.ts`): for every kind of sprite (effects today; geometry,
   decorations, 3-D faces and charts in M9), least recently used first, with counted pins as the bitmap cache has.
+  Its budget is 64 MiB, raised to 4 frames of the largest raster its thread draws (127 MB on a 4K output's asset
+  worker, at most 128 MiB): a slide's sprites grow with its device pixels. A slide's draw is one raster: its own
+  sprites never evict each other, and one that does not fit beside them is not kept (a decoration's sprite is
+  then not made at all), so a 4K slide whose sprites pass the budget draws from those that fit instead of
+  making every one again on every draw (r2a repair; design/27 `spritecache.ts`).
 - **Picture pipeline** (`renderer/src/picture.ts`): `PictureSource` is a canvas image or a `VectorPicture`, which
   the source step that accepts it draws wherever `drawImage` would (`registerPictureSource`); target extensions
   widen a target's key or refuse to prepare it (`registerPictureTarget`); post steps change a prepared bitmap

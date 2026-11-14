@@ -2,7 +2,14 @@ import type { ShapeObject } from '@ordo/domain';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearEffectCache, EFFECT_CACHE_BYTES, effectCacheBytes } from './effects.ts';
 import { RecPath } from './geom/path2d.test-util.ts';
-import { SPRITE_CACHE_BYTES, SpriteCache, spriteCache } from './spritecache.ts';
+import {
+  SPRITE_CACHE_BYTES,
+  SPRITE_CACHE_FRAMES,
+  SPRITE_CACHE_MAX_BYTES,
+  SPRITE_MARKS,
+  SpriteCache,
+  spriteCache,
+} from './spritecache.ts';
 import { drawShape } from './text2d.ts';
 import { traceCtx } from './trace.test-util.ts';
 
@@ -74,6 +81,117 @@ describe('SpriteCache', () => {
     c.unpin('chart', 'later');
     c.unpin('chart', 'never pinned');
     expect(c.pinned).toBe(0);
+  });
+});
+
+describe('rasters', () => {
+  /** One pass over `n` sprites of `mb` MiB, each used or made and kept: the hits. */
+  const pass = (c: SpriteCache, n: number, mb: number, closed?: string[]) => {
+    let hits = 0;
+    for (let i = 0; i < n; i++) {
+      if (c.get('effect', `s${i}`)) hits++;
+      else c.set('effect', `s${i}`, sprite(mb, closed, `s${i}`));
+    }
+    return hits;
+  };
+
+  it("a raster's own sprites never evict each other: what fits is kept, the rest is not", () => {
+    // Eight sprites of 3 MiB drawn again and again in a 16 MiB cache: least recently used first, every pass
+    // evicts exactly the sprites the rest of the pass (and the next) needs, and nothing is ever reused.
+    const lru = new SpriteCache(16 * MB);
+    for (let i = 0; i < 4; i++) expect(pass(lru, 8, 3)).toBe(0);
+    // As rasters, the first five are kept and copied from the second pass on; the last three are made each
+    // time and not kept (`set` is false: the caller draws with them this once, nothing is closed).
+    const c = new SpriteCache(16 * MB);
+    const closed: string[] = [];
+    expect(c.raster(() => pass(c, 8, 3, closed))).toBe(0);
+    for (let i = 0; i < 4; i++) expect(c.raster(() => pass(c, 8, 3, closed))).toBe(5);
+    expect(closed).toEqual([]);
+    expect(c.count()).toBe(5);
+    expect(c.bytes()).toBeLessThanOrEqual(16 * MB);
+    // A raster that used the five has no room for a sixth; one that did not would evict them.
+    expect(
+      c.raster(() => {
+        pass(c, 5, 3);
+        return c.set('effect', 'late', sprite(3));
+      }),
+    ).toBe(false);
+    expect(c.has('effect', 'late')).toBe(false);
+    // Outside a raster the cache is the plain LRU again: a new sprite evicts the oldest.
+    expect(c.set('effect', 'late', sprite(3, closed, 'late'))).toBe(true);
+    expect(c.has('effect', 'late')).toBe(true);
+    expect(closed).toEqual(['s0']);
+    // A later raster evicts what an earlier one kept (the slide changed), least recently used first.
+    c.raster(() => {
+      for (let i = 0; i < 5; i++) expect(c.set('decor', `n${i}`, sprite(3))).toBe(true);
+    });
+    expect(c.count('decor')).toBe(5);
+    expect(c.count('effect')).toBe(0);
+  });
+
+  it('room says beforehand whether a sprite would be kept', () => {
+    const c = new SpriteCache(16 * MB);
+    expect(c.room(8 * MB)).toBe(true);
+    expect(c.room(9 * MB)).toBe(false);
+    c.set('effect', 'old', sprite(6));
+    c.raster(() => {
+      // An earlier raster's sprite is evictable; this raster's are not, nor a pinned one.
+      expect(c.room(8 * MB)).toBe(true);
+      c.set('effect', 'a', sprite(6));
+      c.pin('effect', 'old');
+      expect(c.room(4 * MB)).toBe(true);
+      expect(c.room(5 * MB)).toBe(false);
+      c.unpin('effect', 'old');
+      expect(c.room(8 * MB)).toBe(true);
+      // Nested calls are the same raster.
+      c.raster(() => expect(c.room(10 * MB)).toBe(false));
+      c.get('effect', 'old');
+      expect(c.room(5 * MB)).toBe(false);
+    });
+    expect(c.room(8 * MB)).toBe(true);
+  });
+
+  it('the budget follows the largest frame drawn, within its bounds', () => {
+    expect(SPRITE_CACHE_FRAMES).toBe(4);
+    expect(SPRITE_CACHE_MAX_BYTES).toBe(128 * MB);
+    const c = new SpriteCache(SPRITE_CACHE_BYTES, SPRITE_CACHE_MAX_BYTES);
+    c.raster(() => {}, 1920 * 1080 * 4);
+    expect(c.budgetBytes).toBe(64 * MB);
+    const k4 = 3840 * 2160 * 4;
+    c.raster(() => {}, k4);
+    expect(c.budgetBytes).toBe(4 * k4);
+    // Never lowered by a smaller frame, never past the maximum, never raised by a hostile size.
+    c.raster(() => {}, 1920 * 1080 * 4);
+    expect(c.budgetBytes).toBe(4 * k4);
+    c.raster(() => {}, 8000 * 8000 * 4);
+    expect(c.budgetBytes).toBe(128 * MB);
+    for (const bad of [Number.NaN, -1, Number.POSITIVE_INFINITY]) c.raster(() => {}, bad);
+    expect(c.budgetBytes).toBe(128 * MB);
+    // A cache made with one budget keeps it (the units' cache).
+    const fixed = new SpriteCache(16 * MB);
+    fixed.raster(() => {}, k4);
+    expect(fixed.budgetBytes).toBe(16 * MB);
+    // The renderer's cache rises at 4K.
+    expect(spriteCache.budgetBytes).toBeGreaterThanOrEqual(SPRITE_CACHE_BYTES);
+    expect(spriteCache.budgetBytes).toBeLessThanOrEqual(SPRITE_CACHE_MAX_BYTES);
+  });
+
+  it('marks are a bounded LRU of their own, cleared with their kind', () => {
+    const c = new SpriteCache(16 * MB);
+    for (let i = 0; i < SPRITE_MARKS + 88; i++) c.mark('decor', `m${i}`);
+    expect(c.markCount()).toBe(SPRITE_MARKS);
+    expect(c.marked('decor', 'm0')).toBe(false);
+    expect(c.marked('decor', `m${SPRITE_MARKS + 87}`)).toBe(true);
+    // A mark is not an entry: no bytes, no count, never evicted by sprites.
+    expect(c.count()).toBe(0);
+    for (let i = 0; i < 20; i++) c.set('decor', `d${i}`, sprite(3));
+    expect(c.marked('decor', `m${SPRITE_MARKS + 87}`)).toBe(true);
+    c.mark('effect', 'e');
+    c.clear('decor');
+    expect(c.markCount('decor')).toBe(0);
+    expect(c.marked('effect', 'e')).toBe(true);
+    c.unmark('effect', 'e');
+    expect(c.markCount()).toBe(0);
   });
 });
 

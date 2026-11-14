@@ -2,6 +2,7 @@ import {
   type Box,
   type ImageCrop,
   LOGICAL_HEIGHT,
+  LOGICAL_WIDTH,
   type Look,
   type Rgba,
   type Slide,
@@ -46,6 +47,7 @@ import { GEOM_CLIP_RULE, geomFillPath2D } from './geom/draw.ts';
 import { geomAwaited, storedGeometry } from './geom/stored.ts';
 import { withinDrawBudget } from './geombudget.ts';
 import { drawShapeObject, placeBox } from './shape.ts';
+import { spriteCache } from './spritecache.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
 import { metricsInk } from './text/measure.ts';
@@ -719,6 +721,11 @@ export function registeredSlideObjectsDrawer(): SlideObjectsDrawer | undefined {
   return slideObjectsDrawer;
 }
 
+/** Bytes of a full frame at `scale` device px per logical px (the sprite cache's budget follows it). */
+export function frameBytes(scale: number): number {
+  return Math.round(LOGICAL_WIDTH * scale) * Math.round(LOGICAL_HEIGHT * scale) * 4;
+}
+
 /**
  * Draw the Slide layer of a slide as a look renders it, on a transparent canvas. Backgrounds are not
  * drawn here (they are their own layer). A look that draws slides as authored draws what `slideContent`
@@ -740,11 +747,15 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
       const img = opts.images?.(drawn.pictureMediaId, target);
       if (img) drawImageFit(ctx, img, SLIDE_PICTURE.box, scale, 'contain', 1, 0, undefined, target);
     }
-    // M9 geometry units (units.ts): an object past the budget whose unit is ready is copied from it.
-    if (slideObjectsDrawer?.draw(ctx, rawSlide, drawn.objects, scale, opts.images)) return;
-    // Past the slide's drawing budget, later stored geometries draw as their legacy shapes and later effects are
-    // left out (geombudget.ts).
-    for (const o of withinDrawBudget(drawn.objects)) drawObject(ctx, o, scale, opts.images);
+    // One raster of the sprite cache (spritecache.ts): the slide's own sprites never evict each other, and the
+    // cache holds a few frames at this scale.
+    spriteCache.raster(() => {
+      // M9 geometry units (units.ts): an object past the budget whose unit is ready is copied from it.
+      if (slideObjectsDrawer?.draw(ctx, rawSlide, drawn.objects, scale, opts.images)) return;
+      // Past the slide's drawing budget, later stored geometries draw as their legacy shapes and later effects
+      // are left out (geombudget.ts).
+      for (const o of withinDrawBudget(drawn.objects)) drawObject(ctx, o, scale, opts.images);
+    }, frameBytes(scale));
     return;
   }
   const kind = opts.presentationKind ?? opts.isSong ?? true;

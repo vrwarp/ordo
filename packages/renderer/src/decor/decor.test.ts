@@ -6,7 +6,8 @@ import { RecPath } from '../geom/path2d.test-util.ts';
 import { shapeDrawKind } from '../shape.ts';
 import { drawShape } from '../text2d.ts';
 import { traceCtx } from '../trace.test-util.ts';
-import { decorCost, decorShapes, drawDecor } from './draw.ts';
+import { spriteCache } from '../spritecache.ts';
+import { DECOR_SPRITE, decorCost, decorShapes, drawDecor } from './draw.ts';
 import { clearDecorFiles, decorFileParts, decorPending, putDecorFile, readDecorFiles } from './files.ts';
 // Registers the drawer with the shape dispatch.
 import './index.ts';
@@ -218,6 +219,78 @@ describe('drawing', () => {
       'invalid',
     );
     expect(putDecorFile('d', { parts: [{ d: 'nonsense', p: 0 }] })).toBe(false);
+  });
+});
+
+describe('sprite admission (r2a repair)', () => {
+  class FakeCanvas {
+    ctx: ReturnType<typeof traceCtx>;
+    public width: number;
+    public height: number;
+    constructor(width: number, height: number) {
+      this.width = width;
+      this.height = height;
+      this.ctx = traceCtx(width, height);
+    }
+    getContext() {
+      return this.ctx;
+    }
+  }
+  beforeAll(() => vi.stubGlobal('OffscreenCanvas', FakeCanvas));
+  afterEach(() => spriteCache.clear());
+
+  const MB = 1024 * 1024;
+  const fills = (ctx: ReturnType<typeof traceCtx>) =>
+    ctx.trace.filter((e) => e[0] === 'call' && e[1] === 'fill').length;
+  /** The decoration drawn on a 4K frame inside one raster of the sprite cache, as `drawSlide2D` draws it. */
+  const draw = (o: ShapeObject, before?: () => void) => {
+    const ctx = traceCtx(3840, 2160);
+    spriteCache.raster(() => {
+      before?.();
+      drawShape(ctx, o, 2);
+    });
+    return ctx;
+  };
+
+  it('is made the second time, kept, and copied from then on', () => {
+    const o = shape(m9Decor());
+    expect(fills(draw(o))).toBeGreaterThan(0);
+    expect(spriteCache.count('decor')).toBe(0);
+    expect(spriteCache.markCount('decor')).toBe(1);
+    draw(o);
+    expect(spriteCache.count('decor')).toBe(1);
+    // The mark goes once the sprite is kept: marks never pile up in the cache.
+    expect(spriteCache.markCount('decor')).toBe(0);
+    const third = draw(o);
+    expect(fills(third)).toBe(0);
+    expect(third.trace.filter((e) => e[1] === 'drawImage')).toHaveLength(1);
+  });
+
+  it('is never made when the raster has no room for it, nor past the decorations’ share: drawn directly', () => {
+    const o = shape(m9Decor());
+    draw(o);
+    // The slide's other sprites, used by this raster, fill the cache but 1 MiB: the decoration's sprite (about
+    // 1.8 MB at 4K) would not be kept, so it is not made; the decoration is drawn shape by shape, and its mark
+    // stays for a later raster with room.
+    const full = () => spriteCache.set('effect', 'slide', { bytes: spriteCache.budgetBytes / 2 });
+    const other = () => spriteCache.set('effect', 'other', { bytes: spriteCache.budgetBytes / 2 - MB });
+    const direct = draw(o, () => {
+      full();
+      other();
+    });
+    expect(fills(direct)).toBeGreaterThan(0);
+    expect(spriteCache.count('decor')).toBe(0);
+    expect(spriteCache.markCount('decor')).toBe(1);
+    // With room again (a later raster), it is made.
+    draw(o);
+    expect(spriteCache.count('decor')).toBe(1);
+    // Past the share: other decorations' sprites hold half the budget already.
+    spriteCache.clear();
+    draw(o);
+    spriteCache.set('decor', 'others', { bytes: DECOR_SPRITE.share * spriteCache.budgetBytes });
+    const shared = draw(o);
+    expect(fills(shared)).toBeGreaterThan(0);
+    expect(spriteCache.count('decor')).toBe(1);
   });
 });
 

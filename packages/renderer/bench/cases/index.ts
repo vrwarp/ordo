@@ -9,8 +9,8 @@ import { UNITS_BENCH_CASES } from './units.ts';
  * one line. bench/raster.page.ts draws them after its own cases, and bench/raster.ts checks them by their
  * names as it checks its own: '(rich' against the M2 text budget, '(bounded geometry' against design/27
  * §13's 50 ms task at both sizes, '(bounded effects' against the cold effect budget, '(bounded' against the
- * large effects budget, ', cold' drawn with the sprite cache emptied before every job; other names are
- * reported, not checked.
+ * large effects budget, '(warm task' against the 50 ms task at both sizes drawn warm, ', cold' drawn with the
+ * sprite cache emptied before every job; other names are reported, not checked.
  */
 
 /** A named slide the bench rasterizes at 1920 and 3840 px wide. */

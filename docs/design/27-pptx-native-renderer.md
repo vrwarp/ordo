@@ -788,7 +788,10 @@ the fidelity harness's A/B.
   `drawEffected` with its own small sprites; at most 24 shadowed shapes keep theirs (the converter closes a run
   there: only a hostile file loses one). A decoration past 2,048 points or 4 shadowed shapes is drawn the
   second time through a sprite of its device bounds (`spritecache.ts` kind 'decor', a 1:1 copy, none past one
-  4K frame). `index.ts` registers it as the 'decor' drawer of the shape dispatch with its reach (`decorReach`:
+  4K frame), only when the sprite cache would keep it (`SpriteCache.room`, beside the sprites the slide's raster
+  holds, and the decorations' sprites within half the budget): otherwise it is drawn directly (r2a repair: the
+  Slidesmania "wake" template's slide 12, four decorations among 220 shadowed shapes, made and dropped its
+  sprites on every draw at 3840, 208 ms a warm draw; 21 ms since). `index.ts` registers it as the 'decor' drawer of the shape dispatch with its reach (`decorReach`:
   its shapes' points and outlines placed in the box, their shadows offset and blurred 3σ, for the tight
   sprites); the renderer's index registers only its loader (`registerShapeDrawerLoader('decor')`), so the
   drawer is its own lazy chunk, loaded by the workers' prepare step and the editor canvas the first time a
@@ -2727,8 +2730,16 @@ calls by digest against the code before it:
 - `text/paint.ts`: a glyph painter (`PLAIN_PAINTER`; upright and warp registered by kind, warp first) and a face
   target (`DIRECT_TARGET`; a face sprite registered by the 3-D look) chosen independently per object (decision 6);
   planned glyph runs and rectangles carry their layout line and segment for painters that place lines.
-- `spritecache.ts`: one 64 MiB LRU with counted pins for every kind of sprite (decision 9); the effect layers
-  and composites live in it.
+- `spritecache.ts`: one LRU with counted pins for every kind of sprite (decision 9); the effect layers
+  and composites live in it. _r2a repair:_ its budget is 64 MiB, raised to 4 frames of the largest raster drawn
+  on its thread, at most 128 MiB (127 MB at 3840x2160), and a slide drawn by `drawSlide2D` (or a scene's parts)
+  is one raster whose own sprites never evict each other: a sprite that does not fit beside them is not kept,
+  so a slide whose sprites pass the budget keeps what fits and makes the rest again, where the plain LRU evicted
+  on every draw exactly the sprites the rest of the draw needed and made all of them again (a 4K slide of four
+  decorations and 220 shadows: 208 ms a warm draw at 64 MiB, 21 ms now; its sprites take 114 MB at 3840 against
+  29 MB at 1920). Marks without a sprite (a decoration drawn once) are a 512-key LRU of their own. The raster
+  bench's '(warm task' case holds such a slide to the 50 ms task at both sizes and to its shapes drawn one by
+  one + 10 %.
 - `picture.ts`: `PictureSource = CanvasImageSource | VectorPicture`, drawn by a registered source step wherever
   `drawImage` would (`ImageLookup` returns either); target extensions widen a target's key (or refuse to prepare
   it) and hand data to post steps, which run after the mask's cut before the bitmap is taken.
