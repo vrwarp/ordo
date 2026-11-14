@@ -3,6 +3,13 @@ import { type AuthPinReq, type AuthPinRes, ROUTES } from '@ordo/protocol';
 import { type FormatOptions, formatTime, t } from '../../i18n/index.ts';
 
 /**
+ * The sign-in goes through `@ordo/client`'s api(), which sends `x-ordo` (design/28 §4): written as a call so
+ * apps/hub/test/phones-clients.test.ts, which reads the clients' sources, sees every POST below go through it.
+ */
+const viaApi = <T>(path: string, init: { method: 'POST'; json: AuthPinReq }): Promise<T> =>
+  api<T>(path, init);
+
+/**
  * A phone's sign-in request (design/28 §3.2 "How a phone gets light", "Never remembered"): never `remember`;
  * `cap: 'light'` when the hub's /auth/me lists the cap (`grantsLight`), nothing else for a hub that grants none.
  * A hub behind a stale /auth/me that refuses the field (400 `invalid` naming `cap`: the strict PinBody of an
@@ -13,7 +20,7 @@ export type PinCall = <T>(path: string, init: { method: 'POST'; json: AuthPinReq
 export async function phoneSignIn(
   pin: string,
   grantsLight: boolean,
-  call: PinCall = api as PinCall,
+  call: PinCall = viaApi,
 ): Promise<AuthPinRes> {
   if (!grantsLight) return call<AuthPinRes>(ROUTES.pin, { method: 'POST', json: { pin } });
   try {
