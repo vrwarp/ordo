@@ -148,7 +148,8 @@ describe('budgetColumns (M9, decor-conv)', () => {
     const notes = [
       '12 element(s) outside the slide are not imported',
       '2 shape(s) that show nothing are not imported',
-      "3 object(s) past the slide's drawing budget are drawn from its decoration plate (as their legacy shapes until it is made)",
+      "2 object(s) past the slide's drawing budget are drawn whole from a geometry unit on outputs; their legacy shapes elsewhere",
+      "1 object(s) past the slide's drawing budget are drawn without their effects until effect units are made",
     ];
     expect(budgetColumns(slide, notes)).toEqual({ decors: 1, sheets: 1, culled: 14, plate: 3 });
     expect(budgetColumns({ objects: [] }, [])).toEqual({});

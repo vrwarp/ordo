@@ -15,8 +15,9 @@
  *   LibreOffice), the slide budgets' work (M9, `decor-conv`; each only when not 0): `decors` (decoration
  *   objects, `ShapeObject.decor`), `sheets` (pictures drawn from a composite or an atlas sheet, `SHEET_PREFIX`),
  *   `culled` (elements not imported because they draw nothing on the slide: off it, or showing nothing; read
- *   from the converter's notes) and `plate` (objects past the slide's drawing budgets, drawn from its
- *   decoration plate: the converter's note), and the hub's view of it (`hubClasses`, M9's budget ladder):
+ *   from the converter's notes) and `plate` (objects past the slide's drawing budgets, drawn whole from
+ *   geometry units on outputs and as their legacy shapes elsewhere, or without their effects: the converter's
+ *   notes), and the hub's view of it (`hubClasses`, M9's budget ladder):
  *   `stored` (the slide as the hub stores it; 0 for a picture slide), `hub` (its class once the hub's §3.4
  *   budgets ran: hybrid when the ladder left something out, never a picture for its size), `hubWhy` (why the
  *   ladder changed it: `slide` over 64 KB, `presentation` for the tail, `geoms` for its outline files; null
@@ -93,7 +94,7 @@ function noted(notes: readonly string[], re: RegExp): number {
 
 /**
  * What the slide budgets did to a slide (M9, `decor-conv`): its decorations, the pictures drawn from sheets,
- * the elements culled and the objects past its drawing budgets (named for its decoration plate). Zeros left
+ * the elements culled and the objects past its drawing budgets (`emit.ts` `fitDrawing`'s notes). Zeros left
  * out.
  */
 export function budgetColumns(
@@ -107,10 +108,8 @@ export function budgetColumns(
     culled:
       noted(notes, /^(\d+) element\(s\) outside the slide are not imported$/) +
       noted(notes, /^(\d+) shape\(s\) that show nothing are not imported$/),
-    plate: noted(
-      notes,
-      /^(\d+) object\(s\) past the slide's drawing budget are drawn from its decoration plate/,
-    ),
+    // Both notes of `emit.ts` `fitDrawing`: drawn whole from geometry units, and drawn without their effects.
+    plate: noted(notes, /^(\d+) object\(s\) past the slide's drawing budget are drawn /),
   };
   for (const k of Object.keys(out)) if (!out[k]) delete out[k];
   return out;

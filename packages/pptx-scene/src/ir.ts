@@ -420,8 +420,10 @@ export interface ShapeElement extends ElementBase {
   /** The XML node, for later milestones (custom geometry, effects). Do not keep it past emission. */
   node?: XNode;
   /**
-   * Custom geometry only: the share of the box its paths fill (0-1, curves taken by their end points),
-   * when every point could be read. M1 draws the legacy rect only when most of the box is filled.
+   * Custom geometry only: the share of the box its paths fill (0-1, curves taken by their end points, holes
+   * counted as ink), when every point could be read (`walk.ts` `pathCoverage`). It chooses the legacy shape
+   * only of a geometry past the converter's bounds (`custom.over`, no paths built: drawn as its rect unless
+   * this is known and below MIN_RECT_COVERAGE); a built one is rated by `CustomPaths.ink`.
    */
   coverage?: number;
   /** Custom geometry built (M6, `geom.ts`): its paths, text rectangle and connection sites. */
@@ -473,10 +475,16 @@ export interface CustomPaths {
    */
   cost?: number;
   /**
-   * Past the drawing budgets (`GEOM_COST`, `slideCustom`). Since M9 (`decor-conv`) kept whole: drawn from the
-   * slide's decoration plate, as its legacy shape by a drawer until one exists; never sent to the art.
+   * Past the drawing budgets (`GEOM_COST`, `slideCustom`). Since M9 (`decor-conv`) kept whole: drawn whole
+   * from a geometry unit on outputs and as its legacy shape elsewhere (`ink` chooses it); never sent to the art.
    */
   complex?: boolean;
+  /**
+   * The share of its box the built paths fill under the even-odd rule (`geom.ts` `inkOf`: holes taken away,
+   * curves flattened, capped at 1); undefined when it cannot be worked out within the renderer's nesting
+   * bounds. What its legacy shape is chosen by (`emit.ts`: a line below MIN_RECT_COVERAGE or unknown).
+   */
+  ink?: number;
   /** `a:rect` as fractions of the box: l, t, r, b. */
   text: [number, number, number, number];
   /** `a:cxnLst` as fractions of the box, with the angle a connector leaves at (degrees clockwise). */

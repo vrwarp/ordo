@@ -28,8 +28,8 @@
  * composites, an atlas instead), so the `budget:*` rows are written only behind `ParseOptions.budgetArt`
  * (the harness's A/B), and `3d:flat-in-decoration` (approx) marks real 3-D drawn flat inside a decoration.
  * Nothing goes to the art for being slow to draw (decisions.md "Slow-to-draw elements"): `custGeom:complex`
- * and `geom:complex` are native, kept whole and drawn from the slide's decoration plate, and no longer
- * written.
+ * and `geom:complex` are native, kept whole, drawn whole from a geometry unit on outputs and as their legacy
+ * shapes elsewhere, and no longer written.
  *
  * Pure: tables and lookups; deck strings are only compared, never used as object keys.
  */
@@ -285,14 +285,14 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
     features: ['custGeom'],
     decision: 'native',
     by: 'reader',
-    note: "custom geometry past the slide's drawing budget: kept whole, drawn from the slide's decoration plate (M9; no longer written)",
+    note: "custom geometry past the slide's drawing budget: kept whole, drawn whole from a geometry unit on outputs; its legacy shape elsewhere (M9; no longer written)",
   },
   {
     reason: 'geom:complex',
     features: [],
     decision: 'native',
     by: 'reader',
-    note: "a preset past the slide's drawing budget: kept whole, drawn from the slide's decoration plate (M9; no longer written)",
+    note: "a preset past the slide's drawing budget: kept whole, drawn whole from a geometry unit on outputs; its legacy shape elsewhere (M9; no longer written)",
   },
   {
     reason: 'preset:*',
