@@ -167,3 +167,79 @@ test('(e) the service worker precaches every built file, as before', async ({ pa
     ),
   ).toMatch(/\/sw\.js$/);
 });
+
+/**
+ * A chunk that fails to load on the venue PC (review of P0): the live view waited on every regular page, so one
+ * failed Import tab fetch showed "Part of ordo could not be loaded" instead of the live view, and in Chromium its
+ * Retry could never succeed (a failed dynamic import stays failed for the document; WebKit fetches again). Now a
+ * page the live view does not need fails on its own page only, and the gate's Retry reloads the page when
+ * importing again cannot work. Service workers are blocked, as on a first visit (the worker would serve the
+ * chunk from its cache).
+ */
+test.describe('a chunk that fails once', () => {
+  test.use({ serviceWorkers: 'block' });
+
+  /** Abort the first fetch of a built chunk (by its file name's start); count every fetch of it. */
+  async function failOnce(page: Page, name: string): Promise<{ fetches: () => number }> {
+    let fetches = 0;
+    await page.route(new RegExp(`/assets/${name}-[^/]+\\.js$`), (route) => {
+      fetches++;
+      if (fetches === 1) return route.abort('connectionreset');
+      return route.continue();
+    });
+    return { fetches: () => fetches };
+  }
+
+  test('(f) the Import tab fails: the live view comes up at once; the tab shows its own error and loads on Try again', async ({
+    page,
+  }) => {
+    const imp = await failOnce(page, 'ImportTab');
+    await login(page, op);
+    expect(imp.fetches()).toBe(1);
+    await expect(page.locator('[data-gate-error]')).toHaveCount(0);
+    // The live keys work.
+    const before = await hubLive(api);
+    await page.bringToFront();
+    await page.keyboard.press('Space');
+    await expect.poll(() => hubLive(api), { timeout: 15_000 }).not.toBe(before);
+    // The tab itself: its error, and Try again brings it (Chromium: by a reload, the service not live here).
+    await json(
+      api.post('live/events', { data: { id: 'end-f', event: { k: 'endService', at: Date.now() } } }),
+    );
+    await page.evaluate(() => {
+      location.hash = '#/library/import';
+    });
+    await expect(page.locator('[data-page-error="import"]')).toBeVisible({ timeout: 20_000 });
+    await page.getByRole('button', { name: 'Try again' }).click();
+    await expect(page.locator('[data-pptx-import-mode]')).toBeVisible({ timeout: 30_000 });
+    // Fetched again (Chromium keeps the failed import: the page reloaded to get it).
+    expect(imp.fetches()).toBe(2);
+    await liveService(api, 1);
+  });
+
+  test('(g) the live view’s chunk fails: the error card, and Retry brings up the live view', async ({
+    page,
+  }) => {
+    const live = await failOnce(page, 'LiveView');
+    let loads = 0;
+    page.on('load', () => {
+      loads++;
+    });
+    await page.goto(`${op}/`);
+    await page.locator('input.pin').fill('246810');
+    await page.getByRole('button', { name: 'OK' }).click();
+    await expect(page.locator('[data-gate-error]')).toBeVisible({ timeout: 20_000 });
+    await page.getByRole('button', { name: 'Retry' }).click();
+    // Before: Retry imported again, Chromium answered from its failed import, and the card stayed (3 tries).
+    await expect(page.getByRole('button', { name: 'Launch outputs' })).toBeVisible({ timeout: 30_000 });
+    expect(live.fetches()).toBe(2);
+    // By a reload: the Shell had not mounted, so no output window or service was there to lose.
+    expect(loads).toBe(2);
+  });
+});
+
+async function json<T>(p: Promise<import('@playwright/test').APIResponse>): Promise<T> {
+  const r = await p;
+  if (!r.ok()) throw new Error(`${r.url()} -> ${r.status()} ${await r.text()}`);
+  return (await r.json()) as T;
+}

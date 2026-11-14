@@ -68,9 +68,10 @@ export function installDialogEscape(onClose: () => void, target: Target = window
 /**
  * Bottom sheets (design/28 §2.2 "Sheets", the compact layout only): while one is open the page behind it,
  * `#root`, is `inert` (sheets are portalled to `body`, outside it), so a tap, a screen reader or Tab never
- * reaches the frame under the sheet. Counted like the modals: the last sheet to close lifts it.
+ * reaches the frame under the sheet. Counted like the modals: the last sheet to close lifts it. The compact
+ * sign-in over an ended session is a layer of its own (also outside `#root`) and holds it too.
  */
-const sheets: object[] = [];
+const sheets: { dismiss?: () => void }[] = [];
 
 function setRootInert(doc: Document, on: boolean): void {
   const root = doc.getElementById('root');
@@ -79,9 +80,12 @@ function setRootInert(doc: Document, on: boolean): void {
   else root.removeAttribute('inert');
 }
 
-/** Register an open sheet: `#root` turns inert; returns its removal (the last one lifts it). */
-export function registerSheet(doc: Document = document): () => void {
-  const me = {};
+/**
+ * Register an open sheet: `#root` turns inert; returns its removal (the last one lifts it). `dismiss` closes
+ * it when every sheet must go (`dismissSheets`); a layer without one stays.
+ */
+export function registerSheet(doc: Document = document, dismiss?: () => void): () => void {
+  const me = { dismiss };
   sheets.push(me);
   setRootInert(doc, true);
   return () => {
@@ -89,6 +93,15 @@ export function registerSheet(doc: Document = document): () => void {
     if (i >= 0) sheets.splice(i, 1);
     if (!sheets.length) setRootInert(doc, false);
   };
+}
+
+/**
+ * Close every open sheet that can be closed (the session ended under them: review of P0, the sign-in over an
+ * ended session drawn above a sheet the page could no longer see, its keypad taps landing on the sheet). Each
+ * closes through its own onClose, as a tap on its close button does.
+ */
+export function dismissSheets(): void {
+  for (const s of [...sheets].reverse()) s.dismiss?.();
 }
 
 /** Sheets open (for tests). */

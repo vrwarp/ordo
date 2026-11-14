@@ -47,13 +47,17 @@ ordo/
   headroom printed; the compact precache (`FILES_COMPACT` of `dist/sw.js`); and a violation for any file
   of either set whose source map lists a `COMPACT_FORBIDDEN` source (the canvas editor, Konva, the live
   view, Setup, the settings pages, the output and control-surface services, the preset geometry, the import
-  worker) or a worker other than the core and thumbnail workers; `--check` fails on either. It prints the
-  operator's regular total (every script but the workers, what the venue PC loads) for the PR body. New code
+  worker) or a worker other than the core and thumbnail workers; `--check` fails on either. The operator's
+  regular total (every script but the workers: what the venue PC loads before its Shell mounts, since the code
+  split) is recorded in the baseline (`regularTotal`, `regularTotalGzip`) and held to the same 2 % budget by
+  `--check`; a baseline without it is not checked on it. New code
   the first paint does not need is loaded when first used: pages come from the page registry
   (`apps/operator/src/pages.ts`: one memoized load per module, rendered synchronously once loaded; not
   `React.lazy`, whose Suspense fallback costs about 300 ms on every first open, even from cache), which a
   regular device preloads at startup in parallel with the session (the venue PC mounts its Shell once every
-  regular page and the operate services have loaded, so it is no slower), and a phone never loads; an M9
+  regular page and the operate services have settled, so it is no slower; only the live view and the operate
+  services must have loaded, any other page that failed is its own page's error, and a Retry reloads the page
+  when importing again cannot work, as in Chromium, which keeps a failed import), and a phone never loads; an M9
   object kind's drawer (`registerShapeDrawerLoader`, loaded by the workers' slide prepare steps and the
   editor canvas before they draw). The service worker precaches by device class (every built file on the
   venue PC and tablets, the compact set on a phone: `apps/operator/src/sw/sets.ts`), so the pages open

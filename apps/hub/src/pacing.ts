@@ -7,7 +7,8 @@
  * - Held: a heavy job (a transcode, a document import, LibreOffice's pictures) while holding, unless its kind
  *   is exempt, when Phones is on (`settings.phones.enabled`), or whatever the switch says when it was queued
  *   during a capped (phone) request (`paced`: design/28 §10 items 8 and 11).
- * - Light tools run under `nice -n 19` with one thread while live and Phones is on.
+ * - Light tools run under `nice -n 19` with one thread while live, when Phones is on or the job was queued during
+ *   a capped request (a phone's audio upload or large photo, whatever the switch says).
  * Phones off and no capped request: nothing is held, nothing niced, no timer.
  */
 import type { JobClass } from './jobs.ts';
@@ -87,21 +88,24 @@ export class JobPacing {
     return Math.min(end, now + MAX_TIMER_MS);
   }
 
-  /** The niceness for a light job's tools: 19 while live with Phones on, else 0. */
-  childNice(): number {
-    return this.mode === 'live' && this.on ? LIVE_NICE : 0;
+  /** The niceness for a light job's tools: 19 while live with Phones on or for a `paced` job, else 0. */
+  childNice(paced = false): number {
+    return this.mode === 'live' && (this.on || paced) ? LIVE_NICE : 0;
   }
 
-  /** ffmpeg's thread count for a light job's tools: 1 while live with Phones on, else its own choice. */
-  lightThreads(): number | undefined {
-    return this.mode === 'live' && this.on ? 1 : undefined;
+  /** ffmpeg's thread count for a light job's tools: 1 while live with Phones on or for a `paced` job. */
+  lightThreads(paced = false): number | undefined {
+    return this.mode === 'live' && (this.on || paced) ? 1 : undefined;
   }
 }
 
-/** What a light job's tools run with now: `{ nice: 19, threads: 1 }` while live with Phones on, else `{}`. */
-export function lightToolPace(p: JobPacing | undefined): { nice?: number; threads?: number } {
+/**
+ * What a light job's tools run with now: `{ nice: 19, threads: 1 }` while live with Phones on, or for a job a
+ * capped request queued (`paced`, `JobQueue.paced`) whatever the switch says; else `{}`.
+ */
+export function lightToolPace(p: JobPacing | undefined, paced = false): { nice?: number; threads?: number } {
   if (!p) return {};
-  const nice = p.childNice();
-  const threads = p.lightThreads();
+  const nice = p.childNice(paced);
+  const threads = p.lightThreads(paced);
   return { ...(nice ? { nice } : {}), ...(threads ? { threads } : {}) };
 }

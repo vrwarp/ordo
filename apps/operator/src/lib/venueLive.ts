@@ -2,6 +2,8 @@ import { api } from '@ordo/client';
 import type { LiveState } from '@ordo/domain';
 import { type LiveRes, type LiveSummaryRes, ROUTES } from '@ordo/protocol';
 import { create } from 'zustand';
+import { refreshSession } from '../state/session.ts';
+import { currentLayout } from './layout.ts';
 
 /**
  * What the venue is running, as an edit-profile device sees it (design/15 "iPad editing"). Its core joins
@@ -89,8 +91,20 @@ export async function fetchVenueLive(
   }
 }
 
-/** Poll the venue's live summary while the page is visible; returns the stop function. */
-export function watchVenueLive(role: 'operate' | 'edit', intervalMs = VENUE_POLL_MS): () => void {
+/**
+ * Poll the venue's live summary while the page is visible; returns the stop function. On the compact layout a
+ * 401 means the hub is there but refused the session (a PIN change, an expiry): `onRefused` asks the hub who
+ * this is at once (refreshSession, which brings up the sign-in) instead of counting toward 'failing', so the
+ * Live now strip never says "can't reach ordo" for the 10 to 15 s before the socket's refusal (review of P0).
+ * The regular layout (the iPad's chip) counts it as before.
+ */
+export function watchVenueLive(
+  role: 'operate' | 'edit',
+  intervalMs = VENUE_POLL_MS,
+  opts: { onRefused?: () => void } = {},
+): () => void {
+  const onRefused =
+    opts.onRefused ?? (currentLayout() === 'compact' ? () => void refreshSession() : undefined);
   let stopped = false;
   let busy = false;
   let fails = 0;
@@ -108,9 +122,13 @@ export function watchVenueLive(role: 'operate' | 'edit', intervalMs = VENUE_POLL
       }
       if (same(live, st.live)) useVenueLive.setState({ seq, status: 'ok' });
       else useVenueLive.setState({ seq, live, status: 'ok' });
-    } catch {
-      // Hub unreachable or signed out: keep the last known, and say so after the second failure in a row.
+    } catch (e) {
       if (stopped) return;
+      if (onRefused && (e as { status?: number }).status === 401) {
+        onRefused();
+        return;
+      }
+      // Hub unreachable: keep the last known, and say so after the second failure in a row.
       fails++;
       if (fails >= VENUE_FAILS && useVenueLive.getState().status !== 'failing')
         useVenueLive.setState({ status: 'failing' });

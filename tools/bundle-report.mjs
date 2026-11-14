@@ -5,10 +5,12 @@
  *
  *   node tools/bundle-report.mjs                    print every app's chunks
  *   node tools/bundle-report.mjs --json out.json    also write them as JSON (for a PR body or a CI artifact)
- *   node tools/bundle-report.mjs --check            fail when an app's initial JavaScript grew more than the
- *                                                   baseline's budget (2 %) over tools/bundle-baseline.json, or
- *                                                   the operator's compact first load is over its budget (300 KB
- *                                                   gzip) or holds code a phone must never load
+ *   node tools/bundle-report.mjs --check            fail when an app's initial JavaScript, or the operator's
+ *                                                   regular total (what the venue PC loads before its Shell),
+ *                                                   grew more than the baseline's budget (2 %) over
+ *                                                   tools/bundle-baseline.json, or the operator's compact first
+ *                                                   load is over its budget (300 KB gzip) or holds code a phone
+ *                                                   must never load
  *   node tools/bundle-report.mjs --write            record the current sizes as the baseline (a PR whose
  *                                                   growth was accepted re-records it, and says why)
  *   --root <dir>                                    read <dir>/apps/<name>/dist and <dir>/tools/ (tests)
@@ -247,8 +249,13 @@ if (at >= 0 && args[at + 1]) {
 
 if (args.includes('--write')) {
   const apps = {};
-  for (const [app, r] of Object.entries(report))
+  for (const [app, r] of Object.entries(report)) {
     apps[app] = { initial: r.initial, initialGzip: r.initialGzip, css: r.css };
+    // The operator's regular total: since the code split the venue PC waits on its pages before the Shell
+    // (App's gate), so it is budgeted as the entry was (review of P0).
+    if (r.regularTotal) apps[app].regularTotal = r.regularTotal.raw;
+    if (r.regularTotal) apps[app].regularTotalGzip = r.regularTotal.gzip;
+  }
   const old = existsSync(BASELINE) ? JSON.parse(readFileSync(BASELINE, 'utf8')) : {};
   // The budget and the compact budget are absolute: kept as they are.
   const next = {
@@ -278,6 +285,16 @@ if (args.includes('--check')) {
       console.error(`bundle-report: over budget: ${line}`);
       failed = true;
     } else console.log(`bundle-report: within budget: ${line}`);
+    // The regular total, where the baseline records one (an older baseline has none: not checked).
+    if (typeof b.regularTotal === 'number' && r.regularTotal) {
+      const rlimit = Math.floor(b.regularTotal * (1 + budget));
+      const rgrowth = ((r.regularTotal.raw - b.regularTotal) / b.regularTotal) * 100;
+      const rline = `${app}: regular total ${kb(r.regularTotal.raw)} against the baseline's ${kb(b.regularTotal)} (${rgrowth >= 0 ? '+' : ''}${rgrowth.toFixed(1)} %, budget +${(budget * 100).toFixed(0)} %)`;
+      if (r.regularTotal.raw > rlimit) {
+        console.error(`bundle-report: over budget: ${rline}`);
+        failed = true;
+      } else console.log(`bundle-report: within budget: ${rline}`);
+    }
   }
   const compact = report.operator?.compact;
   if (base.compact && compact) {

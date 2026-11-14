@@ -418,10 +418,13 @@ export const SESSION_CAPS = SessionCap.options;
 
 /**
  * A route of the API: its access role and the lowest session cap it accepts (design/28 §3.2; both checked in
- * http.ts, the process does not start without them). A capped session's request runs inside the paced scope
- * (reqctx.ts), so every heavy job it queues waits while a service is live.
+ * http.ts, the process does not start without them). With `paced` (the library API only), a capped session's
+ * request runs inside the paced scope (reqctx.ts), so every heavy job it queues waits while a service is live.
+ * The live process's routes never enter it: the first `AsyncLocalStorage.run` turns on promise tracking for the
+ * whole process for good (Node 22), which slowed a GO and its read by about 2x once a phone polled
+ * /live/summary (review of P0, measured), and the live process queues no jobs.
  */
-function routeFn(app: FastifyInstance) {
+function routeFn(app: FastifyInstance, opts: { paced: boolean }) {
   return (
     method: HTTPMethods | HTTPMethods[],
     url: string,
@@ -433,12 +436,14 @@ function routeFn(app: FastifyInstance) {
       method,
       url: API_PREFIX + url,
       config: { access, cap },
-      handler(req, reply) {
-        const p = req.principal;
-        if (p?.kind === 'session' && p.cap !== 'full')
-          return pacedScope.run(true, () => handler.call(this, req, reply));
-        return handler.call(this, req, reply);
-      },
+      handler: opts.paced
+        ? function (req, reply) {
+            const p = req.principal;
+            if (p?.kind === 'session' && p.cap !== 'full')
+              return pacedScope.run(true, () => handler.call(this, req, reply));
+            return handler.call(this, req, reply);
+          }
+        : handler,
     });
 }
 
@@ -448,7 +453,7 @@ function routeFn(app: FastifyInstance) {
  */
 export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
   const { auth, live, cfg } = ctx;
-  const route = routeFn(app);
+  const route = routeFn(app, { paced: false });
   route('GET', '/auth/me', 'public', 'view', async (req): Promise<AuthMeRes> => {
     const p = req.principal;
     return {
@@ -521,15 +526,21 @@ export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
 
 /** Unknown API paths are JSON 404s, never the SPA. Registered once, by whichever process owns the API. */
 export function registerApiNotFound(app: FastifyInstance): void {
-  routeFn(app)(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], '/*', 'public', 'view', async () => {
-    throw notFound('Unknown API route');
-  });
+  routeFn(app, { paced: false })(
+    ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    '/*',
+    'public',
+    'view',
+    async () => {
+      throw notFound('Unknown API route');
+    },
+  );
 }
 
 /** The library API: everything except the live routes. Served by the library process. */
 export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   const { lib, auth, live, cfg } = hub;
-  const route = routeFn(app);
+  const route = routeFn(app, { paced: true });
 
   const by = (req: FastifyRequest) => `${sessionRole(req.principal) ?? 'system'}@${req.ip}`;
   const cookieOpts = (req: FastifyRequest, maxAgeS: number) => ({
@@ -593,10 +604,19 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
 
   route('POST', '/auth/pin', 'public', 'view', async (req, reply) => {
     if (auth.setupRequired()) throw new HttpError(409, 'setup_required', 'Set the PINs first');
-    auth.checkRate(req.ip);
-    const b = validate(PinBody, req.body);
+    // Counted as a failure before the PIN is verified, in the tick that checks the buckets (Auth.beginAttempt):
+    // a burst of concurrent guesses gets at most the bucket's 5 verified.
+    const attempt = auth.beginAttempt(req.ip);
+    let b: z.infer<typeof PinBody>;
+    try {
+      b = validate(PinBody, req.body);
+    } catch (e) {
+      // A malformed body is not a guess.
+      auth.cancelAttempt(attempt);
+      throw e;
+    }
     const role = await auth.matchPin(b.pin);
-    auth.recordAttempt(req.ip, !!role);
+    auth.settleAttempt(attempt, !!role);
     if (!role) throw new HttpError(401, 'wrong_pin', 'Wrong PIN');
     if (b.cap && b.cap !== 'full') {
       startSession(req, reply, role, false, b.cap);

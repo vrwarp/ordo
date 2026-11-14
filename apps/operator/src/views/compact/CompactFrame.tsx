@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ConfirmHost } from '../../components/Confirm.tsx';
-import { trackPresses } from '../../components/dialogEscape.ts';
+import { dismissSheets, registerSheet, trackPresses } from '../../components/dialogEscape.ts';
 import { ErrorBoundary, PageError } from '../../components/ErrorBoundary.tsx';
 import { Toasts } from '../../components/Toasts.tsx';
 import { UpdatingOverlay } from '../../components/UpdatingScreen.tsx';
 import { type MessageKey, t } from '../../i18n/index.ts';
 import { sessionEndedMessage } from '../../lib/hubStatus.ts';
+import { thisIsPhone } from '../../lib/layout.ts';
 import type { Route } from '../../lib/route.ts';
 import { useLibrary } from '../../state/library.ts';
 import { navigate } from '../../useRoute.ts';
@@ -47,7 +49,8 @@ const TABS: { tab: Tab; href: string; label: MessageKey }[] = [
  * now strip and the freshness line and the header, with Back on a detail screen; `.page` is the one scroller;
  * the tab bar (Plans, Library, Media, More) sits at the bottom, padded by the bottom safe area, and a detail
  * screen hides it. Toasts, the confirm sheet, the update overlay and the sign-in over an expired session as on
- * the regular frame.
+ * the regular frame, except that the sign-in closes every open sheet and is a layer of its own outside `#root`,
+ * which turns inert behind it (a sheet made `#root` inert, and the sign-in drawn inside it took no taps).
  */
 export function CompactFrame({ route, signedOut, fallback, body }: FrameProps) {
   const [more, setMore] = useState(false);
@@ -62,6 +65,14 @@ export function CompactFrame({ route, signedOut, fallback, body }: FrameProps) {
   // A sheet gives focus back to the control it opened from; Safari does not focus a tapped button, so the
   // frame records presses (components/dialogEscape.ts).
   useEffect(() => trackPresses(), []);
+  // The session ended: every sheet closes (More, the Live sheet, a media preview, a confirm), and the page
+  // behind the sign-in is inert while it shows (unless this device runs the outputs: never on a phone).
+  useEffect(() => {
+    if (!signedOut) return;
+    setMore(false);
+    dismissSheets();
+    return fallback ? undefined : registerSheet();
+  }, [signedOut, fallback]);
   const back = () => {
     const target = backTarget(route, trail.previous);
     if (target === 'history') history.back();
@@ -115,16 +126,20 @@ export function CompactFrame({ route, signedOut, fallback, body }: FrameProps) {
       <ConfirmHost />
       <UpdatingOverlay />
       {more && <MoreSheet onClose={() => setMore(false)} />}
-      {signedOut && (
-        <div
-          className={fallback ? 'signin-overlay nonmodal' : 'signin-overlay'}
-          data-session-expired
-          data-session-expired-mode={fallback ? 'fallback' : 'hub'}
-        >
-          <div className="banner">{sessionEndedMessage(fallback)}</div>
-          <LoginView autoFocus={false} />
-        </div>
-      )}
+      {signedOut &&
+        createPortal(
+          <div
+            className={fallback ? 'signin-overlay nonmodal' : 'signin-overlay'}
+            data-session-expired
+            data-session-expired-mode={fallback ? 'fallback' : 'hub'}
+          >
+            <div className="banner" data-session-ended-text>
+              {fallback ? sessionEndedMessage(true) : t(thisIsPhone() ? 'signin.endedPhone' : 'signin.ended')}
+            </div>
+            <LoginView autoFocus={false} />
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

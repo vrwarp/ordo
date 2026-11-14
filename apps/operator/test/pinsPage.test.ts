@@ -33,7 +33,9 @@ describe('the Phones switch', () => {
     expect(pinChangedText('operatePin')).toBe(
       'Operate PIN changed. Sessions that signed in with it, phones included, are signed out.',
     );
-    expect(pinChangedText('editPin')).toMatch(/^Edit PIN changed\. .*phones included/);
+    expect(pinChangedText('editPin')).toBe(
+      'Edit PIN changed. Sessions that signed in with it and every phone are signed out.',
+    );
   });
 
   it('sits on the PINs page under the PIN form', () => {

@@ -1,9 +1,8 @@
 import { api, ApiFailure } from '@ordo/client';
-import { type AuthPinReq, type AuthPinRes, ROUTES, type SessionCap } from '@ordo/protocol';
+import { type AuthPinReq, type AuthPinRes, ROUTES } from '@ordo/protocol';
 import { useState } from 'react';
 import { t } from '../../i18n/index.ts';
-import { deviceProfile } from '../../lib/capabilities.ts';
-import { deviceScreen, signInCap, useCurrentLayout } from '../../lib/layout.ts';
+import { thisIsPhone, useCurrentLayout } from '../../lib/layout.ts';
 import {
   hubGrants,
   readResignFlag,
@@ -13,12 +12,6 @@ import {
 } from '../../state/session.ts';
 import { phoneSignIn, safariNotInstalled, signInError } from './phoneSignIn.ts';
 
-/** This device signs in as a phone (design/28 §3.2): from the screen, so Request Desktop Website still is one. */
-function signsInAsPhone(): boolean {
-  const cap: SessionCap | undefined = signInCap(deviceProfile(null), deviceScreen());
-  return cap === 'light';
-}
-
 /**
  * PIN login with a large keypad and "remember this device" (prd/09). `autoFocus` is off when the card sits
  * beside a running service (design/15 "Session expiry"): a focused PIN field would take the GO key. A phone
@@ -27,10 +20,14 @@ function signsInAsPhone(): boolean {
  */
 export function LoginView({
   autoFocus = true,
-  phone = signsInAsPhone(),
+  phone = thisIsPhone(),
 }: {
   autoFocus?: boolean;
-  /** This device is a phone (tests set it; the default reads the device). */
+  /**
+   * This device is a phone (design/28 §3.2: from the screen, so Request Desktop Website still is one). The
+   * default is the page's one decision (lib/layout.ts thisIsPhone), so the sign-in and the page agree: an iPad
+   * whose `screen` follows a window shrunk by the keyboard never signs in capped (review of P0). Tests set it.
+   */
   phone?: boolean;
 } = {}) {
   const compact = useCurrentLayout() === 'compact';

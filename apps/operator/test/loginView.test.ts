@@ -8,7 +8,7 @@ import { ApiFailure } from '@ordo/client';
 import { createElement, type FunctionComponent } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { applyLayout, resetLayoutForTests } from '../src/lib/layout.ts';
+import { applyLayout, resetLayoutForTests, thisIsPhone } from '../src/lib/layout.ts';
 import { RESIGN_KEY } from '../src/state/session.ts';
 import { LoginView } from '../src/views/auth/LoginView.tsx';
 import { type PinCall, phoneSignIn, safariNotInstalled, signInError } from '../src/views/auth/phoneSignIn.ts';
@@ -60,6 +60,26 @@ describe('LoginView', () => {
     );
     expect(html).toContain('class="keypad"');
     expect(html).not.toContain('Phones now sign in');
+  });
+
+  it('by default it is the page’s one phone decision: a tablet whose screen shrinks keeps today’s form', () => {
+    // Where `screen` follows the window (Playwright's WebKit, an emulated device), an iPad under the keyboard
+    // reports 1194x474. Before: the sign-in read the screen again and drew the phone form, signing in capped.
+    const g = globalThis as Record<string, unknown>;
+    try {
+      g.screen = { width: 1194, height: 834 };
+      expect(thisIsPhone()).toBe(false);
+      g.screen = { width: 1194, height: 474 };
+      expect(render({ autoFocus: false })).toBe(TODAY_NO_FOCUS);
+      resetLayoutForTests();
+      g.screen = { width: 390, height: 844 };
+      expect(thisIsPhone()).toBe(true);
+      g.screen = { width: 1194, height: 834 };
+      expect(render({})).toContain('class="keypad"');
+      expect(render({})).not.toContain('Remember');
+    } finally {
+      delete g.screen;
+    }
   });
 
   it('a phone signed out once from its pre-upgrade session says why', () => {

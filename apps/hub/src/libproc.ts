@@ -130,6 +130,7 @@ export async function createLibraryProcess(
     (job) => lib.emit([{ kind: 'job', id: job.id, entity: job }]),
     {
       pacing,
+      notifyMany: (all) => lib.emit(all.map((job) => ({ kind: 'job' as const, id: job.id, entity: job }))),
     },
   );
   phones.onChange((on) => jobs.setPhones(on));

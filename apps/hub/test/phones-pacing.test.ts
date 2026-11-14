@@ -10,8 +10,10 @@ import { join } from 'node:path';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import { newId, type Media, type Playlist, type Presentation } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
+import pino from 'pino';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { JobDeferred } from '../src/jobs.ts';
+import { openDb } from '../src/db.ts';
+import { JobDeferred, JobQueue } from '../src/jobs.ts';
 import { createLibraryProcess, type LibraryProcess } from '../src/libproc.ts';
 import { withThreads } from '../src/media/ffmpeg.ts';
 import { run } from '../src/media/tools.ts';
@@ -30,7 +32,7 @@ import {
   TEST_TOOLS,
   tempDir,
 } from './helpers.ts';
-import { phone } from './phones-helpers.ts';
+import { phone, twoProcesses } from './phones-helpers.ts';
 
 const mediaJob = (hub: TestHub, mediaId: string): Job | undefined => {
   const r = hub.db
@@ -187,6 +189,32 @@ describe('jobs paced while live', () => {
     expect(hub.jobs.get(lo!.id).state).toBe('queued');
   });
 
+  it('Phones off: a phone’s audio upload while live runs its tools at nice 19 on one thread; the venue PC’s does not', async () => {
+    // Before: a light job's tools looked only at the switch, so a phone's long WAV ran ffmpeg at nice 0 with
+    // every thread during the service (review of P0: "those a phone queued whatever the switch says").
+    hub = await startHub({ paceGraceMs: 200 });
+    const op = await login(hub.url, OPERATE_PIN);
+    const ph = await phone(hub.url);
+    await goLive(op);
+    const pacing = hub.jobs.pacing!;
+    const nice = vi.spyOn(pacing, 'childNice');
+    const threads = vi.spyOn(pacing, 'lightThreads');
+    const fromPhone = await upload(ph, fixtures.wav(hub.dir), 'phone.wav');
+    await expect
+      .poll(() => hub!.lib.media.must(fromPhone.id).state, { timeout: budgetMs(30_000) })
+      .toBe('ready');
+    expect(nice.mock.results.map((r) => r.value)).toEqual([19]);
+    expect(threads.mock.results.map((r) => r.value)).toEqual([1]);
+    nice.mockClear();
+    threads.mockClear();
+    const fromPc = await upload(op, fixtures.wav(hub.dir), 'pc.wav');
+    await expect
+      .poll(() => hub!.lib.media.must(fromPc.id).state, { timeout: budgetMs(30_000) })
+      .toBe('ready');
+    expect(nice.mock.results.map((r) => r.value)).toEqual([0]);
+    expect(threads.mock.results.map((r) => r.value)).toEqual([undefined]);
+  });
+
   it('a pump started inside a capped request never marks the jobs another session’s job queues', async () => {
     hub = await startHub({ jobs: { heavy: 1, light: 1 } });
     let first = true;
@@ -309,6 +337,12 @@ describe('light tools while live', () => {
     p.setEnabled(true);
     expect(lightToolPace(p)).toEqual({ nice: 19, threads: 1 });
     expect(lightToolPace(undefined)).toEqual({});
+    // A job a phone queued (paced) gets them while live whatever the switch says, and never outside a service.
+    p.setEnabled(false);
+    expect(lightToolPace(p)).toEqual({});
+    expect(lightToolPace(p, true)).toEqual({ nice: 19, threads: 1 });
+    p.onMode('idle');
+    expect(lightToolPace(p, true)).toEqual({});
     expect(withThreads(['-i', 'in.png', '-vf', 'scale=1', 'out.png'], 1)).toEqual([
       '-i',
       'in.png',
@@ -319,5 +353,120 @@ describe('light tools while live', () => {
       'out.png',
     ]);
     expect(withThreads(['-i', 'a', 'b'], undefined)).toEqual(['-i', 'a', 'b']);
+  });
+});
+
+/**
+ * The first AsyncLocalStorage.run turns on promise tracking for the whole Node 22 process, for good. Measured in
+ * the review of P0: one phone's GET /live/summary made the live process's GO and read cost about 2x (+108 % to
+ * +158 % CPU), and a promise-heavy loop 4x slower; the live process queues no jobs, so the scope did nothing
+ * there. It now stays out of the live process, and a hub with no phone never enters it.
+ */
+describe('the paced scope', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('a phone polling the live process (/live/summary, /auth/me, /health) never enters it; its library request does', async () => {
+    const two = await twoProcesses();
+    try {
+      const ph = await phone(two.base);
+      const run = vi.spyOn(pacedScope, 'run');
+      for (const path of ['/live/summary', '/auth/me', '/health', '/live/summary'])
+        expect((await ph.fetch(path)).status, path).toBe(200);
+      expect(run).not.toHaveBeenCalled();
+      // The proxied library request is what queues a phone's jobs: it still runs inside the scope.
+      expect((await ph.fetch('/library/snapshot')).status).toBe(200);
+      expect(run).toHaveBeenCalledWith(true, expect.any(Function));
+    } finally {
+      await two.close();
+    }
+  });
+
+  it('a hub with no phone runs its jobs outside it; a phone’s job and what it queues run inside it', async () => {
+    const hub = await startHub();
+    try {
+      const run = vi.spyOn(pacedScope, 'run');
+      let childPaced: boolean | undefined;
+      hub.jobs.register('probe', async () => undefined);
+      hub.jobs.register('parent', async () => {
+        childPaced = hub.jobs.paced(hub.jobs.enqueue('probe', {}, 'light').id);
+      });
+      hub.jobs.enqueue('probe', {}, 'light');
+      hub.jobs.enqueue('parent', {}, 'light');
+      await expect.poll(() => childPaced).toBe(false);
+      await hub.jobs.idle();
+      expect(run).not.toHaveBeenCalled();
+      childPaced = undefined;
+      const queued = pacedScope.run(true, () => hub.jobs.enqueue('parent', {}, 'light'));
+      run.mockClear();
+      await expect.poll(() => childPaced).toBe(true);
+      await hub.jobs.idle();
+      expect(hub.jobs.get(queued.id).state).toBe('done');
+      expect(run).toHaveBeenCalledWith(true, expect.any(Function));
+    } finally {
+      await hub.cleanup();
+    }
+  });
+});
+
+/**
+ * goLive and End service tell clients only about jobs whose `waiting` changes, in one library change (review of
+ * P0: with Phones off and no phone, 29 queued heavy jobs gave 29 notifications at goLive and 29 more at End
+ * service, each its own library delta to every session socket; d0f49cb sent none).
+ */
+describe('job notifications at goLive and End service', () => {
+  const queue = (enabled: boolean) => {
+    const db = openDb(join(tempDir(), 'ordo.db'));
+    const one: string[] = [];
+    const batches: Job[][] = [];
+    const jobs = new JobQueue(db, pino({ level: 'silent' }), { heavy: 1, light: 1 }, (j) => one.push(j.id), {
+      pacing: new JobPacing({ graceMs: 0, enabled }),
+      notifyMany: (all) => batches.push(all),
+    });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    jobs.register('heavy-probe', () => gate);
+    jobs.start();
+    for (let i = 0; i < 30; i++) jobs.enqueue('heavy-probe', { i }, 'heavy');
+    return { jobs, one, batches, release, db };
+  };
+
+  it('Phones off, no phone: nothing is sent', async () => {
+    const q = queue(false);
+    await sleep(50);
+    const before = q.one.length;
+    q.jobs.onLiveMode('live');
+    q.jobs.onLiveMode('idle');
+    expect(q.one.length - before).toBe(0);
+    expect(q.batches).toEqual([]);
+    q.release();
+    await q.jobs.stop();
+    q.db.close();
+  });
+
+  it('Phones on: one change at goLive with the 29 queued jobs waiting, one at End service without', async () => {
+    const q = queue(true);
+    await sleep(50);
+    const before = q.one.length;
+    // The running job is stopped and queued again by pause(): its own update says it waits.
+    q.jobs.onLiveMode('live');
+    expect(q.batches).toHaveLength(1);
+    expect(q.batches[0]!.length).toBe(29);
+    expect(q.batches[0]!.every((j) => j.waiting === 'service')).toBe(true);
+    // Nothing changed: nothing sent.
+    q.jobs.setPhones(true);
+    q.jobs.repump();
+    expect(q.batches).toHaveLength(1);
+    q.jobs.onLiveMode('idle');
+    expect(q.batches).toHaveLength(2);
+    expect(q.batches[1]!.every((j) => j.waiting === undefined)).toBe(true);
+    expect(q.batches[1]!.length).toBeGreaterThanOrEqual(29);
+    expect(q.one.length - before).toBeLessThanOrEqual(4);
+    q.release();
+    await q.jobs.stop();
+    q.db.close();
   });
 });

@@ -73,8 +73,8 @@ Setup, Screens and the Banner belong to the venue PC.
 - P1: an optional view PIN for musicians: reading only, without deck notes or unapproved photos.
 - P3: per-phone passes, issued from the iPad or the venue PC by QR code or invite link, unlocked with
   Face ID or a fingerprint, named in History, revocable one by one.
-- A lost phone: change the PIN (P0 to P2) or revoke its pass (P3); the phone's copy is removed on its next
-  contact. A phone that has not reached ordo for 14 days hides its copy until someone signs in.
+- A lost phone: change the edit PIN, which signs out every phone (P0 to P2), or revoke its pass (P3); the
+  phone's copy is removed on its next contact. A phone that has not reached ordo for 14 days hides its copy until someone signs in.
 - Photos lose their location data on upload and wait in an Inbox, hidden from musicians, until an editor
   uses or approves them.
 
@@ -85,8 +85,11 @@ op.church.example") and says "On a phone you can look at everything and make sma
 the venue PC." In Safari it adds that the home-screen app signs in on its own. Too many wrong PINs give the time
 the wait ends, and say when everyone on the same Wi-Fi may share it. A phone that signed in before this release
 is signed out once, with "Phones now sign in for an hour at a time. Enter the PIN again." A phone never sees the
-first-run setup: "ordo is not set up yet. Set it up on the venue PC: it sets the PINs." The venue PC, iPads and
-Android tablets sign in as before.
+first-run setup: "ordo is not set up yet. Set it up on the venue PC: it sets the PINs." When a phone's hour is up
+or a PIN changes, whatever was open on it closes and the sign-in says "Signed out. A phone signs in for an hour
+at a time, and a PIN change signs it out. Enter the PIN to keep looking."; while it connects it says
+"Connecting to ordo…", and "Can't reach ordo. Trying again…" when it cannot. A video waiting for the service
+says "Waiting for the service to end". The venue PC, iPads and Android tablets sign in as before.
 
 With the hub's side in place (P0 integrated, 2026-11-14), that sign-in gets a session of at most an hour that is
 never remembered, and the hub refuses a phone everything a phone must never do (running or changing the

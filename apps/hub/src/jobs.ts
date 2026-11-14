@@ -91,21 +91,41 @@ export class JobQueue {
   private db: DB;
   private log: Logger;
   private limits: { heavy: number; light: number };
-  private notify: (job: Job) => void;
+  private sendOne: (job: Job) => void;
+  private sendMany: (jobs: Job[]) => void;
+  /** The jobs clients were last told wait for the service (`Job.waiting`): `repump` sends only what changes. */
+  private announcedWaiting = new Set<string>();
   /** Jobs paced while live (design/28 §5.3); absent: nothing is ever held. */
   readonly pacing?: JobPacing;
+  /** `notifyMany`: several job changes as one library change (default: `notify` for each). */
   constructor(
     db: DB,
     log: Logger,
     limits: { heavy: number; light: number },
     notify: (job: Job) => void,
-    opts: { pacing?: JobPacing } = {},
+    opts: { pacing?: JobPacing; notifyMany?: (jobs: Job[]) => void } = {},
   ) {
     this.db = db;
     this.log = log;
     this.limits = limits;
-    this.notify = notify;
+    this.sendOne = notify;
+    this.sendMany =
+      opts.notifyMany ??
+      ((jobs) => {
+        for (const j of jobs) notify(j);
+      });
     this.pacing = opts.pacing;
+  }
+
+  /** Tell clients about a job (and remember whether it was said to wait for the service). */
+  private notify(job: Job): void {
+    this.noteWaiting(job);
+    this.sendOne(job);
+  }
+
+  private noteWaiting(job: Job): void {
+    if (job.waiting) this.announcedWaiting.add(job.id);
+    else this.announcedWaiting.delete(job.id);
   }
 
   /**
@@ -362,7 +382,10 @@ export class JobQueue {
 
   /**
    * The live mode or the Phones setting changed: tell clients which queued heavy jobs now wait for the
-   * service (`Job.waiting`), then start what may start and set the timer for the rest.
+   * service, or no longer do (`Job.waiting`), in one change; then start what may start and set the timer for
+   * the rest. Only jobs whose `waiting` changes are sent: with Phones off and no phone, goLive and End service
+   * send nothing, as before P0 (the review measured 29 notifications each, one library delta apiece, for 29
+   * queued heavy jobs).
    */
   repump(): void {
     if (this.stopped) return;
@@ -371,7 +394,15 @@ export class JobQueue {
         `SELECT * FROM jobs WHERE state = 'queued' AND class = 'heavy' ORDER BY created_at, id LIMIT 200`,
       )
       .all() as JobRow[];
-    for (const r of rows) this.notify(toJob(r, this.heldNow(r)));
+    const changed: Job[] = [];
+    for (const r of rows) {
+      const held = this.heldNow(r);
+      if (held !== this.announcedWaiting.has(r.id)) changed.push(toJob(r, held));
+    }
+    if (changed.length) {
+      for (const j of changed) this.noteWaiting(j);
+      this.sendMany(changed);
+    }
     this.pump();
   }
 
@@ -438,8 +469,13 @@ export class JobQueue {
       },
     };
     // The handler runs in its own job's scope: a job it queues inherits this job's flag, and a pump started
-    // inside a capped request never marks another session's jobs (reqctx.ts).
-    const done = pacedScope.run(this.paced(row.id), async () => {
+    // inside a capped request never marks another session's jobs (reqctx.ts). A hub that never saw a phone
+    // never enters the scope at all (`getStore()` is undefined until a first `run`), so it never turns on the
+    // process's promise tracking (Node 22; review of P0).
+    const paced = this.paced(row.id);
+    const inScope = (fn: () => Promise<void>) =>
+      paced || pacedScope.getStore() !== undefined ? pacedScope.run(paced, fn) : fn();
+    const done = inScope(async () => {
       await Promise.resolve();
       try {
         if (!handler) throw new Error(`No handler for job kind ${row.kind}`);

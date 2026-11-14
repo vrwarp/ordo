@@ -8,9 +8,14 @@ import { errorText, toast } from '../../state/toasts.ts';
 export const PHONES_HELP =
   'When this is on, videos and other slow jobs uploaded during a service wait until it ends, and the hub accepts changes only from ordo pages that are up to date: reload any ordo tab left open. Phones can sign in either way: they look at everything and make small changes, and never run a service.';
 
-/** What changing a PIN does (design/28 §3.2: phones that signed in with it are signed out too). */
+/**
+ * What changing a PIN does (design/28 §3.2, §4): the operate PIN signs out the sessions and phones that signed in
+ * with it; the edit PIN signs out the sessions that signed in with it and every phone.
+ */
 export function pinChangedText(which: 'operatePin' | 'editPin'): string {
-  return `${which === 'operatePin' ? 'Operate' : 'Edit'} PIN changed. Sessions that signed in with it, phones included, are signed out.`;
+  return which === 'operatePin'
+    ? 'Operate PIN changed. Sessions that signed in with it, phones included, are signed out.'
+    : 'Edit PIN changed. Sessions that signed in with it and every phone are signed out.';
 }
 
 /** The switch as drawn: the hub's value, or the one being saved. */

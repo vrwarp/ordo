@@ -9,7 +9,7 @@ import { DEFAULT_LOOKS, type Media } from '@ordo/domain';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { z } from 'zod';
 import { SETTINGS_SCHEMAS } from '../src/library.ts';
-import { affectsContext, CONTEXT_MEDIA_FIELDS, contextMediaIds } from '../src/librarylink.ts';
+import { affectsContext, CONTEXT_MEDIA_FIELDS, contextMediaIds, forOutputs } from '../src/librarylink.ts';
 import { fixtures } from './fixtures.ts';
 import {
   byType,
@@ -99,6 +99,21 @@ describe('contextMediaIds and affectsContext', () => {
     // No logo set: a media change no longer counts (it did before P0).
     expect(affectsContext({ kind: 'media', id: 'photo' }, new Set())).toBe(false);
   });
+
+  it('outputs get what the context gets, less the Phones switch (the live process still refreshes for it)', () => {
+    const ids = new Set(['logo']);
+    expect(forOutputs({ kind: 'settings', id: 'phones' }, ids)).toBe(false);
+    expect(affectsContext({ kind: 'settings', id: 'phones' }, ids)).toBe(true);
+    for (const c of [
+      { kind: 'settings' as const, id: 'general' },
+      { kind: 'settings' as const, id: 'looks' },
+      { kind: 'settings' as const, id: 'outputs' },
+      { kind: 'font' as const, id: 'f' },
+      { kind: 'media' as const, id: 'logo' },
+    ])
+      expect(forOutputs(c, ids), `${c.kind} ${c.id}`).toBe(true);
+    expect(forOutputs({ kind: 'media', id: 'photo' }, ids)).toBe(false);
+  });
 });
 
 describe('what reaches an output', () => {
@@ -148,6 +163,30 @@ describe('what reaches an output', () => {
     await ws.next((x) => x.t === 'library.delta' && JSON.stringify(x.changes).includes(hold.id));
     ws.close();
   });
+
+  for (const model of ['one process', 'two processes'] as const)
+    it(`${model}: toggling Phones sends an output nothing; the live process still learns it`, async () => {
+      // Before: every output got a library.delta for settings 'phones' and refetched /output/config.
+      const base = model === 'one process' ? (hub = await startHub()).url : (two = await twoProcesses()).base;
+      const op = await login(base, OPERATE_PIN);
+      const outputs =
+        model === 'one process' ? hub!.lib.getSetting('outputs') : two!.lib.lib.getSetting('outputs');
+      const out = outputs[0]!;
+      const ws = await connectWs(base, { token: out.token, hello: { role: 'output', outputId: out.id } });
+      await ws.next(byType('welcome'));
+      const me = await connectWs(base, { cookie: op.cookie, hello: { role: 'operate' } });
+      await me.next(byType('welcome'));
+      await op.json('/settings/phones', { method: 'PUT', json: { enabled: true } });
+      // The operator hears of it (the PINs page follows it).
+      await me.next((x) => x.t === 'library.delta' && JSON.stringify(x.changes).includes('phones'));
+      if (two) await expect.poll(() => two!.live.link.context?.settings.phones?.enabled).toBe(true);
+      await op.json('/settings/phones', { method: 'PUT', json: { enabled: false } });
+      await sleep(300);
+      expect(deltas(ws)).toHaveLength(0);
+      if (two) expect(two.live.link.context?.settings.phones?.enabled).toBe(false);
+      ws.close();
+      me.close();
+    });
 
   it('two processes: no context refresh for a media change outside the context, one for a settings change', async () => {
     two = await twoProcesses();

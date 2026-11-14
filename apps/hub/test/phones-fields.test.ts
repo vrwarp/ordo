@@ -65,6 +65,36 @@ describe('per-field caps', () => {
     expect(ipadSave.status).toBe(200);
   });
 
+  it('a phone may not add a slide sound or an auto-advance time; the iPad may (review of P0, C1)', async () => {
+    // Before: this PUT from a light session answered 200.
+    const n = structuredClone(p);
+    n.sections[0]!.slides[1]!.audio = { mediaId: 'some-media', loop: true, gainDb: 100, start: 'auto' };
+    n.sections[0]!.slides[1]!.durationMs = 1;
+    const res = await ph.fetch(`/presentations/${p.id}`, { method: 'PUT', json: n });
+    expect(res.status).toBe(403);
+    expect(await refusal(res)).toMatchObject({
+      code: 'cap',
+      field: 'slide.audio',
+      slideId: n.sections[0]!.slides[1]!.id,
+      message: expect.stringMatching(/sound/),
+    });
+    delete n.sections[0]!.slides[1]!.audio;
+    const timed = await ph.fetch(`/presentations/${p.id}`, { method: 'PUT', json: n });
+    expect(await refusal(timed)).toMatchObject({ code: 'cap', field: 'durationMs' });
+    expect((await ipad.fetch(`/presentations/${p.id}`, { method: 'PUT', json: n })).status).toBe(200);
+    // A new song from typed words (P2's seam) is accepted; one that names a file is not.
+    const typed = await ph.fetch('/presentations', {
+      method: 'POST',
+      json: { ...song('Typed'), source: { kind: 'paste' } },
+    });
+    expect(typed.status).toBe(201);
+    const filed = await ph.fetch('/presentations', {
+      method: 'POST',
+      json: { ...song('Filed'), source: { kind: 'paste', fileId: 'f'.repeat(64) } },
+    });
+    expect(await refusal(filed)).toMatchObject({ code: 'cap', field: 'source' });
+  });
+
   it('a phone may not set PowerPoint data (no LibreOffice follow-up from a phone)', async () => {
     const n = structuredClone(p);
     n.sections[0]!.slides[1]!.pptx = {

@@ -183,4 +183,28 @@ describe('bundle report: the compact first load', () => {
       readFileSync(join(root, 'apps/operator/dist/assets/index-AAAAAAAA.js')).length,
     );
   });
+
+  it('--write records the regular total; --check fails when it grows over the budget (review of P0)', () => {
+    const root = fakeRoot(tree('console.log(1);'), BASE);
+    execFileSync(process.execPath, [SCRIPT, '--root', root, '--write'], { encoding: 'utf8' });
+    const b = JSON.parse(readFileSync(join(root, 'tools/bundle-baseline.json'), 'utf8'));
+    const { report } = run(root);
+    expect(b.apps.operator.regularTotal).toBe(report.operator.regularTotal.raw);
+    expect(b.apps.operator.regularTotalGzip).toBe(report.operator.regularTotal.gzip);
+    expect(run(root, '--check').status).toBe(0);
+    // A lazy page grows by more than 2 % of the regular total: the entry is unchanged, the check fails.
+    const grown = fakeRoot(
+      tree('console.log(1);', { 'assets/EditorView-GGGGGGGG.js': 'x'.repeat(5_000) }),
+      b,
+    );
+    const r = run(grown, '--check');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('operator: regular total');
+    // A baseline without one (older) is not checked on it.
+    const old = fakeRoot(tree('console.log(1);', { 'assets/EditorView-GGGGGGGG.js': 'x'.repeat(5_000) }), {
+      ...b,
+      apps: { operator: { ...b.apps.operator, regularTotal: undefined } },
+    });
+    expect(run(old, '--check').status).toBe(0);
+  });
 });

@@ -179,6 +179,17 @@ export const REGULAR_FULL: readonly Chunk<unknown>[] = [
   OPERATE as Chunk<unknown>,
 ];
 
+/**
+ * What the venue PC's live view and keys cannot run without: the live view and the operate services. Only their
+ * failure holds the Shell back (the error card); any other regular page that fails to load is the error of its
+ * own page (PageHost), so a library tab that did not load never keeps the venue PC from its live view (review
+ * of P0: one failed Import tab fetch stopped the service from starting).
+ */
+export const VENUE_CRITICAL: readonly Chunk<unknown>[] = [
+  PAGES.live as Chunk<unknown>,
+  OPERATE as Chunk<unknown>,
+];
+
 /** Every chunk a set needs, loaded (true), with the first error if one failed. */
 export function setState(chunks: readonly Chunk<unknown>[]): { ready: boolean; error?: unknown } {
   let ready = true;
@@ -190,10 +201,65 @@ export function setState(chunks: readonly Chunk<unknown>[]): { ready: boolean; e
   return { ready };
 }
 
-/** Hook form of setState, loading each chunk while `enabled` (the full profile's gate in App). */
+/**
+ * The venue PC's gate: ready once every chunk has settled (so a page opens with no "Loading…", as before) and the
+ * critical ones loaded; the error is a critical chunk's. A failed page that is not critical settles too.
+ */
+export function gateState(
+  all: readonly Chunk<unknown>[],
+  critical: readonly Chunk<unknown>[],
+): { ready: boolean; error?: unknown } {
+  for (const c of critical) {
+    const s = c.state();
+    if (s.status === 'failed') return { ready: false, error: s.error };
+  }
+  for (const c of [...all, ...critical]) {
+    const st = c.state().status;
+    if (st === 'failed' && !critical.includes(c)) continue;
+    if (st !== 'loaded') return { ready: false };
+  }
+  return { ready: true };
+}
+
+/**
+ * Load the failed chunks again; if one still fails and reloading is safe, reload the page. Chromium (the venue
+ * PC's browser) keeps a failed dynamic import for the life of the document and never fetches it again, so a
+ * Retry that only imports again can never succeed there (review of P0, measured; WebKit fetches again). The
+ * reload happens only when the hub answers (`reachable`: a reload while it is down would leave the browser's
+ * own error page) and `safe` says so (no service runs from this page).
+ */
+export async function retryOrReload(
+  chunks: readonly Chunk<unknown>[],
+  deps: { reachable: () => Promise<boolean>; reload: () => void; safe?: () => boolean },
+): Promise<'loaded' | 'reloading' | 'failed'> {
+  const failed = chunks.filter((c) => c.state().status === 'failed');
+  const results = await Promise.allSettled(failed.map((c) => c.load()));
+  if (results.every((r) => r.status === 'fulfilled')) return 'loaded';
+  if (deps.safe && !deps.safe()) return 'failed';
+  if (!(await deps.reachable().catch(() => false))) return 'failed';
+  deps.reload();
+  return 'reloading';
+}
+
+/** Whether the hub answers now (GET /api/v1/health, no cache, 5 s at most). */
+export async function hubAnswers(): Promise<boolean> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 5000);
+  try {
+    const r = await fetch('/api/v1/health', { cache: 'no-store', signal: ctrl.signal });
+    return r.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/** Hook form of a set's state, loading each chunk while `enabled` (the full profile's gate in App). */
 export function useChunks(
   chunks: readonly Chunk<unknown>[],
   enabled: boolean,
+  critical: readonly Chunk<unknown>[] = chunks,
 ): { ready: boolean; error?: unknown } {
   const key = useSyncExternalStore(
     (fn) => {
@@ -209,7 +275,7 @@ export function useChunks(
     for (const c of chunks) loadIfEnabled(c, enabled);
   }, [chunks, enabled]);
   void key;
-  return setState(chunks);
+  return critical === chunks ? setState(chunks) : gateState(chunks, critical);
 }
 
 /** Load every failed chunk of a set again (the error card's Retry). */

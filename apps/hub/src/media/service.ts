@@ -463,9 +463,9 @@ export class MediaService {
       onProgress: (f: number) => ctx.progress(f * 0.9),
       trim,
     };
-    // A light job's tools (stills, images, audio) run niced on one thread while a service is live and Phones
-    // is on (design/28 §5.3); heavy ones (video, animated GIF) are held then instead.
-    const pace = lightToolPace(this.jobs.pacing);
+    // A light job's tools (stills, images, audio) run niced on one thread while a service is live, when Phones
+    // is on or a phone queued the job (design/28 §5.3); heavy ones (video, animated GIF) are held then instead.
+    const pace = lightToolPace(this.jobs.pacing, this.jobs.paced(ctx.id));
 
     if (m.original.mime === 'image/gif') {
       const gi = gifInfo(await readFile(input));

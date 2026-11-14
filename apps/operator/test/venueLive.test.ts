@@ -79,4 +79,29 @@ describe('watchVenueLive status', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(answers).toHaveLength(1);
   });
+
+  it('a 401 (the hub refused the session) asks who this is at once and never reads as unreachable', async () => {
+    // Before: a PIN change read as "Live status unknown: can't reach ordo" for 10 to 15 s, until the socket's
+    // refusal brought up the sign-in.
+    const refused = () => () => {
+      throw Object.assign(new Error('Sign in'), { status: 401 });
+    };
+    answers.push(live(1), refused(), refused(), refused());
+    const asked: number[] = [];
+    const stop = watchVenueLive('edit', 1000, { onRefused: () => asked.push(Date.now()) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useVenueLive.getState().status).toBe('ok');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(asked).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(asked).toHaveLength(3);
+    expect(useVenueLive.getState().status).toBe('ok');
+    stop();
+    // The regular layout (the iPad's chip) counts a 401 as a failure, as before.
+    answers.push(live(1), refused(), refused());
+    const ipad = watchVenueLive('edit', 1000);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(useVenueLive.getState().status).toBe('failing');
+    ipad();
+  });
 });

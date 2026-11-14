@@ -12,7 +12,10 @@
  * gets the stripped library delta; GET /live/summary every 8 s); `--upload-video MB` has the first phone upload
  * a generated video of that size by the resumable API during the service, `--upload-photo` a photo. The report
  * says whether the video waited for the service, how many config requests the outputs made meanwhile (none may),
- * and how many phone requests were refused.
+ * and how many phone requests were refused. The outputs are sampled once before the phones sign in, and the
+ * uploads run beside the GO loop (it keeps going until they are done), so the frames the outputs miss while the
+ * phones sign in and while the files are uploaded are counted; the window of the uploads is reported on its
+ * own, and a missed or late frame inside it fails the run.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -20,13 +23,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type APIRequestContext, chromium, type Page, request } from 'playwright';
 import {
+  inWindow,
   type PhonesSummary,
   phonesPass,
   type Sample,
   type SoakReport,
   summarize,
   toMarkdown,
+  type UploadWindow,
   videoWaited,
+  windowPass,
 } from './report.ts';
 
 type Args = {
@@ -266,54 +272,8 @@ async function main(): Promise<void> {
     );
   }
 
-  // The phones phase: from here to End service (design/28 §5.3).
-  const caps = Array.isArray(me.caps) && me.caps.includes('light');
-  const crowd = a.phones > 0 ? await startPhones(a.hub, a.pin, a.phones, me.version, caps) : undefined;
-  phonesPhase = !!crowd;
-  let videoId: string | undefined;
-  let photoId: string | undefined;
-  const videoStates: string[] = [];
-  const uploader = crowd?.phones[0]?.api;
-  const files: string[] = [];
-  if (uploader && a.uploadPhoto) {
-    const photo = makePhoto();
-    files.push(photo);
-    const r = await uploader.post('media', {
-      multipart: { file: { name: 'soak-photo.png', mimeType: 'image/png', buffer: readFileSync(photo) } },
-    });
-    crowd!.counts.requests++;
-    if (r.ok()) photoId = ((await r.json()) as { id: string }).id;
-    else crowd!.counts.refused++;
-  }
-  if (uploader && a.uploadVideoMb) {
-    const video = makeVideo(a.uploadVideoMb);
-    files.push(video);
-    console.log(`uploading a ${a.uploadVideoMb} MB video from a phone during the service`);
-    videoId = await uploadResumable(uploader, video, 'soak-video.mkv').catch((e) => {
-      crowd!.counts.refused++;
-      console.error(`video upload failed: ${(e as Error).message}`);
-      return undefined;
-    });
-  }
-
   const samples: Sample[] = [];
-  const startedAt = new Date().toISOString();
-  const end = Date.now() + a.minutes * 60_000;
-  let gos = 0;
-  let nextGo = Date.now();
-  console.log(`running for ${a.minutes} minutes, GO every ${a.interval} s`);
-  while (Date.now() < end) {
-    if (Date.now() >= nextGo) {
-      const st = await api<{ state: { live?: number; cues: unknown[] } }>('GET', '/live');
-      if (st.state.live !== undefined && st.state.live >= st.state.cues.length - 1)
-        await api('POST', '/live/events', {
-          id: `soak-wrap-${gos}`,
-          event: { k: 'go', cueIndex: 0, at: Date.now() + 50 },
-        });
-      else await api('POST', '/actions', { id: 'next' });
-      gos++;
-      nextGo += a.interval * 1000;
-    }
+  const sampleAll = async () => {
     for (const { id, page } of pages) {
       const t = await page
         .evaluate(() =>
@@ -334,11 +294,82 @@ async function main(): Promise<void> {
         error: typeof t.error === 'string' ? t.error : undefined,
       });
     }
+  };
+  const startedAt = new Date().toISOString();
+  // The baseline: every output's counters before the phones sign in, so what they miss from here is counted.
+  await sampleAll();
+
+  // The phones phase: from here to End service (design/28 §5.3).
+  const caps = Array.isArray(me.caps) && me.caps.includes('light');
+  const crowd = a.phones > 0 ? await startPhones(a.hub, a.pin, a.phones, me.version, caps) : undefined;
+  phonesPhase = !!crowd;
+  let videoId: string | undefined;
+  let photoId: string | undefined;
+  const videoStates: string[] = [];
+  const uploader = crowd?.phones[0]?.api;
+  const files: string[] = [];
+  // The uploads run beside the GO loop (a 500 MB upload goes through the live process for minutes).
+  let window: UploadWindow | undefined;
+  let uploads: Promise<void> = Promise.resolve();
+  if (uploader && (a.uploadPhoto || a.uploadVideoMb)) {
+    const w: UploadWindow = { start: Date.now() };
+    window = w;
+    uploads = (async () => {
+      if (a.uploadPhoto) {
+        const photo = makePhoto();
+        files.push(photo);
+        const r = await uploader.post('media', {
+          multipart: { file: { name: 'soak-photo.png', mimeType: 'image/png', buffer: readFileSync(photo) } },
+        });
+        crowd!.counts.requests++;
+        if (r.ok()) photoId = ((await r.json()) as { id: string }).id;
+        else crowd!.counts.refused++;
+      }
+      if (a.uploadVideoMb) {
+        const video = makeVideo(a.uploadVideoMb);
+        files.push(video);
+        console.log(`uploading a ${a.uploadVideoMb} MB video from a phone during the service`);
+        videoId = await uploadResumable(uploader, video, 'soak-video.mkv').catch((e) => {
+          crowd!.counts.refused++;
+          console.error(`video upload failed: ${(e as Error).message}`);
+          return undefined;
+        });
+      }
+    })().finally(() => {
+      w.end = Date.now();
+    });
+  }
+  let uploading = !!window;
+  void uploads.then(() => {
+    uploading = false;
+  });
+
+  const end = Date.now() + a.minutes * 60_000;
+  let gos = 0;
+  let nextGo = Date.now();
+  console.log(`running for ${a.minutes} minutes (and until the uploads are done), GO every ${a.interval} s`);
+  while (Date.now() < end || uploading) {
+    if (Date.now() >= nextGo) {
+      const st = await api<{ state: { live?: number; cues: unknown[] } }>('GET', '/live');
+      if (st.state.live !== undefined && st.state.live >= st.state.cues.length - 1)
+        await api('POST', '/live/events', {
+          id: `soak-wrap-${gos}`,
+          event: { k: 'go', cueIndex: 0, at: Date.now() + 50 },
+        });
+      else await api('POST', '/actions', { id: 'next' });
+      gos++;
+      nextGo += a.interval * 1000;
+    }
+    await sampleAll();
     if (videoId && samples.length % Math.max(1, pages.length * 5) === 0)
       videoStates.push((await api<{ state: string }>('GET', `/media/${videoId}`)).state);
-    process.stdout.write(`\r${Math.ceil((end - Date.now()) / 1000)} s left, ${gos} GOs   `);
+    process.stdout.write(
+      `\r${Math.max(0, Math.ceil((end - Date.now()) / 1000))} s left${uploading ? ', uploading' : ''}, ${gos} GOs   `,
+    );
     await new Promise((r) => setTimeout(r, 1000));
   }
+  await uploads;
+  await sampleAll();
   console.log('');
   phonesPhase = false;
   let phones: PhonesSummary | undefined;
@@ -366,13 +397,19 @@ async function main(): Promise<void> {
   }
   for (const f of files) rmSync(join(f, '..'), { recursive: true, force: true });
   const summary = summarize(samples, names);
+  const during = window ? inWindow(samples, names, window) : undefined;
   const report: SoakReport = {
     startedAt,
     minutes: a.minutes,
     gos,
     outputs: summary,
     ...(phones ? { phones } : {}),
-    pass: summary.length > 0 && summary.every((o) => o.pass) && phonesPass(phones),
+    ...(window && during ? { uploads: { window, outputs: during } } : {}),
+    pass:
+      summary.length > 0 &&
+      summary.every((o) => o.pass) &&
+      phonesPass(phones) &&
+      (during ? windowPass(during) : true),
   };
   const stamp = startedAt.replace(/[:.]/g, '-');
   writeFileSync(`${a.out}/soak-${stamp}.json`, JSON.stringify({ report, samples }, null, 2));

@@ -103,7 +103,10 @@ The phone specs check layout with `layoutChecks` (`e2e/phone/phonehelpers.ts`, d
 sideways scroll of the document, `.page` or any pane, also after each field is focused; every visible control
 inside the viewport and at least 44x44 by the shared touch audit `e2e/touchaudit.ts`, with no exceptions; the
 Live now strip, the header and the tab bar inside the visual viewport) on every compact route and sheet, at
-390x844 and 390x664 (WebKit), 360x800 (Chromium), 844x390, 320x568 and 200 % text. They run against the real
+390x844 and 390x664 (WebKit), 360x800 (Chromium), 844x390, 320x568 and 200 % text. With `insets` (set by
+`simulateInsets`, the `--safe-*` hooks of `ipad.css`, as iOS reports them to an installed app) every control,
+heading, paragraph and banner under the checked root keeps inside the side insets and under the top one: the
+frame, the sheets and the sign-in over an ended session at 844x390 with 47 px on both sides. They run against the real
 hub: a phone signs in on its keypad (`signInPhone`), `pinBodies` records what it sent and `expectCappedSession`
 checks the capped session (no `ordo_device`, `ordo_session` within an hour, `/auth/me` role `edit` and cap
 `light`). `watchRefusals(page or context)` lists every `/api/` answer that is 403 `cap`, `x_ordo_required` or
@@ -263,7 +266,11 @@ the first phone upload a generated Matroska rawvideo of that size by the resumab
 `--upload-photo` a photo by `POST /media`. The report adds a Phones section: requests and `refused` (phone
 requests the hub answered with an error), `outputConfigFetches` (config requests the outputs made during the
 phones phase) and, for the video, `waited` (it stayed `uploaded` for as long as the service ran). A pass also
-needs no refetch, no refusal and a video that waited. The smoke run (headless, any machine, under the bench
+needs no refetch, no refusal and a video that waited. Every output is sampled once before the phones sign in,
+and the uploads run beside the GO loop, which goes on until they are done, so what the outputs miss while the
+phones sign in and while the files go up is counted; the uploads' window is reported on its own ("While the
+phones uploaded": missed and late frames and long tasks per output), and a missed or late frame inside it fails
+the run. The smoke run (headless, any machine, under the bench
 lock): `pnpm soak --hub http://localhost:<port> --pin <operate PIN> --playlist Sunday --phones 3
 --upload-video 50 --upload-photo --headless --minutes 2`; headless outputs on SwiftShader miss frames, so
 only its Phones section is read there. **The P0 gate** is a rehearsal service on the venue PC with Phones on

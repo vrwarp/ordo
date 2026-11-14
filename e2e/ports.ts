@@ -149,7 +149,7 @@ export const PORT_TABLE = {
   // test's sign-ins, lockouts and live service never meet another's; the row may grow to 26.
   'phone-shell': {
     offset: 310,
-    count: 20,
+    count: 24,
     spec: 'phone/shell.spec.ts',
     what: 'test k: 2k webkit-iphone, 2k+1 chromium-android',
   },

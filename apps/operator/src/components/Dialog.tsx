@@ -35,12 +35,12 @@ export function Dialog(props: {
   // A sheet: the page behind it is inert while it is open, and focus returns to its opener when it closes.
   useEffect(() => {
     if (!sheet) return;
-    const off = registerSheet();
+    const off = registerSheet(document, closable ? () => close.current?.() : undefined);
     return () => {
       off();
       if (opener?.isConnected) opener.focus({ preventScroll: true });
     };
-  }, [sheet, opener]);
+  }, [sheet, opener, closable]);
   if (sheet) {
     const content = (
       <div

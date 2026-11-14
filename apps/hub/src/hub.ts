@@ -15,7 +15,7 @@ import { JobQueue } from './jobs.ts';
 import { JobPacing } from './pacing.ts';
 import { Library, phonesSwitch } from './library.ts';
 import { LiveService, librarySource } from './live.ts';
-import { affectsContext, contextMediaIds } from './librarylink.ts';
+import { contextMediaIds, forOutputs } from './librarylink.ts';
 import { LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
@@ -117,6 +117,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     (job) => lib.emit([{ kind: 'job', id: job.id, entity: job }]),
     {
       pacing,
+      notifyMany: (all) => lib.emit(all.map((job) => ({ kind: 'job' as const, id: job.id, entity: job }))),
     },
   );
   phones.onChange((on) => jobs.setPhones(on));
@@ -143,7 +144,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     const ids = changes.some((c) => c.kind === 'media')
       ? contextMediaIds({ general: lib.getSetting('general'), looks: lib.getSetting('looks') })
       : NO_MEDIA;
-    sockets.broadcastLibrary(changes, (ch) => affectsContext(ch, ids));
+    sockets.broadcastLibrary(changes, (ch) => forOutputs(ch, ids));
   });
 
   const hub: Hub = {

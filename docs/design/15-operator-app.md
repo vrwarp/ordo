@@ -804,7 +804,8 @@ is under 600 CSS px: a phone with Safari's "Request Desktop Website" still is on
 Split View is not. The page decides it once (`thisIsPhone`, at its first call in `main.tsx`), so a tablet
 whose window shrinks never turns into a phone where a browser's `screen` follows the window (an iPad under
 a simulated keyboard in Playwright's WebKit would otherwise lose its open editor to the previews). A phone's
-sign-in asks for the `light` cap (`signInCap`, design/28 §3.2).
+sign-in asks for the `light` cap (`signInCap`, design/28 §3.2); the sign-in's form follows the same one
+decision (`LoginView`'s `phone` is `thisIsPhone()`), so a tablet under the keyboard never signs in capped.
 
 ### The edit profile
 
@@ -846,7 +847,10 @@ sign-in asks for the `light` cap (`signInCap`, design/28 §3.2).
   PC keeps "locked until End service").
   On the compact layout (a phone) the nav chip is replaced by the Live now strip (design/28 §2.2): "Live at
   the venue: <plan> · N locked" from the same poll's plan name and locked ids, never the cue label; "Live
-  status unknown" when offline or after two failed polls; polled at once on `pageshow` and `online` there.
+  status unknown" when offline or after two failed polls; polled at once on `pageshow` and `online` there; a
+  401 there (the hub refused the session) asks `/auth/me` at once (`refreshSession`), so the sign-in comes up
+  instead of "can't reach ordo"; the iPad's chip counts it as a failed poll, as before. The strip keeps to two
+  lines (the Live sheet has the whole name).
   The hub leaves `liveLabel` out for a capped session (a phone, design/28 §3.4); an iPad's uncapped session
   keeps it for its chip.
 
@@ -858,7 +862,14 @@ signs in with; a forced `?profile=full` meets the forced-profile guard. The comp
 (`views/compact/`: the frame with the Live now strip, the freshness line, the header with Back, `.page` and the
 tab bar; More; the P0 bodies of the Library, Media, Plans and a presentation's previews), which the venue PC and
 the iPad's regular layout never load; every dialog is a bottom sheet there (see "Dialogs"); every compact
-control is at least 44 px. On any phone (Request Desktop Website included) and in any capped session, `pageFor`
+control is at least 44 px. When the session ends on the compact layout every open sheet closes
+(`dismissSheets`, each through its own onClose) and the sign-in over it is a layer of its own, portalled
+outside `#root`, which is inert behind it: the sign-in is never under an inert page (a sheet had made `#root`
+inert and its keypad's taps landed on the sheet). It says "Signed out. A phone signs in for an hour at a time,
+and a PIN change signs it out. Enter the PIN to keep looking." on a phone. The waits before the shell read
+"Connecting to ordo…" and "Can't reach ordo. Trying again…" on the compact layout (the regular layout keeps its
+text); sheets and the sign-in keep to the side and top safe areas themselves (`--safe-x`), being outside
+`#root` and its padding. On any phone (Request Desktop Website included) and in any capped session, `pageFor`
 sends Setup, the settings, the live view, Themes, Fonts, Import and the canvas editor elsewhere (design/28 §2.1).
 
 **Sign-in** (`views/auth/LoginView.tsx`, `phoneSignIn.ts`): a phone's form has no "Remember this device", asks

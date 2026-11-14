@@ -8,6 +8,10 @@
  */
 export const en = {
   'shell.loading': 'Getting the library…',
+  // The waits before the shell, on the compact layout (the regular layout keeps "Connecting to the hub…").
+  'shell.connecting': 'Connecting to ordo…',
+  'shell.unreachable': "Can't reach ordo. Trying again…",
+  'shell.retry': 'Try again',
   // ---- sign-in on a phone ----
   'signin.prompt': 'Enter the operate or edit PIN',
   'signin.phoneLine':

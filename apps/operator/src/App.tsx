@@ -9,14 +9,16 @@ import { pageFor, routeHash } from './lib/route.ts';
 import { watchVenueLive } from './lib/venueLive.ts';
 import {
   type Chunk,
+  hubAnswers,
   OPERATE,
   PAGES,
   preloadFor,
   REGULAR_FULL,
-  retryChunks,
+  retryOrReload,
   useChunk,
   useChunkStatus,
   useChunks,
+  VENUE_CRITICAL,
 } from './pages.ts';
 import { controller, startController } from './services/controller.ts';
 import { syncFonts } from './services/fonts.ts';
@@ -24,7 +26,7 @@ import { thumbs } from './services/thumbs.ts';
 import { installUpdateGuard, useUpdate } from './services/update.ts';
 import { useLibrary } from './state/library.ts';
 import { useLive } from './state/live.ts';
-import { capOf, refreshSession, useSession } from './state/session.ts';
+import { capOf, HUB_UNREACHABLE, refreshSession, useSession } from './state/session.ts';
 import { navigate, useRoute } from './useRoute.ts';
 import { LoginView } from './views/auth/LoginView.tsx';
 import { SetupView } from './views/auth/SetupView.tsx';
@@ -59,10 +61,14 @@ export function App() {
 
   // A stale tab that could not update: no hub connection is started, so the reload loop stops here.
   if (updateFailed) return <UpdateFailedScreen />;
+  // The waits before the shell: the compact layout in its own words (design/28 §2.12), the regular as before.
+  const compact = layout === 'compact';
   if (session.status === 'loading')
     return (
       <div className="center">
-        <span className="muted">Connecting to the hub…</span>
+        <span className="muted" data-connecting>
+          {compact ? t('shell.connecting') : 'Connecting to the hub…'}
+        </span>
       </div>
     );
   if (session.status === 'error' && !session.me)
@@ -70,9 +76,11 @@ export function App() {
       <div className="center">
         <div className="card col" style={{ width: 380 }}>
           <h2>ordo</h2>
-          <div className="banner red">{session.error}</div>
+          <div className="banner red" data-session-error>
+            {compact && session.error === HUB_UNREACHABLE ? t('shell.unreachable') : session.error}
+          </div>
           <button type="button" onClick={() => void refreshSession()}>
-            Retry
+            {compact ? t('shell.retry') : 'Retry'}
           </button>
         </div>
       </div>
@@ -92,11 +100,13 @@ export function App() {
 
 /**
  * The venue PC (the operate role on the full profile) mounts its Shell once every regular page and the operate
- * services have loaded (preloaded from main.tsx, in parallel with the session request): its live view and
+ * services have settled (preloaded from main.tsx, in parallel with the session request): its live view and
  * editor then render at once, and the Shell's controller effect installs the operate services synchronously,
- * so the keyboard effect after it finds the surfaces. Until then "Connecting to the hub…"; a chunk that cannot
- * load shows the error card with Retry, never a blank page or an endless "Connecting…". Every other session
- * mounts its Shell at once.
+ * so the keyboard effect after it finds the surfaces. Until then "Connecting to the hub…". Only the live view or
+ * the operate services failing holds it (VENUE_CRITICAL): the error card, whose Retry loads them again and
+ * reloads the page when that cannot work (Chromium keeps a failed import; no Shell or output window is mounted
+ * yet, so a reload is safe). Any other page that failed is its own page's error. Every other session mounts its
+ * Shell at once.
  */
 function OperateGate({
   role,
@@ -109,16 +119,21 @@ function OperateGate({
 }) {
   const profile = useProfile(role);
   const operate = role === 'operate' && profile === 'full';
-  const s = useChunks(REGULAR_FULL, operate);
+  const s = useChunks(REGULAR_FULL, operate, VENUE_CRITICAL);
   if (operate && s.error !== undefined)
     return (
       <div className="center">
         <div className="card col" style={{ width: 380 }}>
           <h2>ordo</h2>
-          <div className="banner red">
+          <div className="banner red" data-gate-error>
             Part of ordo could not be loaded from the hub. Check the connection, then Retry.
           </div>
-          <button type="button" onClick={() => retryChunks(REGULAR_FULL)}>
+          <button
+            type="button"
+            onClick={() =>
+              void retryOrReload(VENUE_CRITICAL, { reachable: hubAnswers, reload: () => location.reload() })
+            }
+          >
             Retry
           </button>
         </div>

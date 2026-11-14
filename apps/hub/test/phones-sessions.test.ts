@@ -78,7 +78,25 @@ describe('capped sessions: storage', () => {
     expect(hub.db.prepare(`SELECT COUNT(*) n FROM capped_sessions`).get()).toEqual({ n: 1 });
   });
 
-  it('a PIN change ends the phones that signed in with that PIN, and only those', async () => {
+  it('an edit PIN change ends every phone, whichever PIN it signed in with (design/28 §4)', async () => {
+    hub = await startHub();
+    // Before: a phone that typed the operate PIN (stored pin 'operate') survived an edit PIN change.
+    const viaOperate = hub.auth.createSession('edit', 'p1', false, Date.now(), {
+      cap: 'light',
+      pin: 'operate',
+    });
+    const viaEdit = hub.auth.createSession('edit', 'p2', false, Date.now(), { cap: 'view', pin: 'edit' });
+    const pc = hub.auth.createSession('operate', 'pc', true);
+    const ipad = hub.auth.createSession('edit', 'ipad', true);
+    await hub.auth.changePin('edit', '444444', hub.auth.session(pc)!.id);
+    expect(hub.auth.session(viaOperate)).toBeNull();
+    expect(hub.auth.session(viaEdit)).toBeNull();
+    expect(hub.db.prepare(`SELECT COUNT(*) n FROM capped_sessions`).get()).toEqual({ n: 0 });
+    expect(hub.auth.session(pc)).toMatchObject({ role: 'operate', cap: 'full' });
+    expect(hub.auth.session(ipad)).toBeNull();
+  });
+
+  it('an operate PIN change ends the phones that signed in with it, and only those', async () => {
     hub = await startHub();
     const viaOperate = hub.auth.createSession('edit', 'p1', false, Date.now(), {
       cap: 'light',

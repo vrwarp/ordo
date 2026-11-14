@@ -62,6 +62,8 @@ type CappedRow = {
   last_seen: number;
   expires_at: number;
 };
+/** A PIN attempt counted as a failure until it is settled (`Auth.beginAttempt`). */
+export type PinAttempt = { ip: string; id: number | bigint; global: number | bigint | undefined; at: number };
 /** A resolved session cookie. */
 export type SessionInfo = { id: string; role: SessionRole; cap: SessionCap };
 
@@ -127,10 +129,14 @@ export class Auth {
     const other = role === 'operate' ? cur.edit : cur.operate;
     if (await argonVerify(other, pin)) throw badRequest('Operate and edit PINs must differ', 'same_pin');
     this.lib.putInternal('_auth.pins', { ...cur, [role]: await argonHash(pin) });
-    // Changing a PIN ends every other session of that role, and every capped session (a phone) that signed in
-    // with that PIN, whatever its role.
+    // Changing a PIN ends every other session of that role. Changing the edit PIN ends every capped session (every
+    // phone, whichever PIN it typed: design/28 §4 "Change the edit PIN to cut off every phone"); changing the
+    // operate PIN ends the phones that signed in with it.
     this.db.prepare(`DELETE FROM sessions WHERE role = ? AND id != ?`).run(role, keepSessionId ?? '');
-    this.db.prepare(`DELETE FROM capped_sessions WHERE pin = ? AND id != ?`).run(role, keepSessionId ?? '');
+    if (role === 'edit')
+      this.db.prepare(`DELETE FROM capped_sessions WHERE id != ?`).run(keepSessionId ?? '');
+    else
+      this.db.prepare(`DELETE FROM capped_sessions WHERE pin = ? AND id != ?`).run(role, keepSessionId ?? '');
   }
 
   /** `operate[:edit]`. Without an edit part the edit PIN is the operate PIN reversed (or +9 if a palindrome). */
@@ -165,13 +171,45 @@ export class Auth {
     if (global.n >= RATE_GLOBAL) throw lockout((global.last ?? now) + RATE_WINDOW_MS, now, 'everyone');
   }
 
-  recordAttempt(ip: string, ok: boolean, now = Date.now()): void {
-    this.db.prepare(`INSERT INTO auth_attempts (ip, at, ok) VALUES (?, ?, ?)`).run(ip, now, ok ? 1 : 0);
-    this.db.prepare(`DELETE FROM auth_attempts WHERE at < ?`).run(now - 7 * 86400_000);
-    if (!ok && !isPrivateAddress(ip)) {
-      this.db.prepare(`INSERT INTO auth_global_failures (at) VALUES (?)`).run(now);
-      this.db.prepare(`DELETE FROM auth_global_failures WHERE at < ?`).run(now - 7 * 86400_000);
+  /**
+   * Count a PIN attempt as a failure before its PIN is verified (design/28 §4): the 429 check and the reservation
+   * run in the same tick, so requests that arrive while earlier ones are still being verified see those as
+   * failures. Without it, every request of a burst passed the check before the first failure was recorded (a
+   * burst of 300 from one address had all 300 verified). `settleAttempt` then records the outcome;
+   * `cancelAttempt` drops a request that was not a guess (a malformed body).
+   */
+  beginAttempt(ip: string, now = Date.now()): PinAttempt {
+    this.checkRate(ip, now);
+    const id = this.db
+      .prepare(`INSERT INTO auth_attempts (ip, at, ok) VALUES (?, ?, 0)`)
+      .run(ip, now).lastInsertRowid;
+    const global = isPrivateAddress(ip)
+      ? undefined
+      : this.db.prepare(`INSERT INTO auth_global_failures (at) VALUES (?)`).run(now).lastInsertRowid;
+    return { ip, id, global, at: now };
+  }
+
+  /** The outcome of a reserved attempt: a success clears its failure rows, a failure keeps them. */
+  settleAttempt(a: PinAttempt, ok: boolean): void {
+    if (ok) {
+      this.db.prepare(`UPDATE auth_attempts SET ok = 1 WHERE id = ?`).run(a.id);
+      if (a.global !== undefined)
+        this.db.prepare(`DELETE FROM auth_global_failures WHERE id = ?`).run(a.global);
     }
+    this.afterAttempt(a.ip, ok, a.at);
+  }
+
+  /** A reserved attempt that was not a guess: both rows go. */
+  cancelAttempt(a: PinAttempt): void {
+    this.db.prepare(`DELETE FROM auth_attempts WHERE id = ?`).run(a.id);
+    if (a.global !== undefined)
+      this.db.prepare(`DELETE FROM auth_global_failures WHERE id = ?`).run(a.global);
+  }
+
+  /** Prune week-old rows; log a failure (and a lockout). */
+  private afterAttempt(ip: string, ok: boolean, now: number): void {
+    this.db.prepare(`DELETE FROM auth_attempts WHERE at < ?`).run(now - 7 * 86400_000);
+    if (!ok) this.db.prepare(`DELETE FROM auth_global_failures WHERE at < ?`).run(now - 7 * 86400_000);
     if (!ok) {
       const n = (
         this.db

@@ -91,6 +91,19 @@ export function affectsContext(c: Change, mediaIds: ReadonlySet<string>): boolea
   return c.kind === 'settings' || c.kind === 'font' || (c.kind === 'media' && mediaIds.has(c.id));
 }
 
+/**
+ * Settings keys the live process reads (its context copy) but outputs never do: their changes refresh the copy
+ * and reach no output socket. `phones` (design/28): toggling the switch sent every output a library delta and a
+ * mid-service /output/config refetch (review of P0); the live process needs it for the x-ordo check.
+ */
+export const SETTINGS_NOT_FOR_OUTPUTS: ReadonlySet<string> = new Set(['phones']);
+
+/** Is a library change part of what outputs read from their config (`affectsContext` less the keys above)? */
+export function forOutputs(c: Change, mediaIds: ReadonlySet<string>): boolean {
+  if (c.kind === 'settings' && SETTINGS_NOT_FOR_OUTPUTS.has(c.id)) return false;
+  return affectsContext(c, mediaIds);
+}
+
 function ago(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 90) return `${s} s ago`;
@@ -185,7 +198,7 @@ export class LibraryLink implements LiveSource {
 
   /** Is this one change part of what outputs read from their config? */
   forOutputs(c: Change): boolean {
-    return affectsContext(c, this.contextMedia());
+    return forOutputs(c, this.contextMedia());
   }
 
   stop(): void {

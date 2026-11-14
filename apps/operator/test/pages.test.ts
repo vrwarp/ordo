@@ -8,12 +8,17 @@ import { describe, expect, it } from 'vitest';
 import {
   chunk,
   COMPACT_PAGES,
+  gateState,
   loadIfEnabled,
+  OPERATE,
   PAGES,
   preloadSet,
+  REGULAR_FULL,
   REGULAR_PAGES,
   retryChunks,
+  retryOrReload,
   setState,
+  VENUE_CRITICAL,
 } from '../src/pages.ts';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -81,6 +86,80 @@ describe('chunk', () => {
     loadIfEnabled(c, true);
     await flush();
     expect(calls).toBe(1);
+  });
+});
+
+/**
+ * The venue PC's gate (review of P0): one failed Import tab fetch showed the error card instead of the live view,
+ * and in Chromium Retry could never succeed (a failed dynamic import stays failed for the document).
+ */
+describe('the venue PC’s gate', () => {
+  const loaded = (v = 1) => {
+    const c = chunk('./ok.ts', async () => v);
+    return c;
+  };
+  const failing = () => chunk('./bad.ts', async () => Promise.reject(new Error('connection reset')));
+
+  it('waits for the live view and the operate services only; the rest only until they settle', async () => {
+    expect(VENUE_CRITICAL).toEqual([PAGES.live, OPERATE]);
+    for (const c of VENUE_CRITICAL) expect(REGULAR_FULL).toContain(c);
+    const live = loaded();
+    const ops = loaded();
+    const tab = failing();
+    const other = loaded();
+    const all = [live, other, tab, ops];
+    const critical = [live, ops];
+    expect(gateState(all, critical)).toEqual({ ready: false });
+    await Promise.allSettled(all.map((c) => c.load()));
+    // Before: setState(all) answered the tab's error and the Shell never mounted.
+    expect(setState(all).error).toBeInstanceOf(Error);
+    expect(gateState(all, critical)).toEqual({ ready: true });
+    // A critical chunk that fails is the gate's error.
+    const badLive = failing();
+    await badLive.load().catch(() => undefined);
+    const g = gateState([badLive, other, ops], [badLive, ops]);
+    expect(g.ready).toBe(false);
+    expect(g.error).toBeInstanceOf(Error);
+    // Still loading: not ready, no error.
+    const slow = chunk('./slow.ts', () => new Promise<number>(() => undefined));
+    void slow.load();
+    expect(gateState([slow, ops], [ops])).toEqual({ ready: false });
+  });
+
+  it('Retry loads again; when that fails it reloads the page, only if the hub answers and it is safe', async () => {
+    let tries = 0;
+    const flaky = chunk('./flaky.ts', async () => {
+      tries++;
+      if (tries < 3) throw new Error('reset');
+      return 'ok';
+    });
+    await flaky.load().catch(() => undefined);
+    let reloads = 0;
+    const reload = () => {
+      reloads++;
+    };
+    // The hub does not answer: no reload (it would leave the browser's own error page).
+    expect(await retryOrReload([flaky], { reachable: async () => false, reload })).toBe('failed');
+    expect(reloads).toBe(0);
+    expect(tries).toBe(2);
+    // A service runs from this page: no reload.
+    const gone = failing();
+    await gone.load().catch(() => undefined);
+    expect(await retryOrReload([gone], { reachable: async () => true, reload, safe: () => false })).toBe(
+      'failed',
+    );
+    expect(reloads).toBe(0);
+    // Chromium's case: the import fails again although the hub answers: reload.
+    expect(await retryOrReload([gone], { reachable: async () => true, reload })).toBe('reloading');
+    expect(reloads).toBe(1);
+    // WebKit's case: the import works again: no reload.
+    expect(flaky.state().status).toBe('failed');
+    expect(await retryOrReload([flaky], { reachable: async () => true, reload })).toBe('loaded');
+    expect(tries).toBe(3);
+    expect(flaky.get()).toBe('ok');
+    expect(reloads).toBe(1);
+    // Nothing failed: nothing to do.
+    expect(await retryOrReload([loaded()], { reachable: async () => true, reload })).toBe('loaded');
   });
 });
 

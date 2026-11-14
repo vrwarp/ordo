@@ -17,7 +17,8 @@ export const enCompact = {
   // ---- More ----
   'more.title': 'More',
   'more.venue': 'ordo at {host}',
-  'more.signedIn': 'Signed in on this phone',
+  'more.signedInPhone': 'Signed in on this phone',
+  'more.signedInDevice': 'Signed in on this device',
   'more.version': 'ordo {version}',
   'more.demoAbout': 'About the demo',
   'more.demoReset': 'Reset the demo',
@@ -39,6 +40,7 @@ export const enCompact = {
   'media.kind.video': 'Video',
   'media.kind.audio': 'Audio',
   'media.state.uploaded': 'Queued',
+  'media.state.waiting': 'Waiting for the service to end',
   'media.state.processing': 'Processing',
   'media.state.ready': 'Ready',
   'media.state.failed': 'Failed',
@@ -68,6 +70,10 @@ export const enCompact = {
   },
   'live.sheetUnknown':
     'This phone cannot tell whether a service is running at the venue. Presentations a service uses stay locked until it ends.',
+  // ---- the sign-in over an ended session ----
+  'signin.endedPhone':
+    'Signed out. A phone signs in for an hour at a time, and a PIN change signs it out. Enter the PIN to keep looking.',
+  'signin.ended': 'Signed out. Enter the PIN to carry on.',
   // ---- freshness ----
   'fresh.offlineAt': 'Offline · copy from {when}',
   'fresh.unreachableAt': "Can't reach ordo · copy from {when}",

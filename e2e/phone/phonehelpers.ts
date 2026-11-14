@@ -67,12 +67,15 @@ export async function signInPhone(page: Page, url: string, pin = PIN): Promise<v
  * - every scrollable pane's `scrollLeft` is 0, and stays 0 after each field under `root` is focused (main's
  *   autofocused search panned the Library by 58 px at 390 and 100 px at 360).
  * `root` is `#root` for a screen (all of the above); `.dialog.sheet` for an open sheet checks the sheet's
- * controls and every pane's scroll, not the screen behind it.
+ * controls and every pane's scroll, not the screen behind it; `[data-session-expired]` the sign-in over an
+ * ended session. With `insets` (simulated safe areas, set as --safe-* on the root element), every control,
+ * heading, paragraph and banner under `root` keeps inside them: nothing essential under a landscape iPhone's
+ * notch or corners, or under an installed app's status bar (design/28 §6).
  */
 export async function layoutChecks(
   page: Page,
   where: string,
-  opts: { root?: string; focusFields?: boolean } = {},
+  opts: { root?: string; focusFields?: boolean; insets?: { x: number; top?: number } } = {},
 ): Promise<string[]> {
   const root = opts.root ?? '#root';
   // A sheet slides in: measure where it settles (finite animations under the root, at most 2 s).
@@ -163,6 +166,7 @@ export async function layoutChecks(
   );
   for (const m of await auditTargets(page, where, root, [], COMPACT_SELECTOR))
     problems.push(`${m.where}: ${m.what} is ${m.w}x${m.h}, under 44x44`);
+  if (opts.insets) problems.push(...(await insetProblems(page, where, root, opts.insets)));
   problems.push(...(await scrolledPanes(page, where)));
   if (opts.focusFields !== false) {
     const fields = await page.locator(`${root} :is(input, textarea, select):visible`).all();
@@ -174,6 +178,53 @@ export async function layoutChecks(
     }
   }
   return problems;
+}
+
+/**
+ * What under `root` reaches into the simulated safe areas: a visible control, heading, paragraph or banner
+ * closer to a side edge than `x`, or (with `top`) above it. A scrolled-away element is not looked at.
+ */
+export async function insetProblems(
+  page: Page,
+  where: string,
+  root: string,
+  insets: { x: number; top?: number },
+): Promise<string[]> {
+  return page.evaluate(
+    ({ where, root, sel, x, top }) => {
+      const out: string[] = [];
+      const iw = window.innerWidth;
+      const ih = window.innerHeight;
+      for (const scope of document.querySelectorAll(root))
+        for (const el of scope.querySelectorAll<HTMLElement>(`${sel}, h1, h2, h3, p, .banner`)) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0 || r.bottom <= 0 || r.top >= ih) continue;
+          const cs = getComputedStyle(el);
+          if (cs.visibility === 'hidden' || cs.display === 'none') continue;
+          const label = `${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 24)}"`;
+          if (r.left < x - 0.5 || r.right > iw - x + 0.5)
+            out.push(
+              `${where}: ${label} in the side insets (x ${Math.round(r.left)}..${Math.round(r.right)} of ${iw}, inset ${x})`,
+            );
+          if (top !== undefined && r.top < top - 0.5)
+            out.push(`${where}: ${label} under the top inset (y ${Math.round(r.top)}, inset ${top})`);
+        }
+      return out;
+    },
+    { where, root, sel: COMPACT_SELECTOR, x: insets.x, top: insets.top },
+  );
+}
+
+/** Simulate a device's safe areas (as iOS reports them to an installed app): the --safe-* hooks of ipad.css. */
+export async function simulateInsets(
+  page: Page,
+  insets: { left?: number; right?: number; top?: number; bottom?: number },
+): Promise<void> {
+  await page.evaluate((i) => {
+    const s = document.documentElement.style;
+    for (const side of ['left', 'right', 'top', 'bottom'] as const)
+      s.setProperty(`--safe-${side}`, `${i[side] ?? 0}px`);
+  }, insets);
 }
 
 /** Every element (and the window) scrolled sideways. */

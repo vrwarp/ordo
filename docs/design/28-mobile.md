@@ -13,8 +13,9 @@ Packages and apps involved:
 Status: **P0 ("A phone is safe to sign in") is built and integrated** (2026-11-14, alongside M9 at the owner's
 request, on `p0/integrate` from `d0f49cb`): the hub lane (`p0/hub`, merged in `057a53e`), the code split and
 the compact shell (`p0/client`, merged in `24ceacb`), and the integration's wiring after them (the protocol's cap
-types in the client, the phone specs against the real hub, refusals watched on every compact route). §16 "P0 as
-built" says what each part does and where it departs from this text; §9 says where each exit criterion is
+types in the client, the phone specs against the real hub, refusals watched on every compact route), then
+repaired after its review (§16 "Repair round 1"). §16 "P0 as built" says what each part does and where it
+departs from this text; §9 says where each exit criterion is
 checked. Left of P0: the rehearsal gate (a rehearsal service with real outputs and phones; the Phones switch
 stays off until it passes, owner question 11) and the device checks (the keyboard open, VoiceOver and TalkBack,
 Safari's Request Desktop Website on a real iPhone). P1 to P3 are proposed. The design was proposed
@@ -658,9 +659,11 @@ than an empty state while nothing has loaded.
   from cache, which made the venue PC's live view after sign-in 0.75 s later in a prototype); a loaded page
   renders synchronously. A regular device preloads at startup every regular page its capability profile can
   open (and the operate services on the full profile, `services/operateServices.ts`), in parallel with the
-  session request, and the venue PC mounts its Shell once they have loaded, so `installOperate` stays
-  synchronous and nothing it opens shows a "Loading…"; a phone or the compact layout preloads nothing of that
-  set. The service worker precaches by device class, chosen once at startup (`./sw.js?set=compact` on a
+  session request, and the venue PC mounts its Shell once they have settled, so `installOperate` stays
+  synchronous and nothing it opens shows a "Loading…"; only the live view and the operate services must have
+  loaded (`VENUE_CRITICAL`): any other page that failed is its own page's error, and the gate's Retry reloads the
+  page when importing again cannot work (repair round 1, §16); a phone or the compact layout preloads nothing of
+  that set. The service worker precaches by device class, chosen once at startup (`./sw.js?set=compact` on a
   phone: the entry, the playlists and previews, the core and thumbnail workers). The thumbnail worker starts
   with the first preview on the compact layout and the document's fonts load on the regular layout only, so
   a phone's first load holds neither. Import sites moved instead of the editor: `services/fonts.ts` imports
@@ -703,7 +706,10 @@ hub downgraded past it never finds a capped cookie and answers 401):
   (`schemas.ts:773-775`). Presentation and playlist saves are whole-document PUTs (`routes.ts:444-455`,
   `:530-538`), so the hub compares a capped session's body with the stored document, per slide id and per
   item id, and answers 403 `cap` (with the field's name) when one of these differs: a new slide or item may
-  not carry them, a slide that has MIDI cues may not be removed, and a kept one keeps them unchanged.
+  not carry them, a slide that has MIDI cues may not be removed, and a kept one keeps them unchanged. (P0 as
+  built, after its review: also a slide's `audio` and `durationMs`, playback as a plan item's fields are, and
+  the presentation's `loop` timing; a new presentation's `source` may only be of a typed kind, `manual`, `paste`
+  or `songselect`, with no file, the seam for P2's "New song from text".)
 - **Plates**: a phone never bakes the decoration plates of M9 (design/27; decisions: never on phones or
   compact layouts, never while live except the go-live bake). A phone's save may leave a plate stale; the
   venue PC re-bakes it after its own save or at Go live, and readiness lists it (§5.2).
@@ -1009,22 +1015,23 @@ Each item lands on a weekday with its own test, and none touches Go live:
 `op.` is public so people can prepare from home (PRD 09). Phones bring more PIN typing on that hostname,
 lost and shared phones, links forwarded in group chats and personal photos.
 
-| Threat                                              | Control                                                                                                                                                                                                            |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A scanner guesses PINs and trips the global bucket  | LAN addresses leave the global bucket (P0); per-IP 5 per 15 minutes stays. Passes (P3) remove PIN typing on phones.                                                                                                |
-| A lost or stolen phone drives the service           | `light` sessions are refused every live and operate route and `live.event` (§3.2).                                                                                                                                 |
-| A lost phone deletes a song and its revisions       | `light` refuses every `DELETE` (today `DELETE /presentations/:id` also removes all revisions, `routes.ts:456-463`), fonts, themes, imports and folders.                                                            |
-| A lost phone shows the library offline              | 14-day expiry after the last signed-in contact; wiped on sign-out, `pin-changed` and `revoked` (§3.10). Change the edit PIN to cut off every phone (P0 to P2); revoke one pass (P3).                               |
-| A phone holds an output or stage URL                | Never given: edit sessions receive no tokens (`ws.ts:519-541`). Opening the stage URL on a phone would also supersede and close the venue's stage screen (`ws.ts:386-394`); the volunteer guidance says so.        |
-| CSRF on writes                                      | `Origin` check and an `X-Ordo` header on every non-GET request (P0); cookies stay host-only. The risk is low (`synology.me` is a public suffix) but the docs must match the code.                                  |
-| A shared invite link (P3)                           | Single use, 24 hours, 128 bits in the fragment, shown as "claimed by a phone over the internet at 21:14", revocable at once. Issued only from the iPad or the venue PC, never while live.                          |
-| Script injection through slide text, names or files | Text rendered with `textContent`; the strict CSP as today (design/21 "Transport and headers"); API files under `default-src 'none'; sandbox`, an SVG sent as a download and drawn as a still (svg-media, PR #23).  |
-| A stolen session floods the NAS                     | Write and upload budgets per session or pass; the free-space floor; uploads over 25 MB wait while live.                                                                                                            |
-| Location and faces in photos                        | Location removed from every stored file, with a backfill (P2). Phone uploads land in the Inbox, hidden from `view` until approved. Consent for photos of people, children above all, is the church's policy (§12). |
-| Pastoral notes on many phones                       | `view` gets songs and plans in full and decks without `Slide.notes`; `/files/:hash` refuses source documents and stored client scenes to `view` (§3.4).                                                            |
-| Everyone at church behind one address               | Without split DNS, phones on church Wi-Fi reach the public name through the router and share one per-IP bucket: five wrong PINs lock the building out for 15 minutes. Split DNS is an install item (§5.4).         |
-| `GET /health` tells anyone when a service runs      | Public answer reduced to `{ ok, version }` (P1).                                                                                                                                                                   |
-| A phishing page that looks like ordo                | Invites never ask for a PIN; the sign-in page shows the venue's name and hostname; volunteers are told "ordo never asks for a PIN in a link".                                                                      |
+| Threat                                              | Control                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A scanner guesses PINs and trips the global bucket  | LAN addresses leave the global bucket (P0); per-IP 5 per 15 minutes stays, counted before the PIN is verified, so a burst gets 5 guesses, not hundreds (P0 repair). LAN addresses have no hub-wide ceiling: on church Wi-Fi a guesser who changes address gets 5 more per address (owner question 15). Passes (P3) remove PIN typing on phones. |
+| A lost or stolen phone drives the service           | `light` sessions are refused every live and operate route and `live.event` (§3.2).                                                                                                                                                                                                                                                              |
+| A lost phone empties a plan                         | `light` may save a whole plan (§3.2), though no P0 screen writes: action and timer items and the item fields of §3.2 stay, but its presentations and media can be taken out, and plans have no revisions until P2; a backup restores them (owner question 16: plan saves at `full` until P2's playlist revisions).                              |
+| A lost phone deletes a song and its revisions       | `light` refuses every `DELETE` (today `DELETE /presentations/:id` also removes all revisions, `routes.ts:456-463`), fonts, themes, imports and folders.                                                                                                                                                                                         |
+| A lost phone shows the library offline              | 14-day expiry after the last signed-in contact; wiped on sign-out, `pin-changed` and `revoked` (§3.10). Change the edit PIN to cut off every phone (P0 to P2; as built, an edit PIN change ends every capped session, an operate PIN change those that signed in with it); revoke one pass (P3).                                                |
+| A phone holds an output or stage URL                | Never given: edit sessions receive no tokens (`ws.ts:519-541`). Opening the stage URL on a phone would also supersede and close the venue's stage screen (`ws.ts:386-394`); the volunteer guidance says so.                                                                                                                                     |
+| CSRF on writes                                      | `Origin` check and an `X-Ordo` header on every non-GET request (P0); cookies stay host-only. The risk is low (`synology.me` is a public suffix) but the docs must match the code.                                                                                                                                                               |
+| A shared invite link (P3)                           | Single use, 24 hours, 128 bits in the fragment, shown as "claimed by a phone over the internet at 21:14", revocable at once. Issued only from the iPad or the venue PC, never while live.                                                                                                                                                       |
+| Script injection through slide text, names or files | Text rendered with `textContent`; the strict CSP as today (design/21 "Transport and headers"); API files under `default-src 'none'; sandbox`, an SVG sent as a download and drawn as a still (svg-media, PR #23).                                                                                                                               |
+| A stolen session floods the NAS                     | Write and upload budgets per session or pass; the free-space floor; uploads over 25 MB wait while live.                                                                                                                                                                                                                                         |
+| Location and faces in photos                        | Location removed from every stored file, with a backfill (P2). Phone uploads land in the Inbox, hidden from `view` until approved. Consent for photos of people, children above all, is the church's policy (§12).                                                                                                                              |
+| Pastoral notes on many phones                       | `view` gets songs and plans in full and decks without `Slide.notes`; `/files/:hash` refuses source documents and stored client scenes to `view` (§3.4).                                                                                                                                                                                         |
+| Everyone at church behind one address               | Without split DNS, phones on church Wi-Fi reach the public name through the router and share one per-IP bucket: five wrong PINs lock the building out for 15 minutes. Split DNS is an install item (§5.4).                                                                                                                                      |
+| `GET /health` tells anyone when a service runs      | Public answer reduced to `{ ok, version }` (P1).                                                                                                                                                                                                                                                                                                |
+| A phishing page that looks like ordo                | Invites never ask for a PIN; the sign-in page shows the venue's name and hostname; volunteers are told "ordo never asks for a PIN in a link".                                                                                                                                                                                                   |
 
 Doc corrections that come with P0, citing the code: cookies are host-only (no `Domain`, `routes.ts:347-353`),
 which is safer and stays; HTTP writes had no `Origin` check before P0; the stage window authenticates with a
@@ -1336,7 +1343,12 @@ Following design/23.
 Nothing here changes the live path of the venue PC before the first service. The hub parts of P0 land after
 the first live service (milestones.md "After the first service"), on a weekday, each behind its own test;
 every phase ships behind the setting `phones.enabled` (design/24: feature flags are settings), off by
-default, which returns today's behaviour. The compact shell alone changes nothing for the full profile
+default. In P0 the switch gates what would change the venue PC's flows: the `x-ordo` check of full sessions
+and the pacing of every heavy job. The rest of P0's hub lane is always on (the caps and capped sign-ins, the
+`Origin` check, the LAN bucket and the attempt counted before its verify, the live font lock, the narrower
+`affectsContext`, one stringify per delta), because each part leaves the venue PC's requests and answers as
+they were or only takes work away from the outputs, and each has its own test that says so (§16 "The switch",
+"Repair round 1"). The compact shell alone changes nothing for the full profile
 (its screenshot tests say so) and may land earlier, as may the fail-closed default of the route caps (every
 route declares its lowest cap; until a route does, capped sessions are refused), which costs nothing while no
 session is capped. Each gate includes a rehearsal service with phones in use.
@@ -1375,8 +1387,9 @@ no refused phone request; real phones in the room do the same by hand. A two-min
    (the built assets a phone fetches, no forbidden source, no thumbnail worker or font before a preview,
    `#/edit` and the settings routes fetch no chunk, Request Desktop Website never mounts the editor, the
    precache holds no forbidden file) in both phone projects, and `tools/bundle-report.mjs --check` (the
-   compact first load against 300,000 B gzip, no compact violation). The hub serves the files uncompressed, so
-   a phone downloads about 0.9 MB (owner question 10).
+   compact first load against 300,000 B gzip, no compact violation). The budget is the gzip size of those
+   files; the hub serves them uncompressed until gzip ships in P1 (§3.4, the P1 row), so a P0 phone downloads
+   about 0.9 MB raw on a cold load.
 3. _The full profile's screenshots are unchanged_: the 34 A/B screenshots against `d0f49cb` (the full profile at
    1280x720, 1024x768, 1280x480 and 600x900; the iPad in both orientations), `e2e/layout-class.spec.ts`,
    `e2e/split-full.spec.ts` and the existing chromium and iPad suites.
@@ -1392,7 +1405,9 @@ no refused phone request; real phones in the room do the same by hand. A two-min
 6. _A photo upload makes no output refetch_: `phones-context` (no library delta to an output, three at
    `d0f49cb`) and `e2e/phones-live-load.spec.ts` (no `/output/config` request between Go live and End service).
 7. _The outputs report zero missed vsync_: printed by `e2e/phones-live-load.spec.ts` and the soak, asserted only
-   with `ORDO_E2E_REAL_GPU=1`; unproven until the rehearsal with real outputs.
+   with `ORDO_E2E_REAL_GPU=1`; unproven until the rehearsal with real outputs. The soak counts from a sample
+   taken before the phones sign in, runs the uploads beside its GO loop and fails on a missed or late frame
+   while they run (its "While the phones uploaded" section; repair round 1).
 
 ## 10. What a phone must never do
 
@@ -1464,6 +1479,13 @@ need if the church wants it after the first service.
     the hub for it acceptable? Are 90 days unused and one year in total right? Who reviews the list when
     volunteers leave?
 14. **Languages**: which languages should the phone screens speak first, and is one of them right to left?
+15. **Wrong PINs on church Wi-Fi** (P0 review): each address on the venue's network gets 5 tries per 15
+    minutes and the network as a whole has no ceiling, so a guest who keeps changing address keeps guessing.
+    Should the LAN get a shared ceiling too (for example 200 failures per 15 minutes), knowing it would lock
+    out the venue PC and the iPads that sign in during an attack unless they are remembered devices?
+16. **Plan saves from phones before P2** (P0 review): no P0 screen writes, but a phone's session may save a
+    whole plan, and plans have no history until P2. Keep plan saves to the venue PC and the iPad until P2's
+    playlist revisions (the default proposed), or allow them now?
 
 ## 13. Risks
 
@@ -1487,6 +1509,11 @@ need if the church wants it after the first service.
    it, by §10 item 9 and by §11: any service-time feature needs its own ADR.
 9. **A second set of views to maintain.** Mitigated by shared stores and operations (no second save path)
    and the phone projects in CI.
+10. **PIN guessing on church Wi-Fi.** Each address's 5 tries are counted before the PIN is verified, so a
+    burst gets no more; but with LAN addresses out of the hub-wide bucket, a guest who changes address (IPv6
+    link-local and ULA too) gets 5 more per address, about one try per Argon2 verification. Mitigated by the
+    6 to 12 digit PINs, the logged lockouts, split DNS (which keeps phones on their own addresses) and passes in
+    P3; owner question 15 decides a shared LAN ceiling.
 
 ## 14. Documents to update with each phase
 
@@ -1498,6 +1525,7 @@ need if the church wants it after the first service.
 | `design/13-protocol.md`                                  | `venue` and `library.poke`                                                                                                                                                                    |
 | `design/21-security.md`                                  | Caps per route, `Origin` checks, the LAN exemption, `view` redaction and file scope, the corrections of §4; passes and WebAuthn in P3                                                         |
 | `design/22-deployment.md`                                | Split DNS for church Wi-Fi                                                                                                                                                                    |
+| `deploy/README.md`                                       | The PIN lockout as built (P0: LAN addresses out of the hub-wide bucket, attempts counted on arrival)                                                                                          |
 | `design/23-testing.md`                                   | The phone and tablet projects, their CI job and the phone gates                                                                                                                               |
 | `design/24-repo-conventions.md` "Bundle budget"          | The compact path's budget (300 KB gzip) beside the initial chunk's                                                                                                                            |
 | `prd/03-editor.md`, `prd/09-security-and-remote-prep.md` | "On a phone"; caps, the view PIN and passes as credentials                                                                                                                                    |
@@ -1615,11 +1643,14 @@ Where this differs from the text above, this is what the code does. Three lanes 
   tokens and anonymous callers never meet the check. The table is `apps/hub/test/phones-routes.test.ts`.
 - **Capped sessions live in a side table** (`capped_sessions`, migration 11), not "on their row": a hub
   downgraded past it never finds a capped cookie (401). Role `edit` whatever PIN matched, one hour sliding,
-  never remembered (the device cookie is cleared and its row forgotten), ended by a change of the PIN it signed
-  in with. `POST /auth/pin { pin, cap }`; `GET /auth/me` carries `cap` and lists `caps` signed in or not, so a
+  never remembered (the device cookie is cleared and its row forgotten), ended by a change of the edit PIN
+  (every phone, §4) or of the PIN it signed in with (repair round 1: before, an edit PIN change spared a phone
+  that had typed the operate PIN). `POST /auth/pin { pin, cap }`; `GET /auth/me` carries `cap` and lists `caps` signed in or not, so a
   client sends `cap` only to a hub that grants it.
-- **Per-field caps** on whole-document saves (`apps/hub/src/capfields.ts`): `Slide.midiCues`, `Slide.pptx`
-  and `Presentation.source` (so a phone never queues a LibreOffice follow-up), a plan item's
+- **Per-field caps** on whole-document saves (`apps/hub/src/capfields.ts`): `Slide.midiCues`, `Slide.audio`
+  and `Slide.durationMs` (repair round 1), `Slide.pptx`, `Presentation.source` (so a phone never queues a
+  LibreOffice follow-up; a new presentation may name a typed source, `manual`, `paste` or `songselect`, with no
+  file) and `Presentation.loop`, a plan item's
   `keepBackground`, `audioMediaId` and `countdownTimer`, action and timer items, media items' `loop`, `onEnd`,
   `audio`, and `PUT /media/:id`'s `loop`, `isBackground`, `audio`; checked only when the save's `rev` matches,
   so a stale save answers 409 as before. 403 `cap` names the `field` and the `slideId` or `itemId`.
@@ -1634,20 +1665,27 @@ Where this differs from the text above, this is what the code does. Three lanes 
   default) gates the full-session header here and the pacing of every heavy job (below); everything else of the hub
   lane is always on.
 - **LAN out of the global PIN bucket** (`auth_global_failures`, migration 12): the 429 says `scope`
-  (`network` or `everyone`).
+  (`network` or `everyone`). Each attempt is counted as a failure in the tick that checks the buckets and
+  settled after its verify (repair round 1: concurrent guesses had all been verified).
 - Measured by `e2e/phone/live-boundary.spec.ts` (all its checks fail at `d0f49cb`), `e2e/phones-writes.spec.ts`
   and `apps/hub/test/phones-*.test.ts`.
 - **Live fonts locked**: `DELETE /fonts/:id` of a face the frozen live copy draws with answers 423 "This font is
   used by the live playlist", in both processes (the live process reports the font ids with its locks).
 - **A narrower `affectsContext`**: a media change touches the outputs' config, and the live process's copy, only
   when the settings name that media (the logo, a look's holding image; a schema walk over every settings key
-  keeps the list whole). A photo upload sends an output no delta, where `d0f49cb` sent three.
+  keeps the list whole). A photo upload sends an output no delta, where `d0f49cb` sent three. The `phones`
+  settings key refreshes the live process's copy and reaches no output (repair round 1).
 - **One stringify per library delta**, the tokenless copy only for a batch with the outputs' tokens; every
   socket receives the bytes it received before.
 - **Jobs paced while live** (`pacing.ts`, `job_paced`, migration 13): with Phones on, every heavy job (video and
   GIF transcodes, document imports, LibreOffice's pictures) waits while live and for `ORDO_PACE_GRACE_MS`
   (2 min) after End service, with `Job.waiting: 'service'` and its media `uploaded`; a heavy job running at
-  goLive is stopped and queued again without counting an attempt; light tools run at `nice 19` with one thread.
+  goLive is stopped and queued again without counting an attempt; light tools run at `nice 19` with one thread,
+  and so do a phone's light jobs (an audio upload, a large photo) whatever the switch says (repair round 1).
+  The paced scope (`reqctx.ts`, an `AsyncLocalStorage`) is entered by the library API's capped requests and by
+  paced jobs only: the live process's routes never enter it, and a hub with no phone never does, so neither
+  turns on Node's promise tracking (repair round 1). goLive and End service send clients only the jobs whose
+  `waiting` changed, in one library change.
   With Phones off, a heavy job queued during a capped request (an upload, a resumable upload's completion, the
   PowerPoint follow-up a phone's save queues) waits all the same. A library restarted during a service keeps
   held jobs held. A tool whose job was stopped before it started no longer runs to its end.
@@ -1775,3 +1813,71 @@ Where this differs from the text above, this is what the code does. Three lanes 
   renderer is unchanged). Two timings are slower than `d0f49cb` by about 20 to 45 ms in three of four pairs: the
   venue PC's sign-in to the live view (its DOMContentLoaded is about 110 ms faster) and the iPad's first editor
   open, as the regular pages now evaluate after the sign-in.
+
+**Repair round 1** (`p0/integrate`, after the review of the integrated build; each fix with a test that fails
+before it):
+
+- **The PIN buckets hold against a burst.** `POST /auth/pin` checked the buckets, awaited two Argon2 verifies
+  and only then recorded the failure, so every request of a burst passed the check (the review: 300 of 300
+  concurrent guesses from one LAN address verified, the last one, the right PIN, signed in; 80 concurrent
+  public failures left 80 rows against the cap of 50; through the live proxy 69 to 103 per address). Each
+  attempt is now counted as a failure in the tick that checks the buckets and settled after its verify
+  (`Auth.beginAttempt`, `settleAttempt`, `cancelAttempt` for a malformed body): `phones-rate.test.ts` sends 20
+  concurrent wrong PINs from one address (at most 5 verified) and 80 from public addresses (50 global failures),
+  in one process and through the live proxy. Sequential sign-ins are counted as before. LAN addresses still have
+  no hub-wide ceiling (§4, §13 risk 10, owner question 15).
+- **An edit PIN change ends every phone** (§4), whichever PIN it typed; an operate PIN change ends the phones
+  that typed it (`phones-sessions.test.ts`; Settings → PINs says so).
+- **More fields refused for `light`**: `Slide.audio`, `Slide.durationMs` and `Presentation.loop` (a looping
+  +100 dB slide sound and a 1 ms auto-advance were accepted); a new presentation may name a typed source
+  (`manual`, `paste`, `songselect`, no file), the seam for P2's "New song from text" (`capfields.test.ts`,
+  `phones-fields.test.ts`). Whole-plan saves stay `light` as §3.2 says; their risk is in §4 (owner question 16).
+- **A phone's light jobs are paced whatever the switch says**: an audio upload or a large photo from a phone
+  during a service runs its tools at `nice 19` on one thread with Phones off too (`lightToolPace(pacing,
+  paced)`; `phones-pacing.test.ts`).
+- **The live process never enters the paced scope.** The first `AsyncLocalStorage.run` turns on Node 22's
+  promise tracking for the whole process for good; one phone's `GET /live/summary` did, which the review
+  measured as about 2x the CPU of a GO and its read. The scope is now the library API's only (`routeFn(app, {
+  paced })`), and a job enters it only when it is paced or a scope is already set, so a hub with no phone never
+  does (`phones-pacing.test.ts` "the paced scope"; re-measured with the review's harness: after a phone's
+  `/live/summary` the promise micro-bench no longer slows, where one `run` makes it 4 to 6 times slower).
+- **goLive and End service send only the jobs whose `waiting` changed**, in one library change: with Phones off
+  and no phone they send nothing, as `d0f49cb` did (29 and 29 before, for 29 queued heavy jobs).
+- **The Phones switch reaches no output**: the `phones` settings key refreshes the live process's copy but is
+  left out of what output sockets receive (`SETTINGS_NOT_FOR_OUTPUTS`; `phones-context.test.ts`, both process
+  models).
+- **The session ends under a sheet**: every open sheet closes (`dismissSheets`) and the compact sign-in is a
+  layer of its own outside `#root`, which is inert behind it. Before, a sheet had made `#root` inert, the
+  sign-in drawn inside it took no taps and they landed on the hidden sheet (five digits of six in portrait;
+  none at 844x390, or the hidden Sign out). `e2e/phone/shell.spec.ts` ends the session under More, the Live
+  sheet and a media preview, in portrait and landscape, and signs in on the overlay's keypad with `{ pin, cap:
+  'light' }`; on a phone it says "Signed out. A phone signs in for an hour at a time, and a PIN change signs it
+  out. Enter the PIN to keep looking." A 401 from the Live now poll brings the sign-in at once (it read "can't
+  reach ordo" for 10 to 15 s); the iPad's chip counts it as before.
+- **Safe areas and the strip**: sheets and the compact sign-in pad the side insets (`--safe-x`, the larger of
+  the two) and the top one themselves, being outside `#root`; the Live now strip keeps to two lines (a 140
+  character plan name made it five, 111 px). `layoutChecks(page, where, { insets })` and `simulateInsets` check
+  them at 844x390 with 47 px on both sides (design/23).
+- **Copy in the phone's words**: "Connecting to ordo…" and "Can't reach ordo. Trying again…" before the shell on
+  the compact layout; More's "Signed in on this phone" or "on this device" (an iPad in a narrow Split View); a
+  video held for the service reads "Waiting for the service to end" (`views/compact/mediaState.ts`, from the
+  item, the Live now summary and the switch, as the hub's rule holds it). The previews' captions stay
+  `LookPreviews`' own until P1 (above).
+- **The sign-in's phone class is the page's** (`LoginView`'s `phone = thisIsPhone()`): a tablet whose `screen`
+  shrinks under the keyboard never signs in capped (`loginView.test.ts`).
+- **A chunk that fails on the venue PC**: the gate waits for every regular page to settle but holds the Shell
+  only for the live view and the operate services (`VENUE_CRITICAL`, `gateState`); a page that failed is its own
+  page's error. Retry, there and on a page's error, loads again and, when that cannot work (Chromium keeps a
+  failed import for the document), reloads the page if the hub answers and no service runs from it
+  (`retryOrReload`). `e2e/split-full.spec.ts` (f) fails the Import tab once: the live view and its keys come up at
+  once, the tab shows its error and loads on Try again; (g) fails the live view's chunk once: the error card, and
+  Retry brings up the live view (by a reload).
+- **The rehearsal tool sees the uploads**: `tools/soak` samples every output before the phones sign in, runs the
+  uploads beside its GO loop (it goes on until they are done) and reports their window on its own, failing on a
+  missed or late frame in it (`report.test.ts`).
+- **The bundle**: the baseline is re-recorded at this build, `regularTotal` included (`tools/bundle-report.mjs
+  --check` holds the venue PC's regular total to the same 2 %): the operator's initial chunk 512.4 kB (162.7 kB
+  gzip; 511.0 kB at the integration, the gate's and the strings' code since), the regular total 1,879.6 kB
+  (606.9 kB gzip), the compact first load 276,068 B gzip (headroom 23,932 B). The thumbnail worker's test now
+  says what it means (no font message before the worker starts, then fonts before any render) and passes on the
+  tree merged with wave r2a, whose worker gets `{ t: 'init' }` first.

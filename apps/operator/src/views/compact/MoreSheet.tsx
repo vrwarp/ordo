@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { DemoDialog, resetDemo } from '../../components/DemoBanner.tsx';
 import { Dialog } from '../../components/Dialog.tsx';
 import { t } from '../../i18n/index.ts';
+import { thisIsPhone } from '../../lib/layout.ts';
 import { logout } from '../../state/session.ts';
 
 /**
@@ -28,7 +29,9 @@ export function MoreSheet({ onClose }: { onClose: () => void }) {
           <p className="compact-more-venue" data-more-venue>
             {t('more.venue', { host })}
           </p>
-          <p className="muted">{t('more.signedIn')}</p>
+          <p className="muted" data-more-signed-in>
+            {t(thisIsPhone() ? 'more.signedInPhone' : 'more.signedInDevice')}
+          </p>
           {DEMO && (
             <div className="compact-more-demo">
               <button type="button" className="compact-wide" onClick={() => setAbout(true)}>

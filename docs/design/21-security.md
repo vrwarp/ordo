@@ -13,12 +13,12 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
 
 ## Authentication
 
-| Credential            | Storage                                                                            | Lifetime                                                   |
-| --------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Operate PIN, Edit PIN | Argon2id hashes in `settings`                                                      | Until changed                                              |
-| Session cookie        | Random 32 bytes, SQLite `sessions` with role and expiry                            | 12 h on remembered devices, 1 h otherwise, sliding         |
-| Capped session cookie | Random 32 bytes, SQLite `capped_sessions` (role `edit`, cap, the PIN that matched) | 1 h, sliding, never remembered; ends when that PIN changes |
-| Output token          | Random 32 bytes, hashed per output                                                 | Until rotated                                              |
+| Credential            | Storage                                                                            | Lifetime                                                                                    |
+| --------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Operate PIN, Edit PIN | Argon2id hashes in `settings`                                                      | Until changed                                                                               |
+| Session cookie        | Random 32 bytes, SQLite `sessions` with role and expiry                            | 12 h on remembered devices, 1 h otherwise, sliding                                          |
+| Capped session cookie | Random 32 bytes, SQLite `capped_sessions` (role `edit`, cap, the PIN that matched) | 1 h, sliding, never remembered; ends when the edit PIN or the PIN it signed in with changes |
+| Output token          | Random 32 bytes, hashed per output                                                 | Until rotated                                                                               |
 
 - `POST /auth/pin` compares against both hashes and returns the matching role, so there is
   one login form.
@@ -29,9 +29,13 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   failures from public addresses only (`auth_global_failures`) and never locks out a LAN or loopback address
   (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, ::1, fc00::/7, fe80::/10; carrier-grade NAT 100.64/10 is
   public), so a scanner on the public name cannot lock out the venue PC or a phone on church Wi-Fi. The 429
-  carries `scope`: `network` (this address's bucket) or `everyone` (the global one). The trade-off: a guest on
-  the LAN rotating addresses gets more tries than before, still 5 per address per 15 minutes, each an Argon2
-  verification.
+  carries `scope`: `network` (this address's bucket) or `everyone` (the global one). Each attempt is counted as
+  a failure in the same tick that checks the buckets, before its PIN is verified, and settled after
+  (`Auth.beginAttempt`, `settleAttempt`): a burst of concurrent guesses from one address gets 5 verified, and
+  public addresses 50 in all (the review of P0 measured 300 of 300 verified in one burst before). The
+  trade-off: LAN addresses have no hub-wide ceiling, so a guest on the LAN rotating addresses (IPv6 link-local
+  and ULA included) gets more tries than before, still 5 per address per 15 minutes, each an Argon2
+  verification (design/28 §4, owner question 15).
 
 ## Authorisation
 

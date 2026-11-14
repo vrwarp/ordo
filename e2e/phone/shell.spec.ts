@@ -19,6 +19,7 @@ import {
   pinBodies,
   type Refusal,
   signInPhone,
+  simulateInsets,
   startPhoneHub,
   watchRefusals,
 } from './phonehelpers.ts';
@@ -686,6 +687,199 @@ test('an offline start reads the copy with its time; back online the strip and t
     await page.context().setOffline(false);
     await expect(page.locator('[data-freshness]')).toHaveCount(0, { timeout: 30_000 });
     await expect(strip).toHaveText('Live at the venue: Sunday Service · 1 locked', { timeout: 30_000 });
+  } finally {
+    await api.dispose();
+    hub.kill();
+  }
+});
+
+/** The phone's landscape size in this project. */
+const landscape = () =>
+  test.info().project.name === 'webkit-iphone' ? { width: 844, height: 390 } : { width: 800, height: 360 };
+
+const ENDED_PHONE =
+  'Signed out. A phone signs in for an hour at a time, and a PIN change signs it out. Enter the PIN to keep looking.';
+
+/** The sign-in over an ended session, once it shows; its keypad takes the taps (none lands on what is under it). */
+async function endedOverlay(page: Page, where: string): Promise<Locator> {
+  const overlay = page.locator('[data-session-expired]');
+  await expect(overlay, where).toBeVisible({ timeout: 45_000 });
+  await expect(page.locator('.dialog.sheet'), `${where}: every sheet closed`).toHaveCount(0);
+  const st = await page.evaluate(() => {
+    const ov = document.querySelector('[data-session-expired]') as HTMLElement;
+    const keys = [...ov.querySelectorAll<HTMLElement>('.keypad button')];
+    const hits = keys.map((k) => {
+      k.scrollIntoView({ block: 'nearest' });
+      const r = k.getBoundingClientRect();
+      const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !!h && k.contains(h);
+    });
+    return {
+      rootInert: document.getElementById('root')!.hasAttribute('inert'),
+      inRoot: ov.closest('#root') !== null,
+      keys: keys.length,
+      hit: hits.every(Boolean),
+    };
+  });
+  // The page behind is inert; the sign-in is a layer of its own outside it, and every key is what a tap hits.
+  expect(st, where).toEqual({ rootInert: true, inRoot: false, keys: 12, hit: true });
+  return overlay;
+}
+
+/** Type a PIN on the overlay's keypad and OK, each key scrolled into view (at 844x390 the card scrolls). */
+async function tapOverlayPin(overlay: Locator, pin: string): Promise<void> {
+  for (const d of pin) {
+    const key = overlay.locator('.keypad').getByRole('button', { name: d, exact: true });
+    await key.scrollIntoViewIfNeeded();
+    await key.tap();
+  }
+  const ok = overlay.getByRole('button', { name: 'OK' });
+  await ok.scrollIntoViewIfNeeded();
+  await ok.tap();
+}
+
+test('the session ends under an open sheet: every sheet closes and the sign-in over it takes the PIN', async ({
+  page,
+}) => {
+  // Review of P0 (R12): a sheet made #root inert and the sign-in, drawn inside #root, took no taps; they landed
+  // on the sheet the volunteer could no longer see (six taps gave five digits; at 844x390 none registered, or
+  // they pressed the hidden Sign out and the page reloaded).
+  test.setTimeout(360_000);
+  const { hub, api, url } = await hubFor(10);
+  try {
+    await seed(api);
+    const pins = pinBodies(page);
+    await signInPhone(page, url);
+    await shown(page);
+    const portrait = page.viewportSize()!;
+    let n = 0;
+    for (const size of [portrait, landscape()]) {
+      await page.setViewportSize(size);
+      for (const which of ['More', 'Live', 'media preview'] as const) {
+        const where = `${which} at ${size.width}x${size.height}`;
+        if (which === 'media preview') {
+          await go(page, '#/library/media');
+          await shown(page);
+          await page.locator('[data-media-row]').first().tap();
+        } else {
+          await go(page, '#/library');
+          await shown(page);
+          if (which === 'More') await page.locator('nav.tabbar').getByRole('button', { name: 'More' }).tap();
+          else await page.locator('[data-live-strip]').tap();
+        }
+        await expect(page.locator('.dialog.sheet'), where).toBeVisible();
+        const hash = await page.evaluate(() => location.hash);
+        // The venue PC changes the operate PIN: the phone, signed in with it, is signed out.
+        n++;
+        const pin = `13579${n}`;
+        const r = await api.put('auth/pins', { data: { operatePin: pin } });
+        expect(r.ok(), await r.text()).toBe(true);
+        const overlay = await endedOverlay(page, where);
+        await expect(overlay.locator('[data-session-ended-text]')).toHaveText(ENDED_PHONE);
+        await tapOverlayPin(overlay, pin);
+        await expect(overlay, where).toHaveCount(0, { timeout: 20_000 });
+        expect(pins.at(-1), where).toEqual({ pin, cap: 'light' });
+        await expectCappedSession(page, where);
+        // Nothing under the sign-in was pressed (no Sign out, no reload) and the page is usable again.
+        expect(await page.evaluate(() => location.hash), where).toBe(hash);
+        expect(await page.evaluate(() => document.getElementById('root')!.hasAttribute('inert'))).toBe(false);
+        await expect(page.locator('nav.tabbar')).toBeVisible();
+      }
+    }
+  } finally {
+    await api.dispose();
+    hub.kill();
+  }
+});
+
+test('sheets and the sign-in keep to the safe areas; a long plan name keeps the Live now strip to two lines', async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const { hub, api, url } = await hubFor(11);
+  try {
+    // A plan with a 140-character name, live (review of P0, R4: the strip grew to 5 lines, 111 px).
+    const songId = (
+      await json<{ id: string }>(
+        api.post('import/songselect', { data: { text: song('Amazing Grace', 'Grace') } }),
+      )
+    ).id;
+    const name = `Sunday ${'Celebration '.repeat(11)}Service`.slice(0, 140);
+    const plan = await json<{ id: string }>(
+      api.post('playlists', {
+        data: {
+          name,
+          serviceDate: '2026-11-15',
+          items: [{ id: 'i1', kind: 'presentation', presentationId: songId }],
+        },
+      }),
+    );
+    await json(api.post('live/events', { data: { id: 'gl', event: { k: 'goLive', playlistId: plan.id } } }));
+    await signInPhone(page, url);
+    await shown(page);
+    const strip = page.locator('[data-live-strip]');
+    await expect(strip).toBeVisible({ timeout: 20_000 });
+    for (const size of [page.viewportSize()!, landscape()]) {
+      await page.setViewportSize(size);
+      const g = await page.locator('.compact-strip-text').evaluate((el) => {
+        const fs = Number.parseFloat(getComputedStyle(el).fontSize);
+        return { h: el.getBoundingClientRect().height, fs, text: el.textContent ?? '' };
+      });
+      // Two lines at most (it was five, 111 px); the text itself is whole (clamped as drawn, not cut).
+      expect(g.h, `strip text at ${size.width}x${size.height}`).toBeLessThanOrEqual(g.fs * 2 * 1.5);
+      expect(g.text).toContain(name);
+      expect(await layoutChecks(page, `long plan name at ${size.width}x${size.height}`)).toEqual([]);
+    }
+    // The Live sheet has the whole name.
+    await strip.tap();
+    await expect(page.locator('[data-live-sheet]')).toContainText(name);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.dialog.sheet')).toHaveCount(0);
+
+    // A landscape iPhone in an installed app: about 47 px on both sides, 21 at the bottom (R10: the sheets'
+    // title, close and body sat inside them while the frame kept out of them).
+    await page.setViewportSize(landscape());
+    await simulateInsets(page, { left: 47, right: 47, bottom: 21 });
+    expect(await layoutChecks(page, 'frame in the insets', { insets: { x: 47 } })).toEqual([]);
+    for (const which of ['More', 'Live'] as const) {
+      if (which === 'More') await page.locator('nav.tabbar').getByRole('button', { name: 'More' }).tap();
+      else await strip.tap();
+      const sheet = page.locator('.dialog.sheet');
+      await expect(sheet).toBeVisible();
+      expect(
+        await layoutChecks(page, `${which} sheet in the insets`, {
+          root: '.dialog.sheet',
+          insets: { x: 47 },
+        }),
+      ).toEqual([]);
+      await page.keyboard.press('Escape');
+      await expect(sheet).toHaveCount(0);
+    }
+
+    // The sign-in over an ended session, under a status bar in portrait and inside the side insets in landscape.
+    const pins = pinBodies(page);
+    const r = await api.put('auth/pins', { data: { operatePin: '135799' } });
+    expect(r.ok(), await r.text()).toBe(true);
+    const overlay = await endedOverlay(page, 'the sign-in');
+    expect(
+      await layoutChecks(page, 'the sign-in in the insets', {
+        root: '[data-session-expired]',
+        focusFields: false,
+        insets: { x: 47 },
+      }),
+    ).toEqual([]);
+    await page.setViewportSize({ width: landscape().height, height: landscape().width });
+    await simulateInsets(page, { top: 47, bottom: 34 });
+    expect(
+      await layoutChecks(page, 'the sign-in under a status bar', {
+        root: '[data-session-expired]',
+        focusFields: false,
+        insets: { x: 0, top: 47 },
+      }),
+    ).toEqual([]);
+    await tapOverlayPin(overlay, '135799');
+    await expect(overlay).toHaveCount(0, { timeout: 20_000 });
+    expect(pins).toEqual([{ pin: '135799', cap: 'light' }]);
   } finally {
     await api.dispose();
     hub.kill();

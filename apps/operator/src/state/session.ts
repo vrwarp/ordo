@@ -86,6 +86,9 @@ export function currentRole(): 'operate' | 'edit' | null {
   return r === 'operate' || r === 'edit' ? r : null;
 }
 
+/** The session error while the hub cannot be reached at all (the compact layout words it its own way). */
+export const HUB_UNREACHABLE = 'The hub is unreachable. Retrying…';
+
 export async function refreshSession(): Promise<void> {
   try {
     const me = await api<AuthMeRes>(ROUTES.me);
@@ -114,7 +117,7 @@ export async function refreshSession(): Promise<void> {
       /* ignore */
     }
     if (last === 'operate' || last === 'edit') useSession.setState({ status: 'offline', offlineRole: last });
-    else useSession.setState({ status: 'error', error: 'The hub is unreachable. Retrying…' });
+    else useSession.setState({ status: 'error', error: HUB_UNREACHABLE });
   }
 }
 

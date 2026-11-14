@@ -2,9 +2,10 @@
  * Per-field caps on whole-document saves (design/28 §3.2 "Refused for `light`, per field"; §10 items 6 and 11).
  * A presentation or playlist save sends the whole document, so the hub compares a capped session's body with
  * the stored one, by slide id and by item id, and refuses (403 `cap` naming the field) a change to what a phone
- * may never change: a slide's MIDI cues (show control), its PowerPoint data and the presentation's source (a
- * phone can never set `pptx.pending` and queue a LibreOffice follow-up), and a plan item's show-control and
- * playback fields. Pure; O(size of the body), which the schemas already bound.
+ * may never change: a slide's MIDI cues (show control), its sound and its auto-advance time (playback, as a plan
+ * item's), its PowerPoint data and the presentation's source (a phone can never set `pptx.pending` and queue a
+ * LibreOffice follow-up), the presentation's loop timing, and a plan item's show-control and playback fields.
+ * Pure; O(size of the body), which the schemas already bound.
  */
 import { isDeepStrictEqual } from 'node:util';
 import type { Media, Playlist, PlaylistItem, Presentation, Slide } from '@ordo/domain';
@@ -12,8 +13,11 @@ import { HttpError } from './errors.ts';
 
 export type CapField =
   | 'midiCues'
+  | 'slide.audio'
+  | 'durationMs'
   | 'pptx'
   | 'source'
+  | 'loopTiming'
   | 'keepBackground'
   | 'audioMediaId'
   | 'countdownTimer'
@@ -29,8 +33,11 @@ export type FieldRefusal = { field: CapField; slideId?: string; itemId?: string 
 /** What the phone shows when a save is refused for a field (the client shows the hub's message). */
 export const FIELD_MESSAGES: Record<CapField, string> = {
   midiCues: "A phone can't change a slide's lighting (MIDI) cues.",
+  'slide.audio': "A phone can't change a slide's sound.",
+  durationMs: "A phone can't change how long a slide shows before the next one.",
   pptx: "A phone can't change a slide's PowerPoint data.",
   source: "A phone can't change where a presentation was imported from.",
+  loopTiming: "A phone can't change how long a loop shows each slide.",
   keepBackground: "A phone can't change whether an item keeps the background.",
   audioMediaId: "A phone can't change an item's music.",
   countdownTimer: "A phone can't change an item's countdown.",
@@ -67,22 +74,36 @@ function slidesById(p: Presentation | undefined): Map<string, Slide[]> {
   return out;
 }
 
+/** The sources a phone may give a new presentation: typed or pasted words, no file (P2's "New song from text"). */
+const TYPED_SOURCES: ReadonlySet<string> = new Set(['manual', 'paste', 'songselect']);
+
+/** A new presentation's source a capped session may set: a typed kind with nothing that names a file. */
+function typedSource(src: Presentation['source']): boolean {
+  if (!src) return true;
+  return TYPED_SOURCES.has(src.kind) && src.fileId === undefined && !src.renderer && src.native === undefined;
+}
+
 /**
  * Why a capped save of `next` over `stored` (undefined: a new presentation) is refused, or undefined. A new
- * slide carries no MIDI cues and no PowerPoint data; a kept slide keeps both as they are; a slide that had cues
- * may not be removed; the source stays as stored (a new presentation has none); slides sharing an id must agree.
+ * slide carries no MIDI cues, no sound, no auto-advance time and no PowerPoint data; a kept slide keeps them as
+ * they are; a slide that had cues may not be removed; the source and the loop timing stay as stored (a new
+ * presentation has no loop timing, and a source only of a typed kind without a file); slides sharing an id must
+ * agree.
  */
 export function presentationRefusal(
   stored: Presentation | undefined,
   next: Presentation,
 ): FieldRefusal | undefined {
-  if (!same(stored?.source, next.source)) return { field: 'source' };
+  if (stored ? !same(stored.source, next.source) : !typedSource(next.source)) return { field: 'source' };
+  if (!same(stored?.loop, next.loop)) return { field: 'loopTiming' };
   const before = slidesById(stored);
   const after = slidesById(next);
   for (const [id, list] of after) {
     const old = before.get(id)?.[0];
     for (const s of list) {
       if (!same(cues(old), cues(s))) return { field: 'midiCues', slideId: id };
+      if (!same(old?.audio, s.audio)) return { field: 'slide.audio', slideId: id };
+      if (!same(old?.durationMs, s.durationMs)) return { field: 'durationMs', slideId: id };
       if (!same(old?.pptx, s.pptx)) return { field: 'pptx', slideId: id };
     }
   }
