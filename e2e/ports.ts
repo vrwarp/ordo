@@ -109,21 +109,41 @@ export const PORT_TABLE = {
   'editor-script': { offset: 110, count: 1, spec: 'editor-script.spec.ts', what: 'hub' },
   'editor-canvas-first': { offset: 111, count: 1, spec: 'editor-canvas-first.spec.ts', what: 'hub' },
   'editor-fit': { offset: 112, count: 1, spec: 'editor-fit.spec.ts', what: 'hub' },
-  // The iPad specs run twice (landscape and portrait projects), one test at a time: a test that runs in both
-  // takes one port per orientation where the two would otherwise reuse each other's hub data.
+  // The iPad specs run three times (landscape, portrait and the Android tablet projects), one test at a time: a
+  // test that runs in each takes one port per project where they would otherwise reuse each other's hub data.
   'ipad-edit': { offset: 200, count: 4, spec: 'ipad/edit.spec.ts', what: 'one hub per test' },
-  'ipad-group': { offset: 210, count: 2, spec: 'ipad/group.spec.ts', what: '0 landscape, 1 portrait' },
+  'ipad-group': {
+    offset: 210,
+    count: 3,
+    spec: 'ipad/group.spec.ts',
+    what: '0 landscape, 1 portrait, 2 chromium-tablet (skips)',
+  },
   'ipad-touch-targets': {
     offset: 215,
-    count: 2,
+    count: 3,
     spec: 'ipad/touch-targets.spec.ts',
-    what: '0 landscape, 1 portrait',
+    what: '0 landscape, 1 portrait, 2 chromium-tablet',
   },
   'ipad-touch': {
     offset: 220,
     count: 6,
     spec: 'ipad/touch.spec.ts',
     what: 'tests 0-2 landscape, 3-5 portrait',
+  },
+  // Phones P0 (design/28 §8), the code split: a spec both phone projects run takes one port per project.
+  // 310-339 belong to the compact shell's specs, 340-349 to the hub's, 350-359 to the integration's.
+  'split-full': { offset: 300, count: 1, spec: 'split-full.spec.ts', what: 'hub' },
+  'ipad-split': {
+    offset: 301,
+    count: 3,
+    spec: 'ipad/split.spec.ts',
+    what: '0 webkit-ipad, 1 webkit-ipad-portrait, 2 chromium-tablet',
+  },
+  'phone-split': {
+    offset: 305,
+    count: 2,
+    spec: 'phone/split.spec.ts',
+    what: '0 webkit-iphone, 1 chromium-android',
   },
 } as const satisfies Record<string, Row>;
 

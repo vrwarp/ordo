@@ -1,10 +1,13 @@
 import { mkdirSync } from 'node:fs';
 import { type APIRequestContext, expect, type Page, request, test } from '@playwright/test';
 import { HubProcess } from '../hubproc.ts';
+import { touchDevice } from '../touchdevice.ts';
 
 /**
- * iPad editing (design/15): WebKit with the iPad Pro 11 descriptor, path mode (`http://localhost:<port>/`).
- * Each test owns a fresh hub on its own port (e2e/ports.ts, a row per spec).
+ * iPad editing (design/15): WebKit with the iPad Pro 11 descriptor, path mode (`http://localhost:<port>/`),
+ * and an Android tablet (chromium-tablet: Chromium with the Galaxy Tab S4 descriptor at 800x1280, Android
+ * Chrome modelled by e2e/touchdevice.ts). Each test owns a fresh hub on its own port (e2e/ports.ts, a row
+ * per spec).
  */
 export const PIN = '246810';
 /** The edit PIN the hub derives from ORDO_DEV_PIN=246810: the operate PIN reversed (auth.ts). */
@@ -27,8 +30,15 @@ export async function json<T>(p: Promise<import('@playwright/test').APIResponse>
   return (await r.json()) as T;
 }
 
-/** Sign in by tapping the keypad, as on the iPad. */
+/** This project's index in a tablet row: 0 webkit-ipad, 1 webkit-ipad-portrait, 2 chromium-tablet. */
+export function tabletSlot(): number {
+  const name = test.info().project.name;
+  return name === 'chromium-tablet' ? 2 : name.includes('portrait') ? 1 : 0;
+}
+
+/** Sign in by tapping the keypad, as on the iPad (an Android tablet modelled first: touchDevice). */
 export async function signInByTapping(page: Page, url: string, pin = PIN): Promise<void> {
+  await touchDevice(page);
   await page.goto(url);
   for (const d of pin) await page.getByRole('button', { name: d, exact: true }).tap();
   await page.getByRole('button', { name: 'OK' }).tap();

@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
-import { json, SONG, shot, signInByTapping, startHub } from './ipadhelpers.ts';
+import { json, SONG, shot, signInByTapping, startHub, tabletSlot } from './ipadhelpers.ts';
 import { portOf } from '../ports.ts';
 
 /**
@@ -65,8 +65,7 @@ test('every control of the editor is a 44 px touch target, apart from the named 
   page,
 }) => {
   test.setTimeout(240_000);
-  const portrait = test.info().project.name.includes('portrait');
-  const { hub, api, url } = await startHub(portOf('ipad-touch-targets', portrait ? 1 : 0));
+  const { hub, api, url } = await startHub(portOf('ipad-touch-targets', tabletSlot()));
   const misses: Miss[] = [];
   try {
     const song = await json<{ id: string }>(api.post('import/songselect', { data: { text: SONG } }));

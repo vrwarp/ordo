@@ -13,9 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Four jobs side by side, none over about 35 minutes (design/23 "CI"): lint, types, unit tests and the builds
-  # (check); the end-to-end suite in two shards (e2e); the renderer goldens in a pinned container (goldens);
-  # the fidelity ratchets (fidelity).
+  # Five jobs side by side, none over about 35 minutes (design/23 "CI"): lint, types, unit tests and the builds
+  # (check); the end-to-end suite in two shards (e2e) and the phone and Android tablet projects (e2e-phones);
+  # the renderer goldens in a pinned container (goldens); the fidelity ratchets (fidelity).
   check:
     name: Lint, types, unit tests, build
     runs-on: ubuntu-24.04
@@ -74,7 +74,7 @@ jobs:
       - name: Install Playwright WebKit
         run: pnpm exec playwright install --with-deps webkit
       - name: End-to-end tests (Chromium venue PC, WebKit iPad)
-        run: pnpm e2e --shard=${{ matrix.shard }}/2
+        run: pnpm e2e --shard=${{ matrix.shard }}/2 --project=chromium --project=webkit-ipad --project=webkit-ipad-portrait
         env:
           ORDO_CI: "1"
       # Traces, captures and the logs of the hubs the specs own (test-results/hub-<port>.log).
@@ -82,6 +82,39 @@ jobs:
         if: failure()
         with:
           name: playwright-report-${{ matrix.shard }}
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
+  # Phones and an Android tablet (design/28 §8, design/23 "CI"): WebKit iPhone 13 and Chromium Pixel 5 on
+  # e2e/phone/, Chromium Galaxy Tab S4 on the iPad specs (the Android Chrome model: e2e/touchdevice.ts).
+  e2e-phones:
+    name: End-to-end, phones and Android tablet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: System tools for the media pipeline and bundled fonts
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm build:pages
+      - name: Install Playwright Chromium and WebKit
+        run: pnpm exec playwright install --with-deps chromium webkit
+      - name: End-to-end tests (WebKit iPhone, Chromium Android phone and tablet)
+        run: pnpm e2e --project=webkit-iphone --project=chromium-android --project=chromium-tablet
+        env:
+          ORDO_CI: "1"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-phones
           path: |
             playwright-report
             test-results

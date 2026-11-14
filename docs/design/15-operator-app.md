@@ -852,7 +852,12 @@ which drops the cached thumbnails, and the editor redraws.
 
 The Playwright projects `webkit-ipad` (iPad Pro 11 landscape) and `webkit-ipad-portrait` run
 `e2e/ipad/*.spec.ts` in WebKit with touch, each test on its own hub (its port from the e2e port table, design/23 "Ports";
-path mode `http://localhost:<port>/`); the Chromium project ignores `e2e/ipad/`. The two
-projects exist only when WebKit is installed (`npx playwright install webkit`; CI does), so a plain
-`pnpm e2e` after `playwright install chromium` still runs; `ORDO_E2E_WEBKIT=1` insists on them.
-`ORDO_E2E_SHOTS=<dir>` keeps a screenshot of each screen per orientation.
+path mode `http://localhost:<port>/`); `chromium-tablet` runs them too as an Android tablet (Galaxy Tab S4
+at 800x1280, the regular layout), and `webkit-iphone` (iPhone 13, 390x844) and `chromium-android` (Pixel 5
+at 360x800) run `e2e/phone/*.spec.ts` (design/28 §8). The Chromium projects model Android Chrome with
+`e2e/touchdevice.ts`: an init script removes WebHID and the Window Management API, which desktop Chromium
+has and Android Chrome lacks, so the page detects the edit profile and a forced `?profile=full` meets the
+guard. The touch and group specs build WebKit TouchLists and skip outside WebKit. The Chromium project
+ignores `e2e/ipad/` and `e2e/phone/`. The WebKit projects exist only when WebKit is installed (`npx
+playwright install webkit`; CI does), so a plain `pnpm e2e` after `playwright install chromium` still runs;
+`ORDO_E2E_WEBKIT=1` insists on them. `ORDO_E2E_SHOTS=<dir>` keeps a screenshot of each screen per orientation.
