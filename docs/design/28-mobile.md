@@ -10,8 +10,15 @@ Packages and apps involved:
 - `packages/protocol`: the `venue` and `library.poke` messages.
 - `e2e`: phone projects in WebKit and Chromium.
 
-Status: proposed (2026-11-07), revised against main `bd9dbcd` (2026-11-13). No code exists for it. It was
-written after three competing proposals, a synthesis and a completeness review of that synthesis against the
+Status: **P0 ("A phone is safe to sign in") is built and integrated** (2026-11-14, alongside M9 at the owner's
+request, on `p0/integrate` from `d0f49cb`): the hub lane (`p0/hub`, merged in `057a53e`), the code split and
+the compact shell (`p0/client`, merged in `24ceacb`), and the integration's wiring after them (the protocol's cap
+types in the client, the phone specs against the real hub, refusals watched on every compact route). §16 "P0 as
+built" says what each part does and where it departs from this text; §9 says where each exit criterion is
+checked. Left of P0: the rehearsal gate (a rehearsal service with real outputs and phones; the Phones switch
+stays off until it passes, owner question 11) and the device checks (the keyboard open, VoiceOver and TalkBack,
+Safari's Request Desktop Website on a real iPhone). P1 to P3 are proposed. The design was proposed
+(2026-11-07) and revised against main `bd9dbcd` (2026-11-13). It was written after three competing proposals, a synthesis and a completeness review of that synthesis against the
 code at `8ea4456` (§15 lists what the review changed), then revised against main after the owner's PRs #2 to
 #25, the last of them #24's canvas-first editor (§16 lists what the revision changed). File and line
 references are to `bd9dbcd` unless they name another commit. Mockups of the key screens are in
@@ -1357,6 +1364,36 @@ zero missed frames on every output, the video waiting for End service (`waited`)
 no refused phone request; real phones in the room do the same by hand. A two-minute smoke of the same
 (`--phones 3 --upload-video 50`) runs headless on any machine.
 
+**P0 status (integrated 2026-11-14).** Where each exit criterion is checked, and what is still open:
+
+1. *Every compact route passes the layout and 44 px checks in WebKit and Chromium*: `e2e/phone/shell.spec.ts`
+   (`layoutChecks` with the shared audit, no exceptions) on `#/library`, `#/library/media`, `#/playlists`, a
+   plan, a presentation's previews, the sign-in and every sheet, in `webkit-iphone` (390x844, 390x664, 844x390,
+   320x568) and `chromium-android` (360x800), and at 200 % root text. Open: the bars inside the visual
+   viewport with the keyboard open (a device check at the gate).
+2. *The compact first load is at most 300 KB gzip and fetches no editor chunk*: `e2e/phone/split.spec.ts`
+   (the built assets a phone fetches, no forbidden source, no thumbnail worker or font before a preview,
+   `#/edit` and the settings routes fetch no chunk, Request Desktop Website never mounts the editor, the
+   precache holds no forbidden file) in both phone projects, and `tools/bundle-report.mjs --check` (the
+   compact first load against 300,000 B gzip, no compact violation). The hub serves the files uncompressed, so
+   a phone downloads about 0.9 MB (owner question 10).
+3. *The full profile's screenshots are unchanged*: the 34 A/B screenshots against `d0f49cb` (the full profile at
+   1280x720, 1024x768, 1280x480 and 600x900; the iPad in both orientations), `e2e/layout-class.spec.ts`,
+   `e2e/split-full.spec.ts` and the existing chromium and iPad suites.
+4. *Every refusal test of §8 "Live boundary" passes*: `apps/hub/test/phones-routes`, `phones-ws`,
+   `phones-fields`, `phones-sessions`; `e2e/phone/live-boundary.spec.ts` in both phone projects, signed in on
+   the keypad; `e2e/phone/split.spec.ts` (a forced `?profile=full` stays edit); `e2e/phone/shell.spec.ts` (a
+   capped, unremembered sign-in; no Edit control and no slide text on any compact route); `phones-context`
+   and `e2e/phones-live-load.spec.ts` (a media upload while live refetches no output config). The phone specs
+   also fail on any refusal a compact screen meets (`watchRefusals`).
+5. *A 500 MB video uploaded during a rehearsal service waits for End service*: `apps/hub/test/phones-pacing`,
+   `e2e/phones-live-load.spec.ts` and the soak smoke here (`waited`). Open: the 500 MB video at a rehearsal
+   service (the owner's gate, the procedure above).
+6. *A photo upload makes no output refetch*: `phones-context` (no library delta to an output, three at
+   `d0f49cb`) and `e2e/phones-live-load.spec.ts` (no `/output/config` request between Go live and End service).
+7. *The outputs report zero missed vsync*: printed by `e2e/phones-live-load.spec.ts` and the soak, asserted only
+   with `ORDO_E2E_REAL_GPU=1`; unproven until the rehearsal with real outputs.
+
 ## 10. What a phone must never do
 
 1. Send anything on the live path (`live.event`, `/actions`, `/live/events`, `preview`, `live.adopt`,
@@ -1565,8 +1602,11 @@ and P2, not fixes to the iPad layout.
 
 ### P0 as built
 
-The hub lane (branch `p0/hub`; the client lanes add their bullets under this heading and the integrator
-merges them). Where it differs from the text above, this is what the code does.
+Where this differs from the text above, this is what the code does. Three lanes built P0 from `d0f49cb`: the hub
+(branch `p0/hub`), the code split and then the compact shell (branch `p0/client`); `p0/integrate` merges them
+(`057a53e`, `24ceacb`) and wires them together (the last group below).
+
+**The hub** (branch `p0/hub`):
 
 - **Caps at every route, failing closed.** Every route declares its access role and the lowest cap it
   accepts (`view`, `light`, `full`); the process does not start with a route that declares none, and at run
@@ -1615,7 +1655,7 @@ merges them). Where it differs from the text above, this is what the code does.
   Measured by `e2e/phones-live-load.spec.ts` (at `d0f49cb` the video transcoded during the service and the
   output refetched its config six times).
 
-The code split (branch p0/client, `d0f49cb` to its last split commit):
+**The code split** (branch `p0/client`, its first nine commits):
 
 - **Layout class and phone class** (`apps/operator/src/lib/layout.ts`): `layoutFor(capabilityProfile,
   compactViewport)` from `deviceProfile('operate')` (the device's capability profile, never the session's:
@@ -1647,7 +1687,7 @@ The code split (branch p0/client, `d0f49cb` to its last split commit):
   context's given `screen` (390x844 in a 980x2120 viewport), so the Request Desktop Website test runs; a real
   iPhone's `screen` under Request Desktop Website is still the device check of §3.2.
 
-The compact shell (branch p0/client, after the code split; §2.2 and §6 have the status lines):
+**The compact shell** (branch `p0/client`, after the code split; §2.2 and §6 have the status lines):
 
 - **Frame** (`apps/operator/src/views/compact/`, the chunk `PAGES.compact`, the compact first load's start
   module): the Live now strip, the freshness line, the header with Back, `.page` as the one scroller and the tab
@@ -1669,9 +1709,8 @@ The compact shell (branch p0/client, after the code split; §2.2 and §6 have th
 - **Sign-in**: no Remember on a phone, `cap: 'light'` to a hub that lists it (else the PIN alone; one retry
   without `cap` when an older hub refuses it), the venue's host, the phone line, Safari's home-screen note, the
   lockout's end by scope; the one sign-out of a pre-upgrade uncapped session (`sessionStorage`
-  `ordo.op.phoneSignIn`); Setup's note on a phone. `capOf` and `hubGrants` read `/auth/me` defensively until the
-  integrator switches to the protocol's types; `e2e/phone/phonehelpers.ts` `capsShim` stands in for the hub
-  lane's `/auth/me` on this branch and goes at integration, where the marked integrate-only test runs.
+  `ordo.op.phoneSignIn`); Setup's note on a phone. `capOf` and `hubGrants` read `/auth/me` through the
+  protocol's `SessionCap` and `AuthMeRes`, defensively (an unknown cap is `view`, a malformed `caps` grants none).
 - **Strings**: `src/i18n` (`en.ts` in the entry: sign-in, Setup's note, the wait; `enCompact.ts` with the compact
   chunk), `t` with one/other plurals, `formatTime`/`formatDayTime`/`formatDate` through Intl, `<html lang>` on
   compact; titles `dir="auto"` (brought forward from P1).
@@ -1681,9 +1720,9 @@ The compact shell (branch p0/client, after the code split; §2.2 and §6 have th
   measures the same files on the wire), headroom 25,068 B; the compact precache 10 files, 421.6 kB gzip. The report found the start module by its source map,
   which never lists a re-export-only barrel: it now finds a barrel by its folder's files and fails on a start
   module no chunk holds.
-- **Tests**: `e2e/phone/shell.spec.ts` (11 tests, one hub each per phone project: 9 in both, the offline start in
-  Chromium only, as Playwright WebKit cannot reload an offline context, and one integrate-only; the 18 runs of
-  the first nine all fail at `d0f49cb`), `e2e/phone/demo.spec.ts` (the Pages demo), `e2e/layout-class.spec.ts`, `e2e/touchaudit.ts` (the
+- **Tests**: `e2e/phone/shell.spec.ts` (10 tests, one hub each per phone project: 9 in both and the offline
+  start in Chromium only, as Playwright WebKit cannot reload an offline context; the 18 runs of the first nine
+  all fail at `d0f49cb`), `e2e/phone/demo.spec.ts` (the Pages demo), `e2e/layout-class.spec.ts`, `e2e/touchaudit.ts` (the
   iPad audit, shared), `layoutChecks`; unit tests `compactCss`, `compactImports`, `compactTabs`, `dialogSheet`,
   `i18n`, `liveStrip`, `freshness`, `venueLive`, `loginView`, `session`.
 - **Not in P0, and where it goes**: axe on every compact screen (P1: axe-core is not in the lockfile, and a new
@@ -1694,3 +1733,27 @@ The compact shell (branch p0/client, after the code split; §2.2 and §6 have th
   offline expiry and wipe, "Getting the library (1.4 MB)" with progress, the view PIN (P1); every edit (P2). The
   200 % check covers the shell and the P0 bodies; the pieces they reuse at fixed px sizes (`LookPreviews`,
   `MediaPreview`) scale with P1's views.
+
+**The integration** (`p0/integrate`, after the two merges; one commit per step):
+
+- **The client reads the cap through the protocol** (`state/session.ts` `capOf`, `hubGrants`; `views/auth`'s
+  sign-in requests typed as `AuthPinReq`), still defensively; `session.test` checks that every `SessionCap` the
+  protocol names is read as itself.
+- **The phone specs run against the real hub.** `capsShim` is gone; `e2e/phone/shell.spec.ts` checks the
+  recorded sign-in body (`{ pin, cap: 'light' }`, never `remember`), no `ordo_device`, `ordo_session` within an
+  hour and `/auth/me` `{ role: 'edit', cap: 'light' }` (`phonehelpers.expectCappedSession`); the pre-upgrade test
+  starts from a real remembered, uncapped session (an API sign-in with `remember`, its cookies copied), which
+  the phone signs out once before its capped keypad sign-in. The integrate-only test is folded into these two.
+- **The live boundary signs in on the keypad**: `e2e/phone/live-boundary.spec.ts` runs in `webkit-iphone` and
+  `chromium-android` only (on `p0/hub` it ran in the chromium project in a 390x844 touch context), the client
+  asks for the cap, and every expectation is hard.
+- **Refusals watched**: `phonehelpers.watchRefusals` lists every 403 `cap`, `x_ordo_required` or `origin` and
+  every 429 in a phone's browser context; the shell and split specs fail on any (the lockout test allows its own
+  429s), and the live-boundary spec checks that it sees the eight refusals it provokes.
+- **The venue PC with Phones on**: `e2e/phones-writes.spec.ts` also runs a service through the code-split live
+  view (Go live, Next, End service) with the switch on.
+- **Numbers on the merged build** (`tools/bundle-report.mjs --check`, nothing re-recorded): the operator's
+  initial chunk 511.0 kB (162.2 kB gzip; +1.8 % on the split's baseline of 502.1 kB; 1,710.9 kB and 537.1 kB gzip
+  at `d0f49cb`); the compact first load 275,118 B gzip in 7 files (headroom 24,882 B; the phone spec measures the
+  same files on the wire); the compact precache 10 files, 421.8 kB gzip; the regular total 1,877.4 kB (606.0 kB
+  gzip) in 35 files. `APP_VERSION` stays 0.6.0, with the hub lane's protocol digest.

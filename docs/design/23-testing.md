@@ -103,8 +103,13 @@ The phone specs check layout with `layoutChecks` (`e2e/phone/phonehelpers.ts`, d
 sideways scroll of the document, `.page` or any pane, also after each field is focused; every visible control
 inside the viewport and at least 44x44 by the shared touch audit `e2e/touchaudit.ts`, with no exceptions; the
 Live now strip, the header and the tab bar inside the visual viewport) on every compact route and sheet, at
-390x844 and 390x664 (WebKit), 360x800 (Chromium), 844x390, 320x568 and 200 % text. `capsShim` stands in for
-the hub lane's `/auth/me` caps on the phone shell's branch and is removed when the hub's contract is merged.
+390x844 and 390x664 (WebKit), 360x800 (Chromium), 844x390, 320x568 and 200 % text. They run against the real
+hub: a phone signs in on its keypad (`signInPhone`), `pinBodies` records what it sent and `expectCappedSession`
+checks the capped session (no `ordo_device`, `ordo_session` within an hour, `/auth/me` role `edit` and cap
+`light`). `watchRefusals(page or context)` lists every `/api/` answer that is 403 `cap`, `x_ordo_required` or
+`origin`, or 429; `e2e/phone/shell.spec.ts` and `split.spec.ts` fail in `afterEach` on any (the P0 screens call
+no route above `light` and write nothing; the lockout test allows its own 429s), and
+`e2e/phone/live-boundary.spec.ts` checks that it lists the eight refusals it provokes.
 
 ## Timing assertions
 

@@ -88,6 +88,12 @@ is signed out once, with "Phones now sign in for an hour at a time. Enter the PI
 first-run setup: "ordo is not set up yet. Set it up on the venue PC: it sets the PINs." The venue PC, iPads and
 Android tablets sign in as before.
 
+With the hub's side in place (P0 integrated, 2026-11-14), that sign-in gets a session of at most an hour that is
+never remembered, and the hub refuses a phone everything a phone must never do (running or changing the
+service, deleting, settings, fonts, themes, imports, a slide's lighting cues), with a line the phone shows. The
+venue PC's **Phones are used during services** (Settings → PINs, off by default) is turned on for the rehearsal
+service with phones that is P0's gate; until then nothing changes on the venue PC.
+
 ## Accessibility and languages
 
 - Usable with one hand: primary actions, search and sheets at the bottom; every control at least 44 px

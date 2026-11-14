@@ -859,8 +859,9 @@ control is at least 44 px. On any phone (Request Desktop Website included) and i
 sends Setup, the settings, the live view, Themes, Fonts, Import and the canvas editor elsewhere (design/28 §2.1).
 
 **Sign-in** (`views/auth/LoginView.tsx`, `phoneSignIn.ts`): a phone's form has no "Remember this device", asks
-for `cap: 'light'` (`signInCap`) when the hub's `GET /auth/me` lists it in `caps` (`hubGrants`, read defensively
-in `state/session.ts` beside `capOf`), sends the PIN alone to a hub that lists none, and asks once more without
+for `cap: 'light'` (`signInCap`) when the hub's `GET /auth/me` lists it in `caps` (`hubGrants` beside `capOf`
+in `state/session.ts`, through the protocol's `SessionCap` and `AuthMeRes` but read defensively: an unknown
+cap is `view`, a malformed list grants none), sends the PIN alone to a hub that lists none, and asks once more without
 `cap` when an older hub refuses the field (400 `invalid` naming `cap`); it never sends `remember`. The hub
 answers a capped sign-in with `{ role: 'edit', cap: 'light' }`, a one-hour sliding session that is never
 remembered, and clears `ordo_device` (design/28 §3.2; the hub lane). The form names the venue's host, says what a
@@ -874,6 +875,13 @@ in for an hour at a time. Enter the PIN again."; the next sign-in is capped. A p
 release keeps its old session until it expires: the hub cannot tell a phone's session from an iPad's. The first
 run's setup form is not offered on the compact layout: "ordo is not set up yet. Set it up on the venue PC: it
 sets the PINs." `pageFor` is restricted for a capped session (`capOf(me) !== 'full'`) as for a phone.
+
+**The hub's side** of these contracts is in design/12 ("Auth": capped sessions in `capped_sessions`, the
+`cap` and `caps` of `/auth/me`; "HTTP API": every route's lowest cap, checked before the role, the per-field
+caps and the refusals; "WebSocket": a capped socket's messages; "Media pipeline": heavy jobs paced while live)
+and design/21 (the cap check, the `Origin` check and `x-ordo` on writes, the LAN out of the hub-wide PIN
+bucket). The P0 compact screens call no route above `light` and write nothing; the phone specs fail on any
+refusal (design/23 "Projects", `watchRefusals`).
 
 ### Look previews
 
