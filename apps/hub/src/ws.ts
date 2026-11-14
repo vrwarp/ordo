@@ -21,6 +21,7 @@ import { CLIENT_MESSAGE_CAP, SERVER_MESSAGE_CAP } from './caps.ts';
 import { errorMessage, HttpError } from './errors.ts';
 import type { Change } from './library.ts';
 import { LiveRejection, type LiveService } from './live.ts';
+import { originAllowed } from './net.ts';
 
 export const QUEUE_LIMIT = 100;
 const HEALTH_STALE_MS = 3500;
@@ -192,22 +193,9 @@ export class SocketHub {
     return this.clients.size;
   }
 
-  /** Origin must be the request's own host or one of the venue's role hosts. */
+  /** Origin must be the request's own host or one of the venue's role hosts (net.ts `originAllowed`). */
   originAllowed(req: IncomingMessage): boolean {
-    const origin = req.headers.origin;
-    if (!origin) return true;
-    let host: string;
-    let hostname: string;
-    try {
-      const u = new URL(origin);
-      host = u.host.toLowerCase();
-      hostname = u.hostname.toLowerCase();
-    } catch {
-      return false;
-    }
-    if (host === (req.headers.host ?? '').toLowerCase()) return true;
-    const d = this.opts.domain;
-    return hostname === d || hostname.endsWith(`.${d}`);
+    return originAllowed(req.headers.origin, req.headers.host ?? '', this.opts.domain);
   }
 
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {

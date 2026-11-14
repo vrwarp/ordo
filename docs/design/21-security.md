@@ -69,8 +69,19 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   operator opened its link; `e2e/svg-media.spec.ts`). The Pages demo's service-worker hub sends the same
   headers for its files (design/26).
 - `Permissions-Policy`: operator origin `hid=(self), midi=(self), window-management=(self), fullscreen=(self)`; output origins `fullscreen=(self), screen-wake-lock=(self), window-management=(self)`; stage `screen-wake-lock=(self), fullscreen=(self)`.
-- Cookies: `Secure; HttpOnly; SameSite=Lax; Domain=.<venue>.synology.me; Path=/`.
+- Cookies: `HttpOnly; SameSite=Lax; Path=/`, `Secure` behind https, host-only (no `Domain`: each role host
+  signs in on its own, which is safer than a domain cookie and stays). The stage window authenticates with a
+  token principal (`x-ordo-token` or `?token=`), not a cookie.
 - WebSocket origin check: the `Origin` header must be one of the known role origins.
+- HTTP writes (every non-GET, HEAD or OPTIONS API request, design/28 P0; before P0 only the socket upgrade
+  checked `Origin`): a present `Origin` must be the request's own host or the venue domain or one of its role
+  hosts, else 403 `origin` (`null` included; the same rule as the upgrade, `net.ts` `originAllowed`). A
+  session's write must carry `x-ordo: 1` (`HEADER_CLIENT`), which every ordo client sends: always from a capped
+  session, and from a signed-in full session once Phones is on (`settings.phones.enabled`), else 403
+  `x_ordo_required` ("Reload ordo: this page is older than the hub."). Anonymous callers (sign-in, setup,
+  sign-out) and output tokens never need it; the Origin check covers them. A page made elsewhere cannot set
+  the header without a CORS preflight the hub never answers, so a cross-site form or fetch cannot write with
+  the venue's cookie even where `SameSite=Lax` would let it through.
 
 ## Input handling
 

@@ -307,7 +307,7 @@ test('a library Safari cleared reloads from the hub, and the core reconnects aft
       document.dispatchEvent(new Event('visibilitychange'));
     });
     // A song saved elsewhere arrives over the reconnected socket (a library delta), without a reload.
-    const api2 = await request.newContext({ baseURL: `${url}api/v1/` });
+    const api2 = await request.newContext({ baseURL: `${url}api/v1/`, extraHTTPHeaders: { 'x-ordo': '1' } });
     await api2.post('auth/pin', { data: { pin: '246810' } });
     await json(api2.post('import/songselect', { data: { text: 'After Resume\n\nVerse 1\nBack again\n' } }));
     await expect(page.getByText('After Resume').first()).toBeVisible({ timeout: 20_000 });

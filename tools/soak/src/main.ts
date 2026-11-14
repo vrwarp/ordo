@@ -63,7 +63,8 @@ async function main(): Promise<void> {
     const r = await op.request.fetch(`${a.hub}/api/v1${path}`, {
       method,
       data: body === undefined ? undefined : JSON.stringify(body),
-      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+      // x-ordo as every ordo client sends it (design/28 §4; needed on writes once Phones is on).
+      headers: { 'x-ordo': '1', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
     });
     if (!r.ok()) throw new Error(`${method} ${path} -> ${r.status()} ${await r.text()}`);
     const ct = r.headers()['content-type'] ?? '';

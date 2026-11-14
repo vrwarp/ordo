@@ -953,7 +953,9 @@ lost and shared phones, links forwarded in group chats and personal photos.
 
 Doc corrections that come with P0, citing the code: cookies are host-only (no `Domain`, `routes.ts:347-353`),
 which is safer and stays; HTTP writes had no `Origin` check before P0; the stage window authenticates with a
-token principal.
+token principal. (P0 as built: design/12 "Auth" and design/21 "Transport and headers" say so; a write with a
+foreign `Origin` is 403 `origin`; `x-ordo` is needed from capped sessions always and from full sessions once
+Phones is on.)
 
 ## 5. Reliability and degraded modes
 

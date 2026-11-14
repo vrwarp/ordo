@@ -243,6 +243,8 @@ export async function createLiveProcess(
     cfg,
     log,
     auth: () => auth,
+    // Its copy of the settings (refreshed on a settings delta before the delta is broadcast).
+    phonesEnabled: () => link.context?.settings.phones?.enabled === true,
     serverFactory: (handler) =>
       createServer((req, res) => {
         if (proxied(req.method, req.url, (h) => fileIndex().has(h))) proxy(req, res);

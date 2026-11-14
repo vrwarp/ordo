@@ -94,6 +94,26 @@ export function settingsProblems(
   return out;
 }
 
+/**
+ * `settings.phones.enabled`, cached for a process (design/24 "Feature flags are settings"): read once, then
+ * followed on the library's own settings change, so nothing reads it from the database per request or job.
+ */
+export function phonesSwitch(lib: Pick<Library, 'getSetting' | 'onChange'>): {
+  enabled(): boolean;
+  onChange(fn: (on: boolean) => void): void;
+} {
+  let on = lib.getSetting('phones')?.enabled === true;
+  const listeners: ((on: boolean) => void)[] = [];
+  lib.onChange((changes) => {
+    if (!changes.some((c) => c.kind === 'settings' && c.id === 'phones')) return;
+    const next = lib.getSetting('phones')?.enabled === true;
+    if (next === on) return;
+    on = next;
+    for (const l of listeners) l(on);
+  });
+  return { enabled: () => on, onChange: (fn) => listeners.push(fn) };
+}
+
 export function newToken(): string {
   return randomBytes(32).toString('base64url');
 }

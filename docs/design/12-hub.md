@@ -362,13 +362,14 @@ of every script in the presentations' text, so CJK faces ship only with Han, Kan
 ## Auth
 
 - PIN hashes with Argon2id. Sessions in SQLite with role, device fingerprint
-  (user agent hash), expiry. A capped session (design/28 §3.2, a phone's `cap: 'light'`) is a row of the side
+  (user agent hash), expiry. Cookie `ordo_session`, `HttpOnly; SameSite=Lax; Path=/`, `Secure` behind
+  https, host-only (no `Domain`; design 28 §4's correction of the earlier text). A capped session (design/28 §3.2, a phone's `cap: 'light'`) is a row of the side
   table `capped_sessions` (migration 11): role `edit` whatever PIN matched, its cap (`light`, `view`), the PIN
   that matched (`pin`: changing that PIN ends it), one hour sliding, never remembered; expired rows are pruned at
   the next capped sign-in. Every session lookup reads `sessions`, then `capped_sessions`, in both processes; a hub
   downgraded past migration 11 never finds a capped cookie (401). The principal carries the cap (`full` for a
-  `sessions` row). Cookie `ordo_session`, `HttpOnly; Secure; SameSite=Lax;
-  Domain=.<venue>.synology.me` so one login covers the operator and stage origins.
+  `sessions` row). Writes need a matching `Origin` when one is sent and the `x-ordo` header from capped sessions (and from
+  full ones once Phones is on), design/21 "Transport and headers".
 - Output tokens: 32 random bytes base64url, stored hashed, one per output, carried as
   `?token=` on the output URL and the WebSocket.
 - Rate limiter keyed by forwarded client IP for `/auth/pin`.

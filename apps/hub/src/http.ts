@@ -6,7 +6,7 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
-import { API_PREFIX, COOKIE_SESSION, HEADER_TOKEN, type SessionCap } from '@ordo/protocol';
+import { API_PREFIX, COOKIE_SESSION, HEADER_CLIENT, HEADER_TOKEN, type SessionCap } from '@ordo/protocol';
 import Fastify, { type FastifyInstance, type FastifyServerFactory, LogController } from 'fastify';
 import type { Logger } from 'pino';
 import { type Access, type Auth, allowed, type Principal } from './auth.ts';
@@ -14,7 +14,7 @@ import { capRefusal } from './caps.ts';
 import type { HubConfig } from './config.ts';
 import { errorMessage, forbidden, HttpError, unauthorized } from './errors.ts';
 import { redactUrl } from './log.ts';
-import { hostAllowed, hostnameOf, ipInAny, normaliseIp } from './net.ts';
+import { hostAllowed, hostnameOf, ipInAny, normaliseIp, originAllowed } from './net.ts';
 import { appFor, securityHeaders } from './static.ts';
 import { MAX_UPLOAD_BYTES } from './store.ts';
 
@@ -52,6 +52,10 @@ export function checkRouteAccess(opts: {
   return { method, url: opts.url, access: config.access, cap: config.cap };
 }
 
+/** What a write without the `x-ordo` header is told (design/28 §4): the page runs a bundle older than the hub. */
+export const X_ORDO_REQUIRED = 'Reload ordo: this page is older than the hub.';
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 export function isLoopback(addr: string): boolean {
   const a = normaliseIp(addr);
   return a === '::1' || a.startsWith('127.');
@@ -80,6 +84,11 @@ export async function createHttpApp(opts: {
    */
   behindLiveProxy?: { secret: string };
   serverFactory?: FastifyServerFactory;
+  /**
+   * `settings.phones.enabled` as this process caches it (design/24 "Feature flags are settings"). On, writes
+   * from signed-in full sessions need the `x-ordo` header too (capped sessions always do). Default: off.
+   */
+  phonesEnabled?: () => boolean;
 }): Promise<HttpApp> {
   const { cfg, log } = opts;
   const behind = opts.behindLiveProxy;
@@ -170,6 +179,23 @@ export async function createHttpApp(opts: {
     if (!allowed(access, req.principal)) {
       if (token && !req.principal) log.warn({ url: redactUrl(req.url), ip: req.ip }, 'invalid output token');
       throw req.principal ? forbidden(`This needs the ${access} role`) : unauthorized();
+    }
+    // Writes (design/28 §4): a present Origin must be this host or a role host of the domain (the socket
+    // upgrade's rule; `null` refused); a session's write needs `x-ordo` when it is capped, and when Phones is on
+    // for a full one too. Tokens and anonymous callers (sign-in, setup, sign-out) never need the header.
+    if (isApi && !SAFE_METHODS.has(req.method)) {
+      const origin = req.headers.origin;
+      if (origin !== undefined && !originAllowed(origin, host, cfg.domain)) {
+        log.warn({ origin, host, url: redactUrl(req.url), ip: req.ip }, 'write from another site refused');
+        throw new HttpError(403, 'origin', 'This request came from another site');
+      }
+      const p = req.principal;
+      if (
+        p?.kind === 'session' &&
+        req.headers[HEADER_CLIENT] === undefined &&
+        (p.cap !== 'full' || opts.phonesEnabled?.() === true)
+      )
+        throw new HttpError(403, 'x_ordo_required', X_ORDO_REQUIRED);
     }
   });
 

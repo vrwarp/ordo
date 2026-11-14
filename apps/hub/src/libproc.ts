@@ -27,7 +27,7 @@ import { createHttpApp, HEADER_INTERNAL, HEADER_LIBRARY_SEQ, type RouteInfo, wit
 import { ImportService } from './imports.ts';
 import type { LocksMsg, ProcessStatus } from './ipc.ts';
 import { JobQueue } from './jobs.ts';
-import { type Change, Library } from './library.ts';
+import { type Change, Library, phonesSwitch } from './library.ts';
 import { type LibraryStats, LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
@@ -133,7 +133,14 @@ export async function createLibraryProcess(
   const libStats = new LibraryStatsCache(lib, log, { minIntervalMs: 0 });
   let status: ProcessStatus[] = [];
 
-  const http = await createHttpApp({ cfg, log, auth: () => auth, behindLiveProxy: { secret: opts.secret } });
+  const phones = phonesSwitch(lib);
+  const http = await createHttpApp({
+    cfg,
+    log,
+    auth: () => auth,
+    behindLiveProxy: { secret: opts.secret },
+    phonesEnabled: phones.enabled,
+  });
   const app = http.app;
   const ctx: LibraryApiCtx = {
     cfg,

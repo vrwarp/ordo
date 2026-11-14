@@ -22,7 +22,10 @@ export type OutputRec = {
 
 /** An authenticated API client on the operator origin. */
 export async function operatorApi(): Promise<APIRequestContext> {
-  const api = await request.newContext({ baseURL: `http://localhost:${PORT}/api/v1/` });
+  const api = await request.newContext({
+    baseURL: `http://localhost:${PORT}/api/v1/`,
+    extraHTTPHeaders: { 'x-ordo': '1' },
+  });
   const r = await api.post('auth/pin', { data: { pin: PIN } });
   expect(r.ok(), await r.text()).toBe(true);
   return api;

@@ -12,7 +12,7 @@ import { FontService } from './fonts/service.ts';
 import { createHttpApp, type RouteInfo, withTimeout } from './http.ts';
 import { ImportService } from './imports.ts';
 import { JobQueue } from './jobs.ts';
-import { Library } from './library.ts';
+import { Library, phonesSwitch } from './library.ts';
 import { LiveService, librarySource } from './live.ts';
 import { affectsContext } from './librarylink.ts';
 import { LibraryStatsCache } from './libstats.ts';
@@ -115,7 +115,8 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
   const statics = new StaticApps(cfg.appsDir, cfg.domain);
 
-  const http = await createHttpApp({ cfg, log, auth: () => auth });
+  const phones = phonesSwitch(lib);
+  const http = await createHttpApp({ cfg, log, auth: () => auth, phonesEnabled: phones.enabled });
   const app = http.app;
   const sockets = new SocketHub(auth, live, () => lib.getSetting('outputs'), log, {
     domain: cfg.domain,

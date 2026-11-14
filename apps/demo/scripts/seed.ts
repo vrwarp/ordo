@@ -343,13 +343,15 @@ async function main() {
     }
     const login = await fetch(`${BASE}auth/pin`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-ordo': '1' },
       body: JSON.stringify({ pin: PIN }),
     });
     const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
     const api = async <T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> => {
       const headers = new Headers(init.headers);
       headers.set('cookie', cookie);
+      // As every ordo client (design/28 §4): the hub needs it on writes once Phones is on.
+      headers.set('x-ordo', '1');
       let body = init.body;
       if (init.json !== undefined) {
         headers.set('content-type', 'application/json');
