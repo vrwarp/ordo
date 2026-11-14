@@ -8,7 +8,9 @@
  *   name never becomes a path). It never throws: a deck the converter cannot read is a note. Every emission
  *   converts with what an import stores (`@ordo/pptx-scene` `version.ts`: `M9_WRITES`, `PPTX_SHEETS`), so the
  *   census, its ratchet and the drawings measure what the hub and the client parse ship; a field held back
- *   until its drawer is on main (`M9_HELD_BACK`) is measured by adding it to `M9_WRITES` in a scratch run.
+ *   until its drawer is on main (`M9_HELD_BACK`, empty since decorations draw) is measured by adding it to
+ *   `M9_WRITES` in a scratch run. The deck's shape files (geometry files and decoration files, one placeholder
+ *   per file over every emission) go to the page with the slides, which reads them before it draws.
  * - `convertDeckIsolated` runs it in a worker thread with a heap limit and a timeout, as the hub's CPU pool
  *   will (design/27 §12): a deck that exhausts either is a note, and the run goes on.
  * - Each slide also gets its features (`features/`, from its own XML and the parts it names) and the
@@ -33,7 +35,13 @@ import { copyFile, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type BudgetLevel, drawnGeomRefs, type GeomFile, type Slide } from '@ordo/domain';
+import {
+  type BudgetLevel,
+  type DecorFile,
+  drawnShapeFileRefs,
+  type GeomFile,
+  type Slide,
+} from '@ordo/domain';
 import { extractZip } from '@ordo/importers/zip-stream.ts';
 import { Worker } from 'node:worker_threads';
 import {
@@ -146,10 +154,11 @@ export type NativeDeck = {
   slideRect: { x: number; y: number; w: number; h: number };
   media: NativeMedia[];
   /**
-   * The geometry files the slides name (`ShapeGeom.ref`, `EmitResult.geoms`; the slides as LibreOffice draws
-   * them name the same placeholders), which the page reads before it draws, as an output does.
+   * The shape files the slides name: geometry files (`ShapeGeom.ref`, `EmitResult.geoms`, `pptxgeom:<n>`) and
+   * M9 decoration files (`DecorData.ref`, `EmitResult.decors`, `pptxdecor:<n>`); the slides as LibreOffice
+   * draws them name the same placeholders. The page reads them before it draws, as an output does.
    */
-  geoms?: { id: string; file: GeomFile }[];
+  geoms?: { id: string; file: GeomFile | DecorFile }[];
   notes: string[];
   /** The deck carries font files (`ppt/fonts/`); LibreOffice 24.2 ignores them (design/27 §14.1). */
   embeddedFonts: boolean;
@@ -291,16 +300,26 @@ export async function convertDeck(
     });
     out.parseMs = performance.now() - t0;
     t0 = performance.now();
-    // One placeholder per geometry file over both emissions (the slides as LibreOffice draws them below).
+    // One placeholder per shape file over every emission (the slides as LibreOffice draws them below):
+    // geometry files and decoration files, numbered apart.
     const geomIds = new Map<string, string>();
     const geomId = (json: string) => {
       let id = geomIds.get(json);
       if (id === undefined) geomIds.set(json, (id = `pptxgeom:${geomIds.size + 1}`));
       return id;
     };
-    const emitted: EmitResult = emitSlides(scene, { geomId, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
+    const decorIds = new Map<string, string>();
+    const decorId = (json: string) => {
+      let id = decorIds.get(json);
+      if (id === undefined) decorIds.set(json, (id = `pptxdecor:${decorIds.size + 1}`));
+      return id;
+    };
+    const ids = { geomId, decorId };
+    const emitted: EmitResult = emitSlides(scene, { ...ids, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
     out.emitMs = performance.now() - t0;
-    const geoms = new Map(emitted.geoms.map((g) => [g.id, g]));
+    const geoms = new Map<string, { id: string; file: GeomFile | DecorFile }>(
+      [...emitted.geoms, ...emitted.decors].map((g) => [g.id, g]),
+    );
     out.slideRect = emitted.slideRect;
     for (const n of [...scene.notes, ...emitted.notes]) note(n);
 
@@ -317,8 +336,8 @@ export async function convertDeck(
     let compatSlides: Map<number, Slide> | undefined;
     try {
       if (hits.size) {
-        const lo = emitSlides(scene, { loCompat: true, geomId, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
-        for (const g of lo.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
+        const lo = emitSlides(scene, { loCompat: true, ...ids, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
+        for (const g of [...lo.geoms, ...lo.decors]) if (!geoms.has(g.id)) geoms.set(g.id, g);
         compatSlides = new Map(lo.slides.map((s) => [s.index, still(s)] as const));
       }
     } catch (e) {
@@ -330,14 +349,14 @@ export async function convertDeck(
     if (opts.noLibreOffice)
       try {
         const o: EmitOptions = {
-          geomId,
+          ...ids,
           ...(opts.loCompat && hits.size ? { loCompat: true } : {}),
           libreoffice: false,
           m9Writes: M9_WRITES,
           sheets: PPTX_SHEETS,
         };
         const r = emitSlides(scene, o);
-        for (const g of r.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
+        for (const g of [...r.geoms, ...r.decors]) if (!geoms.has(g.id)) geoms.set(g.id, g);
         noLo = new Map(r.slides.map((s) => [s.index, s] as const));
       } catch (e) {
         note(`the slides as a hub without LibreOffice emits them could not be emitted: ${errorText(e)}`);
@@ -944,7 +963,7 @@ export function hubLadder(
   const kept = slides.map((s) => {
     if (s.class === 'picture') return { slide: s.slide, missing: [] as string[], geoms: false };
     const keep = new Set<string>();
-    for (const r of drawnGeomRefs(s.slide)) {
+    for (const r of drawnShapeFileRefs(s.slide)) {
       const bytes = fileBytes.get(r);
       if (admitted.has(r) || bytes === undefined) {
         keep.add(r);

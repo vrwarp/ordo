@@ -761,11 +761,44 @@ the fidelity harness's A/B.
   or square caps joins only when it is at most 2 logical px wide (`THIN_LINE_PX`; `DecorPaint` has no joins or
   caps). Caps: 256 parts, 64 paints, 16,384 points, 24 shadowed shapes. Legacy: an empty line, locked (an older
   build draws nothing, §3.2). A large decoration is a decoration file (`DecorData.ref`, `pptxdecor:<n>`), only
-  with the 'decorFile' field. The hub's and the client's `M9_WRITES` leave out 'decor' and 'decorFile' until
-  `decor-render` registers the decoration drawer and names decoration files (the M9 rollout below): their
-  budgets then plan no decoration at all (`BudgetOptions.decorations`), so a slide past 150 objects keeps
-  its merges and each shape, and the guard leaves the topmost past 190 out and lists them, instead of
-  decorations that would draw nothing.
+  with the 'decorFile' field. Both fields are in the hub's and the client's `M9_WRITES` since `decor-render`
+  (the decoration drawer below, and decoration files named on both paths); with 'decor' taken out again (the
+  kill switch) the budgets plan no decoration at all (`BudgetOptions.decorations`), so a slide past 150
+  objects keeps its merges and each shape, and the guard leaves the topmost past 190 out and lists them,
+  instead of decorations that would draw nothing.
+- **The decoration drawer** (`decor-render`; `@ordo/renderer` `decor/`): `draw.ts` builds a decoration's source
+  shapes (parts from one `s: 1` to the next, a paint change starting one, `cont` parts joined) in its own
+  `w` x `h` space and draws them as `drawGeomShape` draws a shape, shape after shape in z-order: a colour or a
+  gradient laid on the member's frame, its outline with its dash (miter joins, flat caps), its shadow through
+  `drawEffected` with its own small sprites; at most 24 shadowed shapes keep theirs (the converter closes a run
+  there: only a hostile file loses one). A decoration past 2,048 points or 4 shadowed shapes is drawn the
+  second time through a sprite of its device bounds (`spritecache.ts` kind 'decor', a 1:1 copy, none past one
+  4K frame). `index.ts` registers it as the 'decor' drawer of the shape dispatch with its reach (`decorReach`:
+  its shapes' points and outlines placed in the box, their shadows offset and blurred 3σ, for the tight
+  sprites); the renderer's index registers only its loader (`registerShapeDrawerLoader('decor')`), so the
+  drawer is its own lazy chunk, loaded by the workers' prepare step and the editor canvas the first time a
+  slide holds a decoration (`loadShapeDrawers`). The decoration files' store is `decor/files.ts`, small and
+  eager in the workers (`putDecorFile`, `readDecorFiles`: the geometry files' rules, parts clamped against the
+  largest palette), so reading a slide's files never loads the drawer; the editor canvas loads it (4.2 kB) the
+  first time a slide names a decoration file. For the outputs' effect
+  units (wave r2b): `drawDecorRange` (shapes `from` to `to`, never through the sprite; the ranges drawn in
+  order give the whole decoration's pixels), `decorShapeCount`, `decorCost` (each shape's `drawCost` with its
+  shadow pass, and its shadow layers' area), `DECOR_SPRITE`. The full clamp is the drawer's (`decor/clamp.ts`
+  `clampDecorData`, applied before a decoration is built, drawn, rated or bounded; the render plan's
+  `clamp/decor.ts` only re-validates the field against the schema for the dispatch, so the operator's first
+  paint carries no decoration code: initial JavaScript +0.8 kB, the drawer a lazy chunk of 17.2 kB in the
+  operator and 36.5 kB in the output): `w`, `h` finite and positive; at most 64 paints and 256 parts; each part
+  re-tokenised, in the palette, its frame five finite numbers; at most 16,384 points, the shape that would pass
+  them dropped with every one after it. Measured
+  (`decor/decor.browser.test.ts`, Chromium): the 60-shape showcase as one decoration against its shapes drawn
+  one by one, at most 1/255 inside shapes at 1920 and 3840 without shadows, 2/255 and 3/255 with 12 shadows
+  (a shadow's reduced layer is made over what the shape draws, the separate shape's over its box: the grid
+  lands a device pixel apart, one level more inside a soft shadow); its sprite a 1:1 copy. Goldens
+  `shape-decor`, `shape-decor-equivalence`, `decor-sprite` (`golden/decor-cases.ts`). **Time** (an open must
+  item before release, design/27 §13): a decoration at its caps (16,384 points, 24 shadows) is one draw of
+  about 100 ms cold at 3840 on a shared 4-CPU machine, past §13's 50 ms task; the outputs' effect units
+  (r2b, items 1-4, must before merge) draw it in slices of `drawDecorRange`. Until then it is reported by the
+  raster bench, not relaxed: a decoration is held to at most its shapes drawn apart + 10 % there.
 - **Sheets** (`pptxmedia:sheet<n>`, `EmitResult.sheets`, `SheetBake`, made by the hub and the harness,
   `decor-render`): cells at the 3840 density, in z-order, each the picture as its object draws it (crop,
   recolour, flips, a turn by quarter turns exactly or by any angle sampled bilinearly, opacity), at most 64
@@ -805,8 +838,10 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   harness and its census convert with the same switches (`tools/pptx-fidelity` `native.ts`), so what they
   measure is what an import stores.
 - **`M9_WRITES` is the kill switch.** A converter field stays out of it until its drawer is on main, and the
-  drawer's PR turns it on: 'decor' (no decoration drawer until `decor-render`) and 'decorFile' are held back
-  (`M9_HELD_BACK`), and pictures are drawn from no sheet (`PPTX_SHEETS` false). A field found wrong after a
+  drawer's PR turns it on: 'decor' and 'decorFile' were held back (`M9_HELD_BACK`) until `decor-render`
+  registered the decoration drawer and named decoration files on both paths (the constant stays, empty, as
+  the kill switch), and pictures are drawn from no sheet (`PPTX_SHEETS` false until `decor-sheets`). A field
+  found wrong after a
   release is withheld the same way, with no release of the drawers: imports from then on write what an older
   build draws for it; presentations imported before keep what they stored. The fields left on draw on main
   today (a table by its registered drawer, `tables-render`; 3-D flat by decision; the other converter seams
@@ -817,13 +852,14 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   (`Slide.pptx.missing`), so goLive's degraded list
   names them; a slide hybrid only for them waits for nothing. On a hub with LibreOffice a slide over 64 KB
   that the ladder would simplify keeps LibreOffice's page instead (`ImportCore.pageForBudget`, above).
-- **Known costs of the hold-back until `decor-render`** (hub with LibreOffice, E's worship slides, against
-  wave 1): with decorations held back, the guard leaves out topmost objects that main sent to LibreOffice's
-  art, and LibreOffice draws no budget's art: an emoji game slide (0.956 at wave 1, 0.907 with every field,
-  0.795 as stored: its connector lines and emojis listed missing) and a slide wave 1 showed as LibreOffice's
-  picture (0.995, 0.932, 0.864: a group of connectors). A Christmas template's app slide (0.969, 0.936, 0.696)
-  is over 64 KB as stored and now keeps LibreOffice's page instead (0.995). All three draw whole again once
-  `decor-render` turns 'decor' on.
+- **What came back with decorations** (`decor-render`, wave r2; E's worship slides): while decorations were
+  held back the guard left out topmost objects that main sent to LibreOffice's art, and LibreOffice draws no
+  budget's art: an emoji game slide (0.956 at wave 1, 0.795 as stored: its connector lines and emojis listed
+  missing), a slide wave 1 showed as LibreOffice's picture (0.995, 0.864: a group of connectors) and a
+  Christmas template's app slide (0.969, 0.696 without LibreOffice; over 64 KB as stored, it kept LibreOffice's
+  page on a hub with it). With 'decor' and 'decorFile' on, their shapes are decorations again, drawn natively
+  on both kinds of hub, and the slides wave 1 had hybrid for `missing:decoration` are native (the measured
+  numbers per slide and kind of hub are in the r2 notes, `regroup/r2a/decor-render`).
 - **The first paint stays as fast.** M9 adds no code to what the operator loads before its first paint: its
   drawers load per object kind (`registerShapeDrawerLoader`; the table's in the workers' prepare step and the
   editor canvas) and the Setup and settings pages load when opened (`React.lazy`). Measured on this PR's build:
@@ -1582,6 +1618,12 @@ _M6 merge re-review, fixed in M9 wave 1 (render-seams)._
 **Named exceptions to the 50 ms asset-worker task** (M6 finish review; a slide's draw is one task, §7.5 "Two raster lanes"):
 - _A slide at its effect budget, drawn cold_ (no layer cached): on the CPU-backed canvases of the asset worker, enlarging a reduced blur layer costs about 20 ms a slide area at 4K and a composite's allocation about 14 ms more, so 10 slide areas of layers take a few hundred ms the first time (the review's twenty custGeoms past their boxes with shadows, nine kept: 379 ms p95 at 3840, 300 ms at 1920; the corpus's most effected slides, 6.4 to 9.1 slide areas, 120 to 225 ms cold and 15 to 94 ms warm at 3840, 32 to 87 ms cold at 1920). Rasters after the first reuse the cached composites and layers. The raster bench checks these slides at 400 / 500 ms (1920 / 3840) cold. Bounding them at 50 ms would cut the effect budget to about one slide area, which 102 of the corpus's 2,927 slides pass (12 decks); the way out is a slide draw that yields between objects, or effect layers composed by the GPU compositor (M7).
 - _A full-slide soft edge, drawn cold_: its first raster makes the eroded, blurred mask and a full-resolution body cut by it, 97 to 118 ms at 3840 (134 ms before the body was cut in place, without a copy), 15 ms warm.
+- **Open must item before release, not a relaxed bound** (M9 decorations, `decor-render`): _a decoration at its
+  caps_ (16,384 points, 24 shadowed shapes) is one draw of about 100 ms cold at 3840 on the shared 4-CPU bench
+  machine (its sprite, made on its second draw, is then a 1:1 copy). The M9 exit stays at 50 ms: the outputs'
+  effect units (wave r2b, items 1-4, must before merge) make it in slices of `drawDecorRange` (32 shapes a
+  turn). Until they land the raster bench reports it (`bench/cases/decor.ts`, cold and warm at 3840) and holds
+  a decoration to at most its shapes drawn one by one + 10 % (checked).
 
 ## 14. Testing and fidelity measurement
 
@@ -2502,8 +2544,8 @@ _Built for M9 (wave 1, track `conv-seams`): the converter's seams, so that each 
   writing, centerBlock, vectorFonts, adjWide, geomFile64; default every one) is consulted by each stub: without
   a field the converter writes what an older build draws for it (§3.2). The hub passes `M9_WRITES`
   (`apps/hub/src/pptx/shared.ts`, decisions.md 1) from `sceneTask.ts`, and `CONVERTER_VERSION` is 2. A field
-  stays out of `M9_WRITES` until what reads it is in (the M9 rollout below): 'decor' and 'decorFile'
-  (`M9_HELD_BACK`) until `decor-render` draws decorations and names their files on the hub and the client.
+  stays out of `M9_WRITES` until what reads it is in (the M9 rollout below; `M9_HELD_BACK`, empty since
+  `decor-render` draws decorations and names their files on the hub and the client).
   The parse reads the same set (`ParseOptions.m9Writes`, `sheets`), so the slide budgets plan only what is
   written.
 - **Notes.** `log.ts` `addNote` keeps a slide's stored notes within `Slide.pptx.notes`' 16: 15 and
@@ -2526,11 +2568,11 @@ _Built for M9 (wave 2, track `decor-conv`): the slide budgets drawn natively (§
 - The job payload grows (not stored): `EmitResult.decors` (decoration files), `EmitResult.sheets` (each sheet's
   recipe once), `EmittedSlide.sheets` (each sheet's uses and the objects to put back), `EmittedSlide.plate`
   (the plate plan); `EmitOptions.decorId`, `sheetId`, `sheets` (false: no sheets, for an importer that cannot
-  make them). The hub's storing of decoration files and sheets is `decor-render`'s (`geoms.ts`, `bakes.ts`
-  `storeSheets`); until it lands the hub and the client convert with `sheets: false` and without 'decor' and
-  'decorFile' in `M9_WRITES` (the M9 rollout below), so no `pptxmedia:sheet<n>` or `pptxdecor:<n>` placeholder
-  is ever written and no decoration is stored that nothing draws (`decor-render` turns each back on with its
-  drawer and its storing).
+  make them). Decoration files are named, checked, bounded and stored on the hub and the client since
+  `decor-render` (the import core's `pptx-geoms.ts` `decorFileOf`, `SHAPE_FILE_KINDS`; stored as geometry
+  files are), and 'decor' and 'decorFile' are in `M9_WRITES`; sheets wait for `decor-sheets` (`bakes.ts`
+  `storeSheets`): the hub and the client convert with `sheets: false` (the M9 rollout below), so no
+  `pptxmedia:sheet<n>` placeholder is ever written.
 - Decisions.md "Slow-to-draw elements": the converter keeps every element and its full vector source, names
   the slide's plate candidates, and leaves "plate or live" to the drawers (`decor-render`).
 <!-- /m9:decor-conv -->
@@ -2591,8 +2633,9 @@ the operator parsed can lay text out differently from one the hub parsed.
 0012).** One import core in `@ordo/importers`, used by the hub's job and pool task, the operator's import
 worker, the Pages demo and the fidelity harness:
 - `pptx-scan.ts` (`PPTX_IMPORT_LIMITS`, `scanDeck`, `clipParts` with `CLIP_CANDIDATES`, `extrasOf`),
-  `pptx-geoms.ts` (`geomFileOf`, `nameGeoms`, `nameShapeFiles`, and `SHAPE_FILE_KINDS`, the hook decoration
-  files join when `decor-render` names them on both sides), `pptx-pictures.ts` (the hub's header checks and
+  `pptx-geoms.ts` (`geomFileOf`, `decorFileOf`, `storedShapeFileOf`, `nameGeoms`, `nameShapeFiles` over
+  `emittedShapeFiles`, and `SHAPE_FILE_KINDS`: geometry and decoration files, named on both sides by one
+  SHA-256), `pptx-pictures.ts` (the hub's header checks and
   display needs, one copy), `sha256.ts` (one SHA-256, incremental), `pptx-ladder.ts` (the budget ladder),
   `pptx-core.ts` (`ImportCore`: drafts, budgets, provenance, assembly, the follow-up's plan) and
   `pptx-report.ts` (`source.log`, missing fonts). The converter's version and stored fields are one constant

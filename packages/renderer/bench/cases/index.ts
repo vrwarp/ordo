@@ -1,4 +1,5 @@
 import type { Slide } from '@ordo/domain';
+import { DECOR_BENCH_CASES } from './decor.ts';
 import { TABLE_BENCH_CASES } from './table.ts';
 
 /*
@@ -15,4 +16,4 @@ import { TABLE_BENCH_CASES } from './table.ts';
 export type BenchCase = readonly [name: string, slide: Slide];
 
 /** Every area's cases. */
-export const AREA_BENCH_CASES: readonly BenchCase[] = [...TABLE_BENCH_CASES];
+export const AREA_BENCH_CASES: readonly BenchCase[] = [...TABLE_BENCH_CASES, ...DECOR_BENCH_CASES];

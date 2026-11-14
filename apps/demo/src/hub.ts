@@ -503,7 +503,7 @@ async function importDocumentUpload(file: File, form: FormData): Promise<Job> {
     );
   }
 
-  // Store geometry files
+  // Store shape files (geometry and decoration files, by the SHA-256 the import core named them)
   for (const g of parsed.geoms) {
     await putFile(g.hash, new Blob([g.bytes as Uint8Array<ArrayBuffer>], { type: 'application/json' }));
   }

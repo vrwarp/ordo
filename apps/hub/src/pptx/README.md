@@ -611,9 +611,11 @@ text toward 64 KB, called them native. The converter now writes such paths once 
 (`ShapeGeom.ref`, placeholder `pptxgeom:<n>`, `EmitResult.geoms`; `@ordo/pptx-scene` README) and measures the
 slide as this job stores it. The job (`geoms.ts`):
 - **Names** each batch's files by the SHA-256 of their JSON (`GeomFile`, its paths re-tokenised by
-  `sanitizeGeom` and checked by the schema) right after the batch, before the budgets: a placeholder whose file
-  is not usable loses its ref (the shape draws its legacy form). One outline in two batches, two decks or two
-  imports is one name.
+  `sanitizeGeom` and checked by the schema; an M9 decoration file, `DecorFile`, its parts by `sanitizeDecor`
+  against the largest palette, at most 16,384 points: the import core's `decorFileOf`) right after the batch,
+  before the budgets: a placeholder whose file is not usable loses its ref (the shape draws its legacy form, a
+  decoration nothing). One outline or decoration in two batches, two decks or two imports is one name, and the
+  browser's parse names it the same (`apps/hub/test/pptx-scene-task.test.ts`, `geoms.decor.test.ts`).
 - **Budgets** them: a slide whose new files pass `PPTX_LIMITS.geomFileBytes` (32 MB an import; the largest
   worship deck needs 0.6 MB) is a compact picture like an oversized one ('over the import budget of shape
   outlines'), so a hostile deck cannot fill the store through files instead of slides.
@@ -635,10 +637,10 @@ slide as this job stores it. The job (`geoms.ts`):
 - `CONVERTER_VERSION` is 2 (`@ordo/pptx-scene` `version.ts`, re-exported by `shared.ts`): the converter that
   draws 3-D flat and writes the M9 fields.
 - `M9_WRITES` (`version.ts`, re-exported by `shared.ts`, the client parse's too): the M9 stored fields the import writes, every one (M9 decision 1) but those whose
-  drawer or reader is not on main yet (`M9_HELD_BACK`: 'decor' and 'decorFile' until `decor-render` draws
-  decorations and names their files); `sceneTask.ts` passes it as `EmitOptions.m9Writes` with
-  `sheets: PPTX_SHEETS` (false until `decor-render` stores composites and atlases), so the slide budgets plan
-  neither (design/27 §15 M9 "rollout"). Taking a field out is the kill switch: the import then writes what an
+  drawer or reader is not on main yet (`M9_HELD_BACK`: empty since `decor-render` draws decorations and names
+  their files on both paths; 'decor' and 'decorFile' were held back until then); `sceneTask.ts` passes it as
+  `EmitOptions.m9Writes` with `sheets: PPTX_SHEETS` (false until `decor-sheets` stores composites and
+  atlases), so the slide budgets plan no sheet (design/27 §15 M9 "rollout"). Taking a field out is the kill switch: the import then writes what an
   older build draws for it. In wave 1 no converter part writes an M9 field yet (the stubs of
   `@ordo/pptx-scene`), so nothing stored changes.
 - `EmitOptions.libreoffice` (default true) is `lo-detect`'s to set: with false the converter plans no art and

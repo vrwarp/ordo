@@ -243,10 +243,11 @@ export function planLadder(
 }
 
 /**
- * `slide` without what names an outline file `keep` refuses (one past the import's budget, or one the store
- * could not take): a shape is left out (its file never arrives, and its legacy shape would stand where a
- * traced outline was), a picture keeps its box without the mask. Returns the slide (the same object when
- * nothing names such a file), the shapes left out, the masks dropped and what the shapes drew.
+ * `slide` without what names a shape file `keep` refuses (one past the import's budget, or one the store
+ * could not take): a shape whose geometry or decoration (M9 `DecorData.ref`) is in such a file is left out (its
+ * file never arrives, and its legacy shape would stand where a traced outline was; a decoration would draw
+ * nothing), a picture keeps its box without the mask. Returns the slide (the same object when nothing names
+ * such a file), the shapes left out, the masks dropped and what the shapes drew.
  */
 export function withoutFiles(
   slide: Slide,
@@ -257,7 +258,11 @@ export function withoutFiles(
   const missing: MissingKind[] = [];
   const objects: SlideObject[] = [];
   for (const o of slide.objects) {
-    if (o.type === 'shape' && typeof o.geom?.ref === 'string' && !keep(o.geom.ref)) {
+    if (
+      o.type === 'shape' &&
+      ((typeof o.geom?.ref === 'string' && !keep(o.geom.ref)) ||
+        (typeof o.decor?.ref === 'string' && !keep(o.decor.ref)))
+    ) {
       dropped++;
       const k: MissingKind = o.chart ? 'chart' : 'decoration';
       if (!missing.includes(k)) missing.push(k);

@@ -295,15 +295,21 @@ are byte-identical, and the tests pin each seam's calls by digest against the co
   cancelled job stops at `host.check`), the operator's thumbnail worker at once, from one registry
   (`registerPrepareStep`), so thumbnails draw what outputs draw. Steps run in order and return the files they
   found missing, which the asset worker reports with the missing pictures. Built in: the M9 shape drawers the
-  slides need (`shape drawers`, below) and the geometry files (`ShapeGeom.ref`); M9 adds table layout, warp
-  faces, vector pictures and decoration files.
+  slides need (`shape drawers`, below), the geometry files (`ShapeGeom.ref`) and the decoration files
+  (`DecorData.ref`, `decoration files`: `drawnDecorRefs`, read into the renderer's small decoration-file store,
+  `decor/files.ts`, as geometry files are; a file not there yet is reported missing and the slide drawn again
+  once it is cached, the decoration drawing nothing meanwhile); M9 adds table layout, warp faces and vector
+  pictures.
 - **Shape dispatch** (`renderer/src/shape.ts` `drawShapeObject`): `table` → `chart` → `decor` → geometry → legacy,
   by the first of the fields the clamp kept whose drawer is registered (`registerShapeDrawer`); until then such a
   shape draws what an older build draws once it strips the field. A kind's drawer may instead be loaded the first
-  time a slide holds that kind (`registerShapeDrawerLoader`: the renderer's index registers the table's, so its
-  code stays out of the operator's first paint, design/24 "Bundle budget"); the workers' prepare step `shape
+  time a slide holds that kind (`registerShapeDrawerLoader`: the renderer's index registers the table's and the
+  decoration's, so their code stays out of the operator's first paint, design/24 "Bundle budget"); the workers' prepare step `shape
   drawers` and the editor canvas call `loadShapeDrawers` before they draw (the canvas draws again once loaded).
   A registered 3-D look (`registerLook3d`) resolves a plan the effect composite draws (`EffectSource.look3d`).
+  A decoration (`decor/draw.ts`) is one draw: at its caps (16,384 points, 24 shadows) about 100 ms cold at 3840,
+  past the 50 ms asset-worker task until the effect units (wave r2b) make it in slices of `drawDecorRange`: an
+  open must item before release (design/27 §13), not a relaxed bound.
 - **Paint hooks** (`renderer/src/text/paint.ts`): `paintRich` puts glyphs on the context through a glyph painter
   (`PLAIN_PAINTER`; upright and warp ones registered by kind), and its rectangles too (a line mask's straps,
   highlights, underlines and strikes: `rect` with the pass) and draws its face on a face target

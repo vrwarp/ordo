@@ -58,8 +58,8 @@ once (like a crash: no goodbyes), the library process stops its jobs (re-queued 
 
 **Routing** (`src/liveproc.ts`, `src/proxy.ts`): the live process listens on `ORDO_PORT` and answers
 itself `/ws`, `/api/v1/{live, live/summary, live/events, actions, cache/manifest, output/config, auth/me, health}`,
-`/api/v1/files/<hash>` for files it knows (the live playlist's media, geometry files and fonts, every font,
-the logo) and
+`/api/v1/files/<hash>` for files it knows (the live playlist's media, geometry and decoration files and
+fonts, every font, the logo) and
 every non-API path (the built apps). Everything else under `/api/v1` is streamed to the library process
 over loopback. We chose the live process as the front door rather than the supervisor so the supervisor
 stays free of network input, and rather than two DSM rules so the deployment is unchanged. The proxy is
@@ -290,7 +290,8 @@ uploading browser parsed (`POST /import/document` part `clientScene`, design/27 
 parsed"): the route drops a `clientScene` part over 32 MB before it is stored, the pool task
 `pptx-client-scene` reads, parses and checks the stored scene off the event loop (`pptx/clientScene.ts`: a
 zod schema with a bound on every list, string and part name; this hub's `CONVERTER_VERSION`, `M9_WRITES` and
-LibreOffice state; every shape file checked again with `geomFileOf` and re-hashed), and any doubt about it
+LibreOffice state; every shape file checked again by its kind, `storedShapeFileOf`: a geometry file with
+`geomFileOf`, an M9 decoration file with `decorFileOf`, and re-hashed), and any doubt about it
 makes the hub parse the deck itself (the job's log says why); the scene file is released once version 1 is
 saved or the import fails. Steps 3-5 are the import core's in `@ordo/importers` (`pptx-core.ts`,
 `pptx-scan.ts`, `pptx-geoms.ts`, `pptx-pictures.ts`, `pptx-ladder.ts`), which the browser's parse and the Pages

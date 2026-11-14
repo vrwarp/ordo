@@ -7,6 +7,7 @@ import {
   type TextStyle,
 } from '@ordo/domain';
 import { clearEffectCache } from '../src/effects.ts';
+import { spriteCache } from '../src/spritecache.ts';
 import { AREA_BENCH_CASES } from './cases/index.ts';
 import { rasterSlide } from '../src/raster.ts';
 import { FontResolver, installFontEnv } from '../src/text/fonts.ts';
@@ -745,6 +746,8 @@ export async function bench(
       // A cold case starts every job with an empty effect cache: its layers are made each time.
       const cold = name.includes(', cold');
       const job = () => {
+        // A cold decoration is drawn directly every job: its sprite (and the mark that it was drawn) made again.
+        if (cold) spriteCache.clear('decor');
         const s = clone(slide);
         if (cold) clearEffectCache();
         const t0 = performance.now();

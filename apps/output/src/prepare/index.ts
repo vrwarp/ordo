@@ -1,5 +1,12 @@
-import { drawnGeomRefs, GEOM_FILE_MAX_BYTES, isGeomFileRef, type Look, type Slide } from '@ordo/domain';
-import { loadShapeDrawers, readGeomFiles, shapeDrawersWanted } from '@ordo/renderer';
+import {
+  drawnDecorRefs,
+  drawnGeomRefs,
+  GEOM_FILE_MAX_BYTES,
+  isGeomFileRef,
+  type Look,
+  type Slide,
+} from '@ordo/domain';
+import { loadShapeDrawers, readDecorFiles, readGeomFiles, shapeDrawersWanted } from '@ordo/renderer';
 
 /*
  * The slide prepare steps (design/27 M9 render-seams): what a worker reads, decodes or lays out before it
@@ -8,9 +15,10 @@ import { loadShapeDrawers, readGeomFiles, shapeDrawersWanted } from '@ordo/rende
  * draws the same in both. Steps run in order and each says which files it found missing: the asset worker
  * reports them with the missing pictures, and the link draws the slide again once they are cached.
  *
- * Built in: the drawers of the M9 object kinds a slide holds (loaded per kind, `shapeDrawers`) and the geometry
- * files (`ShapeGeom.ref`, M6 round 2). M9 registers its own (tables laid out in 8 ms
- * slices, warp faces, vector pictures, decoration files). A step reads only through its host and never from a
+ * Built in: the drawers of the M9 object kinds a slide holds (loaded per kind, `shapeDrawers`), the geometry
+ * files (`ShapeGeom.ref`, M6 round 2) and the decoration files (`DecorData.ref`, M9: read into the renderer's
+ * small decoration-file store, which reading never loads the decoration drawer's own module for). M9 registers
+ * its own (tables laid out in 8 ms slices, warp faces, vector pictures). A step reads only through its host and never from a
  * deck string as a key; it must not throw for a file that is missing or bad (a throw is a failed job), only
  * for a cancelled job (`host.check`).
  *
@@ -65,9 +73,40 @@ export const geometryFiles: PrepareStep = {
   },
 };
 
+/** A file read through the host: its text, null when it is past the size bound, undefined when not there yet. */
+async function fileText(host: PrepareHost, hash: string): Promise<string | null | undefined> {
+  const blob = await host.read(hash);
+  return !blob ? undefined : blob.size > GEOM_FILE_MAX_BYTES ? null : blob.text();
+}
+
 /**
- * The drawers of the M9 object kinds the slides hold (a table's), each module loaded the first time a slide
- * needs it (`loadShapeDrawers`, the renderer's per-kind loaders): before the synchronous draw, so a table is
+ * The decoration files the slides draw (`DecorData.ref`, M9 decorations; `drawnDecorRefs`, the decoration
+ * refs of `drawnShapeFileRefs`), read and parsed into the renderer's decoration-file store as the geometry
+ * files are: each parse in a turn of the job (`host.slice`). A file not there yet is reported missing, and the
+ * slide is drawn again once it is cached; the decoration draws its inline parts (none: nothing) meanwhile.
+ */
+export const decorationFiles: PrepareStep = {
+  name: 'decoration files',
+  async run(job, host) {
+    const refs: string[] = [];
+    for (const s of job.slides) refs.push(...drawnDecorRefs(s).filter(isGeomFileRef));
+    if (!refs.length) return undefined;
+    const r = await readDecorFiles(
+      refs,
+      (hash) => fileText(host, hash),
+      undefined,
+      (fn) => host.slice(fn),
+    );
+    host.check();
+    const missing: string[] = [];
+    for (const [hash, why] of r) if (why === 'missing') missing.push(hash);
+    return missing;
+  },
+};
+
+/**
+ * The drawers of the M9 object kinds the slides hold (a table's, a decoration's), each module loaded the first
+ * time a slide needs it (`loadShapeDrawers`, the renderer's per-kind loaders): before the synchronous draw, so a table is
  * never drawn as its legacy rect for want of its code. Only for a look that draws the slide as authored.
  */
 export const shapeDrawers: PrepareStep = {
@@ -83,7 +122,7 @@ export const shapeDrawers: PrepareStep = {
   },
 };
 
-const steps: PrepareStep[] = [shapeDrawers, geometryFiles];
+const steps: PrepareStep[] = [shapeDrawers, geometryFiles, decorationFiles];
 
 /** Add a step after the registered ones (or in place of one of its name); returns its unregistration. */
 export function registerPrepareStep(step: PrepareStep): () => void {

@@ -111,11 +111,13 @@ columns: `n`, `i`, `tier`, `class`, `reasons`, `objects`, `geom`, `refs`, `bytes
 an error. Each deck is converted in the harness's worker, with the pool's heap limit and timeout.
 
 The census and every fidelity run convert with what an import stores: the M9 fields of `M9_WRITES` and
-`PPTX_SHEETS` (`@ordo/pptx-scene` `version.ts`, the hub's and the client parse's one switch). A field held back
-until its drawer is on main (`M9_HELD_BACK`: decorations and their files, and picture sheets until
-`decor-render`) is therefore not measured as if it shipped: such a slide keeps each shape, and past the
-slide budgets' guard its topmost objects are listed missing. To measure a held-back field, add it to
-`M9_WRITES` in a scratch checkout.
+`PPTX_SHEETS` (`@ordo/pptx-scene` `version.ts`, the hub's and the client parse's one switch). Decorations and
+their files are written since `decor-render` (`M9_HELD_BACK` is empty): the native page draws them (the
+decoration drawer is registered at once) and reads the deck's decoration files beside its geometry files
+(`NativeDeck.geoms`, `pptxdecor:<n>` placeholders; from a hub, by their SHA-256 names). Picture sheets stay off
+until `decor-sheets` (`PPTX_SHEETS` false): a slide past the render clamp's 16 pictures lists the topmost
+missing. A field held back until its drawer is on main is not measured as if it shipped; to measure one, add it
+to `M9_WRITES` in a scratch checkout.
 
 A census line names its deck. Tables made from a census of private decks print counts only.
 
