@@ -16,6 +16,7 @@ import {
   resetLayoutForTests,
   signInCap,
   startLayout,
+  thisIsPhone,
 } from '../src/lib/layout.ts';
 
 /** matchMedia for a viewport of w x h CSS px: the compact query evaluated as a browser would. */
@@ -133,6 +134,18 @@ describe('isPhone and signInCap (§3.2: the screen, never the viewport)', () => 
     expect(signInCap('edit', { width: 390, height: 844 })).toBe('light');
     expect(signInCap('edit', { width: 834, height: 1194 })).toBeUndefined();
     expect(signInCap('full', { width: 390, height: 844 })).toBeUndefined();
+  });
+});
+
+describe('thisIsPhone (the phone class of the page)', () => {
+  it('is decided once: a tablet whose window shrinks (a software keyboard) never turns into a phone', () => {
+    // The first decision: an iPad's screen.
+    expect(thisIsPhone(() => isPhone(edit, { width: 1194, height: 834 }))).toBe(false);
+    // Where the screen follows the window (an emulated iPad under a simulated keyboard: 1194x474).
+    expect(thisIsPhone(() => isPhone(edit, { width: 1194, height: 474 }))).toBe(false);
+    resetLayoutForTests();
+    expect(thisIsPhone(() => isPhone(edit, { width: 390, height: 844 }))).toBe(true);
+    expect(thisIsPhone(() => isPhone(edit, { width: 1194, height: 834 }))).toBe(true);
   });
 });
 

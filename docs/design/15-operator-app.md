@@ -801,7 +801,10 @@ screen is compact from its first paint. The compact layout sets `html[data-layou
 on the regular layout) and is on `window.__ordo.layout`. The **phone class** (`isPhone`) is an edit-
 capability device whose shorter **screen** side (`screen.width`, `screen.height`, never the viewport)
 is under 600 CSS px: a phone with Safari's "Request Desktop Website" still is one, an iPad in a narrow
-Split View is not. A phone's sign-in asks for the `light` cap (`signInCap`, design/28 §3.2).
+Split View is not. The page decides it once (`thisIsPhone`, at its first call in `main.tsx`), so a tablet
+whose window shrinks never turns into a phone where a browser's `screen` follows the window (an iPad under
+a simulated keyboard in Playwright's WebKit would otherwise lose its open editor to the previews). A phone's
+sign-in asks for the `light` cap (`signInCap`, design/28 §3.2).
 
 ### The edit profile
 

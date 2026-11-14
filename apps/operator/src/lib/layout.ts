@@ -58,9 +58,21 @@ export function deviceScreen(): ScreenSize | undefined {
   return typeof screen === 'undefined' ? undefined : screen;
 }
 
-/** This device is a phone (non-reactive: the capability profile and the screen do not change at run time). */
-export function thisIsPhone(): boolean {
-  return isPhone(deviceProfile('operate'), deviceScreen());
+// The phone class of this page, decided once (thisIsPhone).
+let phoneClass: boolean | undefined;
+
+/**
+ * This device is a phone, decided at its first call and kept for the page's life: the capability profile and
+ * the screen of a device do not change at run time, and where a browser's `screen` follows the window (an
+ * emulated device; WebKit under Playwright) a tablet whose window shrinks, as under a software keyboard, must
+ * not turn into a phone (it would be restricted at once and its open editor sent to the previews). `decide` is
+ * for tests.
+ */
+export function thisIsPhone(
+  decide: () => boolean = () => isPhone(deviceProfile('operate'), deviceScreen()),
+): boolean {
+  phoneClass ??= decide();
+  return phoneClass;
 }
 
 // The current layout: written by useLayout (once per render of App) and main.tsx before the first render,
@@ -177,6 +189,7 @@ export function useLayout(capabilityProfile: Profile, routeName: string): Layout
 export function resetLayoutForTests(): void {
   state.layout = 'regular';
   state.decided = false;
+  phoneClass = undefined;
   listeners.clear();
 }
 

@@ -1662,7 +1662,8 @@ Where this differs from the text above, this is what the code does. Three lanes 
   the edit role gives every device the edit profile); `useLayout` once at the top of `App`, deferring regular
   to compact while the editor is open; `startLayout`/`applyLayout` in `main.tsx` before the first render;
   `html[data-layout="compact"]` on the compact layout only; `window.__ordo.layout`. `isPhone` and `signInCap`
-  read `screen`, never the viewport. The forced-profile guard is in `profileFor`.
+  read `screen`, never the viewport; the page decides its phone class once (`thisIsPhone`, the integration's
+  fix below). The forced-profile guard is in `profileFor`.
 - **Routes** (`lib/route.ts` `pageFor`, `compactRedirect`): on the compact layout or on a phone (Request Desktop
   Website included; the shell adds a capped session) refused routes are decided during render and replaced, so
   their chunks are never requested; `#/edit/<id>` opens `#/previews/<id>` until P1's `#/view`.
@@ -1752,6 +1753,13 @@ Where this differs from the text above, this is what the code does. Three lanes 
   429s), and the live-boundary spec checks that it sees the eight refusals it provokes.
 - **The venue PC with Phones on**: `e2e/phones-writes.spec.ts` also runs a service through the code-split live
   view (Go live, Next, End service) with the switch on.
+- **Found on the merged build**: the hub's scan of the clients' writes (`phones-clients.test.ts`) could not
+  follow the phone sign-in's injected `api` call, so the default calls `api()` visibly (same request); and
+  `thisIsPhone()` re-read `screen` on every render, so where `screen` follows the window (Playwright's WebKit) a
+  landscape iPad under a simulated keyboard (1194x474) became a phone for a moment and its open editor was sent
+  to the previews (`e2e/ipad/touch.spec.ts`, 2 of 3 runs; 0 of 3 at `d0f49cb`): the page now decides its phone
+  class once. The venue PC and the tablets are checked to sign in as before, `{ pin, remember: true }` and no cap
+  (`e2e/layout-class.spec.ts`, `e2e/ipad/split.spec.ts`).
 - **Numbers on the merged build** (`tools/bundle-report.mjs --check`, nothing re-recorded): the operator's
   initial chunk 511.0 kB (162.2 kB gzip; +1.8 % on the split's baseline of 502.1 kB; 1,710.9 kB and 537.1 kB gzip
   at `d0f49cb`); the compact first load 275,118 B gzip in 7 files (headroom 24,882 B; the phone spec measures the
