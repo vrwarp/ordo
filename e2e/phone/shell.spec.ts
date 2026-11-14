@@ -222,11 +222,17 @@ test('the frame: a header, the tab bar instead of the nav, and More', async ({ p
   }
 });
 
-test('every dialog is a bottom sheet: More', async ({ page }) => {
+test('every dialog is a bottom sheet: More and Live (the media preview: the bodies test)', async ({
+  page,
+}) => {
   const { hub, api, url } = await hubFor(3);
   try {
+    await seed(api);
     await signInPhone(page, url);
     await sheetChecks(page, page.locator('nav.tabbar').getByRole('button', { name: 'More' }), 'More');
+    const strip = page.locator('[data-live-strip]');
+    await expect(strip).toBeVisible({ timeout: 20_000 });
+    await sheetChecks(page, strip, 'Live');
   } finally {
     await api.dispose();
     hub.kill();
@@ -420,6 +426,49 @@ test('the empty states on a fresh hub', async ({ page }) => {
     await go(page, '#/playlists');
     await expect(page.getByText('No plans yet. Plans are made on a computer or iPad.')).toBeVisible();
     await compactRouteChecks(page, 'empty plans');
+  } finally {
+    await api.dispose();
+    hub.kill();
+  }
+});
+
+test('Live now: the plan and its lock count, never the live slide; offline it says so', async ({ page }) => {
+  test.setTimeout(180_000);
+  const { hub, api, url } = await hubFor(6);
+  try {
+    await seed(api);
+    // The hub's summary carries the live slide's text as liveLabel (today's chip showed it on a phone).
+    const summary = await json<{ liveLabel?: string }>(api.get('live/summary'));
+    expect(summary.liveLabel ?? '').toContain('Unique live line seventeen');
+    await signInPhone(page, url);
+    const strip = page.locator('[data-live-strip]');
+    await expect(strip).toHaveText('Live at the venue: Sunday Service · 1 locked', { timeout: 20_000 });
+    await expect(page.locator('[data-freshness]')).toHaveCount(0);
+    expect(await page.locator('body').innerText()).not.toContain('Unique live line seventeen');
+    await expect(page.locator('[data-live-chip]')).toHaveCount(0);
+    await strip.tap();
+    await expect(page.locator('[data-live-sheet]')).toHaveText(
+      'A service is running at the venue. Sunday Service and its 1 presentation are locked until it ends. You can still look at everything and change anything else.',
+    );
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-live-sheet]')).toHaveCount(0);
+
+    // Offline: the strip cannot know, and the freshness line dates the copy (after its 5 s grace).
+    await page.context().setOffline(true);
+    await expect(strip).toHaveText('Live status unknown: offline');
+    await expect(page.locator('[data-freshness]')).toHaveText(/^Offline · copy from \w{3} \d{1,2}:\d{2}/, {
+      timeout: 15_000,
+    });
+    const stored = await page.evaluate(() => localStorage.getItem('ordo.op.lastContact'));
+    expect(Number(stored)).toBeGreaterThan(Date.now() - 120_000);
+    await layoutChecks(page, 'offline').then((p) => expect(p).toEqual([]));
+    // Online again: the strip asks at once and shows the service; the freshness line goes.
+    await page.context().setOffline(false);
+    await expect(strip).toHaveText('Live at the venue: Sunday Service · 1 locked', { timeout: 20_000 });
+    await expect(page.locator('[data-freshness]')).toHaveCount(0, { timeout: 20_000 });
+    // End service: the strip goes.
+    await json(api.post('live/events', { data: { id: 'end', event: { k: 'endService', at: Date.now() } } }));
+    await expect(strip).toHaveCount(0, { timeout: 20_000 });
   } finally {
     await api.dispose();
     hub.kill();

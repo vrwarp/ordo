@@ -325,6 +325,17 @@ offers a write in P0 (no Edit, New, Upload, Rename, Delete or Archive) and none 
 `LookPreviews` (`apps/operator/test/compactImports.test.ts`); `PlaylistsView` and `PreviewsView` left the
 compact path (`COMPACT_LAZY` is empty).
 
+The Live now strip in P0 (`[data-live-strip]`, `views/compact/LiveNow.tsx`, its text from the pure
+`lib/liveStrip.ts`) comes from the 8 s `/live/summary` poll the iPad already runs (`lib/venueLive.ts`, visible
+pages only, and at once on `pageshow`, a restored page included, and on `online`), not yet from the `venue`
+push: P1 swaps the source behind `liveStrip`'s input, which takes the plan's name and its locked ids only and has
+no field for a cue label, so the live slide's text never reaches the strip (the hub also leaves `liveLabel` out
+for capped sessions, §3.4). The poll's status is `unknown` until its first answer and `failing` after two failed
+polls: "Live status unknown: can't reach ordo"; offline: "Live status unknown: offline". A tap opens the Live
+sheet. The freshness line (`[data-freshness]`, `lib/freshness.ts`) shows 5 s after the hub link drops, at once on
+an offline start, with the time of the last contact (`localStorage` `ordo.op.lastContact`, written when the link
+goes down and on `pagehide` while connected), or "copy on this phone" without one.
+
 ### 2.3 Plans and Plan (P1)
 
 <img src="28-mobile/01-plans-android.png" width="260" alt="Plans home on an Android phone: the next plan with its readiness, then the plans coming up">

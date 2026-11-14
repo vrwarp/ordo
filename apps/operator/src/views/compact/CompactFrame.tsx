@@ -12,6 +12,7 @@ import { navigate } from '../../useRoute.ts';
 import { LoginView } from '../auth/LoginView.tsx';
 import type { FrameProps } from '../RegularFrame.tsx';
 import { Icon } from './icons.tsx';
+import { FreshnessLine, LiveNowStrip } from './LiveNow.tsx';
 import { MoreSheet } from './MoreSheet.tsx';
 import { backTarget, isDetail, nextTrail, type Tab, type Trail, tabOf } from './tabs.ts';
 
@@ -69,6 +70,8 @@ export function CompactFrame({ route, signedOut, fallback, body }: FrameProps) {
   return (
     <div className={`app compact-app app-route-${route.name}`}>
       <div className="compact-top">
+        <LiveNowStrip />
+        <FreshnessLine />
         <header className="compact-header" data-compact-header>
           {detail && (
             <button type="button" className="compact-back" data-back aria-label={t('back')} onClick={back}>

@@ -841,6 +841,11 @@ Split View is not. A phone's sign-in asks for the `light` cap (`signInCap`, desi
   falls back to `GET /live`. On this profile the locked banners and the 423 toasts say "This presentation
   is in the playlist that is live at the venue. It can be edited again after the service." (the venue
   PC keeps "locked until End service").
+  On the compact layout (a phone) the nav chip is replaced by the Live now strip (design/28 §2.2): "Live at
+  the venue: <plan> · N locked" from the same poll's plan name and locked ids, never the cue label; "Live
+  status unknown" when offline or after two failed polls; polled at once on `pageshow` and `online` there.
+  The hub leaves `liveLabel` out for a capped session (a phone, design/28 §3.4); an iPad's uncapped session
+  keeps it for its chip.
 
 ### Look previews
 
