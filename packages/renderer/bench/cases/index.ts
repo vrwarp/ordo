@@ -1,5 +1,6 @@
 import type { Slide } from '@ordo/domain';
 import { TABLE_BENCH_CASES } from './table.ts';
+import { UNITS_BENCH_CASES } from './units.ts';
 
 /*
  * The raster bench cases of M9's areas (design/27 M9 render-seams): each area track writes its slides in
@@ -15,4 +16,4 @@ import { TABLE_BENCH_CASES } from './table.ts';
 export type BenchCase = readonly [name: string, slide: Slide];
 
 /** Every area's cases. */
-export const AREA_BENCH_CASES: readonly BenchCase[] = [...TABLE_BENCH_CASES];
+export const AREA_BENCH_CASES: readonly BenchCase[] = [...TABLE_BENCH_CASES, ...UNITS_BENCH_CASES];

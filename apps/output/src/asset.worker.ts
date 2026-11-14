@@ -50,6 +50,7 @@ import { OpaqueFiles } from './opaque.ts';
 import { PICTURE_LIMITS, preloadPictures, sourcePicture } from './pictures.ts';
 import { jobSlides, type PrepareHost, prepareSlides } from './prepare/index.ts';
 import './prepare/tables.ts';
+import { holdUnits, type UnitHold } from './prepare/units.ts';
 
 /**
  * Asset worker: OPFS reads, image decoding, font loading and text rasterization at output resolution.
@@ -335,17 +336,37 @@ async function preload(
  * waits for a large file's parse. Returns the hashes not there yet: drawn with their fallback for now, and
  * reported with the missing images, so the link draws the slide again once they are cached.
  */
-function prepare(
+async function prepare(
   job: { slide?: Slide; nextSlide?: Slide; look?: Look },
   scale: number,
   steps: Steps,
-): Promise<string[]> {
+): Promise<{ missing: string[]; units: UnitHold }> {
   const host: PrepareHost = {
     read: async (hash) => (await readFile(hash)).blob,
     slice: (fn) => steps.slice(fn),
     check: () => steps.check(),
   };
-  return prepareSlides({ slides: jobSlides(job), scale, look: job.look }, host);
+  // The geometry units it makes or finds stay pinned until the job lets them go (`keepUnits`).
+  const units = holdUnits(host);
+  try {
+    return { missing: await prepareSlides({ slides: jobSlides(job), scale, look: job.look }, host), units };
+  } catch (err) {
+    units.release();
+    throw err;
+  }
+}
+
+/**
+ * The geometry units (prepare/units.ts) held for each layer's last live and armed slide job and for the last warm
+ * job: a cue's units stay pinned while it is armed or warmed (made there, so its GO does no unit work), and are
+ * let go when the next job of the same kind holds its own.
+ */
+const heldUnits = new Map<string, UnitHold>();
+
+function keepUnits(chain: string, hold: UnitHold): void {
+  const old = heldUnits.get(chain);
+  heldUnits.set(chain, hold);
+  if (old !== hold) old?.release();
 }
 
 /** Missing families a 'done' message reports: as many as the link keeps (FromAsset, protocol health). */
@@ -451,7 +472,7 @@ function timed<T>(d: DrawTiming, fn: () => T): T {
  * then the layer is measured, drawn as a sprite, taken and sent in one turn. Every size is the one the job
  * started with, so a resize arriving meanwhile cannot mix two. A cancelled job (`Cancelled`) sends nothing.
  */
-async function run(job: AssetJob, steps: Steps): Promise<void> {
+async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
   const t0 = performance.now();
   const w = width;
   const h = height;
@@ -460,12 +481,15 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
   let skipped = 0;
   let missing: string[] = [];
   let release: (() => void) | undefined;
+  let units: UnitHold | undefined;
   try {
     let draw: () => Drawn;
     if (job.kind === 'slide') {
       // Prepare steps first (geometry files): a masked picture is prepared with its mask's paths, and the
-      // slide's reach and drawing budget are worked out with them.
-      const geoms = await prepare(job, scale, steps);
+      // slide's reach and drawing budget are worked out with them; then its geometry units, pinned.
+      const prep = await prepare(job, scale, steps);
+      units = prep.units;
+      const geoms = prep.missing;
       const pre = await preload(job.images, slidePictures(job.slide, { scale, look: job.look }), out, steps);
       release = pre.release;
       skipped = pre.skipped;
@@ -526,6 +550,9 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
       release = undefined;
       return deliver(job, d, t0);
     });
+    // Drawn: its units stay pinned while it is its layer's last job of its role (live or armed).
+    if (units && job.kind === 'slide') keepUnits(`layer ${job.layer} ${role ?? 'armed'}`, units);
+    units = undefined;
     // A slide whose content is past the raster budget by its drawing estimate (memoised by the draw, with the
     // effect sprites it made): health reports its time apart from the alarm's.
     const heavy =
@@ -554,6 +581,7 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
     });
   } finally {
     release?.();
+    units?.release();
   }
 }
 
@@ -659,8 +687,9 @@ async function warmUp(wj: WarmJob, steps: Steps): Promise<void> {
   const scale = out.w / LOGICAL_WIDTH;
   let decodes = 0;
   if (wj.slide) {
-    // Its prepare steps first, as its slide job runs them: a masked picture is prepared cut to its mask.
-    await prepare(wj, scale, steps);
+    // Its prepare steps first, as its slide job runs them: a masked picture is prepared cut to its mask, and
+    // its geometry units are made and stay pinned until the next warm job (arming it then makes none).
+    keepUnits('warm', (await prepare(wj, scale, steps)).units);
     const pre = await preloadPictures(
       images,
       jobDecoder(steps),
@@ -720,7 +749,7 @@ function onJobMessage(m: ToAsset): void {
         chain: `layer ${job.layer}`,
         rank: rankOf(job, m.role),
         gate: fonts$,
-        run: (steps) => run(job, steps),
+        run: (steps) => run(job, steps, m.role),
       });
       return;
     }

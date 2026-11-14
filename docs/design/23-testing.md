@@ -92,7 +92,17 @@ library that did not answer within its wait, a socket closed within its grace) a
 task budgets (design/27 §13: a 50 ms asset-worker task) are gated by the benches, on a known machine, not
 by vitest: `bench:slides --check` for slide rasters and `bench:tables` for the table object's prepare
 slices and draw (median of five runs under 50 ms); the vitest side of those (`table.browser.test.ts`)
-bounds only a runaway at ten times the task.
+bounds only a runaway at ten times the task. The raster bench (`bench --check`) makes each case's geometry
+units before its jobs, as the asset worker's prepare step does, each slice a task of its own, and prints a
+`units <width>` row under the case (units made, MiB, the time to make them all, the longest slice): every slice
+is held to the 50 ms task, and the line-art case (`line art past the slide budget (units)`, `bench/cases/units.ts`)
+to 16 ms at 3840; its slide's draw is reported, not checked (what it draws live is the drawing budget's, whose
+estimate rates hole-dense line art at about half its time: design/27 §13 "Geometry units"). On the bench machine
+its unit (17.4 MiB at 3840) is made in 73 to 78 ms over 6 slices, the longest 15.3 to 15.4 ms, and the slide
+draws in 65 to 66 ms (p95) at 3840. The cold arm of a slide with units, the wait of a jump to it until effect
+units, is the fidelity harness's `coldMs` (its pictures, its geometry units and the first draw,
+`tools/pptx-fidelity/README.md`): the leaf template's first slide is held to 500 ms at 3840 (245 ms, the median
+of five runs under the bench lock).
 
 `e2e/slide-media.spec.ts` covers video and sound playing in place in a slide (design/27 §14.12) on two
 outputs: Audience 1 on WebGPU (`?renderer=webgpu`) and the audio master, Audience 2 on Canvas 2D. It probes

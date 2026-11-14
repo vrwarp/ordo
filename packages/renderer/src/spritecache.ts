@@ -14,7 +14,7 @@
 export const SPRITE_CACHE_BYTES = 64 * 1024 * 1024;
 
 /** Who made a sprite: its cache key's namespace and the bytes reported per kind. */
-export type SpriteKind = 'effect' | 'geom' | 'decor' | 'look3d' | 'chart';
+export type SpriteKind = 'effect' | 'geom' | 'decor' | 'look3d' | 'chart' | 'unit';
 
 /** What the cache holds: anything that says its size in bytes. */
 export interface CachedSprite {

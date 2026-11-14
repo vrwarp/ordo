@@ -5,6 +5,7 @@ import { FontResolver, drawImageFit, drawSlide2D, fillColor, installFontEnv } fr
 // The outputs' slide prepare steps (geometry files, and what M9 registers): thumbnails draw what outputs draw.
 import { jobSlides, prepareSlides } from '../../../output/src/prepare/index.ts';
 import '../../../output/src/prepare/tables.ts';
+import { setGeometryUnits } from '../../../output/src/prepare/units.ts';
 
 /** Thumbnail worker (design/15): the shared 2D rasterizer on an OffscreenCanvas; the main thread never rasterizes. */
 
@@ -33,6 +34,12 @@ export type ThumbFont = {
   url: string;
 };
 export type ThumbIn =
+  /**
+   * The page's input (lib/capabilities.ts): with a fine pointer (a desktop) the worker makes geometry units for
+   * shapes past a slide's drawing budget (prepare/units.ts); with a coarse one (a phone, a tablet) it keeps their
+   * legacy copies and makes none.
+   */
+  | { t: 'init'; finePointer: boolean }
   | { t: 'fonts'; fonts: ThumbFont[] }
   | { t: 'render'; id: number; job: ThumbJob }
   | { t: 'decoded'; id: number; hash: string; bmp?: ImageBitmap };
@@ -43,6 +50,8 @@ export type ThumbOut =
   | { t: 'decode'; id: number; hash: string };
 
 const scope = self as unknown as DedicatedWorkerGlobalScope & { fonts?: FontFaceSet };
+// No geometry units until the page says its pointer is fine (`init`).
+setGeometryUnits(false);
 const bitmaps = new Map<string, Promise<ImageBitmap | undefined>>();
 let decodeSeq = 1;
 const pendingDecodes = new Map<number, (bmp: ImageBitmap | undefined) => void>();
@@ -170,6 +179,10 @@ startHeartbeat(scope);
 scope.onmessage = (ev: MessageEvent<ThumbIn>) => {
   const m = ev.data;
   if (!m || isControl(m)) return;
+  if (m.t === 'init') {
+    setGeometryUnits(m.finePointer === true);
+    return;
+  }
   if (m.t === 'fonts') {
     for (const f of m.fonts) fontUrls.set(f.hash, f.url);
     fontsReady = Promise.allSettled([fontsReady, fonts.sync(m.fonts)]);
