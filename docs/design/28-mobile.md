@@ -1186,7 +1186,13 @@ Following design/23.
   removes `Slide.midiCues`, or changes an item's `keepBackground`, `audioMediaId` or `countdownTimer`, is
   refused with the field named, and one that leaves them alone is saved; a forced `?profile=full` on the touch
   projects stays `edit`; a capped sign-in clears the device cookie; a live plan shows no Edit; the Live now
-  strip never contains slide text; a media upload while live makes no output refetch its config.
+  strip never contains slide text; a media upload while live makes no output refetch its config. (P0 as
+  built, the hub side measured by `e2e/phone/live-boundary.spec.ts`: a phone signed in with the operate PIN
+  during a service gets 403 `cap` for `/live/events`, `/actions`, a `DELETE`, a settings write, a font, a
+  theme and an import, `forbidden: cap` for a socket `live.event`, `bye forbidden` for `hello operate`, 403
+  `cap` with `field: 'midiCues'` for a cue change, no device cookie, a one-hour session and a summary without
+  `liveLabel`; at `d0f49cb` all sixteen checks fail. The rest are unit and route tests:
+  `apps/hub/test/phones-*.test.ts`.)
 - **Readiness**: each finding of §5.2 from a fixture; attaching a processing video within 12 hours is
   refused; the free-space floor (a small test volume) refuses an upload with 507.
 - **Hub**: renditions made and backfilled (never while live); deferred heavy jobs while live; location
