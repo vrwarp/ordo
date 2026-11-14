@@ -1,4 +1,11 @@
-import { type APIRequestContext, expect, type Page, request, test } from '@playwright/test';
+import {
+  type APIRequestContext,
+  type BrowserContext,
+  expect,
+  type Page,
+  request,
+  test,
+} from '@playwright/test';
 import { HubProcess } from '../hubproc.ts';
 import { auditTargets, COMPACT_SELECTOR } from '../touchaudit.ts';
 import { touchDevice } from '../touchdevice.ts';
@@ -215,4 +222,49 @@ export async function expectCappedSession(page: Page, where = 'after the sign-in
   expect(left, `${where}: ordo_session ends within an hour`).toBeLessThanOrEqual(3600 + 60);
   const me = await page.evaluate(() => fetch('/api/v1/auth/me').then((r) => r.json()));
   expect(me, `${where}: GET /auth/me`).toMatchObject({ role: 'edit', cap: 'light' });
+}
+
+/** One refusal the hub answered (watchRefusals). */
+export type Refusal = { method: string; path: string; status: number; code?: string };
+
+/** The refusals of design/28 §4 that a P0 compact screen must never meet (composed plan §2 E). */
+const REFUSAL_CODES = new Set(['cap', 'x_ordo_required', 'origin']);
+
+/**
+ * Every /api/ answer in `target`'s browser context (its pages, their workers and service worker) that is a
+ * refusal of the phone's cap or of the write checks: 403 with code `cap`, `x_ordo_required` or `origin` (a 403
+ * whose body cannot be read is listed with code `unread`), or 429. The P0 compact screens call no route above
+ * `light` and write nothing, so a spec expects none (the lockout test excepted). Call the returned function to
+ * read the list once the answers are in.
+ */
+export function watchRefusals(target: Page | BrowserContext): () => Promise<Refusal[]> {
+  const ctx: BrowserContext = 'goto' in target ? target.context() : target;
+  const found: Refusal[] = [];
+  const pending: Promise<unknown>[] = [];
+  ctx.on('response', (r) => {
+    let path: string;
+    try {
+      path = new URL(r.url()).pathname;
+    } catch {
+      return;
+    }
+    if (!path.startsWith('/api/')) return;
+    const status = r.status();
+    const base = { method: r.request().method(), path, status };
+    if (status === 429) found.push(base);
+    else if (status === 403)
+      pending.push(
+        r.json().then(
+          (b) => {
+            const code = (b as { error?: { code?: unknown } } | null)?.error?.code;
+            if (typeof code === 'string' && REFUSAL_CODES.has(code)) found.push({ ...base, code });
+          },
+          () => found.push({ ...base, code: 'unread' }),
+        ),
+      );
+  });
+  return async () => {
+    await Promise.all(pending);
+    return [...found];
+  };
 }

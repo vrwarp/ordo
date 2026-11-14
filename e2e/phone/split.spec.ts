@@ -4,7 +4,7 @@ import { assetOf, forbiddenIn } from '../bundlefiles.ts';
 import type { HubProcess } from '../hubproc.ts';
 import { portOf } from '../ports.ts';
 import { touchDevice } from '../touchdevice.ts';
-import { phoneSlot, signInPhone, startPhoneHub } from './phonehelpers.ts';
+import { phoneSlot, type Refusal, signInPhone, startPhoneHub, watchRefusals } from './phonehelpers.ts';
 
 /**
  * Phones P0, the code split (design/28 §3.1, §7, §8 "Layout"): a phone gets the compact layout from its
@@ -71,6 +71,15 @@ test.afterAll(async () => {
   hub?.kill();
 });
 
+// No refusal on any compact route (composed plan §6 W4): 403 `cap`, `x_ordo_required`, `origin`, or 429.
+let refusals: () => Promise<Refusal[]> = async () => [];
+test.beforeEach(({ page }) => {
+  refusals = watchRefusals(page);
+});
+test.afterEach(async () => {
+  expect(await refusals(), 'refusals on the phone').toEqual([]);
+});
+
 type Ordo = {
   layout?: string;
   capabilities: { deviceProfile: string; hid: boolean; windowManagement: boolean };
@@ -99,12 +108,14 @@ test('(5) an iPhone in landscape (844x390) stays compact', async ({ page, browse
     viewport: { width: 844, height: 390 },
     storageState: state,
   });
+  const ctxRefusals = watchRefusals(ctx);
   try {
     const p2 = await ctx.newPage();
     await p2.goto(url);
     await expect(p2.locator('.page')).toBeVisible({ timeout: 20_000 });
     expect(await ordoLayout(p2)).toBe('compact');
     expect(await htmlLayout(p2)).toBe('compact');
+    expect(await ctxRefusals(), 'refusals at 844x390').toEqual([]);
   } finally {
     await ctx.close();
   }
@@ -206,6 +217,7 @@ test('(7) Request Desktop Website: a phone on the regular layout still never mou
     viewport: { width: 980, height: 2120 },
     screen: { width: 390, height: 844 },
   });
+  const ctxRefusals = watchRefusals(ctx);
   try {
     const page = await ctx.newPage();
     const assets = watchAssets(page);
@@ -227,6 +239,7 @@ test('(7) Request Desktop Website: a phone on the regular layout still never mou
     expect(await page.evaluate(() => history.length)).toBe(pushed);
     expect(await sawKonva(page)).toBe(false);
     expect(fetched(assets(), 'views/editor/EditorView.tsx')).toBe(false);
+    expect(await ctxRefusals(), 'refusals on the regular layout').toEqual([]);
   } finally {
     await ctx.close();
   }

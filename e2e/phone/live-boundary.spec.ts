@@ -1,7 +1,14 @@
 import { type APIRequestContext, expect, type Page, request, test } from '@playwright/test';
 import { HubProcess } from '../hubproc.ts';
 import { portOf } from '../ports.ts';
-import { expectCappedSession, PIN, phoneSlot, pinBodies, signInPhone } from './phonehelpers.ts';
+import {
+  expectCappedSession,
+  PIN,
+  phoneSlot,
+  pinBodies,
+  signInPhone,
+  watchRefusals,
+} from './phonehelpers.ts';
 
 /**
  * A phone on the live boundary (design/28 §8 "Live boundary", §10): signed in with the operate PIN while a
@@ -121,6 +128,8 @@ test('a phone signed in with the operate PIN can neither drive the service nor c
     expect(seeded.map((k) => k.name).sort()).toEqual(['ordo_device', 'ordo_session']);
     await page.context().addCookies(seeded.map((k) => ({ ...k, domain: 'op.localhost' })));
     // The keypad, as a phone signs in: its client signs the old session out once and asks for cap 'light'.
+    // watchRefusals (the shell and split specs expect none) must see every refusal below.
+    const seen = watchRefusals(page);
     const pins = pinBodies(page);
     await signInPhone(page, `${op}/`);
     expect(pins).toEqual([{ pin: PIN, cap: 'light' }]);
@@ -186,6 +195,12 @@ test('a phone signed in with the operate PIN can neither drive the service nor c
     expect(sum.lockedPresentationIds).toEqual([a.id]);
     expect(sum, 'the summary has no slide text').not.toHaveProperty('liveLabel');
     expect(JSON.stringify(sum), 'no lyric in the summary').not.toContain('Amazing grace');
+
+    // The refusals as phonehelpers.watchRefusals lists them: the eight routes and the MIDI cue save, each 403
+    // cap, and nothing before them (the sign-in and the old session's sign-out are not refusals).
+    const listed = await seen();
+    expect(listed.filter((r) => r.status === 403 && r.code === 'cap')).toHaveLength(8);
+    expect(listed.every((r) => r.code === 'cap')).toBe(true);
   } finally {
     hub.kill();
   }

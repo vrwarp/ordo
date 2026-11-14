@@ -17,8 +17,10 @@ import {
   PIN,
   phoneSlot,
   pinBodies,
+  type Refusal,
   signInPhone,
   startPhoneHub,
+  watchRefusals,
 } from './phonehelpers.ts';
 
 /**
@@ -27,6 +29,22 @@ import {
  * in webkit-iphone (390x844) and chromium-android (360x800). One hub per test and project (row 'phone-shell':
  * test k on port 2k in webkit-iphone, 2k+1 in chromium-android), so sign-ins, lockouts and services never meet.
  */
+
+// No refusal on any compact route (composed plan §6 W4): the P0 screens call no route above `light` and write
+// nothing, so no answer is 403 `cap`, `x_ordo_required` or `origin`, or 429. The lockout test allows its 429s
+// from POST /auth/pin only (`lockoutAllowed`); a second context checks its own (watchRefusals(ctx)).
+let refusals: () => Promise<Refusal[]> = async () => [];
+let lockoutAllowed = false;
+test.beforeEach(({ page }) => {
+  refusals = watchRefusals(page);
+  lockoutAllowed = false;
+});
+test.afterEach(async () => {
+  const found = (await refusals()).filter(
+    (r) => !(lockoutAllowed && r.status === 429 && r.method === 'POST' && r.path === '/api/v1/auth/pin'),
+  );
+  expect(found, 'refusals on the compact routes').toEqual([]);
+});
 
 /** This test's hub: port 2k + the project's slot of row 'phone-shell'. */
 async function hubFor(k: number): Promise<{ hub: HubProcess; api: APIRequestContext; url: string }> {
@@ -328,11 +346,13 @@ test('the layout checks hold at 844x390 (still compact), 320x568 and 200 % text'
         viewport: { width: 844, height: 390 },
         storageState: await page.context().storageState(),
       });
+      const ctxRefusals = watchRefusals(ctx);
       try {
         const p2 = await ctx.newPage();
         await p2.goto(url);
         await shown(p2);
         await check(p2, 'at 844x390');
+        expect(await ctxRefusals(), 'refusals at 844x390').toEqual([]);
       } finally {
         await ctx.close();
       }
@@ -562,6 +582,7 @@ test('sign-in on a phone: cap light and never remembered, its line and host, the
     }
 
     // Five wrong PINs: the next answer is the lockout, with its end in the phone's own time.
+    lockoutAllowed = true;
     let text = '';
     for (let i = 0; i < 7 && !text.startsWith('Too many'); i++) {
       await tapPin(page, '135790');
