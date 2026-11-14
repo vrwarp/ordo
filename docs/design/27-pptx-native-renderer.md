@@ -789,9 +789,12 @@ the fidelity harness's A/B.
   there: only a hostile file loses one). A decoration past 2,048 points or 4 shadowed shapes is drawn the
   second time through a sprite of its device bounds (`spritecache.ts` kind 'decor', a 1:1 copy, none past one
   4K frame), only when the sprite cache would keep it (`SpriteCache.room`, beside the sprites the slide's raster
-  holds, and the decorations' sprites within half the budget): otherwise it is drawn directly (r2a repair: the
+  holds, and the decorations' sprites within half the budget, other slides' oldest decoration sprites evicted to
+  make room, `SpriteCache.fitKind`): otherwise it is drawn directly (r2a repair: the
   Slidesmania "wake" template's slide 12, four decorations among 220 shadowed shapes, made and dropped its
-  sprites on every draw at 3840, 208 ms a warm draw; 21 ms since). `index.ts` registers it as the 'decor' drawer of the shape dispatch with its reach (`decorReach`:
+  sprites on every draw at 3840, 208 ms a warm draw; 21 ms since. Its re-review: without the eviction, an earlier
+  slide's decoration sprites kept a later slide's from its own for good, the capped decoration at 55 ms a warm
+  draw after the four-large bench slide; 5-8 ms with it). `index.ts` registers it as the 'decor' drawer of the shape dispatch with its reach (`decorReach`:
   its shapes' points and outlines placed in the box, their shadows offset and blurred 3σ, for the tight
   sprites); the renderer's index registers only its loader (`registerShapeDrawerLoader('decor')`), so the
   drawer is its own lazy chunk, loaded by the workers' prepare step and the editor canvas the first time a

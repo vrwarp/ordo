@@ -151,6 +151,31 @@ describe('rasters', () => {
     expect(c.room(8 * MB)).toBe(true);
   });
 
+  it("fitKind keeps a kind within its share by evicting that kind's oldest from earlier rasters only", () => {
+    const c = new SpriteCache(64 * MB);
+    c.set('decor', 'old 1', sprite(8));
+    c.set('decor', 'old 2', sprite(8));
+    c.set('effect', 'effect', sprite(8));
+    c.set('decor', 'old 3', sprite(8));
+    expect(c.fitKind('decor', 4 * MB, 32 * MB)).toBe(true);
+    expect(c.count('decor')).toBe(3);
+    c.raster(() => {
+      c.get('decor', 'old 2');
+      // 24 of 32 MiB held: 12 more evicts the oldest decoration the raster has not used ('old 1'), nothing else.
+      expect(c.fitKind('decor', 12 * MB, 32 * MB)).toBe(true);
+      expect(c.has('decor', 'old 1')).toBe(false);
+      expect(c.has('decor', 'old 2')).toBe(true);
+      expect(c.has('effect', 'effect')).toBe(true);
+      c.pin('decor', 'old 3');
+      // 'old 2' is this raster's and 'old 3' pinned: no room for 20, and nothing is evicted in vain.
+      expect(c.fitKind('decor', 20 * MB, 32 * MB)).toBe(false);
+      expect(c.count('decor')).toBe(2);
+      c.unpin('decor', 'old 3');
+      expect(c.fitKind('decor', 20 * MB, 32 * MB)).toBe(true);
+      expect(c.has('decor', 'old 3')).toBe(false);
+    });
+  });
+
   it('the budget follows the largest frame drawn, within its bounds', () => {
     expect(SPRITE_CACHE_FRAMES).toBe(4);
     expect(SPRITE_CACHE_MAX_BYTES).toBe(128 * MB);

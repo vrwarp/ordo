@@ -65,7 +65,8 @@ import { decorFilesVersion, decorParts, decorPending } from './files.ts';
  *   slide is drawn again for every look and refresh. None larger than a 4K frame; none while `withDirectDecor`
  *   runs (a caller that cuts its work into slices, `drawDecorRange`, which a sprite made at once would not);
  *   none the cache would not keep (`SpriteCache.room`: beside the sprites the slide's raster holds already, and
- *   within `DECOR_SPRITE.share` of the budget for all decorations): such a decoration is drawn directly, so a
+ *   within `DECOR_SPRITE.share` of the budget for all decorations, other slides' oldest decoration sprites
+ *   evicted to make room, `SpriteCache.fitKind`): such a decoration is drawn directly, so a
  *   slide whose sprites pass the cache (a 4K slide of four large decorations and 220 shadowed shapes) never
  *   makes, on every draw, sprites the cache then drops (r2a repair: 208 ms a warm draw at 3840, now 20-30).
  * - **Files.** `ref` names a decoration file (`DecorFile`, stored as a geometry file is; read into the store of
@@ -523,9 +524,11 @@ function drawDecorSprite(ctx: Ctx2D, d: DecorData, geo: DecorGeometry, opacity: 
     }
     // Never made only to be dropped: a sprite the cache would not keep beside what this raster holds (or past
     // the decorations' share) would cost its drawing and a copy on every draw, more than drawing it directly.
+    // The share counts this raster's decorations and evicts other slides' oldest to make room (`fitKind`): an
+    // earlier slide's decorations never keep this one's from their sprites for good.
     const bytes = W * H * 4;
-    if (spriteCache.bytes('decor') + bytes > DECOR_SPRITE.share * spriteCache.budgetBytes) return false;
     if (!spriteCache.room(bytes)) return false;
+    if (!spriteCache.fitKind('decor', bytes, DECOR_SPRITE.share * spriteCache.budgetBytes)) return false;
     const c = new OffscreenCanvas(W, H);
     // Software-backed, as the effect sprites are: copied to a software canvas, drawn by the CPU.
     const s2 = c.getContext('2d', { willReadFrequently: true });

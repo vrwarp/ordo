@@ -15,7 +15,8 @@
  *   whose sprites pass the budget then keeps the ones that fit and makes only the rest again on each draw; a
  *   plain LRU would evict, on every draw, exactly the sprites the rest of that draw (and the next) needs, and
  *   make all of them again every time. `room` says beforehand whether a sprite would be kept, so a drawer
- *   whose sprite only saves time once kept (a decoration's) does not make one to throw away.
+ *   whose sprite only saves time once kept (a decoration's) does not make one to throw away; `fitKind` keeps a
+ *   kind within its share by evicting that kind's oldest entries of earlier rasters, never the running one's.
  * - **Marks** (`mark`, `marked`): keys a drawer remembers without a sprite (a decoration drawn once, its sprite
  *   made the second time), in an LRU of their own of at most `SPRITE_MARKS` keys, cleared with their kind.
  *
@@ -136,6 +137,27 @@ export class SpriteCache<S extends CachedSprite = CachedSprite> {
       if (v && v.raster !== this.current) held += v.bytes;
     }
     return held + b <= this.budget;
+  }
+
+  /**
+   * Room for a sprite of `bytes` of `kind` within `cap` bytes of that kind (a kind's share of the budget): the
+   * least recently used unpinned entries of `kind` that the running raster has not used are evicted until it fits
+   * (another slide's decorations make way for this one's), nothing of another kind. False, evicting nothing, when
+   * the raster's own entries of the kind and the pinned ones leave no room.
+   */
+  fitKind(kind: SpriteKind, bytes: number, cap: number): boolean {
+    const b = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+    const evictable = (k: string, v: Entry<S>) =>
+      v.kind === kind && !this.pins.has(k) && (this.current === 0 || v.raster !== this.current);
+    if (this.bytes(kind) + b <= cap) return true;
+    let kept = this.bytes(kind);
+    for (const [k, v] of this.map) if (evictable(k, v)) kept -= v.bytes;
+    if (kept + b > cap) return false;
+    for (const [k, v] of this.map) {
+      if (this.bytes(kind) + b <= cap) break;
+      if (evictable(k, v)) this.drop(k, v, true);
+    }
+    return true;
   }
 
   /**

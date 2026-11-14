@@ -284,13 +284,51 @@ describe('sprite admission (r2a repair)', () => {
     // With room again (a later raster), it is made.
     draw(o);
     expect(spriteCache.count('decor')).toBe(1);
-    // Past the share: other decorations' sprites hold half the budget already.
+    // Past the share within the raster: its own decorations' sprites hold half the budget already.
     spriteCache.clear();
     draw(o);
-    spriteCache.set('decor', 'others', { bytes: DECOR_SPRITE.share * spriteCache.budgetBytes });
-    const shared = draw(o);
+    const shared = draw(o, () =>
+      spriteCache.set('decor', 'mine', { bytes: DECOR_SPRITE.share * spriteCache.budgetBytes }),
+    );
     expect(fills(shared)).toBeGreaterThan(0);
     expect(spriteCache.count('decor')).toBe(1);
+  });
+
+  it("another slide's decoration sprites never keep a new decoration from its own: the oldest make room", () => {
+    // Re-review of the repair: the share counted every decoration sprite in the cache and evicted none, so once
+    // an earlier slide's held half the budget a later slide's decoration was drawn directly on every draw (the
+    // capped decoration after the four-large slide: 55 ms a warm draw at 3840, against 6 ms).
+    const o = shape(m9Decor());
+    const half = (DECOR_SPRITE.share * spriteCache.budgetBytes) / 2;
+    spriteCache.raster(() => {
+      spriteCache.set('decor', 'slide 12, first', { bytes: half });
+      spriteCache.set('decor', 'slide 12, second', { bytes: half });
+    });
+    expect(spriteCache.bytes('decor')).toBe(DECOR_SPRITE.share * spriteCache.budgetBytes);
+    draw(o);
+    draw(o);
+    // Made on its second draw; the other slide's least recently used sprite went, and only as much as needed.
+    expect(spriteCache.count('decor')).toBe(2);
+    expect(spriteCache.has('decor', 'slide 12, first')).toBe(false);
+    expect(spriteCache.has('decor', 'slide 12, second')).toBe(true);
+    expect(spriteCache.bytes('decor')).toBeLessThanOrEqual(DECOR_SPRITE.share * spriteCache.budgetBytes);
+    const third = draw(o);
+    expect(fills(third)).toBe(0);
+    expect(third.trace.filter((e) => e[1] === 'drawImage')).toHaveLength(1);
+  });
+
+  it('a pinned sprite, or one the raster used, is never evicted to make that room', () => {
+    const o = shape(m9Decor());
+    const share = DECOR_SPRITE.share * spriteCache.budgetBytes;
+    spriteCache.raster(() => spriteCache.set('decor', 'pinned', { bytes: share / 2 }));
+    spriteCache.pin('decor', 'pinned');
+    draw(o);
+    const pinned = draw(o, () => spriteCache.set('decor', 'used', { bytes: share / 2 }));
+    expect(fills(pinned)).toBeGreaterThan(0);
+    expect(spriteCache.has('decor', 'pinned')).toBe(true);
+    expect(spriteCache.has('decor', 'used')).toBe(true);
+    expect(spriteCache.count('decor')).toBe(2);
+    spriteCache.unpin('decor', 'pinned');
   });
 });
 
