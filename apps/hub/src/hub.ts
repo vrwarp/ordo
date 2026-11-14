@@ -213,7 +213,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   app.route({
     method: ['GET', 'HEAD'],
     url: '/*',
-    config: { access: 'public' },
+    config: { access: 'public', cap: 'view' },
     handler: (req, reply) => statics.serve(req, reply),
   });
   app.server.on('upgrade', (req, socket, head) => {

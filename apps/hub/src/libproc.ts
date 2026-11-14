@@ -23,7 +23,7 @@ import { errorMessage, notFound } from './errors.ts';
 import { outputFonts } from './fonts/bundled.ts';
 import { FontService } from './fonts/service.ts';
 import { venueTimeZone } from './hub.ts';
-import { createHttpApp, HEADER_INTERNAL, HEADER_LIBRARY_SEQ, withTimeout } from './http.ts';
+import { createHttpApp, HEADER_INTERNAL, HEADER_LIBRARY_SEQ, type RouteInfo, withTimeout } from './http.ts';
 import { ImportService } from './imports.ts';
 import type { LocksMsg, ProcessStatus } from './ipc.ts';
 import { JobQueue } from './jobs.ts';
@@ -79,6 +79,8 @@ const STATS_DELAY_MS = 3000;
 
 export type LibraryProcess = {
   app: FastifyInstance;
+  /** Every route with its access role and lowest cap (phones-routes.test.ts). */
+  routes: RouteInfo[];
   cfg: HubConfig;
   db: DB;
   lib: Library;
@@ -178,7 +180,7 @@ export async function createLibraryProcess(
   });
 
   const route = (url: string, handler: RouteHandlerMethod) =>
-    app.route({ method: 'GET', url, config: { access: 'public' }, handler });
+    app.route({ method: 'GET', url, config: { access: 'public', cap: 'full' }, handler });
   route('/internal/context', async () => {
     const settings = lib.getSettings();
     const logoId = settings.general.logoMediaId;
@@ -264,6 +266,7 @@ export async function createLibraryProcess(
 
   return {
     app,
+    routes: http.routes,
     cfg,
     db,
     lib,

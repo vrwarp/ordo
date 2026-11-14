@@ -620,7 +620,9 @@ hub downgraded past it never finds a capped cookie and answers 401):
   and tokens; backups; media playback fields (loop, gain, audio pair); every operate and live route. Every
   route declares the lowest cap it accepts beside its role (design/21 "Authorisation"); the startup check
   fails a route without one, and the default refuses capped sessions, so a new route is closed to phones
-  until it says otherwise.
+  until it says otherwise. (P0 as built: `apps/hub/test/phones-routes.test.ts` is the list, for the
+  single-process hub and both processes; the cap is checked before the role, so a phone on an operate route
+  gets 403 `cap`.)
 - **Refused for `light`, per field**: `Slide.midiCues` (show control: MIDI notes to the lighting desk and
   the console, `schemas.ts:565`), and a plan item's `keepBackground`, `audioMediaId` and `countdownTimer`
   (`schemas.ts:773-775`). Presentation and playlist saves are whole-document PUTs (`routes.ts:444-455`,

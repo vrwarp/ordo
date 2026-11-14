@@ -31,6 +31,17 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
 
 - Every route declares `role: 'operate' | 'edit' | 'output' | 'public'`; a startup check
   fails the process if a route lacks one.
+- Every route also declares the lowest session cap it accepts (design/28 §3.2): `view` (reads a phone shows,
+  sign-in and sign-out, files), `light` (presentation and playlist saves, restores and History reads, uploads,
+  media names and tags) or `full` (everything else: every `DELETE`, fonts but `GET /fonts`, themes and theme
+  revisions, folder writes, imports, PowerPoint routes, jobs, capabilities, settings writes, PINs, outputs and
+  tokens, diagnostics, backups, every live and operate route, `/internal/*`). The startup check fails a route
+  without one; at run time a missing cap means `full`, so a new route is closed to phones until it says
+  otherwise. The hub checks, in order: the internal secret (library process), the Host, the HTTPS upgrade, the
+  principal; then, for a session whose cap is below full, the route's cap (403 `cap` with `need`); then the
+  role as before. Full sessions, tokens and anonymous callers never meet the cap check.
+  `apps/hub/test/phones-routes.test.ts` holds the table and refuses every route above a `view` and a `light`
+  session.
 - `operate` includes `edit`.
 - Live events over WebSocket are accepted only from `operate` sessions. Edit sessions'
   sockets receive `library.delta` only.

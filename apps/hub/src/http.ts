@@ -6,10 +6,11 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
-import { API_PREFIX, COOKIE_SESSION, HEADER_TOKEN } from '@ordo/protocol';
+import { API_PREFIX, COOKIE_SESSION, HEADER_TOKEN, type SessionCap } from '@ordo/protocol';
 import Fastify, { type FastifyInstance, type FastifyServerFactory, LogController } from 'fastify';
 import type { Logger } from 'pino';
 import { type Access, type Auth, allowed, type Principal } from './auth.ts';
+import { capRefusal } from './caps.ts';
 import type { HubConfig } from './config.ts';
 import { errorMessage, forbidden, HttpError, unauthorized } from './errors.ts';
 import { redactUrl } from './log.ts';
@@ -20,29 +21,35 @@ import { MAX_UPLOAD_BYTES } from './store.ts';
 declare module 'fastify' {
   interface FastifyContextConfig {
     access?: Access;
+    /** The lowest session cap the route accepts (design/28 §3.2); every route declares one. */
+    cap?: SessionCap;
   }
   interface FastifyRequest {
     principal: Principal | null;
   }
 }
 
-export type RouteInfo = { method: string; url: string; access: Access };
+export type RouteInfo = { method: string; url: string; access: Access; cap: SessionCap };
 
 /** Header carrying the per-boot secret between the hub processes (set by the supervisor). */
 export const HEADER_INTERNAL = 'x-ordo-internal';
 /** On the library's answers to writes: the library sequence after the write (the proxy's barrier). */
 export const HEADER_LIBRARY_SEQ = 'x-ordo-library-seq';
 
-/** Throws when a route does not declare its access role. */
+/**
+ * Throws when a route does not declare its access role or its lowest cap (design/21 "Authorisation", design/28
+ * §3.2): the process does not start with such a route (fail closed).
+ */
 export function checkRouteAccess(opts: {
   method: string | string[];
   url: string;
   config?: unknown;
 }): RouteInfo {
-  const access = (opts.config as { access?: Access } | undefined)?.access;
+  const config = opts.config as { access?: Access; cap?: SessionCap } | undefined;
   const method = String(opts.method);
-  if (!access) throw new Error(`Route ${method} ${opts.url} does not declare an access role`);
-  return { method, url: opts.url, access };
+  if (!config?.access) throw new Error(`Route ${method} ${opts.url} does not declare an access role`);
+  if (!config.cap) throw new Error(`Route ${method} ${opts.url} does not declare a cap`);
+  return { method, url: opts.url, access: config.access, cap: config.cap };
 }
 
 export function isLoopback(addr: string): boolean {
@@ -153,7 +160,13 @@ export async function createHttpApp(opts: {
     const token =
       typeof tokenHeader === 'string' ? tokenHeader : typeof q?.token === 'string' ? q.token : undefined;
     req.principal = opts.auth()?.principal({ cookie: req.cookies?.[COOKIE_SESSION], token }) ?? null;
-    const access = (req.routeOptions.config as { access?: Access } | undefined)?.access ?? 'public';
+    const config = req.routeOptions.config as { access?: Access; cap?: SessionCap } | undefined;
+    // A capped session's cap comes before its role (design/28 §3.2), so a phone on an operate route is told it
+    // is a phone ('cap'), never 'forbidden'; a route without a cap needs full. Full sessions, tokens and
+    // anonymous callers are not checked here.
+    const refused = capRefusal(req.principal, config?.cap);
+    if (refused) throw refused;
+    const access = config?.access ?? 'public';
     if (!allowed(access, req.principal)) {
       if (token && !req.principal) log.warn({ url: redactUrl(req.url), ip: req.ip }, 'invalid output token');
       throw req.principal ? forbidden(`This needs the ${access} role`) : unauthorized();
