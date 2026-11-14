@@ -198,6 +198,12 @@ export interface RunStyle {
   sym?: string;
   /** `baseline`/100,000: +0.3 is a superscript. */
   baseline: number;
+  /**
+   * The nearest `baseline` of the chain is 0 and a farther one is not: that farther one (/100,000, ±1). ordo
+   * draws the run in place at full size, as PowerPoint does; LibreOffice 24.2 reads the 0 as unset and draws
+   * the run shifted by this at 58 % of its size, which `EmitOptions.loCompat` copies (design/27 §4 "Baseline 0").
+   */
+  escZero?: number;
   /** Extra space between characters in points (`spc`/100). */
   spacingPt: number;
   caps: 'none' | 'all' | 'small';
@@ -207,6 +213,12 @@ export interface RunStyle {
   lang?: string;
   /** `a:highlight`. */
   highlight?: Rgba;
+  /**
+   * The nearest fill of the chain was a picture (`a:blipFill`) or a group fill (`a:grpFill`), which ordo does
+   * not paint text with: `fill` is the text colour (tx1), as with no fill, and the outline stays (design/27
+   * §4 "Picture-filled text"; a picture-filled run makes its shape approx, `textFill:picture`).
+   */
+  textFill?: 'picture' | 'group';
 }
 
 export interface Run {
@@ -420,8 +432,10 @@ export interface ShapeElement extends ElementBase {
   /** The XML node, for later milestones (custom geometry, effects). Do not keep it past emission. */
   node?: XNode;
   /**
-   * Custom geometry only: the share of the box its paths fill (0-1, curves taken by their end points),
-   * when every point could be read. M1 draws the legacy rect only when most of the box is filled.
+   * Custom geometry only: the share of the box its paths fill (0-1, curves taken by their end points, holes
+   * counted as ink), when every point could be read (`walk.ts` `pathCoverage`). It chooses the legacy shape
+   * only of a geometry past the converter's bounds (`custom.over`, no paths built: drawn as its rect unless
+   * this is known and below MIN_RECT_COVERAGE); a built one is rated by `CustomPaths.ink`.
    */
   coverage?: number;
   /** Custom geometry built (M6, `geom.ts`): its paths, text rectangle and connection sites. */
@@ -473,10 +487,16 @@ export interface CustomPaths {
    */
   cost?: number;
   /**
-   * Past the drawing budgets (`GEOM_COST`, `slideCustom`). Since M9 (`decor-conv`) kept whole: drawn from the
-   * slide's decoration plate, as its legacy shape by a drawer until one exists; never sent to the art.
+   * Past the drawing budgets (`GEOM_COST`, `slideCustom`). Since M9 (`decor-conv`) kept whole: drawn whole
+   * from a geometry unit on outputs and as its legacy shape elsewhere (`ink` chooses it); never sent to the art.
    */
   complex?: boolean;
+  /**
+   * The share of its box the built paths fill under the even-odd rule (`geom.ts` `inkOf`: holes taken away,
+   * curves flattened, capped at 1); undefined when it cannot be worked out within the renderer's nesting
+   * bounds. What its legacy shape is chosen by (`emit.ts`: a line below MIN_RECT_COVERAGE or unknown).
+   */
+  ink?: number;
   /** `a:rect` as fractions of the box: l, t, r, b. */
   text: [number, number, number, number];
   /** `a:cxnLst` as fractions of the box, with the angle a connector leaves at (degrees clockwise). */

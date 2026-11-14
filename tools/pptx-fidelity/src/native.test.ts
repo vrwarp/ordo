@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Slide, TextObject } from '@ordo/domain';
 import { blankFont } from '@ordo/renderer/text/blankface.ts';
+import { sfntMetrics } from '@ordo/pptx-scene';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { familiesOf, fcFamily, fcMatch, isStandIn } from './fonts.ts';
@@ -20,9 +21,11 @@ import {
   spilledPictureSize,
   spillPart,
   still,
+  unhintedFontconfig,
 } from './native.ts';
 import { dataUri, testPicture } from './png.ts';
 import { beatsBlack, type DeckScore, featureRows, nativeStats } from './report.ts';
+import { findChromium } from '../../find-chromium.ts';
 
 const dirs: string[] = [];
 afterAll(() => Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true }))));
@@ -232,6 +235,40 @@ describe('convertDeck', () => {
     expect(second!.compatSlide).toBeUndefined();
   });
 
+  it("emits a hub without LibreOffice from its own parse where the guard gave pictures to LibreOffice's art", async () => {
+    // Slide 1: 20 distinct pictures, past the render clamp's 16; slide 2: one more picture after them.
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    const s1 = p.addSlide();
+    for (let i = 0; i < 20; i++)
+      s1.addImage({
+        data: dataUri(testPicture(64 + i, 36, i / 20)),
+        x: (i % 5) * 2,
+        y: Math.floor(i / 5),
+        w: 1.5,
+        h: 0.8,
+      });
+    p.addSlide().addImage({ data: dataUri(testPicture(90, 50, 0.5)), x: 1, y: 1, w: 4, h: 2.25 });
+    const dir = await work();
+    const file = join(dir, 'guard.pptx');
+    await writeFile(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    const d = await convertDeck(file, await work(), { noLibreOffice: true });
+    const ids = (sl: Slide | undefined) =>
+      (sl?.objects ?? []).flatMap((o) => (o.type === 'image' ? [o.mediaId] : []));
+    const [first, second] = d.slides;
+    // With LibreOffice: 15 drawn and its art (the clamp's 16); without: the 16 the clamp draws, the rest listed.
+    expect(new Set(ids(first!.slide)).size).toBe(15);
+    expect(first!.reasons).toContain('art:budget:pictures');
+    expect(new Set(ids(first!.noLoSlide)).size).toBe(16);
+    expect(first!.missing).toEqual(['decoration']);
+    // Every picture either way has its file, and slide 2's is the same picture on both kinds of hub.
+    const files = new Map(d.media.map((m) => [m.id, m.file]));
+    for (const id of [...ids(first!.slide), ...ids(first!.noLoSlide), ...ids(second!.slide)])
+      expect(files.get(id), id).toBeDefined();
+    expect(second!.noLoSlide).toBeUndefined();
+    expect(new Set(d.media.map((m) => m.part)).size).toBe(d.media.length);
+  });
+
   it('turns a deck it cannot read into a note', async () => {
     const dir = await work();
     const bad = join(dir, 'bad.pptx');
@@ -295,22 +332,66 @@ describe('convertDeck', () => {
   );
 });
 
-/** A Chromium to drive: ORDO_TEST_CHROMIUM, else Playwright's when it is installed. */
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
-  try {
-    const { chromium } = await import('@playwright/test');
-    const exe = chromium.executablePath();
-    return existsSync(exe) ? exe : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 const chromium = await findChromium();
 
 describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
   const pngSize = (b: Buffer) => [b.readUInt32BE(16), b.readUInt32BE(20)];
+
+  it("draws text with the font's own advances, whatever hinting the machine's fontconfig asks for", async () => {
+    // A machine whose fontconfig asks for full hinting (the CI runner rounds advances like this): the full
+    // headless browser takes it from fontconfig and rounds every advance at the drawing size, the outputs'
+    // headless shell does not. The page must measure what the font says (FaceMetrics x size).
+    const face = await fcMatch('sans-serif');
+    const base = unhintedFontconfig();
+    if (!face || !base) return; // no fontconfig here: nothing to override
+    await rm(base.dir, { recursive: true, force: true });
+    const dir = await work();
+    const hinted = join(dir, 'hinted.conf');
+    await writeFile(
+      hinted,
+      `<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig>
+<include ignore_missing="yes">${process.env.FONTCONFIG_FILE || '/etc/fonts/fonts.conf'}</include>
+<match target="font"><edit name="hinting" mode="assign"><bool>true</bool></edit>
+<edit name="hintstyle" mode="assign"><const>hintfull</const></edit></match></fontconfig>`,
+    );
+    const bytes = await readFile(face.file);
+    const metrics = sfntMetrics(new Uint8Array(bytes), face.index);
+    const texts = ['For God so loved the world, that he gave his one', "and only Son. For God didn't send"];
+    const px = 58.67;
+    const own = texts.map(
+      (t) => [...t].reduce((w, ch) => w + (metrics?.advance(ch.codePointAt(0)!) ?? 0), 0) * px,
+    );
+    const before = process.env.FONTCONFIG_FILE;
+    process.env.FONTCONFIG_FILE = hinted;
+    let r: NativeRenderer;
+    try {
+      r = await NativeRenderer.start(chromium!);
+    } finally {
+      if (before === undefined) delete process.env.FONTCONFIG_FILE;
+      else process.env.FONTCONFIG_FILE = before;
+    }
+    try {
+      const page = await (r as unknown as { browser: import('@playwright/test').Browser }).browser.newPage();
+      const widths = await page.evaluate(
+        async ({ b64, texts, px }) => {
+          const data = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+          const f = new FontFace('HarnessProbe', data.buffer);
+          await f.load();
+          document.fonts.add(f);
+          const c = document.createElement('canvas').getContext('2d')!;
+          c.font = `${px}px HarnessProbe`;
+          c.fontKerning = 'none';
+          return texts.map((t) => c.measureText(t).width);
+        },
+        { b64: bytes.toString('base64'), texts, px },
+      );
+      // Within 0.05 % of the font's advances (shaping rounds positions to 1/64 px); hinting moves a line by
+      // 0.2 % to 0.6 %.
+      for (const [i, w] of widths.entries()) expect(Math.abs(w / own[i]! - 1), texts[i]).toBeLessThan(0.0005);
+    } finally {
+      await r.close();
+    }
+  }, 60_000);
 
   it('draws every shown slide cut to the slide area, with raster timings', async () => {
     const r = await NativeRenderer.start(chromium!);
@@ -404,6 +485,57 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
     ];
     expect(rgb(3 * 192 + 250, 2.5 * 192)).toEqual([255, 0, 0]);
     expect(rgb(3 * 192, 2.5 * 192)).not.toEqual([255, 0, 0]);
+  }, 120_000);
+
+  it("reads the deck's decoration files and draws its decorations (230 squares past the object budget)", async () => {
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    const slide = p.addSlide();
+    // 230 squares of as many colours (no two merge by look): past the slide budgets, kept only as decorations.
+    const color = (i: number) => (0x103050 + i * 0x0a0713).toString(16).slice(-6).padStart(6, '0');
+    for (let i = 0; i < 230; i++)
+      slide.addShape('rect' as Parameters<typeof slide.addShape>[0], {
+        x: 0.1 + (i % 23) * 0.42,
+        y: 0.6 + Math.floor(i / 23) * 0.48,
+        w: 0.3,
+        h: 0.3,
+        fill: { color: color(i) },
+      });
+    const dir = await work();
+    const file = join(dir, 'crowded.pptx');
+    await writeFile(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    const d = await convertDeck(file, dir);
+    const decors = d.slides[0]!.slide.objects.filter((o) => o.type === 'shape' && o.decor);
+    expect(decors.length).toBeGreaterThan(0);
+    expect(d.geoms!.some((g) => g.id.startsWith('pptxdecor:'))).toBe(true);
+    expect(d.slides[0]!.missing).toBeUndefined();
+    const r = await NativeRenderer.start(chromium!);
+    try {
+      await r.renderDeck(d, dir, { repeats: 0 });
+    } finally {
+      await r.close();
+    }
+    // 192 px per inch: the topmost square's centre in its colour, as its decoration file draws it.
+    const px = execFileSync('ffmpeg', [
+      '-v',
+      'error',
+      '-i',
+      join(dir, 'slide-0001.png'),
+      '-vf',
+      `crop=1:1:${Math.round((0.1 + (229 % 23) * 0.42 + 0.15) * 192)}:${Math.round((0.6 + 9 * 0.48 + 0.15) * 192)}`,
+      '-f',
+      'rawvideo',
+      '-pix_fmt',
+      'rgb24',
+      '-',
+    ]);
+    const want = color(229)
+      .match(/../g)!
+      .map((h) => Number.parseInt(h, 16));
+    expect(
+      [...px].every((v, k) => Math.abs(v - want[k]!) <= 3),
+      `${[...px]} vs ${want}`,
+    ).toBe(true);
   }, 120_000);
 
   it('draws the slides asked for, both ways under --lo-compat, through the font resolver', async () => {

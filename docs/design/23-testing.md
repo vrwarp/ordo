@@ -33,17 +33,42 @@ treats `localhost` origins as secure contexts, so service workers, OPFS, WebGPU,
 and the Cache API work without a certificate. Other browsers do not resolve `*.localhost`; the suite is
 Chromium only.
 
-- `playwright.config.ts` starts the hub from `apps/hub/dist` (build first) on `ORDO_E2E_PORT` (default
-  8090) with data in `.e2e-data`, sign-in by `ORDO_DEV_PIN=246810`, `ORDO_TZ=UTC`. Specs share it and run
+- `playwright.config.ts` starts the hub from `apps/hub/dist` (build first) on the shared port (below,
+  `ORDO_E2E_PORT` overrides it) with data in `.e2e-data/web-<port>`, sign-in by `ORDO_DEV_PIN=246810`, `ORDO_TZ=UTC`. Specs share it and run
   one at a time (`workers: 1`).
 - Specs that kill or restart the hub own a hub process (`e2e/hubproc.ts`, `HubProcess.fresh(port)`) on their
   own ports, with data under `ORDO_E2E_DATA_ROOT` or `test-results/.e2e-data-<port>` and the hub's log lines in
   `test-results/hub-<port>.log` (appended across the spec's restarts, so CI's uploaded test-results carry
   them; `ORDO_E2E_HUB_STDOUT=1` prints them instead); `ORDO_E2E_HUB_CMD` runs the hub from source instead of
-  the build. `ORDO_CHAOS_OUTPUT_PORT` and `ORDO_CHAOS_OPERATOR_PORT`
-  move the chaos specs' ports so concurrent runs do not collide.
+  the build.
 - Windows are opened by URL with their output token (`openRoleWindow`), or launched from the operator
   (`window.open`) where the fallback bus needs an opener.
+
+### Ports
+
+Every port the suite opens is in one table, `e2e/ports.ts`: a row per spec (the shared web server is the row
+`shared`), each an offset from one base and a count of ports, what the spec really opens (its hubs, TCP
+proxies, the Pages demo's static server; the iPad specs one per orientation where both projects run the
+test). A spec takes its ports with `portOf(row, i)`; asking past the row's count throws. No spec writes a
+literal port or reads a port variable of its own: `e2e/ports.test.ts` (vitest, part of `pnpm test`) reads
+every file of the suite and fails on a literal port, a `process.env.ORDO_*PORT*` read outside the table or
+arithmetic on a port, and checks that the rows' offsets are unique, their ranges disjoint and inside the span
+(1000 ports), that each row is taken only by its own spec, and that every default base keeps the whole span
+between 16000 and 32767.
+
+- The base is `ORDO_E2E_PORT_BASE` when set; on CI (`CI` or `ORDO_CI`) it is fixed at 16000; otherwise it is
+  16000 + 1000 x (an FNV-1a hash of the checkout's path, mod 15), so two worktrees on one machine run side by
+  side without setting anything. Every default range ends below 32768, where Linux starts its ephemeral ports
+  (`ip_local_port_range`), so an outgoing connection never takes a port a spec is about to listen on.
+- `ORDO_E2E_PORT` still moves the shared web server alone (`helpers.ts` `PORT`). The per-spec variables of
+  earlier versions (`ORDO_E2E_M4_PORT`, `ORDO_E2E_CHAOS_HUB_PORT`, `ORDO_CHAOS_OUTPUT_PORT`,
+  `ORDO_CHAOS_OPERATOR_PORT`, `ORDO_E2E_LOCAL_PORT`, `ORDO_E2E_IMPORT_PORT`, `ORDO_E2E_PRO7_PORT`,
+  `ORDO_E2E_PAGES_PORT`, `ORDO_E2E_IPAD_PORT`, `ORDO_E2E_TOUCH_PORT`, and wave r2a's `ORDO_E2E_LINEART_PORT`,
+  `ORDO_E2E_DECOR_PORT`, `ORDO_E2E_DECOR_LO_PORT`, `ORDO_E2E_GUARD_PORT`, `ORDO_E2E_GUARD_NOLO_PORT`,
+  `ORDO_E2E_PICTEXT_PORT`) are no longer read: those specs take the rows `pptx-lineart`, `pptx-decor`,
+  `pptx-guard` and `pptx-text`.
+- A new spec that starts a hub or a server of its own adds a row (the next free offsets) and takes its ports
+  from it; rows for specs not written yet hold their ports reserved.
 
 ## Timing assertions
 
@@ -70,7 +95,17 @@ library that did not answer within its wait, a socket closed within its grace) a
 task budgets (design/27 §13: a 50 ms asset-worker task) are gated by the benches, on a known machine, not
 by vitest: `bench:slides --check` for slide rasters and `bench:tables` for the table object's prepare
 slices and draw (median of five runs under 50 ms); the vitest side of those (`table.browser.test.ts`)
-bounds only a runaway at ten times the task.
+bounds only a runaway at ten times the task. The raster bench (`bench --check`) makes each case's geometry
+units before its jobs, as the asset worker's prepare step does, each slice a task of its own, and prints a
+`units <width>` row under the case (units made, MiB, the time to make them all, the longest slice): every slice
+is held to the 50 ms task, and the line-art case (`line art past the slide budget (units)`, `bench/cases/units.ts`)
+to 16 ms at 3840; its slide's draw is reported, not checked (what it draws live is the drawing budget's, whose
+estimate rates hole-dense line art at about half its time: design/27 §13 "Geometry units"). On the bench machine
+its unit (17.4 MiB at 3840) is made in 73 to 78 ms over 6 slices, the longest 15.3 to 15.4 ms, and the slide
+draws in 65 to 66 ms (p95) at 3840. The cold arm of a slide with units, the wait of a jump to it until effect
+units, is the fidelity harness's `coldMs` (its pictures, its geometry units and the first draw,
+`tools/pptx-fidelity/README.md`): the leaf template's first slide is held to 500 ms at 3840 (245 ms, the median
+of five runs under the bench lock).
 
 `e2e/slide-media.spec.ts` covers video and sound playing in place in a slide (design/27 §14.12) on two
 outputs: Audience 1 on WebGPU (`?renderer=webgpu`) and the audio master, Audience 2 on Canvas 2D. It probes
@@ -90,10 +125,14 @@ harness's native page (`tools/pptx-fidelity` `convertDeck` and `NativeRenderer`)
 font files (`outputFaces`: their config's library fonts, so both sides draw with the same files whatever
 the machine's fontconfig would pick), and asks three slides captured from Audience 1 at 1920x1080 (WebGPU)
 and Audience 2 at 3840x2160 (Canvas 2D) for SSIM ≥ 0.99 against it, without the outputs' "Enter full
-screen" prompt (`capture` hides `.fs-prompt`; a test window is never full screen). The verse slide has a
-floor of its own, 0.96 (`CUE1_FLOOR`): on the CI runner the outputs draw its text about 0.4 % narrower than
-the harness (a size or advance difference, glyph shapes identical; 1.000 in the dev container), and the
-spec logs each text line's width on both sides until it is gone; it checks the stage text, the Lobby and Stream bands against the same text typed in ordo
+screen" prompt (`capture` hides `.fs-prompt`; a test window is never full screen). The verse slide is held to
+the same 0.99: its text lines must be as wide on the outputs as on the page (the spec logs each line's width
+on both sides), and the hub must store the verse object the harness converts (size, runs, fit, box,
+spacing). The page's browser draws with glyph hinting off whatever the machine's fontconfig says
+(`unhintedFontconfig`): Chromium's full headless browser takes medium or full hinting from fontconfig and
+rounds advances at the drawing size, the outputs' headless shell does not, which once made the CI runner's
+page draw the verse 0.2 % to 0.6 % wider than every output (SSIM 0.966, reproduced here with a hinting
+fontconfig); it checks the stage text, the Lobby and Stream bands against the same text typed in ordo
 (set as the deck sets it, its verse numbers raised, so both bands go through the rich engine; and against
 the text without its verse numbers, which must differ), cue labels, library search, and the
 hidden slide (Next and Prev skip it, a double-click in the grid shows it). `pptx-media` plays the M5 exit
@@ -106,7 +145,12 @@ announcement deck whose music does not restart on the wrap. `e2e/pptx-import-tab
 operators take (design/27 §2 "Where the deck is parsed"): a deck with a table, a picture and a clip dropped on
 the Import tab in Editable mode is parsed in the import worker and built by the hub from its scene, equal to
 the hub's own parse of the same deck; while a playlist is live the browser does not parse. The Pages demo's
-spec imports a public golden deck the same way, without LibreOffice.
+spec imports a public golden deck the same way, without LibreOffice. `e2e/pptx-text.spec.ts` covers PowerPoint text a volunteer
+would see drawn wrong (design/27 §4): a 200 pt 'HIH' filled with a picture (`a:blipFill` in its run
+properties, written as raw XML by `pptxdecks.ts` `pictureTextDeck`, which pptxgenjs cannot), outlined and
+bevelled, imported both through the Import tab and through the hub's route on a hub of its own without
+LibreOffice (the `pptx-text` row of `e2e/ports.ts`); both store the letters in the text colour with their
+outline, and Audience 1 at 1920x1080 (WebGPU) draws the I's stem within 40/255 of black (it was hollow).
 
 ## Chaos tests
 
@@ -117,16 +161,21 @@ could see a fault, the spec samples the screen about every 100 ms from the fault
 500 ms (the test pixel, a pixel of the picture, the cue the window says it holds) and compares each sample
 with the value before the fault: a check only after recovery would miss a black frame in between.
 
-| Spec                          | Kills or breaks                                                                                                                                                                                                                                                                     | Asserts                                                                                                                                                                                                                                                                                                                                                                  |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `chaos-output.spec.ts`        | The output's link, render and asset workers (one at a time, and the render worker right after a GO); a cached OPFS file corrupted (wrong size, and same size so it fails to decode); malformed deltas; the link worker while a clip ends; the file route for 14 s on a fresh output | The screen holds its cue and picture through every restart (sampled), the next GO flips; corrupt files are removed, fetched again and re-armed; a malformed delta resyncs; a clip that ends while the link worker is dead still advances the service; a transient file outage quarantines nothing and `armedOk` is never true for a cue not held                         |
-| `chaos-operator.spec.ts`      | The operator's core worker mid-service, while the operator is the fallback authority, and while it hands the service back to the hub; the main thread blocked; the hub; the session                                                                                                 | The outputs' screens hold (sampled); GO works again within about 3 s and no command is lost; a main-thread block delays neither a Stream Deck GO nor the fallback heartbeat; ports are offered once in hub mode and GO reaches the outputs port to port with the hub dead; the hub ends up with the operator's state; an expired session is not a hub loss               |
-| `chaos-hub.spec.ts`           | The two-process hub: library process killed, live process killed, live process frozen (SIGSTOP, the stall watchdog), the newest live snapshot corrupted with the journal removed, an oversize and a flooding WebSocket, the library crashed past its restart budget                 | The output holds its cue and picture through every outage (sampled); the live API keeps answering while the library is down and it is back within 5 s; the live process resumes from its snapshot (or the previous valid one); the bad sockets are closed and the others carry on; a library past its budget stays down, is reported as `failed`, and live keeps working |
-| `chaos-stage.spec.ts`         | The stage's link worker (on the hub and on the operator's fallback bus); a malformed delta; a state that breaks the live-state invariants; the hub                                                                                                                                  | The lyrics stay on screen while the worker restarts and the next GO reaches the stage; the malformed delta and the bad state are not drawn and resync; on the fallback bus the stage follows the operator across the restart                                                                                                                                             |
-| `link-blip.spec.ts`           | The operator's socket for under the 5 s fallback grace (TCP proxy)                                                                                                                                                                                                                  | A command sent just before the blip is re-sent with its id and applied once; the view does not snap back                                                                                                                                                                                                                                                                 |
-| `link-silent-hub.spec.ts`     | The hub's TCP connections frozen, no close (TCP proxy)                                                                                                                                                                                                                              | The silent hub is noticed within about 12 s while live and the operator is the authority a 5 s grace later                                                                                                                                                                                                                                                               |
-| `link-fallback-leave.spec.ts` | The operator tab that put the outputs on the fallback bus                                                                                                                                                                                                                           | The outputs return to the hub when it is back; a new operator tab's Relaunch takes the windows over                                                                                                                                                                                                                                                                      |
-| `degraded.spec.ts`            | The hub, during a service                                                                                                                                                                                                                                                           | The operator runs the service from the PC, the outputs follow over the fallback bus, and the hub adopts the operator's state when it returns; one GO pressed as soon as the hub has the service back moves the hub and both outputs exactly one cue (pressed once, never retried; a lost or doubled GO fails)                                                            |
+| Spec                          | Kills or breaks                                                                                                                                                                                                                                                                                                                   | Asserts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chaos-output.spec.ts`        | The output's link, render and asset workers (one at a time, and the render worker right after a GO); a cached OPFS file corrupted (wrong size, and same size so it fails to decode); malformed deltas; the link worker while a clip ends; the file route for 14 s on a fresh output                                               | The screen holds its cue and picture through every restart (sampled), the next GO flips; corrupt files are removed, fetched again and re-armed; a malformed delta resyncs; a clip that ends while the link worker is dead still advances the service; a transient file outage quarantines nothing and `armedOk` is never true for a cue not held                                                                                                                                                                              |
+| `chaos-operator.spec.ts`      | The operator's core worker mid-service, while the operator is the fallback authority, and while it hands the service back to the hub, and right after it did; the whole hub frozen right after a hand-back (supervisor and both children, past the 9 s liveness and the 5 s grace); the main thread blocked; the hub; the session | The outputs' screens hold (sampled); GO works again within about 3 s and no command is lost; a main-thread block delays neither a Stream Deck GO nor the fallback heartbeat; ports are offered once in hub mode and GO reaches the outputs port to port with the hub dead; the hub ends up with the operator's state; an expired session is not a hub loss; after a hand-back and a silent hub the operator's own view (sampled every 20 ms) never shows an older cue or sequence, one GO lands once and no conflict is asked |
+| `chaos-hub.spec.ts`           | The two-process hub: library process killed, live process killed, live process frozen (SIGSTOP, the stall watchdog), the newest live snapshot corrupted with the journal removed, an oversize and a flooding WebSocket, the library crashed past its restart budget                                                               | The output holds its cue and picture through every outage (sampled); the live API keeps answering while the library is down and it is back within 5 s; the live process resumes from its snapshot (or the previous valid one); the bad sockets are closed and the others carry on; a library past its budget stays down, is reported as `failed`, and live keeps working                                                                                                                                                      |
+| `chaos-stage.spec.ts`         | The stage's link worker (on the hub and on the operator's fallback bus); a malformed delta; a state that breaks the live-state invariants; the hub                                                                                                                                                                                | The lyrics stay on screen while the worker restarts and the next GO reaches the stage; the malformed delta and the bad state are not drawn and resync; on the fallback bus the stage follows the operator across the restart                                                                                                                                                                                                                                                                                                  |
+| `link-blip.spec.ts`           | The operator's socket for under the 5 s fallback grace (TCP proxy)                                                                                                                                                                                                                                                                | A command sent just before the blip is re-sent with its id and applied once; the view does not snap back                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `link-silent-hub.spec.ts`     | The hub's TCP connections frozen, no close (TCP proxy)                                                                                                                                                                                                                                                                            | The silent hub is noticed within about 12 s while live and the operator is the authority a 5 s grace later                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `link-fallback-leave.spec.ts` | The operator tab that put the outputs on the fallback bus                                                                                                                                                                                                                                                                         | The outputs return to the hub when it is back; a new operator tab's Relaunch takes the windows over                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `degraded.spec.ts`            | The hub, during a service                                                                                                                                                                                                                                                                                                         | The operator runs the service from the PC, the outputs follow over the fallback bus, and the hub adopts the operator's state when it returns; one GO pressed as soon as the hub has the service back moves the hub and both outputs exactly one cue (pressed once, never retried; a lost or doubled GO fails)                                                                                                                                                                                                                 |
+
+A window that is not in front is not drawn on time in headless Chromium: its screencast frames in a trace
+show what it drew before it went to the background (CI run 76's operator frames showed cue 0 for seconds while
+its DOM already held cue 1). Specs therefore assert on what a page reports (`__ordo.live()`, `ScreenWatch`'s
+samples), and a trace frame of a background page is no evidence of what the operator saw.
 
 Not covered end to end (verified by unit tests or by hand): storage quota exhausted, a revoked GPU, a slow
 or failing IndexedDB, the hub stall watchdog on the library process.
@@ -293,7 +342,7 @@ The harness produces:
 ## The golden-pptx census ratchet
 
 `pnpm --filter @ordo/pptx-fidelity census:ratchet` (`tools/pptx-fidelity/src/census-ratchet.ts`) runs the
-census (`census.ts`) over the committed public corpus `golden-pptx/` (112 decks, 1,071 shown slides; about
+census (`census.ts`) over the committed public corpus `golden-pptx/` (113 decks, 1,072 shown slides; about
 15 s here, under a minute on CI) and compares each shown slide's class, its class in the hub and its reasons
 with `tools/pptx-fidelity/golden-census-baseline.json`. A slide whose class gets worse (native < hybrid <
 picture), natively or in the hub, a shown slide that is gone, and a deck that is missing or no longer reads
@@ -301,17 +350,33 @@ fail the run; better classes, other reasons on the same class and new decks or s
 that improves a class records it (`-- --write`) so it cannot slip back. It needs no LibreOffice and no
 browser.
 
+Since M9 leaf-legacy the census also counts, per slide, what its legacy shapes draw (design/27 §3.2 legacy
+values): `budgetLegacy`, the objects the renderer's slide budget (`geombudget.ts` `slideBudget`, every
+drawer's) draws as their legacy shapes, which the outputs draw whole from geometry units; and `legacyFills`, a
+filled legacy rect or ellipse over a built custom geometry (not a table's grid) whose even-odd ink is under
+half its box or cannot be worked out (the converter's own measure, `geom.ts` `inkOf`): the box of its fill
+an older build or a drawer past the budget would draw over line art. A `legacyFills` above 0 fails the run on
+any slide, in the baseline or not (the leaf template's black boxes; the generated guard deck
+`line-art-holes.pptx` had 3 before the fix). The baseline is version 2: each slide's entry gains its
+`budgetLegacy` (0 when none), whose changes are reported; a version 1 baseline (four entries a slide) still
+reads, without that comparison, and `--write` records version 2. Since the r2a repair it also counts
+`unitsLeft`, the objects past the budget that the outputs draw as legacy shapes for want of a geometry unit
+(`units.ts` `slideUnitsLeft`: a plain shape past it for its paint, a masked picture, past the slide's unit area),
+reported, and `unitsAlone`, those past `GEOM_COST.slide` alone (no single task could draw one; thin line art's
+legacy line draws nothing), which fails the run on any slide (never drop for being slow to draw): 0 in E,
+golden-pptx and the sermons today.
+
 ## CI
 
 GitHub Actions on every pull request and merge to main (and by hand), `.github/workflows/ci.yml`, in four
 jobs that run side by side so none takes more than about 35 minutes (one job took 30 to 45 minutes before):
 
-| Job                            | Runs                                                                                                                                                                                                           | Limit  |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| Lint, types, unit tests, build | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), `pnpm test` (`CI` set: timing bounds ×3, golden runs strict), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                       | 25 min |
-| End-to-end (2 shards)          | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure | 35 min |
-| Goldens (pinned container)     | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                            | 20 min |
-| Fidelity ratchets              | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                      | 20 min |
+| Job                            | Runs                                                                                                                                                                                                                                     | Limit  |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| Lint, types, unit tests, build | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), Playwright Chromium, `pnpm test` (`CI` set: timing bounds ×3, golden runs strict, browser tests run or fail), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory) | 25 min |
+| End-to-end (2 shards)          | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure                           | 35 min |
+| Goldens (pinned container)     | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                                                      | 20 min |
+| Fidelity ratchets              | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                                                | 20 min |
 
 The end-to-end, goldens and fidelity jobs install the image's font packages (Carlito, Caladea, Liberation 2,
 Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them; the goldens and
@@ -320,11 +385,22 @@ fidelity jobs add the golden faces (DejaVu, FreeSerif, IPAGothic). Docker images
 benches (`bench:*`, whose 50 ms and frame gates need a known machine) and the PowerPoint fidelity harness
 against LibreOffice (design/27 §14 item 2).
 
+Browser unit tests (the `*.browser.test.ts` files, the harness's `NativeRenderer`, the hub's pptx-preview
+import, `packages/pptx-render`) find their browser with one helper, `tools/find-chromium.ts`: Playwright's
+Chromium (the build the end-to-end suite runs), else `ORDO_TEST_CHROMIUM`. On a developer's machine without
+either they skip; with `CI` or `ORDO_CI` set the helper throws instead, so a browser test can no longer pass CI
+by skipping (before the check job installed Playwright's Chromium, CI run 164 skipped 12 of them). The CLI tools
+(the fidelity harness, the preset golden) take `ORDO_CHROMIUM` first and the system's Chromium or Chrome last.
+
 ## Test content
 
 Fixtures are synthetic: generated lyrics, a 10 s test pattern video in each format, a
 PPTX and a PDF with known text boxes, a minimal ProPresenter 7 file built from the proto
 schema. No venue content in the repo, with one deliberate exception: `golden-pptx/`, a corpus of 112
 public decks (church sermons, worship lyrics, announcements and file-format test decks) downloaded from
-the web with their sources and a takedown notice in its README, used by the census ratchet. Private
+the web with their sources and a takedown notice in its README, used by the census ratchet, beside one
+synthetic guard deck written by a generator in the repository (`line-art-holes.pptx`,
+`tools/pptx-fidelity/src/gen/line-art-holes.ts`: line art past the slide's drawing budget, regenerated
+byte for byte by its test; its manifest entry names the generator instead of a source URL, and
+`tools/download_golden_pptx.py` keeps such entries when it rewrites the manifest and README). Private
 decks a venue shares for testing never enter the repository.

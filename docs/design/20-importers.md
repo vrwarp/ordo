@@ -168,6 +168,9 @@ from filled text in slides, layouts and masters. LibreOffice cannot draw a colou
 around filled text: it substitutes hollow letters, which with the usual drop shadow read as
 broken text (white outlined headlines, common in sermon decks). The fill and shadow stay; text
 meant to be hollow (`<a:noFill/>`) keeps its outline. The job log counts the runs changed.
+Picture-filled text (`<a:blipFill>` in a run's properties) counts as filled: LibreOffice draws it in its
+automatic colour without the outline, and ordo's converter draws it in the slide's text colour (tx1) with
+the outline kept (design/27 §4 "Picture-filled text").
 soffice runs hardened (design/21: address-space cap, no network, process-group timeout). When
 the copy cannot be built (the pool cannot start, the deck passes the caps), the import fails: LibreOffice
 never converts a deck as uploaded. Fonts the deck uses must
@@ -207,13 +210,16 @@ presentation while it is live-locked (it re-queues itself with backoff, 30 s dou
 The native import ([design/27](27-pptx-native-renderer.md), M3) turns a deck into ordinary, editable ordo
 objects instead of page pictures. Its steps are one **import core** in `@ordo/importers`, which runs in Node,
 browsers and Web Workers: the scan (`pptx-scan.ts`: limits, `scanDeck`, `clipParts` with its candidate bound,
-`extrasOf`), shape files (`pptx-geoms.ts`: `geomFileOf`, `nameGeoms`, `nameShapeFiles` with the kinds hook
-`SHAPE_FILE_KINDS` that decoration files join with `decor-render`), picture headers and display needs
+`extrasOf`), shape files (`pptx-geoms.ts`: `geomFileOf`, `decorFileOf`, `storedShapeFileOf`, `nameGeoms`,
+`nameShapeFiles` over `emittedShapeFiles`, the kinds `SHAPE_FILE_KINDS`: geometry files and, since
+`decor-render`, decoration files, `DecorData.ref`, named by one SHA-256 on the hub and in the browser, within
+one batch bound, a decoration whose file cannot be kept left out and listed missing), picture headers and
+display needs
 (`pptx-pictures.ts`), the one SHA-256 (`sha256.ts`, incremental), the budget ladder (`pptx-ladder.ts`), the
 drafts, budgets, provenance and assembly (`pptx-core.ts` `ImportCore`) and the import log (`pptx-report.ts`).
 The hub's job, its pool task and the browser's parse all call them; the converter's version and stored
 fields are one constant each in `@ordo/pptx-scene` (`version.ts`: `CONVERTER_VERSION`, `M9_WRITES` less
-`M9_HELD_BACK`, and `PPTX_SHEETS`).
+`M9_HELD_BACK`, empty since decorations draw, and `PPTX_SHEETS`).
 
 **Where the deck is parsed.** The operator parses a deck it imports as editable slides in a Web Worker
 (`parsePptxScene`, design/27 §2 "Where the deck is parsed") and uploads the scene with the deck
@@ -241,6 +247,12 @@ The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
   becomes a picture for its size (logged, counted in the job result as `simplified`), and with it a slide
   over 64 KB that would lose formatting or decorations keeps LibreOffice's page, as before M9
   (`ImportCore.pageForBudget`);
+- past the render clamp (200 objects, 16 distinct pictures while no picture sheets are stored), the
+  converter's guard leaves the topmost objects out: on a hub with LibreOffice they get LibreOffice's art,
+  those objects only, as at M9 wave 1, and the slide lists nothing missing; on one without it they are left
+  out and listed (`Slide.pptx.missing` 'decoration' or 'element'). The owner's decision of 2026-11-13
+  (design/27 §15 M9 "The guard per kind of hub"); the slides main showed as LibreOffice's page for their
+  picture count stay native and editable, by the same decision;
 - stores the pictures (prepared to their display need, deduplicated) and saves version 1: every slide's
   native objects, `Slide.pptx` provenance (deck, place, class, converter version, the digest of the objects
   as stored, `pending` while LibreOffice work remains), speaker notes, `p14` sections in order with a Default
@@ -471,7 +483,10 @@ It writes `summary.json` and an HTML report with the pictures side by side, wors
 rounds a 960 pt slide up to 1921 pixels; its pictures are cut to the slide's proportions before scoring.
 
 Where LibreOffice is known to differ from PowerPoint, ordo follows PowerPoint and the score pays for it:
-LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" button), ordo does. The native
+LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" button), ordo does; and
+LibreOffice reads a run's `baseline="0"` as unset, so under a presentation default of -25000 it draws the
+text lowered at 58 % of its size, where PowerPoint and ordo draw it in place at full size (design/27 §4
+"Baseline 0"). The native
 column's `--lo-compat` draws the slides those policies change as LibreOffice would and as ordo does, and
 reports the means both ways and per rule (design/27 §14.1).
 

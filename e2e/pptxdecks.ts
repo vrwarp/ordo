@@ -8,8 +8,11 @@ import {
   buildDeck,
   CLRMAP_OVR,
   clipRels,
+  custGeom,
   esc,
   imageRel,
+  lineArtInk as lineArtInkOf,
+  lineArtPath,
   NS_A,
   NS_P,
   NS_R,
@@ -578,4 +581,233 @@ export function lyricLoopDeck(dir: string, advanceMs = 4000): string {
     after: `${CLRMAP_OVR}<p:transition advTm="${advanceMs}"><p:fade/></p:transition>`,
   }));
   return zip(buildDeck({ slides }), join(dir, 'Amazing Grace.pptx'), true);
+}
+
+// ---- the line-art deck (raw XML: custom geometry past the slide's drawing budget, M9 geometry units) -------
+
+/** The line art's holes per path (`test-util.ts` `lineArtPath`): 40 x 8, 9,605 points, as the guard deck's. */
+const LINE_ART_GRID = { cols: 40, rows: 8 } as const;
+
+/**
+ * The share of its box the black line art inks (even-odd: the outline less its holes; `test-util.ts`
+ * `lineArtInk`, the same builder as `golden-pptx/.../line-art-holes.pptx`).
+ */
+export function lineArtInk(): number {
+  return lineArtInkOf({ ...LINE_ART_GRID, seed: 0 });
+}
+
+/** Where the black line art is on the slide, in logical px (16:9 at 1920 px wide). */
+export const LINE_ART_BLACK_BOX = { x: 120, y: 90, w: 1680, h: 900 } as const;
+
+/**
+ * A one-slide deck of line art past the slide's drawing budget (design/27 §12-13, M9 geometry units): on a pale
+ * blue background, a white and a navy line art, then a black one on top (each one custom geometry of one path of
+ * 320 holes and 9,605 points, built by `test-util.ts` `lineArtPath` like the golden-pptx guard deck
+ * `line-art-holes.pptx`). Each alone is within `GEOM_COST.geometry`; together they pass `GEOM_COST.slide`, so a
+ * drawer without geometry units draws the black one as its legacy copy (a black rect at b50d486, nothing once
+ * the legacy kind is a line), and with them draws it whole. No text: the comparison is about the art.
+ */
+export function lineArtDeck(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  const EMU = 6_350; // EMU per logical px (12,192,000 / 1,920)
+  const art = (
+    id: number,
+    name: string,
+    box: { x: number; y: number; w: number; h: number },
+    color: string,
+    seed: number,
+  ) =>
+    sp({
+      id,
+      name,
+      x: box.x * EMU,
+      y: box.y * EMU,
+      cx: box.w * EMU,
+      cy: box.h * EMU,
+      geom: 'none',
+      fill: custGeom({ paths: lineArtPath({ ...LINE_ART_GRID, seed }) }) + solid(color),
+    });
+  const shapes =
+    art(2, 'White line art', { x: 860, y: 380, w: 1000, h: 650 }, 'FFFFFF', 1) +
+    art(3, 'Navy line art', { x: 60, y: 160, w: 1000, h: 650 }, '1F3864', 2) +
+    art(4, 'Black line art', LINE_ART_BLACK_BOX, '000000', 0);
+  return zip(buildDeck({ slides: [{ bg: solidBg('C9D9EE'), shapes }] }), join(dir, 'Line art.pptx'));
+}
+
+// ---- the crowded deck (M9 decorations, decor-render) ----------------------------------------------------
+
+/** The crowded deck's grid: 230 squares in 10 rows of 23 under a title band, in logical px (1920 x 1080). */
+export const CROWDED = { count: 230, cols: 23, x0: 30, y0: 190, pitch: 82, side: 60 } as const;
+
+/** The colour of square `i` of the crowded deck: 230 distinct ones (hue steps, two lightnesses). */
+export function crowdedColor(i: number): [number, number, number] {
+  const h = (i * 137.508) % 360;
+  const l = i % 2 ? 0.42 : 0.6;
+  const s = 0.85;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+}
+
+/** The centre of square `i` of the crowded deck, in logical px. */
+export function crowdedCentre(i: number): [number, number] {
+  const c = i % CROWDED.cols;
+  const r = Math.floor(i / CROWDED.cols);
+  return [
+    CROWDED.x0 + c * CROWDED.pitch + CROWDED.side / 2,
+    CROWDED.y0 + r * CROWDED.pitch + CROWDED.side / 2,
+  ];
+}
+
+/**
+ * One slide of 230 text-less squares, each its own colour (no two merge by look), bottom first, under a title:
+ * past the slide budgets' 190 objects and the render clamp's 200 (design/27 §15 M9 "the steps"), so an import
+ * keeps them only as decorations (`ShapeObject.decor`, in decoration files); without them the guard leaves the
+ * topmost out and lists them missing. Written with the converter's raw-XML test helpers; a white background.
+ */
+export function crowdedDeck(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  const EMU = 6_350; // EMU per logical px (12,192,000 / 1,920)
+  const hex = (c: [number, number, number]) => c.map((v) => v.toString(16).padStart(2, '0')).join('');
+  let shapes = '';
+  for (let i = 0; i < CROWDED.count; i++) {
+    const [cx, cy] = crowdedCentre(i);
+    shapes += sp({
+      id: 10 + i,
+      x: (cx - CROWDED.side / 2) * EMU,
+      y: (cy - CROWDED.side / 2) * EMU,
+      cx: CROWDED.side * EMU,
+      cy: CROWDED.side * EMU,
+      fill: solid(hex(crowdedColor(i))),
+    });
+  }
+  shapes += sp({
+    id: 2,
+    x: 60 * EMU,
+    y: 30 * EMU,
+    cx: 1800 * EMU,
+    cy: 130 * EMU,
+    txBox: true,
+    txBody: body(para(run('A crowded slide', 'sz="4400"', solid('202020')))),
+  });
+  const parts = buildDeck({ slides: [{ shapes, bg: solidBg('FFFFFF') }] });
+  const file = join(dir, 'Crowded.pptx');
+  writeFileSync(file, zipParts(parts));
+  return file;
+}
+
+// ---- the guard deck (M9, lo-forms) ------------------------------------------------------------------------
+
+/** The guard deck: 24 full-slide pictures, each its own colour, past the render clamp's 16 distinct ones. */
+export const GUARD = { pictures: 24, title: 'Pictures past the guard' } as const;
+
+/** The colour of picture `i` of the guard deck (bottom first): 24 hues 15 degrees apart. */
+export function guardColor(i: number): [number, number, number] {
+  const h = (i * 15) % 360;
+  const l = 0.5;
+  const s = 0.8;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+}
+
+/** An opaque PNG of one colour: its rows deflated in a zlib stream (header and Adler-32). */
+function solidPng(w: number, h: number, [r, g, b]: [number, number, number]): Buffer {
+  const row = Buffer.alloc(1 + 3 * w);
+  for (let x = 0; x < w; x++) row.set([r, g, b], 1 + 3 * x);
+  const raw = Buffer.concat(Array.from({ length: h }, () => row));
+  let s1 = 1;
+  let s2 = 0;
+  for (const v of raw) {
+    s1 = (s1 + v) % 65_521;
+    s2 = (s2 + s1) % 65_521;
+  }
+  const adler = Buffer.alloc(4);
+  adler.writeUInt32BE(((s2 << 16) | s1) >>> 0);
+  const chunk = (type: string, data: Buffer) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', Buffer.concat([Buffer.from([0x78, 0x01]), deflateRawSync(raw), adler])),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/**
+ * One slide of a title over 24 distinct full-slide pictures (`GUARD`), past the render clamp's 16 distinct
+ * pictures with decorations on and no picture sheets (the hub stores none), so the slide budgets' guard leaves
+ * the topmost pictures out (`budget.ts` P): on a hub with LibreOffice they are its art (`budget:pictures`,
+ * version 2), on one without it they are listed missing. Written with pptxgenjs; the title on top.
+ */
+export async function guardDeck(dir: string): Promise<string> {
+  mkdirSync(dir, { recursive: true });
+  const p = new pptxgen();
+  p.layout = 'LAYOUT_WIDE';
+  const s = p.addSlide();
+  for (let i = 0; i < GUARD.pictures; i++)
+    s.addImage({
+      data: `data:image/png;base64,${solidPng(64, 36, guardColor(i)).toString('base64')}`,
+      x: 0,
+      y: 0,
+      w: 13.333,
+      h: 7.5,
+    });
+  s.addText(GUARD.title, { x: 0.5, y: 0.3, w: 12.3, h: 1, fontSize: 40, color: 'FFFFFF', bold: true });
+  const file = join(dir, 'Pictures.pptx');
+  writeFileSync(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+  return file;
+}
+
+// ---- the picture-filled text deck (text-fix, r2a) ---------------------------------------------------------
+
+/** The picture-filled text box: 'HIH' at 200 pt, centred on a 13.33 x 7.5 in slide (EMU). */
+export const PICTURE_TEXT = { text: 'HIH', pt: 200, x: 0.67 * IN, y: 1.5 * IN, cx: 12 * IN, cy: 4.5 * IN };
+
+/**
+ * One slide on white: 'HIH' at 200 pt in Arial, centred, filled with a picture (`a:blipFill` in the run's
+ * properties: a test pattern made by ffmpeg), outlined 3 pt in dark red, with a 3-D bevel on its body
+ * (`a:scene3d`, `a:sp3d`), as the AMOR slide of the worship set sets its letters. pptxgenjs cannot write a
+ * picture fill on text, so the deck is raw XML (`test-util.ts`). ordo draws the letters in the text colour
+ * (tx1, black here) with the outline and the bevel drawn flat; before text-fix they were hollow.
+ */
+export function pictureTextDeck(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  const pattern = join(dir, 'pattern.png');
+  ffmpeg(['-f', 'lavfi', '-i', 'testsrc2=s=640x360', '-frames:v', '1', pattern]);
+  const t = PICTURE_TEXT;
+  const rPr =
+    `<a:ln w="38100">${solid('8B0000')}</a:ln>` +
+    '<a:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>' +
+    '<a:latin typeface="Arial"/>';
+  const bodyPr =
+    '<a:bodyPr wrap="none" anchor="ctr"><a:scene3d><a:camera prst="orthographicFront"/>' +
+    '<a:lightRig rig="threePt" dir="t"/></a:scene3d><a:sp3d><a:bevelT w="38100" h="38100"/></a:sp3d></a:bodyPr>';
+  const txBody = body(para(run(t.text, `sz="${t.pt * 100}"`, rPr), 'algn="ctr"')).replace(
+    '<a:bodyPr/>',
+    bodyPr,
+  );
+  const slides: SlideSpec[] = [
+    {
+      bg: solidBg('FFFFFF'),
+      rels: [imageRel('rId2', 'pattern.png')],
+      shapes: sp({ id: 2, name: 'Picture text', x: t.x, y: t.y, cx: t.cx, cy: t.cy, txBox: true, txBody }),
+    },
+  ];
+  return zip(
+    buildDeck({ slides, media: { 'ppt/media/pattern.png': readFileSync(pattern) } }),
+    join(dir, 'Picture text.pptx'),
+  );
 }

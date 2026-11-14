@@ -17,7 +17,7 @@
  *
  * Owned by work item C (inherit-emit).
  */
-import { type ColorCtx, colorIn, readFill } from './color.ts';
+import { type ColorCtx, colorIn, fillElementOf, fillOf, readFill } from './color.ts';
 import type { SlideCtx } from './context.ts';
 import {
   bodyPrChain,
@@ -72,6 +72,15 @@ const clamp = (v: number, lo: number, hi: number) =>
   Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : lo;
 const emu = (v: number | undefined, dflt: number) => clamp(v ?? dflt, 0, MAX_EMU);
 const BLACK = { r: 0, g: 0, b: 0, a: 1 };
+/**
+ * Fills ordo does not paint text with: a picture (`a:blipFill`) and the group's fill (`a:grpFill`, which means
+ * nothing on text). The nearest fill of a run's chain being one of them gives the run the text colour, as no
+ * fill would (tx1; design/27 §4 "Picture-filled text"), and keeps its outline.
+ */
+const TEXT_COLOUR_FILLS: Readonly<Record<string, RunStyle['textFill']>> = Object.assign(Object.create(null), {
+  'a:blipFill': 'picture',
+  'a:grpFill': 'group',
+});
 
 /**
  * A shape's text body with inheritance resolved, or undefined when it has none. `styled` (a table cell's
@@ -267,10 +276,15 @@ export function runStyle(
   chain: readonly (XNode | undefined)[],
 ): RunStyle {
   const props = [rPr, ...chain.map((n) => child(n, 'a:defRPr'))];
+  // The nearest fill decides; a picture or group fill there gives the text colour (`TEXT_COLOUR_FILLS`).
   let fill: Fill | undefined;
+  let textFill: RunStyle['textFill'];
   for (const n of props) {
-    fill = readFill(n, ctx.color);
-    if (fill) break;
+    const el = fillElementOf(n);
+    if (!el) continue;
+    textFill = TEXT_COLOUR_FILLS[el.name];
+    if (!textFill) fill = fillOf(el, ctx.color);
+    break;
   }
   const face = (kind: 'latin' | 'ea' | 'cs' | 'sym') => {
     for (const n of props) {
@@ -283,6 +297,7 @@ export function runStyle(
   const size = num(firstAttr(props, 'sz')) ?? DEFAULT_SIZE_PT * 100;
   const tx1 = ctx.color.scheme.get(ctx.color.map.get('tx1') ?? 'dk1');
   const cap = firstAttr(props, 'cap');
+  const shift = baselineOf(props);
   const out: RunStyle = {
     sizePt: clamp(size / 100, MIN_SIZE_PT, MAX_SIZE_PT),
     bold: on(firstAttr(props, 'b')),
@@ -290,10 +305,17 @@ export function runStyle(
     underline: (firstAttr(props, 'u') ?? 'none') !== 'none',
     strike: (firstAttr(props, 'strike') ?? 'noStrike') !== 'noStrike',
     fill: fill ?? { kind: 'solid', color: tx1 ?? BLACK },
-    baseline: clamp((num(firstAttr(props, 'baseline')) ?? 0) / 100_000, -1, 1),
+    baseline: shift.baseline,
     spacingPt: clamp((num(firstAttr(props, 'spc')) ?? 0) / 100, -4_000, 4_000),
     caps: cap === 'all' ? 'all' : cap === 'small' ? 'small' : 'none',
   };
+  if (shift.escZero !== undefined) out.escZero = shift.escZero;
+  if (textFill) {
+    out.textFill = textFill;
+    ctx.log(
+      `${textFill === 'picture' ? 'picture-filled text' : 'text with a group fill'} is drawn in the text colour`,
+    );
+  }
   const lang = firstAttr(props, 'lang');
   // An empty ea or cs typeface of the theme takes the theme's font for the run language's script.
   const script = langScript(lang);
@@ -314,6 +336,28 @@ export function runStyle(
   const highlight = colorIn(firstChildOf(props, 'a:highlight'), ctx.color);
   if (highlight) out.highlight = highlight;
   return out;
+}
+
+/**
+ * A run's baseline shift: the nearest `baseline` of its chain over 100,000, within ±1 (0 when none sets
+ * one). When that nearest one is 0 and a farther one is not, `escZero` is the farther one: LibreOffice 24.2
+ * reads `baseline="0"` as unset at every level and draws the run raised or lowered by the next non-zero
+ * baseline, at 58 % of its size, while PowerPoint draws it in place at full size (probe decks, design/27 §4
+ * "Baseline 0"). Bounded by the chain's length.
+ */
+function baselineOf(props: readonly (XNode | undefined)[]): { baseline: number; escZero?: number } {
+  const shift = (v: string) => clamp((num(v) ?? 0) / 100_000, -1, 1);
+  let nearest: number | undefined;
+  for (const n of props) {
+    const v = n?.attrs.baseline;
+    if (v === undefined) continue;
+    const b = shift(v);
+    if (nearest === undefined) {
+      nearest = b;
+      if (b !== 0) break;
+    } else if (b !== 0) return { baseline: 0, escZero: b };
+  }
+  return { baseline: nearest ?? 0 };
 }
 
 /** A text outline (`a:ln` in run properties); undefined when it draws nothing (no fill, or noFill). */

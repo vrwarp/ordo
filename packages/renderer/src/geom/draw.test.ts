@@ -4,6 +4,7 @@ import type { Ctx2D } from '../ctx.ts';
 import {
   CLOSED_TOLERANCE,
   drawGeom,
+  evenOddArea,
   FILL_BRIGHTNESS,
   GEOM_FILL_RULE,
   geomFillPath2D,
@@ -12,8 +13,10 @@ import {
   type PathSink,
   shadeRgba,
   traceGeomPath,
+  UNION_NESTING_LIMIT,
+  UNION_NESTING_WORK,
 } from './draw.ts';
-import { PATH_FILLS } from './ops.ts';
+import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, PATH_FILLS } from './ops.ts';
 import { type BuiltGeom, customGeometry, presetGeometry } from './path.ts';
 
 /** A Path2D that records what is traced into it (Node has none). */
@@ -253,5 +256,99 @@ describe('drawGeom', () => {
     const all = geomFillPath2D(can) as unknown as RecPath;
     // The two filled paths (norm and lighten), not the outline (fill none).
     expect(all.ops.filter((op) => op.startsWith('M')).length).toBe(2);
+  });
+});
+
+describe("evenOddArea (the even-odd fill of a path, for the converter's legacy shape)", () => {
+  /** A square from (a, a) to (b, b), traced one way or the other. */
+  const square = (a: number, b: number, reverse = false) =>
+    reverse ? [a, a, a, b, b, b, b, a] : [a, a, b, a, b, b, a, b];
+  const rings = (...subs: number[][]) => ({
+    cmds: subs.flatMap((s) => [CMD_MOVE, ...Array(s.length / 2 - 1).fill(CMD_LINE), CMD_CLOSE]),
+    pts: subs.flat(),
+    fill: 'norm' as const,
+    stroke: true,
+  });
+
+  it('adds outlines and takes holes away by their nesting, whichever way each is traced', () => {
+    expect(evenOddArea(rings(square(0, 100)))).toBe(10_000);
+    // An outline, a hole in it and an island in the hole: 100² − 50² + 20².
+    expect(evenOddArea(rings(square(0, 100), square(25, 75), square(40, 60, true)))).toBe(7_900);
+    expect(evenOddArea(rings(square(0, 100, true), square(25, 75, true), square(40, 60)))).toBe(7_900);
+    // Two outlines side by side add up; a raw sum of |area| would count the hole as ink.
+    expect(evenOddArea(rings(square(0, 10), square(20, 30)))).toBe(200);
+    expect(evenOddArea(rings(square(0, 100), square(1, 99)))).toBe(10_000 - 98 * 98);
+  });
+
+  it('flattens curves as the union path does, and closes an open sub-path as a fill does', () => {
+    // A disc of four cubics (r 50): within 1 % of π r² (its end points alone are a diamond, 64 % of it).
+    const k = 0.5523 * 50;
+    const disc = {
+      cmds: [CMD_MOVE, CMD_CUBIC, CMD_CUBIC, CMD_CUBIC, CMD_CUBIC, CMD_CLOSE],
+      pts: [
+        100,
+        50,
+        100,
+        50 + k,
+        50 + k,
+        100,
+        50,
+        100,
+        50 - k,
+        100,
+        0,
+        50 + k,
+        0,
+        50,
+        0,
+        50 - k,
+        50 - k,
+        0,
+        50,
+        0,
+        50 + k,
+        0,
+        100,
+        50 - k,
+        100,
+        50,
+      ],
+      fill: 'norm' as const,
+      stroke: true,
+    };
+    const share = evenOddArea(disc)! / (Math.PI * 2_500);
+    expect(share).toBeGreaterThan(0.99);
+    expect(share).toBeLessThan(1.001);
+    // An open triangle fills as the closed one.
+    expect(
+      evenOddArea({
+        cmds: [CMD_MOVE, CMD_LINE, CMD_LINE],
+        pts: [0, 0, 10, 0, 0, 10],
+        fill: 'norm',
+        stroke: true,
+      }),
+    ).toBe(50);
+    // A move alone fills nothing.
+    expect(evenOddArea({ cmds: [CMD_MOVE], pts: [5, 5], fill: 'norm', stroke: true })).toBe(0);
+  });
+
+  it('is unknown past the nesting bounds and for points that are not numbers', () => {
+    const many = Array.from({ length: UNION_NESTING_LIMIT + 1 }, (_, i) => square(3 * i, 3 * i + 1));
+    expect(evenOddArea(rings(...many))).toBeUndefined();
+    expect(evenOddArea(rings(...many.slice(0, UNION_NESTING_LIMIT)))).toBe(UNION_NESTING_LIMIT);
+    // An outline of 4,000 points over which UNION_NESTING_WORK edges are tested: nesting is not worked out.
+    const ring = Array.from({ length: 4_000 }, (_, i) => [
+      500 + 500 * Math.cos((2 * Math.PI * i) / 4_000),
+      500 + 500 * Math.sin((2 * Math.PI * i) / 4_000),
+    ]).flat();
+    const dots = Array.from({ length: Math.ceil(UNION_NESTING_WORK / 4_000) }, (_, i) =>
+      square(400 + (i % 100), 401 + (i % 100)),
+    );
+    expect(evenOddArea(rings(ring, ...dots))).toBeUndefined();
+    expect(evenOddArea(rings(square(0, Number.NaN)))).toBeUndefined();
+    expect(
+      evenOddArea({ cmds: [CMD_MOVE, CMD_LINE, CMD_LINE], pts: [0, 0, 1], fill: 'norm', stroke: true }),
+    ).toBeUndefined();
+    expect(evenOddArea(rings(square(0, Number.POSITIVE_INFINITY)))).toBeUndefined();
   });
 });

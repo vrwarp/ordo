@@ -8,7 +8,9 @@
  *   name never becomes a path). It never throws: a deck the converter cannot read is a note. Every emission
  *   converts with what an import stores (`@ordo/pptx-scene` `version.ts`: `M9_WRITES`, `PPTX_SHEETS`), so the
  *   census, its ratchet and the drawings measure what the hub and the client parse ship; a field held back
- *   until its drawer is on main (`M9_HELD_BACK`) is measured by adding it to `M9_WRITES` in a scratch run.
+ *   until its drawer is on main (`M9_HELD_BACK`, empty since decorations draw) is measured by adding it to
+ *   `M9_WRITES` in a scratch run. The deck's shape files (geometry files and decoration files, one placeholder
+ *   per file over every emission) go to the page with the slides, which reads them before it draws.
  * - `convertDeckIsolated` runs it in a worker thread with a heap limit and a timeout, as the hub's CPU pool
  *   will (design/27 §12): a deck that exhausts either is a note, and the run goes on.
  * - Each slide also gets its features (`features/`, from its own XML and the parts it names) and the
@@ -16,7 +18,9 @@
  *   `EmitOptions.loCompat`); with `loCompat` the slide as LibreOffice draws it is kept too (`compatSlide`).
  * - With `noLibreOffice` (`--no-libreoffice`, M9) the deck is emitted once more as a hub without LibreOffice
  *   emits it (`EmitOptions.libreoffice: false`): the art and the metafile conversions are left out and listed
- *   in `missing`; the run draws that slide as the hub stores it (`hubStoredSlide`) for `noLoSsim`.
+ *   in `missing`; the run draws that slide as the hub stores it (`hubStoredSlide`) for `noLoSsim`. A deck whose
+ *   budgets' guard gave elements to LibreOffice's art is parsed once more for it, as such a hub parses it
+ *   (`ParseOptions.libreoffice: false`: its guard culls and lists them, without room for an art).
  * - `NativeRenderer` loads `native-page.ts` (bundled with esbuild) in headless Chromium, gives the page's
  *   font resolver the faces this machine has for every family the slides ask for, ordo's default face and
  *   the script fallbacks (`fonts.ts`, as LibreOffice and the outputs draw them), and draws every shown slide
@@ -28,12 +32,19 @@
  * The deck is untrusted: the page fetches only from the harness's own origin, which answers from a fixed
  * table of generated names, and every other request is refused.
  */
-import { closeSync, openSync, readSync } from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { copyFile, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type BudgetLevel, drawnGeomRefs, type GeomFile, type Slide } from '@ordo/domain';
+import {
+  type BudgetLevel,
+  type DecorFile,
+  drawnShapeFileRefs,
+  type GeomFile,
+  type Slide,
+} from '@ordo/domain';
 import { extractZip } from '@ordo/importers/zip-stream.ts';
 import { Worker } from 'node:worker_threads';
 import {
@@ -49,6 +60,9 @@ import {
 } from '@ordo/pptx-scene';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import { M9_WRITES, PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
+import { bakeKey, type PictureBake } from '@ordo/pptx-scene/bake.ts';
+import { sentToArt } from '@ordo/pptx-scene/budget.ts';
+import { BAKE_PREFIX, MEDIA_PREFIX } from '@ordo/pptx-scene/emit.ts';
 import { planLadder, provenanceStandIn, withoutFiles } from '@ordo/importers/pptx-ladder.ts';
 import { CONVERTER_VERSION, PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import type { Browser, Page } from '@playwright/test';
@@ -112,6 +126,11 @@ export type NativeSlide = {
   noLoSlide?: Slide;
   /** With `noLibreOffice`: that emission's class where it differs (hybrid with `missing:<kind>` in M9). */
   noLoClass?: SlideClass;
+  /**
+   * With `noLibreOffice`: the slide's reasons as a hub without LibreOffice parses it, where they differ from
+   * `reasons` (a slide whose guard's left-outs are LibreOffice's art with it: `missing:<kind>` without).
+   */
+  noLoReasons?: string[];
   /** With `noLibreOffice`: what nothing draws without LibreOffice (`EmittedSlide.missing`: kinds). */
   missing?: string[];
   /**
@@ -146,10 +165,11 @@ export type NativeDeck = {
   slideRect: { x: number; y: number; w: number; h: number };
   media: NativeMedia[];
   /**
-   * The geometry files the slides name (`ShapeGeom.ref`, `EmitResult.geoms`; the slides as LibreOffice draws
-   * them name the same placeholders), which the page reads before it draws, as an output does.
+   * The shape files the slides name: geometry files (`ShapeGeom.ref`, `EmitResult.geoms`, `pptxgeom:<n>`) and
+   * M9 decoration files (`DecorData.ref`, `EmitResult.decors`, `pptxdecor:<n>`); the slides as LibreOffice
+   * draws them name the same placeholders. The page reads them before it draws, as an output does.
    */
-  geoms?: { id: string; file: GeomFile }[];
+  geoms?: { id: string; file: GeomFile | DecorFile }[];
   notes: string[];
   /** The deck carries font files (`ppt/fonts/`); LibreOffice 24.2 ignores them (design/27 §14.1). */
   embeddedFonts: boolean;
@@ -282,25 +302,36 @@ export async function convertDeck(
     t0 = performance.now();
     const spilled = caseless(zip.onDisk);
     const fileOf = (part: string) => zip.onDisk.get(part) ?? spilled.get(part.toLowerCase());
-    const scene = parseDeck(zip.files, {
+    const parsing = {
       m9Writes: M9_WRITES,
       sheets: PPTX_SHEETS,
-      pictureSize: (part) => spilledPictureSize(fileOf(part)),
+      pictureSize: (part: string) => spilledPictureSize(fileOf(part)),
       // Table rows grow to their text measured with the faces the page draws it with.
       fontFace: hostFace,
-    });
+    };
+    let scene = parseDeck(zip.files, parsing);
     out.parseMs = performance.now() - t0;
     t0 = performance.now();
-    // One placeholder per geometry file over both emissions (the slides as LibreOffice draws them below).
+    // One placeholder per shape file over every emission (the slides as LibreOffice draws them below):
+    // geometry files and decoration files, numbered apart.
     const geomIds = new Map<string, string>();
     const geomId = (json: string) => {
       let id = geomIds.get(json);
       if (id === undefined) geomIds.set(json, (id = `pptxgeom:${geomIds.size + 1}`));
       return id;
     };
-    const emitted: EmitResult = emitSlides(scene, { geomId, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
+    const decorIds = new Map<string, string>();
+    const decorId = (json: string) => {
+      let id = decorIds.get(json);
+      if (id === undefined) decorIds.set(json, (id = `pptxdecor:${decorIds.size + 1}`));
+      return id;
+    };
+    const ids = { geomId, decorId };
+    const emitted: EmitResult = emitSlides(scene, { ...ids, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
     out.emitMs = performance.now() - t0;
-    const geoms = new Map(emitted.geoms.map((g) => [g.id, g]));
+    const geoms = new Map<string, { id: string; file: GeomFile | DecorFile }>(
+      [...emitted.geoms, ...emitted.decors].map((g) => [g.id, g]),
+    );
     out.slideRect = emitted.slideRect;
     for (const n of [...scene.notes, ...emitted.notes]) note(n);
 
@@ -317,12 +348,40 @@ export async function convertDeck(
     let compatSlides: Map<number, Slide> | undefined;
     try {
       if (hits.size) {
-        const lo = emitSlides(scene, { loCompat: true, geomId, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
-        for (const g of lo.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
+        const lo = emitSlides(scene, { loCompat: true, ...ids, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
+        for (const g of [...lo.geoms, ...lo.decors]) if (!geoms.has(g.id)) geoms.set(g.id, g);
         compatSlides = new Map(lo.slides.map((s) => [s.index, still(s)] as const));
       }
     } catch (e) {
       note(`the slides as LibreOffice draws them could not be emitted: ${errorText(e)}`);
+    }
+
+    // What a hub without LibreOffice emits below is its own parse where the budgets' guard gave elements to
+    // LibreOffice's art (`ParseOptions.libreoffice`); the rest of the deck parses alike either way. Its
+    // pictures keep the ids of the emission above, and one only it draws gets an id (and a file) of its own.
+    let noLoIds: Pick<EmitOptions, 'mediaId' | 'bakeId'> = {};
+    const noLoOnly: EmitResult['media'] = [];
+    const noLoReasons = new Map<number, string[]>();
+    if (opts.noLibreOffice && scene.slides.some((s) => s.elements.some(sentToArt))) {
+      const lo = new Map(scene.slides.map((s) => [s.index, JSON.stringify(s.classification.reasons)]));
+      scene = parseDeck(zip.files, { ...parsing, libreoffice: false });
+      for (const s of scene.slides)
+        if (lo.get(s.index) !== JSON.stringify(s.classification.reasons))
+          noLoReasons.set(s.index, s.classification.reasons);
+      const mediaIds = new Map(emitted.media.map((m) => [m.bake ? bakeKey(m.part, m.bake) : m.part, m.id]));
+      const idOf = (key: string, part: string, bake?: PictureBake) => {
+        let id = mediaIds.get(key);
+        if (id === undefined) {
+          id = `${bake ? BAKE_PREFIX : MEDIA_PREFIX}nolo${noLoOnly.length + 1}`;
+          mediaIds.set(key, id);
+          noLoOnly.push({ id, part, ...(bake ? { bake } : {}) });
+        }
+        return id;
+      };
+      noLoIds = {
+        mediaId: (part) => idOf(part, part),
+        bakeId: (part, bake) => idOf(bakeKey(part, bake), part, bake),
+      };
     }
     // A hub without LibreOffice (M9, `EmitOptions.libreoffice`), drawn with the same policies as the slides
     // above.
@@ -330,19 +389,21 @@ export async function convertDeck(
     if (opts.noLibreOffice)
       try {
         const o: EmitOptions = {
-          geomId,
+          ...ids,
+          ...noLoIds,
           ...(opts.loCompat && hits.size ? { loCompat: true } : {}),
           libreoffice: false,
           m9Writes: M9_WRITES,
           sheets: PPTX_SHEETS,
         };
         const r = emitSlides(scene, o);
-        for (const g of r.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
+        for (const g of [...r.geoms, ...r.decors]) if (!geoms.has(g.id)) geoms.set(g.id, g);
         noLo = new Map(r.slides.map((s) => [s.index, s] as const));
       } catch (e) {
         note(`the slides as a hub without LibreOffice emits them could not be emitted: ${errorText(e)}`);
       }
     out.geoms = [...geoms.values()];
+    emitted.media.push(...noLoOnly);
     out.slides = emitted.slides.map((s) => {
       // Drawn as a still (a motion background as its poster), as LibreOffice draws the slide.
       const slide = still(s);
@@ -375,6 +436,7 @@ export async function convertDeck(
         ...(nl && nl.classification.class !== s.classification.class
           ? { noLoClass: nl.classification.class }
           : {}),
+        ...(noLoReasons.has(s.index) ? { noLoReasons: noLoReasons.get(s.index) } : {}),
         ...(missing?.length ? { missing: missing.slice(0, 16) } : {}),
       };
     });
@@ -682,6 +744,40 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   ]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * A fontconfig file for the harness's browser: this machine's configuration (`FONTCONFIG_FILE`, else the
+ * system's), then glyph hinting off for every face. Chromium's full headless browser takes hinting from
+ * fontconfig, and medium or full hinting rounds glyph advances at the drawing size (Carlito at 58.67 px: a line
+ * 0.2 % to 0.4 % wider than the font's own advances), while the outputs' headless shell, like an output drawing
+ * at another size, keeps the font's advances (FaceMetrics x size). With hinting on, the page's lines were wider
+ * than an output's on such machines (the CI runner: e2e/pptx-native.spec.ts cue 1, width output/harness
+ * 0.994 to 0.998 at 1080p and 4K alike). Undefined when there is no configuration file to start from (the
+ * browser then keeps the machine's defaults). The caller removes `dir`.
+ */
+export function unhintedFontconfig(): { file: string; dir: string } | undefined {
+  const base = process.env.FONTCONFIG_FILE || '/etc/fonts/fonts.conf';
+  if (!existsSync(base)) return undefined;
+  const xml = (v: string) => v.replace(/[<>&'"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const dir = mkdtempSync(join(tmpdir(), 'ordo-harness-fc-'));
+  const file = join(dir, 'fonts.conf');
+  writeFileSync(
+    file,
+    [
+      '<?xml version="1.0"?>',
+      '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">',
+      '<fontconfig>',
+      `  <include ignore_missing="yes">${xml(resolve(base))}</include>`,
+      '  <match target="font">',
+      '    <edit name="hinting" mode="assign"><bool>false</bool></edit>',
+      '    <edit name="hintstyle" mode="assign"><const>hintnone</const></edit>',
+      '  </match>',
+      '</fontconfig>',
+      '',
+    ].join('\n'),
+  );
+  return { file, dir };
+}
+
 /** Headless Chromium with the native page; one page per deck. */
 export class NativeRenderer {
   /** How each script fallback family was served, over the run (by family). */
@@ -689,12 +785,14 @@ export class NativeRenderer {
 
   private browser: Browser;
   private script: string;
+  private fcDir?: string;
   readonly version: string;
 
-  private constructor(browser: Browser, script: string, version: string) {
+  private constructor(browser: Browser, script: string, version: string, fcDir?: string) {
     this.browser = browser;
     this.script = script;
     this.version = version;
+    this.fcDir = fcDir;
   }
 
   static async start(executable: string): Promise<NativeRenderer> {
@@ -708,19 +806,31 @@ export class NativeRenderer {
       // Nothing resolves: the page's own origin is answered by the route below, before any lookup.
       '--host-resolver-rules=MAP * ~NOTFOUND',
     ];
+    // Text with the fonts' own advances, as an output draws it, whatever hinting this machine configures.
+    const fc = unhintedFontconfig();
+    const env = fc ? { ...process.env, FONTCONFIG_FILE: fc.file } : undefined;
+    const launch = (executablePath: string) =>
+      chromium.launch({ headless: true, executablePath, args, ...(env ? { env } : {}) });
     let browser: Browser;
     try {
-      browser = await chromium.launch({ headless: true, executablePath: executable, args });
+      try {
+        browser = await launch(executable);
+      } catch (e) {
+        // The default (`chromium` on the PATH) is often missing where Chrome is installed.
+        if (executable === '/usr/bin/google-chrome') throw e;
+        browser = await launch('/usr/bin/google-chrome');
+      }
     } catch (e) {
-      // The default (`chromium` on the PATH) is often missing where Chrome is installed.
-      if (executable === '/usr/bin/google-chrome') throw e;
-      browser = await chromium.launch({ headless: true, executablePath: '/usr/bin/google-chrome', args });
+      if (fc) rmSync(fc.dir, { recursive: true, force: true });
+      throw e;
     }
-    return new NativeRenderer(browser, script, browser.version());
+    return new NativeRenderer(browser, script, browser.version(), fc?.dir);
   }
 
   async close(): Promise<void> {
     await this.browser.close().catch(() => undefined);
+    if (this.fcDir) rmSync(this.fcDir, { recursive: true, force: true });
+    this.fcDir = undefined;
   }
 
   /** The script fallbacks the run used, and the face this machine gave each. */
@@ -944,7 +1054,7 @@ export function hubLadder(
   const kept = slides.map((s) => {
     if (s.class === 'picture') return { slide: s.slide, missing: [] as string[], geoms: false };
     const keep = new Set<string>();
-    for (const r of drawnGeomRefs(s.slide)) {
+    for (const r of drawnShapeFileRefs(s.slide)) {
       const bytes = fileBytes.get(r);
       if (admitted.has(r) || bytes === undefined) {
         keep.add(r);

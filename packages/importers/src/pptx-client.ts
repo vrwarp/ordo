@@ -36,7 +36,6 @@ import {
 } from '@ordo/pptx-scene';
 import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
 import type { M9Field } from '@ordo/pptx-scene/emit-ctx.ts';
-import { GEOM_PREFIX } from '@ordo/pptx-scene/emit.ts';
 import { openPackage } from '@ordo/pptx-scene/opc.ts';
 import { extensionOf } from '@ordo/pptx-scene/picture.ts';
 import { CONVERTER_VERSION, M9_WRITES, PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
@@ -49,7 +48,14 @@ import {
   unplace,
   wanted,
 } from './pptx-core.ts';
-import { geomFileOf, type NamedGeomFile, nameGeoms, nameShapeFiles } from './pptx-geoms.ts';
+import {
+  emittedShapeFiles,
+  isShapeFilePlaceholder,
+  type NamedGeomFile,
+  nameGeoms,
+  nameShapeFiles,
+  storedShapeFileOf,
+} from './pptx-geoms.ts';
 import { withoutFiles } from './pptx-ladder.ts';
 import { clearExifOrientation, pictureHeader } from './pptx-pictures.ts';
 import { ImportLog, logSafe } from './pptx-report.ts';
@@ -65,7 +71,7 @@ export const CLIENT_M9_WRITES: ReadonlySet<M9Field> = M9_WRITES;
 
 /**
  * Whether a client parse draws pictures from sheets (`EmitOptions.sheets`): the converter's one switch
- * (`@ordo/pptx-scene` `PPTX_SHEETS`), false until `decor-render` stores sheets on both paths.
+ * (`@ordo/pptx-scene` `PPTX_SHEETS`), false until `decor-sheets` stores sheets on both paths.
  */
 export const CLIENT_SHEETS: boolean = PPTX_SHEETS;
 
@@ -133,12 +139,15 @@ export type PptxClientScene = {
   slides: EmittedSlide[];
   media: { id: string; part: string; bake?: PictureBake }[];
   extras: SceneSlideExtra[];
-  /** The shape files the slides name (by SHA-256): the hub re-checks and re-hashes each. */
+  /**
+   * The shape files the slides name (by SHA-256): geometry files and M9 decoration files, which the hub tells
+   * apart by their JSON (`storedShapeFileOf`), re-checks and re-hashes.
+   */
   geomFiles: { hash: string; json: string }[];
   /**
-   * The slides whose new outline files would pass `PPTX_IMPORT_LIMITS.batchGeomBytes`: in `slides` they keep
-   * the placeholders (`GEOM_PREFIX`) of the files they were not given, and the hub leaves out the objects
-   * that name them (`withoutFiles`).
+   * The slides whose new shape files would pass `PPTX_IMPORT_LIMITS.batchGeomBytes`: in `slides` they keep
+   * the placeholders (`pptxgeom:`, `pptxdecor:`) of the files they were not given, and the hub leaves out the
+   * objects that name them (`withoutFiles`).
    */
   geomOver?: number[];
   /**
@@ -420,17 +429,18 @@ export async function parsePptxScene(
   checkAborted(signal);
   onProgress?.(0.85);
 
-  // Shape files named and bounded as a batch's (`sceneTask.ts`): a slide past the bound keeps the
-  // placeholders of the files it was not given; the hub leaves out the objects that name them.
-  const named = nameShapeFiles(result.slides, result.geoms ?? [], L.batchGeomBytes);
+  // Shape files (geometry and decoration files) named and bounded as a batch's (`sceneTask.ts`): a slide past
+  // the bound keeps the placeholders of the files it was not given; the hub leaves out the objects that name
+  // them.
+  const named = nameShapeFiles(result.slides, emittedShapeFiles(result), L.batchGeomBytes);
   const names = new Map(named.files.map((f) => [f.id, f.hash]));
   const over = new Set(named.over);
   const slides = result.slides.map((s) => {
     if (!over.has(s.index)) return { ...s, slide: nameGeoms(s.slide, names) };
     const keep = new Map(names);
     for (const o of s.slide.objects) {
-      const ref = o.type === 'shape' ? o.geom?.ref : o.type === 'image' ? o.mask?.ref : undefined;
-      if (ref?.startsWith(GEOM_PREFIX) && !keep.has(ref)) keep.set(ref, ref);
+      const refs = o.type === 'shape' ? [o.geom?.ref, o.decor?.ref] : o.type === 'image' ? [o.mask?.ref] : [];
+      for (const ref of refs) if (ref && isShapeFilePlaceholder(ref) && !keep.has(ref)) keep.set(ref, ref);
     }
     return { ...s, slide: nameGeoms(s.slide, keep) };
   });
@@ -514,7 +524,7 @@ export async function assemblePptxScene(
   if (scene.fonts)
     log.add('info', `${scene.fonts} embedded font part(s) not used (embedded fonts come later)`);
   for (const n of scene.notes) log.add('info', n);
-  // Shape files as the hub admits a client's: each checked and re-hashed (`geomFileOf`).
+  // Shape files as the hub admits a client's: each checked and re-hashed by its kind (`storedShapeFileOf`).
   const names = new Map<string, string>();
   for (const g of scene.geomFiles) {
     let parsed: unknown;
@@ -523,7 +533,7 @@ export async function assemblePptxScene(
     } catch {
       continue;
     }
-    const f = geomFileOf(parsed);
+    const f = storedShapeFileOf(parsed);
     if (!f) continue;
     names.set(g.hash, f.hash);
     core.addGeomFile(f);
@@ -537,7 +547,7 @@ export async function assemblePptxScene(
     let s = s0;
     let geomLeft: Converted['geomLeft'];
     if (over.has(s.index)) {
-      const left = withoutFiles(s.slide, (ref) => !ref.startsWith(GEOM_PREFIX));
+      const left = withoutFiles(s.slide, (ref) => !isShapeFilePlaceholder(ref));
       s = { ...s, slide: left.slide };
       geomLeft = { dropped: left.dropped, unmasked: left.unmasked, missing: left.missing };
     }

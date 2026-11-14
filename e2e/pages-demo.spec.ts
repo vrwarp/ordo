@@ -4,14 +4,15 @@ import { extname, join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { shownSlideCue } from './helpers.ts';
 import { decodePng } from './png.ts';
+import { portOf } from './ports.ts';
 
 /**
  * The GitHub Pages demo (apps/demo), served exactly as Pages serves a project site: static files under
  * /ordo/. Needs `pnpm build && pnpm build:pages` (CI runs both); skipped when site/ is missing.
- * Port 8870 (ORDO_E2E_PAGES_PORT overrides).
+ * Its port: e2e/ports.ts row 'pages-demo'.
  */
 const SITE = resolve('site');
-const PORT = Number(process.env.ORDO_E2E_PAGES_PORT ?? 8870);
+const PORT = portOf('pages-demo');
 const BASE = `http://localhost:${PORT}/ordo/`;
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',

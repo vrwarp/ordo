@@ -173,6 +173,27 @@ playlists and library screens). Each open dialog marks Escape handled in the cap
 were added in) and closes in the bubble phase (`components/dialogEscape.ts`). A popover inside the dialog
 (a menu, the colour picker) that stops Escape to close itself keeps the dialog open.
 
+Every dialog is modal (`aria-modal`), closable or not: while one is open no live key acts, not even with focus
+outside it (the keyboard driver's `blocked()` asks the dialogs' registry, `modalOpen`, and so does the Clear
+all hold), and a key pressed inside it is the dialog's (`data-keys="off"` on its root). Space or Enter on a
+focused button presses that button: Space on End service's confirmation ends the service (it was Next, and
+the button never pressed). A dialog takes the focus when it opens unless one of its controls did (autoFocus),
+and keeps it while it is the topmost (`registerModal` with its box): Tab past its last control goes to its
+first and Shift+Tab before its first to its last, focus that lands outside it comes back to it, and when it
+closes the dialog below it gets the focus back. A popup a control of the dialog opened and the page renders at
+the end of the body (a Menu's list since #26, the colour picker) is the dialog's (`components/popupOf.ts`,
+`registerPopup`): the focus may move into it, Tab in it is its own, and it carries the dialog's
+`data-keys="off"`, so Enter and Space press its items and the arrows move its slider; any other element (a
+popup of the page behind, the editor's non-modal Find card) stays outside (menuDialog.browser.test.ts). Such a
+popup open when a dialog opens (a key or the hub opened it, no click closed the popup first) closes then: it is
+drawn above every backdrop, so a click on one of its items would act behind the dialog (`registerPopup`'s
+`close`; land re-review of #26). A key that
+still reaches the page behind it (focus on the body) acts on nothing and, for Space, Enter, the arrows, Page
+Up/Down, Home, End and every mapped key, loses its browser default too (`KeyboardDriver`), so it can never press
+or scroll a control behind the dialog (review r2a: one Shift+Tab from Diagnostics reached Clear all, and two
+Spaces blacked every Audience screen). The Stream Deck and MIDI are not keys and keep working with a dialog
+open (design/19).
+
 ## Launching outputs
 
 1. The operator clicks Launch outputs (a user gesture).
@@ -585,7 +606,10 @@ gesture must not also move an object. A double-tap on a text box focuses its tex
 gesture, so the keyboard opens). On a coarse pointer the editor toolbar is one row: Library, title,
 Save, Undo, Redo, an Add menu (Text, Image, Video, Rectangle, Ellipse, Line), an Arrange menu (front, forward,
 backward, back, duplicate, delete) and History (`components/Menu.tsx`: 44 px items, closed by a tap
-outside or Escape, nothing on hover). While an object is selected its keyboard-only actions (nudge with a
+outside or Escape, nothing on hover; its list is portalled to the body so no scrolling panel clips it, and with
+it open Tab or the Down arrow on the trigger goes to its first item, the arrows, Home and End move between the
+items, and Tab past the last closes it and goes on from the trigger; the focus moving to another control closes
+it, and a click on its padding or a disabled item leaves the focus on the list). While an object is selected its keyboard-only actions (nudge with a
 1/10/50 px step, edit text, deselect) float in a bar just above or below it, clear of its anchors and
 rotate handle, or at the pane edge away from a box that fills the slide (`objectToolsSpot` in
 `touchGeometry.ts`); the bar overlays the pane, so the stage never moves when a selection starts. A mouse
@@ -617,8 +641,10 @@ tainted canvas or no page sends the SVG alone) and posts the PNG beside it as `r
 its delivery: thumbnails, the editor canvas and outputs draw that still. Tiles where media is picked (the
 Media tab's rows and preview, the media pickers, the background swatches: `tileHash`) show the SVG itself, so
 an animated one moves there, and say "SVG · moves in previews only" (`svgNote`): Audience screens show its
-first frame. An SVG without a still (one over 24 MB goes through the resumable upload without one, or this
-browser could not draw it, or it predates stills) says instead that each Audience screen draws it itself when
+first frame. An SVG over 24 MB goes through the resumable upload alone; once the hub has it the operator
+draws its still and sends it to `PUT /media/:id/still` (sent again while the hub is still processing the SVG;
+`sendStill`). An SVG without a still (this browser could not draw it, the hub refused it, or it predates
+stills: such a one keeps the advice below, nothing redraws it) says instead that each Audience screen draws it itself when
 it is shown, or, over 2 MB (`SVG_SCREEN_MAX_BYTES`), that the screens do not show it: upload it again from a
 browser, or a PNG of it. An SVG's media size is its still's (at least 1,920 px on its longer side), so '+ Image'
 and a paste start it at the size its root element declares (`insertBox.ts`: a 200 x 80 logo at 200 x 80, not
@@ -827,8 +853,8 @@ which drops the cached thumbnails, and the editor redraws.
 ### Tests
 
 The Playwright projects `webkit-ipad` (iPad Pro 11 landscape) and `webkit-ipad-portrait` run
-`e2e/ipad/*.spec.ts` in WebKit with touch, each test on its own hub (`ORDO_E2E_IPAD_PORT`, default
-8700 + n, path mode `http://localhost:<port>/`); the Chromium project ignores `e2e/ipad/`. The two
+`e2e/ipad/*.spec.ts` in WebKit with touch, each test on its own hub (its port from the e2e port table, design/23 "Ports";
+path mode `http://localhost:<port>/`); the Chromium project ignores `e2e/ipad/`. The two
 projects exist only when WebKit is installed (`npx playwright install webkit`; CI does), so a plain
 `pnpm e2e` after `playwright install chromium` still runs; `ORDO_E2E_WEBKIT=1` insists on them.
 `ORDO_E2E_SHOTS=<dir>` keeps a screenshot of each screen per orientation.

@@ -138,4 +138,22 @@ describe('shape draw dispatch (M9 render-seams)', () => {
     drawShape(traceCtx(), base, 0.5);
     expect(seen).toHaveLength(1);
   });
+
+  // Last in this file: it loads and registers the real decoration drawer, which then stays registered.
+  it('a decor shape draws its parts once its drawer loads', async () => {
+    // The renderer's index registers each kind's loader (the decoration's: its own lazy module).
+    const { loadShapeDrawers, shapeDrawerRegistered } = await import('./index.ts');
+    const o: ShapeObject = { ...base, decor, shape: 'line', fill: undefined, locked: true };
+    // Before: the legacy line without a stroke (nothing), as an older build draws it.
+    expect(shapeDrawerRegistered('decor')).toBe(false);
+    expect(drawn(o)).toBe(drawn({ ...base, shape: 'line', fill: undefined }));
+    expect(await loadShapeDrawers([o])).toBe(true);
+    expect(shapeDrawerRegistered('decor')).toBe(true);
+    const ctx = traceCtx(960, 540);
+    drawShape(ctx, o, 0.5);
+    // Its 40 filled triangles (the stroked line fills nothing), in z-order.
+    expect(ctx.trace.filter((e) => e[0] === 'call' && e[1] === 'fill')).toHaveLength(40);
+    // Loaded once: nothing more to load.
+    expect(await loadShapeDrawers([o])).toBe(false);
+  });
 });

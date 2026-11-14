@@ -21,7 +21,8 @@
  * (`decor-conv`) the slide budgets never make a slide hybrid or a picture: what draws nothing on the slide is
  * culled, and a slide past the object or picture budget is kept native by merges, decorations, composites,
  * the text ceiling and an atlas (`budget.ts` `fitBudgets`; a table or a chart is one object). Only its
- * guard, never reached in the corpus, leaves anything out (hybrid, `missing:<kind>`). The budgets of M6 and
+ * guard, rarely reached in the corpus, leaves anything out: to LibreOffice's art with it (hybrid,
+ * `art:budget:shapes` / `art:budget:pictures`), else listed (hybrid, `missing:<kind>`). The budgets of M6 and
  * M9 wave 1 (a table's M6 group counted, tables, SmartArt drawings, real 3-D and shapes without text past
  * the budget sent to the art, `budget:*`, and a picture when still over) stay behind
  * `ClassifyOptions.budgetArt`, the harness's A/B.
@@ -30,7 +31,7 @@
  * never used as plain-object keys.
  */
 import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
-import { type BudgetOptions, cullElements, fitBudgets, leftKinds } from './budget.ts';
+import { type BudgetOptions, cullElements, fitBudgets, leftKinds, sentToArt } from './budget.ts';
 import { rootOf, type SlideCtx } from './context.ts';
 import { endsOf, MAX_PATH_CHARS, mergedChars, type ShapePiece, shapePiece } from './geom.ts';
 import { bodyPrChain, chainOf, firstAttr, firstChildOf, nvOf } from './inherit.ts';
@@ -549,6 +550,8 @@ function supportReasons(
       if (e.text.anchorCtr ?? (ctr === '1' || ctr === 'true')) rate('anchorCtr');
       const warp = e.text.warp?.preset ?? firstChildOf(body, 'a:prstTxWarp')?.attrs.prst;
       if (warp !== undefined && warp !== 'textNoShape') rate('warp');
+      if (e.text.paras.some((p) => p.runs.some((r) => r.style.textFill === 'picture' && r.text.trim())))
+        rate('textFill:picture');
     }
   }
   return { residual: [...new Set(residual)], approx: [...new Set(approx)] };
@@ -1228,7 +1231,7 @@ export interface ClassifyOptions {
    * budget a picture, instead of drawing them natively (`budget.ts` `fitBudgets`). Never set by the hub.
    */
   budgetArt?: boolean;
-  /** What the importer stores, so the budgets plan only reliefs that draw (`budget.ts` `BudgetOptions`). */
+  /** What the importer stores and draws, so the budgets plan only reliefs that draw (`budget.ts` `BudgetOptions`). */
   budget?: BudgetOptions;
 }
 
@@ -1237,7 +1240,8 @@ export interface ClassifyOptions {
  * `cullElements`), sets each element's `support` and `reasons` (`refineSupport`), keeps SmartArt drawings
  * whole, then fits the slide budgets natively (`budget.ts` `fitBudgets`: merges, decorations, composites,
  * the text ceiling, the guard and the atlas). Reasons: the tier's (features that keep the slide out of the
- * tier below), then `art:<reason>` for what made it hybrid and `missing:<kind>` for what the guard left out.
+ * tier below), then `art:<reason>` for what made it hybrid (with LibreOffice the guard's left-outs among them,
+ * `art:budget:shapes` / `art:budget:pictures`) and `missing:<kind>` for what the guard left out without it.
  * With `budgetArt`, the art A/B of M6 (`classifyWithArt`).
  */
 export function classifySlide(
@@ -1255,6 +1259,15 @@ export function classifySlide(
   if (opts.budgetArt) return classifyWithArt(ctx, elements, background, residual, tier, reasons);
   wholeDiagrams(ctx, elements, background, residual, false);
   const plan = fitBudgets(ctx, elements, background, opts.budget);
+  // With LibreOffice what the guard left out is the art's, for its budget (`budget.ts` `toArt`); a SmartArt
+  // drawing the art now touches goes with it whole, as at M9 wave 1 (its render copy prints the drawing whole).
+  if (plan.art) {
+    elements.forEach((e, i) => {
+      for (const r of sentToArt(e) ? (e.reasons ?? []) : [])
+        if (r.startsWith('budget:') && !residual[i]!.includes(r)) residual[i] = [...residual[i]!, r];
+    });
+    wholeDiagrams(ctx, elements, background, residual, false);
+  }
   const art = artRange(elements);
   const why: string[] = [];
   for (const i of art?.elements ?? []) for (const r of residual[i]!) why.push(`art:${r}`);

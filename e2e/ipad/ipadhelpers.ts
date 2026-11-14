@@ -4,9 +4,8 @@ import { HubProcess } from '../hubproc.ts';
 
 /**
  * iPad editing (design/15): WebKit with the iPad Pro 11 descriptor, path mode (`http://localhost:<port>/`).
- * Each test owns a fresh hub on BASE + n so the landscape and portrait projects never share state.
+ * Each test owns a fresh hub on its own port (e2e/ports.ts, a row per spec).
  */
-export const BASE = Number(process.env.ORDO_E2E_IPAD_PORT ?? 8700);
 export const PIN = '246810';
 /** The edit PIN the hub derives from ORDO_DEV_PIN=246810: the operate PIN reversed (auth.ts). */
 export const EDIT_PIN = '018642';

@@ -17,8 +17,8 @@ import { type Pixels, decodePng } from './png.ts';
  * SVG media (design/12 "Media pipeline", design/14 "Pictures", design/21 "Uploads"; review 2026-11-13 R4,
  * R5): an SVG background draws on Audience screens as a still, whether the operator uploaded it (the operator
  * draws it into a PNG the hub keeps as its delivery) or it came from a library made before (the output draws
- * it on its main thread); an animated one shows its first frame there and moves in previews only; and an
- * uploaded SVG opened from its file link runs nothing.
+ * it on its main thread); an animated one shows its first frame there and moves in previews only; one over
+ * 24 MB goes up in chunks and its still follows; and an uploaded SVG opened from its file link runs nothing.
  */
 
 const ORANGE = '#ff8000';
@@ -184,6 +184,60 @@ test.describe('SVG media', () => {
         async () => {
           const img = await frame(out);
           return [isOrange(at(img, 300, 300)), isOrange(at(img, 960, 540)), isOrange(at(img, 1600, 900))];
+        },
+        { timeout: 30_000 },
+      )
+      .toEqual([true, true, true]);
+    await out.close();
+  });
+
+  test('an SVG over 24 MB goes up in chunks, its still follows, and it draws on Audience 1', async ({
+    context,
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const api = await operatorApi();
+    await login(page, OP);
+    await page.evaluate(() => {
+      location.hash = '#/library/media';
+    });
+    // Quick to draw, too large for one request: the picture of STILL_SVG and 25 MB of comment.
+    const big = STILL_SVG.replace('</svg>', `<!--${'x'.repeat(25 * 1024 * 1024)}--></svg>`);
+    expect(big.length).toBeGreaterThan(24 * 1024 * 1024);
+    await page
+      .locator('input[type=file]')
+      .first()
+      .setInputFiles({ name: 'Big wave.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(big) });
+    let m: (MediaRec & { name: string }) | undefined;
+    await expect
+      .poll(
+        async () => {
+          const all = await json<(MediaRec & { name: string })[]>(api.get('media'));
+          m = all.find((x) => x.name === 'Big wave');
+          return m?.state === 'ready' && !!m.delivery;
+        },
+        { timeout: 90_000 },
+      )
+      .toBe(true);
+    // The resumable upload carried the SVG alone; the still the operator drew followed (PUT /media/:id/still)
+    // and is the file the screens draw.
+    expect(m!.original.mime).toBe('image/svg+xml');
+    expect(m!.delivery?.mime).toBe('image/png');
+    expect([m!.width, m!.height]).toEqual([1920, 1080]);
+    // Its row in the Media tab no longer says the screens cannot show it (the note of an SVG without its
+    // still, over 2 MB: "Audience screens do not show it").
+    const note = page
+      .locator('span.col', { has: page.locator('b', { hasText: /^Big wave$/ }) })
+      .locator('[data-svg-note]');
+    await expect(note).toHaveAttribute('title', /show it as a still picture/, { timeout: 15_000 });
+    expect(await note.getAttribute('title')).not.toMatch(/without a still picture|do not show it/);
+
+    const out = await showOnAudience(api, context, m!.id);
+    await expect
+      .poll(
+        async () => {
+          const img = await frame(out);
+          return [isOrange(at(img, 200, 200)), isOrange(at(img, 1700, 900)), isBlue(at(img, 960, 540))];
         },
         { timeout: 30_000 },
       )

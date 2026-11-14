@@ -7,17 +7,18 @@ import { SONG, fixtures, testPixelCue, uploadMedia, waitCacheReady } from './hel
 import { HubProcess } from './hubproc.ts';
 import { expectCue, go, hubApi, hubLive, launchOutputs, login } from './linkhelpers.ts';
 import { PNG } from './png.ts';
+import { portOf } from './ports.ts';
 
 /**
- * Design/25 chaos for the output window. Ports PORT..PORT+5 (default 8500; ORDO_CHAOS_OUTPUT_PORT moves
- * them so concurrent runs do not collide).
+ * Design/25 chaos for the output window. Its ports (hubs and file-outage proxies): e2e/ports.ts row
+ * 'chaos-output'.
  *
  * Every worker kill is watched on the audience screen for the whole fault window (review 2026-11-04
  * item 7): the test pixel (the cue the screen shows), a pixel of the picture and the cue the window says
  * it holds are sampled about every 100 ms from the kill until the worker's restart count went up and the
  * hold canvas came down, plus 500 ms, and each sample is compared with the value before the kill.
  */
-const PORT = Number(process.env.ORDO_CHAOS_OUTPUT_PORT ?? 8500);
+const PORT = portOf('chaos-output', 0);
 /** How long an abruptly killed render worker may go unnoticed (50 ms heartbeat, 200 ms silence, 50 ms check). */
 const RENDER_CRASH_DETECT_MS = 400;
 
@@ -533,7 +534,7 @@ test('a clip that ends while the link worker is dead still advances the service'
   page,
 }) => {
   test.setTimeout(180_000);
-  const port = PORT + 1;
+  const port = portOf('chaos-output', 1);
   const hub = HubProcess.fresh(port);
   await hub.start();
   try {
@@ -651,9 +652,9 @@ class FileOutageProxy {
  */
 test('a 14 s file-route outage on a fresh output quarantines nothing', async ({ context, page }) => {
   test.setTimeout(240_000);
-  const port = PORT + 2;
+  const port = portOf('chaos-output', 2);
   const hub = HubProcess.fresh(port);
-  const proxy = new FileOutageProxy(PORT + 3, port);
+  const proxy = new FileOutageProxy(portOf('chaos-output', 3), port);
   await hub.start();
   await proxy.start();
   try {
@@ -762,9 +763,9 @@ test('a 14 s file-route outage on a fresh output quarantines nothing', async ({ 
  */
 test('a slide image withheld until after GO is drawn in once its file arrives', async ({ context, page }) => {
   test.setTimeout(240_000);
-  const port = PORT + 4;
+  const port = portOf('chaos-output', 4);
   const hub = HubProcess.fresh(port);
-  const proxy = new FileOutageProxy(PORT + 5, port);
+  const proxy = new FileOutageProxy(portOf('chaos-output', 5), port);
   await hub.start();
   await proxy.start();
   try {

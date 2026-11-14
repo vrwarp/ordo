@@ -32,6 +32,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      # The browser unit tests (*.browser.test.ts, the harness's NativeRenderer, pptx-preview) drive
+      # Playwright's Chromium; under CI they fail without it rather than skip (tools/find-chromium.ts).
+      - name: Playwright's Chromium for the browser unit tests
+        run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test
       - run: pnpm build
       - name: Bundle budget (each app's initial JavaScript against tools/bundle-baseline.json, +2 % at most)

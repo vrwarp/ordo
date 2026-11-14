@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { body, buildDeck, imageRel, para, pic, run, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
 import { CONVERTER_VERSION, importPptxClient, LOOP_IMPORT_NOTE } from './pptx-client.ts';
+import { pictureGuardDeck } from './pptx-guard.test-util.ts';
 import { remapMediaIds } from './remap.ts';
 
 const IN = 914_400;
@@ -72,6 +73,25 @@ describe('importPptxClient', () => {
     expect(slide.pptx?.pending).toBeUndefined();
     expect(slide.pptx?.missing).toEqual(lite.clientScene.slides[0]!.missing);
     expect(slide.objects.some((o) => o.type === 'text' && o.text === 'Hybrid Slide')).toBe(true);
+  });
+
+  it("gives the guard's left-outs to LibreOffice's art with it, and lists them without it (lo-forms)", async () => {
+    const z = new JSZip();
+    for (const [k, v] of pictureGuardDeck()) z.file(k, v);
+    const bytes = await z.generateAsync({ type: 'uint8array' });
+    const withLo = await importPptxClient(bytes, 'pictures.pptx');
+    const s = withLo.presentation.sections[0]!.slides[0]!;
+    // 15 pictures drawn and LibreOffice's art for the five topmost; nothing listed, the slide waits for it.
+    expect(s.objects.filter((o) => o.type === 'image')).toHaveLength(15);
+    expect(s.pptx).toMatchObject({ class: 'hybrid', pending: true });
+    expect(s.pptx?.missing).toBeUndefined();
+    expect(withLo.loSlides[0]?.art?.elements).toHaveLength(5);
+    const lite = await importPptxClient(bytes, 'pictures.pptx', { libreoffice: false });
+    const t = lite.presentation.sections[0]!.slides[0]!;
+    expect(t.objects.filter((o) => o.type === 'image')).toHaveLength(16);
+    expect(t.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(t.pptx?.pending).toBeUndefined();
+    expect(lite.loSlides).toEqual([]);
   });
 
   it('extracts embedded pictures with remappable placeholders and plans loSlides for hybrid slides', async () => {

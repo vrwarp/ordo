@@ -58,8 +58,8 @@ once (like a crash: no goodbyes), the library process stops its jobs (re-queued 
 
 **Routing** (`src/liveproc.ts`, `src/proxy.ts`): the live process listens on `ORDO_PORT` and answers
 itself `/ws`, `/api/v1/{live, live/summary, live/events, actions, cache/manifest, output/config, auth/me, health}`,
-`/api/v1/files/<hash>` for files it knows (the live playlist's media, geometry files and fonts, every font,
-the logo) and
+`/api/v1/files/<hash>` for files it knows (the live playlist's media, geometry and decoration files and
+fonts, every font, the logo) and
 every non-API path (the built apps). Everything else under `/api/v1` is streamed to the library process
 over loopback. We chose the live process as the front door rather than the supervisor so the supervisor
 stays free of network input, and rather than two DSM rules so the deployment is unchanged. The proxy is
@@ -135,6 +135,7 @@ All under `https://hub.<venue>.synology.me/api/v1`. JSON bodies validated with t
 | `GET /presentations/:id/revisions`, `POST /presentations/:id/restore/:rev`                                             | edit                                                 | Version history                                                                                                                                                                                                                                                              |
 | `GET                                                                                                                   | POST                                                 | PUT                                                                                                                                                                                                                                                                          | DELETE /playlists[/:id]`     | edit | CRUD; live playlist returns 423 Locked on PUT        |
 | `POST /media` (multipart, resumable via `Upload-Offset`)                                                               | edit                                                 | Upload; returns media in `uploaded` state. An SVG may come with its still (part `raster`, see "Media pipeline"); a bad one is 400 `bad_raster`                                                                                                                               |
+| `PUT /media/:id/still` (multipart, part `raster`)                                                                      | edit                                                 | An SVG's still sent after the SVG (the resumable upload carries none): checked as at upload; 409 when the SVG has one or its job runs, 400 `bad_raster`, 413 over 96 MB                                                                                                      |
 | `GET /media/:id`, `PUT /media/:id`, `DELETE /media/:id`                                                                | edit                                                 | Metadata; `DELETE` of media that stored presentations or playlists use answers 409 `media_in_use` naming them (`presentations`, `playlists`), unless `?force=1`                                                                                                              |
 | `GET /files/:hash`                                                                                                     | output token or any role                             | Content-addressed file delivery with long cache headers and range support; an SVG as `Content-Disposition: attachment` (design/21)                                                                                                                                           |
 | `POST /fonts/upload`, `POST /fonts/google { family }`, `GET /fonts`                                                    | edit                                                 | Fonts                                                                                                                                                                                                                                                                        |
@@ -268,13 +269,17 @@ resumes them.
 **SVG** (review 2026-11-13 R4, R5, R13). Outputs cannot decode an SVG (design/14 "Pictures that are SVGs"),
 so an SVG's delivery is a PNG still: the operator draws the SVG through an `<img>` into a canvas at
 `svgRasterSizeFor` (at least 1920 px on the longer side, at most 3840 wide and 16.7 MP) and posts it as part
-`raster` of `POST /media` (one SVG with one still; the resumable upload carries none). Before anything is
-stored the hub checks it by its header: a PNG within those caps, at most 96 MB, of the shape the SVG's root
+`raster` of `POST /media` (one SVG with one still). An SVG over 24 MB goes through the resumable upload,
+which carries the SVG alone; after its 201 the operator draws the still and sends it to
+`PUT /media/:id/still` (part `raster`), which stores it as the delivery only for an SVG that has none (409
+`has_still`; 409 `busy` while the item's job runs: the operator sends it again; 423 while the live playlist
+uses the item), emits the media delta and processes the item again. Before anything is
+stored the hub checks a still by its header: a PNG within those caps, at most 96 MB, of the shape the SVG's root
 element declares (`svgIntrinsicSize` reads `width`, `height` and `viewBox` of the root only: never a
 child's `stroke-width`, a percentage counts as none); anything else is 400 `bad_raster`. The media job
 decodes the still's header with `ffprobe` and drops one that lies about its pixels (logged; the file is
-released). An SVG without a still (a library from before, a client that could not draw it, one sent through the
-resumable upload, over 24 MB) keeps no delivery, and outputs draw it on their window, up to
+released). An SVG without a still (a library from before, which keeps the advice to upload it again; a
+client that could not draw it) keeps no delivery, and outputs draw it on their window, up to
 `SVG_SCREEN_MAX_BYTES` (2 MB; a larger one is not shown, and the operator says so where it is picked). The item's `width` and `height` are the still's, else
 `svgRasterSizeFor` with the browser's default 300x150 for an SVG that declares nothing. An animated SVG is
 a still on the screens (its first frame).
@@ -290,7 +295,8 @@ uploading browser parsed (`POST /import/document` part `clientScene`, design/27 
 parsed"): the route drops a `clientScene` part over 32 MB before it is stored, the pool task
 `pptx-client-scene` reads, parses and checks the stored scene off the event loop (`pptx/clientScene.ts`: a
 zod schema with a bound on every list, string and part name; this hub's `CONVERTER_VERSION`, `M9_WRITES` and
-LibreOffice state; every shape file checked again with `geomFileOf` and re-hashed), and any doubt about it
+LibreOffice state; every shape file checked again by its kind, `storedShapeFileOf`: a geometry file with
+`geomFileOf`, an M9 decoration file with `decorFileOf`, and re-hashed), and any doubt about it
 makes the hub parse the deck itself (the job's log says why); the scene file is released once version 1 is
 saved or the import fails. Steps 3-5 are the import core's in `@ordo/importers` (`pptx-core.ts`,
 `pptx-scan.ts`, `pptx-geoms.ts`, `pptx-pictures.ts`, `pptx-ladder.ts`), which the browser's parse and the Pages

@@ -28,6 +28,7 @@ import {
   scoreRegion,
   verdict,
 } from './score.ts';
+import { findChromium } from '../../../find-chromium.ts';
 
 /*
  * The preset golden (design/27 §14 item 6, §15 M6 exit): every preset geometry at its default adjust values,
@@ -42,7 +43,7 @@ import {
  *
  * A run fails when a preset is under MIN_SSIM (0.95) and not listed in exceptions.ts with its reason, or falls
  * more than MAX_DROP (0.01) below its baseline. Needs soffice (LibreOffice 24.2 made the baseline), pdftoppm,
- * ffmpeg and Chromium (Playwright's, ORDO_CHROMIUM, or /usr/bin/google-chrome).
+ * ffmpeg and Chromium (ORDO_CHROMIUM, Playwright's, ORDO_TEST_CHROMIUM, or the system's: tools/find-chromium.ts).
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -71,17 +72,6 @@ async function has(cmd: string, args: string[]): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_CHROMIUM) return process.env.ORDO_CHROMIUM;
-  try {
-    const exe = (await import('@playwright/test')).chromium.executablePath();
-    if (existsSync(exe)) return exe;
-  } catch {
-    /* not installed */
-  }
-  return existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : undefined;
 }
 
 type Esbuild = { build(o: Record<string, unknown>): Promise<{ outputFiles: { text: string }[] }> };
@@ -220,8 +210,8 @@ async function main(): Promise<number> {
     ['ffmpeg', ['-version']],
   ] as const)
     if (!(await has(cmd, [...args]))) return skip(`${cmd} is not installed`);
-  const executablePath = await findChromium();
-  if (!executablePath) return skip('no Chromium (npx playwright install chromium, or set ORDO_CHROMIUM)');
+  const executablePath = await findChromium({ system: true });
+  if (!executablePath) return skip('no Chromium (npx playwright install chromium, or set ORDO_CHROMIUM)'); // under CI findChromium throws
 
   const work = outDir ? resolve(outDir) : join(tmpdir(), `ordo-preset-golden-${process.pid}`);
   await mkdir(work, { recursive: true });

@@ -3,10 +3,13 @@ import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
 import { charged, EFFECT_COST, GEOM_COST } from '@ordo/renderer/geom/cost.ts';
 import { CMD_CLOSE, CMD_MOVE } from '@ordo/renderer/geom/ops.ts';
 import { presetGeometry } from '@ordo/renderer/geom/path.ts';
-import { storedGeometry } from '@ordo/renderer/geom/stored.ts';
+import { legacyGeometry, storedGeometry } from '@ordo/renderer/geom/stored.ts';
 import { drawnCost, drawnEffectArea, overGeomBudget, slideBudget } from '@ordo/renderer/geombudget.ts';
-import { describe, expect, it } from 'vitest';
-import type { EmitOptions } from './emit.ts';
+import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';
+import { recordingCtx } from '@ordo/renderer/text/test-util.ts';
+import { drawSlide2D } from '@ordo/renderer/text2d.ts';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { type EmitOptions, MIN_RECT_COVERAGE } from './emit.ts';
 import { apply } from './frame.ts';
 import {
   MAX_PATH_CHARS,
@@ -37,6 +40,8 @@ import {
   tc,
   themeXml,
   inlineGeoms,
+  lineArtPath,
+  lineArtPoints,
 } from './test-util.ts';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
@@ -333,8 +338,8 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     const big = { cx: 12_192_000, cy: 6_858_000 };
     const hostile = emitOne({ slides: [{ shapes: custom(2, { paths: zigzag(4_000) }, big) }] });
     const e = hostile.scene.slides[0]!.elements[0] as ShapeElement;
-    // M9 (decisions.md "Slow-to-draw elements"): kept whole, never sent to LibreOffice, and named for the
-    // slide's decoration plate; every drawer draws its legacy shape until a plate holds it.
+    // M9 (decisions.md "Slow-to-draw elements"): kept whole, never sent to LibreOffice; too costly alone for
+    // any drawer (`stored.ts`), it is drawn as its legacy shape until the slide's decoration plate holds it.
     expect(e).toMatchObject({ support: 'native', custom: { complex: true } });
     expect(e.reasons).toBeUndefined();
     expect(e.custom!.over).toBeUndefined();
@@ -432,13 +437,15 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     for (const one of [wide, ends]) {
       const out = emitOne({ slides: [{ shapes: one }] });
       const e = out.scene.slides[0]!.elements[0] as ShapeElement;
-      // M9: kept whole for the decoration plate; the renderer draws its legacy shape until then.
+      // M9: kept whole; past GEOM_COST.slide alone, so no geometry unit draws it: its legacy shape on outputs
+      // too until effect units slice it (r2a repair: the note no longer says a unit draws it).
       expect(e).toMatchObject({ support: 'native', custom: { complex: true } });
       expect(e.custom!.fillCost!).toBeLessThan(GEOM_COST.geometry);
       expect(e.custom!.cost!).toBeGreaterThan(GEOM_COST.slide);
       expect(out.notes.join(' ')).toMatch(
-        /past the slide's drawing budget are drawn from its decoration plate/,
+        /1 object\(s\) past the slide's drawing budget are drawn as their legacy shapes until effect units are made/,
       );
+      expect(out.notes.join(' ')).not.toMatch(/geometry unit/);
       const o = shapes(out.objects)[0]!;
       expect(o.geom?.paths?.length).toBeGreaterThan(0);
       expect(out.emitted.plate?.pastBudget).toEqual([o.id]);
@@ -602,9 +609,11 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     expect(drawn.every((o) => o.gradient?.kind === 'linear' && o.fill?.r === 255 && o.fill.a === 0.5)).toBe(
       true,
     );
+    // Plain shapes past the budget for their gradients: no geometry unit draws them (r2a repair: the note says so).
     expect(out.notes.join(' ')).toMatch(
-      /past the slide's drawing budget are drawn from its decoration plate/,
+      /past the slide's drawing budget are drawn as their legacy shapes until effect units are made/,
     );
+    expect(out.notes.join(' ')).not.toMatch(/geometry unit/);
     const past = slideBudget(out.slide.objects);
     expect(past.size).toBeGreaterThan(130);
     expect(out.emitted.plate?.pastBudget).toEqual(drawn.filter((o) => past.has(o)).map((o) => o.id));
@@ -1533,6 +1542,127 @@ describe('an older build (design/27 §3.2, §14.7)', () => {
     expect(route).toMatchObject({ type: 'shape', shape: 'line', stroke: { width: 2 } });
     expect(route!.box.w).toBeCloseTo(PX * Math.SQRT2);
     expect(image).toMatchObject({ type: 'image', fit: 'stretch' });
+  });
+});
+
+describe('the legacy shape of a custom geometry (design/27 §3.2 legacy values, M9 leaf-legacy)', () => {
+  beforeAll(() => vi.stubGlobal('Path2D', RecPath));
+  afterAll(() => vi.unstubAllGlobals());
+  /** A filled custom shape at a box, turned by `rot` degrees. */
+  const art = (
+    id: number,
+    paths: string,
+    box: { x: number; y: number; cx: number; cy: number; rot?: number },
+  ) => sp({ id, ...box, geom: 'none', fill: custGeom({ paths }) + solid('FF0000') });
+  const big = { x: 0, y: 0, cx: 6 * IN, cy: 3.6 * IN };
+
+  it('draws line art with hundreds of holes past 4,096 points as a line, never a box of its fill', () => {
+    // The leaf template's line art: one outline holding 320 holes, 9,605 points, even-odd ink about 0.23.
+    const { scene, objects } = emitOne({
+      slides: [{ shapes: art(2, lineArtPath({ cols: 40, rows: 8 }), { ...big, rot: 12 }) }],
+    });
+    const e = scene.slides[0]!.elements[0] as ShapeElement;
+    expect(e.custom!.points).toBe(lineArtPoints(40, 8));
+    expect(e.custom!.points).toBeGreaterThan(4_096);
+    // Its read points are past what the coverage reads: unknown, which drew a rect before.
+    expect(e.coverage).toBeUndefined();
+    expect(e.custom!.ink).toBeGreaterThan(0.2);
+    expect(e.custom!.ink).toBeLessThan(0.26);
+    const [o] = shapes(objects);
+    expect(o).toMatchObject({ shape: 'line', fill: RED });
+    expect(
+      o!
+        .geom!.paths!.map((p) => p.d)
+        .join(' ')
+        .match(/M/g),
+    ).toHaveLength(321);
+    // What every drawer draws past the budget, and an older build without the geometry: the line's
+    // midline, no fill (it has no outline).
+    expect(legacyGeometry('line', 0, o!.box.w, o!.box.h).paths[0]!.fill).toBe('none');
+  });
+
+  it('rates a built geometry by the even-odd area of its built paths, curves flattened and holes taken away', () => {
+    const P = (x: number, y: number) => pt(x, y);
+    const cubic = (a: number[], b: number[], c: number[]) =>
+      `<a:cubicBezTo>${P(a[0]!, a[1]!)}${P(b[0]!, b[1]!)}${P(c[0]!, c[1]!)}</a:cubicBezTo>`;
+    // A frame: an outline and one big hole (ink 0.19; its read points summed |area| as 1.81, a rect).
+    const frame = `<a:path w="100" h="100">${M(0, 0)}${L(100, 0)}${L(100, 100)}${L(0, 100)}${Z}${M(5, 5)}${L(95, 5)}${L(95, 95)}${L(5, 95)}${Z}</a:path>`;
+    // A disc of three cubic curves: its end points are a triangle (0.33 of the box, a line before), its
+    // curves fill about 0.75 of it: a rect.
+    const at = (a: number) => [50 + 50 * Math.cos(a), 50 + 50 * Math.sin(a)];
+    const disc = (() => {
+      let d = M(...(at(0) as [number, number]));
+      for (let i = 0; i < 3; i++) {
+        const a = (2 * Math.PI * i) / 3;
+        const b = (2 * Math.PI * (i + 1)) / 3;
+        const t = (4 / 3) * Math.tan((b - a) / 4) * 50;
+        const [ax, ay] = at(a);
+        const [bx, by] = at(b);
+        d += cubic(
+          [Math.round(ax! - t * Math.sin(a)), Math.round(ay! + t * Math.cos(a))],
+          [Math.round(bx! + t * Math.sin(b)), Math.round(by! - t * Math.cos(b))],
+          [Math.round(bx!), Math.round(by!)],
+        );
+      }
+      return `<a:path w="100" h="100">${d}${Z}</a:path>`;
+    })();
+    const { scene, objects } = emitOne({
+      slides: [{ shapes: art(2, frame, big) + art(3, disc, { ...big, x: 7 * IN }) }],
+    });
+    const [ef, ed] = scene.slides[0]!.elements as ShapeElement[];
+    expect(ef!.coverage).toBe(1);
+    expect(ef!.custom!.ink).toBeCloseTo(0.19, 5);
+    expect(ed!.coverage).toBeLessThan(MIN_RECT_COVERAGE);
+    expect(ed!.custom!.ink).toBeGreaterThan(0.7);
+    expect(shapes(objects).map((o) => o.shape)).toEqual(['line', 'rect']);
+  });
+
+  it("keeps the rule of the read points for a geometry past the converter's bounds (no paths stored)", () => {
+    // Nine paths, past the eight a geometry may store: nothing is built. One reads a guide name, so its
+    // coverage is unknown: its rect, as before (nothing that drew a rect is left undrawn).
+    const square = (a: number, b: number) =>
+      `<a:path w="100" h="100">${M(a, a)}${L(b, a)}${L(b, b)}${L(a, b)}${Z}</a:path>`;
+    const unknown = `${Array.from({ length: 8 }, () => square(0, 1)).join('')}<a:path w="100" h="100">${M('w', 'h')}${L(0, 0)}${L(100, 0)}${Z}</a:path>`;
+    const thin = Array.from({ length: 9 }, () => square(0, 10)).join('');
+    const { scene, objects } = emitOne({
+      slides: [{ shapes: art(2, unknown, big) + art(3, thin, { ...big, x: 7 * IN }) }],
+    });
+    const [eu, et] = scene.slides[0]!.elements as ShapeElement[];
+    expect(eu!.custom!.over).toBe(true);
+    expect(eu!.coverage).toBeUndefined();
+    expect(et!.custom!.over).toBe(true);
+    expect(et!.coverage).toBeCloseTo(0.09);
+    // The unknown one draws its rect without a geometry; the thin one, known to fill little, draws nothing.
+    const drawn = shapes(objects);
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0]).toMatchObject({ shape: 'rect', fill: RED });
+    expect(drawn[0]).not.toHaveProperty('geom');
+  });
+
+  it('an older build (0.5.0) keeps the line, and draws nothing of the line art the budget sends to its legacy copy', () => {
+    // Three line-art paths past GEOM_COST.slide together (the guard deck's slide, `line-art-holes.pptx`).
+    const paths = (seed: number) => lineArtPath({ cols: 40, rows: 8, seed });
+    const { slide } = emitOne({
+      slides: [
+        {
+          shapes:
+            art(2, paths(1), { x: 5.5 * IN, y: 2.6 * IN, cx: 9 * IN, cy: 5.5 * IN }) +
+            art(3, paths(2), { x: 1 * IN, y: 3 * IN, cx: 5.4 * IN, cy: 3.2 * IN, rot: -20 }) +
+            art(4, paths(0), { x: 0.3 * IN, y: 0.4 * IN, cx: 9 * IN, cy: 5.5 * IN, rot: 12 }),
+        },
+      ],
+    });
+    const old = prev.Slide.parse(slide) as Slide;
+    const arts = shapes(old.objects).filter((o) => o.geom?.paths);
+    expect(arts).toHaveLength(3);
+    for (const o of arts) expect(o).toMatchObject({ shape: 'line', fill: RED });
+    // The renderer's budget (0.5.0's rule too) draws at least one of them as its legacy copy.
+    const copies = [...slideBudget(old.objects)].filter(([, c]) => !('geom' in c)).map(([, c]) => c);
+    expect(copies.length).toBeGreaterThan(0);
+    for (const c of copies) expect(c).toMatchObject({ type: 'shape', shape: 'line', fill: RED });
+    const ctx = recordingCtx();
+    drawSlide2D(ctx as never, { ...old, objects: copies }, { scale: 0.5 });
+    expect(ctx.ops.filter((x) => x.op === 'fill' || x.op === 'fillRect' || x.op === 'rect')).toHaveLength(0);
   });
 });
 

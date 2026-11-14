@@ -611,9 +611,11 @@ text toward 64 KB, called them native. The converter now writes such paths once 
 (`ShapeGeom.ref`, placeholder `pptxgeom:<n>`, `EmitResult.geoms`; `@ordo/pptx-scene` README) and measures the
 slide as this job stores it. The job (`geoms.ts`):
 - **Names** each batch's files by the SHA-256 of their JSON (`GeomFile`, its paths re-tokenised by
-  `sanitizeGeom` and checked by the schema) right after the batch, before the budgets: a placeholder whose file
-  is not usable loses its ref (the shape draws its legacy form). One outline in two batches, two decks or two
-  imports is one name.
+  `sanitizeGeom` and checked by the schema; an M9 decoration file, `DecorFile`, its parts by `sanitizeDecor`
+  against the largest palette, at most 16,384 points: the import core's `decorFileOf`) right after the batch,
+  before the budgets: a placeholder whose file is not usable loses its ref (the shape draws its legacy form, a
+  decoration nothing). One outline or decoration in two batches, two decks or two imports is one name, and the
+  browser's parse names it the same (`apps/hub/test/pptx-scene-task.test.ts`, `geoms.decor.test.ts`).
 - **Budgets** them: a slide whose new files pass `PPTX_LIMITS.geomFileBytes` (32 MB an import; the largest
   worship deck needs 0.6 MB) is a compact picture like an oversized one ('over the import budget of shape
   outlines'), so a hostile deck cannot fill the store through files instead of slides.
@@ -635,10 +637,10 @@ slide as this job stores it. The job (`geoms.ts`):
 - `CONVERTER_VERSION` is 2 (`@ordo/pptx-scene` `version.ts`, re-exported by `shared.ts`): the converter that
   draws 3-D flat and writes the M9 fields.
 - `M9_WRITES` (`version.ts`, re-exported by `shared.ts`, the client parse's too): the M9 stored fields the import writes, every one (M9 decision 1) but those whose
-  drawer or reader is not on main yet (`M9_HELD_BACK`: 'decor' and 'decorFile' until `decor-render` draws
-  decorations and names their files); `sceneTask.ts` passes it as `EmitOptions.m9Writes` with
-  `sheets: PPTX_SHEETS` (false until `decor-render` stores composites and atlases), so the slide budgets plan
-  neither (design/27 §15 M9 "rollout"). Taking a field out is the kill switch: the import then writes what an
+  drawer or reader is not on main yet (`M9_HELD_BACK`: empty since `decor-render` draws decorations and names
+  their files on both paths; 'decor' and 'decorFile' were held back until then); `sceneTask.ts` passes it as
+  `EmitOptions.m9Writes` with `sheets: PPTX_SHEETS` (false until `decor-sheets` stores composites and
+  atlases), so the slide budgets plan no sheet (design/27 §15 M9 "rollout"). Taking a field out is the kill switch: the import then writes what an
   older build draws for it. In wave 1 no converter part writes an M9 field yet (the stubs of
   `@ordo/pptx-scene`), so nothing stored changes.
 - `EmitOptions.libreoffice` (default true) is `lo-detect`'s to set: with false the converter plans no art and
@@ -783,4 +785,38 @@ instead) and, on a hub with LibreOffice, for a slide over 64 KB that the ladder 
   LibreOffice: no follow-up for a budget but a page for a slide stored plain), `pptx-geoms.test.ts`, `pptx-integrate.test.ts` (2,000-slide decks; a crowded 4:3 slide that keeps LibreOffice's page),
   `pptx-import-route.test.ts` (a client scene past its outline bound, and with slides it could not read).
 <!-- /m9:ladder -->
+
+<!-- m9:lo-forms -->
+## M9 wave 2: the slide budgets' guard per kind of hub (m9/lo-forms)
+
+The owner's decision of 2026-11-13 (design/27 §15 M9 "The guard per kind of hub"): on a hub with LibreOffice,
+what the converter's guard leaves out past the render clamp (200 objects, 16 distinct pictures without
+sheets) gets LibreOffice's art again, for those objects only; without LibreOffice it is listed, as before.
+
+- **The converter decides it as it parses** (`SceneTaskInput.libreoffice` → `ParseOptions.libreoffice` and
+  `EmitOptions.libreoffice`, the one flag `sceneTask.ts` already passes to `convertDeck`): with LibreOffice
+  the left-outs are residual (`budget:shapes`, `budget:pictures`), version 1 draws the rest (one object and,
+  without an art before, one picture short of the clamp, so the art is drawn too), and `EmittedSlide.art`
+  names them; the slide is hybrid and `pending` like any slide with art, `PptxLoSlide.kinds` 'decoration'
+  (what it lacks if LibreOffice fails), and its left-out text is in `pptx.artText`. The follow-up's render
+  copy prints only those objects (and a kept one between them that one of them covers), and version 2 puts
+  the art where the topmost kept object ends. Nothing is listed missing for them: `ImportCore.budgetLeft` has
+  nothing to list from this converter (it still lists what a scene names in `EmittedSlide.missing`).
+- **A client scene** carries the same plan: the operator's parse takes the flag from the hub's capabilities
+  (`PptxClientOptions.libreoffice`) and records it (`PptxClientScene.libreoffice`), and `clientScene.ts`
+  takes a scene only when it agrees with this hub (`checkClientScene`), so the hub's own parse and a browser's
+  store the same (`pptx-import-route.test.ts`, `pptx-client-scene.test.ts`). No line of `clientScene.ts` or
+  `pptx-client.ts` changed.
+- **Without LibreOffice** (`ORDO_LIBREOFFICE=off`, or none found): the guard culls them and the slide lists
+  `missing: ['decoration']` (or 'element' for text, tables and charts), never `pending`, no `pptx-lo`.
+- A deck imported on a hub with LibreOffice and moved to one without keeps its art; one whose follow-up runs
+  after LibreOffice went away gets its slides re-imported (`fallback.ts` `withoutLibreOffice`), which culls
+  and lists them as this hub would.
+- Tests: `pptx-native.test.ts` (208 text boxes: the ten topmost the art's, nothing missing, the follow-up
+  queued with them), `pptx-no-libreoffice.test.ts` (the same deck: nine listed, nothing waits),
+  `pptx-client-scene.test.ts` (a 20-picture slide: hub and client plan the same art, a scene parsed for the
+  other kind of hub refused), `pptx-import-route.test.ts` (the same deck stored alike from both paths), the
+  import core's `pptx-core.test.ts` and `pptx-client.test.ts`; end to end `e2e/pptx-guard.spec.ts` (both kinds
+  of hub, the Audience screen's colour).
+<!-- /m9:lo-forms -->
 

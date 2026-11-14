@@ -75,9 +75,9 @@ Every preset at its default adjust values, drawn by LibreOffice and by `drawGeom
    falls more than 0.01 below `baseline.json`. `score.test.ts` (in `pnpm test`, no LibreOffice needed) checks
    that the baseline covers every preset and that the exceptions are exactly the presets under the bar.
 
-Needs LibreOffice (24.2.7 made the baseline), poppler's `pdftoppm`, ffmpeg and Chromium (Playwright's,
-`ORDO_CHROMIUM`, or `/usr/bin/google-chrome`); a missing tool skips the run, or fails it under `--strict` or
-`CI`. A run takes about 30 s.
+Needs LibreOffice (24.2.7 made the baseline), poppler's `pdftoppm`, ffmpeg and Chromium (`ORDO_CHROMIUM`,
+Playwright's, `ORDO_TEST_CHROMIUM`, or the system's: `tools/find-chromium.ts`); a missing tool skips the run,
+or fails it under `--strict` or `CI`. A run takes about 30 s.
 
 Results (LibreOffice 24.2.7.2, Chromium 1243): 186 of 187 presets at SSIM ≥ 0.95, mean 0.9959. When the baseline
 was made, a pixel comparison allowing a 1 px shift found no other geometry difference; the rest of the gap is anti-aliasing and poppler's

@@ -6,7 +6,6 @@ import pptxgen from 'pptxgenjs';
 import {
   editorHub,
   importDeck,
-  M4_PORT,
   type Obj,
   openEditor,
   openSlide,
@@ -15,11 +14,12 @@ import {
   selectText,
   slidesOf,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import { hubApi } from './linkhelpers.ts';
 import { VERSE_TEXT, VERSES, zipParts } from './pptxdecks.ts';
 
 /**
- * M4 item A, the text ops (apps/operator/src/views/editor/M4.md; design/27 §15 M4 exit), port 8901, on
+ * M4 item A, the text ops (apps/operator/src/views/editor/M4.md; design/27 §15 M4 exit), port row 'editor-text', on
  * synthetic decks:
  * - a typo fixed inside a bold coloured word of a shrink-to-fit box keeps the word's formatting and the
  *   box's text size (PowerPoint's stored fit scale);
@@ -27,7 +27,7 @@ import { VERSE_TEXT, VERSES, zipParts } from './pptxdecks.ts';
  *   while the deck's own faces and colours give way to the theme's.
  * Each ends in `saveAndReload`: after Save and a reload the presentation JSON is identical.
  */
-const PORT = M4_PORT + 1;
+const PORT = portOf('editor-text');
 const OUT = 'test-results/editor-text';
 
 const SHRINK = {

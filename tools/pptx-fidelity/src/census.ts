@@ -15,8 +15,12 @@
  *   LibreOffice), the slide budgets' work (M9, `decor-conv`; each only when not 0): `decors` (decoration
  *   objects, `ShapeObject.decor`), `sheets` (pictures drawn from a composite or an atlas sheet, `SHEET_PREFIX`),
  *   `culled` (elements not imported because they draw nothing on the slide: off it, or showing nothing; read
- *   from the converter's notes) and `plate` (objects past the slide's drawing budgets, drawn from its
- *   decoration plate: the converter's note), and the hub's view of it (`hubClasses`, M9's budget ladder):
+ *   from the converter's notes) and `plate` (objects past the slide's drawing budgets, drawn whole from
+ *   geometry units on outputs and as their legacy shapes elsewhere, or without their effects: the converter's
+ *   notes); what its legacy shapes draw (M9 leaf-legacy, `legacyColumns`; each only when not 0):
+ *   `budgetLegacy` (objects the renderer's slide budget draws as their legacy shapes, every drawer without a
+ *   geometry unit) and `legacyFills` (a filled legacy rect or ellipse over a built custom geometry that fills
+ *   under half its box or whose share is unknown: what the census ratchet fails); and the hub's view of it (`hubClasses`, M9's budget ladder):
  *   `stored` (the slide as the hub stores it; 0 for a picture slide), `hub` (its class once the hub's §3.4
  *   budgets ran: hybrid when the ladder left something out, never a picture for its size), `hubWhy` (why the
  *   ladder changed it: `slide` over 64 KB, `presentation` for the tail, `geoms` for its outline files; null
@@ -34,7 +38,16 @@ import { tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { BudgetLevel, Slide } from '@ordo/domain';
+import { MIN_RECT_COVERAGE } from '@ordo/pptx-scene/emit.ts';
+import { inkOf } from '@ordo/pptx-scene/geom.ts';
 import { SHEET_PREFIX } from '@ordo/pptx-scene';
+import { boxSide, storedPath } from '@ordo/renderer/geom/built.ts';
+import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
+import type { GeomPath } from '@ordo/renderer/geom/path.ts';
+import { clearGeomFiles, putGeomFile, resolvedGeom } from '@ordo/renderer/geom/stored.ts';
+import { drawableContent } from '@ordo/renderer/content.ts';
+import { slideBudget } from '@ordo/renderer/geombudget.ts';
+import { slideUnitsLeft } from '@ordo/renderer/units.ts';
 import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import { listDecks } from './decks.ts';
 import { convertDeckIsolated, type HubWhy, hubLadder, type NativeDeck } from './native.ts';
@@ -93,7 +106,7 @@ function noted(notes: readonly string[], re: RegExp): number {
 
 /**
  * What the slide budgets did to a slide (M9, `decor-conv`): its decorations, the pictures drawn from sheets,
- * the elements culled and the objects past its drawing budgets (named for its decoration plate). Zeros left
+ * the elements culled and the objects past its drawing budgets (`emit.ts` `fitDrawing`'s notes). Zeros left
  * out.
  */
 export function budgetColumns(
@@ -107,11 +120,81 @@ export function budgetColumns(
     culled:
       noted(notes, /^(\d+) element\(s\) outside the slide are not imported$/) +
       noted(notes, /^(\d+) shape\(s\) that show nothing are not imported$/),
-    plate: noted(
-      notes,
-      /^(\d+) object\(s\) past the slide's drawing budget are drawn from its decoration plate/,
-    ),
+    // Both notes of `emit.ts` `fitDrawing`: drawn whole from geometry units, and drawn without their effects.
+    plate: noted(notes, /^(\d+) object\(s\) past the slide's drawing budget are drawn /),
   };
+  for (const k of Object.keys(out)) if (!out[k]) delete out[k];
+  return out;
+}
+
+/**
+ * A stored geometry's paths at its box (`geombudget`'s drawers build them so: a `cont` piece appended to the
+ * path before it), without the drawing budget's cut (`pathsGeometry` builds nothing past `GEOM_COST.geometry`),
+ * so the census rates what a too-costly geometry would fill as well. Undefined for none (a preset, a file not
+ * read).
+ */
+function storedPaths(o: { geom?: unknown; box: { w: number; h: number } }) {
+  const g = resolvedGeom(o.geom as Parameters<typeof resolvedGeom>[0]);
+  if (!g || typeof g.preset === 'string' || !Array.isArray(g.paths) || !g.paths.length) return undefined;
+  const w = boxSide(o.box.w);
+  const h = boxSide(o.box.h);
+  const paths: GeomPath[] = [];
+  for (const p of g.paths.slice(0, GEOM_LIMITS.paths)) {
+    const path = storedPath(p, w, h);
+    const prev = paths[paths.length - 1];
+    if (p?.cont === true && prev)
+      paths[paths.length - 1] = {
+        ...prev,
+        cmds: prev.cmds.concat(path.cmds),
+        pts: prev.pts.concat(path.pts),
+      };
+    else paths.push(path);
+  }
+  return { w, h, paths };
+}
+
+/**
+ * What a slide's legacy shapes draw (M9 leaf-legacy; design/27 §3.2 legacy values, §12 drawing cost), on the
+ * slide as the converter emits it, with the deck's geometry files read (`putGeomFile`):
+ * - `budgetLegacy`: the objects the renderer's slide budget (`geombudget.ts` `slideBudget`, as every drawer
+ *   applies it) draws as their legacy shapes, without their geometry or mask: on outputs from geometry units,
+ *   elsewhere as those shapes;
+ * - `legacyFills`: the shapes whose legacy shape is a filled rect or ellipse over a built custom geometry
+ *   (stored paths, its file's or its own; not a table's grid) whose even-odd ink (`geom.ts` `inkOf`, the converter's own measure)
+ *   is under MIN_RECT_COVERAGE or cannot be worked out: the box of its fill an older build or a drawer past the
+ *   budget draws over line art, which the converter must never write (`emit.ts`: a line). The ratchet fails it;
+ * - `unitsLeft`: the objects the budget sends to legacy copies that get no geometry unit at 3840 on outputs
+ *   (`units.ts` `slideUnitsLeft`: a plain shape past it for its paint, a masked picture, past the slide's unit
+ *   area), drawn there as their legacy shapes until effect units; `unitsAlone` those of them past
+ *   `GEOM_COST.slide` alone (no task could draw one; for thin line art its legacy line draws nothing). The
+ *   ratchet fails `unitsAlone` wherever it is (never drop) and reports `unitsLeft`.
+ * Zeros left out.
+ */
+export function legacyColumns(slide: Pick<Slide, 'objects'>): Record<string, number> {
+  const objects: Slide['objects'] = slide.objects ?? [];
+  let budgetLegacy = 0;
+  for (const [o, c] of slideBudget(objects)) {
+    const lost =
+      (o.type === 'shape' && o.geom !== undefined && !('geom' in c)) ||
+      (o.type === 'image' && o.mask !== undefined && !('mask' in c));
+    if (lost) budgetLegacy++;
+  }
+  let legacyFills = 0;
+  for (const o of objects) {
+    if (o.type !== 'shape' || (o.shape !== 'rect' && o.shape !== 'ellipse') || !(o.fill || o.gradient))
+      continue;
+    // A table's grid (`tables.ts`, origin role 'grid') stores its fills' cells as paths beside their bounding
+    // box, which is its legacy shape by design (design/27 §3.2): no custom geometry.
+    if (o.origin?.role === 'grid') continue;
+    const g = storedPaths(o);
+    if (!g) continue;
+    const ink = inkOf(g);
+    if (!(ink !== undefined && ink >= MIN_RECT_COVERAGE)) legacyFills++;
+  }
+  const left = budgetLegacy ? slideUnitsLeft(drawableContent(slide).objects, 2) : [];
+  const unitsLeft = left.length;
+  const unitsAlone = left.filter((w) => w === 'alone').length;
+  const out: Record<string, number> = { budgetLegacy, legacyFills, unitsLeft, unitsAlone };
   for (const k of Object.keys(out)) if (!out[k]) delete out[k];
   return out;
 }
@@ -131,6 +214,9 @@ export function censusRow(
     index: s.index,
   }));
   const hub = hubClasses(input, deck.geoms ?? []);
+  // The deck's geometry files, read as a drawer reads them, for its legacy columns.
+  clearGeomFiles();
+  for (const g of deck.geoms ?? []) putGeomFile(g.id, g.file);
   const slides = deck.slides
     .map((s, k) => ({ s, h: hub[k]!, x: input[k]! }))
     .filter(({ s }) => s.shown !== undefined)
@@ -143,7 +229,7 @@ export function censusRow(
         i: s.index,
         tier: s.tier,
         class: x.class,
-        reasons: s.reasons,
+        reasons: (noLo ? s.noLoReasons : undefined) ?? s.reasons,
         objects: objects.length,
         geom: objects.filter((o) => o.type === 'shape' && o.geom).length,
         refs: objects.filter(
@@ -152,6 +238,7 @@ export function censusRow(
         bytes: JSON.stringify(x.slide).length,
         ...(s.metafiles?.length && !noLo ? { metafiles: s.metafiles.length } : {}),
         ...budgetColumns(x.slide, s.notes),
+        ...legacyColumns(x.slide),
         stored: h.stored,
         hub: h.hub,
         hubWhy: h.hubWhy,
@@ -159,6 +246,7 @@ export function censusRow(
         ...(missing.length ? { missing } : {}),
       };
     });
+  clearGeomFiles();
   const files = (deck.geoms ?? []).map((g) => JSON.stringify(g.file).length);
   return {
     ...head,
@@ -174,7 +262,8 @@ export function censusRow(
 /**
  * `--hub-budget` (M9): the hub columns model the hub's budget ladder (always so since M9; accepted so the
  * census takes the harness's flags); `--no-libreoffice`: the slides as a hub without LibreOffice emits and
- * stores them.
+ * stores them, with its parse's reasons where they differ (`NativeSlide.noLoReasons`: the guard's left-outs,
+ * LibreOffice's art with it, are `missing:<kind>` without it).
  */
 export type CensusArgs = { out: string; paths: string[]; hubBudget: boolean; noLibreOffice: boolean };
 

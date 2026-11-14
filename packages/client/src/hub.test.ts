@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HubClock } from './clock.ts';
-import { AUTH_RETRY_MS, HubConnection, IDLE_PING_MS, LIVE_LOST_MS, LIVE_PING_MS } from './hub.ts';
+import { AUTH_RETRY_MS, HubConnection, IDLE_PING_MS, LIVE_LOST_MS, LIVE_PING_MS, STALL_MS } from './hub.ts';
 import { FakeWebSocket, installFakeWebSocket, lastSocket, welcome } from './__tests__/fakes.ts';
 
 function connect(opts: Partial<ConstructorParameters<typeof HubConnection>[0]> = {}) {
@@ -87,6 +87,82 @@ describe('HubConnection liveness', () => {
     // The old socket's handshake completing later changes nothing.
     ws.finishClose();
     expect(hub.connected).toBe(true);
+  });
+
+  /** A connection that is live and has just had its pongs answered. */
+  function liveConnection() {
+    const c = connect();
+    const ws = lastSocket();
+    welcome(ws);
+    vi.advanceTimersByTime(200);
+    ws.pongAll();
+    ws.receive(liveState());
+    for (let i = 0; i < 3; i++) {
+      vi.advanceTimersByTime(LIVE_PING_MS);
+      ws.pongAll();
+    }
+    return { ...c, ws };
+  }
+
+  /** This thread is blocked for `ms`: the clock moves, no timer and no message runs meanwhile. */
+  function stall(ms: number) {
+    vi.setSystemTime(Date.now() + ms);
+  }
+
+  it('a stall of this thread with the pong queued behind the check keeps the socket (no false hub loss)', () => {
+    const { hub, statuses, lost, ws } = liveConnection();
+    const lastPongAt = Date.now();
+    // A ping goes out and the hub answers at once, but the answer waits in the queue: this thread is blocked
+    // (a long task, a GC) for 8 s, and the 1 s check runs before the queued message is read.
+    vi.advanceTimersByTime(LIVE_PING_MS);
+    expect(ws.pings()).toBeGreaterThanOrEqual(1);
+    stall(8000);
+    vi.advanceTimersByTime(1000);
+    expect(Date.now() - lastPongAt).toBeGreaterThan(LIVE_LOST_MS);
+    expect(hub.connected).toBe(true);
+    // The queued pongs are read; the check that judges sees a fresh pong.
+    ws.pongAll();
+    for (let i = 0; i < 4; i++) {
+      vi.advanceTimersByTime(LIVE_PING_MS);
+      ws.pongAll();
+    }
+    expect(hub.connected).toBe(true);
+    expect(FakeWebSocket.instances.length).toBe(1);
+    expect(lost).toEqual([]);
+    expect(statuses).toEqual([true]);
+  });
+
+  it('a dead hub is still lost within 12 s of its last pong when this thread stalls meanwhile', () => {
+    for (const [at, ms] of [
+      [2000, 3000],
+      [5000, STALL_MS + 1500],
+      [7500, 2600],
+    ] as const) {
+      const { hub, lost, ws } = liveConnection();
+      const lastPongAt = Date.now();
+      vi.advanceTimersByTime(at);
+      stall(ms);
+      while (hub.connected && Date.now() - lastPongAt < 30_000) vi.advanceTimersByTime(100);
+      expect(hub.connected).toBe(false);
+      expect(Date.now() - lastPongAt).toBeGreaterThanOrEqual(LIVE_LOST_MS);
+      expect(Date.now() - lastPongAt).toBeLessThanOrEqual(LIVE_LOST_MS + LIVE_PING_MS + 1000);
+      expect(lost).toHaveLength(1);
+      expect(ws.closed).toBe(true);
+      hub.stop();
+    }
+  });
+
+  it('timers that are late on every tick (a throttled background tab) still judge every other tick', () => {
+    const { hub, lost } = liveConnection();
+    let ticks = 0;
+    while (hub.connected && ticks < 5) {
+      stall(59_000);
+      vi.advanceTimersByTime(1000);
+      ticks++;
+    }
+    expect(hub.connected).toBe(false);
+    expect(ticks).toBe(2);
+    expect(lost).toHaveLength(1);
   });
 
   it('pings every 3 s while live and every 10 s idle, with a 30 s allowance when idle', () => {

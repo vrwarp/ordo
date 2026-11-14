@@ -14,8 +14,8 @@ import { describe, expect, it } from 'vitest';
  * compiler, the evaluator, arcs and the path builder; M6 repair: the drawing estimate, `cost.ts`, with the
  * outline as drawn, `outline.ts`, its line ends, `ends.ts` and `markers.ts`, and stored paths built at a box,
  * `built.ts`; M6 finish: what a shape covers, `bounds.ts`; M6 merge repair: the stops a gradient is drawn with,
- * `stops.ts`), so a custGeom means in the converter what it means
- * when drawn, and costs what it costs; those
+ * `stops.ts`; M9 leaf-legacy: how a path's sub-paths nest and the even-odd area that follows, `nesting.ts`), so a
+ * custGeom means in the converter what it means when drawn, and costs what it costs; those
  * import nothing at run time but each other and the pure domain modules. Since M9 also the renderer's sfnt
  * reader and cmap (`@ordo/renderer/text/sfnt`, moved there from `metrics.ts`), which import nothing at run
  * time but each other.
@@ -35,6 +35,7 @@ const PURE_GEOM = [
   'built.ts',
   'bounds.ts',
   'stops.ts',
+  'nesting.ts',
 ];
 const PURE_SFNT = ['reader.ts', 'cmap.ts'];
 const IMPORT = /^\s*(import|export)\s+(type\s+)?[^'"]*?from\s+'([^']+)'/gm;

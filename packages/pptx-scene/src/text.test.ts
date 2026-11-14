@@ -2,7 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { parseDeck } from './index.ts';
 import type { ShapeElement, TextBody } from './ir.ts';
 import { plainText, textChars } from './text.ts';
-import { body, br, buildDeck, type DeckSpec, para, run, scheme, solid, sp, themeXml } from './test-util.ts';
+import {
+  body,
+  br,
+  buildDeck,
+  type DeckSpec,
+  imageRel,
+  para,
+  run,
+  scheme,
+  solid,
+  sp,
+  themeXml,
+} from './test-util.ts';
 
 const IN = 914_400;
 const RED = { r: 255, g: 0, b: 0, a: 1 };
@@ -195,6 +207,134 @@ describe('run properties through the chain', () => {
     });
     expect(b!.style.outline).toBeUndefined();
     expect(b!.style.shadow).toBeUndefined();
+  });
+
+  it('a picture-filled run keeps an opaque fill: the text colour, its outline and a note', () => {
+    // The AMOR slide: a run filled with a picture (`a:blipFill` in `a:rPr`), outlined in dark red. ordo
+    // paints no text with a picture; the run takes the text colour (tx1, here dk1 112233), as with no fill.
+    const blip = '<a:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>';
+    const ln = `<a:ln w="76200">${solid('AB0043')}</a:ln>`;
+    const deck = buildDeck({
+      theme: themeXml({ colors: { dk1: '112233' } }),
+      slides: [
+        {
+          rels: [imageRel('rId2', 'image1.png')],
+          shapes:
+            box(body(para(run('A', 'sz="24000" b="1"', ln + blip)))) +
+            // Inherited from the list style; a nearer solid fill still wins; a group fill means nothing on text.
+            box(
+              body(
+                para(run('B', '', ln) + run('C', '', solid('FF0000')) + run('D', '', '<a:grpFill/>')),
+                '',
+                `<a:lvl1pPr><a:defRPr>${blip}</a:defRPr></a:lvl1pPr>`,
+              ),
+              { id: 3 },
+            ),
+        },
+      ],
+    });
+    const s = parseDeck(deck).slides[0]!;
+    const [one, two] = s.elements.filter((e): e is ShapeElement => e.kind === 'shape' && !!e.text);
+    const ink = { r: 0x11, g: 0x22, b: 0x33, a: 1 };
+    const a = one!.text!.paras[0]!.runs[0]!.style;
+    expect(a.fill).toEqual({ kind: 'solid', color: ink });
+    expect(a.textFill).toBe('picture');
+    expect(a.outline).toEqual({
+      width: 76_200,
+      fill: { kind: 'solid', color: { r: 0xab, g: 0, b: 0x43, a: 1 } },
+    });
+    const [b, c, d] = two!.text!.paras[0]!.runs;
+    expect(b!.style).toMatchObject({ fill: { kind: 'solid', color: ink }, textFill: 'picture' });
+    expect(b!.style.outline).toBeDefined();
+    expect(c!.style.fill).toEqual({ kind: 'solid', color: RED });
+    expect(c!.style.textFill).toBeUndefined();
+    expect(d!.style).toMatchObject({ fill: { kind: 'solid', color: ink }, textFill: 'group' });
+    // Noted once for the slide, however many runs.
+    expect(s.notes.filter((n) => n.startsWith('picture-filled text'))).toEqual([
+      'picture-filled text is drawn in the text colour',
+    ]);
+    expect(s.notes).toContain('text with a group fill is drawn in the text colour');
+  });
+
+  it('marks baseline 0 under a non-zero inherited baseline (escZero), where LibreOffice reads the 0 as unset', () => {
+    // The Dutch deck: every run sets baseline="0" under a defaultTextStyle of -25000. PowerPoint draws them in
+    // place at full size; LibreOffice 24.2 drops the 0 and draws them lowered by 25 % at 58 % (probe decks).
+    const [t] = bodies({
+      defaultTextStyle: '<a:lvl1pPr><a:defRPr sz="3600" baseline="-25000"/></a:lvl1pPr>',
+      slides: [
+        {
+          shapes: box(
+            body(para(run('zero', 'baseline="0"') + run('default') + run('sup', 'baseline="30000"'))),
+            { txBox: true },
+          ),
+        },
+      ],
+    });
+    const [zero, dflt, sup] = t!.paras[0]!.runs;
+    expect(zero!.style).toMatchObject({ baseline: 0, escZero: -0.25 });
+    expect(dflt!.style.baseline).toBe(-0.25);
+    expect(dflt!.style.escZero).toBeUndefined();
+    expect(sup!.style.baseline).toBe(0.3);
+    expect(sup!.style.escZero).toBeUndefined();
+    // A list style's 0 counts as the run's own does; a 0 with nothing farther is no shift for both programs.
+    const [listed, alone] = bodies({
+      defaultTextStyle: '<a:lvl1pPr><a:defRPr baseline="-25000"/></a:lvl1pPr>',
+      slides: [
+        {
+          shapes:
+            box(body(para(run('listed')), '', '<a:lvl1pPr><a:defRPr baseline="0"/></a:lvl1pPr>'), {
+              txBox: true,
+            }) + box(body(para(run('alone', 'baseline="0"'))), { id: 3 }),
+        },
+      ],
+    });
+    expect(listed!.paras[0]!.runs[0]!.style).toMatchObject({ baseline: 0, escZero: -0.25 });
+    expect(alone!.paras[0]!.runs[0]!.style.escZero).toBe(-0.25); // a shape: defaultTextStyle too
+    const [none] = bodies({ slides: [{ shapes: box(body(para(run('alone', 'baseline="0"')))) }] });
+    expect(none!.paras[0]!.runs[0]!.style).toMatchObject({ baseline: 0 });
+    expect(none!.paras[0]!.runs[0]!.style.escZero).toBeUndefined();
+  });
+
+  it('reads hostile run fills and baselines without throwing, every run with a fill and a bounded baseline', () => {
+    // A seeded mix of fill elements (several at once, empty, nested, unknown), baselines and lists styles.
+    const parts = [
+      '<a:blipFill/>',
+      '<a:blipFill><a:blip r:embed="rId404"/><a:blipFill/></a:blipFill>',
+      '<a:grpFill/>',
+      '<a:noFill/>',
+      solid('00FF00'),
+      '<a:solidFill/>',
+      '<a:gradFill/>',
+      '<a:pattFill prst="nope"/>',
+      `<a:ln>${'<a:blipFill/>'}</a:ln>`,
+      '<a:x/>',
+    ];
+    const attrs = [
+      '',
+      'baseline="0"',
+      'baseline="-25000"',
+      'baseline="1e309"',
+      'baseline="NaN"',
+      'baseline=""',
+    ];
+    let seed = 7;
+    const next = (n: number) => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed % n;
+    };
+    const runs: string[] = [];
+    for (let i = 0; i < 200; i++) {
+      let kids = '';
+      for (let k = next(4); k > 0; k--) kids += parts[next(parts.length)];
+      runs.push(run(`r${i}`, attrs[next(attrs.length)]!, kids));
+    }
+    const list = `<a:lvl1pPr><a:defRPr ${attrs[2]}>${parts[0]}${parts[2]}</a:defRPr></a:lvl1pPr>`;
+    const [t] = bodies({ slides: [{ shapes: box(body(para(runs.join('')), '', list)) }] });
+    for (const r of t!.paras[0]!.runs) {
+      expect(['solid', 'none', 'gradient', 'pattern']).toContain(r.style.fill.kind);
+      expect(Math.abs(r.style.baseline)).toBeLessThanOrEqual(1);
+      if (r.style.textFill) expect(r.style.fill.kind).toBe('solid');
+    }
   });
 });
 

@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs';
 import { defineConfig, devices, webkit } from '@playwright/test';
+import { SHARED_PORT } from './e2e/ports.ts';
 
-const PORT = Number(process.env.ORDO_E2E_PORT ?? 8090);
+// The shared web server's port: ORDO_E2E_PORT, else the port table's row (e2e/ports.ts, design/23 "Ports").
+const PORT = SHARED_PORT;
 // The iPad projects need WebKit (`npx playwright install webkit`, which CI does). Without it they are left
 // out so a plain `pnpm e2e` after `playwright install chromium` still runs; ORDO_E2E_WEBKIT=1 insists.
 const haveWebKit = process.env.ORDO_E2E_WEBKIT === '1' || existsSync(webkit.executablePath());
@@ -16,6 +18,8 @@ export const E2E = {
 
 export default defineConfig({
   testDir: 'e2e',
+  // Specs only: e2e/*.test.ts are vitest checks of the suite itself (the port table, e2e/ports.test.ts).
+  testMatch: /.*\.spec\.ts$/,
   timeout: 120_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,

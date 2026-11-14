@@ -236,13 +236,58 @@ export class MediaService {
   }
 
   /**
+   * An SVG's still sent after the SVG itself (`PUT /media/:id/still`, design/12 "Media pipeline"): an SVG over
+   * the one-request limit is uploaded in chunks, then the uploading client draws its still and sends it. It is
+   * checked like a still that came with the upload (`checkRaster`) and stored as the delivery only for an SVG
+   * that has none (409 `has_still` otherwise), never while the item's job runs (409 `busy`: send it again).
+   * The item is then processed again, which decodes the still and takes its size; the media delta follows.
+   * The raster file is consumed either way.
+   */
+  async attachStill(id: string, raster: { path: string; hash?: string; bytes?: number }): Promise<Media> {
+    let delivery: FileRef;
+    try {
+      const m = this.lib.media.must(id);
+      if (!isSvgMime(m.original.mime))
+        throw new HttpError(400, 'bad_raster', `${m.name}: a still picture can only come with an SVG`);
+      if (m.delivery)
+        throw new HttpError(409, 'has_still', `${m.name}: the SVG already has its still picture`);
+      if (m.state === 'processing')
+        throw new HttpError(
+          409,
+          'busy',
+          `${m.name}: the SVG is being processed; send its still again shortly`,
+        );
+      await this.checkRaster(this.store.abs(m.original.path), m.original, raster, m.name);
+      delivery = await this.store.put(raster.path, {
+        ext: 'png',
+        mime: 'image/png',
+        hash: raster.hash,
+        bytes: raster.bytes,
+      });
+    } catch (e) {
+      await rm(raster.path, { force: true });
+      throw e;
+    }
+    // Read again: the item may have changed while the still was checked and stored.
+    const cur = this.lib.media.get(id);
+    if (!cur || cur.delivery || cur.state === 'processing') {
+      await this.store.release(delivery.hash);
+      if (!cur) throw new HttpError(404, 'not_found', 'Media not found');
+      throw new HttpError(409, cur.delivery ? 'has_still' : 'busy', `${cur.name}: try again`);
+    }
+    const saved = this.save({ ...cur, delivery, state: 'uploaded', error: undefined });
+    this.queue(id);
+    return saved;
+  }
+
+  /**
    * Check an SVG's still (`IngestOpts.raster`) before anything is stored: the original must be an SVG and the
    * raster a PNG within the caps, of the shape the SVG declares (`svgRasterProblem`). Header reads only: the
    * media job decodes it (ffprobe) before the item is ready.
    */
   private async checkRaster(
     svgPath: string,
-    s: Sniffed,
+    s: Pick<Sniffed, 'mime'>,
     raster: { path: string; bytes?: number },
     name: string,
   ): Promise<void> {

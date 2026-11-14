@@ -13,8 +13,9 @@
  * Per app (apps/<name>/dist): `initial` is the entry script of index.html and every chunk it imports
  * statically (what the browser fetches and parses before the first paint), with its gzip size; `css` the
  * stylesheets index.html links; `workers` each worker entry (`*.worker-*.js`); `lazy` every other chunk,
- * named by what its source map says it holds (`importer`: @ordo/importers' PowerPoint parse; `table drawer`:
- * the renderer's table drawer, loaded per object kind) or by its file name. Only file sizes are read: no
+ * named by what its source map says it holds (`importer`: @ordo/importers' PowerPoint parse; `table drawer`,
+ * `decor drawer`: the renderer's table and decoration drawers, loaded per object kind; `decor files`: the
+ * decoration files' store, which the editor canvas loads the first time a slide names one) or by its file name. Only file sizes are read: no
  * build, no network. Plain Node, no dependencies.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -30,6 +31,8 @@ const APPS = ['operator', 'output', 'stage'];
 const LABELS = [
   ['packages/importers/src/pptx-client.ts', 'importer'],
   ['packages/renderer/src/table/draw.ts', 'table drawer'],
+  ['packages/renderer/src/decor/draw.ts', 'decor drawer'],
+  ['packages/renderer/src/decor/files.ts', 'decor files'],
 ];
 
 const kb = (n) =>

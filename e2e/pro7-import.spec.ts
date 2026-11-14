@@ -2,6 +2,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
 import { pro7Type } from '../packages/importers/src/proto.ts';
+import { portOf } from './ports.ts';
 import {
   editorHub,
   editorState,
@@ -31,9 +32,9 @@ import {
  * its picture from its folder, on its presentation's background colour. The picture keeps its round
  * corners with its shadow (design/27 §7.1 "Picture effects"), and the editor's background replace shows the
  * new picture instead of a slide still covered by the colour it was imported on (the backdrop,
- * `origin.role: 'bg'`). Port ORDO_E2E_PRO7_PORT (8880).
+ * `origin.role: 'bg'`). Its port: e2e/ports.ts row 'pro7-import'.
  */
-const PORT = Number(process.env.ORDO_E2E_PRO7_PORT ?? 8880);
+const PORT = portOf('pro7-import');
 const OUT = 'test-results/pro7-import';
 
 const BLUE = { red: 0.1, green: 0.2, blue: 0.55, alpha: 1 };

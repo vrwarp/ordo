@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   type Baseline,
+  type BaselineSlide,
   baselineJson,
   type CensusLine,
   compareCensus,
@@ -31,15 +32,63 @@ const census = (): CensusLine[] => [
 describe('golden-pptx census ratchet', () => {
   const baseline = recordBaseline(census(), 'test');
 
-  it('records each shown slide with its class, hub class and sorted reasons', () => {
+  it('records each shown slide with its class, hub class, sorted reasons and legacy shapes (version 2)', () => {
+    expect(baseline.version).toBe(2);
     expect(baseline.decks['sermons__a.pptx']).toEqual([
-      [1, 'native', 'native', ['custGeom', 'mixedRuns']],
-      [2, 'hybrid', 'hybrid', ['chart']],
+      [1, 'native', 'native', ['custGeom', 'mixedRuns'], 0],
+      [2, 'hybrid', 'hybrid', ['chart'], 0],
     ]);
     // The written file is the same baseline, one slide a line.
     const json = baselineJson(baseline);
     expect(JSON.parse(json)).toEqual(baseline);
-    expect(json).toContain('\n      [1,"native","native",["custGeom","mixedRuns"]],\n');
+    expect(json).toContain('\n  "version": 2,\n');
+    expect(json).toContain('\n      [1,"native","native",["custGeom","mixedRuns"],0],\n');
+  });
+
+  it('fails a slide with a legacy fill over line art, in the baseline or not', () => {
+    // A filled legacy rect over a custom geometry filling under half its box (`census.ts` `legacyFills`).
+    const fills = census();
+    fills[0]!.slides![1]!.legacyFills = 2;
+    fills.push(line('new__lines.pptx', [[1, 'native', 'native', ['custGeom']]]));
+    fills[2]!.slides![0]!.legacyFills = 1;
+    const r = compareCensus(baseline, fills);
+    expect(r.failures).toEqual([
+      'sermons__a.pptx slide 2: 2 legacy fill(s) over custom geometry filling under half its box (a rect or ellipse where the legacy shape must be a line)',
+      'new__lines.pptx slide 1: 1 legacy fill(s) over custom geometry filling under half its box (a rect or ellipse where the legacy shape must be a line)',
+    ]);
+  });
+
+  it('fails an object past the drawing budget alone (no unit), and reports the others outputs draw as legacy shapes', () => {
+    // `census.ts` `unitsAlone`, `unitsLeft` (r2a repair: never drop for being slow to draw).
+    const left = census();
+    left[0]!.slides![0]!.unitsLeft = 2;
+    left[0]!.slides![0]!.unitsAlone = 1;
+    left[0]!.slides![1]!.unitsLeft = 3;
+    const r = compareCensus(baseline, left);
+    expect(r.failures).toEqual([
+      'sermons__a.pptx slide 1: 1 object(s) past the drawing budget alone, with no geometry unit (outputs draw the legacy shape)',
+    ]);
+    expect(r.notes).toContain(
+      'sermons__a.pptx slide 2: 3 object(s) past the drawing budget outputs draw as legacy shapes (no unit until effect units)',
+    );
+  });
+
+  it('reports another count of legacy shapes past the drawing budget, and still reads a version 1 baseline', () => {
+    const more = census();
+    more[1]!.slides![0]!.budgetLegacy = 3;
+    const r = compareCensus(baseline, more);
+    expect(r.failures).toEqual([]);
+    expect(r.notes).toEqual(['worship__b.pptx slide 1: legacy shapes past the drawing budget 0 -> 3']);
+    // Version 1: four entries a slide, no legacy comparison.
+    const v1: Baseline = {
+      version: 1,
+      note: 'v1',
+      decks: Object.fromEntries(
+        Object.entries(baseline.decks).map(([k, v]) => [k, v.map((e) => e.slice(0, 4) as BaselineSlide)]),
+      ),
+    };
+    expect(compareCensus(v1, more)).toMatchObject({ failures: [], notes: [], decks: 2, slides: 3 });
+    expect(compareCensus(v1, census()).failures).toEqual([]);
   });
 
   it('passes the census it was recorded from', () => {

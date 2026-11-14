@@ -11,12 +11,12 @@ import {
 import { clampGeom } from '../clamp.ts';
 import { geomBounds } from '../shape.ts';
 import { compileGeom, type GeomSource, newGeomNotes } from './compile.ts';
-import { geomFillPath2D } from './draw.ts';
+import { evenOddArea, geomFillPath2D, UNION_NESTING_LIMIT } from './draw.ts';
 import { withEnds } from './ends.ts';
 import { evalGuideLists, evalGuides } from './eval.ts';
 import { charged, GEOM_COST } from './cost.ts';
 import { drawnCost, slideBudget } from '../geombudget.ts';
-import { GEOM_LIMITS, PATH_FILLS } from './ops.ts';
+import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD, GEOM_LIMITS, PATH_FILLS } from './ops.ts';
 import {
   buildGeom,
   COORD_LIMIT,
@@ -421,6 +421,64 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('rates the even-odd area of any path (garbage commands and points included) without throwing, quickly', () => {
+    // Commands of every kind and unknown ones, with too few points, NaN, infinities and huge values: the area
+    // is a finite number >= 0 or unknown, never a throw (the converter rates every custom geometry by it).
+    const raw = fc.record({
+      cmds: fc.array(fc.constantFrom(CMD_MOVE, CMD_LINE, CMD_QUAD, CMD_CUBIC, CMD_CLOSE, 99, -1), {
+        maxLength: 400,
+      }),
+      pts: fc.array(
+        fc.oneof(
+          fc.double({ min: -1e4, max: 1e4, noNaN: true }),
+          fc.constantFrom(Number.NaN, Number.POSITIVE_INFINITY, -1e308, 1e308, 0),
+        ),
+        { maxLength: 1_200 },
+      ),
+      fill: fillMode,
+      stroke: fc.boolean(),
+    });
+    fc.assert(
+      fc.property(raw, (path) => {
+        const a = evenOddArea(path as GeomPath);
+        if (a !== undefined) {
+          expect(Number.isFinite(a)).toBe(true);
+          expect(a).toBeGreaterThanOrEqual(0);
+        }
+      }),
+      { numRuns: 500 },
+    );
+    // Stored geometries of random whole commands: what the converter and the census rate.
+    fc.assert(
+      fc.property(fc.array(commands, { minLength: 1, maxLength: 4 }), side, side, (paths, w, h) => {
+        const g = clampGeom({
+          paths: paths.map((cmds) => ({
+            d: cmds.map(([c, n]) => [c, ...n].join(' ')).join(' '),
+            w: 100,
+            h: 100,
+          })),
+        });
+        const built = g ? storedGeometry(g, w, h) : undefined;
+        for (const p of built?.paths ?? []) {
+          const a = evenOddArea(p);
+          if (a !== undefined) expect(Number.isFinite(a) && a >= 0).toBe(true);
+        }
+      }),
+      { numRuns: 300 },
+    );
+    // The worst nesting within the bounds: UNION_NESTING_LIMIT squares, each inside all the others' boxes.
+    const nested = Array.from({ length: UNION_NESTING_LIMIT }, (_, i) => [i, i, 4_096 - i, 4_096 - i]);
+    const path: GeomPath = {
+      cmds: nested.flatMap(() => [CMD_MOVE, CMD_LINE, CMD_LINE, CMD_LINE, CMD_CLOSE]),
+      pts: nested.flatMap(([a, b, c, d]) => [a!, b!, c!, b!, c!, d!, a!, d!]),
+      fill: 'norm',
+      stroke: true,
+    };
+    const t0 = performance.now();
+    expect(evenOddArea(path)).toBeUndefined();
+    expect(performance.now() - t0).toBeLessThan(budgetMs(1_000));
   });
 
   it('parses a 10,000-point path string to 4,096 points quickly', () => {

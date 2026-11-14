@@ -144,6 +144,13 @@ export interface ParseOptions {
    * sheets no composite or atlas is planned (`BudgetOptions.sheets`).
    */
   sheets?: boolean;
+  /**
+   * M9: whether LibreOffice can draw what ordo does not (`EmitOptions.libreoffice`, the same flag; default
+   * true). Read here too: with it, what the slide budgets' guard leaves out goes to LibreOffice's art, as at
+   * M9 wave 1 (`budget:shapes` / `budget:pictures`); without it, it is left out and listed
+   * (`BudgetOptions.libreoffice`). Parse and emit a deck with the same flag.
+   */
+  libreoffice?: boolean;
 }
 
 /** Families, weights and slants `ParseOptions.fontFace` is asked for per call (a deck can name thousands). */
@@ -294,7 +301,11 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
       const background = readBackground(ctx);
       const classification = classifySlide(ctx, elements, background, {
         budgetArt: opts.budgetArt === true,
-        budget: { decorations: (opts.m9Writes ?? ALL_M9_FIELDS).has('decor'), sheets: opts.sheets !== false },
+        budget: {
+          decorations: (opts.m9Writes ?? ALL_M9_FIELDS).has('decor'),
+          sheets: opts.sheets !== false,
+          libreoffice: opts.libreoffice !== false,
+        },
       });
       return {
         ...base,

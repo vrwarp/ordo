@@ -3,7 +3,10 @@
 ## Keyboard
 
 The default key map in [prd/02](02-operator.md). Keys work only while the operator window
-is focused. The key map is editable in settings and stored on the hub.
+is focused and no dialog is open (a dialog keeps the keys to itself: Space or Enter presses
+its focused button, Tab stays inside it; [prd/02](02-operator.md) "Dialogs" names the ones that
+can open during a service). The Stream Deck and MIDI act with a dialog open. The key map is
+editable in settings and stored on the hub.
 
 ## Stream Deck
 

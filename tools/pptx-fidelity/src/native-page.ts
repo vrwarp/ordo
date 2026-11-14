@@ -7,6 +7,8 @@ import { drawableContent } from '@ordo/renderer/content.ts';
 import { clearEffectCache } from '@ordo/renderer/effects.ts';
 import { withinDrawBudget } from '@ordo/renderer/geombudget.ts';
 import { clearGeomFiles, putGeomFile } from '@ordo/renderer/geom/stored.ts';
+import { prepareSlideUnits } from '@ordo/renderer/units.ts';
+import { clearDecorFiles, putDecorFile } from '@ordo/renderer/decor/files.ts';
 import { withoutExifOrientation } from './exif.ts';
 import { timeEach } from './objecttime.ts';
 import { type PictureTarget, pictureTarget, preparePicture } from '@ordo/renderer/picture.ts';
@@ -19,8 +21,10 @@ import {
   fillColor,
   slidePictures,
 } from '@ordo/renderer/text2d.ts';
-// The table drawer, registered at once: the outputs load it per kind before they draw (`loadShapeDrawers`).
+// The table and decoration drawers, registered at once: the outputs load them per kind before they draw
+// (`loadShapeDrawers`).
 import '@ordo/renderer/table/index.ts';
+import '@ordo/renderer/decor/index.ts';
 
 /**
  * Browser side of the harness's native column (design/27 §14.1). `native.ts` bundles this file with
@@ -30,8 +34,8 @@ import '@ordo/renderer/table/index.ts';
  * cover-fit, then the real `drawSlide2D` of `@ordo/renderer`. The picture is taken at 1920x1080 and cut to
  * the deck's slide rectangle, so a 4:3 deck compares with LibreOffice's 4:3 page like for like. The slide is
  * then drawn again at 1920 and 3840 px for the raster timings: warm (the median of repeated draws, pictures
- * prepared) and cold (preparing the pictures the cache lacks plus the first draw, as an output pays it on a
- * slide change).
+ * prepared) and cold (preparing the pictures the cache lacks and making the slide's geometry units, plus the
+ * first draw, as an output pays it on a slide change: design/27 §13 "Geometry units").
  *
  * Fonts go through the renderer's `FontResolver`, installed as the page's font environment as the asset and
  * thumbnail workers install theirs (design/27 §10): each family's faces are registered under an internal
@@ -111,7 +115,10 @@ export type NativePage = {
   /** The CSS font the installed font environment gives each request (what text is drawn with). */
   font(reqs: FaceRequest[]): string[];
   media(list: PageMedia[]): void;
-  /** The deck's geometry files (`ShapeGeom.ref`): read before any slide is drawn, as an output reads them. */
+  /**
+   * The deck's shape files (`ShapeGeom.ref`, M9 `DecorData.ref`): read before any slide is drawn, as an output
+   * reads them.
+   */
   geoms(list: { id: string; file: unknown }[]): void;
   render(job: RenderJob): Promise<RenderResult>;
   /** Each object's cold draw on its own, at 1920 and 3840 px: the largest (`maxObjectMs`). */
@@ -128,13 +135,19 @@ const BACKGROUND = { box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, fit: 'c
 type Decoded = { bmp: ImageBitmap | undefined; px: number };
 
 const known = new Map<string, PageMedia>();
-/** The deck's geometry files as `geoms` was given them: read again before each slide's object pass. */
+/**
+ * The deck's shape files as `geoms` was given them (geometry files, and decoration files: `{ parts }`, under
+ * a converter placeholder or the hub's SHA-256 name): read again before each slide's object pass.
+ */
 let geomList: { id: string; file: unknown }[] = [];
 
-/** Forget every geometry file and read the deck's again: what was built from them is built anew. */
+/** Forget every shape file and read the deck's again: what was built from them is built anew. */
 function rereadGeoms(): void {
   clearGeomFiles();
-  for (const g of geomList) putGeomFile(g.id, g.file);
+  clearDecorFiles();
+  for (const g of geomList)
+    if (g.file && typeof g.file === 'object' && 'parts' in g.file) putDecorFile(g.id, g.file);
+    else putGeomFile(g.id, g.file);
 }
 /** Sources by media id and prepared pictures by `pictureKey(id, target)`, least recently used first. */
 const cache = new Map<string, Decoded>();
@@ -254,6 +267,14 @@ async function picturesOf(slide: Slide, missing: string[], widths: readonly numb
     if (keys.some((k) => cache.has(k) && !cache.get(k)!.bmp) && !missing.includes(id)) missing.push(id);
   }
   return (id, t) => (t && cache.get(pictureKey(id, t))?.bmp) || cache.get(id)?.bmp;
+}
+
+/**
+ * The slide's geometry units at `width` (design/27 §13 "Geometry units"), made as an output's prepare step makes
+ * them before its draw, here at once: the shapes its drawing budget sends to legacy copies are drawn whole.
+ */
+async function unitsOf(slide: Slide, width: number): Promise<void> {
+  await prepareSlideUnits(slide, width / 1920, undefined, { slice: async (fn) => fn(), check: () => {} });
 }
 
 /** The thumbnail worker's drawing: black, background cover-fit, then the slide (`thumb.worker.ts`). */
@@ -394,9 +415,10 @@ const page: NativePage = {
   },
   async render(job) {
     const missing: string[] = [];
-    // Cold at 1920: the pictures the cache lacks, then the first draw and flush.
+    // Cold at 1920: the pictures the cache lacks and the geometry units, then the first draw and flush.
     const t0 = performance.now();
     const images = await picturesOf(job.slide, missing, [1920]);
+    await unitsOf(job.slide, 1920);
     const ctx = context(1920);
     draw(ctx, job.slide, 1920, images);
     ctx.getImageData(0, 0, 1, 1);
@@ -414,6 +436,7 @@ const page: NativePage = {
     if (job.repeats) {
       const t1 = performance.now();
       const big = await picturesOf(job.slide, missing, [3840]);
+      await unitsOf(job.slide, 3840);
       const ctx4 = context(3840);
       draw(ctx4, job.slide, 3840, big);
       ctx4.getImageData(0, 0, 1, 1);

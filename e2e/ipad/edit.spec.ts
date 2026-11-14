@@ -1,6 +1,5 @@
 import { devices, expect, request, test } from '@playwright/test';
 import {
-  BASE,
   EDIT_PIN,
   SONG,
   json,
@@ -11,6 +10,7 @@ import {
   startHub,
   thumbsRendered,
 } from './ipadhelpers.ts';
+import { portOf } from '../ports.ts';
 
 /**
  * iPad editing (design/15 "iPad editing", prd/03): the worship lead builds a service from home on an
@@ -28,7 +28,7 @@ type Playlist = { id: string; name: string; items: { presentationId?: string; ar
 test('the worship lead builds a service on the iPad: search, new song, edit, previews, playlist', async ({
   page,
 }) => {
-  const { hub, api, url } = await startHub(BASE + 1);
+  const { hub, api, url } = await startHub(portOf('ipad-edit', 0));
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   try {
@@ -143,7 +143,7 @@ test('the worship lead builds a service on the iPad: search, new song, edit, pre
 });
 
 test('the previews page shows a slide in four looks and follows text changes', async ({ page }) => {
-  const { hub, api, url } = await startHub(BASE + 2);
+  const { hub, api, url } = await startHub(portOf('ipad-edit', 1));
   try {
     const song = await json<{ id: string }>(api.post('import/songselect', { data: { text: SONG } }));
     await signInByTapping(page, url);
@@ -214,7 +214,7 @@ test('the previews page shows a slide in four looks and follows text changes', a
 test('with a service live, an iPad signed in with the EDIT PIN sees the live chip and the lock', async ({
   page,
 }) => {
-  const { hub, api, url } = await startHub(BASE + 3);
+  const { hub, api, url } = await startHub(portOf('ipad-edit', 2));
   try {
     const song = await json<{ id: string }>(api.post('import/songselect', { data: { text: SONG } }));
     const pl = await json<{ id: string }>(
@@ -276,7 +276,7 @@ test('a library Safari cleared reloads from the hub, and the core reconnects aft
   browser,
   page,
 }) => {
-  const { hub, api, url } = await startHub(BASE + 4);
+  const { hub, api, url } = await startHub(portOf('ipad-edit', 3));
   try {
     await json(api.post('import/songselect', { data: { text: SONG } }));
     await signInByTapping(page, url);

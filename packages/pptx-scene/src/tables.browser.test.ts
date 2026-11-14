@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +9,7 @@ import type { Frame, TableElement, TableLine } from './ir.ts';
 import { gridObjects } from './tables.ts';
 import type { GridCase, GridResult } from './tables.page.test-util.ts';
 import { buildDeck, solid, tableFrame, tc, withTableStyles } from './test-util.ts';
+import { findChromium } from '../../../tools/find-chromium.ts';
 
 /**
  * A table's lines as one object per look (fidelity round 2) drawn by the renderer in headless Chromium,
@@ -25,18 +25,6 @@ import { buildDeck, solid, tableFrame, tc, withTableStyles } from './test-util.t
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../..');
-
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
-  try {
-    const { chromium } = await import('@playwright/test');
-    const exe = chromium.executablePath();
-    if (existsSync(exe)) return exe;
-  } catch {
-    /* Playwright not installed */
-  }
-  return existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : undefined;
-}
 
 type Esbuild = {
   build(o: Record<string, unknown>): Promise<{ outputFiles: { text: string }[] }>;
