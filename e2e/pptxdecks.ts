@@ -362,12 +362,15 @@ export function probeMedia(dir: string): ProbeMedia {
     ...['-f', 'lavfi', '-i', 'sine=frequency=550:duration=5'],
     ...['-shortest', ...h264, '-c:a', 'aac', out('magenta.mp4')],
   ]);
-  // A 4 s blue clip with a white box moving across it and a tone the slide mutes: the motion background.
+  // A 12 s blue clip with a white box crossing it once and a tone the slide mutes: the motion background. No
+  // two of its frames are alike, so two captures of the looping clip differ unless they are a whole loop
+  // apart. pptx-media.spec.ts compares consecutive captures, 2 to 6 s apart. With a 4 s clip (its box crossing
+  // in 3.5 s) the CI runner's first and last captures were once a loop apart (4.03 s of clip): the same frame.
   ffmpeg([
-    ...['-f', 'lavfi', '-i', 'color=c=0x0030c0:s=960x540:r=30:d=4'],
-    ...['-f', 'lavfi', '-i', 'color=c=white:s=120x140:r=30:d=4'],
-    ...['-f', 'lavfi', '-i', 'sine=frequency=990:duration=4'],
-    ...['-filter_complex', "[0:v][1:v]overlay=x='mod(t*240,840)':y=200[v]", '-map', '[v]', '-map', '2:a'],
+    ...['-f', 'lavfi', '-i', 'color=c=0x0030c0:s=960x540:r=30:d=12'],
+    ...['-f', 'lavfi', '-i', 'color=c=white:s=120x140:r=30:d=12'],
+    ...['-f', 'lavfi', '-i', 'sine=frequency=990:duration=12'],
+    ...['-filter_complex', "[0:v][1:v]overlay=x='t*70':y=200[v]", '-map', '[v]', '-map', '2:a'],
     ...['-shortest', ...h264, '-c:a', 'aac', out('motion.mp4')],
   ]);
   ffmpeg(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=30', '-c:a', 'libmp3lame', out('tone.mp3')]);
