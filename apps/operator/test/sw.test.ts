@@ -139,3 +139,52 @@ describe('service worker (ADR 0013: network-first navigation, cache-first assets
     expect(sw.request(`${ORIGIN}/output/`, 'navigate')).toBeUndefined();
   });
 });
+
+/** Install the generated worker registered at `swUrl` and return what it precached. */
+async function precached(src: string, swUrl: string): Promise<string[]> {
+  const listeners: Record<string, ((e: { waitUntil: (p: Promise<unknown>) => void }) => void)[]> = {};
+  let added: string[] = [];
+  const cache = {
+    addAll: (urls: string[]) => {
+      added = urls;
+      return Promise.resolve();
+    },
+  };
+  const self = {
+    location: { href: swUrl, origin: ORIGIN },
+    registration: { scope: `${ORIGIN}/` },
+    addEventListener: (k: string, fn: (e: { waitUntil: (p: Promise<unknown>) => void }) => void) => {
+      (listeners[k] ??= []).push(fn);
+    },
+    skipWaiting: () => Promise.resolve(),
+    clients: { claim: () => Promise.resolve() },
+  };
+  const caches = { open: () => Promise.resolve(cache), keys: () => Promise.resolve([]) };
+  new Function('self', 'caches', 'fetch', src)(self, caches, () => Promise.reject(new Error('no network')));
+  const waits: Promise<unknown>[] = [];
+  for (const fn of listeners.install ?? []) fn({ waitUntil: (p) => waits.push(p) });
+  await Promise.all(waits);
+  return added.map((u) => u.slice(ORIGIN.length + 1));
+}
+
+describe('precache sets by device class (design/28 §3.1)', () => {
+  const all = ['index.html', 'assets/index.js', 'assets/EditorView.js', 'assets/import.worker-a.js'];
+  const compact = ['index.html', 'assets/index.js'];
+  const src = swSource(all, 'v-sets', SW_NAV_TIMEOUT_MS, compact);
+
+  it('./sw.js precaches every file, as before', async () => {
+    expect(await precached(src, `${ORIGIN}/sw.js`)).toEqual(all);
+    // Without a compact list (older callers) the compact set is every file too.
+    expect(await precached(swSource(all, 'v'), `${ORIGIN}/sw.js?set=compact`)).toEqual(all);
+  });
+
+  it('./sw.js?set=compact precaches the phone’s list only', async () => {
+    expect(await precached(src, `${ORIGIN}/sw.js?set=compact`)).toEqual(compact);
+    expect(await precached(src, `${ORIGIN}/sw.js?set=other`)).toEqual(all);
+  });
+
+  it('a phone’s worker still serves every app file cache-first when fetched', () => {
+    expect(src).toContain('KNOWN.includes(clean)');
+    expect(src).toContain("const CACHE = 'ordo-shell-' + VERSION;");
+  });
+});

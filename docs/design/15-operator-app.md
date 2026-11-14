@@ -180,6 +180,15 @@ focused button presses that button: Space on End service's confirmation ends the
 the button never pressed). A dialog takes the focus when it opens unless one of its controls did (autoFocus).
 The Stream Deck and MIDI are not keys and keep working with a dialog open (design/19).
 
+On the compact layout (a phone, design/28 §2.2 "Sheets") every dialog is a bottom sheet: the same component
+(`components/Dialog.tsx`) portals it into `body` with the classes `dialog sheet`, full width from the bottom,
+its `width` ignored, at most the viewport's height under the top safe area (all of it under 500 px tall), a
+44 px close, the footer padded by the bottom safe area, no slide-in under `prefers-reduced-motion`. While one is
+open `#root` is `inert` (`registerSheet`, counted like the modals), Escape closes it as above, and focus returns
+to the control it opened from (the focused one, or the control pressed just before it: Safari does not focus a
+tapped button; `openerFor`, `trackPresses`). The regular layout's dialog and markup are unchanged
+(`apps/operator/test/dialogSheet.test.ts` pins them).
+
 ## Launching outputs
 
 1. The operator clicks Launch outputs (a user gesture).
@@ -603,7 +612,9 @@ Controls are 44 px with 16 px inputs (no focus zoom), the canvas-first editor's 
 list, and the Lyric Script's arrangement pills get 44 px back under a coarse pointer);
 `e2e/ipad/touch-targets.spec.ts` audits every visible control of the editor, the docked panel, the slides
 list, the paint picker and the Lyric Script in both orientations, the picker's 32 px swatch grid and the
-ramp's stop pins its named exceptions. In portrait the editor's property panel and the
+ramp's stop pins its named exceptions. The audit itself is `e2e/touchaudit.ts` (`auditTargets`); a phone's
+compact layout runs it on every compact route and sheet with links, `role="button"` and checkbox labels added
+and no exceptions (`layoutChecks` in `e2e/phone/phonehelpers.ts`, design/28 §8 "Layout"). In portrait the editor's property panel and the
 playlist's add panel move under the main pane. File pickers are a plain button to the native picker
 (Files, Photos): photos arrive as JPEG because Safari transcodes HEIC when the accept list does not name
 it (the hub does not accept HEIC), videos as MOV or MP4.
@@ -774,8 +785,23 @@ device has Window Management or WebHID (both Chromium-only: the venue PC); it is
 API is deliberately not a qualifier: iPadOS has it, and reports a fine pointer with hover as soon as a
 trackpad or mouse is attached (a Magic Keyboard), which must not turn the worship lead's iPad into an
 operator. `?profile=edit|full` or localStorage `ordo.profile` forces it for
-support and tests (never over the edit role). The result is on `window.__ordo.capabilities` (with
-`deviceProfile`) for tests.
+support and tests (never over the edit role); a forced `full` holds only where Window Management or
+WebHID exist (the forced-profile guard, design/28 §3.1 and §10 item 1): on a phone or a tablet it would
+give a broken operator, so it is ignored there, and a forced `edit` works everywhere. The result is on
+`window.__ordo.capabilities` (with `deviceProfile`) for tests.
+
+The **layout class** (`src/lib/layout.ts`, design/28 decision 3) is `compact` when the device's
+capability profile (`deviceProfile('operate')`, never the session's profile: the edit role gives every
+device the edit profile) is not `full` and `matchMedia('(max-width: 699px), (max-height: 499px)')`
+matches, `regular` otherwise; the venue PC never gets it, whatever its window or PIN. `useLayout` runs
+once at the top of `App` and follows the viewport, except that a change from regular to compact waits
+while the editor is open (an iPad Split View narrowing switches at the next navigation); compact to
+regular is immediate. `main.tsx` decides it before the first render (`startLayout`), so the sign-in
+screen is compact from its first paint. The compact layout sets `html[data-layout="compact"]` (removed
+on the regular layout) and is on `window.__ordo.layout`. The **phone class** (`isPhone`) is an edit-
+capability device whose shorter **screen** side (`screen.width`, `screen.height`, never the viewport)
+is under 600 CSS px: a phone with Safari's "Request Desktop Website" still is one, an iPad in a narrow
+Split View is not. A phone's sign-in asks for the `light` cap (`signInCap`, design/28 §3.2).
 
 ### The edit profile
 
@@ -786,6 +812,24 @@ support and tests (never over the edit role). The result is on `window.__ordo.ca
 - Navigation: Library, Playlists, Previews and (operate PIN only) Settings with Looks, Stage messages,
   General, Themes and PINs. The live view, the checklist and the output, audio, key map, Stream Deck,
   MIDI, backups and diagnostics pages redirect to the library (`allowedForRole(route, role, profile)`).
+  `pageFor(route, { role, profile, layout, restricted })` (`src/lib/route.ts`) decides each route's page
+  during render: on the regular layout of a device that is not a phone, exactly these rules (a refused
+  route now renders nothing before its redirect is pushed); on the compact layout, or on any phone
+  (`restricted`: the phone class, so Safari's "Request Desktop Website" on the regular layout too),
+  `compactRedirect` sends Setup and the checklist, every settings page, the live view, Themes, Fonts and
+  Import, and Previews without a presentation to the Library, and the canvas editor to the presentation's
+  previews (`#/edit/<id>` -> `#/previews/<id>`), replacing the history entry (`navigate(r, { replace:
+  true })`), so the refused page's chunk is never requested (design/28 §2.1, §3.1).
+- **Page sets** (`src/pages.ts`, `src/pageSets.ts`): the entry holds the shell, the Library's Presentations
+  and Media tabs and the sign-in; every other page is a registry module. A regular device preloads the
+  pages its capability profile can open at startup (the full profile: the live view, the editor,
+  playlists, previews, settings, Setup, Themes, Fonts, Import and the operate services; the edit profile
+  the same without the live view, Setup and the operate services), so the iPad opens them as before. A
+  phone, on either layout, never loads or precaches the canvas editor (`SlideCanvas`, #24's floating bar,
+  the Tune drawer, `PaintPopover`, the docked panel), the live view, Setup, the settings pages, the output
+  and control-surface services, the preset geometry or the import worker; its first load is the entry, the
+  stylesheet and the core worker (262.5 kB gzip), and the thumbnail worker and the library's fonts wait for
+  the first preview.
 - A playlist shows "Go live from the venue PC." instead of Go live; the nav says "This device edits;
   run services from the venue PC" (operate PIN, wide screens).
 - **Live now.** The hub sends live state only to operators and outputs, so an iPad (edit or operate PIN)
@@ -797,6 +841,39 @@ support and tests (never over the edit role). The result is on `window.__ordo.ca
   falls back to `GET /live`. On this profile the locked banners and the 423 toasts say "This presentation
   is in the playlist that is live at the venue. It can be edited again after the service." (the venue
   PC keeps "locked until End service").
+  On the compact layout (a phone) the nav chip is replaced by the Live now strip (design/28 §2.2): "Live at
+  the venue: <plan> · N locked" from the same poll's plan name and locked ids, never the cue label; "Live
+  status unknown" when offline or after two failed polls; polled at once on `pageshow` and `online` there.
+  The hub leaves `liveLabel` out for a capped session (a phone, design/28 §3.4); an iPad's uncapped session
+  keeps it for its chip.
+
+### Phones
+
+A phone (the phone class above) gets the compact layout when its viewport is small, which on a phone is always
+(design/28 decision 3; `html[data-layout="compact"]`, `lib/layout.ts`), and the edit profile whatever PIN it
+signs in with; a forced `?profile=full` meets the forced-profile guard. The compact views are their own chunk
+(`views/compact/`: the frame with the Live now strip, the freshness line, the header with Back, `.page` and the
+tab bar; More; the P0 bodies of the Library, Media, Plans and a presentation's previews), which the venue PC and
+the iPad's regular layout never load; every dialog is a bottom sheet there (see "Dialogs"); every compact
+control is at least 44 px. On any phone (Request Desktop Website included) and in any capped session, `pageFor`
+sends Setup, the settings, the live view, Themes, Fonts, Import and the canvas editor elsewhere (design/28 §2.1).
+
+**Sign-in** (`views/auth/LoginView.tsx`, `phoneSignIn.ts`): a phone's form has no "Remember this device", asks
+for `cap: 'light'` (`signInCap`) when the hub's `GET /auth/me` lists it in `caps` (`hubGrants`, read defensively
+in `state/session.ts` beside `capOf`), sends the PIN alone to a hub that lists none, and asks once more without
+`cap` when an older hub refuses the field (400 `invalid` naming `cap`); it never sends `remember`. The hub
+answers a capped sign-in with `{ role: 'edit', cap: 'light' }`, a one-hour sliding session that is never
+remembered, and clears `ordo_device` (design/28 §3.2; the hub lane). The form names the venue's host, says what a
+phone may do, adds Safari's home-screen note, focuses nothing, and shows a lockout's end from
+`details.retryAfterS` in the phone's own time, by `details.scope` ("from this network ... Everyone on the same
+Wi-Fi may share this wait", or "tried on ordo" for the hub-wide bucket). Every other device keeps today's form
+byte for byte (nothing autofocused on the compact layout). **Pre-upgrade sessions** (owner question 12): when
+`/auth/me` shows a signed-in, uncapped session from a hub that grants caps on a phone, the client signs out once
+(a `sessionStorage` mark stops a loop; none where the storage is blocked) and the sign-in says "Phones now sign
+in for an hour at a time. Enter the PIN again."; the next sign-in is capped. A phone that never loads this
+release keeps its old session until it expires: the hub cannot tell a phone's session from an iPad's. The first
+run's setup form is not offered on the compact layout: "ordo is not set up yet. Set it up on the venue PC: it
+sets the PINs." `pageFor` is restricted for a capped session (`capOf(me) !== 'full'`) as for a phone.
 
 ### Look previews
 
@@ -825,7 +902,12 @@ which drops the cached thumbnails, and the editor redraws.
   `src/ipad.css` defines `--safe-top/right/bottom/left` (from `env(safe-area-inset-*)`, 0 on the venue
   PC), pads `#root` with them and sets `touch-action: manipulation` on controls (no double-tap zoom;
   pinch zoom stays). The icons are committed PNGs; the manifest and icons are not precached (the
-  installed app keeps its icon; the shell is precached as before).
+  installed app keeps its icon; the shell is precached as before). The service worker precaches by
+  device class, decided once at startup (`src/sw/register.ts`): an iPad, an Android tablet and the
+  venue PC register `./sw.js` at once and precache every built file, as before (an iPad starting in a
+  narrow Split View too, so it keeps the editor offline); a phone registers `./sw.js?set=compact` after
+  load and idle and precaches only the compact set (`src/sw/sets.ts`: the entry, the playlists and
+  previews, the core and thumbnail workers). A layout change never re-registers.
 - On the first sign-in an edit-profile device asks once for `navigator.storage.persist()` (Safari may
   grant it to an installed app; otherwise script-written storage goes after 7 days unused).
 - Back from a suspension the core reconnects on its own: the hub connection judges liveness by the time
@@ -837,7 +919,12 @@ which drops the cached thumbnails, and the editor redraws.
 
 The Playwright projects `webkit-ipad` (iPad Pro 11 landscape) and `webkit-ipad-portrait` run
 `e2e/ipad/*.spec.ts` in WebKit with touch, each test on its own hub (its port from the e2e port table, design/23 "Ports";
-path mode `http://localhost:<port>/`); the Chromium project ignores `e2e/ipad/`. The two
-projects exist only when WebKit is installed (`npx playwright install webkit`; CI does), so a plain
-`pnpm e2e` after `playwright install chromium` still runs; `ORDO_E2E_WEBKIT=1` insists on them.
-`ORDO_E2E_SHOTS=<dir>` keeps a screenshot of each screen per orientation.
+path mode `http://localhost:<port>/`); `chromium-tablet` runs them too as an Android tablet (Galaxy Tab S4
+at 800x1280, the regular layout), and `webkit-iphone` (iPhone 13, 390x844) and `chromium-android` (Pixel 5
+at 360x800) run `e2e/phone/*.spec.ts` (design/28 §8). The Chromium projects model Android Chrome with
+`e2e/touchdevice.ts`: an init script removes WebHID and the Window Management API, which desktop Chromium
+has and Android Chrome lacks, so the page detects the edit profile and a forced `?profile=full` meets the
+guard. The touch and group specs build WebKit TouchLists and skip outside WebKit. The Chromium project
+ignores `e2e/ipad/` and `e2e/phone/`. The WebKit projects exist only when WebKit is installed (`npx
+playwright install webkit`; CI does), so a plain `pnpm e2e` after `playwright install chromium` still runs;
+`ORDO_E2E_WEBKIT=1` insists on them. `ORDO_E2E_SHOTS=<dir>` keeps a screenshot of each screen per orientation.

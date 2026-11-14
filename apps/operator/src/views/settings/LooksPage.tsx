@@ -12,16 +12,9 @@ import {
 } from '@ordo/domain';
 import { drawSlide2D } from '@ordo/renderer';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ColorField } from '../../components/ColorField.tsx';
 import { confirmDialog } from '../../components/Confirm.tsx';
-import {
-  BoxEditor,
-  Check,
-  ColorField,
-  Field,
-  Select,
-  TextField,
-  TransitionEditor,
-} from '../../components/fields.tsx';
+import { BoxEditor, Check, Field, Select, TextField, TransitionEditor } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { useFontGeneration } from '../../services/fonts.ts';
 import { BackgroundPicker } from '../editor/BackgroundPicker.tsx';

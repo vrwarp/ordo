@@ -11,10 +11,12 @@ import {
   thumbsRendered,
 } from './ipadhelpers.ts';
 import { portOf } from '../ports.ts';
+import { touchDevice } from '../touchdevice.ts';
 
 /**
  * iPad editing (design/15 "iPad editing", prd/03): the worship lead builds a service from home on an
- * iPad. Runs in WebKit with the iPad Pro 11 descriptor (projects webkit-ipad and webkit-ipad-portrait).
+ * iPad. Runs in WebKit with the iPad Pro 11 descriptor (projects webkit-ipad and webkit-ipad-portrait) and
+ * as an Android tablet (chromium-tablet: Chromium, Galaxy Tab S4 at 800x1280, e2e/touchdevice.ts).
  */
 
 type Pres = {
@@ -24,6 +26,16 @@ type Pres = {
   sections: { slides: { id: string; objects: { id: string; type: string; text?: string }[] }[] }[];
 };
 type Playlist = { id: string; name: string; items: { presentationId?: string; arrangementId?: string }[] };
+
+/** This project's device for a second context (the descriptors of playwright.config.ts). */
+function sameDevice() {
+  const name = test.info().project.name;
+  if (name === 'chromium-tablet') {
+    const { defaultBrowserType: _browser, ...tab } = devices['Galaxy Tab S4']!;
+    return { ...tab, viewport: { width: 800, height: 1280 }, screen: { width: 800, height: 1280 } };
+  }
+  return devices[name.includes('portrait') ? 'iPad Pro 11' : 'iPad Pro 11 landscape']!;
+}
 
 test('the worship lead builds a service on the iPad: search, new song, edit, previews, playlist', async ({
   page,
@@ -50,6 +62,11 @@ test('the worship lead builds a service on the iPad: search, new song, edit, pre
       windowManagement: false,
       coarsePointer: true,
     });
+    // A tablet keeps the regular layout (design/28 decision 3): no compact attribute on the document.
+    expect(
+      await page.evaluate(() => (window as unknown as { __ordo: { layout?: string } }).__ordo.layout),
+    ).toBe('regular');
+    expect(await page.evaluate(() => document.documentElement.hasAttribute('data-layout'))).toBe(false);
     await expect(page.getByRole('link', { name: /Live/ })).toHaveCount(0);
     await expect(page.getByRole('link', { name: 'Checklist' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Launch outputs' })).toHaveCount(0);
@@ -315,12 +332,9 @@ test('a library Safari cleared reloads from the hub, and the core reconnects aft
 
     // Safari evicted the IndexedDB copy: a fresh context with the same sign-in (cookies) and no IndexedDB.
     const state = await page.context().storageState();
-    const portrait = test.info().project.name.includes('portrait');
-    const ctx2 = await browser.newContext({
-      ...devices[portrait ? 'iPad Pro 11' : 'iPad Pro 11 landscape'],
-      storageState: state,
-    });
+    const ctx2 = await browser.newContext({ ...sameDevice(), storageState: state });
     const page2 = await ctx2.newPage();
+    await touchDevice(page2);
     await page2.goto(url);
     await expect(page2.getByText('Tablet Test Song').first()).toBeVisible({ timeout: 20_000 });
     await expect(page2.getByText('After Resume').first()).toBeVisible();

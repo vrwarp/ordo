@@ -18,7 +18,31 @@ export type VenueLive = {
   presentationIds: string[];
 };
 
-export const useVenueLive = create<{ live?: VenueLive; seq: number }>(() => ({ seq: -1 }));
+/**
+ * Where the summary stands: 'unknown' until the first answer, 'ok' after one, 'failing' after two polls in a
+ * row failed (the hub unreachable or the session gone). The compact layout's Live now strip reads it
+ * (lib/liveStrip.ts); the iPad's chip reads `live` only.
+ */
+export type VenueLiveStatus = 'unknown' | 'ok' | 'failing';
+
+export const useVenueLive = create<{ live?: VenueLive; seq: number; status: VenueLiveStatus }>(() => ({
+  seq: -1,
+  status: 'unknown',
+}));
+
+/** Polls in a row that must fail before the status reads 'failing'. */
+export const VENUE_FAILS = 2;
+
+/** The running watch's poll, for pollVenueLiveNow (undefined while none runs). */
+let pollNow: (() => void) | undefined;
+
+/**
+ * Poll the summary at once if a watch runs (the compact layout calls it on `pageshow`, a restored page
+ * included, and on `online`, design/28 §3.11; the iPad keeps its interval and visibility poll).
+ */
+export function pollVenueLiveNow(): void {
+  pollNow?.();
+}
 
 /** The hub's summary as the store keeps it (undefined when idle). */
 export function fromSummary(r: LiveSummaryRes): VenueLive | undefined {
@@ -69,20 +93,32 @@ export async function fetchVenueLive(
 export function watchVenueLive(role: 'operate' | 'edit', intervalMs = VENUE_POLL_MS): () => void {
   let stopped = false;
   let busy = false;
+  let fails = 0;
   const poll = async () => {
     if (stopped || busy || (typeof document !== 'undefined' && document.hidden)) return;
     busy = true;
     try {
       const { seq, live } = await fetchVenueLive(role);
-      if (stopped || seq === useVenueLive.getState().seq) return;
-      if (same(live, useVenueLive.getState().live)) useVenueLive.setState({ seq });
-      else useVenueLive.setState({ seq, live });
+      if (stopped) return;
+      fails = 0;
+      const st = useVenueLive.getState();
+      if (seq === st.seq) {
+        if (st.status !== 'ok') useVenueLive.setState({ status: 'ok' });
+        return;
+      }
+      if (same(live, st.live)) useVenueLive.setState({ seq, status: 'ok' });
+      else useVenueLive.setState({ seq, live, status: 'ok' });
     } catch {
-      /* hub unreachable or signed out: keep the last known */
+      // Hub unreachable or signed out: keep the last known, and say so after the second failure in a row.
+      if (stopped) return;
+      fails++;
+      if (fails >= VENUE_FAILS && useVenueLive.getState().status !== 'failing')
+        useVenueLive.setState({ status: 'failing' });
     } finally {
       busy = false;
     }
   };
+  pollNow = () => void poll();
   void poll();
   const t = setInterval(() => void poll(), intervalMs);
   // Back from a suspension: look at once rather than at the next tick.
@@ -94,6 +130,7 @@ export function watchVenueLive(role: 'operate' | 'edit', intervalMs = VENUE_POLL
     stopped = true;
     clearInterval(t);
     document.removeEventListener('visibilitychange', onVisible);
-    useVenueLive.setState({ live: undefined, seq: -1 });
+    pollNow = undefined;
+    useVenueLive.setState({ live: undefined, seq: -1, status: 'unknown' });
   };
 }

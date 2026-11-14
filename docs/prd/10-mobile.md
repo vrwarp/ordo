@@ -63,6 +63,8 @@ Setup, Screens and the Banner belong to the venue PC.
   marks changes made from phones. Media that is not ready cannot be added within 12 hours of a service.
 - Phones never slow a service: heavy processing and large uploads wait until it ends, and the load of
   phones in use is measured at a rehearsal before each phase ships.
+- A phone downloads only what it shows: never the slide editor, the live view, Setup or the settings
+  (at most 300 KB compressed to start).
 
 ## Access
 
@@ -75,6 +77,16 @@ Setup, Screens and the Banner belong to the venue PC.
   contact. A phone that has not reached ordo for 14 days hides its copy until someone signs in.
 - Photos lose their location data on upload and wait in an Inbox, hidden from musicians, until an editor
   uses or approves them.
+
+As built in P0 (the phone's side): a phone (a device whose shorter screen side is under 600 px, so Safari's
+"Request Desktop Website" still counts) signs in with the keypad and no "Remember this device"; the request
+asks the hub for the capped `light` session when the hub offers it, and the sign-in names the venue ("ordo at
+op.church.example") and says "On a phone you can look at everything and make small changes. Services run from
+the venue PC." In Safari it adds that the home-screen app signs in on its own. Too many wrong PINs give the time
+the wait ends, and say when everyone on the same Wi-Fi may share it. A phone that signed in before this release
+is signed out once, with "Phones now sign in for an hour at a time. Enter the PIN again." A phone never sees the
+first-run setup: "ordo is not set up yet. Set it up on the venue PC: it sets the PINs." The venue PC, iPads and
+Android tablets sign in as before.
 
 ## Accessibility and languages
 

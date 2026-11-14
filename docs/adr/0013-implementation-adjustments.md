@@ -53,7 +53,13 @@ adapter Chrome gives the output and whether it is a software one.
 ## Service worker caching (design/17)
 
 Navigations are network-first with a 4 s timeout and fall back to the cached shell. Assets are cache-first. A
-pure cache-first `index.html` would never pick up a new deploy.
+pure cache-first `index.html` would never pick up a new deploy. The operator's install precaches one of two
+lists generated at build (`apps/operator/src/sw/sets.ts`), chosen by the URL it was registered with, once at
+startup from the device class: `./sw.js` every built file (the venue PC, iPads, Android tablets: unchanged),
+`./sw.js?set=compact` (a phone, after load and idle, so it does not compete with the first load) the entry, the
+playlists and previews with their imports, the core and thumbnail workers and the stylesheet (design/28 §3.1).
+A layout change never re-registers; every app file stays cache-first once fetched, and the cache's name is
+the same.
 
 ## ProPresenter 7 schema (ADR 0012)
 

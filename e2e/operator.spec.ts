@@ -16,6 +16,10 @@ test('a volunteer builds a service in the UI, goes live, launches outputs and ru
   page.on('pageerror', (e) => errors.push(e.message));
   try {
     await page.goto(op + '/');
+    // The venue PC's sign-in is today's (design/28 §2.2: only a phone loses Remember): ticked by default.
+    const remember = page.getByRole('checkbox', { name: 'Remember this device (12 hours)' });
+    await expect(remember).toBeVisible({ timeout: 20_000 });
+    await expect(remember).toBeChecked();
     await page.locator('input.pin').fill('246810');
     await page.getByRole('button', { name: 'OK' }).click();
     await expect(page.getByRole('button', { name: 'Launch outputs' })).toBeVisible({ timeout: 20_000 });

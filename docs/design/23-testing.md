@@ -48,8 +48,9 @@ Chromium only.
 
 Every port the suite opens is in one table, `e2e/ports.ts`: a row per spec (the shared web server is the row
 `shared`), each an offset from one base and a count of ports, what the spec really opens (its hubs, TCP
-proxies, the Pages demo's static server; the iPad specs one per orientation where both projects run the
-test). A spec takes its ports with `portOf(row, i)`; asking past the row's count throws. No spec writes a
+proxies, the Pages demo's static server; the iPad specs one per project where the three tablet projects run
+the test; a spec both phone projects run, one per phone project: 0 `webkit-iphone`, 1 `chromium-android`).
+A spec takes its ports with `portOf(row, i)`; asking past the row's count throws. No spec writes a
 literal port or reads a port variable of its own: `e2e/ports.test.ts` (vitest, part of `pnpm test`) reads
 every file of the suite and fails on a literal port, a `process.env.ORDO_*PORT*` read outside the table or
 arithmetic on a port, and checks that the rows' offsets are unique, their ranges disjoint and inside the span
@@ -66,6 +67,44 @@ between 16000 and 32767.
   `ORDO_E2E_PAGES_PORT`, `ORDO_E2E_IPAD_PORT`, `ORDO_E2E_TOUCH_PORT`) are no longer read.
 - A new spec that starts a hub or a server of its own adds a row (the next free offsets) and takes its ports
   from it; rows for specs not written yet hold their ports reserved.
+- Phones P0 (design/28) holds offsets 300-359: the code split's rows `split-full` (300), `ipad-split`
+  (301-303: `webkit-ipad`, `webkit-ipad-portrait`, `chromium-tablet`) and `phone-split` (305-306), the
+  compact shell's `phone-shell` (310-329: one hub per test and phone project, test k on 2k in `webkit-iphone`
+  and 2k+1 in `chromium-android`, so its sign-ins, lockouts and services never meet; it may grow to 26 ports)
+  and `phone-demo` (336-337: the Pages build's static server per phone project), the hub's 340-349 and the
+  integration's 350-359. `ipad-group` and `ipad-touch-targets` have three ports (slot 2 is
+  `chromium-tablet`). `e2e/layout-class.spec.ts` (the venue PC never compact) uses the shared server.
+
+### Projects
+
+`playwright.config.ts` runs one Chromium project for the venue PC (`chromium`, Desktop Chrome at 1280x720:
+every spec but `e2e/ipad/` and `e2e/phone/`) and, beside it, the tablet and phone projects, each spec on a
+hub of its own in path mode (`http://localhost:<port>/`):
+
+| Project                | Device                                         | Specs              |
+| ---------------------- | ---------------------------------------------- | ------------------ |
+| `webkit-ipad`          | WebKit, iPad Pro 11 landscape, 1194x834        | `e2e/ipad/*.spec`  |
+| `webkit-ipad-portrait` | WebKit, iPad Pro 11, 834x1194                  | `e2e/ipad/*.spec`  |
+| `chromium-tablet`      | Chromium, Galaxy Tab S4, 800x1280              | `e2e/ipad/*.spec`  |
+| `webkit-iphone`        | WebKit, iPhone 13, viewport and screen 390x844 | `e2e/phone/*.spec` |
+| `chromium-android`     | Chromium, Pixel 5, viewport and screen 360x800 | `e2e/phone/*.spec` |
+
+The Chromium tablet and phone model Android Chrome with `e2e/touchdevice.ts` `touchDevice(page)`, which the
+sign-in helpers call before a context's first navigation: an init script deletes `Navigator.prototype.hid`
+and `getScreenDetails` (an own property of `window`, Window being a [Global] interface; also from
+`Window.prototype`), which desktop Chromium has and Android Chrome lacks, so `lib/capabilities.ts` detects
+the edit profile and a forced `?profile=full` meets the forced-profile guard (`e2e/ipad/edit.spec.ts` asserts
+`hid` and `windowManagement` false in all three tablet projects). `screen` reaches a context only through
+`contextOptions` (the test runner does not pass a device descriptor's `screen`); the phone class reads it.
+WebKit projects exist only where WebKit is installed. The iPad touch and group specs dispatch WebKit
+TouchLists and skip outside WebKit.
+
+The phone specs check layout with `layoutChecks` (`e2e/phone/phonehelpers.ts`, design/28 §8 "Layout": no
+sideways scroll of the document, `.page` or any pane, also after each field is focused; every visible control
+inside the viewport and at least 44x44 by the shared touch audit `e2e/touchaudit.ts`, with no exceptions; the
+Live now strip, the header and the tab bar inside the visual viewport) on every compact route and sheet, at
+390x844 and 390x664 (WebKit), 360x800 (Chromium), 844x390, 320x568 and 200 % text. `capsShim` stands in for
+the hub lane's `/auth/me` caps on the phone shell's branch and is removed when the hub's contract is merged.
 
 ## Timing assertions
 
@@ -349,15 +388,16 @@ browser.
 
 ## CI
 
-GitHub Actions on every pull request and merge to main (and by hand), `.github/workflows/ci.yml`, in four
+GitHub Actions on every pull request and merge to main (and by hand), `.github/workflows/ci.yml`, in five
 jobs that run side by side so none takes more than about 35 minutes (one job took 30 to 45 minutes before):
 
-| Job                            | Runs                                                                                                                                                                                                                                     | Limit  |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| Lint, types, unit tests, build | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), Playwright Chromium, `pnpm test` (`CI` set: timing bounds ×3, golden runs strict, browser tests run or fail), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory) | 25 min |
-| End-to-end (2 shards)          | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure                           | 35 min |
-| Goldens (pinned container)     | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                                                      | 20 min |
-| Fidelity ratchets              | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                                                | 20 min |
+| Job                                   | Runs                                                                                                                                                                                                                                                                                   | Limit  |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| Lint, types, unit tests, build        | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), Playwright Chromium, `pnpm test` (`CI` set: timing bounds ×3, golden runs strict, browser tests run or fail), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                                               | 25 min |
+| End-to-end (2 shards)                 | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2 --project=chromium --project=webkit-ipad --project=webkit-ipad-portrait` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure | 35 min |
+| End-to-end, phones and Android tablet | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --project=webkit-iphone --project=chromium-android --project=chromium-tablet` with `ORDO_CI=1`; uploads `playwright-report-phones` on failure ("Projects" above)                                                | 25 min |
+| Goldens (pinned container)            | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                                                                                                    | 20 min |
+| Fidelity ratchets                     | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                                                                                              | 20 min |
 
 The end-to-end, goldens and fidelity jobs install the image's font packages (Carlito, Caladea, Liberation 2,
 Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them; the goldens and
