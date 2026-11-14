@@ -207,6 +207,12 @@ export interface RunStyle {
   lang?: string;
   /** `a:highlight`. */
   highlight?: Rgba;
+  /**
+   * The nearest fill of the chain was a picture (`a:blipFill`) or a group fill (`a:grpFill`), which ordo does
+   * not paint text with: `fill` is the text colour (tx1), as with no fill, and the outline stays (design/27
+   * §4 "Picture-filled text"; a picture-filled run makes its shape approx, `textFill:picture`).
+   */
+  textFill?: 'picture' | 'group';
 }
 
 export interface Run {

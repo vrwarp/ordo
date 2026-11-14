@@ -168,6 +168,9 @@ from filled text in slides, layouts and masters. LibreOffice cannot draw a colou
 around filled text: it substitutes hollow letters, which with the usual drop shadow read as
 broken text (white outlined headlines, common in sermon decks). The fill and shadow stay; text
 meant to be hollow (`<a:noFill/>`) keeps its outline. The job log counts the runs changed.
+Picture-filled text (`<a:blipFill>` in a run's properties) counts as filled: LibreOffice draws it in its
+automatic colour without the outline, and ordo's converter draws it in the slide's text colour (tx1) with
+the outline kept (design/27 §4 "Picture-filled text").
 soffice runs hardened (design/21: address-space cap, no network, process-group timeout). When
 the copy cannot be built (the pool cannot start, the deck passes the caps), the import fails: LibreOffice
 never converts a deck as uploaded. Fonts the deck uses must

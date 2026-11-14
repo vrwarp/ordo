@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { charClass, fallbackFonts, scriptClasses, substituteOf } from './fontmap.ts';
 import { emitSlides, parseDeck } from './index.ts';
 import { MAX_TEXT } from './richtext.ts';
-import { body, br, buildDeck, type DeckSpec, para, run, solid, sp, themeXml } from './test-util.ts';
+import { body, br, buildDeck, type DeckSpec, imageRel, para, run, solid, sp, themeXml } from './test-util.ts';
 
 /*
  * Rich text emission (design/27 §3.1, §3.2, §4 "Text bodies", §6, §11): crafted decks through parseDeck and
@@ -498,6 +498,35 @@ describe('loCompat (the fidelity harness only)', () => {
       },
     ]);
     expect(b!.style.autofit).toBeUndefined();
+  });
+
+  it('draws picture-filled text opaque in the text colour with its outline; LibreOffice’s copy has no outline', () => {
+    // The AMOR slide: `a:blipFill` in the run, dark red outline. Before: hollow (transparent) with the outline.
+    const blip = '<a:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>';
+    const spec: DeckSpec = {
+      slides: [
+        {
+          rels: [imageRel('rId2', 'image1.png')],
+          shapes: box(
+            body(para(run('AMOR', 'sz="24000" b="1"', `<a:ln w="76200">${solid('AB0043')}</a:ln>${blip}`))),
+          ),
+        },
+      ],
+    };
+    const {
+      texts: [t],
+      notes,
+    } = texts(spec);
+    expect(t!.style.color).toEqual({ r: 0, g: 0, b: 0, a: 1 }); // tx1 = dk1, black in the default theme
+    expect(t!.style.outline).toEqual({ width: 6, color: { r: 0xab, g: 0, b: 0x43, a: 1 } });
+    expect(t!.runs).toBeUndefined();
+    expect(notes).toContain('picture-filled text is drawn in the text colour');
+    const lo = emitSlides(parseDeck(buildDeck(spec)), { loCompat: true });
+    const l = lo.slides[0]!.slide.objects.find((o): o is TextObject => o.type === 'text')!;
+    expect(l.style.color).toEqual({ r: 0, g: 0, b: 0, a: 1 });
+    expect(l.style.outline).toBeUndefined();
+    // An older build (main's 0.5.0 schema) draws it filled too: the colour is a legacy field.
+    expect(prev.TextObject.parse(t).style.color.a).toBe(1);
   });
 });
 

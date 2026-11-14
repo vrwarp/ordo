@@ -99,6 +99,16 @@ describe('compatRules', () => {
     }),
     // 7: normAutofit inherited from the master's body placeholder
     sp({ id: 3, ph: 'type="body" idx="1"', txBody: body(para(run('Inherited', 'sz="4000"'))) }),
+    // 8: picture-filled text is filled (the text colour): its outline goes, as on LibreOffice's copy
+    sp({
+      id: 2,
+      ...box,
+      txBody: body(
+        para(
+          run('AMOR', 'sz="4000"', `${OUTLINE}<a:blipFill><a:blip r:embed="rId9"/><a:stretch/></a:blipFill>`),
+        ),
+      ),
+    }),
   );
 
   it("names the rules each slide's text hits", () => {
@@ -107,6 +117,7 @@ describe('compatRules', () => {
       [1, ['textOutline']],
       [5, ['refit']],
       [7, ['inheritedFit']],
+      [8, ['textOutline']],
     ]);
   });
 
@@ -124,6 +135,9 @@ describe('compatRules', () => {
     expect(texts(lo[5]!)[0]!.style.fitScale).toBeUndefined();
     expect(texts(ordo[7]!)[0]!.style.autofit).toBe('shrink');
     expect(texts(lo[7]!)[0]!.style.autofit).toBeUndefined();
+    expect(texts(ordo[8]!)[0]!.style).toMatchObject({ color: { a: 1 }, outline: { width: 2 } });
+    expect(texts(lo[8]!)[0]!.style).toMatchObject({ color: { a: 1 } });
+    expect(texts(lo[8]!)[0]!.style.outline).toBeUndefined();
     // The slides no rule names draw alike; the others do not.
     const hit = compatRules(scene);
     for (const [k, s] of ordo.entries())

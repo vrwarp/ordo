@@ -167,7 +167,9 @@ two stored presentations modulo ids, media ids (by file), times, the import log 
 
 - `src/compat/`: one LibreOffice policy rule per file (`compatRule`: key, text, `hits(element, slide)`),
   listed once in `COMPAT_REGISTRY` (`index.ts`), in report order. An M9 track adds its rule (`flat3d`,
-  `warpRuns`, `vertLo`, `mirrorTurn`, `chartLo`) as a file and one line there.
+  `warpRuns`, `vertLo`, `mirrorTurn`, `chartLo`) as a file and one line there. `textOutline` counts
+  picture-filled text as filled (the converter draws it in the text colour; the render copy LibreOffice
+  draws has its outline removed).
 - `src/features/`: one family of XML features per file (`featureFamily`: key, features in report order,
   optional targets, `detect(source)` with the slide's XML and the parts it names, `related('/chart')`),
   listed once in `FEATURE_FAMILIES`. The text family is `textFeatures` (as since M2); every other family's

@@ -17,7 +17,7 @@
  *
  * Owned by work item C (inherit-emit).
  */
-import { type ColorCtx, colorIn, readFill } from './color.ts';
+import { type ColorCtx, colorIn, fillElementOf, fillOf, readFill } from './color.ts';
 import type { SlideCtx } from './context.ts';
 import {
   bodyPrChain,
@@ -72,6 +72,15 @@ const clamp = (v: number, lo: number, hi: number) =>
   Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : lo;
 const emu = (v: number | undefined, dflt: number) => clamp(v ?? dflt, 0, MAX_EMU);
 const BLACK = { r: 0, g: 0, b: 0, a: 1 };
+/**
+ * Fills ordo does not paint text with: a picture (`a:blipFill`) and the group's fill (`a:grpFill`, which means
+ * nothing on text). The nearest fill of a run's chain being one of them gives the run the text colour, as no
+ * fill would (tx1; design/27 §4 "Picture-filled text"), and keeps its outline.
+ */
+const TEXT_COLOUR_FILLS: Readonly<Record<string, RunStyle['textFill']>> = Object.assign(Object.create(null), {
+  'a:blipFill': 'picture',
+  'a:grpFill': 'group',
+});
 
 /**
  * A shape's text body with inheritance resolved, or undefined when it has none. `styled` (a table cell's
@@ -267,10 +276,15 @@ export function runStyle(
   chain: readonly (XNode | undefined)[],
 ): RunStyle {
   const props = [rPr, ...chain.map((n) => child(n, 'a:defRPr'))];
+  // The nearest fill decides; a picture or group fill there gives the text colour (`TEXT_COLOUR_FILLS`).
   let fill: Fill | undefined;
+  let textFill: RunStyle['textFill'];
   for (const n of props) {
-    fill = readFill(n, ctx.color);
-    if (fill) break;
+    const el = fillElementOf(n);
+    if (!el) continue;
+    textFill = TEXT_COLOUR_FILLS[el.name];
+    if (!textFill) fill = fillOf(el, ctx.color);
+    break;
   }
   const face = (kind: 'latin' | 'ea' | 'cs' | 'sym') => {
     for (const n of props) {
@@ -294,6 +308,12 @@ export function runStyle(
     spacingPt: clamp((num(firstAttr(props, 'spc')) ?? 0) / 100, -4_000, 4_000),
     caps: cap === 'all' ? 'all' : cap === 'small' ? 'small' : 'none',
   };
+  if (textFill) {
+    out.textFill = textFill;
+    ctx.log(
+      `${textFill === 'picture' ? 'picture-filled text' : 'text with a group fill'} is drawn in the text colour`,
+    );
+  }
   const lang = firstAttr(props, 'lang');
   // An empty ea or cs typeface of the theme takes the theme's font for the run language's script.
   const script = langScript(lang);

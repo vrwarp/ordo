@@ -63,6 +63,8 @@ const M9_CHANGES: Readonly<Record<string, Decision>> = {
   'custGeom:complex': 'native',
   'geom:complex': 'native',
   '3d:flat-in-decoration': 'approx',
+  // text-fix (r2a): picture-filled text is drawn in the text colour, a row of its own.
+  'textFill:picture': 'approx',
 };
 
 const IN = 914_400;
@@ -93,6 +95,7 @@ describe('the residual decision table (M9)', () => {
     expect(RESIDUAL_ROWS.filter((r) => r.decision !== BASE[r.reason]).map((r) => r.reason)).toEqual([
       '3d',
       '3d:camera',
+      'textFill:picture',
       'custGeom:complex',
       'geom:complex',
       '3d:flat-in-decoration',
@@ -152,6 +155,7 @@ describe('the residual decision table (M9)', () => {
       ['vert', text('vert="vert"')],
       ['numCol', text('numCol="2"')],
       ['anchorCtr', text('anchorCtr="1"')],
+      ['textFill:picture', text('', '', para(run('AMOR', '', '<a:blipFill><a:blip/></a:blipFill>')))],
     ];
     for (const [reason, shapes] of cases) {
       const e = parseDeck(buildDeck({ slides: [{ shapes }] })).slides[0]!.elements[0]!;

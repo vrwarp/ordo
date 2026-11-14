@@ -580,6 +580,7 @@ As built in M3 (`packages/domain/src/size.ts`):
 - Paragraphs become `paras`: align (incl. justify and distribute), level, marL/indent, spacing (spcPts in 1/100 pt; spcPct as a share of F), line spacing, bullets, rtl. `a:br` becomes `\n` with `soft: true`. `a:tab` becomes a space (logged once per deck; Canvas draws tabs as spaces).
 - Sizes: px = pt × 12700 × s, clamped to 1-4,000 pt in the parser and when stored to 4-1,000 px for the box size and 2-1,000 px for a run (§3.2). A run's `sizeScale` is its real size over the box's, never raised to the box floor: a 1 pt spacer under 7 pt text is 2/14.
 - Text outline: `a:ln w` → `outline.width = w/2`, because ordo strokes 2× under the fill. An outline without a solid fill is not drawn. Hollow text (noFill) becomes alpha 0 plus the outline.
+- **Picture-filled text** (`a:blipFill` in run properties; also `a:grpFill`, which means nothing on text): ordo paints no text with a picture. When the nearest fill of a run's chain is one of them, the run takes the text colour (tx1), as it would with no fill at all, keeps its outline, and the slide is noted once ("picture-filled text is drawn in the text colour"); the shape is approx (`textFill:picture`). PowerPoint textures the letters with the picture; LibreOffice draws them in its automatic colour, the render copy having removed their outline as from any filled text (§5). Owner default (2026-11-14): the slide's text colour, not the picture's average colour. Before r2a such letters were hollow (the fill read as none), showing only their outline (a slide of the worship set scored 0.849 against LibreOffice's page).
 - Run text shadows and coloured outlines are drawn as PowerPoint draws them.
 - `cap="all"` → `caps` (applied at draw time, so offsets stay valid). Fields keep their stored `a:t` text (logged). Hyperlinks are dropped (logged).
 - Body properties: insets (defaults 7.2/3.6 pt) → `insets`; anchor → `valign`; `wrap="none"` → `wrap:false`.
@@ -671,7 +672,7 @@ As built in M3 (`packages/domain/src/size.ts`):
   - vertical text (until M9);
   - tables (until M6; since M6 only those with vertical cell text or past the slide's object budget, a table of more drawn cells than a slide may have objects among them);
   - a metafile that fails conversion.
-- **Approx** (drawn natively, logged): reflection, inner shadow, soft edge on pictures before M8 (the renderer draws a picture's `softEdge` since PR #23, §7.1; the converter does not write it yet), kerning differences, unknown transitions.
+- **Approx** (drawn natively, logged): reflection, inner shadow, soft edge on pictures before M8 (the renderer draws a picture's `softEdge` since PR #23, §7.1; the converter does not write it yet), kerning differences, unknown transitions, picture-filled text (`textFill:picture`, drawn in the text colour, §4).
 - Everything else is native.
 
 <!-- m9:conv-seams -->
