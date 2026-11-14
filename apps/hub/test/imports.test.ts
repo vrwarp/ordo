@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { copyFileSync, mkdirSync, truncateSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { newId, type Playlist, type Presentation, slideContent, type TextObject } from '@ordo/domain';
