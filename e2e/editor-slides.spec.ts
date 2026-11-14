@@ -142,6 +142,16 @@ test('change the announcement date by find and replace, hide a slide: dimmed, sk
 
     // ---- Hide the photo slide (4): dimmed in the slide list beside the deck's own hidden slide (6).
     await openSlide(page, 4);
+    await page.locator('.ed-slide-inline-actions').getByRole('button', { name: /⋯/ }).click();
+    const slideMenu = page.getByRole('menu', { name: '⋯' });
+    await expect(slideMenu.getByRole('menuitem', { name: 'Delete slide' })).toBeVisible();
+    const menuBox = await slideMenu.boundingBox();
+    const itemBox = await slideMenu.getByRole('menuitem', { name: 'Delete slide' }).boundingBox();
+    expect(menuBox && itemBox).toBeTruthy();
+    expect(itemBox!.x + itemBox!.width).toBeLessThanOrEqual(menuBox!.x + menuBox!.width + 1);
+    expect(menuBox!.x).toBeGreaterThanOrEqual(4);
+    await page.keyboard.press('Escape');
+    await expect(slideMenu).toBeHidden();
     const toggle = page.locator('[data-hide-slide]');
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
     await toggle.click();

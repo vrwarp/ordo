@@ -150,6 +150,7 @@ function SlideItem(props: {
           <HideSlideToggle hidden={hidden} onToggle={props.onToggleHidden} compact />
           <Menu
             label="⋯"
+            align="right"
             items={[
               ...(props.onMoveUp
                 ? [{ label: '↑ Move slide up', name: 'Slide up', onSelect: props.onMoveUp }]
