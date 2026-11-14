@@ -42,6 +42,11 @@ export type HubConfig = {
   snapshotIntervalMs: number;
   /** Health summary interval. */
   healthIntervalMs: number;
+  /**
+   * How long after End service held heavy jobs keep waiting (ORDO_PACE_GRACE_MS, default 2 minutes; design/28
+   * §5.3): a second service on the same morning, the venue PC's offline download after the first.
+   */
+  paceGraceMs: number;
   /** Optional override for the importers module (tests). */
   importers?: unknown;
   /** Tool timeouts (ms). */
@@ -129,6 +134,7 @@ export function loadConfig(
     scheduleBackups: true,
     snapshotIntervalMs: 5000,
     healthIntervalMs: 1000,
+    paceGraceMs: paceGrace(env.ORDO_PACE_GRACE_MS),
     timeouts: { probe: 30_000, transcode: 4 * 3600_000, soffice: 180_000, pdf: 300_000, light: 600_000 },
     jobs: { heavy: 1, light: 2 },
     chromium: { path: env.ORDO_CHROMIUM || 'chromium', sandbox: env.ORDO_CHROMIUM_SANDBOX === '1' },
@@ -136,4 +142,10 @@ export function loadConfig(
     fontsDir: env.ORDO_FONTS_DIR ? resolve(env.ORDO_FONTS_DIR) : undefined,
     ...overrides,
   };
+}
+
+/** ORDO_PACE_GRACE_MS: a whole number of milliseconds from 0 to a day; anything else is the default (2 min). */
+export function paceGrace(v: string | undefined): number {
+  const n = Number(v);
+  return v !== undefined && v !== '' && Number.isInteger(n) && n >= 0 && n <= 86_400_000 ? n : 120_000;
 }

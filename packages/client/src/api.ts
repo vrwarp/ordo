@@ -1,4 +1,4 @@
-import { API_PREFIX, type ApiError } from '@ordo/protocol';
+import { API_PREFIX, type ApiError, HEADER_CLIENT } from '@ordo/protocol';
 
 export class ApiFailure extends Error {
   public status: number;
@@ -31,8 +31,13 @@ export function setApiToken(token: string | undefined): void {
   authToken = token;
 }
 
+/**
+ * A hub request. Every one carries `x-ordo: 1` (design/28 §4): the hub needs it on writes from capped sessions,
+ * and from signed-in full sessions once Phones is on, so a page made elsewhere cannot write with the cookie.
+ */
 export async function api<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const headers = new Headers(init.headers);
+  headers.set(HEADER_CLIENT, '1');
   if (authToken) headers.set('x-ordo-token', authToken);
   let body = init.body;
   if (init.json !== undefined) {
@@ -69,6 +74,7 @@ export function upload<T>(path: string, form: FormData, onProgress?: (frac: numb
     const xhr = new XMLHttpRequest();
     xhr.open('POST', API_PREFIX + path);
     xhr.withCredentials = true;
+    xhr.setRequestHeader(HEADER_CLIENT, '1');
     if (authToken) xhr.setRequestHeader('x-ordo-token', authToken);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
     xhr.onload = () => {

@@ -5,7 +5,10 @@ import { leftBusIn } from './linklog.ts';
 /** Shared steps for the operator-to-output link specs (items 1, 2 and 13 of the 2026-11-03 review). */
 
 export async function hubApi(port: number): Promise<APIRequestContext> {
-  const ctx = await request.newContext({ baseURL: `http://localhost:${port}/api/v1/` });
+  const ctx = await request.newContext({
+    baseURL: `http://localhost:${port}/api/v1/`,
+    extraHTTPHeaders: { 'x-ordo': '1' },
+  });
   expect((await ctx.post('auth/pin', { data: { pin: '246810' } })).ok()).toBe(true);
   return ctx;
 }

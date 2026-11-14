@@ -26,6 +26,7 @@ import {
   type ManifestRes,
   type OutputConfigRes,
   type OutputHealthEntry,
+  SessionCap,
   SETTINGS_BODY,
   type Settings,
   type SettingsKey,
@@ -34,8 +35,15 @@ import type { FastifyInstance, FastifyReply, FastifyRequest, HTTPMethods, RouteH
 import JSZip from 'jszip';
 import { z } from 'zod';
 import type { Logger } from 'pino';
-import type { Access, Auth, Principal } from './auth.ts';
+import type { Access, Auth, LowerCap, Principal } from './auth.ts';
 import type { Backups } from './backup.ts';
+import {
+  type FieldRefusal,
+  fieldRefusalError,
+  mediaPatchRefusal,
+  playlistRefusal,
+  presentationRefusal,
+} from './capfields.ts';
 import type { HubConfig } from './config.ts';
 import { badRequest, conflict, HttpError, locked, notFound, unauthorized } from './errors.ts';
 import type { FontService } from './fonts/service.ts';
@@ -45,6 +53,7 @@ import { FolderSchema, type Library, newToken, SETTINGS_KEYS, stripTokens } from
 import { LiveRejection, type LiveService } from './live.ts';
 import type { LogRing } from './log.ts';
 import { MAX_SVG_RASTER_BYTES, type MediaService } from './media/service.ts';
+import { pacedScope } from './reqctx.ts';
 import type { Store } from './store.ts';
 import { searchGoogleFonts } from './fonts/google.ts';
 import {
@@ -66,7 +75,10 @@ import { validate } from './validate.ts';
 export const DEVICE_COOKIE = 'ordo_device';
 
 // ---- request bodies (design/25): strict at the top level (unknown keys are refused) and bounded ----
-const PinBody = z.object({ pin: z.string().max(64), remember: z.boolean().optional() }).strict();
+/** `cap`: the cap a device asks for (design/28 §3.2); 'full' or absent is a sign-in as before. */
+const PinBody = z
+  .object({ pin: z.string().max(64), remember: z.boolean().optional(), cap: SessionCap.optional() })
+  .strict();
 const SetupBody = z.object({ operatePin: z.string().max(64), editPin: z.string().max(64) }).strict();
 const PinsBody = z
   .object({ operatePin: z.string().max(64).optional(), editPin: z.string().max(64).optional() })
@@ -208,7 +220,7 @@ export function documentImportForm(fields: Readonly<Record<string, string>>): Do
 
 /** The live service as the library side sees it: edit locks and the mode (from IPC in the library process). */
 export type LiveView = {
-  locks(): { playlistId?: string; presentations: Set<string>; media: Set<string> };
+  locks(): { playlistId?: string; presentations: Set<string>; media: Set<string>; fonts: Set<string> };
   mode(): 'idle' | 'live';
 };
 
@@ -367,26 +379,72 @@ function sessionRole(p: Principal | null): 'operate' | 'edit' | undefined {
   return p?.kind === 'session' ? p.role : undefined;
 }
 
+/** A session below full (a phone): its whole-document saves are checked per field (capfields.ts). */
+function isCapped(p: Principal | null): boolean {
+  return p?.kind === 'session' && p.cap !== 'full';
+}
+
+/** Throw the per-field refusal for a capped session's save, if any. */
+function refuseFields(req: FastifyRequest, check: () => FieldRefusal | undefined): void {
+  if (!isCapped(req.principal)) return;
+  const r = check();
+  if (r) throw fieldRefusalError(r);
+}
+
 /**
  * GET /live/summary: the venue's service as an edit-profile device needs it (design/15 "iPad editing"): no
  * tokens, no full state. `locked` is what the hub refuses saves to with 423 (LiveService.locks). The output is
- * validated so a change to the live state can never leak more than the contract says.
+ * validated so a change to the live state can never leak more than the contract says. `label`: the live cue's
+ * label (slide text), for full sessions only (the iPad's chip); a phone never gets it (design/28 §10 item 9).
  */
-export function liveSummary(state: LiveState, locked: Iterable<string>): LiveSummaryRes {
+export function liveSummary(
+  state: LiveState,
+  locked: Iterable<string>,
+  opts: { label: boolean } = { label: true },
+): LiveSummaryRes {
   const r = state.mode === 'live' ? state.resolved : undefined;
   const cue = r && state.live !== undefined ? state.cues[state.live] : undefined;
   return LiveSummaryRes.parse({
     seq: state.seq,
     mode: r ? 'live' : 'idle',
     ...(r ? { playlistId: r.playlist.id, playlistName: r.playlist.name } : {}),
-    ...(cue?.label ? { liveLabel: cue.label.slice(0, 1000) } : {}),
+    ...(opts.label && cue?.label ? { liveLabel: cue.label.slice(0, 1000) } : {}),
     lockedPresentationIds: r ? [...locked] : [],
   });
 }
 
-function routeFn(app: FastifyInstance) {
-  return (method: HTTPMethods | HTTPMethods[], url: string, access: Access, handler: RouteHandlerMethod) =>
-    app.route({ method, url: API_PREFIX + url, config: { access }, handler });
+/** The caps this hub grants (`AuthMeRes.caps`). */
+export const SESSION_CAPS = SessionCap.options;
+
+/**
+ * A route of the API: its access role and the lowest session cap it accepts (design/28 §3.2; both checked in
+ * http.ts, the process does not start without them). With `paced` (the library API only), a capped session's
+ * request runs inside the paced scope (reqctx.ts), so every heavy job it queues waits while a service is live.
+ * The live process's routes never enter it: the first `AsyncLocalStorage.run` turns on promise tracking for the
+ * whole process for good (Node 22), which slowed a GO and its read by about 2x once a phone polled
+ * /live/summary (review of P0, measured), and the live process queues no jobs.
+ */
+function routeFn(app: FastifyInstance, opts: { paced: boolean }) {
+  return (
+    method: HTTPMethods | HTTPMethods[],
+    url: string,
+    access: Access,
+    cap: SessionCap,
+    handler: RouteHandlerMethod,
+  ) =>
+    app.route({
+      method,
+      url: API_PREFIX + url,
+      config: { access, cap },
+      handler: opts.paced
+        ? function (req, reply) {
+            const p = req.principal;
+            if (p?.kind === 'session' && p.cap !== 'full')
+              return pacedScope.run(true, () => handler.call(this, req, reply));
+            return handler.call(this, req, reply);
+          }
+        : handler,
+    });
 }
 
 /**
@@ -395,32 +453,38 @@ function routeFn(app: FastifyInstance) {
  */
 export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
   const { auth, live, cfg } = ctx;
-  const route = routeFn(app);
-  route('GET', '/auth/me', 'public', async (req): Promise<AuthMeRes> => {
+  const route = routeFn(app, { paced: false });
+  route('GET', '/auth/me', 'public', 'view', async (req): Promise<AuthMeRes> => {
     const p = req.principal;
     return {
       role: p?.role ?? null,
       setupRequired: auth.setupRequired(),
       version: APP_VERSION,
       domain: cfg.domain,
+      // A capped session's cap; the caps this hub grants, signed in or not (a client sends `cap` only to a hub
+      // that lists it: an older hub refuses the key).
+      ...(p?.kind === 'session' && p.cap !== 'full' ? { cap: p.cap } : {}),
+      caps: [...SESSION_CAPS],
     };
   });
-  route('GET', '/output/config', 'token', async (req): Promise<OutputConfigRes> => {
+  route('GET', '/output/config', 'token', 'full', async (req): Promise<OutputConfigRes> => {
     const p = req.principal;
     if (p?.kind !== 'token') throw unauthorized();
     const res = ctx.outputConfig(p.outputId);
     if (!res) throw unauthorized();
     return res;
   });
-  route('GET', '/live', 'live', async () => ({ seq: live.state.seq, state: live.state }));
+  route('GET', '/live', 'live', 'full', async () => ({ seq: live.state.seq, state: live.state }));
   // `edit` admits both session roles (an operate session satisfies it too); never output tokens.
   route(
     'GET',
     '/live/summary',
     'edit',
-    async (): Promise<LiveSummaryRes> => liveSummary(live.state, live.locks().presentations),
+    'view',
+    async (req): Promise<LiveSummaryRes> =>
+      liveSummary(live.state, live.locks().presentations, { label: !isCapped(req.principal) }),
   );
-  route('GET', '/cache/manifest', 'live', async (): Promise<ManifestRes> => {
+  route('GET', '/cache/manifest', 'live', 'full', async (): Promise<ManifestRes> => {
     const r = live.state.mode === 'live' ? live.state.resolved : undefined;
     return r ? { manifestId: r.manifestId, files: r.files, resolved: r } : null;
   });
@@ -433,7 +497,7 @@ export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
       throw e;
     }
   };
-  route('POST', '/live/events', 'operate', async (req) => {
+  route('POST', '/live/events', 'operate', 'full', async (req) => {
     const body = (req.body ?? {}) as { event?: unknown };
     if (body && typeof body === 'object' && 'event' in body) {
       const b = validate(LiveEventsBody, body);
@@ -441,7 +505,7 @@ export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
     }
     return submit(body, undefined);
   });
-  route('POST', '/actions', 'operate', async (req) => {
+  route('POST', '/actions', 'operate', 'full', async (req) => {
     const a = validate(ActionBody, req.body);
     const ev = actionToEvent(live.state, a, live.now() + 33, {
       messagePresets: live.messagePresets(),
@@ -450,7 +514,7 @@ export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
     if (!ev) return { seq: live.state.seq, ignored: true };
     return submit(ev, `action:${a.id}`);
   });
-  route('GET', '/health', 'public', async () => ({
+  route('GET', '/health', 'public', 'view', async () => ({
     ok: true,
     version: APP_VERSION,
     uptimeS: Math.round(process.uptime()),
@@ -462,15 +526,21 @@ export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
 
 /** Unknown API paths are JSON 404s, never the SPA. Registered once, by whichever process owns the API. */
 export function registerApiNotFound(app: FastifyInstance): void {
-  routeFn(app)(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], '/*', 'public', async () => {
-    throw notFound('Unknown API route');
-  });
+  routeFn(app, { paced: false })(
+    ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    '/*',
+    'public',
+    'view',
+    async () => {
+      throw notFound('Unknown API route');
+    },
+  );
 }
 
 /** The library API: everything except the live routes. Served by the library process. */
 export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   const { lib, auth, live, cfg } = hub;
-  const route = routeFn(app);
+  const route = routeFn(app, { paced: true });
 
   const by = (req: FastifyRequest) => `${sessionRole(req.principal) ?? 'system'}@${req.ip}`;
   const cookieOpts = (req: FastifyRequest, maxAgeS: number) => ({
@@ -480,13 +550,25 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     secure: req.protocol === 'https',
     maxAge: maxAgeS,
   });
+  /**
+   * With a cap below full (design/28 §3.2, a phone): role `edit` whatever PIN matched (`role` is that PIN), never
+   * remembered (any device cookie is cleared and its row forgotten), one hour sliding. Without: as before.
+   */
   const startSession = (
     req: FastifyRequest,
     reply: FastifyReply,
     role: 'operate' | 'edit',
     remember: boolean,
+    cap?: LowerCap,
   ) => {
     const ua = req.headers['user-agent'] ?? '';
+    if (cap) {
+      auth.forgetDevice(req.cookies[DEVICE_COOKIE]);
+      reply.setCookie(DEVICE_COOKIE, '', cookieOpts(req, 0));
+      const token = auth.createSession('edit', ua, false, Date.now(), { cap, pin: role });
+      reply.setCookie(COOKIE_SESSION, token, cookieOpts(req, 3600));
+      return;
+    }
     const deviceOk = auth.deviceValid(req.cookies[DEVICE_COOKIE], ua);
     if (remember && !deviceOk)
       reply.setCookie(DEVICE_COOKIE, auth.createDevice(ua), cookieOpts(req, 365 * 86400));
@@ -510,7 +592,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   };
 
   // ---------------- auth ----------------
-  route('POST', '/auth/setup', 'public', async (req, reply) => {
+  route('POST', '/auth/setup', 'public', 'full', async (req, reply) => {
     if (!auth.setupRequired()) throw new HttpError(409, 'already_setup', 'PINs are already set');
     auth.checkRate(req.ip);
     const b = validate(SetupBody, req.body);
@@ -520,24 +602,37 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     return { role: 'operate' };
   });
 
-  route('POST', '/auth/pin', 'public', async (req, reply) => {
+  route('POST', '/auth/pin', 'public', 'view', async (req, reply) => {
     if (auth.setupRequired()) throw new HttpError(409, 'setup_required', 'Set the PINs first');
-    auth.checkRate(req.ip);
-    const b = validate(PinBody, req.body);
+    // Counted as a failure before the PIN is verified, in the tick that checks the buckets (Auth.beginAttempt):
+    // a burst of concurrent guesses gets at most the bucket's 5 verified.
+    const attempt = auth.beginAttempt(req.ip);
+    let b: z.infer<typeof PinBody>;
+    try {
+      b = validate(PinBody, req.body);
+    } catch (e) {
+      // A malformed body is not a guess.
+      auth.cancelAttempt(attempt);
+      throw e;
+    }
     const role = await auth.matchPin(b.pin);
-    auth.recordAttempt(req.ip, !!role);
+    auth.settleAttempt(attempt, !!role);
     if (!role) throw new HttpError(401, 'wrong_pin', 'Wrong PIN');
+    if (b.cap && b.cap !== 'full') {
+      startSession(req, reply, role, false, b.cap);
+      return { role: 'edit', cap: b.cap };
+    }
     startSession(req, reply, role, !!b.remember);
     return { role };
   });
 
-  route('POST', '/auth/logout', 'public', async (req, reply) => {
+  route('POST', '/auth/logout', 'public', 'view', async (req, reply) => {
     auth.endSession(req.cookies[COOKIE_SESSION]);
     reply.clearCookie(COOKIE_SESSION, { path: '/' });
     return reply.code(204).send();
   });
 
-  route('PUT', '/auth/pins', 'operate', async (req) => {
+  route('PUT', '/auth/pins', 'operate', 'full', async (req) => {
     const b = validate(PinsBody, req.body);
     const keep = req.principal?.kind === 'session' ? req.principal.sessionId : undefined;
     if (b.operatePin) await auth.changePin('operate', b.operatePin, keep);
@@ -547,7 +642,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
 
   // ---------------- library ----------------
   // `?since=<seq>` answers with deltas when the change log still covers that seq, else the full snapshot.
-  route('GET', '/library/snapshot', 'edit', async (req) => {
+  route('GET', '/library/snapshot', 'edit', 'view', async (req) => {
     const withTokens = sessionRole(req.principal) === 'operate';
     const since = (req.query as Record<string, unknown>).since;
     if (typeof since === 'string' && since !== '') {
@@ -560,29 +655,36 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
 
   // presentations
-  route('GET', '/presentations', 'edit', async () => lib.presentations.list());
-  route('GET', '/presentations/:id', 'edit', async (req) => lib.presentations.must(params(req).id!));
-  route('POST', '/presentations', 'edit', async (req, reply) => {
+  route('GET', '/presentations', 'edit', 'view', async () => lib.presentations.list());
+  route('GET', '/presentations/:id', 'edit', 'view', async (req) => lib.presentations.must(params(req).id!));
+  route('POST', '/presentations', 'edit', 'light', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const p = validate(PresentationBody, { ...body, id: body.id || newId(), rev: 1 });
     if (lib.presentations.get(p.id)) throw conflict(`Presentation ${p.id} already exists`);
+    refuseFields(req, () => presentationRefusal(undefined, p));
     const saved = lib.savePresentation(p, { create: true, by: by(req) });
     lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
     return reply.code(201).send(saved);
   });
-  route('PUT', '/presentations/:id', 'edit', async (req) => {
+  route('PUT', '/presentations/:id', 'edit', 'light', async (req) => {
     const id = params(req).id!;
     const body = (req.body ?? {}) as Record<string, unknown>;
     if (typeof body.rev !== 'number') throw badRequest('rev is required');
     assertPresentationUnlocked(id);
     const p = validate(PresentationBody, { ...body, id });
+    // Against the stored version only when the save would apply: a stale rev answers 409 as before (the client
+    // merges and saves again, and is checked then).
+    refuseFields(req, () => {
+      const stored = lib.presentations.get(id);
+      return !stored || stored.rev === body.rev ? presentationRefusal(stored, p) : undefined;
+    });
     const saved = lib.savePresentation(p, { expectedRev: body.rev, by: by(req) });
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);
     // Slides of a native PowerPoint import still waiting for LibreOffice get their follow-up back.
     hub.imports.pptx.followUp(saved);
     return saved;
   });
-  route('DELETE', '/presentations/:id', 'edit', async (req, reply) => {
+  route('DELETE', '/presentations/:id', 'edit', 'full', async (req, reply) => {
     const id = params(req).id!;
     assertPresentationUnlocked(id);
     if (!lib.presentations.delete(id)) throw notFound();
@@ -590,22 +692,25 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     lib.emit([{ kind: 'presentation', id, deleted: true }]);
     return reply.code(204).send();
   });
-  route('GET', '/presentations/:id/revisions', 'edit', async (req) => {
+  route('GET', '/presentations/:id/revisions', 'edit', 'light', async (req) => {
     lib.presentations.must(params(req).id!);
     return lib.revisions(params(req).id!);
   });
-  route('GET', '/presentations/:id/revisions/:rev', 'edit', async (req) =>
+  route('GET', '/presentations/:id/revisions/:rev', 'edit', 'light', async (req) =>
     lib.revision(params(req).id!, Number(params(req).rev)),
   );
-  route('POST', '/presentations/:id/restore/:rev', 'edit', async (req) => {
+  route('POST', '/presentations/:id/restore/:rev', 'edit', 'light', async (req) => {
     const id = params(req).id!;
     assertPresentationUnlocked(id);
+    refuseFields(req, () =>
+      presentationRefusal(lib.presentations.must(id), lib.revision(id, Number(params(req).rev))),
+    );
     const saved = lib.restoreRevision(id, Number(params(req).rev), by(req));
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);
     hub.imports.pptx.followUp(saved);
     return saved;
   });
-  route('POST', '/presentations/:id/slides/:slideId/make-editable', 'edit', async (req, reply) => {
+  route('POST', '/presentations/:id/slides/:slideId/make-editable', 'edit', 'full', async (req, reply) => {
     const id = params(req).id!;
     assertPresentationUnlocked(id);
     // A legacy PowerPoint page whose deck is stored is rebuilt natively (M4 item F): 202 and the job.
@@ -615,7 +720,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
   // 'Show PowerPoint picture' (design/27 §5 "Operator fallback"): LibreOffice pictures of every shown slide,
   // or (M9, multipart with one PDF) the pages of PowerPoint's own PDF export, which needs no LibreOffice.
-  route('POST', '/presentations/:id/pptx-reference', 'edit', async (req, reply) => {
+  route('POST', '/presentations/:id/pptx-reference', 'edit', 'full', async (req, reply) => {
     const id = params(req).id!;
     assertPresentationUnlocked(id);
     const p = lib.presentations.must(id);
@@ -676,12 +781,12 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
     return { p, fileId };
   };
-  route('GET', '/presentations/:id/pptx-reimport', 'edit', async (req) => {
+  route('GET', '/presentations/:id/pptx-reimport', 'edit', 'full', async (req) => {
     const { p } = storedDeck(params(req).id!);
     const tags = (mediaId: string) => lib.media.get(mediaId)?.tags;
     return planReimport(p, {}, tags);
   });
-  route('POST', '/presentations/:id/pptx-reimport', 'edit', async (req, reply) => {
+  route('POST', '/presentations/:id/pptx-reimport', 'edit', 'full', async (req, reply) => {
     const id = params(req).id!;
     assertPresentationUnlocked(id);
     const { fileId } = storedDeck(id);
@@ -690,26 +795,32 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
 
   // playlists
-  route('GET', '/playlists', 'edit', async () => lib.playlists.list());
-  route('GET', '/playlists/:id', 'edit', async (req) => lib.playlists.must(params(req).id!));
-  route('POST', '/playlists', 'edit', async (req, reply) => {
+  route('GET', '/playlists', 'edit', 'view', async () => lib.playlists.list());
+  route('GET', '/playlists/:id', 'edit', 'view', async (req) => lib.playlists.must(params(req).id!));
+  route('POST', '/playlists', 'edit', 'light', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const p = validate(PlaylistBody, { ...body, id: body.id || newId(), rev: 1 });
     if (lib.playlists.get(p.id)) throw conflict(`Playlist ${p.id} already exists`);
+    refuseFields(req, () => playlistRefusal(undefined, p));
     const saved = lib.playlists.insert(p);
     lib.emit([{ kind: 'playlist', id: saved.id, rev: saved.rev, entity: saved }]);
     return reply.code(201).send(saved);
   });
-  route('PUT', '/playlists/:id', 'edit', async (req) => {
+  route('PUT', '/playlists/:id', 'edit', 'light', async (req) => {
     const id = params(req).id!;
     const body = (req.body ?? {}) as Record<string, unknown>;
     if (typeof body.rev !== 'number') throw badRequest('rev is required');
     assertPlaylistUnlocked(id);
-    const saved = lib.playlists.update(id, validate(PlaylistBody, { ...body, id }), body.rev);
+    const next = validate(PlaylistBody, { ...body, id });
+    refuseFields(req, () => {
+      const stored = lib.playlists.get(id);
+      return stored && stored.rev === body.rev ? playlistRefusal(stored, next) : undefined;
+    });
+    const saved = lib.playlists.update(id, next, body.rev);
     lib.emit([{ kind: 'playlist', id, rev: saved.rev, entity: saved }]);
     return saved;
   });
-  route('DELETE', '/playlists/:id', 'edit', async (req, reply) => {
+  route('DELETE', '/playlists/:id', 'edit', 'full', async (req, reply) => {
     const id = params(req).id!;
     assertPlaylistUnlocked(id);
     if (!lib.playlists.delete(id)) throw notFound();
@@ -718,9 +829,9 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
 
   // themes
-  route('GET', '/themes', 'edit', async () => lib.themes.list());
-  route('GET', '/themes/:id', 'edit', async (req) => lib.themes.must(params(req).id!));
-  route('POST', '/themes', 'edit', async (req, reply) => {
+  route('GET', '/themes', 'edit', 'view', async () => lib.themes.list());
+  route('GET', '/themes/:id', 'edit', 'view', async (req) => lib.themes.must(params(req).id!));
+  route('POST', '/themes', 'edit', 'full', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const t = validate(ThemeBody, { ...body, id: body.id || newId() });
     if (lib.themes.get(t.id)) throw conflict(`Theme ${t.id} already exists`);
@@ -728,7 +839,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     lib.emit([{ kind: 'theme', id: saved.id, rev: saved.rev, entity: saved }]);
     return reply.code(201).send(saved);
   });
-  route('PUT', '/themes/:id', 'edit', async (req) => {
+  route('PUT', '/themes/:id', 'edit', 'full', async (req) => {
     const id = params(req).id!;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const saved = lib.saveTheme(validate(ThemeBody, { ...body, id }), {
@@ -738,7 +849,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     lib.emit([{ kind: 'theme', id, rev: saved.rev, entity: saved }]);
     return saved;
   });
-  route('DELETE', '/themes/:id', 'edit', async (req, reply) => {
+  route('DELETE', '/themes/:id', 'edit', 'full', async (req, reply) => {
     const id = params(req).id!;
     if (id === DEFAULT_THEME.id) throw conflict('The default theme cannot be deleted');
     if (!lib.themes.delete(id)) throw notFound();
@@ -746,14 +857,14 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     lib.emit([{ kind: 'theme', id, deleted: true }]);
     return reply.code(204).send();
   });
-  route('GET', '/themes/:id/revisions', 'edit', async (req) => {
+  route('GET', '/themes/:id/revisions', 'edit', 'full', async (req) => {
     lib.themes.must(params(req).id!);
     return lib.themeRevisions(params(req).id!);
   });
-  route('GET', '/themes/:id/revisions/:rev', 'edit', async (req) =>
+  route('GET', '/themes/:id/revisions/:rev', 'edit', 'full', async (req) =>
     lib.themeRevision(params(req).id!, Number(params(req).rev)),
   );
-  route('POST', '/themes/:id/restore/:rev', 'edit', async (req) => {
+  route('POST', '/themes/:id/restore/:rev', 'edit', 'full', async (req) => {
     const id = params(req).id!;
     const saved = lib.restoreThemeRevision(id, Number(params(req).rev), by(req));
     lib.emit([{ kind: 'theme', id, rev: saved.rev, entity: saved }]);
@@ -761,14 +872,14 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
 
   // folders
-  route('GET', '/folders', 'edit', async () => lib.folders.list());
-  route('POST', '/folders', 'edit', async (req, reply) => {
+  route('GET', '/folders', 'edit', 'view', async () => lib.folders.list());
+  route('POST', '/folders', 'edit', 'full', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const saved = lib.folders.insert(validate(FolderBody, { ...body, id: body.id || newId() }));
     lib.emit([{ kind: 'folder', id: saved.id, rev: saved.rev, entity: saved }]);
     return reply.code(201).send(saved);
   });
-  route('PUT', '/folders/:id', 'edit', async (req) => {
+  route('PUT', '/folders/:id', 'edit', 'full', async (req) => {
     const id = params(req).id!;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const saved = lib.folders.update(
@@ -779,7 +890,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     lib.emit([{ kind: 'folder', id, rev: saved.rev, entity: saved }]);
     return saved;
   });
-  route('DELETE', '/folders/:id', 'edit', async (req, reply) => {
+  route('DELETE', '/folders/:id', 'edit', 'full', async (req, reply) => {
     const id = params(req).id!;
     if (!lib.folders.delete(id)) throw notFound();
     lib.emit([{ kind: 'folder', id, deleted: true }]);
@@ -787,9 +898,9 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
 
   // ---------------- media ----------------
-  route('GET', '/media', 'edit', async () => lib.media.list());
-  route('GET', '/media/:id', 'edit', async (req) => lib.media.must(params(req).id!));
-  route('POST', '/media', 'edit', async (req, reply) => {
+  route('GET', '/media', 'edit', 'view', async () => lib.media.list());
+  route('GET', '/media/:id', 'edit', 'view', async (req) => lib.media.must(params(req).id!));
+  route('POST', '/media', 'edit', 'light', async (req, reply) => {
     const { files: parts, fields } = await readMultipart(hub, req);
     // An SVG may come with its still (field "raster"): a PNG the uploading client drew, kept as the file
     // outputs draw (design/12 "Media pipeline"). One SVG per upload then.
@@ -824,7 +935,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     }
     return reply.code(201).send(out.length === 1 ? out[0] : out);
   });
-  route('PUT', '/media/:id', 'edit', async (req) => {
+  route('PUT', '/media/:id', 'edit', 'light', async (req) => {
     const id = params(req).id!;
     const patch = validate(MediaPatch, req.body);
     const cur = lib.media.must(id);
@@ -844,11 +955,12 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
           }
         : {}),
     };
+    refuseFields(req, () => mediaPatchRefusal(cur, next));
     const saved = lib.media.update(id, next, patch.rev);
     lib.emit([{ kind: 'media', id, rev: saved.rev, entity: saved }]);
     return saved;
   });
-  route('DELETE', '/media/:id', 'edit', async (req, reply) => {
+  route('DELETE', '/media/:id', 'edit', 'full', async (req, reply) => {
     const id = params(req).id!;
     if (live.locks().media.has(id)) throw locked('This media is used by the live playlist');
     const m = lib.media.must(id);
@@ -867,10 +979,10 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     for (const h of [m.original.hash, m.delivery?.hash, m.poster?.hash]) await hub.store.release(h);
     return reply.code(204).send();
   });
-  route('POST', '/media/:id/retry', 'edit', async (req) => hub.media.retry(params(req).id!));
+  route('POST', '/media/:id/retry', 'edit', 'full', async (req) => hub.media.retry(params(req).id!));
   // An SVG's still sent after the SVG (field "raster"): the resumable upload carries the SVG alone, then the
   // uploading client draws its still and sends it here (design/12 "Media pipeline", MediaService.attachStill).
-  route('PUT', '/media/:id/still', 'edit', async (req) => {
+  route('PUT', '/media/:id/still', 'edit', 'light', async (req) => {
     const id = params(req).id!;
     const { files } = await readMultipart(hub, req, { maxFiles: 1, limit: MAX_SVG_RASTER_BYTES });
     try {
@@ -884,7 +996,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
 
   // Resumable uploads: create, then PATCH chunks with Upload-Offset; the last chunk returns the Media.
-  route('POST', '/media/uploads', 'edit', async (req, reply) => {
+  route('POST', '/media/uploads', 'edit', 'light', async (req, reply) => {
     const b = validate(UploadCreate, req.body);
     const id = newId();
     const now = Date.now();
@@ -904,12 +1016,12 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     if (!row) throw notFound('Upload not found or expired');
     return row;
   };
-  route('GET', '/media/uploads/:id', 'edit', async (req, reply) => {
+  route('GET', '/media/uploads/:id', 'edit', 'light', async (req, reply) => {
     const row = uploadRow(params(req).id!);
     reply.header('Upload-Offset', String(row.offset));
     return { id: row.id, offset: row.offset, size: row.size };
   });
-  route('PATCH', '/media/uploads/:id', 'edit', async (req, reply) => {
+  route('PATCH', '/media/uploads/:id', 'edit', 'light', async (req, reply) => {
     const row = uploadRow(params(req).id!);
     const offset = Number(req.headers['upload-offset']);
     if (!Number.isInteger(offset) || offset !== row.offset) {
@@ -963,8 +1075,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
 
   // ---------------- fonts ----------------
-  route('GET', '/fonts', 'edit', async () => lib.listFonts());
-  route('POST', '/fonts/upload', 'edit', async (req, reply) => {
+  route('GET', '/fonts', 'edit', 'view', async () => lib.listFonts());
+  route('POST', '/fonts/upload', 'edit', 'full', async (req, reply) => {
     const { files, fields } = await readMultipart(hub, req, { limit: 50 * 1024 * 1024 });
     if (!files.length) throw badRequest('No font file in the upload');
     const out = [];
@@ -979,20 +1091,21 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     }
     return reply.code(201).send(out);
   });
-  route('DELETE', '/fonts/:id', 'edit', async (req, reply) => {
+  route('DELETE', '/fonts/:id', 'edit', 'full', async (req, reply) => {
+    if (live.locks().fonts.has(params(req).id!)) throw locked('This font is used by the live playlist');
     if (!(await hub.fonts.remove(params(req).id!))) throw notFound();
     return reply.code(204).send();
   });
-  route('GET', '/fonts/google/search', 'edit', async (req) =>
+  route('GET', '/fonts/google/search', 'edit', 'full', async (req) =>
     searchGoogleFonts(String((req.query as Record<string, unknown>).q ?? '').slice(0, 100)),
   );
-  route('POST', '/fonts/google', 'edit', async (req, reply) => {
+  route('POST', '/fonts/google', 'edit', 'full', async (req, reply) => {
     const b = validate(z.object({ family: z.string().min(1).max(100) }).strict(), req.body);
     return reply.code(202).send(hub.fonts.queueGoogle(b.family));
   });
 
   // ---------------- imports ----------------
-  route('POST', '/import/songselect', 'edit', async (req, reply) => {
+  route('POST', '/import/songselect', 'edit', 'full', async (req, reply) => {
     let text: string;
     let title: string | undefined;
     if (req.isMultipart()) {
@@ -1016,7 +1129,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     }
     return reply.code(201).send(hub.imports.songselect(text, { title, by: by(req) }));
   });
-  route('POST', '/import/pro7', 'edit', async (req, reply) => {
+  route('POST', '/import/pro7', 'edit', 'full', async (req, reply) => {
     assertNotLive();
     if (req.isMultipart()) {
       const { files } = await readMultipart(hub, req, { maxFiles: 1 });
@@ -1047,7 +1160,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const b = validate(z.object({ path: z.string().min(1).max(1000) }).strict(), req.body);
     return reply.code(202).send(await hub.imports.queuePro7FromPath(b.path));
   });
-  route('POST', '/import/document', 'edit', async (req, reply) => {
+  route('POST', '/import/document', 'edit', 'full', async (req, reply) => {
     assertNotLive();
     // A scene parsed in the browser (`clientScene`) is optional: past `CLIENT_SCENE_LIMITS.bytes` it is dropped
     // before it is stored, and the hub parses the deck itself (design/27 §12).
@@ -1124,21 +1237,21 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
 
   // What this hub's server tools allow (design/27 M9: LibreOffice is optional): the operator offers only what
   // works. Not in the public /health: no tool versions to the world.
-  route('GET', '/capabilities', 'edit', async () => {
+  route('GET', '/capabilities', 'edit', 'full', async () => {
     await hub.imports.tools.settled();
     return hub.imports.tools.capabilities();
   });
 
   // ---------------- jobs ----------------
-  route('GET', '/jobs', 'edit', async () => hub.jobs.list());
-  route('GET', '/jobs/:id', 'edit', async (req) => hub.jobs.get(params(req).id!));
+  route('GET', '/jobs', 'edit', 'full', async () => hub.jobs.list());
+  route('GET', '/jobs/:id', 'edit', 'full', async (req) => hub.jobs.get(params(req).id!));
 
   // ---------------- settings and outputs ----------------
-  route('GET', '/settings', 'edit', async (req) => {
+  route('GET', '/settings', 'edit', 'view', async (req) => {
     const s = lib.getSettings();
     return sessionRole(req.principal) === 'operate' ? s : stripTokens(s);
   });
-  route('GET', '/settings/:key', 'edit', async (req) => {
+  route('GET', '/settings/:key', 'edit', 'view', async (req) => {
     const key = params(req).key as SettingsKey;
     if (!SETTINGS_KEYS.includes(key)) throw notFound(`Unknown setting ${key}`);
     const v = lib.getSetting(key);
@@ -1146,7 +1259,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       ? (v as Output[]).map(({ token: _t, ...o }) => o)
       : v;
   });
-  route('PUT', '/settings/:key', 'operate', async (req) => {
+  route('PUT', '/settings/:key', 'operate', 'full', async (req) => {
     const key = params(req).key as SettingsKey;
     if (!SETTINGS_KEYS.includes(key)) throw notFound(`Unknown setting ${key}`);
     let value = validate(SETTINGS_BODY[key], req.body, key) as Settings[SettingsKey];
@@ -1168,7 +1281,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     }
     return lib.putSetting(key, value);
   });
-  route('POST', '/outputs/:id/token/rotate', 'operate', async (req) => {
+  route('POST', '/outputs/:id/token/rotate', 'operate', 'full', async (req) => {
     const id = params(req).id!;
     const outputs = lib.getSetting('outputs');
     const o = outputs.find((x) => x.id === id);
@@ -1183,7 +1296,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     return next;
   });
   // ---------------- files ----------------
-  route('GET', '/files/:hash', 'any', async (req, reply) => {
+  route('GET', '/files/:hash', 'any', 'view', async (req, reply) => {
     const hash = params(req).hash!;
     if (!/^[0-9a-f]{64}$/.test(hash)) throw notFound();
     const f = lib.getFile(hash);
@@ -1197,7 +1310,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
 
   // ---------------- diagnostics, backups ----------------
-  route('GET', '/diagnostics/export', 'operate', async (_req, reply) => {
+  route('GET', '/diagnostics/export', 'operate', 'full', async (_req, reply) => {
     const zip = new JSZip();
     const s = stripTokens(lib.getSettings());
     const d = await hub.liveDiag();
@@ -1239,8 +1352,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     reply.header('Cache-Control', 'no-store');
     return reply.type('application/zip').send(buf);
   });
-  route('POST', '/backup/run', 'operate', async () => hub.backups.run());
-  route('GET', '/backup/list', 'operate', async () => hub.backups.list());
+  route('POST', '/backup/run', 'operate', 'full', async () => hub.backups.run());
+  route('GET', '/backup/list', 'operate', 'full', async () => hub.backups.list());
 }
 
 /**

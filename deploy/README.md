@@ -85,8 +85,12 @@ Open `https://op.<venue>.synology.me`. While no PINs exist, the operator shows f
 the Operate PIN and the Edit PIN (6 to 12 digits, different from each other). Setup is disabled once the
 PINs exist. To change PINs later, an Operate session calls `PUT /api/v1/auth/pins`.
 
-Five wrong PINs from one IP lock that IP out for 15 minutes. Fifty wrong PINs across all IPs lock the
-whole login for 15 minutes. Lockouts are logged with the IP.
+Five wrong PINs from one IP lock that IP out for 15 minutes; each attempt counts as soon as it arrives, so
+five sent at once are all the tries an address gets. Fifty wrong PINs from public addresses lock the login
+for every public address for 15 minutes; addresses on the venue's own network (10/8, 172.16/12, 192.168/16,
+loopback, link-local, IPv6 ULA) are never locked by them, so a scanner on the public name cannot lock out the
+venue PC or a phone on church Wi-Fi. Each LAN address keeps its own five (design/21 "Authentication"; the
+trade-off is design/28 §4). Lockouts are logged with the IP.
 
 ## 6. Presentation PC hosts entries
 

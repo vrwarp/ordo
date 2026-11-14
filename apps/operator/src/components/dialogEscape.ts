@@ -186,3 +186,78 @@ export function installDialogEscape(onClose: () => void, target: Target = window
     if (i >= 0) open.splice(i, 1);
   };
 }
+
+/**
+ * Bottom sheets (design/28 §2.2 "Sheets", the compact layout only): while one is open the page behind it,
+ * `#root`, is `inert` (sheets are portalled to `body`, outside it), so a tap, a screen reader or Tab never
+ * reaches the frame under the sheet. Counted like the modals: the last sheet to close lifts it. The compact
+ * sign-in over an ended session is a layer of its own (also outside `#root`) and holds it too.
+ */
+const sheets: { dismiss?: () => void }[] = [];
+
+function setRootInert(doc: Document, on: boolean): void {
+  const root = doc.getElementById('root');
+  if (!root) return;
+  if (on) root.setAttribute('inert', '');
+  else root.removeAttribute('inert');
+}
+
+/**
+ * Register an open sheet: `#root` turns inert; returns its removal (the last one lifts it). `dismiss` closes
+ * it when every sheet must go (`dismissSheets`); a layer without one stays.
+ */
+export function registerSheet(doc: Document = document, dismiss?: () => void): () => void {
+  const me = { dismiss };
+  sheets.push(me);
+  setRootInert(doc, true);
+  return () => {
+    const i = sheets.indexOf(me);
+    if (i >= 0) sheets.splice(i, 1);
+    if (!sheets.length) setRootInert(doc, false);
+  };
+}
+
+/**
+ * Close every open sheet that can be closed (the session ended under them: review of P0, the sign-in over an
+ * ended session drawn above a sheet the page could no longer see, its keypad taps landing on the sheet). Each
+ * closes through its own onClose, as a tap on its close button does.
+ */
+export function dismissSheets(): void {
+  for (const s of [...sheets].reverse()) s.dismiss?.();
+}
+
+/** Sheets open (for tests). */
+export function openSheetCount(): number {
+  return sheets.length;
+}
+
+/**
+ * The control a sheet opens from, to focus again when it closes. Safari does not focus a button it taps, so
+ * the last control pressed (within a second, still in the document) stands in when nothing has focus.
+ */
+let lastPressed: { el: HTMLElement; at: number } | undefined;
+
+const CONTROL = 'button, a[href], input, select, textarea, [role="button"], [tabindex]';
+
+/** Record presses on the compact layout (CompactFrame installs it); returns the removal. */
+export function trackPresses(doc: Document = document): () => void {
+  const record = (e: Event) => {
+    const t = e.target as Element | null;
+    const el = t && typeof t.closest === 'function' ? t.closest<HTMLElement>(CONTROL) : null;
+    if (el) lastPressed = { el, at: Date.now() };
+  };
+  doc.addEventListener('pointerdown', record, true);
+  return () => {
+    doc.removeEventListener('pointerdown', record, true);
+    lastPressed = undefined;
+  };
+}
+
+/** The element to focus when a sheet that opens now closes (null when none). */
+export function openerFor(doc: Document | undefined = globalThis.document): HTMLElement | null {
+  if (!doc) return null;
+  const a = doc.activeElement as HTMLElement | null;
+  if (a && a !== doc.body && a !== doc.documentElement) return a;
+  if (lastPressed && lastPressed.el.isConnected && Date.now() - lastPressed.at < 1000) return lastPressed.el;
+  return null;
+}

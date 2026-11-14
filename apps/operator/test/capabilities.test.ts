@@ -130,7 +130,22 @@ describe('capability detection (design/15 iPad editing)', () => {
     expect(forcedProfile('', 'full')).toBe('full');
     expect(forcedProfile('?profile=x', 'nope')).toBeNull();
     expect(profileFor(detectCapabilities(chromeDesktop), 'operate', 'edit')).toBe('edit');
-    expect(profileFor(detectCapabilities(ipadSafari), 'operate', 'full')).toBe('full');
+    // The forced-profile guard (design/28 §3.1, §10 item 1): a forced `full` on a device with neither Window
+    // Management nor WebHID (iPad Safari, a phone, Android Chrome) would give a broken operator; ignored.
+    expect(profileFor(detectCapabilities(ipadSafari), 'operate', 'full')).toBe('edit');
+  });
+
+  it('a forced full profile needs Window Management or WebHID; a forced edit always applies', () => {
+    const none = detectCapabilities({ ...ipadSafari, navigator: {}, window: {} });
+    expect(none.hid || none.windowManagement).toBe(false);
+    expect(profileFor(none, 'operate', 'full')).toBe('edit');
+    expect(profileFor({ ...none, windowManagement: true }, 'operate', 'full')).toBe('full');
+    expect(profileFor({ ...none, hid: true }, 'operate', 'full')).toBe('full');
+    expect(profileFor(none, 'operate', 'edit')).toBe('edit');
+    expect(profileFor(detectCapabilities(chromeDesktop), 'operate', 'edit')).toBe('edit');
+    expect(profileFor(detectCapabilities(chromeDesktop), 'operate', 'full')).toBe('full');
+    // Never over the edit role.
+    expect(profileFor(detectCapabilities(chromeDesktop), 'edit', 'full')).toBe('edit');
   });
 
   it('persistent storage is requested once per device', async () => {

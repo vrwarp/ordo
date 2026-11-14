@@ -12,9 +12,10 @@ import { FontService } from './fonts/service.ts';
 import { createHttpApp, type RouteInfo, withTimeout } from './http.ts';
 import { ImportService } from './imports.ts';
 import { JobQueue } from './jobs.ts';
-import { Library } from './library.ts';
+import { JobPacing } from './pacing.ts';
+import { Library, phonesSwitch } from './library.ts';
 import { LiveService, librarySource } from './live.ts';
-import { affectsContext } from './librarylink.ts';
+import { contextMediaIds, forOutputs } from './librarylink.ts';
 import { LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
@@ -31,6 +32,8 @@ import { Store } from './store.ts';
 import { SocketHub } from './ws.ts';
 
 export { checkRouteAccess, type RouteInfo } from './http.ts';
+
+const NO_MEDIA: ReadonlySet<string> = new Set();
 
 export type Hub = {
   app: FastifyInstance;
@@ -104,7 +107,20 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   await store.init();
   const auth = new Auth(db, lib, log);
   if (cfg.devPin) await auth.devSetup(cfg.devPin);
-  const jobs = new JobQueue(db, log, cfg.jobs, (job) => lib.emit([{ kind: 'job', id: job.id, entity: job }]));
+  // Phones (design/24 "Feature flags are settings"): cached here, followed on the settings change.
+  const phones = phonesSwitch(lib);
+  const pacing = new JobPacing({ graceMs: cfg.paceGraceMs, enabled: phones.enabled() });
+  const jobs = new JobQueue(
+    db,
+    log,
+    cfg.jobs,
+    (job) => lib.emit([{ kind: 'job', id: job.id, entity: job }]),
+    {
+      pacing,
+      notifyMany: (all) => lib.emit(all.map((job) => ({ kind: 'job' as const, id: job.id, entity: job }))),
+    },
+  );
+  phones.onChange((on) => jobs.setPhones(on));
   const media = new MediaService(lib, store, jobs, cfg, log);
   const fonts = new FontService(lib, store, jobs, cfg, log);
   const imports = new ImportService(lib, store, jobs, media, cfg, log, (id) =>
@@ -115,7 +131,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
   const statics = new StaticApps(cfg.appsDir, cfg.domain);
 
-  const http = await createHttpApp({ cfg, log, auth: () => auth });
+  const http = await createHttpApp({ cfg, log, auth: () => auth, phonesEnabled: phones.enabled });
   const app = http.app;
   const sockets = new SocketHub(auth, live, () => lib.getSetting('outputs'), log, {
     domain: cfg.domain,
@@ -123,9 +139,13 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     clientIp: http.clientIp,
   });
   // Outputs hear of what their config holds: settings, fonts and the logo media.
-  lib.onChange((changes) =>
-    sockets.broadcastLibrary(changes, (ch) => affectsContext(ch, lib.getSetting('general').logoMediaId)),
-  );
+  lib.onChange((changes) => {
+    // The media the settings name, read only for a batch that has a media change.
+    const ids = changes.some((c) => c.kind === 'media')
+      ? contextMediaIds({ general: lib.getSetting('general'), looks: lib.getSetting('looks') })
+      : NO_MEDIA;
+    sockets.broadcastLibrary(changes, (ch) => forOutputs(ch, ids));
+  });
 
   const hub: Hub = {
     app,
@@ -213,7 +233,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   app.route({
     method: ['GET', 'HEAD'],
     url: '/*',
-    config: { access: 'public' },
+    config: { access: 'public', cap: 'view' },
     handler: (req, reply) => statics.serve(req, reply),
   });
   app.server.on('upgrade', (req, socket, head) => {
@@ -235,6 +255,11 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   await app.ready();
   await cleanupStaleUploads(hub).catch((e) => log.warn({ err: errorMessage(e) }, 'upload cleanup failed'));
   live.start();
+  // Jobs paced while live (design/28 §5.3): the mode at start first, so a restart during a service never
+  // relaunches a held job; then every goLive and End service.
+  jobs.onLiveMode(live.state.mode);
+  live.onDelta(() => jobs.onLiveMode(live.state.mode));
+  live.onState((s) => jobs.onLiveMode(s.mode));
   jobs.start();
   sockets.start();
   if (cfg.scheduleBackups) backups.schedule();

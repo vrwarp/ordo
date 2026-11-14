@@ -1,10 +1,28 @@
 import { api } from '@ordo/client';
 import { ROUTES } from '@ordo/protocol';
 import { useState } from 'react';
+import { t } from '../../i18n/index.ts';
+import { useCurrentLayout } from '../../lib/layout.ts';
 import { refreshSession } from '../../state/session.ts';
 
-/** First run: set both PINs (prd/09). */
+/**
+ * First run: set both PINs (prd/09). On the compact layout (a phone) only a note: the PINs are set at the venue
+ * PC (design/28 owner question 8), never on a phone over the public hostname.
+ */
 export function SetupView() {
+  if (useCurrentLayout() === 'compact')
+    return (
+      <div className="center">
+        <div className="card col" data-setup-phone>
+          <h2>ordo</h2>
+          <p style={{ margin: 0 }}>{t('setup.phone')}</p>
+        </div>
+      </div>
+    );
+  return <SetupForm />;
+}
+
+function SetupForm() {
   const [operatePin, setOperate] = useState('');
   const [operate2, setOperate2] = useState('');
   const [editPin, setEdit] = useState('');

@@ -13,6 +13,7 @@ import {
   Look,
   type Media,
   Output,
+  PhoneSettings,
   type Playlist,
   type Presentation,
   SurfaceSettings,
@@ -28,10 +29,41 @@ export const API_PREFIX = '/api/v1';
 
 export type ApiError = { error: { code: string; message: string } };
 
-export type AuthPinReq = { pin: string; remember?: boolean };
-export type AuthPinRes = { role: 'operate' | 'edit' };
-export type AuthMeRes = { role: Role | null; setupRequired: boolean; version: string; domain: string };
+/**
+ * What a session may do beyond its role (design/28 §3.2): `full` is a session as before (the venue PC, an
+ * iPad, a laptop); `light` (a phone) reads everything and writes presentations, playlists, uploads, media names
+ * and tags, and restores; `view` reads. A session that asked for no cap is `full`.
+ */
+export const SessionCap = z.enum(['full', 'light', 'view']);
+export type SessionCap = z.infer<typeof SessionCap>;
+
+/**
+ * POST /auth/pin. `cap`: the cap a device asks for (a phone sends 'light', and only to a hub whose
+ * `AuthMeRes.caps` lists it: an older hub answers 400 to the key). A capped sign-in is never remembered.
+ */
+export type AuthPinReq = { pin: string; remember?: boolean; cap?: SessionCap };
+/** A capped sign-in answers role 'edit' whatever PIN matched, with its cap. */
+export type AuthPinRes = { role: 'operate' | 'edit'; cap?: 'light' | 'view' };
+/**
+ * GET /auth/me. `cap`: a capped session's cap (absent: full). `caps`: the caps this hub grants, listed signed in
+ * or not (absent: an older hub that grants none, so a client sends no `cap` to it).
+ */
+export type AuthMeRes = {
+  role: Role | null;
+  setupRequired: boolean;
+  version: string;
+  domain: string;
+  cap?: 'light' | 'view';
+  caps?: SessionCap[];
+};
 export type SetupReq = { operatePin: string; editPin: string };
+
+/**
+ * Sent with `1` on every request of an ordo client (design/28 §4): the hub needs it on writes from capped
+ * sessions always, and from signed-in full sessions once Phones is on (`Settings.phones.enabled`), so a page
+ * made elsewhere cannot write with the venue's cookie. Without it such a write gets 403 `x_ordo_required`.
+ */
+export const HEADER_CLIENT = 'x-ordo';
 
 export type Folder = { id: string; name: string; parentId?: string };
 export type Job = {
@@ -44,6 +76,11 @@ export type Job = {
   error?: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * 'service': a heavy job the hub holds until the service ends (design/28 §5.3; its media stays 'uploaded').
+   * Reaches clients in `library.delta` job changes.
+   */
+  waiting?: 'service';
 };
 
 /** GET /library/snapshot */
@@ -84,6 +121,11 @@ export type Settings = {
   audio: AudioSettings;
   keymap: KeyMap;
   surfaces: SurfaceSettings;
+  /**
+   * Optional in the type: an older hub sends none, and every reader writes `settings.phones?.enabled === true`
+   * (off). This hub always sends it.
+   */
+  phones?: PhoneSettings;
 };
 export type SettingsKey = keyof Settings;
 
@@ -99,6 +141,7 @@ export const SETTINGS_BODY: Record<SettingsKey, z.ZodType> = {
   audio: AudioSettings.strict(),
   keymap: KeyMap,
   surfaces: SurfaceSettings.strict(),
+  phones: PhoneSettings.strict(),
 };
 
 export type RevisionInfo = { rev: number; savedAt: string; savedBy?: string; title: string };

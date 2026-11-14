@@ -1,5 +1,5 @@
 import { api, ApiFailure, upload } from '@ordo/client';
-import { API_PREFIX } from '@ordo/protocol';
+import { API_PREFIX, HEADER_CLIENT } from '@ordo/protocol';
 import {
   isSvgMime,
   type Media,
@@ -171,7 +171,11 @@ export async function uploadMedia(
     const res = await fetch(`${API_PREFIX}/media/uploads/${session.id}`, {
       method: 'PATCH',
       credentials: 'same-origin',
-      headers: { 'upload-offset': String(offset), 'content-type': 'application/offset+octet-stream' },
+      headers: {
+        'upload-offset': String(offset),
+        'content-type': 'application/offset+octet-stream',
+        [HEADER_CLIENT]: '1',
+      },
       body: file.slice(offset, end),
       signal,
     });

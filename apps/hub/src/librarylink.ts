@@ -62,9 +62,46 @@ const BUNDLES_KEEP = 8;
 /** Why the last prepare() of a playlist did not get a fresh copy. */
 type Fallback = 'unanswered' | 'down';
 
-/** Does a library change affect the live process's context copy (settings, fonts, the logo media)? */
-export function affectsContext(c: Change, logoId: string | undefined): boolean {
-  return c.kind === 'settings' || c.kind === 'font' || (c.kind === 'media' && (!logoId || c.id === logoId));
+/**
+ * The settings fields that name a media item the outputs' config depends on (design/28 §3.4): the logo and
+ * each look's holding image. phones-context.test.ts walks the settings schemas and fails on a `*MediaId` field
+ * missing here.
+ */
+export const CONTEXT_MEDIA_FIELDS = ['general.logoMediaId', 'looks[].holdingMediaId'] as const;
+
+/** Every media id the settings name (CONTEXT_MEDIA_FIELDS). */
+export function contextMediaIds(
+  settings:
+    | { general?: { logoMediaId?: string }; looks?: readonly { holdingMediaId?: string }[] }
+    | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  const logo = settings?.general?.logoMediaId;
+  if (logo) out.add(logo);
+  for (const l of settings?.looks ?? []) if (l?.holdingMediaId) out.add(l.holdingMediaId);
+  return out;
+}
+
+/**
+ * Does a library change affect the live process's context copy and the outputs' config: a settings or font
+ * change, or a change to a media item the settings name (the logo, a holding image). Before P0 every media
+ * change counted when no logo was set, so a photo upload made every output refetch its config three times.
+ */
+export function affectsContext(c: Change, mediaIds: ReadonlySet<string>): boolean {
+  return c.kind === 'settings' || c.kind === 'font' || (c.kind === 'media' && mediaIds.has(c.id));
+}
+
+/**
+ * Settings keys the live process reads (its context copy) but outputs never do: their changes refresh the copy
+ * and reach no output socket. `phones` (design/28): toggling the switch sent every output a library delta and a
+ * mid-service /output/config refetch (review of P0); the live process needs it for the x-ordo check.
+ */
+export const SETTINGS_NOT_FOR_OUTPUTS: ReadonlySet<string> = new Set(['phones']);
+
+/** Is a library change part of what outputs read from their config (`affectsContext` less the keys above)? */
+export function forOutputs(c: Change, mediaIds: ReadonlySet<string>): boolean {
+  if (c.kind === 'settings' && SETTINGS_NOT_FOR_OUTPUTS.has(c.id)) return false;
+  return affectsContext(c, mediaIds);
 }
 
 function ago(ms: number): string {
@@ -145,15 +182,23 @@ export class LibraryLink implements LiveSource {
     return this.url;
   }
 
+  /** The media ids the current context's settings name, computed once per context copy. */
+  private mediaIdsOf: { context?: LiveContext; ids: ReadonlySet<string> } = { ids: new Set() };
+  private contextMedia(): ReadonlySet<string> {
+    if (this.mediaIdsOf.context !== this.context)
+      this.mediaIdsOf = { context: this.context, ids: contextMediaIds(this.context?.settings) };
+    return this.mediaIdsOf.ids;
+  }
+
   /** Do these library changes affect the context copy (so it must be refreshed before they are broadcast)? */
   affects(changes: Change[]): boolean {
-    const logoId = this.context?.settings.general.logoMediaId;
-    return changes.some((c) => affectsContext(c, logoId));
+    const ids = this.contextMedia();
+    return changes.some((c) => affectsContext(c, ids));
   }
 
   /** Is this one change part of what outputs read from their config? */
   forOutputs(c: Change): boolean {
-    return affectsContext(c, this.context?.settings.general.logoMediaId);
+    return forOutputs(c, this.contextMedia());
   }
 
   stop(): void {

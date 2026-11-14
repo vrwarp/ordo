@@ -80,6 +80,10 @@ export function detectCapabilities(env: CapabilityEnv): Capabilities {
  * `edit`, or when forced for testing. The Fullscreen API is deliberately not enough: iPadOS Safari has it,
  * and reports a fine pointer with hover as soon as a trackpad or mouse is attached (a Magic Keyboard), so
  * a rule built on it would turn the worship lead's iPad into an operator.
+ *
+ * A forced `edit` always applies; a forced `full` only where Window Management or WebHID exist (the
+ * forced-profile guard, design/28 §3.1 and §10 item 1): on a phone or a tablet it would give a broken
+ * operator, so it is ignored there. The hub's session cap, not this guard, protects a phone's cookie.
  */
 export function profileFor(
   caps: Capabilities,
@@ -87,8 +91,10 @@ export function profileFor(
   forced?: Profile | null,
 ): Profile {
   if (role === 'edit') return 'edit';
-  if (forced === 'edit' || forced === 'full') return forced;
-  return caps.windowManagement || caps.hid ? 'full' : 'edit';
+  if (forced === 'edit') return 'edit';
+  const capable = caps.windowManagement || caps.hid;
+  if (forced === 'full') return capable ? 'full' : 'edit';
+  return capable ? 'full' : 'edit';
 }
 
 /** `?profile=edit|full` in the URL, or localStorage `ordo.profile` (tests and support only). */

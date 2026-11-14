@@ -113,15 +113,20 @@ export const PORT_TABLE = {
   'editor-script': { offset: 110, count: 1, spec: 'editor-script.spec.ts', what: 'hub' },
   'editor-canvas-first': { offset: 111, count: 1, spec: 'editor-canvas-first.spec.ts', what: 'hub' },
   'editor-fit': { offset: 112, count: 1, spec: 'editor-fit.spec.ts', what: 'hub' },
-  // The iPad specs run twice (landscape and portrait projects), one test at a time: a test that runs in both
-  // takes one port per orientation where the two would otherwise reuse each other's hub data.
+  // The iPad specs run three times (landscape, portrait and the Android tablet projects), one test at a time: a
+  // test that runs in each takes one port per project where they would otherwise reuse each other's hub data.
   'ipad-edit': { offset: 200, count: 4, spec: 'ipad/edit.spec.ts', what: 'one hub per test' },
-  'ipad-group': { offset: 210, count: 2, spec: 'ipad/group.spec.ts', what: '0 landscape, 1 portrait' },
+  'ipad-group': {
+    offset: 210,
+    count: 3,
+    spec: 'ipad/group.spec.ts',
+    what: '0 landscape, 1 portrait, 2 chromium-tablet (skips)',
+  },
   'ipad-touch-targets': {
     offset: 215,
-    count: 2,
+    count: 3,
     spec: 'ipad/touch-targets.spec.ts',
-    what: '0 landscape, 1 portrait',
+    what: '0 landscape, 1 portrait, 2 chromium-tablet',
   },
   'ipad-touch': {
     offset: 220,
@@ -129,6 +134,44 @@ export const PORT_TABLE = {
     spec: 'ipad/touch.spec.ts',
     what: 'tests 0-2 landscape, 3-5 portrait',
   },
+  // Phones P0 (design/28 §8), the code split: a spec both phone projects run takes one port per project.
+  // 310-339 belong to the compact shell's specs, 340-349 to the hub's, 350-359 to the integration's.
+  'split-full': { offset: 300, count: 1, spec: 'split-full.spec.ts', what: 'hub' },
+  'ipad-split': {
+    offset: 301,
+    count: 3,
+    spec: 'ipad/split.spec.ts',
+    what: '0 webkit-ipad, 1 webkit-ipad-portrait, 2 chromium-tablet',
+  },
+  'phone-split': {
+    offset: 305,
+    count: 2,
+    spec: 'phone/split.spec.ts',
+    what: '0 webkit-iphone, 1 chromium-android',
+  },
+  // The compact shell: one hub per test and project (test k: 2k webkit-iphone, 2k+1 chromium-android), so a
+  // test's sign-ins, lockouts and live service never meet another's; the row may grow to 26.
+  'phone-shell': {
+    offset: 310,
+    count: 24,
+    spec: 'phone/shell.spec.ts',
+    what: 'test k: 2k webkit-iphone, 2k+1 chromium-android',
+  },
+  'phone-demo': {
+    offset: 336,
+    count: 2,
+    spec: 'phone/demo.spec.ts',
+    what: 'static server of the Pages build, one per phone project',
+  },
+  // Phones P0, the hub lane (design/28 §8 "Live boundary" and "Hub"): offsets 340-349.
+  'phone-live-boundary': {
+    offset: 340,
+    count: 2,
+    spec: 'phone/live-boundary.spec.ts',
+    what: '0 webkit-iphone, 1 chromium-android',
+  },
+  'phones-live-load': { offset: 345, count: 1, spec: 'phones-live-load.spec.ts', what: 'hub' },
+  'phones-writes': { offset: 346, count: 1, spec: 'phones-writes.spec.ts', what: 'hub' },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;

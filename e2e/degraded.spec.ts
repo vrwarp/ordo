@@ -7,7 +7,10 @@ const PORT = portOf('degraded');
 const op = `http://op.localhost:${PORT}`;
 
 async function api(port: number) {
-  const ctx = await request.newContext({ baseURL: `http://localhost:${port}/api/v1/` });
+  const ctx = await request.newContext({
+    baseURL: `http://localhost:${port}/api/v1/`,
+    extraHTTPHeaders: { 'x-ordo': '1' },
+  });
   expect((await ctx.post('auth/pin', { data: { pin: '246810' } })).ok()).toBe(true);
   return ctx;
 }

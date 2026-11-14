@@ -1,8 +1,7 @@
-import { FontsTab } from './FontsTab.tsx';
-import { ImportTab } from './ImportTab.tsx';
+import { PageHost } from '../../components/PageHost.tsx';
+import { PAGES } from '../../pages.ts';
 import { MediaTab } from './MediaTab.tsx';
 import { PresentationsTab } from './PresentationsTab.tsx';
-import { ThemesTab } from './ThemesTab.tsx';
 
 const TABS = [
   ['presentations', 'Presentations'],
@@ -29,9 +28,10 @@ export function LibraryView({ tab }: { tab: 'presentations' | 'media' | 'themes'
       <div style={{ minHeight: 0 }}>
         {tab === 'presentations' && <PresentationsTab />}
         {tab === 'media' && <MediaTab />}
-        {tab === 'themes' && <ThemesTab />}
-        {tab === 'fonts' && <FontsTab />}
-        {tab === 'import' && <ImportTab />}
+        {/* Themes, Fonts and Import come from the page registry: never on the compact path (design/28 §2.1). */}
+        {tab === 'themes' && <PageHost name="themes" chunk={PAGES.themes} props={{}} />}
+        {tab === 'fonts' && <PageHost name="fonts" chunk={PAGES.fonts} props={{}} />}
+        {tab === 'import' && <PageHost name="import" chunk={PAGES.import} props={{}} />}
       </div>
     </div>
   );

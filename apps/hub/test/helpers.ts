@@ -61,11 +61,21 @@ export type Client = {
   json<T = unknown>(path: string, init?: RequestInit & { json?: unknown }): Promise<T>;
 };
 
-export function client(base: string, cookie = '', headers: Record<string, string> = {}): Client {
+/**
+ * A hub client as the ordo apps are: it sends `x-ordo: 1` (design/28 §4) unless `opts.xOrdo` is false (a
+ * client older than the hub, or a page made elsewhere).
+ */
+export function client(
+  base: string,
+  cookie = '',
+  headers: Record<string, string> = {},
+  opts: { xOrdo?: boolean } = {},
+): Client {
   const c: Client = {
     cookie,
     async fetch(path, init = {}) {
       const h = new Headers(init.headers);
+      if (opts.xOrdo !== false) h.set('x-ordo', '1');
       for (const [k, v] of Object.entries(headers)) h.set(k, v);
       if (c.cookie) h.set('cookie', c.cookie);
       let body = init.body;

@@ -5,6 +5,7 @@ import {
   DEFAULT_GENERAL,
   DEFAULT_KEYMAP,
   DEFAULT_LOOKS,
+  DEFAULT_PHONES,
   DEFAULT_SURFACES,
   DEFAULT_THEME,
   Font,
@@ -14,6 +15,7 @@ import {
   Media,
   newId,
   Output,
+  PhoneSettings,
   Playlist,
   Presentation,
   SurfaceSettings,
@@ -52,6 +54,7 @@ export const SETTINGS_SCHEMAS: Record<SettingsKey, z.ZodType> = {
   audio: AudioSettings,
   keymap: KeyMap,
   surfaces: SurfaceSettings,
+  phones: PhoneSettings,
 };
 export const SETTINGS_KEYS = Object.keys(SETTINGS_SCHEMAS) as SettingsKey[];
 
@@ -89,6 +92,26 @@ export function settingsProblems(
       if (!ids.has(o.lookId)) out.push(`"${o.name}" uses look ${o.lookId}, which does not exist`);
   }
   return out;
+}
+
+/**
+ * `settings.phones.enabled`, cached for a process (design/24 "Feature flags are settings"): read once, then
+ * followed on the library's own settings change, so nothing reads it from the database per request or job.
+ */
+export function phonesSwitch(lib: Pick<Library, 'getSetting' | 'onChange'>): {
+  enabled(): boolean;
+  onChange(fn: (on: boolean) => void): void;
+} {
+  let on = lib.getSetting('phones')?.enabled === true;
+  const listeners: ((on: boolean) => void)[] = [];
+  lib.onChange((changes) => {
+    if (!changes.some((c) => c.kind === 'settings' && c.id === 'phones')) return;
+    const next = lib.getSetting('phones')?.enabled === true;
+    if (next === on) return;
+    on = next;
+    for (const l of listeners) l(on);
+  });
+  return { enabled: () => on, onChange: (fn) => listeners.push(fn) };
 }
 
 export function newToken(): string {
@@ -267,6 +290,7 @@ export class Library {
       audio: DEFAULT_AUDIO,
       keymap: DEFAULT_KEYMAP,
       surfaces: DEFAULT_SURFACES,
+      phones: DEFAULT_PHONES,
     };
     const ins = this.db.prepare(
       `INSERT OR IGNORE INTO settings (key, rev, json, updated_at) VALUES (?, 1, ?, ?)`,
@@ -326,6 +350,7 @@ export class Library {
       audio: DEFAULT_AUDIO,
       keymap: DEFAULT_KEYMAP,
       surfaces: DEFAULT_SURFACES,
+      phones: DEFAULT_PHONES,
     };
   }
 

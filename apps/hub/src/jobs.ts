@@ -3,6 +3,8 @@ import type { Job } from '@ordo/protocol';
 import type { Logger } from 'pino';
 import { type DB, nowIso } from './db.ts';
 import { errorMessage, notFound } from './errors.ts';
+import type { JobPacing } from './pacing.ts';
+import { inPacedScope, pacedScope } from './reqctx.ts';
 
 export type JobClass = 'heavy' | 'light';
 export type JobCtx<P = unknown> = {
@@ -31,6 +33,8 @@ type JobRow = {
 };
 
 const MAX_LOG = 500;
+/** Node fires a longer delay (Infinity included) after 1 ms: never ask for more. */
+const MAX_DELAY_MS = 2 ** 31 - 1;
 
 /**
  * Thrown by a handler that cannot run yet (a pptx follow-up while its presentation is live-locked, ADR 0007):
@@ -51,7 +55,7 @@ export class JobDeferred extends Error {
  */
 export const MAX_JOB_ATTEMPTS = 3;
 
-function toJob(r: JobRow): Job {
+function toJob(r: JobRow, waiting = false): Job {
   return {
     id: r.id,
     kind: r.kind,
@@ -62,6 +66,7 @@ function toJob(r: JobRow): Job {
     error: r.error ?? undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    ...(waiting ? { waiting: 'service' as const } : {}),
   };
 }
 
@@ -79,22 +84,78 @@ export class JobQueue {
   /** Deferred jobs (JobDeferred): not started before this time (ms since the epoch). */
   private notBefore = new Map<string, number>();
   private wake: NodeJS.Timeout | undefined;
+  /** Running jobs stopped by `pause()` (going back to the queue when their handler ends). */
+  private pausing = new Set<string>();
+  private onPauses = new Map<string, (payload: never) => void>();
 
   private db: DB;
   private log: Logger;
   private limits: { heavy: number; light: number };
-  private notify: (job: Job) => void;
-  constructor(db: DB, log: Logger, limits: { heavy: number; light: number }, notify: (job: Job) => void) {
+  private sendOne: (job: Job) => void;
+  private sendMany: (jobs: Job[]) => void;
+  /** The jobs clients were last told wait for the service (`Job.waiting`): `repump` sends only what changes. */
+  private announcedWaiting = new Set<string>();
+  /** Jobs paced while live (design/28 §5.3); absent: nothing is ever held. */
+  readonly pacing?: JobPacing;
+  /** `notifyMany`: several job changes as one library change (default: `notify` for each). */
+  constructor(
+    db: DB,
+    log: Logger,
+    limits: { heavy: number; light: number },
+    notify: (job: Job) => void,
+    opts: { pacing?: JobPacing; notifyMany?: (jobs: Job[]) => void } = {},
+  ) {
     this.db = db;
     this.log = log;
     this.limits = limits;
-    this.notify = notify;
+    this.sendOne = notify;
+    this.sendMany =
+      opts.notifyMany ??
+      ((jobs) => {
+        for (const j of jobs) notify(j);
+      });
+    this.pacing = opts.pacing;
   }
 
-  /** `giveUp` runs when a job of this kind is abandoned without its handler (too many crashed attempts). */
-  register<P>(kind: string, handler: JobHandler<P>, giveUp?: (payload: P, error: string) => void): void {
+  /** Tell clients about a job (and remember whether it was said to wait for the service). */
+  private notify(job: Job): void {
+    this.noteWaiting(job);
+    this.sendOne(job);
+  }
+
+  private noteWaiting(job: Job): void {
+    if (job.waiting) this.announcedWaiting.add(job.id);
+    else this.announcedWaiting.delete(job.id);
+  }
+
+  /**
+   * `giveUp` runs when a job of this kind is abandoned without its handler (too many crashed attempts);
+   * `onPause` when a running job of this kind was stopped for a service (`pause()`) and is queued again.
+   */
+  register<P>(
+    kind: string,
+    handler: JobHandler<P>,
+    giveUp?: (payload: P, error: string) => void,
+    hooks: { onPause?: (payload: P) => void } = {},
+  ): void {
     this.handlers.set(kind, handler as JobHandler<never>);
     if (giveUp) this.giveUps.set(kind, giveUp as (payload: never, error: string) => void);
+    if (hooks.onPause) this.onPauses.set(kind, hooks.onPause as (payload: never) => void);
+  }
+
+  /** Was this job queued during a capped request, or by a job that was (`job_paced`)? */
+  paced(id: string): boolean {
+    return this.db.prepare(`SELECT 1 FROM job_paced WHERE job_id = ?`).get(id) !== undefined;
+  }
+
+  /** Whether the pacing rule holds this queued job now. */
+  private heldNow(r: Pick<JobRow, 'id' | 'kind' | 'class' | 'state'>): boolean {
+    if (!this.pacing || r.state !== 'queued' || r.class !== 'heavy' || !this.pacing.holding()) return false;
+    return this.pacing.held({
+      kind: r.kind,
+      class: r.class,
+      paced: this.pacing.enabled() || this.paced(r.id),
+    });
   }
 
   attempts(id: string): number {
@@ -119,6 +180,9 @@ export class JobQueue {
         `INSERT INTO jobs (id, kind, class, state, progress, payload, log, created_at, updated_at) VALUES (?, ?, ?, 'queued', 0, ?, '[]', ?, ?)`,
       )
       .run(id, kind, cls, JSON.stringify(payload), now, now);
+    // Queued during a capped (phone) request, or by a job that was: held while live whatever Phones says
+    // (design/28 §10 items 8 and 11). Every class is marked, so a light job's heavy children inherit it.
+    if (inPacedScope()) this.db.prepare(`INSERT OR IGNORE INTO job_paced (job_id) VALUES (?)`).run(id);
     const job = this.get(id);
     this.notify(job);
     queueMicrotask(() => this.pump());
@@ -143,13 +207,13 @@ export class JobQueue {
   get(id: string): Job {
     const r = this.db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(id) as JobRow | undefined;
     if (!r) throw notFound(`job ${id}`);
-    return toJob(r);
+    return toJob(r, this.heldNow(r));
   }
 
   list(limit = 100): Job[] {
     return (
       this.db.prepare(`SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?`).all(limit) as JobRow[]
-    ).map(toJob);
+    ).map((r) => toJob(r, this.heldNow(r)));
   }
 
   start(): void {
@@ -175,6 +239,11 @@ export class JobQueue {
     this.db
       .prepare(
         `DELETE FROM job_attempts WHERE job_id NOT IN (SELECT id FROM jobs WHERE state IN ('queued','running'))`,
+      )
+      .run();
+    this.db
+      .prepare(
+        `DELETE FROM job_paced WHERE job_id NOT IN (SELECT id FROM jobs WHERE state IN ('queued','running'))`,
       )
       .run();
     // Old finished jobs are pruned after 30 days.
@@ -214,25 +283,127 @@ export class JobQueue {
     const busy = [...this.running.keys()];
     const now = Date.now();
     const waiting = (id: string) => (this.notBefore.get(id) ?? 0) > now;
+    // Held heavy jobs are filtered in SQL, so they never fill the LIMIT and starve a job that may run.
+    const held = this.heldFilter(cls);
+    if (held === null) return undefined;
     const rows = this.db
       .prepare(
-        `SELECT * FROM jobs WHERE state = 'queued' AND class = ? ORDER BY created_at, id LIMIT ${20 + this.notBefore.size}`,
+        `SELECT * FROM jobs WHERE state = 'queued' AND class = ?${held.sql} ORDER BY created_at, id LIMIT ${20 + this.notBefore.size}`,
       )
-      .all(cls) as JobRow[];
+      .all(cls, ...held.args) as JobRow[];
     return rows.find((r) => !busy.includes(r.id) && !waiting(r.id));
   }
 
-  /** Pump again when the earliest deferred job may start. */
+  /**
+   * The SQL that leaves out the jobs the pacing rule holds (design/28 §5.3): every heavy job but the exempt
+   * kinds while Phones is on (null: none can start), the paced ones otherwise; nothing outside a hold.
+   */
+  private heldFilter(cls: JobClass): { sql: string; args: string[] } | null {
+    const p = this.pacing;
+    if (!p || cls !== 'heavy' || !p.holding()) return { sql: '', args: [] };
+    const exempt = p.exemptKinds();
+    const inExempt = exempt.length ? `kind IN (${exempt.map(() => '?').join(', ')})` : '0';
+    if (p.enabled()) return exempt.length ? { sql: ` AND ${inExempt}`, args: [...exempt] } : null;
+    return {
+      sql: ` AND (id NOT IN (SELECT job_id FROM job_paced) OR ${inExempt})`,
+      args: [...exempt],
+    };
+  }
+
+  /** Whether any heavy job is queued (the pacing timer is set only then). */
+  private heavyQueued(): boolean {
+    return (
+      this.db.prepare(`SELECT 1 FROM jobs WHERE state = 'queued' AND class = 'heavy' LIMIT 1`).get() !==
+      undefined
+    );
+  }
+
+  /**
+   * Pump again when the earliest deferred job may start, or when the pacing grace ends with held jobs
+   * queued. While live there is no pacing timer at all: End service wakes the queue (`repump`).
+   */
   private schedule(): void {
     clearTimeout(this.wake);
     this.wake = undefined;
-    if (this.stopped || !this.notBefore.size) return;
+    if (this.stopped) return;
     const now = Date.now();
     for (const [id, t] of this.notBefore) if (t <= now) this.notBefore.delete(id);
-    if (!this.notBefore.size) return;
-    const next = Math.min(...this.notBefore.values());
-    this.wake = setTimeout(() => this.pump(), Math.max(0, next - now) + 5);
+    let next = this.notBefore.size ? Math.min(...this.notBefore.values()) : undefined;
+    const paceAt = this.pacing?.wakeAt(now);
+    if (paceAt !== undefined && this.heavyQueued())
+      next = next === undefined ? paceAt : Math.min(next, paceAt);
+    if (next === undefined) return;
+    this.wake = setTimeout(() => this.pump(), Math.min(MAX_DELAY_MS, Math.max(0, next - now) + 5));
     this.wake.unref();
+  }
+
+  /**
+   * At goLive (design/28 §5.3, owner question 3): a running heavy job the pacing rule now holds is stopped and
+   * queued again without counting an attempt; its kind's `onPause` puts what it was working on back as it
+   * was (media: 'processing' back to 'uploaded'). It starts again from the beginning after the service.
+   */
+  pause(): void {
+    if (!this.pacing) return;
+    for (const [id, r] of this.running) {
+      if (r.cls !== 'heavy' || this.pausing.has(id)) continue;
+      const row = this.db.prepare(`SELECT kind FROM jobs WHERE id = ?`).get(id) as
+        | { kind: string }
+        | undefined;
+      if (!row) continue;
+      const paced = this.pacing.enabled() || this.paced(id);
+      if (!this.pacing.held({ kind: row.kind, class: 'heavy', paced })) continue;
+      this.log.info({ job: id, kind: row.kind }, 'heavy job stopped for the service; queued again');
+      this.pausing.add(id);
+      r.ctrl.abort();
+    }
+  }
+
+  /**
+   * The live service's mode, as this process learns it (design/28 §5.3): goLive stops the heavy jobs the rule
+   * now holds (`pause`), End service starts the grace; either way the queue looks again. Call it before
+   * `start()` with the mode at start, so a library restarted during a service never relaunches a held job.
+   */
+  onLiveMode(mode: 'idle' | 'live'): void {
+    const p = this.pacing;
+    if (!p || (mode === 'live') === p.live()) return;
+    p.onMode(mode);
+    if (mode === 'live') this.pause();
+    this.repump();
+  }
+
+  /** `settings.phones.enabled` changed: during a service, heavy jobs it now holds are stopped too. */
+  setPhones(on: boolean): void {
+    const p = this.pacing;
+    if (!p || p.enabled() === on) return;
+    p.setEnabled(on);
+    if (on && p.live()) this.pause();
+    this.repump();
+  }
+
+  /**
+   * The live mode or the Phones setting changed: tell clients which queued heavy jobs now wait for the
+   * service, or no longer do (`Job.waiting`), in one change; then start what may start and set the timer for
+   * the rest. Only jobs whose `waiting` changes are sent: with Phones off and no phone, goLive and End service
+   * send nothing, as before P0 (the review measured 29 notifications each, one library delta apiece, for 29
+   * queued heavy jobs).
+   */
+  repump(): void {
+    if (this.stopped) return;
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM jobs WHERE state = 'queued' AND class = 'heavy' ORDER BY created_at, id LIMIT 200`,
+      )
+      .all() as JobRow[];
+    const changed: Job[] = [];
+    for (const r of rows) {
+      const held = this.heldNow(r);
+      if (held !== this.announcedWaiting.has(r.id)) changed.push(toJob(r, held));
+    }
+    if (changed.length) {
+      for (const j of changed) this.noteWaiting(j);
+      this.sendMany(changed);
+    }
+    this.pump();
   }
 
   private pump(): void {
@@ -297,7 +468,14 @@ export class JobQueue {
         this.update(row.id, { payload: JSON.stringify(p) }, false);
       },
     };
-    const done = (async () => {
+    // The handler runs in its own job's scope: a job it queues inherits this job's flag, and a pump started
+    // inside a capped request never marks another session's jobs (reqctx.ts). A hub that never saw a phone
+    // never enters the scope at all (`getStore()` is undefined until a first `run`), so it never turns on the
+    // process's promise tracking (Node 22; review of P0).
+    const paced = this.paced(row.id);
+    const inScope = (fn: () => Promise<void>) =>
+      paced || pacedScope.getStore() !== undefined ? pacedScope.run(paced, fn) : fn();
+    const done = inScope(async () => {
       await Promise.resolve();
       try {
         if (!handler) throw new Error(`No handler for job kind ${row.kind}`);
@@ -308,6 +486,7 @@ export class JobQueue {
           result: result === undefined ? null : JSON.stringify(result),
           log: JSON.stringify(logLines),
         });
+        this.db.prepare(`DELETE FROM job_paced WHERE job_id = ?`).run(row.id);
       } catch (e) {
         if (e instanceof JobDeferred && !this.stopped) {
           // Not a crashed attempt: back to the queue, not started again before its time.
@@ -318,6 +497,20 @@ export class JobQueue {
           this.notBefore.set(row.id, Date.now() + delay);
           logLines.push(`${new Date().toISOString().slice(11, 19)} ${e.message}`);
           this.update(row.id, { state: 'queued', log: JSON.stringify(logLines) });
+        } else if (ctrl.signal.aborted && this.pausing.has(row.id) && !this.stopped) {
+          // Stopped for the service (`pause()`): not a crashed attempt; back to the queue, held until it ends.
+          this.db
+            .prepare(`UPDATE job_attempts SET attempts = MAX(0, attempts - 1) WHERE job_id = ?`)
+            .run(row.id);
+          logLines.push(
+            `${new Date().toISOString().slice(11, 19)} stopped for the service; starts again after it`,
+          );
+          this.update(row.id, { state: 'queued', progress: 0, log: JSON.stringify(logLines) });
+          try {
+            this.onPauses.get(row.kind)?.(payload as never);
+          } catch (err) {
+            this.log.warn({ job: row.id, err: errorMessage(err) }, 'job pause hook failed');
+          }
         } else if (ctrl.signal.aborted && this.stopped) {
           // Shutdown: leave it queued so the next start resumes it. A clean stop is not a crashed attempt.
           this.db
@@ -328,13 +521,15 @@ export class JobQueue {
           logLines.push(`error: ${errorMessage(e)}`);
           this.log.warn({ job: row.id, kind: row.kind, err: errorMessage(e) }, 'job failed');
           this.update(row.id, { state: 'failed', error: errorMessage(e), log: JSON.stringify(logLines) });
+          this.db.prepare(`DELETE FROM job_paced WHERE job_id = ?`).run(row.id);
         }
       } finally {
+        this.pausing.delete(row.id);
         this.running.delete(row.id);
         this.lastNotify.delete(row.id);
         this.pump();
       }
-    })();
+    });
     this.running.set(row.id, { cls: row.class, ctrl, done });
   }
 }
