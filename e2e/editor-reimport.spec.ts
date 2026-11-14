@@ -8,7 +8,6 @@ import {
   editorHub,
   editorState,
   importDeck,
-  M4_PORT,
   openEditor,
   openSlide,
   type PresentationRec,
@@ -20,6 +19,7 @@ import {
   slidesOf,
   stored,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import { hubApi } from './linkhelpers.ts';
 import { apiJson } from './pptxlive.ts';
 
@@ -31,9 +31,10 @@ import { apiJson } from './pptxlive.ts';
  * editor, 'Make editable' on the first page is rebuilt from the PowerPoint file (the hub reroutes it to the
  * re-import), then 'Re-import from PowerPoint…' in the Presentation panel rebuilds the other pages. A copy
  * made editable the way an older build did (text boxes over the page picture) is re-imported with one slide
- * kept as it is. Each ends with Save and a reload: the presentation JSON is identical. Port 8906.
+ * kept as it is. Each ends with Save and a reload: the presentation JSON is identical. Its port: e2e/ports.ts row
+ * 'editor-reimport'.
  */
-const PORT = M4_PORT + 6;
+const PORT = portOf('editor-reimport');
 const OUT = 'test-results/editor-reimport';
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 

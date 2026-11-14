@@ -1,5 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
-import { BASE, json, SONG, shot, signInByTapping, startHub } from './ipadhelpers.ts';
+import { json, SONG, shot, signInByTapping, startHub } from './ipadhelpers.ts';
+import { portOf } from '../ports.ts';
 
 /**
  * Touch targets on the iPad (design/15 "Touch": every control is 44 px, which #24's class rules had undone): an audit of every visible
@@ -65,7 +66,7 @@ test('every control of the editor is a 44 px touch target, apart from the named 
 }) => {
   test.setTimeout(240_000);
   const portrait = test.info().project.name.includes('portrait');
-  const { hub, api, url } = await startHub(BASE + 30 + (portrait ? 1 : 0));
+  const { hub, api, url } = await startHub(portOf('ipad-touch-targets', portrait ? 1 : 0));
   const misses: Miss[] = [];
   try {
     const song = await json<{ id: string }>(api.post('import/songselect', { data: { text: SONG } }));

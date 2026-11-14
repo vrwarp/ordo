@@ -1,8 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { HubProcess } from './hubproc.ts';
+import { portOf } from './ports.ts';
 import { SONG, shownSlideCue, waitCacheReady } from './helpers.ts';
 
-const PORT = 8092;
+const PORT = portOf('operator');
 const op = `http://op.localhost:${PORT}`;
 
 test('a volunteer builds a service in the UI, goes live, launches outputs and runs it from the keyboard', async ({

@@ -827,8 +827,8 @@ which drops the cached thumbnails, and the editor redraws.
 ### Tests
 
 The Playwright projects `webkit-ipad` (iPad Pro 11 landscape) and `webkit-ipad-portrait` run
-`e2e/ipad/*.spec.ts` in WebKit with touch, each test on its own hub (`ORDO_E2E_IPAD_PORT`, default
-8700 + n, path mode `http://localhost:<port>/`); the Chromium project ignores `e2e/ipad/`. The two
+`e2e/ipad/*.spec.ts` in WebKit with touch, each test on its own hub (its port from the e2e port table, design/23 "Ports";
+path mode `http://localhost:<port>/`); the Chromium project ignores `e2e/ipad/`. The two
 projects exist only when WebKit is installed (`npx playwright install webkit`; CI does), so a plain
 `pnpm e2e` after `playwright install chromium` still runs; `ORDO_E2E_WEBKIT=1` insists on them.
 `ORDO_E2E_SHOTS=<dir>` keeps a screenshot of each screen per orientation.

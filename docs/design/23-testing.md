@@ -33,17 +33,39 @@ treats `localhost` origins as secure contexts, so service workers, OPFS, WebGPU,
 and the Cache API work without a certificate. Other browsers do not resolve `*.localhost`; the suite is
 Chromium only.
 
-- `playwright.config.ts` starts the hub from `apps/hub/dist` (build first) on `ORDO_E2E_PORT` (default
-  8090) with data in `.e2e-data`, sign-in by `ORDO_DEV_PIN=246810`, `ORDO_TZ=UTC`. Specs share it and run
+- `playwright.config.ts` starts the hub from `apps/hub/dist` (build first) on the shared port (below,
+  `ORDO_E2E_PORT` overrides it) with data in `.e2e-data/web-<port>`, sign-in by `ORDO_DEV_PIN=246810`, `ORDO_TZ=UTC`. Specs share it and run
   one at a time (`workers: 1`).
 - Specs that kill or restart the hub own a hub process (`e2e/hubproc.ts`, `HubProcess.fresh(port)`) on their
   own ports, with data under `ORDO_E2E_DATA_ROOT` or `test-results/.e2e-data-<port>` and the hub's log lines in
   `test-results/hub-<port>.log` (appended across the spec's restarts, so CI's uploaded test-results carry
   them; `ORDO_E2E_HUB_STDOUT=1` prints them instead); `ORDO_E2E_HUB_CMD` runs the hub from source instead of
-  the build. `ORDO_CHAOS_OUTPUT_PORT` and `ORDO_CHAOS_OPERATOR_PORT`
-  move the chaos specs' ports so concurrent runs do not collide.
+  the build.
 - Windows are opened by URL with their output token (`openRoleWindow`), or launched from the operator
   (`window.open`) where the fallback bus needs an opener.
+
+### Ports
+
+Every port the suite opens is in one table, `e2e/ports.ts`: a row per spec (the shared web server is the row
+`shared`), each an offset from one base and a count of ports, what the spec really opens (its hubs, TCP
+proxies, the Pages demo's static server; the iPad specs one per orientation where both projects run the
+test). A spec takes its ports with `portOf(row, i)`; asking past the row's count throws. No spec writes a
+literal port or reads a port variable of its own: `e2e/ports.test.ts` (vitest, part of `pnpm test`) reads
+every file of the suite and fails on a literal port, a `process.env.ORDO_*PORT*` read outside the table or
+arithmetic on a port, and checks that the rows' offsets are unique, their ranges disjoint and inside the span
+(1000 ports), that each row is taken only by its own spec, and that every default base keeps the whole span
+between 16000 and 32767.
+
+- The base is `ORDO_E2E_PORT_BASE` when set; on CI (`CI` or `ORDO_CI`) it is fixed at 16000; otherwise it is
+  16000 + 1000 x (an FNV-1a hash of the checkout's path, mod 15), so two worktrees on one machine run side by
+  side without setting anything. Every default range ends below 32768, where Linux starts its ephemeral ports
+  (`ip_local_port_range`), so an outgoing connection never takes a port a spec is about to listen on.
+- `ORDO_E2E_PORT` still moves the shared web server alone (`helpers.ts` `PORT`). The per-spec variables of
+  earlier versions (`ORDO_E2E_M4_PORT`, `ORDO_E2E_CHAOS_HUB_PORT`, `ORDO_CHAOS_OUTPUT_PORT`,
+  `ORDO_CHAOS_OPERATOR_PORT`, `ORDO_E2E_LOCAL_PORT`, `ORDO_E2E_IMPORT_PORT`, `ORDO_E2E_PRO7_PORT`,
+  `ORDO_E2E_PAGES_PORT`, `ORDO_E2E_IPAD_PORT`, `ORDO_E2E_TOUCH_PORT`) are no longer read.
+- A new spec that starts a hub or a server of its own adds a row (the next free offsets) and takes its ports
+  from it; rows for specs not written yet hold their ports reserved.
 
 ## Timing assertions
 

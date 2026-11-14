@@ -10,9 +10,8 @@ import { apiJson, importPptx, pptxHub } from './pptxlive.ts';
  * Shared steps of the M4 editor specs (design/27 §15 M4 exit; apps/operator/src/views/editor/M4.md): a
  * synthetic church deck imported through the real upload route, the editor opened on it, an edit made in
  * the editor's UI, Save, a reload, and the presentation JSON compared (after save and reload it must be
- * identical). Each spec owns a hub on `M4_PORT + n` (n = the item's number, A = 1 … H = 8; 0 the smoke spec).
+ * identical). Each spec owns a hub on its own port (e2e/ports.ts, a row per spec).
  */
-export const M4_PORT = Number(process.env.ORDO_E2E_M4_PORT ?? 8900);
 
 /** The operator's origin on a hub of `port` (the desktop operator, signed in with the operate PIN). */
 export const opOrigin = (port: number) => `http://op.localhost:${port}`;

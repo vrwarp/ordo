@@ -3,15 +3,16 @@ import { fixtures, SONG, uploadMedia } from './helpers.ts';
 import { HubProcess } from './hubproc.ts';
 import { busOf, cueOn, go, hubApi, login, outputPages } from './linkhelpers.ts';
 import { PNG } from './png.ts';
+import { portOf } from './ports.ts';
 
 /**
  * Going live without the hub (design/17 "Going live without the hub"): the NAS is down before the service.
  * The volunteer downloaded the playlist for offline use beforehand; with the hub gone, Go live asks and
  * runs the service from the operator PC. The hub coming back mid-service is not given the service and is
  * not followed by the outputs; End service hands the authority back to it.
- * Port 8860 (ORDO_E2E_LOCAL_PORT overrides).
+ * Its ports: e2e/ports.ts row 'local-golive'.
  */
-const PORT = Number(process.env.ORDO_E2E_LOCAL_PORT ?? 8860);
+const PORT = portOf('local-golive', 0);
 const op = `http://op.localhost:${PORT}`;
 
 type Px = { r: number; g: number; b: number };
@@ -150,7 +151,7 @@ test('the PC starts with the hub already down: the pages load from their cache a
   page,
 }) => {
   test.setTimeout(240_000);
-  const port = PORT + 1;
+  const port = portOf('local-golive', 1);
   const opUrl = `http://op.localhost:${port}`;
   const hub = HubProcess.fresh(port);
   await hub.start();

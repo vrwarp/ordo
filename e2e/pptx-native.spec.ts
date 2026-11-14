@@ -23,6 +23,7 @@ import {
   textLines,
 } from './pptxlive.ts';
 import { TEXT_DECK, textDeck, VERSE_TEXT, VERSES } from './pptxdecks.ts';
+import { portOf } from './ports.ts';
 
 /**
  * A PowerPoint deck imported as editable slides, end to end (design/27 §14.12; §15 M3 exit): a synthetic
@@ -38,9 +39,10 @@ import { TEXT_DECK, textDeck, VERSE_TEXT, VERSES } from './pptxdecks.ts';
  *   and every slide keeps its own notes and text.
  *
  * Playlist (cues): [0-4] the deck (cue 2 the hidden slide); [5-6] "Reference", typed in ordo: the verse
- * text as plain text, and the same text without its verse numbers (the band comparisons). Port 8396.
+ * text as plain text, and the same text without its verse numbers (the band comparisons). Its port: e2e/ports.ts row
+ * 'pptx-native', #0.
  */
-const PORT = 8396;
+const PORT = portOf('pptx-native', 0);
 const OUT = 'test-results/pptx-native';
 /** The outputs draw what the harness draws: the title over a picture (cue 0), picture and shapes (cue 3). */
 const FLOOR = 0.99;
@@ -377,10 +379,10 @@ test('an imported PowerPoint deck draws like the harness, shows its text everywh
  * The same import on a hub without LibreOffice (design/27 M9 "LibreOffice optional", `ORDO_LIBREOFFICE=off`):
  * a deck with a chart over its title goes through the import screen; the card counts the slides, names what
  * ordo could not draw and says nothing of LibreOffice; no slide waits for it and no follow-up is queued; the
- * import screen offers no 'Pictures (LibreOffice)'. Port 8397.
+ * import screen offers no 'Pictures (LibreOffice)'. Port #1 of its row.
  */
 test.describe('without LibreOffice on the hub (ORDO_LIBREOFFICE=off)', () => {
-  const LITE_PORT = 8397;
+  const LITE_PORT = portOf('pptx-native', 1);
   const LITE_OUT = 'test-results/pptx-native-lite';
 
   test('imports editable slides, lists what ordo cannot draw and waits for nothing', async ({ page }) => {

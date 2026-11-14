@@ -11,6 +11,7 @@ import { HubProcess } from './hubproc.ts';
 import { busOf, expectCue, go, hubApi, hubLive, launchOutputs, liveService, login } from './linkhelpers.ts';
 import { inflateSync } from 'node:zlib';
 import { PNG } from './png.ts';
+import { portOf } from './ports.ts';
 
 /**
  * Chaos for the operator window (design/25, phase C): the core worker dies mid-service (in hub mode, while
@@ -27,9 +28,8 @@ import { PNG } from './png.ts';
  * Each test owns a hub on its own port and the specs share the machine's CPU with CDP captures, so the file
  * is serial: not safe to run in parallel with itself or with the other chaos specs on the same ports.
  *
- * Ports BASE+1..BASE+7 (default 8540; ORDO_CHAOS_OPERATOR_PORT moves them so concurrent runs do not collide).
+ * One hub port per test: e2e/ports.ts row 'chaos-operator'.
  */
-const BASE = Number(process.env.ORDO_CHAOS_OPERATOR_PORT ?? 8540);
 test.describe.configure({ mode: 'serial' });
 
 type Hooks = {
@@ -400,7 +400,7 @@ test('the core worker dies mid-service: the screen holds, GO works within ~3 s a
   page,
 }) => {
   test.setTimeout(120_000);
-  const PORT = BASE + 1;
+  const PORT = portOf('chaos-operator', 0);
   const hub = HubProcess.fresh(PORT);
   await hub.start();
   try {
@@ -473,7 +473,7 @@ test('a long main-thread block delays neither a Stream Deck GO nor the fallback 
   page,
 }) => {
   test.setTimeout(120_000);
-  const PORT = BASE + 2;
+  const PORT = portOf('chaos-operator', 1);
   const hub = HubProcess.fresh(PORT);
   await hub.start();
   try {
@@ -545,7 +545,7 @@ test('ports are offered once in hub mode; with the hub dead GO reaches the outpu
   page,
 }) => {
   test.setTimeout(180_000);
-  const PORT = BASE + 3;
+  const PORT = portOf('chaos-operator', 2);
   const hub = HubProcess.fresh(PORT);
   await hub.start();
   try {
@@ -615,7 +615,7 @@ test('the core dies while the operator is the fallback authority: it resumes the
   page,
 }) => {
   test.setTimeout(120_000);
-  const PORT = BASE + 4;
+  const PORT = portOf('chaos-operator', 3);
   const hub = HubProcess.fresh(PORT);
   await hub.start();
   try {
@@ -676,7 +676,7 @@ test('the core dies while handing the service back to the hub: the hub ends up w
   page,
 }) => {
   test.setTimeout(150_000);
-  const PORT = BASE + 5;
+  const PORT = portOf('chaos-operator', 4);
   const hub = HubProcess.fresh(PORT);
   await hub.start();
   try {
@@ -755,7 +755,7 @@ test('an expired session is not a hub loss: the outputs stay on the hub and the 
   page,
 }) => {
   test.setTimeout(120_000);
-  const PORT = BASE + 6;
+  const PORT = portOf('chaos-operator', 5);
   const hub = HubProcess.fresh(PORT);
   await hub.start();
   try {
@@ -820,7 +820,7 @@ test('a session refusal while the operator is the fallback authority: the keys k
   page,
 }) => {
   test.setTimeout(150_000);
-  const PORT = BASE + 7;
+  const PORT = portOf('chaos-operator', 6);
   const hub = HubProcess.fresh(PORT);
   await hub.start();
   try {

@@ -1972,7 +1972,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   (which never merges). Tests: `apps/operator/test/merge.test.ts` (rules and properties: a side that changed
   nothing takes the other whole, edits to different slides always merge, the merge is the same whichever
   side is mine), `mergeSave.test.ts` (the save flow against a fake hub, the dialog);
-  `e2e/editor-merge.spec.ts` (two editor pages, port 8908).
+  `e2e/editor-merge.spec.ts` (two editor pages).
 - **As built, the integration** (`m4/integrate`): the eight items merged in the order A-H, the scaffold's
   stub expectations replaced by the items' own tests (`apps/operator/test/m4-scaffold.test.ts` keeps the
   wiring and the ops' identity when they change nothing), item E's re-crop tests run on item D's
@@ -1990,7 +1990,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   every key, a button or radio its Enter, arrows and Delete, the canvas gets them all; since #24 the
   non-modal Find card is not a dialog for this, the hidden backing text field gives the keys back when
   inline editing ends, and keys an input method composes with are its own: design/15 "Keyboard"), and Ctrl+Z / Ctrl+Y
-  in the text field are the editor's undo and redo (`e2e/editor-keys.spec.ts`, port 8909); taking a job's
+  in the text field are the editor's undo and redo (`e2e/editor-keys.spec.ts`); taking a job's
   revision over moves the undo steps with the draft, a re-import's through the three-way merge; Find and
   replace changes only the part of each match that differs (typing's rule) and marks matches the screens
   do not show; the picture pickers of Replace and the background replace wait for a picture's size (and

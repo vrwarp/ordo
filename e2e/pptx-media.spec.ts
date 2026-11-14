@@ -2,6 +2,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
 import { hubApi, login } from './linkhelpers.ts';
+import { portOf } from './ports.ts';
 import { BOXED_ROT, LOOP_SLIDES, loopDeck, MEDIA_SLIDES, mediaDeck, probeMedia } from './pptxdecks.ts';
 import {
   apiJson,
@@ -30,9 +31,10 @@ import {
  * video; [2] a text slide; [3] a looping muted full-slide motion background; [4] a numSld=3 sound, [5] a
  * hidden slide, [6-8] text slides; [9] a clip that is not a video; [10] a clip whose processing fails;
  * [11] a looping clip trimmed by p14:trim to its middle two seconds. "Probe loop" [12-15]: a 4-slide
- * looping announcement deck with music across its slides. Port 8398.
+ * looping announcement deck with music across its slides. Its port: e2e/ports.ts row
+ * 'pptx-media'.
  */
-const PORT = 8398;
+const PORT = portOf('pptx-media');
 const OUT = 'test-results/pptx-media';
 const SKEW_MS = process.env.ORDO_E2E_REAL_GPU === '1' ? 17 : 100;
 

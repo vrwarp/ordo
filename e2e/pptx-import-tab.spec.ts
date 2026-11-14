@@ -7,6 +7,7 @@ import { hubApi, login } from './linkhelpers.ts';
 import { comparable, diffJson } from '../tools/pptx-fidelity/src/equivalence.ts';
 import { ffmpeg } from './pptxdecks.ts';
 import { apiJson, importPptx, pptxHub } from './pptxlive.ts';
+import { portOf } from './ports.ts';
 
 /**
  * The Import tab's PowerPoint import as a volunteer runs it (design/27 §2 "Where the deck is parsed",
@@ -20,9 +21,9 @@ import { apiJson, importPptx, pptxHub } from './pptxlive.ts';
  *   panel opens through it (Tune);
  * - with a playlist live the browser does not parse: the hub refuses the import as it always did, and the
  *   Diagnostics page counts the deck as left to the hub.
- * Own hub with the bundled fonts on port 8399 (ORDO_E2E_IMPORT_PORT), so the table is measured with them.
+ * Own hub with the bundled fonts on its own port (e2e/ports.ts row 'pptx-import-tab'), so the table is measured with them.
  */
-const PORT = Number(process.env.ORDO_E2E_IMPORT_PORT ?? 8399);
+const PORT = portOf('pptx-import-tab');
 const OUT = 'test-results/pptx-import-tab';
 
 /** A deck with a title, a table, a picture and a clip (pptxgenjs; media made by ffmpeg). */

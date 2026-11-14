@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { HubProcess } from './hubproc.ts';
+import { portOf } from './ports.ts';
 import { expectCue, go, hubApi, hubLive, launchOutputs, liveService, login } from './linkhelpers.ts';
 import { TcpProxy } from './tcpproxy.ts';
 
-const PROXY_PORT = 8380;
-const HUB_PORT = 8381;
+const PROXY_PORT = portOf('link-silent-hub', 0);
+const HUB_PORT = portOf('link-silent-hub', 1);
 const op = `http://op.localhost:${PROXY_PORT}`;
 
 /**

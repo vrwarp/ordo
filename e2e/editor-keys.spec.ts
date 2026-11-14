@@ -9,7 +9,6 @@ import {
   editorHub,
   editorState,
   importDeck,
-  M4_PORT,
   type Obj,
   openEditor,
   openSlide,
@@ -17,6 +16,7 @@ import {
   selectRange,
   slidesOf,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import type { HubProcess } from './hubproc.ts';
 import { hubApi } from './linkhelpers.ts';
 
@@ -30,9 +30,9 @@ import { hubApi } from './linkhelpers.ts';
  * - Backspace on a focused format button deletes nothing;
  * - in the Find dialog, Enter on 'Replace all' replaces, and Delete on its Close button does not delete the
  *   text box selected behind the dialog.
- * Port 8909.
+ * Its port: e2e/ports.ts row 'editor-keys'.
  */
-const PORT = M4_PORT + 9;
+const PORT = portOf('editor-keys');
 const OUT = 'test-results/editor-keys';
 
 let hub: HubProcess;
