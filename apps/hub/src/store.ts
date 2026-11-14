@@ -270,6 +270,10 @@ export class Store {
       );
       if ((stream as { truncated?: boolean }).truncated) throw tooLarge(limit);
     } catch (e) {
+      // The write stream opens its file on the thread pool, and a stream refused at its first chunk fails
+      // before that open is done: wait until the stream has closed (it opens, then closes), or `rm` can run on
+      // another pool thread before the open and leave an empty .part behind (measured: 3-7 per 10,000).
+      if (!out.closed) await new Promise<void>((r) => out.once('close', () => r()));
       await rm(path, { force: true });
       throw e;
     }
