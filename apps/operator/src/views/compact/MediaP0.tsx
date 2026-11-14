@@ -22,6 +22,7 @@ const STATE_TAG: Record<Media['state'], string> = {
  */
 export function MediaP0() {
   const media = useLibrary((s) => s.data.media);
+  const loaded = useLibrary((s) => s.loaded);
   const [previewing, setPreviewing] = useState<Media>();
   const list = useMemo(
     () => media.filter((m) => !isPresentationPicture(m)).sort((a, b) => a.name.localeCompare(b.name)),
@@ -29,7 +30,11 @@ export function MediaP0() {
   );
   return (
     <div className="compact-body" data-compact-media>
-      {!list.length ? (
+      {!loaded ? (
+        <p className="compact-empty" data-not-loaded>
+          {t('library.notLoaded')}
+        </p>
+      ) : !list.length ? (
         <p className="compact-empty">{t('media.empty')}</p>
       ) : (
         <ul className="compact-list">

@@ -23,6 +23,8 @@ function rowMeta(p: Presentation): string {
 export function LibraryP0() {
   const [q, setQ] = useState('');
   const presentations = useLibrary((s) => s.data.presentations);
+  // Nothing from the phone's copy or the hub yet (an offline start without a copy): not "No songs yet".
+  const loaded = useLibrary((s) => s.loaded);
   const hits = useSearch(q, { kind: 'presentation' });
   const locked = useLockedIds();
   const byId = useMemo(() => new Map(presentations.map((p) => [p.id, p])), [presentations]);
@@ -34,7 +36,7 @@ export function LibraryP0() {
   const query = q.trim();
   return (
     <div className="compact-body" data-compact-library>
-      {!empty && (
+      {loaded && !empty && (
         <div className="compact-search">
           <input
             type="search"
@@ -47,7 +49,11 @@ export function LibraryP0() {
           />
         </div>
       )}
-      {empty ? (
+      {!loaded ? (
+        <p className="compact-empty" data-not-loaded>
+          {t('library.notLoaded')}
+        </p>
+      ) : empty ? (
         <p className="compact-empty">{t('library.empty')}</p>
       ) : !list.length && query ? (
         <p className="compact-empty">{t('library.noMatch', { q: query.slice(0, 100) })}</p>

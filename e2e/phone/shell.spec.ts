@@ -630,3 +630,47 @@ test('integrate: the hub caps a phone’s sign-in, and a real pre-upgrade sessio
     hub.kill();
   }
 });
+
+test('an offline start reads the copy with its time; back online the strip and the line catch up', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  test.skip(
+    test.info().project.name === 'webkit-iphone',
+    'Playwright WebKit cannot reload a page while the context is offline ("internal error"); Chromium can',
+  );
+  const { hub, api, url } = await hubFor(10);
+  try {
+    await seed(api);
+    await signInPhone(page, url);
+    const strip = page.locator('[data-live-strip]');
+    await expect(strip).toHaveText('Live at the venue: Sunday Service · 1 locked', { timeout: 20_000 });
+    // The service worker holds the shell (registered after load and idle on a phone); the copy is in IndexedDB.
+    await page.evaluate(() => navigator.serviceWorker.ready.then(() => undefined));
+    await expect
+      .poll(() => page.evaluate(async () => (await caches.keys()).some((k) => k.startsWith('ordo-shell-'))), {
+        timeout: 30_000,
+      })
+      .toBe(true);
+    // The page goes away while connected: the last contact is stored on pagehide.
+    await page.context().setOffline(true);
+    await page.reload();
+    await expect(page.locator('nav.tabbar')).toBeVisible({ timeout: 30_000 });
+    // At once (no grace on an offline start), with the stored time; the strip cannot know.
+    await expect(page.locator('[data-freshness]')).toHaveText(/^Offline · copy from \w{3} \d{1,2}:\d{2}/);
+    await expect(strip).toHaveText('Live status unknown: offline');
+    // The Library reads the phone's copy when there is one; without one it says so, never "No songs yet."
+    // (P1's offline copy, design/28 §3.10, keeps the library on the phone).
+    await expect(
+      page.locator('[data-compact-library] .compact-row').first().or(page.locator('[data-not-loaded]')),
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('No songs yet.')).toHaveCount(0);
+    // Back online: the core reconnects and the poll answers, although the session started offline.
+    await page.context().setOffline(false);
+    await expect(page.locator('[data-freshness]')).toHaveCount(0, { timeout: 30_000 });
+    await expect(strip).toHaveText('Live at the venue: Sunday Service · 1 locked', { timeout: 30_000 });
+  } finally {
+    await api.dispose();
+    hub.kill();
+  }
+});

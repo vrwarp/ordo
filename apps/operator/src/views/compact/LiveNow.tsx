@@ -22,6 +22,18 @@ function subscribeOnline(fn: () => void): () => void {
   };
 }
 
+/**
+ * The session started offline (the hub was unreachable at load: state/session.ts 'offline') and this page has
+ * not reached the hub since. The session store keeps 'offline' until a reload, but the core reconnects on its
+ * own; once it has, the phone is in contact again.
+ */
+function useStartedOffline(): boolean {
+  const sessionOffline = useSession((s) => s.status === 'offline');
+  const hubConnected = useLive((s) => s.hubConnected);
+  const everConnected = useLive((s) => s.everConnected);
+  return sessionOffline && !hubConnected && !everConnected;
+}
+
 /** navigator.onLine, following its events. */
 export function useOnline(): boolean {
   return useSyncExternalStore(
@@ -43,7 +55,7 @@ export function LiveNowStrip() {
   const live = useVenueLive((s) => s.live);
   const status = useVenueLive((s) => s.status);
   const online = useOnline();
-  const sessionOffline = useSession((s) => s.status === 'offline');
+  const sessionOffline = useStartedOffline();
   const [open, setOpen] = useState(false);
   // Back from the background (a restored page too) or back online: ask at once (§3.11).
   useEffect(() => {
@@ -94,7 +106,7 @@ export function LiveNowStrip() {
  */
 export function FreshnessLine() {
   const online = useOnline();
-  const sessionOffline = useSession((s) => s.status === 'offline');
+  const sessionOffline = useStartedOffline();
   const hubConnected = useLive((s) => s.hubConnected);
   const everConnected = useLive((s) => s.everConnected);
   const offline = !online || sessionOffline;

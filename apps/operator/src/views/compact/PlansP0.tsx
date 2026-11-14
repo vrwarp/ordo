@@ -111,7 +111,16 @@ function PlanDetail({ plan, live }: { plan: Playlist; live: boolean }) {
  */
 export function PlansP0({ id }: { id?: string }) {
   const playlists = useLibrary((s) => s.data.playlists);
+  const loaded = useLibrary((s) => s.loaded);
   const liveId = useLivePlaylistId();
+  if (!loaded)
+    return (
+      <div className="compact-body">
+        <p className="compact-empty" data-not-loaded>
+          {t('library.notLoaded')}
+        </p>
+      </div>
+    );
   if (!id) return <PlanList playlists={playlists} liveId={liveId} />;
   const plan = playlists.find((p) => p.id === id);
   if (!plan)

@@ -334,7 +334,10 @@ for capped sessions, §3.4). The poll's status is `unknown` until its first answ
 polls: "Live status unknown: can't reach ordo"; offline: "Live status unknown: offline". A tap opens the Live
 sheet. The freshness line (`[data-freshness]`, `lib/freshness.ts`) shows 5 s after the hub link drops, at once on
 an offline start, with the time of the last contact (`localStorage` `ordo.op.lastContact`, written when the link
-goes down and on `pagehide` while connected), or "copy on this phone" without one.
+goes down and on `pagehide` while connected), or "copy on this phone" without one. A session that started
+offline counts as offline only until the core reaches the hub again (the session store keeps 'offline' until a
+reload); the P0 bodies say "The library is not on this phone yet: it loads when ordo can be reached." rather
+than an empty state while nothing has loaded.
 
 ### 2.3 Plans and Plan (P1)
 

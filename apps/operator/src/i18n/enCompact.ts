@@ -27,6 +27,7 @@ export const enCompact = {
   'library.searchLabel': 'Search presentations: title, lyrics, CCLI, tag',
   'library.locked': 'Live · locked',
   'library.empty': 'No songs yet.',
+  'library.notLoaded': 'The library is not on this phone yet: it loads when ordo can be reached.',
   'library.noMatch': 'No presentations match “{q}”.',
   'library.more': { one: '1 more: search to find it.', other: '{n} more: search to find them.' },
   'kind.song': 'Song',
