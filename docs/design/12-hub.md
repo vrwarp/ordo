@@ -180,6 +180,13 @@ stage) or `?token=` (outputs). Message schemas in `packages/protocol`
 Broadcast fan-out keeps per-socket queues; if an output's queue exceeds 100 messages the
 hub sends a full `live.state` instead of deltas and resets the queue.
 
+A library delta is serialised once (design/28 P0): operate sockets get the whole batch, edit sockets
+(capped ones included) the same string unless the batch carries the outputs with their tokens, when a
+second string without tokens is built for them; outputs and the stage get ids only, for what their config
+holds. Before P0 every batch was stringified twice on the live process's main thread (37 ms together for one
+4 MiB deck on the test machine); the bytes each socket receives are unchanged
+(`apps/hub/test/phones-broadcast.test.ts` compares them with the old code).
+
 Command validation on the hub (`live.ts`):
 
 - Event schemas are strict (unknown keys are rejected, not stripped) and bounded: `at` is a

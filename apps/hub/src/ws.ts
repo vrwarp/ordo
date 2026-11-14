@@ -545,12 +545,26 @@ export class SocketHub {
     changes: Change[],
     forOutputs: (ch: Change) => boolean = (ch) => ch.kind === 'settings',
   ): void {
+    const tokens = (ch: Change) => ch.kind === 'settings' && ch.id === 'outputs' && Array.isArray(ch.entity);
     const strip = (ch: Change): Change =>
-      ch.kind === 'settings' && ch.id === 'outputs' && Array.isArray(ch.entity)
+      tokens(ch)
         ? { ...ch, entity: (ch.entity as { token?: string }[]).map(({ token: _t, ...o }) => o) }
         : ch;
-    const full = JSON.stringify({ t: 'library.delta', v: PROTOCOL_VERSION, changes });
-    const stripped = JSON.stringify({ t: 'library.delta', v: PROTOCOL_VERSION, changes: changes.map(strip) });
+    // One stringify per delta (design/28 §3.4): the whole batch is serialised when the first session socket
+    // needs it, and a second time without tokens only when the batch has outputs with tokens; otherwise edit
+    // sockets get the same string (its bytes are those of the stripped one: strip changes nothing then).
+    let full: string | undefined;
+    let stripped: string | undefined;
+    const needsStrip = changes.some(tokens);
+    const fullMsg = () => {
+      full ??= JSON.stringify({ t: 'library.delta', v: PROTOCOL_VERSION, changes });
+      return full;
+    };
+    const strippedMsg = () => {
+      if (!needsStrip) return fullMsg();
+      stripped ??= JSON.stringify({ t: 'library.delta', v: PROTOCOL_VERSION, changes: changes.map(strip) });
+      return stripped;
+    };
     const relevant = changes.filter(forOutputs);
     const toOutputs = relevant.length
       ? JSON.stringify({
@@ -560,8 +574,8 @@ export class SocketHub {
         })
       : undefined;
     for (const c of this.clients) {
-      if (c.role === 'operate') this.send(c, full);
-      else if (c.role === 'edit') this.send(c, stripped);
+      if (c.role === 'operate') this.send(c, fullMsg());
+      else if (c.role === 'edit') this.send(c, strippedMsg());
       else if ((c.role === 'output' || c.role === 'stage') && toOutputs) this.send(c, toOutputs);
     }
   }
