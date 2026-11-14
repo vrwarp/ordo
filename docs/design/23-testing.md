@@ -301,6 +301,17 @@ fail the run; better classes, other reasons on the same class and new decks or s
 that improves a class records it (`-- --write`) so it cannot slip back. It needs no LibreOffice and no
 browser.
 
+Since M9 leaf-legacy the census also counts, per slide, what its legacy shapes draw (design/27 §3.2 legacy
+values): `budgetLegacy`, the objects the renderer's slide budget (`geombudget.ts` `slideBudget`, every
+drawer's) draws as their legacy shapes, which the outputs draw whole from geometry units; and `legacyFills`, a
+filled legacy rect or ellipse over a built custom geometry (not a table's grid) whose even-odd ink is under
+half its box or cannot be worked out (the converter's own measure, `geom.ts` `inkOf`): the box of its fill
+an older build or a drawer past the budget would draw over line art. A `legacyFills` above 0 fails the run on
+any slide, in the baseline or not (the leaf template's black boxes; the generated guard deck
+`line-art-holes.pptx` had 3 before the fix). The baseline is version 2: each slide's entry gains its
+`budgetLegacy` (0 when none), whose changes are reported; a version 1 baseline (four entries a slide) still
+reads, without that comparison, and `--write` records version 2.
+
 ## CI
 
 GitHub Actions on every pull request and merge to main (and by hand), `.github/workflows/ci.yml`, in four
