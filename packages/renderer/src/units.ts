@@ -229,8 +229,11 @@ const slideMemo = new WeakMap<
   readonly SlideObject[],
   { version: number; byScale: Map<number, GeomUnit[]> }
 >();
-/** The scales at which each object (a slide's, clamped) is drawn from its unit: what `slideUnits` planned. */
-const planned = new WeakMap<SlideObject, Set<number>>();
+/**
+ * The scales at which each object (a slide's, clamped) is drawn from its unit, with the geometry files read
+ * when `slideUnits` planned it: a plan made before a file was read is planned again before it is drawn so.
+ */
+const planned = new WeakMap<SlideObject, Map<number, number>>();
 
 /**
  * The units a slide's objects (`slideContent`'s, clamped, in z-order) ask for at `scale`: one for each object
@@ -260,8 +263,8 @@ export function slideUnits(objects: readonly SlideObject[], scale: number): read
         area += a;
         out.push(u);
         let at = planned.get(o);
-        if (!at) planned.set(o, (at = new Set()));
-        at.add(s);
+        if (!at) planned.set(o, (at = new Map()));
+        at.set(s, version);
       }
     if (m.byScale.size >= 8) m.byScale.clear();
     m.byScale.set(s, out);
@@ -456,7 +459,8 @@ export async function prepareSlideUnits(
 /** The ready unit `drawSlide2D` copies for `o`, an object as the budget draws it, at `scale`; if any. */
 function readyFor(o: SlideObject, scale: number): { u: GeomUnit; img: UnitImage } | undefined {
   const from = legacyOf(o);
-  if (!from || from.part === 'effects' || !planned.get(from.original)?.has(scale)) return undefined;
+  if (!from || from.part === 'effects') return undefined;
+  if (planned.get(from.original)?.get(scale) !== geomFilesVersion()) return undefined;
   const u = unitOf(from.original, scale);
   if (!u) return undefined;
   const img = unitCache.get('unit', u.key);

@@ -235,6 +235,22 @@ describe('geometry units (M9 Slow-to-draw, Runtime)', () => {
     expect(units.length).toBeGreaterThan(0);
   });
 
+  it('copies only units of the current plan: a plan made before a geometry file was read is made again first', () => {
+    const slide = busySlide();
+    const units = ready(slide);
+    const drawn = () => {
+      const t = traceCtx(1920, 1080);
+      drawSlide2D(t, slide, { scale: 1 });
+      return images(t).length;
+    };
+    expect(drawn()).toBe(units.length);
+    // Another file read: the budget and the plan are worked out again before a unit is copied.
+    putGeomFile('b'.repeat(64), { paths: [{ d: 'M 0 0 L 10 0 L 10 10 Z', w: 10, h: 10 }] });
+    expect(drawn()).toBe(0);
+    expect(unitsOfSlide(slide, 1).map((u) => u.key)).toEqual(units.map((u) => u.key));
+    expect(drawn()).toBe(units.length);
+  });
+
   it("cuts a unit to the frame: an object partly off the slide is drawn from the frame's edge", () => {
     const slide: Slide = {
       id: 'off',
