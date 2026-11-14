@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "golden-pptx census: 112 decks, 1071 shown slides",
+  "note": "golden-pptx census: 113 decks, 1072 shown slides",
   "decks": {
     "challenging-features__3d-and-effects__artistic_effect_sample.pptx": [
       [1,"native","native",["deco:custGeom","deco:group"]],
@@ -101,6 +101,9 @@
     ],
     "challenging-features__custom-geometry__ink_handwriting_drawing.pptx": [
       [1,"native","native",[]]
+    ],
+    "challenging-features__custom-geometry__line-art-holes.pptx": [
+      [1,"native","native",["custGeom","group"]]
     ],
     "challenging-features__custom-geometry__overlapping_relations_zorder.pptx": [
       [1,"native","native",[]],

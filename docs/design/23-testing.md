@@ -293,7 +293,7 @@ The harness produces:
 ## The golden-pptx census ratchet
 
 `pnpm --filter @ordo/pptx-fidelity census:ratchet` (`tools/pptx-fidelity/src/census-ratchet.ts`) runs the
-census (`census.ts`) over the committed public corpus `golden-pptx/` (112 decks, 1,071 shown slides; about
+census (`census.ts`) over the committed public corpus `golden-pptx/` (113 decks, 1,072 shown slides; about
 15 s here, under a minute on CI) and compares each shown slide's class, its class in the hub and its reasons
 with `tools/pptx-fidelity/golden-census-baseline.json`. A slide whose class gets worse (native < hybrid <
 picture), natively or in the hub, a shown slide that is gone, and a deck that is missing or no longer reads
@@ -326,5 +326,9 @@ Fixtures are synthetic: generated lyrics, a 10 s test pattern video in each form
 PPTX and a PDF with known text boxes, a minimal ProPresenter 7 file built from the proto
 schema. No venue content in the repo, with one deliberate exception: `golden-pptx/`, a corpus of 112
 public decks (church sermons, worship lyrics, announcements and file-format test decks) downloaded from
-the web with their sources and a takedown notice in its README, used by the census ratchet. Private
+the web with their sources and a takedown notice in its README, used by the census ratchet, beside one
+synthetic guard deck written by a generator in the repository (`line-art-holes.pptx`,
+`tools/pptx-fidelity/src/gen/line-art-holes.ts`: line art past the slide's drawing budget, regenerated
+byte for byte by its test; its manifest entry names the generator instead of a source URL, and
+`tools/download_golden_pptx.py` keeps such entries when it rewrites the manifest and README). Private
 decks a venue shares for testing never enter the repository.
