@@ -37,6 +37,13 @@ import { z } from 'zod';
 import type { Logger } from 'pino';
 import type { Access, Auth, LowerCap, Principal } from './auth.ts';
 import type { Backups } from './backup.ts';
+import {
+  type FieldRefusal,
+  fieldRefusalError,
+  mediaPatchRefusal,
+  playlistRefusal,
+  presentationRefusal,
+} from './capfields.ts';
 import type { HubConfig } from './config.ts';
 import { badRequest, conflict, HttpError, locked, notFound, unauthorized } from './errors.ts';
 import type { FontService } from './fonts/service.ts';
@@ -372,6 +379,18 @@ function sessionRole(p: Principal | null): 'operate' | 'edit' | undefined {
   return p?.kind === 'session' ? p.role : undefined;
 }
 
+/** A session below full (a phone): its whole-document saves are checked per field (capfields.ts). */
+function isCapped(p: Principal | null): boolean {
+  return p?.kind === 'session' && p.cap !== 'full';
+}
+
+/** Throw the per-field refusal for a capped session's save, if any. */
+function refuseFields(req: FastifyRequest, check: () => FieldRefusal | undefined): void {
+  if (!isCapped(req.principal)) return;
+  const r = check();
+  if (r) throw fieldRefusalError(r);
+}
+
 /**
  * GET /live/summary: the venue's service as an edit-profile device needs it (design/15 "iPad editing"): no
  * tokens, no full state. `locked` is what the hub refuses saves to with 423 (LiveService.locks). The output is
@@ -616,6 +635,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const p = validate(PresentationBody, { ...body, id: body.id || newId(), rev: 1 });
     if (lib.presentations.get(p.id)) throw conflict(`Presentation ${p.id} already exists`);
+    refuseFields(req, () => presentationRefusal(undefined, p));
     const saved = lib.savePresentation(p, { create: true, by: by(req) });
     lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
     return reply.code(201).send(saved);
@@ -626,6 +646,12 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     if (typeof body.rev !== 'number') throw badRequest('rev is required');
     assertPresentationUnlocked(id);
     const p = validate(PresentationBody, { ...body, id });
+    // Against the stored version only when the save would apply: a stale rev answers 409 as before (the client
+    // merges and saves again, and is checked then).
+    refuseFields(req, () => {
+      const stored = lib.presentations.get(id);
+      return !stored || stored.rev === body.rev ? presentationRefusal(stored, p) : undefined;
+    });
     const saved = lib.savePresentation(p, { expectedRev: body.rev, by: by(req) });
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);
     // Slides of a native PowerPoint import still waiting for LibreOffice get their follow-up back.
@@ -650,6 +676,9 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   route('POST', '/presentations/:id/restore/:rev', 'edit', 'light', async (req) => {
     const id = params(req).id!;
     assertPresentationUnlocked(id);
+    refuseFields(req, () =>
+      presentationRefusal(lib.presentations.must(id), lib.revision(id, Number(params(req).rev))),
+    );
     const saved = lib.restoreRevision(id, Number(params(req).rev), by(req));
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);
     hub.imports.pptx.followUp(saved);
@@ -746,6 +775,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const p = validate(PlaylistBody, { ...body, id: body.id || newId(), rev: 1 });
     if (lib.playlists.get(p.id)) throw conflict(`Playlist ${p.id} already exists`);
+    refuseFields(req, () => playlistRefusal(undefined, p));
     const saved = lib.playlists.insert(p);
     lib.emit([{ kind: 'playlist', id: saved.id, rev: saved.rev, entity: saved }]);
     return reply.code(201).send(saved);
@@ -755,7 +785,12 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const body = (req.body ?? {}) as Record<string, unknown>;
     if (typeof body.rev !== 'number') throw badRequest('rev is required');
     assertPlaylistUnlocked(id);
-    const saved = lib.playlists.update(id, validate(PlaylistBody, { ...body, id }), body.rev);
+    const next = validate(PlaylistBody, { ...body, id });
+    refuseFields(req, () => {
+      const stored = lib.playlists.get(id);
+      return stored && stored.rev === body.rev ? playlistRefusal(stored, next) : undefined;
+    });
+    const saved = lib.playlists.update(id, next, body.rev);
     lib.emit([{ kind: 'playlist', id, rev: saved.rev, entity: saved }]);
     return saved;
   });
@@ -894,6 +929,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
           }
         : {}),
     };
+    refuseFields(req, () => mediaPatchRefusal(cur, next));
     const saved = lib.media.update(id, next, patch.rev);
     lib.emit([{ kind: 'media', id, rev: saved.rev, entity: saved }]);
     return saved;
