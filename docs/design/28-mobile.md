@@ -970,7 +970,8 @@ Phones is on.)
   between them"). Phones cannot write settings, fonts or themes (`light`), fonts the live copy uses are
   locked (P0; as built: `DELETE /fonts/:id` answers 423 for a face of the frozen copy, in both processes,
   `LiveService.locks().fonts`), and media changes no longer refresh the outputs' config unless they touch the logo or a
-  holding image (P0).
+  holding image (P0; as built: `contextMediaIds`, and a schema walk over every settings key keeps the list
+  whole: a photo upload sends an output no delta, where `d0f49cb` sent three).
 
 ### 5.2 Protecting the next service
 

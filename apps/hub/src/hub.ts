@@ -14,7 +14,7 @@ import { ImportService } from './imports.ts';
 import { JobQueue } from './jobs.ts';
 import { Library, phonesSwitch } from './library.ts';
 import { LiveService, librarySource } from './live.ts';
-import { affectsContext } from './librarylink.ts';
+import { affectsContext, contextMediaIds } from './librarylink.ts';
 import { LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
@@ -31,6 +31,8 @@ import { Store } from './store.ts';
 import { SocketHub } from './ws.ts';
 
 export { checkRouteAccess, type RouteInfo } from './http.ts';
+
+const NO_MEDIA: ReadonlySet<string> = new Set();
 
 export type Hub = {
   app: FastifyInstance;
@@ -124,9 +126,13 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     clientIp: http.clientIp,
   });
   // Outputs hear of what their config holds: settings, fonts and the logo media.
-  lib.onChange((changes) =>
-    sockets.broadcastLibrary(changes, (ch) => affectsContext(ch, lib.getSetting('general').logoMediaId)),
-  );
+  lib.onChange((changes) => {
+    // The media the settings name, read only for a batch that has a media change.
+    const ids = changes.some((c) => c.kind === 'media')
+      ? contextMediaIds({ general: lib.getSetting('general'), looks: lib.getSetting('looks') })
+      : NO_MEDIA;
+    sockets.broadcastLibrary(changes, (ch) => affectsContext(ch, ids));
+  });
 
   const hub: Hub = {
     app,

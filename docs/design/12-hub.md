@@ -85,9 +85,12 @@ the library only through `GET /internal/context` (all settings with tokens, font
 /internal/golive/<playlist>` (fetched when the operator goes live), and keeps the last copy of each in
 `live.db`, so a library outage blocks neither a reconnect nor a GO, and a goLive of a playlist fetched
 before still works. Library changes are applied in order: a batch touching the context (settings, fonts,
-the logo media) first refreshes the copy (bounded by the 1.5 s fetch timeout), and only then is the delta
-broadcast, so an output that refetches its config on the delta gets the new look. Outputs and the stage
-receive ids only, for settings, fonts and the logo. A context refresh that is not part of a delta (the
+and the media the settings name: the logo and the looks' holding images, `contextMediaIds`) first refreshes
+the copy (bounded by the 1.5 s fetch timeout), and only then is the delta broadcast, so an output that
+refetches its config on the delta gets the new look. Outputs and the stage receive ids only, for settings,
+fonts and those media. Any other media change (a photo upload: uploaded, processing, ready) neither
+refreshes the copy nor reaches the outputs (design/28 P0; before, every media change counted while no logo
+was set). A context refresh that is not part of a delta (the
 library came back; the first refresh after a live-process restart) sends outputs and the stage a
 settings-only delta so they refetch; they also refetch on every `welcome`.
 
