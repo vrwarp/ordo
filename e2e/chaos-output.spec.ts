@@ -416,7 +416,10 @@ test('the output survives killed workers, a corrupt cache file and a malformed d
       expect(await opfsSize(o, bgHash)).toBe(1234);
       await o.evaluate(() => (window as unknown as Ordo).__ordo.chaos.verifyCache());
       await expect.poll(() => opfsSize(o, bgHash), { timeout: 20_000 }).toBe(bgBytes);
-      expect((await st(o)).cacheRepairs).toBeGreaterThanOrEqual(1);
+      // The repair is counted before the file is fetched again, but the window publishes its state (the count
+      // among it) 30 ms after a change and every 250 ms, and the refill of this small file can take less: the
+      // size can be back before the state that counts it. Wait for that state, as (b)'s second half does.
+      await expect.poll(async () => (await st(o)).cacheRepairs, { timeout: 5_000 }).toBeGreaterThanOrEqual(1);
       await neverBlack(o, 300);
     });
 
