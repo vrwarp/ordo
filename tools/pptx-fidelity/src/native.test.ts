@@ -25,6 +25,7 @@ import {
 } from './native.ts';
 import { dataUri, testPicture } from './png.ts';
 import { beatsBlack, type DeckScore, featureRows, nativeStats } from './report.ts';
+import { findChromium } from '../../find-chromium.ts';
 
 const dirs: string[] = [];
 afterAll(() => Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true }))));
@@ -296,18 +297,6 @@ describe('convertDeck', () => {
     90_000,
   );
 });
-
-/** A Chromium to drive: ORDO_TEST_CHROMIUM, else Playwright's when it is installed. */
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
-  try {
-    const { chromium } = await import('@playwright/test');
-    const exe = chromium.executablePath();
-    return existsSync(exe) ? exe : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 const chromium = await findChromium();
 

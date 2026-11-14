@@ -37,7 +37,7 @@ by the next run with the same `--out` (they are the slow part); `--fresh-lo` dra
 | `--corpus`                   | add the synthetic decks of `src/corpus.ts`                                                                                                                      |
 | `--raw`                      | also draw with pptx-preview unmodified                                                                                                                          |
 | `--script-stand-ins`         | serve a missing script fallback family with fontconfig's face for the script                                                                                    |
-| `--chromium PATH`            | the Chromium to drive (else `ORDO_CHROMIUM`, Playwright's, or the system's)                                                                                     |
+| `--chromium PATH`            | the Chromium to drive (else `ORDO_CHROMIUM`, Playwright's, `ORDO_TEST_CHROMIUM`, or the system's)                                                               |
 
 The run writes `<dir>/summary.json`, `<dir>/native-baseline.json` and `<dir>/report.html`, and prints the
 means. Native pictures are `<dir>/<deck>/native/slide-NNNN.png`; delete them after measuring when disk is

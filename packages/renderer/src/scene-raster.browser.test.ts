@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { CaseResult } from './scene-raster.page.test-util.ts';
+import { findChromium } from '../../../tools/find-chromium.ts';
 
 /**
  * Headless check of the asset worker's scene bitmaps (design/27 §7.2, SCENE.md item E): bundles
@@ -14,18 +15,6 @@ import type { CaseResult } from './scene-raster.page.test-util.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../..');
-
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
-  try {
-    const { chromium } = await import('@playwright/test');
-    const exe = chromium.executablePath();
-    if (existsSync(exe)) return exe;
-  } catch {
-    /* Playwright not installed */
-  }
-  return existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : undefined;
-}
 
 /** The part of esbuild used here. */
 type Esbuild = {

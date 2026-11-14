@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { CoverageReport } from './coverage.page.test-util.ts';
+import { findChromium } from '../../../../tools/find-chromium.ts';
 
 /**
  * Font coverage misses in headless Chromium (design/27 §10, M7): slides drawn in a worker through the font
@@ -14,18 +15,6 @@ import type { CoverageReport } from './coverage.page.test-util.ts';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../../..');
 const FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
-
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
-  try {
-    const { chromium } = await import('@playwright/test');
-    const exe = chromium.executablePath();
-    if (existsSync(exe)) return exe;
-  } catch {
-    /* Playwright not installed */
-  }
-  return existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : undefined;
-}
 
 type Esbuild = { build(o: Record<string, unknown>): Promise<{ outputFiles: { text: string }[] }> };
 

@@ -339,7 +339,7 @@ jobs that run side by side so none takes more than about 35 minutes (one job too
 
 | Job                            | Runs                                                                                                                                                                                                           | Limit  |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| Lint, types, unit tests, build | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), `pnpm test` (`CI` set: timing bounds ×3, golden runs strict), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                       | 25 min |
+| Lint, types, unit tests, build | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), Playwright Chromium, `pnpm test` (`CI` set: timing bounds ×3, golden runs strict, browser tests run or fail), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory) | 25 min |
 | End-to-end (2 shards)          | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure | 35 min |
 | Goldens (pinned container)     | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                            | 20 min |
 | Fidelity ratchets              | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                      | 20 min |
@@ -350,6 +350,13 @@ fidelity jobs add the golden faces (DejaVu, FreeSerif, IPAGothic). Docker images
 `docker-pr.yml` and published by `docker-publish.yml`; tags build and push the image. Not run in CI: the
 benches (`bench:*`, whose 50 ms and frame gates need a known machine) and the PowerPoint fidelity harness
 against LibreOffice (design/27 §14 item 2).
+
+Browser unit tests (the `*.browser.test.ts` files, the harness's `NativeRenderer`, the hub's pptx-preview
+import, `packages/pptx-render`) find their browser with one helper, `tools/find-chromium.ts`: Playwright's
+Chromium (the build the end-to-end suite runs), else `ORDO_TEST_CHROMIUM`. On a developer's machine without
+either they skip; with `CI` or `ORDO_CI` set the helper throws instead, so a browser test can no longer pass CI
+by skipping (before the check job installed Playwright's Chromium, CI run 164 skipped 12 of them). The CLI tools
+(the fidelity harness, the preset golden) take `ORDO_CHROMIUM` first and the system's Chromium or Chrome last.
 
 ## Test content
 

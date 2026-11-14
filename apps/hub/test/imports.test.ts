@@ -11,6 +11,7 @@ import { annotatePptx } from '@ordo/pptx-render';
 import { annotatePptxInWorker, type Importers, MAX_INLINE_BYTES, type Pro7Result } from '../src/imports.ts';
 import { fixtures } from './fixtures.ts';
 import { type Client, EDIT_PIN, login, song, startHub, type TestHub, tempDir } from './helpers.ts';
+import { findChromium } from '../../../tools/find-chromium.ts';
 
 const fx = tempDir('ordo-fx-');
 
@@ -441,15 +442,6 @@ describe('pptx-preview annotation on the CPU pool', () => {
   });
 });
 
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
-  try {
-    const exe = (await import('@playwright/test')).chromium.executablePath();
-    return existsSync(exe) ? exe : undefined;
-  } catch {
-    return undefined;
-  }
-}
 const chromiumExe = await findChromium();
 
 describe.skipIf(!chromiumExe)('pptx-preview import (headless Chromium)', () => {
