@@ -353,7 +353,11 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
       const moved = () => centres.some((c) => dist(c, centres[0]!) > 40);
       for (let more = 1; !moved() && more <= 8; more++) {
         await p.waitForTimeout(250 + 900 * more);
-        centres.push(at(await frame(p), probe.centre));
+        const c = at(await frame(p), probe.centre);
+        // Each extra capture must still show the clip in its box, as the first five do: a black or
+        // re-init frame differs from the first without the clip playing.
+        expect(isSweep(c), `${n}: the clip in its box (${c})`).toBe(true);
+        centres.push(c);
         times.push((await slotOf(p, boxedKey))?.t);
       }
       const seen =
