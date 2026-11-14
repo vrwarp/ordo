@@ -324,13 +324,24 @@ The harness produces:
 ## The golden-pptx census ratchet
 
 `pnpm --filter @ordo/pptx-fidelity census:ratchet` (`tools/pptx-fidelity/src/census-ratchet.ts`) runs the
-census (`census.ts`) over the committed public corpus `golden-pptx/` (112 decks, 1,071 shown slides; about
+census (`census.ts`) over the committed public corpus `golden-pptx/` (113 decks, 1,072 shown slides; about
 15 s here, under a minute on CI) and compares each shown slide's class, its class in the hub and its reasons
 with `tools/pptx-fidelity/golden-census-baseline.json`. A slide whose class gets worse (native < hybrid <
 picture), natively or in the hub, a shown slide that is gone, and a deck that is missing or no longer reads
 fail the run; better classes, other reasons on the same class and new decks or slides are reported, and a PR
 that improves a class records it (`-- --write`) so it cannot slip back. It needs no LibreOffice and no
 browser.
+
+Since M9 leaf-legacy the census also counts, per slide, what its legacy shapes draw (design/27 §3.2 legacy
+values): `budgetLegacy`, the objects the renderer's slide budget (`geombudget.ts` `slideBudget`, every
+drawer's) draws as their legacy shapes, which the outputs draw whole from geometry units; and `legacyFills`, a
+filled legacy rect or ellipse over a built custom geometry (not a table's grid) whose even-odd ink is under
+half its box or cannot be worked out (the converter's own measure, `geom.ts` `inkOf`): the box of its fill
+an older build or a drawer past the budget would draw over line art. A `legacyFills` above 0 fails the run on
+any slide, in the baseline or not (the leaf template's black boxes; the generated guard deck
+`line-art-holes.pptx` had 3 before the fix). The baseline is version 2: each slide's entry gains its
+`budgetLegacy` (0 when none), whose changes are reported; a version 1 baseline (four entries a slide) still
+reads, without that comparison, and `--write` records version 2.
 
 ## CI
 
@@ -364,5 +375,9 @@ Fixtures are synthetic: generated lyrics, a 10 s test pattern video in each form
 PPTX and a PDF with known text boxes, a minimal ProPresenter 7 file built from the proto
 schema. No venue content in the repo, with one deliberate exception: `golden-pptx/`, a corpus of 112
 public decks (church sermons, worship lyrics, announcements and file-format test decks) downloaded from
-the web with their sources and a takedown notice in its README, used by the census ratchet. Private
+the web with their sources and a takedown notice in its README, used by the census ratchet, beside one
+synthetic guard deck written by a generator in the repository (`line-art-holes.pptx`,
+`tools/pptx-fidelity/src/gen/line-art-holes.ts`: line art past the slide's drawing budget, regenerated
+byte for byte by its test; its manifest entry names the generator instead of a source URL, and
+`tools/download_golden_pptx.py` keeps such entries when it rewrites the manifest and README). Private
 decks a venue shares for testing never enter the repository.

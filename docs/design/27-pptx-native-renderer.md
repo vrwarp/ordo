@@ -460,6 +460,19 @@ SlidePptx  += { missing: string[] ≤ 16 of ≤ 40 }                   // '<kind
   - text in its dominant run's style, with `padding` = the smallest inset;
   - pictures stretched and uncropped;
   - shapes as rect, ellipse or line with a solid fill (the first gradient stop);
+  - (M9 leaf-legacy) a custom geometry as a rect only when it fills at least half its box
+    (`MIN_RECT_COVERAGE`), else as a `line` (its fill is not drawn; an outline, if any, along the box's
+    midline). A geometry whose paths are built and stored is rated by the even-odd area of those paths
+    (`CustomPaths.ink`: renderer `geom/nesting.ts` `evenOddArea`, sub-paths signed by their nesting so holes
+    are taken away, curves flattened, within `UNION_NESTING_LIMIT` sub-paths and `UNION_NESTING_WORK` edges);
+    one whose share cannot be worked out within those bounds counts as thin: a `line`, never a box of its
+    fill. A geometry past the converter's bounds (nothing built, no `geom` stored) keeps the rule of its read
+    points (`ShapeElement.coverage`, holes counted as ink): thin only when that is known and below half, else
+    its rect, so nothing drawn as a rect before is left undrawn. These legacy values are what an older build,
+    a phone's editor and every drawer the slide's drawing budget sends to its legacy copy draw (`geombudget.ts`
+    `slideBudget`, `withoutPart` 'geom'): the leaf template's line art (309 sub-paths, ink 0.058, read points
+    past 4,096) was a black rect there until this rule. No stored field and no converter version change: a
+    deck imported again gets the new legacy shape;
   - (M6) a table's grid as its line looks' outline and its fills' bounding boxes, and a merged run of shapes
     of one look (§15 M6 "the object budget") as a `line`: an older build draws nothing for a run without an
     outline and the run's outline colour along the union box's midline for one with an outline (the M6
