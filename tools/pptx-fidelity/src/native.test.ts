@@ -338,9 +338,9 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
   const pngSize = (b: Buffer) => [b.readUInt32BE(16), b.readUInt32BE(20)];
 
   it("draws text with the font's own advances, whatever hinting the machine's fontconfig asks for", async () => {
-    // A machine whose fontconfig asks for full hinting (the CI runner rounds advances like this): the full
-    // headless browser takes it from fontconfig and rounds every advance at the drawing size, the outputs'
-    // headless shell does not. The page must measure what the font says (FaceMetrics x size).
+    // A machine whose fontconfig asks for full hinting: the full headless browser takes it from fontconfig and
+    // rounds every advance at the drawing size. The page must measure what the font says (FaceMetrics x size),
+    // as the outputs do.
     const face = await fcMatch('sans-serif');
     const base = unhintedFontconfig();
     if (!face || !base) return; // no fontconfig here: nothing to override

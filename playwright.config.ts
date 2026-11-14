@@ -37,6 +37,12 @@ export default defineConfig({
         '--use-vulkan=swiftshader',
         '--enable-features=Vulkan',
         '--force-color-profile=srgb',
+        // Text with the fonts' own advances. Playwright's headless shell defaults to full hinting, which rounds
+        // every glyph advance to a whole pixel: the CI runner's outputs drew a verse line 0.25 % to 0.6 %
+        // narrower than the fidelity harness's page (which draws unhinted, `unhintedFontconfig`), SSIM 0.971
+        // (e2e/pptx-native.spec.ts cue 1), and narrower than Chrome draws it under fontconfig's default, slight
+        // hinting, which keeps the advances. With the switch the outputs keep them on every machine.
+        '--font-render-hinting=none',
         '--autoplay-policy=no-user-gesture-required',
         '--disable-background-timer-throttling',
         '--disable-renderer-backgrounding',

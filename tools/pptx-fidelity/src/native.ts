@@ -748,11 +748,12 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
  * A fontconfig file for the harness's browser: this machine's configuration (`FONTCONFIG_FILE`, else the
  * system's), then glyph hinting off for every face. Chromium's full headless browser takes hinting from
  * fontconfig, and medium or full hinting rounds glyph advances at the drawing size (Carlito at 58.67 px: a line
- * 0.2 % to 0.4 % wider than the font's own advances), while the outputs' headless shell, like an output drawing
- * at another size, keeps the font's advances (FaceMetrics x size). With hinting on, the page's lines were wider
- * than an output's on such machines (the CI runner: e2e/pptx-native.spec.ts cue 1, width output/harness
- * 0.994 to 0.998 at 1080p and 4K alike). Undefined when there is no configuration file to start from (the
- * browser then keeps the machine's defaults). The caller removes `dir`.
+ * 0.2 % to 0.4 % wider than the font's own advances), while an output keeps the font's advances (FaceMetrics x
+ * size; the e2e suite's headless shell runs with `--font-render-hinting=none`, playwright.config.ts).
+ * Fontconfig's default, slight hinting, keeps them too (the CI runner's page drew the verse lines as wide
+ * before this file as after), so it matters only on a machine that asks for medium or full hinting. Undefined
+ * when there is no configuration file to start from (the browser then keeps the machine's defaults). The
+ * caller removes `dir`.
  */
 export function unhintedFontconfig(): { file: string; dir: string } | undefined {
   const base = process.env.FONTCONFIG_FILE || '/etc/fonts/fonts.conf';
