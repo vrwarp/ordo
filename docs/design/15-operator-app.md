@@ -173,6 +173,13 @@ playlists and library screens). Each open dialog marks Escape handled in the cap
 were added in) and closes in the bubble phase (`components/dialogEscape.ts`). A popover inside the dialog
 (a menu, the colour picker) that stops Escape to close itself keeps the dialog open.
 
+Every dialog is modal (`aria-modal`), closable or not: while one is open no live key acts, not even with focus
+outside it (the keyboard driver's `blocked()` asks the dialogs' registry, `modalOpen`, and so does the Clear
+all hold), and a key pressed inside it is the dialog's (`data-keys="off"` on its root). Space or Enter on a
+focused button presses that button: Space on End service's confirmation ends the service (it was Next, and
+the button never pressed). A dialog takes the focus when it opens unless one of its controls did (autoFocus).
+The Stream Deck and MIDI are not keys and keep working with a dialog open (design/19).
+
 ## Launching outputs
 
 1. The operator clicks Launch outputs (a user gesture).

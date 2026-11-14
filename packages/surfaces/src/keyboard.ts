@@ -40,9 +40,14 @@ export type KeyboardOptions = {
   /** Clock for the repeat rate limit (ms). Defaults to `performance.now`. */
   now?: () => number;
   repeatIntervalMs?: number;
+  /**
+   * True while no key may act (the operator: a modal dialog is open, design/15 "Dialogs"). A blocked key is
+   * left alone entirely, default included, so Space or Enter on a dialog's focused button presses it.
+   */
+  blocked?: () => boolean;
 };
 
-/** Keyboard driver: keydown on window, no debounce; ignores events from text inputs. */
+/** Keyboard driver: keydown on window, no debounce; ignores events from text inputs and while `blocked()`. */
 export class KeyboardDriver {
   private handler = (e: Event) => this.onKey(e as KeyboardEvent);
   private now: () => number;
@@ -50,9 +55,11 @@ export class KeyboardDriver {
   private lastRepeatAt = Number.NEGATIVE_INFINITY;
   private map: KeyMap;
   private dispatch: Dispatch;
+  private blocked?: () => boolean;
   constructor(map: KeyMap, dispatch: Dispatch, opts: KeyboardOptions = {}) {
     this.map = map;
     this.dispatch = dispatch;
+    this.blocked = opts.blocked;
     this.now = opts.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this.repeatIntervalMs = opts.repeatIntervalMs ?? KEY_REPEAT_INTERVAL_MS;
   }
@@ -67,6 +74,7 @@ export class KeyboardDriver {
   }
   private onKey(e: KeyboardEvent): void {
     if (e.defaultPrevented || e.isComposing) return;
+    if (this.blocked?.()) return;
     const t = e.target as HTMLElement | null;
     if (
       t &&

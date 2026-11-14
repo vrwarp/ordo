@@ -13,6 +13,29 @@ type Target = Pick<Window, 'addEventListener' | 'removeEventListener'>;
 
 const open: object[] = [];
 
+/**
+ * Every mounted Dialog, closable or not. While one is open no live key acts (`modalOpen`, the operator's
+ * KeyboardDriver and its Clear all hold): a key pressed in a dialog is the dialog's (Space or Enter on its
+ * focused button presses that button), and a key pressed with focus elsewhere does nothing. The Stream Deck
+ * and MIDI are not keys and keep working (design/15 "Dialogs", design/19).
+ */
+const modals: object[] = [];
+
+/** Register a mounted modal dialog; returns its removal. */
+export function registerModal(): () => void {
+  const me = {};
+  modals.push(me);
+  return () => {
+    const i = modals.indexOf(me);
+    if (i >= 0) modals.splice(i, 1);
+  };
+}
+
+/** Whether a modal dialog is open: the live keys do nothing meanwhile. */
+export function modalOpen(): boolean {
+  return modals.length > 0;
+}
+
 /** Dialogs open with an Escape handler (for tests). */
 export function openDialogCount(): number {
   return open.length;
