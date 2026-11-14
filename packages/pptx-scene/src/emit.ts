@@ -394,8 +394,9 @@ export interface EmitResult {
   geoms: { id: string; file: GeomFile }[];
   /**
    * M9 (`decor-conv`): the decoration files the slides name (`DecorData.ref`, `pptxdecor:<n>`), each once in
-   * first-use order. An importer stores each as it stores geometry files (`decor-render`) and puts its name in
-   * place of the placeholder; one that cannot leaves the decoration drawing nothing.
+   * first-use order. An importer stores each as it stores geometry files (the import core's `pptx-geoms.ts`
+   * `decorFileOf`, on the hub and the client) and puts its name in place of the placeholder; one that cannot
+   * leaves the object out (`withoutFiles`: the decoration would draw nothing) and lists it missing.
    */
   decors: { id: string; file: DecorFile }[];
   /**

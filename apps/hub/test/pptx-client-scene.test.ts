@@ -10,6 +10,7 @@ import {
   body,
   buildDeck,
   custGeom,
+  grpSp,
   imageRel,
   para,
   pic,
@@ -22,6 +23,7 @@ import JSZip from 'jszip';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import { checkClientScene, clientSceneTask } from '../src/pptx/clientScene.ts';
+import { nameGeoms } from '../src/pptx/geoms.ts';
 
 const IN = 914_400;
 const PNG = Uint8Array.from(
@@ -145,6 +147,56 @@ describe('checkClientScene', () => {
     ];
     const out = checkClientScene(s, { libreoffice: true });
     expect('scene' in out && out.scene.geomFiles).toEqual([]);
+  });
+
+  it('refuses a decoration file whose JSON is not what its name says, and the slide loses its ref', async () => {
+    // A layout of 160 text-less shapes of as many colours: one decoration, in a decoration file.
+    let shapes = '';
+    for (let i = 0; i < 160; i++) {
+      const hex = (0x102030 + i * 0x010305).toString(16).slice(-6).padStart(6, '0');
+      shapes += sp({
+        id: 10 + i,
+        x: (i % 16) * (IN / 2),
+        y: Math.floor(i / 16) * (IN / 4),
+        cx: IN / 4,
+        cy: IN / 6,
+        geom: i % 2 ? 'ellipse' : 'star5',
+        fill: solid(hex),
+      });
+    }
+    const parts = buildDeck({
+      layouts: [{ shapes: grpSp({ id: 2, x: 0, y: 0, cx: 8 * IN, cy: 4 * IN }, shapes) }],
+      slides: [{ shapes: '' }],
+    });
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    const decorated = (await parsePptxScene(await z.generateAsync({ type: 'uint8array' }))).scene;
+    const refs = decorated.slides[0]!.slide.objects.flatMap((o) =>
+      o.type === 'shape' && o.decor?.ref ? [o.decor.ref] : [],
+    );
+    expect(refs.length).toBeGreaterThan(0);
+    const file = decorated.geomFiles.find((g) => g.hash === refs[0])!;
+    expect(JSON.parse(file.json).parts.length).toBeGreaterThan(0);
+    // As sent: taken, re-hashed by its kind (a decoration file), the same name.
+    const ok = checkClientScene(structuredClone(decorated), { libreoffice: true });
+    expect('scene' in ok && ok.scene.geomFiles.map((f) => f.hash)).toContain(refs[0]);
+    // Tampered (a paint index past the palette, a number changed, parts that are no parts): refused, and the
+    // job's renaming over the files kept (`nativeJob.ts`) takes the ref off the decoration.
+    for (const json of [
+      file.json.replace('"p":0', '"p":64'),
+      file.json.replace(/\d/, (d) => String((Number(d) + 1) % 10)),
+      '{"parts":"no"}',
+    ]) {
+      const s = structuredClone(decorated);
+      s.geomFiles = s.geomFiles.map((g) => (g.hash === refs[0] ? { ...g, json } : g));
+      const out = checkClientScene(s, { libreoffice: true });
+      if (!('scene' in out)) throw new Error(out.refused);
+      const kept = new Map(out.scene.geomFiles.map((f) => [f.hash, f.hash]));
+      expect(kept.has(refs[0]!)).toBe(false);
+      const slide = nameGeoms(out.scene.slides[0]!.slide, kept);
+      const left = slide.objects.flatMap((o) => (o.type === 'shape' && o.decor?.ref ? [o.decor.ref] : []));
+      expect(left).not.toContain(refs[0]);
+    }
   });
 
   it('reads the stored file in the pool task within its bound', () => {

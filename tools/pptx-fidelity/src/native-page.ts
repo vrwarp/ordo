@@ -8,6 +8,7 @@ import { clearEffectCache } from '@ordo/renderer/effects.ts';
 import { withinDrawBudget } from '@ordo/renderer/geombudget.ts';
 import { clearGeomFiles, putGeomFile } from '@ordo/renderer/geom/stored.ts';
 import { prepareSlideUnits } from '@ordo/renderer/units.ts';
+import { clearDecorFiles, putDecorFile } from '@ordo/renderer/decor/files.ts';
 import { withoutExifOrientation } from './exif.ts';
 import { timeEach } from './objecttime.ts';
 import { type PictureTarget, pictureTarget, preparePicture } from '@ordo/renderer/picture.ts';
@@ -20,8 +21,10 @@ import {
   fillColor,
   slidePictures,
 } from '@ordo/renderer/text2d.ts';
-// The table drawer, registered at once: the outputs load it per kind before they draw (`loadShapeDrawers`).
+// The table and decoration drawers, registered at once: the outputs load them per kind before they draw
+// (`loadShapeDrawers`).
 import '@ordo/renderer/table/index.ts';
+import '@ordo/renderer/decor/index.ts';
 
 /**
  * Browser side of the harness's native column (design/27 §14.1). `native.ts` bundles this file with
@@ -112,7 +115,10 @@ export type NativePage = {
   /** The CSS font the installed font environment gives each request (what text is drawn with). */
   font(reqs: FaceRequest[]): string[];
   media(list: PageMedia[]): void;
-  /** The deck's geometry files (`ShapeGeom.ref`): read before any slide is drawn, as an output reads them. */
+  /**
+   * The deck's shape files (`ShapeGeom.ref`, M9 `DecorData.ref`): read before any slide is drawn, as an output
+   * reads them.
+   */
   geoms(list: { id: string; file: unknown }[]): void;
   render(job: RenderJob): Promise<RenderResult>;
   /** Each object's cold draw on its own, at 1920 and 3840 px: the largest (`maxObjectMs`). */
@@ -129,13 +135,19 @@ const BACKGROUND = { box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, fit: 'c
 type Decoded = { bmp: ImageBitmap | undefined; px: number };
 
 const known = new Map<string, PageMedia>();
-/** The deck's geometry files as `geoms` was given them: read again before each slide's object pass. */
+/**
+ * The deck's shape files as `geoms` was given them (geometry files, and decoration files: `{ parts }`, under
+ * a converter placeholder or the hub's SHA-256 name): read again before each slide's object pass.
+ */
 let geomList: { id: string; file: unknown }[] = [];
 
-/** Forget every geometry file and read the deck's again: what was built from them is built anew. */
+/** Forget every shape file and read the deck's again: what was built from them is built anew. */
 function rereadGeoms(): void {
   clearGeomFiles();
-  for (const g of geomList) putGeomFile(g.id, g.file);
+  clearDecorFiles();
+  for (const g of geomList)
+    if (g.file && typeof g.file === 'object' && 'parts' in g.file) putDecorFile(g.id, g.file);
+    else putGeomFile(g.id, g.file);
 }
 /** Sources by media id and prepared pictures by `pictureKey(id, target)`, least recently used first. */
 const cache = new Map<string, Decoded>();

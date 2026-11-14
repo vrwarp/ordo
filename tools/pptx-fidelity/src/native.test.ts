@@ -453,6 +453,57 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
     expect(rgb(3 * 192, 2.5 * 192)).not.toEqual([255, 0, 0]);
   }, 120_000);
 
+  it("reads the deck's decoration files and draws its decorations (230 squares past the object budget)", async () => {
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    const slide = p.addSlide();
+    // 230 squares of as many colours (no two merge by look): past the slide budgets, kept only as decorations.
+    const color = (i: number) => (0x103050 + i * 0x0a0713).toString(16).slice(-6).padStart(6, '0');
+    for (let i = 0; i < 230; i++)
+      slide.addShape('rect' as Parameters<typeof slide.addShape>[0], {
+        x: 0.1 + (i % 23) * 0.42,
+        y: 0.6 + Math.floor(i / 23) * 0.48,
+        w: 0.3,
+        h: 0.3,
+        fill: { color: color(i) },
+      });
+    const dir = await work();
+    const file = join(dir, 'crowded.pptx');
+    await writeFile(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    const d = await convertDeck(file, dir);
+    const decors = d.slides[0]!.slide.objects.filter((o) => o.type === 'shape' && o.decor);
+    expect(decors.length).toBeGreaterThan(0);
+    expect(d.geoms!.some((g) => g.id.startsWith('pptxdecor:'))).toBe(true);
+    expect(d.slides[0]!.missing).toBeUndefined();
+    const r = await NativeRenderer.start(chromium!);
+    try {
+      await r.renderDeck(d, dir, { repeats: 0 });
+    } finally {
+      await r.close();
+    }
+    // 192 px per inch: the topmost square's centre in its colour, as its decoration file draws it.
+    const px = execFileSync('ffmpeg', [
+      '-v',
+      'error',
+      '-i',
+      join(dir, 'slide-0001.png'),
+      '-vf',
+      `crop=1:1:${Math.round((0.1 + (229 % 23) * 0.42 + 0.15) * 192)}:${Math.round((0.6 + 9 * 0.48 + 0.15) * 192)}`,
+      '-f',
+      'rawvideo',
+      '-pix_fmt',
+      'rgb24',
+      '-',
+    ]);
+    const want = color(229)
+      .match(/../g)!
+      .map((h) => Number.parseInt(h, 16));
+    expect(
+      [...px].every((v, k) => Math.abs(v - want[k]!) <= 3),
+      `${[...px]} vs ${want}`,
+    ).toBe(true);
+  }, 120_000);
+
   it('draws the slides asked for, both ways under --lo-compat, through the font resolver', async () => {
     const r = await NativeRenderer.start(chromium!);
     try {

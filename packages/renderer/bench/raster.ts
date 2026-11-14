@@ -49,6 +49,12 @@ const BOUNDED_EFFECTS: Record<string, number> = { '1920': 400, '3840': 500 };
  */
 const UNIT_TASK_MS = 50;
 const UNIT_TURN_MS: Record<string, number> = { '3840': 16 };
+/**
+ * M9 decorations (bench/cases/decor.ts): a decoration drawn as one object against the same shapes drawn one by
+ * one, paired by name ('(decoration vs shapes: <pair>' and '(shapes vs decoration: <pair>'): --check fails when
+ * the decoration's p95 at a size passes its shapes' by more than this share.
+ */
+const DECOR_OVER_SHAPES = 0.1;
 
 async function loadEsbuild(): Promise<typeof import('esbuild')> {
   try {
@@ -141,10 +147,49 @@ async function main(): Promise<number> {
         }
       }
     }
+    over += decorPairs(report);
   } finally {
     await browser.close();
   }
   return check && over ? 1 : 0;
+}
+
+/**
+ * The decoration-against-shapes pairs (`DECOR_OVER_SHAPES`): prints each pair's p95 per size and counts those
+ * whose decoration is over.
+ */
+function decorPairs(report: BenchReport): number {
+  const pairs = new Map<
+    string,
+    { decor?: BenchReport['slides'][number]; shapes?: BenchReport['slides'][number] }
+  >();
+  for (const s of report.slides) {
+    const m = /\((decoration|shapes) vs (?:shapes|decoration): ([^,)]+)/.exec(s.name);
+    if (!m) continue;
+    const p = pairs.get(m[2]!) ?? {};
+    if (m[1] === 'decoration') p.decor = s;
+    else p.shapes = s;
+    pairs.set(m[2]!, p);
+  }
+  let over = 0;
+  for (const [pair, p] of pairs) {
+    if (!p.decor || !p.shapes) {
+      console.log(`decoration vs shapes, ${pair}: one of the pair is missing`);
+      over++;
+      continue;
+    }
+    for (const [w, r] of Object.entries(p.decor.raster)) {
+      const shapes = p.shapes.raster[w];
+      if (!shapes) continue;
+      const limit = shapes.steady.p95 * (1 + DECOR_OVER_SHAPES);
+      const bad = r.steady.p95 > limit;
+      if (bad) over++;
+      console.log(
+        `decoration vs shapes, ${pair} ${w}: p95 ${ms(r.steady.p95)} ms against ${ms(shapes.steady.p95)} ms (budget ${ms(limit)} ms${bad ? ': OVER' : ''})`,
+      );
+    }
+  }
+  return over;
 }
 
 process.exit(await main());

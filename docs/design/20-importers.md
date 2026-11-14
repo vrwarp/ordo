@@ -207,13 +207,16 @@ presentation while it is live-locked (it re-queues itself with backoff, 30 s dou
 The native import ([design/27](27-pptx-native-renderer.md), M3) turns a deck into ordinary, editable ordo
 objects instead of page pictures. Its steps are one **import core** in `@ordo/importers`, which runs in Node,
 browsers and Web Workers: the scan (`pptx-scan.ts`: limits, `scanDeck`, `clipParts` with its candidate bound,
-`extrasOf`), shape files (`pptx-geoms.ts`: `geomFileOf`, `nameGeoms`, `nameShapeFiles` with the kinds hook
-`SHAPE_FILE_KINDS` that decoration files join with `decor-render`), picture headers and display needs
+`extrasOf`), shape files (`pptx-geoms.ts`: `geomFileOf`, `decorFileOf`, `storedShapeFileOf`, `nameGeoms`,
+`nameShapeFiles` over `emittedShapeFiles`, the kinds `SHAPE_FILE_KINDS`: geometry files and, since
+`decor-render`, decoration files, `DecorData.ref`, named by one SHA-256 on the hub and in the browser, within
+one batch bound, a decoration whose file cannot be kept left out and listed missing), picture headers and
+display needs
 (`pptx-pictures.ts`), the one SHA-256 (`sha256.ts`, incremental), the budget ladder (`pptx-ladder.ts`), the
 drafts, budgets, provenance and assembly (`pptx-core.ts` `ImportCore`) and the import log (`pptx-report.ts`).
 The hub's job, its pool task and the browser's parse all call them; the converter's version and stored
 fields are one constant each in `@ordo/pptx-scene` (`version.ts`: `CONVERTER_VERSION`, `M9_WRITES` less
-`M9_HELD_BACK`, and `PPTX_SHEETS`).
+`M9_HELD_BACK`, empty since decorations draw, and `PPTX_SHEETS`).
 
 **Where the deck is parsed.** The operator parses a deck it imports as editable slides in a Web Worker
 (`parsePptxScene`, design/27 §2 "Where the deck is parsed") and uploads the scene with the deck

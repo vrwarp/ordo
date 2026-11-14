@@ -29,7 +29,7 @@
 import {
   type Box,
   compactSlideBytes,
-  drawnGeomRefs,
+  drawnShapeFileRefs,
   formatBytes,
   IMPORT_RESERVE_BYTES,
   type ImageObject,
@@ -224,7 +224,7 @@ export class ImportCore {
   readonly log: ImportLog;
   /** LibreOffice can draw what ordo cannot (decided once the tools are known). */
   lo: boolean;
-  /** The deck's outline files by name: what the kept slides' refs name. */
+  /** The deck's shape files (geometry and M9 decoration files) by name: what the kept slides' refs name. */
   readonly geomFiles = new Map<string, NamedGeomFile>();
   /** Bytes of `geomFiles`. */
   geomBytes = 0;
@@ -436,13 +436,13 @@ export class ImportCore {
    * out).
    */
   budget(drafts: Draft[]): number {
-    // Outline files, admitted one by one in slide order while the import's budget holds; what names one past
-    // it (or one dropped as its batch arrived) is left out.
+    // Shape files (geometry and M9 decoration files), admitted one by one in slide order while the import's
+    // budget holds; what names one past it (or one dropped as its batch arrived) is left out.
     const admitted = new Set<string>();
     let fileBytes = 0;
     for (const d of drafts) {
       if (d.cls === 'picture') continue;
-      const refs = drawnGeomRefs(d.slide);
+      const refs = drawnShapeFileRefs(d.slide);
       if (!refs.length) continue;
       const keep = new Set<string>();
       for (const name of refs) {
