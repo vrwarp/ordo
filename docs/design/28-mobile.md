@@ -1441,3 +1441,38 @@ editor-fixes docks the Find card in the stage pane, so it no longer covers the t
 Lyric Script's splits cut at the caret and keep the song's own text (§2.7, `e2e/editor-script.spec.ts`). The phone's own
 problems (the 160x90 slide, the 18 px script fields, the cut nav, the panned Library) are this design's P0
 and P2, not fixes to the iPad layout.
+
+### P0 as built
+
+The hub lane (branch `p0/hub`; the client lanes add their bullets under this heading and the integrator
+merges them). Where it differs from the text above, this is what the code does.
+
+- **Caps at every route, failing closed.** Every route declares its access role and the lowest cap it
+  accepts (`view`, `light`, `full`); the process does not start with a route that declares none, and at run
+  time a missing cap means `full`. A capped session's cap is checked before its role, so a phone on an
+  operate route gets 403 `cap` (`need`, and the message the phone shows), never `forbidden`. Full sessions,
+  tokens and anonymous callers never meet the check. The table is `apps/hub/test/phones-routes.test.ts`.
+- **Capped sessions live in a side table** (`capped_sessions`, migration 11), not "on their row": a hub
+  downgraded past it never finds a capped cookie (401). Role `edit` whatever PIN matched, one hour sliding,
+  never remembered (the device cookie is cleared and its row forgotten), ended by a change of the PIN it signed
+  in with. `POST /auth/pin { pin, cap }`; `GET /auth/me` carries `cap` and lists `caps` signed in or not, so a
+  client sends `cap` only to a hub that grants it.
+- **Per-field caps** on whole-document saves (`apps/hub/src/capfields.ts`): `Slide.midiCues`, `Slide.pptx`
+  and `Presentation.source` (so a phone never queues a LibreOffice follow-up), a plan item's
+  `keepBackground`, `audioMediaId` and `countdownTimer`, action and timer items, media items' `loop`, `onEnd`,
+  `audio`, and `PUT /media/:id`'s `loop`, `isBackground`, `audio`; checked only when the save's `rev` matches,
+  so a stale save answers 409 as before. 403 `cap` names the `field` and the `slideId` or `itemId`.
+- **WebSocket caps** (`apps/hub/src/caps.ts`): a capped socket sends `hello` (edit) and `time.ping`; a
+  `live.event` is acked `forbidden: cap`, anything else above its cap is dropped; it never receives live
+  state, health, signalling or previews, and gets the stripped `library.delta` until P1's `library.poke`.
+  `welcome` is unchanged. `GET /live/summary` leaves `liveLabel` out below full.
+- **Origin and `x-ordo`** on every API write: a present foreign `Origin` is 403 `origin`; `x-ordo` is needed
+  from capped sessions always and from signed-in full sessions once **Phones** is on (403
+  `x_ordo_required`, "Reload ordo: this page is older than the hub."). Every ordo client sends it.
+- **The switch** `settings.phones.enabled` ("Phones are used during services", Settings → PINs, off by
+  default) gates the full-session header here and job pacing (hub lane part B); everything else of the hub
+  lane is always on.
+- **LAN out of the global PIN bucket** (`auth_global_failures`, migration 12): the 429 says `scope`
+  (`network` or `everyone`).
+- Measured by `e2e/phone/live-boundary.spec.ts` (all its checks fail at `d0f49cb`), `e2e/phones-writes.spec.ts`
+  and `apps/hub/test/phones-*.test.ts`.
