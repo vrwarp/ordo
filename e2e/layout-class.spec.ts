@@ -6,7 +6,8 @@ import { OP, PIN } from './helpers.ts';
  * Window Management is the full capability profile, so whatever its window (1280x720, 1280x480 under 500 tall,
  * 600x900 under 700 wide) and whatever PIN signs in (the edit PIN gives the session the edit profile, not the
  * device), the layout is regular: no html[data-layout], no tab bar, the compact chunk never loaded, and the
- * operate PIN's nav keeps Setup and Live. The shared web server's hub.
+ * operate PIN's nav keeps Setup and Live. It signs in as before, `{ pin, remember: true }` with no cap, and its
+ * session stays uncapped although the hub grants caps (composed plan §2 A). The shared web server's hub.
  */
 const EDIT_PIN = [...PIN].reverse().join('');
 
@@ -20,9 +21,18 @@ async function signIn(browser: Browser, size: { width: number; height: number },
   // Before the session: the sign-in is the regular one (Remember ticked, as on main).
   expect(await page.evaluate(() => (window as unknown as { __ordo: Ordo }).__ordo.layout)).toBe('regular');
   await expect(page.getByText('Remember this device (12 hours)')).toBeVisible();
+  const pins: unknown[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().endsWith('/api/v1/auth/pin')) pins.push(r.postDataJSON());
+  });
   await page.locator('input.pin').fill(pin);
   await page.getByRole('button', { name: 'OK' }).click();
   await expect(page.locator('nav.nav')).toBeVisible({ timeout: 20_000 });
+  // Today's sign-in, never a cap; the hub lists caps, and this session has none.
+  expect(pins).toEqual([{ pin, remember: true }]);
+  const me = await page.evaluate(() => fetch('/api/v1/auth/me').then((r) => r.json()));
+  expect(me).toMatchObject({ caps: ['full', 'light', 'view'] });
+  expect(me).not.toHaveProperty('cap');
   return page;
 }
 
