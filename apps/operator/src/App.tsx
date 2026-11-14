@@ -4,7 +4,8 @@ import { ConfirmHost } from './components/Confirm.tsx';
 import { Toasts } from './components/Toasts.tsx';
 import { UpdateFailedScreen, UpdatingOverlay } from './components/UpdatingScreen.tsx';
 import { sessionEndedMessage } from './lib/hubStatus.ts';
-import { requestPersistentStorage, useProfile } from './lib/capabilities.ts';
+import { deviceProfile, requestPersistentStorage, useProfile } from './lib/capabilities.ts';
+import { useLayout } from './lib/layout.ts';
 import { allowedForRole } from './lib/route.ts';
 import { watchVenueLive } from './lib/venueLive.ts';
 import { installCacheCheck } from './services/cacheCheck.ts';
@@ -42,6 +43,8 @@ const DeviceSetupView = lazy(() =>
 const pageLoading = <div className="center muted">Loading…</div>;
 
 export function App() {
+  // The layout class, once, from the device's capability profile (never the session's: lib/layout.ts).
+  useLayout(deviceProfile('operate'), useRoute().name);
   const session = useSession();
   const updateFailed = useUpdate((u) => u.phase === 'failed');
   useEffect(() => {

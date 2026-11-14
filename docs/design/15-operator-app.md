@@ -774,8 +774,23 @@ device has Window Management or WebHID (both Chromium-only: the venue PC); it is
 API is deliberately not a qualifier: iPadOS has it, and reports a fine pointer with hover as soon as a
 trackpad or mouse is attached (a Magic Keyboard), which must not turn the worship lead's iPad into an
 operator. `?profile=edit|full` or localStorage `ordo.profile` forces it for
-support and tests (never over the edit role). The result is on `window.__ordo.capabilities` (with
-`deviceProfile`) for tests.
+support and tests (never over the edit role); a forced `full` holds only where Window Management or
+WebHID exist (the forced-profile guard, design/28 §3.1 and §10 item 1): on a phone or a tablet it would
+give a broken operator, so it is ignored there, and a forced `edit` works everywhere. The result is on
+`window.__ordo.capabilities` (with `deviceProfile`) for tests.
+
+The **layout class** (`src/lib/layout.ts`, design/28 decision 3) is `compact` when the device's
+capability profile (`deviceProfile('operate')`, never the session's profile: the edit role gives every
+device the edit profile) is not `full` and `matchMedia('(max-width: 699px), (max-height: 499px)')`
+matches, `regular` otherwise; the venue PC never gets it, whatever its window or PIN. `useLayout` runs
+once at the top of `App` and follows the viewport, except that a change from regular to compact waits
+while the editor is open (an iPad Split View narrowing switches at the next navigation); compact to
+regular is immediate. `main.tsx` decides it before the first render (`startLayout`), so the sign-in
+screen is compact from its first paint. The compact layout sets `html[data-layout="compact"]` (removed
+on the regular layout) and is on `window.__ordo.layout`. The **phone class** (`isPhone`) is an edit-
+capability device whose shorter **screen** side (`screen.width`, `screen.height`, never the viewport)
+is under 600 CSS px: a phone with Safari's "Request Desktop Website" still is one, an iPad in a narrow
+Split View is not. A phone's sign-in asks for the `light` cap (`signInCap`, design/28 §3.2).
 
 ### The edit profile
 
