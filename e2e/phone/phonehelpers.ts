@@ -56,7 +56,8 @@ export async function signInPhone(page: Page, url: string, pin = PIN): Promise<v
  *   viewport, and the tab bar's bottom is the viewport's;
  * - every scrollable pane's `scrollLeft` is 0, and stays 0 after each field under `root` is focused (main's
  *   autofocused search panned the Library by 58 px at 390 and 100 px at 360).
- * `root` is `#root` for a screen, `.dialog.sheet` for an open sheet.
+ * `root` is `#root` for a screen (all of the above); `.dialog.sheet` for an open sheet checks the sheet's
+ * controls and every pane's scroll, not the screen behind it.
  */
 export async function layoutChecks(
   page: Page,
@@ -70,11 +71,15 @@ export async function layoutChecks(
       const iw = window.innerWidth;
       const ih = window.innerHeight;
       const de = document.documentElement;
+      const screen = root === '#root';
       if (de.scrollWidth > iw) out.push(`${where}: document scrollWidth ${de.scrollWidth} > ${iw}`);
       if (de.scrollHeight > ih + 1) out.push(`${where}: document scrollHeight ${de.scrollHeight} > ${ih}`);
-      for (const p of document.querySelectorAll<HTMLElement>('.page'))
-        if (p.scrollWidth > iw || p.scrollWidth > p.clientWidth + 1)
-          out.push(`${where}: .page scrollWidth ${p.scrollWidth} (client ${p.clientWidth}, viewport ${iw})`);
+      if (screen)
+        for (const p of document.querySelectorAll<HTMLElement>('.page'))
+          if (p.scrollWidth > iw || p.scrollWidth > p.clientWidth + 1)
+            out.push(
+              `${where}: .page scrollWidth ${p.scrollWidth} (client ${p.clientWidth}, viewport ${iw})`,
+            );
       const scrolls = (el: Element) => {
         const cs = getComputedStyle(el);
         return /(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 1;
@@ -117,6 +122,7 @@ export async function layoutChecks(
             `${where}: ${name} outside the visual viewport (${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)} in ${Math.round(w)}x${Math.round(h)})`,
           );
       };
+      if (!screen) return out;
       inVisual('[data-live-strip]', document.querySelector('[data-live-strip]'), false);
       inVisual('the compact header', document.querySelector('[data-compact-header]'), false);
       const bar = document.querySelector('nav.tabbar');

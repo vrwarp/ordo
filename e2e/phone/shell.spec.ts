@@ -1,7 +1,7 @@
-import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
+import { type APIRequestContext, expect, type Locator, type Page, test } from '@playwright/test';
 import type { HubProcess } from '../hubproc.ts';
 import { portOf } from '../ports.ts';
-import { phoneSlot, signInPhone, startPhoneHub } from './phonehelpers.ts';
+import { layoutChecks, phoneSlot, signInPhone, startPhoneHub } from './phonehelpers.ts';
 
 /**
  * Phones P0, the compact shell (design/28 §2.2, §8 "Layout"): the frame (header with Back, `.page` the one
@@ -32,10 +32,33 @@ How precious did that grace appear
 The hour I first believed
 `;
 
-async function go(page: Page, hash: string): Promise<void> {
-  await page.evaluate((h) => {
-    location.hash = h;
-  }, hash);
+/**
+ * A sheet opened from `opener` (design/28 §2.2 "Sheets"): full width from the bottom (today a 380 px dialog at
+ * x -10 on 360), the page behind inert, 44 px controls, Escape closes it and focus returns to the opener.
+ */
+async function sheetChecks(page: Page, opener: Locator, where: string): Promise<void> {
+  await opener.tap();
+  const sheet = page.locator('.dialog.sheet');
+  await expect(sheet, where).toBeVisible();
+  await sheet.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+  const g = await page.evaluate(() => {
+    const r = document.querySelector('.dialog.sheet')!.getBoundingClientRect();
+    return {
+      x: Math.round(r.x),
+      w: Math.round(r.width),
+      bottom: Math.round(r.bottom),
+      iw: innerWidth,
+      ih: innerHeight,
+      inert: document.getElementById('root')!.hasAttribute('inert'),
+      inBody: document.querySelector('.dialog.sheet')!.closest('#root') === null,
+    };
+  });
+  expect(g, where).toEqual({ x: 0, w: g.iw, bottom: g.ih, iw: g.iw, ih: g.ih, inert: true, inBody: true });
+  expect(await layoutChecks(page, where, { root: '.dialog.sheet' })).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(sheet, where).toHaveCount(0);
+  expect(await page.evaluate(() => document.getElementById('root')!.hasAttribute('inert'))).toBe(false);
+  await expect(opener, `${where}: focus back on the opener`).toBeFocused();
 }
 
 test('the frame: a header, the tab bar instead of the nav, and More', async ({ page }) => {
@@ -82,6 +105,17 @@ test('the frame: a header, the tab bar instead of the nav, and More', async ({ p
     expect(pages.find((p) => p.name === 'compact')?.status).toBe('loaded');
     for (const name of ['live', 'edit', 'settings', 'setup', 'operate'])
       expect(pages.find((p) => p.name === name)?.status, name).toBe('idle');
+  } finally {
+    await api.dispose();
+    hub.kill();
+  }
+});
+
+test('every dialog is a bottom sheet: More', async ({ page }) => {
+  const { hub, api, url } = await hubFor(3);
+  try {
+    await signInPhone(page, url);
+    await sheetChecks(page, page.locator('nav.tabbar').getByRole('button', { name: 'More' }), 'More');
   } finally {
     await api.dispose();
     hub.kill();

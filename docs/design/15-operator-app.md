@@ -180,6 +180,15 @@ focused button presses that button: Space on End service's confirmation ends the
 the button never pressed). A dialog takes the focus when it opens unless one of its controls did (autoFocus).
 The Stream Deck and MIDI are not keys and keep working with a dialog open (design/19).
 
+On the compact layout (a phone, design/28 §2.2 "Sheets") every dialog is a bottom sheet: the same component
+(`components/Dialog.tsx`) portals it into `body` with the classes `dialog sheet`, full width from the bottom,
+its `width` ignored, at most the viewport's height under the top safe area (all of it under 500 px tall), a
+44 px close, the footer padded by the bottom safe area, no slide-in under `prefers-reduced-motion`. While one is
+open `#root` is `inert` (`registerSheet`, counted like the modals), Escape closes it as above, and focus returns
+to the control it opened from (the focused one, or the control pressed just before it: Safari does not focus a
+tapped button; `openerFor`, `trackPresses`). The regular layout's dialog and markup are unchanged
+(`apps/operator/test/dialogSheet.test.ts` pins them).
+
 ## Launching outputs
 
 1. The operator clicks Launch outputs (a user gesture).

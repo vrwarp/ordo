@@ -202,3 +202,70 @@ html[data-layout="compact"] .compact-wide {
   min-block-size: max(44px, 2.75rem);
   font-size: 1rem;
 }
+
+/* ---- sheets: every dialog from the bottom, full width (components/Dialog.tsx's compact branch) ---- */
+html[data-layout="compact"] .backdrop.sheet-backdrop {
+  align-items: flex-end;
+  justify-content: stretch;
+}
+html[data-layout="compact"] .dialog.sheet {
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: none;
+  max-block-size: calc(100dvh - var(--safe-top));
+  border-radius: 12px 12px 0 0;
+  border-inline: 0;
+  border-block-end: 0;
+  animation: compact-sheet-in 180ms ease-out;
+}
+html[data-layout="compact"] .dialog.sheet > header {
+  padding-block: 0.25rem;
+  padding-inline: 1rem 0.25rem;
+}
+html[data-layout="compact"] .dialog.sheet > header h3 {
+  font-size: 1.0625rem;
+  overflow-wrap: anywhere;
+}
+html[data-layout="compact"] .dialog.sheet > header button {
+  min-inline-size: max(44px, 2.75rem);
+  min-block-size: max(44px, 2.75rem);
+  font-size: 1.125rem;
+}
+html[data-layout="compact"] .dialog.sheet > .body {
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+html[data-layout="compact"] .dialog.sheet > .body:last-child,
+html[data-layout="compact"] .dialog.sheet > footer {
+  padding-block-end: calc(1rem + var(--safe-bottom));
+}
+html[data-layout="compact"] .dialog.sheet > footer {
+  flex-wrap: wrap;
+}
+html[data-layout="compact"] .dialog.sheet > footer > * {
+  flex: 1 1 auto;
+}
+html[data-layout="compact"] .dialog.sheet img,
+html[data-layout="compact"] .dialog.sheet video {
+  max-inline-size: 100%;
+}
+@media (max-height: 499px) {
+  html[data-layout="compact"] .dialog.sheet {
+    block-size: 100dvh;
+    max-block-size: 100dvh;
+    border-radius: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-layout="compact"] .dialog.sheet {
+    animation: none;
+  }
+}
+@keyframes compact-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}

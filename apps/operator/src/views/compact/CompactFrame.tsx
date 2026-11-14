@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ConfirmHost } from '../../components/Confirm.tsx';
+import { trackPresses } from '../../components/dialogEscape.ts';
 import { ErrorBoundary, PageError } from '../../components/ErrorBoundary.tsx';
 import { Toasts } from '../../components/Toasts.tsx';
 import { UpdatingOverlay } from '../../components/UpdatingScreen.tsx';
@@ -57,6 +58,9 @@ export function CompactFrame({ route, signedOut, fallback, body }: FrameProps) {
   useEffect(() => {
     trail = nextTrail(trail, route);
   }, [routeKey]);
+  // A sheet gives focus back to the control it opened from; Safari does not focus a tapped button, so the
+  // frame records presses (components/dialogEscape.ts).
+  useEffect(() => trackPresses(), []);
   const back = () => {
     const target = backTarget(route, trail.previous);
     if (target === 'history') history.back();
