@@ -16,6 +16,11 @@ must hold on a public address from M1.
   changeable by the Operate role.
 - A session lasts 12 hours on the venue PC (remembered device) and 1 hour elsewhere,
   renewed on activity. Sessions are HTTP-only, Secure, SameSite cookies.
+- A phone's session is capped (design/28 §3.2): whatever PIN matched it is an edit session that can look at
+  everything and make light changes (presentations, plans, uploads, media names and tags, restores), never
+  delete, change settings, fonts or themes, import, or run a service. It is never remembered (one hour,
+  renewed on activity) and ends when the PIN it signed in with changes. The cap protects the phone's cookie,
+  not the PIN: anyone who knows the operate PIN can still use it at a computer.
 - Rate limiting: 5 failed PIN attempts per IP per 15 minutes, then a lockout of 15 minutes
   with a clear message. Attempts are logged.
 - Phones (design/28 P0): Settings → PINs has "Phones are used during services", off by default. Phones can

@@ -105,10 +105,13 @@ The numbers replace the measurements of 2026-11-07 (8ea4456), which predate the 
   merge, `1764e05`), and nothing in the editor is lazy (§7).
 - With the operate PIN a phone gets an operate session. The edit profile never offers live control, but
   the hub accepts `live.event` from any operate socket (`apps/hub/src/ws.ts:416-418` refuses only `edit`)
-  and `POST /live/events` from any operate cookie.
+  and `POST /live/events` from any operate cookie. _Fixed by P0 (hub): a phone signs in with `cap: 'light'`
+  and gets an edit session with that cap whatever PIN matched; the cap is checked before the role at every
+  route and on the socket (§3.2)._
 - "Remember this device" is ticked by default (`apps/operator/src/views/auth/LoginView.tsx:12`; ticked on
   all four devices), so a phone keeps a one-year device cookie and 12-hour sessions
-  (`apps/hub/src/routes.ts:360-366`).
+  (`apps/hub/src/routes.ts:360-366`). _Fixed by P0 (hub): a capped sign-in ignores `remember`, clears the
+  device cookie and forgets its row; its session lasts an hour, sliding._
 - Offline, the app opens the library copy with the last role from `localStorage`, with no PIN and no time
   limit (`apps/operator/src/state/session.ts:23-48`). Sign-out does not clear IndexedDB.
 - PRD 01 lists a phone or tablet remote as a non-goal and, with this design, phones for the week as a

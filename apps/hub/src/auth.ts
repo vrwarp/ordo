@@ -371,13 +371,19 @@ export class Auth {
   }
 }
 
-function lockout(until: number, now: number): HttpError {
+/**
+ * Which bucket locked a sign-in out (design/28 §4): 'network' the caller's own address (5 per 15 min), 'everyone'
+ * the hub-wide one (public addresses only). The phone's locked-out line follows it.
+ */
+export type LockoutScope = 'network' | 'everyone';
+
+function lockout(until: number, now: number, scope?: LockoutScope): HttpError {
   const min = Math.max(1, Math.ceil((until - now) / 60_000));
   return new HttpError(
     429,
     'locked_out',
     `Too many wrong PINs. Try again in ${min} minute${min === 1 ? '' : 's'}.`,
-    { retryAfterS: Math.ceil((until - now) / 1000) },
+    { retryAfterS: Math.ceil((until - now) / 1000), ...(scope ? { scope } : {}) },
   );
 }
 

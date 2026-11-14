@@ -26,6 +26,7 @@ import {
   type ManifestRes,
   type OutputConfigRes,
   type OutputHealthEntry,
+  SessionCap,
   SETTINGS_BODY,
   type Settings,
   type SettingsKey,
@@ -34,7 +35,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest, HTTPMethods, RouteH
 import JSZip from 'jszip';
 import { z } from 'zod';
 import type { Logger } from 'pino';
-import type { Access, Auth, Principal } from './auth.ts';
+import type { Access, Auth, LowerCap, Principal } from './auth.ts';
 import type { Backups } from './backup.ts';
 import type { HubConfig } from './config.ts';
 import { badRequest, conflict, HttpError, locked, notFound, unauthorized } from './errors.ts';
@@ -66,7 +67,10 @@ import { validate } from './validate.ts';
 export const DEVICE_COOKIE = 'ordo_device';
 
 // ---- request bodies (design/25): strict at the top level (unknown keys are refused) and bounded ----
-const PinBody = z.object({ pin: z.string().max(64), remember: z.boolean().optional() }).strict();
+/** `cap`: the cap a device asks for (design/28 §3.2); 'full' or absent is a sign-in as before. */
+const PinBody = z
+  .object({ pin: z.string().max(64), remember: z.boolean().optional(), cap: SessionCap.optional() })
+  .strict();
 const SetupBody = z.object({ operatePin: z.string().max(64), editPin: z.string().max(64) }).strict();
 const PinsBody = z
   .object({ operatePin: z.string().max(64).optional(), editPin: z.string().max(64).optional() })
@@ -384,6 +388,9 @@ export function liveSummary(state: LiveState, locked: Iterable<string>): LiveSum
   });
 }
 
+/** The caps this hub grants (`AuthMeRes.caps`). */
+export const SESSION_CAPS = SessionCap.options;
+
 function routeFn(app: FastifyInstance) {
   return (method: HTTPMethods | HTTPMethods[], url: string, access: Access, handler: RouteHandlerMethod) =>
     app.route({ method, url: API_PREFIX + url, config: { access }, handler });
@@ -403,6 +410,10 @@ export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
       setupRequired: auth.setupRequired(),
       version: APP_VERSION,
       domain: cfg.domain,
+      // A capped session's cap; the caps this hub grants, signed in or not (a client sends `cap` only to a hub
+      // that lists it: an older hub refuses the key).
+      ...(p?.kind === 'session' && p.cap !== 'full' ? { cap: p.cap } : {}),
+      caps: [...SESSION_CAPS],
     };
   });
   route('GET', '/output/config', 'token', async (req): Promise<OutputConfigRes> => {
@@ -480,13 +491,25 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     secure: req.protocol === 'https',
     maxAge: maxAgeS,
   });
+  /**
+   * With a cap below full (design/28 §3.2, a phone): role `edit` whatever PIN matched (`role` is that PIN), never
+   * remembered (any device cookie is cleared and its row forgotten), one hour sliding. Without: as before.
+   */
   const startSession = (
     req: FastifyRequest,
     reply: FastifyReply,
     role: 'operate' | 'edit',
     remember: boolean,
+    cap?: LowerCap,
   ) => {
     const ua = req.headers['user-agent'] ?? '';
+    if (cap) {
+      auth.forgetDevice(req.cookies[DEVICE_COOKIE]);
+      reply.setCookie(DEVICE_COOKIE, '', cookieOpts(req, 0));
+      const token = auth.createSession('edit', ua, false, Date.now(), { cap, pin: role });
+      reply.setCookie(COOKIE_SESSION, token, cookieOpts(req, 3600));
+      return;
+    }
     const deviceOk = auth.deviceValid(req.cookies[DEVICE_COOKIE], ua);
     if (remember && !deviceOk)
       reply.setCookie(DEVICE_COOKIE, auth.createDevice(ua), cookieOpts(req, 365 * 86400));
@@ -527,6 +550,10 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const role = await auth.matchPin(b.pin);
     auth.recordAttempt(req.ip, !!role);
     if (!role) throw new HttpError(401, 'wrong_pin', 'Wrong PIN');
+    if (b.cap && b.cap !== 'full') {
+      startSession(req, reply, role, false, b.cap);
+      return { role: 'edit', cap: b.cap };
+    }
     startSession(req, reply, role, !!b.remember);
     return { role };
   });
