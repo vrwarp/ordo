@@ -1,3 +1,4 @@
+import '../i18n/compactStrings.ts';
 import { type FormatOptions, formatDayTime, t } from '../i18n/index.ts';
 
 /**

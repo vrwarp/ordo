@@ -1,4 +1,5 @@
 import { en } from './en.ts';
+import type { enCompact } from './enCompact.ts';
 
 /**
  * The compact layout's strings and formats (design/28 §6 "UI language"; P0: English only). `t(key, params)`
@@ -8,11 +9,22 @@ import { en } from './en.ts';
  * (and an override in More), with `<html lang dir>` following it.
  */
 export type Plural = { readonly one: string; readonly other: string };
-export type MessageKey = keyof typeof en;
+/** Every key: the entry's (en.ts) and the compact chunk's (enCompact.ts, a type import: not bundled here). */
+export type MessageKey = keyof typeof en | keyof typeof enCompact;
 export type UiLanguage = 'en';
 export type Params = Readonly<Record<string, string | number>>;
+type Entry = string | Plural;
 
-const CATALOGS: Record<UiLanguage, Readonly<Record<MessageKey, string | Plural>>> = { en };
+/**
+ * The catalogs: the entry's strings at once; the compact chunk adds its own when it loads (addStrings, from
+ * compactStrings.ts), so the venue PC never downloads them.
+ */
+const CATALOGS: Record<UiLanguage, Partial<Record<MessageKey, Entry>>> = { en: { ...en } };
+
+/** Add strings to a language's catalog (the compact chunk's, at its load). */
+export function addStrings(lang: UiLanguage, strings: Readonly<Partial<Record<MessageKey, Entry>>>): void {
+  Object.assign(CATALOGS[lang], strings);
+}
 
 /**
  * The UI language for a device's preferred languages (navigator.languages): the first one with a catalog,
@@ -43,9 +55,13 @@ function fill(text: string, params: Params): string {
   );
 }
 
-/** A string of the catalog, its parameters filled and its plural form chosen by `params.n`. */
+/**
+ * A string of the catalog, its parameters filled and its plural form chosen by `params.n`. A key whose catalog
+ * has not loaded reads as the key itself (never thrown: the page keeps working).
+ */
 export function t(key: MessageKey, params: Params = {}, lang: UiLanguage = 'en'): string {
   const entry = CATALOGS[lang][key] ?? CATALOGS.en[key];
+  if (entry === undefined) return key;
   if (typeof entry === 'string') return fill(entry, params);
   const n = Number(params.n ?? 0);
   const form = pluralRules(lang).select(Number.isFinite(n) ? n : 0);

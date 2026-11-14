@@ -116,6 +116,32 @@ describe('bundle report: the compact first load', () => {
     ]);
   });
 
+  it('a barrel start module (index.ts that only re-exports) is found by its folder’s files', () => {
+    const files = tree('console.log(1);', {
+      'assets/Compact-FFFFFFFF.js.map': map('../../src/views/compact/Frame.tsx', '../../src/i18n/x.ts'),
+    });
+    const { report } = run(fakeRoot(files, BASE), '--compact-start', 'src/views/compact/index.ts');
+    const c = report.operator.compact;
+    expect(c.firstLoad.files).toContain('Compact-FFFFFFFF.js');
+    expect(c.chunks).toEqual([
+      { source: 'src/views/compact/index.ts', raw: expect.any(Number), gzip: expect.any(Number) },
+    ]);
+    expect(c.violations).toEqual([]);
+  });
+
+  it('a start module that no chunk holds is a violation (the first load would be under-counted)', () => {
+    const { report, status } = run(
+      fakeRoot(tree('console.log(1);'), BASE),
+      '--check',
+      '--compact-start',
+      'src/views/gone/index.ts',
+    );
+    expect(report.operator.compact.violations).toEqual([
+      'src/views/gone/index.ts: the compact start module is in no chunk',
+    ]);
+    expect(status).toBe(1);
+  });
+
   it('a compact file whose map lists the editor is a violation, and --check fails on it', () => {
     const root = fakeRoot(tree('import "./EditorView-GGGGGGGG.js";'), BASE);
     const { report, status, stderr } = run(root, '--check');

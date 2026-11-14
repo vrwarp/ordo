@@ -1,80 +1,13 @@
 /**
- * The compact layout's English strings (design/28 §6 "UI language"): every string the phone's shell, sheets,
- * P0 tab bodies and phone sign-in show, in the owner's and the design's words. A plural is `{ one, other }`,
- * chosen by Intl.PluralRules from the `n` parameter; `{name}` is a parameter. The regular layout (the venue PC,
- * the iPad) keeps its inline English strings (design/28 §6 "Known gap"). P1 adds the next languages beside this
- * file, the override in More and the direction.
+ * The English strings a phone needs before the compact chunk (design/28 §6 "UI language"): the sign-in, the
+ * first-run note and the shell's wait, in the entry. The compact views' strings are in enCompact.ts, which only
+ * the compact chunk loads (src/i18n/compactStrings.ts), so the venue PC never downloads them. A plural is
+ * `{ one, other }`, chosen by Intl.PluralRules from the `n` parameter; `{name}` is a parameter. The regular layout
+ * (the venue PC, the iPad) keeps its inline English strings (design/28 §6 "Known gap"). P1 adds the next
+ * languages beside these files, the override in More and the direction.
  */
 export const en = {
-  // ---- the frame ----
-  'tab.plans': 'Plans',
-  'tab.library': 'Library',
-  'tab.media': 'Media',
-  'tab.more': 'More',
-  'tab.bar': 'Sections',
-  'title.plans': 'Plans',
-  'title.library': 'Library',
-  'title.media': 'Media',
-  back: 'Back',
   'shell.loading': 'Getting the library…',
-  // ---- More ----
-  'more.title': 'More',
-  'more.venue': 'ordo at {host}',
-  'more.signedIn': 'Signed in on this phone',
-  'more.version': 'ordo {version}',
-  'more.demoAbout': 'About the demo',
-  'more.demoReset': 'Reset the demo',
-  'more.signOut': 'Sign out',
-  // ---- Library ----
-  'library.search': 'Search presentations',
-  'library.searchLabel': 'Search presentations: title, lyrics, CCLI, tag',
-  'library.locked': 'Live · locked',
-  'library.empty': 'No songs yet.',
-  'library.noMatch': 'No presentations match “{q}”.',
-  'library.more': { one: '1 more: search to find it.', other: '{n} more: search to find them.' },
-  'kind.song': 'Song',
-  'kind.slides': 'Slides',
-  'kind.loop': 'Announcement loop',
-  // ---- Media ----
-  'media.empty': 'No pictures yet.',
-  'media.kind.image': 'Picture',
-  'media.kind.video': 'Video',
-  'media.kind.audio': 'Audio',
-  'media.state.uploaded': 'Queued',
-  'media.state.processing': 'Processing',
-  'media.state.ready': 'Ready',
-  'media.state.failed': 'Failed',
-  // ---- Plans ----
-  'plans.empty': 'No plans yet. Plans are made on a computer or iPad.',
-  'plans.items': { one: '{n} item', other: '{n} items' },
-  'plans.rowMeta': '{date} · {items}',
-  'plans.live': 'Live at the venue',
-  'plans.liveBanner': 'Live at the venue: locked until the service ends',
-  'plans.noItems': 'No items yet.',
-  'plans.missing': 'This plan is not in the library.',
-  // ---- previews ----
-  'preview.previous': 'Previous',
-  'preview.next': 'Next',
-  'preview.position': 'Slide {n} of {total}',
-  'preview.noSlides': 'No slides yet.',
-  'preview.missing': 'This presentation is not in the library.',
-  // ---- Live now ----
-  'live.strip': 'Live at the venue: {name} · {n} locked',
-  'live.unknownOffline': 'Live status unknown: offline',
-  'live.unknownUnreachable': "Live status unknown: can't reach ordo",
-  'live.sheetTitle': 'Live at the venue',
-  'live.sheet': {
-    one: 'A service is running at the venue. {name} and its {n} presentation are locked until it ends. You can still look at everything and change anything else.',
-    other:
-      'A service is running at the venue. {name} and its {n} presentations are locked until it ends. You can still look at everything and change anything else.',
-  },
-  'live.sheetUnknown':
-    'This phone cannot tell whether a service is running at the venue. Presentations a service uses stay locked until it ends.',
-  // ---- freshness ----
-  'fresh.offlineAt': 'Offline · copy from {when}',
-  'fresh.unreachableAt': "Can't reach ordo · copy from {when}",
-  'fresh.offlineHere': 'Offline · copy on this phone',
-  'fresh.unreachableHere': "Can't reach ordo · copy on this phone",
   // ---- sign-in on a phone ----
   'signin.prompt': 'Enter the operate or edit PIN',
   'signin.phoneLine':

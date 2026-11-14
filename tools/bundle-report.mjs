@@ -155,10 +155,14 @@ function reportApp(name) {
     gzip: pageJs.reduce((n, f) => n + gz(f), 0),
   };
 
-  // The compact path (design/28 §7).
-  const startChunks = js.filter(
-    (f) => !workerName(f) && sourcesOf(assets, f).some((s) => compactStart.includes(s)),
-  );
+  // The compact path (design/28 §7). A start module's chunk is the one whose map lists it; a barrel
+  // (`<dir>/index.ts` that only re-exports, which leaves no code and so no source in the map) is found by the
+  // files of its folder. A start module no chunk holds is a violation: the first load would be under-counted.
+  const startOf = (s) =>
+    compactStart.find(
+      (m) => s === m || (/\/index\.tsx?$/.test(m) && s.startsWith(m.replace(/index\.tsx?$/, ''))),
+    );
+  const startChunks = js.filter((f) => !workerName(f) && sourcesOf(assets, f).some((s) => startOf(s)));
   const core = js.filter((f) => workerName(f) === 'core.worker');
   const first = new Set([...initial, ...closure(startChunks), ...closure(core), ...css]);
   const sum = (files, of) => [...files].reduce((n, f) => n + of(f), 0);
@@ -182,6 +186,9 @@ function reportApp(name) {
       if (e) violations.push(`${f}: ${e} (${s})`);
     }
   };
+  for (const m of compactStart)
+    if (!startChunks.some((f) => sourcesOf(assets, f).some((s) => startOf(s) === m)))
+      violations.push(`${m}: the compact start module is in no chunk`);
   for (const f of first) check(f);
   for (const f of precacheFiles) if (f.startsWith('assets/') && !first.has(f.slice(7))) check(f.slice(7));
   const firstGzip = sum(first, gz);
@@ -193,7 +200,7 @@ function reportApp(name) {
       gzip: sum(precacheFiles, distGz),
     },
     chunks: startChunks.map((f) => ({
-      source: sourcesOf(assets, f).find((s) => compactStart.includes(s)),
+      source: startOf(sourcesOf(assets, f).find((s) => startOf(s)) ?? ''),
       raw: size(f),
       gzip: gz(f),
     })),

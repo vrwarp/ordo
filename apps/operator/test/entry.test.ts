@@ -38,6 +38,10 @@ const FORBIDDEN: { why: string; test: (m: string) => boolean }[] = [
         (s) => m === `${OP}services/${s}.ts`,
       ),
   },
+  {
+    why: "the compact views' strings (the compact chunk's)",
+    test: (m) => m === `${OP}i18n/enCompact.ts` || m === `${OP}i18n/compactStrings.ts`,
+  },
   { why: '@ordo/surfaces', test: (m) => m.startsWith('packages/surfaces/') },
   { why: "the renderer's barrel", test: (m) => m === 'packages/renderer/src/index.ts' },
   { why: "the renderer's preset geometry", test: (m) => m.startsWith('packages/renderer/src/geom/') },

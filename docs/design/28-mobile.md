@@ -1150,7 +1150,9 @@ process for every open editor. It is left for after P2's measurements (§11).
 - **Search** folds every combining mark (§2.4): "الله" finds "اللّٰه".
 
 Status (P0, as built by the compact shell): the compact layout's strings live in an English catalog
-(`apps/operator/src/i18n/en.ts`, read through `t(key, params)` with one/other plurals by `Intl.PluralRules`;
+(`apps/operator/src/i18n/`: `en.ts` holds what a phone needs before the compact chunk, the sign-in and the
+first-run note, and `enCompact.ts` the compact views' strings, which load with the compact chunk so the venue
+PC never downloads them; read through `t(key, params)` with one/other plurals by `Intl.PluralRules`;
 `uiLanguage(navigator.languages)` answers `en`; times and dates through `Intl.DateTimeFormat` in the device's
 locale), the compact App sets `<html lang>` from it, `compact.css` uses logical properties only, and titles that
 come from content carry `dir="auto"` (brought forward from P1). P1 adds the next languages, the override in

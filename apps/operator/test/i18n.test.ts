@@ -4,9 +4,18 @@
  */
 import { describe, expect, it } from 'vitest';
 import { en } from '../src/i18n/en.ts';
+import { enCompact } from '../src/i18n/enCompact.ts';
 import { formatDate, formatDayTime, formatTime, t, uiLanguage } from '../src/i18n/index.ts';
 
 describe('t', () => {
+  it('the compact strings arrive with the compact modules; before that a key reads as itself', async () => {
+    expect(t('signin.wrong')).toBe('Wrong PIN.');
+    // This file imports no compact module until here (the catalog is per worker, so this order holds).
+    expect(t('plans.empty')).toBe('plans.empty');
+    await import('../src/i18n/compactStrings.ts');
+    expect(t('plans.empty')).toBe('No plans yet. Plans are made on a computer or iPad.');
+  });
+
   it('fills parameters and leaves unknown ones as they are', () => {
     expect(t('signin.host', { host: 'op.church.example' })).toBe('ordo at op.church.example');
     expect(t('signin.host')).toBe('ordo at {host}');
@@ -24,8 +33,9 @@ describe('t', () => {
     expect(t('plans.items', { n: 'x' })).toBe('x items');
   });
 
-  it('every entry is a string or a plural with one and other', () => {
-    for (const [k, v] of Object.entries(en)) {
+  it('every entry is a string or a plural with one and other; the two catalogs share no key', () => {
+    for (const k of Object.keys(en)) expect(Object.hasOwn(enCompact, k), k).toBe(false);
+    for (const [k, v] of Object.entries({ ...en, ...enCompact })) {
       if (typeof v === 'string') continue;
       expect(Object.keys(v).sort(), k).toEqual(['one', 'other']);
     }

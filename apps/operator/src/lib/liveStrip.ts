@@ -1,3 +1,4 @@
+import '../i18n/compactStrings.ts';
 import { t } from '../i18n/index.ts';
 
 /**
