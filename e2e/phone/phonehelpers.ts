@@ -65,6 +65,22 @@ export async function layoutChecks(
   opts: { root?: string; focusFields?: boolean } = {},
 ): Promise<string[]> {
   const root = opts.root ?? '#root';
+  // A sheet slides in: measure where it settles (finite animations under the root, at most 2 s).
+  await page.evaluate(
+    (root) =>
+      Promise.race([
+        Promise.all(
+          [...document.querySelectorAll(root)].flatMap((el) =>
+            el
+              .getAnimations({ subtree: true })
+              .filter((a) => Number.isFinite(Number(a.effect?.getTiming().iterations ?? 1)))
+              .map((a) => a.finished.catch(() => undefined)),
+          ),
+        ),
+        new Promise((r) => setTimeout(r, 2000)),
+      ]),
+    root,
+  );
   const problems = await page.evaluate(
     ({ where, root, sel }) => {
       const out: string[] = [];
