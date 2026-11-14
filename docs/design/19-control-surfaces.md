@@ -71,6 +71,9 @@ Space on a dialog's focused button presses the button. The Stream Deck and MIDI 
   enabled when they hold MIDI mappings, so an upgraded venue keeps its pedals, and as off without mappings
   (`upgradeStoredSurfaces`, applied by the hub's settings read and by the operator to a cached library
   copy). The first save of the surface settings writes the key; from then on it reads as stored.
+  `e2e/surfaces-upgrade.spec.ts` writes such rows into a stopped hub's database and starts it: with
+  mappings the settings and Setup show MIDI on and the operator starts it; without, both show it off and
+  the browser is never asked.
 - Mapping entries: `{ deviceName, kind: 'note' | 'cc' | 'programChange', number, channel?, threshold, action, paramSource? }`.
   - Static: Note-on with velocity ≥ threshold fires; CC fires when the value crosses the threshold upward (edge-triggered).
   - Dynamic (`paramSource: 'velocity' | 'ccValue'`): incoming velocity or CC value is dynamically passed as the action's `arg`, enabling DAW show-control patterns (e.g. `goToSlideItem [vel]`, `goToItem [vel]`, `goToSection [vel]`).
