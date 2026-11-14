@@ -911,3 +911,198 @@ test('a session refusal while the operator is the fallback authority: the keys k
     hub.kill();
   }
 });
+
+// ---------------------------------------------------------------- after a hand-back, the hub goes silent
+
+/** One sample of the operator's own view (`__ordo.live()`), taken in the page every 20 ms. */
+type OpSample = {
+  t: number;
+  seq: number;
+  live?: number;
+  authority: string;
+  hubConnected: boolean;
+  reconcile: string | null;
+  conflict: boolean;
+  generation?: number;
+  recovering: boolean;
+};
+type OpWindow = Window & { __op?: OpSample[]; __opTimer?: number };
+
+async function startOpSampler(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as OpWindow & {
+      __ordo: {
+        live(): Omit<OpSample, 't'> & { conflict?: boolean };
+      };
+    };
+    clearInterval(w.__opTimer);
+    w.__op = [];
+    const t0 = Date.now();
+    const read = () => {
+      const l = w.__ordo.live();
+      w.__op!.push({
+        t: Date.now() - t0,
+        seq: l.seq,
+        live: l.live,
+        authority: l.authority,
+        hubConnected: l.hubConnected,
+        reconcile: l.reconcile,
+        conflict: !!l.conflict,
+        generation: l.generation,
+        recovering: l.recovering,
+      });
+    };
+    read();
+    w.__opTimer = window.setInterval(read, 20);
+  });
+}
+
+async function stopOpSampler(page: Page): Promise<OpSample[]> {
+  return page.evaluate(() => {
+    const w = window as unknown as OpWindow;
+    clearInterval(w.__opTimer);
+    return w.__op ?? [];
+  });
+}
+
+/** The samples as runs of the same view (start time and count), for the log. */
+function opRuns(samples: OpSample[]): string {
+  const rows: string[] = [];
+  let last = '';
+  let n = 0;
+  let start = 0;
+  const flush = () => {
+    if (n) rows.push(`${start}ms x${n} ${last}`);
+  };
+  for (const s of samples) {
+    const k = `seq=${s.seq} live=${s.live} ${s.authority}${s.hubConnected ? ' connected' : ''}${
+      s.reconcile ? ` ${s.reconcile}` : ''
+    }${s.conflict ? ' CONFLICT' : ''} gen=${s.generation}${s.recovering ? ' recovering' : ''}`;
+    if (k !== last) {
+      flush();
+      last = k;
+      n = 0;
+      start = s.t;
+    }
+    n++;
+  }
+  flush();
+  return rows.join('\n');
+}
+
+for (const variant of ['silent hub', 'core killed after the hand-back'] as const) {
+  test(`after a hand-back, ${variant}: the operator never shows an older cue and one GO lands once`, async ({
+    context,
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const PORT = portOf('chaos-operator', variant === 'silent hub' ? 7 : 8);
+    const hub = HubProcess.fresh(PORT);
+    await hub.start();
+    try {
+      const a = await hubApi(PORT);
+      await pictureService(a, 1);
+      await testMode(page);
+      await login(page, opUrl(PORT));
+      const o = await launchWatchedOutput(page, context);
+      await go(page);
+      await expectCue([o], 0);
+      await expect.poll(() => hubLive(a)).toBe(0);
+
+      // The hub dies; this PC takes over and GO moves the outputs to cue 1.
+      hub.kill();
+      await page.bringToFront();
+      await expect(page.locator('body')).toContainText('running from this PC', { timeout: 25_000 });
+      await expect.poll(() => busOf(o), { timeout: 15_000 }).toBe('fallback');
+      await go(page);
+      await expectCue([o], 1);
+      expect((await opLive(page)).live).toBe(1);
+      await startOpSampler(page);
+      const watch = await ScreenWatch.start(o);
+      const t0 = Date.now();
+
+      // The hub returns and adopts cue 1 (the hand-back).
+      await hub.start();
+      await page.evaluate(() => (window as unknown as Hooks).__ordo.chaos.kickHub());
+      const a2 = await hubApi(PORT);
+      const backAt = await until(
+        async () => {
+          const l = await opLive(page);
+          return l.authority === 'hub' && l.hubConnected && (await hubLive(a2)) === 1;
+        },
+        30_000,
+        'the hand-back',
+      );
+      const gen0 = (await opLive(page)).generation ?? 0;
+      if (variant === 'core killed after the hand-back')
+        expect(await page.evaluate(() => (window as unknown as Hooks).__ordo.chaos.killWorker('core'))).toBe(
+          true,
+        );
+      // One GO, and at once the whole hub goes silent (frozen: no pong, no delta, no close), past the
+      // operator's liveness (9 s) and its 5 s grace: the operator becomes the authority a second time.
+      await page.keyboard.press('Space');
+      const pressAt = Date.now();
+      hub.freeze();
+      const fallbackAt = await until(
+        async () => (await opLive(page)).authority === 'fallback',
+        30_000,
+        'the second fallback',
+      );
+      await page.waitForTimeout(1500);
+      hub.thaw();
+      const thawAt = Date.now();
+      const doneAt = await until(
+        async () => {
+          const l = await opLive(page);
+          const out = await outState(o);
+          return (
+            l.authority === 'hub' &&
+            l.hubConnected &&
+            (await hubLive(a2)) === 2 &&
+            out.bus === 'hub' &&
+            out.shown === 2
+          );
+        },
+        45_000,
+        'the second hand-back with the GO applied once',
+      );
+      await watch.stop(doneAt + 500);
+      const samples = await stopOpSampler(page);
+      console.log(
+        `${variant}: hand-back ${backAt - t0} ms, press ${pressAt - t0} ms, second fallback ${
+          fallbackAt - t0
+        } ms, thaw ${thawAt - t0} ms, done ${doneAt - t0} ms (page clock starts with the sampler)\n${opRuns(
+          samples,
+        )}`,
+      );
+      const diag = await page.evaluate(() => {
+        const o = (window as unknown as { __ordo?: { logs?: () => unknown[] } }).__ordo;
+        return o?.logs?.().slice(-40);
+      });
+      console.log(`operator log: ${JSON.stringify(diag)}`);
+
+      // The GO landed exactly once: the hub at 2 and staying there.
+      const stayUntil = Date.now() + 1500;
+      while (Date.now() < stayUntil) {
+        expect(await hubLive(a2)).toBe(2);
+        await page.waitForTimeout(150);
+      }
+      // The outputs went 1 then 2, never back to 0 and never black.
+      watch.assertHeld(variant, [1, 2], ['fallback', 'hub', 'none']);
+      // The operator's own view: never below cue 1, its seq never going back, no conflict dialog.
+      const bad: string[] = [];
+      let prevSeq = 0;
+      for (const s of samples) {
+        if (s.live === undefined || s.live < 1) bad.push(`${s.t}ms live ${s.live}`);
+        if (s.seq < prevSeq) bad.push(`${s.t}ms seq ${s.seq} after ${prevSeq}`);
+        prevSeq = Math.max(prevSeq, s.seq);
+        if (s.conflict) bad.push(`${s.t}ms conflict dialog`);
+      }
+      expect(bad, opRuns(samples)).toEqual([]);
+      if (variant === 'core killed after the hand-back')
+        expect((await opLive(page)).generation).toBeGreaterThan(gen0);
+    } finally {
+      hub.kill();
+    }
+  });
+}

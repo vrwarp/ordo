@@ -13,6 +13,7 @@ import {
 import { create } from 'zustand';
 import { HoldGuard } from '../lib/confirm.ts';
 import { deckView } from '../lib/deckView.ts';
+import { midiCuesOnChange } from '../lib/midiOut.ts';
 import { saveSettings } from '../state/library.ts';
 import { useLibrary } from '../state/library.ts';
 import { useLive } from '../state/live.ts';
@@ -104,12 +105,8 @@ export class Surfaces {
       }),
       useLive.subscribe((st, prev) => {
         if (st.state !== prev.state || st.hubConnected !== prev.hubConnected) this.pushView(st.state);
-        if (st.state.live !== prev.state.live && st.state.live !== undefined) {
-          const liveCue = st.state.cues[st.state.live];
-          if (liveCue?.midiCues?.length) {
-            this.midi.sendCues(liveCue.midiCues);
-          }
-        }
+        const cues = midiCuesOnChange(prev.state, st.state);
+        if (cues.length) this.midi.sendCues(cues);
       }),
     );
   }

@@ -79,7 +79,7 @@ export const PORT_TABLE = {
     spec: 'chaos-output.spec.ts',
     what: '0 hub, 1 hub, 2 hub, 3 file-outage proxy of 2, 4 hub, 5 file-outage proxy of 4',
   },
-  'chaos-operator': { offset: 60, count: 7, spec: 'chaos-operator.spec.ts', what: 'one hub per test' },
+  'chaos-operator': { offset: 60, count: 9, spec: 'chaos-operator.spec.ts', what: 'one hub per test' },
   'chaos-stage': { offset: 70, count: 2, spec: 'chaos-stage.spec.ts', what: '0 hub, 1 hub (fallback bus)' },
   'chaos-hub': { offset: 75, count: 1, spec: 'chaos-hub.spec.ts', what: 'hub (supervisor and children)' },
   'local-golive': { offset: 80, count: 2, spec: 'local-golive.spec.ts', what: 'one hub per test' },
