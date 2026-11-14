@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import { json, SONG, shot, signInByTapping, startHub, tabletSlot } from './ipadhelpers.ts';
 import { portOf } from '../ports.ts';
+import { auditTargets, type Miss } from '../touchaudit.ts';
 
 /**
  * Touch targets on the iPad (design/15 "Touch": every control is 44 px, which #24's class rules had undone): an audit of every visible
@@ -8,9 +9,9 @@ import { portOf } from '../ports.ts';
  * surface a volunteer touches: the canvas with its object tools, the docked panel's tabs, the slides list
  * with the selected card's actions, the Stage lens, the paint picker (solid and gradient) and the Lyric
  * Script. A control passes when its box is at least 44 px tall and 44 px wide, apart from the named
- * exceptions below, each with its reason.
+ * exceptions below, each with its reason (the audit itself is e2e/touchaudit.ts, which the phones' layout checks
+ * share).
  */
-type Miss = { where: string; what: string; w: number; h: number };
 
 /**
  * Controls allowed under 44 px, by CSS selector, and why. Everything else must be a 44 px target.
@@ -30,34 +31,13 @@ const EXCEPTIONS: [selector: string, why: string][] = [
   ],
 ];
 
-async function audit(page: Page, where: string, root: string): Promise<Miss[]> {
-  return page.evaluate(
-    ({ where, root, except }) => {
-      const out: { where: string; what: string; w: number; h: number }[] = [];
-      const sel =
-        'button, select, a.btn, [role="tab"], [role="menuitem"], input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"])';
-      for (const scope of document.querySelectorAll(root))
-        for (const el of scope.querySelectorAll<HTMLElement>(sel)) {
-          if (except.some((x) => el.matches(x))) continue;
-          if (el.id === 'ordo-text-editor') continue; // the canvas's text field, not a target
-          // A field in a boxed label is reached by a tap anywhere on its label: the label is the target.
-          const r = (el.tagName === 'INPUT' ? (el.closest('label') ?? el) : el).getBoundingClientRect();
-          if (r.width === 0 || r.height === 0) continue;
-          const cs = getComputedStyle(el);
-          if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) < 0.05) continue;
-          if (Math.round(r.height) >= 44 && Math.round(r.width) >= 44) continue;
-          const what = `${el.tagName.toLowerCase()}.${String(el.className).split(' ').filter(Boolean).join('.')} "${(
-            el.getAttribute('aria-label') ??
-            el.textContent ??
-            ''
-          )
-            .trim()
-            .slice(0, 24)}"`;
-          out.push({ where, what, w: Math.round(r.width), h: Math.round(r.height) });
-        }
-      return out;
-    },
-    { where, root, except: EXCEPTIONS.map(([s]) => s) },
+/** The iPad's audit (e2e/touchaudit.ts) with its named exceptions. */
+function audit(page: Page, where: string, root: string): Promise<Miss[]> {
+  return auditTargets(
+    page,
+    where,
+    root,
+    EXCEPTIONS.map(([s]) => s),
   );
 }
 

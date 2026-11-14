@@ -145,6 +145,20 @@ export const PORT_TABLE = {
     spec: 'phone/split.spec.ts',
     what: '0 webkit-iphone, 1 chromium-android',
   },
+  // The compact shell: one hub per test and project (test k: 2k webkit-iphone, 2k+1 chromium-android), so a
+  // test's sign-ins, lockouts and live service never meet another's; the row may grow to 26.
+  'phone-shell': {
+    offset: 310,
+    count: 20,
+    spec: 'phone/shell.spec.ts',
+    what: 'test k: 2k webkit-iphone, 2k+1 chromium-android',
+  },
+  'phone-demo': {
+    offset: 336,
+    count: 2,
+    spec: 'phone/demo.spec.ts',
+    what: 'static server of the Pages build, one per phone project',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;

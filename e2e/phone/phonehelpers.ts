@@ -1,5 +1,6 @@
 import { type APIRequestContext, expect, type Page, request, test } from '@playwright/test';
 import { HubProcess } from '../hubproc.ts';
+import { auditTargets, COMPACT_SELECTOR } from '../touchaudit.ts';
 import { touchDevice } from '../touchdevice.ts';
 
 /**
@@ -41,4 +42,118 @@ export async function signInPhone(page: Page, url: string, pin = PIN): Promise<v
   await page.getByRole('button', { name: 'OK' }).tap();
   await expect(page.locator('.keypad')).toHaveCount(0, { timeout: 20_000 });
   await expect(page.locator('.page')).toBeVisible({ timeout: 20_000 });
+}
+
+/**
+ * The compact layout's layout checks on the page as it is now (design/28 §8 "Layout", principle 3: every
+ * compact control at least 44x44, no horizontal scroll, `.page` the one scroller). The problems found, empty
+ * when the page passes:
+ * - the document and `.page` are no wider than the viewport, and the document does not scroll;
+ * - every visible control under `root` (the iPad audit's controls plus links, `role="button"` and checkbox
+ *   labels, e2e/touchaudit.ts `COMPACT_SELECTOR`) is inside the viewport (vertically too, unless a scroller
+ *   holds it) and at least 44x44, with no exceptions;
+ * - the Live now strip (when shown), the compact header and the tab bar (when shown) are inside the visual
+ *   viewport, and the tab bar's bottom is the viewport's;
+ * - every scrollable pane's `scrollLeft` is 0, and stays 0 after each field under `root` is focused (main's
+ *   autofocused search panned the Library by 58 px at 390 and 100 px at 360).
+ * `root` is `#root` for a screen, `.dialog.sheet` for an open sheet.
+ */
+export async function layoutChecks(
+  page: Page,
+  where: string,
+  opts: { root?: string; focusFields?: boolean } = {},
+): Promise<string[]> {
+  const root = opts.root ?? '#root';
+  const problems = await page.evaluate(
+    ({ where, root, sel }) => {
+      const out: string[] = [];
+      const iw = window.innerWidth;
+      const ih = window.innerHeight;
+      const de = document.documentElement;
+      if (de.scrollWidth > iw) out.push(`${where}: document scrollWidth ${de.scrollWidth} > ${iw}`);
+      if (de.scrollHeight > ih + 1) out.push(`${where}: document scrollHeight ${de.scrollHeight} > ${ih}`);
+      for (const p of document.querySelectorAll<HTMLElement>('.page'))
+        if (p.scrollWidth > iw || p.scrollWidth > p.clientWidth + 1)
+          out.push(`${where}: .page scrollWidth ${p.scrollWidth} (client ${p.clientWidth}, viewport ${iw})`);
+      const scrolls = (el: Element) => {
+        const cs = getComputedStyle(el);
+        return /(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 1;
+      };
+      const held = (el: Element) => {
+        for (let a = el.parentElement; a; a = a.parentElement) if (scrolls(a)) return true;
+        return false;
+      };
+      const label = (el: Element) =>
+        `${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 24)}"`;
+      for (const scope of document.querySelectorAll(root))
+        for (const el of scope.querySelectorAll<HTMLElement>(sel)) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          const cs = getComputedStyle(el);
+          if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) < 0.05) continue;
+          if (r.left < -0.5 || r.right > iw + 0.5)
+            out.push(
+              `${where}: ${label(el)} outside the viewport (x ${Math.round(r.left)}..${Math.round(r.right)})`,
+            );
+          else if ((r.top < -0.5 || r.bottom > ih + 0.5) && !held(el))
+            out.push(
+              `${where}: ${label(el)} outside the viewport (y ${Math.round(r.top)}..${Math.round(r.bottom)})`,
+            );
+        }
+      const vv = window.visualViewport;
+      const inVisual = (name: string, el: Element | null, required: boolean) => {
+        if (!el) {
+          if (required) out.push(`${where}: no ${name}`);
+          return;
+        }
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return;
+        const top = vv?.offsetTop ?? 0;
+        const left = vv?.offsetLeft ?? 0;
+        const h = vv?.height ?? ih;
+        const w = vv?.width ?? iw;
+        if (r.top < top - 0.5 || r.bottom > top + h + 0.5 || r.left < left - 0.5 || r.right > left + w + 0.5)
+          out.push(
+            `${where}: ${name} outside the visual viewport (${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)} in ${Math.round(w)}x${Math.round(h)})`,
+          );
+      };
+      inVisual('[data-live-strip]', document.querySelector('[data-live-strip]'), false);
+      inVisual('the compact header', document.querySelector('[data-compact-header]'), false);
+      const bar = document.querySelector('nav.tabbar');
+      inVisual('nav.tabbar', bar, false);
+      if (bar) {
+        const b = bar.getBoundingClientRect().bottom;
+        if (Math.abs(b - ih) > 1) out.push(`${where}: nav.tabbar bottom ${Math.round(b)} != ${ih}`);
+      }
+      return out;
+    },
+    { where, root, sel: COMPACT_SELECTOR },
+  );
+  for (const m of await auditTargets(page, where, root, [], COMPACT_SELECTOR))
+    problems.push(`${m.where}: ${m.what} is ${m.w}x${m.h}, under 44x44`);
+  problems.push(...(await scrolledPanes(page, where)));
+  if (opts.focusFields !== false) {
+    const fields = await page.locator(`${root} :is(input, textarea, select):visible`).all();
+    for (const [i, f] of fields.entries()) {
+      await f.evaluate((el) => (el as HTMLElement).focus());
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+      problems.push(...(await scrolledPanes(page, `${where} (field ${i + 1} focused)`)));
+      await f.evaluate((el) => (el as HTMLElement).blur());
+    }
+  }
+  return problems;
+}
+
+/** Every element (and the window) scrolled sideways. */
+async function scrolledPanes(page: Page, where: string): Promise<string[]> {
+  return page.evaluate((where) => {
+    const out: string[] = [];
+    if (window.scrollX !== 0) out.push(`${where}: window scrollX ${window.scrollX}`);
+    for (const el of document.querySelectorAll<HTMLElement>('*'))
+      if (el.scrollLeft !== 0)
+        out.push(
+          `${where}: ${el.tagName.toLowerCase()}.${String(el.className).split(' ')[0]} scrollLeft ${el.scrollLeft}`,
+        );
+    return out;
+  }, where);
 }
