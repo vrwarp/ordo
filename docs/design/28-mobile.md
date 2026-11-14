@@ -699,6 +699,11 @@ type LibraryPoke = { t: 'library.poke'; v: 1; seq: number }; // capped sockets, 
   process, so a 4 MiB deck saved during a service costs the live process one small string per phone
   instead of 4 MiB per phone.
 - Both are new message types: one `APP_VERSION` bump in P1 (design/13 "Versioning").
+- **P0: the stripped `library.delta` until P1's `library.poke`.** In P0 a capped socket gets the
+  `library.delta` an edit socket gets (no tokens) and the compact client polls `GET /live/summary` (without
+  `liveLabel` below full) for the Live now strip; it may send `hello` (edit) and `time.ping` only, a
+  `live.event` is acked `forbidden: cap` and anything else above its cap is dropped (design/13 "Per-message
+  caps"). `welcome` gains no cap field until P1.
 
 ### 3.4 Hub changes per phase
 

@@ -394,16 +394,21 @@ function refuseFields(req: FastifyRequest, check: () => FieldRefusal | undefined
 /**
  * GET /live/summary: the venue's service as an edit-profile device needs it (design/15 "iPad editing"): no
  * tokens, no full state. `locked` is what the hub refuses saves to with 423 (LiveService.locks). The output is
- * validated so a change to the live state can never leak more than the contract says.
+ * validated so a change to the live state can never leak more than the contract says. `label`: the live cue's
+ * label (slide text), for full sessions only (the iPad's chip); a phone never gets it (design/28 §10 item 9).
  */
-export function liveSummary(state: LiveState, locked: Iterable<string>): LiveSummaryRes {
+export function liveSummary(
+  state: LiveState,
+  locked: Iterable<string>,
+  opts: { label: boolean } = { label: true },
+): LiveSummaryRes {
   const r = state.mode === 'live' ? state.resolved : undefined;
   const cue = r && state.live !== undefined ? state.cues[state.live] : undefined;
   return LiveSummaryRes.parse({
     seq: state.seq,
     mode: r ? 'live' : 'idle',
     ...(r ? { playlistId: r.playlist.id, playlistName: r.playlist.name } : {}),
-    ...(cue?.label ? { liveLabel: cue.label.slice(0, 1000) } : {}),
+    ...(opts.label && cue?.label ? { liveLabel: cue.label.slice(0, 1000) } : {}),
     lockedPresentationIds: r ? [...locked] : [],
   });
 }
@@ -471,7 +476,8 @@ export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
     '/live/summary',
     'edit',
     'view',
-    async (): Promise<LiveSummaryRes> => liveSummary(live.state, live.locks().presentations),
+    async (req): Promise<LiveSummaryRes> =>
+      liveSummary(live.state, live.locks().presentations, { label: !isCapped(req.principal) }),
   );
   route('GET', '/cache/manifest', 'live', 'full', async (): Promise<ManifestRes> => {
     const r = live.state.mode === 'live' ? live.state.resolved : undefined;
