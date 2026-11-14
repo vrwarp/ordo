@@ -252,6 +252,11 @@ settings pages in `EDIT_PROFILE_SETTINGS` (`:84`); the compact layout narrows th
 services (`useLaunch`, `OutputWindows`) stay out of the compact bundle; edit sessions get no tokens anyway,
 so nothing could open.
 
+Status (P0, as built by the code split): `pageFor` and `compactRedirect` (`lib/route.ts`) decide these
+redirects during render on the compact layout and on any phone (Request Desktop Website included), by
+replace, before any page's chunk is requested; `#/edit/<id>` goes to `#/previews/<id>` until P1's `#/view`.
+The rows marked P1 and later are not built.
+
 ### 2.2 The shell (P0)
 
 - **Live now strip**, pinned under the top safe area (`--safe-top`), outside anything that scrolls or clips.

@@ -801,6 +801,14 @@ Split View is not. A phone's sign-in asks for the `light` cap (`signInCap`, desi
 - Navigation: Library, Playlists, Previews and (operate PIN only) Settings with Looks, Stage messages,
   General, Themes and PINs. The live view, the checklist and the output, audio, key map, Stream Deck,
   MIDI, backups and diagnostics pages redirect to the library (`allowedForRole(route, role, profile)`).
+  `pageFor(route, { role, profile, layout, restricted })` (`src/lib/route.ts`) decides each route's page
+  during render: on the regular layout of a device that is not a phone, exactly these rules (a refused
+  route now renders nothing before its redirect is pushed); on the compact layout, or on any phone
+  (`restricted`: the phone class, so Safari's "Request Desktop Website" on the regular layout too),
+  `compactRedirect` sends Setup and the checklist, every settings page, the live view, Themes, Fonts and
+  Import, and Previews without a presentation to the Library, and the canvas editor to the presentation's
+  previews (`#/edit/<id>` -> `#/previews/<id>`), replacing the history entry (`navigate(r, { replace:
+  true })`), so the refused page's chunk is never requested (design/28 §2.1, §3.1).
 - A playlist shows "Go live from the venue PC." instead of Go live; the nav says "This device edits;
   run services from the venue PC" (operate PIN, wide screens).
 - **Live now.** The hub sends live state only to operators and outputs, so an iPad (edit or operate PIN)

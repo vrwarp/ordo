@@ -1,13 +1,11 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
-import { ErrorBoundary, PageError } from './components/ErrorBoundary.tsx';
-import { ConfirmHost } from './components/Confirm.tsx';
-import { Toasts } from './components/Toasts.tsx';
-import { UpdateFailedScreen, UpdatingOverlay } from './components/UpdatingScreen.tsx';
-import { sessionEndedMessage } from './lib/hubStatus.ts';
+import { useEffect, useLayoutEffect, useState } from 'react';
+import { PageHost } from './components/PageHost.tsx';
+import { UpdateFailedScreen } from './components/UpdatingScreen.tsx';
 import { deviceProfile, requestPersistentStorage, useProfile } from './lib/capabilities.ts';
-import { useLayout } from './lib/layout.ts';
-import { allowedForRole } from './lib/route.ts';
+import { type Layout, thisIsPhone, useLayout } from './lib/layout.ts';
+import { pageFor, routeHash } from './lib/route.ts';
 import { watchVenueLive } from './lib/venueLive.ts';
+import { PAGES } from './pages.ts';
 import { installCacheCheck } from './services/cacheCheck.ts';
 import { controller, startController } from './services/controller.ts';
 import { syncFonts } from './services/fonts.ts';
@@ -21,30 +19,19 @@ import { refreshSession, useSession } from './state/session.ts';
 import { navigate, useRoute } from './useRoute.ts';
 import { LoginView } from './views/auth/LoginView.tsx';
 import { SetupView } from './views/auth/SetupView.tsx';
-import { Nav } from './views/Nav.tsx';
-import { EditorView } from './views/editor/EditorView.tsx';
 import { LibraryView } from './views/library/LibraryView.tsx';
-import { LiveView } from './views/live/LiveView.tsx';
-import { PlaylistsView } from './views/playlists/PlaylistsView.tsx';
-import { PreviewsView } from './views/editor/PreviewsView.tsx';
+import { RegularFrame } from './views/RegularFrame.tsx';
 import { reacquireOnFirstGesture } from './services/reacquire.ts';
 
 /*
- * Pages loaded when first opened (the operator's initial bundle budget, `tools/bundle-report.mjs`): the device
- * checklist and the Setup pages (settings) are opened before or after a service, never in its hot path. The
- * service worker precaches every built file, so they open offline as the rest of the app does.
+ * Pages come from the registry (src/pages.ts): loaded when first needed, or preloaded at startup on a regular
+ * device, and rendered synchronously once loaded (no React.lazy, whose Suspense fallback costs about 300 ms on
+ * every first open). The service worker precaches them, so they open offline as the rest of the app does.
  */
-const SettingsView = lazy(() =>
-  import('./views/settings/SettingsView.tsx').then((m) => ({ default: m.SettingsView })),
-);
-const DeviceSetupView = lazy(() =>
-  import('./views/setup/DeviceSetupView.tsx').then((m) => ({ default: m.DeviceSetupView })),
-);
-const pageLoading = <div className="center muted">Loading…</div>;
 
 export function App() {
   // The layout class, once, from the device's capability profile (never the session's: lib/layout.ts).
-  useLayout(deviceProfile('operate'), useRoute().name);
+  const layout = useLayout(deviceProfile('operate'), useRoute().name);
   const session = useSession();
   const updateFailed = useUpdate((u) => u.phase === 'failed');
   useEffect(() => {
@@ -82,13 +69,21 @@ export function App() {
     // The session ended under a running operator (review item 5): keep the shell, its output windows and
     // the core mounted (the outputs stay on the hub) and sign in over it.
     const running = controller()?.role;
-    if (running) return <Shell role={running} signedOut />;
+    if (running) return <Shell role={running} layout={layout} signedOut />;
     return <LoginView />;
   }
-  return <Shell role={role} />;
+  return <Shell role={role} layout={layout} />;
 }
 
-function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOut?: boolean }) {
+function Shell({
+  role,
+  layout,
+  signedOut = false,
+}: {
+  role: 'operate' | 'edit';
+  layout: Layout;
+  signedOut?: boolean;
+}) {
   const route = useRoute();
   // An edit-profile device (an iPad, or the edit role) builds services but never runs one: its core joins
   // the hub as an editor (no service-cache fill, no fallback authority, no snapshot), and no output
@@ -142,73 +137,58 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
       (route.name === 'live' || route.name === 'playlists' || route.name === 'library');
     surfaces()?.setKeyboard(keysOn);
   }, [coreRole, route.name, signedOut, fallback]);
+  // What this route shows (lib/route.ts pageFor): on the compact layout or a phone a refused route is decided
+  // here, before any body, and replaced (its chunk is never requested, history does not grow); on the regular
+  // layout a route allowedForRole refuses renders nothing and is pushed to the library, as before.
+  const decision = pageFor(route, { role, profile, layout, restricted: thisIsPhone() });
+  const redirect = 'redirect' in decision ? decision : undefined;
+  const redirectKey = redirect
+    ? `${redirect.replace ? 'replace' : 'push'} ${routeHash(redirect.redirect)}`
+    : '';
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the key names the redirect
+  useLayoutEffect(() => {
+    if (redirect?.replace) navigate(redirect.redirect, { replace: true });
+  }, [redirectKey]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the key names the redirect
   useEffect(() => {
-    if (!allowedForRole(route, role, profile)) navigate({ name: 'library', tab: 'presentations' });
-  }, [route, role, profile]);
+    if (redirect && !redirect.replace) navigate(redirect.redirect);
+  }, [redirectKey]);
 
-  let body: React.ReactNode;
+  let body: React.ReactNode = null;
   if (!ready) body = <div className="center muted">Loading library…</div>;
   else
-    switch (route.name) {
+    switch (decision.page) {
       case 'live':
-        body = role === 'operate' && profile === 'full' ? <LiveView /> : null;
+        body = <PageHost name="live" chunk={PAGES.live} props={{}} />;
         break;
       case 'library':
-        body = <LibraryView tab={route.tab} />;
+        body = <LibraryView tab={decision.props.tab} />;
         break;
       case 'edit':
-        body = <EditorView id={route.id} key={route.id} />;
+        body = <PageHost name="edit" chunk={PAGES.edit} props={decision.props} key={decision.props.id} />;
         break;
       case 'playlists':
-        body = <PlaylistsView id={route.id} />;
+        body = <PageHost name="playlists" chunk={PAGES.playlists} props={decision.props} />;
         break;
       case 'settings':
-        body =
-          role === 'operate' ? (
-            <Suspense fallback={pageLoading}>
-              <SettingsView page={route.page} profile={profile} />
-            </Suspense>
-          ) : null;
+        body = <PageHost name="settings" chunk={PAGES.settings} props={{ ...decision.props, profile }} />;
         break;
       case 'setup':
-      case 'checklist':
-        body = (
-          <Suspense fallback={pageLoading}>
-            <DeviceSetupView />
-          </Suspense>
-        );
+        body = <PageHost name="setup" chunk={PAGES.setup} props={{}} />;
         break;
       case 'previews':
-        body = <PreviewsView id={route.id} slideId={route.slideId} />;
+        body = <PageHost name="previews" chunk={PAGES.previews} props={decision.props} />;
         break;
     }
   return (
-    <div className={`app app-route-${route.name}`}>
-      <Nav role={role} route={route} profile={profile} />
-      <div className="page">
-        <ErrorBoundary
-          key={route.name}
-          name={`page ${route.name}`}
-          resetKey={JSON.stringify(route)}
-          fallback={(retry) => <PageError route={route.name} retry={retry} />}
-        >
-          {body}
-        </ErrorBoundary>
-      </div>
-      <Toasts />
-      <ConfirmHost />
-      <UpdatingOverlay />
-      {signedOut && (
-        <div
-          className={fallback ? 'signin-overlay nonmodal' : 'signin-overlay'}
-          data-session-expired
-          data-session-expired-mode={fallback ? 'fallback' : 'hub'}
-        >
-          <div className="banner">{sessionEndedMessage(fallback)}</div>
-          {/* No autofocus on the PIN while the keys run the service: a focused text field eats Space. */}
-          <LoginView autoFocus={!fallback} />
-        </div>
-      )}
-    </div>
+    <RegularFrame
+      role={role}
+      route={route}
+      profile={profile}
+      layout={layout}
+      signedOut={signedOut}
+      fallback={fallback}
+      body={body}
+    />
   );
 }
