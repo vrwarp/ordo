@@ -354,9 +354,11 @@ copy stays.
   the live, armed and warmed cues hold at most three frames (100 MB at 4K).
 - **When they are made.** An armed or warmed cue's units are made by its slide or warm job, so its GO does no
   unit work and never waits. A jump (a cue neither armed nor warmed) waits for its units in its own job, as
-  for its table layouts, within the bounds above: about 0.5 s cold at 4K for the leaf template's first slide
-  (design/23 bench). Effect units (M9 r2b) replace that wait: a GO never waits, the slide shows at once and a
-  late unit fades in (about 0.3 s, the owner's call).
+  for its table layouts, within the bounds above: the leaf template's first slide (one unit of 10.7 MiB at 4K)
+  arms cold within 0.5 s at 4K, its pictures, its units and its first draw in 245 ms at 3840 and 195 ms at 1920
+  (the fidelity harness's cold time, median of five on the bench machine; design/23). Effect units (M9 r2b)
+  replace that wait: a GO never waits, the slide shows at once and a late unit fades in (about 0.3 s, the
+  owner's call).
 - **Thumbnails.** The operator's thumbnail worker runs the same step, only when its page says the pointer is
   fine (`init`, `lib/capabilities.ts` `coarsePointer`): a desktop's thumbnails draw the shapes whole, a phone or
   tablet keeps the legacy copies and makes nothing. The editor canvas keeps the legacy copies (leaf-editor).
