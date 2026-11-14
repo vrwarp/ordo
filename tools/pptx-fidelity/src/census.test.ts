@@ -7,6 +7,7 @@ import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { budgetColumns, hubClasses, parseCensusArgs, runCensus } from './census.ts';
 import { listDecks } from './decks.ts';
+import { dataUri, testPicture } from './png.ts';
 import { zipStore } from './table-probe.ts';
 
 const dirs: string[] = [];
@@ -223,5 +224,39 @@ describe('census', () => {
       ext: 'pptx',
       unreadable: 'missing target',
     });
+  }, 120_000);
+
+  it("rates the guard's left-outs as LibreOffice's art with it, and as missing without it (lo-forms)", async () => {
+    const dir = await work();
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    const slide = p.addSlide();
+    for (let i = 0; i < 20; i++)
+      slide.addImage({
+        data: dataUri(testPicture(40 + i, 30, i / 20)),
+        x: (i % 5) * 2,
+        y: Math.floor(i / 5),
+        w: 1.5,
+        h: 0.8,
+      });
+    await writeFile(join(dir, 'pictures.pptx'), (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    const row = async (noLibreOffice: boolean) => {
+      const out = join(dir, `census-${noLibreOffice}.jsonl`);
+      await runCensus([join(dir, 'pictures.pptx')], out, () => {}, { noLibreOffice });
+      return (
+        (JSON.parse(await readFile(out, 'utf8')) as Record<string, unknown>).slides as Record<
+          string,
+          unknown
+        >[]
+      )[0]!;
+    };
+    const lo = await row(false);
+    expect(lo.class).toBe('hybrid');
+    expect(lo.reasons).toContain('art:budget:pictures');
+    expect(lo.missing).toBeUndefined();
+    const noLo = await row(true);
+    expect(noLo.reasons).toContain('missing:decoration');
+    expect(noLo.reasons).not.toContain('art:budget:pictures');
+    expect(noLo.missing).toEqual(['decoration']);
   }, 120_000);
 });

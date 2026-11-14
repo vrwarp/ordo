@@ -227,6 +227,29 @@ describe('a hub without LibreOffice (design/27 M9)', () => {
     neverRan();
   }, 120_000);
 
+  it("lists what the slide budgets' guard leaves out, and waits for nothing (lo-forms: as before)", async () => {
+    // 208 text boxes: past the 200 the render clamp draws; the converter's guard leaves the topmost 9 out.
+    const many = Array.from({ length: 208 }, (_, i) =>
+      sp({
+        id: 10 + i,
+        x: (i % 10) * 1.2 * IN,
+        y: Math.floor(i / 10) * 0.3 * IN,
+        cx: IN,
+        cy: IN / 4,
+        txBody: body(para(run('Word'))),
+      }),
+    ).join('');
+    const { result, p } = await importDeck(buildDeck({ slides: [{ shapes: many }] }), 'Crowded.pptx');
+    const [s] = slidesOf(p) as [Slide];
+    expect(s.objects.filter((o) => o.type === 'text')).toHaveLength(199);
+    expect(s.pptx).toMatchObject({ class: 'hybrid', missing: ['element'] });
+    expect(s.pptx!.pending).toBeUndefined();
+    expect(s.pptx!.notes!.join(' ')).toMatch(/9 element\(s\) past the slide's budgets are not drawn/);
+    expect(s.pptx!.notes!.join(' ')).not.toMatch(/LibreOffice/);
+    expect(result).toMatchObject({ hybrid: 1, pending: 0, missing: 1 });
+    neverRan();
+  }, 120_000);
+
   it('renderer=libreoffice is refused with 501 libreoffice_unavailable and the upload is removed', async () => {
     const bytes = await zipOf(serviceDeck('Pictures, please'));
     const res = await upload(bytes, 'Pictures.pptx', { renderer: 'libreoffice' });

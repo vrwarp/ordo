@@ -533,9 +533,15 @@ describe('element support (design/27 §5)', () => {
     const t0 = performance.now();
     const s = slideOf(one.repeat(4_999));
     expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
-    // M9: never a picture for a budget: the guard keeps 200 objects and lists what it left out.
-    expect(s.classification).toMatchObject({ tier: 'T2', class: 'hybrid', missing: ['element'] });
-    expect(s.elements.filter((e) => !e.hidden)).toHaveLength(199);
+    // M9: never a picture for a budget: the guard keeps 200 objects and gives what it left out to LibreOffice's
+    // art (with LibreOffice, the default), or lists it (without).
+    expect(s.classification).toMatchObject({ tier: 'T2', class: 'hybrid' });
+    expect(s.classification.reasons).toContain('art:budget:shapes');
+    expect(s.elements.filter((e) => e.support !== 'residual')).toHaveLength(198);
+    const noLo = parseDeck(buildDeck({ slides: [{ shapes: one.repeat(4_999) }] }), { libreoffice: false })
+      .slides[0]!;
+    expect(noLo.classification).toMatchObject({ tier: 'T2', class: 'hybrid', missing: ['element'] });
+    expect(noLo.elements.filter((e) => !e.hidden)).toHaveLength(199);
   });
 
   it('rates an element of alternate content by the branch Package.xml keeps', () => {

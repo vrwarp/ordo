@@ -16,7 +16,9 @@
  *   `EmitOptions.loCompat`); with `loCompat` the slide as LibreOffice draws it is kept too (`compatSlide`).
  * - With `noLibreOffice` (`--no-libreoffice`, M9) the deck is emitted once more as a hub without LibreOffice
  *   emits it (`EmitOptions.libreoffice: false`): the art and the metafile conversions are left out and listed
- *   in `missing`; the run draws that slide as the hub stores it (`hubStoredSlide`) for `noLoSsim`.
+ *   in `missing`; the run draws that slide as the hub stores it (`hubStoredSlide`) for `noLoSsim`. A deck whose
+ *   budgets' guard gave elements to LibreOffice's art is parsed once more for it, as such a hub parses it
+ *   (`ParseOptions.libreoffice: false`: its guard culls and lists them, without room for an art).
  * - `NativeRenderer` loads `native-page.ts` (bundled with esbuild) in headless Chromium, gives the page's
  *   font resolver the faces this machine has for every family the slides ask for, ordo's default face and
  *   the script fallbacks (`fonts.ts`, as LibreOffice and the outputs draw them), and draws every shown slide
@@ -49,6 +51,9 @@ import {
 } from '@ordo/pptx-scene';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import { M9_WRITES, PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
+import { bakeKey, type PictureBake } from '@ordo/pptx-scene/bake.ts';
+import { sentToArt } from '@ordo/pptx-scene/budget.ts';
+import { BAKE_PREFIX, MEDIA_PREFIX } from '@ordo/pptx-scene/emit.ts';
 import { planLadder, provenanceStandIn, withoutFiles } from '@ordo/importers/pptx-ladder.ts';
 import { CONVERTER_VERSION, PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import type { Browser, Page } from '@playwright/test';
@@ -112,6 +117,11 @@ export type NativeSlide = {
   noLoSlide?: Slide;
   /** With `noLibreOffice`: that emission's class where it differs (hybrid with `missing:<kind>` in M9). */
   noLoClass?: SlideClass;
+  /**
+   * With `noLibreOffice`: the slide's reasons as a hub without LibreOffice parses it, where they differ from
+   * `reasons` (a slide whose guard's left-outs are LibreOffice's art with it: `missing:<kind>` without).
+   */
+  noLoReasons?: string[];
   /** With `noLibreOffice`: what nothing draws without LibreOffice (`EmittedSlide.missing`: kinds). */
   missing?: string[];
   /**
@@ -282,13 +292,14 @@ export async function convertDeck(
     t0 = performance.now();
     const spilled = caseless(zip.onDisk);
     const fileOf = (part: string) => zip.onDisk.get(part) ?? spilled.get(part.toLowerCase());
-    const scene = parseDeck(zip.files, {
+    const parsing = {
       m9Writes: M9_WRITES,
       sheets: PPTX_SHEETS,
-      pictureSize: (part) => spilledPictureSize(fileOf(part)),
+      pictureSize: (part: string) => spilledPictureSize(fileOf(part)),
       // Table rows grow to their text measured with the faces the page draws it with.
       fontFace: hostFace,
-    });
+    };
+    let scene = parseDeck(zip.files, parsing);
     out.parseMs = performance.now() - t0;
     t0 = performance.now();
     // One placeholder per geometry file over both emissions (the slides as LibreOffice draws them below).
@@ -324,6 +335,34 @@ export async function convertDeck(
     } catch (e) {
       note(`the slides as LibreOffice draws them could not be emitted: ${errorText(e)}`);
     }
+
+    // What a hub without LibreOffice emits below is its own parse where the budgets' guard gave elements to
+    // LibreOffice's art (`ParseOptions.libreoffice`); the rest of the deck parses alike either way. Its
+    // pictures keep the ids of the emission above, and one only it draws gets an id (and a file) of its own.
+    let noLoIds: Pick<EmitOptions, 'mediaId' | 'bakeId'> = {};
+    const noLoOnly: EmitResult['media'] = [];
+    const noLoReasons = new Map<number, string[]>();
+    if (opts.noLibreOffice && scene.slides.some((s) => s.elements.some(sentToArt))) {
+      const lo = new Map(scene.slides.map((s) => [s.index, JSON.stringify(s.classification.reasons)]));
+      scene = parseDeck(zip.files, { ...parsing, libreoffice: false });
+      for (const s of scene.slides)
+        if (lo.get(s.index) !== JSON.stringify(s.classification.reasons))
+          noLoReasons.set(s.index, s.classification.reasons);
+      const ids = new Map(emitted.media.map((m) => [m.bake ? bakeKey(m.part, m.bake) : m.part, m.id]));
+      const idOf = (key: string, part: string, bake?: PictureBake) => {
+        let id = ids.get(key);
+        if (id === undefined) {
+          id = `${bake ? BAKE_PREFIX : MEDIA_PREFIX}nolo${noLoOnly.length + 1}`;
+          ids.set(key, id);
+          noLoOnly.push({ id, part, ...(bake ? { bake } : {}) });
+        }
+        return id;
+      };
+      noLoIds = {
+        mediaId: (part) => idOf(part, part),
+        bakeId: (part, bake) => idOf(bakeKey(part, bake), part, bake),
+      };
+    }
     // A hub without LibreOffice (M9, `EmitOptions.libreoffice`), drawn with the same policies as the slides
     // above.
     let noLo: Map<number, EmittedSlide> | undefined;
@@ -331,6 +370,7 @@ export async function convertDeck(
       try {
         const o: EmitOptions = {
           geomId,
+          ...noLoIds,
           ...(opts.loCompat && hits.size ? { loCompat: true } : {}),
           libreoffice: false,
           m9Writes: M9_WRITES,
@@ -343,6 +383,7 @@ export async function convertDeck(
         note(`the slides as a hub without LibreOffice emits them could not be emitted: ${errorText(e)}`);
       }
     out.geoms = [...geoms.values()];
+    emitted.media.push(...noLoOnly);
     out.slides = emitted.slides.map((s) => {
       // Drawn as a still (a motion background as its poster), as LibreOffice draws the slide.
       const slide = still(s);
@@ -375,6 +416,7 @@ export async function convertDeck(
         ...(nl && nl.classification.class !== s.classification.class
           ? { noLoClass: nl.classification.class }
           : {}),
+        ...(noLoReasons.has(s.index) ? { noLoReasons: noLoReasons.get(s.index) } : {}),
         ...(missing?.length ? { missing: missing.slice(0, 16) } : {}),
       };
     });

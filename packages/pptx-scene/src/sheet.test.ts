@@ -383,16 +383,35 @@ describe('without sheets (the M9 rollout: the hub and the client store none yet)
     expect(parseDeck(parts, { sheets: false }).slides[0]!.classification.atlas).toBeUndefined();
   });
 
-  it('keeps the 16 the render clamp draws, and lists the topmost past them as missing', () => {
-    const s = convertDeck(distinct(20), { sheets: false }).slides[0]!;
+  it('keeps the 16 the render clamp draws, and lists the topmost past them as missing (without LibreOffice)', () => {
+    const s = convertDeck(distinct(20), { sheets: false, libreoffice: false }).slides[0]!;
     const images = s.slide.objects.filter((o): o is ImageObject => o.type === 'image');
     expect(new Set(images.map((o) => o.mediaId)).size).toBe(16);
-    // The four topmost (the last written) are left out, listed (a left-out picture is a 'decoration'), and
-    // the slide is hybrid.
+    // The four topmost (the last written) are left out and listed (a left-out picture is a 'decoration'; the
+    // import core classes the slide hybrid for it, `ImportCore.gaps`).
     expect(images.map((o) => o.mediaId)).not.toContain('pptxmedia:20');
-    expect(s.classification).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(s.classification).toMatchObject({ missing: ['decoration'] });
     expect(s.missing).toEqual(['decoration']);
     expect(s.notes).toContain("4 element(s) past the slide's budgets are not drawn");
+    expect(Slide.safeParse(s.slide).success).toBe(true);
+  });
+
+  it("with LibreOffice gives the topmost past the clamp's pictures to its art, with room for the art (the owner's decision of 2026-11-13)", () => {
+    const s = convertDeck(distinct(20), { sheets: false }).slides[0]!;
+    const images = s.slide.objects.filter((o): o is ImageObject => o.type === 'image');
+    // 15 drawn by version 1 and the art: the clamp's 16, the art on top of them, so it is drawn too.
+    expect(new Set(images.map((o) => o.mediaId)).size).toBe(15);
+    expect(images.map((o) => o.mediaId)).not.toContain('pptxmedia:16');
+    expect(s.classification).toMatchObject({ class: 'hybrid' });
+    expect(s.classification.reasons).toContain('art:budget:pictures');
+    expect(s.classification.missing).toBeUndefined();
+    expect(s.missing).toBeUndefined();
+    // The art draws exactly the five left out (the topmost, ids 17-21), nothing it covers is replaced, and it
+    // goes on top of what version 1 draws.
+    expect(s.art?.elements.map((r) => r.shapeId)).toEqual([17, 18, 19, 20, 21]);
+    expect(s.art?.replaces).toEqual([]);
+    expect(s.art?.at).toBe(s.slide.objects.length);
+    expect(s.notes).toContain("5 element(s) past the slide's budgets: LibreOffice draws them");
     expect(Slide.safeParse(s.slide).success).toBe(true);
   });
 });

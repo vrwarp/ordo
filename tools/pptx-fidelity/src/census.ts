@@ -143,7 +143,7 @@ export function censusRow(
         i: s.index,
         tier: s.tier,
         class: x.class,
-        reasons: s.reasons,
+        reasons: (noLo ? s.noLoReasons : undefined) ?? s.reasons,
         objects: objects.length,
         geom: objects.filter((o) => o.type === 'shape' && o.geom).length,
         refs: objects.filter(
@@ -174,7 +174,8 @@ export function censusRow(
 /**
  * `--hub-budget` (M9): the hub columns model the hub's budget ladder (always so since M9; accepted so the
  * census takes the harness's flags); `--no-libreoffice`: the slides as a hub without LibreOffice emits and
- * stores them.
+ * stores them, with its parse's reasons where they differ (`NativeSlide.noLoReasons`: the guard's left-outs,
+ * LibreOffice's art with it, are `missing:<kind>` without it).
  */
 export type CensusArgs = { out: string; paths: string[]; hubBudget: boolean; noLibreOffice: boolean };
 

@@ -241,6 +241,12 @@ The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
   becomes a picture for its size (logged, counted in the job result as `simplified`), and with it a slide
   over 64 KB that would lose formatting or decorations keeps LibreOffice's page, as before M9
   (`ImportCore.pageForBudget`);
+- past the render clamp (200 objects, 16 distinct pictures while no picture sheets are stored), the
+  converter's guard leaves the topmost objects out: on a hub with LibreOffice they get LibreOffice's art,
+  those objects only, as at M9 wave 1, and the slide lists nothing missing; on one without it they are left
+  out and listed (`Slide.pptx.missing` 'decoration' or 'element'). The owner's decision of 2026-11-13
+  (design/27 §15 M9 "The guard per kind of hub"); the slides main showed as LibreOffice's page for their
+  picture count stay native and editable, by the same decision;
 - stores the pictures (prepared to their display need, deduplicated) and saves version 1: every slide's
   native objects, `Slide.pptx` provenance (deck, place, class, converter version, the digest of the objects
   as stored, `pending` while LibreOffice work remains), speaker notes, `p14` sections in order with a Default
