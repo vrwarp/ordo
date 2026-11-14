@@ -1,10 +1,13 @@
 {
   "budget": 0.02,
+  "compact": {
+    "firstLoadGzip": 300000
+  },
   "apps": {
     "operator": {
-      "initial": 1708046,
-      "initialGzip": 535943,
-      "css": 45502
+      "initial": 502060,
+      "initialGzip": 159239,
+      "css": 45529
     },
     "output": {
       "initial": 181959,

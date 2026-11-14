@@ -285,3 +285,24 @@ test('(4) the service worker precaches no editor, live, settings, Setup or outpu
   }
   expect(bad).toEqual([]);
 });
+
+test('(1c) the first load’s built assets are at most 300 KB gzip', async ({ page }) => {
+  const reqs = await firstLoad(page);
+  const files = new Map<string, { raw: number; gzip: number }>();
+  let api = 0;
+  const fonts: string[] = [];
+  for (const r of reqs) {
+    const f = assetOf(r.url);
+    if (f) files.set(f.file, { raw: f.raw, gzip: f.gzip });
+    else if (fontHash && r.url.includes(`/api/v1/files/${fontHash}`)) fonts.push(r.url);
+    else if (r.url.includes('/api/')) api++;
+  }
+  const gzip = [...files.values()].reduce((n, f) => n + f.gzip, 0);
+  const raw = [...files.values()].reduce((n, f) => n + f.raw, 0);
+  // Not code, and not counted: the API answers and any font file (1b says there is none).
+  console.log(
+    `${test.info().project.name}: first load ${files.size} built files, ${raw} B raw, ${gzip} B gzip; ${api} API requests; ${fonts.length} font files`,
+  );
+  for (const [f, s] of files) console.log(`  ${f} ${s.raw} B, ${s.gzip} B gzip`);
+  expect(gzip).toBeLessThanOrEqual(300_000);
+});
