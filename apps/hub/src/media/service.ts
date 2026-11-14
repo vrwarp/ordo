@@ -16,6 +16,7 @@ import { errorMessage, HttpError } from '../errors.ts';
 import type { Job } from '@ordo/protocol';
 import type { JobCtx, JobQueue } from '../jobs.ts';
 import type { Library } from '../library.ts';
+import { lightToolPace } from '../pacing.ts';
 import { extensionAgrees, extOf, hashFile, readHead, type Sniffed, sniff, type Store } from '../store.ts';
 import {
   downscaleImage,
@@ -165,6 +166,13 @@ export class MediaService {
       ({ mediaId }, error) => {
         const cur = this.lib.media.get(mediaId);
         if (cur && cur.state !== 'ready') this.save({ ...cur, state: 'failed', error: error.slice(0, 500) });
+      },
+      {
+        // Stopped for a service (design/28 §5.3): the item waits as uploaded, not as processing.
+        onPause: ({ mediaId }) => {
+          const cur = this.lib.media.get(mediaId);
+          if (cur?.state === 'processing') this.save({ ...cur, state: 'uploaded', error: undefined });
+        },
       },
     );
   }
@@ -455,6 +463,9 @@ export class MediaService {
       onProgress: (f: number) => ctx.progress(f * 0.9),
       trim,
     };
+    // A light job's tools (stills, images, audio) run niced on one thread while a service is live and Phones
+    // is on (design/28 §5.3); heavy ones (video, animated GIF) are held then instead.
+    const pace = lightToolPace(this.jobs.pacing);
 
     if (m.original.mime === 'image/gif') {
       const gi = gifInfo(await readFile(input));
@@ -470,7 +481,7 @@ export class MediaService {
         return this.video({ ...m, kind: 'video', loop: true }, input, ginfo, gi.transparent, ctx, opts);
       }
       const out = this.store.tmpPath('png');
-      await firstFramePng(input, out, { timeoutMs: t.light, signal: ctx.signal });
+      await firstFramePng(input, out, { timeoutMs: t.light, signal: ctx.signal, ...pace });
       const delivery = await this.store.put(out, { ext: 'png', mime: 'image/png' });
       return { ...m, kind: 'image', delivery, width: gi.width, height: gi.height, hasAlpha: gi.transparent };
     }
@@ -483,7 +494,11 @@ export class MediaService {
         const ext = hasAlpha ? 'png' : 'jpg';
         const out = this.store.tmpPath(ext);
         ctx.log(`downscaling ${v.width}x${v.height} to ${MAX_IMAGE_WIDTH} wide`);
-        await downscaleImage(input, out, MAX_IMAGE_WIDTH, { timeoutMs: t.light, signal: ctx.signal });
+        await downscaleImage(input, out, MAX_IMAGE_WIDTH, {
+          timeoutMs: t.light,
+          signal: ctx.signal,
+          ...pace,
+        });
         const delivery = await this.store.put(out, { ext, mime: ext === 'png' ? 'image/png' : 'image/jpeg' });
         const h = Math.round((v.height * MAX_IMAGE_WIDTH) / v.width / 2) * 2;
         return { ...m, delivery, width: MAX_IMAGE_WIDTH, height: h, hasAlpha };
@@ -495,10 +510,16 @@ export class MediaService {
 
     if (info.audio) {
       ctx.log('measuring loudness');
-      const lufs = await measureLoudness(input, { timeoutMs: t.light * 4, signal: ctx.signal, trim });
+      const lufs = await measureLoudness(input, {
+        timeoutMs: t.light * 4,
+        signal: ctx.signal,
+        trim,
+        ...pace,
+      });
       ctx.progress(0.3);
       const out = this.store.tmpPath('m4a');
       await transcodeAudio(input, out, {
+        ...pace,
         timeoutMs: t.transcode,
         signal: ctx.signal,
         durationMs: opts.durationMs,

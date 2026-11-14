@@ -24,7 +24,7 @@ import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openLiveDb, openSharedDb } from './db.ts';
 import { forbidden, notFound } from './errors.ts';
 import { liveDiagOf } from './hub.ts';
-import { createHttpApp, HEADER_INTERNAL, withTimeout } from './http.ts';
+import { createHttpApp, HEADER_INTERNAL, type RouteInfo, withTimeout } from './http.ts';
 import type { ChildState, LocksMsg, ProcessStatus } from './ipc.ts';
 import type { Change } from './library.ts';
 import { type LiveContext, LibraryLink } from './librarylink.ts';
@@ -152,6 +152,8 @@ function importLegacyLiveState(liveDb: DB, ordoDb: string, log: Logger): void {
 
 export type LiveProcess = {
   app: FastifyInstance;
+  /** Every route with its access role and lowest cap (phones-routes.test.ts). */
+  routes: RouteInfo[];
   cfg: HubConfig;
   live: LiveService;
   link: LibraryLink;
@@ -241,6 +243,8 @@ export async function createLiveProcess(
     cfg,
     log,
     auth: () => auth,
+    // Its copy of the settings (refreshed on a settings delta before the delta is broadcast).
+    phonesEnabled: () => link.context?.settings.phones?.enabled === true,
     serverFactory: (handler) =>
       createServer((req, res) => {
         if (proxied(req.method, req.url, (h) => fileIndex().has(h))) proxy(req, res);
@@ -359,6 +363,7 @@ export async function createLiveProcess(
       playlistId: l.playlistId,
       presentations: [...l.presentations],
       media: [...l.media],
+      fonts: [...l.fonts],
     };
   };
   const reportLocks = () => opts.onLocks?.(locks());
@@ -382,7 +387,7 @@ export async function createLiveProcess(
   app.route({
     method: 'GET',
     url: '/api/v1/files/:hash',
-    config: { access: 'any' },
+    config: { access: 'any', cap: 'view' },
     handler: async (req, reply) => {
       const hash = (req.params as { hash: string }).hash;
       const f = /^[0-9a-f]{64}$/.test(hash) ? fileIndex().get(hash) : undefined;
@@ -401,7 +406,7 @@ export async function createLiveProcess(
   app.route({
     method: 'GET',
     url: '/internal/diag',
-    config: { access: 'public' },
+    config: { access: 'public', cap: 'full' },
     handler: async (req) => {
       if (req.headers[HEADER_INTERNAL] !== opts.secret) throw forbidden();
       const d = liveDiagOf(live, sockets);
@@ -421,7 +426,7 @@ export async function createLiveProcess(
   app.route({
     method: ['GET', 'HEAD'],
     url: '/*',
-    config: { access: 'public' },
+    config: { access: 'public', cap: 'view' },
     handler: (req, reply) => statics.serve(req, reply),
   });
   app.server.on('upgrade', (req, socket, head) => {
@@ -460,6 +465,7 @@ export async function createLiveProcess(
   let closed = false;
   return {
     app,
+    routes: http.routes,
     cfg,
     live,
     link,

@@ -125,6 +125,15 @@ export const PORT_TABLE = {
     spec: 'ipad/touch.spec.ts',
     what: 'tests 0-2 landscape, 3-5 portrait',
   },
+  // Phones P0, the hub lane (design/28 §8 "Live boundary" and "Hub"): offsets 340-349.
+  'phone-live-boundary': {
+    offset: 340,
+    count: 2,
+    spec: 'phone/live-boundary.spec.ts',
+    what: '0 chromium (p0/hub) or webkit-iphone, 1 chromium-android',
+  },
+  'phones-live-load': { offset: 345, count: 1, spec: 'phones-live-load.spec.ts', what: 'hub' },
+  'phones-writes': { offset: 346, count: 1, spec: 'phones-writes.spec.ts', what: 'hub' },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;

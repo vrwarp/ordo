@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PHONES,
   DEFAULT_THEME,
   type Font,
   isSvgMime,
@@ -108,7 +109,9 @@ async function library(): Promise<Lib> {
     const s = await seed();
     for (const f of s.files) seedFiles.add(f);
     const saved = await getDoc<Lib>('lib');
-    lib = saved ?? s.snapshot;
+    const l = saved ?? s.snapshot;
+    // Phones are off in the demo, as on a new hub; a seed or a saved library from before the setting has none.
+    lib = l.settings.phones ? l : { ...l, settings: { ...l.settings, phones: { ...DEFAULT_PHONES } } };
     if (!saved) await putDoc('lib', lib);
     return lib;
   })().finally(() => {

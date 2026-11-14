@@ -13,23 +13,41 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
 
 ## Authentication
 
-| Credential            | Storage                                                 | Lifetime                                           |
-| --------------------- | ------------------------------------------------------- | -------------------------------------------------- |
-| Operate PIN, Edit PIN | Argon2id hashes in `settings`                           | Until changed                                      |
-| Session cookie        | Random 32 bytes, SQLite `sessions` with role and expiry | 12 h on remembered devices, 1 h otherwise, sliding |
-| Output token          | Random 32 bytes, hashed per output                      | Until rotated                                      |
+| Credential            | Storage                                                                            | Lifetime                                                   |
+| --------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Operate PIN, Edit PIN | Argon2id hashes in `settings`                                                      | Until changed                                              |
+| Session cookie        | Random 32 bytes, SQLite `sessions` with role and expiry                            | 12 h on remembered devices, 1 h otherwise, sliding         |
+| Capped session cookie | Random 32 bytes, SQLite `capped_sessions` (role `edit`, cap, the PIN that matched) | 1 h, sliding, never remembered; ends when that PIN changes |
+| Output token          | Random 32 bytes, hashed per output                                                 | Until rotated                                              |
 
 - `POST /auth/pin` compares against both hashes and returns the matching role, so there is
   one login form.
 - Remembered device: a checkbox sets a second long-lived cookie bound to the user agent
   hash; it only extends the session lifetime, it does not skip the PIN.
 - Rate limiting: a token bucket per forwarded IP (5 per 15 min) and a global bucket (50
-  per 15 min) on `/auth/pin`. Lockouts are logged with the IP.
+  per 15 min) on `/auth/pin`. Lockouts are logged with the IP. Since design/28 P0 the global bucket counts
+  failures from public addresses only (`auth_global_failures`) and never locks out a LAN or loopback address
+  (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, ::1, fc00::/7, fe80::/10; carrier-grade NAT 100.64/10 is
+  public), so a scanner on the public name cannot lock out the venue PC or a phone on church Wi-Fi. The 429
+  carries `scope`: `network` (this address's bucket) or `everyone` (the global one). The trade-off: a guest on
+  the LAN rotating addresses gets more tries than before, still 5 per address per 15 minutes, each an Argon2
+  verification.
 
 ## Authorisation
 
 - Every route declares `role: 'operate' | 'edit' | 'output' | 'public'`; a startup check
   fails the process if a route lacks one.
+- Every route also declares the lowest session cap it accepts (design/28 §3.2): `view` (reads a phone shows,
+  sign-in and sign-out, files), `light` (presentation and playlist saves, restores and History reads, uploads,
+  media names and tags) or `full` (everything else: every `DELETE`, fonts but `GET /fonts`, themes and theme
+  revisions, folder writes, imports, PowerPoint routes, jobs, capabilities, settings writes, PINs, outputs and
+  tokens, diagnostics, backups, every live and operate route, `/internal/*`). The startup check fails a route
+  without one; at run time a missing cap means `full`, so a new route is closed to phones until it says
+  otherwise. The hub checks, in order: the internal secret (library process), the Host, the HTTPS upgrade, the
+  principal; then, for a session whose cap is below full, the route's cap (403 `cap` with `need`); then the
+  role as before. Full sessions, tokens and anonymous callers never meet the cap check.
+  `apps/hub/test/phones-routes.test.ts` holds the table and refuses every route above a `view` and a `light`
+  session.
 - `operate` includes `edit`.
 - Live events over WebSocket are accepted only from `operate` sessions. Edit sessions'
   sockets receive `library.delta` only.
@@ -57,8 +75,19 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   operator opened its link; `e2e/svg-media.spec.ts`). The Pages demo's service-worker hub sends the same
   headers for its files (design/26).
 - `Permissions-Policy`: operator origin `hid=(self), midi=(self), window-management=(self), fullscreen=(self)`; output origins `fullscreen=(self), screen-wake-lock=(self), window-management=(self)`; stage `screen-wake-lock=(self), fullscreen=(self)`.
-- Cookies: `Secure; HttpOnly; SameSite=Lax; Domain=.<venue>.synology.me; Path=/`.
+- Cookies: `HttpOnly; SameSite=Lax; Path=/`, `Secure` behind https, host-only (no `Domain`: each role host
+  signs in on its own, which is safer than a domain cookie and stays). The stage window authenticates with a
+  token principal (`x-ordo-token` or `?token=`), not a cookie.
 - WebSocket origin check: the `Origin` header must be one of the known role origins.
+- HTTP writes (every non-GET, HEAD or OPTIONS API request, design/28 P0; before P0 only the socket upgrade
+  checked `Origin`): a present `Origin` must be the request's own host or the venue domain or one of its role
+  hosts, else 403 `origin` (`null` included; the same rule as the upgrade, `net.ts` `originAllowed`). A
+  session's write must carry `x-ordo: 1` (`HEADER_CLIENT`), which every ordo client sends: always from a capped
+  session, and from a signed-in full session once Phones is on (`settings.phones.enabled`), else 403
+  `x_ordo_required` ("Reload ordo: this page is older than the hub."). Anonymous callers (sign-in, setup,
+  sign-out) and output tokens never need it; the Origin check covers them. A page made elsewhere cannot set
+  the header without a CORS preflight the hub never answers, so a cross-site form or fetch cannot write with
+  the venue's cookie even where `SameSite=Lax` would let it through.
 
 ## Input handling
 

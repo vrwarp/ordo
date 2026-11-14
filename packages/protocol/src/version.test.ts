@@ -17,9 +17,10 @@ import { APP_VERSION } from './index.ts';
  *   bump APP_VERSION and record the new digest with it;
  * - otherwise (a refactor with the same results), record the new digest with the same version.
  */
+// 0.6.0 again with phones P0 (design/28): schemas.ts: PhoneSettings, a settings key a stale client ignores.
 const RECORDED = {
   version: '0.6.0',
-  digest: '7a3587f9a8e5d14a7592a757a7b2e4e4a437fdec4a4e208f12309850e6c943ac',
+  digest: 'da518616675d5b4e9a158c06c8933ba1afbbf14570b8eea189b07d8dc7610e60',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

@@ -17,6 +17,17 @@ and on the fallback bus (`postMessage`), so outputs have one receive path.
 | `rtc.signal`     | operator, output | `{ to: outputId                             | 'operator', sdp?, ice? }`                          | Program-view signalling |
 | `surface.event`  | operator         | `{ device, control, value }`                | Optional telemetry of surface presses              |
 
+### Per-message caps (design/28 P0)
+
+A socket of a capped session (a phone: role `edit`, cap `light` or `view`) is checked per message
+(`apps/hub/src/caps.ts`, a table over every message type, so a new type does not compile until it is
+listed): it may send `hello` (as `edit`; `operate` gets `bye forbidden` as for every edit socket) and
+`time.ping`. A `live.event` gets `live.ack { rejected: 'forbidden: cap' }`; every other message above its cap
+(`live.adopt`, `live.resync`, `health`, `rtc.signal`, `preview`) is dropped without an answer. It receives
+`welcome` (unchanged: no cap field in P0), `time.pong`, `bye`, `live.ack` and, until P1's `library.poke`, the
+stripped `library.delta` an edit socket gets; never `live.state`, `live.delta`, `health.summary`,
+`rtc.signal` or `preview`. Operate, output, stage and uncapped edit sockets run none of these checks.
+
 ## Hub to client
 
 | `t`              | Payload                                         | Notes                                                                                              |

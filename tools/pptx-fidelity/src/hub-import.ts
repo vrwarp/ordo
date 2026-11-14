@@ -177,7 +177,7 @@ export class HubClient {
   async login(pin = PIN): Promise<void> {
     const r = await fetch(`${this.base}/auth/pin`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-ordo': '1' },
       body: JSON.stringify({ pin }),
     });
     if (!r.ok) throw new HubError(`auth/pin -> ${r.status} ${(await r.text()).slice(0, 200)}`, r.status);
@@ -190,6 +190,8 @@ export class HubClient {
   private async req(path: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     if (this.cookie) headers.set('cookie', this.cookie);
+    // As every ordo client (design/28 §4): the hub needs it on writes once Phones is on.
+    headers.set('x-ordo', '1');
     return fetch(`${this.base}/${path}`, { ...init, headers });
   }
 

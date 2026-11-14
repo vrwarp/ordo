@@ -92,4 +92,6 @@ all hidden is not offered.
 
 `POST /live/events` and `POST /actions` on the hub accept the same actions with the
 operate role, for tests and for future Companion-style integrations. Not exposed to
-volunteers in the prototype.
+volunteers in the prototype. An integration signed in with a session sends `x-ordo: 1` on these writes
+once Phones is on (`settings.phones.enabled`, design/28 P0; without it the hub answers 403
+`x_ordo_required`), and any `Origin` it sends must be the hub's own host; a token principal needs neither.

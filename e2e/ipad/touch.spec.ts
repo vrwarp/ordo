@@ -29,7 +29,10 @@ function portFor(n: number): number {
 async function startHub(port: number) {
   const hub = HubProcess.fresh(port);
   await hub.start();
-  const api = await request.newContext({ baseURL: `http://localhost:${port}/api/v1/` });
+  const api = await request.newContext({
+    baseURL: `http://localhost:${port}/api/v1/`,
+    extraHTTPHeaders: { 'x-ordo': '1' },
+  });
   const r = await api.post('auth/pin', { data: { pin: PIN } });
   expect(r.ok(), await r.text()).toBe(true);
   return { hub, api, url: `http://localhost:${port}/` };
