@@ -12,6 +12,7 @@ import { FontService } from './fonts/service.ts';
 import { createHttpApp, type RouteInfo, withTimeout } from './http.ts';
 import { ImportService } from './imports.ts';
 import { JobQueue } from './jobs.ts';
+import { JobPacing } from './pacing.ts';
 import { Library, phonesSwitch } from './library.ts';
 import { LiveService, librarySource } from './live.ts';
 import { affectsContext, contextMediaIds } from './librarylink.ts';
@@ -106,7 +107,19 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   await store.init();
   const auth = new Auth(db, lib, log);
   if (cfg.devPin) await auth.devSetup(cfg.devPin);
-  const jobs = new JobQueue(db, log, cfg.jobs, (job) => lib.emit([{ kind: 'job', id: job.id, entity: job }]));
+  // Phones (design/24 "Feature flags are settings"): cached here, followed on the settings change.
+  const phones = phonesSwitch(lib);
+  const pacing = new JobPacing({ graceMs: cfg.paceGraceMs, enabled: phones.enabled() });
+  const jobs = new JobQueue(
+    db,
+    log,
+    cfg.jobs,
+    (job) => lib.emit([{ kind: 'job', id: job.id, entity: job }]),
+    {
+      pacing,
+    },
+  );
+  phones.onChange((on) => jobs.setPhones(on));
   const media = new MediaService(lib, store, jobs, cfg, log);
   const fonts = new FontService(lib, store, jobs, cfg, log);
   const imports = new ImportService(lib, store, jobs, media, cfg, log, (id) =>
@@ -117,7 +130,6 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
   const statics = new StaticApps(cfg.appsDir, cfg.domain);
 
-  const phones = phonesSwitch(lib);
   const http = await createHttpApp({ cfg, log, auth: () => auth, phonesEnabled: phones.enabled });
   const app = http.app;
   const sockets = new SocketHub(auth, live, () => lib.getSetting('outputs'), log, {
@@ -242,6 +254,11 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   await app.ready();
   await cleanupStaleUploads(hub).catch((e) => log.warn({ err: errorMessage(e) }, 'upload cleanup failed'));
   live.start();
+  // Jobs paced while live (design/28 §5.3): the mode at start first, so a restart during a service never
+  // relaunches a held job; then every goLive and End service.
+  jobs.onLiveMode(live.state.mode);
+  live.onDelta(() => jobs.onLiveMode(live.state.mode));
+  live.onState((s) => jobs.onLiveMode(s.mode));
   jobs.start();
   sockets.start();
   if (cfg.scheduleBackups) backups.schedule();

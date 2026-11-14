@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { restoreBackup } from './backup.ts';
 import { loadConfig } from './config.ts';
 import { createHub } from './hub.ts';
-import { HEARTBEAT_MS, isToChild, sendToParent } from './ipc.ts';
+import { HEARTBEAT_MS, isToChild, parseLocks, sendToParent } from './ipc.ts';
 import { createLogger, LogRing } from './log.ts';
 import { Supervisor } from './supervisor.ts';
 
@@ -72,20 +72,18 @@ async function runChild(name: string): Promise<void> {
   });
   if (name === 'library') {
     const { createLibraryProcess } = await import('./libproc.ts');
+    // The locks are known before the job queue starts (the live process re-reports them anyway): a library
+    // restarted during a service holds its heavy jobs from the start (design/28 §5.3).
     const p = await createLibraryProcess(
       {},
       {
         secret,
         onChanges: (changes, seq) => sendToParent({ t: 'changes', changes, seq }),
         onStats: (library) => sendToParent({ t: 'stats', library }),
+        initialLocks: parseLocks(process.env.ORDO_LIVE_LOCKS),
       },
     );
     if (process.env.ORDO_LIVE_URL) p.setLiveUrl(process.env.ORDO_LIVE_URL);
-    try {
-      if (process.env.ORDO_LIVE_LOCKS) p.setLocks(JSON.parse(process.env.ORDO_LIVE_LOCKS));
-    } catch {
-      /* ignore: the live process re-reports its locks */
-    }
     process.on('message', (m) => {
       if (!isToChild(m)) return;
       if (m.t === 'locks') p.setLocks(m);

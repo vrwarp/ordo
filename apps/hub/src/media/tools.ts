@@ -23,7 +23,11 @@ export class ToolError extends Error {
  * or 127 saying it 'failed to execute' it (`unshare: failed to execute soffice: No such file or directory`).
  */
 export function missingExit(code: number | null, stderr: string): boolean {
-  return (code === 126 || code === 127) && /failed to execute/i.test(stderr);
+  return (
+    (code === 126 || code === 127) &&
+    (/failed to execute/i.test(stderr) ||
+      /^nice: .*(No such file or directory|Permission denied)/im.test(stderr))
+  );
 }
 
 /**
@@ -45,10 +49,18 @@ export function run(
     keepStdout?: boolean;
     allowFail?: boolean;
     group?: boolean;
+    /**
+     * Niceness for the tool (design/28 §5.3: 19 for light jobs while a service is live and Phones is on). It is
+     * spawned as `nice -n <n> <cmd>`: on Linux a setpriority on a running pid reaches one thread only, and a
+     * tool's threads are made at its start.
+     */
+    nice?: number;
   },
 ): Promise<RunResult> {
+  const nice = opts.nice !== undefined && opts.nice > 0 ? Math.min(19, Math.round(opts.nice)) : 0;
+  const [exe, argv] = nice ? ['nice', ['-n', String(nice), cmd, ...args]] : [cmd, args];
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, {
+    const child = spawn(exe, argv, {
       cwd: opts.cwd,
       env: opts.env ?? { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -76,6 +88,9 @@ export function run(
     );
     const onAbort = () => kill('cancelled');
     opts.signal?.addEventListener('abort', onAbort, { once: true });
+    // A signal aborted before the spawn never fires its event: the job was stopped between two tools (a goLive
+    // pause during the probe, a shutdown); the tool must not run to its end.
+    if (opts.signal?.aborted) onAbort();
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (d: string) => {

@@ -106,7 +106,7 @@ describe('broadcastLibrary', () => {
       expect(raw.edit).toEqual([want.edit]);
       expect(raw.capped).toEqual([want.edit]);
       expect(raw.output).toEqual(want.output ? [want.output] : []);
-      expect(raw.edit[0]).not.toContain('"token"');
+      expect(raw.edit?.[0]).not.toContain('"token"');
     });
 
   it('a presentation batch is stringified once (twice before), a batch with tokens twice', () => {

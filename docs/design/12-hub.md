@@ -260,6 +260,23 @@ A single in-process job queue (one video job at a time, two light jobs concurren
 the NAS CPU is shared with other services). Jobs are persisted in `jobs` so a restart
 resumes them.
 
+**Jobs paced while live** (design/28 P0, `pacing.ts`, `jobs.ts`). A heavy job (video and animated-GIF
+transcodes, `document`, `pptx-lo`, `pptx-reference`) is held while a service is live and for
+`ORDO_PACE_GRACE_MS` (default 2 minutes) after End service: when **Phones** is on
+(`settings.phones.enabled`), every one; with it off, only those queued during a capped (phone) request or by a
+job that was (`job_paced`, migration 13: a media upload, a resumable upload's completion, the PowerPoint
+follow-up a save queues), so a phone never starts heavy work during a service. Held jobs are left out in SQL,
+so they never fill the queue's window and starve one that may run; a held job carries `waiting: 'service'` in
+its job changes and its media stays `uploaded`. A heavy job running at goLive that the rule now holds is
+stopped and queued again without counting an attempt (media back to `uploaded`; it starts again from the
+beginning after the service). While live no pacing timer runs; after End service one wakes the queue at the
+end of the grace (at most 2^31-1 ms ahead). With Phones on, light tools (stills, images, audio) run under
+`nice -n 19` with `-threads 1` while live. The library process applies the live locks before its queue
+starts (`ORDO_LIVE_LOCKS`), so a library restarted during a service keeps held jobs held. Each handler runs in
+its own job's scope, so a pump started inside a capped request never marks another session's jobs.
+`PACE_EXEMPT` (empty in P0) names a kind a running service needs. Phones off and no capped request: nothing
+is held, nothing niced, no timer.
+
 | Job                | Tool                                                                                                                                                                                                                                                                                                                                                                                                  | Output                                                                                    |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `probe`            | `ffprobe`                                                                                                                                                                                                                                                                                                                                                                                             | duration, dimensions, alpha, audio channels                                               |
@@ -484,7 +501,8 @@ CPU-heavy parsing, 1 to 8, default 1), `ORDO_SINGLE_PROCESS=1` (one process inst
 supervisor and its two children; development and diagnosis), `ORDO_LOG_LEVEL`, and for
 development and tests only `ORDO_DEV_PIN` and `ORDO_APPS_DIR`. The supervisor sets
 `ORDO_INTERNAL_SECRET`, `ORDO_LIBRARY_URL`, `ORDO_LIVE_URL` and `ORDO_LIVE_LOCKS` for its
-children; they are not configuration. Settings that switch behaviour are settings, not environment
+children; they are not configuration. `ORDO_PACE_GRACE_MS` (default 120000): how long held heavy jobs keep
+waiting after End service (design/28 P0, "Jobs paced while live" below). Settings that switch behaviour are settings, not environment
 variables (design/24): `settings.phones.enabled` ("Phones are used during services", Settings → PINs, off by
 default) makes the library process hold heavy jobs while a service is live and both processes need the
 `x-ordo` header on writes from signed-in full sessions (design/28 P0); each process caches it and follows the

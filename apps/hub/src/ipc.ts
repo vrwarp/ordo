@@ -19,6 +19,27 @@ export type LocksMsg = {
   fonts?: string[];
 };
 
+/** ORDO_LIVE_LOCKS as the supervisor writes it (a LocksMsg), read defensively; undefined when it is not one. */
+export function parseLocks(json: string | undefined): LocksMsg | undefined {
+  if (!json) return undefined;
+  try {
+    const m = JSON.parse(json) as Partial<LocksMsg>;
+    if (!m || typeof m !== 'object' || (m.mode !== 'idle' && m.mode !== 'live')) return undefined;
+    const ids = (v: unknown) =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 100_000) : [];
+    return {
+      t: 'locks',
+      mode: m.mode,
+      ...(typeof m.playlistId === 'string' ? { playlistId: m.playlistId } : {}),
+      presentations: ids(m.presentations),
+      media: ids(m.media),
+      fonts: ids(m.fonts),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export type ChildState = 'starting' | 'up' | 'down' | 'failed' | 'stopped';
 export type ProcessStatus = {
   name: ChildName;

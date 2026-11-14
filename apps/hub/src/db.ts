@@ -191,6 +191,15 @@ CREATE TABLE IF NOT EXISTS auth_global_failures (id INTEGER PRIMARY KEY AUTOINCR
 CREATE INDEX IF NOT EXISTS auth_global_failures_at ON auth_global_failures(at);
 `,
   },
+  {
+    version: 13,
+    name: 'job-paced',
+    // Jobs queued during a capped (phone) request, or by a job that was (design/28 §10 items 8 and 11): held
+    // while a service is live whatever `settings.phones.enabled` says. A row goes with its job.
+    sql: `
+CREATE TABLE IF NOT EXISTS job_paced (job_id TEXT PRIMARY KEY);
+`,
+  },
 ];
 
 /**

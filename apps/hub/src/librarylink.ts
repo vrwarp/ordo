@@ -71,7 +71,9 @@ export const CONTEXT_MEDIA_FIELDS = ['general.logoMediaId', 'looks[].holdingMedi
 
 /** Every media id the settings name (CONTEXT_MEDIA_FIELDS). */
 export function contextMediaIds(
-  settings: { general?: { logoMediaId?: string }; looks?: readonly { holdingMediaId?: string }[] } | undefined,
+  settings:
+    | { general?: { logoMediaId?: string }; looks?: readonly { holdingMediaId?: string }[] }
+    | undefined,
 ): Set<string> {
   const out = new Set<string>();
   const logo = settings?.general?.logoMediaId;
