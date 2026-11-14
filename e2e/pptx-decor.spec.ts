@@ -5,6 +5,7 @@ import { decodePng } from './png.ts';
 import { openEditor, opOrigin, type PresentationRec, slidesOf } from './editorhelpers.ts';
 import { hubApi, login } from './linkhelpers.ts';
 import { CROWDED, crowdedCentre, crowdedColor, crowdedDeck } from './pptxdecks.ts';
+import { portOf } from './ports.ts';
 import {
   apiJson,
   at,
@@ -27,16 +28,16 @@ import {
  * files named by their SHA-256 on the hub and in the browser alike. Until decorations were drawn and their files
  * named, the guard left the topmost squares out and listed them missing (`missing:decoration`, class hybrid).
  * On both kinds of hub:
- * - **without LibreOffice** (`ORDO_LIBREOFFICE=off`, ORDO_E2E_DECOR_PORT, default 8411): the deck dropped on the
+ * - **without LibreOffice** (`ORDO_LIBREOFFICE=off`, port 0 of the 'pptx-decor' row): the deck dropped on the
  *   Import tab in 'Editable' mode is parsed in the operator and the hub builds version 1 from its scene;
- * - **with LibreOffice** (ORDO_E2E_DECOR_LO_PORT, default 8412): the deck through the upload route, parsed by the
+ * - **with LibreOffice** (port 1 of the row): the deck through the upload route, parsed by the
  *   hub itself, read once its follow-up jobs (version 2, for the slides that wait for LibreOffice) are done;
  * the stored slide is native with nothing missing and its decoration files are in the store; taken live, the
  * Audience window shows the five topmost squares in their colours (`pptxlive.ts` `capture`, `at`); and the
  * editor canvas shows the topmost one.
  */
-const PORT = Number(process.env.ORDO_E2E_DECOR_PORT ?? 8411);
-const LO_PORT = Number(process.env.ORDO_E2E_DECOR_LO_PORT ?? 8412);
+const PORT = portOf('pptx-decor', 0);
+const LO_PORT = portOf('pptx-decor', 1);
 const OUT = 'test-results/pptx-decor';
 /** The five topmost squares (the last in z-order), under the title. */
 const TOP = Array.from({ length: 5 }, (_, k) => CROWDED.count - 1 - k);

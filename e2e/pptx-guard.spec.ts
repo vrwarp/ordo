@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { type APIRequestContext, type BrowserContext, expect, test } from '@playwright/test';
 import { hubApi } from './linkhelpers.ts';
 import { GUARD, guardColor, guardDeck } from './pptxdecks.ts';
+import { portOf } from './ports.ts';
 import {
   apiJson,
   at,
@@ -23,15 +24,15 @@ import {
  * owner's decision of 2026-11-13): a title over 24 distinct full-slide pictures (`pptxdecks.ts` `guardDeck`),
  * past the render clamp's 16 with no picture sheets, so the guard leaves the topmost pictures out. Each deck
  * goes through the upload route to a hub of its own:
- * - **with LibreOffice** (ORDO_E2E_GUARD_PORT, default 8413): the left-out pictures are LibreOffice's art
+ * - **with LibreOffice** (port 0 of the 'pptx-guard' row): the left-out pictures are LibreOffice's art
  *   (`budget:pictures`); once version 2 is in, the slide waits for nothing, lists nothing missing, carries the
  *   art, and the Audience screen shows the topmost picture's colour. Before lo-forms the guard culled them on
  *   this hub too: listed missing, the 16th picture on screen.
- * - **without LibreOffice** (ORDO_E2E_GUARD_NOLO_PORT, default 8414, `ORDO_LIBREOFFICE=off`): as before, the
+ * - **without LibreOffice** (port 1 of the row, `ORDO_LIBREOFFICE=off`): as before, the
  *   guard keeps the 16 the clamp draws and the import report lists the rest ('decoration'); no follow-up.
  */
-const PORT = Number(process.env.ORDO_E2E_GUARD_PORT ?? 8413);
-const NOLO_PORT = Number(process.env.ORDO_E2E_GUARD_NOLO_PORT ?? 8414);
+const PORT = portOf('pptx-guard', 0);
+const NOLO_PORT = portOf('pptx-guard', 1);
 const OUT = 'test-results/pptx-guard';
 /** Channel difference allowed between a picture's colour and what the screen draws. */
 const TOL = 12;

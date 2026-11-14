@@ -69,16 +69,20 @@ export const PORT_TABLE = {
   'pptx-native': { offset: 32, count: 2, spec: 'pptx-native.spec.ts', what: '0 hub, 1 lite hub' },
   'pptx-media': { offset: 34, count: 1, spec: 'pptx-media.spec.ts', what: 'hub' },
   'pptx-import-tab': { offset: 35, count: 1, spec: 'pptx-import-tab.spec.ts', what: 'hub' },
-  // Reserved for the wave r2a specs being written beside this table (the integrator moves them onto it).
-  'pptx-lineart': { offset: 36, count: 1, spec: 'pptx-lineart.spec.ts', what: 'hub (reserved)' },
-  'pptx-decor': { offset: 37, count: 2, spec: 'pptx-decor.spec.ts', what: 'hubs (reserved)' },
+  'pptx-lineart': { offset: 36, count: 1, spec: 'pptx-lineart.spec.ts', what: 'hub' },
+  'pptx-decor': {
+    offset: 37,
+    count: 2,
+    spec: 'pptx-decor.spec.ts',
+    what: '0 hub without LibreOffice (Import tab), 1 hub with LibreOffice (upload route)',
+  },
   'pptx-guard': {
     offset: 39,
     count: 2,
     spec: 'pptx-guard.spec.ts',
-    what: 'hubs with and without LibreOffice (reserved)',
+    what: '0 hub with LibreOffice, 1 hub without',
   },
-  'pptx-text': { offset: 41, count: 1, spec: 'pptx-text.spec.ts', what: 'hub (reserved)' },
+  'pptx-text': { offset: 41, count: 1, spec: 'pptx-text.spec.ts', what: 'hub without LibreOffice' },
   'chaos-output': {
     offset: 50,
     count: 6,

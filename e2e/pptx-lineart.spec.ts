@@ -5,6 +5,7 @@ import { convertDeck, NativeRenderer } from '../tools/pptx-fidelity/src/native.t
 import { hubApi } from './linkhelpers.ts';
 import { decodePng, type Pixels } from './png.ts';
 import { LINE_ART_BLACK_BOX, lineArtDeck, lineArtInk } from './pptxdecks.ts';
+import { portOf } from './ports.ts';
 import {
   apiJson,
   cacheReady,
@@ -22,16 +23,17 @@ import {
 /**
  * Line art past the slide's drawing budget, end to end (design/27 §12-13 "Geometry units", M9 decisions
  * "Slow-to-draw elements", Runtime: draw it, never drop it). A synthetic deck (`pptxdecks.ts` `lineArtDeck`: a
- * white and a navy line art under a black one, each a custom geometry of 320 holes and 4,164 points a path,
- * together past `GEOM_COST.slide`) goes through the real upload route to a hub without LibreOffice and goes live.
+ * white and a navy line art under a black one, each a custom geometry of one path of 320 holes and 9,605 points,
+ * `test-util.ts` `lineArtPath` as the golden-pptx guard deck's, together past `GEOM_COST.slide`; checked by
+ * `lineart-deck.test.ts`) goes through the real upload route to a hub without LibreOffice and goes live.
  * Audience 1 at 1920x1080 (WebGPU) and Audience 2 at 3840x2160 (Canvas 2D) draw the black line art whole, from
  * its geometry unit:
  * - the black share of its box is its ink coverage within 0.05 (a legacy rect is all black, about 1.0; a legacy
  *   line draws nothing, 0);
  * - the slide is the fidelity harness's native page's drawing (SSIM at least 0.99, greyscale 960x540).
- * Its own hub on ORDO_E2E_LINEART_PORT (default 8410).
+ * Its own hub on its row of `ports.ts` ('pptx-lineart').
  */
-const PORT = Number(process.env.ORDO_E2E_LINEART_PORT ?? 8410);
+const PORT = portOf('pptx-lineart');
 const OUT = 'test-results/pptx-lineart';
 const FLOOR = 0.99;
 /** The black share of the black line art's box may differ from its ink coverage by this much (edges, overlap). */

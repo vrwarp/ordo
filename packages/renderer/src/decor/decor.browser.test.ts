@@ -1,9 +1,9 @@
-import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { DiffResult } from './decor.page.test-util.ts';
+import { findChromium } from '../../../../tools/find-chromium.ts';
 
 /**
  * Decorations in headless Chromium (design/27 M9, decor-render; plan §4 exit `shape-decor-equivalence` and
@@ -20,23 +20,12 @@ import type { DiffResult } from './decor.page.test-util.ts';
  *   shadows (Chromium dithers a gradient by its device position, and the sprite is drawn on its own canvas),
  *   at most 0.01 % of the pixels past 2 levels on edges; its cached copy is its first draw exactly (a 1:1
  *   copy).
- * Skipped when no Chromium is found (ORDO_TEST_CHROMIUM, Playwright's, or the system's Google Chrome).
+ * Chromium is tools/find-chromium.ts's (Playwright's, else ORDO_TEST_CHROMIUM): skipped when none is found, and a
+ * failure under CI.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../../..');
-
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
-  try {
-    const { chromium } = await import('@playwright/test');
-    const exe = chromium.executablePath();
-    if (existsSync(exe)) return exe;
-  } catch {
-    /* Playwright not installed */
-  }
-  return existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : undefined;
-}
 
 type Esbuild = { build(o: Record<string, unknown>): Promise<{ outputFiles: { text: string }[] }> };
 

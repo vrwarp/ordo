@@ -63,7 +63,10 @@ between 16000 and 32767.
 - `ORDO_E2E_PORT` still moves the shared web server alone (`helpers.ts` `PORT`). The per-spec variables of
   earlier versions (`ORDO_E2E_M4_PORT`, `ORDO_E2E_CHAOS_HUB_PORT`, `ORDO_CHAOS_OUTPUT_PORT`,
   `ORDO_CHAOS_OPERATOR_PORT`, `ORDO_E2E_LOCAL_PORT`, `ORDO_E2E_IMPORT_PORT`, `ORDO_E2E_PRO7_PORT`,
-  `ORDO_E2E_PAGES_PORT`, `ORDO_E2E_IPAD_PORT`, `ORDO_E2E_TOUCH_PORT`) are no longer read.
+  `ORDO_E2E_PAGES_PORT`, `ORDO_E2E_IPAD_PORT`, `ORDO_E2E_TOUCH_PORT`, and wave r2a's `ORDO_E2E_LINEART_PORT`,
+  `ORDO_E2E_DECOR_PORT`, `ORDO_E2E_DECOR_LO_PORT`, `ORDO_E2E_GUARD_PORT`, `ORDO_E2E_GUARD_NOLO_PORT`,
+  `ORDO_E2E_PICTEXT_PORT`) are no longer read: those specs take the rows `pptx-lineart`, `pptx-decor`,
+  `pptx-guard` and `pptx-text`.
 - A new spec that starts a hub or a server of its own adds a row (the next free offsets) and takes its ports
   from it; rows for specs not written yet hold their ports reserved.
 
@@ -146,7 +149,7 @@ spec imports a public golden deck the same way, without LibreOffice. `e2e/pptx-t
 would see drawn wrong (design/27 §4): a 200 pt 'HIH' filled with a picture (`a:blipFill` in its run
 properties, written as raw XML by `pptxdecks.ts` `pictureTextDeck`, which pptxgenjs cannot), outlined and
 bevelled, imported both through the Import tab and through the hub's route on a hub of its own without
-LibreOffice (`ORDO_E2E_PICTEXT_PORT`, default 8415); both store the letters in the text colour with their
+LibreOffice (the `pptx-text` row of `e2e/ports.ts`); both store the letters in the text colour with their
 outline, and Audience 1 at 1920x1080 (WebGPU) draws the I's stem within 40/255 of black (it was hollow).
 
 ## Chaos tests

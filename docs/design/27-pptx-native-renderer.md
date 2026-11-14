@@ -878,11 +878,16 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   numbers per slide and kind of hub are in the r2 notes, `regroup/r2a/decor-render`).
 - **The first paint stays as fast.** M9 adds no code to what the operator loads before its first paint: its
   drawers load per object kind (`registerShapeDrawerLoader`; the table's in the workers' prepare step and the
-  editor canvas) and the Setup and settings pages load when opened (`React.lazy`). Measured on this PR's build:
+  editor canvas) and the Setup and settings pages load when opened (`React.lazy`). Measured on PR #23's build:
   operator initial JavaScript 1,708.0 kB (gzip 535.9) against main's 1,713.3 kB (535.1) (1,684.6 kB with the
   lazy drawers alone; the PR's editor, live and media fixes add 23.4 kB, and the PowerPoint parse runs in an
-  import worker of its own, 659.7 kB, loaded when a deck is imported); CI fails a PR whose initial JavaScript
-  grows more than 2 % over `tools/bundle-baseline.json` (design/24 "Bundle budget"), recorded from this build.
+  import worker of its own, 659.7 kB, loaded when a deck is imported). Wave r2a (geometry units, decorations
+  drawn, the guard's art, the live follow-ups) takes it to 1,714.4 kB (gzip 538.4), 4.3 kB over PR #23's
+  merged 1,710.0 kB: the geometry units' copy step and plan 2.7 kB, the decoration files' store 0.8 kB (the
+  decoration drawer itself is a lazy chunk, 17.2 kB in the operator and 36.5 kB in the output), the dialog and
+  liveness guards 0.9 kB; the import worker is 666.5 kB, the output's initial 182.1 kB and the stage's 383.9 kB.
+  CI fails a PR whose initial JavaScript grows more than 2 % over `tools/bundle-baseline.json` (design/24
+  "Bundle budget"), recorded from wave r2a's build.
 - **The tail keeps its page.** The presentation's tail (§3.4) stores each slide minimal with its page, the
   background drawn as a shape, as a plain rect in its colour (`minimalSlide`), so its dark text is never drawn
   on the output's black; a deck that does not fit 4 MiB even so (about 2,000 slides) leaves the pages out

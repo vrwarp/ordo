@@ -8,8 +8,11 @@ import {
   buildDeck,
   CLRMAP_OVR,
   clipRels,
+  custGeom,
   esc,
   imageRel,
+  lineArtInk as lineArtInkOf,
+  lineArtPath,
   NS_A,
   NS_P,
   NS_R,
@@ -582,65 +585,16 @@ export function lyricLoopDeck(dir: string, advanceMs = 4000): string {
 
 // ---- the line-art deck (raw XML: custom geometry past the slide's drawing budget, M9 geometry units) -------
 
-/** EMU per inch. */
-const LINE_ART_IN = 914_400;
-/** The line art's path space (`a:path` w and h). */
-const LINE_ART_W = 40_000;
-const LINE_ART_H = 30_000;
-/** Holes of a line-art path: 20 x 16 ovals, 13 points each, so the path has 4,164 points (past 4,096). */
-const LINE_ART_COLS = 20;
-const LINE_ART_ROWS = 16;
-
-/** Each hole of the line art: its centre and radii in path units. */
-function lineArtHoles(wall: number): { cx: number; cy: number; rx: number; ry: number }[] {
-  const cw = LINE_ART_W / LINE_ART_COLS;
-  const ch = LINE_ART_H / LINE_ART_ROWS;
-  const out: { cx: number; cy: number; rx: number; ry: number }[] = [];
-  for (let r = 0; r < LINE_ART_ROWS; r++)
-    for (let c = 0; c < LINE_ART_COLS; c++)
-      out.push({
-        cx: Math.round((c + 0.5) * cw),
-        cy: Math.round((r + 0.5) * ch),
-        rx: Math.round((cw / 2) * (1 - wall) * (0.9 + 0.1 * Math.sin(r * 7 + c * 3))),
-        ry: Math.round((ch / 2) * (1 - wall) * (0.9 + 0.1 * Math.cos(r * 5 + c * 11))),
-      });
-  return out;
-}
+/** The line art's holes per path (`test-util.ts` `lineArtPath`): 40 x 8, 9,605 points, as the guard deck's. */
+const LINE_ART_GRID = { cols: 40, rows: 8 } as const;
 
 /**
- * One `a:path` of line art (as the leaf template's: one outline holding 320 oval holes of four cubic curves each,
- * wound against it), in the line art's path space.
+ * The share of its box the black line art inks (even-odd: the outline less its holes; `test-util.ts`
+ * `lineArtInk`, the same builder as `golden-pptx/.../line-art-holes.pptx`).
  */
-function lineArtPathXml(wall: number, layer = 0): string {
-  const pt = (x: number, y: number) => `<a:pt x="${Math.round(x)}" y="${Math.round(y)}"/>`;
-  const k = 0.5523;
-  let xml = `<a:path w="${LINE_ART_W}" h="${LINE_ART_H}"><a:moveTo>${pt(0, 0)}</a:moveTo>`;
-  xml += `<a:lnTo>${pt(LINE_ART_W, 0)}</a:lnTo><a:lnTo>${pt(LINE_ART_W, LINE_ART_H)}</a:lnTo>`;
-  xml += `<a:lnTo>${pt(0, LINE_ART_H)}</a:lnTo><a:close/>`;
-  // Every layer the same outline and holes (strokes drawn over strokes, as traced line art has them), each from
-  // another starting hole, so the three paths are three paths and their ink is one layer's.
-  const holes = lineArtHoles(wall);
-  for (let i = 0; i < holes.length; i++) {
-    const { cx, cy, rx, ry } = holes[(i + layer * 107) % holes.length]!;
-    const cubic = (a: [number, number], b: [number, number], c: [number, number]) =>
-      `<a:cubicBezTo>${pt(...a)}${pt(...b)}${pt(...c)}</a:cubicBezTo>`;
-    xml += `<a:moveTo>${pt(cx + rx, cy)}</a:moveTo>`;
-    xml += cubic([cx + rx, cy - k * ry], [cx + k * rx, cy - ry], [cx, cy - ry]);
-    xml += cubic([cx - k * rx, cy - ry], [cx - rx, cy - k * ry], [cx - rx, cy]);
-    xml += cubic([cx - rx, cy + k * ry], [cx - k * rx, cy + ry], [cx, cy + ry]);
-    xml += cubic([cx + k * rx, cy + ry], [cx + rx, cy + k * ry], [cx + rx, cy]);
-    xml += '<a:close/>';
-  }
-  return `${xml}</a:path>`;
-}
-
-/** The share of its box the black line art inks (even-odd: the outline less its holes, ovals of π·rx·ry). */
 export function lineArtInk(): number {
-  const holes = lineArtHoles(LINE_ART_BLACK_WALL).reduce((a, h) => a + Math.PI * h.rx * h.ry, 0);
-  return 1 - holes / (LINE_ART_W * LINE_ART_H);
+  return lineArtInkOf({ ...LINE_ART_GRID, seed: 0 });
 }
-
-const LINE_ART_BLACK_WALL = 0.06;
 
 /** Where the black line art is on the slide, in logical px (16:9 at 1920 px wide). */
 export const LINE_ART_BLACK_BOX = { x: 120, y: 90, w: 1680, h: 900 } as const;
@@ -648,36 +602,35 @@ export const LINE_ART_BLACK_BOX = { x: 120, y: 90, w: 1680, h: 900 } as const;
 /**
  * A one-slide deck of line art past the slide's drawing budget (design/27 §12-13, M9 geometry units): on a pale
  * blue background, a white and a navy line art, then a black one on top (each one custom geometry of one path of
- * 320 holes and 4,164 points). Each alone is within `GEOM_COST.geometry`; together they pass `GEOM_COST.slide`,
- * so a drawer without geometry units draws the black one as its legacy copy (a black rect at b50d486, nothing
- * once the legacy kind is a line), and with them draws it whole. No text: the comparison is about the art.
+ * 320 holes and 9,605 points, built by `test-util.ts` `lineArtPath` like the golden-pptx guard deck
+ * `line-art-holes.pptx`). Each alone is within `GEOM_COST.geometry`; together they pass `GEOM_COST.slide`, so a
+ * drawer without geometry units draws the black one as its legacy copy (a black rect at b50d486, nothing once
+ * the legacy kind is a line), and with them draws it whole. No text: the comparison is about the art.
  */
 export function lineArtDeck(dir: string): string {
   mkdirSync(dir, { recursive: true });
-  const px = (v: number) => Math.round((v / 1920) * 13.333 * LINE_ART_IN);
+  const EMU = 6_350; // EMU per logical px (12,192,000 / 1,920)
   const art = (
     id: number,
     name: string,
     box: { x: number; y: number; w: number; h: number },
     color: string,
-    wall: number,
+    seed: number,
   ) =>
     sp({
       id,
       name,
-      x: px(box.x),
-      y: px(box.y),
-      cx: px(box.w),
-      cy: px(box.h),
+      x: box.x * EMU,
+      y: box.y * EMU,
+      cx: box.w * EMU,
+      cy: box.h * EMU,
       geom: 'none',
-      fill:
-        `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="l" t="t" r="r" b="b"/>` +
-        `<a:pathLst>${lineArtPathXml(wall)}${lineArtPathXml(wall, 1)}${lineArtPathXml(wall, 2)}</a:pathLst></a:custGeom>${solid(color)}`,
+      fill: custGeom({ paths: lineArtPath({ ...LINE_ART_GRID, seed }) }) + solid(color),
     });
   const shapes =
-    art(2, 'White line art', { x: 860, y: 380, w: 1000, h: 650 }, 'FFFFFF', 0.08) +
-    art(3, 'Navy line art', { x: 60, y: 160, w: 1000, h: 650 }, '1F3864', 0.07) +
-    art(4, 'Black line art', LINE_ART_BLACK_BOX, '000000', LINE_ART_BLACK_WALL);
+    art(2, 'White line art', { x: 860, y: 380, w: 1000, h: 650 }, 'FFFFFF', 1) +
+    art(3, 'Navy line art', { x: 60, y: 160, w: 1000, h: 650 }, '1F3864', 2) +
+    art(4, 'Black line art', LINE_ART_BLACK_BOX, '000000', 0);
   return zip(buildDeck({ slides: [{ bg: solidBg('C9D9EE'), shapes }] }), join(dir, 'Line art.pptx'));
 }
 

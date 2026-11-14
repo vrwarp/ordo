@@ -5,6 +5,7 @@ import { opOrigin, type PresentationRec, slidesOf } from './editorhelpers.ts';
 import { hubApi, login } from './linkhelpers.ts';
 import type { Pixels } from './png.ts';
 import { pictureTextDeck } from './pptxdecks.ts';
+import { portOf } from './ports.ts';
 import {
   apiJson,
   cacheReady,
@@ -25,10 +26,10 @@ import {
  * worker) and through the hub's route (parsed by the hub). Both store the letters in the text colour (black
  * here) with their outline, and Audience 1 (1920x1080, WebGPU) draws the I's stem black: before text-fix the
  * letters were hollow, only their outline drawn. text-conv adds its vertical text case here.
- * Own hub without LibreOffice (`ORDO_LIBREOFFICE=off`, as a lite hub runs) on port 8415
- * (ORDO_E2E_PICTEXT_PORT).
+ * Own hub without LibreOffice (`ORDO_LIBREOFFICE=off`, as a lite hub runs) on its row of `ports.ts`
+ * ('pptx-text').
  */
-const PORT = Number(process.env.ORDO_E2E_PICTEXT_PORT ?? 8415);
+const PORT = portOf('pptx-text');
 const OUT = 'test-results/pptx-text';
 /** The I's stem is within this of black in every channel (it was the white ground before). */
 const BLACK_TOL = 40;

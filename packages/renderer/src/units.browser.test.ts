@@ -1,33 +1,21 @@
-import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { runUnits } from './units.page.test-util.ts';
+import { findChromium } from '../../../tools/find-chromium.ts';
 
 /**
  * Headless check of geometry units (design/27 §12-13, M9 "Slow-to-draw elements", Runtime): bundles
  * units.page.test-util.ts, runs it in headless Chromium and expects line art past the slide's drawing budget,
  * drawn with its units made in slices, to be the very drawing of every object whole (largest channel difference
  * at most 1 at 1920 and at 3840, on the frame and in a tight sprite at its offset), where the legacy copies are
- * visibly another picture. Skipped when no Chromium is found (ORDO_TEST_CHROMIUM, Playwright's, or the system's
- * Google Chrome).
+ * visibly another picture. Chromium is tools/find-chromium.ts's (Playwright's, else ORDO_TEST_CHROMIUM): skipped
+ * when none is found, and a failure under CI.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../..');
-
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
-  try {
-    const { chromium } = await import('@playwright/test');
-    const exe = chromium.executablePath();
-    if (existsSync(exe)) return exe;
-  } catch {
-    /* Playwright not installed */
-  }
-  return existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : undefined;
-}
 
 type Esbuild = {
   build(o: Record<string, unknown>): Promise<{ outputFiles: { text: string }[] }>;

@@ -1122,7 +1122,9 @@ Cutting the rows marked No leaves about 684 kB raw, about 214 kB gzip at the chu
 estimate; the split measures it with `tools/bundle-report.mjs` from PR #23). The thumbnail worker loads
 with the first preview and counts against "Opening a song" above, not the first load. PR #23 takes the
 initial chunk to 1,708.0 kB (535.9 kB gzip) with M9 inside: lazy M9 drawers and lazy Setup (a1-prep, 1,684.6
-kB) and then its editor, live and media fixes (23.4 kB).
+kB) and then its editor, live and media fixes (23.4 kB); merged, 1,710.0 kB. Wave r2a takes it to 1,714.4 kB
+(538.4 kB gzip): geometry units, the decoration files' store and the live follow-ups (design/27, the M9 rollout's
+"The first paint stays as fast").
 
 ## 8. Testing
 

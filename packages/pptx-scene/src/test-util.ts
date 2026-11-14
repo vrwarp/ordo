@@ -1028,6 +1028,30 @@ export function lineArtPath(
   return `<a:path w="${w}" h="${h}">${d}</a:path>`;
 }
 
+/**
+ * The even-odd ink of `lineArtPath` with the same options: the share of its box the lines between the holes
+ * fill (the outline less every hole, a rounded rectangle of its cell's size less the gap, less its four
+ * corners' `(4 − π) rad²`; the cubics' quarter turns are within 0.03 % of a circle's).
+ */
+export function lineArtInk(o: { cols?: number; rows?: number; gap?: number; seed?: number } = {}): number {
+  const w = 100_000;
+  const h = 60_000;
+  const cols = o.cols ?? 20;
+  const rows = o.rows ?? 15;
+  const gap = o.gap ?? 0.12;
+  const seed = o.seed ?? 0;
+  const cw = w / cols;
+  const ch = h / rows;
+  let holes = 0;
+  for (let j = 0; j < rows; j++)
+    for (let i = 0; i < cols; i++) {
+      const k = (i * 7 + j * 13 + seed * 5) % 11;
+      const rad = Math.min(cw, ch) * (1 - gap) * (0.1 + 0.05 * (k % 4));
+      holes += cw * (1 - gap) * ch * (1 - gap) - (4 - Math.PI) * rad * rad;
+    }
+  return 1 - holes / (w * h);
+}
+
 /** The points of `lineArtPath` as the converter counts them (moveTo, lnTo and close 1, cubicBezTo 3). */
 export function lineArtPoints(cols = 20, rows = 15): number {
   return 5 + 30 * cols * rows;

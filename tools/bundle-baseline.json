@@ -2,18 +2,18 @@
   "budget": 0.02,
   "apps": {
     "operator": {
-      "initial": 1708046,
-      "initialGzip": 535943,
-      "css": 45502
+      "initial": 1714367,
+      "initialGzip": 538407,
+      "css": 45529
     },
     "output": {
-      "initial": 181959,
-      "initialGzip": 54918,
+      "initial": 182119,
+      "initialGzip": 55019,
       "css": 1599
     },
     "stage": {
       "initial": 383943,
-      "initialGzip": 118408,
+      "initialGzip": 118407,
       "css": 2226
     }
   }

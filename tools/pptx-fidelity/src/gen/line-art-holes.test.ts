@@ -5,7 +5,7 @@ import type { ShapeObject } from '@ordo/domain';
 import { extractZip } from '@ordo/importers/zip-stream.ts';
 import { emitSlides, M9_WRITES, PPTX_SHEETS, parseDeck } from '@ordo/pptx-scene';
 import type { ShapeElement } from '@ordo/pptx-scene/ir.ts';
-import { lineArtPoints } from '@ordo/pptx-scene/test-util.ts';
+import { lineArtInk, lineArtPoints } from '@ordo/pptx-scene/test-util.ts';
 import { GEOM_COST } from '@ordo/renderer/geom/cost.ts';
 import { clearGeomFiles, putGeomFile } from '@ordo/renderer/geom/stored.ts';
 import { drawnCost, slideBudget } from '@ordo/renderer/geombudget.ts';
@@ -76,6 +76,10 @@ describe('line-art-holes.pptx (the golden-pptx guard deck)', () => {
         expect(e.custom!.ink).toBeLessThan(0.3);
         expect(e.custom!.fillCost).toBeLessThan(GEOM_COST.geometry);
       }
+      // The converter's even-odd ink is the builder's own (white seed 1, navy 2, black 0).
+      expect(
+        arts.map((e) => e.custom!.ink! - lineArtInk({ cols: 40, rows: 8, seed: [1, 2, 0][arts.indexOf(e)] })),
+      ).toEqual([0, 0, 0].map(() => expect.closeTo(0, 3)));
       const out = emitSlides(scene, { m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
       clearGeomFiles();
       for (const g of out.geoms) putGeomFile(g.id, g.file);
