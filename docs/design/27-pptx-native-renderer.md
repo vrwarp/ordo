@@ -885,10 +885,13 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   operator initial JavaScript 1,708.0 kB (gzip 535.9) against main's 1,713.3 kB (535.1) (1,684.6 kB with the
   lazy drawers alone; the PR's editor, live and media fixes add 23.4 kB, and the PowerPoint parse runs in an
   import worker of its own, 659.7 kB, loaded when a deck is imported). Wave r2a (geometry units, decorations
-  drawn, the guard's art, the live follow-ups) takes it to 1,714.4 kB (gzip 538.4), 4.3 kB over PR #23's
-  merged 1,710.0 kB: the geometry units' copy step and plan 2.7 kB, the decoration files' store 0.8 kB (the
-  decoration drawer itself is a lazy chunk, 17.2 kB in the operator and 36.5 kB in the output), the dialog and
-  liveness guards 0.9 kB; the import worker is 666.5 kB, the output's initial 182.1 kB and the stage's 383.9 kB.
+  drawn, the guard's art, the live follow-ups, and its repair) takes it to 1,714.8 kB (gzip 538.7), 4.8 kB over
+  PR #23's merged 1,710.0 kB: the decoration files' store 0.8 kB (the decoration drawer itself is a lazy chunk,
+  17.3 kB in the operator and 38.0 kB in the output), the dialog and liveness guards with the dialog's focus
+  trap, the sprite cache's rasters and the import's capability wait about 4 kB. The geometry units are no
+  longer in it (2.6 kB: only the asset and thumbnail workers make them, importing `@ordo/renderer/units.ts`
+  themselves; the renderer's index exports their types only); the import worker is 666.7 kB, the output's
+  initial 182.1 kB and the stage's 383.9 kB.
   CI fails a PR whose initial JavaScript grows more than 2 % over `tools/bundle-baseline.json` (design/24
   "Bundle budget"), recorded from wave r2a's build.
 - **The tail keeps its page.** The presentation's tail (§3.4) stores each slide minimal with its page, the
@@ -1741,9 +1744,25 @@ budget only decides that it is drawn so.
   scale, origin and cut), pinned by the asset worker from a job's prepare step to its raster and while its cue is
   armed or warmed (design/14 "Geometry units"). Made by the outputs' prepare step `geometry units` and a desktop's
   thumbnail worker; never on a phone, never in the editor (it keeps the legacy copies; leaf-editor), never stored.
-- **Bounded**: a job makes units for at most `UNIT_WAIT_MS` (1 s); the rest draw as their legacy copies this
-  time. An armed or warmed cue's GO does no unit work; a jump waits for its units (as
-  for its table layouts) until effect units make a late unit fade in instead.
+- **Bounded**: a job makes units for at most `UNIT_WAIT_MS` (1 s) and a slide's units cover at most
+  `UNIT_SLIDE_AREAS` (one frame; a unit at most half of `UNIT_CACHE_BYTES`); the rest draw as their legacy
+  copies this time. An armed or warmed cue's GO does no unit work; a jump waits for its units (as
+  for its table layouts) until effect units make a late unit fade in instead. _That wait is a GO waiting (the
+  owner's call of 2026-11-13: a GO never waits), so effect units item 5 is a must item before the follow-up PR
+  merges (r2a repair)._
+- **With its effects** (r2a repair): a shape whose legacy copy keeps its effects ('geom': the budget held back
+  its geometry, not its shadow, glow or soft edge) is drawn from a unit with them, in one call through the effects
+  path, when the shape and its effects are within `GEOM_COST.slide` together (`unitDrawn`); a 'both' copy's
+  unit draws it without them, as the budget does. Before, every unit drew the shape without its effects, which
+  dropped a 'geom' shape's shadow that the legacy copy had drawn.
+- **Open must items for effect units** (r2a repair; `units.ts` `slideUnitsLeft`, counted by the census as
+  `unitsLeft`, and `unitsAlone`, which the ratchet fails): until effect units, outputs draw as their legacy shapes
+  (1) a geometry past `GEOM_COST.slide` alone (no single call fits a task: for thin line art its legacy line draws
+  nothing, a drop; a unit sliced by sub-path groups or `cont` pieces must draw it), (2) objects past the slide's
+  `UNIT_SLIDE_AREAS`, (3) plain shapes past the budget for their gradient or dash (their first colour) and masked
+  pictures (without their masks), and (4) a 'geom' shape whose effects would put its one call past a task is drawn
+  without them. None occurs in E, golden-pptx or the sermons today (21 objects past the budget there, every one
+  with a unit at 1920 and 3840, none with an effect).
 <!-- /m9:geometry-units -->
 
 **Named exception to the editor's 15 ms thumbnail at 640 px** (M6 merge review): _the first thumbnail of a heavy traced-outline slide_, which builds its geometry paths and its effect layers: 22.6 ms for a slide of 136 shadowed geometry-file shapes, 19.2 ms and 13.9 ms for two others; later draws take 1 to 8 ms. The thumbnail worker draws in a worker of its own, so the editor's main thread does not wait for it.
@@ -2761,7 +2780,10 @@ builds version 1 from that scene without its pool (`nativeJob.ts` `stepsFromClie
 too: the client's `CONVERTER_VERSION` is 2 and its `CLIENT_M9_WRITES` are the hub's `M9_WRITES` (a hub test
 checks both); the operator parses for the LibreOffice the hub has (`hubHasLibreOffice`, the hub's own rule:
 only absent or off means none; `PptxClientOptions.libreoffice`, recorded as `PptxClientScene.libreoffice`), and
-the hub uses a scene only when it was parsed for what the hub has, else it parses the deck itself. Without
+the hub uses a scene only when it was parsed for what the hub has, else it parses the deck itself. A deck dropped
+on the Import tab before it heard the hub's capabilities waits for the first answer, at most
+`IMPORT_CAPS_WAIT_MS` (3 s, `pptxImport.ts` `importCaps`), so it is not parsed for a LibreOffice the hub lacks and
+parsed again on the NAS (r2a repair); without an answer in time it goes ahead as before. Without
 LibreOffice the client's own presentation (the pages demo's) lists `Slide.pptx.missing` and leaves nothing
 `pending`, as the hub's import does. The client parse is given no font faces (`ParseOptions.fontFace`: the hub
 passes its library's), so the text it measures (table rows, autofit, and M9's warps, vertical text and

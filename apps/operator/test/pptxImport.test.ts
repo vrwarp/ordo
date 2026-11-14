@@ -1,4 +1,5 @@
 import type { Presentation, Slide } from '@ordo/domain';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import { type Job, LEGACY_CAPABILITIES } from '@ordo/protocol';
 import { describe, expect, it } from 'vitest';
 import {
@@ -11,6 +12,7 @@ import {
   isImportJob,
   lastLogLine,
   hiddenCount,
+  importCaps,
   loStatus,
   onlyJobSaves,
   hubHasLibreOffice,
@@ -112,6 +114,31 @@ describe('the import choice', () => {
     expect(hubHasLibreOffice(tools('broken'))).toBe(true);
     expect(hubHasLibreOffice(tools('absent'))).toBe(false);
     expect(hubHasLibreOffice(tools('off'))).toBe(false);
+  });
+
+  it('a deck dropped before the tab heard the hub waits for its answer: parsed for the LibreOffice it has (r2a repair)', async () => {
+    const without = { ...LEGACY_CAPABILITIES, libreoffice: { state: 'absent' as const } };
+    let asked = 0;
+    // Unknown when the deck is dropped: the answer comes 20 ms later, a hub without LibreOffice.
+    const answer = () => {
+      asked++;
+      return new Promise<typeof without>((r) => setTimeout(() => r(without), 20));
+    };
+    const caps = await importCaps(undefined, answer, 1_000);
+    expect(asked).toBe(1);
+    expect(caps).toBe(without);
+    // What the documents flow then does: an editable import, parsed in the browser for no LibreOffice.
+    expect(documentFields('a.pptx', DEFAULT_PPTX_CHOICE, caps)[0]).toEqual(['renderer', 'native']);
+    expect(hubHasLibreOffice(caps)).toBe(false);
+    // Known already: no wait, no ask.
+    expect(await importCaps(LEGACY_CAPABILITIES, answer, 1_000)).toBe(LEGACY_CAPABILITIES);
+    expect(asked).toBe(1);
+    // A hub that does not answer in time, or fails: the import goes ahead as before (unknown).
+    const never = () => new Promise<undefined>(() => {});
+    const t0 = Date.now();
+    expect(await importCaps(undefined, never, 30)).toBeUndefined();
+    expect(Date.now() - t0).toBeLessThan(budgetMs(1_000));
+    expect(await importCaps(undefined, () => Promise.reject(new Error('down')), 1_000)).toBeUndefined();
   });
 
   it('sends what the import screen shows before the hub says it offers pictures (M9 wave 1 repair)', () => {

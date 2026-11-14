@@ -45,7 +45,9 @@ import { boxSide, storedPath } from '@ordo/renderer/geom/built.ts';
 import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
 import type { GeomPath } from '@ordo/renderer/geom/path.ts';
 import { clearGeomFiles, putGeomFile, resolvedGeom } from '@ordo/renderer/geom/stored.ts';
+import { drawableContent } from '@ordo/renderer/content.ts';
 import { slideBudget } from '@ordo/renderer/geombudget.ts';
+import { slideUnitsLeft } from '@ordo/renderer/units.ts';
 import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import { listDecks } from './decks.ts';
 import { convertDeckIsolated, type HubWhy, hubLadder, type NativeDeck } from './native.ts';
@@ -160,7 +162,12 @@ function storedPaths(o: { geom?: unknown; box: { w: number; h: number } }) {
  * - `legacyFills`: the shapes whose legacy shape is a filled rect or ellipse over a built custom geometry
  *   (stored paths, its file's or its own; not a table's grid) whose even-odd ink (`geom.ts` `inkOf`, the converter's own measure)
  *   is under MIN_RECT_COVERAGE or cannot be worked out: the box of its fill an older build or a drawer past the
- *   budget draws over line art, which the converter must never write (`emit.ts`: a line). The ratchet fails it.
+ *   budget draws over line art, which the converter must never write (`emit.ts`: a line). The ratchet fails it;
+ * - `unitsLeft`: the objects the budget sends to legacy copies that get no geometry unit at 3840 on outputs
+ *   (`units.ts` `slideUnitsLeft`: a plain shape past it for its paint, a masked picture, past the slide's unit
+ *   area), drawn there as their legacy shapes until effect units; `unitsAlone` those of them past
+ *   `GEOM_COST.slide` alone (no task could draw one; for thin line art its legacy line draws nothing). The
+ *   ratchet fails `unitsAlone` wherever it is (never drop) and reports `unitsLeft`.
  * Zeros left out.
  */
 export function legacyColumns(slide: Pick<Slide, 'objects'>): Record<string, number> {
@@ -184,7 +191,10 @@ export function legacyColumns(slide: Pick<Slide, 'objects'>): Record<string, num
     const ink = inkOf(g);
     if (!(ink !== undefined && ink >= MIN_RECT_COVERAGE)) legacyFills++;
   }
-  const out: Record<string, number> = { budgetLegacy, legacyFills };
+  const left = budgetLegacy ? slideUnitsLeft(drawableContent(slide).objects, 2) : [];
+  const unitsLeft = left.length;
+  const unitsAlone = left.filter((w) => w === 'alone').length;
+  const out: Record<string, number> = { budgetLegacy, legacyFills, unitsLeft, unitsAlone };
   for (const k of Object.keys(out)) if (!out[k]) delete out[k];
   return out;
 }

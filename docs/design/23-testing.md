@@ -359,7 +359,12 @@ an older build or a drawer past the budget would draw over line art. A `legacyFi
 any slide, in the baseline or not (the leaf template's black boxes; the generated guard deck
 `line-art-holes.pptx` had 3 before the fix). The baseline is version 2: each slide's entry gains its
 `budgetLegacy` (0 when none), whose changes are reported; a version 1 baseline (four entries a slide) still
-reads, without that comparison, and `--write` records version 2.
+reads, without that comparison, and `--write` records version 2. Since the r2a repair it also counts
+`unitsLeft`, the objects past the budget that the outputs draw as legacy shapes for want of a geometry unit
+(`units.ts` `slideUnitsLeft`: a plain shape past it for its paint, a masked picture, past the slide's unit area),
+reported, and `unitsAlone`, those past `GEOM_COST.slide` alone (no single task could draw one; thin line art's
+legacy line draws nothing), which fails the run on any slide (never drop for being slow to draw): 0 in E,
+golden-pptx and the sermons today.
 
 ## CI
 

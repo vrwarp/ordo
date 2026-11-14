@@ -56,6 +56,8 @@ export type CensusLine = {
     reasons: string[];
     budgetLegacy?: number;
     legacyFills?: number;
+    unitsLeft?: number;
+    unitsAlone?: number;
   }[];
 };
 
@@ -121,13 +123,24 @@ export function compareCensus(baseline: Baseline, census: readonly CensusLine[])
   }
   for (const line of census)
     if (!(line.name in baseline.decks)) out.notes.push(`${line.name}: new deck (not in the baseline)`);
-  // A legacy fill over line art fails wherever it is, in the baseline or not.
+  // A legacy fill over line art fails wherever it is, in the baseline or not; so does an object past the
+  // drawing budget alone (no geometry unit: outputs draw its legacy shape, nothing for thin line art). Other
+  // objects outputs draw as their legacy shapes are reported (effect-units gives them units).
   for (const line of census)
-    for (const s of line.slides ?? [])
+    for (const s of line.slides ?? []) {
       if (s.legacyFills)
         out.failures.push(
           `${line.name} slide ${s.n}: ${s.legacyFills} legacy fill(s) over custom geometry filling under half its box (a rect or ellipse where the legacy shape must be a line)`,
         );
+      if (s.unitsAlone)
+        out.failures.push(
+          `${line.name} slide ${s.n}: ${s.unitsAlone} object(s) past the drawing budget alone, with no geometry unit (outputs draw the legacy shape)`,
+        );
+      else if (s.unitsLeft)
+        out.notes.push(
+          `${line.name} slide ${s.n}: ${s.unitsLeft} object(s) past the drawing budget outputs draw as legacy shapes (no unit until effect units)`,
+        );
+    }
   return out;
 }
 

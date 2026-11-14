@@ -1,4 +1,4 @@
-import { pinUnit, prepareSlideUnits, unpinUnit } from '@ordo/renderer';
+import { pinUnit, prepareSlideUnits, unpinUnit } from '@ordo/renderer/units.ts';
 import { type PrepareHost, type PrepareStep, registerPrepareStep } from './index.ts';
 
 /*
@@ -8,8 +8,10 @@ import { type PrepareHost, type PrepareStep, registerPrepareStep } from './index
  * the synchronous draw that follows copies it 1:1 instead of drawing the legacy copy. After 'geometry files':
  * a unit draws the geometry those files hold. A unit made for an armed or warmed cue is in the cache when the
  * cue goes live, so that GO does no unit work; a jump to a cue neither armed nor warmed waits for its units as
- * for its table layouts, bounded by `UNIT_WAIT_MS` and `UNIT_JOB_BYTES` (the rest draw as their legacy copies
- * this time). Effect units (r2b) replace that wait: a GO never waits, and a late unit fades in.
+ * for its table layouts, bounded by `UNIT_WAIT_MS` of making (one second) and `UNIT_SLIDE_AREAS` (one frame of
+ * units a slide; a unit is at most half of `UNIT_CACHE_BYTES`): the rest draw as their legacy copies this time.
+ * That wait is a GO waiting, which the owner ruled out (decisions 2026-11-13): effect units (r2b, item 5) replace
+ * it, a GO never waits and a late unit fades in, a must item before the follow-up PR merges (design/27 §13).
  *
  * Importing this module registers the step (the asset worker and the thumbnail worker import it). The
  * thumbnail worker turns it on only for a fine pointer (`setGeometryUnits`): phones and other coarse-pointer

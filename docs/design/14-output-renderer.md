@@ -369,7 +369,8 @@ copy stays.
   arms cold within 0.5 s at 4K, its pictures, its units and its first draw in 245 ms at 3840 and 195 ms at 1920
   (the fidelity harness's cold time, median of five on the bench machine; design/23). Effect units (M9 r2b)
   replace that wait: a GO never waits, the slide shows at once and a late unit fades in (about 0.3 s, the
-  owner's call).
+  owner's call). Until then the jump's wait is a GO that waits, so that item (effect units item 5) is a must item
+  before the follow-up PR merges (r2a repair).
 - **Thumbnails.** The operator's thumbnail worker runs the same step, only when its page says the pointer is
   fine (`init`, `lib/capabilities.ts` `coarsePointer`): a desktop's thumbnails draw the shapes whole, a phone or
   tablet keeps the legacy copies and makes nothing. The editor canvas keeps the legacy copies (leaf-editor).

@@ -58,6 +58,21 @@ describe('golden-pptx census ratchet', () => {
     ]);
   });
 
+  it('fails an object past the drawing budget alone (no unit), and reports the others outputs draw as legacy shapes', () => {
+    // `census.ts` `unitsAlone`, `unitsLeft` (r2a repair: never drop for being slow to draw).
+    const left = census();
+    left[0]!.slides![0]!.unitsLeft = 2;
+    left[0]!.slides![0]!.unitsAlone = 1;
+    left[0]!.slides![1]!.unitsLeft = 3;
+    const r = compareCensus(baseline, left);
+    expect(r.failures).toEqual([
+      'sermons__a.pptx slide 1: 1 object(s) past the drawing budget alone, with no geometry unit (outputs draw the legacy shape)',
+    ]);
+    expect(r.notes).toContain(
+      'sermons__a.pptx slide 2: 3 object(s) past the drawing budget outputs draw as legacy shapes (no unit until effect units)',
+    );
+  });
+
   it('reports another count of legacy shapes past the drawing budget, and still reads a version 1 baseline', () => {
     const more = census();
     more[1]!.slides![0]!.budgetLegacy = 3;

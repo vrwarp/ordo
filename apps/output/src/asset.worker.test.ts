@@ -18,10 +18,8 @@ import {
   SRC_SCENE,
   planeSample,
   preparedKey,
-  unitReady,
-  unitsOfSlide,
-  unitWork,
 } from '@ordo/renderer';
+import { unitReady, unitsOfSlide, unitWork } from '@ordo/renderer/units.ts';
 import { lineArtSlide } from '@ordo/renderer/units.test-util.ts';
 import { CONTENT_CASES, contentCase } from '@ordo/domain/content.test-util.ts';
 import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';

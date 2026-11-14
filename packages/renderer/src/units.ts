@@ -5,7 +5,14 @@ import type { Ctx2D } from './ctx.ts';
 import { digest } from './digest.ts';
 import { charged, GEOM_COST, hasPart } from './geom/cost.ts';
 import { geomAwaited, geomFilesVersion } from './geom/stored.ts';
-import { drawnCost, legacyCopy, legacyOf, overGeomBudget, withinDrawBudget } from './geombudget.ts';
+import {
+  drawnCost,
+  legacyCopy,
+  legacyOf,
+  overGeomBudget,
+  slideBudget,
+  withinDrawBudget,
+} from './geombudget.ts';
 import { geomShapeReach } from './sprite.ts';
 import { geomShapeSteps, hasShapeExtras } from './shape.ts';
 import { type CachedSprite, SpriteCache } from './spritecache.ts';
@@ -18,11 +25,16 @@ import { drawObject, type ImageLookup, registerSlideObjectsDrawer } from './text
  * drawn whole instead, from a unit made beforehand in slices:
  *
  * - **What**: each shape of a stored geometry `overGeomBudget` sends to a legacy copy ('geom' or 'both'), drawn
- *   whole without its effects (`slideUnits`): the geometry, gradient, dash, arrowheads and outline as `drawObject`
- *   draws them; in z-order while their area is within `UNIT_SLIDE_AREAS` frames. Never text, and never a table,
- *   chart, decoration or 3-D look (their own drawers; effect units and decorations come with effect-units); a
- *   plain shape past the budget for its paint keeps its legacy copy, so does a shape no task could draw (alone
- *   past `GEOM_COST.slide`) and a masked picture (drawn without its mask).
+ *   whole (`slideUnits`): the geometry, gradient, dash, arrowheads and outline as `drawObject` draws them, with
+ *   the shadow, glow and soft edge the budget kept for it ('geom': drawn on its legacy copy before units) when
+ *   the shape and its effects together are within `GEOM_COST.slide` (`unitDrawn`), else without its effects;
+ *   in z-order while their area is within `UNIT_SLIDE_AREAS` frames. Never text, and never a table, chart,
+ *   decoration or 3-D look (their own drawers; effect units and decorations come with effect-units). Until
+ *   effect units these keep their legacy copies (`slideUnitsLeft`, counted by the census): a plain shape past
+ *   the budget for its paint (its first colour), a shape no task could draw (alone past `GEOM_COST.slide`: its
+ *   legacy line draws nothing for thin line art), a masked picture (drawn without its mask) and the objects past
+ *   the slide's `UNIT_SLIDE_AREAS`; and a shape whose effects would put its one call past a task is drawn
+ *   without them (design/27 §13 lists all as effect-units must items).
  * - **Where**: at the job's device scale, over the object's reach (`geomShapeReach` of what it draws) rounded out
  *   to whole device px and cut to the frame (the logical frame at that scale), so its origin is an integer and a
  *   1:1 copy at that origin is the very pixels drawing it there would give.
@@ -195,24 +207,39 @@ function rectOf(drawn: SlideObject, scale: number): UnitRect | undefined {
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
-const unitMemo = new WeakMap<SlideObject, { version: number; byScale: Map<number, GeomUnit | null> }>();
+const unitMemo = new WeakMap<SlideObject, { version: number; byScale: Map<string, GeomUnit | null> }>();
 
 /**
- * The unit of an object the budget sends to a legacy copy (`o` as the slide holds it, clamped), at `scale`:
+ * What a unit of `o` draws: `o` with its effects when the budget kept them (`keepEffects`: its legacy copy is
+ * 'geom', the effects drawn on it) and the object drawn whole with them is within `GEOM_COST.slide` (one call
+ * of the making, the effects included); else `o` without its effects (the budget left them out too, 'both',
+ * or they would put the one call past a task: drawn without them until effect units, design/27 §13).
+ */
+function unitDrawn(o: SlideObject, keepEffects: boolean): SlideObject {
+  if (!hasPart(o, 'effects')) return o;
+  if (keepEffects && charged(drawnCost(o)) <= GEOM_COST.slide) return o;
+  return legacyCopy(o, 'effects');
+}
+
+/**
+ * The unit of an object the budget sends to a legacy copy (`o` as the slide holds it, clamped), at `scale`,
+ * with its effects when `keepEffects` (its legacy copy is 'geom': the budget kept them, `unitDrawn`):
  * undefined when a unit cannot draw it (`unitShape`), its geometry file is not read yet, it draws nothing on
  * the frame, its unit would be past half the cache, or drawing it alone is past `GEOM_COST.slide` (a hostile
- * object no task could draw: 24,000 arrowheads, a 500 px outline on a tiny path; it keeps its legacy copy, as
- * the budget has it). Memoised per object, scale and geometry files read.
+ * object no task could draw: 24,000 arrowheads, a 500 px outline on a tiny path, a full-slide line art of
+ * thousands of holes; it keeps its legacy copy, as the budget has it, until effect units slice it: an open must
+ * item, design/27 §13). Memoised per object, scale, effects and geometry files read.
  */
-export function unitOf(o: SlideObject, scale: number): GeomUnit | undefined {
+export function unitOf(o: SlideObject, scale: number, keepEffects = false): GeomUnit | undefined {
   if (!o || !unitShape(o)) return undefined;
   const s = num(scale, 0.01, 8, 1);
   const version = geomFilesVersion();
   let m = unitMemo.get(o);
   if (!m || m.version !== version) unitMemo.set(o, (m = { version, byScale: new Map() }));
-  let u = m.byScale.get(s);
+  const at = `${s}|${keepEffects ? 1 : 0}`;
+  let u = m.byScale.get(at);
   if (u === undefined) {
-    const drawn = hasPart(o, 'effects') ? legacyCopy(o, 'effects') : o;
+    const drawn = unitDrawn(o, keepEffects);
     const rect = charged(drawnCost(drawn)) <= GEOM_COST.slide ? rectOf(drawn, s) : undefined;
     const bytes = rect ? rect.w * rect.h * 4 : 0;
     u =
@@ -220,9 +247,41 @@ export function unitOf(o: SlideObject, scale: number): GeomUnit | undefined {
         ? { key: unitKey(drawn, s, rect), object: o, drawn, scale: s, rect, bytes }
         : null;
     if (m.byScale.size >= 8) m.byScale.clear();
-    m.byScale.set(s, u);
+    m.byScale.set(at, u);
   }
   return u ?? undefined;
+}
+
+/** Whether the budget kept `o`'s effects though it sends its geometry to a legacy copy ('geom'). */
+function keptEffects(o: SlideObject, copy: SlideObject | undefined): boolean {
+  return !!copy && legacyOf(copy)?.part === 'geom' && hasPart(o, 'effects');
+}
+
+/**
+ * An object the budget sends to a legacy copy that gets no unit, and why: `alone` (drawing it alone is past
+ * `GEOM_COST.slide`), `kind` (no unit draws it: a plain shape, a masked picture), `area` (past the slide's
+ * `UNIT_SLIDE_AREAS`), `nowhere` (nothing on the frame, or a file not read yet). The census counts them
+ * (`unitsLeft`), so the ratchet sees what draws as its legacy copy on the outputs.
+ */
+export type UnitLeft = 'alone' | 'kind' | 'area' | 'nowhere';
+
+/** The objects of a slide (clamped, in z-order) the budget sends to legacy copies that get no unit at `scale`. */
+export function slideUnitsLeft(objects: readonly SlideObject[], scale: number): UnitLeft[] {
+  const s = num(scale, 0.01, 8, 1);
+  const over = overGeomBudget(objects);
+  if (!over.size) return [];
+  const withUnit = new Set(slideUnits(objects, s).map((u) => u.object));
+  const copies = slideBudget(objects);
+  const out: UnitLeft[] = [];
+  for (const o of objects) {
+    if (!over.has(o) || withUnit.has(o)) continue;
+    if (!unitShape(o)) out.push('kind');
+    else if (charged(drawnCost(unitDrawn(o, keptEffects(o, copies.get(o))))) > GEOM_COST.slide)
+      out.push('alone');
+    else if (unitOf(o, s, keptEffects(o, copies.get(o)))) out.push('area');
+    else out.push('nowhere');
+  }
+  return out;
 }
 
 const slideMemo = new WeakMap<
@@ -251,12 +310,13 @@ export function slideUnits(objects: readonly SlideObject[], scale: number): read
   if (!out) {
     out = [];
     const over = overGeomBudget(objects);
+    const copies = slideBudget(objects);
     const frame = frameAt(s);
     let area = 0;
     if (over.size)
       for (const o of objects) {
         if (!over.has(o)) continue;
-        const u = unitOf(o, s);
+        const u = unitOf(o, s, keptEffects(o, copies.get(o)));
         if (!u) continue;
         const a = (u.rect.w * u.rect.h) / (frame.w * frame.h);
         if (area + a > UNIT_SLIDE_AREAS) continue;
@@ -325,7 +385,15 @@ export async function makeUnit(u: GeomUnit, run: UnitRun): Promise<number | unde
   if (unitCache.has('unit', u.key)) return 0;
   const now = run.now ?? (() => performance.now());
   const frame = frameAt(u.scale);
-  const draws = u.drawn.type === 'shape' ? geomShapeSteps(u.drawn, u.scale) : [];
+  // A unit with the object's effects is one call (the shape and its layers through the effects path, within
+  // `GEOM_COST.slide` with them: `unitDrawn`); one without is a call a path's fill or outline.
+  const drawn = u.drawn;
+  const draws: ((ctx: Ctx2D) => void)[] =
+    drawn.type !== 'shape'
+      ? []
+      : hasPart(drawn, 'effects')
+        ? [(ctx) => drawObject(ctx, drawn, u.scale)]
+        : geomShapeSteps(drawn, u.scale);
   const { x, y, w, h } = u.rect;
   let scratch: ReturnType<typeof canvas2d>;
   let unit: ReturnType<typeof canvas2d>;
@@ -461,7 +529,7 @@ function readyFor(o: SlideObject, scale: number): { u: GeomUnit; img: UnitImage 
   const from = legacyOf(o);
   if (!from || from.part === 'effects') return undefined;
   if (planned.get(from.original)?.get(scale) !== geomFilesVersion()) return undefined;
-  const u = unitOf(from.original, scale);
+  const u = unitOf(from.original, scale, from.part === 'geom' && hasPart(from.original, 'effects'));
   if (!u) return undefined;
   const img = unitCache.get('unit', u.key);
   return img ? { u, img } : undefined;

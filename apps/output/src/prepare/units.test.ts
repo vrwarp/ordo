@@ -1,16 +1,7 @@
 import { LOOK_MAIN, type Look, type ShapeObject, type Slide } from '@ordo/domain';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
-import {
-  clampSlide,
-  clearGeomFiles,
-  clearUnits,
-  drawableContent,
-  drawSlide2D,
-  overGeomBudget,
-  unitCache,
-  unitsOfSlide,
-  unitWork,
-} from '@ordo/renderer';
+import { clampSlide, clearGeomFiles, drawableContent, drawSlide2D, overGeomBudget } from '@ordo/renderer';
+import { clearUnits, unitCache, unitsOfSlide, unitWork } from '@ordo/renderer/units.ts';
 import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';
 import { lineArtSlide } from '@ordo/renderer/units.test-util.ts';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';

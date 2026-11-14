@@ -105,8 +105,10 @@ import type {
 import { drawnBounds } from '@ordo/renderer/geom/bounds.ts';
 import { geometryAt, legacyGeometry } from '@ordo/renderer/geom/built.ts';
 import {
+  charged,
   EFFECT_COST,
   effectArea,
+  GEOM_COST,
   type LegacyPart,
   objectCost,
   type Rated,
@@ -742,7 +744,9 @@ function fitEffects(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
  * (renderer `units.ts`, made in slices before the slide is drawn), and every drawer without one (an older
  * build, a phone's editor, a thumbnail) draws its legacy shape (`emitShape`'s legacy values: a line for
  * line art); the slide's decoration plate (`platePlan`) is the later home of the static ones. Returns their
- * ids, with a note: one for those drawn from geometry units, one for those only drawn without their effects.
+ * ids, with a note: one for those drawn from geometry units, one for those no unit draws (a plain shape past
+ * the budget for its paint, a masked picture, a geometry past `GEOM_COST.slide` alone: drawn as their legacy
+ * shapes on outputs too, until effect units), one for those only drawn without their effects.
  */
 function fitDrawing(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
   const rate = (o: SlideObject, part?: LegacyPart): Rated => {
@@ -750,9 +754,17 @@ function fitDrawing(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
     const at = geometryOf(x);
     return { est: objectCost(x, at?.built), points: at?.points ?? 0 };
   };
+  // Whether a geometry unit draws `o` on outputs (renderer `units.ts` `unitOf`): a shape with a stored
+  // geometry and its own drawer's fields only, whose drawing without its effects is within GEOM_COST.slide.
+  const unitDraws = (o: SlideObject): boolean => {
+    if (o.type !== 'shape' || o.geom === undefined) return false;
+    if (o.table || o.chart || o.decor || o.look3d) return false;
+    return charged(rate(o, 'effects')) <= GEOM_COST.slide;
+  };
   const parts = slidePlan(objects, rate, effectAreaOf);
   const past: string[] = [];
   let effectsOnly = 0;
+  let whole = 0;
   parts.forEach((part, i) => {
     const o = objects[i]!;
     // A stored geometry too costly to fill at once is drawn as its legacy shape by every drawer, whatever
@@ -761,11 +773,18 @@ function fitDrawing(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
     const costly = !!g?.paths?.length && g.ref === undefined && !geometryAt(g, o.box.w, o.box.h);
     if (part || costly) past.push(o.id);
     if (part === 'effects' && !costly) effectsOnly++;
+    else if (part && !costly && unitDraws(o)) whole++;
   });
-  const whole = past.length - effectsOnly;
+  // What no geometry unit draws (renderer `units.ts` `slideUnitsLeft`): a plain shape past the budget for its
+  // gradient or dash, a masked picture, a geometry past `GEOM_COST.slide` alone or too costly to build.
+  const legacy = past.length - effectsOnly - whole;
   if (whole)
     ctx.log(
       `${whole} object(s) past the slide's drawing budget are drawn whole from a geometry unit on outputs; their legacy shapes elsewhere`,
+    );
+  if (legacy)
+    ctx.log(
+      `${legacy} object(s) past the slide's drawing budget are drawn as their legacy shapes until effect units are made`,
     );
   if (effectsOnly)
     ctx.log(

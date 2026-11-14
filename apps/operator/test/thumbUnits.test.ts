@@ -1,5 +1,5 @@
 import type { Slide } from '@ordo/domain';
-import { clearUnits, unitsOfSlide, unitWork } from '@ordo/renderer';
+import { clearUnits, unitsOfSlide, unitWork } from '@ordo/renderer/units.ts';
 import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';
 import { lineArtSlide } from '@ordo/renderer/units.test-util.ts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';

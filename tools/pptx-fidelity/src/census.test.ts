@@ -5,6 +5,7 @@ import { DEFAULT_LYRIC_STYLE, type Slide } from '@ordo/domain';
 import { extractZip } from '@ordo/importers/zip-stream.ts';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
+import { lineArtD } from '@ordo/renderer/units.test-util.ts';
 import { budgetColumns, hubClasses, legacyColumns, parseCensusArgs, runCensus } from './census.ts';
 import { LINE_ART_HOLES_PATH } from './gen/line-art-holes.ts';
 import { listDecks } from './decks.ts';
@@ -217,6 +218,27 @@ describe('legacyColumns (M9 leaf-legacy)', () => {
       ),
     ).toEqual({});
     expect(legacyColumns(slide([]))).toEqual({});
+  });
+
+  it('counts an object past the drawing budget alone, which no geometry unit draws (r2a repair)', () => {
+    // One full-slide line art of 8 paths with 20 x 15 holes each: about 1.2 x GEOM_COST.slide alone.
+    const art = {
+      id: 'art',
+      type: 'shape',
+      box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+      shape: 'line',
+      opacity: 1,
+      radius: 0,
+      fill: red,
+      geom: {
+        paths: Array.from({ length: 8 }, (_, i) => ({
+          d: lineArtD({ w: 4000, h: 3000, cols: 20, rows: 15, wall: 0.1 + 0.02 * i }),
+          w: 4000,
+          h: 3000,
+        })),
+      },
+    } as Slide['objects'][number];
+    expect(legacyColumns(slide([art]))).toEqual({ budgetLegacy: 1, unitsLeft: 1, unitsAlone: 1 });
   });
 
   it("counts what the slide budget draws as legacy shapes, and the guard deck's line art draws no fill", async () => {

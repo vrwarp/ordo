@@ -437,13 +437,15 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     for (const one of [wide, ends]) {
       const out = emitOne({ slides: [{ shapes: one }] });
       const e = out.scene.slides[0]!.elements[0] as ShapeElement;
-      // M9: kept whole, drawn whole from a geometry unit on outputs, as its legacy shape elsewhere.
+      // M9: kept whole; past GEOM_COST.slide alone, so no geometry unit draws it: its legacy shape on outputs
+      // too until effect units slice it (r2a repair: the note no longer says a unit draws it).
       expect(e).toMatchObject({ support: 'native', custom: { complex: true } });
       expect(e.custom!.fillCost!).toBeLessThan(GEOM_COST.geometry);
       expect(e.custom!.cost!).toBeGreaterThan(GEOM_COST.slide);
       expect(out.notes.join(' ')).toMatch(
-        /past the slide's drawing budget are drawn whole from a geometry unit on outputs; their legacy shapes elsewhere/,
+        /1 object\(s\) past the slide's drawing budget are drawn as their legacy shapes until effect units are made/,
       );
+      expect(out.notes.join(' ')).not.toMatch(/geometry unit/);
       const o = shapes(out.objects)[0]!;
       expect(o.geom?.paths?.length).toBeGreaterThan(0);
       expect(out.emitted.plate?.pastBudget).toEqual([o.id]);
@@ -607,9 +609,11 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     expect(drawn.every((o) => o.gradient?.kind === 'linear' && o.fill?.r === 255 && o.fill.a === 0.5)).toBe(
       true,
     );
+    // Plain shapes past the budget for their gradients: no geometry unit draws them (r2a repair: the note says so).
     expect(out.notes.join(' ')).toMatch(
-      /past the slide's drawing budget are drawn whole from a geometry unit on outputs; their legacy shapes elsewhere/,
+      /past the slide's drawing budget are drawn as their legacy shapes until effect units are made/,
     );
+    expect(out.notes.join(' ')).not.toMatch(/geometry unit/);
     const past = slideBudget(out.slide.objects);
     expect(past.size).toBeGreaterThan(130);
     expect(out.emitted.plate?.pastBudget).toEqual(drawn.filter((o) => past.has(o)).map((o) => o.id));

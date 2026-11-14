@@ -16,6 +16,7 @@ import {
   prepareSlideUnits,
   putUnit,
   slideUnits,
+  slideUnitsLeft,
   UNIT_SLIDE_AREAS,
   UNIT_VERSION,
   unitCache,
@@ -459,6 +460,82 @@ describe('making geometry units in slices', () => {
     expect(all).toMatchObject({ made: units.length - 1, ready: 1, left: 0 });
     expect(pins).toEqual([units[0]!.key, ...units.map((u) => u.key)]);
     expect(unitCache.bytes('unit')).toBe(units.reduce((n, u) => n + u.bytes, 0));
+  });
+
+  it("keeps the shadow the budget kept: a 'geom' legacy copy's unit draws the shape with it (r2a repair)", async () => {
+    // Twelve shadowed zigzags: the shadows fit the effect budget, the geometry does not, so the later ones go
+    // to legacy copies that keep their shadows ('geom'), which their units draw too, in one call.
+    const shadow = { dx: 6, dy: 6, blur: 10, color: { r: 0, g: 0, b: 0, a: 0.5 } };
+    const objects = objectsOf(busySlide({ shadow }));
+    const copies = slideBudget(objects);
+    const over = [...overGeomBudget(objects)];
+    expect(over.length).toBeGreaterThan(0);
+    for (const o of over) expect(legacyOf(copies.get(o)!)?.part).toBe('geom');
+    const units = slideUnits(objects, 2);
+    expect(units.length).toBeGreaterThan(0);
+    for (const u of units) expect(u.drawn.type === 'shape' && u.drawn.shadow).toEqual(shadow);
+    // The unit reaches over the shadow (its rect is the reach of what it draws), and its key differs from the
+    // unit of the shape without its effects.
+    const bare = unitOf(units[0]!.object, 2, false)!;
+    expect(bare.drawn.type === 'shape' && bare.drawn.shadow).toBeFalsy();
+    expect(units[0]!.key).not.toBe(bare.key);
+    expect(units[0]!.rect.x + units[0]!.rect.w).toBeGreaterThan(bare.rect.x + bare.rect.w);
+    // Made in one call through the effects path: the shadow's layer is drawn on the scratch, then the copy.
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+    FakeOffscreenCanvas.made = [];
+    const before = unitWork();
+    expect(await makeUnit(units[0]!, { slice: async (fn) => fn(), check: () => {} })).toBeDefined();
+    expect(unitWork().steps - before.steps).toBe(3);
+    const scratch = FakeOffscreenCanvas.made.find((c) => c.width === 3840 && c.height === 2160)!;
+    const calls = scratch.ctx.trace.filter((e) => e[0] === 'call').map((e) => e[1]);
+    // The composite of the shape and its shadow, copied onto the frame's scratch.
+    expect(calls).toContain('drawImage');
+    const layers = FakeOffscreenCanvas.made.filter(
+      (c) => c !== scratch && c.ctx.trace.some((e) => e[1] === 'fill'),
+    );
+    expect(layers.length).toBeGreaterThan(0);
+    // The same slide past the effect budget as well ('both'): its units draw the shape without its shadow.
+    const objectsBoth = objectsOf(busySlide({ shadow: { ...shadow, blur: 400, dx: 0, dy: 0 } }));
+    const copiesBoth = slideBudget(objectsBoth);
+    const both = [...overGeomBudget(objectsBoth)].filter(
+      (o) => legacyOf(copiesBoth.get(o)!)?.part === 'both',
+    );
+    expect(both.length).toBeGreaterThan(0);
+    for (const u of slideUnits(objectsBoth, 2))
+      if (both.includes(u.object)) expect(u.drawn.type === 'shape' && u.drawn.shadow).toBeFalsy();
+  });
+
+  it('says which objects past the budget get no unit, and why', () => {
+    // Past GEOM_COST.slide alone: no task could draw it (its legacy copy is drawn).
+    const hostile = objectsOf(busySlide({ stroke: { width: 500, color: { r: 0, g: 0, b: 0, a: 1 } } }));
+    const left = slideUnitsLeft(hostile, 2);
+    expect(left.length).toBe(overGeomBudget(hostile).size);
+    expect(new Set(left)).toEqual(new Set(['alone']));
+    // Twelve zigzags: the units of the later ones would pass the slide's one frame of units.
+    const busy = objectsOf(busySlide());
+    const busyLeft = slideUnitsLeft(busy, 2);
+    expect(busyLeft.length).toBe(overGeomBudget(busy).size - slideUnits(busy, 2).length);
+    expect(new Set(busyLeft)).toEqual(new Set(['area']));
+    // A plain shape past it for its gradient (no stored geometry): no unit draws it yet.
+    const plain = objectsOf({
+      id: 'plain',
+      objects: Array.from({ length: 160 }, (_, i) =>
+        shape(`g${i}`, {
+          geom: undefined,
+          box: { x: (i % 16) * 120, y: Math.floor(i / 16) * 108, w: 1900, h: 1000, rotation: 0 },
+          gradient: {
+            kind: 'radial',
+            stops: [
+              { at: 0, color: { r: 255, g: 255, b: 255, a: 1 } },
+              { at: 0.4, color: { r: 0, g: 0, b: 0, a: 1 } },
+              { at: 1, color: { r: 0, g: 0, b: 255, a: 1 } },
+            ],
+          },
+        }),
+      ),
+    });
+    const plainLeft = slideUnitsLeft(plain, 2);
+    if (overGeomBudget(plain).size) expect(new Set(plainLeft)).toEqual(new Set(['kind']));
   });
 
   it('makes no unit for an object no task could draw: it keeps its legacy copy', () => {

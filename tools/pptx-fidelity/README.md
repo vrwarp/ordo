@@ -112,7 +112,9 @@ and the slide's class in the hub once its budgets ran, one JSON line per deck (`
 columns: `n`, `i`, `tier`, `class`, `reasons`, `objects`, `geom`, `refs`, `bytes`, `metafiles`, the slide
 budgets' `decors`, `sheets`, `culled`, `plate`, what the legacy shapes draw (M9 leaf-legacy: `budgetLegacy`,
 objects the slide budget draws as their legacy shapes; `legacyFills`, a filled legacy rect or ellipse over
-custom geometry filling under half its box), `stored`, `hub`, `hubWhy`; per deck `geomFiles`, `geomBytes`,
+custom geometry filling under half its box; `unitsLeft` and `unitsAlone`, objects past the budget no geometry
+unit draws on outputs, and those of them past `GEOM_COST.slide` alone), `stored`, `hub`, `hubWhy`; per deck
+`geomFiles`, `geomBytes`,
 `error`). It reads the same files as a fidelity run
 (`DECK_RE`); a link whose deck is gone is listed as `unreadable: "missing target"` without slides, never as
 an error. Each deck is converted in the harness's worker, with the pool's heap limit and timeout.
@@ -139,8 +141,8 @@ pnpm --filter @ordo/pptx-fidelity census:ratchet -- --write # record golden-cens
 shown slides, about 15 s here) and compares it with `golden-census-baseline.json`: per deck, each shown
 slide's number, class, class in the hub, reasons and (baseline version 2) `budgetLegacy`. A slide whose class or
 hub class got worse (native < hybrid < picture), a shown slide that is gone, a deck of the baseline that is
-missing or that the converter can no longer read, or any slide with `legacyFills` above 0 fails the run;
-another `budgetLegacy` is reported. A version 1 baseline still reads (no `budgetLegacy` comparison). A better class, other reasons on the same class and decks or slides the
+missing or that the converter can no longer read, or any slide with `legacyFills` or `unitsAlone` above 0
+fails the run; another `budgetLegacy`, and a slide with `unitsLeft`, is reported. A version 1 baseline still reads (no `budgetLegacy` comparison). A better class, other reasons on the same class and decks or slides the
 baseline lacks pass and are reported; record an improvement with `--write` in the same PR, so it cannot slip
 back. The census goes to `test-results/census-golden.jsonl` and the comparison to
 `test-results/census-ratchet.json`. CI's fidelity job runs it on every pull request.

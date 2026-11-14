@@ -24,7 +24,18 @@ export * from './shape.ts';
 export * from './effects.ts';
 export * from './spritecache.ts';
 export * from './geombudget.ts';
-export * from './units.ts';
+// Geometry units (units.ts) are made only on the asset and thumbnail workers: they import
+// '@ordo/renderer/units.ts' themselves (its import registers the slide objects' drawer), so the operator's main
+// thread, which never makes one, does not carry it (r2a repair: 2.7 kB of its initial bundle). Types only here.
+export type {
+  GeomUnit,
+  SlideUnitsMade,
+  SlideUnitsOptions,
+  UnitImage,
+  UnitLeft,
+  UnitRect,
+  UnitRun,
+} from './units.ts';
 export {
   clearDecorFiles,
   DECOR_FILE_RETRY_MS,
