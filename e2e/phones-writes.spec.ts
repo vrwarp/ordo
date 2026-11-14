@@ -99,6 +99,32 @@ test('with Phones on, every venue PC write path sends x-ordo (no 403 x_ordo_requ
     })
     .toBe(1);
 
+  // The service, through the live view's chunk: Go live from the plan, Next (Space) on the live view, End
+  // service with its confirmation. Its writes go to the live process (POST /live/events or the socket).
+  type Summary = { seq: number; mode: string };
+  const summary = async () => (await (await api.get('live/summary')).json()) as Summary;
+  const plans = (await (await api.get('playlists')).json()) as { id: string; name: string }[];
+  const plan = plans.find((p) => p.name === 'Sunday')!;
+  await page.evaluate((id) => {
+    location.hash = `#/playlists/${encodeURIComponent(id)}`;
+  }, plan.id);
+  await page.getByRole('button', { name: 'Go live', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End service' })).toBeVisible({ timeout: 15_000 });
+  await expect.poll(async () => (await summary()).mode).toBe('live');
+  await page.evaluate(() => {
+    location.hash = '#/live';
+  });
+  await expect(page.getByRole('button', { name: 'End service' })).toBeVisible({ timeout: 15_000 });
+  const seq = (await summary()).seq;
+  await page.keyboard.press('Space');
+  await expect.poll(async () => (await summary()).seq, { timeout: 15_000 }).toBeGreaterThan(seq);
+  await page.getByRole('button', { name: 'End service' }).click();
+  await page
+    .locator('.dialog', { hasText: 'Clear every output' })
+    .getByRole('button', { name: 'End service' })
+    .click();
+  await expect.poll(async () => (await summary()).mode, { timeout: 15_000 }).not.toBe('live');
+
   // A PNG uploaded in the Media tab.
   const { png } = fixtures();
   await page.evaluate(() => {
