@@ -1588,13 +1588,14 @@ The compact shell (branch p0/client, after the code split; §2.2 and §6 have th
   chunk), `t` with one/other plurals, `formatTime`/`formatDayTime`/`formatDate` through Intl, `<html lang>` on
   compact; titles `dir="auto"` (brought forward from P1).
 - **Numbers** (`tools/bundle-report.mjs --check`): the operator's initial chunk 510.8 kB (+1.7 % on the split's
-  baseline; the compact strings left it after a first measure at +2.2 %); the compact first load 274,817 B gzip in
-  7 files (entry, CSS, core worker, the compact chunk at 17.2 kB, 5.5 kB gzip, and its imports), headroom
-  25,183 B; the compact precache 10 files, 421.5 kB gzip. The report found the start module by its source map,
+  baseline; the compact strings left it after a first measure at +2.2 %); the compact first load 274,932 B gzip in
+  7 files (entry, CSS, core worker, the compact chunk at 17.8 kB, 5.6 kB gzip, and its imports; the phone spec
+  measures the same files on the wire), headroom 25,068 B; the compact precache 10 files, 421.6 kB gzip. The report found the start module by its source map,
   which never lists a re-export-only barrel: it now finds a barrel by its folder's files and fails on a start
   module no chunk holds.
-- **Tests**: `e2e/phone/shell.spec.ts` (18 tests in the two phone projects, one hub each; every one fails at
-  `d0f49cb`), `e2e/phone/demo.spec.ts` (the Pages demo), `e2e/layout-class.spec.ts`, `e2e/touchaudit.ts` (the
+- **Tests**: `e2e/phone/shell.spec.ts` (11 tests, one hub each per phone project: 9 in both, the offline start in
+  Chromium only, as Playwright WebKit cannot reload an offline context, and one integrate-only; the 18 runs of
+  the first nine all fail at `d0f49cb`), `e2e/phone/demo.spec.ts` (the Pages demo), `e2e/layout-class.spec.ts`, `e2e/touchaudit.ts` (the
   iPad audit, shared), `layoutChecks`; unit tests `compactCss`, `compactImports`, `compactTabs`, `dialogSheet`,
   `i18n`, `liveStrip`, `freshness`, `venueLive`, `loginView`, `session`.
 - **Not in P0, and where it goes**: axe on every compact screen (P1: axe-core is not in the lockfile, and a new
