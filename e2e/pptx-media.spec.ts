@@ -330,8 +330,10 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
     for (const p of both) {
       const n = name(p);
       const centres: RGB[] = [];
+      const times: (number | undefined)[] = [];
       for (let i = 0; i < 5; i++) {
         const img = await frame(p, i === 0 ? 'boxed' : undefined);
+        times.push((await slotOf(p, boxedKey))?.t);
         const c = at(img, probe.centre);
         centres.push(c);
         expect(isSweep(c), `${n}: the clip in its box (${c})`).toBe(true);
@@ -344,10 +346,21 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
         expect(isGrey(at(img, probe.slide)), `${n}: the slide`).toBe(true);
         await p.waitForTimeout(250);
       }
-      expect(
-        centres.some((c) => dist(c, centres[0]!) > 40),
-        `${n}: the clip plays`,
-      ).toBe(true);
+      // The clip plays: a capture's centre differs from the first. The sweep loops every 6 s, and on a loaded
+      // machine one capture can take about as long (screenshots of 4 to 6.6 s: five Canvas 2D captures 5 to 8 s
+      // apart all landed on the loop's green while the clip played), so while none differs it captures on,
+      // waiting 0.9 s longer each time to step through the loop. A clip that does not play never differs.
+      const moved = () => centres.some((c) => dist(c, centres[0]!) > 40);
+      for (let more = 1; !moved() && more <= 8; more++) {
+        await p.waitForTimeout(250 + 900 * more);
+        centres.push(at(await frame(p), probe.centre));
+        times.push((await slotOf(p, boxedKey))?.t);
+      }
+      const seen =
+        `centres ${centres.map((c) => `(${c})`).join(' ')}; clip time after each capture ` +
+        `${times.map((t) => t?.toFixed(2) ?? '-').join(', ')} s`;
+      if (centres.length > 5) console.log(`${n}: the boxed clip after ${centres.length} captures: ${seen}`);
+      expect(moved(), `${n}: the clip plays (${seen})`).toBe(true);
     }
 
     // ---- Clear media during the in-slide clip, then arm the next slide's clip: the live slide shows its

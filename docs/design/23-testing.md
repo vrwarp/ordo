@@ -138,7 +138,9 @@ text, the Lobby and Stream bands against the same text typed in ordo (set as the
 numbers raised, so both bands go through the rich engine; and against the text without its verse numbers,
 which must differ), cue labels, library search, and the
 hidden slide (Next and Prev skip it, a double-click in the grid shows it). `pptx-media` plays the M5 exit
-with PowerPoint decks: a boxed autoplay clip turned, cropped and rounded under a title, a click-start clip
+with PowerPoint decks: a boxed autoplay clip turned, cropped and rounded under a title (playing: while no
+capture differs from the first it captures on, a little later each time, since a capture on a loaded machine
+can take one whole loop of its 6 s sweep), a click-start clip
 (F8, Shift+F8, onEnd 'advance' set in ordo, the stage's remaining time), a muted motion background (moving
 from each capture to the next: its 12 s clip shows no frame twice in a loop, so captures 2 to 6 s apart
 never meet the same frame, as those of a 4 s clip once did on the CI runner), a `numSld=3` sound across a
