@@ -189,9 +189,16 @@ class Thumbs {
       fonts: list.map((f) => ({ ...f, url: new URL(f.url, location.href).href })),
     };
     this.fontMsg = msg;
-    this.ensure()?.postMessage(msg);
+    // Only to a running worker: a worker started later gets the list first thing (wire). A phone starts it
+    // with its first thumbnail (design/28 §7: the thumbnail worker is not part of a phone's first load).
+    this.worker?.postMessage(msg);
     // Fonts changed: drop cached thumbnails so text re-renders with the right faces.
     this.invalidate();
+  }
+
+  /** Start the worker now (the regular layout, at Shell mount, as the venue PC and the iPad always did). */
+  warm(): void {
+    this.ensure();
   }
 
   /** Drop every cached thumbnail: the next request of each draws it again. */

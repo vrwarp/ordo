@@ -17,6 +17,7 @@ import {
 } from './pages.ts';
 import { controller, startController } from './services/controller.ts';
 import { syncFonts } from './services/fonts.ts';
+import { thumbs } from './services/thumbs.ts';
 import { installUpdateGuard, useUpdate } from './services/update.ts';
 import { useLibrary } from './state/library.ts';
 import { useLive } from './state/live.ts';
@@ -177,6 +178,11 @@ function Shell({
     [profile, role, signedOut],
   );
   useEffect(() => syncFonts(fonts), [fonts]);
+  // The thumbnail worker starts here on the regular layout (the venue PC and the iPad, as before); the compact
+  // layout starts it with its first thumbnail (services/thumbs.ts).
+  useEffect(() => {
+    if (layout === 'regular') thumbs.warm();
+  }, [layout]);
   // Live keys act on operator screens only; the editor uses arrows, Delete and Ctrl+Z itself. A signed-out
   // operator keeps its keys only while it is the fallback authority (the outputs would otherwise be stuck).
   useEffect(() => {

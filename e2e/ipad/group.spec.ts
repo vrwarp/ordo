@@ -7,7 +7,8 @@ import { portOf } from '../ports.ts';
  * selects the shape and its text together, a long press selects the text alone (Alt-click's touch
  * equivalent), 'Select the group' in the panel takes the pair back, and a finger drag moves both. Runs in
  * the webkit-ipad projects; the touches are dispatched in the page as `touch.spec.ts` does (pointer events
- * with pointerType "touch" and TouchEvents, as iPadOS sends them). Hubs on e2e/ports.ts row 'ipad-group' (landscape, portrait, chromium-tablet, which skips).
+ * with pointerType "touch" and TouchEvents, as iPadOS sends them). Hubs on e2e/ports.ts row 'ipad-group'
+ * (landscape, portrait, and chromium-tablet, which skips).
  */
 
 type Box = { x: number; y: number; w: number; h: number; rotation: number };

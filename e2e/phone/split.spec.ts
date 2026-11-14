@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { type APIRequestContext, devices, expect, type Page, test } from '@playwright/test';
 import { assetOf, forbiddenIn } from '../bundlefiles.ts';
 import type { HubProcess } from '../hubproc.ts';
@@ -27,6 +28,15 @@ let hub: HubProcess;
 let api: APIRequestContext;
 let url: string;
 let songId: string;
+/** The library font's file hash (a system face uploaded in beforeAll), when this machine has one. */
+let fontHash: string | undefined;
+
+/** A face to upload as a library font: the first of the system faces CI and this machine install. */
+const FONT_FILES = [
+  '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+  '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
+  '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+];
 
 async function json<T>(p: Promise<import('@playwright/test').APIResponse>): Promise<T> {
   const r = await p;
@@ -44,6 +54,16 @@ test.beforeAll(async () => {
     }),
   );
   await json(api.post('live/events', { data: { id: 'gl', event: { k: 'goLive', playlistId: pl.id } } }));
+  const face = FONT_FILES.find((f) => existsSync(f));
+  if (face) {
+    await json(
+      api.post('fonts/upload', {
+        multipart: { file: { name: 'Hymnal.ttf', mimeType: 'font/ttf', buffer: readFileSync(face) } },
+      }),
+    );
+    const fonts = await json<{ file: { hash: string } }[]>(api.get('fonts'));
+    fontHash = fonts[0]?.file.hash;
+  }
 });
 
 test.afterAll(async () => {
@@ -233,4 +253,13 @@ test('(1a) the first load holds no editor, live, settings, Setup or output code'
     if (f) for (const v of forbiddenIn(f)) bad.push(`${f.file}: ${v}`);
   }
   expect(bad).toEqual([]);
+});
+
+test('(1b) the first load starts no thumbnail worker and fetches no font file', async ({ page }) => {
+  const reqs = await firstLoad(page);
+  const workers = reqs.filter((r) => /thumb\.worker/.test(r.url)).map((r) => r.url);
+  expect.soft(workers, 'the thumbnail worker waits for the first preview').toEqual([]);
+  test.skip(!fontHash, 'no system face to upload as a library font on this machine');
+  const fontFiles = reqs.filter((r) => r.url.includes(`/api/v1/files/${fontHash}`)).map((r) => r.url);
+  expect.soft(fontFiles, 'no library font file before a preview draws').toEqual([]);
 });
