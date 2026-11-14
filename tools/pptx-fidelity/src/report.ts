@@ -443,7 +443,7 @@ export const CAUSE_GROUPS: readonly (readonly [string, readonly string[]])[] = [
   ['warp', ['art:warp']],
   ['table', ['art:table', 'art:budget:table']],
   ['decorations', ['art:budget:shapes', 'budget:objects']],
-  ['pictures', ['budget:pictures']],
+  ['pictures', ['budget:pictures', 'art:budget:pictures']],
   ['vertical', ['art:vert']],
   ['metafile/ole', ['art:ole', 'pic:emf', 'pic:wmf']],
   ['chart', ['art:chart']],

@@ -235,6 +235,40 @@ describe('convertDeck', () => {
     expect(second!.compatSlide).toBeUndefined();
   });
 
+  it("emits a hub without LibreOffice from its own parse where the guard gave pictures to LibreOffice's art", async () => {
+    // Slide 1: 20 distinct pictures, past the render clamp's 16; slide 2: one more picture after them.
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    const s1 = p.addSlide();
+    for (let i = 0; i < 20; i++)
+      s1.addImage({
+        data: dataUri(testPicture(64 + i, 36, i / 20)),
+        x: (i % 5) * 2,
+        y: Math.floor(i / 5),
+        w: 1.5,
+        h: 0.8,
+      });
+    p.addSlide().addImage({ data: dataUri(testPicture(90, 50, 0.5)), x: 1, y: 1, w: 4, h: 2.25 });
+    const dir = await work();
+    const file = join(dir, 'guard.pptx');
+    await writeFile(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    const d = await convertDeck(file, await work(), { noLibreOffice: true });
+    const ids = (sl: Slide | undefined) =>
+      (sl?.objects ?? []).flatMap((o) => (o.type === 'image' ? [o.mediaId] : []));
+    const [first, second] = d.slides;
+    // With LibreOffice: 15 drawn and its art (the clamp's 16); without: the 16 the clamp draws, the rest listed.
+    expect(new Set(ids(first!.slide)).size).toBe(15);
+    expect(first!.reasons).toContain('art:budget:pictures');
+    expect(new Set(ids(first!.noLoSlide)).size).toBe(16);
+    expect(first!.missing).toEqual(['decoration']);
+    // Every picture either way has its file, and slide 2's is the same picture on both kinds of hub.
+    const files = new Map(d.media.map((m) => [m.id, m.file]));
+    for (const id of [...ids(first!.slide), ...ids(first!.noLoSlide), ...ids(second!.slide)])
+      expect(files.get(id), id).toBeDefined();
+    expect(second!.noLoSlide).toBeUndefined();
+    expect(new Set(d.media.map((m) => m.part)).size).toBe(d.media.length);
+  });
+
   it('turns a deck it cannot read into a note', async () => {
     const dir = await work();
     const bad = join(dir, 'bad.pptx');

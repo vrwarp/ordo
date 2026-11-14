@@ -22,8 +22,10 @@ import fc from 'fast-check';
 import JSZip from 'jszip';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { pictureGuardDeck } from '@ordo/importers/pptx-guard.test-util.ts';
 import { checkClientScene, clientSceneTask } from '../src/pptx/clientScene.ts';
 import { nameGeoms } from '../src/pptx/geoms.ts';
+import { sceneTask } from '../src/pptx/sceneTask.ts';
 
 const IN = 914_400;
 const PNG = Uint8Array.from(
@@ -259,5 +261,49 @@ describe('checkClientScene', () => {
       { numRuns: 400, seed: 11 },
     );
     expect(performance.now() - t0).toBeLessThan(budgetMs(20_000));
+  });
+});
+
+describe("a slide past the guard (lo-forms: the guard's left-outs to LibreOffice's art on a hub with it)", () => {
+  /** What a slide's plan is, apart from ids: its class and reasons, its art's elements and box, what it lists. */
+  const plan = (sl: PptxClientScene['slides'][number]) => ({
+    classification: sl.classification,
+    art: sl.art && {
+      elements: sl.art.elements,
+      box: sl.art.box,
+      text: sl.art.text,
+      replaces: sl.art.replaces.length,
+    },
+    missing: sl.missing,
+    notes: sl.notes,
+    objects: sl.slide.objects.map((o) => o.type),
+  });
+
+  it('hub and client scenes are equal for a guard deck with LibreOffice, and the hub takes it only then', async () => {
+    const parts = pictureGuardDeck();
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    const client = (await parsePptxScene(await z.generateAsync({ type: 'uint8array' }))).scene;
+    const own = (libreoffice: boolean) =>
+      sceneTask({
+        parts: new Map(parts),
+        pictureSizes: [],
+        range: { from: 0, to: 1 },
+        options: {},
+        ...(libreoffice ? {} : { libreoffice: false }),
+      }).result.slides[0]!;
+    const [slide] = client.slides;
+    // With LibreOffice, on both: the five topmost pictures are its art, nothing is listed missing.
+    expect(slide!.art?.elements.map((r) => r.shapeId)).toEqual([17, 18, 19, 20, 21]);
+    expect(slide!.missing).toBeUndefined();
+    expect(plan(slide!)).toEqual(plan(own(true)));
+    // Without it the hub's own parse lists them (and keeps one picture more): a scene parsed for LibreOffice
+    // is refused there, and taken whole, art included, where LibreOffice is.
+    expect(plan(own(false))).toMatchObject({ missing: ['decoration'], art: undefined });
+    expect(checkClientScene(structuredClone(client), { libreoffice: false })).toEqual({
+      refused: 'parsed for a hub with LibreOffice',
+    });
+    const taken = checkClientScene(structuredClone(client), { libreoffice: true });
+    expect('scene' in taken && taken.scene.slides[0]!.art?.elements).toHaveLength(5);
   });
 });

@@ -117,6 +117,7 @@ import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from '@ordo/render
 import { outlineOf } from '@ordo/renderer/geom/outline.ts';
 import { apply, boxPx, decompose, lenPx, multiply, slideRect } from './frame.ts';
 import { bakeKey, bakeOf, type PictureBake, type SheetBake, sheetKey } from './bake.ts';
+import { sentToArt } from './budget.ts';
 import { emitChart } from './chart.ts';
 import { boundsOf, unionBox } from './classify.ts';
 import { DECOR_PREFIX, decorFiles, emitDecor, type PlatePlan, platePlan } from './decor.ts';
@@ -774,13 +775,13 @@ function fitDrawing(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
 }
 
 /**
- * An element the object budget sent to the art (`classify.ts` `fitShapes`, 'budget:shapes', only behind
- * `ParseOptions.budgetArt`, the harness's A/B): like a residual table it emits nothing, so version 1 stays
- * within the budget with the slide's own text drawn, until the art replaces what it draws. Since M9 nothing
- * else is left to the art for a budget, and nothing at all for being slow to draw (`walk.ts`).
+ * An element a budget sent to the art (`budget.ts` `sentToArt`: what the guard leaves out on a hub with
+ * LibreOffice, 'budget:shapes' / 'budget:pictures'; `classify.ts` `fitShapes` behind `ParseOptions.budgetArt`,
+ * the harness's A/B): like a residual table it emits nothing, so version 1 stays within the render clamp with
+ * the slide's own text drawn, until the art draws it. Nothing is left to the art for being slow to draw.
  */
 function pastBudget(e: Element): boolean {
-  return e.support === 'residual' && !!e.reasons?.includes('budget:shapes');
+  return sentToArt(e);
 }
 
 /**

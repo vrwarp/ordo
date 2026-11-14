@@ -6,10 +6,11 @@ import {
   leftKinds,
   MAX_DRAWN_OBJECTS,
   MAX_SLIDE_OBJECTS_TEXT,
+  sentToArt,
 } from './budget.ts';
 import { MAX_SLIDE_OBJECTS, MAX_SLIDE_PICTURES, shapeRuns } from './classify.ts';
 import { frameOf } from './frame.ts';
-import { convertDeck, emitSlides, M9_FIELDS, parseDeck } from './index.ts';
+import { convertDeck, emitSlides, M9_FIELDS, type ParseOptions, parseDeck } from './index.ts';
 import type { Background, Element, ShapeElement, SlideScene } from './ir.ts';
 import { drawingXml, dspSp, smartArtFrame, smartArtRels, withSmartArt } from './smartart.test-util.ts';
 import {
@@ -30,9 +31,16 @@ const IN = 914_400;
 const FRAME = frameOf(12_192_000, 6_858_000);
 const NONE: Background = { fill: { kind: 'none' }, from: 'none' };
 
-function slideOf(shapes: string, more: Partial<SlideSpec> = {}, deck: Partial<DeckSpec> = {}): SlideScene {
-  return parseDeck(buildDeck({ ...deck, slides: [{ shapes, ...more }] })).slides[0]!;
+function slideOf(
+  shapes: string,
+  more: Partial<SlideSpec> = {},
+  deck: Partial<DeckSpec> = {},
+  opts: ParseOptions = {},
+): SlideScene {
+  return parseDeck(buildDeck({ ...deck, slides: [{ shapes, ...more }] }), opts).slides[0]!;
 }
+/** A hub without LibreOffice (`ParseOptions.libreoffice: false`). */
+const NO_LO: ParseOptions = { libreoffice: false };
 
 /** `n` squares 0.1 in wide in rows of 20 from (x, y) inches, of `colors` in turn, ids from `first`. */
 function squares(n: number, first: number, colors = ['336699'], x = 0, y = 0, extra = '') {
@@ -202,37 +210,79 @@ describe('the slide budgets, natively (M9, decor-conv)', () => {
     expect(out.slide.objects.at(-1)!.type).toBe('text');
   });
 
-  it('keeps a slide of text up to 190 objects, then leaves the topmost out (the guard)', () => {
+  it('keeps a slide of text up to 190 objects, then leaves the topmost out (the guard): without LibreOffice they are culled and listed', () => {
     let texts = '';
     for (let i = 0; i < MAX_SLIDE_OBJECTS_TEXT - 2; i++)
       texts += textBox(10 + i, (i % 10) * 1.2, Math.floor(i / 10) * 0.3);
-    const s = slideOf(texts);
+    const s = slideOf(texts, {}, {}, NO_LO);
     expect(s.classification.class).toBe('native');
     expect(s.elements.every((e) => !e.hidden)).toBe(true);
     let more = texts;
     for (let i = 0; i < 20; i++) more += textBox(500 + i, i * 0.2, 6);
-    const t = slideOf(more);
+    const t = slideOf(more, {}, {}, NO_LO);
     // Text only: 208 text boxes and the background; the topmost past 200 are left out and listed.
     expect(t.classification).toMatchObject({ class: 'hybrid', missing: ['element'] });
     expect(t.classification.reasons).toContain('missing:element');
     expect(t.elements.filter((e) => e.culled === 'budget')).toHaveLength(9);
     expect(t.elements.slice(-9).every((e) => e.culled === 'budget')).toBe(true);
     // Shapes that are not text go first.
-    const mixed = slideOf(
-      more +
-        squares(
-          40,
-          900,
-          ['336699'],
-          0,
-          6.5,
-          '<a:effectLst><a:glow rad="1"><a:srgbClr val="FF0000"/></a:glow></a:effectLst>',
-        ),
-    );
+    const mixed = slideOf(more + glowing, {}, {}, NO_LO);
     expect(leftKinds(mixed.elements)).toContain('decoration');
     expect(
       mixed.elements.filter((e) => e.culled === 'budget' && e.kind === 'shape' && !e.text).length,
     ).toBeGreaterThan(0);
+  });
+
+  /** 40 squares with a glow (no decoration takes them), below the text slide's last row. */
+  const glowing = squares(
+    40,
+    900,
+    ['336699'],
+    0,
+    6.5,
+    '<a:effectLst><a:glow rad="1"><a:srgbClr val="FF0000"/></a:glow></a:effectLst>',
+  );
+  /** 188 text boxes, then 20 more on a row of their own: 208 text objects and the background. */
+  const crowdedText = () => {
+    let texts = '';
+    for (let i = 0; i < MAX_SLIDE_OBJECTS_TEXT - 2; i++)
+      texts += textBox(10 + i, (i % 10) * 1.2, Math.floor(i / 10) * 0.3);
+    for (let i = 0; i < 20; i++) texts += textBox(500 + i, i * 0.2, 6);
+    return texts;
+  };
+
+  it("with LibreOffice the guard's left-outs go to the art, nothing is culled (the owner's decision of 2026-11-13)", () => {
+    const more = crowdedText();
+    const t = slideOf(more);
+    // Nothing culled or listed: the topmost text boxes are LibreOffice's art, residual for the guard.
+    expect(t.elements.some((e) => e.culled === 'budget' || e.hidden)).toBe(false);
+    expect(leftKinds(t.elements)).toEqual([]);
+    const sent = t.elements.flatMap((e, i) => (sentToArt(e) ? [i] : []));
+    // The ten topmost: 209 objects less ten, and the art, is the render clamp's 200.
+    expect(sent).toEqual(Array.from({ length: 10 }, (_, k) => t.elements.length - 10 + k));
+    for (const i of sent)
+      expect(t.elements[i]).toMatchObject({ support: 'residual', reasons: ['budget:shapes'] });
+    expect(t.classification).toMatchObject({ class: 'hybrid', art: { elements: sent } });
+    expect(t.classification.missing).toBeUndefined();
+    expect(t.classification.reasons).toContain('art:budget:shapes');
+    expect(t.classification.reasons.some((r) => r.startsWith('missing:'))).toBe(false);
+    expect(t.notes).toContain("10 element(s) past the slide's budgets: LibreOffice draws them");
+    // Emitted: version 1 draws none of them (199 objects, the art makes 200); the art draws exactly them, its
+    // text the left-out text (search); nothing is missing.
+    const out = convertDeck(buildDeck({ slides: [{ shapes: more }] })).slides[0]!;
+    expect(out.slide.objects).toHaveLength(MAX_DRAWN_OBJECTS - 1);
+    expect(out.art?.elements.map((r) => r.shapeId)).toEqual(Array.from({ length: 10 }, (_, k) => 510 + k));
+    expect(out.art?.replaces).toEqual([]);
+    expect(out.art?.text.split('\n')).toEqual(Array.from({ length: 10 }, () => 'Word'));
+    expect(out.missing).toBeUndefined();
+    // Shapes that are not text go first, to the art too, for the same budget.
+    const mixed = slideOf(more + glowing);
+    expect(mixed.elements.some((e) => e.culled === 'budget')).toBe(false);
+    const shapes = mixed.elements.filter((e) => sentToArt(e) && e.kind === 'shape' && !e.text);
+    expect(shapes.length).toBeGreaterThan(0);
+    expect(shapes.every((e) => e.reasons?.includes('budget:shapes'))).toBe(true);
+    // Without LibreOffice the same slide is as it was: culled and listed (the test above).
+    expect(slideOf(more, {}, {}, NO_LO).classification).toMatchObject({ missing: ['element'] });
   });
 
   it('never plans more than 200 objects, nor 190 that are not text (a property over random slides)', () => {
@@ -292,7 +342,9 @@ describe('the slide budgets, natively (M9, decor-conv)', () => {
             objects: 40,
           } as unknown as Element);
       }
-      const plan = fitBudgets({ frame: FRAME, log: () => {} }, elements, NONE);
+      // Without LibreOffice, and with it on a copy of the same elements.
+      const copy = structuredClone(elements);
+      const plan = fitBudgets({ frame: FRAME, log: () => {} }, elements, NONE, { libreoffice: false });
       const c = budgetCost(elements, NONE, undefined, plan.atlas);
       expect(c.objects, `round ${round}`).toBeLessThanOrEqual(MAX_DRAWN_OBJECTS);
       const text = elements.filter((e) => !e.hidden && e.kind === 'shape' && e.text).length;
@@ -301,6 +353,19 @@ describe('the slide budgets, natively (M9, decor-conv)', () => {
       expect(plan.objects).toBe(c.objects);
       // What is left out is exactly what is culled for the budget.
       expect(elements.filter((e) => e.culled === 'budget').length).toBe(plan.left);
+      expect(plan.art).toBe(0);
+      // With LibreOffice nothing is culled for the budget: what is left out is the art's, and version 1 with
+      // the art as one more object stays within the render clamp.
+      const withLo = fitBudgets({ frame: FRAME, log: () => {} }, copy, NONE);
+      const d = budgetCost(copy, NONE, undefined, withLo.atlas);
+      expect(copy.some((e) => e.culled === 'budget')).toBe(false);
+      expect(withLo.left).toBe(0);
+      expect(copy.filter(sentToArt).length).toBe(withLo.art);
+      expect(d.objects + (withLo.art ? 1 : 0), `round ${round}`).toBeLessThanOrEqual(MAX_DRAWN_OBJECTS);
+      expect(d.pictures).toBeLessThanOrEqual(MAX_SLIDE_PICTURES);
+      expect(withLo.objects).toBe(d.objects);
+      // The art is the guard's way: as many elements or one object's worth more, never fewer.
+      expect(withLo.art).toBeGreaterThanOrEqual(plan.left);
     }
   });
 });
@@ -435,13 +500,57 @@ describe('without decorations (the M9 rollout: no decoration drawer yet)', () =>
     expect(out.missing).toBeUndefined();
   });
 
-  it('past 190 objects the guard leaves the topmost out and lists them, never a decoration that draws nothing', () => {
+  it('past 190 objects the guard leaves the topmost out, never a decoration that draws nothing: listed without LibreOffice, its art with it', () => {
     const parts = buildDeck({ slides: [{ shapes: squares(220, 10, TWO) }] });
-    const out = convertDeck(parts, { m9Writes: noDecor }).slides[0]!;
+    const out = convertDeck(parts, { m9Writes: noDecor, libreoffice: false }).slides[0]!;
     expect(out.slide.objects.some((o) => o.type === 'shape' && o.decor)).toBe(false);
     expect(out.slide.objects.length).toBeLessThanOrEqual(MAX_SLIDE_OBJECTS_TEXT);
-    expect(out.classification).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    // (the import core classes it hybrid for what it lists: `ImportCore.gaps`)
+    expect(out.classification).toMatchObject({ missing: ['decoration'] });
     expect(out.missing).toEqual(['decoration']);
     expect(out.notes.some((n) => /element\(s\) past the slide's budgets are not drawn/.test(n))).toBe(true);
+    // With LibreOffice the same squares are its art's: version 1 draws the same objects, nothing is missing.
+    const lo = convertDeck(parts, { m9Writes: noDecor }).slides[0]!;
+    expect(lo.slide.objects).toHaveLength(out.slide.objects.length);
+    expect(lo.classification).toMatchObject({ class: 'hybrid' });
+    expect(lo.classification.reasons).toContain('art:budget:shapes');
+    expect(lo.missing).toBeUndefined();
+    expect(lo.art?.elements).toHaveLength(220 - (out.slide.objects.length - 1));
+    expect(lo.notes).toContain(
+      `${lo.art?.elements.length} element(s) past the slide's budgets: LibreOffice draws them`,
+    );
+  });
+
+  it('with LibreOffice a SmartArt drawing the guard leaves partly out goes to the art whole, as at wave 1', () => {
+    // 170 squares under a SmartArt drawing of 30 shapes: 201 objects that are not text, so the guard leaves the
+    // drawing's topmost shapes out, a part of it.
+    let nodes = '';
+    for (let i = 0; i < 30; i++)
+      nodes += dspSp({
+        x: (i % 10) * (IN / 2),
+        y: Math.floor(i / 10) * (IN / 4),
+        cx: IN / 4,
+        cy: IN / 8,
+      }).replace(/<a:srgbClr val="[0-9A-F]+"\/>/, `<a:srgbClr val="${TWO[i % 2]}"/>`);
+    const frame = { id: 7, x: IN, y: 4 * IN, cx: 6 * IN, cy: 2 * IN, dmId: 'rIdDm1' };
+    const parts = withSmartArt(
+      buildDeck({
+        slides: [{ shapes: squares(170, 10, TWO) + smartArtFrame(frame), rels: smartArtRels(1) }],
+      }),
+      1,
+      drawingXml(nodes),
+    );
+    const s = parseDeck(parts, { m9Writes: noDecor }).slides[0]!;
+    const drawing = s.elements.filter((e) => e.diagram !== undefined);
+    expect(drawing).toHaveLength(30);
+    // Some of its shapes were the guard's, and the whole drawing is the art's: its render copy prints it whole.
+    expect(drawing.some((e) => e.reasons?.includes('budget:shapes'))).toBe(true);
+    expect(drawing.some((e) => !e.reasons?.includes('budget:shapes'))).toBe(true);
+    expect(drawing.every((e) => e.support === 'residual')).toBe(true);
+    const inArt = new Set(s.classification.art?.elements);
+    expect(
+      s.elements.flatMap((e, i) => (e.diagram !== undefined ? [i] : [])).every((i) => inArt.has(i)),
+    ).toBe(true);
+    expect(s.classification.reasons).toEqual(expect.arrayContaining(['art:budget:shapes', 'art:smartart']));
   });
 });

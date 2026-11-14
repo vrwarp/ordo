@@ -36,6 +36,7 @@ import {
   type SceneTaskInput,
 } from '../src/pptx/shared.ts';
 import { documentImportForm } from '../src/routes.ts';
+import { pictureGuardDeck } from '@ordo/importers/pptx-guard.test-util.ts';
 import { comparable, diffJson } from '../../../tools/pptx-fidelity/src/equivalence.ts';
 import { fixtures } from './fixtures.ts';
 import { type Client, EDIT_PIN, login, startHub, type TestHub, tempDir } from './helpers.ts';
@@ -421,10 +422,11 @@ describe('POST /import/document', () => {
     expect(result.notes.some((n) => /slide 2's shape outlines pass/.test(n))).toBe(true);
   });
 
-  it('stores what its own parse stores when it builds from a client scene (public golden decks)', async () => {
+  it('stores what its own parse stores when it builds from a client scene (public golden decks, a guard deck)', async () => {
     // The hub-vs-client equivalence of the import core (tools/pptx-fidelity `--equivalence` runs it over the
     // worship corpus): each deck through the hub's own parse and through a browser scene, compared modulo ids,
-    // media ids (by file), times, the import log and digests.
+    // media ids (by file), times, the import log and digests. The guard deck (lo-forms): 20 distinct pictures,
+    // the topmost past the render clamp LibreOffice's art on this hub, on both paths.
     const decks = [
       'golden-pptx/challenging-features/tables/table_styles_and_cells.pptx',
       'golden-pptx/challenging-features/charts/chart_2d_basic.pptx',
@@ -454,9 +456,12 @@ describe('POST /import/document', () => {
       } as JobCtx<PptxNativePayload>)) as PptxNativeResult;
       return { p: hub.lib.presentations.must(out.presentationId), logs };
     };
-    for (const rel of decks) {
-      const bytes = new Uint8Array(readFileSync(join(import.meta.dirname, '../../..', rel)));
-      const name = rel.split('/').pop()!;
+    for (const rel of [...decks, 'guard']) {
+      const bytes =
+        rel === 'guard'
+          ? await deckBytes(pictureGuardDeck())
+          : new Uint8Array(readFileSync(join(import.meta.dirname, '../../..', rel)));
+      const name = rel === 'guard' ? 'Pictures.pptx' : rel.split('/').pop()!;
       const scene = (await parsePptxScene(bytes)).scene;
       const fd = new FormData();
       fd.append('renderer', 'native');
@@ -471,6 +476,11 @@ describe('POST /import/document', () => {
       const fileOf = (id: string) => hub.lib.media.get(id)?.original.hash;
       const same = (p: Presentation) => comparable({ ...p, title: '' }, fileOf);
       expect(diffJson(same(hubOwn.p), same(client.p)), rel).toEqual([]);
+      if (rel === 'guard')
+        for (const p of [hubOwn.p, client.p]) {
+          expect(slidesOf(p)[0]!.pptx).toMatchObject({ class: 'hybrid', pending: true });
+          expect(slidesOf(p)[0]!.pptx!.missing).toBeUndefined();
+        }
     }
   });
 

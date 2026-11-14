@@ -762,9 +762,9 @@ the fidelity harness's A/B.
   a slide still over, real 3-D drawn flat in decorations (`3d:flat-in-decoration`; otherwise 3-D never joins a
   decoration, and merges by look only with an equal 3-D digest and disjoint boxes, decision 6). Objects left
   that are text or that no step can merge stay up to 190; past that, and never past the render clamp's 200,
-  the guard leaves the topmost elements without text out, then text (class hybrid, `missing:<kind>`; never
-  reached on E). Past 12 distinct pictures an **atlas** packs the fewest smallest into one sheet, each object
-  keeping its box and showing its cell through its crop.
+  the guard leaves the topmost elements without text out, then text (LibreOffice's art for them on a hub with
+  it, listed without it: "The guard per kind of hub" below). Past 12 distinct pictures an **atlas** packs the
+  fewest smallest into one sheet, each object keeping its box and showing its cell through its crop.
 - **A decoration draws what its shapes draw**: each member is emitted as a single shape is, then its geometry
   built at its box as the renderer builds it and placed (flips, rotation) into the decoration's own space (its
   box in logical px); parts in z-order, a member's first marked `s: 1`; its look a paint (fill; gradient laid on
@@ -819,7 +819,8 @@ the fidelity harness's A/B.
   (`EmittedSlide.sheets`), for an importer that cannot make it. The hub and the client make none yet
   (`PPTX_SHEETS`, `CLIENT_SHEETS` false until `decor-render` stores them): their budgets plan no composite or
   atlas (`BudgetOptions.sheets`), every picture is its own object, and past the render clamp's 16 distinct
-  pictures (`MAX_DRAWN_PICTURES`) the topmost are left out and listed, never dropped without a word.
+  pictures (`MAX_DRAWN_PICTURES`) the topmost are left out the guard's way (LibreOffice's art, or listed:
+  below), never dropped without a word.
 - **Kept whole** (the wave 1 re-review): an object past the slide's drawing or effect budget is stored as it
   is, its gradient, geometry, dash, ends and effects kept (`emit.ts` `fitDrawing`, `fitEffects` no longer
   flatten it to its legacy copy), and a shape past the drawing budget is never sent to the art
@@ -859,9 +860,9 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   build draws for it; presentations imported before keep what they stored. The fields left on draw on main
   today (a table by its registered drawer, `tables-render`; 3-D flat by decision; the other converter seams
   write nothing yet).
-- **What the budgets leave out is always listed**, with LibreOffice or without: the guard's elements past 190
-  or 200 objects and 16 pictures (`EmittedSlide.missing`, recorded on the LibreOffice path too: the import
-  core's `ImportCore.budgetLeft`, for the hub's job and the client parse alike) and the ladder's
+- **What the budgets leave out is drawn by LibreOffice or listed** (`lo-forms`, below): on a hub with
+  LibreOffice the guard's elements past 190 or 200 objects and 16 pictures are its art, without it they are
+  listed (`EmittedSlide.missing`; the import core's `ImportCore.budgetLeft` lists what a scene names), as the ladder's are
   (`Slide.pptx.missing`), so goLive's degraded list
   names them; a slide hybrid only for them waits for nothing. On a hub with LibreOffice a slide over 64 KB
   that the ladder would simplify keeps LibreOffice's page instead (`ImportCore.pageForBudget`, above).
@@ -885,6 +886,66 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   on the output's black; a deck that does not fit 4 MiB even so (about 2,000 slides) leaves the pages out
   before any text is cut (`ladder.ts` `planLadder`).
 <!-- /m9:rollout -->
+
+<!-- m9:lo-forms -->
+_The guard per kind of hub (M9 wave 2, track `lo-forms`; the owner's decision of 2026-11-13 on integrate.md's
+decision item 2: "guard left-outs get LibreOffice's art for the left-out objects on hubs with LibreOffice")._
+- **The rule.** The slide budgets' guard (the steps above: past 190 objects without text or the render
+  clamp's 200 in all, and, while the hub stores no picture sheets, past the clamp's 16 distinct pictures) is
+  the render clamp's count, never slowness: nothing goes to LibreOffice for being slow to draw (decisions.md
+  2026-11-07). What it leaves out depends on the hub:
+  - **with LibreOffice** it is LibreOffice's art again, as at M9 wave 1, for exactly those objects: each is
+    residual for its budget (`budget:shapes` for the object guard's, `budget:pictures` for the picture
+    guard's; `residual.ts`, `budget.ts` `toArt`), version 1 emits nothing for it and draws the rest, and
+    version 2's art draws them (`EmittedSlide.art`; a kept object between them that one of them covers goes
+    into the art too, as for any art, to keep the z-order, and a SmartArt drawing the art touches goes whole,
+    as at wave 1). So that the art itself is drawn, the guard keeps
+    one of the clamp's 200 objects free for it and, on a slide with no art before, one of its 16 pictures: a
+    hub with LibreOffice leaves one object or picture more to the art than a hub without it leaves out, and
+    draws them all. The slide is hybrid (`art:budget:shapes`, `art:budget:pictures`), waits for the
+    follow-up like any slide with art, lists nothing missing and keeps the left-out text in
+    `Slide.pptx.artText` (search); should LibreOffice fail, the follow-up's kinds say 'decoration'.
+  - **without LibreOffice** nothing changes: culled and listed (`Slide.pptx.missing` 'decoration' for shapes
+    and pictures, 'element' for text, tables and charts), nothing waits.
+- **Where it is decided.** As the deck is parsed: `ParseOptions.libreoffice` (the same flag as
+  `EmitOptions.libreoffice`; `convertDeck` takes one for both) reaches the budgets as
+  `BudgetOptions.libreoffice`. The hub's pool task passes it (`SceneTaskInput.libreoffice`), the operator's
+  parse records it in its scene (`PptxClientScene.libreoffice`), and the hub takes a scene only when it agrees
+  (`clientScene.ts`), so both paths store the same. `ImportCore.budgetLeft` has nothing to list from this
+  converter on a hub with LibreOffice. The fidelity harness parses a deck once more for its
+  hub-without-LibreOffice column where the guard gave anything to the art (`tools/pptx-fidelity` `native.ts`,
+  `NativeSlide.noLoReasons`), so `noLoSsim` and the census `--no-libreoffice` stay a lite hub's.
+- **Rollout.** No stored field; `M9_WRITES` and `CONVERTER_VERSION` (2) unchanged. A scene of a converter
+  before this rule (the same version) lists its left-outs, and the hub lists them, as then. An older build
+  (main's 0.5.0) draws version 2's art as the picture it is.
+- **Measured** (b50d486 with this rule, decorations still held back; `regroup/r2a/lo-forms`). Census of E
+  (`--hub-budget`) with LibreOffice: the guard's `missing:decoration` on 16 worship slides becomes the art's
+  (`art:budget:shapes` 14, `art:budget:pictures` 2), none of them `missing:element` before or after, classes
+  unchanged; without LibreOffice not one slide changes, golden-pptx none either way, the sermons none. Of the 16,
+  5 are stored in full; on a hub with LibreOffice (its version 2 against LibreOffice's page): the emoji game
+  slide 7 0.795 → 0.953 (wave 1 0.956), animal-crossing 1 0.887 → 0.995 (0.998), PICK_ME 5 0.864 → 0.982
+  (0.995), absalom 1 0.701 → 0.940 (0.953), a clipart collection's slide 1 0.984 → 0.998 (0.998); without
+  LibreOffice each as before (within 0.0002). The other 11 are over 64 KB, where a hub with LibreOffice keeps
+  LibreOffice's page (`pageForBudget`) as before: unchanged. The owner was asked about 2 left-out slides (the
+  emoji game slide and animal-crossing 1); the rule moves 4 that the r1 review counted below wave 1 (also
+  PICK_ME 5 and absalom 1, picture slides at wave 1) and the clipart slide, which was not, so on a hub with
+  LibreOffice E's slides below wave 1 by more than 0.02 go from 23 to 19 (the leaf template's 8, the 11 below).
+  Version 1 of the two picture-guard slides keeps one picture fewer (the art's room): a hub that has not drawn
+  version 2 yet shows 0.817 and 0.663 there (0.864 and 0.701 before). Hub and client store the same: shard0 89
+  of 89 decks without LibreOffice, the 8 budget decks and the guard decks (these 5 and the e2e deck) with it.
+  The sermons and the 30 table decks: no slide moved on either kind of hub. With decorations drawn
+  (`decor-render`, measured on a scratch merge of both branches) the guard is reached on 3 worship slides of E,
+  all past the clamp's 16 pictures (the emoji game slide 7, PICK_ME 5, absalom 1); they become
+  `art:budget:pictures` (without LibreOffice nothing changes against decor-render alone), and on a hub with
+  LibreOffice they score 0.953, 0.982 and 0.940 (decor-render alone 0.950, 0.864, 0.701); animal-crossing 1 and
+  the clipart slide are then drawn natively whole (0.996, 0.998).
+- **Known costs, by the owner's choice.** On a hub with LibreOffice the slides main showed as LibreOffice's
+  page only for their picture count stay native and editable (G2, keeping that page, is not built): 13 at the
+  r1 review, 0.70-0.94 against 0.96-0.98 at wave 1; two of them were guard left-outs (PICK_ME 5, absalom 1)
+  and get LibreOffice's art for those now, so 11 remain (a memory-game deck's 9 at 0.93-0.94, a banner deck's
+  1 at 0.87, a bulletin's 1 at 0.92), until picture sheets (`decor-sheets`) draw a slide's pictures past 16.
+  The owner's default A (accept a native drawing within about 0.02-0.04 of wave 1) covers the rest.
+<!-- /m9:lo-forms -->
 
 **One rule for every drawer.** `slideContent(slide): { pictureMediaId?: string; objects: SlideObject[] }` in `packages/renderer/src/content.ts`:
 - `pptx.show === 'picture'` and `pptx.refMediaId`: the reference picture plus only the objects without `origin` (the operator's own additions);
