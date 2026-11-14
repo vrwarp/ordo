@@ -1,7 +1,5 @@
-import type { Box, Rgba, Transition } from '@ordo/domain';
+import type { Box, Transition } from '@ordo/domain';
 import { type ReactNode, useEffect, useState } from 'react';
-import { ColorPill } from './ColorPicker.tsx';
-import type { ColorSwatch } from './colorMath.ts';
 
 export function Field(props: {
   label: ReactNode;
@@ -110,26 +108,6 @@ export function TextField(props: {
         if (e.key === 'Enter' && props.commitOnBlur) onBlur();
       }}
       style={props.style}
-    />
-  );
-  return props.label ? <Field label={props.label}>{el}</Field> : el;
-}
-
-export function ColorField(props: {
-  label?: ReactNode;
-  value: Rgba;
-  onChange: (c: Rgba) => void;
-  alpha?: boolean;
-  disabled?: boolean;
-  swatches?: readonly ColorSwatch[];
-}) {
-  const el = (
-    <ColorPill
-      value={props.value}
-      onChange={props.onChange}
-      alpha={props.alpha}
-      disabled={props.disabled}
-      swatches={props.swatches}
     />
   );
   return props.label ? <Field label={props.label}>{el}</Field> : el;

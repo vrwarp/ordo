@@ -1,6 +1,8 @@
 import { fileUrl } from '@ordo/client';
 import type { Font } from '@ordo/domain';
-import { FontResolver, installFontEnv } from '@ordo/renderer';
+// The font module itself, not the @ordo/renderer barrel (which brings the preset geometry and the text
+// engine into the entry); the barrel re-exports this module, so currentFontEnv sees the same env.
+import { FontResolver, installFontEnv } from '@ordo/renderer/text/fonts.ts';
 import { useEffect, useState } from 'react';
 import { thumbs } from './thumbs.ts';
 

@@ -5,13 +5,9 @@ import { deviceProfile, requestPersistentStorage, useProfile } from './lib/capab
 import { type Layout, thisIsPhone, useLayout } from './lib/layout.ts';
 import { pageFor, routeHash } from './lib/route.ts';
 import { watchVenueLive } from './lib/venueLive.ts';
-import { PAGES } from './pages.ts';
-import { installCacheCheck } from './services/cacheCheck.ts';
+import { OPERATE, PAGES, useChunk } from './pages.ts';
 import { controller, startController } from './services/controller.ts';
 import { syncFonts } from './services/fonts.ts';
-import { installOutputWindows } from './services/outputs.ts';
-import { installProgramViews } from './services/programView.ts';
-import { installSurfaces, surfaces } from './services/surfaces.ts';
 import { installUpdateGuard, useUpdate } from './services/update.ts';
 import { useLibrary } from './state/library.ts';
 import { useLive } from './state/live.ts';
@@ -21,7 +17,6 @@ import { LoginView } from './views/auth/LoginView.tsx';
 import { SetupView } from './views/auth/SetupView.tsx';
 import { LibraryView } from './views/library/LibraryView.tsx';
 import { RegularFrame } from './views/RegularFrame.tsx';
-import { reacquireOnFirstGesture } from './services/reacquire.ts';
 
 /*
  * Pages come from the registry (src/pages.ts): loaded when first needed, or preloaded at startup on a regular
@@ -69,10 +64,51 @@ export function App() {
     // The session ended under a running operator (review item 5): keep the shell, its output windows and
     // the core mounted (the outputs stay on the hub) and sign in over it.
     const running = controller()?.role;
-    if (running) return <Shell role={running} layout={layout} signedOut />;
+    // The same element tree as a signed-in session (OperateGate, then Shell): the Shell stays mounted.
+    if (running) return <OperateGate role={running} layout={layout} signedOut />;
     return <LoginView />;
   }
-  return <Shell role={role} layout={layout} />;
+  return <OperateGate role={role} layout={layout} />;
+}
+
+/**
+ * An operator core installs the operate services synchronously when its Shell mounts (the keyboard effect
+ * after it must find the surfaces): on the full profile, keep "Connecting to the hub…" until their module has
+ * loaded, and show the error card with Retry if it cannot.
+ */
+function OperateGate({
+  role,
+  layout,
+  signedOut = false,
+}: {
+  role: 'operate' | 'edit';
+  layout: Layout;
+  signedOut?: boolean;
+}) {
+  const profile = useProfile(role);
+  const operate = role === 'operate' && profile === 'full';
+  const s = useChunk(OPERATE, operate);
+  if (operate && s.status === 'failed')
+    return (
+      <div className="center">
+        <div className="card col" style={{ width: 380 }}>
+          <h2>ordo</h2>
+          <div className="banner red">
+            Part of ordo could not be loaded from the hub. Check the connection, then Retry.
+          </div>
+          <button type="button" onClick={() => void OPERATE.load().catch(() => undefined)}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  if (operate && s.status !== 'loaded')
+    return (
+      <div className="center">
+        <span className="muted">Connecting to the hub…</span>
+      </div>
+    );
+  return <Shell role={role} layout={layout} signedOut={signedOut} />;
 }
 
 function Shell({
@@ -106,13 +142,8 @@ function Shell({
     const ctl = startController(coreRole);
     const offUpdate = installUpdateGuard(ctl.hub);
     let offCacheCheck: (() => void) | undefined;
-    if (coreRole === 'operate') {
-      installOutputWindows(ctl);
-      installProgramViews(ctl);
-      installSurfaces(ctl);
-      offCacheCheck = installCacheCheck();
-      reacquireOnFirstGesture();
-    }
+    // Loaded before this Shell mounted (OperateGate): installed now, in the order they always were.
+    if (coreRole === 'operate') offCacheCheck = OPERATE.get()?.installOperate(ctl);
     return () => {
       offUpdate();
       offCacheCheck?.();
@@ -135,7 +166,7 @@ function Shell({
       (!signedOut || fallback) &&
       coreRole === 'operate' &&
       (route.name === 'live' || route.name === 'playlists' || route.name === 'library');
-    surfaces()?.setKeyboard(keysOn);
+    OPERATE.get()?.surfaces()?.setKeyboard(keysOn);
   }, [coreRole, route.name, signedOut, fallback]);
   // What this route shows (lib/route.ts pageFor): on the compact layout or a phone a refused route is decided
   // here, before any body, and replaced (its chunk is never requested, history does not grow); on the regular

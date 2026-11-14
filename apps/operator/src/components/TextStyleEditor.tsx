@@ -1,7 +1,8 @@
 import type { TextStyle } from '@ordo/domain';
 import type { ReactNode } from 'react';
 import { AlignIcon, VAlignIcon } from './AlignIcons.tsx';
-import { Check, ColorField, Field, NumberField, Select } from './fields.tsx';
+import { ColorField } from './ColorField.tsx';
+import { Check, Field, NumberField, Select } from './fields.tsx';
 import { FontPicker } from './FontPicker.tsx';
 import { fontFamilies } from '../services/fonts.ts';
 import { useLibrary } from '../state/library.ts';

@@ -118,6 +118,9 @@ export const PAGES = {
 
 export type PageName = keyof typeof PAGES;
 
+/** The operate services: output windows, program views, Stream Deck, MIDI, keys, the cache check. */
+export const OPERATE = chunk('./services/operateServices.ts', () => import('./services/operateServices.ts'));
+
 /** The regular pages a device of this capability profile can open (allowedForRole's widest role, operate). */
 export const REGULAR_PAGES: Record<Profile, readonly PageName[]> = {
   full: ['live', 'edit', 'playlists', 'previews', 'settings', 'setup', 'themes', 'fonts', 'import'],
@@ -144,6 +147,7 @@ export function preloadSet(
 export function preloadFor(layout: Layout, capabilityProfile: Profile, phone: boolean): Chunk<unknown>[] {
   const set = preloadSet(layout, capabilityProfile, phone);
   const chunks: Chunk<unknown>[] = set.pages.map((k) => PAGES[k] as Chunk<unknown>);
+  if (set.operate) chunks.push(OPERATE as Chunk<unknown>);
   for (const c of chunks) void c.load().catch(() => undefined);
   return chunks;
 }
@@ -188,7 +192,10 @@ export function retryChunks(chunks: readonly Chunk<unknown>[]): void {
 
 /** The registry's state for the end-to-end specs: `window.__ordo.pages()`. */
 export function pagesState(): { name: string; module: string; status: ChunkState<unknown>['status'] }[] {
-  const all = Object.entries(PAGES) as [string, Chunk<unknown>][];
+  const all: [string, Chunk<unknown>][] = [
+    ...(Object.entries(PAGES) as [string, Chunk<unknown>][]),
+    ['operate', OPERATE as Chunk<unknown>],
+  ];
   return all.map(([name, c]) => ({ name, module: c.module, status: c.state().status }));
 }
 

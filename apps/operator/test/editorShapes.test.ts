@@ -10,7 +10,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { clearGeomFiles, putGeomFile } from '@ordo/renderer/geom/index.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ColorPill, PaintPill, PaintPopover } from '../src/components/ColorPicker.tsx';
-import { Check, ColorField, NumberField, Select } from '../src/components/fields.tsx';
+import { ColorField } from '../src/components/ColorField.tsx';
+import { Check, NumberField, Select } from '../src/components/fields.tsx';
 import { openPresentation, useEditor } from '../src/views/editor/editorStore.ts';
 import { ObjectPanel } from '../src/views/editor/ObjectPanel.tsx';
 import {

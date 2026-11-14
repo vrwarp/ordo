@@ -1,5 +1,5 @@
 import { type APIRequestContext, devices, expect, type Page, test } from '@playwright/test';
-import { assetOf, holds } from '../bundlefiles.ts';
+import { assetOf, forbiddenIn } from '../bundlefiles.ts';
 import type { HubProcess } from '../hubproc.ts';
 import { portOf } from '../ports.ts';
 import { touchDevice } from '../touchdevice.ts';
@@ -210,4 +210,27 @@ test('(7) Request Desktop Website: a phone on the regular layout still never mou
   } finally {
     await ctx.close();
   }
+});
+
+/** A phone's first load: sign in, the Library, 3 s idle. Returns every request the page made. */
+async function firstLoad(page: Page): Promise<{ url: string; sources: string[] | undefined }[]> {
+  const reqs: { url: string; sources: string[] | undefined }[] = [];
+  page.on('request', (req) => {
+    if (req.serviceWorker()) return;
+    reqs.push({ url: req.url(), sources: assetOf(req.url())?.sources });
+  });
+  await signInPhone(page, url);
+  await expect(page).toHaveURL(/#\/library$/);
+  await page.waitForTimeout(3000);
+  return reqs;
+}
+
+test('(1a) the first load holds no editor, live, settings, Setup or output code', async ({ page }) => {
+  const reqs = await firstLoad(page);
+  const bad: string[] = [];
+  for (const r of reqs) {
+    const f = assetOf(r.url);
+    if (f) for (const v of forbiddenIn(f)) bad.push(`${f.file}: ${v}`);
+  }
+  expect(bad).toEqual([]);
 });

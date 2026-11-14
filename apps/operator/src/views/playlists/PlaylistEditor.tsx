@@ -8,7 +8,7 @@ import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
-import { itemSubtitle, itemTitle } from '../live/PlaylistPane.tsx';
+import { itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
 import { AddItemsPanel } from './AddItemsPanel.tsx';
 import { ItemSettings } from './ItemSettings.tsx';
 import { startService } from '../../lib/startService.ts';

@@ -1,7 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { forbiddenEntry, normalizeSource } from '../apps/operator/src/pageSets.ts';
+import {
+  COMPACT_WORKERS,
+  forbiddenEntry,
+  normalizeSource,
+  workerName,
+} from '../apps/operator/src/pageSets.ts';
 
 /**
  * The operator's built files by what they hold (design/28 §8): each file of apps/operator/dist/assets (or of
@@ -51,8 +56,14 @@ export function holds(f: BuiltFile, needle: string): boolean {
   return f.sources.some((s) => s.includes(needle));
 }
 
-/** The COMPACT_FORBIDDEN sources a built file holds, as `<entry> (<source>)`. */
+/**
+ * What a built file of the compact path may not hold: a worker other than COMPACT_WORKERS, or, for the page's
+ * own files, a COMPACT_FORBIDDEN source (as `<entry> (<source>)`). A compact worker runs off the page and may
+ * hold what it draws with (pageSets.ts).
+ */
 export function forbiddenIn(f: BuiltFile): string[] {
+  const worker = workerName(f.file);
+  if (worker) return COMPACT_WORKERS.includes(worker) ? [] : [`worker ${worker}`];
   const out: string[] = [];
   for (const s of f.sources) {
     const e = forbiddenEntry(s);

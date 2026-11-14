@@ -14,7 +14,12 @@ export const COMPACT_LAZY: readonly string[] = [
   'src/views/editor/PreviewsView.tsx',
 ];
 
-/** The workers a phone needs: the core (hub connection, library copy) and the thumbnails. */
+/**
+ * The workers a phone needs: the core (hub connection, library copy) and the thumbnails. A worker is its own
+ * file and runs off the page: the thumbnail worker draws slides with the renderer's preset geometry and the core
+ * worker holds the Stream Deck key renderer, so COMPACT_FORBIDDEN applies to the page's files, and a worker the
+ * compact path loads or precaches must be one of these.
+ */
 export const COMPACT_WORKERS: readonly string[] = ['core.worker', 'thumb.worker'];
 
 /**
@@ -42,7 +47,10 @@ export const COMPACT_FORBIDDEN: readonly string[] = [
 
 /** A source map's source without its leading `./` and `../` (and a virtual module's NUL). */
 export function normalizeSource(source: string): string {
-  return source.replaceAll('\\', '/').replace(/^\0/, '').replace(/^(?:\.\.?\/)+/, '');
+  return source
+    .replaceAll('\\', '/')
+    .replace(/^\0/, '')
+    .replace(/^(?:\.\.?\/)+/, '');
 }
 
 /** Whether a source (as a source map lists it, or normalized) is one COMPACT_FORBIDDEN entry names. */
@@ -52,6 +60,12 @@ export function sourceMatches(source: string, entry: string): boolean {
   if (!entry.includes('/')) return s.includes(`node_modules/${entry}/`);
   const path = entry.startsWith('packages/') ? entry : `src/${entry}`;
   return dir ? s.startsWith(path) : s === path;
+}
+
+/** A built worker file (`<name>.worker-<hash>.js`) and its name (`core.worker`). */
+export function workerName(file: string): string | undefined {
+  const m = /([\w-]+\.worker)-[\w-]+\.js$/.exec(file);
+  return m?.[1];
 }
 
 /** The first COMPACT_FORBIDDEN entry a source falls under, if any. */
