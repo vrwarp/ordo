@@ -1881,3 +1881,8 @@ before it):
   (606.9 kB gzip), the compact first load 276,068 B gzip (headroom 23,932 B). The thumbnail worker's test now
   says what it means (no font message before the worker starts, then fonts before any render) and passes on the
   tree merged with wave r2a, whose worker gets `{ t: 'init' }` first.
+- **Checks of the repair** (`4785c05`, a shared machine): lint, typecheck, build, the Pages build, the bundle
+  budget and the goldens (no new case against the baseline) pass; the whole vitest run passes but for one
+  search timing check that ran at load 17 and passed three times alone; the P0 specs passed three times in all six
+  projects (62 tests each, 3 skipped as before); the whole e2e suite passed (171, 7 skipped); the new e2e tests
+  all fail against the pre-repair client.
