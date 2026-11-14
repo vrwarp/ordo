@@ -1018,7 +1018,10 @@ Done (design/27 §4, §15 M1):
   anywhere: footers not drawn, others the whole slide; empty slide placeholders (prompt text only) not drawn.
 - Run style through the whole chain (own rPr, shape lstStyle, layout and master placeholder lstStyles,
   `p:style/a:fontRef` colour and major/minor font, master txStyles for placeholders, `defaultTextStyle` for
-  everything else, never otherStyle): size, fill, bold, italic, underline, strike, caps, spacing, baseline,
+  everything else, never otherStyle): size, fill (the nearest decides; a picture or group fill gives the
+  text colour tx1, as no fill does, marked `textFill` and noted once a slide), bold, italic, underline,
+  strike, caps, spacing, baseline (the nearest, 0 included; a 0 under a farther non-zero one is
+  `escZero`, which LibreOffice reads as unset: `loCompat` writes that shift, design/27 §4 "Baseline 0"),
   Latin/EA/CS/sym typefaces through the theme (+mj for titles, +mn otherwise), outline (`a:ln`), outer
   shadow, highlight, lang. Paragraphs: algn, level, marL/indent, rtl, spcBef/spcAft/lnSpc, the nearest
   bullet setting (buNone wins). Bodies: insets, anchor, wrap, normAutofit/spAutoFit, vert, numCol,
@@ -1079,7 +1082,7 @@ Done (design/27 §3.1, §3.2, §4 "Text bodies", §6, §11 "Mapping"):
 - **Runs**: whatever differs from the box, merged while unchanged: family per script (a run's Latin,
   East Asian or complex-script typeface by LibreOffice's block table, weak characters taking the script
   before them), weight, slant, `sizeScale`, colour (gradient as its first stop until M6, hollow text
-  transparent), highlight, underline, strike, caps, letter spacing, `baseline`, outline and shadow (null
+  transparent, picture-filled text in the text colour with its outline), highlight, underline, strike, caps, letter spacing, `baseline`, outline and shadow (null
   where only the box has one), language (primary subtag). The '\n' ending an empty paragraph carries its end
   mark; the a:br before an empty last line carries the paragraph's end mark. Known limit: when the line
   before an empty last paragraph is empty too, its '\n' ends both and carries the last paragraph's end mark

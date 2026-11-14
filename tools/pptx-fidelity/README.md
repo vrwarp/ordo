@@ -192,7 +192,11 @@ two stored presentations modulo ids, media ids (by file), times, the import log 
 
 - `src/compat/`: one LibreOffice policy rule per file (`compatRule`: key, text, `hits(element, slide)`),
   listed once in `COMPAT_REGISTRY` (`index.ts`), in report order. An M9 track adds its rule (`flat3d`,
-  `warpRuns`, `vertLo`, `mirrorTurn`, `chartLo`) as a file and one line there.
+  `warpRuns`, `vertLo`, `mirrorTurn`, `chartLo`) as a file and one line there. The rules: `runShadow`,
+  `textOutline` (it counts picture-filled text as filled: the converter draws it in the text colour, and the
+  render copy LibreOffice draws has its outline removed), `refit`, `inheritedFit`, `cellRows` and `escZero`
+  (a run's `baseline="0"` under a non-zero inherited baseline, which LibreOffice reads as unset: drawn shifted
+  by that one at 58 %, as `src/esczero-probe.ts` measured).
 - `src/features/`: one family of XML features per file (`featureFamily`: key, features in report order,
   optional targets, `detect(source)` with the slide's XML and the parts it names, `related('/chart')`),
   listed once in `FEATURE_FAMILIES`. The text family is `textFeatures` (as since M2); every other family's
@@ -222,6 +226,8 @@ something out), `hubWhy` (`slide`, `presentation`, `geoms`), `level` (when not `
 
 - `src/placement.ts`: the M1 placement check on the synthetic 4:3 deck (boxes within 2 px of LibreOffice's).
 - `src/table-probe.ts`: the probe deck that measured LibreOffice's table row rule.
+- `src/esczero-probe.ts`: the probe decks that measured LibreOffice's reading of `baseline="0"` (`LO_ESC_ZERO`,
+  checked against the converter's `--lo-compat` emission in `esczero-probe.test.ts`).
 
 ## Tests
 

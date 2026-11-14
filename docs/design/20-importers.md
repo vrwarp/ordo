@@ -168,6 +168,9 @@ from filled text in slides, layouts and masters. LibreOffice cannot draw a colou
 around filled text: it substitutes hollow letters, which with the usual drop shadow read as
 broken text (white outlined headlines, common in sermon decks). The fill and shadow stay; text
 meant to be hollow (`<a:noFill/>`) keeps its outline. The job log counts the runs changed.
+Picture-filled text (`<a:blipFill>` in a run's properties) counts as filled: LibreOffice draws it in its
+automatic colour without the outline, and ordo's converter draws it in the slide's text colour (tx1) with
+the outline kept (design/27 §4 "Picture-filled text").
 soffice runs hardened (design/21: address-space cap, no network, process-group timeout). When
 the copy cannot be built (the pool cannot start, the deck passes the caps), the import fails: LibreOffice
 never converts a deck as uploaded. Fonts the deck uses must
@@ -480,7 +483,10 @@ It writes `summary.json` and an HTML report with the pictures side by side, wors
 rounds a 960 pt slide up to 1921 pixels; its pictures are cut to the slide's proportions before scoring.
 
 Where LibreOffice is known to differ from PowerPoint, ordo follows PowerPoint and the score pays for it:
-LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" button), ordo does. The native
+LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" button), ordo does; and
+LibreOffice reads a run's `baseline="0"` as unset, so under a presentation default of -25000 it draws the
+text lowered at 58 % of its size, where PowerPoint and ordo draw it in place at full size (design/27 §4
+"Baseline 0"). The native
 column's `--lo-compat` draws the slides those policies change as LibreOffice would and as ordo does, and
 reports the means both ways and per rule (design/27 §14.1).
 

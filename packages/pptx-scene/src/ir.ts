@@ -198,6 +198,12 @@ export interface RunStyle {
   sym?: string;
   /** `baseline`/100,000: +0.3 is a superscript. */
   baseline: number;
+  /**
+   * The nearest `baseline` of the chain is 0 and a farther one is not: that farther one (/100,000, ±1). ordo
+   * draws the run in place at full size, as PowerPoint does; LibreOffice 24.2 reads the 0 as unset and draws
+   * the run shifted by this at 58 % of its size, which `EmitOptions.loCompat` copies (design/27 §4 "Baseline 0").
+   */
+  escZero?: number;
   /** Extra space between characters in points (`spc`/100). */
   spacingPt: number;
   caps: 'none' | 'all' | 'small';
@@ -207,6 +213,12 @@ export interface RunStyle {
   lang?: string;
   /** `a:highlight`. */
   highlight?: Rgba;
+  /**
+   * The nearest fill of the chain was a picture (`a:blipFill`) or a group fill (`a:grpFill`), which ordo does
+   * not paint text with: `fill` is the text colour (tx1), as with no fill, and the outline stays (design/27
+   * §4 "Picture-filled text"; a picture-filled run makes its shape approx, `textFill:picture`).
+   */
+  textFill?: 'picture' | 'group';
 }
 
 export interface Run {

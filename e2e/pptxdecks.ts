@@ -817,3 +817,44 @@ export async function guardDeck(dir: string): Promise<string> {
   writeFileSync(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
   return file;
 }
+
+// ---- the picture-filled text deck (text-fix, r2a) ---------------------------------------------------------
+
+/** The picture-filled text box: 'HIH' at 200 pt, centred on a 13.33 x 7.5 in slide (EMU). */
+export const PICTURE_TEXT = { text: 'HIH', pt: 200, x: 0.67 * IN, y: 1.5 * IN, cx: 12 * IN, cy: 4.5 * IN };
+
+/**
+ * One slide on white: 'HIH' at 200 pt in Arial, centred, filled with a picture (`a:blipFill` in the run's
+ * properties: a test pattern made by ffmpeg), outlined 3 pt in dark red, with a 3-D bevel on its body
+ * (`a:scene3d`, `a:sp3d`), as the AMOR slide of the worship set sets its letters. pptxgenjs cannot write a
+ * picture fill on text, so the deck is raw XML (`test-util.ts`). ordo draws the letters in the text colour
+ * (tx1, black here) with the outline and the bevel drawn flat; before text-fix they were hollow.
+ */
+export function pictureTextDeck(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  const pattern = join(dir, 'pattern.png');
+  ffmpeg(['-f', 'lavfi', '-i', 'testsrc2=s=640x360', '-frames:v', '1', pattern]);
+  const t = PICTURE_TEXT;
+  const rPr =
+    `<a:ln w="38100">${solid('8B0000')}</a:ln>` +
+    '<a:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>' +
+    '<a:latin typeface="Arial"/>';
+  const bodyPr =
+    '<a:bodyPr wrap="none" anchor="ctr"><a:scene3d><a:camera prst="orthographicFront"/>' +
+    '<a:lightRig rig="threePt" dir="t"/></a:scene3d><a:sp3d><a:bevelT w="38100" h="38100"/></a:sp3d></a:bodyPr>';
+  const txBody = body(para(run(t.text, `sz="${t.pt * 100}"`, rPr), 'algn="ctr"')).replace(
+    '<a:bodyPr/>',
+    bodyPr,
+  );
+  const slides: SlideSpec[] = [
+    {
+      bg: solidBg('FFFFFF'),
+      rels: [imageRel('rId2', 'pattern.png')],
+      shapes: sp({ id: 2, name: 'Picture text', x: t.x, y: t.y, cx: t.cx, cy: t.cy, txBox: true, txBody }),
+    },
+  ];
+  return zip(
+    buildDeck({ slides, media: { 'ppt/media/pattern.png': readFileSync(pattern) } }),
+    join(dir, 'Picture text.pptx'),
+  );
+}

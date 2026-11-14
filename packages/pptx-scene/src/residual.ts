@@ -216,6 +216,13 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
     by: 'classify',
     note: 'a centred text block that moves text',
   },
+  {
+    reason: 'textFill:picture',
+    features: [],
+    decision: 'approx',
+    by: 'classify',
+    note: 'picture-filled text: drawn in the text colour (tx1), its outline kept',
+  },
   // ── Pictures ──
   {
     reason: 'metafile',

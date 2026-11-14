@@ -550,6 +550,8 @@ function supportReasons(
       if (e.text.anchorCtr ?? (ctr === '1' || ctr === 'true')) rate('anchorCtr');
       const warp = e.text.warp?.preset ?? firstChildOf(body, 'a:prstTxWarp')?.attrs.prst;
       if (warp !== undefined && warp !== 'textNoShape') rate('warp');
+      if (e.text.paras.some((p) => p.runs.some((r) => r.style.textFill === 'picture' && r.text.trim())))
+        rate('textFill:picture');
     }
   }
   return { residual: [...new Set(residual)], approx: [...new Set(approx)] };
