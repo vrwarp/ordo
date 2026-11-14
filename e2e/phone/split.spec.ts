@@ -263,3 +263,25 @@ test('(1b) the first load starts no thumbnail worker and fetches no font file', 
   const fontFiles = reqs.filter((r) => r.url.includes(`/api/v1/files/${fontHash}`)).map((r) => r.url);
   expect.soft(fontFiles, 'no library font file before a preview draws').toEqual([]);
 });
+
+test('(4) the service worker precaches no editor, live, settings, Setup or output code, and no import worker', async ({
+  page,
+}) => {
+  await signInPhone(page, url);
+  const cached = await page.evaluate(async () => {
+    const reg = await navigator.serviceWorker.ready;
+    const names = (await caches.keys()).filter((k) => k.startsWith('ordo-shell-'));
+    const c = names[0] ? await caches.open(names[0]) : undefined;
+    const keys = c ? (await c.keys()).map((r) => new URL(r.url).pathname) : [];
+    return { script: reg.active?.scriptURL ?? '', keys };
+  });
+  expect.soft(cached.script).toMatch(/\/sw\.js\?set=compact$/);
+  expect(cached.keys.length).toBeGreaterThan(0);
+  const bad: string[] = [];
+  for (const k of cached.keys) {
+    const f = assetOf(new URL(k, url).href);
+    if (f) for (const v of forbiddenIn(f)) bad.push(`${f.file}: ${v}`);
+    if (/import\.worker/.test(k)) bad.push(`${k}: the import worker`);
+  }
+  expect(bad).toEqual([]);
+});

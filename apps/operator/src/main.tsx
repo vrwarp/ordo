@@ -5,6 +5,7 @@ import { deviceProfile } from './lib/capabilities.ts';
 import { applyLayout, startLayout, thisIsPhone } from './lib/layout.ts';
 import { preloadFor } from './pages.ts';
 import { installGlobalErrorLog } from './services/log.ts';
+import { browserSwEnv, registerServiceWorker } from './sw/register.ts';
 import './styles.css';
 import './ipad.css';
 
@@ -24,8 +25,9 @@ if (DEMO) {
     if (ok) createRoot(document.getElementById('root')!).render(<App />);
   });
 } else {
-  if ('serviceWorker' in navigator && import.meta.env.PROD) {
-    navigator.serviceWorker.register('./sw.js').catch(() => undefined);
-  }
+  // The precache set by device class, once (src/sw/register.ts): a phone's after load and idle, every other
+  // device's at once, as before.
+  if ('serviceWorker' in navigator && import.meta.env.PROD)
+    registerServiceWorker(browserSwEnv(thisIsPhone()));
   createRoot(document.getElementById('root')!).render(<App />);
 }

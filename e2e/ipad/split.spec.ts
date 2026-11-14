@@ -29,6 +29,11 @@ test('a tablet keeps the regular layout and opens the editor with no Loading…'
     }, song.id);
     await expect(page.locator('.konvajs-content').first()).toBeVisible({ timeout: 20_000 });
     expect(await page.evaluate(() => (window as unknown as { __loading?: number }).__loading)).toBe(0);
+    // A tablet precaches every file, as before (design/28 §3.1: the set is chosen by device class).
+    const script = await page.evaluate(
+      async () => (await navigator.serviceWorker.ready).active?.scriptURL ?? '',
+    );
+    expect(script).toMatch(/\/sw\.js$/);
   } finally {
     await api.dispose();
     hub.kill();

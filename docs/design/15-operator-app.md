@@ -848,7 +848,12 @@ which drops the cached thumbnails, and the editor redraws.
   `src/ipad.css` defines `--safe-top/right/bottom/left` (from `env(safe-area-inset-*)`, 0 on the venue
   PC), pads `#root` with them and sets `touch-action: manipulation` on controls (no double-tap zoom;
   pinch zoom stays). The icons are committed PNGs; the manifest and icons are not precached (the
-  installed app keeps its icon; the shell is precached as before).
+  installed app keeps its icon; the shell is precached as before). The service worker precaches by
+  device class, decided once at startup (`src/sw/register.ts`): an iPad, an Android tablet and the
+  venue PC register `./sw.js` at once and precache every built file, as before (an iPad starting in a
+  narrow Split View too, so it keeps the editor offline); a phone registers `./sw.js?set=compact` after
+  load and idle and precaches only the compact set (`src/sw/sets.ts`: the entry, the playlists and
+  previews, the core and thumbnail workers). A layout change never re-registers.
 - On the first sign-in an edit-profile device asks once for `navigator.storage.persist()` (Safari may
   grant it to an installed app; otherwise script-written storage goes after 7 days unused).
 - Back from a suspension the core reconnects on its own: the hub connection judges liveness by the time

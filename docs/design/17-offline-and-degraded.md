@@ -21,7 +21,10 @@ yet (an outage, a slow NAS at service start) keeps its cue retrying with backoff
 quarantined.
 The apps themselves are served by a Service Worker per origin that precaches the app
 shell on first load and serves it cache-first, so a reload with the hub down still
-loads the app.
+loads the app. The operator's worker precaches by device class, chosen once at startup:
+`./sw.js` (the venue PC, iPads, Android tablets) every built file, `./sw.js?set=compact`
+(a phone, registered after load and idle) only what a phone opens, without the editor, the
+live view, Setup, the settings pages or the import worker (design/28 §3.1).
 
 ## WAN loss
 
