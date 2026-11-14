@@ -184,7 +184,10 @@ closes the dialog below it gets the focus back. A popup a control of the dialog 
 the end of the body (a Menu's list since #26, the colour picker) is the dialog's (`components/popupOf.ts`,
 `registerPopup`): the focus may move into it, Tab in it is its own, and it carries the dialog's
 `data-keys="off"`, so Enter and Space press its items and the arrows move its slider; any other element (a
-popup of the page behind, the editor's non-modal Find card) stays outside (menuDialog.browser.test.ts). A key that
+popup of the page behind, the editor's non-modal Find card) stays outside (menuDialog.browser.test.ts). Such a
+popup open when a dialog opens (a key or the hub opened it, no click closed the popup first) closes then: it is
+drawn above every backdrop, so a click on one of its items would act behind the dialog (`registerPopup`'s
+`close`; land re-review of #26). A key that
 still reaches the page behind it (focus on the body) acts on nothing and, for Space, Enter, the arrows, Page
 Up/Down, Home, End and every mapped key, loses its browser default too (`KeyboardDriver`), so it can never press
 or scroll a control behind the dialog (review r2a: one Shift+Tab from Diagnostics reached Clear all, and two
@@ -605,7 +608,8 @@ Save, Undo, Redo, an Add menu (Text, Image, Video, Rectangle, Ellipse, Line), an
 backward, back, duplicate, delete) and History (`components/Menu.tsx`: 44 px items, closed by a tap
 outside or Escape, nothing on hover; its list is portalled to the body so no scrolling panel clips it, and with
 it open Tab or the Down arrow on the trigger goes to its first item, the arrows, Home and End move between the
-items, and Tab past the last closes it and goes on from the trigger). While an object is selected its keyboard-only actions (nudge with a
+items, and Tab past the last closes it and goes on from the trigger; the focus moving to another control closes
+it, and a click on its padding or a disabled item leaves the focus on the list). While an object is selected its keyboard-only actions (nudge with a
 1/10/50 px step, edit text, deselect) float in a bar just above or below it, clear of its anchors and
 rotate handle, or at the pane edge away from a box that fills the slide (`objectToolsSpot` in
 `touchGeometry.ts`); the bar overlays the pane, so the stage never moves when a selection starts. A mouse

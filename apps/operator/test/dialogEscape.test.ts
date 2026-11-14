@@ -457,4 +457,42 @@ describe("a popup the dialog opened is the dialog's (#26: a Menu's list is porta
     offList();
     off();
   });
+  it('a popup open outside a dialog when it opens closes (it sits above every backdrop: a click on it would act)', () => {
+    const doc = new FakeDoc();
+    const closed: string[] = [];
+    const offs = new Map<string, () => void>();
+    /** Register `popup` with `anchor`; closing it unmounts it, which unregisters it (usePopupOf). */
+    const open = (name: string, anchor: unknown, closable = true) => {
+      const popup = fakePopup([name], doc);
+      const close = () => {
+        closed.push(name);
+        offs.get(name)?.();
+      };
+      offs.set(name, registerPopup(popup, anchor, closable ? close : undefined));
+      return popup;
+    };
+    // The page's Arrange menu, open when a key (a save, the hub) opens a dialog over it.
+    open('Arrange', new FakeControl('Arrange', doc, null));
+    const box = fakeDialog(['Close', 'Layer'], doc);
+    // A popup that the dialog's own control has open as it registers (mounted with it) stays.
+    const layer = open('Layer', box.controls[1]);
+    const off = registerModal(box, doc);
+    expect(closed).toEqual(['Arrange']);
+    expect(inDialog(box, layer.items[0])).toBe(true);
+    // A dialog over it closes the popup of the one below; one with no way to close is left, and stays outside.
+    const fill = open('Fill', new FakeControl('Fill', doc, null), false);
+    const confirm = fakeDialog(['OK'], doc);
+    const offConfirm = registerModal(confirm, doc);
+    expect(closed).toEqual(['Arrange', 'Layer']);
+    doc.move(fill.items[0]);
+    expect(doc.activeElement).toBe(confirm);
+    // A modal registered without a box closes every popup that can close.
+    open('Hex', confirm.controls[0]);
+    const offBare = registerModal();
+    expect(closed).toEqual(['Arrange', 'Layer', 'Hex']);
+    offBare();
+    offConfirm();
+    offs.get('Fill')?.();
+    off();
+  });
 });

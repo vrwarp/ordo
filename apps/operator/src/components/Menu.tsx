@@ -1,4 +1,5 @@
 import {
+  type FocusEvent as FocusEv,
   type KeyboardEvent as KeyEvent,
   type ReactNode,
   useEffect,
@@ -30,7 +31,10 @@ const VIEWPORT_PAD = 8;
  * next to its trigger in the page, the keys that reached it by order reach it by hand: with it open, Tab, the
  * Down arrow or Home on the trigger moves to its first item, the Up arrow or End to its last; in it, the arrows
  * move between the items (wrapping; Home and End to the ends), Shift+Tab from the first item goes back to the
- * trigger, and Tab from the last closes it with the focus on the trigger, so the Tab goes on from there.
+ * trigger, and Tab from the last closes it with the focus on the trigger, so the Tab goes on from there. The focus
+ * moving from the trigger and the list to another control closes it (Shift+Tab from the trigger, a script); the
+ * list itself takes the focus of a click on its padding or a disabled item (`tabIndex` -1), so that focus stays
+ * in the menu, where the arrows and Escape go on working. A dialog that opens over it closes it (`usePopupOf`).
  */
 export function Menu({
   label,
@@ -54,7 +58,7 @@ export function Menu({
     setOpen(false);
     trigger.current?.focus();
   };
-  usePopupOf(listRef, trigger, open);
+  usePopupOf(listRef, trigger, open, () => setOpen(false));
   /** The items that take the focus, in order. */
   const enabledItems = () =>
     Array.from(
@@ -76,10 +80,27 @@ export function Menu({
           : null;
     if (into && focusItem(into)) e.preventDefault();
   };
+  /** Focus that moves to a control outside the trigger and the list (not to nothing: the window) closes it. */
+  const onFocusLeave = (e: FocusEv<HTMLElement>) => {
+    const to = e.relatedTarget as Node | null;
+    if (to && !root.current?.contains(to) && !listRef.current?.contains(to)) setOpen(false);
+  };
   const onListKey = (e: KeyEvent<HTMLDivElement>) => {
     const all = enabledItems();
     const i = all.indexOf(e.target as HTMLButtonElement);
-    if (i < 0 || !all.length) return;
+    if (!all.length) return;
+    if (i < 0) {
+      // The list itself (a click on its padding or a disabled item): into it, as from the trigger.
+      if (e.target !== listRef.current) return;
+      const into =
+        e.key === 'ArrowDown' || e.key === 'Home'
+          ? 'first'
+          : e.key === 'ArrowUp' || e.key === 'End'
+            ? 'last'
+            : null;
+      if (into && focusItem(into)) e.preventDefault();
+      return;
+    }
     const to =
       e.key === 'ArrowDown'
         ? (i + 1) % all.length
@@ -158,8 +179,10 @@ export function Menu({
       className={`menu-list ${align}`}
       role="menu"
       aria-label={label}
+      tabIndex={-1}
       style={{ position: 'fixed', left: pos.left, top: pos.top }}
       onKeyDown={onListKey}
+      onBlur={onFocusLeave}
     >
       {items.map((it, i) => (
         <button
@@ -191,6 +214,7 @@ export function Menu({
         className={open ? 'on' : ''}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onTriggerKey}
+        onBlur={onFocusLeave}
       >
         {label} ▾
       </button>

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,9 +12,11 @@ import { findChromium } from '../../../tools/find-chromium.ts';
  * `registerModal`) took the focus back from its items, Tab from the trigger skipped them, and the live
  * KeyboardDriver, blocked while a modal is open, kept Enter and Space on them from pressing anything (a key
  * outside every `[data-keys="off"]`). The page (menuDialog.page.test-util.tsx) mounts the operator's own Dialog,
- * Menu and KeyboardDriver; real key presses and clicks move the focus and press the buttons. Each step records
- * where the focus is, whether the menu and the dialog are open and what was picked; the whole record is compared
- * at once, so a failure shows every step that went wrong.
+ * Menu and KeyboardDriver with the operator's styles.css (the list above every backdrop, as #26 placed it); real
+ * key presses and clicks move the focus and press the buttons. Each step records where the focus is, whether a
+ * menu and the dialog are open and what was picked; the whole record is compared at once, so a failure shows every
+ * step that went wrong. A menu or colour picker the page opened before a dialog opened over it closes then (land
+ * re-review: its list stayed above the backdrop, and a click on an item ran it while the modal was open).
  * Chromium is tools/find-chromium.ts's (Playwright's, else ORDO_TEST_CHROMIUM): skipped when none is found, and a
  * failure under CI.
  */
@@ -73,6 +76,9 @@ function state(p: Page): Promise<State> {
   });
 }
 
+/** Where an item of the page's menu was, before a dialog opened over it. */
+const spot = { x: 0, y: 0 };
+
 const s = (focused: string, menu = true, log: string[] = [], dialog = true): State => ({
   focused,
   menu,
@@ -81,7 +87,8 @@ const s = (focused: string, menu = true, log: string[] = [], dialog = true): Sta
 });
 
 /** Each scenario: the page's variant, its steps and the state expected after each. */
-const SCENARIOS: { name: string; variant: 'footer' | 'last' | 'colour'; steps: [Step, State][] }[] = [
+type Variant = 'footer' | 'last' | 'colour' | 'page';
+const SCENARIOS: { name: string; variant: Variant; steps: [Step, State][] }[] = [
   {
     name: 'arrows and Tab move through the items (the disabled one skipped), Shift+Tab back to the trigger',
     variant: 'footer',
@@ -162,6 +169,29 @@ const SCENARIOS: { name: string; variant: 'footer' | 'last' | 'colour'; steps: [
     ],
   },
   {
+    name: 'the focus leaving the trigger and the list for another control closes the menu (menu button pattern)',
+    variant: 'footer',
+    steps: [
+      [openMenu, s('Layer ▾')],
+      [['Shift+Tab', press('Shift+Tab')], s('Before', false)],
+      [openMenu, s('Layer ▾')],
+      [['ArrowDown', press('ArrowDown')], s('Bring to front')],
+      [['script focus OK', (p) => p.getByRole('button', { name: 'OK' }).focus()], s('OK', false)],
+    ],
+  },
+  {
+    name: 'a click on a disabled item keeps the focus in the list, where the arrows and Escape still work',
+    variant: 'footer',
+    steps: [
+      [openMenu, s('Layer ▾')],
+      [['click Locked (disabled)', (p) => item(p, 'Locked').click({ force: true })], s('Layer')],
+      [['ArrowDown', press('ArrowDown')], s('Bring to front')],
+      [['click Locked (disabled)', (p) => item(p, 'Locked').click({ force: true })], s('Layer')],
+      [['End', press('End')], s('Send to back')],
+      [['Escape', press('Escape')], s('Layer ▾', false)],
+    ],
+  },
+  {
     name: 'with the trigger the last control, Tab past the last item wraps to the first control',
     variant: 'last',
     steps: [
@@ -186,6 +216,45 @@ const SCENARIOS: { name: string; variant: 'footer' | 'last' | 'colour'; steps: [
       [['ArrowRight', press('ArrowRight')], { ...s('Hue', false), picker: true, value: '211' }],
       [['Escape (the picker only)', press('Escape')], s('body', false)],
       [['Escape', press('Escape')], s('body', false, ['dialog closed'], false)],
+    ],
+  },
+  {
+    name: 'a menu or colour picker the page opened closes when a dialog opens over it: no click on it acts behind it',
+    variant: 'page',
+    steps: [
+      [
+        ['click Page menu', (p) => p.getByRole('button', { name: 'Page menu ▾' }).click()],
+        s('Page menu ▾', true, [], false),
+      ],
+      [['ArrowDown', press('ArrowDown')], s('Page one', true, [], false)],
+      [
+        [
+          'a dialog opens with no click first (a key, the hub)',
+          async (p) => {
+            const b = (await item(p, 'Page two').boundingBox())!;
+            spot.x = b.x + b.width / 2;
+            spot.y = b.y + b.height / 2;
+            await p.evaluate(() => window.__openDialog());
+          },
+        ],
+        s('box', false),
+      ],
+      // The list is gone: the click lands on the backdrop, which closes the dialog.
+      [
+        ['mouse click where Page two was', (p) => p.mouse.click(spot.x, spot.y)],
+        s('body', false, ['dialog closed'], false),
+      ],
+    ],
+  },
+  {
+    name: 'so does a colour picker the page opened',
+    variant: 'page',
+    steps: [
+      [
+        ['click the page colour pill', (p) => p.getByRole('button', { name: 'Open color picker' }).click()],
+        { ...s('Open color picker', false, [], false), picker: true },
+      ],
+      [['a dialog opens', (p) => p.evaluate(() => window.__openDialog())], s('box', false)],
     ],
   },
 ];
@@ -215,19 +284,25 @@ describe.skipIf(!executablePath)('a Menu inside a Dialog, in headless Chromium',
     const errors: string[] = [];
     try {
       const page = await browser.newPage();
+      page.setDefaultTimeout(5_000);
       page.on('pageerror', (e) => errors.push(e.message));
       await page.setContent('<!doctype html><html><body><div id="app"></div></body></html>');
+      await page.addStyleTag({ content: readFileSync(join(here, '../src/styles.css'), 'utf8') });
       await page.addScriptTag({ content: built.outputFiles[0]!.text });
       for (const sc of SCENARIOS) {
         await page.evaluate((v) => window.__mount(v), sc.variant);
-        await expect.poll(() => page.locator('.dialog').count()).toBe(1);
+        await expect.poll(() => page.locator(sc.variant === 'page' ? '.menu' : '.dialog').count()).toBe(1);
         got[sc.name] = [];
         want[sc.name] = [];
         for (const [[label, act], expected] of sc.steps) {
-          await act(page);
+          // A step that cannot act (a control under a backdrop) is recorded, so the record still shows every step.
+          const failed = await act(page).then(
+            () => '',
+            (e: Error) => ` (failed: ${e.message.split('\n')[0]})`,
+          );
           // React commits a key's or a click's update before the next task; let it, and the focus, settle.
           await page.evaluate(() => new Promise((r) => setTimeout(r, 30)));
-          got[sc.name]!.push(`${label} -> ${JSON.stringify(await state(page))}`);
+          got[sc.name]!.push(`${label}${failed} -> ${JSON.stringify(await state(page))}`);
           want[sc.name]!.push(`${label} -> ${JSON.stringify(expected)}`);
         }
       }

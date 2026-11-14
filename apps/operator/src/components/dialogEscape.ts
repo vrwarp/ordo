@@ -20,8 +20,9 @@ const open: object[] = [];
  * default included (the KeyboardDriver keeps Space, Enter and the arrows from a control behind the dialog).
  * The focus stays in the topmost dialog (`registerModal` with its box): Tab and Shift+Tab cycle over its own
  * controls, and focus that lands outside it comes back, unless it lands in a popup the dialog opened (a Menu's
- * list portalled to the body, `registerPopup`). The Stream Deck and MIDI are not keys and keep working
- * (design/15 "Dialogs", design/19).
+ * list portalled to the body, `registerPopup`). A popup open elsewhere when a dialog opens closes: it is drawn
+ * above every backdrop, so a click on it would act behind the dialog. The Stream Deck and MIDI are not keys and
+ * keep working (design/15 "Dialogs", design/19).
  */
 const modals: { box?: FocusBox }[] = [];
 
@@ -63,17 +64,23 @@ export function tabbables(box: FocusBox): FocusControl[] {
   );
 }
 
-/** The open popups that a control opened and the page renders elsewhere, with that control (`registerPopup`). */
-const popups: { popup: PopupBox; anchor: unknown }[] = [];
+/**
+ * The open popups that a control opened and the page renders elsewhere, with that control and how to close them
+ * (`registerPopup`).
+ */
+const popups: { popup: PopupBox; anchor: unknown; close?: () => void }[] = [];
 
 /**
  * Register an open popup that a control (`anchor`) opened and the page renders elsewhere: a Menu's list and the
  * colour picker, portalled to the body so that no scrolling box clips them. For the focus trap the popup is where
  * its anchor is: opened from the topmost dialog it is that dialog's, and the focus may move into it (a click on
- * an item, the arrows, Tab); opened from anywhere else it is outside, as before. Returns its removal.
+ * an item, the arrows, Tab); opened from anywhere else it is outside, as before. `close` closes it: a dialog that
+ * opens while it is open and is not its anchor's (a key or the hub opened the dialog, no click closed the popup
+ * first) calls it, since the popup is drawn above the dialog's backdrop (`.menu-list`, `.color-popover`) and a
+ * click on it would act behind the dialog. Returns its removal.
  */
-export function registerPopup(popup: PopupBox, anchor: unknown): () => void {
-  const me = { popup, anchor };
+export function registerPopup(popup: PopupBox, anchor: unknown, close?: () => void): () => void {
+  const me = { popup, anchor, close };
   popups.push(me);
   return () => {
     const i = popups.indexOf(me);
@@ -99,12 +106,14 @@ export function inDialog(box: FocusBox, t: unknown, depth = 0): boolean {
  * the page, a script, a click on nothing) is put back on the box. A popup it opened (`registerPopup`) is inside
  * it: the focus may move there, and Tab there is the popup's own (a Menu takes it: past its last item it gives the
  * focus back to its trigger, and the Tab goes on from there). The Tab is handled on the document, after the
- * popup's own handler, since a popup's keys never pass through the box. When it closes, the dialog below it (if
- * any) gets the focus back.
+ * popup's own handler, since a popup's keys never pass through the box. A popup open when it registers that is
+ * not its own (the page's, or the dialog's below) is closed (`registerPopup`'s `close`); without a box, every one
+ * is. When it closes, the dialog below it (if any) gets the focus back.
  */
 export function registerModal(box?: FocusBox, doc?: FocusDoc): () => void {
   const me: { box?: FocusBox } = box ? { box } : {};
   modals.push(me);
+  for (const p of popups.slice()) if (p.close && !(box && inDialog(box, p.anchor))) p.close();
   const top = () => modals[modals.length - 1] === me;
   const onKey = (e: KeyboardEvent) => {
     if (!box || e.key !== 'Tab' || e.defaultPrevented || !top()) return;
