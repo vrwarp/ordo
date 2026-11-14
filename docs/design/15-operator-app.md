@@ -179,8 +179,12 @@ all hold), and a key pressed inside it is the dialog's (`data-keys="off"` on its
 focused button presses that button: Space on End service's confirmation ends the service (it was Next, and
 the button never pressed). A dialog takes the focus when it opens unless one of its controls did (autoFocus),
 and keeps it while it is the topmost (`registerModal` with its box): Tab past its last control goes to its
-first and Shift+Tab before its first to its last, focus that lands outside it comes back to it (a popover it
-opened, the colour picker's, keeps it), and when it closes the dialog below it gets the focus back. A key that
+first and Shift+Tab before its first to its last, focus that lands outside it comes back to it, and when it
+closes the dialog below it gets the focus back. A popup a control of the dialog opened and the page renders at
+the end of the body (a Menu's list since #26, the colour picker) is the dialog's (`components/popupOf.ts`,
+`registerPopup`): the focus may move into it, Tab in it is its own, and it carries the dialog's
+`data-keys="off"`, so Enter and Space press its items and the arrows move its slider; any other element (a
+popup of the page behind, the editor's non-modal Find card) stays outside (menuDialog.browser.test.ts). A key that
 still reaches the page behind it (focus on the body) acts on nothing and, for Space, Enter, the arrows, Page
 Up/Down, Home, End and every mapped key, loses its browser default too (`KeyboardDriver`), so it can never press
 or scroll a control behind the dialog (review r2a: one Shift+Tab from Diagnostics reached Clear all, and two
@@ -599,7 +603,9 @@ gesture must not also move an object. A double-tap on a text box focuses its tex
 gesture, so the keyboard opens). On a coarse pointer the editor toolbar is one row: Library, title,
 Save, Undo, Redo, an Add menu (Text, Image, Video, Rectangle, Ellipse, Line), an Arrange menu (front, forward,
 backward, back, duplicate, delete) and History (`components/Menu.tsx`: 44 px items, closed by a tap
-outside or Escape, nothing on hover). While an object is selected its keyboard-only actions (nudge with a
+outside or Escape, nothing on hover; its list is portalled to the body so no scrolling panel clips it, and with
+it open Tab or the Down arrow on the trigger goes to its first item, the arrows, Home and End move between the
+items, and Tab past the last closes it and goes on from the trigger). While an object is selected its keyboard-only actions (nudge with a
 1/10/50 px step, edit text, deselect) float in a bar just above or below it, clear of its anchors and
 rotate handle, or at the pane edge away from a box that fills the slide (`objectToolsSpot` in
 `touchGeometry.ts`); the bar overlays the pane, so the stage never moves when a selection starts. A mouse

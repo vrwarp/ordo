@@ -10,6 +10,7 @@ import {
   rgbaCssString,
   rgbaToHsv,
 } from './colorMath.ts';
+import { usePopupOf } from './popupOf.ts';
 import { useDeckSwatches } from './deckSwatches.ts';
 import {
   activeColorOf,
@@ -83,6 +84,8 @@ export function PaintPopover({
   onClose,
 }: PaintPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
+  // Portalled to the body: it is where its anchor is for a dialog's focus trap and the live keys (popupOf.ts).
+  usePopupOf(popoverRef, anchor, !inline);
   const svRef = useRef<HTMLDivElement>(null);
   const swatches = useDeckSwatches(explicitSwatches);
   const recent = getRecentColors();

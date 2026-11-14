@@ -1,5 +1,13 @@
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  type KeyboardEvent as KeyEvent,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { createPortal } from 'react-dom';
+import { usePopupOf } from './popupOf.ts';
 
 export type MenuItem = {
   label: ReactNode;
@@ -16,6 +24,13 @@ const VIEWPORT_PAD = 8;
  * A touch-friendly drop-down menu (design/15 "Touch"): a button that opens a list of 44 px items below it.
  * Portaled to `document.body` with viewport clamping so scrollable sidebars/toolbars never clip it.
  * A tap outside, Escape, or picking an item closes it; nothing depends on hover.
+ *
+ * The list is where its trigger is for the keys and the focus (`usePopupOf`): opened in a dialog it is the
+ * dialog's, so the focus trap lets the focus into it and Enter and Space press its items. Since it is no longer
+ * next to its trigger in the page, the keys that reached it by order reach it by hand: with it open, Tab, the
+ * Down arrow or Home on the trigger moves to its first item, the Up arrow or End to its last; in it, the arrows
+ * move between the items (wrapping; Home and End to the ends), Shift+Tab from the first item goes back to the
+ * trigger, and Tab from the last closes it with the focus on the trigger, so the Tab goes on from there.
  */
 export function Menu({
   label,
@@ -38,6 +53,53 @@ export function Menu({
   const closeToTrigger = () => {
     setOpen(false);
     trigger.current?.focus();
+  };
+  usePopupOf(listRef, trigger, open);
+  /** The items that take the focus, in order. */
+  const enabledItems = () =>
+    Array.from(
+      listRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [],
+    );
+  const focusItem = (which: 'first' | 'last') => {
+    const all = enabledItems();
+    const el = which === 'first' ? all[0] : all[all.length - 1];
+    el?.focus();
+    return !!el;
+  };
+  const onTriggerKey = (e: KeyEvent<HTMLButtonElement>) => {
+    if (!open) return;
+    const into =
+      (e.key === 'Tab' && !e.shiftKey) || e.key === 'ArrowDown' || e.key === 'Home'
+        ? 'first'
+        : e.key === 'ArrowUp' || e.key === 'End'
+          ? 'last'
+          : null;
+    if (into && focusItem(into)) e.preventDefault();
+  };
+  const onListKey = (e: KeyEvent<HTMLDivElement>) => {
+    const all = enabledItems();
+    const i = all.indexOf(e.target as HTMLButtonElement);
+    if (i < 0 || !all.length) return;
+    const to =
+      e.key === 'ArrowDown'
+        ? (i + 1) % all.length
+        : e.key === 'ArrowUp'
+          ? (i - 1 + all.length) % all.length
+          : e.key === 'Home'
+            ? 0
+            : e.key === 'End'
+              ? all.length - 1
+              : -1;
+    if (to >= 0) {
+      e.preventDefault();
+      all[to]!.focus();
+    } else if (e.key === 'Tab' && e.shiftKey && i === 0) {
+      e.preventDefault();
+      trigger.current?.focus();
+    } else if (e.key === 'Tab' && !e.shiftKey && i === all.length - 1) {
+      // Not prevented: the browser's Tab goes on from the trigger, and a dialog's trap wraps it if need be.
+      closeToTrigger();
+    }
   };
   useLayoutEffect(() => {
     if (!open || !trigger.current || !listRef.current) return;
@@ -97,6 +159,7 @@ export function Menu({
       role="menu"
       aria-label={label}
       style={{ position: 'fixed', left: pos.left, top: pos.top }}
+      onKeyDown={onListKey}
     >
       {items.map((it, i) => (
         <button
@@ -127,6 +190,7 @@ export function Menu({
         disabled={disabled}
         className={open ? 'on' : ''}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={onTriggerKey}
       >
         {label} ▾
       </button>
