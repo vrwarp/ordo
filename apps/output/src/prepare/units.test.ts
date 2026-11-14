@@ -1,7 +1,7 @@
 import { LOOK_MAIN, type Look, type ShapeObject, type Slide } from '@ordo/domain';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import { clampSlide, clearGeomFiles, drawableContent, drawSlide2D, overGeomBudget } from '@ordo/renderer';
-import { clearUnits, unitCache, unitsOfSlide, unitWork } from '@ordo/renderer/units.ts';
+import { clearUnits, SLICE_MS, unitCache, unitsOfSlide, unitWork } from '@ordo/renderer/units.ts';
 import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';
 import { lineArtSlide } from '@ordo/renderer/units.test-util.ts';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -14,17 +14,21 @@ import { geometryUnits, holdUnits, setGeometryUnits } from './units.ts';
  * copies it.
  */
 
-/** A 2D context that records draw calls; a one-pixel read (each step's flush) takes `stepMs`. */
+/**
+ * The clock of a host that passes one (`host(log, read, clock.now)`): only the steps' flushes advance it, so how
+ * a job cuts its work into turns depends on no real time (review r2a: a 3 ms busy wait a step failed under load,
+ * every turn holding one step).
+ */
+const clock = { t: 0, now: () => clock.t };
+
+/** A 2D context that records draw calls; a one-pixel read (each step's flush) takes `stepMs` of `clock`. */
 function fakeCtx(ops: string[], stepMs: () => number) {
   const state: Record<string | symbol, unknown> = { globalAlpha: 1 };
   return new Proxy(state, {
     get(t, k) {
       if (k === 'getImageData')
         return () => {
-          const until = performance.now() + stepMs();
-          while (performance.now() < until) {
-            /* a slow machine's step */
-          }
+          clock.t += stepMs();
           return { data: new Uint8ClampedArray(4) };
         };
       if (k === 'getTransform') return () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
@@ -77,8 +81,12 @@ afterEach(() => {
   FakeOffscreenCanvas.made = [];
 });
 
-/** A host that runs slices at once and counts them and its checks. */
-function host(log: { slices: number; checks: number }, read: PrepareHost['read'] = async () => undefined) {
+/** A host that runs slices at once and counts them and its checks; with `now`, the job's clock. */
+function host(
+  log: { slices: number; checks: number },
+  read: PrepareHost['read'] = async () => undefined,
+  now?: () => number,
+) {
   return {
     read,
     slice: async <T>(fn: () => T) => {
@@ -88,6 +96,7 @@ function host(log: { slices: number; checks: number }, read: PrepareHost['read']
     check: () => {
       log.checks++;
     },
+    ...(now ? { now } : {}),
   } satisfies PrepareHost;
 }
 
@@ -105,17 +114,24 @@ describe('the geometry units prepare step (M9 Slow-to-draw, Runtime)', () => {
     const units = unitsOfSlide(slide, 2);
     expect(units.length).toBe(overGeomBudget(objectsOf(slide)).size);
     expect(units.length).toBeGreaterThanOrEqual(2);
-    // Each step (the frame's scratch, a draw call, the copy) takes 3 ms: about two steps a turn.
+    // Each step (the frame's scratch, a draw call, the copy) takes 3 ms of the job's clock against a turn's
+    // SLICE_MS / 2 (5 ms): two steps a turn, a unit's last turn one or two.
+    expect(SLICE_MS / 2).toBe(5);
     stepMs = 3;
     const log = { slices: 0, checks: 0 };
     const before = unitWork();
-    expect(await geometryUnits.run({ slides: [slide], scale: 2 }, host(log))).toBeUndefined();
+    expect(
+      await geometryUnits.run({ slides: [slide], scale: 2 }, host(log, undefined, clock.now)),
+    ).toBeUndefined();
     const work = unitWork();
     expect(work.made - before.made).toBe(units.length);
     // The plan (one turn), then the units' turns.
-    expect(log.slices).toBe(1 + work.turns - before.turns);
+    const turns = work.turns - before.turns;
+    const steps = work.steps - before.steps;
+    expect(log.slices).toBe(1 + turns);
     expect(log.slices).toBeGreaterThan(units.length);
-    expect(log.slices).toBeLessThan(work.steps - before.steps);
+    expect(steps).toBeLessThanOrEqual(2 * turns);
+    expect(steps).toBeGreaterThanOrEqual(2 * turns - units.length);
     expect(log.checks).toBeGreaterThanOrEqual(log.slices);
     // The draw copies each unit where the budget draws the legacy copy, and draws no legacy copy.
     const out = new FakeOffscreenCanvas(3840, 2160);
@@ -151,7 +167,7 @@ describe('the geometry units prepare step (M9 Slow-to-draw, Runtime)', () => {
     stepMs = 3;
     let n = 0;
     const cancelled: PrepareHost = {
-      ...host({ slices: 0, checks: 0 }),
+      ...host({ slices: 0, checks: 0 }, undefined, clock.now),
       check: () => {
         if (++n > 1) throw new Error('cancelled');
       },

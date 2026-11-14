@@ -33,6 +33,8 @@ export interface PrepareHost {
   slice<T>(fn: () => T): Promise<T>;
   /** Throws when the job was cancelled (the asset worker's `Cancelled`). */
   check(): void;
+  /** The clock a step cuts its work into turns by (tests; `performance.now` when absent). */
+  now?(): number;
 }
 
 /** What is about to be drawn: the slides of the job (the slide, and the next one a look shows). */

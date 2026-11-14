@@ -65,7 +65,11 @@ export const geometryUnits: PrepareStep = {
       slide,
       job.scale,
       job.look,
-      { slice: (fn) => host.slice(fn), check: () => host.check() },
+      {
+        slice: (fn) => host.slice(fn),
+        check: () => host.check(),
+        ...(host.now ? { now: () => host.now!() } : {}),
+      },
       keys
         ? {
             pin: (k) => {
