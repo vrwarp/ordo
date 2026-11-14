@@ -847,6 +847,34 @@ Split View is not. A phone's sign-in asks for the `light` cap (`signInCap`, desi
   The hub leaves `liveLabel` out for a capped session (a phone, design/28 §3.4); an iPad's uncapped session
   keeps it for its chip.
 
+### Phones
+
+A phone (the phone class above) gets the compact layout when its viewport is small, which on a phone is always
+(design/28 decision 3; `html[data-layout="compact"]`, `lib/layout.ts`), and the edit profile whatever PIN it
+signs in with; a forced `?profile=full` meets the forced-profile guard. The compact views are their own chunk
+(`views/compact/`: the frame with the Live now strip, the freshness line, the header with Back, `.page` and the
+tab bar; More; the P0 bodies of the Library, Media, Plans and a presentation's previews), which the venue PC and
+the iPad's regular layout never load; every dialog is a bottom sheet there (see "Dialogs"); every compact
+control is at least 44 px. On any phone (Request Desktop Website included) and in any capped session, `pageFor`
+sends Setup, the settings, the live view, Themes, Fonts, Import and the canvas editor elsewhere (design/28 §2.1).
+
+**Sign-in** (`views/auth/LoginView.tsx`, `phoneSignIn.ts`): a phone's form has no "Remember this device", asks
+for `cap: 'light'` (`signInCap`) when the hub's `GET /auth/me` lists it in `caps` (`hubGrants`, read defensively
+in `state/session.ts` beside `capOf`), sends the PIN alone to a hub that lists none, and asks once more without
+`cap` when an older hub refuses the field (400 `invalid` naming `cap`); it never sends `remember`. The hub
+answers a capped sign-in with `{ role: 'edit', cap: 'light' }`, a one-hour sliding session that is never
+remembered, and clears `ordo_device` (design/28 §3.2; the hub lane). The form names the venue's host, says what a
+phone may do, adds Safari's home-screen note, focuses nothing, and shows a lockout's end from
+`details.retryAfterS` in the phone's own time, by `details.scope` ("from this network ... Everyone on the same
+Wi-Fi may share this wait", or "tried on ordo" for the hub-wide bucket). Every other device keeps today's form
+byte for byte (nothing autofocused on the compact layout). **Pre-upgrade sessions** (owner question 12): when
+`/auth/me` shows a signed-in, uncapped session from a hub that grants caps on a phone, the client signs out once
+(a `sessionStorage` mark stops a loop; none where the storage is blocked) and the sign-in says "Phones now sign
+in for an hour at a time. Enter the PIN again."; the next sign-in is capped. A phone that never loads this
+release keeps its old session until it expires: the hub cannot tell a phone's session from an iPad's. The first
+run's setup form is not offered on the compact layout: "ordo is not set up yet. Set it up on the venue PC: it
+sets the PINs." `pageFor` is restricted for a capped session (`capOf(me) !== 'full'`) as for a phone.
+
 ### Look previews
 
 `LookPreviews` (`src/views/editor/LookPreviews.tsx`) draws the selected slide under every look in

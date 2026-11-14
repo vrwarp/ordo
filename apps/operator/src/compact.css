@@ -451,3 +451,8 @@ html[data-layout="compact"] .compact-sheet-text {
   margin: 0;
   line-height: 1.5;
 }
+
+/* ---- the sign-in: the PIN field no wider than the card ---- */
+html[data-layout="compact"] .pin {
+  max-inline-size: 100%;
+}

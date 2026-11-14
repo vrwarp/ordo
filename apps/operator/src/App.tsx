@@ -24,7 +24,7 @@ import { thumbs } from './services/thumbs.ts';
 import { installUpdateGuard, useUpdate } from './services/update.ts';
 import { useLibrary } from './state/library.ts';
 import { useLive } from './state/live.ts';
-import { refreshSession, useSession } from './state/session.ts';
+import { capOf, refreshSession, useSession } from './state/session.ts';
 import { navigate, useRoute } from './useRoute.ts';
 import { LoginView } from './views/auth/LoginView.tsx';
 import { SetupView } from './views/auth/SetupView.tsx';
@@ -195,10 +195,12 @@ function Shell({
       (route.name === 'live' || route.name === 'playlists' || route.name === 'library');
     OPERATE.get()?.surfaces()?.setKeyboard(keysOn);
   }, [coreRole, route.name, signedOut, fallback]);
-  // What this route shows (lib/route.ts pageFor): on the compact layout or a phone a refused route is decided
-  // here, before any body, and replaced (its chunk is never requested, history does not grow); on the regular
-  // layout a route allowedForRole refuses renders nothing and is pushed to the library, as before.
-  const restricted = thisIsPhone();
+  // What this route shows (lib/route.ts pageFor): on the compact layout, on a phone (either layout) or in a
+  // capped session (design/28 §3.2) a refused route is decided here, before any body, and replaced (its chunk
+  // is never requested, history does not grow); on the regular layout a route allowedForRole refuses renders
+  // nothing and is pushed to the library, as before.
+  const cap = useSession((s) => capOf(s.me));
+  const restricted = thisIsPhone() || cap !== 'full';
   const decision = pageFor(route, { role, profile, layout, restricted });
   // The compact layout's frame and views (src/pages.ts PAGES.compact): loaded only on the compact layout, so the
   // venue PC and the iPad's regular layout never fetch them.

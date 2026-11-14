@@ -163,3 +163,51 @@ async function scrolledPanes(page: Page, where: string): Promise<string[]> {
     return out;
   }, where);
 }
+
+/**
+ * REMOVED AT INTEGRATE (the integrator replaces it with assertions against the hub lane's real contracts).
+ *
+ * The hub's cap contract (design/28 §3.2; composed plan §2 A-C) simulated in front of this branch's hub, which
+ * grants no caps: GET /auth/me in 'upgraded' mode gains `caps: ['full', 'light', 'view']` when absent and, once
+ * a sign-in asked for cap 'light', `cap: 'light'` and role 'edit' on signed-in answers (the real session stays
+ * uncapped: without this the client would sign a capped phone out again); in 'pre-upgrade' mode it is the real
+ * answer (no caps, no cap). Every POST /auth/pin body is recorded, and while the real hub lists no caps the
+ * request continues without `cap` (its strict PinBody would answer 400). Install before the first navigation.
+ */
+export async function capsShim(
+  page: Page,
+  mode: 'upgraded' | 'pre-upgrade' = 'upgraded',
+): Promise<{ pins: Record<string, unknown>[] }> {
+  const pins: Record<string, unknown>[] = [];
+  let askedLight = false;
+  let realCaps = false;
+  await page.route('**/api/v1/auth/pin', async (route) => {
+    const req = route.request();
+    if (req.method() !== 'POST') return route.continue();
+    let body: Record<string, unknown> = {};
+    try {
+      body = JSON.parse(req.postData() ?? '{}') as Record<string, unknown>;
+    } catch {
+      /* not JSON: recorded as {} */
+    }
+    pins.push(body);
+    if (body.cap === 'light') askedLight = true;
+    if (realCaps || !('cap' in body)) return route.continue();
+    const { cap: _cap, ...rest } = body;
+    return route.continue({ postData: JSON.stringify(rest) });
+  });
+  await page.route('**/api/v1/auth/me', async (route) => {
+    const res = await route.fetch();
+    const me = (await res.json()) as Record<string, unknown>;
+    realCaps = Array.isArray(me.caps);
+    if (mode === 'upgraded') {
+      if (!Array.isArray(me.caps)) me.caps = ['full', 'light', 'view'];
+      if (askedLight && (me.role === 'operate' || me.role === 'edit') && me.cap === undefined) {
+        me.cap = 'light';
+        me.role = 'edit';
+      }
+    }
+    await route.fulfill({ response: res, json: me });
+  });
+  return { pins };
+}
