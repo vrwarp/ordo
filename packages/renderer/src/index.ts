@@ -24,6 +24,7 @@ export * from './shape.ts';
 export * from './effects.ts';
 export * from './spritecache.ts';
 export * from './geombudget.ts';
+export * from './units.ts';
 
 // M9 drawers per object kind, each loaded the first time a slide holds that kind (`loadShapeDrawers`): the
 // table's model, layout, drawing and reach (`@ordo/renderer/table/index.ts`, imported directly by code that

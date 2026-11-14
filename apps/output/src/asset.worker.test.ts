@@ -18,7 +18,11 @@ import {
   SRC_SCENE,
   planeSample,
   preparedKey,
+  unitReady,
+  unitsOfSlide,
+  unitWork,
 } from '@ordo/renderer';
+import { lineArtSlide } from '@ordo/renderer/units.test-util.ts';
 import { CONTENT_CASES, contentCase } from '@ordo/domain/content.test-util.ts';
 import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';
 import { geomFile } from '@ordo/renderer/geom/stored.ts';
@@ -628,5 +632,81 @@ describe('asset worker: geometry files (ShapeGeom.ref)', () => {
     });
     await vi.waitFor(() => expect(replies.some((r) => (r as { key?: string }).key === 'wm|geom')).toBe(true));
     expect(geomFile(GEOM_WARM)).toEqual(JSON.parse(GEOM_FILES.get(GEOM_WARM)!));
+  });
+});
+
+describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
+  const send = (m: unknown) => link.onmessage!({ data: m });
+  /**
+   * Line art past the slide's drawing budget, without gradients (these fakes make none), moved by `dx` (units are
+   * keyed by what they draw: each test's slide asks for units of its own).
+   */
+  const busy = (id: string, dx: number): Slide => {
+    const art = lineArtSlide().objects.filter((o) => o.type === 'shape' && !('gradient' in o && o.gradient));
+    const last = art.at(-1)!;
+    const objects = [...art, { ...last, id: `${last.id}-again`, box: { ...last.box, x: last.box.x - 300 } }];
+    return { id, objects: objects.map((o) => ({ ...o, box: { ...o.box, x: o.box.x + dx } })) };
+  };
+  const unitsOf = (s: Slide) => unitsOfSlide(s, W / 1920, LOOK_MAIN);
+  /** Send a job with its role and wait for its answer. */
+  async function runAs(job: AssetJob, role: 'live' | 'armed') {
+    rendered.length = 0;
+    replies.length = 0;
+    send({ t: 'job', job, role });
+    await vi.waitFor(() => expect(replies.length).toBeGreaterThan(0));
+    return { msg: rendered[0]?.msg, reply: replies[0]! };
+  }
+  /** The unit pictures a drawn bitmap copied (a unit's picture holds the frame scratch it was copied from). */
+  const unitCopies = (b: FakeBitmap) =>
+    b.drawn.filter((d) => d.width < W || d.height < H || d.drawn.length > 0);
+
+  it('arming a cue past the budget makes its units; its GO (a live job of the slide) does no unit work', async () => {
+    const s = busy('arm-then-go', 0);
+    const units = unitsOf(s);
+    expect(units.length).toBeGreaterThanOrEqual(2);
+    const before = unitWork();
+    const armed = await runAs(
+      slideJob({ slide: s, images: {}, video: undefined, key: 'sl|armed-units' }),
+      'armed',
+    );
+    expect(armed.reply, JSON.stringify(armed.reply)).toMatchObject({ t: 'done' });
+    expect(unitWork().made - before.made).toBe(units.length);
+    // Each unit is copied where its legacy copy would be drawn.
+    expect(unitCopies(armed.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(units.length);
+    const after = unitWork();
+    const live = await runAs(
+      slideJob({ slide: s, images: {}, video: undefined, key: 'sl|live-units' }),
+      'live',
+    );
+    expect(live.reply.t).toBe('done');
+    expect(unitWork()).toEqual(after);
+    expect(unitCopies(live.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(units.length);
+  });
+
+  it('a warm job makes the next cue’s units, kept pinned: arming it then makes none', async () => {
+    const s = busy('warm-units', 7);
+    const units = unitsOf(s);
+    replies.length = 0;
+    const before = unitWork();
+    send({ t: 'warm', warm: { key: 'wm|units', slide: s, look: LOOK_MAIN, images: {} } });
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]).toMatchObject({ t: 'warmed', key: 'wm|units' });
+    expect(unitWork().made - before.made).toBe(units.length);
+    for (const u of units) expect(unitReady(u)).toBeDefined();
+    const after = unitWork();
+    await runAs(slideJob({ slide: s, images: {}, video: undefined, key: 'sl|warmed-units' }), 'armed');
+    expect(unitWork()).toEqual(after);
+  });
+
+  it('a jump to a cue neither armed nor warmed waits for its units in its own job', async () => {
+    const s = busy('jump', 13);
+    const before = unitWork();
+    const { reply, msg } = await runAs(
+      slideJob({ slide: s, images: {}, video: undefined, key: 'sl|jump' }),
+      'live',
+    );
+    expect(reply.t).toBe('done');
+    expect(unitWork().made - before.made).toBe(unitsOf(s).length);
+    expect(unitCopies(msg!.bitmap as unknown as FakeBitmap)).toHaveLength(unitsOf(s).length);
   });
 });

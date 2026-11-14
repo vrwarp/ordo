@@ -10,6 +10,7 @@ import {
   stillFile,
 } from '@ordo/domain';
 import { useEffect, useState } from 'react';
+import { capabilities } from '../lib/capabilities.ts';
 import type { ThumbIn, ThumbJob, ThumbOut } from '../workers/thumb.worker.ts';
 
 const MAX_ENTRIES = 800;
@@ -136,6 +137,8 @@ class Thumbs {
       p.resolve(ev.data.blob ? URL.createObjectURL(ev.data.blob) : undefined);
       this.pump();
     };
+    // Geometry units only with a fine pointer: phones and tablets keep the legacy copies (design/27 §13).
+    w.postMessage({ t: 'init', finePointer: !capabilities().coarsePointer } satisfies ThumbIn);
     if (this.fontMsg) w.postMessage(this.fontMsg);
   }
 

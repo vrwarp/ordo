@@ -1,5 +1,5 @@
 import { LOGICAL_HEIGHT, LOGICAL_WIDTH, type Look, type SlideObject, type TextObject } from '@ordo/domain';
-import { CLAMP, clampLook, num } from './clamp.ts';
+import { CLAMP, clampLook, isClamped, keepClamped, num } from './clamp.ts';
 import { drawableContent } from './content.ts';
 import { drawnBounds } from './geom/bounds.ts';
 import { legacyGeometry } from './geom/built.ts';
@@ -71,11 +71,15 @@ const memo = new WeakMap<
   }
 >();
 const copies = new WeakMap<SlideObject, { geom?: SlideObject; effects?: SlideObject; both?: SlideObject }>();
+/** Each legacy copy's original and what it leaves out (`legacyOf`). */
+const originals = new WeakMap<SlideObject, { original: SlideObject; part: LegacyPart }>();
 const rated = new WeakMap<SlideObject, { version: number; r: Rated; area: number }>();
 
 /**
  * An object as drawn past a budget (`withoutPart`): without its stored geometry and costly outline fields
  * (`geom`), without its effects (`effects`), or both. Memoised per object, so the drawers' caches see one copy.
+ * A copy of a clamped object is clamped (`keepClamped`): a part of the slide keeps the very copy, and
+ * `legacyOf` names its original wherever it is drawn.
  */
 export function legacyCopy<T extends SlideObject>(o: T, what: LegacyPart): T {
   let c = copies.get(o);
@@ -83,8 +87,20 @@ export function legacyCopy<T extends SlideObject>(o: T, what: LegacyPart): T {
   const hit = c[what];
   if (hit) return hit as T;
   const out = withoutPart(o, what);
+  if (isClamped(o)) keepClamped(out);
+  originals.set(out, { original: o, part: what });
   c[what] = out;
   return out;
+}
+
+/**
+ * The original of a legacy copy (`legacyCopy`) and what the copy leaves out; undefined for an object that is
+ * no such copy. What lets a drawer draw an object past the budget from its geometry unit (`units.ts`) where
+ * the budget would draw its legacy copy, in the slide and in a part of it (`sceneSlides`), and size its reach
+ * by what the unit draws (`sprite.ts` `slideReach`).
+ */
+export function legacyOf(o: SlideObject): { original: SlideObject; part: LegacyPart } | undefined {
+  return originals.get(o);
 }
 
 /** An object as its legacy shape: a shape without its stored geometry, a picture without its mask. */

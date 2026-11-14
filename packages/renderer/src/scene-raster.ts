@@ -9,7 +9,7 @@ import {
 } from '@ordo/domain';
 import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
 import { drawableContent } from './content.ts';
-import { withinDrawBudget } from './geombudget.ts';
+import { legacyOf, withinDrawBudget } from './geombudget.ts';
 import { type PictureSource, pictureTarget, sourceSize } from './picture.ts';
 import { rasterSlide } from './raster.ts';
 import {
@@ -143,6 +143,21 @@ function pictureSize(img: PictureSource | undefined): [number, number] {
 }
 
 /**
+ * Where an object as the slide's drawing budget draws it can draw: its own bounds (`objectBounds`), and a legacy
+ * copy past the geometry budget also its original's, which its geometry unit draws in its place when it is
+ * ready (units.ts): the split is the same whether the unit is drawn or the copy.
+ */
+function drawnBounds(o: SlideObject): Rect {
+  const own = objectBounds(o);
+  const from = legacyOf(o);
+  if (!from || from.part === 'effects') return own;
+  const b = objectBounds(from.original);
+  const x = Math.min(own.x, b.x);
+  const y = Math.min(own.y, b.y);
+  return { x, y, w: Math.max(own.x + own.w, b.x + b.w) - x, h: Math.max(own.y + own.h, b.y + b.h) - y };
+}
+
+/**
  * Plan the scene of a slide whose ImageObject `objectId` plays its clip in place, drawn at `scale` (device
  * px per logical px) with `look`. `ctx` measures text (nothing is drawn). The plane fits the video with the
  * clip's own size (`clip`, the delivery's Media.width x height): the poster may be any picture the operator
@@ -185,7 +200,7 @@ export function sceneSlides(
   const translucent = num(play.opacity, 0, 1, 1) < 1;
   const split = splitScene(drawn, index, {
     showWhenStopped: translucent ? false : play.play?.showWhenStopped,
-    bounds: (o: SlideObject) => (o.type === 'text' ? textBounds(ctx, o, scale) : objectBounds(o)),
+    bounds: (o: SlideObject) => (o.type === 'text' ? textBounds(ctx, o, scale) : drawnBounds(o)),
   });
   const plane = new Float32Array(PLANE_FLOATS);
   const cw = num(clip.w, 0, 1e6, 0);

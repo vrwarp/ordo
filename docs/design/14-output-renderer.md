@@ -330,6 +330,35 @@ are kept by their content, so the next job, a slide sent again and the thumbnail
 not draw the slide as authored prepares nothing.
 <!-- /m9:tables-render -->
 
+<!-- m9:geometry-units -->
+**Geometry units** (design/27 §13 "Geometry units", M9 decisions "Slow-to-draw elements", Runtime: draw it,
+never drop it). A shape the slide's drawing budget sends to its legacy copy (a stored geometry past
+`GEOM_COST.slide`, such as the leaf template's line art) is drawn whole from a unit: its object drawn without
+effects at the output's scale over its reach, cut to the frame at a whole-pixel origin, which the slide's draw
+copies 1:1 where the legacy copy would be drawn (`renderer/src/units.ts`).
+- **Prepare step `geometry units`** (`apps/output/src/prepare/units.ts`, after `geometry files`, whose paths it
+  draws): the job's slide's units, made in the job's lane turns, one draw call a step (a path's fill or outline,
+  on a scratch canvas of the frame at the frame's own transform, then the rect copied out), as many a turn as
+  fit in about 5 ms (`SLICE_MS` 10 halved); a step is one call, at most `GEOM_COST.geometry` (about 38 ms at 4K
+  cold), within design/27 §13's 50 ms. Bounded per job: at most `UNIT_WAIT_MS` (1 s) of making and
+  `UNIT_JOB_BYTES` (64 MiB); the rest draw as their legacy copies this time and the next job of the slide goes
+  on. A job cancelled meanwhile keeps nothing of a half-made unit.
+- **Unit cache** (`unitCache`, one per asset worker): 192 MiB (the owner's figure for all units; effect units
+  extend it, never a second cache), least recently used first, keyed by what a unit draws (`unitKey`: its drawn
+  fields with its geometry file's hash, never its id; scale, origin and cut; `UNIT_VERSION`). The asset worker
+  pins a slide job's units from its prepare step to its raster and keeps them pinned while that job is its
+  layer's last of its role (live, armed), and a warm job's until the next warm job (`holdUnits`, `keepUnits`):
+  the live, armed and warmed cues hold at most 3 x 64 MiB.
+- **When they are made.** An armed or warmed cue's units are made by its slide or warm job, so its GO does no
+  unit work and never waits. A jump (a cue neither armed nor warmed) waits for its units in its own job, as
+  for its table layouts, within the bounds above: about 0.5 s cold at 4K for the leaf template's first slide
+  (design/23 bench). Effect units (M9 r2b) replace that wait: a GO never waits, the slide shows at once and a
+  late unit fades in (about 0.3 s, the owner's call).
+- **Thumbnails.** The operator's thumbnail worker runs the same step, only when its page says the pointer is
+  fine (`init`, `lib/capabilities.ts` `coarsePointer`): a desktop's thumbnails draw the shapes whole, a phone or
+  tablet keeps the legacy copies and makes nothing. The editor canvas keeps the legacy copies (leaf-editor).
+<!-- /m9:geometry-units -->
+
 ## Frame loop
 
 ```

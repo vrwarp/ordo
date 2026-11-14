@@ -165,8 +165,8 @@ export function geomPathOpen(path: GeomPath, tolerance = 0): boolean {
   return open();
 }
 
-/** geomPathOpen at CLOSED_TOLERANCE of the geometry's box, once per path object. */
-function pathOpen(path: GeomPath, built: BuiltGeom): boolean {
+/** geomPathOpen at CLOSED_TOLERANCE of the geometry's box, once per path object (`drawGeom` strokes it last). */
+export function pathOpen(path: GeomPath, built: BuiltGeom): boolean {
   let open = OPEN_CACHE.get(path);
   if (open === undefined) {
     open = geomPathOpen(path, CLOSED_TOLERANCE * Math.max(built.w, built.h));
