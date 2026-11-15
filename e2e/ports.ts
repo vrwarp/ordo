@@ -172,6 +172,13 @@ export const PORT_TABLE = {
   },
   'phones-live-load': { offset: 345, count: 1, spec: 'phones-live-load.spec.ts', what: 'hub' },
   'phones-writes': { offset: 346, count: 1, spec: 'phones-writes.spec.ts', what: 'hub' },
+  // Wave r2b (offsets 400-659), design/29 §2.3 M8.
+  'golive-prepare': {
+    offset: 450,
+    count: 2,
+    spec: 'golive-prepare.spec.ts',
+    what: '0 hub with a slowed library (Go live again during a service), 1 hub (size ceiling)',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;
