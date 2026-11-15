@@ -1,8 +1,6 @@
-import { createWriteStream } from 'node:fs';
 import { appendFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type Readable, Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import type { MultipartFile } from '@fastify/multipart';
 import {
   ActionId,
@@ -1032,33 +1030,14 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     }
     const path = join(hub.store.uploads, `${row.id}.part`);
     const body = req.body as Readable | Buffer | undefined;
-    let added = 0;
-    const max = row.size - row.offset;
-    const ws = createWriteStream(path, { flags: 'a' });
     const src: Readable | AsyncIterable<Buffer> =
       body && typeof (body as Readable).pipe === 'function'
         ? (body as Readable)
         : (async function* () {
             if (body) yield Buffer.from(body as Buffer);
           })();
-    try {
-      await pipeline(
-        src,
-        async function* (s: AsyncIterable<Buffer>) {
-          for await (const c of s) {
-            added += c.length;
-            if (added > max) throw new HttpError(413, 'too_large', 'Chunk exceeds the declared upload size');
-            yield c;
-          }
-        },
-        ws,
-      );
-    } catch (e) {
-      // Keep only whole, acknowledged bytes: truncate back to the last known offset.
-      const { truncate } = await import('node:fs/promises');
-      await truncate(path, row.offset).catch(() => undefined);
-      throw e;
-    }
+    // Keeps only whole, acknowledged bytes: a PATCH that fails leaves the .part at row.offset.
+    const added = await hub.store.appendPart(path, row.offset, row.size - row.offset, src);
     const newOffset = row.offset + added;
     lib.db
       .prepare(`UPDATE uploads SET offset = ?, updated_at = ? WHERE id = ?`)
