@@ -1786,6 +1786,34 @@ budget only decides that it is drawn so.
   it stays where a caller waits (the harness, thumbnails, the editor); the raster bench reports that draw and
   holds a decoration to at most its shapes drawn one by one + 10 % (checked).
 
+<!-- r2b:open-items -->
+**Open items of §12-13 after wave r2b sub-wave 1** (one list, from effect-units, units-live and tables-conv; the
+wave's integration measures them: `regroup/r2b/integrate-1.md`).
+- _Closed in sub-wave 1:_ r2a must a (a decoration at its caps drawn at once on the outputs): a `whole` effect unit
+  made in slices, left out of an output raster until made (`SlideDrawOptions.late`, C2b, on every asset-worker
+  raster) and faded in. r2a must b (a GO waits for units): a jump is drawn at once, a GO hurries an armed or warm
+  job, the units come in a late job and fade in over 300 ms (design/14 "Late units"). c(1) a geometry past
+  `GEOM_COST.slide` alone (`sliced`, the hostile lone line art drawn on the Audience screens); c(3) gradient and
+  dashed shapes and masked pictures past the budget (`whole` units, prepared bitmaps); c(4) a geometry whose
+  effects would pass a task (`whole` with its effects, in steps); decorations rated in the drawing budget
+  (`DecorHooks`). `?effects=base` (C6) gives a venue 62a1c3a's drawing of effects and decorations back.
+- _Left to live-frame (sub-wave 2):_ c(2), objects past one frame of units a slide (`UNIT_SLIDE_AREAS`) keep their
+  legacy copies, counted `unitsLeft` 'area'; effects past one frame of units likewise (the wake template's slide
+  12 has two, the suite's prisma slide nine). The emoji game slide's warm draw (325 pictures) and crowded slides
+  past 200 shapes or 16 pictures are live-frame's too.
+- _Left to render-bounds (sub-wave 3):_ one draw call of a hostile fill at 4K can take up to about 50 ms with
+  nothing past the budget (holo-gradients 16, whose estimate underrates its gradients, and the wake template's
+  slides 11 and 20, one 41-58 ms object each).
+- _Still open, named:_ a picture's effects past the budget keep their legacy copy (a picture unit needs the
+  decoded picture at the prepare step); the editor and coarse-pointer thumbnails keep legacy copies (leaf-editor,
+  sub-wave 2). (A unit an armed job did not finish within `UNIT_WAIT_MS` is no longer seen only at a later draw:
+  the job leaves it to the late job, which fades it in.)
+- _Tables (tables-conv):_ question 3 of the LibreOffice inventory stays open: on a hub with LibreOffice the 8
+  dense table slides keep LibreOffice's page (the interim rule, §15 M9 "The table object imported"; the table
+  object missed the gate on all 8); vertical cells stay LibreOffice's art; the Korean bulletin's slide 20 is still
+  under blank (Latin punctuation and circled digits take the Korean face in LibreOffice).
+<!-- /r2b:open-items -->
+
 ## 14. Testing and fidelity measurement
 
 1. **`tools/pptx-fidelity --engine native|ppv|both` (M1).**
