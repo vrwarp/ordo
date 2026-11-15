@@ -172,6 +172,13 @@ export const PORT_TABLE = {
   },
   'phones-live-load': { offset: 345, count: 1, spec: 'phones-live-load.spec.ts', what: 'hub' },
   'phones-writes': { offset: 346, count: 1, spec: 'phones-writes.spec.ts', what: 'hub' },
+  // M9 wave r2b (tables-conv): PowerPoint tables imported as one table object.
+  'pptx-tables': {
+    offset: 430,
+    count: 3,
+    spec: 'pptx-tables.spec.ts',
+    what: '0 hub without LibreOffice (Import tab), 1 hub without LibreOffice (upload route), 2 hub with LibreOffice',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;

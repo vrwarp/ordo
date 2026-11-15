@@ -814,3 +814,98 @@ export function pictureTextDeck(dir: string): string {
     join(dir, 'Picture text.pptx'),
   );
 }
+
+// ---- the table deck (M9, tables-conv) -------------------------------------------------------------------
+
+/**
+ * The table deck's bulletin (slide 1), in inches on the 13.33 x 7.5 in slide: a header row on a navy fill
+ * and 31 rows of a week's services, five columns, the first service row's day and time merged into one cell:
+ * 160 slots, 159 cells, past M6's 150-cell cap. Logical px are 144 an inch (1920 x 1080).
+ */
+export const TABLE = {
+  x: 0.4,
+  y: 0.4,
+  cols: [1.6, 1.4, 4.5, 2.5, 2.5],
+  rowH: 0.2,
+  rows: 32,
+  header: [31, 56, 100] as [number, number, number],
+  headerText: ['Day', 'Time', 'Service', 'Room', 'Leader'],
+  title: 'Week bulletin',
+} as const;
+
+/** The bulletin's body text of row `r` (1-based, under the header) and column `c`. */
+export function tableCellText(r: number, c: number): string {
+  const day = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][r % 7]!;
+  return [day, `${7 + (r % 12)}:30`, `Hymn ${100 + r} and prayer`, `Hall ${1 + (r % 4)}`, `Team ${r}`][c]!;
+}
+
+/** The centre of the bulletin's cell (row `r` from 0, the header; column `c`), in logical px. */
+export function tableCellCentre(r: number, c: number): [number, number] {
+  const x = TABLE.x + TABLE.cols.slice(0, c).reduce((s, w) => s + w, 0) + TABLE.cols[c]! / 2;
+  return [x * 144, (TABLE.y + (r + 0.5) * TABLE.rowH) * 144];
+}
+
+/** The reading plan (slide 2): 28 rows of 5 cells, each a few words in 9 pt with its four borders. */
+export const PLAN = { rows: 28, cols: 5 } as const;
+
+/**
+ * Two table slides on white, written by pptxgenjs (as a church's bulletin is), fonts Calibri (an output draws
+ * it with the bundled Carlito):
+ * 1. **The bulletin** (`TABLE`): past M6's cell cap, so before the table object LibreOffice's art drew it on a
+ *    hub with LibreOffice and a hub without it listed it missing; now one table object on every hub.
+ * 2. **The reading plan** (`PLAN`): 140 cells, within the cap, but its M6 group (a text object a cell, its
+ *    rules as shapes) passes 64 KB where the table object is under 16 KB: on a hub with LibreOffice the slide
+ *    keeps LibreOffice's page (the interim rule of question 3, `ImportCore.pageForBudget`), on one without it
+ *    the table object.
+ * Neither slide has text outside its table: no Bottom-Third strap, and the Stage shows the deck's title.
+ */
+export async function tableDeck(dir: string): Promise<string> {
+  mkdirSync(dir, { recursive: true });
+  const p = new pptxgen();
+  p.layout = 'LAYOUT_WIDE';
+  p.title = TABLE.title;
+  const border = { type: 'solid' as const, pt: 0.75, color: 'A6A6A6' };
+  const cell = {
+    fontFace: 'Calibri',
+    fontSize: 9,
+    color: '1A1A1A',
+    border,
+    margin: [0.02, 0.05, 0.02, 0.05],
+  };
+  const head = TABLE.headerText.map((text) => ({
+    text,
+    options: { ...cell, bold: true, color: 'FFFFFF', fill: { color: '1F3864' } },
+  }));
+  const rows: { text: string; options?: Record<string, unknown> }[][] = [head];
+  for (let r = 1; r < TABLE.rows; r++) {
+    const row: { text: string; options?: Record<string, unknown> }[] = TABLE.headerText.map((_, c) => ({
+      text: tableCellText(r, c),
+      options: { ...cell },
+    }));
+    // The first service: its day and time are one cell (a merge across two columns).
+    if (r === 1) row.splice(0, 2, { text: 'Sunday 7:30', options: { ...cell, colspan: 2 } });
+    rows.push(row);
+  }
+  const s1 = p.addSlide();
+  s1.background = { color: 'FFFFFF' };
+  s1.addTable(rows as never, {
+    x: TABLE.x,
+    y: TABLE.y,
+    colW: [...TABLE.cols],
+    rowH: TABLE.rowH,
+  });
+  const plan: { text: string; options?: Record<string, unknown> }[][] = [];
+  for (let r = 0; r < PLAN.rows; r++)
+    plan.push(
+      Array.from({ length: PLAN.cols }, (_, c) => ({
+        text: `Day ${r + 1}: Psalm ${r * PLAN.cols + c + 1}, verses ${c + 1}-${c + 9}`,
+        options: { ...cell },
+      })),
+    );
+  const s2 = p.addSlide();
+  s2.background = { color: 'FFFFFF' };
+  s2.addTable(plan as never, { x: 0.4, y: 0.4, colW: [2.5, 2.5, 2.5, 2.5, 2.5], rowH: 0.24 });
+  const file = join(dir, 'Bulletin.pptx');
+  writeFileSync(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+  return file;
+}
