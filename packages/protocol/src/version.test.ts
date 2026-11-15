@@ -21,9 +21,12 @@ import { APP_VERSION } from './index.ts';
 // 0.7.0 for PR #27 (wave r2a and phones P0), the one bump at merge: main published 0.6.0 without the decoration
 // drawer or geometry units, and its cached pages must reload rather than draw these slides the old way. The
 // digest is unchanged (it leaves the APP_VERSION line out).
+// 0.7.0 again on r2b/prerender-model (wave r2b sub-wave 1, design/29): schemas.ts Slide.prerender, draw, cut and
+// meta.draw, optional fields nothing writes yet (an older client strips them); the wave's one bump, 0.8.0, comes
+// at its end and the integrator re-records the digest once after the sub-wave's last merge.
 const RECORDED = {
   version: '0.7.0',
-  digest: 'da518616675d5b4e9a158c06c8933ba1afbbf14570b8eea189b07d8dc7610e60',
+  digest: '1b158079245294a40bf64492a5475e1f699e86192a7236ac5c14834595639ac8',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

@@ -1,5 +1,5 @@
 import { parsePathData, type Rgba, type ShapeObject, Slide, type TextObject } from '@ordo/domain';
-import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import * as prev from '@ordo/domain/schemas.prev05.test-util.ts';
 import { CMD_MOVE, GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
 import { storedGeometry } from '@ordo/renderer/geom/stored.ts';
 import { describe, expect, it } from 'vitest';

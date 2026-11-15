@@ -935,6 +935,68 @@ export const MidiCue = z.object({
 });
 export type MidiCue = z.infer<typeof MidiCue>;
 
+/** A name in the hub's content store: a SHA-256 in hex (slide files' heads and pages, pictures; design/29 §1.2). */
+export const ContentHash = z.string().regex(/^[0-9a-f]{64}$/);
+export type ContentHash = z.infer<typeof ContentHash>;
+
+/**
+ * Why a slide is pre-rendered (design/29 §1.1): `bytes` stored over 64 KiB, `tail` moved out of line for the
+ * presentation's inline budget, `count` past a live-raster bound, `chosen` set to Pre-rendered by hand.
+ */
+export const PRERENDER_WHY = ['bytes', 'tail', 'count', 'chosen'] as const;
+export type PrerenderWhy = (typeof PRERENDER_WHY)[number];
+const isPrerenderWhy = (w: string): w is PrerenderWhy => (PRERENDER_WHY as readonly string[]).includes(w);
+
+/** Bounds of a stand-in's pre-render record (design/29 §1.2). */
+export const PRERENDER_LIMITS = {
+  /** Ids of the live set: as many as a slide's inline objects. */
+  live: 1000,
+  /** What the slide file draws: media, shape files, font families. */
+  media: 1000,
+  files: 1000,
+  fonts: 64,
+  /** `Slide.cut`: lines, and characters a line. */
+  cut: 16,
+  cutChars: 200,
+} as const;
+
+/**
+ * A pre-rendered slide's record on its stand-in (design/29 §1.2): why it is pre-rendered (a reason this build
+ * does not know is dropped), its slide file (the head's hash and the file's bytes; absent for `chosen`, or when
+ * the hub refused the full form), the live set drawn above the picture (bottom first, §1.5), and what the file
+ * draws (`uses`: the hub rewrites it from its own record at save). Written by importers and the editor through
+ * `withFullSlide` (`prerender.ts`); older builds strip it and draw the stand-in.
+ */
+export const SlidePrerender = z.object({
+  why: z
+    .array(z.string().max(40))
+    .max(8)
+    .transform((a) => [...new Set(a.filter(isPrerenderWhy))]),
+  file: z
+    .object({
+      ref: ContentHash,
+      bytes: z
+        .number()
+        .int()
+        .min(0)
+        .max(32 * 1024 * 1024),
+    })
+    .optional(),
+  live: z.array(Id).max(PRERENDER_LIMITS.live),
+  uses: z
+    .object({
+      media: z.array(Id).max(PRERENDER_LIMITS.media),
+      files: z.array(ContentHash).max(PRERENDER_LIMITS.files),
+      fonts: z.array(z.string().max(300)).max(PRERENDER_LIMITS.fonts),
+    })
+    .optional(),
+});
+export type SlidePrerender = z.infer<typeof SlidePrerender>;
+
+/** Draw as (design/29 §1.8): from the slide's picture, or live by the screens. */
+export const DrawAs = z.enum(['picture', 'live']);
+export type DrawAs = z.infer<typeof DrawAs>;
+
 export const Slide = z.object({
   id: Id,
   objects: z.array(SlideObject).max(1000).default([]),
@@ -975,6 +1037,22 @@ export const Slide = z.object({
   audio: SlideSound.optional(),
   /** Outgoing MIDI cues to fire when this slide goes live. */
   midiCues: z.array(MidiCue).max(32).optional(),
+  /**
+   * design/29 §1.2: the slide is pre-rendered; its `objects` are then its stand-in (the live objects whole, the
+   * rest simplified) and the full slide is in its slide file. Damaged: dropped, and the stand-in draws.
+   */
+  prerender: SlidePrerender.optional().catch(undefined),
+  /** Draw as (design/29 §1.2); absent: the presentation's `meta.draw` (`resolveDraw`). */
+  draw: DrawAs.optional().catch(undefined),
+  /**
+   * What a kept bound left out of a slide not from PowerPoint (design/29 §1.2; a PowerPoint slide uses
+   * `pptx.missing`): the import's critical lines, which goLive repeats.
+   */
+  cut: z
+    .array(z.string().max(PRERENDER_LIMITS.cutChars))
+    .max(PRERENDER_LIMITS.cut)
+    .optional()
+    .catch(undefined),
 });
 export type Slide = z.infer<typeof Slide>;
 
@@ -1023,6 +1101,12 @@ export const Presentation = z.object({
       key: z.string().max(50).optional(),
       tempo: z.number().min(0).max(10_000).optional(),
       tags: z.array(z.string().max(200)).max(200).default([]),
+      /**
+       * Detailed slides: Pre-rendered or Live (design/29 §1.2), the default of every pre-rendered slide without
+       * its own `Slide.draw`. In `meta`, not at the top level: an older hub's `Presentation.strict()` PUT body
+       * would refuse a new top-level key, while `meta` strips what it does not know.
+       */
+      draw: DrawAs.optional().catch(undefined),
     })
     .default({ tags: [] }),
   folderId: Id.optional(),

@@ -20,7 +20,7 @@ import {
   TextWarp,
   Writing,
 } from './schemas.ts';
-import * as prev from './schemas.prev.test-util.ts';
+import * as prev from './schemas.prev05.test-util.ts';
 import { SIZE_BUDGETS, slideBytes } from './size.ts';
 import { CAMERA_PRESETS, LIGHT_RIGS, MATERIALS } from './three-names.ts';
 

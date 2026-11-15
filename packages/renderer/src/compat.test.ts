@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LOOK_MAIN, type Slide } from '@ordo/domain';
 import { richSlide } from '@ordo/domain/rich.test-util.ts';
-import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import * as prev from '@ordo/domain/schemas.prev05.test-util.ts';
 import { drawSlide2D } from './text2d.ts';
 import { recordingCtx } from './text/test-util.ts';
 

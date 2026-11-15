@@ -1,5 +1,5 @@
 import { type ImageObject, type ShapeObject, Slide, type SlideObject, type TextObject } from '@ordo/domain';
-import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import * as prev from '@ordo/domain/schemas.prev05.test-util.ts';
 import { charged, EFFECT_COST, GEOM_COST } from '@ordo/renderer/geom/cost.ts';
 import { CMD_CLOSE, CMD_MOVE } from '@ordo/renderer/geom/ops.ts';
 import { presetGeometry } from '@ordo/renderer/geom/path.ts';

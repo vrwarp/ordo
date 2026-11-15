@@ -439,6 +439,39 @@ column's size, cell styles, fills and lines, keep no line inside a merged cell, 
 or remove a row's height to `box.h`; they refuse past `TABLE_LIMITS` and at the last row or column.
 <!-- /m9:tables-render -->
 
+<!-- r2b:prerender -->
+### Pre-render (design/29 §1.2, wave r2b)
+
+A big or crowded slide is kept whole in a **slide file** and the presentation stores its **stand-in**: the live
+objects whole (the lyric box, step-by-step text, playing pictures and what lies above them), the rest simplified
+(`minimalSlide`), within the live-raster bounds. The fields are optional, each with `.catch(undefined)`; older
+builds (0.7.0 and 0.5.0, `schemas.prev.test-util.ts` and `schemas.prev05.test-util.ts`) strip them and draw the
+stand-in. Nothing writes them in sub-wave 1, and every path that would use them reads `PRERENDER_ON` (false).
+
+```ts
+type Slide += {
+  prerender?: {
+    why: ('bytes' | 'tail' | 'count' | 'chosen')[]; // a reason this build does not know is dropped
+    file?: { ref: ContentHash; bytes: number }; // the slide file's head; absent for 'chosen' or when refused
+    live: Id[]; // ≤ 1,000: the live set, bottom first
+    uses?: { media: Id[]; files: ContentHash[]; fonts: string[] }; // what the file draws: ≤ 1,000 / 1,000 / 64
+  };
+  draw?: 'picture' | 'live'; // Draw as; absent: meta.draw
+  cut?: string[]; // ≤ 16 × 200: what a kept bound left out of a slide not from PowerPoint
+};
+type PresentationMeta += { draw?: 'picture' | 'live' }; // in meta: an older hub's strict PUT body refuses new top-level keys
+type ContentHash = string; // a SHA-256 in hex
+```
+
+**Slide files** (`slidefile.ts`): a head `{ v: 1, pages: ContentHash[], count, lyricObjectId?, imported? }` and
+pages `{ v: 1, objects }` of at most 500 objects and 256 KiB of canonical JSON, cut every 500 objects (and
+within a run where its JSON would pass 256 KiB), each named by the SHA-256 of its canonical JSON
+(`slideFileName`, `sha256.ts`: plain JavaScript, so a page over plain HTTP computes it too). At most 20,000
+objects and 16 MiB a slide (`SLIDE_FILE_LIMITS`; `slideFileOf` refuses past them, W18). `slideFromFile(standIn,
+head, pages)` gives the full slide back and refuses pages that are not the head's. Only what draws is in the
+file: notes, timing, transition, cues, sound and provenance stay on the stand-in.
+<!-- /r2b:prerender -->
+
 ## Live state
 
 Owned by the hub (or the operator in fallback), produced by the pure reducer in

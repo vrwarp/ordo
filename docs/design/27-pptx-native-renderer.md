@@ -439,8 +439,9 @@ SlidePptx  += { missing: string[] ≤ 16 of ≤ 40 }                   // '<kind
 - **goLive**: a slide with `pptx.missing` goes live with a `degraded` entry naming what is left out
   (`missingSlideReason`: 'PowerPoint slide with something ordo cannot draw (a chart, …): it is left out',
   kind 'drawing'); a slide waiting for LibreOffice is reported as waiting instead.
-- **Older builds**: `schemas.prev.test-util.ts` is main's 0.5.0 schema, as published (M9 is 0.6.0; every push
-  to main publishes the edge image and the Pages demo, so 0.5.0 is what a venue rolls back to). It strips every
+- **Older builds**: `schemas.prev05.test-util.ts` is main's 0.5.0 schema, as published (M9 is 0.6.0; every push
+  to main publishes the edge image and the Pages demo, so 0.5.0 is what a venue rolls back to; since wave r2b
+  `schemas.prev.test-util.ts` is 0.7.0, the release before it, design/29 §1.2, and these cases keep 0.5.0). It strips every
   M9 field (`table`, `chart`, `decor`, `look3d`, `warp`, `writing`, `centerBlock`, `vectorFonts`, `adjWide`,
   `SlidePptx.missing`) and keeps what 0.5.0 already had: geometry and its files, rich text, provenance,
   `midiCues`, `bottomThirdText`, a playlist item's `keepBackground`, `audioMediaId` and `countdownTimer`, a
@@ -849,7 +850,7 @@ _The M9 rollout (regroup 2026-11-13; PR #23 lands M9 waves 0-1 and wave 2a)._ Ev
 edge Docker image and the Pages demo, so each M9 PR ships on its own:
 - **Version.** M9 is `APP_VERSION` 0.6.0 for the whole PR (one bump; a later PR bumps again at its merge).
   The build a venue rolls back to is main's 0.5.0, whose schema is the older-build fixture
-  (`schemas.prev.test-util.ts`, §3.2 "Older builds"): it strips every M9 field and draws the legacy shapes and
+  (`schemas.prev05.test-util.ts` since wave r2b, §3.2 "Older builds"): it strips every M9 field and draws the legacy shapes and
   text written beside them.
 - **The client path.** A PowerPoint is parsed in the operator (`@ordo/importers` `importPptxClient`, sent as
   the upload's `clientScene`) with the hub's pool as the fallback; both run the same converter

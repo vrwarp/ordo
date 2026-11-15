@@ -1,6 +1,6 @@
 import { type ShapeObject, Slide } from '@ordo/domain';
 import { geomSlide } from '@ordo/domain/geom.test-util.ts';
-import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import * as prev from '@ordo/domain/schemas.prev05.test-util.ts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { effectCacheBytes } from './effects.ts';
 import { RecPath } from './geom/path2d.test-util.ts';

@@ -1,5 +1,5 @@
 import { readableText, Slide, type TextObject, type TextPara } from '@ordo/domain';
-import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import * as prev from '@ordo/domain/schemas.prev05.test-util.ts';
 import { describe, expect, it } from 'vitest';
 import { charClass, fallbackFonts, scriptClasses, substituteOf } from './fontmap.ts';
 import { emitSlides, parseDeck } from './index.ts';
