@@ -102,11 +102,11 @@ hub and surfaces a warning. Details in [design/17](17-offline-and-degraded.md).
 units, the slow parts of a slide drawn ahead in slices (design/14 "Late units"; wave r2b), all optional so an older
 hub's parse strips them:
 
-| Field | Meaning |
-| --- | --- |
-| `unitsMade` | units the window's asset worker has made since it started |
-| `unitsLate` | slides the window showed before all their units were ready, whose late parts faded in a moment later (counted once a showing); the operator shows W49 "Parts of 2 slides appeared a moment late on this screen." (design 29 §3) as a note |
-| `unitCacheBytes` | bytes the asset worker's unit cache holds now (at most 192 MiB; warm-up stops at two thirds) |
+| Field            | Meaning                                                                                                                                                                                                                                   |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unitsMade`      | units the window's asset worker has made since it started                                                                                                                                                                                 |
+| `unitsLate`      | slides the window showed before all their units were ready, whose late parts faded in a moment later (counted once a showing); the operator shows W49 "Parts of 2 slides appeared a moment late on this screen." (design 29 §3) as a note |
+| `unitCacheBytes` | bytes the asset worker's unit cache holds now (at most 192 MiB; warm-up stops at two thirds)                                                                                                                                              |
 
 ## Versioning
 

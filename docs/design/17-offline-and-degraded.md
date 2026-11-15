@@ -208,6 +208,7 @@ soon as they are made (design/14 "Late units"). Nothing that can take more than 
   most once per 0.3 s a slide, never ahead of a GO's raster; a GO during that fade ends it and flips at once;
 - the live playlist's slides are prepared ahead, in cue order, up to two thirds of the unit cache, and every GO
   pauses that work for its own.
+
 Health counts the slides shown with late parts (`unitsLate`; the operator's note W49 "Parts of 2 slides appeared
 a moment late on this screen."). For a venue that wants the earlier behaviour, the output URL switches
 `?late=next` (late parts at the slide's next draw, no fade), `?warm=off` (no warm-up) and `?effects=base`
