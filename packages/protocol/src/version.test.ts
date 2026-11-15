@@ -29,11 +29,11 @@ import { APP_VERSION } from './index.ts';
 // caller passes a picture file: none does yet), live.ts ResolvedPlaylist.prerenders and prerenderKeys (listed
 // only from the hub's picture rows: none yet), and in live.ts, live-state and protocol index.ts the
 // prerender.add (hub only) and prerender.use events, state.prerendered and state.drawOverride, which no client
-// sends before the sub-waves that use them. Each track re-recorded on its branch; the integrator records the
-// merged digest once after the sub-wave's last merge.
+// sends before the sub-waves that use them. Each track re-recorded on its branch; the sub-wave's integrator
+// recorded the merged digest once, after its last merge.
 const RECORDED = {
   version: '0.7.0',
-  digest: '334a7ebc5c42278b4fedd33abcb7b1ee1f1acc810949f44545dc20e3bc84c2a7',
+  digest: '716c5b07c94aa49c54e70224452eb3e897c4fa6294e94fce355442d7cd766317',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */
