@@ -63,7 +63,7 @@ import { basename, join, relative, resolve } from 'node:path';
 import { renderWithPptxPreview } from '@ordo/pptx-render';
 import { parseArgs, slidesFor } from './args.ts';
 import { type BaselineDeck, compareBaseline } from './baseline.ts';
-import { BeforeHub, type HubBefore, type HubScores, needsHub, pasteSsim } from './beforehub.ts';
+import { BeforeHub, type HubBefore, type HubScores, keepsPage, needsHub, pasteSsim } from './beforehub.ts';
 import { hubClasses } from './census.ts';
 import { drawingKey } from './compat/index.ts';
 import { buildCorpus } from './corpus.ts';
@@ -328,7 +328,7 @@ async function nativeColumn(
   const before = (i: number): HubBefore | undefined => {
     const s = shown[i];
     const h = s ? hubOf.get(s.index) : undefined;
-    const budget = h?.hubWhy === 'slide' && (h.level === 'plain' || h.level === 'minimal');
+    const budget = !!h && keepsPage(h, s?.tableGroupBytes);
     return s && h
       ? {
           hub: h.hub,

@@ -39,8 +39,9 @@ export type HubBefore = {
   art?: Box;
   metafiles?: readonly Box[];
   /**
-   * Its slide budget fitted it by leaving something out (`plain`, `minimal`): a hub with LibreOffice keeps
-   * LibreOffice's page for it instead (`ImportCore.pageForBudget`), so the hub is asked whatever its class.
+   * A hub with LibreOffice keeps LibreOffice's page for it (`keepsPage`: its slide budget fitted it by leaving
+   * something out, or its tables as their M6 group pass 64 KB; `ImportCore.pageForBudget`), so the hub is asked
+   * whatever its class.
    */
   budget?: boolean;
 };
@@ -163,6 +164,25 @@ export async function pasteSsim(
   if (!(await pasteLibreOffice(page.native, page.lo, regions, page.rect, page.scratch)))
     return page.nativeSsim;
   return ssim(page.lo, page.scratch);
+}
+
+/** A slide's JSON budget on the hub (design/27 §3.4, `SIZE_BUDGETS.slideMax`). */
+const SLIDE_MAX = 64 * 1024;
+
+/**
+ * Whether a hub with LibreOffice keeps LibreOffice's page for a slide (`ImportCore.pageForBudget`), from the
+ * census's model of its budgets (`hubClasses`): the slide fitted by leaving something out ('plain',
+ * 'minimal'), or (M9 `tables-conv`, the interim rule of question 3) its tables as their M6 group would take it
+ * past 64 KB (`EmittedSlide.tableGroupBytes`, the converter's count with LibreOffice). The hub itself decides
+ * (its page form within 64 KB, the presentation's room): this only says which slides to ask it for.
+ */
+export function keepsPage(
+  h: { hub: string; hubWhy: string | null; level: string; stored: number },
+  tableGroupBytes = 0,
+): boolean {
+  if (h.hub === 'picture') return false;
+  if (h.hubWhy === 'slide' && (h.level === 'plain' || h.level === 'minimal')) return true;
+  return tableGroupBytes > 0 && h.stored + tableGroupBytes > SLIDE_MAX;
 }
 
 /** A slide the hub does not show as the native column draws it: `--before hub` asks the hub for it. */

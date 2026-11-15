@@ -120,6 +120,11 @@ export type NativeSlide = {
   /** Classed picture by the converter's slide budget alone (`EmittedSlide.overBudget`). */
   overBudget?: true;
   /**
+   * M9 (`tables-conv`): what the slide's tables would add as their M6 group (`EmittedSlide.tableGroupBytes`,
+   * with LibreOffice): `--before hub` asks the hub for a slide this takes past 64 KB (`keepsPage`).
+   */
+  tableGroupBytes?: number;
+  /**
    * With `noLibreOffice`: the slide as a hub without LibreOffice emits it (`EmitOptions.libreoffice: false`,
    * with the policies `slide` or `compatSlide` is drawn with), when that differs from the slide drawn.
    */
@@ -432,6 +437,7 @@ export async function convertDeck(
         ...(s.art ? { art: { ...s.art.box } } : {}),
         ...(s.metafiles?.length ? { metafiles: s.metafiles.map((m) => ({ ...m.object.box })) } : {}),
         ...(s.overBudget ? { overBudget: true as const } : {}),
+        ...(s.tableGroupBytes ? { tableGroupBytes: s.tableGroupBytes } : {}),
         ...(nl && nlSlide && drawingKey(nlSlide) !== drawingKey(drawn) ? { noLoSlide: nlSlide } : {}),
         ...(nl && nl.classification.class !== s.classification.class
           ? { noLoClass: nl.classification.class }
