@@ -1,15 +1,18 @@
 /**
- * The library's font faces for the `pptx-scene` pool task (design/27 §15 M6 tables): a table row is as tall
- * as its text, measured with the faces the outputs' font resolver draws it with (`@ordo/pptx-scene`
- * `ParseOptions.fontFace`). The job lists the library's face files (`sceneFontFiles`); the worker reads a
- * file only when a table asks for its family (`libraryFaces`), at most `FACE_LIMITS.files` files and
- * `FACE_LIMITS.bytes` per task, each through `metricTables` (TTF, OTF, WOFF, WOFF2) and `metricsOfTables`.
+ * The library's font faces for the `pptx-scene` pool task (design/27 §15 M6 tables): a table's cells are
+ * measured (and, since M9 tables-conv, their lines spaced) with the faces the outputs' font resolver draws
+ * them with (`@ordo/pptx-scene` `ParseOptions.fontFace`). The job lists the library's face files
+ * (`sceneFontFiles`); the worker reads a file only when a table asks for its family (`libraryFaces`), at most
+ * `FACE_LIMITS.files` files and `FACE_LIMITS.bytes` per task, each through `metricTables` (TTF, OTF, WOFF,
+ * WOFF2) and `metricsOfTables`.
  *
  * As the resolver does, a family is its library faces only: `@ordo/pptx-scene` asks for the metric
- * substitute (Carlito for Calibri, ...) and ordo's default face by name next. Faces of one family, weight and
- * slant (Google Fonts' unicode-range subsets) are tried in turn for each character; their line metrics are
- * the first face's, and a pair is kerned by a face that has both characters. `FACE_LIMITS.bytes` counts
- * what a face keeps (its tables, decompressed) or its file, whichever is more.
+ * substitute (Carlito for Calibri, ...) and ordo's default face by name next, and for a script none of a
+ * run's faces has the script's face (`FaceSource.script`: the first of its fallback families the library has,
+ * the import core's one rule, so the browser's parse spaces a Korean cell as this task does). Faces of one
+ * family, weight and slant (Google Fonts' unicode-range subsets) are tried in turn for each character; their
+ * line metrics are the first face's, and a pair is kerned by a face that has both characters.
+ * `FACE_LIMITS.bytes` counts what a face keeps (its tables, decompressed) or its file, whichever is more.
  */
 import { readFileSync, statSync } from 'node:fs';
 import type { Font } from '@ordo/domain';

@@ -721,8 +721,11 @@ export function tableFrame(o: {
   );
 }
 
-/** Add `ppt/tableStyles.xml` (`a:tblStyleLst` holding `styles`) with the presentation's relationship to it. */
-export function withTableStyles(parts: PartSource, styles: string): PartSource {
+/**
+ * Add `ppt/tableStyles.xml` (`a:tblStyleLst` holding `styles`, its default style `def` when given) with the
+ * presentation's relationship to it.
+ */
+export function withTableStyles(parts: PartSource, styles: string, def?: string): PartSource {
   const relsName = 'ppt/_rels/presentation.xml.rels';
   parts.set(
     relsName,
@@ -736,7 +739,7 @@ export function withTableStyles(parts: PartSource, styles: string): PartSource {
   return withPart(
     parts,
     'ppt/tableStyles.xml',
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<a:tblStyleLst xmlns:a="${NS_A}" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}">${styles}</a:tblStyleLst>`,
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<a:tblStyleLst xmlns:a="${NS_A}"${def ? ` def="${def}"` : ''}>${styles}</a:tblStyleLst>`,
     'application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml',
   );
 }

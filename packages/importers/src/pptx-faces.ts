@@ -10,6 +10,11 @@
  *   name next. The slant asked for if the family has it, then the weight nearest the one asked for; faces of
  *   one family, weight and slant (Google Fonts' unicode-range subsets) are tried in turn for each character,
  *   their line metrics the first face's, a pair kerned by a face that has both characters.
+ * - **A script's face** (`FaceSource.script`, M9 tables-conv): the face the outputs fall back to for a script
+ *   none of a run's faces has, the first of the script's fallback families (`SCRIPT_FALLBACK_FONTS`: Noto
+ *   Sans KR for Hangul ...) the library has, upright and regular; the converter spaces such a cell's lines by
+ *   it (`tables.ts` `Measure`). One rule, so the hub's pool task and the browser's parse write the same line
+ *   spacing.
  * - **What a deck needs** (`deckFaceNeeds`): only tables are measured today, so only a deck with a table
  *   needs faces: the families its parts name (`typeface` attributes of runs, themes and tables), their metric
  *   substitutes, the script fallbacks of the scripts its text uses (`SCRIPT_FALLBACK_FONTS`) and ordo's default
@@ -40,8 +45,21 @@ export type LibraryFace = {
   metrics: () => FaceMetrics | undefined;
 };
 
-/** A `FaceSource` over library faces (see the module comment). */
+/** A `FaceSource` over library faces (see the module comment), with the scripts' faces (`script`). */
 export function faceSourceOf(faces: readonly LibraryFace[]): FaceSource {
+  const source = familyFaces(faces);
+  source.script = (code) => {
+    for (const family of SCRIPT_FALLBACK_FONTS[code] ?? []) {
+      const f = source(family, false, false);
+      if (f) return f;
+    }
+    return undefined;
+  };
+  return source;
+}
+
+/** A family's faces of a weight and slant (see the module comment). */
+function familyFaces(faces: readonly LibraryFace[]): FaceSource {
   const byFamily = new Map<string, LibraryFace[]>();
   for (const f of faces.slice(0, FACE_LIMITS.listed)) {
     const k = f.family.trim().toLowerCase();

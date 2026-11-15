@@ -1,5 +1,6 @@
 import { parsePathData, type Rgba, type ShapeObject, Slide, type TextObject } from '@ordo/domain';
 import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import { cellRich } from '@ordo/domain/table.ts';
 import { TABLE_LIMITS as DOMAIN_LIMITS } from '@ordo/domain';
 import { CMD_MOVE, GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
 import { storedGeometry } from '@ordo/renderer/geom/stored.ts';
@@ -124,6 +125,8 @@ function convert(
   shapes: string,
   opts: {
     styles?: string;
+    /** The style list's default (`a:tblStyleLst def`), with `styles`. */
+    def?: string;
     fontFace?: FaceSource;
     deck?: Partial<DeckSpec>;
     loCompat?: boolean;
@@ -131,7 +134,7 @@ function convert(
   } = {},
 ) {
   let parts = buildDeck({ slides: [{ shapes }], ...opts.deck });
-  if (opts.styles !== undefined) parts = withTableStyles(parts, opts.styles);
+  if (opts.styles !== undefined) parts = withTableStyles(parts, opts.styles, opts.def);
   const out = convertDeck(parts, {
     fontFace: opts.fontFace ?? HALF_EM,
     m9Writes: M6_GROUP,
@@ -354,6 +357,37 @@ describe('tables: styles', () => {
       [232, 235, 244], // wholeTbl: accent1 tint 20 %
     ]);
     expect(texts[0]!.style).toMatchObject({ fontWeight: 700, color: { r: 255, g: 255, b: 255 } });
+  });
+
+  it("takes the deck's default style (a:tblStyleLst def) for a table that names none: its cells opaque", () => {
+    // The suite's brutalism deck (slide 14): ppt/tableStyles.xml names only its default, Medium Style 2 -
+    // Accent 1, and a table without a:tableStyleId shows a picture under it through every cell without a fill
+    // of its own, where LibreOffice (and PowerPoint) draw the default style's fills.
+    const shapes = table({
+      cols: [IN, IN],
+      rows: [
+        { h: IN / 2, cells: [tcWith('own', solid('111111')), tc('b')] },
+        { h: IN / 2, cells: [tc('c'), tc('d')] },
+      ],
+      tblPr: '<a:tblPr/>',
+    });
+    const DEF = '{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}';
+    const fills = (styles: string, def?: string) =>
+      convert(shapes, { styles, ...(def ? { def } : {}) })
+        .rects.sort((a, b) => a.y - b.y || a.x - b.x)
+        .map(rgb);
+    expect(fills('', DEF)).toEqual([
+      [17, 17, 17], // its own fill
+      [232, 235, 244], // wholeTbl: accent1 tint 20 %
+      [232, 235, 244], // the second row, joined
+    ]);
+    // A default the deck's list defines is its own; a list without a default leaves the cells as they are.
+    const deckDefault = `<a:tblStyle styleId="${DEF}" styleName="Deck"><a:wholeTbl><a:tcStyle><a:fill>${solid('DDEEFF')}</a:fill></a:tcStyle></a:wholeTbl></a:tblStyle>`;
+    expect(fills(deckDefault, DEF).slice(1)).toEqual([
+      [221, 238, 255],
+      [221, 238, 255],
+    ]);
+    expect(fills(deckDefault)).toEqual([[17, 17, 17]]);
   });
 
   it('puts the table background (the own fill of a:tblPr) under every cell', () => {
@@ -646,6 +680,46 @@ describe('tables: gridObjects within the stored path bounds', () => {
 
 describe('tables: rows grow to their text', () => {
   const long = 'aaaa bbbb cccc dddd';
+
+  it('measures Korean as the renderer breaks it (words kept whole) and spaces it by the face of its Hangul', () => {
+    // The deck's family has no face; ordo's default (Inter here) has no Hangul; the script's face
+    // (FaceSource.script, the library's Noto Sans KR on the hub) draws it, 1 em a syllable, its line 1.26 of the
+    // size. 20 pt (40 px) in a column of 5 syllables: "가나 다라마바 사" breaks at its spaces only (UAX#14 with
+    // Korean words whole, the renderer's breaks.ts): three lines, where breaking between syllables gave two.
+    const latin = { advance: (cp: number) => (cp === 0x20 ? 0.25 : undefined), lineHeight: 1.21 };
+    const hangul = {
+      advance: (cp: number) => (cp >= 0xac00 && cp <= 0xd7a3 ? 1 : undefined),
+      lineHeight: 1.26,
+    };
+    const faces: FaceSource = Object.assign((family: string) => (family === 'Inter' ? latin : undefined), {
+      script: (code: string) => (code === 'Hang' ? hangul : undefined),
+    });
+    const inner = 5 * 40;
+    const col = Math.round(((inner + 28.8) * 12_192_000) / 1920) + 10;
+    const shapes = table({
+      cols: [col],
+      rows: [
+        {
+          h: 0,
+          cells: [
+            tc('가나 다라마바 사', {
+              rPr: 'lang="ko-KR" sz="2000"',
+              rPrChildren: '<a:latin typeface="Malgun Gothic"/><a:ea typeface="Malgun Gothic"/>',
+            }),
+          ],
+        },
+      ],
+    });
+    const scene = parseDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: faces });
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    const px = (emu: number) => (emu * 1920) / 12_192_000;
+    expect(px(t.rows[0]!)).toBeCloseTo(3 * 1.26 * 40 + 14.4, 3);
+    // The stored cell is spaced by the Hangul face (the table object's paragraph or box line height).
+    const out = convertDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: faces });
+    const o = out.slides[0]!.slide.objects.find((x) => x.type === 'shape' && x.table) as ShapeObject;
+    const c = cellRich(o.table!, 0)!;
+    expect(c.paras?.[0]?.lineSpacing ?? c.style.lineHeight / 1.2).toBeCloseTo(1.26 / 1.2, 6);
+  });
 
   it('measures text with the faces in the office line model and grows the row', () => {
     // 2 in = 288 px, less 28.8 px of margins: 14 characters of 18 px fit, so "dddd" wraps: two lines of

@@ -65,7 +65,7 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `index.ts`          | `PptxImports`: registers the jobs, `queueNative`, `queueReference` (`imports.pptx`)        | shared |
 | `nativeJob.ts`      | The light `pptx-native` job, steps 1-6                                                     | B      |
 | `sceneTask.ts`      | Worker side of `pptx-scene`: one batch through `convertDeck` (working pass-through)        | B      |
-| `faces.ts`          | The library's faces for `pptx-scene` (M6 tables: rows grow to their text), read on demand  | M6     |
+| `faces.ts`          | The library's faces for `pptx-scene`: table cells measured and spaced, scripts' faces      | M6     |
 | `report.ts`         | `PptxNativeResult` for the import card, `source.log`, `logSafe`                            | B      |
 | `mediaParts.ts`     | `mediaForFile`: the generalised `mediaFor`, through the media hash index; `clipForFile`    | C      |
 | `clips.ts`          | `spillClips` (spill and sniff), `ClipImport` (store clips, replace their placeholders)     | w2 A   |

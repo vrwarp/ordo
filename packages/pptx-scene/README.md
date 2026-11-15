@@ -842,6 +842,10 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
   rows, 64 columns and 4,096 slots (noted) and measures at most 10,000 characters a cell and 60,000 a table
   (`measuredBodies`); the emitter cuts the same and leaves later palette entries out (noted). No cell cap: a
   table is one object of the slide's 150.
+- **Styles and scripts**: a table naming no style takes the deck's default (`a:tblStyleLst def`, `tableStyleOf`);
+  the measure breaks at the renderer's break opportunities (`breakOpportunities`, Korean words whole) and
+  spaces a paragraph by the face that draws its script (`FaceSource.script`: `@ordo/importers` `faceSourceOf` on
+  the hub and in the browser, `fc-match :charset` in the harness).
 - **Not written**: a table with vertical cell text stays residual ('vert') until the writing engine lays cells
   out; no legacy group (M9 decision 4).
 - **The kill switch** (`m9Writes` without 'table'): the M6 group, counted as its objects by the budgets
@@ -850,7 +854,8 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
 - Tests: `emit-table.test.ts` (one object with palettes, background and gradient fills, spans, diagonals, rtl,
   the cell entries as the domain reads them, 96 and 160 cells native, the 640-cell master grid one object a
   slide, the older build's strip, the kill switch under 150 objects, stored rows, LibreOffice's rows, the text
-  budget, the bounds), `tables.test.ts` (the reader's cuts, no cell cap, the kill switch's cap, vertical cells),
+  budget, the bounds), `tables.test.ts` (the reader's cuts, no cell cap, the kill switch's cap, vertical cells,
+  the deck's default style, Korean cells measured and spaced by their script's face),
   `domain/src/cellstyle.test.ts` (the pure mapping equals `table.ts`'s).
 <!-- /m9:tables-conv -->
 
@@ -879,7 +884,7 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
 | `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                                         | M3 B          |
 | `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                                      | M3b A         |
 | `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`                      | M3b A         |
-| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6; M9 reads into the table object); `tablestyles.ts`: built-in styles (MPL 2.0)    | M6b C         |
+| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6; M9 reads into the table object); `tablestyles.ts`: built-in styles (MPL 2.0)        | M6b C         |
 | `metrics.ts`    | `sfntMetrics`, `metricsOfTables`, `FaceSource`: advances, pair kerning, line heights from font files, bounded                        | M6b C         |
 | `smartart.ts`   | SmartArt from its drawing cache: `readSmartArt` (the drawing's shapes through the walk), `lockDiagram`                               | M6b D         |
 | `bake.ts`       | Baked pictures: `PictureBake` recipes (`bakeOf`, `tileBakeOf`), `applyBake` (recolour and tile pixels); M9 `SheetBake`, `applySheet` | M6b D         |

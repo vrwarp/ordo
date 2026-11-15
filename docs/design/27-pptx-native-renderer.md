@@ -2918,6 +2918,16 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
 - **No cell cap.** A table is one object of the slide's budget (`budget.ts` `ownObjects`), its cells' JSON
   counted against the slide's text budget as it is written. The 640-cell master grid of the summer-vibes
   template is one object a slide, a 160-cell bulletin native.
+- **The deck's default table style.** A table whose `a:tblPr` names no style takes `a:tblStyleLst def` (as
+  LibreOffice and PowerPoint do): the suite's brutalism deck (slide 14) names only its default, and the cells
+  without a fill of their own showed the picture under the table where LibreOffice draws them opaque.
+- **Korean and other scripts' cells** (tables-object.md §3): the measure breaks where the renderer breaks
+  (`@ordo/renderer` text/breaks.ts `breakOpportunities`: UAX#14 with Korean words kept whole, never before
+  `)` `」` `,` `?` `・` or after `(` `「`) and spaces a paragraph by the face that draws its script
+  (`FaceSource.script`): one rule for the hub's pool task and the browser's parse (`@ordo/importers`
+  `faceSourceOf`: the first of the script's fallback families the library has, Noto Sans KR for Hangul), so
+  both write the same line spacing; the harness asks fontconfig for a letter of the script
+  (`fc-match :charset=<hex>`, the face Chromium falls back to on its host: WenQuanYi Zen Hei for Hangul).
 - **Vertical cells stay residual** (`'vert'`, LibreOffice's art) until the writing engine lays them out: drawn
   horizontally they would replace LibreOffice's art on a hub with it by text turned the wrong way (the WIP's
   "approx, drawn horizontally" was not taken).
