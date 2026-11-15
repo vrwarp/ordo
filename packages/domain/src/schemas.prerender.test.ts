@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { slideContent } from './content.ts';
-import { Presentation, Slide } from './schemas.ts';
+import { PRERENDER_LIMITS, Presentation, Slide, SlidePrerender } from './schemas.ts';
 import * as prev from './schemas.prev.test-util.ts';
 import * as prev05 from './schemas.prev05.test-util.ts';
 
@@ -118,6 +118,22 @@ describe('Slide.prerender, Slide.draw, Slide.cut and meta.draw (design/29 §1.2)
     }
     const p = Presentation.parse(presentation({ draw: 'never' }));
     expect(p.meta.draw).toBeUndefined();
+  });
+
+  it('bounds each list at PRERENDER_LIMITS (the schema writes them out)', () => {
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `o${i}`);
+    const hash = (n: number) => Array.from({ length: n }, () => 'c'.repeat(64));
+    const rec = (o: object) => SlidePrerender.safeParse({ why: ['bytes'], live: [], ...o }).success;
+    const L = PRERENDER_LIMITS;
+    expect([rec({ live: ids(L.live) }), rec({ live: ids(L.live + 1) })]).toEqual([true, false]);
+    const uses = (u: object) => rec({ uses: { media: [], files: [], fonts: [], ...u } });
+    expect([uses({ media: ids(L.media) }), uses({ media: ids(L.media + 1) })]).toEqual([true, false]);
+    expect([uses({ files: hash(L.files) }), uses({ files: hash(L.files + 1) })]).toEqual([true, false]);
+    expect([uses({ fonts: ids(L.fonts) }), uses({ fonts: ids(L.fonts + 1) })]).toEqual([true, false]);
+    const cut = (c: string[]) => Slide.parse({ id: 's', objects: [], cut: c }).cut;
+    expect(cut(Array(L.cut).fill('x'.repeat(L.cutChars)))).toHaveLength(L.cut);
+    expect(cut(Array(L.cut + 1).fill('x'))).toBeUndefined();
+    expect(cut(['x'.repeat(L.cutChars + 1)])).toBeUndefined();
   });
 
   for (const [name, old] of [

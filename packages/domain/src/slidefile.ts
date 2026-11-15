@@ -39,25 +39,32 @@ export const SLIDE_FILE_LIMITS = {
   pages: 129,
 } as const;
 
-/** A page: objects of the full slide, in z order (bottom first), at most 500 and 256 KiB of canonical JSON. */
-export const SlideFilePage = z
-  .object({ v: z.literal(1), objects: z.array(SlideObject).max(SLIDE_FILE_LIMITS.pageObjects) })
-  .refine((p) => utf8Bytes(canonicalJson(p)) <= SLIDE_FILE_LIMITS.pageBytes, {
-    message: `a slide page is at most ${SLIDE_FILE_LIMITS.pageBytes} bytes`,
+// The schemas are made by functions called /* @__PURE__ */, so a bundle that imports this module for
+// `slideFileOf` alone (goLive's path in the operator's core worker, which a phone loads) leaves them out.
+const pageSchema = () =>
+  z
+    .object({ v: z.literal(1), objects: z.array(SlideObject).max(SLIDE_FILE_LIMITS.pageObjects) })
+    .refine((p) => utf8Bytes(canonicalJson(p)) <= SLIDE_FILE_LIMITS.pageBytes, {
+      message: `a slide page is at most ${SLIDE_FILE_LIMITS.pageBytes} bytes`,
+    });
+const headSchema = () =>
+  z.object({
+    v: z.literal(1),
+    pages: z.array(ContentHash).max(SLIDE_FILE_LIMITS.pages),
+    count: z.number().int().min(0).max(SLIDE_FILE_LIMITS.objects),
+    lyricObjectId: Id.optional(),
+    imported: Slide.shape.imported,
   });
+
+/** A page: objects of the full slide, in z order (bottom first), at most 500 and 256 KiB of canonical JSON. */
+export const SlideFilePage = /* @__PURE__ */ pageSchema();
 export type SlideFilePage = z.infer<typeof SlideFilePage>;
 
 /**
  * A head: its pages in order, the slide's object count, and the fields of the full slide that draw besides its
  * objects (the lyric box's id, an imported page picture).
  */
-export const SlideFileHead = z.object({
-  v: z.literal(1),
-  pages: z.array(ContentHash).max(SLIDE_FILE_LIMITS.pages),
-  count: z.number().int().min(0).max(SLIDE_FILE_LIMITS.objects),
-  lyricObjectId: Id.optional(),
-  imported: Slide.shape.imported,
-});
+export const SlideFileHead = /* @__PURE__ */ headSchema();
 export type SlideFileHead = z.infer<typeof SlideFileHead>;
 
 /** A full slide the content store cannot hold (W18), or a file that does not assemble. */

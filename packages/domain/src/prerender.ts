@@ -447,7 +447,7 @@ export function standInOf(full: Slide, live: readonly string[]): Slide {
 // The picture's key (design/29 §1.2)
 
 /** Fields of an object that never change what it draws: left out of the drawn part. */
-const UNDRAWN = new Set(['id', 'origin', 'locked']);
+const UNDRAWN = /* @__PURE__ */ new Set(['id', 'origin', 'locked']);
 
 /** What the picture draws: the slide's picture under its objects (`slideContent`), and the objects not live. */
 export type DrawnPart = { picture?: string; objects: Record<string, unknown>[] };

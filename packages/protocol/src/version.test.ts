@@ -30,7 +30,7 @@ import { APP_VERSION } from './index.ts';
 // integrator re-records the digest once after the sub-wave's last merge.
 const RECORDED = {
   version: '0.7.0',
-  digest: 'cff67be36b06f3aaf9a942fbc841146c9bd99dbee9c8022f1a0beca806daf4dd',
+  digest: '70d25396391e482f20df819fc58dc18614be4f3235ef5127534fafa98c7a7d6f',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

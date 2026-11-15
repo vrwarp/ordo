@@ -414,8 +414,8 @@ const MEDIA_REASON =
   /; (?:showing its poster|the slide shows without it|the slide shows only the objects added in ordo|the item plays without music)(?:; Go live again once it is ready)?$/;
 
 export function degradedKind(reason: string): DegradedKind {
-  if (PICTURE_REASON.test(reason)) return 'picture';
-  if (SLIDE_FILE_REASON.test(reason)) return 'slideFile';
+  if (reason.includes(PICTURE_MARK)) return 'picture';
+  if (reason.includes(SLIDE_FILE_MARK)) return 'slideFile';
   if (reason === PENDING_SLIDE_REASON || reason === FAILED_SLIDE_REASON) return 'drawing';
   if (reason.startsWith(MISSING_SLIDE_REASON)) return 'drawing';
   if (MEDIA_REASON.test(reason)) return 'media';
@@ -462,16 +462,14 @@ function slideFileMissing(title: string, slides: number[]): string {
     ? `Slide ${slides[0]} of "${title}" is missing its full copy on the hub, so the screens show a simplified version (its text and pictures only).`
     : `${slides.length} slides of "${title}" are missing their full copy on the hub, so the screens show a simplified version (their text and pictures only).`;
 }
-const SLIDE_FILE_REASON =
-  / (?:is|are) missing (?:its|their) full copy on the hub, so the screens show a simplified version/;
+const SLIDE_FILE_MARK = ' full copy on the hub, ';
 
 /** The degraded line of pre-rendered slides of one presentation without a picture yet (W33; critical). */
 function pictureMissing(title: string, n: number): string {
   const which = n === 1 ? `1 slide of "${title}" has` : `${n} slides of "${title}" have`;
   return `${which} no picture yet. Until a picture is ready, the screens draw the slide themselves, so it may appear a moment late.`;
 }
-const PICTURE_REASON =
-  / (?:has|have) no picture yet\. Until a picture is ready, the screens draw the slide themselves/;
+const PICTURE_MARK = ' no picture yet. ';
 
 /** What a goLive lists besides media and fonts: `geomFiles`' result. */
 type Listed = {

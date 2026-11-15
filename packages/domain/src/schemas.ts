@@ -975,19 +975,16 @@ export const SlidePrerender = z.object({
   file: z
     .object({
       ref: ContentHash,
-      bytes: z
-        .number()
-        .int()
-        .min(0)
-        .max(32 * 1024 * 1024),
+      bytes: z.number().int().min(0).max(33_554_432),
     })
     .optional(),
-  live: z.array(Id).max(PRERENDER_LIMITS.live),
+  // The bounds of PRERENDER_LIMITS, written out: the schema is in every bundle, the object need not be.
+  live: z.array(Id).max(1000),
   uses: z
     .object({
-      media: z.array(Id).max(PRERENDER_LIMITS.media),
-      files: z.array(ContentHash).max(PRERENDER_LIMITS.files),
-      fonts: z.array(z.string().max(300)).max(PRERENDER_LIMITS.fonts),
+      media: z.array(Id).max(1000),
+      files: z.array(ContentHash).max(1000),
+      fonts: z.array(z.string().max(300)).max(64),
     })
     .optional(),
 });
@@ -1048,11 +1045,7 @@ export const Slide = z.object({
    * What a kept bound left out of a slide not from PowerPoint (design/29 §1.2; a PowerPoint slide uses
    * `pptx.missing`): the import's critical lines, which goLive repeats.
    */
-  cut: z
-    .array(z.string().max(PRERENDER_LIMITS.cutChars))
-    .max(PRERENDER_LIMITS.cut)
-    .optional()
-    .catch(undefined),
+  cut: z.array(z.string().max(200)).max(16).optional().catch(undefined),
 });
 export type Slide = z.infer<typeof Slide>;
 
