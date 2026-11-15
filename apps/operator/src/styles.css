@@ -477,6 +477,11 @@ table.list th {
 .toast.ok {
   border-color: #15803d;
 }
+/* W41's Go live progress (views/live/GoLiveToast.tsx): its own stack, clear of the other toasts. */
+.toasts.golive {
+  bottom: auto;
+  top: 72px;
+}
 
 /* ---- operator view ---- */
 .op {

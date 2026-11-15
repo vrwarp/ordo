@@ -98,6 +98,7 @@ export class Controller {
             conflict: e.open ? { hubPlaylist: e.hubPlaylist, localPlaylist: e.localPlaylist } : undefined,
           });
         else if (e.k === 'goLiveError') useLive.setState({ goLiveError: e.reason });
+        else if (e.k === 'goLivePrepare') useLive.setState({ goLivePrepare: e.p });
         else if (e.k === 'offlineCheck')
           useLive.setState((s) => ({
             offlineChecks: { ...s.offlineChecks, [e.result.playlistId]: e.result },
@@ -279,6 +280,10 @@ export class Controller {
   goLive(playlistId: string): void {
     useLive.setState({ goLiveError: undefined });
     this.call('goLive', playlistId);
+  }
+  /** W41's button: go live from the hub's saved copy of the playlist being prepared (design/29 M8). */
+  goLiveFromSaved(playlistId: string): void {
+    this.call('goLiveSaved', playlistId);
   }
   /** Go live from this PC with the hub unreachable (after the operator confirmed; design/17). */
   goLiveLocal(playlistId: string): void {
