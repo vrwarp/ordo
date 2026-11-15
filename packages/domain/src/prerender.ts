@@ -123,10 +123,12 @@ export type PicturePlan = {
 export type CostReasons = (slide: Slide, at: typeof PRERENDER_FRAME) => readonly string[];
 
 /**
- * Which slides get a picture (design/29 §1.1): `bytes` stored over 64 KiB (the caller measures the slide after
- * the lossless grid step), `count` past a live count (`PICTURE_COUNTS`) or a cost reason. Judged at the fixed
- * 3840 reference whatever the caller's screen, so every view plans the same. `tail` and `chosen` are the
- * import plan's and the editor's, not found here.
+ * Which slides get a picture (design/29 §1.1): `bytes` stored over 64 KiB, `count` past a live count
+ * (`PICTURE_COUNTS`) or a cost reason. Judged at the fixed 3840 reference whatever the caller's screen, so every
+ * view plans the same. `tail` and `chosen` are the import plan's and the editor's, not found here. The caller
+ * passes the slide as the hub stores it, after the lossless grid step and with its shape files named: a
+ * converter's placeholders (`pptxgeom:<n>`) are shorter than the hub's names, and one E slide measured
+ * 65,514 bytes emitted that the ladder stores past 64 KiB.
  */
 export function pictureUnits(slide: Slide, cost?: CostReasons): PicturePlan {
   const drawn = slideContent(slide).objects;
