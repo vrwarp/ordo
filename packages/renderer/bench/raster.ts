@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,8 @@ import type { BenchReport, Stats } from './raster.page.ts';
  * M9 areas list in bench/cases/index.ts. Prints layout (cold and with a warm width cache),
  * raster (clear, draw, transferToImageBitmap) and paint-only times.
  *
- *   pnpm --filter @ordo/renderer bench [--iterations 200] [--check]
+ *   pnpm --filter @ordo/renderer bench [--iterations 200] [--check] [--only <part of a case's name>]
+ *     [--bundle-out <file> | --bundle <file>]
  *
  * --check fails when a rich slide's raster p95 is over the M2 budget: 8 ms at 1920, 30 ms at 3840; a
  * bounded geometry one's (hostile fills and outlines at the slide's drawing budget, M6 repair and finish,
@@ -34,6 +35,14 @@ const arg = (name: string) => {
 };
 const iterations = Math.max(10, Number(arg('--iterations') ?? 120));
 const check = process.argv.includes('--check');
+/** Only the cases whose name holds this (a quick run of a few rows). */
+const only = arg('--only');
+/**
+ * `--bundle-out <file>`: write the page bundle of this checkout and exit; `--bundle <file>`: run that bundle
+ * instead of building one (a timing run of one commit's code while the checkout moves on, under the bench lock).
+ */
+const bundleOut = arg('--bundle-out');
+const bundleIn = arg('--bundle');
 const BUDGET: Record<string, number> = { '1920': 8, '3840': 30 };
 const BOUNDED: Record<string, number> = { '1920': 50, '3840': 120 };
 const BOUNDED_GEOMETRY: Record<string, number> = { '1920': 50, '3840': 50 };
@@ -82,17 +91,26 @@ async function main(): Promise<number> {
     console.error('bench: DejaVu Sans not installed (apt install fonts-dejavu-core)');
     return 1;
   }
-  const esbuild = await loadEsbuild();
-  const built = await esbuild.build({
-    entryPoints: [join(here, 'raster.page.ts')],
-    bundle: true,
-    write: false,
-    format: 'iife',
-    target: 'es2022',
-    absWorkingDir: root,
-    logLevel: 'silent',
-  });
-  const script = built.outputFiles[0]!.text;
+  let script: string;
+  if (bundleIn) script = readFileSync(bundleIn, 'utf8');
+  else {
+    const esbuild = await loadEsbuild();
+    const built = await esbuild.build({
+      entryPoints: [join(here, 'raster.page.ts')],
+      bundle: true,
+      write: false,
+      format: 'iife',
+      target: 'es2022',
+      absWorkingDir: root,
+      logLevel: 'silent',
+    });
+    script = built.outputFiles[0]!.text;
+  }
+  if (bundleOut) {
+    writeFileSync(bundleOut, script);
+    console.log(`bench: page bundle written to ${bundleOut}`);
+    return 0;
+  }
   const browser = await chromium
     .launch({ headless: true })
     .catch(() => chromium.launch({ headless: true, executablePath: '/usr/bin/google-chrome' }));
@@ -103,17 +121,20 @@ async function main(): Promise<number> {
     await page.setContent('<!doctype html><html><body></body></html>');
     await page.addScriptTag({ content: script });
     const report: BenchReport = await page.evaluate(
-      ([src, f, b, n]) =>
+      ([src, f, b, n, o]) =>
         (
           window as unknown as {
-            __bench: { worker(s: string, f: string, b: string, n: number): Promise<BenchReport> };
+            __bench: {
+              worker(s: string, f: string, b: string, n: number, o?: string): Promise<BenchReport>;
+            };
           }
-        ).__bench.worker(src as string, f as string, b as string, n as number),
+        ).__bench.worker(src as string, f as string, b as string, n as number, (o as string) || undefined),
       [
         script,
         readFileSync(regular).toString('base64'),
         readFileSync(bold).toString('base64'),
         iterations,
+        only ?? '',
       ] as const,
     );
     console.log(
@@ -150,6 +171,22 @@ async function main(): Promise<number> {
         console.log(
           `  raster ${w}: first ${ms(r.first)} ms; per job ${fmt(r.steady)}${checked ? ` (budget p95 ${budget} ms${bad ? ': OVER' : ''})` : ''}${rich ? `; paint only ${fmt(r.paintOnly)}` : ''}`,
         );
+        const alt = r.alternation;
+        if (alt) {
+          // Rounds 3 on (the first two make what both slides draw).
+          const of = (xs: number[]) => {
+            const kept = xs.slice(2);
+            return { worst: Math.max(...kept), mean: kept.reduce((a, b) => a + b, 0) / kept.length };
+          };
+          const a = of(alt.slide);
+          const b = of(alt.other);
+          console.log(
+            `  alternation ${w}: rounds 3-${alt.rounds}: this slide worst ${ms(a.worst)} mean ${ms(a.mean)} ms; the other worst ${ms(b.worst)} mean ${ms(b.mean)} ms; ` +
+              `rounds 1-2 ${[alt.slide[0], alt.other[0], alt.slide[1], alt.other[1]].map((x) => ms(x ?? 0)).join(' / ')} ms`,
+          );
+          console.log(`    this slide: ${alt.slide.map((x) => x.toFixed(1)).join(' ')}`);
+          console.log(`    the other:  ${alt.other.map((x) => x.toFixed(1)).join(' ')}`);
+        }
         const u = r.units;
         if (u) {
           const turn = unitsCase ? UNIT_TURN_MS[w] : undefined;
@@ -188,6 +225,8 @@ function decorPairs(report: BenchReport): number {
   let over = 0;
   for (const [pair, p] of pairs) {
     if (!p.decor || !p.shapes) {
+      // A run of some cases (`--only`) checks the pairs it drew whole.
+      if (only) continue;
       console.log(`decoration vs shapes, ${pair}: one of the pair is missing`);
       over++;
       continue;

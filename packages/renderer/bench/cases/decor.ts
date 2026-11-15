@@ -25,6 +25,14 @@ import type { BenchCase } from './index.ts';
  *   one by one + 10 % (a pair; the shapes are reported, not checked against the task). With the cache of
  *   77fcdad (one fixed 64 MiB LRU) it took p50 214 ms at 3840 against its shapes' 32 ms: every draw evicted
  *   the sprites the rest of the draw needed, then made them again (measured, r2a repair).
+ * - That slide and the decoration at its caps drawn in turn (`BenchRun` `alternate`, 20 rounds from a cold start:
+ *   two looks showing a slide and the next one): their decorations' sprites passed the decorations' share
+ *   together and pushed each other out on a schedule, the draw after each push making them again (r2a land
+ *   review, 3840: worst 93.5 ms, the capped one's mean 27.5 ms over rounds 3-20). Reported per slide, worst and
+ *   mean over rounds 3-20 ('(alternation').
+ * - That slide's second draw (`BenchRun` `second`): its first draw marks its decorations, its second makes their
+ *   sprites (r2a land re-review: 58-73 ms at 3840 on the wake template's slide 12 it is built like, against
+ *   25-29 ms drawn without them). Reported ('(second draw').
  */
 
 /** A ring of `n` points about (cx, cy) as a path string. */
@@ -163,6 +171,16 @@ function fourLarge(as: 'decor' | 'shapes'): Slide {
 }
 
 export const DECOR_BENCH_CASES: readonly BenchCase[] = [
+  [
+    'four large decorations and one at its caps drawn in turn, 20 rounds (alternation, r2a land review)',
+    fourLarge('decor'),
+    { alternate: capped(), rounds: 20 },
+  ],
+  [
+    'four large decorations among 124 shadowed shapes, the draw that makes their sprites (second draw, r2a land re-review)',
+    fourLarge('decor'),
+    { second: true, rounds: 12 },
+  ],
   ['a decoration at its caps: 16,384 points, 24 shadows in one task, cold (M9 decor-render)', capped()],
   ['a decoration at its caps: 16,384 points, 24 shadows, warm (M9 decor-render)', capped()],
   [
