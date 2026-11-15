@@ -77,9 +77,15 @@ between 16000 and 32767.
   and `phone-demo` (336-337: the Pages build's static server per phone project), the hub's 340-349 and the
   integration's 350-359. `ipad-group` and `ipad-touch-targets` have three ports (slot 2 is
   `chromium-tablet`). `e2e/layout-class.spec.ts` (the venue PC never compact) uses the shared server.
-- M9 wave r2b holds offsets 400-659: `editor-table` (420) and `ipad-table-targets` (421-423, one per tablet
-  project) are the table editing's; `pptx-tables` (430-432, tables-conv: the table deck on a hub without
-  LibreOffice through the Import tab and through the upload route, and on a hub with LibreOffice).
+- M9 wave r2b holds offsets 400-659, in offset order: `effect-units` (400-401: effects past the budget, and the
+  hostile lone line art through the upload route), `units-live` (405-406: a jump to a slide not prepared and a GO
+  50 ms after its arm, and the playlist warmed ahead), `editor-table` (420) and `ipad-table-targets` (421-423, one
+  per tablet project) are the table editing's; `pptx-table-edit` (425, sub-wave 1's integration: the table deck
+  imported on a hub without LibreOffice, a cell edited on the canvas, live); `pptx-tables` (430-432, tables-conv:
+  the table deck on a hub without LibreOffice through the Import tab and through the upload route, and on a hub
+  with LibreOffice); `golive-prepare` (450-451: Go live again during a service on a hub with a slowed library, and
+  the size ceiling). The integrations of sub-waves 2-4 hold 630-659. An explicit `ORDO_E2E_PORT_BASE` may sit below
+  16000 (design/29 §4; `e2e/ports.ts` says what it must avoid).
   `e2e/table-deck.test.ts` checks the deck still tests what the spec is about (the bulletin past M6's cell cap,
   the reading plan's M6 group past 64 KB), as `e2e/lineart-deck.test.ts` does for the line-art deck.
 
