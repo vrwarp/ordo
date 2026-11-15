@@ -139,8 +139,10 @@ from the audio master output.
    and holds it to End service, exactly like a service it started without the hub (below),
    and says so. At End service it ends the hub's older copy of the same playlist by adopting
    its own idle state (a few hundred bytes); a hub that went on to another playlist is
-   followed. A goLive above 12 MiB carries a `degraded` warning so the operator knows
-   before the service.
+   followed. Since design/29 D13 no goLive carries a takeover warning any more (A10): above
+   32 MiB it is refused (W58), and past the GO-lead size it carries W59's line ("Going live
+   beside the running service" below); a service between 15 and 32 MiB is held after an
+   outage as described here until handback-ref (design/29 M3) removes the limit.
 4. If the hub has a different live playlist (another operator went live meanwhile), the
    operator shows a conflict dialog: keep local (adopt with `force`) or take the hub's.
 

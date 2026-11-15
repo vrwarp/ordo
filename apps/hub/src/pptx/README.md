@@ -334,7 +334,7 @@ Done (`apps/hub/test/fonts-bundled.test.ts`, `fonts-google.test.ts`, domain `res
 ### F: budgets
 
 Files: `packages/domain/src/size.ts` (refine; add `previewSlice`), `goLive.ts` (a `degraded` warning above
-`SIZE_BUDGETS.resolvedWarn`, additive), `apps/operator/src/views/editor/PreviewControl.tsx` (send
+`SIZE_BUDGETS.resolvedWarn`, additive; since design/29 D13 the W58 refusal above 32 MiB and the W59 line), `apps/operator/src/views/editor/PreviewControl.tsx` (send
 `previewSlice`), `apps/operator/src/core/engine.ts` (refuse `live.adopt` locally above `adoptMax`), the
 library snapshot size in hub health.
 

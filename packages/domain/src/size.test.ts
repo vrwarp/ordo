@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { resolvePlaylist } from './goLive.ts';
+import { GoLiveRejection, resolvePlaylist } from './goLive.ts';
+import { budgetMs } from './timing.test-util.ts';
 import { parsePathData } from './pathdata.ts';
 import {
   type Presentation,
@@ -15,6 +16,8 @@ import {
   compactSlideBytes,
   fitSlideBudget,
   formatBytes,
+  GOLIVE_MAX_BYTES,
+  GOLIVE_SLOW_BYTES,
   GRID_PX,
   gridSlide,
   jsonBytes,
@@ -22,6 +25,7 @@ import {
   planImportSizes,
   presentationBytes,
   previewSlice,
+  resolvedSizeRefusal,
   resolvedSizeWarning,
   SIZE_BUDGETS,
   slideBytes,
@@ -454,25 +458,50 @@ describe('resolved playlist size (design/27 §14.10)', () => {
   }
   const digest = () => 'digest';
 
-  it('a 13 MiB resolved playlist goes live with the degraded warning; a small one without', () => {
-    const big = resolvePlaylist(inputs(4, 200, 13_800), 'pl', { digest });
+  // D13 (design/29 §2.2): the takeover warning above 12 MiB (A10) is replaced by a ceiling (W58) and a critical
+  // line past the size whose first save on a screen passes the GO lead (W59).
+  it('refuses a 40 MiB service with W58', { timeout: budgetMs(60_000) }, () => {
+    const err = (() => {
+      try {
+        resolvePlaylist(inputs(12, 200, 13_800), 'pl', { digest });
+      } catch (e) {
+        return e;
+      }
+      return undefined;
+    })();
+    expect(err).toBeInstanceOf(GoLiveRejection);
+    expect((err as Error).message).toMatch(
+      /^This service is too large to go live \(4[01] MB\)\. Split the longest presentations into smaller ones\.$/,
+    );
+  });
+
+  it('a service past the GO-lead size goes live with the W59 line; a small one without', () => {
+    const big = resolvePlaylist(inputs(1, 200, 13_800), 'pl', { digest });
     const bytes = jsonBytes({ ...big, degraded: undefined });
-    expect(bytes).toBeGreaterThan(13 * MiB);
-    expect(bytes).toBeLessThan(14 * MiB);
-    const w = big.degraded?.find((d) => d.reason.includes('too large for an operator takeover'));
-    expect(w).toMatchObject({ cueIndex: -1 });
-    expect(w!.reason).toContain('13.');
-    expect(w!.reason.length).toBeLessThanOrEqual(500);
+    expect(bytes).toBeGreaterThan(GOLIVE_SLOW_BYTES);
+    expect(bytes).toBeLessThan(GOLIVE_MAX_BYTES);
+    const w = big.degraded?.filter((d) => d.reason === W59_TEXT) ?? [];
+    expect(w).toEqual([{ cueIndex: -1, reason: W59_TEXT }]);
     const small = resolvePlaylist(inputs(2, 20, 1000), 'pl', { digest });
     expect(small.degraded).toBeUndefined();
   });
 
-  it('warns only above 12 MiB', () => {
-    expect(resolvedSizeWarning(SIZE_BUDGETS.resolvedWarn)).toBeUndefined();
+  it('W59 only past the GO-lead size, W58 only past GOLIVE_MAX_BYTES', () => {
+    expect(GOLIVE_MAX_BYTES).toBe(32 * MiB);
+    expect(resolvedSizeWarning(GOLIVE_SLOW_BYTES)).toBeUndefined();
     expect(resolvedSizeWarning(Number.NaN)).toBeUndefined();
-    expect(resolvedSizeWarning(SIZE_BUDGETS.resolvedWarn + 1)).toContain('12.0 MiB');
+    expect(resolvedSizeWarning(GOLIVE_SLOW_BYTES + 1)).toBe(W59_TEXT);
+    expect(resolvedSizeRefusal(GOLIVE_MAX_BYTES)).toBeUndefined();
+    expect(resolvedSizeRefusal(Number.NaN)).toBeUndefined();
+    expect(resolvedSizeRefusal(40 * MiB)).toBe(
+      'This service is too large to go live (40 MB). Split the longest presentations into smaller ones.',
+    );
   });
 });
+
+/** W59's words (design/29 §3). */
+const W59_TEXT =
+  'Going live with this service takes a few seconds on the screens. Go live before the service starts.';
 
 // ── The budget ladder (M9 `ladder`) ──────────────────────────────────────────────────────────────────────
 
