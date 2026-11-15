@@ -10,6 +10,7 @@ import {
   body,
   buildDeck,
   custGeom,
+  denseTableDeck,
   grpSp,
   imageRel,
   para,
@@ -305,5 +306,22 @@ describe("a slide past the guard (lo-forms: the guard's left-outs to LibreOffice
     });
     const taken = checkClientScene(structuredClone(client), { libreoffice: true });
     expect('scene' in taken && taken.scene.slides[0]!.art?.elements).toHaveLength(5);
+  });
+});
+
+describe('a dense table slide (M9 tables-conv: the interim table rule)', () => {
+  it("keeps a table slide's group bytes (the interim table rule): the client's scene weighs as the hub's own", async () => {
+    // M9 tables-conv: with LibreOffice, a slide whose tables as their M6 group pass 64 KB keeps LibreOffice's
+    // page; a client's scene must carry the same count, or its import would differ from the hub's.
+    const parts = denseTableDeck(28);
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    const client = (await parsePptxScene(await z.generateAsync({ type: 'uint8array' }))).scene;
+    const own = sceneTask({ parts: new Map(parts), pictureSizes: [], range: { from: 0, to: 1 }, options: {} })
+      .result.slides[0]!;
+    expect(own.tableGroupBytes).toBeGreaterThan(64 * 1024);
+    expect(client.slides[0]!.tableGroupBytes).toBe(own.tableGroupBytes);
+    const taken = checkClientScene(structuredClone(client), { libreoffice: true });
+    expect('scene' in taken && taken.scene.slides[0]!.tableGroupBytes).toBe(own.tableGroupBytes);
   });
 });

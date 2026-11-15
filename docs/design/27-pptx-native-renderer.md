@@ -840,7 +840,8 @@ the fidelity harness's A/B.
   hybrid 104 → 74, picture 37 → 17 (all 17 for 64 KB, the ladder's: 10 of text formatting, 7 as stored);
   `art:budget:shapes` 30 → 0, `budget:pictures` 13 → 0, `art:custGeom:complex` 16 → 0, `art:budget:3d` 1 → 0;
   BannerStyle 225 → 41 objects (culled 205 elements off the slide; its 3-D shapes merge); one slide over 150
-  objects, a 96-cell table counted as one object and emitted as its M6 group until `tables-conv`'s table object.
+  objects, a 96-cell table counted as one object and emitted as its M6 group until `tables-conv`'s table object
+  (written since: one object, below).
   Sermons: 73 of 73 native, unchanged.
 <!-- /m9:decor-conv -->
 
@@ -2841,7 +2842,7 @@ worker, the Pages demo and the fidelity harness:
 <!-- m9:tables-render -->
 **Built for M9 wave 2: the table object drawn and edited by ordo (tables-render track).** `ShapeObject.table`
 (the schema track's `TableData`) is laid out and drawn by the renderer, its cells edited by pure ops in the
-domain; the converter writes it from the tables-conv track on (until then nothing writes one).
+domain; the converter writes it since the tables-conv track ("The table object imported", below).
 - **Model** (`domain/src/table.ts`): placement is implicit (row-major, each cell at the next slot no earlier
   cell covers, a span cut at a covered slot or the grid's edge, cells past the grid dropped: `placeCells`,
   O(grid)); a cell is drawn and edited as a rich text body (`cellRich`: `base` with its style entry over it,
@@ -2893,6 +2894,87 @@ domain; the converter writes it from the tables-conv track on (until then nothin
   to 11 ms; the prepared chart draws at 3840 in 24 to 32 ms: no task over 50 ms. The fuzz test of hostile
   tables runs in about 1.2 s.
 <!-- /m9:tables-render -->
+
+<!-- m9:tables-conv -->
+**Built for wave r2b: the table object imported (tables-conv track).** Every PowerPoint table the converter
+reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvaged from the m9r WIP):
+- **What is written.** The grid as the deck stores it: `cols` its column widths, `rows` its `a:tr h` heights
+  (`TableElement.storedRows`), `box.h` their sum, so the drawer grows the rows to their text (its layout, never
+  the converter's measure: cells never shrink, which removes the "row one line short" squeeze of the M6 group
+  and the Korean cells' second breaker). Cells row-major as `placeCells` reads them back (the reader cuts spans
+  at a covered slot as the stored table places them), each with its rich text from `richText` without autofit
+  (runs, paragraph styles, fallback fonts; plain once the slide passes its text budget), spans, fill (a
+  gradient with its first stop as colour, a pattern as its blended colour) and per-cell diagonals (the M6 group
+  never drew them). Palettes by canonical JSON: `base` the cells' most common box style, each cell's entry what
+  its box differs from it in (the domain's `cellStyleOf`, `@ordo/domain/cellstyle.ts`, the pure module the
+  converter may import; `table.ts` keeps the same functions, tested equal, until it re-exports them), a box's
+  letter spacing, underline, outline, shadow and caps folded into its runs and its line height into its
+  paragraphs where they differ from `base`, partial formatting to `runStyles`, fills, line styles, the
+  resolved edges. Bounds are the schema's `TABLE_LIMITS` (a table past them keeps its first rows and columns, a
+  cell's text 10,000 characters and a table's 60,000, a palette past its size gives later entries none, each
+  noted). Origin role `'table'`, not locked; legacy fields a rect of the background (decision 4: no legacy
+  group). Under the harness's LibreOffice policy (`loCompat`, rule `cellRows`) `rowRule: 'fixed'` with
+  LibreOffice's columns and rows, its sizes and its spill and lift folded into each cell's insets.
+- **No cell cap.** A table is one object of the slide's budget (`budget.ts` `ownObjects`), its cells' JSON
+  counted against the slide's text budget as it is written. The 640-cell master grid of the summer-vibes
+  template is one object a slide, a 160-cell bulletin native.
+- **No default table style.** A table whose `a:tblPr` names no style has none, whatever `a:tblStyleLst def`
+  says: LibreOffice 24.2 leaves its cells unfilled (probe decks `regroup/r2b/tables-conv/lodef`: the default
+  named and undefined, or defined in the list, both unfilled; only `a:tableStyleId` fills them; it does draw a
+  cell fill's alpha). Taking the default (as a548707 did for the suite's brutalism deck) turned the worship deck
+  "Depression" (white text on black cells, a list defining Medium Style 2 - Accent 1 as default) light blue:
+  0.86 -> 0.05. Brutalism's slide 14 differs from LibreOffice for another reason: the picture under its table is
+  an SVG (`asvg:svgBlip`, white where the table is) with a PNG stand-in, and ordo draws the stand-in.
+- **Korean and other scripts' cells** (tables-object.md §3): the measure breaks where the renderer breaks
+  (`@ordo/renderer` text/breaks.ts `breakOpportunities`: UAX#14 with Korean words kept whole, never before
+  `)` `」` `,` `?` `・` or after `(` `「`) and spaces a paragraph by the face that draws its script
+  (`FaceSource.script`, asked for Han, Kana and Hangul only, `GLYPH_SCRIPTS`: a shaped script such as Arabic,
+  measured by its unshaped advances, wrapped a line early and took its face's line, the cec bible readings'
+  slide 6 0.805 -> 0.741): one rule for the hub's pool task and the browser's parse (`@ordo/importers`
+  `faceSourceOf`: the first of the script's fallback families the library has, Noto Sans KR for Hangul), so
+  both write the same line spacing (the browser's parse loads the library's faces for a table on a layout or a
+  master as well: the summer-vibes template's grid, measured estimated in the browser until then, made the
+  only deck of `hub-import --equivalence` whose scenes differed); the harness asks fontconfig for a letter of the script
+  (`fc-match :charset=<hex>`, the face Chromium falls back to on its host: WenQuanYi Zen Hei for Hangul).
+- **Vertical cells stay residual** (`'vert'`, LibreOffice's art) until the writing engine lays them out: drawn
+  horizontally they would replace LibreOffice's art on a hub with it by text turned the wrong way (the WIP's
+  "approx, drawn horizontally" was not taken).
+- **The kill switch is honest.** Without 'table' in `m9Writes` (`version.ts` `M9_HELD_BACK`) the M6 group is
+  written, and the budgets count it as the objects it emits (`BudgetOptions.tables`,
+  `TableElement.objects`, the guard's text objects one per cell) and keep M6's cell cap (`m6TableCap`,
+  `MAX_TABLE_CELLS` 150, 'budget:table'), so no slide passes the 150 objects either way.
+- **Question 3 of the LibreOffice inventory missed its gate: the interim rule.** On a hub with LibreOffice,
+  E's 8 dense table slides showed LibreOffice's page at 62a1c3a (their tables as M6 groups passed 64 KB, so the
+  ladder would have fitted them, `pageForBudget`). The gate for giving them the table object there was each
+  slide ≥ its LibreOffice page − 0.04 and the mean ≥ − 0.02. Measured at a548707 (`fid.sh --both`, shards
+  0-2, the 8 slides of tables-object.md §1; the page as LibreOffice drew it, the table object as the native
+  hub draws it, and the hub without LibreOffice before, where the M6 group was stored minimal):
+
+  | Slide (deck, page)        | LibreOffice's page | Table object | Without LibreOffice before |
+  | ------------------------- | -----------------: | -----------: | -------------------------: |
+  | 1000 Years, 1             |              0.972 |        0.622 |                      0.399 |
+  | John 5 vs 18, 1           |              0.949 |        0.619 |                      0.351 |
+  | Colossians 2-14-16, 1     |              0.931 |        0.634 |                      0.340 |
+  | Matthew 16v18, 1          |              0.963 |        0.783 |                      0.477 |
+  | Flesh and Spirit chart, 1 |              0.956 |        0.817 |                      0.514 |
+  | Boletim Fev-17, 2         |              0.976 |        0.866 |                      0.577 |
+  | Boletim Mai-17, 2         |              0.975 |        0.877 |                      0.586 |
+  | Moral Character, 1        |              0.946 |        0.872 |                      0.606 |
+  | Mean                      |              0.959 |        0.761 |                      0.481 |
+
+  Missed (every slide by 0.07-0.35). So, until the owner decides: **with LibreOffice, a slide whose tables as
+  their M6 group pass 64 KB keeps LibreOffice's page**, as it did while tables were their group. The
+  converter weighs the group (`EmittedSlide.tableGroupBytes`, with LibreOffice only: each table emitted once
+  more as its M6 group into a scratch list, the slide as stored with the groups in place less as it is, after
+  `fitBytes`; none for a table past M6's cell cap, which M6 left to LibreOffice's art unmeasured, so a
+  160-cell bulletin is a table object on every hub) and the import core applies it (`pptx-core.ts`
+  `pageForBudget`, the slide's note "its tables as shapes would be over 64 KB: LibreOffice draws its page"),
+  within 64 KB as the page form and the presentation's room, like the plain and minimal forms. A client's
+  scene carries the same count (`clientScene.ts`). Without LibreOffice every table is the table object (the
+  8 slides 0.62-0.88, from 0.34-0.61 stored minimal). 'Make editable' on such a page lays text boxes over it,
+  as before: the table object there waits for the owner's answer. A table object's cells count as the slide's
+  text bodies (`bodyTexts`, a picture slide's search text), as the group's cells did.
+<!-- /m9:tables-conv -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 

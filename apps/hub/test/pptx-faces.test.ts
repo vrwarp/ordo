@@ -6,14 +6,24 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
-import type { Font } from '@ordo/domain';
+import type { Font, ShapeObject, TableData } from '@ordo/domain';
+import { cellRich } from '@ordo/domain/table.ts';
+import { loadDeckFaces } from '@ordo/importers/pptx-faces.ts';
+import { parsePptxScene } from '@ordo/importers/pptx-client.ts';
 import { buildDeck, sfntFont, tableFrame, tc } from '@ordo/pptx-scene/test-util.ts';
+import JSZip from 'jszip';
 import { afterAll, describe, expect, it } from 'vitest';
 import { metricTables } from '../src/fonts/sfnt.ts';
 import { FACE_LIMITS, libraryFaces, type SceneFontFile, sceneFontFiles } from '../src/pptx/faces.ts';
 import { sceneTask } from '../src/pptx/sceneTask.ts';
 
 const IN = 914_400;
+
+/** A cell's line spacing as a share of single: its paragraph's, else its box's (`lineHeight` / 1.2). */
+const cellSpacing = (t: TableData, i: number) => {
+  const c = cellRich(t, i)!;
+  return c.paras?.[0]?.lineSpacing ?? c.style.lineHeight / 1.2;
+};
 const dir = mkdtempSync(join(tmpdir(), 'ordo-faces-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -163,10 +173,16 @@ describe('libraryFaces', () => {
 });
 
 describe('sceneTask with the library faces', () => {
-  it("grows a table row to its text measured with the library's face", () => {
-    // Every character of "Wide" half an em wide: 18 px at 36 px; a 1 in cell (144 px, 115.2 px inside its
-    // margins) holds 6 of them on a line.
-    const wide = file('wide.ttf', sfntFont(Object.fromEntries([...'Wide w'].map((c) => [c, 500]))));
+  it("measures a table's cells with the library's face: their lines spaced by its line height", () => {
+    // "Wide" half an em wide, its line 1.4 of the size (hhea): the cell's paragraph is spaced 1.4 / 1.2 of
+    // single, as the browser parse spaces it (packages/importers/src/pptx-faces.test.ts); the table object
+    // (M9 tables-conv) keeps the deck's row, which the drawer grows to the text.
+    const wide = file(
+      'wide.ttf',
+      sfntFont(Object.fromEntries([...'Wide w'].map((c) => [c, 500])), {
+        vertical: { ascender: 1100, descender: -300 },
+      }),
+    );
     const parts = buildDeck({
       slides: [
         {
@@ -189,8 +205,74 @@ describe('sceneTask with the library faces', () => {
       options: {},
       fonts: [['Wide Face', 400, false, wide]],
     });
-    const text = out.result.slides[0]!.slide.objects.find((o) => o.type === 'text')!;
-    // Three lines ("Wide " fits 5 of 6, the next word wraps): 3 × 1.2 × 36 px, plus 14.4 px of margins.
-    expect(text.box.h).toBeCloseTo(3 * 1.2 * 36 + 14.4, 6);
+    const s = out.result.slides[0]!;
+    const t = (s.slide.objects.find((o) => o.type === 'shape' && o.table) as ShapeObject).table!;
+    expect(cellSpacing(t, 0)).toBeCloseTo(1.4 / 1.2, 6);
+    expect(s.notes.some((n) => n.includes('estimated widths') && n.includes('Wide Face'))).toBe(false);
+  });
+});
+
+describe("a table's script face, on the hub and in the browser alike (FaceSource.script)", () => {
+  it('spaces a Korean cell by the face that draws its Hangul, and the hub and the client write the same spacing', async () => {
+    // The deck names a family the library lacks (Malgun Gothic): the chain falls to ordo's default face, Inter,
+    // which has no Hangul; the script's fallback face (Noto Sans KR, SCRIPT_FALLBACK_FONTS.Hang) draws it, and
+    // its line (1.26 of the size, hhea) spaces the cell's lines, as on the screens (design/27 tables-object §3
+    // fix 3). Both sides read the library's faces through one rule (importers pptx-faces.ts faceSourceOf).
+    const text = '이야기를 나누는 시간';
+    const latin = sfntFont(Object.fromEntries([...'abc '].map((c) => [c, 500])), {
+      vertical: { ascender: 1000, descender: -200 },
+    });
+    const hangul = sfntFont(Object.fromEntries([...new Set(text)].map((c) => [c, 1000])), {
+      vertical: { ascender: 1000, descender: -260 },
+    });
+    const fonts: Record<string, Uint8Array> = { 'Inter.ttf': latin, 'NotoSansKR.ttf': hangul };
+    const parts = buildDeck({
+      slides: [
+        {
+          shapes: tableFrame({
+            id: 4,
+            x: IN,
+            y: IN,
+            cols: [4 * IN],
+            rows: [
+              {
+                h: 1,
+                cells: [
+                  tc(text, {
+                    rPr: 'lang="ko-KR"',
+                    rPrChildren: '<a:latin typeface="Malgun Gothic"/><a:ea typeface="Malgun Gothic"/>',
+                  }),
+                ],
+              },
+            ],
+          }),
+        },
+      ],
+    });
+    const hub = sceneTask({
+      parts,
+      pictureSizes: [],
+      range: { from: 0, to: 1 },
+      options: {},
+      fonts: [
+        ['Inter', 400, false, file('Inter.ttf', latin)],
+        ['Noto Sans KR', 400, false, file('NotoSansKR.ttf', hangul)],
+      ],
+    });
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    const library = [
+      { family: 'Inter', weight: 400, italic: false, url: 'Inter.ttf' },
+      { family: 'Noto Sans KR', weight: 400, italic: false, url: 'NotoSansKR.ttf' },
+    ];
+    const client = await parsePptxScene(await z.generateAsync({ type: 'uint8array' }), {
+      loadFaces: (p) => loadDeckFaces(p, library, async (url) => fonts[url]),
+    });
+    const tableOf = (objects: readonly unknown[]) =>
+      (objects as ShapeObject[]).find((o) => o.type === 'shape' && o.table)!.table!;
+    const onHub = cellSpacing(tableOf(hub.result.slides[0]!.slide.objects), 0);
+    const inBrowser = cellSpacing(tableOf(client.scene.slides[0]!.slide.objects), 0);
+    expect(onHub).toBeCloseTo(1.26 / 1.2, 6);
+    expect(inBrowser).toBe(onHub);
   });
 });

@@ -76,9 +76,12 @@ between 16000 and 32767.
   and 2k+1 in `chromium-android`, so its sign-ins, lockouts and services never meet; it may grow to 26 ports)
   and `phone-demo` (336-337: the Pages build's static server per phone project), the hub's 340-349 and the
   integration's 350-359. `ipad-group` and `ipad-touch-targets` have three ports (slot 2 is
-  `chromium-tablet`).
+  `chromium-tablet`). `e2e/layout-class.spec.ts` (the venue PC never compact) uses the shared server.
 - M9 wave r2b holds offsets 400-659: `editor-table` (420) and `ipad-table-targets` (421-423, one per tablet
-  project) are the table editing's. `e2e/layout-class.spec.ts` (the venue PC never compact) uses the shared server.
+  project) are the table editing's; `pptx-tables` (430-432, tables-conv: the table deck on a hub without
+  LibreOffice through the Import tab and through the upload route, and on a hub with LibreOffice).
+  `e2e/table-deck.test.ts` checks the deck still tests what the spec is about (the bulletin past M6's cell cap,
+  the reading plan's M6 group past 64 KB), as `e2e/lineart-deck.test.ts` does for the line-art deck.
 
 ### Projects
 

@@ -136,7 +136,8 @@ export interface ParseOptions {
   /**
    * M9: the stored fields the converter may write (`EmitOptions.m9Writes`, the same set). Read here too
    * because a slide's budgets are planned as it is parsed: without 'decor' no decoration is planned
-   * (`budget.ts` `BudgetOptions.decorations`).
+   * (`budget.ts` `BudgetOptions.decorations`); without 'table' a table is counted as its M6 group and M6's
+   * cell cap holds (`BudgetOptions.tables`).
    */
   m9Writes?: ReadonlySet<M9Field>;
   /**
@@ -305,6 +306,7 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
           decorations: (opts.m9Writes ?? ALL_M9_FIELDS).has('decor'),
           sheets: opts.sheets !== false,
           libreoffice: opts.libreoffice !== false,
+          tables: (opts.m9Writes ?? ALL_M9_FIELDS).has('table'),
         },
       });
       return {

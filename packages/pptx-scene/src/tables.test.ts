@@ -1,10 +1,14 @@
 import { parsePathData, type Rgba, type ShapeObject, Slide, type TextObject } from '@ordo/domain';
 import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import { cellRich } from '@ordo/domain/table.ts';
+import { TABLE_LIMITS as DOMAIN_LIMITS } from '@ordo/domain';
 import { CMD_MOVE, GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
 import { storedGeometry } from '@ordo/renderer/geom/stored.ts';
 import { describe, expect, it } from 'vitest';
+import { MAX_TABLE_CELLS } from './budget.ts';
 import { MAX_SLIDE_OBJECTS } from './classify.ts';
 import { MAX_PATH_CHARS } from './geom.ts';
+import { M9_FIELDS } from './emit-ctx.ts';
 import { convertDeck, parseDeck } from './index.ts';
 import type { Line, TableCell, TableElement, TableLine } from './ir.ts';
 import type { FaceSource } from './metrics.ts';
@@ -14,8 +18,7 @@ import {
   gridObjects,
   loAscent,
   loLineHeight,
-  MAX_TABLE_CELLS,
-  MAX_TABLE_GRID,
+  TABLE_LIMITS,
 } from './tables.ts';
 import { PREDEFINED_TABLE_STYLE_IDS, predefinedTableStyle } from './tablestyles.ts';
 import {
@@ -111,11 +114,19 @@ const rectsOf = (o: ShapeObject): Rect[] =>
       })
     : [{ x: o.box.x, y: o.box.y, w: o.box.w, h: o.box.h, fill: o.fill! }];
 
+/**
+ * M9: the stored fields but the table object (`M9_WRITES` without 'table'): tables as their M6 group of
+ * shapes and text boxes, which these tests read (the table object: `emit-table.test.ts`).
+ */
+const M6_GROUP = new Set(M9_FIELDS.filter((f) => f !== 'table'));
+
 /** Convert one slide; it must be an ordinary ordo slide. */
 function convert(
   shapes: string,
   opts: {
     styles?: string;
+    /** The style list's default (`a:tblStyleLst def`), with `styles`. */
+    def?: string;
     fontFace?: FaceSource;
     deck?: Partial<DeckSpec>;
     loCompat?: boolean;
@@ -123,9 +134,10 @@ function convert(
   } = {},
 ) {
   let parts = buildDeck({ slides: [{ shapes }], ...opts.deck });
-  if (opts.styles !== undefined) parts = withTableStyles(parts, opts.styles);
+  if (opts.styles !== undefined) parts = withTableStyles(parts, opts.styles, opts.def);
   const out = convertDeck(parts, {
     fontFace: opts.fontFace ?? HALF_EM,
+    m9Writes: M6_GROUP,
     ...(opts.loCompat ? { loCompat: true } : {}),
     ...(opts.budgetArt ? { budgetArt: true } : {}),
   });
@@ -347,6 +359,41 @@ describe('tables: styles', () => {
     expect(texts[0]!.style).toMatchObject({ fontWeight: 700, color: { r: 255, g: 255, b: 255 } });
   });
 
+  it("gives a table that names no style none, whatever the deck's default (a:tblStyleLst def), as LibreOffice", () => {
+    // LibreOffice 24.2 draws such a table without a style (regroup/r2b/tables-conv/lodef: the default named
+    // and undefined, or defined in ppt/tableStyles.xml, both leave the cells unfilled; only a:tableStyleId
+    // fills them). The worship deck "Depression" (white text on black cells, a list defining Medium Style 2 -
+    // Accent 1 as its default) fell from 0.86 to 0.05 when the default was taken.
+    const shapes = table({
+      cols: [IN, IN],
+      rows: [
+        { h: IN / 2, cells: [tcWith('own', solid('111111')), tc('b')] },
+        { h: IN / 2, cells: [tc('c'), tc('d')] },
+      ],
+      tblPr: '<a:tblPr/>',
+    });
+    const DEF = '{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}';
+    const fills = (styles: string, def?: string) =>
+      convert(shapes, { styles, ...(def ? { def } : {}) })
+        .rects.sort((a, b) => a.y - b.y || a.x - b.x)
+        .map(rgb);
+    const deckDefault = `<a:tblStyle styleId="${DEF}" styleName="Deck"><a:wholeTbl><a:tcStyle><a:fill>${solid('DDEEFF')}</a:fill></a:tcStyle></a:wholeTbl></a:tblStyle>`;
+    // Only the cell's own fill, with the default named (built in) or defined, or no default at all.
+    expect(fills('', DEF)).toEqual([[17, 17, 17]]);
+    expect(fills(deckDefault, DEF)).toEqual([[17, 17, 17]]);
+    expect(fills(deckDefault)).toEqual([[17, 17, 17]]);
+    // Named, the same style fills every cell.
+    const named = convert(
+      table({
+        cols: [IN, IN],
+        rows: [{ h: IN / 2, cells: [tc('a'), tc('b')] }],
+        tblPr: `<a:tblPr><a:tableStyleId>${DEF}</a:tableStyleId></a:tblPr>`,
+      }),
+      { styles: deckDefault, def: DEF },
+    );
+    expect(named.rects.map(rgb)).toEqual([[221, 238, 255]]);
+  });
+
   it('puts the table background (the own fill of a:tblPr) under every cell', () => {
     const { rects } = convert(
       table({
@@ -404,18 +451,20 @@ describe('tables: lines', () => {
     expect(shared(lines).map((l) => [l.width, l.color])).toEqual([[6, { r: 0, g: 0, b: 0, a: 1 }]]);
   });
 
-  it('notes diagonal lines, which are not drawn, and rates the table approx', () => {
+  it('reads diagonal lines per cell (the table object draws them; the M6 group notes them)', () => {
     const shapes = table({
       cols: [IN],
       rows: [{ h: IN / 2, cells: [tcWith('a', ln('lnTlToBr', 'FF0000', 12_700))] }],
     });
     const { s, lines } = convert(shapes);
     expect(lines).toHaveLength(0);
-    expect(s.notes).toContain('diagonal lines of table cells are not drawn');
+    expect(s.notes).toContain('diagonal lines of table cells are not drawn (M6 group)');
     const scene = parseDeck(buildDeck({ slides: [{ shapes }] }));
     const t = scene.slides[0]!.elements[0] as TableElement;
-    expect(t.support).toBe('approx');
-    expect(t.reasons).toContain('tableDiagonal');
+    expect(t.support).toBe('native');
+    expect(t.cells[0]!.diag).toEqual({
+      down: { width: 12_700, fill: { kind: 'solid', color: { r: 255, g: 0, b: 0, a: 1 } } },
+    });
   });
 });
 
@@ -635,6 +684,75 @@ describe('tables: gridObjects within the stored path bounds', () => {
 
 describe('tables: rows grow to their text', () => {
   const long = 'aaaa bbbb cccc dddd';
+
+  it('measures Korean as the renderer breaks it (words kept whole) and spaces it by the face of its Hangul', () => {
+    // The deck's family has no face; ordo's default (Inter here) has no Hangul; the script's face
+    // (FaceSource.script, the library's Noto Sans KR on the hub) draws it, 1 em a syllable, its line 1.26 of the
+    // size. 20 pt (40 px) in a column of 5 syllables: "가나 다라마바 사" breaks at its spaces only (UAX#14 with
+    // Korean words whole, the renderer's breaks.ts): three lines, where breaking between syllables gave two.
+    const latin = { advance: (cp: number) => (cp === 0x20 ? 0.25 : undefined), lineHeight: 1.21 };
+    const hangul = {
+      advance: (cp: number) => (cp >= 0xac00 && cp <= 0xd7a3 ? 1 : undefined),
+      lineHeight: 1.26,
+    };
+    const faces: FaceSource = Object.assign((family: string) => (family === 'Inter' ? latin : undefined), {
+      script: (code: string) => (code === 'Hang' ? hangul : undefined),
+    });
+    const inner = 5 * 40;
+    const col = Math.round(((inner + 28.8) * 12_192_000) / 1920) + 10;
+    const shapes = table({
+      cols: [col],
+      rows: [
+        {
+          h: 0,
+          cells: [
+            tc('가나 다라마바 사', {
+              rPr: 'lang="ko-KR" sz="2000"',
+              rPrChildren: '<a:latin typeface="Malgun Gothic"/><a:ea typeface="Malgun Gothic"/>',
+            }),
+          ],
+        },
+      ],
+    });
+    const scene = parseDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: faces });
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    const px = (emu: number) => (emu * 1920) / 12_192_000;
+    expect(px(t.rows[0]!)).toBeCloseTo(3 * 1.26 * 40 + 14.4, 3);
+    // The stored cell is spaced by the Hangul face (the table object's paragraph or box line height).
+    const out = convertDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: faces });
+    const o = out.slides[0]!.slide.objects.find((x) => x.type === 'shape' && x.table) as ShapeObject;
+    const c = cellRich(o.table!, 0)!;
+    expect(c.paras?.[0]?.lineSpacing ?? c.style.lineHeight / 1.2).toBeCloseTo(1.26 / 1.2, 6);
+  });
+
+  it("asks the script's face only for scripts drawn glyph by glyph (Han, Kana, Hangul), never for Arabic", () => {
+    // Arabic is shaped (its letters join), which the measure does not do: its script's face (fontconfig's
+    // DejaVu Sans in the harness) measured the cec bible readings' Arabic cells a line too long and spaced them
+    // by its own line, and the slide's rows fell from LibreOffice's (0.805 -> 0.741). Such a cell keeps the
+    // chain's faces (or the estimate) and their spacing, as before the script's face.
+    const latin = { advance: (cp: number) => (cp === 0x20 ? 0.25 : undefined), lineHeight: 1.21 };
+    const arabic = {
+      advance: (cp: number) => (cp >= 0x600 && cp <= 0x6ff ? 2 : undefined),
+      lineHeight: 1.8,
+    };
+    const asked: string[] = [];
+    const faces: FaceSource = Object.assign((family: string) => (family === 'Inter' ? latin : undefined), {
+      script: (code: string) => {
+        asked.push(code);
+        return code === 'Arab' ? arabic : undefined;
+      },
+    });
+    const shapes = table({
+      cols: [2 * IN],
+      rows: [{ h: 0, cells: [tc('سلام عليكم', { rPr: 'lang="ar-EG" sz="2000"' })] }],
+    });
+    const out = convertDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: faces });
+    const o = out.slides[0]!.slide.objects.find((x) => x.type === 'shape' && x.table) as ShapeObject;
+    const c = cellRich(o.table!, 0)!;
+    // Spaced by the chain's face (Inter's 1.21), as before the script's face, not by the Arabic face's 1.8.
+    expect(c.paras?.[0]?.lineSpacing ?? c.style.lineHeight / 1.2).toBeCloseTo(1.21 / 1.2, 6);
+    expect(asked).not.toContain('Arab');
+  });
 
   it('measures text with the faces in the office line model and grows the row', () => {
     // 2 in = 288 px, less 28.8 px of margins: 14 characters of 18 px fit, so "dddd" wraps: two lines of
@@ -945,14 +1063,49 @@ describe('tables: what stays residual', () => {
     expect(texts).toHaveLength(84);
   });
 
-  it(`reads no table of more than ${MAX_TABLE_GRID} grid cells`, () => {
+  it('cuts a table past 256 rows and notes it', () => {
+    const rows = Array.from({ length: 300 }, (_, r) => ({ h: 12_700, cells: [tc(`r${r}`)] }));
+    const scene = parseDeck(buildDeck({ slides: [{ shapes: table({ cols: [IN], rows }) }] }), {
+      fontFace: HALF_EM,
+    });
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.kind).toBe('table');
+    expect(t.rows).toHaveLength(TABLE_LIMITS.rows);
+    expect(t.storedRows).toHaveLength(TABLE_LIMITS.rows);
+    expect(t.cells).toHaveLength(TABLE_LIMITS.rows);
+    expect(t.cells[255]!.text.paras[0]!.runs[0]!.text).toBe('r255');
+    expect(scene.slides[0]!.notes).toContain(
+      'a table of 300 rows and 1 columns is cut to its first 256 rows and 1 columns',
+    );
+  });
+
+  it(`cuts a table past 64 columns or ${TABLE_LIMITS.grid} slots to its first ones`, () => {
+    // 65 rows of 64 columns: 4,160 slots, so the first 64 rows (4,096) are read.
     const rows = Array.from({ length: 65 }, () => ({
       h: 12_700,
-      cells: [tc('x', { attrs: `gridSpan="64"` })],
+      cells: [tc('x', { attrs: 'gridSpan="70"' })],
     }));
-    const { s, texts } = convert(table({ cols: Array(64).fill(IN / 8), rows }));
-    expect(texts).toHaveLength(0);
-    expect(s.notes.some((n) => n.startsWith(`a table of ${65 * 64} grid cells`))).toBe(true);
+    const scene = parseDeck(
+      buildDeck({ slides: [{ shapes: table({ cols: Array(70).fill(IN / 8), rows }) }] }),
+    );
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.cols).toHaveLength(64);
+    expect(t.rows).toHaveLength(64);
+    expect(t.cells).toHaveLength(64);
+    expect(t.cells.every((c) => c.cols === 64)).toBe(true);
+    expect(scene.slides[0]!.notes).toContain(
+      'a table of 65 rows and 70 columns is cut to its first 64 rows and 64 columns',
+    );
+  });
+
+  it('keeps the bounds of the stored table (TABLE_LIMITS of @ordo/domain)', () => {
+    expect(TABLE_LIMITS).toEqual({
+      rows: DOMAIN_LIMITS.rows,
+      cols: DOMAIN_LIMITS.cols,
+      grid: DOMAIN_LIMITS.grid,
+      cellText: DOMAIN_LIMITS.cellText,
+      tableText: DOMAIN_LIMITS.tableText,
+    });
   });
 
   it('draws a dense table natively while the slide stays within its object budget', () => {
@@ -988,9 +1141,8 @@ describe('tables: what stays residual', () => {
     expect(s.art?.text).toContain('x');
   });
 
-  it('leaves a table of more cells than a slide may have objects to LibreOffice, unmeasured', () => {
-    expect(MAX_TABLE_CELLS).toBe(MAX_SLIDE_OBJECTS);
-    // 12 × 13 = 156 drawn cells: each is an object, so the table could never be drawn natively.
+  it('reads and measures a table of more cells than a slide may have objects (M9: no cell cap)', () => {
+    // 12 × 13 = 156 drawn cells: M6 left it to LibreOffice unmeasured; the table object is one object.
     const rows = Array.from({ length: 12 }, () => ({
       h: IN / 16,
       cells: Array.from({ length: 13 }, () => tc('x')),
@@ -1000,14 +1152,17 @@ describe('tables: what stays residual', () => {
       faces++;
       return HALF_EM(...args);
     };
-    const { s, texts } = convert(table({ cols: Array(13).fill(IN / 2), rows }), { fontFace: counting });
-    expect(texts).toHaveLength(0);
-    expect(faces).toBe(0);
-    expect(s.classification.class).toBe('hybrid');
-    expect(s.classification.reasons).toContain('art:budget:table');
-    expect(s.notes).toContain(
-      `a table of 156 cells passes the slide's budget of ${MAX_SLIDE_OBJECTS} objects: LibreOffice draws it`,
+    const scene = parseDeck(
+      buildDeck({ slides: [{ shapes: table({ cols: Array(13).fill(IN / 2), rows }) }] }),
+      {
+        fontFace: counting,
+      },
     );
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.kind).toBe('table');
+    expect(t.cells).toHaveLength(156);
+    expect(t.cells.every((c) => c.text.paras[0]!.runs[0]!.text === 'x')).toBe(true);
+    expect(faces).toBeGreaterThan(0);
   });
 
   it('leaves a table with vertical cell text to LibreOffice', () => {
@@ -1016,6 +1171,21 @@ describe('tables: what stays residual', () => {
     );
     expect(s.classification.reasons).toContain('art:table');
     expect(s.notes).toContain('a table with vertical cell text is drawn by LibreOffice (M8)');
+  });
+
+  it("without the table object (the kill switch) keeps M6's cell cap: a table of more cells than a slide may have objects is LibreOffice's", () => {
+    expect(MAX_TABLE_CELLS).toBe(MAX_SLIDE_OBJECTS);
+    const rows = Array.from({ length: 12 }, () => ({
+      h: IN / 16,
+      cells: Array.from({ length: 13 }, () => tc('x')),
+    }));
+    const { s, texts } = convert(table({ cols: Array(13).fill(IN / 2), rows }));
+    expect(texts).toHaveLength(0);
+    expect(s.classification.class).toBe('hybrid');
+    expect(s.classification.reasons).toContain('art:budget:table');
+    expect(s.notes).toContain(
+      `a table of 156 cells passes the slide's budget of ${MAX_SLIDE_OBJECTS} objects: LibreOffice draws it`,
+    );
   });
 
   it('sends the largest tables to the art when the slide would pass its object budget behind budgetArt', () => {

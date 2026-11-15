@@ -123,7 +123,7 @@ import { sentToArt } from './budget.ts';
 import { emitChart } from './chart.ts';
 import { boundsOf, unionBox } from './classify.ts';
 import { DECOR_PREFIX, decorFiles, emitDecor, type PlatePlan, platePlan } from './decor.ts';
-import { slideBudget } from './emit-budget.ts';
+import { groupFormExtra, slideBudget } from './emit-budget.ts';
 import {
   ALL_M9_FIELDS,
   BOX_FACTOR,
@@ -373,6 +373,13 @@ export interface EmittedSlide {
    * the converter never flattens, drops or leaves to LibreOffice what is only slow to draw.
    */
   plate?: PlatePlan & { pastBudget: string[] };
+  /**
+   * M9 (`tables-conv`), `EmitOptions.libreoffice` only: how many bytes more the slide's JSON would be with its
+   * tables as their M6 group instead of table objects (`emit-table.ts`). The import core's interim rule for a
+   * hub with LibreOffice (question 3 of the LibreOffice inventory, missed): a slide that this takes past 64 KB
+   * keeps LibreOffice's page, as it did when tables were their group (`pptx-core.ts` `pageForBudget`).
+   */
+  tableGroupBytes?: number;
 }
 
 /** The placeholder media id of a metafile's object until it is converted (`EmittedSlide.metafiles`). */
@@ -522,6 +529,9 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     // The slide's whole JSON as the hub stores it, its large geometries in files (design/27 §3.4); one still
     // over the budget keeps its class and is fitted by the importer (M9 `ladder`).
     const { over } = slideBudget(ctx, slide, notes, geomRef);
+    // M9 (`tables-conv`), with LibreOffice: what the slide's tables would add as their M6 groups.
+    const groupBytes = ctx.tableGroups ? groupFormExtra(slide, notes, ctx.tableGroups, geomRef) : 0;
+    ctx.tableGroups = undefined;
     let art = artInfo(s, scene.frame, spans, slide.objects);
     let metafiles = ctx.metafiles.map(({ part, object, at }) => {
       const before = slide.objects[at]?.id;
@@ -560,6 +570,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       ...(gaps?.artText ? { artText: gaps.artText } : {}),
       ...(ctx.sheets?.length ? { sheets: ctx.sheets } : {}),
       ...(plate ? { plate } : {}),
+      ...(groupBytes ? { tableGroupBytes: groupBytes } : {}),
     };
   });
   return {

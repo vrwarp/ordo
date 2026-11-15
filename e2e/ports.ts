@@ -180,6 +180,13 @@ export const PORT_TABLE = {
     spec: 'ipad/table-targets.spec.ts',
     what: '0 webkit-ipad, 1 webkit-ipad-portrait, 2 chromium-tablet',
   },
+  // tables-conv: PowerPoint tables imported as one table object.
+  'pptx-tables': {
+    offset: 430,
+    count: 3,
+    spec: 'pptx-tables.spec.ts',
+    what: '0 hub without LibreOffice (Import tab), 1 hub without LibreOffice (upload route), 2 hub with LibreOffice',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;

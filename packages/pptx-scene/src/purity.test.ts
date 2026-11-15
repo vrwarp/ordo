@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest';
  * on the hub's CPU pool and in Node alike. Code outside tests imports only its own modules, types from
  * `@ordo/domain`, and the few domain modules that are plain tables and functions shared with the renderer
  * (the Wingdings/Symbol bullet table, the script fallback families and the script scan, design/27 §1 and
- * §10; the stored path data tokeniser, §3.1; M9: the missing kinds, `missing.ts`, and the palettes of
- * decorations, `palette.ts`), which import nothing at
+ * §10; the stored path data tokeniser, §3.1; M9: the missing kinds, `missing.ts`, the palettes of
+ * decorations and tables, `palette.ts`, and a table cell's style entry, `cellstyle.ts`), which import nothing at
  * run time but each other. Since M6
  * also the renderer's geometry engine without its drawer (`@ordo/renderer/geom`: the preset table, the
  * compiler, the evaluator, arcs and the path builder; M6 repair: the drawing estimate, `cost.ts`, with the
@@ -20,7 +20,15 @@ import { describe, expect, it } from 'vitest';
  * reader and cmap (`@ordo/renderer/text/sfnt`, moved there from `metrics.ts`), which import nothing at run
  * time but each other.
  */
-const PURE_DOMAIN = ['bullets.ts', 'defaults.ts', 'missing.ts', 'palette.ts', 'pathdata.ts', 'readable.ts'];
+const PURE_DOMAIN = [
+  'bullets.ts',
+  'cellstyle.ts',
+  'defaults.ts',
+  'missing.ts',
+  'palette.ts',
+  'pathdata.ts',
+  'readable.ts',
+];
 const PURE_GEOM = [
   'compile.ts',
   'eval.ts',
@@ -38,6 +46,8 @@ const PURE_GEOM = [
   'nesting.ts',
 ];
 const PURE_SFNT = ['reader.ts', 'cmap.ts'];
+/** M9 (`tables-conv`): the renderer's line breaking, so a table's measure breaks where the drawer does. */
+const PURE_TEXT = ['breaks.ts'];
 const IMPORT = /^\s*(import|export)\s+(type\s+)?[^'"]*?from\s+'([^']+)'/gm;
 const IMPURE = /\brequire\(|\bimport\(|\bprocess\.|\bdocument\.|\bwindow\.|\bfetch\(/;
 
@@ -56,6 +66,7 @@ describe('package purity', () => {
       if (!typeOnly && PURE_DOMAIN.some((p) => spec === `@ordo/domain/${p}`)) continue;
       if (PURE_GEOM.some((p) => spec === `@ordo/renderer/geom/${p}`)) continue;
       if (PURE_SFNT.some((p) => spec === `@ordo/renderer/text/sfnt/${p}`)) continue;
+      if (PURE_TEXT.some((p) => spec === `@ordo/renderer/text/${p}`)) continue;
       expect(`${file}: ${spec} ${typeOnly ? 'type' : 'value'}`).toBe(`${file}: @ordo/domain type`);
     }
     expect(src).not.toMatch(IMPURE);
@@ -86,6 +97,16 @@ describe('package purity', () => {
       expect(src).not.toMatch(IMPURE);
     },
   );
+
+  it.each(PURE_TEXT)('renderer text/%s imports nothing at run time but npm linebreak', (file) => {
+    const src = readFileSync(join(dir, '../../renderer/src/text', file), 'utf8');
+    for (const m of src.matchAll(IMPORT)) {
+      const [, , typeOnly, spec] = m;
+      if (typeOnly) continue;
+      expect(`${file}: ${spec}`).toBe(`${file}: linebreak`);
+    }
+    expect(src).not.toMatch(IMPURE);
+  });
 
   it.each(PURE_SFNT)(
     'renderer text/sfnt/%s imports nothing at run time but the other sfnt modules',

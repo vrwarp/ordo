@@ -436,6 +436,27 @@ column's size, cell styles, fills and lines, keep no line inside a merged cell, 
 or remove a row's height to `box.h`; they refuse past `TABLE_LIMITS` and at the last row or column.
 <!-- /m9:tables-render -->
 
+<!-- m9:tables-conv -->
+**Table object: import** (`@ordo/pptx-scene` `emit-table.ts`, M9 tables-conv). A PowerPoint table is imported as
+one `ShapeObject.table` (origin role `'table'`, not locked; its legacy fields a rect of the table's background,
+no stroke), never the M6 group of grid shapes and cell text boxes: `cols` are the deck's column widths and
+`rows` its stored row heights (`a:tr h`) in logical px, `box.h` their sum, so the drawer's row scale is 1 at
+import and it grows each row to its text; cells in the order `placeCells` reads them back (row-major, spans cut
+at a covered slot), each with its rich text (as a text box writes it, without autofit), spans, fill and
+diagonals; `base` the cells' most common box style, each cell's `style` entry what its box differs from it in
+(`cellStyleOf` of the pure `cellstyle.ts`, the same mapping `table.ts` reads back with `cellTextStyle`, within
+`CellStyle`'s bounds), formatting of part of a cell's text in `runStyles`, fills, line styles and the resolved
+edges `h` and `v`; within `TABLE_LIMITS` (a palette past its size gives later entries none, noted). A table is
+one object of the slide's 150 (no cell cap), its cells' JSON counted against the slide's text budget. Under the
+harness's LibreOffice policy (`loCompat`) `rowRule: 'fixed'` holds LibreOffice's rows. Not written: vertical
+cells (the table stays LibreOffice's art until the writing engine lays them out) and the legacy group (M9
+decision 4). Without 'table' in the converter's `m9Writes` (the kill switch) the M6 group is written, counted as
+its objects, and M6's cell cap holds. On a hub with LibreOffice, until the owner decides question 3 of the
+LibreOffice inventory, a slide whose tables as their M6 group would pass 64 KB keeps LibreOffice's page (picture
+class, its cells' text in `pptx.artText`; design/27 §15 M9 "The table object imported"). A table's non-empty
+cells are its slide's text bodies for search and re-import, each at its cell's place.
+<!-- /m9:tables-conv -->
+
 <!-- r2b:editor-table -->
 **Table object: cell target and cellTextObject** (`packages/domain/src/table.ts`, r2b editor-table). The
 editor edits a cell as a text object: `cellTextObject(o, i, box?)` is cell `i` of table shape `o` as a

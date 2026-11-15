@@ -7,6 +7,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   BeforeHub,
   boundsOf,
+  keepsPage,
   needsHub,
   pagePx,
   pasteLibreOffice,
@@ -57,6 +58,20 @@ describe('which slides the hub is asked for', () => {
     expect(needsHub({ hub: 'native', budget: true })).toBe(true);
     // The converter did not emit it: the hub shows LibreOffice's picture of it.
     expect(needsHub(undefined)).toBe(true);
+  });
+
+  it("asks for a slide a hub with LibreOffice keeps as LibreOffice's page (keepsPage, ImportCore.pageForBudget)", () => {
+    const stored = { hub: 'native', hubWhy: null, level: 'full', stored: 9_000 };
+    // Fitted by leaving something out: the page, as before M9.
+    expect(keepsPage({ ...stored, hubWhy: 'slide', level: 'plain' })).toBe(true);
+    expect(keepsPage({ ...stored, hubWhy: 'slide', level: 'minimal' })).toBe(true);
+    expect(keepsPage({ ...stored, hubWhy: 'slide', level: 'grid' })).toBe(false);
+    // M9 tables-conv, the interim rule: its tables as their M6 group would take it past 64 KB.
+    expect(keepsPage(stored, 86_079)).toBe(true);
+    expect(keepsPage(stored, 64 * 1024 - 9_000)).toBe(false);
+    expect(keepsPage(stored)).toBe(false);
+    // A picture slide is LibreOffice's page whatever the rule says (`needsHub` asks for it by its class).
+    expect(keepsPage({ ...stored, hub: 'picture' }, 86_079)).toBe(false);
   });
 });
 
