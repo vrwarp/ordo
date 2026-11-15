@@ -11,11 +11,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   formatSelection,
   handleTextPaste,
+  inlineText,
   nextCell,
   pasteRichSelection,
   resizeSelection,
   setParagraphs,
   tabCell,
+  tableKey,
   typeText,
 } from '../src/views/editor/actions.ts';
 import {
@@ -204,5 +206,49 @@ describe('the cell selection and the inline target', () => {
       cell: undefined,
       inlineEditingId: undefined,
     });
+  });
+});
+
+describe("the canvas's keys on a selected table (tableKey)", () => {
+  const key = (k: string, shiftKey = false, readOnly = false) =>
+    tableKey({ key: k, shiftKey }, table(), readOnly);
+
+  it('Enter edits the selected cell (the first with none), its caret at the end of its text', () => {
+    selectObject('table');
+    expect(key('Enter')).toBe(true);
+    expect(inlineTarget()).toEqual({ objectId: 'table', cell: 0 });
+    expect(useEditor.getState().textRange).toEqual({ start: 4, end: 4, caret: 4 });
+    expect(inlineText()?.view.text).toBe('Time');
+    stopInlineEditing();
+    selectCell('table', 9);
+    key('Enter');
+    expect(inlineTarget()).toEqual({ objectId: 'table', cell: 9 });
+    expect(useEditor.getState().textRange.caret).toBe('Worship team'.length);
+    // Read-only, or a locked table: Enter is not the table's.
+    stopInlineEditing();
+    expect(key('Enter', false, true)).toBe(false);
+    expect(inlineTarget()).toBeUndefined();
+  });
+
+  it('Tab and Shift+Tab select the next and previous cell; Escape goes back to the table; Delete empties the cell', () => {
+    selectObject('table');
+    expect(key('Tab')).toBe(true);
+    expect(useEditor.getState().cell).toBe(0);
+    key('Tab');
+    expect(useEditor.getState().cell).toBe(1);
+    key('Tab', true);
+    expect(useEditor.getState().cell).toBe(0);
+    selectCell('table', 3);
+    expect(key('Delete')).toBe(true);
+    expect(cellText(3)).toBe('');
+    undo();
+    expect(cellText(3)).toBe('10:00');
+    expect(key('Escape')).toBe(true);
+    expect(useEditor.getState()).toMatchObject({ objectId: 'table', cell: undefined });
+    // With the whole table selected, Escape and Delete are the editor's (drop the selection, delete it).
+    expect(key('Escape')).toBe(false);
+    expect(key('Delete')).toBe(false);
+    expect(key('a')).toBe(false);
+    expect(tableKey({ key: 'Enter', shiftKey: false }, lyric(), false)).toBe(false);
   });
 });
