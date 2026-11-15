@@ -414,6 +414,12 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
 - **Health** (design/13 "Output health: units"): `unitsMade`, `unitsLate` (slides shown with parts that came
   late, counted once a showing) and `unitCacheBytes`; the operator's technical line, and W49 "Parts of 2 slides
   appeared a moment late on this screen." (design 29 §3) as a note.
+- **Switches** (venue troubleshooting, on the output URL beside `?renderer=2d`; `apps/output/src/switches.ts`,
+  carried to the asset worker in its `init` as `drawing`, which it reports back for the diagnostics):
+  `?late=next` (late parts at the slide's next draw, `LATE_UNIT`'s other mode), `?warm=off` (no warm-up),
+  `?effects=base` (62a1c3a's drawing of effects and decorations: the integrator wires effect-units'
+  `setEffectUnits(false)` to it, C6). In test mode only, `?unitTurnMs=N` (1-5000) waits N ms after each turn of
+  unit making, so the e2e can make units slow; outside test mode it is refused with a console line.
 <!-- /r2b:units-live -->
 
 ## Frame loop

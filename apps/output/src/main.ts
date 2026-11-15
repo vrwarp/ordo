@@ -1,5 +1,6 @@
 import { DEMO, ensureDemoHub, registerWindowProbe } from '@ordo/client';
 import { OutputHost } from './host.ts';
+import { outputSwitches } from './switches.ts';
 import type { ChaosHooks } from './host-protocol.ts';
 import './style.css';
 import { type WakeSentinel, WakeLockKeeper } from './wakelock.ts';
@@ -9,7 +10,9 @@ import { type WakeSentinel, WakeLockKeeper } from './wakelock.ts';
  * in path mode). Test hooks: `?test=1` writes the live slide cue index into the top-left pixel and exposes
  * `__ordo.chaos`; `?renderer=2d` forces the Canvas 2D compositor and `?renderer=webgpu` keeps WebGPU on a
  * software adapter (SwiftShader), which otherwise gets Canvas 2D; `?res=1280x720` overrides the render
- * resolution. Everything that is not DOM runs in the link worker (link.worker.ts).
+ * resolution. Venue troubleshooting switches for drawing (switches.ts, design/14 "Late units"): `?late=next`,
+ * `?warm=off`, `?effects=base`; in test mode `?unitTurnMs=` slows unit turns. Everything that is not DOM runs in
+ * the link worker (link.worker.ts).
  */
 
 const q = new URLSearchParams(location.search);
@@ -17,6 +20,8 @@ const outputId = q.get('output');
 if (outputId && !window.name) window.name = `ordo-out-${outputId}`;
 if (outputId) registerWindowProbe(outputId, 'output');
 const testMode = import.meta.env.MODE === 'test' || q.get('test') === '1';
+const switches = outputSwitches(q, testMode);
+for (const s of switches.refused) console.warn(`[ordo] ?${s} works only in test mode; ignored`);
 
 function resolution(): { width: number; height: number } {
   const m = /^(\d{2,5})x(\d{2,5})$/.exec(q.get('res') ?? '');
@@ -48,8 +53,9 @@ const host = new OutputHost({
   width,
   height,
   testMode,
-  forceCanvas2d: q.get('renderer') === '2d',
-  allowFallbackAdapter: q.get('renderer') === 'webgpu',
+  forceCanvas2d: switches.forceCanvas2d,
+  allowFallbackAdapter: switches.allowFallbackAdapter,
+  drawing: switches.drawing,
 });
 
 declare global {

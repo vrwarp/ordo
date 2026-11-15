@@ -12,7 +12,7 @@ import {
   windowEndpoint,
 } from '@ordo/client';
 import { API_PREFIX } from '@ordo/protocol';
-import type { AssetToMain, FromRender, ToAsset, ToRender } from '@ordo/renderer';
+import type { AssetToMain, DrawingSwitches, FromRender, ToAsset, ToRender } from '@ordo/renderer';
 import { vframeClock } from '@ordo/renderer/frame-ring.ts';
 import { Diagnostics } from './diagnostics.ts';
 import type {
@@ -44,6 +44,8 @@ export type HostOptions = {
   forceCanvas2d: boolean;
   /** WebGPU even on a software adapter (`?renderer=webgpu`, tests). */
   allowFallbackAdapter?: boolean;
+  /** The URL's drawing switches (switches.ts), for the asset worker's init. */
+  drawing?: DrawingSwitches;
 };
 
 const RELOAD_KEY = 'ordo.output.reloads';
@@ -393,6 +395,7 @@ export class OutputHost {
       height: this.opts.height,
       token: this.token,
       apiPrefix: API_PREFIX,
+      ...(this.opts.drawing ? { drawing: this.opts.drawing } : {}),
     };
     w.postMessage(init);
     if (gen > 0) this.scheduleWire();

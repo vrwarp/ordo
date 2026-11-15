@@ -14,7 +14,7 @@ export function outputDot(h: OutputHealthEntry | undefined, now = Date.now()): D
   return 'green';
 }
 
-export type HealthIssueId = 'fontMissing' | 'fontCoverage' | 'raster' | 'upload';
+export type HealthIssueId = 'fontMissing' | 'fontCoverage' | 'raster' | 'upload' | 'unitsLate';
 
 /**
  * Something on an output that does not stop the service but should be looked at (design/27 §13, M7): a
@@ -24,6 +24,10 @@ export type HealthIssueId = 'fontMissing' | 'fontCoverage' | 'raster' | 'upload'
  * diagnostics view and the dot's tooltip list it, for the tech to fix before the next one).
  */
 export type HealthIssue = { id: HealthIssueId; level: 'warn' | 'note'; label: string; detail: string };
+
+/** The outputs' unit cache (renderer `UNIT_CACHE_BYTES`; not imported: the renderer stays out of this bundle). */
+const UNIT_CACHE_BYTES = 192 * 1024 * 1024;
+const mb = (bytes: number) => Math.round(bytes / 1e6);
 
 const list = (xs: readonly string[], max = 6) =>
   xs.length > max ? `${xs.slice(0, max).join(', ')} and ${xs.length - max} more` : xs.join(', ');
@@ -46,6 +50,15 @@ export function outputIssues(h: OutputHealthEntry | undefined): HealthIssue[] {
       level: 'note',
       label: 'Some letters or symbols are not in any font, so they may look different or show as boxes.',
       detail: `${fc.count} character${fc.count === 1 ? '' : 's'} no font of this output has: ${[...fc.chars].join(' ')}${fc.count > [...fc.chars].length ? ' …' : ''} (scripts ${fc.scripts.join(', ')}). This computer's own fonts draw them. Upload a font that has them.`,
+    });
+  // W49 (design 29 §3, decided 2026-11-13): a GO never waits for drawing, so a slide shown before its slow parts
+  // were ready showed them a moment later (they faded in). Nothing to do during a service.
+  if (h.unitsLate)
+    out.push({
+      id: 'unitsLate',
+      level: 'note',
+      label: `Parts of ${h.unitsLate} slide${h.unitsLate === 1 ? '' : 's'} appeared a moment late on this screen.`,
+      detail: `${h.unitsMade ?? 0} part${h.unitsMade === 1 ? '' : 's'} made ahead in slices on this screen; ${h.unitsLate} slide${h.unitsLate === 1 ? ' was' : 's were'} shown before all of theirs were ready (a jump to a slide not prepared yet, or a GO while it was being prepared), and the rest faded in. Unit cache ${mb(h.unitCacheBytes ?? 0)} MB of ${mb(UNIT_CACHE_BYTES)} MB. Showing slides in order lets the screens prepare them; if it happens in order too, check the computer's speed.`,
     });
   const alarms = new Set(h.alarms ?? []);
   const b = h.budgets;
@@ -133,6 +146,9 @@ export function dotTitle(h: OutputHealthEntry | undefined, name: string): string
     h.fps !== undefined ? `fps ${h.fps.toFixed(1)}` : '',
     h.gpuLost ? `GPU lost ${h.gpuLost}×` : '',
     h.videoDropped ? `video dropped ${h.videoDropped}` : '',
+    h.unitsMade || h.unitsLate
+      ? `units made ${h.unitsMade ?? 0}, slides with late parts ${h.unitsLate ?? 0}, unit cache ${mb(h.unitCacheBytes ?? 0)} MB`
+      : '',
     h.audio ? `audio ${h.audio}` : '',
     h.error ? `error: ${h.error}` : '',
     ...outputIssues(h).map((i) => i.label),

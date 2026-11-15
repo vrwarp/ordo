@@ -144,6 +144,29 @@ describe('things to check on an output (design/27 §13, M7)', () => {
     expect(outputDot(entry({ fontFallbacks: ['calibri'], error: 'decode failed' }))).toBe('red');
   });
 
+  it('says when parts of slides appeared late on a screen (W49), as a note; the units in the technical line', () => {
+    const issues = outputIssues(entry({ unitsMade: 41, unitsLate: 2, unitCacheBytes: 96 * 1024 * 1024 }));
+    expect(issues.map((i) => [i.id, i.level])).toEqual([['unitsLate', 'note']]);
+    // design 29 §3, W49, word for word.
+    expect(issues[0]!.label).toBe('Parts of 2 slides appeared a moment late on this screen.');
+    expect(issues[0]!.detail).toMatch(/41 parts? made ahead/);
+    expect(issues[0]!.detail).toMatch(/Unit cache 101 MB of 201 MB/);
+    expect(outputIssues(entry({ unitsLate: 1 }))[0]!.label).toBe(
+      'Parts of 1 slide appeared a moment late on this screen.',
+    );
+    // Nothing to do during a service: the dot stays green; the tooltip has the line and the units.
+    expect(outputDot(entry({ unitsLate: 2 }))).toBe('green');
+    const title = dotTitle(
+      entry({ unitsMade: 41, unitsLate: 2, unitCacheBytes: 96 * 1024 * 1024 }),
+      'Audience 1',
+    );
+    expect(title).toMatch(/units made 41, slides with late parts 2, unit cache 101 MB/);
+    expect(title).toMatch(/Parts of 2 slides appeared a moment late/);
+    // None late: no note, and the technical line only once units were made.
+    expect(outputIssues(entry({ unitsMade: 41 }))).toEqual([]);
+    expect(dotTitle(entry(), 'Audience 1')).not.toMatch(/units made/);
+  });
+
   it('formats slide drawing times', () => {
     expect(rasterText(entry(perf))).toBe('12 / 34 ms');
     expect(rasterText(entry())).toBe('—');

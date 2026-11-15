@@ -195,6 +195,27 @@ still away the PC stays the authority (and may go live locally again) until the 
 
 Services the hub started keep the existing behaviour below (_Hub returns_).
 
+## A GO never waits for drawing
+
+<!-- r2b:units-live -->
+Owner decision 2026-11-13 ("fill in when ready with a fade"). An output flips a GO on its scheduled frame with
+what it has: a slide whose slow parts (geometry units now; effect units and decorations from effect-units) are
+not ready is shown at once without them, their simple stand-ins drawn this time, and they fade in over 0.3 s as
+soon as they are made (design/14 "Late units"). Nothing that can take more than one task runs on a GO's path:
+- a jump to a slide that was not prepared draws it in its own live job without waiting for units; a GO while the
+  slide's arm or warm job is still preparing it hurries that job (it stops waiting at its next turn);
+- the late parts are made below the live and armed cues' work, and drawn again in place with a cross-fade at
+  most once per 0.3 s a slide, never ahead of a GO's raster; a GO during that fade ends it and flips at once;
+- the live playlist's slides are prepared ahead, in cue order, up to two thirds of the unit cache, and every GO
+  pauses that work for its own.
+Health counts the slides shown with late parts (`unitsLate`; the operator's note W49 "Parts of 2 slides appeared
+a moment late on this screen."). For a venue that wants the earlier behaviour, the output URL switches
+`?late=next` (late parts at the slide's next draw, no fade), `?warm=off` (no warm-up) and `?effects=base`
+(62a1c3a's drawing of effects and decorations) sit beside `?renderer=2d` (`apps/output/src/switches.ts`). Tests:
+`e2e/units-live.spec.ts` (a GO to a slide not prepared, a GO 50 ms after its arm, the warm-up ahead), the asset
+worker, link-core, stacks and compositor tests.
+<!-- /r2b:units-live -->
+
 ## Outputs on other machines
 
 Not at this venue. An output elsewhere has no opener and cannot join the fallback bus; it
