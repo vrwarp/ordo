@@ -418,6 +418,13 @@ drawing budget (`geombudget.ts`) would draw as a lesser legacy copy on the outpu
   at 4K, in the one unit cache (`UNIT_CACHE_BYTES`, 192 MiB, `unitCacheBytes`). An object past that frame keeps
   its legacy copy this time (`unitsLeft` 'area', a census note) for live-frame's frame unit (sub-wave 2).
 - **The look gate** (`authoredObjects`): a lyric-only, hidden or band look makes no unit of any kind.
+- **Decorations rated** (`geombudget.ts` `ratedOf`): a decoration is rated as its shapes drawn one by one
+  (`decorCost`: estimate, points, shadow layers), through the decoration's hooks once its drawer is loaded, so the
+  budget, health's raster alarm and `heavySlide` count them (r2a rated them about 0). A decoration is never drawn
+  as a lesser copy (it has no legacy part): rating it can only send later objects past the budget, to units on the
+  outputs and to legacy copies on the editor and coarse-pointer thumbnails. Where units are planned (the asset
+  worker) `slideJobCost` rates an object drawn from a unit at its 1:1 copy (`pictures`), its making at arm apart
+  (`slideUnitsCost`): a warm copied unit is never rated at its making cost.
 - **Switch** (`setEffectUnits(false)`, an output's `?effects=base` once the integrator wires it, C6): 62a1c3a's
   drawing, geometry units only (a stored geometry past the budget, its effects kept only within one call).
 <!-- /r2b:effect-units -->

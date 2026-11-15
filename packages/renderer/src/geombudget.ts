@@ -16,7 +16,8 @@ import { outlineOf } from './geom/outline.ts';
 import type { BuiltGeom } from './geom/path.ts';
 import { geomFilesVersion, storedCost, storedGeometry } from './geom/stored.ts';
 import { pictureTarget } from './picture.ts';
-import { clampShapeObject } from './shape.ts';
+import { decorFilesVersion } from './decor/files.ts';
+import { clampShapeObject, decorHooks, decorHooksGeneration } from './shape.ts';
 
 /*
  * A slide's drawing budget (design/27 §12 "drawing cost", §13), the same for every drawer: the outputs'
@@ -122,14 +123,28 @@ function drawnGeometry(o: SlideObject): { g: BuiltGeom | undefined; points: numb
   return { g: undefined, points: 0 };
 }
 
-/** An object's estimate and effect area as drawn (clamped), memoised per object and files read. */
+/** What a rating depends on besides the object: the geometry and decoration files read, the decoration drawer. */
+function ratings(): number {
+  return geomFilesVersion() + decorFilesVersion() + decorHooksGeneration();
+}
+
+/**
+ * An object's estimate and effect area as drawn (clamped), memoised per object and files read. A decoration is
+ * rated as its shapes drawn one by one (`decorCost`, through the decoration's hooks once its drawer is loaded;
+ * nothing before, as it draws nothing): r2a switched decorations on and rated them about 0.
+ */
 function ratedOf(o: SlideObject): { r: Rated; area: number } {
-  const version = geomFilesVersion();
+  const version = ratings();
   const hit = rated.get(o);
   if (hit && hit.version === version) return hit;
   let r: Rated = { est: 0, points: 0 };
   let area = 0;
-  if (o?.box && (o.type === 'shape' || o.type === 'image')) {
+  const hooks = o?.type === 'shape' && o.decor !== undefined ? decorHooks() : undefined;
+  if (hooks && o.type === 'shape') {
+    const c = hooks.cost(o);
+    r = { est: c.est, points: c.points };
+    area = c.effects;
+  } else if (o?.box && (o.type === 'shape' || o.type === 'image')) {
     const c = o.type === 'shape' ? clampShapeObject(o) : o;
     const { g, points } = drawnGeometry(c);
     r = { est: objectCost(c, g), points };
@@ -167,7 +182,7 @@ export function slideBudget(objects: readonly SlideObject[]): ReadonlyMap<SlideO
 }
 
 function planOf(objects: readonly SlideObject[]) {
-  const version = geomFilesVersion();
+  const version = ratings();
   const hit = memo.get(objects);
   if (hit && hit.version === version) return hit;
   const drawn = new Map<SlideObject, SlideObject>();
@@ -300,7 +315,7 @@ const NO_COST: SlideDrawCost = { units: 0, effects: 0 };
 export function slideJobCost(slide: unknown, look?: Look): SlideDrawCost {
   if (look && clampLook(look).layers.slide.mode !== 'authored') return NO_COST;
   const drawn = drawableContent(slide);
-  const cost = slideDrawCost(drawn.objects);
+  const cost = copiedCost(drawn.objects, slideDrawCost(drawn.objects));
   if (!drawn.pictureMediaId) return cost;
   let hit = withPicture.get(cost);
   if (!hit) withPicture.set(cost, (hit = { ...cost, pictures: (cost.pictures ?? 0) + 1 }));
@@ -308,6 +323,55 @@ export function slideJobCost(slide: unknown, look?: Look): SlideDrawCost {
 }
 
 const withPicture = new WeakMap<SlideDrawCost, SlideDrawCost>();
+
+/**
+ * The objects of a slide this thread draws from units (units.ts registers it): each one's original and the area
+ * its unit copies, in slide areas; undefined when none is planned. What lets health rate a unit at its copy when
+ * warm: its making is the arm's (the prepare step's), never the raster's.
+ */
+export type UnitCopies = (
+  objects: readonly SlideObject[],
+) => { objects: readonly SlideObject[]; area: number } | undefined;
+
+let unitCopies: UnitCopies | undefined;
+
+/** Register how a slide's unit copies are found (one at a time); returns its unregistration. */
+export function registerUnitCopies(f: UnitCopies): () => void {
+  unitCopies = f;
+  return () => {
+    if (unitCopies === f) unitCopies = undefined;
+  };
+}
+
+const copied = new WeakMap<SlideDrawCost, { key: string; cost: SlideDrawCost }>();
+
+/**
+ * `cost` with the objects this thread draws from units rated as their copies: their drawn estimates and effect
+ * layers taken out, the area their units copy added to the 1:1 pictures (`pictures`, the same copy).
+ */
+function copiedCost(objects: readonly SlideObject[], cost: SlideDrawCost): SlideDrawCost {
+  const u = unitCopies?.(objects);
+  if (!u?.objects.length) return cost;
+  const key = `${u.objects.length}|${u.area}`;
+  const hit = copied.get(cost);
+  if (hit && hit.key === key) return hit.cost;
+  const budget = slideBudget(objects);
+  let units = cost.units;
+  let effects = cost.effects;
+  for (const o of u.objects) {
+    const d = budget.get(o) ?? o;
+    units -= charged(drawnCost(d));
+    effects -= drawnEffectArea(d);
+  }
+  const out: SlideDrawCost = {
+    ...cost,
+    units: Math.max(0, units),
+    effects: Math.max(0, effects),
+    pictures: (cost.pictures ?? 0) + u.area,
+  };
+  copied.set(cost, { key, cost: out });
+  return out;
+}
 
 /** `objects` as the slide's drawing budget draws them (the same array when it changes none). */
 export function withinDrawBudget(objects: readonly SlideObject[]): readonly SlideObject[] {

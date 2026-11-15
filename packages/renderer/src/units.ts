@@ -15,7 +15,14 @@ import { digest } from './digest.ts';
 import { EFFECT_STEP_PIXELS, effectRect, effectSteps } from './effects.ts';
 import { charged, GEOM_COST, hasPart, type LegacyPart } from './geom/cost.ts';
 import { geomAwaited, geomFilesVersion } from './geom/stored.ts';
-import { drawnCost, legacyCopy, legacyOf, slideBudget, withinDrawBudget } from './geombudget.ts';
+import {
+  drawnCost,
+  legacyCopy,
+  legacyOf,
+  registerUnitCopies,
+  slideBudget,
+  withinDrawBudget,
+} from './geombudget.ts';
 import { hasPictureEffects, pictureTarget, preparedKey } from './picture.ts';
 import { geomShapeReach } from './sprite.ts';
 import {
@@ -950,3 +957,41 @@ function drawnFor(o: SlideObject, scale: number): SlideObject | undefined {
 }
 
 registerSlideObjectsDrawer({ draw: drawWithUnits, reach: unitReach, drawnFor });
+
+/** A unit's area in slide areas (its rect at its scale over the logical frame). */
+const slideAreas = (u: GeomUnit) => (u.rect.w * u.rect.h) / (u.scale * u.scale * LOGICAL_WIDTH * LOGICAL_HEIGHT);
+
+/**
+ * What a slide's units cost (health, the prepare step's report): `making`, the drawing units of what they draw
+ * (`charged` of each object as its unit draws it), paid once at arm in the prepare step's turns, never in the
+ * raster; `copy`, the slide areas the raster copies from them when warm.
+ */
+export function slideUnitsCost(slide: Slide, scale: number, look?: Look): { making: number; copy: number } {
+  let making = 0;
+  let copy = 0;
+  for (const u of unitsOfSlide(slide, scale, look)) {
+    if (u.of === 'prepared') continue;
+    making += charged(drawnCost(u.drawn));
+    copy += slideAreas(u);
+  }
+  return { making, copy };
+}
+
+// The raster's cost as health rates it (`geombudget.ts` `slideJobCost`): objects planned for units here are
+// copies, at whichever scale this thread planned them (one an output).
+registerUnitCopies((objects) => {
+  let out: SlideObject[] | undefined;
+  let area = 0;
+  const gen = generation();
+  for (const o of objects) {
+    const at = planned.get(o);
+    if (!at) continue;
+    for (const e of at.values()) {
+      if (e.gen !== gen || e.u.of === 'prepared') continue;
+      (out ??= []).push(o);
+      area += slideAreas(e.u);
+      break;
+    }
+  }
+  return out ? { objects: out, area } : undefined;
+});

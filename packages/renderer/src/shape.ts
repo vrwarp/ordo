@@ -229,8 +229,8 @@ export interface DecorHooks {
   count(o: ShapeObject): number;
   /** Draws source shapes `from` to `to` (excluded), never through its sprite (`drawDecorRange`). */
   range(ctx: Ctx2D, o: ShapeObject, scale: number, from: number, to: number): void;
-  /** Its drawing estimate and its shadows' weighted area (`decorCost`). */
-  cost(o: ShapeObject): { est: number; effects: number };
+  /** Its drawing estimate, its shadows' weighted area and its points (`decorCost`). */
+  cost(o: ShapeObject): { est: number; effects: number; points: number };
   /** Where it draws on the slide, its shadows included (`decorReach`; logical px; null: unknown). */
   reach(o: ShapeObject): { x: number; y: number; w: number; h: number } | null | undefined;
 }

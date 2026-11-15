@@ -622,17 +622,19 @@ function drawDecorShapes(
 
 // ── Cost ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-const costs = new WeakMap<DecorData, { version: number; est: number; effects: number }>();
+const costs = new WeakMap<DecorData, { version: number; est: number; effects: number; points: number }>();
 
 /**
  * What a decoration costs to draw (the units of `geom/cost.ts` `drawCost` for each shape, its shadow pass
  * included) and its shadow layers' weighted area in slide areas (`effectArea`), as its shapes drawn one by one
- * would cost: the effect units' and health's estimate of it. Memoised per clamped decoration and files read.
+ * would cost, and its points (charged as stored points are): what the slide's drawing budget rates it at
+ * (geombudget.ts, through the decoration's hooks), so the budget, health's alarm and `heavySlide` count it.
+ * Memoised per clamped decoration and files read.
  */
-export function decorCost(raw: ShapeObject): { est: number; effects: number } {
+export function decorCost(raw: ShapeObject): { est: number; effects: number; points: number } {
   const o = clampShapeObject(raw);
   const d = drawnDecor(o);
-  if (!d) return { est: 0, effects: 0 };
+  if (!d) return { est: 0, effects: 0, points: 0 };
   const hit = costs.get(d);
   if (hit && hit.version === decorFilesVersion()) return hit;
   const geo = decorShapes(d);
@@ -663,7 +665,7 @@ export function decorCost(raw: ShapeObject): { est: number; effects: number } {
         s.bounds,
       );
   }
-  const out = { version: decorFilesVersion(), est, effects };
+  const out = { version: decorFilesVersion(), est, effects, points: geo.points };
   costs.set(d, out);
   return out;
 }
