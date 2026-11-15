@@ -1,10 +1,13 @@
 import { parsePathData, type Rgba, type ShapeObject, Slide, type TextObject } from '@ordo/domain';
 import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import { TABLE_LIMITS as DOMAIN_LIMITS } from '@ordo/domain';
 import { CMD_MOVE, GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
 import { storedGeometry } from '@ordo/renderer/geom/stored.ts';
 import { describe, expect, it } from 'vitest';
+import { MAX_TABLE_CELLS } from './budget.ts';
 import { MAX_SLIDE_OBJECTS } from './classify.ts';
 import { MAX_PATH_CHARS } from './geom.ts';
+import { M9_FIELDS } from './emit-ctx.ts';
 import { convertDeck, parseDeck } from './index.ts';
 import type { Line, TableCell, TableElement, TableLine } from './ir.ts';
 import type { FaceSource } from './metrics.ts';
@@ -14,8 +17,7 @@ import {
   gridObjects,
   loAscent,
   loLineHeight,
-  MAX_TABLE_CELLS,
-  MAX_TABLE_GRID,
+  TABLE_LIMITS,
 } from './tables.ts';
 import { PREDEFINED_TABLE_STYLE_IDS, predefinedTableStyle } from './tablestyles.ts';
 import {
@@ -111,6 +113,12 @@ const rectsOf = (o: ShapeObject): Rect[] =>
       })
     : [{ x: o.box.x, y: o.box.y, w: o.box.w, h: o.box.h, fill: o.fill! }];
 
+/**
+ * M9: the stored fields but the table object (`M9_WRITES` without 'table'): tables as their M6 group of
+ * shapes and text boxes, which these tests read (the table object: `emit-table.test.ts`).
+ */
+const M6_GROUP = new Set(M9_FIELDS.filter((f) => f !== 'table'));
+
 /** Convert one slide; it must be an ordinary ordo slide. */
 function convert(
   shapes: string,
@@ -126,6 +134,7 @@ function convert(
   if (opts.styles !== undefined) parts = withTableStyles(parts, opts.styles);
   const out = convertDeck(parts, {
     fontFace: opts.fontFace ?? HALF_EM,
+    m9Writes: M6_GROUP,
     ...(opts.loCompat ? { loCompat: true } : {}),
     ...(opts.budgetArt ? { budgetArt: true } : {}),
   });
@@ -404,18 +413,20 @@ describe('tables: lines', () => {
     expect(shared(lines).map((l) => [l.width, l.color])).toEqual([[6, { r: 0, g: 0, b: 0, a: 1 }]]);
   });
 
-  it('notes diagonal lines, which are not drawn, and rates the table approx', () => {
+  it('reads diagonal lines per cell (the table object draws them; the M6 group notes them)', () => {
     const shapes = table({
       cols: [IN],
       rows: [{ h: IN / 2, cells: [tcWith('a', ln('lnTlToBr', 'FF0000', 12_700))] }],
     });
     const { s, lines } = convert(shapes);
     expect(lines).toHaveLength(0);
-    expect(s.notes).toContain('diagonal lines of table cells are not drawn');
+    expect(s.notes).toContain('diagonal lines of table cells are not drawn (M6 group)');
     const scene = parseDeck(buildDeck({ slides: [{ shapes }] }));
     const t = scene.slides[0]!.elements[0] as TableElement;
-    expect(t.support).toBe('approx');
-    expect(t.reasons).toContain('tableDiagonal');
+    expect(t.support).toBe('native');
+    expect(t.cells[0]!.diag).toEqual({
+      down: { width: 12_700, fill: { kind: 'solid', color: { r: 255, g: 0, b: 0, a: 1 } } },
+    });
   });
 });
 
@@ -945,14 +956,49 @@ describe('tables: what stays residual', () => {
     expect(texts).toHaveLength(84);
   });
 
-  it(`reads no table of more than ${MAX_TABLE_GRID} grid cells`, () => {
+  it('cuts a table past 256 rows and notes it', () => {
+    const rows = Array.from({ length: 300 }, (_, r) => ({ h: 12_700, cells: [tc(`r${r}`)] }));
+    const scene = parseDeck(buildDeck({ slides: [{ shapes: table({ cols: [IN], rows }) }] }), {
+      fontFace: HALF_EM,
+    });
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.kind).toBe('table');
+    expect(t.rows).toHaveLength(TABLE_LIMITS.rows);
+    expect(t.storedRows).toHaveLength(TABLE_LIMITS.rows);
+    expect(t.cells).toHaveLength(TABLE_LIMITS.rows);
+    expect(t.cells[255]!.text.paras[0]!.runs[0]!.text).toBe('r255');
+    expect(scene.slides[0]!.notes).toContain(
+      'a table of 300 rows and 1 columns is cut to its first 256 rows and 1 columns',
+    );
+  });
+
+  it(`cuts a table past 64 columns or ${TABLE_LIMITS.grid} slots to its first ones`, () => {
+    // 65 rows of 64 columns: 4,160 slots, so the first 64 rows (4,096) are read.
     const rows = Array.from({ length: 65 }, () => ({
       h: 12_700,
-      cells: [tc('x', { attrs: `gridSpan="64"` })],
+      cells: [tc('x', { attrs: 'gridSpan="70"' })],
     }));
-    const { s, texts } = convert(table({ cols: Array(64).fill(IN / 8), rows }));
-    expect(texts).toHaveLength(0);
-    expect(s.notes.some((n) => n.startsWith(`a table of ${65 * 64} grid cells`))).toBe(true);
+    const scene = parseDeck(
+      buildDeck({ slides: [{ shapes: table({ cols: Array(70).fill(IN / 8), rows }) }] }),
+    );
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.cols).toHaveLength(64);
+    expect(t.rows).toHaveLength(64);
+    expect(t.cells).toHaveLength(64);
+    expect(t.cells.every((c) => c.cols === 64)).toBe(true);
+    expect(scene.slides[0]!.notes).toContain(
+      'a table of 65 rows and 70 columns is cut to its first 64 rows and 64 columns',
+    );
+  });
+
+  it('keeps the bounds of the stored table (TABLE_LIMITS of @ordo/domain)', () => {
+    expect(TABLE_LIMITS).toEqual({
+      rows: DOMAIN_LIMITS.rows,
+      cols: DOMAIN_LIMITS.cols,
+      grid: DOMAIN_LIMITS.grid,
+      cellText: DOMAIN_LIMITS.cellText,
+      tableText: DOMAIN_LIMITS.tableText,
+    });
   });
 
   it('draws a dense table natively while the slide stays within its object budget', () => {
@@ -988,9 +1034,8 @@ describe('tables: what stays residual', () => {
     expect(s.art?.text).toContain('x');
   });
 
-  it('leaves a table of more cells than a slide may have objects to LibreOffice, unmeasured', () => {
-    expect(MAX_TABLE_CELLS).toBe(MAX_SLIDE_OBJECTS);
-    // 12 × 13 = 156 drawn cells: each is an object, so the table could never be drawn natively.
+  it('reads and measures a table of more cells than a slide may have objects (M9: no cell cap)', () => {
+    // 12 × 13 = 156 drawn cells: M6 left it to LibreOffice unmeasured; the table object is one object.
     const rows = Array.from({ length: 12 }, () => ({
       h: IN / 16,
       cells: Array.from({ length: 13 }, () => tc('x')),
@@ -1000,14 +1045,17 @@ describe('tables: what stays residual', () => {
       faces++;
       return HALF_EM(...args);
     };
-    const { s, texts } = convert(table({ cols: Array(13).fill(IN / 2), rows }), { fontFace: counting });
-    expect(texts).toHaveLength(0);
-    expect(faces).toBe(0);
-    expect(s.classification.class).toBe('hybrid');
-    expect(s.classification.reasons).toContain('art:budget:table');
-    expect(s.notes).toContain(
-      `a table of 156 cells passes the slide's budget of ${MAX_SLIDE_OBJECTS} objects: LibreOffice draws it`,
+    const scene = parseDeck(
+      buildDeck({ slides: [{ shapes: table({ cols: Array(13).fill(IN / 2), rows }) }] }),
+      {
+        fontFace: counting,
+      },
     );
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.kind).toBe('table');
+    expect(t.cells).toHaveLength(156);
+    expect(t.cells.every((c) => c.text.paras[0]!.runs[0]!.text === 'x')).toBe(true);
+    expect(faces).toBeGreaterThan(0);
   });
 
   it('leaves a table with vertical cell text to LibreOffice', () => {
@@ -1016,6 +1064,21 @@ describe('tables: what stays residual', () => {
     );
     expect(s.classification.reasons).toContain('art:table');
     expect(s.notes).toContain('a table with vertical cell text is drawn by LibreOffice (M8)');
+  });
+
+  it("without the table object (the kill switch) keeps M6's cell cap: a table of more cells than a slide may have objects is LibreOffice's", () => {
+    expect(MAX_TABLE_CELLS).toBe(MAX_SLIDE_OBJECTS);
+    const rows = Array.from({ length: 12 }, () => ({
+      h: IN / 16,
+      cells: Array.from({ length: 13 }, () => tc('x')),
+    }));
+    const { s, texts } = convert(table({ cols: Array(13).fill(IN / 2), rows }));
+    expect(texts).toHaveLength(0);
+    expect(s.classification.class).toBe('hybrid');
+    expect(s.classification.reasons).toContain('art:budget:table');
+    expect(s.notes).toContain(
+      `a table of 156 cells passes the slide's budget of ${MAX_SLIDE_OBJECTS} objects: LibreOffice draws it`,
+    );
   });
 
   it('sends the largest tables to the art when the slide would pass its object budget behind budgetArt', () => {

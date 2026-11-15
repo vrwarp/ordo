@@ -268,6 +268,11 @@ The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
   each node's text in PowerPoint's text rectangle (`dsp:txXfrm`) and in the colours part's node text colour
   (as LibreOffice takes it); a drawing with a residual shape (3D, vertical text) goes to the art whole, and
   SmartArt without a drawing stays for LibreOffice;
+- writes each table as one table object (`ShapeObject.table`, M9 tables-conv; design/27 §15 M9 "The table
+  object imported"), edited cell by cell in the editor: the deck's columns and stored rows (the drawer grows
+  each row to its text, cells never shrink), each cell's rich text, spans, fill and diagonals, the palettes of
+  styles, fills and lines; one object of the slide's budget however many cells it has (the 640-cell master
+  grid of a template is one object a slide). A table with vertical cell text stays for LibreOffice;
 - bakes recoloured pictures (duotone, colour change, grayscale, black and white, brightness and contrast:
   PowerPoint's recolour presets) and tiled picture fills (shapes and backgrounds, tiles sized by the
   picture's stated resolution, else 96 per inch) into new prepared pictures, so they are drawn as PowerPoint

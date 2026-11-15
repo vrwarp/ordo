@@ -6,7 +6,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
-import type { Font } from '@ordo/domain';
+import type { Font, ShapeObject, TableData } from '@ordo/domain';
+import { cellRich } from '@ordo/domain/table.ts';
 import { buildDeck, sfntFont, tableFrame, tc } from '@ordo/pptx-scene/test-util.ts';
 import { afterAll, describe, expect, it } from 'vitest';
 import { metricTables } from '../src/fonts/sfnt.ts';
@@ -14,6 +15,12 @@ import { FACE_LIMITS, libraryFaces, type SceneFontFile, sceneFontFiles } from '.
 import { sceneTask } from '../src/pptx/sceneTask.ts';
 
 const IN = 914_400;
+
+/** A cell's line spacing as a share of single: its paragraph's, else its box's (`lineHeight` / 1.2). */
+const cellSpacing = (t: TableData, i: number) => {
+  const c = cellRich(t, i)!;
+  return c.paras?.[0]?.lineSpacing ?? c.style.lineHeight / 1.2;
+};
 const dir = mkdtempSync(join(tmpdir(), 'ordo-faces-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -163,10 +170,16 @@ describe('libraryFaces', () => {
 });
 
 describe('sceneTask with the library faces', () => {
-  it("grows a table row to its text measured with the library's face", () => {
-    // Every character of "Wide" half an em wide: 18 px at 36 px; a 1 in cell (144 px, 115.2 px inside its
-    // margins) holds 6 of them on a line.
-    const wide = file('wide.ttf', sfntFont(Object.fromEntries([...'Wide w'].map((c) => [c, 500]))));
+  it("measures a table's cells with the library's face: their lines spaced by its line height", () => {
+    // "Wide" half an em wide, its line 1.4 of the size (hhea): the cell's paragraph is spaced 1.4 / 1.2 of
+    // single, as the browser parse spaces it (packages/importers/src/pptx-faces.test.ts); the table object
+    // (M9 tables-conv) keeps the deck's row, which the drawer grows to the text.
+    const wide = file(
+      'wide.ttf',
+      sfntFont(Object.fromEntries([...'Wide w'].map((c) => [c, 500])), {
+        vertical: { ascender: 1100, descender: -300 },
+      }),
+    );
     const parts = buildDeck({
       slides: [
         {
@@ -189,8 +202,9 @@ describe('sceneTask with the library faces', () => {
       options: {},
       fonts: [['Wide Face', 400, false, wide]],
     });
-    const text = out.result.slides[0]!.slide.objects.find((o) => o.type === 'text')!;
-    // Three lines ("Wide " fits 5 of 6, the next word wraps): 3 × 1.2 × 36 px, plus 14.4 px of margins.
-    expect(text.box.h).toBeCloseTo(3 * 1.2 * 36 + 14.4, 6);
+    const s = out.result.slides[0]!;
+    const t = (s.slide.objects.find((o) => o.type === 'shape' && o.table) as ShapeObject).table!;
+    expect(cellSpacing(t, 0)).toBeCloseTo(1.4 / 1.2, 6);
+    expect(s.notes.some((n) => n.includes('estimated widths') && n.includes('Wide Face'))).toBe(false);
   });
 });

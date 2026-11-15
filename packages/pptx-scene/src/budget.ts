@@ -12,7 +12,11 @@
  *    miss the slide area (`offSlide`; the deck's area, not the 1920 x 1080 frame), or a shape that shows
  *    nothing (`invisible`: no visible fill, line, text or effect), is treated as hidden: not emitted, counted,
  *    put in the art or its text. Clips, sounds and SmartArt drawings' elements are never culled;
- * 1. **tables and charts** are one object each (`ShapeObject.table`, `ShapeObject.chart`);
+ * 1. **tables and charts** are one object each (`ShapeObject.table`, `ShapeObject.chart`). Without the table
+ *    object (`BudgetOptions.tables` false: the kill switch, `EmitOptions.m9Writes` without 'table') a table is
+ *    its M6 group, counted as the objects it emits (`TableElement.objects`), and M6's cell cap holds: a table
+ *    of more drawn cells than a slide may have objects (`MAX_TABLE_CELLS`) is LibreOffice's art
+ *    ('budget:table', `m6TableCap`, before the elements' support is refined), as at M6;
  * 2. **shapes of one look** merged as M6 merges them (`classify.ts` `shapeRuns`, `ShapeElement.merge`);
  * 3. **decorations**, narrow scope (`decor.ts` `decorRuns`: a SmartArt drawing, a top-level group, a
  *    layout's or master's decorations; `ElementBase.decor`), the shape runs worked out again around them;
@@ -64,6 +68,7 @@ import {
 import type { SlideCtx } from './context.ts';
 import { decorRuns } from './decor.ts';
 import type { ArtRange, Background, Element, Frame, RectEmu, ShapeElement } from './ir.ts';
+import type { Log } from './log.ts';
 import { atlasParts, pictureRuns } from './sheet.ts';
 
 /** Objects a slide whose objects past `MAX_SLIDE_OBJECTS` are all text (or unmergeable) may keep. */
@@ -75,6 +80,14 @@ export const MAX_DRAWN_OBJECTS = 200;
  * sheets keeps up to this many, the topmost past it left out and listed (it would draw no more).
  */
 export const MAX_DRAWN_PICTURES = 16;
+/**
+ * M6's cell cap (design/27 §15 M6), for the kill switch only (`BudgetOptions.tables` false): a table of more
+ * drawn cells (a merge once) than a slide may have objects is LibreOffice's art, its M6 group could never fit.
+ * The table object has no cap: it is one object, its bounds are `@ordo/domain` `TABLE_LIMITS`. Equal to
+ * `MAX_SLIDE_OBJECTS` (`tables.test.ts`), written out: `classify.ts` imports this module, so its constant is
+ * not set yet when this one is.
+ */
+export const MAX_TABLE_CELLS = 150;
 
 /**
  * What the importer can store, so the budgets plan only reliefs that draw (the M9 rollout: a field stays off
@@ -100,6 +113,11 @@ export interface BudgetOptions {
    * (`budget:shapes`, `budget:pictures`), with room kept for the art. False: it is left out and listed.
    */
   libreoffice?: boolean;
+  /**
+   * The table object (`ShapeObject.table`, the 'table' field; default true): a table is one object. False
+   * (the kill switch): its M6 group, counted as the objects it emits, and M6's cell cap (`m6TableCap`).
+   */
+  tables?: boolean;
 }
 
 /** What the budgets did to a slide (its notes say it; the census counts it). */
@@ -200,15 +218,23 @@ function picturePart(e: Element): string | undefined {
   return undefined;
 }
 
-/** The objects an element emits on its own (a shape with a fill or line and text is two). */
-function ownObjects(e: Element): number {
-  if (e.kind === 'picture' || e.kind === 'table' || e.kind === 'chart') return 1;
+/**
+ * The objects an element emits on its own (a shape with a fill or line and text is two; a table one, or its
+ * M6 group's objects without the table object, `tables` false).
+ */
+function ownObjects(e: Element, tables = true): number {
+  if (e.kind === 'table') return tables ? 1 : Math.max(1, e.objects);
+  if (e.kind === 'picture' || e.kind === 'chart') return 1;
   if (e.kind === 'shape') return (e.fill.kind !== 'none' || e.line ? 1 : 0) + (e.text ? 1 : 0);
   return 0;
 }
 
 /** Whether an element holds text (a shape's text body, a table's cells), for the guard. */
 const hasText = (e: Element) => (e.kind === 'shape' && !!e.text) || e.kind === 'table';
+
+/** The text objects of an element (one; a table's M6 group has one per cell), for the guard's text count. */
+const textObjects = (e: Element, tables: boolean) =>
+  e.kind === 'table' && !tables ? Math.max(1, e.cells.length) : hasText(e) ? 1 : 0;
 
 /**
  * Whether a budget gave an element to LibreOffice's art (`toArt`, with LibreOffice; or the art A/B of
@@ -233,6 +259,7 @@ export function budgetCost(
   background: Background,
   art: ArtRange | undefined,
   atlas: readonly string[] = [],
+  tables = true,
 ): { objects: number; pictures: number } {
   const inArt = new Set(art?.elements);
   const pictures = new Set<string>();
@@ -248,7 +275,7 @@ export function budgetCost(
       // version 1, and by a hub without LibreOffice for good, until the art replaces them: as themselves.
       const part = picturePart(e);
       if (part !== undefined) pictures.add(part);
-      objects += ownObjects(e);
+      objects += ownObjects(e, tables);
       return;
     }
     if (e.sheet !== undefined) {
@@ -276,7 +303,7 @@ export function budgetCost(
       objects += e.text ? 1 : 0;
       return;
     }
-    objects += ownObjects(e);
+    objects += ownObjects(e, tables);
   });
   let distinct = pictures.size + sheets + (art ? 1 : 0);
   const packed = atlas.filter((p) => pictures.has(p)).length;
@@ -349,6 +376,7 @@ export function fitBudgets(
   const decorations = opts.decorations !== false;
   const sheets = opts.sheets !== false;
   const lo = opts.libreoffice !== false;
+  const tables = opts.tables !== false;
   const plan: BudgetPlan = {
     culled: { offSlide: 0, invisible: 0 },
     merged: { shapes: 0, objects: 0 },
@@ -363,7 +391,7 @@ export function fitBudgets(
   };
   const art = artRange(elements);
   const inArt = new Set(art?.elements);
-  const cost = () => budgetCost(elements, background, art, plan.atlas);
+  const cost = () => budgetCost(elements, background, art, plan.atlas, tables);
   const used = () => {
     const out = new Set(inArt);
     elements.forEach((e, i) => {
@@ -429,7 +457,8 @@ export function fitBudgets(
   // 7: the guard. Elements that are not text first, topmost first; then text. With LibreOffice the art that
   // draws what it leaves out is one more of the render clamp's objects.
   if (cost().objects > MAX_SLIDE_OBJECTS_TEXT)
-    for (const i of guard(elements, background, art, inArt, lo ? 1 : 0)) leftOut.set(i, 'budget:shapes');
+    for (const i of guard(elements, background, art, inArt, lo ? 1 : 0, tables))
+      leftOut.set(i, 'budget:shapes');
   // P: the atlas, then the guard's way for what it cannot hold. Without sheets, the guard's way past what the
   // render clamp draws, where an art new on the slide is one more of its pictures.
   const pictureBudget = sheets ? MAX_SLIDE_PICTURES : MAX_DRAWN_PICTURES;
@@ -478,6 +507,29 @@ export function fitBudgets(
   return plan;
 }
 
+/**
+ * M6's cell cap, without the table object only (`BudgetOptions.tables` false, the kill switch): each shown
+ * table of more drawn cells than `MAX_TABLE_CELLS` is made residual ('budget:table'), LibreOffice's art
+ * drawing it, as M6's reader left it; its M6 group could never fit the slide's objects. Run before the
+ * elements' support is refined (`classify.ts` `classifySlide`), which keeps the verdict and its reason. With
+ * the table object nothing is capped. Returns how many tables it capped.
+ */
+export function m6TableCap(log: Log, elements: Element[], opts: BudgetOptions = {}): number {
+  if (opts.tables !== false) return 0;
+  let n = 0;
+  for (const e of elements) {
+    if (e.kind !== 'table' || e.hidden || e.support === 'residual' || e.cells.length <= MAX_TABLE_CELLS)
+      continue;
+    log(
+      `a table of ${e.cells.length} cells passes the slide's budget of ${MAX_TABLE_CELLS} objects: LibreOffice draws it`,
+    );
+    e.support = 'residual';
+    e.reasons = [...(e.reasons ?? []), 'budget:table'];
+    n++;
+  }
+  return n;
+}
+
 /** Leave an element out for the budgets (the guard): culled as `budget`, hidden. */
 function leave(e: Element): void {
   e.culled = 'budget';
@@ -521,12 +573,14 @@ function guard(
   art: ArtRange | undefined,
   inArt: ReadonlySet<number>,
   room: number,
+  tables = true,
 ): number[] {
-  // Each drawn unit (an element, or a run as one) with its objects and whether it holds text.
-  type Unit = { members: number[]; objects: number; text: boolean; gone?: true };
+  // Each drawn unit (an element, or a run as one) with its objects and its text objects (`texts`, a table's
+  // M6 group one per cell); `text` says it holds text.
+  type Unit = { members: number[]; objects: number; text: boolean; texts: number; gone?: true };
   const units: Unit[] = [];
   const byRun = new Map<string, Unit>();
-  let all = budgetCost(elements, background, art).objects;
+  let all = budgetCost(elements, background, art, [], tables).objects;
   let text = 0;
   elements.forEach((e, i) => {
     if (e.hidden || inArt.has(i) || e.kind === 'residual') return;
@@ -535,7 +589,7 @@ function guard(
     if (key !== undefined) {
       let u = byRun.get(key);
       if (!u) {
-        u = { members: [], objects: 1, text: false };
+        u = { members: [], objects: 1, text: false, texts: 0 };
         byRun.set(key, u);
         units.push(u);
       }
@@ -544,14 +598,16 @@ function guard(
       if (t) {
         u.text = true;
         u.objects++;
+        u.texts++;
         text++;
       }
       return;
     }
-    const n = ownObjects(e);
+    const n = ownObjects(e, tables);
     if (!n) return;
-    if (t) text++;
-    units.push({ members: [i], objects: n, text: t });
+    const texts = textObjects(e, tables);
+    text += texts;
+    units.push({ members: [i], objects: n, text: t, texts });
   });
   const left: number[] = [];
   const max = () => MAX_DRAWN_OBJECTS - (left.length ? room : 0);
@@ -561,7 +617,7 @@ function guard(
       left.push(i);
     }
     all -= u.objects;
-    if (u.text) text--;
+    text -= u.texts;
     u.gone = true;
   };
   for (let k = units.length - 1; k >= 0 && (all > max() || all - text > MAX_SLIDE_OBJECTS_TEXT); k--)

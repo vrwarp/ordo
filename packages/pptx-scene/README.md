@@ -693,7 +693,7 @@ the art.
 | `emit-ctx.ts`    | `EmitCtx`, `M9_FIELDS` and `writes` (the `EmitOptions.m9Writes` gate), box, colour and object helpers                                                                   | (frozen)         |
 | `emit-text.ts`   | Text bodies (`textObject`, `richTextObject`, legacy text, `marginOf`); stubs `warpOf`, `writingOf`                                                                      | `text-conv`      |
 | `emit-budget.ts` | `storedSlideBytes`, `fitBytes`, `chargeText`, `slideBudget` (was `overBudget`), `compactRuns`, `MAX_SLIDE_BYTES`, `TEXT_BUDGET_BYTES`                                   | `ladder`         |
-| `emit-table.ts`  | The M6 table group; stub `emitTableObject`                                                                                                                              | `tables-conv`    |
+| `emit-table.ts`  | The table object (`emitTableObject`, since `tables-conv`), the M6 table group without 'table'                                                                           | `tables-conv`    |
 | `chart.ts`       | Stubs `readChart`, `emitChart`                                                                                                                                          | `charts-conv`    |
 | `decor.ts`       | Stub `emitDecor` (runs of `ElementBase.decor`)                                                                                                                          | `decor-conv`     |
 | `three3d.ts`     | Stubs `read3d`, `look3dOf`                                                                                                                                              | `three-model`    |
@@ -822,6 +822,38 @@ whether.
   `hybrid.test.ts`).
 <!-- /m9:decor-conv -->
 
+<!-- m9:tables-conv -->
+## Wave r2b: the table object imported (`emit-table.ts`, `tables.ts`; `tables-conv`)
+
+Every table the reader keeps is written as one `ShapeObject.table` (`emitTableObject`; design/27 §15 M9 "The
+table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of the section above:
+- **The grid as stored**: `cols` the deck's widths, `rows` its `a:tr h` (`TableElement.storedRows`), `box.h` their
+  sum; the renderer grows the rows to the text it lays out (cells never shrink, no autofit). `TableElement.rows`
+  (the measured rows) are what the M6 group and the harness's LibreOffice rows (`loCompat`: `rowRule: 'fixed'`,
+  LibreOffice's columns and rows, its spill and lift in the insets) use.
+- **Cells** row-major as the stored table places them (`readTable` cuts a span at a slot an earlier cell covers),
+  each its rich text (`richText`, plain past the slide's text budget), spans, fill, diagonals (read per cell
+  now, `TableCell.diag`: the M6 group notes them undrawn).
+- **Palettes** (`@ordo/domain` `Palette`): `base` the most common cell box style; each cell's entry from
+  `@ordo/domain/cellstyle.ts` `cellStyleOf` (the domain's mapping, the pure module this package may import),
+  bounded to `CellStyle` (`boundEntry`); box fields a cell style lacks folded into its runs and paragraphs
+  (`foldBox`); run styles, fills, line styles, edges.
+- **Bounds** (`TABLE_LIMITS`, the domain's, `TABLE_OBJECT_LIMITS` tested equal): the reader keeps the first 256
+  rows, 64 columns and 4,096 slots (noted) and measures at most 10,000 characters a cell and 60,000 a table
+  (`measuredBodies`); the emitter cuts the same and leaves later palette entries out (noted). No cell cap: a
+  table is one object of the slide's 150.
+- **Not written**: a table with vertical cell text stays residual ('vert') until the writing engine lays cells
+  out; no legacy group (M9 decision 4).
+- **The kill switch** (`m9Writes` without 'table'): the M6 group, counted as its objects by the budgets
+  (`BudgetOptions.tables` false: `budgetCost`, the guard's text objects one per cell), and M6's cell cap
+  (`budget.ts` `m6TableCap`, `MAX_TABLE_CELLS` 150, 'budget:table') before the support is refined.
+- Tests: `emit-table.test.ts` (one object with palettes, background and gradient fills, spans, diagonals, rtl,
+  the cell entries as the domain reads them, 96 and 160 cells native, the 640-cell master grid one object a
+  slide, the older build's strip, the kill switch under 150 objects, stored rows, LibreOffice's rows, the text
+  budget, the bounds), `tables.test.ts` (the reader's cuts, no cell cap, the kill switch's cap, vertical cells),
+  `domain/src/cellstyle.test.ts` (the pure mapping equals `table.ts`'s).
+<!-- /m9:tables-conv -->
+
 ## Module map
 
 | File            | What                                                                                                                                 | Owner         |
@@ -847,7 +879,7 @@ whether.
 | `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                                         | M3 B          |
 | `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                                      | M3b A         |
 | `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`                      | M3b A         |
-| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6); `tablestyles.ts`: the built-in styles (LibreOffice's, MPL 2.0)                     | M6b C         |
+| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6; M9 reads into the table object); `tablestyles.ts`: built-in styles (MPL 2.0)    | M6b C         |
 | `metrics.ts`    | `sfntMetrics`, `metricsOfTables`, `FaceSource`: advances, pair kerning, line heights from font files, bounded                        | M6b C         |
 | `smartart.ts`   | SmartArt from its drawing cache: `readSmartArt` (the drawing's shapes through the walk), `lockDiagram`                               | M6b D         |
 | `bake.ts`       | Baked pictures: `PictureBake` recipes (`bakeOf`, `tileBakeOf`), `applyBake` (recolour and tile pixels); M9 `SheetBake`, `applySheet` | M6b D         |

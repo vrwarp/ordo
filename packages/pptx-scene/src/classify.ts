@@ -31,7 +31,7 @@
  * never used as plain-object keys.
  */
 import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
-import { type BudgetOptions, cullElements, fitBudgets, leftKinds, sentToArt } from './budget.ts';
+import { type BudgetOptions, cullElements, fitBudgets, leftKinds, m6TableCap, sentToArt } from './budget.ts';
 import { rootOf, type SlideCtx } from './context.ts';
 import { endsOf, MAX_PATH_CHARS, mergedChars, type ShapePiece, shapePiece } from './geom.ts';
 import { bodyPrChain, chainOf, firstAttr, firstChildOf, nvOf } from './inherit.ts';
@@ -1255,6 +1255,8 @@ export function classifySlide(
   const culled = cullElements(ctx.frame, elements);
   if (culled.offSlide) ctx.log(`${culled.offSlide} element(s) outside the slide are not imported`);
   if (culled.invisible) ctx.log(`${culled.invisible} shape(s) that show nothing are not imported`);
+  // Without the table object (the kill switch) M6's cell cap: its group could never fit (`budget.ts`).
+  m6TableCap(ctx.log, elements, opts.budget);
   const residual = refineSupport(ctx, elements);
   if (opts.budgetArt) return classifyWithArt(ctx, elements, background, residual, tier, reasons);
   wholeDiagrams(ctx, elements, background, residual, false);

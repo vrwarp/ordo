@@ -15,6 +15,7 @@ import { portOf } from './ports.ts';
  * zone in 'Editable' mode is parsed in the operator's import worker and uploaded with its scene; the hub checks
  * the scene and builds version 1 from it. Checked:
  * - the hub built from the browser's scene (its job log), and Settings › Diagnostics counts the parse;
+ * - the table is one table object (M9 tables-conv), measured with the bundled faces on both sides;
  * - what it stored equals what the hub stores when it parses the same deck itself (posted without a scene),
  *   modulo ids, media ids (compared by file) and times;
  * - the deck opens canvas-first with the stage pill 'Imported PowerPoint slide', and the slide's PowerPoint
@@ -115,9 +116,10 @@ test('a deck dropped on the Import tab is parsed in the browser and stored as th
     // Modulo ids, media ids (by their file), times and the import log: no difference at all.
     const same = (p: PresentationRec) => comparable({ ...p, title: '' }, (id) => fileOf.get(id));
     expect(diffJson(same(fromHub), same(fromBrowser))).toEqual([]);
-    // The table, the picture and the clip are there as objects.
-    const kinds = slidesOf(fromBrowser).map((s) => s.objects.map((o) => o.type).join(','));
-    expect(kinds[1]).toMatch(/text/);
+    // The table, the picture and the clip are there as objects (the table one table object, M9 tables-conv).
+    expect(
+      slidesOf(fromBrowser)[1]!.objects.filter((o) => o.type === 'shape' && (o as { table?: unknown }).table),
+    ).toHaveLength(1);
     expect(slidesOf(fromBrowser)[2]!.objects.some((o) => o.type === 'image')).toBe(true);
     expect(
       slidesOf(fromBrowser)[3]!.objects.some((o) => o.type === 'image' && (o as { play?: unknown }).play),

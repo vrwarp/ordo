@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ShapeObject } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
+import { M9_FIELDS } from './emit-ctx.ts';
 import { apply } from './frame.ts';
 import { convertDeck, parseDeck } from './index.ts';
 import type { Frame, TableElement, TableLine } from './ir.ts';
@@ -158,7 +159,10 @@ function linesBothWays(shapes: string): {
   const parts = withTableStyles(buildDeck({ slides: [{ shapes }] }), STYLES + ONE);
   const scene = parseDeck(parts);
   const e = scene.slides[0]!.elements.find((x): x is TableElement => x.kind === 'table')!;
-  const out = convertDeck(withTableStyles(buildDeck({ slides: [{ shapes }] }), STYLES + ONE));
+  // The M6 group (the table object off), whose grid objects these tests compare.
+  const out = convertDeck(withTableStyles(buildDeck({ slides: [{ shapes }] }), STYLES + ONE), {
+    m9Writes: new Set(M9_FIELDS.filter((f) => f !== 'table')),
+  });
   const grouped = out.slides[0]!.slide.objects.filter(
     (o): o is ShapeObject => o.type === 'shape' && o.stroke !== undefined && o.geom !== undefined,
   );

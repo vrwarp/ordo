@@ -1,5 +1,5 @@
-import type { Slide, TextObject } from '@ordo/domain';
-import { type DeckScene, emitSlides, parseDeck } from '@ordo/pptx-scene';
+import type { ShapeObject, Slide, TextObject } from '@ordo/domain';
+import { type DeckScene, emitSlides, M9_FIELDS, parseDeck } from '@ordo/pptx-scene';
 import {
   body,
   buildDeck,
@@ -181,8 +181,10 @@ describe('compatRules', () => {
       }),
     });
     expect([...compatRules(scene)].map(([i, h]) => [i, [...h]])).toEqual([[0, ['cellRows']]]);
+    // The M6 group (the table object off: `m9Writes` without 'table'), a text box per cell.
+    const group = new Set(M9_FIELDS.filter((f) => f !== 'table'));
     const cell = (lo: boolean) =>
-      texts(emitSlides(scene, lo ? { loCompat: true } : {}).slides[0]!.slide).find(
+      texts(emitSlides(scene, { ...(lo ? { loCompat: true } : {}), m9Writes: group }).slides[0]!.slide).find(
         (t) => t.origin?.role === 'cell',
       )!;
     // Two lines of 14 pt: ordo's rows at the face's 1.2207 × the size; LibreOffice's at its 600 dpi metrics
@@ -191,6 +193,18 @@ describe('compatRules', () => {
     expect(cell(true).box.h).toBeCloseTo(((2 * 601 + 255) * 360) / 6350, 6);
     expect(cell(true).style.fontSizePx).toBeCloseTo(28.08, 6);
     expect(cell(true).style.insets!.t).toBeLessThan(cell(false).style.insets!.t);
+    // The table object (M9 tables-conv): LibreOffice's row, fixed, under the rule; the deck's own row, which
+    // the drawer grows, without it.
+    const tableOf = (lo: boolean) =>
+      (
+        emitSlides(scene, lo ? { loCompat: true } : {}).slides[0]!.slide.objects.find(
+          (o) => o.type === 'shape' && o.table,
+        ) as ShapeObject
+      ).table!;
+    expect(tableOf(true).rowRule).toBe('fixed');
+    expect(tableOf(true).rows[0]).toBeCloseTo(((2 * 601 + 255) * 360) / 6350, 6);
+    expect(tableOf(false).rowRule).toBeUndefined();
+    expect(tableOf(false).rows).toEqual([0]);
   });
 
   it('leaves a scene with nothing to change without rules', () => {
