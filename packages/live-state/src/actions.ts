@@ -22,7 +22,7 @@ export function actionToEvent(
   action: { id: ActionId; arg?: number | string },
   at: number,
   ctx: ActionContext = {},
-): LiveEvent | null {
+): Exclude<LiveEvent, { k: 'prerender.add' }> | null {
   switch (action.id) {
     case 'go':
       if (s.armed !== undefined) return { k: 'go', cueIndex: s.armed, at };

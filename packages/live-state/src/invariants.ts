@@ -1,4 +1,4 @@
-import type { LiveState } from '@ordo/domain';
+import { DRAW_OVERRIDE_MAX, type LiveState, PRERENDERED_MAX } from '@ordo/domain';
 
 /**
  * Structural invariants of a live state (design/25). Every window checks them after applying a change;
@@ -78,6 +78,17 @@ export function checkInvariants(s: LiveState): string[] {
     else if (s.messages.length > 50) v.push(`${s.messages.length} messages exceed the bound`);
     if (s.props?.countdownTimerId && !s.timers?.[s.props.countdownTimerId])
       v.push('countdown prop references an unknown timer');
+    // design/29 §1.7: what a service adds about its pictures is bounded and ends with it.
+    if (s.prerendered !== undefined) {
+      if (!Array.isArray(s.prerendered) || s.prerendered.length > PRERENDERED_MAX)
+        v.push('prerendered pictures exceed the bound');
+      else if (s.mode === 'idle' && s.prerendered.length) v.push('idle state has prerendered pictures');
+    }
+    if (s.drawOverride !== undefined) {
+      if (!Array.isArray(s.drawOverride) || s.drawOverride.length > DRAW_OVERRIDE_MAX)
+        v.push('draw overrides exceed the bound');
+      else if (s.mode === 'idle' && s.drawOverride.length) v.push('idle state has draw overrides');
+    }
   } catch (err) {
     v.push(`invariant check threw: ${(err as Error).message}`);
   }

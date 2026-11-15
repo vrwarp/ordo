@@ -6,7 +6,7 @@ columns. Identifiers are ULIDs. Every stored entity carries `id`, `createdAt`,
 `updatedAt`, and `rev` (monotonic per entity).
 
 Pre-rendered slides (the stand-in, slide files, the picture key and the live events for pictures) are designed in
-[design/29](29-prerender-and-limits.md).
+[design/29](29-prerender-and-limits.md); their fields are under "Pre-render" below.
 
 ## Entities
 
@@ -517,6 +517,12 @@ are missing on the hub) and `picture` (W33, one a presentation: slides without a
 `PRERENDER_ON`); a slide's `cut` lines are listed as they are. Without a file index (the operator PC resolving
 from its cache) the slides' shape files, heads and pages are listed by name (bytes 0), for the offline download
 and the direct link to fetch.
+
+**Live state** (`live.ts`, `packages/live-state`): `state.prerendered` (pictures the go-live bake made during the
+service, from the hub's `prerender.add`, newest last, at most 4,096) and `state.drawOverride` (slides set to Live
+that draw from their picture for this service, from the operator's `prerender.use`, at most 1,000), both cleared at
+End service; `resolved` stays as it went live. `LiveCommand` leaves `prerender.add` out (design/13 "Pre-render
+messages").
 <!-- /r2b:prerender -->
 
 ## Live state

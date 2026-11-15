@@ -57,8 +57,11 @@ export interface FallbackPort {
 }
 
 export type Timer = unknown;
-/** A live event the operator may apply locally (everything except the hub-resolved goLive). */
-export type LocalEvent = Exclude<LiveEvent, { k: 'goLive' }>;
+/**
+ * A live event the operator may apply locally (everything except the hub-resolved goLive and the hub-only
+ * `prerender.add`, design/29 §1.11).
+ */
+export type LocalEvent = Exclude<LiveEvent, { k: 'goLive' | 'prerender.add' }>;
 
 export type LiveCoreDeps = {
   sendHub(m: HubOut): boolean;
