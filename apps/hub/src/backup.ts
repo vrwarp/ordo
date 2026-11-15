@@ -344,7 +344,10 @@ export function resetLiveCopies(dataDir: string, print: (s: string) => void = ()
   try {
     const live = new Database(file, { fileMustExist: true });
     try {
-      const n = live.prepare(`DELETE FROM live_kv WHERE key IN ('context', 'bundles')`).run().changes;
+      // 'bundles' is the single row of copies older versions kept; each copy is its own 'bundle:<id>' row now.
+      const n = live
+        .prepare(`DELETE FROM live_kv WHERE key IN ('context', 'bundles') OR key LIKE 'bundle:%'`)
+        .run().changes;
       if (n) print('cleared the live process copies of the old library in live.db');
     } finally {
       live.close();

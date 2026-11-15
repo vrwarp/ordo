@@ -214,6 +214,38 @@ export type ServerMessage =
   | (z.infer<typeof RtcSignal> & { from: string })
   | (z.infer<typeof PreviewMsg> & { from: string });
 
+// ---- going live prepared beside the running service (design/29 §2.3 M8) ----
+/** The route the operator calls before goLive (operate role; the live process answers it). */
+export const LIVE_PREPARE_PATH = '/live/prepare';
+/** How long POST /live/prepare holds its answer for the prepare to end or its progress to move. */
+export const LIVE_PREPARE_WAIT_MS = 400;
+/**
+ * POST /live/prepare: get a playlist ready to go live beside the running service. `saved`: go live from the
+ * hub's saved copy (W41's button). `seen`: the progress the caller last saw (the answer waits until it moves,
+ * or until the prepare ends; without it, until the prepare ends), at most LIVE_PREPARE_WAIT_MS.
+ */
+export const LivePrepareReq = z
+  .object({
+    playlistId: Id,
+    saved: z.boolean().optional(),
+    seen: z.number().int().min(0).max(100).optional(),
+  })
+  .strict();
+export type LivePrepareReq = z.infer<typeof LivePrepareReq>;
+/** The prepare's progress: once `ready` (or `failed`), the operator sends goLive, which applies at once. */
+export type LivePrepareRes = {
+  playlistId: string;
+  state: 'preparing' | 'ready' | 'failed';
+  /** 0-90 while the copy arrives, 90 while it is checked, 100 when done. */
+  pct: number;
+  /** Why it failed (the goLive's refusal). */
+  reason?: string;
+  /** When the hub's saved copy of the playlist was taken (ms since the epoch, hub clock), if it has one. */
+  savedAt?: number;
+  /** The prepared copy's size in bytes. */
+  bytes?: number;
+};
+
 // ---- fallback bus (operator <-> outputs via postMessage) ----
 /**
  * `hold`: the operator PC started this service itself while the hub was unreachable (design/17 "Going live

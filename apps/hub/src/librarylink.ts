@@ -5,7 +5,11 @@
  *   library comes up and again after a settings, font or media change. It answers output tokens, the
  *   output config, the audio master and message presets.
  * - A **goLive bundle** (the playlist, its stored presentations, the media they reference, fonts, looks) is
- *   fetched when the operator goes live. The last few are kept.
+ *   fetched when the operator goes live, beside the running service (design/29 §2.3 M8): FETCH_TIMEOUT_MS to
+ *   the response headers, then the body for as long as it keeps arriving (no bytes for PROGRESS_TIMEOUT_MS
+ *   ends it) under BUNDLE_CEILING_MS. It is kept as the JSON bytes the library sent (never parsed on this
+ *   loop: golive-worker.ts checks it); the last BUNDLES_KEEP are kept, one live_kv row each (`bundle:<id>`,
+ *   its saved_at the time the copy was taken), written after the goLive applied.
  *
  * Both are persisted in live.db, so a live-process restart while the library process is down still has
  * them: a library outage does not block a reconnect, a GO, or a goLive of a playlist that was fetched
@@ -13,26 +17,36 @@
  *
  * goLive and the library's health (design/25, review 2026-11-04 items 12 and 13):
  * - library merely restarting (`starting`/`down`): wait up to UP_WAIT_MS for it before falling back;
- * - library up but silent (stalled) past FETCH_TIMEOUT_MS, or down: a cached copy is used and the goLive
- *   carries a `degraded` entry naming the copy's time, so the operator sees it is not the current playlist;
+ * - library up but silent (stalled) past FETCH_TIMEOUT_MS or PROGRESS_TIMEOUT_MS, past the ceiling, or down:
+ *   a cached copy is used and the goLive carries a `degraded` entry naming the copy's time, so the operator
+ *   sees it is not the current playlist (the operator may also choose the saved copy after 5 s, W41);
  * - no cached copy: refused with a reason that says to try again (never "playlist not found").
  */
 import {
   DEFAULT_SURFACES,
-  type FileRef,
   type Font,
-  type GeneralSettings,
-  type Look,
+  GOLIVE_MAX_BYTES,
   type Media,
   type Output,
+  resolvedSizeRefusal,
 } from '@ordo/domain';
 import type { OutputConfigRes, Settings } from '@ordo/protocol';
 import type { Logger } from 'pino';
 import type { DB } from './db.ts';
+import { bundleInputs, type GoLiveBundle } from './golive-worker.ts';
 import { HEADER_INTERNAL } from './http.ts';
 import type { ChildState } from './ipc.ts';
 import type { Change } from './library.ts';
-import { type GoLiveInputs, LiveRejection, type LiveSettings, type LiveSource } from './live.ts';
+import {
+  type BundleOptions,
+  type GoLiveInputs,
+  LiveRejection,
+  type LiveSettings,
+  type LiveSource,
+  type RawBundle,
+} from './live.ts';
+
+export type { GoLiveBundle };
 
 export type LiveContext = {
   settings: Settings;
@@ -42,25 +56,71 @@ export type LiveContext = {
   /** The library sequence the copy reflects (absent from copies saved by older versions). */
   seq?: number;
 };
-export type GoLiveBundle = {
-  playlist: unknown;
-  presentations: Record<string, unknown>;
-  media: Record<string, Media>;
-  /** The geometry files the presentations' shapes name (`ShapeGeom.ref`); absent in a copy saved before them. */
-  files?: Record<string, FileRef>;
-  fonts: Font[];
-  looks: Look[];
-  general: GeneralSettings;
-  takenAt: number;
-};
 
+/** The library has this long to answer a request with its headers (the context's body too). */
 export const FETCH_TIMEOUT_MS = 1500;
+/** A goLive bundle's body that sends no bytes for this long is given up (design/29 M8). */
+export const PROGRESS_TIMEOUT_MS = 1500;
+/** However long it keeps sending, a goLive bundle is given up after this (design/29 M8). */
+export const BUNDLE_CEILING_MS = 30_000;
+/** A bundle larger than this is never read whole: its service would be refused at goLive (W58). */
+export const BUNDLE_MAX_BYTES = 2 * GOLIVE_MAX_BYTES;
 /** How long a goLive waits for a library that is restarting before it falls back to the cached copy. */
 export const UP_WAIT_MS = 1500;
 const BUNDLES_KEEP = 8;
+/** live_kv key of a cached bundle. */
+const BUNDLE_KEY = 'bundle:';
+/** The single row of every cached bundle that versions before design/29 M8 wrote; read once and replaced. */
+const LEGACY_BUNDLES_KEY = 'bundles';
 
 /** Why the last prepare() of a playlist did not get a fresh copy. */
 type Fallback = 'unanswered' | 'down';
+
+/** A cached bundle: the JSON bytes the library sent (shared with the check's worker), when it was taken. */
+type StoredBundle = { bytes: Uint8Array; takenAt: number; saved: boolean };
+
+/** Fetch timings (tests shorten them). */
+export type FetchTiming = { headerMs: number; progressMs: number; ceilingMs: number };
+
+/** Bytes in a SharedArrayBuffer, so the check's worker reads them without a copy on the live loop. */
+function shared(bytes: Uint8Array): Uint8Array {
+  if (bytes.buffer instanceof SharedArrayBuffer) return bytes;
+  const out = new Uint8Array(new SharedArrayBuffer(bytes.byteLength));
+  out.set(bytes);
+  return out;
+}
+
+/** Collects a body's chunks into shared memory as they arrive (in place when its length is announced). */
+class SharedSink {
+  length = 0;
+  private buf?: Uint8Array;
+  private chunks: Uint8Array[] = [];
+  constructor(total: number | undefined) {
+    if (total && total > 0) this.buf = new Uint8Array(new SharedArrayBuffer(total));
+  }
+  push(c: Uint8Array): void {
+    if (this.buf && this.length + c.byteLength <= this.buf.byteLength) this.buf.set(c, this.length);
+    else {
+      // More than announced: keep the rest as chunks and join them at the end.
+      if (this.buf) {
+        this.chunks.push(this.buf.subarray(0, this.length));
+        this.buf = undefined;
+      }
+      this.chunks.push(c);
+    }
+    this.length += c.byteLength;
+  }
+  bytes(): Uint8Array {
+    if (this.buf) return this.buf.subarray(0, this.length);
+    const out = new Uint8Array(new SharedArrayBuffer(this.length));
+    let at = 0;
+    for (const c of this.chunks) {
+      out.set(c, at);
+      at += c.byteLength;
+    }
+    return out;
+  }
+}
 
 /**
  * The settings fields that name a media item the outputs' config depends on (design/28 §3.4): the logo and
@@ -125,7 +185,7 @@ export class LibraryLink implements LiveSource {
   private url?: string;
   state: ChildState = 'starting';
   context?: LiveContext;
-  private bundles = new Map<string, GoLiveBundle>();
+  private bundles = new Map<string, StoredBundle>();
   /** Playlists whose last prepare() fell back (absent: the copy is fresh). */
   private fallbacks = new Map<string, Fallback>();
   private upWaiters = new Set<() => void>();
@@ -137,11 +197,24 @@ export class LibraryLink implements LiveSource {
   private log: Logger;
   private secret: string;
   private fetcher: typeof fetch;
-  constructor(db: DB, log: Logger, secret: string, fetcher: typeof fetch = globalThis.fetch) {
+  private timing: FetchTiming;
+  constructor(
+    db: DB,
+    log: Logger,
+    secret: string,
+    fetcher: typeof fetch = globalThis.fetch,
+    timing: Partial<FetchTiming> = {},
+  ) {
     this.db = db;
     this.log = log;
     this.secret = secret;
     this.fetcher = fetcher;
+    this.timing = {
+      headerMs: FETCH_TIMEOUT_MS,
+      progressMs: PROGRESS_TIMEOUT_MS,
+      ceilingMs: BUNDLE_CEILING_MS,
+      ...timing,
+    };
     this.load();
   }
 
@@ -242,8 +315,81 @@ export class LibraryLink implements LiveSource {
     }
   }
 
-  /** Fetch the playlist's goLive bundle; on failure the cached copy (if any) stands. Never throws. */
-  async prepare(playlistId: string): Promise<void> {
+  /**
+   * The goLive bundle's bytes, fetched by progress (design/29 M8): FETCH_TIMEOUT_MS to the headers, then the body
+   * while bytes keep arriving (PROGRESS_TIMEOUT_MS) under BUNDLE_CEILING_MS. Throws on any failure (the reason
+   * as the message); undefined when the library does not know the playlist. Aborted by `signal`.
+   */
+  private async fetchBundle(playlistId: string, opts: BundleOptions): Promise<Uint8Array | undefined> {
+    const base = this.url;
+    if (!base) throw new Error('the library is not running');
+    const path = `/internal/golive/${encodeURIComponent(playlistId)}`;
+    const ctrl = new AbortController();
+    let why = '';
+    const abort = (reason: string) => {
+      if (ctrl.signal.aborted) return;
+      why = reason;
+      ctrl.abort();
+    };
+    const onCancel = () => abort('cancelled');
+    opts.signal?.addEventListener('abort', onCancel);
+    if (opts.signal?.aborted) onCancel();
+    const { headerMs, progressMs, ceilingMs } = this.timing;
+    let quiet = setTimeout(() => abort(`no answer within ${headerMs / 1000} s`), headerMs);
+    const ceiling = setTimeout(() => abort(`not complete within ${ceilingMs / 1000} s`), ceilingMs);
+    try {
+      const res = await this.fetcher(`${base}${path}`, {
+        headers: { [HEADER_INTERNAL]: this.secret },
+        signal: ctrl.signal,
+      });
+      clearTimeout(quiet);
+      if (res.status === 404) {
+        await res.body?.cancel().catch(() => undefined);
+        return undefined;
+      }
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const announced = Number(res.headers.get('content-length')) || undefined;
+      if (announced && announced > BUNDLE_MAX_BYTES) throw new BundleTooLarge(announced);
+      const arm = () => {
+        clearTimeout(quiet);
+        quiet = setTimeout(() => abort(`no data for ${progressMs / 1000} s`), progressMs);
+      };
+      arm();
+      const sink = new SharedSink(announced);
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        sink.push(value);
+        if (sink.length > BUNDLE_MAX_BYTES) {
+          ctrl.abort();
+          throw new BundleTooLarge(sink.length);
+        }
+        arm();
+        opts.onProgress?.(sink.length, announced);
+      }
+      this.lastError = undefined;
+      return sink.bytes();
+    } catch (e) {
+      if (e instanceof BundleTooLarge) throw e;
+      const message = why || (e as Error).message;
+      this.lastError = `${path}: ${message}`;
+      throw new Error(message);
+    } finally {
+      clearTimeout(quiet);
+      clearTimeout(ceiling);
+      opts.signal?.removeEventListener('abort', onCancel);
+    }
+  }
+
+  /**
+   * The playlist's goLive bundle (LiveSource.bundle, design/29 M8): a fresh copy from the library, or the
+   * cached copy with the reason the goLive carries when the library is down or does not answer in time (or
+   * `saved`: the operator chose the saved copy). Undefined: the library does not know the playlist. Throws
+   * LiveRejection when there is no copy to go live from, or a bundle past BUNDLE_MAX_BYTES (W58).
+   */
+  async bundle(playlistId: string, opts: BundleOptions = {}): Promise<RawBundle | undefined> {
+    if (opts.saved && this.bundles.has(playlistId)) return this.cached(playlistId, 'unanswered');
     this.fallbacks.delete(playlistId);
     // A library that is merely restarting is back within about a second: wait for it rather than go live
     // from an old copy (or refuse) needlessly.
@@ -252,55 +398,109 @@ export class LibraryLink implements LiveSource {
       this.fallbacks.set(playlistId, 'down');
       if (this.bundles.has(playlistId))
         this.log.warn({ playlistId }, 'library process is down; going live from the cached copy');
-      return;
+      return this.cached(playlistId, 'down');
     }
+    let bytes: Uint8Array | undefined;
     try {
-      const b = await this.get<Omit<GoLiveBundle, 'takenAt'>>(
-        `/internal/golive/${encodeURIComponent(playlistId)}`,
-      );
-      if (!b) {
-        this.bundles.delete(playlistId);
-        return;
-      }
-      this.bundles.delete(playlistId);
-      this.bundles.set(playlistId, { ...b, takenAt: Date.now() });
-      while (this.bundles.size > BUNDLES_KEEP) this.bundles.delete(this.bundles.keys().next().value!);
-      this.save('bundles', [...this.bundles.entries()]);
+      bytes = await this.fetchBundle(playlistId, opts);
     } catch (e) {
+      if (e instanceof BundleTooLarge) throw new LiveRejection(resolvedSizeRefusal(e.bytes) ?? e.message);
+      if (opts.signal?.aborted) throw e;
       this.fallbacks.set(playlistId, 'unanswered');
       this.log.warn(
         { playlistId, err: (e as Error).message, cached: this.bundles.has(playlistId) },
         'goLive fetch from the library failed; using the cached copy if there is one',
       );
+      return this.cached(playlistId, 'unanswered');
+    }
+    if (!bytes) {
+      this.forget(playlistId);
+      return undefined;
+    }
+    const takenAt = Date.now();
+    this.bundles.delete(playlistId);
+    this.bundles.set(playlistId, { bytes, takenAt, saved: false });
+    while (this.bundles.size > BUNDLES_KEEP) this.forget(this.bundles.keys().next().value!);
+    return { bytes, takenAt };
+  }
+
+  /** The cached copy of a playlist with the reason a goLive from it carries; LiveRejection without one. */
+  private cached(playlistId: string, why: Fallback): RawBundle {
+    const b = this.bundles.get(playlistId);
+    if (!b) {
+      if (why === 'unanswered')
+        throw new LiveRejection('The library did not answer; try Go live again in a moment');
+      throw new LiveRejection(
+        this.state === 'failed'
+          ? 'The library has stopped and this playlist was never live before; restart the hub to go live with it'
+          : 'The library is restarting; try Go live again in a moment',
+      );
+    }
+    return { bytes: b.bytes, takenAt: b.takenAt, cachedCopy: cachedCopyReason(b.takenAt, why) };
+  }
+
+  /** When the cached copy of a playlist was taken (the operator's "Go live from the copy saved ..."). */
+  savedAt(playlistId: string): number | undefined {
+    return this.bundles.get(playlistId)?.takenAt;
+  }
+
+  /**
+   * A goLive of this playlist applied (design/29 A18): its fresh copy becomes its own live_kv row, written
+   * after the goLive and its broadcast, never on the goLive's path.
+   */
+  applied(playlistId: string): void {
+    const b = this.bundles.get(playlistId);
+    if (!b || b.saved) return;
+    b.saved = true;
+    setImmediate(() => {
+      if (this.bundles.get(playlistId) !== b) return;
+      try {
+        this.db
+          .prepare(`INSERT OR REPLACE INTO live_kv (key, json, saved_at) VALUES (?, ?, ?)`)
+          .run(
+            `${BUNDLE_KEY}${playlistId}`,
+            Buffer.from(b.bytes.buffer, b.bytes.byteOffset, b.bytes.byteLength),
+            b.takenAt,
+          );
+      } catch (e) {
+        b.saved = false;
+        this.log.warn({ playlistId, err: (e as Error).message }, 'could not persist the goLive copy');
+      }
+    });
+  }
+
+  /** Drop a cached bundle and its row. */
+  private forget(playlistId: string): void {
+    if (!this.bundles.delete(playlistId)) return;
+    try {
+      this.db.prepare(`DELETE FROM live_kv WHERE key = ?`).run(`${BUNDLE_KEY}${playlistId}`);
+    } catch (e) {
+      this.log.warn({ playlistId, err: (e as Error).message }, 'could not remove a cached goLive copy');
     }
   }
 
+  /** Fetch the playlist's goLive bundle into the cache; on failure the cached copy (if any) stands. Never throws. */
+  async prepare(playlistId: string): Promise<void> {
+    await this.bundle(playlistId).catch(() => undefined);
+  }
+
+  /**
+   * The cached bundle as goLive inputs, parsed here (tests and diagnostics; a goLive goes through `bundle()`
+   * and the check's worker).
+   */
   goLiveInputs(playlistId: string): GoLiveInputs | undefined {
     const b = this.bundles.get(playlistId);
-    // Without prepare() (never on the goLive path) a library that is down still means a cached copy.
+    // Without prepare() a library that is down still means a cached copy.
     const fallback = this.fallbacks.get(playlistId) ?? (this.up ? undefined : 'down');
     if (!b) {
-      if (fallback === 'unanswered')
-        throw new LiveRejection('The library did not answer; try Go live again in a moment');
-      if (fallback === 'down')
-        throw new LiveRejection(
-          this.state === 'failed'
-            ? 'The library has stopped and this playlist was never live before; restart the hub to go live with it'
-            : 'The library is restarting; try Go live again in a moment',
-        );
+      if (fallback) this.cached(playlistId, fallback);
       return undefined;
     }
-    return {
-      playlist: b.playlist,
-      presentation: (id) => b.presentations[id],
-      media: (id) => b.media[id],
-      file: (hash) => (b.files && Object.hasOwn(b.files, hash) ? b.files[hash] : undefined),
-      fonts: () => b.fonts,
-      looks: b.looks,
-      general: b.general,
+    const parsed = JSON.parse(new TextDecoder().decode(b.bytes)) as Omit<GoLiveBundle, 'takenAt'>;
+    return bundleInputs(parsed, {
       takenAt: b.takenAt,
       ...(fallback ? { cachedCopy: cachedCopyReason(b.takenAt, fallback) } : {}),
-    };
+    });
   }
 
   settings(): LiveSettings {
@@ -353,10 +553,55 @@ export class LibraryLink implements LiveSource {
     const ctx = read('context') as LiveContext | undefined;
     if (ctx && typeof ctx === 'object' && ctx.settings && Array.isArray(ctx.settings.outputs))
       this.context = ctx;
-    const b = read('bundles');
-    if (Array.isArray(b))
-      for (const e of b)
-        if (Array.isArray(e) && typeof e[0] === 'string' && e[1] && typeof e[1] === 'object')
-          this.bundles.set(e[0], e[1] as GoLiveBundle);
+    // The single row older versions kept (every copy re-serialised on each goLive): one row per copy now.
+    const legacy = read(LEGACY_BUNDLES_KEY);
+    if (Array.isArray(legacy)) {
+      const encoder = new TextEncoder();
+      for (const e of legacy)
+        if (Array.isArray(e) && typeof e[0] === 'string' && e[1] && typeof e[1] === 'object') {
+          const { takenAt, ...rest } = e[1] as GoLiveBundle;
+          const at = typeof takenAt === 'number' && Number.isFinite(takenAt) ? takenAt : 0;
+          this.bundles.set(e[0], {
+            bytes: shared(encoder.encode(JSON.stringify(rest))),
+            takenAt: at,
+            saved: false,
+          });
+        }
+      for (const id of [...this.bundles.keys()]) this.applied(id);
+      try {
+        this.db.prepare(`DELETE FROM live_kv WHERE key = ?`).run(LEGACY_BUNDLES_KEY);
+      } catch {
+        /* read again next start */
+      }
+    }
+    try {
+      const rows = this.db
+        .prepare(`SELECT key, json, saved_at FROM live_kv WHERE key LIKE 'bundle:%' ORDER BY saved_at`)
+        .all() as { key: string; json: unknown; saved_at: number }[];
+      for (const r of rows) {
+        const id = r.key.slice(BUNDLE_KEY.length);
+        const raw = r.json;
+        const bytes =
+          raw instanceof Uint8Array
+            ? raw
+            : typeof raw === 'string'
+              ? new TextEncoder().encode(raw)
+              : undefined;
+        if (!id || !bytes || this.bundles.has(id)) continue;
+        this.bundles.set(id, { bytes: shared(bytes), takenAt: r.saved_at, saved: true });
+      }
+    } catch {
+      /* no copies */
+    }
+    while (this.bundles.size > BUNDLES_KEEP) this.forget(this.bundles.keys().next().value!);
+  }
+}
+
+/** A goLive bundle past BUNDLE_MAX_BYTES: never read whole. */
+class BundleTooLarge extends Error {
+  readonly bytes: number;
+  constructor(bytes: number) {
+    super(`the playlist is too large to go live (${bytes} bytes)`);
+    this.bytes = bytes;
   }
 }

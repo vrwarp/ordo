@@ -24,6 +24,7 @@ import {
 } from '@ordo/live-state';
 import type { Logger } from 'pino';
 import type { DB } from './db.ts';
+import { GoLiveWorker, type PrepareOutput } from './golive-worker.ts';
 import type { Library } from './library.ts';
 
 export class LiveRejection extends Error {}
@@ -48,11 +49,66 @@ export type LiveSettings = { outputs: Output[]; surfaces: Pick<SurfaceSettings, 
  * nothing that was fetched before it.
  */
 export interface LiveSource {
-  /** Awaited before a goLive is resolved: a remote source refreshes its copy here. Never throws. */
-  prepare?(playlistId: string): Promise<void>;
+  /**
+   * A remote source (the live process): the playlist's goLive bundle as the JSON bytes the library sent,
+   * fetched beside the running service (design/29 §2.3 M8), or a cached copy with the reason the goLive
+   * carries. Undefined: the playlist does not exist. Throws LiveRejection when there is nothing to go live
+   * from. With it, a goLive is checked in golive-worker.ts and enters the queue only once prepared.
+   */
+  bundle?(playlistId: string, opts: BundleOptions): Promise<RawBundle | undefined>;
+  /** A goLive of this playlist was applied: the source may persist its copy now. */
+  applied?(playlistId: string): void;
+  /** When the source's saved copy of a playlist was taken (W41's "Go live from the copy saved ..."). */
+  savedAt?(playlistId: string): number | undefined;
+  /** The in-process source: the inputs, resolved on the loop (`resolve`). */
   goLiveInputs(playlistId: string): GoLiveInputs | undefined;
   settings(): LiveSettings;
 }
+
+/** A goLive bundle's JSON bytes (without `takenAt`), when the copy was taken, and why it is a cached copy. */
+export type RawBundle = { bytes: Uint8Array; takenAt: number; cachedCopy?: string };
+export type BundleOptions = {
+  /** Bytes received so far, and the announced total. */
+  onProgress?: (received: number, total: number | undefined) => void;
+  /** Go live from the saved copy without asking the library (the operator chose it, W41). */
+  saved?: boolean;
+  /** Abandons the fetch (the operator chose the saved copy meanwhile). */
+  signal?: AbortSignal;
+};
+
+/** How a prepare stands (POST /live/prepare, design/29 M8; LivePrepareRes in @ordo/protocol). */
+export type PrepareState = {
+  playlistId: string;
+  state: 'preparing' | 'ready' | 'failed';
+  /** 0-90 while the bundle arrives (by its announced length), 90 while it is checked, 100 when done. */
+  pct: number;
+  /** Why it failed: the goLive's refusal. */
+  reason?: string;
+  /** When the hub's saved copy of the playlist was taken, if it has one. */
+  savedAt?: number;
+  /** The prepared copy's size (UTF-8 JSON bytes). */
+  bytes?: number;
+};
+
+type Prepared = { ok: true; buffer: Uint8Array; resolvedId: string } | { ok: false; reason: string };
+type Prep = {
+  playlistId: string;
+  saved: boolean;
+  ctrl: AbortController;
+  state: PrepareState;
+  promise: Promise<Prepared>;
+  result?: Prepared;
+  doneAt?: number;
+  emittedAt: number;
+  waiters: Set<() => void>;
+  expiry?: NodeJS.Timeout;
+};
+
+/** A prepared goLive not applied within this is dropped; a goLive after it prepares again (design/29 M8). */
+export const PREPARED_TTL_MS = 10_000;
+/** Progress is reported at most this often. */
+const PROGRESS_EVERY_MS = 100;
+const CANCELLED = 'cancelled';
 
 /** The in-process source: reads straight from the Library. */
 export function librarySource(lib: Library): LiveSource {
@@ -95,8 +151,17 @@ export class LiveService {
   private advanceTimer?: NodeJS.Timeout;
   private advanceKey = '';
   private queue: Promise<unknown> = Promise.resolve();
+  /** goLives in arrival order among themselves, each entering `queue` once prepared (design/29 M8). */
+  private goLiveChain: Promise<unknown> = Promise.resolve();
+  private preps = new Map<string, Prep>();
+  private worker?: GoLiveWorker;
   /** Warnings from the last restore (tests and diagnostics). */
   restoreWarnings: string[] = [];
+  /**
+   * The SHA-256 of the copy the last prepared goLive applied (design/29 M2: live-by-ref names the running
+   * service by it). Undefined after a goLive resolved on the loop (the in-process source).
+   */
+  resolvedId?: string;
 
   private db: DB;
   private source: LiveSource;
@@ -135,6 +200,11 @@ export class LiveService {
   stop(): void {
     clearInterval(this.snapshotTimer);
     clearTimeout(this.advanceTimer);
+    for (const p of this.preps.values()) {
+      clearTimeout(p.expiry);
+      p.ctrl.abort();
+    }
+    void this.worker?.close();
     this.snapshot(true);
   }
 
@@ -283,9 +353,11 @@ export class LiveService {
   }
 
   /**
-   * Resolve a playlist into the frozen copy a goLive carries. Every presentation is validated against the
-   * schema; what fails is quarantined (design/25) and listed in `degraded`, and the service still goes
-   * live. Missing presentations and media that is not ready still refuse the goLive. Throws LiveRejection.
+   * Resolve a playlist into the frozen copy a goLive carries, on this loop: the in-process source only (a
+   * remote source's goLive is prepared in golive-worker.ts, `prepare`). Every presentation is validated
+   * against the schema; what fails is quarantined (design/25) and listed in `degraded`, and the service still
+   * goes live. Missing presentations, media that is not ready and a service past GOLIVE_MAX_BYTES (W58) still
+   * refuse the goLive. Throws LiveRejection.
    */
   resolve(playlistId: string): ResolvedPlaylist {
     try {
@@ -366,19 +438,225 @@ export class LiveService {
   }
 
   /**
-   * Submit in arrival order, letting a goLive first refresh the source's copy of the library (the live
-   * process fetches it from the library process). Commands behind a goLive wait for it, so a `next` sent
-   * right after GO live applies to the new playlist.
+   * Submit in arrival order. With a remote source a goLive enters the queue only once it is prepared
+   * (design/29 §2.3 M8): fetched and checked beside the running service, so GO, Next and Clear sent meanwhile
+   * apply to the running service at once; the goLive then applies with one parse of the prepared copy.
+   * goLives keep their order among themselves. The operator sends goLive once POST /live/prepare reports it
+   * ready, so a `next` it sends after Go live still applies to the new playlist.
    */
   submitQueued(cmd: LiveCommand | LiveEvent, origin: Origin): Promise<number> {
-    const run = async () => {
-      if (cmd.k === 'goLive' && 'playlistId' in cmd && this.source.prepare)
-        await this.source.prepare(cmd.playlistId);
-      return this.submit(cmd, origin);
-    };
+    if (
+      cmd.k === 'goLive' &&
+      'playlistId' in cmd &&
+      !('resolved' in cmd) &&
+      this.source.bundle &&
+      (origin.role === 'operate' || origin.role === 'system')
+    ) {
+      const playlistId = cmd.playlistId;
+      const prepared = this.preparedFor(playlistId);
+      const p = this.goLiveChain
+        .then(() => prepared)
+        .then((r) => this.enqueue(() => this.applyPrepared(playlistId, r, origin)));
+      this.goLiveChain = p.catch(() => undefined);
+      return p;
+    }
+    return this.enqueue(() => this.submit(cmd, origin));
+  }
+
+  private enqueue<T>(run: () => T): Promise<T> {
     const p = this.queue.then(run, run);
     this.queue = p.catch(() => undefined);
     return p;
+  }
+
+  /** Apply a prepared goLive: one parse of the copy the worker serialised (design/29 M8, D13). */
+  private applyPrepared(playlistId: string, r: Prepared, origin: Origin): number {
+    if (!r.ok) throw new LiveRejection(r.reason);
+    const text = Buffer.from(r.buffer.buffer, r.buffer.byteOffset, r.buffer.byteLength).toString('utf8');
+    const resolved = JSON.parse(text) as ResolvedPlaylist;
+    const seq = this.apply({ k: 'goLive', resolved }, origin.id);
+    this.resolvedId = r.resolvedId;
+    this.source.applied?.(playlistId);
+    return seq;
+  }
+
+  // ---- prepare (design/29 §2.3 M8) ----
+
+  /**
+   * Start preparing a playlist's goLive (POST /live/prepare), or report the prepare under way. `saved`: go
+   * live from the hub's saved copy instead of waiting for the library (W41's button); a fresh copy already
+   * prepared is kept. Without a remote source there is nothing to prepare: ready at once.
+   */
+  prepare(playlistId: string, opts: { saved?: boolean } = {}): PrepareState {
+    if (!this.source.bundle) return { playlistId, state: 'ready', pct: 100 };
+    const cur = this.preps.get(playlistId);
+    const fresh = cur?.result && this.now() - (cur.doneAt ?? 0) <= PREPARED_TTL_MS;
+    if (opts.saved) {
+      if (cur && fresh && cur.result?.ok) return cur.state;
+      if (cur && !cur.result && cur.saved) return cur.state;
+      if (cur && !cur.result) cur.ctrl.abort();
+      return this.startPrepare(playlistId, true).state;
+    }
+    if (cur && !cur.result) return cur.state;
+    return this.startPrepare(playlistId, false).state;
+  }
+
+  /**
+   * `prepare`, then wait (up to `waitMs`) until it is done or its progress differs from `seen` (the operator
+   * long-polls POST /live/prepare; without `seen` it waits for the prepare to end).
+   */
+  async prepareWait(
+    playlistId: string,
+    opts: { saved?: boolean; seen?: number; waitMs: number },
+  ): Promise<PrepareState> {
+    const first = this.prepare(playlistId, opts);
+    const prep = this.preps.get(playlistId);
+    if (!prep || first.state !== 'preparing') return first;
+    const changed = () => {
+      const s = this.preps.get(playlistId)?.state;
+      return s?.state !== 'preparing' || (opts.seen !== undefined && s.pct !== opts.seen);
+    };
+    if (!changed()) {
+      await new Promise<void>((resolve) => {
+        // Watches the prepare and any that replaces it meanwhile (the saved copy chosen).
+        const watched = new Set<Prep>();
+        const check = () => {
+          if (changed()) finish();
+        };
+        const watch = (p: Prep) => {
+          if (p.playlistId !== playlistId) return;
+          p.waiters.add(check);
+          watched.add(p);
+          check();
+        };
+        const finish = () => {
+          clearTimeout(t);
+          for (const p of watched) p.waiters.delete(check);
+          this.onReplace.delete(watch);
+          resolve();
+        };
+        const t = setTimeout(finish, opts.waitMs);
+        this.onReplace.add(watch);
+        watch(prep);
+      });
+    }
+    return this.preps.get(playlistId)?.state ?? first;
+  }
+
+  private onReplace = new Set<(p: Prep) => void>();
+
+  private startPrepare(playlistId: string, saved: boolean): Prep {
+    const prev = this.preps.get(playlistId);
+    if (prev) clearTimeout(prev.expiry);
+    const prep: Prep = {
+      playlistId,
+      saved,
+      ctrl: new AbortController(),
+      state: { playlistId, state: 'preparing', pct: 0, ...this.savedAtOf(playlistId) },
+      promise: Promise.resolve({ ok: false, reason: CANCELLED }),
+      emittedAt: 0,
+      waiters: new Set(),
+    };
+    this.preps.set(playlistId, prep);
+    for (const f of this.onReplace) f(prep);
+    prep.promise = this.runPrepare(prep).then((result) => {
+      prep.result = result;
+      prep.doneAt = this.now();
+      prep.state = result.ok
+        ? { ...prep.state, state: 'ready', pct: 100, bytes: result.buffer.byteLength }
+        : { ...prep.state, state: 'failed', pct: 100, reason: result.reason };
+      this.changed(prep, true);
+      if (this.preps.get(playlistId) === prep) {
+        prep.expiry = setTimeout(() => {
+          if (this.preps.get(playlistId) === prep) this.preps.delete(playlistId);
+        }, PREPARED_TTL_MS);
+        prep.expiry.unref();
+      }
+      return result;
+    });
+    return prep;
+  }
+
+  private savedAtOf(playlistId: string): { savedAt?: number } {
+    const at = this.source.savedAt?.(playlistId);
+    return at !== undefined ? { savedAt: at } : {};
+  }
+
+  private changed(prep: Prep, force = false): void {
+    const now = Date.now();
+    if (!force && now - prep.emittedAt < PROGRESS_EVERY_MS) return;
+    prep.emittedAt = now;
+    for (const w of [...prep.waiters]) w();
+  }
+
+  private async runPrepare(prep: Prep): Promise<Prepared> {
+    const { playlistId } = prep;
+    let bundle: RawBundle | undefined;
+    try {
+      bundle = await this.source.bundle!(playlistId, {
+        saved: prep.saved,
+        signal: prep.ctrl.signal,
+        onProgress: (received, total) => {
+          if (!total) return;
+          const pct = Math.min(90, Math.floor((received / total) * 90));
+          if (pct === prep.state.pct) return;
+          prep.state = { ...prep.state, pct };
+          this.changed(prep);
+        },
+      });
+    } catch (e) {
+      if (e instanceof LiveRejection) return { ok: false, reason: e.message };
+      if (prep.ctrl.signal.aborted) return { ok: false, reason: CANCELLED };
+      this.log.error({ playlistId, err: (e as Error).message }, 'goLive prepare failed');
+      return { ok: false, reason: `Could not get the playlist ready: ${(e as Error).message}` };
+    }
+    if (prep.ctrl.signal.aborted) return { ok: false, reason: CANCELLED };
+    if (!bundle) return { ok: false, reason: `Playlist ${playlistId} not found` };
+    prep.state = { ...prep.state, pct: 90, ...this.savedAtOf(playlistId) };
+    this.changed(prep, true);
+    let out: PrepareOutput;
+    try {
+      this.worker ??= new GoLiveWorker();
+      out = await this.worker.run({
+        playlistId,
+        bundle: bundle.bytes,
+        takenAt: bundle.takenAt,
+        ...(bundle.cachedCopy ? { cachedCopy: bundle.cachedCopy } : {}),
+      });
+      if (this.worker.inline)
+        this.log.warn('goLive check ran on the live loop: no worker thread could start');
+    } catch (e) {
+      this.log.error({ playlistId, err: (e as Error).message }, 'goLive check failed');
+      return { ok: false, reason: `Could not check the service: ${(e as Error).message}` };
+    }
+    for (const w of out.warnings) this.log.warn(w.detail ?? {}, w.message);
+    if (!out.ok) return { ok: false, reason: out.reason };
+    this.log.info(
+      { playlistId, bytes: out.buffer.byteLength, resolvedId: out.resolvedId.slice(0, 12), ...out.ms },
+      'goLive prepared',
+    );
+    return { ok: true, buffer: out.buffer, resolvedId: out.resolvedId };
+  }
+
+  /**
+   * What a goLive of `playlistId` applies: the prepare under way or a fresh one ready (used once), else a
+   * new prepare. A prepare replaced meanwhile (the saved copy chosen) is followed to its replacement.
+   */
+  private preparedFor(playlistId: string): Promise<Prepared> {
+    const cur = this.preps.get(playlistId);
+    const usable = cur && (!cur.result || this.now() - (cur.doneAt ?? 0) <= PREPARED_TTL_MS);
+    const prep = usable ? cur : this.startPrepare(playlistId, false);
+    const follow = (p: Prep): Promise<Prepared> =>
+      p.promise.then((r) => {
+        const next = this.preps.get(playlistId);
+        if (!r.ok && r.reason === CANCELLED && next && next !== p) return follow(next);
+        if (next === p) {
+          clearTimeout(p.expiry);
+          this.preps.delete(playlistId);
+        }
+        return r;
+      });
+    return follow(prep);
   }
 
   apply(event: LiveEvent, id?: string): number {

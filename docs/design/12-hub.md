@@ -82,9 +82,10 @@ host can talk to it.
 
 **Data between them**: the live process keeps its journal and snapshots in its own `live.db`. It reads
 the library only through `GET /internal/context` (all settings with tokens, fonts, logo) and `GET
-/internal/golive/<playlist>` (fetched when the operator goes live), and keeps the last copy of each in
-`live.db`, so a library outage blocks neither a reconnect nor a GO, and a goLive of a playlist fetched
-before still works. Library changes are applied in order: a batch touching the context (settings, fonts,
+/internal/golive/<playlist>` (fetched when the operator goes live, beside the running service: "Going live
+prepared beside the running service" below), and keeps the context and the last 8 goLive copies in
+`live.db` (one `live_kv` row per copy, `bundle:<playlist>`, written after its goLive applied), so a library
+outage blocks neither a reconnect nor a GO, and a goLive of a playlist fetched before still works. Library changes are applied in order: a batch touching the context (settings, fonts,
 and the media the settings name: the logo and the looks' holding images, `contextMediaIds`) first refreshes
 the copy (bounded by the 1.5 s fetch timeout), and only then is the delta broadcast, so an output that
 refetches its config on the delta gets the new look. Outputs and the stage receive ids only, for settings,
@@ -94,13 +95,31 @@ was set). A context refresh that is not part of a delta (the
 library came back; the first refresh after a live-process restart) sends outputs and the stage a
 settings-only delta so they refetch; they also refetch on every `welcome`.
 
-goLive against the library: a library that is merely restarting is waited for up to 1.5 s. If it stays
-down, or is up but does not answer within 1.5 s (stalled), a cached copy is used and the goLive carries a
+goLive against the library: a library that is merely restarting is waited for up to 1.5 s. The goLive copy
+then has 1.5 s to its response headers (`FETCH_TIMEOUT_MS`), after which its body may take as long as it
+keeps arriving: no bytes for 1.5 s (`PROGRESS_TIMEOUT_MS`) ends it, and so does a 30 s ceiling
+(`BUNDLE_CEILING_MS`); a copy over 64 MiB is not read (its service would be refused, W58). If the library
+stays down, or is up but does not answer in time (stalled), a cached copy is used and the goLive carries a
 `degraded` entry (cue -1) naming the copy's time ("Went live from the copy of this playlist saved 3 days
 ago …"), so the operator sees it is not the current playlist. Without a cached copy the goLive is
 refused: "The library did not answer; try Go live again in a moment" (stalled), "The library is
 restarting; try Go live again in a moment" (down), or, when the library has failed for good, a reason
 naming that. A playlist the library says does not exist is "not found".
+
+**Going live prepared beside the running service** (design/29 §2.3 M8): a goLive is prepared before it
+enters the live process's command queue, so GO, Next and Clear sent meanwhile apply to the running service
+at once (before, every command behind a goLive waited for its fetch, up to about 3 s). The operator first
+calls `POST /live/prepare` (design/13 "Prepare before goLive"), which starts the fetch above; the copy's
+bytes go, without a copy on the loop (shared memory), to a worker thread (`src/golive-worker.ts`, one,
+started on first use, gone after a minute idle; heap 1 GiB; a check past 60 s is abandoned and its worker
+terminated) that parses them, checks and quarantines every presentation (`quarantinePresentation` through
+`resolvePlaylist`, as the loop did), resolves, serialises the resolved copy once and hashes that buffer:
+its SHA-256 is the copy's `resolvedId` (design/29 M2). The operator sends goLive once the prepare reports
+`ready` (or `failed`: the goLive is then refused with its reason); the goLive applies at once with one
+`JSON.parse` of the prepared buffer. A goLive that arrives without a prepare (an older operator, the
+`/actions` bridge, a test) prepares itself the same way, outside the queue; goLives keep their order among
+themselves. A prepared copy not used within 10 s is dropped. The in-process source (`createHub`, `--single`)
+still resolves on its loop.
 Sessions live in ordo.db, which the live process opens directly (WAL readers never wait for the library;
 its sliding-expiry writes use a 50 ms busy timeout and are skipped when busy; it never checkpoints).
 Output tokens come from the context copy; a rotated or removed token closes that output's sockets.
@@ -154,6 +173,7 @@ the route accepts (design/28 §3.2); a capped session below it gets 403 `cap`.
 | `GET /live`                                                                                                            | operate, output          | full                                                        | Current live state (full)                                                                                                                                                                                                                                                                                       |
 | `GET /live/summary`                                                                                                    | edit, operate            | view (`liveLabel` left out below full)                      | What an edit-profile device needs: `{ seq, mode, playlistId?, playlistName?, liveLabel?, lockedPresentationIds }` (no tokens, no full state; answered by the live process)                                                                                                                                      |
 | `POST /live/events`                                                                                                    | operate                  | full                                                        | Submit live events over HTTP (used by surfaces' HTTP bridge and tests); WebSocket is the normal path                                                                                                                                                                                                            |
+| `POST /live/prepare`                                                                                                   | operate                  | full                                                        | Prepare a playlist's goLive beside the running service: `{ playlistId, saved?, seen? }` → its progress (design/13 "Prepare before goLive", design/29 M8); answered by the live process                                                                                                                          |
 | `GET /cache/manifest`                                                                                                  | operate, output          | full                                                        | The live service cache manifest                                                                                                                                                                                                                                                                                 |
 | `GET /health`, `GET /diagnostics/export`                                                                               | operate                  | view (`/health`), full (`/diagnostics/export`)              | Hub health; zip of logs, journal tail, settings                                                                                                                                                                                                                                                                 |
 | `POST /backup/run`, `GET /backup/list`                                                                                 | operate                  | full                                                        | Backups                                                                                                                                                                                                                                                                                                         |

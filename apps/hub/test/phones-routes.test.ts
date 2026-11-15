@@ -24,6 +24,7 @@ const LIVE_API: Row[] = [
   ['GET', '/api/v1/live/summary', 'edit', 'view'],
   ['GET', '/api/v1/cache/manifest', 'live', 'full'],
   ['POST', '/api/v1/live/events', 'operate', 'full'],
+  ['POST', '/api/v1/live/prepare', 'operate', 'full'],
   ['POST', '/api/v1/actions', 'operate', 'full'],
   ['GET', '/api/v1/health', 'public', 'view'],
 ];

@@ -79,6 +79,30 @@ frameMs` (33 ms at 60 Hz). Outputs flip at the first vsync whose predicted prese
 time is at or after `at`; if `at` is already past (late delivery), they flip on the next
 vsync and report the lateness in `health`.
 
+## Prepare before goLive
+
+Design/29 §2.3 M8. Going live has two steps, so a mid-service Go live never holds GO, Next or Clear:
+
+1. `POST /api/v1/live/prepare` (operate role; the live process answers it) with `LivePrepareReq`
+   `{ playlistId, saved?, seen? }`. The hub fetches the playlist's copy from its library and checks it in a
+   worker thread (design/12 "Going live prepared beside the running service"). The answer is a
+   `LivePrepareRes` `{ playlistId, state: 'preparing' | 'ready' | 'failed', pct, reason?, savedAt?, bytes? }`:
+   `pct` is 0-90 while the copy arrives (by its announced length), 90 while it is checked, 100 when done;
+   `savedAt` is when the hub's saved copy of the playlist was taken, if it has one; `reason` is the goLive's
+   refusal. The request is a long poll: it is answered when the prepare ends, or (with `seen`, the `pct` the
+   caller last saw) when the progress moves, and otherwise after `LIVE_PREPARE_WAIT_MS` (400 ms). Asking
+   again while a prepare is under way joins it; asking after it ended starts a fresh one. `saved: true` goes
+   live from the hub's saved copy instead of waiting for the library (W41's button): the fetch under way is
+   abandoned, and the goLive carries the existing cached-copy `degraded` entry.
+2. Once `ready` (or `failed`), the operator sends the ordinary `{ k: 'goLive', playlistId }` command. It
+   uses the prepared copy (once, within 10 s), applies at once with one parse, and is refused with the
+   prepare's `reason` if it failed.
+
+A goLive sent without step 1 (an older operator, `/actions`, a script) is prepared the same way before it
+enters the command queue; commands sent after it then apply to the running service until it is ready.
+goLives keep their order among themselves. No WebSocket message is added: the operator learns the progress
+from the long poll (`packages/protocol` `LIVE_PREPARE_PATH`, `LivePrepareReq`, `LivePrepareRes`).
+
 ## Sequence rules
 
 - `seq` is the hub's. Clients track `appliedSeq`. A delta with `fromSeq !== appliedSeq`
