@@ -560,7 +560,20 @@ Arm sequence for a cue (asset worker, then render worker):
 Memory bound: two stacks per layer (live and armed) plus a one-deep queue for content that
 arrives while the armed stack is busy (the outgoing side of a fade, or the target of a flip
 not yet due; the latest wins), so at most three pictures per layer, six for scenes (base and
-over). The host keeps six media elements (two background, two media, two audio slots); the
+over), and a fourth while the live bitmap's late parts fade in (below).
+
+**In-place fade** (late parts, "Late units" above): a `refresh` of the live bitmap with
+`refreshFadeMs` goes to the layer's `incoming` stack instead of replacing the live copy. WebGPU
+uploads it in strips into a third texture of the layer (`layerN-fade`, made when the layer's first
+such refresh is offered: +33 MB at 4K, counted in `gpuMB`), after the content a pending flip waits
+for; once it can be drawn it fades in over the live copy (the pair pipeline on WebGPU, the
+crossfade's scratch mix on Canvas 2D) over `refreshFadeMs`, the old copy kept until the end, when
+the live stack takes the fresh copy with its content version and WebGPU copies it from the fade
+texture on the GPU (`copyTextureToTexture`, never a second upload). Only a bitmap over a bitmap
+fades; anything else, and a refresh during a flip's crossfade, swaps in place as before. A GO
+during the fade ends it at once and flips: the slide leaves as its fresh copy when that was
+uploaded (else the copy is dropped); the armed content is never touched, so the GO flips on time.
+A newer refresh during the fade ends the running one first (its parts stay) and fades in on top. The host keeps six media elements (two background, two media, two audio slots); the
 renderer presents at most `MAX_VIDEO_SLOTS` (4) video slots, two newest frames each
 (`FrameRing`).
 

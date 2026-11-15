@@ -123,6 +123,7 @@ function attachAsset(port: MessagePort): void {
             y: a.y,
             cueIndex: a.cueIndex,
             refresh: a.refresh,
+            refreshFadeMs: a.refreshFadeMs,
             over: a.over ?? null,
             overX: a.overX,
             overY: a.overY,
@@ -139,6 +140,7 @@ function attachAsset(port: MessagePort): void {
             opaque: a.opaque,
             cueIndex: a.cueIndex,
             refresh: a.refresh,
+            refreshFadeMs: a.refreshFadeMs,
           };
     if (engine) engine.offer(a.layer, c);
     else earlyOffers.push({ layer: a.layer, c });

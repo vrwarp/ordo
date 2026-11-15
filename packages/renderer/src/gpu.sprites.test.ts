@@ -75,6 +75,15 @@ class FakeDevice {
   createBindGroup = () => ({});
   importExternalTexture = () => ({});
   createCommandEncoder = () => ({
+    copyTextureToTexture: (
+      src: { texture: Tex; origin?: { x: number; y: number } },
+      dst: { texture: Tex; origin?: { x: number; y: number } },
+      size: ArrayLike<number>,
+    ) => {
+      this.log.push(
+        `gpucopy:${src.texture.label}->${dst.texture.label}@${dst.origin?.x ?? 0},${dst.origin?.y ?? 0}:${size[0]}x${size[1]}`,
+      );
+    },
     beginRenderPass: () => ({
       setPipeline: (p: { label: string }) => {
         this.pipe = p.label;
@@ -609,5 +618,84 @@ describe('RenderEngine with strip uploads', () => {
     expect(second.dev.copies.slice(1).map((x) => [x.bitmap, x.size[1]])).toEqual([['B', 9]]);
     for (let i = 1; i < 4; i++) frame(1000 + i * 16);
     expect(e.layers[SLIDE]!.armedStack.ready).toBe(true);
+  });
+});
+
+describe('WebGPU in-place fade of late parts (design/14 "Late units", r2b units-live)', () => {
+  it('uploads the fresh copy into the fade texture, mixes it over the live copy, then copies it on the GPU', async () => {
+    const { c, dev } = await gpu({ bytes: 1e9, ms: 1e9 });
+    const f = inputs();
+    const ls = f.layers[SLIDE]!;
+    ls.offer({ key: 'A', kind: SRC_BITMAP, bitmap: bitmap('a1', 40, 10), x: 4, y: 20 });
+    ls.requestFlip('A', 0, 0, 0);
+    for (let i = 0; i < 2; i++) frame(c, f, i * 16);
+    const before = c.gpuBytes();
+    dev.copies.length = 0;
+    dev.log.length = 0;
+    dev.draws.length = 0;
+    const refresh = {
+      key: 'A',
+      kind: SRC_BITMAP,
+      bitmap: bitmap('a2', 40, 12),
+      x: 4,
+      y: 18,
+      refresh: true,
+      refreshFadeMs: 300,
+    };
+    c.prepare(SLIDE, refresh);
+    ls.offer(refresh);
+    expect(c.gpuBytes() - before).toBe(W * H * 4);
+    // Uploaded after the frame (strips), into the fade texture: the live copy stays drawn meanwhile.
+    frame(c, f, 100);
+    expect(dev.copies).toEqual([
+      { bitmap: 'a2', texture: 'layer1-fade', src: [0, 0], dst: [4, 18], size: [40, 12] },
+    ]);
+    expect(dev.draws.at(-1)).toEqual({ pipe: 'single-t', scissor: [4, 20, 40, 10] });
+    // Next frame: the fade starts; both copies in one pass over their union.
+    frame(c, f, 116);
+    frame(c, f, 266);
+    expect(dev.draws.at(-1)).toEqual({ pipe: 'pair-tt', scissor: [4, 18, 40, 12] });
+    expect(dev.uniform[SLIDE * 64 + 8]).toBe(0.5);
+    // At its end the live texture gets the fresh copy by a GPU copy, not a second upload.
+    dev.log.length = 0;
+    frame(c, f, 420);
+    expect(dev.log.filter((x) => x.startsWith('copy:'))).toEqual([]);
+    expect(dev.log).toContain('gpucopy:layer1-fade->layer1-stack1@4,18:40x12');
+    expect(dev.draws.at(-1)).toEqual({ pipe: 'single-t', scissor: [4, 18, 40, 12] });
+  });
+
+  it('a GO in the middle of an in-place fade ends it and flips at once (the armed cue is ready)', async () => {
+    const { c, dev } = await gpu({ bytes: 1e9, ms: 1e9 });
+    const f = inputs();
+    const ls = f.layers[SLIDE]!;
+    ls.offer({ key: 'A', kind: SRC_BITMAP, bitmap: bitmap('a1', 40, 10), x: 4, y: 20 });
+    ls.requestFlip('A', 0, 0, 0);
+    frame(c, f, 0);
+    ls.offer({ key: 'B', kind: SRC_BITMAP, bitmap: bitmap('b', 20, 10), x: 30, y: 2 });
+    frame(c, f, 16);
+    expect(ls.armedStack.ready).toBe(true);
+    const refresh = {
+      key: 'A',
+      kind: SRC_BITMAP,
+      bitmap: bitmap('a2', 40, 10),
+      x: 4,
+      y: 20,
+      refresh: true,
+      refreshFadeMs: 300,
+    };
+    c.prepare(SLIDE, refresh);
+    ls.offer(refresh);
+    frame(c, f, 32);
+    frame(c, f, 48);
+    expect(ls.refading).toBe(true);
+    dev.log.length = 0;
+    ls.requestFlip('B', 100, 300, 90);
+    frame(c, f, 100);
+    expect(ls.liveStack.key).toBe('B');
+    expect(ls.lateFlips).toBe(0);
+    // The armed content was not touched; the leaving copy is the fresh one, copied on the GPU, not uploaded.
+    expect(dev.log.filter((x) => x.startsWith('copy:'))).toEqual([]);
+    expect(dev.log.some((x) => x.startsWith('gpucopy:layer1-fade->'))).toBe(true);
+    expect(dev.draws.at(-1)!.pipe).toBe('pair-tt');
   });
 });

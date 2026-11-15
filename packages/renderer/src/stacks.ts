@@ -54,6 +54,11 @@ export type StackContent<B> = {
   cueIndex?: number;
   /** Replace the held copy of this key in place (a re-draw with content that arrived late). */
   refresh?: boolean;
+  /**
+   * A `refresh` of the live bitmap fades in over the old copy for this long (ms) instead of replacing it at once
+   * (a slide's late parts, design/14 "Late units"); the old copy is kept until the fade ends.
+   */
+  refreshFadeMs?: number;
   /** SRC_SCENE: objects above the video that overlap it (null when there are none). */
   over?: B | null;
   /** SRC_SCENE: device px offset of `over` in the frame (default 0). */
@@ -64,6 +69,10 @@ export type StackContent<B> = {
   /** SRC_SCENE: the slot generation the clip was loaded under; frames of another generation are not shown. */
   videoGen?: number;
 };
+
+/** The next content version (`Stack.version`), unique across every stack. */
+let versions = 0;
+const nextVersion = () => ++versions;
 
 /** One fully prepared stack. Objects are pre-allocated and mutated in place. */
 export class Stack<B> {
@@ -83,7 +92,11 @@ export class Stack<B> {
   overY = 0;
   readonly plane = new Float32Array(PLANE_FLOATS);
   videoGen = -1;
-  /** Bumped whenever the content changes so the compositor knows to re-upload. */
+  /**
+   * Set from one counter for every stack whenever the content changes, so the compositor knows to re-upload; a
+   * content moved to another stack keeps its number (an in-place fade's copy becoming the live one), which the
+   * GPU compositor copies on the GPU instead of uploading it again.
+   */
   version = 0;
   /**
    * The compositor can draw this content (WebGPU: its bitmaps are uploaded completely). Content that needs
@@ -102,6 +115,11 @@ export class Stack<B> {
  *   when `at` passes, the previous content is held and the flip happens on the first frame after it
  *   arrives (arm-then-flip ASAP).
  * - `tick` runs once per frame: ends finished fades, promotes queued content, performs due flips.
+ * - An in-place refresh with `refreshFadeMs` (a slide's late parts, design/14 "Late units") goes to `incoming`
+ *   and, once the compositor can draw it (`ready`), fades in over the live copy, which is kept until the fade
+ *   ends; then it is the live copy. Only a bitmap over a bitmap fades (anything else swaps in place, as does a
+ *   refresh during a flip's crossfade). A flip due meanwhile (a GO) ends it at once: the fresh copy, when ready,
+ *   becomes the live one first, so the slide fades out whole; one not uploaded yet is dropped.
  */
 export class LayerStack<B> {
   readonly stacks: [Stack<B>, Stack<B>] = [new Stack<B>(), new Stack<B>()];
@@ -120,6 +138,13 @@ export class LayerStack<B> {
 
   lateFlips = 0;
   flips = 0;
+  /** The live content's fresh copy fading in over it (`refreshFadeMs`): held while `hasIncoming`. */
+  readonly incoming = new Stack<B>();
+  hasIncoming = false;
+  /** The in-place fade runs (the incoming copy is drawn over the live one at `refadeWeight`). */
+  refading = false;
+  refadeStart = 0;
+  refadeMs = 0;
   /** Set whenever held keys change; the owner reports and clears it outside the frame loop. */
   dirty = false;
   /**
@@ -153,8 +178,28 @@ export class LayerStack<B> {
   offer(c: StackContent<B>): void {
     if (c.key === this.liveStack.key && c.key !== '') {
       if (c.refresh) {
+        const fadeMs = typeof c.refreshFadeMs === 'number' && c.refreshFadeMs > 0 ? c.refreshFadeMs : 0;
+        const live = this.liveStack;
+        if (
+          fadeMs &&
+          !this.fading &&
+          live.kind === SRC_BITMAP &&
+          live.bitmap &&
+          c.kind === SRC_BITMAP &&
+          c.bitmap
+        ) {
+          // Late parts: the fresh copy fades in over the live one (a running in-place fade ends first, so the
+          // parts it was bringing in stay; a copy not uploaded yet is replaced by this newer one).
+          if (this.refading) this.endRefade();
+          this.assign(this.incoming, c);
+          this.hasIncoming = true;
+          this.refadeMs = fadeMs;
+          this.dirty = true;
+          return;
+        }
         // The live content drawn again (an image that arrived after the slide was armed): swap the copy
         // in place, no flip; a running fade keeps fading into the new copy.
+        this.dropIncoming();
         this.assign(this.liveStack, c);
         this.dirty = true;
         return;
@@ -209,6 +254,15 @@ export class LayerStack<B> {
   tick(now: number, frameMs: number, hold = false): boolean {
     /* @hot */
     if (this.fading && now >= this.fadeStart + this.fadeMs) this.endFade();
+    if (this.hasIncoming) {
+      // The in-place fade starts once its copy can be drawn, and ends after its time.
+      if (!this.refading) {
+        if (this.incoming.ready) {
+          this.refading = true;
+          this.refadeStart = now;
+        }
+      } else if (now >= this.refadeStart + this.refadeMs) this.endRefade();
+    }
     if (!this.flipPending || !flipDue(now, this.flipAt, frameMs)) return false;
     const key = this.flipKey;
     if (key === this.liveStack.key) {
@@ -233,6 +287,11 @@ export class LayerStack<B> {
     // Not uploaded completely yet (strip uploads): hold the previous content; the flip happens on the first
     // frame after the upload completes (a late flip, as for content that arrives late).
     if (!this.armedStack.ready || hold) return false;
+    // A GO during an in-place fade ends it at once: the slide leaves as its fresh copy when that can be drawn.
+    if (this.hasIncoming) {
+      if (this.refading) this.endRefade();
+      else this.dropIncoming();
+    }
     this.live = 1 - this.live;
     this.flipPending = false;
     this.flips++;
@@ -253,15 +312,51 @@ export class LayerStack<B> {
     return this.fading ? crossfadeWeight(now, this.fadeStart, this.fadeMs) : 1;
   }
 
+  /** The weight of the fresh copy over the live one in a running in-place fade; 1 when none runs. */
+  refadeWeight(now: number): number {
+    /* @hot */
+    return this.refading ? crossfadeWeight(now, this.refadeStart, this.refadeMs) : 1;
+  }
+
   /** Drop everything (used on look change or teardown). */
   reset(): void {
     this.clearStack(this.stacks[0]);
     this.clearStack(this.stacks[1]);
     this.clearStack(this.queued);
+    this.dropIncoming();
     this.hasQueued = false;
     this.fading = false;
     this.flipPending = false;
     this.dirty = true;
+  }
+
+  /** End the in-place fade: the fresh copy is the live one now (it keeps its version), the old one is let go. */
+  private endRefade(): void {
+    /* @hot */
+    const live = this.liveStack;
+    const inc = this.incoming;
+    if (live.bitmap && live.bitmap !== inc.bitmap) this.release(live.bitmap);
+    live.bitmap = inc.bitmap;
+    live.x = inc.x;
+    live.y = inc.y;
+    live.opaque = inc.opaque;
+    live.cueIndex = inc.cueIndex;
+    live.version = inc.version;
+    live.ready = true;
+    inc.bitmap = null;
+    inc.key = '';
+    inc.kind = SRC_EMPTY;
+    this.hasIncoming = false;
+    this.refading = false;
+    this.dirty = true;
+  }
+
+  /** Drop an in-place fade's copy (not uploaded yet when a GO comes, or the live content replaced). */
+  private dropIncoming(): void {
+    if (!this.hasIncoming && this.incoming.key === '') return;
+    this.clearStack(this.incoming);
+    this.hasIncoming = false;
+    this.refading = false;
   }
 
   private endFade(): void {
@@ -291,7 +386,7 @@ export class LayerStack<B> {
     a.overY = q.overY;
     a.plane.set(q.plane);
     a.videoGen = q.videoGen;
-    a.version++;
+    a.version = nextVersion();
     a.ready = !this.gated || !holdsBitmaps(a);
     q.bitmap = null;
     q.over = null;
@@ -317,7 +412,7 @@ export class LayerStack<B> {
     s.cueIndex = -1;
     s.plane.fill(0);
     s.videoGen = -1;
-    s.version++;
+    s.version = nextVersion();
     s.ready = true;
   }
 
@@ -339,7 +434,7 @@ export class LayerStack<B> {
     if (c.plane && c.plane.length === PLANE_FLOATS) s.plane.set(c.plane);
     else s.plane.fill(0);
     s.videoGen = c.videoGen ?? -1;
-    s.version++;
+    s.version = nextVersion();
     s.ready = !this.gated || !holdsBitmaps(s);
   }
 
@@ -349,8 +444,8 @@ export class LayerStack<B> {
    */
   resetUploads(gated: boolean): void {
     this.gated = gated;
-    for (const s of [this.stacks[0], this.stacks[1], this.queued]) {
-      s.version++;
+    for (const s of [this.stacks[0], this.stacks[1], this.queued, this.incoming]) {
+      s.version = nextVersion();
       s.ready = !gated || !holdsBitmaps(s);
     }
   }
