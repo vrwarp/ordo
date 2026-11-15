@@ -1,5 +1,5 @@
 import { parsePathData, type Rgba, type ShapeObject, Slide, type TextObject } from '@ordo/domain';
-import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import * as prev from '@ordo/domain/schemas.prev05.test-util.ts';
 import { cellRich } from '@ordo/domain/table.ts';
 import { TABLE_LIMITS as DOMAIN_LIMITS } from '@ordo/domain';
 import { CMD_MOVE, GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';

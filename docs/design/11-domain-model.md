@@ -5,6 +5,9 @@ TypeScript types. The hub stores them as JSON columns in SQLite beside indexed s
 columns. Identifiers are ULIDs. Every stored entity carries `id`, `createdAt`,
 `updatedAt`, and `rev` (monotonic per entity).
 
+Pre-rendered slides (the stand-in, slide files, the picture key and the live events for pictures) are designed in
+[design/29](29-prerender-and-limits.md); their fields are under "Pre-render" below.
+
 ## Entities
 
 ```ts
@@ -470,6 +473,92 @@ of a table. Fields of a cell's style that a cell style cannot hold (`cellStyleOf
 size, italics, colour, insets, language, fallback fonts, alignment, vertical alignment, direction) are not
 offered for a cell (no uppercase, outline, shadow or shrink-to-fit), so nothing typed or set on a cell is lost.
 <!-- /r2b:editor-table -->
+
+<!-- r2b:prerender -->
+### Pre-render (design/29 §1.2, wave r2b)
+
+A big or crowded slide is kept whole in a **slide file** and the presentation stores its **stand-in**: the live
+objects whole (the lyric box, step-by-step text, playing pictures and what lies above them), the rest simplified
+(`minimalSlide`), within the live-raster bounds. The fields are optional, each with `.catch(undefined)`; older
+builds (0.7.0 and 0.5.0, `schemas.prev.test-util.ts` and `schemas.prev05.test-util.ts`) strip them and draw the
+stand-in. Nothing writes them in sub-wave 1, and every path that would use them reads `PRERENDER_ON` (false).
+
+```ts
+type Slide += {
+  prerender?: {
+    why: ('bytes' | 'tail' | 'count' | 'chosen')[]; // a reason this build does not know is dropped
+    file?: { ref: ContentHash; bytes: number }; // the slide file's head; absent for 'chosen' or when refused
+    live: Id[]; // ≤ 1,000: the live set, bottom first
+    uses?: { media: Id[]; files: ContentHash[]; fonts: string[] }; // what the file draws: ≤ 1,000 / 1,000 / 64
+  };
+  draw?: 'picture' | 'live'; // Draw as; absent: meta.draw
+  cut?: string[]; // ≤ 16 × 200: what a kept bound left out of a slide not from PowerPoint
+};
+type PresentationMeta += { draw?: 'picture' | 'live' }; // in meta: an older hub's strict PUT body refuses new top-level keys
+type ContentHash = string; // a SHA-256 in hex
+```
+
+**Slide files** (`slidefile.ts`): a head `{ v: 1, pages: ContentHash[], count, lyricObjectId?, imported? }` and
+pages `{ v: 1, objects }` of at most 500 objects and 256 KiB of canonical JSON, cut every 500 objects (and
+within a run where its JSON would pass 256 KiB), each named by the SHA-256 of its canonical JSON
+(`slideFileName`, `sha256.ts`: plain JavaScript, so a page over plain HTTP computes it too). At most 20,000
+objects and 16 MiB a slide (`SLIDE_FILE_LIMITS`; `slideFileOf` refuses past them, W18). `slideFromFile(standIn,
+head, pages)` gives the full slide back and refuses pages that are not the head's. Only what draws is in the
+file: notes, timing, transition, cues, sound and provenance stay on the stand-in.
+**The model** (`prerender.ts`, pure, no drawing; the hub cannot import the renderer, so what needs it is passed
+in):
+
+- `PRERENDER_ON` (false): the one switch every pre-render path reads (design/29 §4); `PRERENDER_VERSION` (1) and
+  `FALLBACK_FACES_DIGEST` (the default face and the script fallbacks) are part of every key.
+- `pictureUnits(slide, cost?)`: `bytes` past 64 KiB stored, `count` past a live count (`PICTURE_COUNTS`: 200
+  objects, 16 distinct pictures, 10,000 characters a box other than the lyric box, 16 families and 64 size scales
+  a box, equal to the renderer's `CLAMP` by `prerender-counts.test.ts`) or a cost reason, asked at the fixed
+  3840 × 2160 reference (`PRERENDER_FRAME`) so every view plans the same.
+- `liveSet(slide, reach?)`: the anchors (`liveAnchors`: the lyric box, text with build steps, playing pictures, at
+  most 16 playing and 200 in all) and every object above that overlaps them or an object already live, bottom
+  first, by `reach` (the renderer's `objectBounds`, else `objectReach`: the turned box and its effects' reach).
+- `standInOf(full, live)`: the live objects whole, the rest `minimalSlide`, capped to 200 objects and 16 pictures
+  (live, then text, then pictures by area, in z order); text that does not fit is merged into plain boxes of at
+  most 20,000 characters.
+- `drawnPart(full, live)`, `pictureSource(full, live, inputs)`, `prerenderKey(source)` and `standbyId(source)`: the
+  key is the SHA-256 of `{ v: PRERENDER_VERSION, source }`, the source names the drawn part's digest (never the
+  head's hash: ids, origins and locks never change a key), the live set, the backdrops variant, each drawn
+  picture's file and every face of the chain of the picture's text; the stand-by id leaves fonts and version out.
+- `resolveDraw(slide, meta?, { estimateMs })`: `slide.draw ?? meta.draw ?? 'picture'`; a `tail` slide without its
+  own switch is live unless its estimate passes 0.3 s at 4K; a slide without a record is live unless set to
+  Pre-rendered.
+- `withFullSlide(full, fn, inputs)` → `{ full, standIn, pages?, key?, standbyId?, refused? }`: the one way every
+  writer changes a pre-rendered slide (prerender-editor, editor-slideops, hub-writers): plans the result again,
+  writes its pages, rebuilds the stand-in and the key; inline whole when it needs no picture, inline with its
+  record when only `chosen`, stand-in only when the store cannot hold it (W18).
+
+**Drawing** (`content.ts`): `slideContent(slide, { picture, look })` draws a pre-rendered slide's picture file
+(`SlideDrawing.picture = { hash, w, h }`) under its live set, in the shape of a reference picture, only when the
+caller passes the file and draws the authored look (lyric-only, bands and hidden draw the stand-in's text live).
+The output's link worker chooses the file (prerender-outputs, behind `PRERENDER_ON`); the media listers
+(`referencedMediaIds`, `drawnMediaIds`, `slideImages`, `previewMedia`) never pass one, so they list the stand-in's
+pictures and never the picture file.
+
+**goLive** (`goLive.ts`, design/29 §1.7): `ResolvedPlaylist.prerenders` lists the pictures the hub keeps of the
+service's pre-rendered slides (`GoLiveInputs.prerenders`: the newest per slide, variant and size, of the key set
+or a stand-by, W39) and `prerenderKeys` carries the key set the live process checks `prerender.add` against. Into
+`files` (and `geoms`, which the live process serves while the library is down) go, in cue order from the first
+cue, each slide's geometry and decoration files and, for a pre-rendered slide, its pictures, its head, its pages
+(`GoLiveInputs.slideHead`) and the shape files it uses; then the slides no cue shows. Past
+`GOLIVE_GEOM_FILES_MAX` (20,000) the rest are not listed and a whole-service line says so (W60; it was a silent
+cut). The fonts and media a slide file uses (`uses`) are shipped, the media optional like a reference picture (a
+line, never a refusal). New `degraded` kinds: `slideFile` (W40, one line a presentation: its slides' full copies
+are missing on the hub) and `picture` (W33, one a presentation: slides without a picture yet, only while
+`PRERENDER_ON`); a slide's `cut` lines are listed as they are. Without a file index (the operator PC resolving
+from its cache) the slides' shape files, heads and pages are listed by name (bytes 0), for the offline download
+and the direct link to fetch.
+
+**Live state** (`live.ts`, `packages/live-state`): `state.prerendered` (pictures the go-live bake made during the
+service, from the hub's `prerender.add`, newest last, at most 4,096) and `state.drawOverride` (slides set to Live
+that draw from their picture for this service, from the operator's `prerender.use`, at most 1,000), both cleared at
+End service; `resolved` stays as it went live. `LiveCommand` leaves `prerender.add` out (design/13 "Pre-render
+messages").
+<!-- /r2b:prerender -->
 
 ## Live state
 

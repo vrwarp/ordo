@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_LYRIC_STYLE } from './defaults.ts';
 import { m9Table } from './m9.test-util.ts';
 import { type ShapeObject, Slide, TABLE_LIMITS, TableData } from './schemas.ts';
-import * as prev from './schemas.prev.test-util.ts';
+import * as prev from './schemas.prev05.test-util.ts';
 import { slideBytes } from './size.ts';
 import { placeCells } from './table.ts';
 

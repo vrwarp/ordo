@@ -253,10 +253,88 @@ describe('resolvePlaylist: geometry files (M6 round 2)', () => {
     expect(r.degraded?.[0]?.slideId).toBe('b');
   });
 
-  it('lists nothing without a file index (the operator PC resolving from its cache)', () => {
+  it('lists each file by name without a file index (the operator PC resolving from its cache, design/29 §1.7)', () => {
+    // The operator's offline download and the direct link fetch them by name; nothing is judged missing.
     const r = resolvePlaylist(base, 'pl', { digest: localDigest });
-    expect(r.files).toEqual([]);
+    expect(r.files).toEqual([
+      { hash: ref, bytes: 0, mime: 'application/json' },
+      { hash: lost, bytes: 0, mime: 'application/json' },
+    ]);
     expect(r).not.toHaveProperty('geoms');
     expect(r.degraded).toBeUndefined();
+  });
+});
+
+/*
+ * design/29 §1.6 "Outputs" 1: the picture-file form. The link worker knows whether a slide's picture file exists
+ * and passes it in; `slideContent` then draws the live set over it, in the shape of a reference picture
+ * (picture under, objects above), so drawSlide2D needs no new path. Only in the authored look.
+ */
+describe('slideContent: the picture of a pre-rendered slide (design/29 §1.6)', () => {
+  const PIC = { hash: 'c'.repeat(64), w: 3840, h: 2160 };
+  const obj = (id: string, x: number) => ({
+    id,
+    type: 'shape' as const,
+    box: { x, y: 0, w: 10, h: 10, rotation: 0 },
+    shape: 'rect' as const,
+    opacity: 1,
+    radius: 0,
+  });
+  const standIn = Slide.parse({
+    id: 's',
+    objects: [
+      obj('bg', 0),
+      { ...obj('clip', 10), type: 'image', mediaId: 'poster', play: { mediaId: 'video' }, fit: 'contain' },
+      obj('over', 15),
+      {
+        id: 'lyric',
+        type: 'text',
+        box: { x: 0, y: 500, w: 100, h: 100, rotation: 0 },
+        text: 'Lyric',
+        style: { fontFamily: 'Inter', fontSizePx: 40, color: { r: 255, g: 255, b: 255, a: 1 } },
+      },
+      { ...obj('photo', 300), type: 'image', mediaId: 'photo', fit: 'contain' },
+    ],
+    lyricObjectId: 'lyric',
+    prerender: { why: ['count'], live: ['clip', 'over', 'lyric'] },
+  });
+
+  it('draws the picture under and the live set above it, bottom first', () => {
+    const d = slideContent(standIn, { picture: PIC, look: 'authored' });
+    expect(d.picture).toEqual(PIC);
+    expect(d.pictureMediaId).toBeUndefined();
+    expect(d.reference).toBe(false);
+    expect(d.objects.map((o) => o.id)).toEqual(['clip', 'over', 'lyric']);
+  });
+
+  it('draws the stand-in without a picture, in another look, or on a slide that is not pre-rendered', () => {
+    expect(slideContent(standIn).objects).toBe(standIn.objects);
+    expect(slideContent(standIn).picture).toBeUndefined();
+    // A lyric-only or hidden look draws the stand-in's text live, never the picture.
+    for (const look of ['lyricOnly', 'hidden'] as const) {
+      const d = slideContent(standIn, { picture: PIC, look });
+      expect(d.picture).toBeUndefined();
+      expect(d.objects).toBe(standIn.objects);
+    }
+    // No look named: the picture is not used (the caller must say it draws the authored look).
+    expect(slideContent(standIn, { picture: PIC }).picture).toBeUndefined();
+    const plain = { ...standIn, prerender: undefined };
+    expect(slideContent(plain, { picture: PIC, look: 'authored' }).picture).toBeUndefined();
+  });
+
+  it('is skipped by the media listers: they list the stand-in pictures, never the picture file', () => {
+    expect(drawnMediaIds(standIn)).toEqual(['poster', 'photo']);
+    const p = Presentation.parse({
+      id: 'p',
+      title: 'Big',
+      kind: 'slides',
+      sections: [{ id: 'sec', label: 'S', short: 'S', slides: [standIn] }],
+    });
+    const ids = referencedMediaIds(
+      { id: 'pl', name: 'x', items: [{ id: 'i', kind: 'presentation', presentationId: 'p' }] } as never,
+      { p },
+    );
+    expect([...ids].sort()).toEqual(['photo', 'poster', 'video']);
+    expect([...ids]).not.toContain(PIC.hash);
   });
 });

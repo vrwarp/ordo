@@ -182,6 +182,21 @@ export const ClientMessage = z.discriminatedUnion('t', [
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
+// ---- pre-rendered slides' live events (design/29 §1.7, §1.11) ----
+/**
+ * `prerender.add`: a picture of a key of the live service the hub accepted during the service (the go-live
+ * bake), kept in `state.prerendered`. The hub applies it (`LiveService.apply`) and every client reduces it from
+ * `live.delta`; a client's `live.event` carrying it is refused at its parse (`LiveCommand` leaves it out).
+ */
+export type PrerenderAddEvent = Extract<LiveEvent, { k: 'prerender.add' }>;
+/**
+ * `prerender.use`: the operator's "Use the picture for this slide during this service" (operate role, an
+ * ordinary `live.event`), kept in `state.drawOverride` until End service.
+ */
+export type PrerenderUseEvent = Extract<LiveEvent, { k: 'prerender.use' }>;
+/** Live events only the hub applies: no client message may carry one. */
+export const HUB_ONLY_EVENTS: readonly LiveEvent['k'][] = ['prerender.add'];
+
 // ---- hub -> client (trusted, typed only) ----
 export type Welcome = { t: 'welcome'; v: 1; hubMs: number; seq: number; role: Role; appVersion: string };
 export type TimePong = { t: 'time.pong'; v: 1; c: number; s: number };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ImageObject, ShapeGeom, Slide } from './schemas.ts';
-import * as prev from './schemas.prev.test-util.ts';
+import * as prev from './schemas.prev05.test-util.ts';
 
 /** ImageObject.flipH, flipV and mask (design/27 §3.1; M4 item D), additive as every design/27 field. */
 const image = {

@@ -4,6 +4,9 @@ Defined in `packages/protocol` as Zod schemas. JSON text frames. Every message h
 `{ t: string, v: 1, ...payload }`. The same message types are used on the hub WebSocket
 and on the fallback bus (`postMessage`), so outputs have one receive path.
 
+The live events of pre-rendered slides (`prerender.add`, `prerender.use`) are designed in
+[design/29](29-prerender-and-limits.md) §1.7 and §1.11 and listed under "Pre-render messages" below.
+
 ## Client to hub
 
 | `t`              | From             | Payload                                     | Notes                                              |
@@ -102,6 +105,33 @@ A goLive sent without step 1 (an older operator, `/actions`, a script) is prepar
 enters the command queue; commands sent after it then apply to the running service until it is ready.
 goLives keep their order among themselves. No WebSocket message is added: the operator learns the progress
 from the long poll (`packages/protocol` `LIVE_PREPARE_PATH`, `LivePrepareReq`, `LivePrepareRes`).
+
+## Pre-render messages
+
+Wave r2b (design/29 §1.7, §1.11): two live events for pre-rendered slides, built in sub-wave 1 and used from
+sub-wave 3 on (nothing sends them while `PRERENDER_ON` is false).
+
+```ts
+type LiveEvent +=
+  | { k: 'prerender.add'; presentationId: Id; slideId: Id; key: ContentHash; size: 3840 | 1920; file: ContentHash }
+  | { k: 'prerender.use'; presentationId: Id; slideId: Id };
+type LiveState += {
+  prerendered?: PrerenderPicture[]; // newest last, ≤ PRERENDERED_MAX (4,096); the oldest go
+  drawOverride?: { presentationId: Id; slideId: Id }[]; // ≤ DRAW_OVERRIDE_MAX (1,000)
+};
+```
+
+- `prerender.add` is the hub's only: a picture of a key of the live service (`resolved.prerenderKeys`) accepted
+  during it (the go-live bake). The hub applies it through `LiveService.apply` and every client reduces it from
+  `live.delta`; `LiveCommand`, what a client's `live.event` and `POST /live/events` carry, leaves it out, so a
+  client sending one is refused at the parse (`HUB_ONLY_EVENTS`). The reducer keeps it in `state.prerendered`
+  (one entry per slide, key and size; a key outside the key set, a slide outside the service or an idle state is
+  a no-op) and never changes `resolved`.
+- `prerender.use` is the operator's "Use the picture for this slide during this service" (operate role, refused
+  from edit, output and Stage sockets as every command is): a slide set to Live draws from its picture until
+  End service, kept in `state.drawOverride`. It changes nothing in the presentation (locked while live), is
+  journaled like every event and travels with the hand-back state.
+- Both end with the service: `endService` and the next `goLive` start without them.
 
 ## Sequence rules
 

@@ -1,4 +1,10 @@
-import type { Slide, SlideObject } from './schemas.ts';
+import type { Slide, SlideObject, SlideRule } from './schemas.ts';
+
+/**
+ * A pre-rendered slide's picture file (design/29 §1.6): a content-store file, not a media item, chosen by the
+ * output's link worker from `resolved.prerenders` and `state.prerendered` (only it knows which files exist).
+ */
+export type SlidePicture = { hash: string; w: number; h: number };
 
 /**
  * What a slide draws (design/27 §5 "One rule for every drawer"): one whole-slide picture, contain-fitted
@@ -15,8 +21,16 @@ export type SlideDrawing = {
    * optional (design/27 §8 "Domain").
    */
   reference: boolean;
-  /** The objects drawn, bottom first: every object, or only the operator's own on a reference picture. */
+  /**
+   * The objects drawn, bottom first: every object, only the operator's own on a reference picture, or the live
+   * set over a pre-rendered slide's picture.
+   */
   objects: SlideObject[];
+  /**
+   * A pre-rendered slide's picture (design/29 §1.6), under the live set: the reference-picture shape with a
+   * file in place of a media item, so drawers keep one path. Set only when the caller passes it.
+   */
+  picture?: SlidePicture;
 };
 
 /** Whether an object came from a PowerPoint import (`origin`), rather than from the operator. */
@@ -48,9 +62,24 @@ export function referencePicture(slide: Pick<Slide, 'pptx'>): string | undefined
  * the media a goLive ships (`referencedMediaIds`, `slideImages`, `previewMedia`) all read slides through
  * it, so every screen shows the same thing and has every picture it draws. Pure and defensive: it reads
  * unclamped slides too, and returns the slide's own `objects` array when nothing is left out.
+ *
+ * A pre-rendered slide (design/29 §1.6) is drawn from its stand-in, or, when the caller (an output's link
+ * worker) passes its picture file and draws the authored look, as that picture under the live set
+ * (`Slide.prerender.live`). The media listers never pass one: the picture is a file, not a media item.
  */
-export function slideContent(slide: Pick<Slide, 'objects' | 'imported' | 'pptx'>): SlideDrawing {
+export function slideContent(
+  slide: Pick<Slide, 'objects' | 'imported' | 'pptx'> & Partial<Pick<Slide, 'prerender'>>,
+  opts: { picture?: SlidePicture; look?: SlideRule['mode'] } = {},
+): SlideDrawing {
   const objects: SlideObject[] = Array.isArray(slide.objects) ? slide.objects : [];
+  // A pre-rendered slide over its picture (design/29 §1.6): only in the authored look (lyric-only, bands and
+  // hidden draw the stand-in's text live), only when the caller has the file, and the listers never pass it.
+  const live = (slide as { prerender?: { live?: unknown } }).prerender?.live;
+  if (opts.picture && opts.look === 'authored' && Array.isArray(live)) {
+    const ids = new Set(live);
+    const shown = referencePicture(slide) ? objects.filter((o) => !fromImport(o)) : objects;
+    return { picture: opts.picture, reference: false, objects: shown.filter((o) => ids.has(o?.id)) };
+  }
   const ref = referencePicture(slide);
   if (ref) return { pictureMediaId: ref, reference: true, objects: objects.filter((o) => !fromImport(o)) };
   const page = (slide.imported as { imageMediaId?: unknown } | undefined)?.imageMediaId;

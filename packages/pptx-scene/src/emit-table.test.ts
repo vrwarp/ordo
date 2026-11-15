@@ -1,6 +1,6 @@
 import { type ShapeObject, Slide, TABLE_LIMITS, TableData } from '@ordo/domain';
 import { cellRich } from '@ordo/domain/table.ts';
-import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import * as prev from '@ordo/domain/schemas.prev05.test-util.ts';
 import { describe, expect, it } from 'vitest';
 import { MAX_SLIDE_OBJECTS } from './classify.ts';
 import { storedSlideBytes } from './emit-budget.ts';

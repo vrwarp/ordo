@@ -11,7 +11,7 @@ import {
   Slide,
   TextStyle,
 } from './schemas.ts';
-import * as prev from './schemas.prev.test-util.ts';
+import * as prev from './schemas.prev05.test-util.ts';
 
 /**
  * The M6 drawing fields (design/27 §3.1, §3.2, §14.7): parsed and kept by the current schema and by the

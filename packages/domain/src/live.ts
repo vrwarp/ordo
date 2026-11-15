@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  ContentHash,
   FileRef,
   Font,
   Id,
@@ -13,6 +14,34 @@ import {
   type ActionId,
   type MidiCue,
 } from './schemas.ts';
+
+/** The sizes a screen fetches of a pre-rendered slide's picture (design/29 §1.2, §1.7): 4K, and the 1080p copy. */
+export const PrerenderSize = z.union([z.literal(3840), z.literal(1920)]);
+export type PrerenderSize = z.infer<typeof PrerenderSize>;
+
+/**
+ * A pre-rendered slide's picture file (design/29 §1.7): which slide it is of, its key (the variant without
+ * backdrops has a key of its own), its size and its content-store file. What goLive lists and `prerender.add`
+ * announces; outputs never compute keys.
+ */
+export const PrerenderPicture = z.object({
+  presentationId: Id,
+  slideId: Id,
+  key: ContentHash,
+  size: PrerenderSize,
+  file: ContentHash,
+});
+export type PrerenderPicture = z.infer<typeof PrerenderPicture>;
+
+/** At most this many pictures and keys a goLive carries. */
+export const PRERENDERS_MAX = 20_000;
+/**
+ * At most this many pictures `state.prerendered` keeps (the go-live bake's, newest last): two sizes of the
+ * slides of a long service. Past it the oldest go; their slides are drawn live, never cut.
+ */
+export const PRERENDERED_MAX = 4_096;
+/** At most this many slides `state.drawOverride` keeps ("Use the picture during this service"). */
+export const DRAW_OVERRIDE_MAX = 1_000;
 
 /** One entry of the service cache manifest. Content addressed by sha256. */
 export const ManifestFile = z.object({ hash: z.string(), bytes: z.number().int(), mime: z.string() });
@@ -31,11 +60,26 @@ export const ResolvedPlaylist = z.object({
   logoMediaId: Id.optional(),
   files: z.array(ManifestFile),
   /**
-   * The geometry files the slides draw (`drawnGeomRefs`, design/27 §3.1 `ShapeGeom.ref`): their hashes are
-   * in `files` too, so outputs cache them with the pictures; the live process serves them from here while
-   * the library is down. Absent when no slide draws one.
+   * The content-store files the slides draw besides media and fonts: geometry and decoration files
+   * (`drawnShapeFileRefs`, design/27 §3.1 `ShapeGeom.ref`) and pre-rendered slides' pictures, heads and pages
+   * (design/29 §1.7), in cue order. Their hashes are in `files` too, so outputs cache them with the pictures;
+   * the live process serves them from here while the library is down. Absent when no slide draws one.
    */
   geoms: z.array(FileRef).max(100_000).optional(),
+  /**
+   * design/29 §1.7: the pictures of the service's pre-rendered slides the hub has, the newest per slide, variant
+   * and size; `standby` marks one found by its stand-by id (an older renderer or font set, W39). Their files are
+   * in `files` (and `geoms`, for the live process) in cue order. Absent when there are none.
+   */
+  prerenders: z
+    .array(PrerenderPicture.extend({ standby: z.boolean().optional() }))
+    .max(PRERENDERS_MAX)
+    .optional(),
+  /**
+   * design/29 §1.3: the picture keys of the service's presentations (the hub's `prerender_keys`): the live
+   * process accepts `prerender.add` only for one of them. Absent when there are none.
+   */
+  prerenderKeys: z.array(ContentHash).max(PRERENDERS_MAX).optional(),
   manifestId: z.string(),
   /**
    * Content that failed validation at goLive and was quarantined (design/25): a bad slide is replaced by an
@@ -189,6 +233,17 @@ export type LiveState = {
   messages: StageMessage[];
   /** Set on clear-all; outputs fade audio and draw clear colour. */
   black: boolean;
+  /**
+   * design/29 §1.7: pictures the go-live bake made during the service (`prerender.add`, the hub's), newest last,
+   * at most `PRERENDERED_MAX`; `resolved` stays as it went live. Absent until the first; cleared at End service.
+   */
+  prerendered?: PrerenderPicture[];
+  /**
+   * design/29 §1.7: slides set to Live that draw from their picture for this service (`prerender.use`, the
+   * operator's "Use the picture for this slide during this service"), at most `DRAW_OVERRIDE_MAX`. The
+   * presentation (locked while live) is unchanged; cleared at End service.
+   */
+  drawOverride?: { presentationId: Id; slideId: Id }[];
 };
 
 /** Hub ms; clients derive it from a clock-offset estimate, so it need not be an integer. */
@@ -204,7 +259,7 @@ const ttlMs = z.number().int().min(0).max(86_400_000);
  * clock). Every variant is strict: unknown keys are rejected rather than silently stripped, so a client
  * on a newer protocol cannot smuggle fields the hub does not validate.
  */
-export const LiveEvent = z.discriminatedUnion('k', [
+const CLIENT_EVENTS = [
   z.object({ k: z.literal('goLive'), resolved: ResolvedPlaylist }).strict(),
   z.object({ k: z.literal('endService'), at }).strict(),
   z.object({ k: z.literal('select'), cueIndex }).strict(),
@@ -243,16 +298,28 @@ export const LiveEvent = z.discriminatedUnion('k', [
     .strict(),
   z.object({ k: z.literal('message.dismiss'), id: Id }).strict(),
   z.object({ k: z.literal('message.clear') }).strict(),
-]);
+  /** design/29 §1.7: the operator's "Use the picture for this slide during this service" (operate role). */
+  z.object({ k: z.literal('prerender.use'), presentationId: Id, slideId: Id }).strict(),
+] as const;
+/**
+ * design/29 §1.7, §1.11: a picture of a key of the live service the hub accepted during it (the go-live bake).
+ * Applied by the hub only (`LiveService.apply`): `LiveCommand` leaves it out, so no socket can send one.
+ */
+const PrerenderAdd = PrerenderPicture.extend({ k: z.literal('prerender.add') }).strict();
+export const LiveEvent = z.discriminatedUnion('k', [...CLIENT_EVENTS, PrerenderAdd]);
 export type LiveEvent = z.infer<typeof LiveEvent>;
 
 /**
- * Commands the operator submits. Identical to events except goLive, which carries only the playlist id;
- * the hub resolves it into a goLive event. A client-sent goLive with `resolved` is rejected by the hub.
+ * Commands the operator submits. Identical to events except goLive, which carries only the playlist id (the
+ * hub resolves it into a goLive event; a client-sent goLive with `resolved` is rejected by the hub), and
+ * `prerender.add`, which only the hub applies (design/29 §1.11): a protocol `live.event` or a POST /live/events
+ * carrying it is refused at its parse.
  */
 export const GoLiveCommand = z.object({ k: z.literal('goLive'), playlistId: Id }).strict();
-export const LiveCommand = z.union([GoLiveCommand, LiveEvent]);
-export type LiveCommand = Exclude<LiveEvent, { k: 'goLive' }> | z.infer<typeof GoLiveCommand>;
+export const LiveCommand = z.union([GoLiveCommand, z.discriminatedUnion('k', [...CLIENT_EVENTS])]);
+export type LiveCommand =
+  | Exclude<LiveEvent, { k: 'goLive' | 'prerender.add' }>
+  | z.infer<typeof GoLiveCommand>;
 
 export const MANUAL_ELAPSED_TIMER_ID = 'manual-elapsed';
 export const SERVICE_COUNTDOWN_TIMER_ID = 'service-countdown';

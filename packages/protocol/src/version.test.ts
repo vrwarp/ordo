@@ -24,7 +24,13 @@ import { APP_VERSION } from './index.ts';
 // 0.7.0 kept through wave r2b sub-wave 1 (its one bump, 0.8.0, is the wave PR's last commit): golive-prepare
 // (design/29 M8) adds the POST /live/prepare request and answer types, which no older client sends or reads;
 // units-live adds OutputHealth's optional unitsMade, unitsLate and unitCacheBytes, which an older hub's parse
-// strips. Each track re-recorded on its branch; the integrator records the merged digest once after the last merge.
+// strips; prerender-model (design/29) adds schemas.ts Slide.prerender, draw, cut and meta.draw, optional fields
+// nothing writes yet (an older client strips them), content.ts slideContent's picture form (used only when a
+// caller passes a picture file: none does yet), live.ts ResolvedPlaylist.prerenders and prerenderKeys (listed
+// only from the hub's picture rows: none yet), and in live.ts, live-state and protocol index.ts the
+// prerender.add (hub only) and prerender.use events, state.prerendered and state.drawOverride, which no client
+// sends before the sub-waves that use them. Each track re-recorded on its branch; the integrator records the
+// merged digest once after the sub-wave's last merge.
 const RECORDED = {
   version: '0.7.0',
   digest: '334a7ebc5c42278b4fedd33abcb7b1ee1f1acc810949f44545dc20e3bc84c2a7',
