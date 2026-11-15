@@ -149,7 +149,7 @@ describe('things to check on an output (design/27 §13, M7)', () => {
     expect(issues.map((i) => [i.id, i.level])).toEqual([['unitsLate', 'note']]);
     // design 29 §3, W49, word for word.
     expect(issues[0]!.label).toBe('Parts of 2 slides appeared a moment late on this screen.');
-    expect(issues[0]!.detail).toMatch(/41 parts? made ahead/);
+    expect(issues[0]!.detail).toMatch(/41 parts made ahead on this screen; 2 slide\(s\) shown before all were ready, the rest faded in/);
     expect(issues[0]!.detail).toMatch(/Unit cache 101 MB of 201 MB/);
     expect(outputIssues(entry({ unitsLate: 1 }))[0]!.label).toBe(
       'Parts of 1 slide appeared a moment late on this screen.',

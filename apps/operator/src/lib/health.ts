@@ -58,7 +58,7 @@ export function outputIssues(h: OutputHealthEntry | undefined): HealthIssue[] {
       id: 'unitsLate',
       level: 'note',
       label: `Parts of ${h.unitsLate} slide${h.unitsLate === 1 ? '' : 's'} appeared a moment late on this screen.`,
-      detail: `${h.unitsMade ?? 0} part${h.unitsMade === 1 ? '' : 's'} made ahead in slices on this screen; ${h.unitsLate} slide${h.unitsLate === 1 ? ' was' : 's were'} shown before all of theirs were ready (a jump to a slide not prepared yet, or a GO while it was being prepared), and the rest faded in. Unit cache ${mb(h.unitCacheBytes ?? 0)} MB of ${mb(UNIT_CACHE_BYTES)} MB. Showing slides in order lets the screens prepare them; if it happens in order too, check the computer's speed.`,
+      detail: `${h.unitsMade ?? 0} parts made ahead on this screen; ${h.unitsLate} slide(s) shown before all were ready, the rest faded in. Unit cache ${mb(h.unitCacheBytes ?? 0)} MB of ${mb(UNIT_CACHE_BYTES)} MB.`,
     });
   const alarms = new Set(h.alarms ?? []);
   const b = h.budgets;
