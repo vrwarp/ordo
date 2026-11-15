@@ -65,6 +65,8 @@ export const PROGRESS_TIMEOUT_MS = 1500;
 export const BUNDLE_CEILING_MS = 30_000;
 /** A bundle larger than this is never read whole: its service would be refused at goLive (W58). */
 export const BUNDLE_MAX_BYTES = 2 * GOLIVE_MAX_BYTES;
+/** The longest stretch of body chunks read without letting the live loop turn (design/29 M8). */
+const YIELD_MS = 2;
 /** How long a goLive waits for a library that is restarting before it falls back to the cached copy. */
 export const UP_WAIT_MS = 1500;
 const BUNDLES_KEEP = 8;
@@ -350,13 +352,20 @@ export class LibraryLink implements LiveSource {
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       const announced = Number(res.headers.get('content-length')) || undefined;
       if (announced && announced > BUNDLE_MAX_BYTES) throw new BundleTooLarge(announced);
-      const arm = () => {
-        clearTimeout(quiet);
-        quiet = setTimeout(() => abort(`no data for ${progressMs / 1000} s`), progressMs);
+      // One watchdog for the whole body (not a timer per chunk): it fires every PROGRESS_TIMEOUT_MS and gives
+      // up only when no byte came in that long.
+      let lastByte = Date.now();
+      const watch = () => {
+        const quietFor = Date.now() - lastByte;
+        if (quietFor >= progressMs) abort(`no data for ${progressMs / 1000} s`);
+        else quiet = setTimeout(watch, progressMs - quietFor);
       };
-      arm();
+      quiet = setTimeout(watch, progressMs);
       const sink = new SharedSink(announced);
       const reader = res.body.getReader();
+      // Chunks that arrive in a burst are read in slices of at most YIELD_MS, the loop free between them, so
+      // a GO arriving meanwhile is never held behind the copy.
+      let slice = performance.now();
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -365,8 +374,12 @@ export class LibraryLink implements LiveSource {
           ctrl.abort();
           throw new BundleTooLarge(sink.length);
         }
-        arm();
+        lastByte = Date.now();
         opts.onProgress?.(sink.length, announced);
+        if (performance.now() - slice > YIELD_MS) {
+          await new Promise((r) => setImmediate(r));
+          slice = performance.now();
+        }
       }
       this.lastError = undefined;
       return sink.bytes();
