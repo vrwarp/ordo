@@ -4,9 +4,15 @@ import {
   cellTextObject,
   type ImageCrop,
   type ImageObject,
+  deleteCol,
+  deleteRow,
+  insertCol,
   insertRow,
   placeCells,
   type Presentation,
+  type Rgba,
+  setCellFill,
+  TABLE_LIMITS,
   type SlideObject,
   setCell,
   type TableData,
@@ -341,6 +347,103 @@ export function inlineText(): { view: TextObject; target: TextTarget } | undefin
   if (t.cell === undefined) return o.type === 'text' ? { view: o, target: t } : undefined;
   const view = o.type === 'shape' ? cellTextObject(o, t.cell) : undefined;
   return view ? { view, target: t } : undefined;
+}
+
+// ---- A (tables): fills, rows and columns -----------------------------------------------------------
+
+/**
+ * 'Cell fill' (the table bar and panel): cell `cell` of table `objectId` filled with `color`, or with no fill
+ * (null); with no cell selected, every cell. One undo step (`setCellFill`).
+ */
+export function fillCells(objectId: string, cell: number | undefined, color: Rgba | null): void {
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table) return o;
+    const all = o.table.cells.map((_, i) => i);
+    return setCellFill(o, cell === undefined ? all : [cell], color);
+  });
+}
+
+/** The table bar's and panel's 'Rows & columns' ops. */
+export type RowColOp = 'rowAbove' | 'rowBelow' | 'colLeft' | 'colRight' | 'deleteRow' | 'deleteCol';
+
+/** The rows and columns menu, in its order, with what each says. */
+export const ROW_COL_OPS: readonly [RowColOp, string][] = [
+  ['rowAbove', 'Row above'],
+  ['rowBelow', 'Row below'],
+  ['colLeft', 'Column left'],
+  ['colRight', 'Column right'],
+  ['deleteRow', 'Delete row'],
+  ['deleteCol', 'Delete column'],
+];
+
+/**
+ * Whether `op` can be made on table `t` from cell `cell` (none: the whole table): a row or column added within
+ * `TABLE_LIMITS` (rows, columns, grid slots); a row or column deleted from a selected cell, never the last one.
+ */
+export function canRowCol(
+  t: Pick<TableData, 'rows' | 'cols' | 'cells'>,
+  op: RowColOp,
+  cell?: number,
+): boolean {
+  const { R, C, anchors } = placeCells(t);
+  if (!R || !C) return false;
+  switch (op) {
+    case 'rowAbove':
+    case 'rowBelow':
+      return R + 1 <= TABLE_LIMITS.rows && (R + 1) * C <= TABLE_LIMITS.grid;
+    case 'colLeft':
+    case 'colRight':
+      return C + 1 <= TABLE_LIMITS.cols && R * (C + 1) <= TABLE_LIMITS.grid;
+    case 'deleteRow':
+      return cell !== undefined && !!anchors[cell] && R > 1;
+    case 'deleteCol':
+      return cell !== undefined && !!anchors[cell] && C > 1;
+  }
+}
+
+/**
+ * 'Rows & columns' on table `objectId` (design/15 "Table editing"): from cell `cell` (its first row and column;
+ * a merged cell's span grows over an inserted line), or without one at the table's top, bottom, left or right
+ * edge. One undo step (`insertRow`, `deleteRow`, `insertCol`, `deleteCol`: a new line copies the look of the one
+ * beside it). The cell to select afterwards (the same cell where it moved, its neighbour when its line was
+ * deleted), or undefined when nothing changed or no cell was selected.
+ */
+export function rowCol(objectId: string, op: RowColOp, cell?: number): number | undefined {
+  const o = currentSlide()?.objects.find((x) => x.id === objectId);
+  if (o?.type !== 'shape' || !o.table || o.locked || !canRowCol(o.table, op, cell)) return undefined;
+  const { R, C, anchors } = placeCells(o.table);
+  const a = cell === undefined ? undefined : anchors[cell];
+  let next: number | undefined;
+  onObject(objectId, (x) => {
+    if (x.type !== 'shape' || !x.table) return x;
+    let y = x;
+    let at: { row: number; col: number } | undefined = a && { row: a.row, col: a.col };
+    if (op === 'rowAbove') {
+      y = a ? insertRow(x, a.row, a.row) : insertRow(x, 0, 0);
+      if (at) at.row++;
+    } else if (op === 'rowBelow')
+      y = a ? insertRow(x, a.row + a.rows, a.row + a.rows - 1) : insertRow(x, R, R - 1);
+    else if (op === 'colLeft') {
+      y = a ? insertCol(x, a.col, a.col) : insertCol(x, 0, 0);
+      if (at) at.col++;
+    } else if (op === 'colRight')
+      y = a ? insertCol(x, a.col + a.cols, a.col + a.cols - 1) : insertCol(x, C, C - 1);
+    else if (op === 'deleteRow' && a) {
+      y = deleteRow(x, a.row);
+      at = { row: Math.min(a.row, R - 2), col: a.col };
+    } else if (op === 'deleteCol' && a) {
+      y = deleteCol(x, a.col);
+      at = { row: a.row, col: Math.min(a.col, C - 2) };
+    }
+    if (y === x || !y.table) return x;
+    if (at) {
+      const p = placeCells(y.table);
+      const k = p.slots[at.row * p.C + at.col];
+      next = k !== undefined && k >= 0 ? k : undefined;
+    }
+    return y;
+  });
+  return next;
 }
 
 // ---- Rich clipboard (text & slide objects) ----------------------------------------------------------

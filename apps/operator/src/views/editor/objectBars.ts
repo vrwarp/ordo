@@ -1,5 +1,6 @@
 import type { Presentation, SlideObject } from '@ordo/domain';
 import type { ReactNode } from 'react';
+import { TableBar } from './TableTools.tsx';
 
 /*
  * The floating bar's bars (design/15 "Object bars"; the floating bar's counterpart of the Object panel's
@@ -63,8 +64,15 @@ export const OBJECT_BAR_ORDER = {
 
 export type BuiltinBarId = keyof typeof OBJECT_BAR_ORDER;
 
-/** Bars the M9 editor tracks add, one line each. */
-export const OBJECT_BARS: readonly ObjectBar[] = [];
+/** Bars the M9 editor tracks add, one line each (a table's, design/15 "Table editing"). */
+export const OBJECT_BARS: readonly ObjectBar[] = [
+  {
+    id: 'table',
+    order: OBJECT_BAR_ORDER.shape,
+    applies: (o) => o.type === 'shape' && !!o.table,
+    Component: TableBar,
+  },
+];
 
 const registered: ObjectBar[] = [];
 

@@ -107,9 +107,9 @@ describe('the floating bar registry (objectBars)', () => {
     expect(one('decor')).toBe('neutral');
     expect(one('locked')).toBe('neutral');
     expect(objectBarFor(o('rect'), true, BUILTIN_BARS)?.id).toBe('multi');
-    // No M9 bar is registered yet: a table gets the neutral bar.
-    expect(OBJECT_BARS).toEqual([]);
-    expect(one('table')).toBe('neutral');
+    // The table's bar is the one line of `OBJECT_BARS` (design/15 "Table editing").
+    expect(OBJECT_BARS.map((b) => b.id)).toEqual(['table']);
+    expect(one('table')).toBe('table');
     for (const b of BUILTIN_BARS) expect(b.order).toBe(OBJECT_BAR_ORDER[b.id as 'text']);
     // A registered bar stands in for the built-in ones it replaces, for what it applies to only.
     const off = registerObjectBar({

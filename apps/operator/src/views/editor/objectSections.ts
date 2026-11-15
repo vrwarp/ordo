@@ -1,5 +1,6 @@
 import type { Presentation, Slide, SlideObject } from '@ordo/domain';
 import type { ReactNode } from 'react';
+import { TableSection } from './TableTools.tsx';
 
 /*
  * The Object panel's sections (design/27 M9 render-seams; design/15): the panel (ObjectPanel.tsx) renders its
@@ -65,8 +66,16 @@ export const OBJECT_SECTION_ORDER = {
 
 export type BuiltinSectionId = keyof typeof OBJECT_SECTION_ORDER;
 
-/** Sections the M9 editor tracks add, one line each (none yet). */
-export const OBJECT_SECTIONS: readonly ObjectSection[] = [];
+/** Sections the M9 editor tracks add, one line each (a table's cells in place of the shape fields). */
+export const OBJECT_SECTIONS: readonly ObjectSection[] = [
+  {
+    id: 'table',
+    order: OBJECT_SECTION_ORDER.shape,
+    applies: (o) => o.type === 'shape' && !!o.table,
+    replaces: ['shape'],
+    Component: TableSection,
+  },
+];
 
 const registered: ObjectSection[] = [];
 

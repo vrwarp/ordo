@@ -562,7 +562,9 @@ fill, stroke), a picture's (Crop, Replace, Use as BG, loop) and the neutral bar,
 without a table, a chart or a decoration only: its geometry select and fill pill write the legacy fields
 (`shape`, `fill`, `gradient`) that only an older build draws for those, and a locked shape's fields are
 read-only, so those objects get the neutral bar (`test/objectBars.test.ts`). M9's editor tracks add their bars
-with one line in `OBJECT_BARS` (or `registerObjectBar` at run time), as the panel's sections are added.
+with one line in `OBJECT_BARS` (or `registerObjectBar` at run time), as the panel's sections are added: the
+table's is there (see "Table editing"); a chart and a decoration keep the neutral bar until their tracks add
+theirs.
 
 ### Table editing
 
@@ -591,6 +593,25 @@ _A table (`ShapeObject.table`, design/27 M9) is edited cell by cell (`SlideCanva
   drawn height (`drawnHeight`: rows grow with their text past `box.h`); a height drag sets `box.h` from it
   (a drag of the width alone keeps it, `tableBoxAfterTransform`); tables do not turn in the editor (no
   rotate handle; a stored turn is kept and drawn).
+- **The table bar and the Table section** (`TableTools.tsx`; the bar is `OBJECT_BARS`' table line, the section
+  `OBJECT_SECTIONS`' one, in place of the shape section). With a cell selected the bar is the text bar on the
+  cell's view (font, size, bold, italic, underline and superscript over a selection, colour, highlight,
+  alignment; `TextControls.tsx`), without uppercase, the contrast menu or shrink-to-fit (a cell style holds
+  none of them, domain `cellStyleOf`; a cell's row grows instead of its text shrinking), led by the cell's place
+  ('Row 2, column 3'); with the whole table selected it says 'Table'. Both have 'Cell fill' (solid or none,
+  `setCellFill`: the selected cell, or every cell with none selected) and 'Rows & columns' (Row above, Row below,
+  Column left, Column right, Delete row, Delete column: around the selected cell, at the table's edges with none;
+  each one undo step; disabled past `TABLE_LIMITS`, at the last row or column, and for a delete with no cell;
+  the selection follows its cell). The panel's section has the cell's text field (`#ordo-text-editor`, which
+  the canvas's inline editing types through while the panel is open; Ctrl+B, I and U format the selected
+  words), its font, size, Bold, Italic, colour and alignment, and the six row and column ops as buttons (44 px
+  under a finger). Not built: merging and splitting cells, borders, column widths, table styles.
+- **Find & Replace and New slide like this.** Find & Replace searches and replaces in the cells of every
+  unlocked table as in text boxes (`findInCells` in `ops/slides.ts`, the one place the find walks cells; a
+  match carries its `cell`); the Find card lists a cell's match and opens it for editing on the canvas. 'New
+  slide like this' empties a table's cells (text, runs and paragraph styles; each cell keeps its style, fill
+  and span). A table is never the lyric box, whatever `lyricObjectId` names, and 'Make lyric box' is not offered
+  for it.
 
 ### Canvas-first layout
 

@@ -38,6 +38,7 @@ Objects, in z-order, each selectable, movable, resizable, rotatable:
 | Text box | Position, size, text, font family, size, weight, style, colour, alignment (horizontal and vertical), line height, letter spacing, outline (width, colour), shadow (offset, blur, colour), padding, fill colour and opacity, corner radius |
 | Image    | Position, size, media reference, fit (contain, cover, stretch), opacity, corner radius                                                                                                                                                    |
 | Shape    | Rectangle, ellipse, line, PowerPoint shapes (geometry shown read-only); fill (solid colour or gradient), stroke (width, colour, dash, arrowheads on open lines), shadow, opacity, corner radius                                           |
+| Table    | Position, size; each cell's text and its formatting (font, size, bold, italic, underline, colour, alignment), cell fill (solid colour or none), rows and columns added and deleted; merged cells, borders and column widths shown as imported |
 
 - Multiple text boxes per slide. The first text box of a song slide is the lyric box and
   is what the lower-third and stage looks read.
@@ -57,6 +58,9 @@ Objects, in z-order, each selectable, movable, resizable, rotatable:
   silently missing on the screens. Something pasted that the editor cannot use is left out, and a part of
   the editor that fails to draw shows a message there while the rest of the app, the live controls
   included, keeps working.
+- Tables are edited cell by cell: a click on the selected table picks a cell, a double-click (or Enter) types
+  in it, Tab moves to the next cell and adds a row after the last one, as in PowerPoint; Find and replace also
+  finds text in tables. A table is never the lyric box.
 - Undo and redo within an editing session; save creates a presentation revision
   ([prd/05](05-library-media-import.md), version history).
 - Keyboard: arrow nudges, Shift for 10 px, Ctrl+D duplicate, Delete, Ctrl+Z, Ctrl+Y,

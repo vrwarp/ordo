@@ -211,7 +211,8 @@ describe('the Object panel sections (M9 render-seams)', () => {
   });
 
   it('lists the built-in sections in today’s order, each for the objects it served', () => {
-    expect(OBJECT_SECTIONS).toEqual([]);
+    // The one M9 section registered: a table's (design/15 "Table editing"), which applies to tables only.
+    expect(OBJECT_SECTIONS.map((s) => s.id)).toEqual(['table']);
     const ids = (o: SlideObject) => objectSectionsFor(o, BUILTIN_SECTIONS).map((x) => x.id);
     const [lyric, , photo, , , rect] = OBJECTS;
     expect(ids(lyric!)).toEqual([
