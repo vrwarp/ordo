@@ -182,8 +182,11 @@ async function main(): Promise<number> {
                   : BUDGET
         )[w]!;
         const checked = rich || bounded || warmTask;
-        // A '(warm task' row holds its slowest draw to the task too (r2a must a4), beside its p95.
-        const bad = checked && (r.steady.p95 > budget || (warmTask && r.steady.max > budget));
+        // A '(warm task' row holds its slowest draw to the task too (r2a must a4), beside its p95: printed as a
+        // budget of its own after the p95's, so a reader of '(budget p95 N ms)' reads the row as before.
+        const p95Bad = checked && r.steady.p95 > budget;
+        const maxBad = warmTask && r.steady.max > budget;
+        const bad = p95Bad || maxBad;
         if (second) {
           const late = r.steady.max > SECOND_DRAW[w]!;
           if (late) over++;
@@ -193,7 +196,7 @@ async function main(): Promise<number> {
         }
         if (bad) over++;
         console.log(
-          `  raster ${w}: first ${ms(r.first)} ms; per job ${fmt(r.steady)}${checked ? ` (budget p95${warmTask ? ' and max' : ''} ${budget} ms${bad ? ': OVER' : ''})` : ''}${rich ? `; paint only ${fmt(r.paintOnly)}` : ''}`,
+          `  raster ${w}: first ${ms(r.first)} ms; per job ${fmt(r.steady)}${checked ? ` (budget p95 ${budget} ms${p95Bad ? ': OVER' : ''})` : ''}${warmTask ? ` (budget max ${budget} ms${maxBad ? ': OVER' : ''})` : ''}${rich ? `; paint only ${fmt(r.paintOnly)}` : ''}`,
         );
         const alt = r.alternation;
         if (alt) {
