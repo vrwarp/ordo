@@ -288,3 +288,65 @@ export function showcaseSlide(as: 'shapes' | 'decor', shadows = 12): Slide {
   };
   return { id: `showcase-${as}`, objects: [backdrop, ...(as === 'shapes' ? shapes : [decorOf(shapes)])] };
 }
+
+/** A star of `n` points about (cx, cy) as a path string (every other point at 0.55 of the radius). */
+function star(cx: number, cy: number, r: number, n: number): string {
+  const p: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const k = i % 2 ? 0.55 : 1;
+    p.push(
+      `${i ? 'L' : 'M'} ${(cx + r * k * Math.cos(a)).toFixed(2)} ${(cy + r * k * Math.sin(a)).toFixed(2)}`,
+    );
+  }
+  return `${p.join(' ')} Z`;
+}
+
+/**
+ * A decoration at its caps (`DECOR_LIMITS`): 256 stars of 64 points over the slide (16,384 points), the first 24
+ * shadowed, a traced ornament layer as the Slidesmania templates hold them (one-colour pieces, some outlined):
+ * about 100-115 ms drawn at once at 3840 (the bench's row, the effect units' tests).
+ */
+export function cappedSlide(): Slide {
+  const parts: DecorPart[] = [];
+  for (let i = 0; i < 256; i++) {
+    const col = i % 16;
+    const row = Math.floor(i / 16);
+    parts.push({
+      d: star(60 + col * 120, 34 + row * 67, 22 + (i % 5) * 3, 63),
+      p: i < 24 ? 4 + (i % 2) : i % 4,
+      s: 1,
+    });
+  }
+  const shadow = { dx: 3, dy: 4, blur: 6, color: { r: 0, g: 0, b: 0, a: 0.5 } };
+  const decor: DecorData = {
+    w: 1920,
+    h: 1080,
+    paints: [
+      { fill: { r: 240, g: 190, b: 40, a: 1 } },
+      {
+        fill: { r: 30, g: 150, b: 140, a: 0.8 },
+        stroke: { width: 1, color: { r: 255, g: 255, b: 255, a: 1 } },
+      },
+      { fill: { r: 210, g: 60, b: 50, a: 1 } },
+      {
+        fill: { r: 255, g: 255, b: 255, a: 0.85 },
+        stroke: { width: 0.75, color: { r: 20, g: 40, b: 90, a: 1 } },
+      },
+      { fill: { r: 255, g: 255, b: 255, a: 1 }, shadow },
+      { fill: { r: 20, g: 40, b: 90, a: 1 }, shadow },
+    ],
+    parts,
+  };
+  const o: ShapeObject = {
+    id: 'decor',
+    type: 'shape',
+    box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+    shape: 'line',
+    opacity: 1,
+    radius: 0,
+    decor,
+    locked: true,
+  };
+  return { id: 'decor-capped', objects: [o] };
+}

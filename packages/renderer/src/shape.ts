@@ -3,7 +3,7 @@ import type { Box, ShapeObject } from '@ordo/domain';
 import { CLAMP, clampObject, isClamped, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
 import { digest } from './digest.ts';
-import { drawEffected, type Look3dPlan } from './effects.ts';
+import { drawEffected, type EffectSource, type Look3dPlan } from './effects.ts';
 import { type Bounds, drawnBounds, geomBounds } from './geom/bounds.ts';
 import {
   drawGeom,
@@ -14,9 +14,11 @@ import {
   pathOpen,
 } from './geom/draw.ts';
 import { arrowFor, arrowReach } from './geom/ends.ts';
+import { drawCost, fillPaintOf, GEOM_COST } from './geom/cost.ts';
+import { CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from './geom/ops.ts';
 import { hasShapeExtras, lineStyleOf, outlineOf, SHAPE_MITER_LIMIT } from './geom/outline.ts';
 import { gradientStyle } from './geom/paint.ts';
-import type { BuiltGeom } from './geom/path.ts';
+import type { BuiltGeom, GeomPath } from './geom/path.ts';
 import { geomAwaited, geomPending, legacyGeometry, storedGeometry } from './geom/stored.ts';
 
 /*
@@ -214,6 +216,49 @@ export function registerShapeDrawer(kind: ShapeDrawKind, draw: ShapeDrawer, reac
   };
 }
 
+/**
+ * What effect units (units.ts) and the drawing budget (geombudget.ts) read of a decoration: the decoration
+ * module's own functions (`decor/draw.ts`), registered with its drawer (`decor/index.ts`), so that neither
+ * loads that module (it is loaded the first time a slide holds a decoration, `loadShapeDrawers`). Until it is,
+ * a decoration draws nothing and costs nothing.
+ */
+export interface DecorHooks {
+  /** Past `DECOR_SPRITE` (points or shadowed shapes): one long call drawn whole, a unit on the outputs. */
+  capped(o: ShapeObject): boolean;
+  /** Its source shapes (`decorShapeCount`): what `range` draws in pieces. */
+  count(o: ShapeObject): number;
+  /** Draws source shapes `from` to `to` (excluded), never through its sprite (`drawDecorRange`). */
+  range(ctx: Ctx2D, o: ShapeObject, scale: number, from: number, to: number): void;
+  /** Its drawing estimate and its shadows' weighted area (`decorCost`). */
+  cost(o: ShapeObject): { est: number; effects: number };
+  /** Where it draws on the slide, its shadows included (`decorReach`; logical px; null: unknown). */
+  reach(o: ShapeObject): { x: number; y: number; w: number; h: number } | null | undefined;
+}
+
+let decorHooksNow: DecorHooks | undefined;
+let decorHooksVersion = 0;
+
+/** Register the decoration's hooks (one at a time); returns its unregistration. */
+export function registerDecorHooks(h: DecorHooks): () => void {
+  decorHooksNow = h;
+  decorHooksVersion++;
+  return () => {
+    if (decorHooksNow !== h) return;
+    decorHooksNow = undefined;
+    decorHooksVersion++;
+  };
+}
+
+/** The decoration's hooks, once its module is loaded. */
+export function decorHooks(): DecorHooks | undefined {
+  return decorHooksNow;
+}
+
+/** Changes whenever the decoration's hooks are registered or unregistered (memos of costs and plans read it). */
+export function decorHooksGeneration(): number {
+  return decorHooksVersion;
+}
+
 /** Whether a drawer of `kind` is registered (its module is loaded). */
 export function shapeDrawerRegistered(kind: ShapeDrawKind): boolean {
   return drawers.has(kind);
@@ -390,8 +435,240 @@ export function geomShapeSteps(raw: ShapeObject, scale: number): ((ctx: Ctx2D) =
   return steps;
 }
 
-/** Draw a shape with M6 fields (`hasShapeExtras`) at `scale` device px per logical px. */
-export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void {
+/** A 2D affine's six numbers (what a context's transform holds). */
+export type Affine = { a: number; b: number; c: number; d: number; e: number; f: number };
+
+/**
+ * The device transform of a box's space (0..w, 0..h, logical px) at `scale`: what `placeBox` sets on an
+ * untransformed context (flipped about the box's centre, rotated about it, scaled), worked out without one.
+ */
+export function boxTransform(box: Box, scale: number, flipH = false, flipV = false): Affine {
+  const th = box.rotation ? (box.rotation * Math.PI) / 180 : 0;
+  const cos = Math.cos(th);
+  const sin = Math.sin(th);
+  const sx = scale * (flipH ? -1 : 1);
+  const sy = scale * (flipV ? -1 : 1);
+  const a = cos * sx;
+  const b = sin * sx;
+  const c = -sin * sy;
+  const d = cos * sy;
+  return {
+    a,
+    b,
+    c,
+    d,
+    e: (box.x + box.w / 2) * scale - a * (box.w / 2) - c * (box.h / 2),
+    f: (box.y + box.h / 2) * scale - b * (box.w / 2) - d * (box.h / 2),
+  };
+}
+
+/** Coordinate pairs a path command takes. */
+function pairsOf(op: number): number {
+  return op === CMD_MOVE || op === CMD_LINE ? 1 : op === CMD_QUAD ? 2 : op === CMD_CUBIC ? 3 : 0;
+}
+
+/** A path's sub-paths (each from its moveTo), as paths of their own with the path's fill mode and stroke flag. */
+function subPaths(p: GeomPath): GeomPath[] {
+  const out: GeomPath[] = [];
+  let cmds: number[] = [];
+  let pts: number[] = [];
+  let at = 0;
+  const flush = () => {
+    if (cmds.length) out.push({ ...p, cmds, pts });
+    cmds = [];
+    pts = [];
+  };
+  for (const op of p.cmds) {
+    if (op === CMD_MOVE) flush();
+    cmds.push(op);
+    const n = pairsOf(op);
+    for (let j = 0; j < n && at + 1 < p.pts.length; j++, at += 2) pts.push(p.pts[at]!, p.pts[at + 1]!);
+  }
+  flush();
+  return out;
+}
+
+const groupMemo = new WeakMap<GeomPath, Map<number, GeomPath[] | null>>();
+
+/**
+ * A path's sub-paths in groups (in order) whose outline is drawn within `slice` drawing units a call
+ * (`drawCost` of the group, its points charged): greedily by their costs alone with a margin of two, then any
+ * group over `slice` split in halves until it is within (edges side by side in one group cost more together, as
+ * they share the scan converter's bands). Undefined when one sub-path's outline alone is past
+ * `GEOM_COST.geometry`: no call within a task draws it. Memoised per path and slice.
+ */
+function strokeGroups(
+  o: ShapeObject,
+  built: BuiltGeom,
+  p: GeomPath,
+  outline: ReturnType<typeof outlineOf>,
+  slice: number,
+): GeomPath[] | undefined {
+  let m = groupMemo.get(p);
+  if (!m) groupMemo.set(p, (m = new Map()));
+  const hit = m.get(slice);
+  if (hit !== undefined) return hit ?? undefined;
+  const spec = { fill: false, outline, paint: fillPaintOf(o) };
+  const costOf = (g: GeomPath) =>
+    drawCost({ w: built.w, h: built.h, paths: [g] }, spec) + (g.pts.length / 2) * GEOM_COST.point;
+  const join = (g: GeomPath[]): GeomPath => ({
+    ...p,
+    cmds: g.flatMap((x) => x.cmds),
+    pts: g.flatMap((x) => x.pts),
+  });
+  const out: GeomPath[] = [];
+  const refine = (g: GeomPath[]) => {
+    const one = join(g);
+    if (g.length > 1 && costOf(one) > slice) {
+      const half = Math.ceil(g.length / 2);
+      refine(g.slice(0, half));
+      refine(g.slice(half));
+    } else out.push(one);
+  };
+  let group: GeomPath[] = [];
+  let cost = 0;
+  let hostile = false;
+  for (const sub of subPaths(p)) {
+    const c = costOf(sub);
+    if (!(c <= GEOM_COST.geometry)) {
+      hostile = true;
+      break;
+    }
+    if (group.length && cost + c > slice / 2) {
+      refine(group);
+      group = [];
+      cost = 0;
+    }
+    group.push(sub);
+    cost += c;
+  }
+  if (!hostile && group.length) refine(group);
+  const r = hostile ? undefined : out;
+  m.set(slice, r ?? null);
+  return r;
+}
+
+/**
+ * The drawing estimates of a sliced shape's outline calls (`geomBodySteps` with `slice`: one a group of
+ * sub-paths), in order; undefined when it cannot be sliced (tests and the bench read them).
+ */
+export function geomSlices(raw: ShapeObject, slice: number): number[] | undefined {
+  const o = clampShapeObject(raw);
+  if (!o.stroke || o.ends || geomAwaited(o.geom)) return undefined;
+  const built = shapeGeometry(o);
+  const outline = outlineOf(o, num(o.stroke.width, 0, CLAMP.maxEffectPx, 1));
+  const spec = { fill: false, outline, paint: fillPaintOf(o) };
+  const out: number[] = [];
+  for (const p of built.paths) {
+    if (!p.stroke) continue;
+    const groups = strokeGroups(o, built, p, outline, slice);
+    if (!groups) return undefined;
+    for (const g of groups)
+      out.push(drawCost({ w: built.w, h: built.h, paths: [g] }, spec) + (g.pts.length / 2) * GEOM_COST.point);
+  }
+  return out;
+}
+
+/**
+ * A shape's draw calls under its box space (the context's transform maps it) at full alpha, in `drawGeom`'s
+ * order: each path's fill and its closed outline, then the open outlines. What its effects path draws as one
+ * call (`EffectSource.draw`), cut into one call a step, so the steps drawn in order on one canvas give its
+ * pixels: what an effect unit draws its body and its layers' silhouettes with (units.ts). With `slice` (a
+ * sliced unit: a geometry past `GEOM_COST.slide` on its own), each outline is cut further into groups of
+ * sub-paths whose drawing estimates add up to at most `slice` (a fill stays one call: its holes need it whole,
+ * and a fill past `GEOM_COST.geometry` is drawn as the legacy shape anyway). Undefined when one sub-path's
+ * outline alone is past `GEOM_COST.geometry` (no call within a task draws it), or a sliced shape has
+ * arrowheads (they follow the whole path). Empty for a shape whose geometry file is not read yet.
+ */
+export function geomBodySteps(raw: ShapeObject, slice?: number): ((c: Ctx2D) => void)[] | undefined {
+  const o = clampShapeObject(raw);
+  if (geomAwaited(o.geom)) return [];
+  if (slice !== undefined && o.ends) return undefined;
+  const built = shapeGeometry(o);
+  const draw =
+    (path: GeomPath, fill: boolean, stroke: boolean) =>
+    (c: Ctx2D): void => {
+      const plan = planOf(c, o);
+      const f = fill ? plan.fill : null;
+      const st = stroke ? plan.stroke : null;
+      if (!f && !st) return;
+      c.save();
+      styleLines(c, o);
+      drawGeom(c, { ...plan.built, paths: [path] }, f, st);
+      c.restore();
+    };
+  const steps: ((c: Ctx2D) => void)[] = [];
+  const open: GeomPath[] = [];
+  const outline = o.stroke ? outlineOf(o, num(o.stroke.width, 0, CLAMP.maxEffectPx, 1)) : undefined;
+  const strokes = (p: GeomPath): ((c: Ctx2D) => void)[] | undefined => {
+    if (slice === undefined) return [draw(p, false, true)];
+    const groups = strokeGroups(o, built, p, outline, slice);
+    return groups?.map((g) => draw(g, false, true));
+  };
+  for (const p of built.paths) {
+    steps.push(draw(p, true, false));
+    if (!o.stroke || !p.stroke) continue;
+    if (pathOpen(p, built)) open.push(p);
+    else {
+      const s = strokes(p);
+      if (!s) return undefined;
+      steps.push(...s);
+    }
+  }
+  for (const p of open) {
+    const s = strokes(p);
+    if (!s) return undefined;
+    steps.push(...s);
+  }
+  return steps;
+}
+
+/**
+ * A shape's effects as `drawGeomShape` hands them to `drawEffected`, under the device transform `m` of its box
+ * space (`boxTransform`), not cached (an effect unit keeps what it makes): its silhouettes, outline, shadow, glow
+ * and soft edge, and `draw` (the whole shape at full alpha). Undefined when it has no effect to draw.
+ */
+export function geomEffectSource(raw: ShapeObject, m: Affine): EffectSource | undefined {
+  const o = clampShapeObject(raw);
+  if (geomAwaited(o.geom) || !(o.shadow || o.glow || o.softEdge)) return undefined;
+  const built = shapeGeometry(o);
+  const outline = o.stroke ? outlineOf(o, num(o.stroke.width, 0, CLAMP.maxEffectPx, 1)) : undefined;
+  const stroked = !!(o.stroke && outline);
+  const filled = !(o.shape === 'line' && !o.geom) && !!(o.gradient || o.fill);
+  let fillPath: Path2D | undefined;
+  let strokePaths: Path2D[] | undefined;
+  return {
+    transform: m as DOMMatrix,
+    scale: Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)),
+    bounds: drawnBounds(built, stroked ? outline : undefined),
+    draw: (c) => {
+      const plan = planOf(c, o);
+      styleLines(c, o);
+      drawGeom(c, plan.built, plan.fill, plan.stroke);
+    },
+    get fill() {
+      if (!filled) return undefined;
+      fillPath ??= geomFillPath2D(built);
+      return fillPath;
+    },
+    get strokes() {
+      if (!stroked) return undefined;
+      strokePaths ??= built.paths.filter((p) => p.stroke).map(geomPath2D);
+      return strokePaths;
+    },
+    lineWidth: stroked ? outline!.width : 0,
+    ...lineStyleOf(o),
+    shadow: o.shadow,
+    glow: o.glow,
+    softEdge: o.softEdge,
+  };
+}
+
+/**
+ * Draw a shape with M6 fields (`hasShapeExtras`) at `scale` device px per logical px. `part` 'body' (an effect
+ * unit's 'layers', units.ts: its shadow and glow come from the unit) draws the shape without its effects.
+ */
+export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number, part?: 'body'): void {
   const o = clampShapeObject(raw);
   // A geometry only in a file not read yet draws nothing until it is (`geomAwaited`).
   if (geomAwaited(o.geom)) return;
@@ -405,7 +682,11 @@ export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void
     o.look3d && look3dResolver && typeof ctx.getTransform === 'function'
       ? look3dResolver(o, ctx.getTransform(), plan.built)
       : undefined;
-  if ((o.shadow || o.glow || o.softEdge || look3d) && typeof ctx.getTransform === 'function') {
+  if (
+    part !== 'body' &&
+    (o.shadow || o.glow || o.softEdge || look3d) &&
+    typeof ctx.getTransform === 'function'
+  ) {
     const m = ctx.getTransform();
     const device = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
     const drawn = drawEffected(

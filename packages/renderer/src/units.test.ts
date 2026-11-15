@@ -15,12 +15,11 @@ import {
   makeUnit,
   prepareSlideUnits,
   putUnit,
+  setEffectUnits,
   slideUnits,
   slideUnitsLeft,
   UNIT_SLIDE_AREAS,
-  UNIT_VERSION,
   unitCache,
-  unitKey,
   unitOf,
   unitReady,
   unitsOfSlide,
@@ -71,6 +70,9 @@ function busySlide(extra: Partial<ShapeObject> = {}): Slide {
     objects: Array.from({ length: 12 }, (_, i) =>
       shape(`z${i}`, {
         box: { x: 50 + (i % 4) * 400 + i, y: 50 + Math.floor(i / 4) * 250, w: 700, h: 500, rotation: 0 },
+        // Each its own colour: units are keyed by what they draw, not where (units.key.test.ts), so twelve
+        // identical shapes inside the frame would share one.
+        fill: { r: i, g: 0, b: 0, a: 1 },
         ...extra,
       }),
     ),
@@ -195,29 +197,7 @@ describe('geometry units (M9 Slow-to-draw, Runtime)', () => {
     expect(images(sprite)).toHaveLength(1);
   });
 
-  it('keys a unit by what it draws: not its id, its effects or editor fields; its geometry by file hash', () => {
-    const a = shape('a');
-    const rect = { x: 0, y: 0, w: 10, h: 10 };
-    const key = unitKey(a, 1, rect);
-    expect(key.startsWith(`u${UNIT_VERSION}:`)).toBe(true);
-    expect(unitKey({ ...a, id: 'b', origin: { src: 'pptx' }, locked: true }, 1, rect)).toBe(key);
-    expect(unitKey({ ...a, fill: { r: 9, g: 0, b: 0, a: 1 } }, 1, rect)).not.toBe(key);
-    expect(unitKey({ ...a, box: { ...a.box, rotation: 10 } }, 1, rect)).not.toBe(key);
-    expect(unitKey({ ...a, flipH: true }, 1, rect)).not.toBe(key);
-    expect(unitKey(a, 2, rect)).not.toBe(key);
-    expect(unitKey(a, 1, { ...rect, x: 1 })).not.toBe(key);
-    expect(unitKey(a, 1, { ...rect, w: 11 })).not.toBe(key);
-    const f1 = unitKey({ ...a, geom: { ref: 'f'.repeat(64) } } as SlideObject, 1, rect);
-    expect(f1).not.toBe(unitKey({ ...a, geom: { ref: 'e'.repeat(64) } } as SlideObject, 1, rect));
-    // Effects are not drawn on a unit: a shadowed copy of a shape asks for the same unit.
-    const plain = objectsOf(busySlide());
-    const shadowed = objectsOf(
-      busySlide({ shadow: { dx: 4, dy: 4, blur: 8, color: { r: 0, g: 0, b: 0, a: 0.5 } } }),
-    );
-    const u = unitOf(shadowed.at(-1)!, 1)!;
-    expect(u.key).toBe(unitOf(plain.at(-1)!, 1)!.key);
-    expect((u.drawn as ShapeObject).shadow).toBeUndefined();
-  });
+  // Unit keys: units.key.test.ts (effect units key what a unit draws, its effects and kind included).
 
   it("a geometry file not read yet makes no unit; once read, the slide's units are worked out again", () => {
     const hash = 'a'.repeat(64);
@@ -474,26 +454,28 @@ describe('making geometry units in slices', () => {
     const units = slideUnits(objects, 2);
     expect(units.length).toBeGreaterThan(0);
     for (const u of units) expect(u.drawn.type === 'shape' && u.drawn.shadow).toEqual(shadow);
-    // The unit reaches over the shadow (its rect is the reach of what it draws), and its key differs from the
-    // unit of the shape without its effects.
-    const bare = unitOf(units[0]!.object, 2, false)!;
+    // The unit reaches over the shadow (its rect is the composite of the shape and its layers), and its key
+    // differs from the unit 62a1c3a made of the shape without its effects (`setEffectUnits(false)`, 'both').
+    setEffectUnits(false);
+    const bare = unitOf(units[0]!.object, 2, 'both')!;
+    setEffectUnits(true);
     expect(bare.drawn.type === 'shape' && bare.drawn.shadow).toBeFalsy();
     expect(units[0]!.key).not.toBe(bare.key);
     expect(units[0]!.rect.x + units[0]!.rect.w).toBeGreaterThan(bare.rect.x + bare.rect.w);
-    // Made in one call through the effects path: the shadow's layer is drawn on the scratch, then the copy.
+    // Made in steps through the effects path (`effectSteps`): the shadow's reduced layer painted call by call
+    // and blurred, enlarged into the composite in bands, the shape over it call by call, then the composite's
+    // part on the frame copied into the unit in bands: more than one step, none of a full frame's scratch.
     vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
     FakeOffscreenCanvas.made = [];
     const before = unitWork();
     expect(await makeUnit(units[0]!, { slice: async (fn) => fn(), check: () => {} })).toBeDefined();
-    expect(unitWork().steps - before.steps).toBe(3);
-    const scratch = FakeOffscreenCanvas.made.find((c) => c.width === 3840 && c.height === 2160)!;
-    const calls = scratch.ctx.trace.filter((e) => e[0] === 'call').map((e) => e[1]);
-    // The composite of the shape and its shadow, copied onto the frame's scratch.
-    expect(calls).toContain('drawImage');
-    const layers = FakeOffscreenCanvas.made.filter(
-      (c) => c !== scratch && c.ctx.trace.some((e) => e[1] === 'fill'),
-    );
-    expect(layers.length).toBeGreaterThan(0);
+    expect(unitWork().steps - before.steps).toBeGreaterThan(3);
+    expect(FakeOffscreenCanvas.made.find((c) => c.width === 3840 && c.height === 2160)).toBeUndefined();
+    const layers = FakeOffscreenCanvas.made.filter((c) => c.ctx.trace.some((e) => e[1] === 'fill'));
+    expect(layers.length).toBeGreaterThan(1);
+    expect(
+      FakeOffscreenCanvas.made.some((c) => c.width === units[0]!.rect.w && c.height === units[0]!.rect.h),
+    ).toBe(true);
     // The same slide past the effect budget as well ('both'): its units draw the shape without its shadow.
     const objectsBoth = objectsOf(busySlide({ shadow: { ...shadow, blur: 400, dx: 0, dy: 0 } }));
     const copiesBoth = slideBudget(objectsBoth);
@@ -501,8 +483,18 @@ describe('making geometry units in slices', () => {
       (o) => legacyOf(copiesBoth.get(o)!)?.part === 'both',
     );
     expect(both.length).toBeGreaterThan(0);
+    // Effect units draw them with their shadows all the same (never a legacy copy); off (`setEffectUnits`), as
+    // 62a1c3a did, without.
     for (const u of slideUnits(objectsBoth, 2))
-      if (both.includes(u.object)) expect(u.drawn.type === 'shape' && u.drawn.shadow).toBeFalsy();
+      if (both.includes(u.object)) expect(u.drawn.type === 'shape' && u.drawn.shadow).toBeTruthy();
+    setEffectUnits(false);
+    try {
+      expect(slideUnits(objectsBoth, 2).length).toBeGreaterThan(0);
+      for (const u of slideUnits(objectsBoth, 2))
+        if (both.includes(u.object)) expect(u.drawn.type === 'shape' && u.drawn.shadow).toBeFalsy();
+    } finally {
+      setEffectUnits(true);
+    }
   });
 
   it('says which objects past the budget get no unit, and why', () => {
@@ -534,8 +526,17 @@ describe('making geometry units in slices', () => {
         }),
       ),
     });
-    const plainLeft = slideUnitsLeft(plain, 2);
-    if (overGeomBudget(plain).size) expect(new Set(plainLeft)).toEqual(new Set(['kind']));
+    // Effect units draw it (its gradient kept) within the slide's frame of units, the rest past it ('area');
+    // off (`setEffectUnits`), as 62a1c3a did, none ('kind').
+    expect(overGeomBudget(plain).size).toBeGreaterThan(0);
+    expect(slideUnits(plain, 2).length).toBeGreaterThan(0);
+    expect(new Set(slideUnitsLeft(plain, 2))).toEqual(new Set(['area']));
+    setEffectUnits(false);
+    try {
+      expect(new Set(slideUnitsLeft(plain, 2))).toEqual(new Set(['kind']));
+    } finally {
+      setEffectUnits(true);
+    }
   });
 
   it('makes no unit for an object no task could draw: it keeps its legacy copy', () => {

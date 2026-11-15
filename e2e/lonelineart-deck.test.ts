@@ -8,7 +8,7 @@ import type { ShapeElement } from '../packages/pptx-scene/src/ir.ts';
 import { charged, GEOM_COST } from '../packages/renderer/src/geom/cost.ts';
 import { clearGeomFiles, putGeomFile } from '../packages/renderer/src/geom/stored.ts';
 import { drawnCost, slideBudget } from '../packages/renderer/src/geombudget.ts';
-import { slideUnitsLeft } from '../packages/renderer/src/units.ts';
+import { slideUnits, slideUnitsLeft } from '../packages/renderer/src/units.ts';
 import { afterAll, describe, expect, it } from 'vitest';
 import { LONE_CHAIN, loneLineArtDeck } from './pptxdecks.ts';
 
@@ -16,7 +16,7 @@ import { LONE_CHAIN, loneLineArtDeck } from './pptxdecks.ts';
  * The deck `effect-units.spec.ts` imports for its lone line art (`pptxdecks.ts` `loneLineArtDeck`): one thin
  * chain whose drawing alone passes the slide's drawing budget, which no single draw call within a task draws.
  * At 62a1c3a such a shape got no unit (`slideUnitsLeft` 'alone', the census's one failing case) and its legacy
- * copy, a line, drew nothing on the outputs.
+ * copy, a line, drew nothing on the outputs; a sliced unit draws it now (units.alone.test.ts).
  */
 describe('the lone line-art deck of the effect-units spec', () => {
   afterAll(() => clearGeomFiles());
@@ -46,8 +46,10 @@ describe('the lone line-art deck of the effect-units spec', () => {
       const copies = [...slideBudget(objects)];
       expect(copies.map(([o]) => o.id)).toEqual([chain[0]!.id]);
       expect(copies[0]![1]).toMatchObject({ shape: 'line' });
-      // 62a1c3a: no unit, its legacy copy (a line without a fill) draws nothing.
-      expect(slideUnitsLeft(objects, 2)).toEqual(['alone']);
+      // 62a1c3a gave it no unit (slideUnitsLeft ['alone']): its legacy copy, a line without a fill, drew
+      // nothing. A sliced unit draws it now, one group of its rings a step.
+      expect(slideUnitsLeft(objects, 2)).toEqual([]);
+      expect(slideUnits(objects, 2).map((u) => u.kind)).toEqual(['sliced']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

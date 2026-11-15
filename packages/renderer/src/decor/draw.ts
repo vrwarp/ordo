@@ -73,8 +73,9 @@ import { decorFilesVersion, decorParts, decorPending } from './files.ts';
  *   `files.ts` before the slide is drawn); while it is read its parts are drawn and `parts` is ignored; until
  *   then the decoration draws its inline parts (the converter leaves them empty: nothing).
  * - **Time.** One decoration is drawn in one call: at its caps (16,384 points, 24 shadowed shapes) about
- *   100 ms cold at 3840 on a shared 4-CPU machine, past design/27 §13's 50 ms task, until the outputs' effect
- *   units draw it in slices of `drawDecorRange` (design/27 §13, an open must item before release).
+ *   100 ms cold at 3840 on a shared 4-CPU machine, past design/27 §13's 50 ms task. On the outputs a decoration
+ *   past `DECOR_SPRITE` (`decorCapped`) is drawn from an effect unit made in slices of `drawDecorRange` (units.ts),
+ *   and an output raster leaves it out until its unit is made (drawSlide2D's `late`), never drawing it at once.
  *
  * `index.ts` registers `drawDecor` as the 'decor' drawer of the shape dispatch (`shape.ts`).
  */
@@ -553,6 +554,19 @@ function drawDecorSprite(ctx: Ctx2D, d: DecorData, geo: DecorGeometry, opacity: 
  */
 export function drawDecor(ctx: Ctx2D, o: ShapeObject, scale: number): boolean {
   return drawDecorShapes(ctx, o, scale, 0, Number.POSITIVE_INFINITY, true);
+}
+
+/**
+ * Whether a shape's decoration is past `DECOR_SPRITE` (more points or shadowed shapes): drawn at once it is one
+ * long call (at its caps about 100-115 ms at 3840), so the outputs draw it from an effect unit made in slices of
+ * `drawDecorRange` (units.ts) and the other drawers through its sprite from its second draw.
+ */
+export function decorCapped(raw: ShapeObject): boolean {
+  const o = clampShapeObject(raw);
+  const d = drawnDecor(o);
+  if (!d || !(num(o.opacity, 0, 1, 1) > 0)) return false;
+  const geo = decorShapes(d);
+  return !!geo.bounds && (geo.points > DECOR_SPRITE.points || geo.shadowed > DECOR_SPRITE.shadowed);
 }
 
 /** The source shapes a shape's decoration draws (`decorShapes`), 0 without one: what `drawDecorRange` counts. */

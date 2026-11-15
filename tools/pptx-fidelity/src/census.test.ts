@@ -220,8 +220,9 @@ describe('legacyColumns (M9 leaf-legacy)', () => {
     expect(legacyColumns(slide([]))).toEqual({});
   });
 
-  it('counts an object past the drawing budget alone, which no geometry unit draws (r2a repair)', () => {
-    // One full-slide line art of 8 paths with 20 x 15 holes each: about 1.2 x GEOM_COST.slide alone.
+  it('counts an object past the drawing budget alone that no unit draws (r2a repair, r2b effect units)', () => {
+    // One full-slide line art of 8 paths with 20 x 15 holes each: about 1.2 x GEOM_COST.slide alone. 62a1c3a
+    // counted it alone (no geometry unit drew it); a sliced unit draws it now, one path's fill a step.
     const art = {
       id: 'art',
       type: 'shape',
@@ -238,7 +239,23 @@ describe('legacyColumns (M9 leaf-legacy)', () => {
         })),
       },
     } as Slide['objects'][number];
-    expect(legacyColumns(slide([art]))).toEqual({ budgetLegacy: 1, unitsLeft: 1, unitsAlone: 1 });
+    expect(legacyColumns(slide([art]))).toEqual({ budgetLegacy: 1 });
+    // One sub-path stroked 500 px wide: its one outline alone is past the per-call bound (GEOM_COST.geometry),
+    // so no unit draws it and its legacy copy stays (the ratchet fails this anywhere).
+    let d = 'M 1000 1000';
+    for (let k = 1; k < 250; k++) {
+      const a = (k / 250) * Math.PI * 2 * 37;
+      const r = k % 2 ? 1000 : 50;
+      d += ` L ${(1000 + r * Math.cos(a)).toFixed(1)} ${(1000 + r * Math.sin(a)).toFixed(1)}`;
+    }
+    const hostile = {
+      ...art,
+      id: 'hostile',
+      shape: 'rect',
+      stroke: { width: 500, color: red },
+      geom: { paths: [{ d: `${d} Z`, w: 2000, h: 2000 }] },
+    } as Slide['objects'][number];
+    expect(legacyColumns(slide([hostile]))).toEqual({ budgetLegacy: 1, unitsLeft: 1, unitsAlone: 1 });
   });
 
   it("counts what the slide budget draws as legacy shapes, and the guard deck's line art draws no fill", async () => {

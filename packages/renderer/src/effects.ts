@@ -89,6 +89,11 @@ export interface EffectSource {
    * walls inside the composite): a type only until then, so a shape with one draws flat, as today.
    */
   readonly look3d?: Look3dPlan;
+  /**
+   * Draw the shadow and glow layers only, not the shape over them (an effect unit's 'layers', units.ts: the
+   * shape itself is drawn live over the unit, `drawGeomShape` 'body'). Only without a soft edge.
+   */
+  readonly layersOnly?: boolean;
 }
 
 /**
@@ -387,7 +392,8 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
       : undefined;
   const bytes = r.W * r.H * 4;
 
-  const allKey = tagged('all');
+  const layersOnly = src.layersOnly === true && !soft;
+  const allKey = tagged(layersOnly ? 'layers' : 'all');
   let out = cached(allKey);
   let compose = !!out || bytes <= EFFECT_COMPOSITE_BYTES || opacity < 1;
   if (!compose && allKey !== undefined && bytes <= EFFECT_CACHE_BYTES / 2 && !thrashed.has(allKey)) {
@@ -421,7 +427,8 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
         if (!layer) return false;
         place(layer);
       }
-      if (!body(f, src, m, s, r, soft, !!(sh || gl), tagged('softmask'), softPad)) return false;
+      if (!layersOnly && !body(f, src, m, s, r, soft, !!(sh || gl), tagged('softmask'), softPad))
+        return false;
       out = { canvas: f.canvas, x: r.X, y: r.Y, w: r.W, h: r.H, bytes };
       remember(allKey, out);
     }
@@ -463,7 +470,7 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
   ctx.imageSmoothingQuality = 'low';
   for (const l of [shadowLayer, glowLayer]) if (l) ctx.drawImage(l.canvas, l.x + ox, l.y + oy, l.w, l.h);
   if (softBody) ctx.drawImage(softBody.canvas, r.X + ox, r.Y + oy);
-  else {
+  else if (!layersOnly) {
     ctx.setTransform(t.a, t.b, t.c, t.d, t.e, t.f);
     src.draw(ctx);
   }
@@ -615,4 +622,245 @@ export function pictureSoftMask(
   const whole = { X: 0, Y: 0, W: c.canvas.width, H: c.canvas.height };
   const t = c.getTransform();
   return softMask(c, { softEdge: e, fill, lineWidth: 0 }, t, s, whole, undefined, 3 * sigma + 2);
+}
+
+// ── In steps (effect units) ──────────────────────────────────────────────────────────────────────────────
+
+/** Device pixels of one banded step at most (an enlarge, a copy or a soft edge's multiply over rows). */
+export const EFFECT_STEP_PIXELS = 1 << 21;
+
+/** What `effectSteps` makes: the composite's device rect on the canvas and its steps. */
+export interface EffectSteps {
+  /** The composite's device rect on a canvas of the given size (whole px; it may reach past the canvas). */
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+  /** The steps in order: each one call, a blur, or a band of rows of an enlarge, a multiply or a copy. */
+  readonly steps: readonly (() => void)[];
+  /** The composite once every step ran (at full alpha; the caller copies it at the object's opacity). */
+  result(): OffscreenCanvas | undefined;
+}
+
+/** Bands of whole rows of a `w` x `h` canvas, each within `EFFECT_STEP_PIXELS`. */
+function bandsOf(w: number, h: number): [number, number][] {
+  const rows = Math.max(1, Math.floor(EFFECT_STEP_PIXELS / Math.max(1, w)));
+  const out: [number, number][] = [];
+  for (let y = 0; y < h; y += rows) out.push([y, Math.min(rows, h - y)]);
+  return out;
+}
+
+/** Runs `fn` on `c` with a clip of rows y..y+n (device px, whole rows): only those rows change. */
+function inRows(c: OffscreenCanvasRenderingContext2D, y: number, n: number, fn: () => void): void {
+  c.save();
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.beginPath();
+  c.rect(0, y, c.canvas.width, n);
+  c.clip();
+  fn();
+  c.restore();
+}
+
+/** `drawEffected`'s layout of a shape's layers (transform, blurs, offsets) and its composite's rect `r`. */
+function effectLayout(
+  src: Pick<EffectSource, 'transform' | 'scale' | 'bounds' | 'shadow' | 'glow'>,
+  cw: number,
+  ch: number,
+) {
+  const t = src.transform;
+  if (![t.a, t.b, t.c, t.d, t.e, t.f].every(Number.isFinite)) return undefined;
+  const ox = Math.floor(t.e);
+  const oy = Math.floor(t.f);
+  const m: Affine = { a: t.a, b: t.b, c: t.c, d: t.d, e: t.e - ox, f: t.f - oy };
+  const s = Number.isFinite(src.scale) && src.scale > 0 ? src.scale : 1;
+  const content = deviceBounds(m, src.bounds);
+  const sh = src.shadow && src.shadow.color.a > 0 ? src.shadow : undefined;
+  const shadowSigma = sh ? sh.blur * STACK_BLUR_SIGMA * s : 0;
+  const shadowReach = 3 * shadowSigma + 2;
+  const sdx = sh ? sh.dx * s : 0;
+  const sdy = sh ? sh.dy * s : 0;
+  const gl = src.glow && src.glow.radius > 0 && src.glow.color.a > 0 ? src.glow : undefined;
+  const glowSigma = gl ? (gl.radius / 2) * STACK_BLUR_SIGMA * s : 0;
+  const glowReach = gl ? (gl.radius / 2) * s + 3 * glowSigma + 2 : 0;
+  const all: Bounds = { ...content };
+  if (sh) {
+    all.x0 = Math.min(all.x0, content.x0 + sdx - shadowReach);
+    all.y0 = Math.min(all.y0, content.y0 + sdy - shadowReach);
+    all.x1 = Math.max(all.x1, content.x1 + sdx + shadowReach);
+    all.y1 = Math.max(all.y1, content.y1 + sdy + shadowReach);
+  }
+  if (gl) {
+    all.x0 = Math.min(all.x0, content.x0 - glowReach);
+    all.y0 = Math.min(all.y0, content.y0 - glowReach);
+    all.x1 = Math.max(all.x1, content.x1 + glowReach);
+    all.y1 = Math.max(all.y1, content.y1 + glowReach);
+  }
+  const r = region(
+    all,
+    cw,
+    ch,
+    Math.max(shadowReach + Math.max(Math.abs(sdx), Math.abs(sdy)), glowReach),
+    ox,
+    oy,
+  );
+  return { m, ox, oy, s, sh, shadowSigma, sdx, sdy, gl, glowSigma, r };
+}
+
+/**
+ * The device rect of the composite `drawEffected` makes of a shape and its layers on a `cw` x `ch` canvas (its
+ * reach past the canvas kept, as it is cut there), whole px: what an effect unit holds (`effectSteps`). Undefined
+ * for a transform that is not finite or a composite past `EFFECT_MAX_PIXELS` (drawn without its effects); null
+ * when nothing lands on the canvas. Plain arithmetic: no canvas needed.
+ */
+export function effectRect(
+  src: Pick<EffectSource, 'transform' | 'scale' | 'bounds' | 'shadow' | 'glow'>,
+  cw: number,
+  ch: number,
+): { x: number; y: number; w: number; h: number } | null | undefined {
+  const at = effectLayout(src, cw, ch);
+  if (!at) return undefined;
+  if (!at.r) return null;
+  if (at.r.W * at.r.H > EFFECT_MAX_PIXELS) return undefined;
+  return { x: at.r.X + at.ox, y: at.r.Y + at.oy, w: at.r.W, h: at.r.H };
+}
+
+/**
+ * `drawEffected`'s composite of a shape and its layers (its compose path: the reduced shadow and glow
+ * layers enlarged into a sprite of their device rect, the shape over them, cut by its soft edge's mask) made in
+ * steps, so that no step is more than one draw call of the shape (`body`: its draw calls under box space, in
+ * order, at full alpha: `shape.ts` `geomBodySteps`), one blur of a reduced layer (at most `BLUR_MAX_PIXELS`), or
+ * one band of rows (`EFFECT_STEP_PIXELS`) of an enlarge, a copy or the soft edge's multiply (its mask made once,
+ * `softMask`, then multiplied band by band, as a prepared picture's soft edge is, `picture.ts` `SOFT_EDGE_STEP`).
+ * The very operations of the compose path, so the composite is its pixels (an effect unit, units.ts, copies it
+ * 1:1 at the object's opacity). `cw` x `ch` is the canvas it will be copied onto (the frame), whose edges cut the
+ * layers as `drawEffected` cuts them. `layersOnly`: the layers without the shape (no soft edge). Nothing cached.
+ * Undefined where `drawEffected` would not draw either (no OffscreenCanvas, a non-finite transform, past
+ * `EFFECT_MAX_PIXELS`); a rect of no size when nothing lands on the canvas.
+ */
+export function effectSteps(
+  src: EffectSource,
+  body: readonly ((c: Ctx2D) => void)[],
+  cw: number,
+  ch: number,
+  layersOnly = false,
+): EffectSteps | undefined {
+  if (typeof OffscreenCanvas === 'undefined') return undefined;
+  const at = effectLayout(src, cw, ch);
+  if (!at) return undefined;
+  const { m, ox, oy, s, sh, shadowSigma, sdx, sdy, gl, glowSigma, r } = at;
+  if (!r) return { x: ox, y: oy, w: 0, h: 0, steps: [], result: () => undefined };
+  if (r.W * r.H > EFFECT_MAX_PIXELS) return undefined;
+  const soft = !layersOnly && !!src.softEdge && src.softEdge > 0;
+  const softPad = soft && src.isolated ? 3 * (src.softEdge ?? 0) * STACK_BLUR_SIGMA * s + 2 : 0;
+  const steps: (() => void)[] = [];
+  let f: OffscreenCanvasRenderingContext2D | undefined;
+  let failed = false;
+  const toBox = (c: OffscreenCanvasRenderingContext2D, k = 1, dx = 0, dy = 0) =>
+    c.setTransform(m.a / k, m.b / k, m.c / k, m.d / k, (m.e + dx - r.X) / k, (m.f + dy - r.Y) / k);
+  steps.push(() => {
+    f = sprite(r.W, r.H);
+    if (!f) failed = true;
+    else {
+      f.imageSmoothingEnabled = true;
+      f.imageSmoothingQuality = 'low';
+    }
+  });
+  const bands = bandsOf(r.W, r.H);
+  /** A reduced layer (`blurLayer`'s) made in steps: its silhouette painted by `paint`, then blurred. */
+  const layer = (
+    sigma: number,
+    dx: number,
+    dy: number,
+    color: string,
+    paint: ((c: OffscreenCanvasRenderingContext2D) => void)[],
+  ) => {
+    let k = Math.min(BLUR_MAX_REDUCTION, Math.max(1, sigma / 2));
+    k = Math.max(k, Math.sqrt((r.W * r.H) / BLUR_MAX_PIXELS));
+    const w = Math.max(1, Math.ceil(r.W / k));
+    const h = Math.max(1, Math.ceil(r.H / k));
+    let a: OffscreenCanvasRenderingContext2D | undefined;
+    let made: Sprite | undefined;
+    steps.push(() => {
+      a = sprite(w, h, true);
+      if (!a) failed = true;
+      else toBox(a, k, dx, dy);
+    });
+    for (const p of paint)
+      steps.push(() => {
+        if (a && !failed) p(a);
+      });
+    steps.push(() => {
+      if (!a || failed) return;
+      const b = sprite(w, h, true);
+      if (!b) {
+        failed = true;
+        return;
+      }
+      shadowOnly(b, a.canvas, color, sigma / k);
+      made = { canvas: b.canvas, x: r.X, y: r.Y, w: w * k, h: h * k, bytes: w * h * 4 };
+      a = undefined;
+    });
+    for (const [y, n] of bands)
+      steps.push(() => {
+        if (!f || !made || failed) return;
+        const l = made;
+        inRows(f, y, n, () => f!.drawImage(l.canvas, l.x - r.X, l.y - r.Y, l.w, l.h));
+      });
+  };
+  if (sh)
+    layer(shadowSigma, sdx, sdy, rgbaCss(sh.color), [
+      ...body.map((draw) => (c: OffscreenCanvasRenderingContext2D) => draw(c as unknown as Ctx2D)),
+      ...(soft
+        ? [(c: OffscreenCanvasRenderingContext2D) => softened(c, src, m, s, undefined, undefined, softPad)]
+        : []),
+    ]);
+  if (gl) layer(glowSigma, 0, 0, rgbaCss(gl.color), [(c) => silhouette(c, src, gl.radius / 2)]);
+  if (!layersOnly) {
+    // The shape: over the layers in the sprite, or (soft-edged or isolated over layers) alone first, cut, then
+    // copied over them, as `body` draws it.
+    const alone = (soft || src.isolated) && !!(sh || gl);
+    let target: OffscreenCanvasRenderingContext2D | undefined;
+    steps.push(() => {
+      if (failed) return;
+      target = alone ? sprite(r.W, r.H) : f;
+      if (!target) failed = true;
+    });
+    for (const draw of body)
+      steps.push(() => {
+        if (!target || failed) return;
+        target.save();
+        toBox(target);
+        draw(target as unknown as Ctx2D);
+        target.restore();
+      });
+    if (soft) {
+      let mask: SoftMask | undefined;
+      steps.push(() => {
+        if (!target || failed) return;
+        target.save();
+        toBox(target);
+        mask = softMask(target, src, m, s, r, undefined, softPad);
+        target.restore();
+      });
+      for (const [y, n] of bands)
+        steps.push(() => {
+          if (target && mask && !failed) inRows(target, y, n, () => multiplySoftMask(target!, mask!));
+        });
+    }
+    if (alone)
+      for (const [y, n] of bands)
+        steps.push(() => {
+          if (!f || !target || failed) return;
+          const from = target.canvas;
+          inRows(f, y, n, () => f!.drawImage(from, 0, 0));
+        });
+  }
+  return {
+    x: r.X + ox,
+    y: r.Y + oy,
+    w: r.W,
+    h: r.H,
+    steps,
+    result: () => (failed ? undefined : f?.canvas),
+  };
 }
