@@ -2,6 +2,7 @@ import { LOOK_MAIN, type ShapeObject, type Slide, type SlideObject } from '@ordo
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { clampSlide } from './clamp.ts';
 import { drawableContent } from './content.ts';
+import { EFFECT_STEP_PIXELS } from './effects.ts';
 import { RecPath } from './geom/path2d.test-util.ts';
 import { clearGeomFiles, putGeomFile } from './geom/stored.ts';
 import { legacyOf, overGeomBudget, slideBudget, withinDrawBudget } from './geombudget.ts';
@@ -321,7 +322,8 @@ class FakeOffscreenCanvas {
     const t = traceCtx(w, h);
     // The trace has no pixels: a read gives a transparent one.
     (t as unknown as { getImageData: unknown }).getImageData = () => ({ data: new Uint8ClampedArray(4) });
-    this.ctx = t;
+    // Its `canvas` is this canvas, as an OffscreenCanvas's context's is (a unit may be the canvas it was drawn on).
+    this.ctx = new Proxy(t, { get: (target, k) => (k === 'canvas' ? this : Reflect.get(target, k)) });
     FakeOffscreenCanvas.made.push(this);
   }
   getContext() {
@@ -378,16 +380,20 @@ describe('making geometry units in slices', () => {
     expect(drawn.filter((e) => e[1] === 'clip')).toEqual([]);
     expect(drawn.filter((e) => e[1] === 'fill')).toHaveLength(2);
     expect(drawn.filter((e) => e[1] === 'stroke')).toHaveLength(2);
-    // Its rect copied 1:1 into the unit's own picture.
+    // Its rect copied 1:1 into the unit's own picture, a band of whole rows (EFFECT_STEP_PIXELS) a step.
     expect([unit!.width, unit!.height]).toEqual([u!.rect.w, u!.rect.h]);
     const { x, y, w, h } = u!.rect;
-    expect(unit!.ctx.trace.filter((e) => e[1] === 'drawImage')).toEqual([
-      ['call', 'drawImage', { image: [3840, 2160, ''] }, x, y, w, h, 0, 0, w, h],
-    ]);
+    const rows = Math.floor(EFFECT_STEP_PIXELS / w);
+    const bands: unknown[] = [];
+    for (let y0 = 0; y0 < h; y0 += rows) {
+      const n = Math.min(rows, h - y0);
+      bands.push(['call', 'drawImage', { image: [3840, 2160, ''] }, x, y + y0, w, n, 0, y0, w, n]);
+    }
+    expect(unit!.ctx.trace.filter((e) => e[1] === 'drawImage')).toEqual(bands);
     const work = unitWork();
     expect(work.made - before.made).toBe(1);
-    // The scratch, four calls and the copy.
-    expect(work.steps - before.steps).toBe(6);
+    // The scratch, four calls and the copy's bands.
+    expect(work.steps - before.steps).toBe(1 + 4 + bands.length);
     expect(log.slices).toBe(work.turns - before.turns);
     expect(log.slices).toBeGreaterThan(1);
     expect(log.checks).toBeGreaterThanOrEqual(log.slices);

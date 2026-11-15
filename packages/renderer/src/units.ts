@@ -621,7 +621,8 @@ type UnitSteps = { steps: (() => void)[]; picture(): OffscreenCanvas | undefined
 /**
  * A unit drawn as the frame draws its object (a shape without effects, a sliced shape, a decoration): a scratch
  * canvas of the frame, the object's draw calls on it at the frame's own transform (`draws`), then its rect
- * copied 1:1 into the unit's own canvas. No clip and no other transform, which would move Skia's anti-aliasing.
+ * copied 1:1 into the unit's own canvas, a band of rows a step (a unit of the whole frame is the scratch). No clip
+ * and no other transform on the drawing, which would move Skia's anti-aliasing.
  */
 function onFrame(u: GeomUnit, draws: ((ctx: Ctx2D) => void)[], perTurn: number): UnitSteps {
   const frame = frameAt(u.scale);
@@ -639,14 +640,25 @@ function onFrame(u: GeomUnit, draws: ((ctx: Ctx2D) => void)[], perTurn: number):
       draw(scratch.c as unknown as Ctx2D);
       scratch.c.getImageData(x, y, 1, 1);
     }),
-    () => {
-      if (!scratch) return;
-      unit = canvas2d(w, h);
-      unit?.c.drawImage(scratch.canvas, x, y, w, h, 0, 0, w, h);
-      unit?.c.getImageData(0, 0, 1, 1);
-      scratch = undefined;
-    },
   ];
+  // A unit of the whole frame (a decoration at its caps) is the scratch itself: nothing to copy.
+  if (x === 0 && y === 0 && w === frame.w && h === frame.h)
+    return { steps, picture: () => scratch?.canvas, perTurn };
+  // Copied out in bands of whole rows (`EFFECT_STEP_PIXELS` each, as an effect unit's copy), the unit's canvas
+  // made with the first and the scratch let go with the last: a 4K unit copied at once is one draw of up to 33 MB
+  // (15-38 ms on the bench machine).
+  const rows = Math.max(1, Math.floor(EFFECT_STEP_PIXELS / Math.max(1, w)));
+  for (let y0 = 0; y0 < h; y0 += rows) {
+    const n = Math.min(rows, h - y0);
+    steps.push(() => {
+      if (!scratch) return;
+      if (y0 === 0) unit = canvas2d(w, h);
+      if (!unit) return;
+      unit.c.drawImage(scratch.canvas, x, y + y0, w, n, 0, y0, w, n);
+      unit.c.getImageData(0, y0, 1, 1);
+      if (y0 + n >= h) scratch = undefined;
+    });
+  }
   return { steps, picture: () => unit?.canvas, perTurn };
 }
 
@@ -654,7 +666,8 @@ function onFrame(u: GeomUnit, draws: ((ctx: Ctx2D) => void)[], perTurn: number):
  * A unit of a shape and its effects: `effects.ts` `effectSteps`, the compose path of `drawEffected` in steps
  * (its layers made and enlarged in bands, its body call by call or one sub-path group a step, a soft edge's mask
  * once and its multiply in bands), then the composite's part on the frame copied into the unit at the shape's
- * opacity (`layers`: the layers alone, at full opacity, the body drawn live over them), in bands.
+ * opacity (`layers`: the layers alone, at full opacity, the body drawn live over them), in bands; a composite all
+ * on the frame at full opacity is the unit itself.
  */
 function composite(u: GeomUnit, o: ShapeObject): UnitSteps | undefined {
   const frame = frameAt(u.scale);
@@ -665,18 +678,20 @@ function composite(u: GeomUnit, o: ShapeObject): UnitSteps | undefined {
   if (!es) return undefined;
   const { x, y, w, h } = u.rect;
   const opacity = u.kind === 'layers' ? 1 : num(o.opacity, 0, 1, 1);
+  // A composite that is the unit (all of it on the frame, at full opacity: a full-frame soft edge) is not copied.
+  if (opacity === 1 && es.x === x && es.y === y && es.w === w && es.h === h)
+    return { steps: [...es.steps], picture: () => es.result(), perTurn: Infinity };
   let unit: ReturnType<typeof canvas2d>;
   const rows = Math.max(1, Math.floor(EFFECT_STEP_PIXELS / Math.max(1, w)));
-  const copies: (() => void)[] = [
-    () => {
-      unit = canvas2d(w, h);
-    },
-  ];
+  const copies: (() => void)[] = [];
   for (let y0 = 0; y0 < h; y0 += rows) {
     const n = Math.min(rows, h - y0);
     copies.push(() => {
       const from = es.result();
-      if (!unit || !from) return;
+      if (!from) return;
+      // The unit's canvas made with the first band.
+      if (y0 === 0) unit = canvas2d(w, h);
+      if (!unit) return;
       unit.c.save();
       unit.c.beginPath();
       unit.c.rect(0, y0, w, n);

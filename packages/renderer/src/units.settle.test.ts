@@ -2,9 +2,12 @@ import type { ShapeObject, Slide } from '@ordo/domain';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { clampSlide } from './clamp.ts';
 import { drawableContent } from './content.ts';
+import './decor/index.ts';
+import { cappedSlide } from './decor/test-util.ts';
+import { EFFECT_STEP_PIXELS } from './effects.ts';
 import { RecPath } from './geom/path2d.test-util.ts';
-import { traceCtx } from './trace.test-util.ts';
-import { effectsSlide, PANEL_SHADOW, softFrame } from './units.effects.test-util.ts';
+import { type TraceCtx, traceCtx } from './trace.test-util.ts';
+import { effectsSlide, loneChain, PANEL_SHADOW, softFrame } from './units.effects.test-util.ts';
 import { clearUnits, type GeomUnit, makeUnit, slideUnits, unitReady } from './units.ts';
 
 /*
@@ -47,11 +50,14 @@ class RecordingCanvas {
   readonly width: number;
   readonly height: number;
   readonly ctx: CanvasRenderingContext2D;
+  /** What was drawn on it, in order (the trace context's log). */
+  readonly trace: TraceCtx['trace'];
   pending = 0;
   constructor(w: number, h: number) {
     this.width = w;
     this.height = h;
     const t = traceCtx(w, h);
+    this.trace = t.trace;
     const self = this;
     this.ctx = new Proxy(t, {
       get(target, name) {
@@ -142,5 +148,69 @@ describe('effect units in steps', () => {
     expect(new Set(kinds)).toEqual(
       new Set(['effects layers', 'translucent whole', 'soft-edges whole', 'soft-shadow whole']),
     );
+  });
+});
+
+describe('a unit copied out of the frame', () => {
+  it('copies a unit in bands of rows within EFFECT_STEP_PIXELS, and does not copy one that is its whole canvas', async () => {
+    // A full-frame copy at 4K is one 33 MB draw and a 33 MB canvas (15-38 ms on the bench machine, the longest turn
+    // of a capped decoration's unit): a unit of the whole frame is the canvas it was drawn on, and any other is
+    // copied a band of rows a step, as an effect unit's copy is.
+    vi.stubGlobal('OffscreenCanvas', RecordingCanvas);
+    const soft = { ...softFrame(), id: 's1', fill: { r: 200, g: 120, b: 60, a: 1 } };
+    // The capped decoration with its first star a full-slide rect instead (within its caps): its unit is the
+    // whole frame.
+    const framed = cappedSlide();
+    const decor = framed.objects[0] as ShapeObject;
+    const [, ...stars] = decor.decor!.parts!;
+    const parts = [{ d: 'M 0 0 L 1920 0 L 1920 1080 L 0 1080 Z', p: 0, s: 1 }, ...stars];
+    framed.objects = [{ ...decor, decor: { ...decor.decor!, parts } }];
+    const slides: Slide[] = [
+      { ...cappedSlide(), id: 'capped' },
+      { ...framed, id: 'capped-frame' },
+      { id: 'chain', objects: [loneChain()] },
+      { id: 'soft-edges', objects: [softFrame(), soft] },
+    ];
+    const seen: string[] = [];
+    for (const slide of slides) {
+      const [u] = slideUnits(objectsOf(slide), 2);
+      expect(u, slide.id).toBeDefined();
+      RecordingCanvas.made = [];
+      const { undrawn } = await makeChecked(u!);
+      expect(undrawn, slide.id).toEqual([]);
+      const whole = u!.rect.w === 3840 && u!.rect.h === 2160;
+      seen.push(`${slide.id} ${u!.kind} ${u!.of}${whole ? ' whole frame' : ''}`);
+      const sized = RecordingCanvas.made.filter((c) => c.width === u!.rect.w && c.height === u!.rect.h);
+      if (whole) {
+        // The canvas it was drawn on is the unit: one canvas of the frame, never copied.
+        expect(sized, slide.id).toHaveLength(1);
+        const copied = RecordingCanvas.made.flatMap((c) =>
+          c.trace.filter(
+            (e) => e[0] === 'call' && e[1] === 'drawImage' && (e[2] as { image: number[] }).image[0] === 3840,
+          ),
+        );
+        expect(copied, slide.id).toEqual([]);
+        continue;
+      }
+      const unit = sized.at(-1)!;
+      const copies = unit.trace.filter((e) => e[0] === 'call' && e[1] === 'drawImage');
+      expect(copies.length, slide.id).toBeGreaterThan(1);
+      let rows = 0;
+      for (const c of copies) {
+        // drawImage(scratch, sx, sy, sw, sh, dx, dy, dw, dh): 1:1, whole rows of the unit, in order.
+        const [sx, sy, sw, sh, dx, dy, dw, dh] = c.slice(3) as number[];
+        expect([sw, sh], slide.id).toEqual([dw, dh]);
+        expect(sw! * sh!, slide.id).toBeLessThanOrEqual(EFFECT_STEP_PIXELS);
+        expect([sx, sy, dx, dy], slide.id).toEqual([u!.rect.x, u!.rect.y + rows, 0, rows]);
+        rows += sh!;
+      }
+      expect(rows, slide.id).toBe(u!.rect.h);
+    }
+    expect(seen).toEqual([
+      'capped whole decor',
+      'capped-frame whole decor whole frame',
+      'chain sliced shape',
+      'soft-edges whole shape whole frame',
+    ]);
   });
 });

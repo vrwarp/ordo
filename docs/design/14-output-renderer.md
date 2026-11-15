@@ -405,7 +405,9 @@ drawing budget (`geombudget.ts`) would draw as a lesser legacy copy on the outpu
   painted call by call and blurred, enlarged into the composite in bands of `EFFECT_STEP_PIXELS`, the body call
   by call, a soft edge's mask made once and multiplied in bands, as a prepared picture's soft edge), then the
   composite's part on the frame copied into the unit at the shape's opacity; a decoration by `drawDecorRange`, one
-  source shape a step and at most `DECOR_TURN_SHAPES` (32) a turn. A turn takes steps while within half of
+  source shape a step and at most `DECOR_TURN_SHAPES` (32) a turn. The copy into the unit is a band of rows
+  (`EFFECT_STEP_PIXELS`) a step; a unit that is the whole frame, or a composite all on the frame at full opacity,
+  is the canvas it was drawn on and is not copied. A turn takes steps while within half of
   `SLICE_MS`; a step is at most one call of a shape within `GEOM_COST.slide` (about 38 ms at 4K, cold). Every
   step ends by reading one pixel back from each canvas it drew on: Chromium records 2D calls and draws them when
   the canvas is read, copied or transferred, so a step that only recorded would be drawn by a later one (the
