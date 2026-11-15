@@ -124,14 +124,14 @@ test('the stage shows the live slide’s notes and a Hebrew line right to left',
     );
     await stage.bringToFront();
 
-    // The live slide's notes, in their own box under the next slide, clear of the current lyrics.
+    // The live slide's notes, in their own Preacher Split column beside the current slide, clear of the current lyrics.
     const notes = stage.locator('.notes');
     await expect(notes).toHaveText(CHURCH.announcement.notes, { timeout: 30_000 });
     await expect(stage.locator('.current')).toContainText(HEBREW);
     const nb = (await notes.boundingBox())!;
     const cb = (await stage.locator('.current').boundingBox())!;
     expect(apart(nb, cb), 'the notes never cover the current lyrics').toBe(true);
-    expect(nb.y).toBeGreaterThanOrEqual(cb.y + cb.height);
+    expect(nb.x).toBeGreaterThanOrEqual(cb.x + cb.width);
     expect(nb.y + nb.height).toBeLessThanOrEqual(1080);
     await stage.screenshot({ path: join(OUT, 'stage-announcement.png') });
 
@@ -159,12 +159,31 @@ test('the stage shows the live slide’s notes and a Hebrew line right to left',
         startGap: first.getBoundingClientRect().top - clip.getBoundingClientRect().top,
       };
     });
-    expect(long.size).toBe('32px');
+    expect(long.size).toBe('58px');
     expect(long.startGap).toBeCloseTo(0, 0);
     await stage.screenshot({ path: join(OUT, 'stage-long-notes.png') });
     await liveEvent(a, { k: 'go', cueIndex: 0, at: Date.now() });
     await expect(notes).toHaveText(CHURCH.welcome.notes);
     await stage.close();
+
+    // ---- Pulpit Lectern view (?view=lectern): interactive scrollable preacher manuscript + peek ahead.
+    const lectern = await roleWindow(
+      context,
+      PORT,
+      outs.find((o) => o.kind === 'stage')!,
+      { width: 1024, height: 768 },
+      'test=1&view=lectern',
+    );
+    await lectern.bringToFront();
+    await expect(lectern.locator('[data-lectern-view]')).toBeVisible({ timeout: 20_000 });
+    await expect(lectern.locator('[data-lectern-notes]')).toContainText(CHURCH.welcome.notes);
+    // Peeking next shows slide 2's notes on the lectern without changing the live cue on the hub.
+    await lectern.getByRole('button', { name: /^Peek Next/ }).click();
+    await expect(lectern.locator('[data-lectern-notes]')).toContainText(CHURCH.announcement.notes);
+    await lectern.getByRole('button', { name: 'Full Manuscript' }).click();
+    await expect(lectern.locator('[data-lectern-manuscript]')).toContainText('Point 1: tell the story');
+    await lectern.screenshot({ path: join(OUT, 'stage-lectern.png') });
+    await lectern.close();
   } finally {
     hub.kill();
   }

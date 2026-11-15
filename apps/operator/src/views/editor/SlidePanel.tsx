@@ -13,6 +13,7 @@ import { SlideMidiCues } from './SlideMidiCues.tsx';
 import { resetSlideToTheme, themeOf, updateSlide } from './ops.ts';
 import { PptxSlideCard } from './PptxSlideCard.tsx';
 import { followReimport, isJob, rebuildsFromPptx } from './pptxJobs.ts';
+import { applyNoteFormatting } from './SpeakerNotesDock.tsx';
 
 export async function makeSlideEditable(
   slide: Slide,
@@ -170,14 +171,51 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
           Hidden: Next skips it, a click in the slide grid shows it (as in PowerPoint)
         </label>
       )}
-      <TextField
-        label="Notes"
-        multiline
-        rows={3}
-        value={slide.notes ?? ''}
-        disabled={readOnly}
-        onChange={(notes) => set((s) => ({ ...s, notes: notes || undefined }), `notes:${slide.id}`)}
-      />
+      <div className="col" style={{ gap: 4 }}>
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <span className="small" style={{ color: 'var(--fg2)' }}>
+            Speaker Notes
+          </span>
+          {!readOnly && (
+            <div className="row" style={{ gap: 2 }}>
+              <button
+                type="button"
+                className="small ghost"
+                style={{ padding: '1px 6px', fontSize: 11 }}
+                title="Highlight phrase on Stage (**bold**)"
+                onClick={() =>
+                  applyNoteFormatting(null, slide.notes ?? '', 'highlight', (notes) =>
+                    set((s) => ({ ...s, notes: notes || undefined }), `notes:${slide.id}`),
+                  )
+                }
+              >
+                ★ Highlight
+              </button>
+              <button
+                type="button"
+                className="small ghost"
+                style={{ padding: '1px 6px', fontSize: 11 }}
+                title="Insert [PAUSE] cue"
+                onClick={() =>
+                  applyNoteFormatting(null, slide.notes ?? '', 'pause', (notes) =>
+                    set((s) => ({ ...s, notes: notes || undefined }), `notes:${slide.id}`),
+                  )
+                }
+              >
+                + [PAUSE]
+              </button>
+            </div>
+          )}
+        </div>
+        <TextField
+          label="Notes"
+          multiline
+          rows={4}
+          value={slide.notes ?? ''}
+          disabled={readOnly}
+          onChange={(notes) => set((s) => ({ ...s, notes: notes || undefined }), `notes:${slide.id}`)}
+        />
+      </div>
       {p.kind === 'song' && slide.overrides && slide.overrides.length > 0 && (
         <div className="col">
           <span className="override-mark">

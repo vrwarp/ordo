@@ -8,7 +8,7 @@ import { ConflictDialog, GoLiveErrorDialog, LocalGoLiveDialog, PlacementDialog }
 import { PlaylistPane } from './PlaylistPane.tsx';
 import { ProgramView } from './ProgramView.tsx';
 import { SlideGrid } from './SlideGrid.tsx';
-import { StageTools } from './StageTools.tsx';
+import { LiveSpeakerNotesCard, StageTools } from './StageTools.tsx';
 import { TopBar } from './TopBar.tsx';
 import { useOperatorPlaylist } from './useOperatorPlaylist.ts';
 
@@ -33,6 +33,7 @@ export function LiveView() {
         <PlaylistPane op={op} viewItem={viewItem} />
         <SlideGrid op={op} viewItem={viewItem} />
         <div className="pane">
+          <LiveSpeakerNotesCard />
           <ProgramView />
           <StageTools />
         </div>

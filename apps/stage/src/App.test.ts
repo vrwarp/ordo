@@ -97,4 +97,19 @@ describe('the notes region', () => {
       expect(html).toContain(`justify-content:${css}`);
     }
   });
+
+  it('formats bullets, **highlights**, and [CUE] pills while leaving plain RTL/LTR paragraphs untouched', () => {
+    const notes = stageLayout(notesOn()).notes!;
+    const html = renderToStaticMarkup(
+      createElement(NotesRegion, {
+        prop: notes,
+        text: `${HEBREW}\n- Tell the **prodigal** story [PAUSE]`,
+        fontsVersion: 0,
+      }),
+    );
+    expect(html).toContain(`<div class="para" dir="auto">${HEBREW}</div>`);
+    expect(html).toContain('class="para note-bullet"');
+    expect(html).toContain('<strong class="note-hl">prodigal</strong>');
+    expect(html).toContain('<span class="note-cue">PAUSE</span>');
+  });
 });

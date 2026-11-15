@@ -1,5 +1,5 @@
 import { SVG_HEAD_BYTES, type SlideObject } from '@ordo/domain';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { FindReplaceDialog } from './FindReplaceDialog.tsx';
 import { ErrorBoundary, PaneError } from '../../components/ErrorBoundary.tsx';
 import { DeckSwatchesSource, type SwatchSource } from '../../components/deckSwatches.ts';
@@ -58,6 +58,9 @@ import './inspect.ts';
 import { ObjectPanel } from './ObjectPanel.tsx';
 import { getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
 import { hasGroup, htmlToRichText, pasteRichText } from './ops/index.ts';
+import { SpeakerNotesDock } from './SpeakerNotesDock.tsx';
+
+const DeckNotesEditor = lazy(() => import('./DeckNotesEditor.tsx'));
 import { PresentationPanel } from './PresentationPanel.tsx';
 import { LoopDeckBanner } from './PptxReport.tsx';
 import { insertBox, svgDeclared } from './insertBox.ts';
@@ -111,6 +114,8 @@ export function EditorView({ id }: { id: string }) {
   const [bgPick, setBgPick] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [songMode, setSongMode] = useState<'reflow' | 'canvas' | null>(null);
+  const [deckMode, setDeckMode] = useState<'canvas' | 'notes'>('canvas');
+  const [notesDockOpen, setNotesDockOpen] = useState<boolean | null>(null);
   const [zoom, setZoom] = useState<'fit' | 0.5 | 0.75 | 1>('fit');
   // The paint pickers' deck swatches: components/deckSwatches.ts reads the deck from this context, so the
   // shared components never import the editor's store.
@@ -203,6 +208,8 @@ export function EditorView({ id }: { id: string }) {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   useEffect(() => {
+    setDeckMode('canvas');
+    setNotesDockOpen(null);
     void loadPresentation(id, libP);
   }, [id]);
   useEffect(() => {
@@ -210,6 +217,11 @@ export function EditorView({ id }: { id: string }) {
   }, [ed.objectId]);
 
   const p = ed.id === id ? ed.draft : undefined;
+  const tallViewport = useMedia('(min-height: 800px)');
+  const deckHasNotes = useMemo(
+    () => (p ? p.sections.some((sec) => sec.slides.some((sl) => Boolean(sl.notes?.trim()))) : false),
+    [p],
+  );
   const readOnly = locked.has(id);
   // The lock as it is now, for what finishes later (a pasted picture's upload).
   const readOnlyNow = useRef(readOnly);
@@ -230,6 +242,11 @@ export function EditorView({ id }: { id: string }) {
       if (ctrl && e.key.toLowerCase() === 's') {
         e.preventDefault();
         if (!readOnly && place !== 'dialog') void save();
+        return;
+      }
+      if (e.altKey && !ctrl && e.code === 'KeyN' && place !== 'dialog') {
+        e.preventDefault();
+        setNotesDockOpen((prev) => !(prev ?? false));
         return;
       }
       if (place === 'field' || place === 'dialog') return;
@@ -506,9 +523,11 @@ export function EditorView({ id }: { id: string }) {
     if (obj && slide) deleteSelection();
   };
   const looksShown = looksOpen ?? touchLandscape;
-  // A song in the Lyric Script has no stage pane: the Find card floats over the page there.
+  // A song in the Lyric Script or a deck in Presenter Notes Studio has no stage pane: Find floats there.
   const reflow = p.kind === 'song' && (songMode ?? (coarse ? 'canvas' : 'reflow')) === 'reflow';
-  const findDocked = !reflow;
+  const deckNotesStudio = p.kind !== 'song' && deckMode === 'notes';
+  const scriptStudio = reflow || deckNotesStudio;
+  const findDocked = !scriptStudio;
   // Touch: the keyboard-only actions as buttons, floating by the selected object (SlideCanvas places them).
   const objectTools =
     coarse && obj && !readOnly ? (
@@ -550,6 +569,9 @@ export function EditorView({ id }: { id: string }) {
     ) : undefined;
 
   const showProps = coarse || drawerOpen;
+  const effectiveNotesDockOpen =
+    notesDockOpen !== null ? notesDockOpen : deckHasNotes && !showProps && !coarse && tallViewport;
+  const stageLookId = shownLooks.find((l) => l.kind === 'stage')?.id;
 
   const page = (
     <div
@@ -641,7 +663,7 @@ export function EditorView({ id }: { id: string }) {
           </button>
         </div>
       ) : (
-        <div className={`toolbar ed-toolbar-calm${p.kind === 'song' ? ' has-modes' : ''}`}>
+        <div className={`toolbar ed-toolbar-calm${p.kind === 'song' || deckNotesStudio ? ' has-modes' : ''}`}>
           {/* Left Zone: Back, Inline-Editable Title, Unified Save + Revision History Pill, Undo/Redo */}
           <a className="btn small ghost" href="#/library">
             ← Library
@@ -696,6 +718,27 @@ export function EditorView({ id }: { id: string }) {
             </div>
           )}
 
+          {deckNotesStudio && (
+            <div className="ed-mode-switch">
+              <button
+                type="button"
+                className="small on"
+                style={{ fontWeight: 600 }}
+                onClick={() => setDeckMode('notes')}
+              >
+                Presenter Notes
+              </button>
+              <button
+                type="button"
+                className="small ghost"
+                style={{ fontWeight: 600 }}
+                onClick={() => setDeckMode('canvas')}
+              >
+                Slide Canvas
+              </button>
+            </div>
+          )}
+
           <button
             type="button"
             className="small ghost"
@@ -718,7 +761,7 @@ export function EditorView({ id }: { id: string }) {
           <span className="spacer" />
 
           {/* Center Zone: Clean Creation Island */}
-          {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
+          {!scriptStudio && (
             <div className="ed-insert-island" role="group" aria-label="Insert onto slide">
               <button
                 type="button"
@@ -802,7 +845,7 @@ export function EditorView({ id }: { id: string }) {
           {/* Right Zone: Zoom, Find, the drawer triggers (folded into one Panels menu on a narrow window),
               Full screen. One unit: when the bar does not fit it wraps to a second row, kept at the right. */}
           <div className="ed-zone-right">
-            {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
+            {!scriptStudio && (
               <select
                 aria-label="Canvas zoom"
                 className="ed-zoom-select"
@@ -827,7 +870,7 @@ export function EditorView({ id }: { id: string }) {
             >
               Find…
             </button>
-            {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') &&
+            {!scriptStudio &&
               (!drawerOpen ? (
                 <>
                   <div
@@ -939,12 +982,53 @@ export function EditorView({ id }: { id: string }) {
             }
           />
         </ErrorBoundary>
+      ) : deckNotesStudio ? (
+        <ErrorBoundary
+          name="editor Presenter Notes Studio"
+          resetKey={p}
+          fallback={(retry) => <PaneError what="Presenter Notes Studio" retry={retry} undo={undo} />}
+        >
+          <Suspense fallback={<div className="center muted">Opening Presenter Notes Studio…</div>}>
+            <DeckNotesEditor
+              presentation={p}
+              readOnly={readOnly}
+              selectedSlideId={slide?.id}
+              onSwitchToCanvas={() => setDeckMode('canvas')}
+              banners={
+                <>
+                  {readOnly && (
+                    <div className="banner" style={{ margin: '8px 16px 0' }} data-locked-banner>
+                      {profile === 'edit'
+                        ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
+                        : 'This presentation is in the live playlist. Editing is locked until End service.'}
+                    </div>
+                  )}
+                  {changedElsewhere && (
+                    <div className="banner blue row" style={{ margin: '8px 16px 0' }}>
+                      <span className="grow">
+                        Someone else saved this presentation (rev {libP.rev}) since you opened it. Saving
+                        combines your changes with theirs.
+                      </span>
+                      <button type="button" className="small" onClick={() => void reloadLatest()}>
+                        Reload theirs
+                      </button>
+                      <button type="button" className="small" onClick={() => setDismissedRev(libP.rev)}>
+                        Keep editing
+                      </button>
+                    </div>
+                  )}
+                </>
+              }
+            />
+          </Suspense>
+        </ErrorBoundary>
       ) : (
         <>
           <SlidesPanel
             p={p}
             readOnly={readOnly}
             onSwitchToReflow={p.kind === 'song' ? () => setSongMode('reflow') : undefined}
+            onOpenDeckNotes={p.kind !== 'song' ? () => setDeckMode('notes') : undefined}
           />
           <div className="stagewrap">
             {/* Docked in the stage pane: it never covers the slide list or the open Tune drawer's tabs. */}
@@ -1051,6 +1135,23 @@ export function EditorView({ id }: { id: string }) {
               </ErrorBoundary>
             ) : (
               <div className="center muted">Add a slide to start.</div>
+            )}
+
+            {/* Proposal A Docked Speaker Notes Bar right under the slide canvas */}
+            {slide && !coarse && (
+              <SpeakerNotesDock
+                slide={slide}
+                presentation={p}
+                readOnly={readOnly}
+                open={effectiveNotesDockOpen}
+                onToggleOpen={(open) => setNotesDockOpen(open)}
+                onOpenStudio={p.kind !== 'song' ? () => setDeckMode('notes') : undefined}
+                onPreviewStage={
+                  stageLookId
+                    ? () => setStageLens(stageLens === stageLookId ? 'canvas' : stageLookId)
+                    : undefined
+                }
+              />
             )}
 
             {/* Proposal B Bottom Stage Bar: Floating Output View Lens + Optional 4-Up Strip */}

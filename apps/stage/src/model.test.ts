@@ -848,12 +848,16 @@ describe('the notes the stage shows', () => {
     expect(v.notes).toBe('Ask for volunteers.');
   });
 
-  it('expands default speaker notes box on non-song slides and stays clear of active stage messages', () => {
-    let s = liveSermon(['Preacher sermon outline here.']);
+  it('adapts non-song slides to Preacher Split (58px right column) and stays clear of active stage messages', () => {
+    let s = liveSermon(['Preacher sermon outline here.', 'Next point preview.']);
     const v = view(s, LOOK_STAGE);
-    expect(v.layout.notes?.box.y).toBe(450);
-    expect(v.layout.notes?.box.h).toBe(614);
-    expect(v.layout.notes?.fontSizePx).toBe(32);
+    expect(v.layout.current?.box).toEqual({ x: 60, y: 144, w: 620, h: 502, rotation: 0 });
+    expect(v.layout.notes?.box).toEqual({ x: 704, y: 144, w: 1156, h: 916, rotation: 0 });
+    expect(v.layout.notes?.fontSizePx).toBe(58);
+    expect(overlaps(v.layout.notes!.box, v.layout.current!.box)).toBe(false);
+    expect(v.nextNotes).toBe('Next point preview.');
+    expect(v.lecternSlides).toHaveLength(2);
+    expect(v.lecternSlides?.[0]?.notes).toBe('Preacher sermon outline here.');
 
     // Sending a stage flash message shrinks the notes bottom so the yellow banner never overlaps notes
     s = reduce(s, { k: 'message.send', id: 'm1', text: 'Wrap up in 2 min', at: 1500 });
@@ -862,6 +866,44 @@ describe('the notes the stage shows', () => {
     expect(vMsg.layout.notes!.box.y + vMsg.layout.notes!.box.h).toBeLessThanOrEqual(
       vMsg.layout.messages!.box.y,
     );
+
+    // Full Prompter preset uses full-width 64px teleprompter notes under a compact context strip
+    const prompterLook = {
+      ...LOOK_STAGE,
+      layers: {
+        ...LOOK_STAGE.layers,
+        props: { ...LOOK_STAGE.layers.props, stagePreset: 'prompter' as const },
+      },
+    };
+    const vPrompter = view(s, prompterLook);
+    expect(vPrompter.layout.notes?.box.w).toBe(1800);
+    expect(vPrompter.layout.notes?.fontSizePx).toBe(64);
+    expect(overlaps(vPrompter.layout.notes!.box, vPrompter.layout.current!.box)).toBe(false);
+
+    // Worship Band preset uses high-contrast 42px chord/band cue strip at the bottom
+    const worshipLook = {
+      ...LOOK_STAGE,
+      layers: {
+        ...LOOK_STAGE.layers,
+        props: { ...LOOK_STAGE.layers.props, stagePreset: 'worship' as const, notesScale: 'xl' as const },
+      },
+    };
+    const vWorship = view(liveSermon(['Capo 2 · Build on bridge']), worshipLook);
+    expect(vWorship.layout.notes?.box.w).toBe(1800);
+    expect(vWorship.layout.notes?.fontSizePx).toBe(48);
+    expect(overlaps(vWorship.layout.notes!.box, vWorship.layout.current!.box)).toBe(false);
+  });
+
+  it('defaults notes ON for stage looks even when props.notes is omitted', () => {
+    const legacyStageLook = {
+      ...LOOK_STAGE,
+      layers: {
+        ...LOOK_STAGE.layers,
+        props: { logo: false, countdown: true, clock: true, messages: true, elapsed: true, style: {} },
+      },
+    };
+    const s = liveSermon(['Default stage notes work out of the box.']);
+    expect(view(s, legacyStageLook).notes).toBe('Default stage notes work out of the box.');
   });
 
   it('are tidied: line ends, trailing spaces and runs of blank lines', () => {

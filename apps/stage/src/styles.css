@@ -141,6 +141,10 @@ body.not-fullscreen {
   cursor: default;
 }
 
+body:has([data-lectern-view]) .fs-prompt {
+  display: none;
+}
+
 .fs-prompt {
   position: fixed;
   top: 16px;
@@ -171,4 +175,379 @@ body.not-fullscreen {
   background: rgba(30, 41, 59, 0.98);
   border-color: rgba(255, 255, 255, 0.5);
   transform: scale(1.02);
+}
+
+/* Stage Notes Emphasis & Scrollable Mode */
+.note-bullet {
+  padding-inline-start: 1.05em;
+  text-indent: -1.05em;
+  margin-bottom: 0.22em;
+}
+.note-dot {
+  color: #fbbf24;
+  font-weight: 700;
+}
+.note-hl {
+  color: #fef08a;
+  background: rgba(250, 204, 21, 0.16);
+  padding: 0 0.16em;
+  border-radius: 0.16em;
+  font-weight: 700;
+}
+.note-cue {
+  display: inline-block;
+  text-indent: 0;
+  font-size: 0.68em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #111827;
+  background: #fbbf24;
+  padding: 0.08em 0.42em;
+  border-radius: 0.3em;
+  vertical-align: middle;
+  margin-inline: 0.14em;
+}
+
+.notes-scrollable .notes-clip {
+  overflow-y: auto;
+  pointer-events: auto;
+  cursor: default;
+}
+.viewport.hud-awake {
+  cursor: default;
+}
+
+/* Auto-hiding Stage Touch / Lectern Wake Pill */
+.stage-hud-pill {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 99990;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font-family: Inter, system-ui, sans-serif;
+}
+.stage-hud-pill button {
+  appearance: none;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.stage-hud-pill button:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+.stage-hud-pill button.on {
+  background: rgba(251, 191, 36, 0.24);
+  border-color: #fbbf24;
+  color: #fde68a;
+}
+.stage-hud-pill button.primary {
+  background: #2563eb;
+  color: #fff;
+}
+.stage-hud-pill .hud-sep {
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Dedicated Interactive Pulpit Lectern View (?view=lectern) */
+.lectern {
+  --lec-bg: #0b0d12;
+  --lec-surface: #141821;
+  --lec-border: rgba(255, 255, 255, 0.12);
+  --lec-fg: #f8fafc;
+  --lec-muted: #94a3b8;
+  --lec-accent: #3b82f6;
+  --lec-hl-bg: rgba(250, 204, 21, 0.22);
+  --lec-hl-fg: #fef08a;
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--lec-bg);
+  color: var(--lec-fg);
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  cursor: default;
+  user-select: text;
+}
+.lectern-paper {
+  --lec-bg: #f6f1e5;
+  --lec-surface: #ede5d2;
+  --lec-border: rgba(28, 25, 23, 0.14);
+  --lec-fg: #1c1917;
+  --lec-muted: #57534e;
+  --lec-accent: #b45309;
+  --lec-hl-bg: #fef08a;
+  --lec-hl-fg: #1c1917;
+}
+.lectern-light {
+  --lec-bg: #ffffff;
+  --lec-surface: #f1f5f9;
+  --lec-border: #cbd5e1;
+  --lec-fg: #0f172a;
+  --lec-muted: #475569;
+  --lec-accent: #2563eb;
+  --lec-hl-bg: #fef08a;
+  --lec-hl-fg: #0f172a;
+}
+.lectern .note-hl {
+  background: var(--lec-hl-bg);
+  color: var(--lec-hl-fg);
+}
+.lectern-hdr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 10px 18px;
+  background: var(--lec-surface);
+  border-bottom: 1px solid var(--lec-border);
+  flex-shrink: 0;
+}
+.lectern-telemetry {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.lectern-clock {
+  font-size: 24px;
+  font-weight: 700;
+}
+.lectern-timer {
+  font-size: 22px;
+  font-weight: 700;
+}
+.lectern-timer small {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.72;
+  margin-right: 4px;
+}
+.lectern-timer.elapsed {
+  color: #38bdf8;
+}
+.lectern-paper .lectern-timer.elapsed,
+.lectern-light .lectern-timer.elapsed {
+  color: #0369a1;
+}
+.lectern-timer.countdown {
+  color: #fbbf24;
+}
+.lectern-paper .lectern-timer.countdown,
+.lectern-light .lectern-timer.countdown {
+  color: #b45309;
+}
+.lectern-timer.overdue {
+  color: #ef4444;
+}
+.lectern-timer.dim {
+  opacity: 0.55;
+}
+.lectern-offline {
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: #dc2626;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+.lectern-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.lectern-btn,
+.lectern-seg button,
+.lectern-step-btn {
+  appearance: none;
+  border: 1px solid var(--lec-border);
+  background: transparent;
+  color: var(--lec-fg);
+  font-size: 13px;
+  font-weight: 600;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.lectern-btn.on,
+.lectern-seg button.on {
+  background: var(--lec-accent);
+  border-color: var(--lec-accent);
+  color: #fff;
+}
+.lectern-return-live {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #111827;
+  font-weight: 700;
+}
+.lectern-seg {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--lec-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.lectern-seg button {
+  border: 0;
+  border-radius: 0;
+  padding: 6px 10px;
+}
+.lectern-px {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 6px;
+  color: var(--lec-muted);
+  font-variant-numeric: tabular-nums;
+}
+.lectern-whispers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 18px;
+  background: #facc15;
+  color: #111827;
+  flex-shrink: 0;
+}
+.lectern-whisper-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 700;
+}
+.lectern-whisper-tag {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  background: #111827;
+  color: #facc15;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+.lectern-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--lec-border);
+  flex-shrink: 0;
+}
+.lectern-step-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.lectern-step-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  min-width: 0;
+}
+.lectern-step-meta strong {
+  font-size: 14px;
+}
+.lectern-step-meta span {
+  font-size: 12px;
+  color: var(--lec-muted);
+}
+.lectern-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 24px max(20px, calc((100vw - 920px) / 2)) 64px;
+  line-height: 1.45;
+}
+.lectern-single,
+.lectern-manuscript {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.lectern-onscreen-ref,
+.lectern-upnext,
+.lectern-card {
+  padding: 16px 20px;
+  border-radius: 14px;
+  background: var(--lec-surface);
+  border: 1px solid var(--lec-border);
+}
+.lectern-card.is-live {
+  border: 2px solid var(--lec-accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+}
+.lectern-ref-label,
+.lectern-badge {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--lec-muted);
+  margin-bottom: 6px;
+}
+.lectern-card.is-live .lectern-badge {
+  color: var(--lec-accent);
+}
+.lectern-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--lec-border);
+}
+.lectern-slide-excerpt,
+.lectern-ref-text,
+.lectern-upnext-slide {
+  font-size: 0.62em;
+  font-weight: 600;
+  color: var(--lec-muted);
+  line-height: 1.35;
+}
+.lectern-primary-notes {
+  padding: 8px 4px;
+}
+.lectern-notes {
+  font-weight: 500;
+  line-height: 1.48;
+}
+.lectern-notes .para + .para {
+  margin-top: 0.38em;
+}
+.lectern-no-notes,
+.lectern-empty {
+  font-size: 0.72em;
+  color: var(--lec-muted);
+  font-style: italic;
+  margin: 0;
+}
+.lectern-upnext-notes {
+  margin-top: 8px;
+  font-size: 0.68em;
+  opacity: 0.85;
 }

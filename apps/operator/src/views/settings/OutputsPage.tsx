@@ -1,5 +1,15 @@
 import { api, appEnv, roleUrl } from '@ordo/client';
-import { DEFAULT_LYRIC_STYLE, KEY_GREEN, type Look, nearColor, newId, type Output } from '@ordo/domain';
+import {
+  DEFAULT_LYRIC_STYLE,
+  KEY_GREEN,
+  type Look,
+  nearColor,
+  newId,
+  type Output,
+  type StageNotesScale,
+  stageNotesEnabled,
+  type StagePreset,
+} from '@ordo/domain';
 import { useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { Check } from '../../components/fields.tsx';
@@ -7,6 +17,7 @@ import { type ScreenInfo, toScreenRef } from '../../lib/screens.ts';
 import { outputWindows, useLaunch } from '../../services/outputs.ts';
 import { saveSettings, settings } from '../../state/library.ts';
 import { errorText, toast } from '../../state/toasts.ts';
+import { NOTES_SCALES, STAGE_PRESET_CARDS } from './StageNotesOptions.tsx';
 import { SaveBar, useSettingsDraft } from './useSettingsDraft.tsx';
 
 function StageMiniPreview({ look }: { look?: Look }) {
@@ -14,18 +25,20 @@ function StageMiniPreview({ look }: { look?: Look }) {
   const showClock = props?.clock !== false;
   const showCountdown = props?.countdown !== false;
   const showElapsed = props?.elapsed !== false;
-  const showNotes = props?.notes !== false;
+  const showNotes = look ? stageNotesEnabled(look) : true;
   const showMessages = props?.messages !== false;
   const showNext = look?.layers.slide.mode === 'lyricOnly' && !!look.layers.slide.nextSlide;
+  const preset: StagePreset = props?.stagePreset ?? 'auto';
 
   return (
     <div
       style={{
         width: 320,
+        minWidth: 320,
         height: 180,
-        background: '#000',
+        background: '#080a0f',
         color: '#fff',
-        borderRadius: 6,
+        borderRadius: 8,
         border: '1px solid var(--line)',
         padding: 8,
         display: 'flex',
@@ -36,6 +49,7 @@ function StageMiniPreview({ look }: { look?: Look }) {
         boxSizing: 'border-box',
         overflow: 'hidden',
         userSelect: 'none',
+        gap: 4,
       }}
     >
       {/* Top Telemetry Bar */}
@@ -44,91 +58,172 @@ function StageMiniPreview({ look }: { look?: Look }) {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          opacity: 0.8,
           fontSize: 9,
-          borderBottom: '1px solid #333',
-          paddingBottom: 2,
+          borderBottom: '1px solid #222',
+          paddingBottom: 3,
         }}
       >
         <div style={{ display: 'flex', gap: 6 }}>
-          {showClock && <span style={{ color: '#60a5fa', fontWeight: 600 }}>10:15 AM</span>}
-          {showCountdown && <span style={{ color: '#34d399' }}>Starts in 04:30</span>}
+          {showClock && <span style={{ color: '#f8fafc', fontWeight: 700 }}>10:15 AM</span>}
+          {showCountdown && <span style={{ color: '#fbbf24' }}>04:30</span>}
         </div>
-        <div>{showElapsed && <span style={{ color: '#f59e0b' }}>Sermon 24:15</span>}</div>
+        <div>{showElapsed && <span style={{ color: '#38bdf8', fontWeight: 600 }}>ELAPSED 18:24</span>}</div>
       </div>
 
-      {/* Main Live Lyric Area */}
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          textAlign: 'center',
-          padding: '4px 0',
-        }}
-      >
-        <span style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.3, color: '#f8fafc' }}>
-          Amazing grace how sweet the sound
-          <br />
-          That saved a wretch like me
-        </span>
-      </div>
+      {/* Main Content Area by Preset */}
+      {showNotes && preset === 'prompter' ? (
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            minHeight: 0,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 8,
+              color: '#94a3b8',
+              background: '#141821',
+              padding: '2px 6px',
+              borderRadius: 4,
+            }}
+          >
+            The Good Shepherd · John 10:11 (3/10)
+          </div>
+          <div
+            style={{
+              flex: 1,
+              background: 'rgba(255,255,255,0.06)',
+              borderRadius: 6,
+              padding: '6px 8px',
+              fontSize: 11,
+              fontWeight: 600,
+              lineHeight: 1.35,
+              color: '#f8fafc',
+            }}
+          >
+            • Welcome to week 3 of John
+            <br />•{' '}
+            <span style={{ color: '#fef08a', background: 'rgba(250,204,21,0.2)', padding: '0 2px' }}>
+              Jesus lays down His life
+            </span>
+            <br />•{' '}
+            <span
+              style={{ background: '#fbbf24', color: '#111', fontSize: 8, padding: '0 3px', borderRadius: 2 }}
+            >
+              PAUSE
+            </span>{' '}
+            Open John 10:11
+          </div>
+        </div>
+      ) : showNotes && preset !== 'worship' ? (
+        /* Auto Adaptive / Preacher Split */
+        <div style={{ flex: 1, display: 'flex', gap: 6, minHeight: 0 }}>
+          <div style={{ width: '36%', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div
+              style={{
+                flex: 1.3,
+                background: 'rgba(255,255,255,0.05)',
+                borderRadius: 5,
+                padding: 5,
+                fontSize: 8.5,
+                fontWeight: 600,
+                lineHeight: 1.25,
+              }}
+            >
+              <div style={{ color: '#fbbf24', fontSize: 7, marginBottom: 2 }}>SLIDE 3/10</div>
+              The Good Shepherd
+              <br />
+              John 10:11–15
+            </div>
+            {showNext && (
+              <div
+                style={{
+                  flex: 1,
+                  background: 'rgba(255,255,255,0.03)',
+                  borderRadius: 5,
+                  padding: 5,
+                  fontSize: 7.5,
+                  color: '#94a3b8',
+                  lineHeight: 1.2,
+                }}
+              >
+                <div style={{ fontSize: 6.5, opacity: 0.7 }}>NEXT</div>
+                1. Known by Name
+              </div>
+            )}
+          </div>
+          <div
+            style={{
+              flex: 1,
+              background: 'rgba(255,255,255,0.07)',
+              borderRadius: 6,
+              padding: '6px 8px',
+              fontSize: 10,
+              fontWeight: 600,
+              lineHeight: 1.35,
+              color: '#f8fafc',
+            }}
+          >
+            • Welcome to week 3
+            <br />• <span style={{ color: '#fef08a' }}>Jesus lays down His life</span> willingly
+            <br />• Invite church to turn to John 10
+          </div>
+        </div>
+      ) : (
+        /* Worship Band Layout */
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            gap: 3,
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.25, paddingTop: 2 }}>
+            Amazing grace how sweet the sound
+            <br />
+            That saved a wretch like me
+          </div>
+          {showNext && (
+            <div style={{ fontSize: 8.5, color: '#94a3b8' }}>My chains are gone, I have been set free</div>
+          )}
+          {showNotes && (
+            <div
+              style={{
+                background: 'rgba(245, 158, 11, 0.18)',
+                color: '#fde68a',
+                padding: '3px 6px',
+                borderRadius: 4,
+                fontSize: 8.5,
+                fontWeight: 600,
+              }}
+            >
+              Key: G · Capo 2 | Build drums into Chorus
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Stage Flash Message Banner */}
       {showMessages && (
         <div
           style={{
-            background: '#b91c1c',
-            color: '#fff',
-            padding: '2px 4px',
+            background: '#facc15',
+            color: '#111827',
+            fontWeight: 700,
+            padding: '2px 6px',
             borderRadius: 3,
             fontSize: 8,
             textAlign: 'center',
-            marginBottom: 2,
           }}
         >
-          Nursery: Child #142
+          Booth Whisper: Wrap in 2 min
         </div>
       )}
-
-      {/* Preacher Notes & Next Slide Bar */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2,
-          borderTop: '1px solid #333',
-          paddingTop: 2,
-          fontSize: 8,
-        }}
-      >
-        {showNext && (
-          <div
-            style={{
-              opacity: 0.65,
-              color: '#cbd5e1',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            <strong style={{ color: '#94a3b8' }}>Next:</strong> My chains are gone, I have been set free
-          </div>
-        )}
-        {showNotes && (
-          <div
-            style={{
-              color: '#fde047',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            <strong style={{ color: '#eab308' }}>Notes:</strong> Pastor: transition to greeting after chorus
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -386,90 +481,168 @@ export function OutputsPage() {
               <div
                 style={{
                   display: 'flex',
-                  gap: 16,
-                  alignItems: 'center',
+                  flexDirection: 'column',
+                  gap: 12,
                   background: 'var(--subtle, #111)',
                   padding: 12,
                   borderRadius: 6,
                 }}
               >
-                <StageMiniPreview look={look} />
-                <div className="col" style={{ gap: 8, flex: 1 }}>
-                  <strong style={{ fontSize: 13 }}>Stage Confidence Elements</strong>
-                  <div className="grid2">
-                    <Check
-                      label="Time of Day Clock"
-                      value={look.layers.props.clock !== false}
-                      onChange={(on) =>
-                        setLook(look.id, {
-                          layers: { ...look.layers, props: { ...look.layers.props, clock: on } },
-                        })
-                      }
-                    />
-                    <Check
-                      label="Countdown Timer"
-                      value={look.layers.props.countdown !== false}
-                      onChange={(on) =>
-                        setLook(look.id, {
-                          layers: { ...look.layers, props: { ...look.layers.props, countdown: on } },
-                        })
-                      }
-                    />
-                    <Check
-                      label="Elapsed Sermon Timer"
-                      value={look.layers.props.elapsed !== false}
-                      onChange={(on) =>
-                        setLook(look.id, {
-                          layers: { ...look.layers, props: { ...look.layers.props, elapsed: on } },
-                        })
-                      }
-                    />
-                    <Check
-                      label="Speaker / Preacher Notes"
-                      value={look.layers.props.notes !== false}
-                      onChange={(on) =>
-                        setLook(look.id, {
-                          layers: { ...look.layers, props: { ...look.layers.props, notes: on } },
-                        })
-                      }
-                    />
-                    <Check
-                      label="Stage Whisper Messages"
-                      value={look.layers.props.messages !== false}
-                      onChange={(on) =>
-                        setLook(look.id, {
-                          layers: { ...look.layers, props: { ...look.layers.props, messages: on } },
-                        })
-                      }
-                    />
-                    <Check
-                      label="Next Slide Look-Ahead"
-                      value={look.layers.slide.mode === 'lyricOnly' && !!look.layers.slide.nextSlide}
-                      onChange={(on) => {
-                        if (look.layers.slide.mode !== 'lyricOnly') return;
-                        setLook(look.id, {
-                          layers: {
-                            ...look.layers,
-                            slide: {
-                              ...look.layers.slide,
-                              nextSlide: on
-                                ? {
-                                    style: {
-                                      ...DEFAULT_LYRIC_STYLE,
-                                      fontSizePx: 28,
-                                      color: { r: 200, g: 200, b: 200, a: 0.75 },
-                                      align: 'left',
-                                    },
-                                    band: { x: 60, y: 700, w: 1800, h: 260, rotation: 0 },
-                                  }
-                                : undefined,
+                <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <StageMiniPreview look={look} />
+                  <div className="col" style={{ gap: 8, flex: 1, minWidth: 260 }}>
+                    <strong style={{ fontSize: 13 }}>Stage Confidence Elements</strong>
+                    <div className="grid2">
+                      <Check
+                        label="Time of Day Clock"
+                        value={look.layers.props.clock !== false}
+                        onChange={(on) =>
+                          setLook(look.id, {
+                            layers: { ...look.layers, props: { ...look.layers.props, clock: on } },
+                          })
+                        }
+                      />
+                      <Check
+                        label="Countdown Timer"
+                        value={look.layers.props.countdown !== false}
+                        onChange={(on) =>
+                          setLook(look.id, {
+                            layers: { ...look.layers, props: { ...look.layers.props, countdown: on } },
+                          })
+                        }
+                      />
+                      <Check
+                        label="Elapsed Sermon Timer"
+                        value={look.layers.props.elapsed !== false}
+                        onChange={(on) =>
+                          setLook(look.id, {
+                            layers: { ...look.layers, props: { ...look.layers.props, elapsed: on } },
+                          })
+                        }
+                      />
+                      <Check
+                        label="Speaker / Preacher Notes"
+                        value={stageNotesEnabled(look)}
+                        onChange={(on) =>
+                          setLook(look.id, {
+                            layers: { ...look.layers, props: { ...look.layers.props, notes: on } },
+                          })
+                        }
+                      />
+                      <Check
+                        label="Stage Whisper Messages"
+                        value={look.layers.props.messages !== false}
+                        onChange={(on) =>
+                          setLook(look.id, {
+                            layers: { ...look.layers, props: { ...look.layers.props, messages: on } },
+                          })
+                        }
+                      />
+                      <Check
+                        label="Next Slide Look-Ahead"
+                        value={look.layers.slide.mode === 'lyricOnly' && !!look.layers.slide.nextSlide}
+                        onChange={(on) => {
+                          if (look.layers.slide.mode !== 'lyricOnly') return;
+                          setLook(look.id, {
+                            layers: {
+                              ...look.layers,
+                              slide: {
+                                ...look.layers.slide,
+                                nextSlide: on
+                                  ? {
+                                      style: {
+                                        ...DEFAULT_LYRIC_STYLE,
+                                        fontSizePx: 44,
+                                        fontWeight: 400,
+                                        outline: undefined,
+                                        shadow: undefined,
+                                        color: { r: 200, g: 200, b: 200, a: 0.75 },
+                                        align: 'left',
+                                        valign: 'top',
+                                      },
+                                      band: { x: 60, y: 700, w: 1800, h: 260, rotation: 0 },
+                                    }
+                                  : undefined,
+                              },
                             },
-                          },
-                        });
-                      }}
-                    />
+                          });
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
+
+                {stageNotesEnabled(look) && (
+                  <div
+                    className="row wrap"
+                    style={{
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 10,
+                      borderTop: '1px solid var(--line)',
+                      paddingTop: 10,
+                    }}
+                  >
+                    <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
+                      <span className="muted small">Stage Layout:</span>
+                      <div className="ed-seg-bar">
+                        {STAGE_PRESET_CARDS.map((pCard) => {
+                          const cur: StagePreset = look.layers.props.stagePreset ?? 'auto';
+                          return (
+                            <button
+                              key={pCard.id}
+                              type="button"
+                              className={`small ${cur === pCard.id ? 'on' : ''}`}
+                              title={pCard.desc}
+                              onClick={() =>
+                                setLook(look.id, {
+                                  layers: {
+                                    ...look.layers,
+                                    props: {
+                                      ...look.layers.props,
+                                      stagePreset: pCard.id === 'auto' ? undefined : pCard.id,
+                                    },
+                                  },
+                                })
+                              }
+                            >
+                              {pCard.title}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                      <span className="muted small">Notes Size:</span>
+                      <div className="ed-seg-bar">
+                        {NOTES_SCALES.map((sc) => {
+                          const curScale: StageNotesScale = look.layers.props.notesScale ?? 'lg';
+                          return (
+                            <button
+                              key={sc.id}
+                              type="button"
+                              className={`small ${curScale === sc.id ? 'on' : ''}`}
+                              onClick={() =>
+                                setLook(look.id, {
+                                  layers: {
+                                    ...look.layers,
+                                    props: {
+                                      ...look.layers.props,
+                                      notesScale: sc.id === 'lg' ? undefined : sc.id,
+                                    },
+                                  },
+                                })
+                              }
+                            >
+                              {sc.label} ({sc.px})
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -565,7 +738,7 @@ export function OutputsPage() {
             )}
 
             {/* Link & Window Management */}
-            <div className="row small" style={{ alignItems: 'center' }}>
+            <div className="row wrap small" style={{ alignItems: 'center', gap: 8 }}>
               <span className="muted">Window link:</span>
               <span className="mono ellipsis grow">
                 {o.token ? `${o.token.slice(0, 6)}…` : 'issued on save'}
@@ -580,6 +753,33 @@ export function OutputsPage() {
                 >
                   Copy URL
                 </button>
+              )}
+              {isStage && o.token && (
+                <>
+                  <button
+                    type="button"
+                    className="small"
+                    title="Copy interactive Pulpit / iPad Lectern teleprompter URL (?view=lectern)"
+                    onClick={() => {
+                      const base = url(o);
+                      const lecUrl = `${base}${base.includes('?') ? '&' : '?'}view=lectern`;
+                      void navigator.clipboard
+                        ?.writeText(lecUrl)
+                        .then(() => toast('Pulpit Lectern URL copied for tablet / iPad.'));
+                    }}
+                  >
+                    Copy Lectern URL
+                  </button>
+                  <a
+                    className="btn small ghost"
+                    href={`${url(o)}${url(o).includes('?') ? '&' : '?'}view=lectern`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Open interactive Pulpit Lectern view in a new tab"
+                  >
+                    Open Pulpit Lectern ↗
+                  </a>
+                </>
               )}
               {o.token && (
                 <button type="button" className="small" onClick={() => void rotate(o)}>
