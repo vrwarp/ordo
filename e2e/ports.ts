@@ -197,6 +197,13 @@ export const PORT_TABLE = {
     spec: 'ipad/table-targets.spec.ts',
     what: '0 webkit-ipad, 1 webkit-ipad-portrait, 2 chromium-tablet',
   },
+  // The integration of sub-wave 1: a PowerPoint table imported, a cell edited, live.
+  'pptx-table-edit': {
+    offset: 425,
+    count: 1,
+    spec: 'pptx-table-edit.spec.ts',
+    what: 'hub without LibreOffice (import tableDeck, edit a cell, Go live)',
+  },
   // tables-conv: PowerPoint tables imported as one table object.
   'pptx-tables': {
     offset: 430,
