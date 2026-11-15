@@ -155,7 +155,16 @@ is held to the 50 ms task, and the line-art case (`line art past the slide budge
 to 16 ms at 3840; its slide's draw is reported, not checked (what it draws live is the drawing budget's, whose
 estimate rates hole-dense line art at about half its time: design/27 §13 "Geometry units"). On the bench machine
 its unit (17.4 MiB at 3840) is made in 73 to 78 ms over 6 slices, the longest 15.3 to 15.4 ms, and the slide
-draws in 65 to 66 ms (p95) at 3840. The cold arm of a slide with units, the wait of a jump to it until effect
+draws in 65 to 66 ms (p95) at 3840. Effect units (design/14 "Effect units": shadows, soft edges and translucent
+shapes past the effect budget, a decoration at its caps) print the same `units` row and are held to the same
+50 ms slice. Three kinds of decoration row gate the draws themselves (`bench/cases/decor.ts`, r2b): a
+`(warm task` row (a slide drawn warm, one raster a job) by its p95 and by its slowest draw, both within 50 ms at
+1920 and 3840; the `(alternation` row (the four-large-decorations slide and the capped decoration's drawn in
+turn for 20 rounds, the asset worker's two lanes showing two slides of one look) by its worst draw from round 3
+on (50 ms) and by each slide's mean (28 ms); the `(second draw` row (the draw after the one that marked a
+slide's decorations, which makes their sprites, at most one a raster) by its slowest draw (50 ms, target 35).
+The fidelity harness writes each slide's slowest warm draw (`rasterMaxMs`, at 1920 and 3840) beside its median
+(`rasterMs`), and its report shows the slowest. The cold arm of a slide with units, the wait of a jump to it until effect
 units, is the fidelity harness's `coldMs` (its pictures, its geometry units and the first draw,
 `tools/pptx-fidelity/README.md`): the leaf template's first slide is held to 500 ms at 3840 (245 ms, the median
 of five runs under the bench lock).

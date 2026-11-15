@@ -89,9 +89,11 @@ tight (the summaries keep every number).
   chart, smartart; then ladder for a picture slide, other): before-harness, before-hub (and how many from the
   hub), the paste, without LibreOffice, black, `missing`, exceptions and the largest object.
 - `rasterMs`: the median `drawSlide2D` time (draw and flush) at 1920 and 3840 px wide, pictures prepared and
-  geometry units made (a shape past the slide's drawing budget copied from its unit).
-- `coldMs`: preparing the pictures the deck's cache lacks and making the slide's geometry units (design/27 §13
-  "Geometry units", as an output's prepare step makes them), plus the first draw, at each width.
+  geometry and effect units made (an object past the slide's drawing budget copied from its unit).
+- `rasterMaxMs`: the slowest of those same warm draws at each width (a draw that makes a decoration's sprite, or
+  one a cache let go, shows here and not in the median; design/27 §13's 50 ms task). The report shows it.
+- `coldMs`: preparing the pictures the deck's cache lacks and making the slide's geometry and effect units
+  (design/27 §13 "Geometry units", as an output's prepare step makes them), plus the first draw, at each width.
 - `maxObjectMs` and `maxObjectId`: the largest single object's draw and flush at 1920 and 3840 px, cold
   (design/27 §13's 50 ms task). After every slide's own timings, each slide is drawn again on a canvas of its
   own, object by object as `drawSlide2D` draws them (the authored objects within the slide's drawing budget),

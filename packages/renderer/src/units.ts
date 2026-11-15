@@ -963,7 +963,8 @@ function drawnFor(o: SlideObject, scale: number): SlideObject | undefined {
 registerSlideObjectsDrawer({ draw: drawWithUnits, reach: unitReach, drawnFor });
 
 /** A unit's area in slide areas (its rect at its scale over the logical frame). */
-const slideAreas = (u: GeomUnit) => (u.rect.w * u.rect.h) / (u.scale * u.scale * LOGICAL_WIDTH * LOGICAL_HEIGHT);
+const slideAreas = (u: GeomUnit) =>
+  (u.rect.w * u.rect.h) / (u.scale * u.scale * LOGICAL_WIDTH * LOGICAL_HEIGHT);
 
 /**
  * What a slide's units cost (health, the prepare step's report): `making`, the drawing units of what they draw
