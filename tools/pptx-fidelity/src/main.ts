@@ -87,6 +87,7 @@ import {
   nativeTables,
   type SlideScore,
   type Summary,
+  slideTimings,
   writeReport,
 } from './report.ts';
 import { findChromium } from '../../find-chromium.ts';
@@ -408,10 +409,7 @@ async function nativeColumn(
       if (s.missing?.length) score.missing = s.missing;
     }
     if (opts.sha256) Object.assign(score, exceptionMarks(opts.sha256, i + 1));
-    if (r?.rasterMs) score.rasterMs = r.rasterMs;
-    if (r?.coldMs) score.coldMs = r.coldMs;
-    if (r?.maxObjectMs) score.maxObjectMs = r.maxObjectMs;
-    if (r?.maxObjectId) score.maxObjectId = r.maxObjectId;
+    Object.assign(score, slideTimings(r));
     perSlide.push(score);
   }
   await blacks.save();

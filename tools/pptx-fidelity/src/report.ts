@@ -144,6 +144,26 @@ const esc = (s: string) =>
 
 export const mean = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
 
+/** The timings a slide's score carries from what the native page drew (`native.ts` `RenderedSlide`). */
+export type SlideTimings = Pick<
+  SlideScore,
+  'rasterMs' | 'rasterMaxMs' | 'coldMs' | 'maxObjectMs' | 'maxObjectId'
+>;
+
+/**
+ * A slide's timings for its score (`summary.json` `perSlide`): the median and slowest warm draw, the cold arm
+ * and the largest object, each only when the page measured it.
+ */
+export function slideTimings(r: SlideTimings | undefined): SlideTimings {
+  const out: SlideTimings = {};
+  if (r?.rasterMs) out.rasterMs = r.rasterMs;
+  if (r?.rasterMaxMs) out.rasterMaxMs = r.rasterMaxMs;
+  if (r?.coldMs) out.coldMs = r.coldMs;
+  if (r?.maxObjectMs) out.maxObjectMs = r.maxObjectMs;
+  if (r?.maxObjectId) out.maxObjectId = r.maxObjectId;
+  return out;
+}
+
 export function quantile(xs: number[], q: number): number {
   if (!xs.length) return 0;
   const s = [...xs].sort((a, b) => a - b);
