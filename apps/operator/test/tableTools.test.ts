@@ -183,6 +183,22 @@ describe('fills, rows and columns', () => {
     expect(table().table).toEqual(m9Table());
   });
 
+  it('a fill the cells already have records no undo step (the paint picker sends the same colour again)', () => {
+    open();
+    const t = m9Table();
+    const grey = t.fills![t.cells[3]!.fill!]!.color;
+    const draft = useEditor.getState().draft;
+    fillCells('table', 3, grey);
+    // Cell 4 has no fill.
+    fillCells('table', 4, null);
+    expect(useEditor.getState().draft).toBe(draft);
+    expect(useEditor.getState().canUndo).toBe(false);
+    fillCells('table', 3, red);
+    fillCells('table', 3, red);
+    undo();
+    expect(table().table).toEqual(m9Table());
+  });
+
   it('Rows & columns insert and delete around the selected cell, the selection following it', () => {
     open();
     const R = m9Table().rows.length;

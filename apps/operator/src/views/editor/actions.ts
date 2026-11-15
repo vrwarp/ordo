@@ -353,13 +353,21 @@ export function inlineText(): { view: TextObject; target: TextTarget } | undefin
 
 /**
  * 'Cell fill' (the table bar and panel): cell `cell` of table `objectId` filled with `color`, or with no fill
- * (null); with no cell selected, every cell. One undo step (`setCellFill`).
+ * (null); with no cell selected, every cell. One undo step (`setCellFill`); none when every one of the cells
+ * already has that solid fill (a paint picker sends its colour again on Enter or a tab).
  */
 export function fillCells(objectId: string, cell: number | undefined, color: Rgba | null): void {
   onObject(objectId, (o) => {
     if (o.type !== 'shape' || !o.table) return o;
-    const all = o.table.cells.map((_, i) => i);
-    return setCellFill(o, cell === undefined ? all : [cell], color);
+    const t = o.table;
+    const which = cell === undefined ? t.cells.map((_, i) => i) : [cell];
+    const has = (i: number) => {
+      const k = t.cells[i]?.fill;
+      const f = k === undefined ? undefined : t.fills?.[k];
+      if (!color) return !f;
+      return !!f && !f.gradient && JSON.stringify(f.color) === JSON.stringify(color);
+    };
+    return which.every(has) ? o : setCellFill(o, which, color);
   });
 }
 
