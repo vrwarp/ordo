@@ -19,6 +19,9 @@ import {
   type Slide,
   type SlideContent,
   type StageMessage,
+  type StageNotesScale,
+  stageNotesEnabled,
+  type StagePreset,
   type TextStyle,
   type Timer,
 } from '@ordo/domain';
@@ -42,6 +45,10 @@ export type StageLayout = {
    * (`clearOf`). Null when the look shows no notes or not one line of them fits beside the lyrics.
    */
   notes: PropBox | null;
+  /** Adaptive layout preset and scale from `PropsRule` (used when `hasCustomNotesStyle` is false). */
+  stagePreset?: StagePreset;
+  notesScale?: StageNotesScale;
+  hasCustomNotesStyle?: boolean;
   clearColor: Rgba;
   nonSong: 'text' | 'none';
 };
@@ -175,7 +182,7 @@ export function clearOf(box: Box, avoid: Box | undefined, minW: number, minH: nu
  */
 export function notesRegion(look: Look, current: Region | null, next: Region | null): PropBox | null {
   const props = look.layers.props;
-  if (props.notes !== true) return null;
+  if (!stageNotesEnabled(look)) return null;
   const family = current?.style.fontFamily ?? 'Inter';
   const n = props.style.notes ?? defaultNotes(family, current?.box, next?.box);
   const box = clearOf(n.box, current?.box, Math.max(1, n.fontSizePx * 4), linesHeight(n, 1));
@@ -234,6 +241,9 @@ export function stageLayout(look: Look | undefined): StageLayout {
     messages: pick('messages', props.messages),
     section: props.style.section ?? section,
     notes: notesRegion(l, current, next),
+    stagePreset: props.stagePreset,
+    notesScale: props.notesScale,
+    hasCustomNotesStyle: Boolean(props.style.notes),
     clearColor: l.clearColor,
     nonSong,
   };
@@ -386,6 +396,58 @@ export function cutNotes(notes: unknown, max = NOTES_MAX): string | null {
 export function notesText(s: LiveState, content: SlideContent | null): string | null {
   if (!content) return null;
   return cutNotes(findSlide(s, content.presentationId, content.slideId)?.notes);
+}
+
+/** Next slide's speaker notes for lectern look-ahead, skipping hidden cues. */
+export function nextNotesText(s: LiveState, content: SlideContent | null): string | null {
+  if (!content) return null;
+  const cur = s.cues[content.cueIndex];
+  if (!cur) return null;
+  for (let i = content.cueIndex + 1; i < s.cues.length; i++) {
+    const c = s.cues[i]!;
+    if (isHiddenCue(c) || c.kind !== 'slide') continue;
+    return cutNotes(findSlide(s, c.presentationId, c.slideId)?.notes, 600);
+  }
+  return null;
+}
+
+/** Full slide deck outline & manuscript notes for the active item in Pulpit Lectern mode. */
+export function buildLecternSlides(
+  s: LiveState,
+  content: SlideContent | null,
+): {
+  slideId: string;
+  cueIndex: number;
+  number: number;
+  section?: string;
+  text: string;
+  notes: string | null;
+}[] {
+  if (!content) return [];
+  const cur = s.cues[content.cueIndex];
+  if (!cur) return [];
+  const out: {
+    slideId: string;
+    cueIndex: number;
+    number: number;
+    section?: string;
+    text: string;
+    notes: string | null;
+  }[] = [];
+  let num = 1;
+  for (const c of s.cues) {
+    if (c.itemIndex !== cur.itemIndex || c.kind !== 'slide' || !c.slideId || isHiddenCue(c)) continue;
+    const sl = findSlide(s, c.presentationId, c.slideId);
+    out.push({
+      slideId: c.slideId,
+      cueIndex: c.index,
+      number: num++,
+      section: c.sectionLabel,
+      text: slideText(sl),
+      notes: cutNotes(sl?.notes, 12_000),
+    });
+  }
+  return out;
 }
 
 /**

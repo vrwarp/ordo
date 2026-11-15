@@ -1,12 +1,16 @@
 import {
+  adaptStageRegions,
   type Box,
+  formatStageNotesPlain,
   type ImageCrop,
   LOGICAL_HEIGHT,
   LOGICAL_WIDTH,
   type Look,
+  type PropBox,
   type Rgba,
   type Slide,
   type SlideObject,
+  stageNotesEnabled,
   type TextObject,
   type TextStyle,
   readableText,
@@ -759,11 +763,116 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
     return;
   }
   const kind = opts.presentationKind ?? opts.isSong ?? true;
+  const isSong = kind === true || kind === 'song';
+  const rawNotes =
+    look && stageNotesEnabled(look) && typeof rawSlide.notes === 'string'
+      ? formatStageNotesPlain(rawSlide.notes.slice(0, 4000))
+      : '';
+  const preset = look?.layers.props.stagePreset;
+  if (
+    look &&
+    stageNotesEnabled(look) &&
+    (rawNotes.length > 0 || preset === 'split' || preset === 'prompter')
+  ) {
+    drawStagePreview2D(ctx, slide, next, look, rule, kind, isSong, rawNotes, scale);
+    return;
+  }
   const text = lyricTextFor(slide, look, kind);
   if (text) drawBandText(ctx, text, rule.style, rule.band, scale, bandSource(slide, text));
   if (rule.nextSlide && next && kind !== 'loop') {
     const nt = lyricTextFor(next, look, kind);
     if (nt) drawBandText(ctx, nt, rule.nextSlide.style, rule.nextSlide.band, scale, bandSource(next, nt));
+  }
+}
+
+function paintCardBox(ctx: Ctx2D, box: Box, fill: TextStyle['fill'], scale: number): void {
+  if (!fill) return;
+  ctx.save();
+  ctx.fillStyle = rgbaCss(fill.color);
+  ctx.beginPath();
+  roundRect(ctx, box.x * scale, box.y * scale, box.w * scale, box.h * scale, fill.radius * scale);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawStagePreview2D(
+  ctx: Ctx2D,
+  slide: Slide,
+  next: Slide | undefined,
+  look: Look,
+  rule: Extract<Look['layers']['slide'], { mode: 'lyricOnly' }>,
+  kind: boolean | 'song' | 'slides' | 'loop',
+  isSong: boolean,
+  notesText: string,
+  scale: number,
+): void {
+  const customNotes = look.layers.props.style.notes;
+  const defaultNotesBox: PropBox = customNotes ?? {
+    fontFamily: rule.style.fontFamily,
+    fontWeight: 400,
+    fontStyle: 'normal',
+    fontSizePx: 32,
+    color: { r: 235, g: 235, b: 235, a: 1 },
+    align: 'left',
+    valign: 'top',
+    lineHeight: 1.2,
+    letterSpacing: 0,
+    padding: 8,
+    transform: 'none',
+    fill: { color: { r: 255, g: 255, b: 255, a: 0.1 }, radius: 10 },
+    box: { x: 60, y: 972, w: 1800, h: 92, rotation: 0 },
+  };
+  const text = lyricTextFor(slide, look, kind);
+  const nt = rule.nextSlide && next && kind !== 'loop' ? lyricTextFor(next, look, kind) : null;
+  const adapted = adaptStageRegions({
+    preset: look.layers.props.stagePreset,
+    notesScale: look.layers.props.notesScale,
+    isSong,
+    hasNotes: notesText.length > 0,
+    notesEnabled: true,
+    hasCustomNotesStyle: Boolean(customNotes),
+    current: rule.nonSong === 'none' && !isSong ? null : { box: rule.band, style: rule.style },
+    next: rule.nextSlide ? { box: rule.nextSlide.band, style: rule.nextSlide.style } : null,
+    notes: defaultNotesBox,
+  });
+  if (adapted.current && text) {
+    paintCardBox(ctx, adapted.current.box, adapted.current.style.fill, scale);
+    drawBandText(
+      ctx,
+      text,
+      { ...adapted.current.style, fill: undefined },
+      adapted.current.box,
+      scale,
+      bandSource(slide, text),
+    );
+  }
+  if (adapted.next && nt) {
+    paintCardBox(ctx, adapted.next.box, adapted.next.style.fill, scale);
+    drawBandText(
+      ctx,
+      nt,
+      { ...adapted.next.style, fill: undefined },
+      adapted.next.box,
+      scale,
+      next ? bandSource(next, nt) : undefined,
+    );
+  }
+  if (adapted.notes && notesText) {
+    const nb = adapted.notes.box;
+    paintCardBox(ctx, nb, adapted.notes.fill, scale);
+    ctx.save();
+    ctx.beginPath();
+    roundRect(
+      ctx,
+      nb.x * scale,
+      nb.y * scale,
+      nb.w * scale,
+      nb.h * scale,
+      (adapted.notes.fill?.radius ?? 0) * scale,
+    );
+    ctx.clip();
+    drawText(ctx, notesText, { ...adapted.notes, fill: undefined, valign: 'top' }, nb, scale, { fit: false });
+    ctx.restore();
   }
 }
 

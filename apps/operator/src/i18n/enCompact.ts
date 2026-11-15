@@ -56,6 +56,7 @@ export const enCompact = {
   'preview.previous': 'Previous',
   'preview.next': 'Next',
   'preview.position': 'Slide {n} of {total}',
+  'preview.notes': 'Speaker notes',
   'preview.noSlides': 'No slides yet.',
   'preview.missing': 'This presentation is not in the library.',
   // ---- Live now ----

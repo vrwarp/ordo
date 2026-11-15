@@ -81,6 +81,12 @@ describe('the Stage screen card', () => {
     const check = html.match(/<label class="check"><input type="checkbox"[^>]*>/)![0];
     expect(check).toContain('checked');
     expect(text(html)).toContain('Notes: show the live slide’s notes, for the preacher');
+    expect(text(html)).toContain('Stage layout preset');
+    expect(text(html)).toContain('Auto Adaptive');
+    expect(text(html)).toContain('Preacher Split');
+    expect(text(html)).toContain('Full Prompter');
+    expect(text(html)).toContain('Worship Band');
+    expect(text(html)).toContain('Speaker notes text scale');
     // While the notes are on, shows notes box and notes text options.
     expect(text(html)).toContain('Notes box (default: under the next slide)');
     expect(text(html)).toContain('Notes text');

@@ -1,17 +1,45 @@
 import {
   formatDuration,
+  formatStageNotesPlain,
+  isHiddenCue,
+  type LiveState,
   MANUAL_ELAPSED_TIMER_ID,
   nextTimeOfDay,
+  parseStageNoteLine,
   SERVICE_COUNTDOWN_TIMER_ID,
+  type Slide,
   type Timer,
 } from '@ordo/domain';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Select } from '../../components/fields.tsx';
 import { useHubNow } from '../../hooks.ts';
 import { controller } from '../../services/controller.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import { setUi, useUi } from '../../state/ui.ts';
+
+function cueSlide(state: LiveState, cueIndex: number | undefined): Slide | undefined {
+  if (cueIndex === undefined) return undefined;
+  const cue = state.cues[cueIndex];
+  if (!cue?.presentationId || !cue.slideId) return undefined;
+  const p = state.resolved?.presentations[cue.presentationId];
+  if (!p) return undefined;
+  for (const sec of p.sections) {
+    for (const sl of sec.slides) {
+      if (sl.id === cue.slideId) return sl;
+    }
+  }
+  return undefined;
+}
+
+function nextVisibleCueIndex(state: LiveState): number | undefined {
+  if (state.live === undefined) return undefined;
+  for (let i = state.live + 1; i < state.cues.length; i++) {
+    const c = state.cues[i];
+    if (c && !isHiddenCue(c)) return i;
+  }
+  return undefined;
+}
 
 const TTLS = [
   { value: '0', label: 'Until dismissed' },
@@ -27,6 +55,80 @@ export function timerText(t: Timer, now: number, timeZone: string): string {
   }
   if (t.running && t.startedAt !== undefined) return formatDuration(now - t.startedAt);
   return formatDuration(t.elapsedMs ?? 0);
+}
+
+/** Live & Next Speaker Notes / Cues card for the booth operator's right rail. */
+export function LiveSpeakerNotesCard() {
+  const state = useLive((s) => s.state);
+  const liveSlide = cueSlide(state, state.live);
+  const nextIdx = nextVisibleCueIndex(state);
+  const nextSlide = cueSlide(state, nextIdx);
+  const liveNotes = liveSlide?.notes?.trim() ?? '';
+  const nextNotes = nextSlide?.notes?.trim() ?? '';
+  if (!liveNotes && !nextNotes) return null;
+
+  return (
+    <div
+      className="card col live-notes-card"
+      data-live-speaker-notes
+      style={{ padding: 10, gap: 6, margin: '8px 8px 2px' }}
+    >
+      <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
+        <h4 style={{ margin: 0 }}>Speaker Notes &amp; Cues</h4>
+        <span className="tag notes" style={{ fontSize: 10 }}>
+          Live Cue
+        </span>
+      </div>
+      {liveNotes ? (
+        <div className="live-notes-body" dir="auto">
+          {(() => {
+            let linePos = 0;
+            return liveNotes.split('\n').map((line) => {
+              const key = `ln-${linePos}`;
+              linePos += line.length + 1;
+              if (!line.trim()) return <div key={key} style={{ height: 4 }} />;
+              const parsed = parseStageNoteLine(line);
+              let tokPos = 0;
+              return (
+                <div key={key} className={parsed.bullet ? 'live-note-line bullet' : 'live-note-line'}>
+                  {parsed.bullet && <span className="live-note-bullet">•</span>}
+                  <span>
+                    {parsed.tokens.map((r) => {
+                      const tokKey = `tk-${tokPos}`;
+                      tokPos += r.text.length + 1;
+                      if (r.kind === 'highlight') {
+                        return (
+                          <mark key={tokKey} className="live-note-hl">
+                            {r.text}
+                          </mark>
+                        );
+                      }
+                      if (r.kind === 'cue') {
+                        return (
+                          <span key={tokKey} className="live-note-cue">
+                            {r.text}
+                          </span>
+                        );
+                      }
+                      return <Fragment key={tokKey}>{r.text}</Fragment>;
+                    })}
+                  </span>
+                </div>
+              );
+            });
+          })()}
+        </div>
+      ) : (
+        <div className="muted small">No speaker notes on current live slide.</div>
+      )}
+      {nextNotes && (
+        <div className="live-notes-next" dir="auto">
+          <span className="live-notes-next-lbl">UP NEXT:</span>{' '}
+          <span>{formatStageNotesPlain(nextNotes).replace(/\s+/g, ' ').slice(0, 140)}</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Messages, recent and preset messages, timers, lower third and logo (prd/02 Stage tools). */
@@ -50,6 +152,7 @@ export function StageTools() {
   const others = Object.values(state.timers).filter(
     (t) => t.id !== SERVICE_COUNTDOWN_TIMER_ID && t.id !== MANUAL_ELAPSED_TIMER_ID,
   );
+
   return (
     <div className="stage-tools col" style={{ gap: 10 }}>
       {/* 1. BACKSTAGE (Stage Screen Only) */}

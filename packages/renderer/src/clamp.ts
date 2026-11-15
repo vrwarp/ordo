@@ -1055,6 +1055,15 @@ export function clampLook(look: unknown): Look {
   };
   if (typeof pr.mediaRemaining === 'boolean') props.mediaRemaining = pr.mediaRemaining;
   if (typeof pr.notes === 'boolean') props.notes = pr.notes;
+  if (
+    pr.stagePreset === 'auto' ||
+    pr.stagePreset === 'worship' ||
+    pr.stagePreset === 'split' ||
+    pr.stagePreset === 'prompter'
+  )
+    props.stagePreset = pr.stagePreset;
+  if (pr.notesScale === 'sm' || pr.notesScale === 'md' || pr.notesScale === 'lg' || pr.notesScale === 'xl')
+    props.notesScale = pr.notesScale;
   const tr = l.transition as Look['transition'] | undefined;
   const transition: Look['transition'] =
     tr && typeof tr === 'object' && (tr.kind === 'cut' || tr.kind === 'crossfade')

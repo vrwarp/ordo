@@ -106,6 +106,8 @@ function PlaylistItemSection({
                 const tags = slideMediaTags(slide, op.media);
                 // A hidden slide (design/27 §9) is dimmed and tagged, and a click still shows it.
                 const hidden = isHiddenCue(c);
+                const notesText = slide?.notes?.trim() ?? '';
+                const hasNotes = notesText.length > 0;
                 return (
                   <SlideThumb
                     key={c.index}
@@ -121,11 +123,20 @@ function PlaylistItemSection({
                     onClick={() => onClick(c)}
                     onDoubleClick={() => onDouble(c)}
                     footer={
-                      tags.length > 0 || hidden ? (
+                      tags.length > 0 || hidden || hasNotes ? (
                         <>
                           {hidden && (
                             <span className="tag" title={HIDDEN_TITLE} data-hidden-slide>
                               hidden
+                            </span>
+                          )}
+                          {hasNotes && (
+                            <span
+                              className="tag notes"
+                              title={`Speaker notes: ${notesText.slice(0, 160)}`}
+                              data-slide-notes
+                            >
+                              notes
                             </span>
                           )}
                           {tags.map((t) => (

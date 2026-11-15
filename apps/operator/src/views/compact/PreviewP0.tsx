@@ -29,7 +29,9 @@ export function PreviewP0({ id, slideId }: { id?: string; slideId?: string }) {
       </div>
     );
   const found = slides.findIndex((s) => s.id === slideId);
-  const index = found >= 0 ? found : 0;
+  const index = Math.max(found, 0);
+  const activeSlide = slides[index]!;
+  const speakerNotes = activeSlide.notes?.trim() ?? '';
   const step = (d: number) => {
     const next = slides[index + d];
     if (next) navigate({ name: 'previews', id: presentation.id, slideId: next.id }, { replace: true });
@@ -54,7 +56,15 @@ export function PreviewP0({ id, slideId }: { id?: string; slideId?: string }) {
           <Icon name="next" />
         </button>
       </div>
-      <LookPreviews presentation={presentation} slideId={slides[index]!.id} />
+      {speakerNotes && (
+        <section className="compact-notes-card" data-compact-notes aria-label={t('preview.notes')}>
+          <div className="compact-notes-head">{t('preview.notes')}</div>
+          <div className="compact-notes-body" dir="auto">
+            {speakerNotes}
+          </div>
+        </section>
+      )}
+      <LookPreviews presentation={presentation} slideId={activeSlide.id} />
     </div>
   );
 }
