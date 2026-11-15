@@ -650,6 +650,20 @@ function bandsOf(w: number, h: number): [number, number][] {
   return out;
 }
 
+/**
+ * Draws what `c` recorded: Chromium draws a 2D context's calls when its canvas is read, copied or transferred, so
+ * an `effectSteps` step ends with it and its time is its own, not a later step's (else the copy that ends an
+ * effect unit paid for a full-frame body and its soft edge's multiply at once: 102 ms at 4K, bench '(bounded, M6
+ * finish)'). One pixel read back from a CPU-backed canvas (`willReadFrequently`), as `picture.ts` `settle` does.
+ */
+function settle(c: OffscreenCanvasRenderingContext2D | null | undefined): void {
+  try {
+    c?.getImageData(0, 0, 1, 1);
+  } catch {
+    // Nothing to read back (a lost context): the step just ends.
+  }
+}
+
 /** Runs `fn` on `c` with a clip of rows y..y+n (device px, whole rows): only those rows change. */
 function inRows(c: OffscreenCanvasRenderingContext2D, y: number, n: number, fn: () => void): void {
   c.save();
@@ -787,7 +801,9 @@ export function effectSteps(
     });
     for (const p of paint)
       steps.push(() => {
-        if (a && !failed) p(a);
+        if (!a || failed) return;
+        p(a);
+        settle(a);
       });
     steps.push(() => {
       if (!a || failed) return;
@@ -797,6 +813,7 @@ export function effectSteps(
         return;
       }
       shadowOnly(b, a.canvas, color, sigma / k);
+      settle(b);
       made = { canvas: b.canvas, x: r.X, y: r.Y, w: w * k, h: h * k, bytes: w * h * 4 };
       a = undefined;
     });
@@ -805,6 +822,7 @@ export function effectSteps(
         if (!f || !made || failed) return;
         const l = made;
         inRows(f, y, n, () => f!.drawImage(l.canvas, l.x - r.X, l.y - r.Y, l.w, l.h));
+        settle(f);
       });
   };
   if (sh)
@@ -832,6 +850,7 @@ export function effectSteps(
         toBox(target);
         draw(target as unknown as Ctx2D);
         target.restore();
+        settle(target);
       });
     if (soft) {
       let mask: SoftMask | undefined;
@@ -841,10 +860,13 @@ export function effectSteps(
         toBox(target);
         mask = softMask(target, src, m, s, r, undefined, softPad);
         target.restore();
+        settle(mask?.canvas.getContext('2d') as OffscreenCanvasRenderingContext2D | null | undefined);
       });
       for (const [y, n] of bands)
         steps.push(() => {
-          if (target && mask && !failed) inRows(target, y, n, () => multiplySoftMask(target!, mask!));
+          if (!target || !mask || failed) return;
+          inRows(target, y, n, () => multiplySoftMask(target!, mask!));
+          settle(target);
         });
     }
     if (alone)
@@ -853,6 +875,7 @@ export function effectSteps(
           if (!f || !target || failed) return;
           const from = target.canvas;
           inRows(f, y, n, () => f!.drawImage(from, 0, 0));
+          settle(f);
         });
   }
   return {

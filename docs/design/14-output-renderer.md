@@ -406,7 +406,10 @@ drawing budget (`geombudget.ts`) would draw as a lesser legacy copy on the outpu
   by call, a soft edge's mask made once and multiplied in bands, as a prepared picture's soft edge), then the
   composite's part on the frame copied into the unit at the shape's opacity; a decoration by `drawDecorRange`, one
   source shape a step and at most `DECOR_TURN_SHAPES` (32) a turn. A turn takes steps while within half of
-  `SLICE_MS`; a step is at most one call of a shape within `GEOM_COST.slide` (about 38 ms at 4K, cold).
+  `SLICE_MS`; a step is at most one call of a shape within `GEOM_COST.slide` (about 38 ms at 4K, cold). Every
+  step ends by reading one pixel back from each canvas it drew on: Chromium records 2D calls and draws them when
+  the canvas is read, copied or transferred, so a step that only recorded would be drawn by a later one (the
+  copy that ended a full-slide soft edge's unit took 102 ms at 3840 before it).
 - **Drawn** by `drawSlide2D` (the slide objects' drawer `units.ts` registers): in z-order, an object whose unit is
   ready is copied 1:1 (`layers`: its body drawn live over it); one whose unit is not ready keeps its cheap legacy
   copy as the placeholder (live-frame removes it in sub-wave 2). With `SlideDrawOptions.late` (an output raster:
