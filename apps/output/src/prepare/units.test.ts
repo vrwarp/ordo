@@ -6,7 +6,7 @@ import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';
 import { lineArtSlide } from '@ordo/renderer/units.test-util.ts';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type PrepareHost, prepareSlides, prepareSteps } from './index.ts';
-import { geometryUnits, holdUnits, setGeometryUnits } from './units.ts';
+import { geometryUnits, holdInto, holdUnits, setGeometryUnits, unitJob } from './units.ts';
 
 /*
  * The geometry units prepare step (design/27 §12-13, M9 "Slow-to-draw elements", Runtime): each object a slide's
@@ -240,6 +240,94 @@ describe('the geometry units prepare step (M9 Slow-to-draw, Runtime)', () => {
     // A host nobody holds (the thumbnail worker) pins nothing.
     clearUnits();
     await geometryUnits.run({ slides: [slide], scale: 1 }, host({ slices: 0, checks: 0 }));
+    expect(unitCache.pinned).toBe(0);
+    expect(unitCache.count('unit')).toBe(keys.length);
+  });
+});
+
+describe('an output job that must not wait for its units (r2b units-live: a GO never waits for drawing)', () => {
+  it('a live job (stop true from the start) makes no unit and says which it left', async () => {
+    const slide = lineArtSlide();
+    const keys = unitsOfSlide(slide, 1).map((u) => u.key);
+    expect(keys.length).toBeGreaterThanOrEqual(2);
+    stepMs = 3;
+    const h = host({ slices: 0, checks: 0 }, undefined, clock.now);
+    const job = unitJob(h, { stop: () => true });
+    const before = unitWork();
+    await geometryUnits.run({ slides: [slide], scale: 1 }, h);
+    expect(unitWork().made).toBe(before.made);
+    expect(unitWork().steps).toBe(before.steps);
+    expect(job.left).toEqual(keys);
+    expect(job.made).toEqual([]);
+  });
+
+  it('a hurried job (stop turns true while a unit is made) abandons that unit at its next turn', async () => {
+    const slide = lineArtSlide();
+    const keys = unitsOfSlide(slide, 1).map((u) => u.key);
+    // Two steps a turn: the GO arrives after the first unit's first turn.
+    stepMs = 3;
+    let turns = 0;
+    const h: PrepareHost = {
+      ...host({ slices: 0, checks: 0 }, undefined, clock.now),
+      slice: async <T>(fn: () => T) => {
+        turns++;
+        return fn();
+      },
+    };
+    const job = unitJob(h, { stop: () => turns > 2 });
+    await geometryUnits.run({ slides: [slide], scale: 1 }, h);
+    // The plan's turn, the first unit's first turn, then the hurry: nothing kept, every unit left.
+    expect(unitCache.count('unit')).toBe(0);
+    expect(job.left).toEqual(keys);
+    expect(turns).toBeLessThanOrEqual(4);
+  });
+
+  it('a late job reports each unit it makes, and waits after each turn of making (test mode)', async () => {
+    const slide = lineArtSlide();
+    const keys = unitsOfSlide(slide, 1).map((u) => u.key);
+    stepMs = 3;
+    const h = host({ slices: 0, checks: 0 }, undefined, clock.now);
+    const reported: string[] = [];
+    let waits = 0;
+    const job = unitJob(h, {
+      stop: () => false,
+      onUnit: (k) => reported.push(k),
+      afterTurn: async () => {
+        waits++;
+      },
+    });
+    const before = unitWork();
+    await geometryUnits.run({ slides: [slide], scale: 1 }, h);
+    expect(reported).toEqual(keys);
+    expect(job.made).toEqual(keys);
+    expect(job.left).toEqual([]);
+    // Only the turns that make units wait, not the plan's.
+    expect(waits).toBe(unitWork().turns - before.turns);
+    expect(waits).toBeGreaterThanOrEqual(keys.length);
+  });
+
+  it("a late job's pins join the hold of the job it continues, and none once that hold is let go", async () => {
+    const slide = lineArtSlide();
+    const keys = unitsOfSlide(slide, 1).map((u) => u.key);
+    const live = host({ slices: 0, checks: 0 });
+    const hold = holdUnits(live);
+    unitJob(live, { stop: () => true });
+    await geometryUnits.run({ slides: [slide], scale: 1 }, live);
+    // Nothing made: the plan's units are pinned before they are made (they stay pinned while live).
+    expect(unitCache.pinned).toBe(0);
+    const late = host({ slices: 0, checks: 0 });
+    holdInto(late, hold);
+    unitJob(late, { stop: () => false });
+    await geometryUnits.run({ slides: [slide], scale: 1 }, late);
+    expect([...hold.keys]).toEqual(keys);
+    expect(unitCache.pinned).toBe(keys.length);
+    hold.release();
+    expect(unitCache.pinned).toBe(0);
+    // A late job after the hold was let go (the slide left the screen) pins nothing.
+    clearUnits();
+    const after = host({ slices: 0, checks: 0 });
+    holdInto(after, hold);
+    await geometryUnits.run({ slides: [slide], scale: 1 }, after);
     expect(unitCache.pinned).toBe(0);
     expect(unitCache.count('unit')).toBe(keys.length);
   });

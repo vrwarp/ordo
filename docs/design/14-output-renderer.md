@@ -364,17 +364,41 @@ copy stays.
   layer's last of its role (live, armed), and a warm job's until the next warm job (`holdUnits`, `keepUnits`):
   the live, armed and warmed cues hold at most three frames (100 MB at 4K).
 - **When they are made.** An armed or warmed cue's units are made by its slide or warm job, so its GO does no
-  unit work and never waits. A jump (a cue neither armed nor warmed) waits for its units in its own job, as
-  for its table layouts, within the bounds above: the leaf template's first slide (one unit of 10.7 MiB at 4K)
-  arms cold within 0.5 s at 4K, its pictures, its units and its first draw in 245 ms at 3840 and 195 ms at 1920
-  (the fidelity harness's cold time, median of five on the bench machine; design/23). Effect units (M9 r2b)
-  replace that wait: a GO never waits, the slide shows at once and a late unit fades in (about 0.3 s, the
-  owner's call). Until then the jump's wait is a GO that waits, so that item (effect units item 5) is a must item
-  before the follow-up PR merges (r2a repair).
+  unit work and never waits; the live playlist's slides are warmed ahead too ("Late units" below). A GO never
+  waits for them (owner decision 2026-11-13): a jump (a cue neither armed nor warmed) is drawn and shown at
+  once with the units not ready as their legacy copies, and a GO while the cue's armed or warm job is still
+  making them stops that wait; the units are made in a late job and fade in ("Late units"). Cold, the leaf
+  template's first slide (one unit of 10.7 MiB at 4K) takes 239 ms at 3840 for its pictures, its units and its
+  first draw (r2b base, median of three under the bench lock), which is now late making, not a GO's wait.
 - **Thumbnails.** The operator's thumbnail worker runs the same step, only when its page says the pointer is
   fine (`init`, `lib/capabilities.ts` `coarsePointer`): a desktop's thumbnails draw the shapes whole, a phone or
   tablet keeps the legacy copies and makes nothing. The editor canvas keeps the legacy copies (leaf-editor).
 <!-- /m9:geometry-units -->
+
+### Late units
+
+<!-- r2b:units-live -->
+A GO never waits for drawing (owner decision 2026-11-13, "fill in when ready with a fade"; design/17 "A GO never
+waits for drawing"). What a slide's units are not ready for is shown at once without them, their legacy copies
+drawn this time, and the parts fade in when they are made (`apps/output/src/late.ts`: `LATE_UNIT = 'fade'`,
+`REFRESH_FADE_MS` 300).
+
+- **Who waits.** Only an armed job waits for its units (bounded by `UNIT_WAIT_MS`, as before), and a warm job.
+  A live job (a jump to a cue neither armed nor warmed) and a re-draw (`role: 'late'`) never do: the asset worker
+  tells the units step through `unitJob` (keyed by the job's prepare host, as `holdUnits`), whose `stop` is
+  checked before each unit (`SlideUnitsOptions.stop`, renderer units.ts) and at each turn of the unit being made.
+  The harness, the thumbnail worker and bakes pass no job and wait for complete drawing as before.
+- **Hurry.** A GO to a cue whose armed or warm job is still running (the link's `ensureContent` skips an
+  in-flight key) sends `{t: 'hurry', keys}`: that job's `stop` turns true at once, the unit it is making is
+  abandoned at its next turn (nothing of it kept), and it is drawn and sent with what is ready, within one turn
+  of the hurry (a turn is about `SLICE_MS` / 2 plus the step running, design/27 §13).
+- **Late job.** A slide job that left units (`done.unitsLeft`) queues a late job for them (`RANK.late`: below
+  the live and armed cues, above bulk work; chain `late`), which pins what it makes into the slide job's own hold
+  (`holdInto`: while the slide is live or armed) and reports them with `{t: 'unitsReady', slideKey, keys,
+  left}`, coalesced: once all are made, or at most once per `REFRESH_FADE_MS` while some remain. A live job of
+  another slide on the layer drops the late jobs of the slides it replaced on screen. With `?late=next` the late
+  job still makes them, but reports nothing: the slide's next draw copies them.
+<!-- /r2b:units-live -->
 
 ## Frame loop
 

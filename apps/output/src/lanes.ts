@@ -3,8 +3,9 @@
  * only prepares what comes later, and a job that was superseded stops at its next step.
  *
  * - **Lanes.** *interactive*: the props layer (a clock flips once a second, rasterized 150 ms ahead of its
- *   boundary), then the live cue's layers, then the armed cue's; *bulk*: work for later (the pictures of the
- *   cue after the armed one). A job's rank says which; lower ranks go first.
+ *   boundary), then the live cue's layers, then the armed cue's, then late work (units a slide was shown
+ *   without, and the re-draws that fade them in); *bulk*: work for later (the pictures of the cue after the
+ *   armed one, the live playlist's units warmed ahead). A job's rank says which; lower ranks go first.
  * - **Chains.** Jobs of one chain run one at a time, in rank then arrival order: a layer's content must
  *   reach the renderer in the order its stacks expect it (`LayerStack.offer`), so each layer is a chain. Jobs
  *   of different chains run side by side: one awaiting a file read or a decode (off this thread) never
@@ -39,8 +40,12 @@ export class Cancelled extends Error {
 
 export type LaneName = 'interactive' | 'bulk';
 
-/** Job ranks, most urgent first: the first three are the interactive lane, `bulk` the other. */
-export const RANK = { props: 0, live: 1, armed: 2, bulk: 3 } as const;
+/**
+ * Job ranks, most urgent first: all but `bulk` are the interactive lane. `late` (design/14 "Late units"): the
+ * units a slide was shown without and the re-draws that fade them in, below the live and armed cues (a GO's
+ * jobs go first) and above bulk work, which waits for them.
+ */
+export const RANK = { props: 0, live: 1, armed: 2, late: 3, bulk: 4 } as const;
 
 export function laneOf(rank: number): LaneName {
   return rank >= RANK.bulk ? 'bulk' : 'interactive';

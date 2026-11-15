@@ -19,12 +19,19 @@ import {
   planeSample,
   preparedKey,
 } from '@ordo/renderer';
-import { unitReady, unitsOfSlide, unitWork } from '@ordo/renderer/units.ts';
+import {
+  putUnit,
+  UNIT_CACHE_BYTES,
+  unitCache,
+  unitReady,
+  unitsOfSlide,
+  unitWork,
+} from '@ordo/renderer/units.ts';
 import { lineArtSlide } from '@ordo/renderer/units.test-util.ts';
 import { CONTENT_CASES, contentCase } from '@ordo/domain/content.test-util.ts';
 import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';
 import { geomFile } from '@ordo/renderer/geom/stored.ts';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 /**
  * The asset worker with fakes (design/27 §7.2, SCENE.md item E): its global scope, OffscreenCanvas,
@@ -50,6 +57,17 @@ type FakeBitmap = {
 
 const W = 960;
 const H = 540;
+
+/**
+ * The worker's clock in the tests that time unit making (`performance.now` while `on`): only unit steps move it
+ * (`stepMs` each, `fakeCtx`), so how long units take, and when a picture is sent, depends on no real time.
+ */
+const clock: { on: boolean; t: number; stepMs: number; at?: { t: number; fn: () => void } } = {
+  on: false,
+  t: 0,
+  stepMs: 0,
+};
+const realNow = performance.now.bind(performance);
 /** Geometry files the fake hub serves, by hash, and one it does not have. */
 const GEOM_READ = 'a'.repeat(64);
 const GEOM_GONE = 'b'.repeat(64);
@@ -68,7 +86,19 @@ function fakeCtx(rec: { ops: string[]; drawn: FakeBitmap[] }) {
       if (k === 'measureText') return (s: string) => ({ width: s.length * 10 });
       // Nothing drawn reaches a pixel of these fakes: a tight sprite's edge ring reads transparent.
       if (k === 'getImageData')
-        return (_x: number, _y: number, w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4) });
+        return (_x: number, _y: number, w: number, h: number) => {
+          // A unit step's flush (a one-pixel read) takes `clock.stepMs` of the test's clock while it runs.
+          if (clock.on && w === 1 && h === 1) {
+            clock.t += clock.stepMs;
+            // Something that happens at a time of the clock (a GO), between two steps.
+            const due = clock.at;
+            if (due && clock.t >= due.t) {
+              clock.at = undefined;
+              due.fn();
+            }
+          }
+          return { data: new Uint8ClampedArray(w * h * 4) };
+        };
       if (k in t) return t[k];
       return (...args: unknown[]) => {
         if (k === 'fillText') rec.ops.push(`text:${args[0]}`);
@@ -145,7 +175,8 @@ const scope: { postMessage: (m: unknown) => void; onmessage: ((ev: { data: unkno
   postMessage: () => undefined,
   onmessage: null,
 };
-const rendered: { msg: AssetToRender; transfer: unknown[] }[] = [];
+/** Pictures sent to the renderer, with the units made on the thread and the test's clock when each was sent. */
+const rendered: { msg: AssetToRender; transfer: unknown[]; made: number; steps: number; at: number }[] = [];
 /** Files decoded (createImageBitmap of a fetched file). */
 const decoded: string[] = [];
 const replies: FromAsset[] = [];
@@ -159,12 +190,14 @@ const link: {
   close: () => undefined,
 };
 const render = {
-  postMessage: (msg: AssetToRender, transfer: unknown[]) => rendered.push({ msg, transfer }),
+  postMessage: (msg: AssetToRender, transfer: unknown[]) =>
+    rendered.push({ msg, transfer, made: unitWork().made, steps: unitWork().steps, at: clock.t }),
   close: () => undefined,
 };
 
 beforeAll(async () => {
   vi.useFakeTimers({ toFake: ['setInterval'] });
+  vi.spyOn(performance, 'now').mockImplementation(() => (clock.on ? clock.t : realNow()));
   vi.stubGlobal('self', scope);
   vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
   // Pictures arrive from the hub's file route, tagged with their hash; the poster is 4:3. Geometry files
@@ -647,8 +680,18 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
     return { id, objects: objects.map((o) => ({ ...o, box: { ...o.box, x: o.box.x + dx } })) };
   };
   const unitsOf = (s: Slide) => unitsOfSlide(s, W / 1920, LOOK_MAIN);
+  /** `n` copies of a line art, each moved a little: past the budget, several units within one frame. */
+  const many = (id: string, n: number): Slide => {
+    const art = lineArtSlide().objects.find((o) => o.type === 'shape')!;
+    const objects = Array.from({ length: n }, (_, i) => ({
+      ...art,
+      id: `${art.id}-${i}`,
+      box: { x: 20 + i * 30, y: 20 + i * 20, w: 600, h: 400, rotation: 0 },
+    }));
+    return { id, objects };
+  };
   /** Send a job with its role and wait for its answer. */
-  async function runAs(job: AssetJob, role: 'live' | 'armed') {
+  async function runAs(job: AssetJob, role: 'live' | 'armed' | 'late') {
     rendered.length = 0;
     replies.length = 0;
     send({ t: 'job', job, role });
@@ -697,15 +740,294 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
     expect(unitWork()).toEqual(after);
   });
 
-  it('a jump to a cue neither armed nor warmed waits for its units in its own job', async () => {
+  /** Re-send the worker's init with these drawing switches (the asset init's `drawing`). */
+  const init = (drawing: Record<string, unknown> = {}) =>
+    scope.onmessage!({ data: { t: 'init', width: W, height: H, token: '', apiPrefix: '/api/v1', drawing } });
+  /** The test's clock on, each unit step `stepMs` long; off again after the test. */
+  const timed = (stepMs: number) => {
+    clock.on = true;
+    clock.t = 0;
+    clock.stepMs = stepMs;
+  };
+  afterEach(() => {
+    clock.on = false;
+    clock.stepMs = 0;
+    clock.at = undefined;
+    init();
+  });
+  const ready = () =>
+    replies.filter((r) => r.t === 'unitsReady') as Extract<FromAsset, { t: 'unitsReady' }>[];
+
+  it('a jump to a cue neither armed nor warmed is sent at once; its units are made late and reported (r2b units-live)', async () => {
     const s = busy('jump', 13);
+    const units = unitsOf(s);
+    // Each unit step takes 40 ms of the clock: the slide's units take several hundred ms of turns.
+    timed(40);
     const before = unitWork();
-    const { reply, msg } = await runAs(
-      slideJob({ slide: s, images: {}, video: undefined, key: 'sl|jump' }),
-      'live',
+    rendered.length = 0;
+    replies.length = 0;
+    send({
+      t: 'job',
+      job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|jump' }),
+      role: 'live',
+    });
+    await vi.waitFor(() => expect(rendered.length).toBeGreaterThan(0));
+    // Sent before any unit was made, within the plan's turn: the units not ready are drawn as their legacy copies.
+    expect(rendered[0]!.made).toBe(before.made);
+    expect(rendered[0]!.at).toBe(0);
+    expect(unitCopies(rendered[0]!.msg.bitmap as unknown as FakeBitmap)).toHaveLength(0);
+    await vi.waitFor(() => expect(replies.find((r) => r.t === 'done')).toBeDefined());
+    expect(replies.find((r) => r.t === 'done')).toMatchObject({ key: 'sl|jump', unitsLeft: units.length });
+    // The late job makes them all and says so once (made within 300 ms of each other at most: one report).
+    await vi.waitFor(() => expect(ready().reduce((n, r) => n + r.keys.length, 0)).toBe(units.length));
+    expect(ready().at(-1)).toMatchObject({ layer: 1, slideKey: 'sl|jump', left: 0 });
+    expect(unitWork().made - before.made).toBe(units.length);
+    for (const u of units) expect(unitReady(u)).toBeDefined();
+    // The re-draw the link sends then copies them, and fades in on screen.
+    const again = await runAs(
+      slideJob({ slide: s, images: {}, video: undefined, key: 'sl|jump', refresh: true, refreshFadeMs: 300 }),
+      'late',
     );
-    expect(reply.t).toBe('done');
+    expect(unitCopies(again.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(units.length);
+    expect(again.msg).toMatchObject({ refresh: true, refreshFadeMs: 300 });
+  });
+
+  it('a harness or arm path still waits: an armed job makes every unit before it is sent', async () => {
+    const s = busy('arm-waits', 17);
+    timed(40);
+    const before = unitWork();
+    const { msg } = await runAs(
+      slideJob({ slide: s, images: {}, video: undefined, key: 'sl|arm-waits' }),
+      'armed',
+    );
     expect(unitWork().made - before.made).toBe(unitsOf(s).length);
     expect(unitCopies(msg!.bitmap as unknown as FakeBitmap)).toHaveLength(unitsOf(s).length);
+    expect(ready().filter((r) => r.slideKey === 'sl|arm-waits')).toEqual([]);
+  });
+
+  it('a GO 20 ms after the arm hurries the armed job: it is sent within the lead, its units made late', async () => {
+    const s = busy('hurry', 23);
+    const units = unitsOf(s);
+    // 60 ms a step: more than 300 ms of unit turns for the slide.
+    timed(60);
+    rendered.length = 0;
+    replies.length = 0;
+    let goAt = -1;
+    clock.at = {
+      t: 20,
+      fn: () => {
+        goAt = clock.t;
+        expect(rendered).toHaveLength(0);
+        send({ t: 'hurry', keys: ['sl|hurry'] });
+      },
+    };
+    send({
+      t: 'job',
+      job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|hurry' }),
+      role: 'armed',
+    });
+    await vi.waitFor(() => expect(rendered.length).toBeGreaterThan(0));
+    expect(goAt).toBeGreaterThanOrEqual(20);
+    // The lead is 33 ms: the unit being made is abandoned at its next turn (one step at most).
+    expect(rendered[0]!.at - goAt).toBeLessThanOrEqual(33);
+    expect(units.length * 3 * 60).toBeGreaterThan(300);
+    await vi.waitFor(() => expect(replies.find((r) => r.t === 'done')).toBeDefined());
+    expect((replies.find((r) => r.t === 'done') as { unitsLeft?: number }).unitsLeft).toBeGreaterThan(0);
+    await vi.waitFor(() => expect(ready().at(-1)?.left).toBe(0));
+    for (const u of units) expect(unitReady(u)).toBeDefined();
+  });
+
+  it('reports late units at most once per 300 ms while some remain, then once all are made', async () => {
+    const s = many('coalesce', 10);
+    const units = unitsOf(s);
+    expect(units.length).toBeGreaterThanOrEqual(3);
+    // 40 ms a step, three steps a unit: one unit every 120 ms of the clock.
+    timed(40);
+    rendered.length = 0;
+    replies.length = 0;
+    const at: number[] = [];
+    const record = link.postMessage;
+    link.postMessage = (m) => {
+      if (m.t === 'unitsReady') at.push(clock.t);
+      record(m);
+    };
+    try {
+      send({
+        t: 'job',
+        job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|co' }),
+        role: 'live',
+      });
+      await vi.waitFor(() => expect(ready().at(-1)?.left).toBe(0));
+    } finally {
+      link.postMessage = record;
+    }
+    const r = ready();
+    expect(r.reduce((n, x) => n + x.keys.length, 0)).toBe(units.length);
+    expect(r.length).toBeLessThan(units.length);
+    for (let i = 1; i < at.length - 1; i++) expect(at[i]! - at[i - 1]!).toBeGreaterThanOrEqual(300);
+  });
+
+  it("with ?late=next the late units are made but not reported: the slide's next draw copies them", async () => {
+    init({ late: 'next' });
+    const s = busy('next', 31);
+    const units = unitsOf(s);
+    const before = unitWork();
+    rendered.length = 0;
+    replies.length = 0;
+    send({
+      t: 'job',
+      job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|next' }),
+      role: 'live',
+    });
+    await vi.waitFor(() => expect(unitWork().made - before.made).toBe(units.length));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ready().filter((x) => x.slideKey === 'sl|next')).toEqual([]);
+    expect(unitCopies(rendered[0]!.msg.bitmap as unknown as FakeBitmap)).toHaveLength(0);
+    // The next arm of the slide copies them.
+    const armed = await runAs(
+      slideJob({ slide: s, images: {}, video: undefined, key: 'sl|next-again' }),
+      'armed',
+    );
+    expect(unitCopies(armed.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(units.length);
+  });
+
+  it('a jump to another slide drops the late units of the one that left the screen', async () => {
+    const a = busy('left-a', 37);
+    const b = busy('left-b', 41);
+    timed(40);
+    replies.length = 0;
+    // The jump to b comes while a's late job makes its first unit.
+    clock.at = {
+      t: 80,
+      fn: () =>
+        send({
+          t: 'job',
+          job: slideJob({ slide: b, images: {}, video: undefined, key: 'sl|b' }),
+          role: 'live',
+        }),
+    };
+    send({ t: 'job', job: slideJob({ slide: a, images: {}, video: undefined, key: 'sl|a' }), role: 'live' });
+    await vi.waitFor(() => expect(ready().find((r) => r.slideKey === 'sl|b' && r.left === 0)).toBeDefined());
+    expect(ready().filter((r) => r.slideKey === 'sl|a' && r.left === 0)).toEqual([]);
+    expect(unitsOf(a).filter((u) => unitReady(u)).length).toBeLessThan(unitsOf(a).length);
+  });
+
+  it('the drawing switches of the asset init reach the worker; ?unitTurnMs waits after each unit turn', async () => {
+    init({ late: 'next', warm: false, effects: 'base', unitTurnMs: 30, other: 'ignored' });
+    replies.length = 0;
+    scope.onmessage!({ data: { t: 'ports', render, link } });
+    expect(replies.at(-1)).toEqual({
+      t: 'drawing',
+      switches: { late: 'next', warm: false, effects: 'base', unitTurnMs: 30 },
+    });
+    // Each unit turn of a late job is followed by a 30 ms wait (real time).
+    init({ unitTurnMs: 30 });
+    const s = busy('turn-wait', 43);
+    const t0 = realNow();
+    send({ t: 'job', job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|tw' }), role: 'live' });
+    await vi.waitFor(
+      () => expect(ready().find((r) => r.slideKey === 'sl|tw' && r.left === 0)).toBeDefined(),
+      {
+        timeout: 10_000,
+      },
+    );
+    expect(realNow() - t0).toBeGreaterThanOrEqual(30 * unitsOf(s).length);
+  });
+});
+
+describe('asset worker: warming the live playlist’s units (r2b units-live)', () => {
+  const send = (m: unknown) => link.onmessage!({ data: m });
+  const busy = (id: string, dx: number): Slide => {
+    const art = lineArtSlide().objects.filter((o) => o.type === 'shape' && !('gradient' in o && o.gradient));
+    return { id, objects: art.map((o) => ({ ...o, box: { ...o.box, x: o.box.x + dx } })) };
+  };
+  const unitsOf = (s: Slide) => unitsOfSlide(s, W / 1920, LOOK_MAIN);
+  const warmed = () =>
+    replies.filter((r) => r.t === 'unitsWarmed') as Extract<FromAsset, { t: 'unitsWarmed' }>[];
+  afterEach(() => {
+    clock.on = false;
+    clock.stepMs = 0;
+    clock.at = undefined;
+    scope.onmessage!({ data: { t: 'init', width: W, height: H, token: '', apiPrefix: '/api/v1' } });
+  });
+
+  it('makes the units of the slides it is sent, in their order, unpinned, and says so per cue', async () => {
+    const slides = [5, 6, 7].map((cueIndex) => ({
+      cueIndex,
+      slide: busy(`warm-${cueIndex}`, 50 + cueIndex),
+    }));
+    replies.length = 0;
+    const pinned = unitCache.pinned;
+    send({ t: 'warmUnits', warm: { key: 'wu|a', slides, look: LOOK_MAIN } });
+    await vi.waitFor(() => expect(warmed().at(-1)?.stopped).toBe('done'));
+    expect(warmed().map((w) => w.cueIndex)).toEqual([5, 6, 7]);
+    for (const w of warmed()) expect(w.ready).toBe(w.units);
+    for (const { slide } of slides) for (const u of unitsOf(slide)) expect(unitReady(u)).toBeDefined();
+    expect(unitCache.pinned).toBe(pinned);
+  });
+
+  it('stops at two thirds of the unit cache', async () => {
+    // Two stand-in units of 65 MiB: past 128 MiB, two thirds of 192.
+    const big = (k: string) => ({ key: k, rect: { x: 0, y: 0, w: 1, h: 1 }, bytes: 65 * 1024 * 1024 });
+    const fake = { width: 1, height: 1, close() {} } as unknown as CanvasImageSource;
+    expect(putUnit(big('big-1') as never, fake)).toBe(true);
+    expect(putUnit(big('big-2') as never, fake)).toBe(true);
+    expect(unitCache.bytes('unit')).toBeGreaterThanOrEqual((UNIT_CACHE_BYTES * 2) / 3);
+    try {
+      replies.length = 0;
+      const before = unitWork();
+      const slides = [{ cueIndex: 1, slide: busy('warm-full', 71) }];
+      send({ t: 'warmUnits', warm: { key: 'wu|full', slides, look: LOOK_MAIN } });
+      await vi.waitFor(() => expect(warmed().at(-1)?.stopped).toBe('full'));
+      expect(unitWork().made).toBe(before.made);
+    } finally {
+      unitCache.delete('unit', 'big-1');
+      unitCache.delete('unit', 'big-2');
+    }
+  });
+
+  it('a GO preempts it within one lane turn, and it goes on afterwards', async () => {
+    const slides = [1, 2, 3, 4].map((cueIndex) => ({
+      cueIndex,
+      slide: busy(`warm-go-${cueIndex}`, 80 + cueIndex),
+    }));
+    clock.on = true;
+    clock.t = 0;
+    clock.stepMs = 20;
+    replies.length = 0;
+    rendered.length = 0;
+    let goAt = -1;
+    let goSteps = -1;
+    clock.at = {
+      t: 40,
+      fn: () => {
+        goAt = clock.t;
+        goSteps = unitWork().steps;
+        send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|go-during-warm' }), role: 'live' });
+      },
+    };
+    send({ t: 'warmUnits', warm: { key: 'wu|go', slides, look: LOOK_MAIN } });
+    await vi.waitFor(() => expect(rendered.length).toBeGreaterThan(0));
+    expect(goAt).toBeGreaterThanOrEqual(40);
+    // No unit step after the one running when it arrived.
+    expect(rendered[0]!.at - goAt).toBeLessThanOrEqual(20);
+    expect(rendered[0]!.steps - goSteps).toBeLessThanOrEqual(1);
+    await vi.waitFor(() => expect(warmed().at(-1)?.stopped).toBe('done'));
+    expect(warmed().map((w) => w.cueIndex)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('?warm=off makes nothing ahead', async () => {
+    scope.onmessage!({
+      data: { t: 'init', width: W, height: H, token: '', apiPrefix: '/api/v1', drawing: { warm: false } },
+    });
+    replies.length = 0;
+    const before = unitWork();
+    send({
+      t: 'warmUnits',
+      warm: { key: 'wu|off', slides: [{ cueIndex: 1, slide: busy('warm-off', 91) }], look: LOOK_MAIN },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(warmed()).toEqual([]);
+    expect(unitWork().made).toBe(before.made);
   });
 });
