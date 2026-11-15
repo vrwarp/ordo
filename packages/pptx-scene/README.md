@@ -851,10 +851,18 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
 - **The kill switch** (`m9Writes` without 'table'): the M6 group, counted as its objects by the budgets
   (`BudgetOptions.tables` false: `budgetCost`, the guard's text objects one per cell), and M6's cell cap
   (`budget.ts` `m6TableCap`, `MAX_TABLE_CELLS` 150, 'budget:table') before the support is refined.
+- **The M6 group's bytes** (`EmittedSlide.tableGroupBytes`, with LibreOffice only; question 3 of the LibreOffice
+  inventory missed its gate): each table object's M6 group is emitted once more into a scratch list
+  (`emit-table.ts` `groupForm`: ids of a ULID's length, no log, the text budget as it stood before the table;
+  none past `MAX_TABLE_CELLS`), and once the slide is fitted `emit-budget.ts` `groupFormExtra` weighs the slide
+  with the groups in place of the table objects (`fitBytes` on copies, a stand-in for file names: no file is
+  added) less the slide as it is. The import core's interim rule keeps LibreOffice's page for a slide this takes
+  past 64 KB (`@ordo/importers` `pptx-core.ts` `pageForBudget`).
 - Tests: `emit-table.test.ts` (one object with palettes, background and gradient fills, spans, diagonals, rtl,
   the cell entries as the domain reads them, 96 and 160 cells native, the 640-cell master grid one object a
   slide, the older build's strip, the kill switch under 150 objects, stored rows, LibreOffice's rows, the text
-  budget, the bounds), `tables.test.ts` (the reader's cuts, no cell cap, the kill switch's cap, vertical cells,
+  budget, the bounds, the group's bytes exactly the kill switch's slide less the table object's, none without
+  LibreOffice or past 150 cells), `tables.test.ts` (the reader's cuts, no cell cap, the kill switch's cap, vertical cells,
   the deck's default style, Korean cells measured and spaced by their script's face),
   `domain/src/cellstyle.test.ts` (the pure mapping equals `table.ts`'s).
 <!-- /m9:tables-conv -->

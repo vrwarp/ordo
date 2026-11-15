@@ -7,7 +7,7 @@
  *
  * Pure: values in, ordo objects out.
  */
-import type { ImageObject, Rgba as OrdoRgba, ShapeObject } from '@ordo/domain';
+import type { ImageObject, Rgba as OrdoRgba, ShapeObject, SlideObject } from '@ordo/domain';
 import type { PictureBake, SheetBake } from './bake.ts';
 import type { PlatePlan } from './decor.ts';
 import { boxPx } from './frame.ts';
@@ -96,6 +96,12 @@ export interface EmitCtx {
   mediaPart?: (id: string) => { part: string; bake?: PictureBake } | undefined;
   /** M9 (`decor-conv`): the slide's plate plan once it is emitted (`EmittedSlide.plate`). */
   plate?: PlatePlan & { pastBudget: string[] };
+  /**
+   * M9 (`tables-conv`), with LibreOffice: each table object of the slide and its M6 group (`emit-table.ts`
+   * `groupForm`), weighed once the slide is emitted (`emit-budget.ts` `groupFormExtra`,
+   * `EmittedSlide.tableGroupBytes`).
+   */
+  tableGroups?: Map<SlideObject, SlideObject[]>;
 }
 
 /** Visible characters of a string (whitespace not counted). */

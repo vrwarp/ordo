@@ -142,6 +142,23 @@ export function fitBytes(
 }
 
 /**
+ * M9 (`tables-conv`): how many bytes more the slide as stored (`fitBytes`: its large geometries in files)
+ * would be with each table object in `groups` written as its M6 group (`EmittedSlide.tableGroupBytes`), ≥ 0.
+ * On copies, after `slideBudget`: neither the slide's objects nor the import's geometry files change (a
+ * stand-in names the files the group's geometries would take).
+ */
+export function groupFormExtra(
+  slide: Slide,
+  notes: readonly string[],
+  groups: ReadonlyMap<SlideObject, readonly SlideObject[]>,
+  geomRef: ((json: string, file: GeomFile) => string) | undefined,
+): number {
+  const objects = slide.objects.flatMap((o) => (groups.get(o) ?? [o]).map((x) => ({ ...x })));
+  const standIn = geomRef ? () => 'x'.repeat(STORED_REF_CHARS) : undefined;
+  return Math.max(0, fitBytes({ ...slide, objects }, notes, standIn) - storedSlideBytes(slide, notes));
+}
+
+/**
  * The slide's budget once it is emitted (design/27 §3.4; `emit.ts`): its large geometries moved into files
  * (`fitBytes`, whatever its text holds) and whether it is over the budget all the same, its text formatting
  * past `TEXT_BUDGET_BYTES` or its JSON as stored past `MAX_SLIDE_BYTES` (noted, `SLIDE_BYTES_NOTE`). The

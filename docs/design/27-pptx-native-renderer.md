@@ -2935,6 +2935,37 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
   written, and the budgets count it as the objects it emits (`BudgetOptions.tables`,
   `TableElement.objects`, the guard's text objects one per cell) and keep M6's cell cap (`m6TableCap`,
   `MAX_TABLE_CELLS` 150, 'budget:table'), so no slide passes the 150 objects either way.
+- **Question 3 of the LibreOffice inventory missed its gate: the interim rule.** On a hub with LibreOffice,
+  E's 8 dense table slides showed LibreOffice's page at 62a1c3a (their tables as M6 groups passed 64 KB, so the
+  ladder would have fitted them, `pageForBudget`). The gate for giving them the table object there was each
+  slide ≥ its LibreOffice page − 0.04 and the mean ≥ − 0.02. Measured at a548707 (`fid.sh --both`, shards
+  0-2, the 8 slides of tables-object.md §1; the page as LibreOffice drew it, the table object as the native
+  hub draws it, and the hub without LibreOffice before, where the M6 group was stored minimal):
+
+  | Slide (deck, page)        | LibreOffice's page | Table object | Without LibreOffice before |
+  | ------------------------- | -----------------: | -----------: | -------------------------: |
+  | 1000 Years, 1             |              0.972 |        0.622 |                      0.399 |
+  | John 5 vs 18, 1           |              0.949 |        0.619 |                      0.351 |
+  | Colossians 2-14-16, 1     |              0.931 |        0.634 |                      0.340 |
+  | Matthew 16v18, 1          |              0.963 |        0.783 |                      0.477 |
+  | Flesh and Spirit chart, 1 |              0.956 |        0.817 |                      0.514 |
+  | Boletim Fev-17, 2         |              0.976 |        0.866 |                      0.577 |
+  | Boletim Mai-17, 2         |              0.975 |        0.877 |                      0.586 |
+  | Moral Character, 1        |              0.946 |        0.872 |                      0.606 |
+  | Mean                      |              0.959 |        0.761 |                      0.481 |
+
+  Missed (every slide by 0.07-0.35). So, until the owner decides: **with LibreOffice, a slide whose tables as
+  their M6 group pass 64 KB keeps LibreOffice's page**, as it did while tables were their group. The
+  converter weighs the group (`EmittedSlide.tableGroupBytes`, with LibreOffice only: each table emitted once
+  more as its M6 group into a scratch list, the slide as stored with the groups in place less as it is, after
+  `fitBytes`; none for a table past M6's cell cap, which M6 left to LibreOffice's art unmeasured, so a
+  160-cell bulletin is a table object on every hub) and the import core applies it (`pptx-core.ts`
+  `pageForBudget`, the slide's note "its tables as shapes would be over 64 KB: LibreOffice draws its page"),
+  within 64 KB as the page form and the presentation's room, like the plain and minimal forms. A client's
+  scene carries the same count (`clientScene.ts`). Without LibreOffice every table is the table object (the
+  8 slides 0.62-0.88, from 0.34-0.61 stored minimal). 'Make editable' on such a page lays text boxes over it,
+  as before: the table object there waits for the owner's answer. A table object's cells count as the slide's
+  text bodies (`bodyTexts`, a picture slide's search text), as the group's cells did.
 <!-- /m9:tables-conv -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)

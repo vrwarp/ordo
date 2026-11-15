@@ -61,6 +61,7 @@ import { boxPx, lenPx, multiply } from './frame.ts';
 import { dashOf, gradientOf } from './geom.ts';
 import type { Fill, Line, TableElement, TextBody } from './ir.ts';
 import { type RichText, richText } from './richtext.ts';
+import { MAX_TABLE_CELLS } from './budget.ts';
 import { asLibreOffice, atLoSizes, emitTable } from './tables.ts';
 
 /** The stored table's bounds (`@ordo/domain` `TABLE_LIMITS`; `emit-table.test.ts` checks them against it). */
@@ -95,6 +96,7 @@ const bound = (v: number, lo: number, hi: number) =>
  */
 export function emitTableObject(ctx: EmitCtx, e: TableElement, out: SlideObject[]): boolean {
   if (!writes(ctx, 'table') || e.support === 'residual') return false;
+  const textBefore = ctx.textBytes;
   const f = ctx.frame;
   const lo = ctx.lo;
   // The grid: LibreOffice's (fixed) under its policies, else the stored rows the drawer grows.
@@ -281,7 +283,31 @@ export function emitTableObject(ctx: EmitCtx, e: TableElement, out: SlideObject[
     table,
   };
   out.push(o);
+  // With LibreOffice: the table as its M6 group, for the import core's interim rule (question 3 of the
+  // LibreOffice inventory: a slide that form takes past 64 KB keeps LibreOffice's page; `emit.ts` weighs it).
+  if (ctx.libreoffice) {
+    const group = groupForm(ctx, e, textBefore);
+    if (group) (ctx.tableGroups ??= new Map()).set(o, group);
+  }
   return true;
+}
+
+/** Characters of an id as the hub stores it (a ULID; `emit-budget.ts` `storedSlideBytes`). */
+const STORED_ID_CHARS = 26;
+
+/**
+ * Table `e` as its M6 group (`tables.ts` `emitTable`, as 62a1c3a wrote it), for `EmittedSlide.tableGroupBytes`:
+ * emitted into a scratch list with ids of a ULID's length that take none from the slide, logging nothing, its
+ * text formatting counted from the slide's text budget as it stood before the table (`textBefore`). Undefined
+ * for a table M6 never wrote as a group (more drawn cells than `MAX_TABLE_CELLS`: LibreOffice's art drew it).
+ */
+function groupForm(ctx: EmitCtx, e: TableElement, textBefore: number): SlideObject[] | undefined {
+  if (e.cells.length > MAX_TABLE_CELLS) return undefined;
+  const id = 'x'.repeat(STORED_ID_CHARS);
+  const scratch: EmitCtx = { ...ctx, newId: () => id, log: () => {}, textBytes: textBefore };
+  const group: SlideObject[] = [];
+  emitTableGroup(scratch, e, group);
+  return group;
 }
 
 /** A table's objects: the M9 table object when `emitTableObject` writes one, else the M6 group. */
