@@ -390,7 +390,8 @@ function jobHost(steps: Steps): PrepareHost {
 
 /**
  * Keys of the armed and warm jobs a GO hurried (`hurry`): their units step stops waiting at once (the unit it is
- * making is abandoned at its next turn) and they draw with what is ready. Forgotten when the job ends.
+ * making is abandoned at its next turn) and they draw with what is ready. Forgotten when the job ends or is
+ * cancelled: the same key sent again later (the operator came back to that cue) waits as any job of its role.
  */
 const hurried = new Set<string>();
 /** Waits of unit turns (`turnWait`) by job key, ended at once by a hurry or a cancel. */
@@ -980,7 +981,6 @@ async function warmUp(wj: WarmJob, steps: Steps): Promise<void> {
       if (err instanceof Cancelled) throw err;
     }
   }
-  hurried.delete(wj.key);
   const t = steps.timing();
   post({
     t: 'warmed',
@@ -1042,7 +1042,13 @@ function onJobMessage(m: ToAsset): void {
     }
     case 'warm': {
       const wj = m.warm;
-      lanes.push({ key: wj.key, chain: 'warm', rank: RANK.bulk, gate: fonts$, run: (s) => warmUp(wj, s) });
+      lanes.push({
+        key: wj.key,
+        chain: 'warm',
+        rank: RANK.bulk,
+        gate: fonts$,
+        run: (s) => warmUp(wj, s).finally(() => hurried.delete(wj.key)),
+      });
       return;
     }
     case 'warmUnits':
@@ -1061,6 +1067,7 @@ function onJobMessage(m: ToAsset): void {
     case 'cancel':
       lanes.cancel(m.keys);
       endTurnWaits(m.keys);
+      for (const k of m.keys) hurried.delete(k);
       return;
     case 'prune':
       images.prune(new Set(m.keep));

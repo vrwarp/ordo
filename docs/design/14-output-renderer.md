@@ -391,7 +391,9 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
 - **Hurry.** A GO to a cue whose armed or warm job is still running (the link's `ensureContent` skips an
   in-flight key) sends `{t: 'hurry', keys}`: that job's `stop` turns true at once, the unit it is making is
   abandoned at its next turn (nothing of it kept), and it is drawn and sent with what is ready, within one turn
-  of the hurry (a turn is about `SLICE_MS` / 2 plus the step running, design/27 §13).
+  of the hurry (a turn is about `SLICE_MS` / 2 plus the step running, design/27 §13). The link finds a warm job
+  by the slide key of the plan it warmed (a warm key also holds the background and media keys). A hurry lasts
+  as long as its job: once the job ends or is cancelled, the same key sent again waits as any job of its role.
 - **Late job.** A slide job that left units (`done.unitsLeft`) queues a late job for them (`RANK.late`: below
   the live and armed cues, above bulk work; chain `late`), which pins what it makes into the slide job's own hold
   (`holdInto`: while the slide is live or armed) and reports them with `{t: 'unitsReady', slideKey, keys,

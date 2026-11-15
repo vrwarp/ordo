@@ -837,6 +837,29 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
     for (const u of units) expect(unitReady(u)).toBeDefined();
   });
 
+  it('a hurried job cancelled before it ends is not hurried when its key is sent again', async () => {
+    const s = busy('hurry-cancel', 29);
+    const units = unitsOf(s);
+    timed(60);
+    replies.length = 0;
+    const before = unitWork();
+    // A GO to the warmed cue hurries its warm job, then the next GO moves the warm work on: it is cancelled.
+    clock.at = {
+      t: 20,
+      fn: () => {
+        send({ t: 'hurry', keys: ['wm|again'] });
+        send({ t: 'cancel', keys: ['wm|again'] });
+        // The operator comes back: the same cue is the one after the armed one again.
+        send({ t: 'warm', warm: { key: 'wm|again', slide: s, look: LOOK_MAIN, images: {} } });
+      },
+    };
+    send({ t: 'warm', warm: { key: 'wm|again', slide: s, look: LOOK_MAIN, images: {} } });
+    await vi.waitFor(() => expect(replies.filter((r) => r.t === 'warmed')).toHaveLength(1));
+    // Sent again, it waits for its units as any warm job does.
+    expect(unitWork().made - before.made).toBe(units.length);
+    for (const u of units) expect(unitReady(u)).toBeDefined();
+  });
+
   it('reports late units at most once per 300 ms while some remain, then once all are made', async () => {
     const s = many('coalesce', 10);
     const units = unitsOf(s);
