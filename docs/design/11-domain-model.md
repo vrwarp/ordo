@@ -470,6 +470,32 @@ within a run where its JSON would pass 256 KiB), each named by the SHA-256 of it
 objects and 16 MiB a slide (`SLIDE_FILE_LIMITS`; `slideFileOf` refuses past them, W18). `slideFromFile(standIn,
 head, pages)` gives the full slide back and refuses pages that are not the head's. Only what draws is in the
 file: notes, timing, transition, cues, sound and provenance stay on the stand-in.
+**The model** (`prerender.ts`, pure, no drawing; the hub cannot import the renderer, so what needs it is passed
+in):
+
+- `PRERENDER_ON` (false): the one switch every pre-render path reads (design/29 §4); `PRERENDER_VERSION` (1) and
+  `FALLBACK_FACES_DIGEST` (the default face and the script fallbacks) are part of every key.
+- `pictureUnits(slide, cost?)`: `bytes` past 64 KiB stored, `count` past a live count (`PICTURE_COUNTS`: 200
+  objects, 16 distinct pictures, 10,000 characters a box other than the lyric box, 16 families and 64 size scales
+  a box, equal to the renderer's `CLAMP` by `prerender-counts.test.ts`) or a cost reason, asked at the fixed
+  3840 × 2160 reference (`PRERENDER_FRAME`) so every view plans the same.
+- `liveSet(slide, reach?)`: the anchors (`liveAnchors`: the lyric box, text with build steps, playing pictures, at
+  most 16 playing and 200 in all) and every object above that overlaps them or an object already live, bottom
+  first, by `reach` (the renderer's `objectBounds`, else `objectReach`: the turned box and its effects' reach).
+- `standInOf(full, live)`: the live objects whole, the rest `minimalSlide`, capped to 200 objects and 16 pictures
+  (live, then text, then pictures by area, in z order); text that does not fit is merged into plain boxes of at
+  most 20,000 characters.
+- `drawnPart(full, live)`, `pictureSource(full, live, inputs)`, `prerenderKey(source)` and `standbyId(source)`: the
+  key is the SHA-256 of `{ v: PRERENDER_VERSION, source }`, the source names the drawn part's digest (never the
+  head's hash: ids, origins and locks never change a key), the live set, the backdrops variant, each drawn
+  picture's file and every face of the chain of the picture's text; the stand-by id leaves fonts and version out.
+- `resolveDraw(slide, meta?, { estimateMs })`: `slide.draw ?? meta.draw ?? 'picture'`; a `tail` slide without its
+  own switch is live unless its estimate passes 0.3 s at 4K; a slide without a record is live unless set to
+  Pre-rendered.
+- `withFullSlide(full, fn, inputs)` → `{ full, standIn, pages?, key?, standbyId?, refused? }`: the one way every
+  writer changes a pre-rendered slide (prerender-editor, editor-slideops, hub-writers): plans the result again,
+  writes its pages, rebuilds the stand-in and the key; inline whole when it needs no picture, inline with its
+  record when only `chosen`, stand-in only when the store cannot hold it (W18).
 <!-- /r2b:prerender -->
 
 ## Live state
