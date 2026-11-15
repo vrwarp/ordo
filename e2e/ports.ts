@@ -11,7 +11,10 @@ import { fileURLToPath } from 'node:url';
  * The base is `ORDO_E2E_PORT_BASE` when set. On CI (`CI` or `ORDO_CI`) it is fixed at 16000. Otherwise it is
  * 16000 + 1000 x (a hash of this checkout's path, mod 15): two worktrees of the repository on one machine get
  * different bases, so their suites can run side by side. Every default range ends below 32768, where Linux
- * starts handing out ephemeral ports (`ip_local_port_range`), and starts at 16000 or above.
+ * starts handing out ephemeral ports (`ip_local_port_range`), and starts at 16000 or above. An explicit base may
+ * sit below 16000 (a wave's parallel tracks each take a block outside the default bases, design/29 §4); it then
+ * keeps out of 5000-5999 (`tools/serve-demo.mjs` serves on 5173) and 8000-8999 (the shared `ORDO_E2E_PORT`s), and
+ * no row may land on a port browsers refuse to fetch (10080 is one: base 10000 puts `local-golive` there).
  *
  * The shared web server of `playwright.config.ts` (the hub most specs use, `helpers.ts` PORT) is the row
  * `shared`; `ORDO_E2E_PORT` still moves it on its own.
@@ -172,7 +175,7 @@ export const PORT_TABLE = {
   },
   'phones-live-load': { offset: 345, count: 1, spec: 'phones-live-load.spec.ts', what: 'hub' },
   'phones-writes': { offset: 346, count: 1, spec: 'phones-writes.spec.ts', what: 'hub' },
-  // M9 wave r2b's specs: offsets 400-659.
+  // M9 wave r2b's specs: offsets 400-659, in offset order (sub-wave 1: 400-459; the integrations' 425, 630-659).
   // effect-units: effects past the budget and lone line art drawn from units.
   'effect-units': {
     offset: 400,
