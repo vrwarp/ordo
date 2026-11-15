@@ -64,6 +64,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** What Launch outputs says when pressed before the library (and so the outputs) has loaded. */
 export const LAUNCH_LOADING_TEXT =
   'The library is still loading, so ordo does not know the outputs yet. Press Launch outputs again in a moment.';
+/**
+ * What it says when the library could not be loaded at all: the hub did not answer and this computer has no
+ * saved copy. The library loads again when the hub connects (core/engine.ts, on welcome).
+ */
+export const LAUNCH_UNLOADED_TEXT =
+  "Can't load the library: ordo did not answer, and this computer has no saved copy, so the outputs are not known. Press Launch outputs again once ordo is connected.";
 
 /** Opens, tracks and relaunches the output and stage windows (design/15, Launching outputs). */
 export class OutputWindows {
@@ -185,9 +191,12 @@ export class OutputWindows {
       const outputs = settings().outputs;
       if (!outputs.length) {
         // Before the library has come (from the cache or the hub) the outputs are not known yet: say so, not
-        // that none are configured (a Launch pressed as the live view appears, seen on a loaded machine).
-        if (!useLibrary.getState().loaded) toast(LAUNCH_LOADING_TEXT, 'info');
-        else toast('No outputs configured. Add outputs in Settings → Outputs.', 'warn');
+        // that none are configured (a Launch pressed as the live view appears, seen on a loaded machine). Once
+        // the core has tried both and has neither, say that, not that it is still loading.
+        const lib = useLibrary.getState();
+        if (lib.loaded) toast('No outputs configured. Add outputs in Settings → Outputs.', 'warn');
+        else if (lib.attempted) toast(LAUNCH_UNLOADED_TEXT, 'warn');
+        else toast(LAUNCH_LOADING_TEXT, 'info');
         return;
       }
       const screens = await this.screens();

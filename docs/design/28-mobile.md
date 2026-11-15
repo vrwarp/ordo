@@ -1519,7 +1519,7 @@ need if the church wants it after the first service.
     P3; owner question 15 decides a shared LAN ceiling.
 11. **A lost phone empties a plan.** A `light` session may save a whole plan before P2 (no P0 screen writes
     one), and plans have no revisions until then. §4's row "A lost phone empties a plan" holds the threat and
-    the restore from a backup; owner question 16 decides whether plan saves stay at `full` until P2's playlist
+    the restore from a backup; owner question 16 decides whether plan saves move to `full` until P2's playlist
     revisions.
 
 ## 14. Documents to update with each phase

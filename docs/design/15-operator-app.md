@@ -207,8 +207,9 @@ tapped button; `openerFor`, `trackPresses`). The regular layout's dialog and mar
 
 1. The operator clicks Launch outputs (a user gesture). With no outputs known it opens nothing and says why:
    before the library has loaded (from the cache or the hub) that it is still loading and to press again in a
-   moment, never "No outputs configured", which it says only once the library has loaded with none
-   (`launchLoading.test.ts`).
+   moment; once the hub has not answered and the PC has no saved copy, that the library could not be loaded
+   and to press again once ordo is connected (the library loads again when the hub connects); never "No
+   outputs configured", which it says only once the library has loaded with none (`launchLoading.test.ts`).
 2. The app requests `window.getScreenDetails()` (Window Management API permission,
    remembered per origin). For each enabled output it finds the screen matching the saved
    `ScreenRef` by label, then by position; unmatched outputs open on the primary screen

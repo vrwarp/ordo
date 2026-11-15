@@ -2,12 +2,18 @@
  * Launch outputs pressed before the library has loaded (services/outputs.ts; design/15 "Launching outputs"):
  * the outputs are not known yet, so it says the library is still loading and to press again, never "No
  * outputs configured" (seen on a loaded machine when Launch was pressed as the live view appeared: the PR #27
- * fallback-leave verify). Once the library has loaded with no outputs, it still says none are configured; with
+ * fallback-leave verify). When the hub did not answer and there is no saved copy, it says that instead (the
+ * review of the merge). Once the library has loaded with no outputs, it still says none are configured; with
  * one, it opens its window.
  */
 import type { Output } from '@ordo/domain';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { installOutputWindows, LAUNCH_LOADING_TEXT, type OutputWindows } from '../src/services/outputs.ts';
+import {
+  installOutputWindows,
+  LAUNCH_LOADING_TEXT,
+  LAUNCH_UNLOADED_TEXT,
+  type OutputWindows,
+} from '../src/services/outputs.ts';
 import { useLibrary } from '../src/state/library.ts';
 import { useToasts } from '../src/state/toasts.ts';
 
@@ -76,6 +82,18 @@ describe('Launch outputs before the library has loaded', () => {
     await ow?.launch();
     expect(texts()).toEqual([LAUNCH_LOADING_TEXT]);
     expect(LAUNCH_LOADING_TEXT).toContain('still loading');
+    expect(texts().join()).not.toContain('No outputs configured');
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('when the hub did not answer and there is no saved copy, it says so, not that the library is loading', async () => {
+    // The core tried its saved copy and the hub, and has neither (state/library.ts `attempted`): "press again in
+    // a moment" would never come true. It loads again when the hub connects (core/engine.ts, on welcome).
+    useLibrary.setState({ loaded: false, attempted: true, source: 'none', error: 'Failed to fetch' });
+    await ow?.launch();
+    expect(texts()).toEqual([LAUNCH_UNLOADED_TEXT]);
+    expect(LAUNCH_UNLOADED_TEXT).toContain('no saved copy');
+    expect(texts()).not.toContain(LAUNCH_LOADING_TEXT);
     expect(texts().join()).not.toContain('No outputs configured');
     expect(open).not.toHaveBeenCalled();
   });
