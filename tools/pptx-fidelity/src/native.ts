@@ -24,7 +24,8 @@
  * - `NativeRenderer` loads `native-page.ts` (bundled with esbuild) in headless Chromium, gives the page's
  *   font resolver the faces this machine has for every family the slides ask for, ordo's default face and
  *   the script fallbacks (`fonts.ts`, as LibreOffice and the outputs draw them), and draws every shown slide
- *   with `drawSlide2D`: a 1920x1080 picture cut to the slide area, and raster timings at 1920 and 3840 px;
+ *   with `drawSlide2D`: a 1920x1080 picture cut to the slide area, and raster timings at 1920 and 3840 px (the
+ *   median and the slowest warm draw, `rasterMs` and `rasterMaxMs`);
  *   then, with the timings, each slide's objects drawn cold one at a time (`maxObjectMs`).
  *   A caller can give the page other faces instead (`RenderOptions.fonts`): an output's own, so the page
  *   and the output draw with the same files (e2e/pptx-native.spec.ts).
@@ -687,6 +688,8 @@ export type RenderedSlide = {
   width?: number;
   height?: number;
   rasterMs?: { '1920': number; '3840': number };
+  /** The slowest warm draw at each width, beside `rasterMs` (the median), in ms (`RenderResult.max1920`). */
+  rasterMaxMs?: { '1920': number; '3840': number };
   /** Preparing the pictures the cache lacks plus the first draw, in ms (`RenderResult.cold1920`). */
   coldMs?: { '1920': number; '3840': number };
   /** The largest single object's cold draw and flush, in ms (`NativePage.objects`). */
@@ -952,6 +955,7 @@ export class NativeRenderer {
             ...(repeats
               ? {
                   rasterMs: { '1920': round2(r.ms1920), '3840': round2(r.ms3840) },
+                  rasterMaxMs: { '1920': round2(r.max1920), '3840': round2(r.max3840) },
                   coldMs: { '1920': round2(r.cold1920), '3840': round2(r.cold3840) },
                 }
               : {}),

@@ -34,6 +34,8 @@ export type SlideScore = {
   convertMs?: number;
   /** Median `drawSlide2D` time (draw and flush) at 1920 and 3840 px wide, in ms. */
   rasterMs?: { '1920': number; '3840': number };
+  /** The slowest warm `drawSlide2D` at 1920 and 3840 px wide, in ms (beside the median). */
+  rasterMaxMs?: { '1920': number; '3840': number };
   /** Cold: preparing the pictures the deck's cache lacks plus the first draw, in ms. */
   coldMs?: { '1920': number; '3840': number };
   /** The largest single object's cold draw and flush at 1920 and 3840 px, in ms (`native-page.ts`). */
@@ -728,7 +730,9 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
             p.xmlFeatures?.length ? `features: ${p.xmlFeatures.join(', ')}` : '',
             p.compat?.length ? `LibreOffice policies: ${p.compat.join(', ')}` : '',
             p.convertMs !== undefined ? `convert ${ms(p.convertMs)} ms` : '',
-            p.rasterMs ? `raster ${ms(p.rasterMs['1920'])} / ${ms(p.rasterMs['3840'])} ms` : '',
+            p.rasterMs
+              ? `raster ${ms(p.rasterMs['1920'])} / ${ms(p.rasterMs['3840'])} ms${p.rasterMaxMs ? ` (slowest ${ms(p.rasterMaxMs['1920'])} / ${ms(p.rasterMaxMs['3840'])} ms)` : ''}`
+              : '',
             p.coldMs ? `cold ${ms(p.coldMs['1920'])} / ${ms(p.coldMs['3840'])} ms` : '',
             p.maxObjectMs
               ? `largest object ${ms(p.maxObjectMs['1920'])} / ${ms(p.maxObjectMs['3840'])} ms${p.maxObjectId ? ` (${p.maxObjectId})` : ''}`

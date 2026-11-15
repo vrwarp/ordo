@@ -68,7 +68,8 @@ const UNIT_TURN_MS: Record<string, number> = { '3840': 16 };
 const DECOR_OVER_SHAPES = 0.1;
 /**
  * A '(warm task' case (bench/cases/decor.ts, r2a repair): a slide drawn warm, one raster each job, within
- * design/27 §13's 50 ms task at both sizes; its sprites pass a 64 MiB cache at 3840.
+ * design/27 §13's 50 ms task at both sizes, its p95 and its slowest draw (r2a must a4); its sprites pass a 64 MiB
+ * cache at 3840.
  */
 const WARM_TASK: Record<string, number> = { '1920': 50, '3840': 50 };
 /**
@@ -181,7 +182,8 @@ async function main(): Promise<number> {
                   : BUDGET
         )[w]!;
         const checked = rich || bounded || warmTask;
-        const bad = checked && r.steady.p95 > budget;
+        // A '(warm task' row holds its slowest draw to the task too (r2a must a4), beside its p95.
+        const bad = checked && (r.steady.p95 > budget || (warmTask && r.steady.max > budget));
         if (second) {
           const late = r.steady.max > SECOND_DRAW[w]!;
           if (late) over++;
@@ -191,7 +193,7 @@ async function main(): Promise<number> {
         }
         if (bad) over++;
         console.log(
-          `  raster ${w}: first ${ms(r.first)} ms; per job ${fmt(r.steady)}${checked ? ` (budget p95 ${budget} ms${bad ? ': OVER' : ''})` : ''}${rich ? `; paint only ${fmt(r.paintOnly)}` : ''}`,
+          `  raster ${w}: first ${ms(r.first)} ms; per job ${fmt(r.steady)}${checked ? ` (budget p95${warmTask ? ' and max' : ''} ${budget} ms${bad ? ': OVER' : ''})` : ''}${rich ? `; paint only ${fmt(r.paintOnly)}` : ''}`,
         );
         const alt = r.alternation;
         if (alt) {
