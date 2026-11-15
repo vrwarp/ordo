@@ -52,6 +52,7 @@ import { CropHandles } from './CropControl.tsx';
 import {
   type CanvasTextSelection,
   change,
+  currentSlide,
   redo,
   selectCell,
   selectObject,
@@ -1372,6 +1373,19 @@ export function CanvasBackingTextEditor({
 }) {
   const off = readOnly || isLocked(obj);
   const caret = useEditor((s) => s.textRange.caret);
+  // A table's cell edited on the canvas: when Tab moves to another cell, the field holds that cell's text and
+  // its selection at once (in the commit that shows it), before the next key reaches the field.
+  const editingCell = useEditor(
+    (s) =>
+      target.cell !== undefined &&
+      s.inlineEditingId === target.objectId &&
+      s.inlineEditingCell === target.cell,
+  );
+  useLayoutEffect(() => {
+    if (!editingCell) return;
+    const r = useEditor.getState().textRange;
+    syncBackingTextarea(r.start, r.end, r.caret);
+  }, [editingCell, target.objectId, target.cell]);
   const at = stage
     ? backingAt(obj, caret, stage.scale, { w: stage.w, h: stage.h })
     : { left: 0, top: 0, height: 1 };
@@ -1494,23 +1508,11 @@ export function moveToCell(at: TextTarget, back: boolean, grow: boolean): void {
   if (next === undefined) return;
   const editing = st.inlineEditingId === at.objectId && st.inlineEditingCell === at.cell;
   selectCell(at.objectId, next);
-  const table = currentObjectOf(at.objectId);
+  const table = currentSlide()?.objects.find((o) => o.id === at.objectId);
   const len = isTable(table) ? (table.table.cells[next]?.text?.length ?? 0) : 0;
   const range = { start: 0, end: len, caret: len };
   setTextRange(range);
-  if (editing) {
-    startInlineEditing(at.objectId, range, next);
-    requestAnimationFrame(() => syncBackingTextarea(range.start, range.end, range.caret));
-  }
-}
-
-/** Object `id` of the open slide in the editor's draft. */
-function currentObjectOf(id: string): SlideObject | undefined {
-  const st = useEditor.getState();
-  if (!st.draft) return undefined;
-  for (const sec of st.draft.sections)
-    for (const sl of sec.slides) if (sl.id === st.slideId) return sl.objects.find((o) => o.id === id);
-  return undefined;
+  if (editing) startInlineEditing(at.objectId, range, next);
 }
 
 /**

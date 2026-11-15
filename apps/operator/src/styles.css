@@ -2075,6 +2075,12 @@ input.color-hex-box {
   border-color: rgba(59, 130, 246, 0.35);
 }
 
+/* The Table section's cell format row (views/editor/TableTools.tsx): its icon buttons are 44 px targets. */
+@media (pointer: coarse) {
+  .ed-cell-format button {
+    min-width: 44px;
+  }
+}
 @media (pointer: coarse) {
   .color-pill-chip {
     width: 32px;

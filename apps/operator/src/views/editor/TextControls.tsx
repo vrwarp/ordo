@@ -43,6 +43,7 @@ export function TextFloatingControls({
   target = o.id,
   cell = false,
   lead,
+  bare = false,
   tailActions,
 }: {
   /** The text box, or a table cell's text view. */
@@ -56,7 +57,9 @@ export function TextFloatingControls({
   cell?: boolean;
   /** Shown first in the bar (the table bar's scope pill). */
   lead?: React.ReactNode;
-  tailActions: React.ReactNode;
+  /** In a panel (the Table section), not over the slide: a plain row, 44 px controls under a finger. */
+  bare?: boolean;
+  tailActions?: React.ReactNode;
 }) {
   const s = o.style;
   const clampedStart = Math.max(0, Math.min(o.text.length, range.start));
@@ -107,8 +110,8 @@ export function TextFloatingControls({
   };
 
   return (
-    <div className="ed-floating-stack">
-      <div className="ed-floating-inner">
+    <div className={bare ? 'ed-cell-format' : 'ed-floating-stack'}>
+      <div className={bare ? 'row wrap' : 'ed-floating-inner'} style={bare ? { gap: 6 } : undefined}>
         {lead}
         {hasSelection && (
           <button

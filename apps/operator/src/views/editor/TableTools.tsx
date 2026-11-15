@@ -1,15 +1,10 @@
-import { cellTextObject, placeCells, type ShapeObject, type TextStyle } from '@ordo/domain';
-import { ColorPill, PaintPill, type PaintValue } from '../../components/ColorPicker.tsx';
-import { NumberField, Select } from '../../components/fields.tsx';
-import { FontPicker } from '../../components/FontPicker.tsx';
+import { cellTextObject, placeCells, type ShapeObject } from '@ordo/domain';
+import { PaintPill, type PaintValue } from '../../components/ColorPicker.tsx';
 import { Menu } from '../../components/Menu.tsx';
 import {
   canRowCol,
-  copyTextSelection,
-  cutTextSelection,
   fillCells,
   formatSelection,
-  handleTextPaste,
   ROW_COL_OPS,
   type RowColOp,
   rowCol,
@@ -133,8 +128,8 @@ const TOUCH = { minWidth: 44 } as const;
 
 /**
  * The Object panel's Table section (in place of the shape section): the selected cell's text (the field the
- * canvas's inline editing types through while the panel is open, `#ordo-text-editor`) and its box format
- * (font, size, bold, italic, colour, alignment), Cell fill, and Rows & columns as buttons.
+ * canvas's inline editing types through while the panel is open, `#ordo-text-editor`) and its format (the
+ * bar's text controls, as a row of 44 px controls under a finger), Cell fill, and Rows & columns as buttons.
  */
 export function TableSection({ o, readOnly }: ObjectSectionContext) {
   const cell = useCell(o);
@@ -142,10 +137,6 @@ export function TableSection({ o, readOnly }: ObjectSectionContext) {
   if (!isTable(o)) return null;
   const view = cell === undefined ? undefined : cellTextObject(o, cell);
   const target: TextTarget | undefined = cell === undefined ? undefined : { objectId: o.id, cell };
-  const setBox = <K extends keyof TextStyle>(k: K, v: TextStyle[K]) => {
-    if (target && !readOnly) setCellStyle(target, (s) => ({ ...s, [k]: v }), String(k));
-  };
-  const s = view?.style;
   return (
     <fieldset
       className="col"
@@ -154,7 +145,7 @@ export function TableSection({ o, readOnly }: ObjectSectionContext) {
       style={{ border: 0, borderBottom: '1px solid var(--line)', margin: 0, padding: '8px 0 12px', gap: 10 }}
     >
       <h4>Table</h4>
-      {view && target && s && cell !== undefined ? (
+      {view && target && cell !== undefined ? (
         <>
           <span className="muted small">{cellLabel(o, cell)}</span>
           <textarea
@@ -195,98 +186,16 @@ export function TableSection({ o, readOnly }: ObjectSectionContext) {
               setTextRange({ start: e.target.selectionStart, end: caret, caret });
               if (!readOnly) typeText(target, e.target.value, caret);
             }}
-            onCopy={(e) => {
-              const el = e.currentTarget;
-              if (copyTextSelection(view, el.selectionStart, el.selectionEnd, e.clipboardData))
-                e.preventDefault();
-            }}
-            onCut={(e) => {
-              if (readOnly) return;
-              const el = e.currentTarget;
-              const caret = cutTextSelection(
-                view,
-                el.selectionStart,
-                el.selectionEnd,
-                e.clipboardData,
-                target,
-              );
-              if (caret === null) return;
-              e.preventDefault();
-              setTextRange({ start: caret, end: caret, caret });
-              restoreFieldSelection({ start: caret, end: caret });
-            }}
-            onPaste={(e) => {
-              if (readOnly) return;
-              const el = e.currentTarget;
-              const caret = handleTextPaste(
-                view,
-                el.selectionStart,
-                el.selectionEnd,
-                e.clipboardData,
-                target,
-              );
-              if (caret === null) return;
-              e.preventDefault();
-              setTextRange({ start: caret, end: caret, caret });
-              restoreFieldSelection({ start: caret, end: caret });
-            }}
           />
-          <div className="row wrap" style={{ gap: 8, alignItems: 'flex-end' }}>
-            <FontPicker value={s.fontFamily} label="Font" onChange={(f) => setBox('fontFamily', f)} />
-            <NumberField
-              label="Size"
-              value={s.fontSizePx}
-              min={8}
-              max={300}
-              width={64}
-              disabled={readOnly}
-              onChange={(v) => setBox('fontSizePx', Math.max(8, Math.min(300, v)))}
-            />
-          </div>
-          <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-            <button
-              type="button"
-              className={`small${s.fontWeight >= 600 ? ' on' : ''}`}
-              style={TOUCH}
-              aria-pressed={s.fontWeight >= 600}
-              disabled={readOnly}
-              onClick={() => setBox('fontWeight', s.fontWeight >= 600 ? 400 : 700)}
-            >
-              Bold
-            </button>
-            <button
-              type="button"
-              className={`small${s.fontStyle === 'italic' ? ' on' : ''}`}
-              style={TOUCH}
-              aria-pressed={s.fontStyle === 'italic'}
-              disabled={readOnly}
-              onClick={() => setBox('fontStyle', s.fontStyle === 'italic' ? 'normal' : 'italic')}
-            >
-              Italic
-            </button>
-            <ColorPill
-              value={s.color}
-              disabled={readOnly}
-              ariaLabel="Cell text color"
-              onChange={(c) => setBox('color', c)}
-            />
-            <Select
-              label="Align"
-              value={s.align}
-              options={[
-                { value: 'left', label: 'Left' },
-                { value: 'center', label: 'Center' },
-                { value: 'right', label: 'Right' },
-              ]}
-              disabled={readOnly}
-              onChange={(a) => setBox('align', a)}
-            />
-          </div>
-          {range.start < range.end && (
-            <span className="muted small">
-              Ctrl+B, Ctrl+I and Ctrl+U format the selected words; the slide's bar has more.
-            </span>
-          )}
+          <TextFloatingControls
+            o={view}
+            range={range}
+            off={readOnly}
+            cell
+            bare
+            target={target}
+            setStyle={(fn, key) => setCellStyle(target, fn, key)}
+          />
         </>
       ) : (
         <span className="muted small">Click a cell to edit its text (double-click on the slide).</span>

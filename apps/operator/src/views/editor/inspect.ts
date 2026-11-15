@@ -1,5 +1,5 @@
 import type { Presentation } from '@ordo/domain';
-import { useEditor } from './editorStore.ts';
+import { inlineTarget, useEditor } from './editorStore.ts';
 
 /** What `window.__ordo.editor` reports: the open editor, for the end-to-end specs (e2e/editorhelpers.ts). */
 export type EditorInspect = {
@@ -12,6 +12,9 @@ export type EditorInspect = {
   slideId?: string;
   objectId?: string;
   objectIds: string[];
+  /** The selected cell of a selected table, and the target edited on the canvas (design/15 "Table editing"). */
+  cell?: number;
+  inline?: { objectId: string; cell?: number };
   /** The draft as the editor holds it (what Save would send, with the base rev). */
   draft?: Presentation;
 };
@@ -31,6 +34,8 @@ export function inspectEditor(): EditorInspect {
     slideId: s.slideId,
     objectId: s.objectId,
     objectIds: [...s.objectIds],
+    cell: s.cell,
+    inline: inlineTarget(s),
     draft: s.draft ? structuredClone(s.draft) : undefined,
   };
 }
