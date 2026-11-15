@@ -21,9 +21,11 @@ import { APP_VERSION } from './index.ts';
 // 0.7.0 for PR #27 (wave r2a and phones P0), the one bump at merge: main published 0.6.0 without the decoration
 // drawer or geometry units, and its cached pages must reload rather than draw these slides the old way. The
 // digest is unchanged (it leaves the APP_VERSION line out).
+// 0.7.0 kept on r2b/golive-prepare (design/29 M8): protocol index.ts gains the POST /live/prepare request and
+// answer types, which no older client sends or reads; the wave's integrator re-records once after the last merge.
 const RECORDED = {
   version: '0.7.0',
-  digest: 'da518616675d5b4e9a158c06c8933ba1afbbf14570b8eea189b07d8dc7610e60',
+  digest: '334a7ebc5c42278b4fedd33abcb7b1ee1f1acc810949f44545dc20e3bc84c2a7',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

@@ -529,3 +529,118 @@ describe('LiveCore with a refused hub session (item 5)', () => {
     expect(notices).not.toContain('fallback-on');
   });
 });
+
+describe('Go live prepared beside the running service (design/29 M8, W41)', () => {
+  let engine: CoreEngine | undefined;
+  afterEach(() => {
+    engine?.dispose();
+    engine = undefined;
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  type Answer = { state: 'preparing' | 'ready' | 'failed'; pct: number; savedAt?: number; reason?: string };
+  /** The hub's POST /live/prepare answers, in turn (the last one repeats); the bodies the engine sent. */
+  function hubPrepare(answers: (Answer | 404)[]) {
+    const bodies: Record<string, unknown>[] = [];
+    let i = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (!String(url).endsWith('/live/prepare')) return new Response('{}', { status: 404 });
+        bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        const a = answers[Math.min(i++, answers.length - 1)]!;
+        if (a === 404)
+          return Response.json({ error: { code: 'not_found', message: 'Not found' } }, { status: 404 });
+        return Response.json({ playlistId: 'pl2', ...a });
+      }),
+    );
+    return bodies;
+  }
+
+  async function connected(state: LiveState) {
+    const posts: CoreToMain[] = [];
+    const { store } = memStore({
+      [CORE_KEY]: { state, authority: 'hub', pending: [], aids: [], at: Date.now() },
+    });
+    engine = new CoreEngine((m) => posts.push(m), store);
+    const e = engine;
+    await e.init({ t: 'init', role: 'operate', appVersion: 't', generation: 1, test: true });
+    (e.hub as unknown as { connected: boolean }).connected = true;
+    e.core.onStatus(true);
+    const goLives: string[] = [];
+    const submit = e.core.submit.bind(e.core);
+    e.core.submit = ((cmd, id, opts) => {
+      if (cmd.k === 'goLive') goLives.push(cmd.playlistId);
+      return submit(cmd, id, opts);
+    }) as typeof e.core.submit;
+    return { posts, e, goLives };
+  }
+  const prepares = (posts: CoreToMain[]) =>
+    posts.flatMap((p) => (p.t === 'ui' && p.e.k === 'goLivePrepare' ? [p.e] : []));
+
+  it('asks the hub to prepare, shows the progress, and sends goLive only once the hub reports it ready', async () => {
+    const bodies = hubPrepare([
+      { state: 'preparing', pct: 0 },
+      { state: 'preparing', pct: 40 },
+      { state: 'ready', pct: 100 },
+    ]);
+    const { posts, e, goLives } = await connected(live());
+    e.handle({ t: 'call', aid: 'g1', name: 'goLive', args: ['pl2'] });
+    // Nothing goes to the hub's queue while the playlist is prepared.
+    expect(goLives).toEqual([]);
+    for (let i = 0; i < 40 && !goLives.length; i++) await new Promise((r) => setTimeout(r, 25));
+    expect(goLives).toEqual(['pl2']);
+    expect(bodies[0]).toEqual({ playlistId: 'pl2' });
+    expect(bodies[1]).toEqual({ playlistId: 'pl2', seen: 0 });
+    expect(bodies[2]).toEqual({ playlistId: 'pl2', seen: 40 });
+    const shown = prepares(posts);
+    expect(shown.map((x) => x.p?.pct)).toEqual([0, 40, undefined]);
+    expect(shown[1]!.p).toMatchObject({ playlistId: 'pl2', live: true });
+    // The toast is gone once the goLive is sent.
+    expect(shown.at(-1)).toEqual({ k: 'goLivePrepare' });
+  });
+
+  it('while a service is live, after 5 s offers the saved copy, and asks for it when pressed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const savedAt = Date.now() - 3 * 86_400_000;
+    const bodies = hubPrepare([{ state: 'preparing', pct: 10, savedAt }]);
+    const { posts, e, goLives } = await connected(live());
+    const turn = () => new Promise((r) => setTimeout(r, 400));
+    e.handle({ t: 'call', aid: 'g1', name: 'goLive', args: ['pl2'] });
+    await turn();
+    expect(prepares(posts).length).toBeGreaterThan(0);
+    expect(prepares(posts).at(-1)?.p?.savedAgo).toBeUndefined();
+    vi.setSystemTime(Date.now() + 5_000);
+    await turn();
+    expect(prepares(posts).at(-1)?.p?.savedAgo).toBe('3 days ago');
+    e.handle({ t: 'call', aid: 'g2', name: 'goLiveSaved', args: ['pl2'] });
+    await turn();
+    expect(bodies.at(-1)).toMatchObject({ playlistId: 'pl2', saved: true });
+    // Once asked for, the button is not offered again.
+    expect(prepares(posts).at(-1)?.p?.savedAgo).toBeUndefined();
+    expect(goLives).toEqual([]);
+  });
+
+  it('a hub without the prepare route gets the goLive at once', async () => {
+    hubPrepare([404]);
+    const { e, goLives } = await connected(initialState());
+    e.handle({ t: 'call', aid: 'g1', name: 'goLive', args: ['pl2'] });
+    for (let i = 0; i < 10 && !goLives.length; i++) await flush();
+    expect(goLives).toEqual(['pl2']);
+  });
+
+  it('End service while preparing sends no goLive', async () => {
+    hubPrepare([
+      { state: 'preparing', pct: 5 },
+      { state: 'preparing', pct: 6 },
+      { state: 'ready', pct: 100 },
+    ]);
+    const { e, goLives } = await connected(live());
+    e.handle({ t: 'call', aid: 'g1', name: 'goLive', args: ['pl2'] });
+    await flush();
+    e.handle({ t: 'call', aid: 'e1', name: 'endService', args: [] });
+    await new Promise((r) => setTimeout(r, 500));
+    expect(goLives).toEqual([]);
+  });
+});

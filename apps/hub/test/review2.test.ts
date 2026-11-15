@@ -424,6 +424,8 @@ describe('items 22 and 23: backups and restore', () => {
     const ins = live.prepare(`INSERT OR REPLACE INTO live_kv (key, json, saved_at) VALUES (?, ?, ?)`);
     ins.run('context', '{"settings":{"outputs":[]}}', 1);
     ins.run('bundles', '[]', 1);
+    // A cached goLive copy, one row each since design/29 M8.
+    ins.run('bundle:pl', Buffer.from('{}'), 1);
     live.close();
     await restoreBackup(dir, file, { print: () => undefined });
     const after = new Database(join(dir, 'live.db'), { readonly: true });

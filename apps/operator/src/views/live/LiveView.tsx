@@ -4,6 +4,7 @@ import { setUi, useUi } from '../../state/ui.ts';
 import { DegradedBanner } from './DegradedBanner.tsx';
 import { DiagnosticsPanel } from './DiagnosticsPanel.tsx';
 import { LayerBar } from './LayerBar.tsx';
+import { GoLivePrepareToast } from './GoLiveToast.tsx';
 import { ConflictDialog, GoLiveErrorDialog, LocalGoLiveDialog, PlacementDialog } from './LiveDialogs.tsx';
 import { PlaylistPane } from './PlaylistPane.tsx';
 import { ProgramView } from './ProgramView.tsx';
@@ -41,6 +42,9 @@ export function LiveView() {
       <PlacementDialog />
       <ConflictDialog />
       <GoLiveErrorDialog />
+      <div className="toasts golive no-print">
+        <GoLivePrepareToast />
+      </div>
       <LocalGoLiveDialog />
       <DiagnosticsPanel />
     </div>

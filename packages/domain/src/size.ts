@@ -43,8 +43,17 @@ export const SIZE_BUDGETS = {
   presentationMax: 4 * MiB,
   /** A `preview` message: only the previewed slide's section is sent (`previewSlice`). */
   previewMax: 1 * MiB,
-  /** `resolvePlaylist` adds a `degraded` warning above this: too large for an operator takeover. */
-  resolvedWarn: 12 * MiB,
+  /**
+   * The running service's ceiling at goLive (design/29 D13, owner question 14): above it Go live is refused
+   * (W58). The live process parses the prepared copy once on its loop and every screen saves it once; 32 MiB
+   * is the default until a venue PC confirms it.
+   */
+  goLiveMax: 32 * MiB,
+  /**
+   * The size whose first save on a screen passes the 33 ms GO lead (D13; structuredClone 9-12 ms/MiB on this
+   * class of PC): past it the goLive carries W59's critical line. A default until a venue PC confirms it.
+   */
+  goLiveSlow: 3 * MiB,
   /**
    * The operator refuses to send `live.adopt` (or a `preview`) above this instead of tripping the socket
    * cap: the hub would close the socket, the operator reconnect and try again, forever.
@@ -689,16 +698,26 @@ export function previewSlice(
 
 // ── Resolved playlists ──────────────────────────────────────────────────────────────────────────────────
 
+/** D13's ceiling (W58) and GO-lead size (W59) as plain constants. */
+export const GOLIVE_MAX_BYTES = SIZE_BUDGETS.goLiveMax;
+export const GOLIVE_SLOW_BYTES = SIZE_BUDGETS.goLiveSlow;
+
 /**
- * The `degraded` warning of a resolved playlist above `resolvedWarn` (design/27 §3.4), or undefined. The
- * operator PC carries a service it took over in its whole live state, and hands it back to the hub in one
- * `live.adopt` message, which the socket caps; above the warning that hand-back may be refused.
+ * Why a resolved playlist of `bytes` may not go live (W58, design/29 §3), or undefined: past
+ * GOLIVE_MAX_BYTES the live process's one parse and every screen's first save would hold the service.
+ */
+export function resolvedSizeRefusal(bytes: number): string | undefined {
+  if (!(bytes > GOLIVE_MAX_BYTES)) return undefined;
+  // W58
+  return `This service is too large to go live (${Math.round(bytes / MiB)} MB). Split the longest presentations into smaller ones.`;
+}
+
+/**
+ * The `degraded` line of a resolved playlist past the size whose first save on a screen passes the GO lead
+ * (W59, design/29 §3; critical), or undefined.
  */
 export function resolvedSizeWarning(bytes: number): string | undefined {
-  if (!(bytes > SIZE_BUDGETS.resolvedWarn)) return undefined;
-  return (
-    `This service is ${formatBytes(bytes)}, too large for an operator takeover (over ${formatBytes(SIZE_BUDGETS.resolvedWarn)}): ` +
-    'if the hub is lost during the service, this PC keeps the outputs running but may only hand the service back after End service. ' +
-    'Fewer or smaller presentations in the playlist keep it below.'
-  );
+  if (!(bytes > GOLIVE_SLOW_BYTES)) return undefined;
+  // W59
+  return 'Going live with this service takes a few seconds on the screens. Go live before the service starts.';
 }

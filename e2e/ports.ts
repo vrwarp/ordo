@@ -187,6 +187,13 @@ export const PORT_TABLE = {
     spec: 'pptx-tables.spec.ts',
     what: '0 hub without LibreOffice (Import tab), 1 hub without LibreOffice (upload route), 2 hub with LibreOffice',
   },
+  // golive-prepare (design/29 §2.3 M8): Go live prepared beside the running service.
+  'golive-prepare': {
+    offset: 450,
+    count: 2,
+    spec: 'golive-prepare.spec.ts',
+    what: '0 hub with a slowed library (Go live again during a service), 1 hub (size ceiling)',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;

@@ -22,7 +22,7 @@ import {
   Section,
   Slide,
 } from './schemas.ts';
-import { resolvedBytes, resolvedSizeWarning } from './size.ts';
+import { resolvedBytes, resolvedSizeRefusal, resolvedSizeWarning } from './size.ts';
 
 /**
  * Turning a playlist into the frozen copy a goLive carries (design/25 "quarantine"). Shared by the hub
@@ -281,8 +281,12 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
     ...(geoms.files.length ? { geoms: geoms.files } : {}),
     manifestId: opts.digest(parts),
   };
-  // Too large for an operator takeover's hand-back (design/27 §3.4): live with a warning.
-  const sizeWarning = resolvedSizeWarning(resolvedBytes(resolved));
+  // The running service's size (design/29 D13): refused past the ceiling (W58), a critical line past the
+  // size whose first save on a screen passes the GO lead (W59).
+  const bytes = resolvedBytes(resolved);
+  const refusal = resolvedSizeRefusal(bytes);
+  if (refusal) throw new GoLiveRejection(refusal);
+  const sizeWarning = resolvedSizeWarning(bytes);
   if (sizeWarning) problems.push({ reason: sizeWarning });
   // Slides whose LibreOffice art or page picture is still being made go live as they are (design/27 §5).
   problems.push(...pendingSlides(resolved));

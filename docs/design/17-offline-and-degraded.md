@@ -139,10 +139,31 @@ from the audio master output.
    and holds it to End service, exactly like a service it started without the hub (below),
    and says so. At End service it ends the hub's older copy of the same playlist by adopting
    its own idle state (a few hundred bytes); a hub that went on to another playlist is
-   followed. A goLive above 12 MiB carries a `degraded` warning so the operator knows
-   before the service.
+   followed. Since design/29 D13 no goLive carries a takeover warning any more (A10): above
+   32 MiB it is refused (W58), and past the GO-lead size it carries W59's line ("Going live
+   beside the running service" below); a service between 15 and 32 MiB is held after an
+   outage as described here until handback-ref (design/29 M3) removes the limit.
 4. If the hub has a different live playlist (another operator went live meanwhile), the
    operator shows a conflict dialog: keep local (adopt with `force`) or take the hub's.
+
+## Going live beside the running service
+
+Design/29 §2.3 M8. Pressing Go live while a service runs (to pick up a fixed slide, or the next service)
+never holds the running one: the hub prepares the new playlist beside it (design/13 "Prepare before goLive",
+design/12), and until it is ready the screens keep showing the current service and GO, Next and Clear keep
+applying to it on time. The operator's toast (W41, design/29 §3) shows the progress: "Getting 'Sunday
+service' ready to go live (40 %). The screens keep showing the current service until then." (the second
+sentence only while a service is live). While a service is live and the prepare has taken 5 s, the toast
+offers the hub's saved copy, if it has one: "Go live from the copy saved 3 days ago". Pressing it goes live
+from that copy at once, and the goLive carries the existing note ("Went live from the copy of this playlist
+saved 3 days ago …"). The library's copy may take up to 30 s while it keeps arriving (no bytes for 1.5 s ends
+it, and then the saved copy is used as before). End service pressed while a Go live is prepared cancels
+that Go live. With the hub unreachable, Go live is sent at once and follows "Going live without the hub".
+
+A service too large is refused before anything changes on the screens (W58, above 32 MiB); one past the
+size whose first save on a screen passes the GO lead goes live with W59's critical line in the degraded
+list ("Going live with this service takes a few seconds on the screens. Go live before the service
+starts."). Both sizes are defaults until a venue PC confirms them (design/29 D13, owner question 14).
 
 ## Going live without the hub
 
