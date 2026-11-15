@@ -7,7 +7,7 @@ import { cappedSlide } from './decor/test-util.ts';
 import { charged } from './geom/cost.ts';
 import { slideBudget, slideDrawCost, slideJobCost, withinDrawBudget } from './geombudget.ts';
 import { heavySlide } from './health.ts';
-import { clearUnits, slideUnitsCost, unitsOfSlide } from './units.ts';
+import { clearUnits, setEffectUnits, slideUnitsCost, unitsOfSlide } from './units.ts';
 
 /*
  * Decorations rated (r2a Follow-ups, r2b effect units): `decorCost` feeds the slide's drawing budget, so the
@@ -16,7 +16,10 @@ import { clearUnits, slideUnitsCost, unitsOfSlide } from './units.ts';
  * copy when warm, its making at arm.
  */
 
-afterEach(() => clearUnits());
+afterEach(() => {
+  clearUnits();
+  setEffectUnits(true);
+});
 
 const objectsOf = (s: Slide) => drawableContent(clampSlide(s)).objects;
 
@@ -67,5 +70,12 @@ describe('decorations rated', () => {
     const arm = slideUnitsCost(slide, 2, LOOK_MAIN);
     expect(arm.making).toBeCloseTo(charged({ est: c.est, points: c.points }), -2);
     expect(arm.copy).toBeGreaterThan(0.9);
+  });
+
+  it('off (setEffectUnits(false), the venue switch) rates them as 62a1c3a did: about nothing', () => {
+    setEffectUnits(false);
+    const cost = slideDrawCost(objectsOf(decorated(3)));
+    expect(cost.units).toBe(0);
+    expect(cost.effects).toBe(0);
   });
 });

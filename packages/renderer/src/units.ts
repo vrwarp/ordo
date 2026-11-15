@@ -19,6 +19,7 @@ import {
   drawnCost,
   legacyCopy,
   legacyOf,
+  rateDecorations,
   registerUnitCopies,
   slideBudget,
   withinDrawBudget,
@@ -197,13 +198,16 @@ let switches = 0;
 /**
  * Effect units on (the default) or off (a venue troubleshooting switch: an output's `?effects=base`, wired by
  * the asset worker's init): off, this thread plans the units 62a1c3a planned, geometry units only (a stored
- * geometry past the budget, its effects kept only within one call), and draws effects past the budget, plain
- * shapes past it for their paint and masked pictures as their legacy copies, and decorations directly.
+ * geometry past the budget, its effects kept only within one call), rates decorations as 62a1c3a did (about 0,
+ * `rateDecorations`), and draws effects past the budget, plain shapes past it for their paint and masked
+ * pictures as their legacy copies, and decorations directly.
  */
 export function setEffectUnits(on: boolean): void {
   if (on === effectUnitsOn) return;
   effectUnitsOn = on;
   switches++;
+  // Decorations rated with effect units: off, the budget is 62a1c3a's too.
+  rateDecorations(on);
 }
 
 /** Whether effect units are on in this thread (`setEffectUnits`). */

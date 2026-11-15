@@ -123,9 +123,22 @@ function drawnGeometry(o: SlideObject): { g: BuiltGeom | undefined; points: numb
   return { g: undefined, points: 0 };
 }
 
-/** What a rating depends on besides the object: the geometry and decoration files read, the decoration drawer. */
+let decorationsRated = true;
+let ratingSwitches = 0;
+
+/**
+ * Rate decorations (`decorCost`, the default) or not (62a1c3a's budget, where a decoration rated about 0):
+ * `units.ts` `setEffectUnits` sets it with the units it plans, so that off draws as 62a1c3a did.
+ */
+export function rateDecorations(on: boolean): void {
+  if (on === decorationsRated) return;
+  decorationsRated = on;
+  ratingSwitches++;
+}
+
+/** What a rating depends on besides the object: the files read, the decoration drawer, the switch. */
 function ratings(): number {
-  return geomFilesVersion() + decorFilesVersion() + decorHooksGeneration();
+  return geomFilesVersion() + decorFilesVersion() + decorHooksGeneration() + ratingSwitches;
 }
 
 /**
@@ -139,7 +152,7 @@ function ratedOf(o: SlideObject): { r: Rated; area: number } {
   if (hit && hit.version === version) return hit;
   let r: Rated = { est: 0, points: 0 };
   let area = 0;
-  const hooks = o?.type === 'shape' && o.decor !== undefined ? decorHooks() : undefined;
+  const hooks = decorationsRated && o?.type === 'shape' && o.decor !== undefined ? decorHooks() : undefined;
   if (hooks && o.type === 'shape') {
     const c = hooks.cost(o);
     r = { est: c.est, points: c.points };
