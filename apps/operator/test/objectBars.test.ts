@@ -99,14 +99,14 @@ describe('the floating bar registry (objectBars)', () => {
 
   it('dispatches by order: the first bar that applies and that no applying bar replaces', () => {
     const o = (id: string) => OBJECTS.find((x) => x.id === id)!;
-    const one = (id: string) => objectBarFor(o(id), false, BUILTIN_BARS).id;
+    const one = (id: string) => objectBarFor(o(id), false, BUILTIN_BARS)?.id;
     expect(one('rect')).toBe('shape');
     expect(one('text')).toBe('text');
     expect(one('photo')).toBe('picture');
     expect(one('chart')).toBe('neutral');
     expect(one('decor')).toBe('neutral');
     expect(one('locked')).toBe('neutral');
-    expect(objectBarFor(o('rect'), true, BUILTIN_BARS).id).toBe('multi');
+    expect(objectBarFor(o('rect'), true, BUILTIN_BARS)?.id).toBe('multi');
     // No M9 bar is registered yet: a table gets the neutral bar.
     expect(OBJECT_BARS).toEqual([]);
     expect(one('table')).toBe('neutral');

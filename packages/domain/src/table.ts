@@ -1,5 +1,6 @@
 import { canonicalJson, Palette, paletteIndex } from './palette.ts';
 import {
+  type Box,
   type CellStyle,
   type Rgba,
   type ShapeObject,
@@ -11,6 +12,7 @@ import {
   type TableRunStyle,
   type TextPara,
   type TextRun,
+  type TextObject,
   type TextStyle,
 } from './schemas.ts';
 
@@ -182,6 +184,38 @@ export function cellRich(t: TableData, i: number): CellRich | undefined {
   };
   if (Array.isArray(c.runs)) out.runs = cellRuns(t, c);
   if (Array.isArray(c.paras)) out.paras = c.paras;
+  return out;
+}
+
+/**
+ * Cell `i` of a table shape as the text object the editor's text ops work on (design/11 "Table object: cell
+ * target and cellTextObject"): `cellRich`'s body (its text, style, runs and paragraph styles) in `box` (default
+ * the table's box: the text ops never read it), with the table's id and opacity. Every text op (`editText`,
+ * `formatRange`, `setParas`, a paste) then edits a cell unchanged, and its result goes back through `setCell`
+ * (`cellBodyOf`). Undefined when the shape has no table or no such cell. Pure.
+ */
+export function cellTextObject(o: ShapeObject, i: number, box: Box = o.box): TextObject | undefined {
+  const t = tableOf(o);
+  const rich = t ? cellRich(t, i) : undefined;
+  if (!rich) return undefined;
+  const out: TextObject = {
+    id: o.id,
+    type: 'text',
+    box,
+    text: rich.text,
+    style: rich.style,
+    opacity: o.opacity,
+  };
+  if (rich.runs) out.runs = rich.runs;
+  if (rich.paras) out.paras = rich.paras;
+  return out;
+}
+
+/** The rich text body of an edited cell view (`cellTextObject`) for `setCell`. */
+export function cellBodyOf(v: Pick<TextObject, 'text' | 'style' | 'runs' | 'paras'>): CellRich {
+  const out: CellRich = { text: v.text, style: v.style };
+  if (v.runs) out.runs = v.runs;
+  if (v.paras) out.paras = v.paras;
   return out;
 }
 

@@ -564,6 +564,34 @@ without a table, a chart or a decoration only: its geometry select and fill pill
 read-only, so those objects get the neutral bar (`test/objectBars.test.ts`). M9's editor tracks add their bars
 with one line in `OBJECT_BARS` (or `registerObjectBar` at run time), as the panel's sections are added.
 
+### Table editing
+
+_A table (`ShapeObject.table`, design/27 M9) is edited cell by cell (`SlideCanvas.tsx`, `actions.ts`,
+`editorStore.ts`; renderer `table/edit.ts`)._
+
+- **Cells as text.** The store's selection has the table's selected cell (`cell`, its index in
+  `TableData.cells`) and the inline target `{ objectId, cell }` (`inlineEditingId`, `inlineEditingCell`;
+  `inlineTarget()`). The text actions take a target (`typeText`, `formatSelection`, `resizeSelection`,
+  `setParagraphs`, `pasteRichSelection`, and cut and paste with the cell's view): a cell is edited as its text
+  object view (domain `cellTextObject`) and written back through `setCell`, so every text op works on cells
+  unchanged; typing coalesces into one undo step per cell (`cell:<id>:<i>`), as per text box.
+- **Canvas.** The canvas loads the renderer's table module with the first table on a slide (the editor's chunk
+  holds no table code). A press on the table already selected alone selects the cell under it
+  (`cellAtPoint`: `tablePoint` and `tableHit`); a double-click, or Enter, edits it, the caret where the click
+  landed (Enter: at its end); Tab and Shift+Tab go to the next or previous cell in reading order (its text
+  selected), and Tab in the last cell adds a row (`insertRow`, the last row's look, one undo step), as
+  PowerPoint does; Escape goes from the cell back to the whole table, a second Escape drops the selection;
+  Delete and Backspace with a cell selected empty that cell (with the whole table selected they delete the
+  table). The cell is edited as its edit view (`cellEditView`): the drawn cell text in slide coordinates (the
+  table's corner plus the cell's, moved by its vertical anchor), memoised per laid cell and box, so the caret,
+  the selection, a click and the arrow keys (`text/cursor.ts`) land on the drawn glyphs (same line breaks,
+  caret within 0.5 px: `table/edit.test.ts`); the selected cell is outlined on the editing layer. Typing a
+  character lays out that one cell again (the cell layout cache is keyed by each cell's content: in a
+  160-cell table one layout changes). The table's hit area, node cache rect and Transformer frame are its
+  drawn height (`drawnHeight`: rows grow with their text past `box.h`); a height drag sets `box.h` from it
+  (a drag of the width alone keeps it, `tableBoxAfterTransform`); tables do not turn in the editor (no
+  rotate handle; a stored turn is kept and drawn).
+
 ### Canvas-first layout
 
 The desktop editor (a fine pointer; #24) puts the slide first. A touch device keeps the docked panel

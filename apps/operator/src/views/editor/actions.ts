@@ -1,10 +1,30 @@
-import type { Box, ImageCrop, ImageObject, Presentation, SlideObject, TextObject } from '@ordo/domain';
+import {
+  type Box,
+  cellBodyOf,
+  cellTextObject,
+  type ImageCrop,
+  type ImageObject,
+  insertRow,
+  placeCells,
+  type Presentation,
+  type SlideObject,
+  setCell,
+  type TableData,
+  type TextObject,
+} from '@ordo/domain';
 import {
   change,
   currentObjects,
+  currentSlide,
   selectObject,
   selectObjects,
+  inlineTarget,
+  selectCell,
   selectSlide,
+  setTextRange,
+  startInlineEditing,
+  stopInlineEditing,
+  type TextTarget,
   useEditor,
 } from './editorStore.ts';
 import {
@@ -91,16 +111,54 @@ function onObject(objectId: string, fn: (o: SlideObject) => SlideObject, key?: s
   if (!slideId) return;
   change((p) => withObject(p, slideId, objectId, (o) => (o.locked ? o : fn(o))), key);
 }
-const onText = (objectId: string, fn: (o: TextObject) => TextObject, key?: string) =>
-  onObject(objectId, (o) => (o.type === 'text' ? fn(o) : o), key);
+
+/** A text op's target: a text object's id, or a `TextTarget` (with `cell`, that cell of a table). */
+export type TextTargetArg = string | TextTarget;
+
+/** The target named by `t`. */
+export const targetOf = (t: TextTargetArg): TextTarget => (typeof t === 'string' ? { objectId: t } : t);
+
+/**
+ * `fn` applied to cell `cell` of table `o` as the cell's text object view (`cellTextObject`) and written back
+ * through `setCell` (design/15 "Table editing"): so every text op (typing, a format, paragraph styles, a paste)
+ * edits a cell as it edits a text box. `o` itself when it is no table, `fn` changes nothing, or the cell's or
+ * the table's bounds refuse the result (`setCell`).
+ */
+export function editCell(o: SlideObject, cell: number, fn: (t: TextObject) => TextObject): SlideObject {
+  if (o.type !== 'shape' || !o.table) return o;
+  const view = cellTextObject(o, cell);
+  if (!view) return o;
+  const next = fn(view);
+  return next === view ? o : setCell(o, cell, cellBodyOf(next));
+}
+
+/** `fn` on the text of `target`: a text object of the open slide, or a table's cell (locked objects left alone). */
+function onText(target: TextTargetArg, fn: (o: TextObject) => TextObject, key?: string): void {
+  const { objectId, cell } = targetOf(target);
+  if (cell === undefined) onObject(objectId, (o) => (o.type === 'text' ? fn(o) : o), key);
+  else onObject(objectId, (o) => editCell(o, cell, fn), key);
+}
+
+/** The undo key of an edit of `kind` on a target: per object, and per cell for a table (`cell:<id>:<i>`). */
+function targetKey(kind: string, t: TextTarget): string {
+  return t.cell === undefined ? `${kind}:${t.objectId}` : `${kind}:${t.objectId}:${t.cell}`;
+}
 const onImage = (objectId: string, fn: (o: ImageObject) => ImageObject, key?: string) =>
   onObject(objectId, (o) => (o.type === 'image' ? fn(o) : o), key);
 
 // ---- A: text ops -------------------------------------------------------------------------------------
 
-/** The textarea's edit of a text object (typing coalesces per object). */
-export function typeText(objectId: string, next: string, caret?: number): void {
-  onText(objectId, (o) => editText(o, next, caret), `text:${objectId}`);
+/**
+ * The textarea's edit of a text object or a table's cell (typing coalesces per object, and per cell:
+ * `cell:<id>:<i>`).
+ */
+export function typeText(target: TextTargetArg, next: string, caret?: number): void {
+  const t = targetOf(target);
+  onText(
+    t,
+    (o) => editText(o, next, caret),
+    t.cell === undefined ? targetKey('text', t) : targetKey('cell', t),
+  );
 }
 
 /**
@@ -109,24 +167,56 @@ export function typeText(objectId: string, next: string, caret?: number): void {
  * `runs.sizeScale`, ...: ops/text.ts `runOverrides`), so the next theme keeps what the volunteer formatted
  * (design/27 §11 "Themes"), as the Object panel marks `style.*` for the box style.
  */
-function onFormat(objectId: string, fn: (o: TextObject) => TextObject, overrides: string[], key?: string) {
+function onFormat(
+  target: TextTargetArg,
+  fn: (o: TextObject) => TextObject,
+  overrides: string[],
+  key?: string,
+) {
+  const t = targetOf(target);
+  // A table is never the lyric box: a cell marks no theme override.
+  if (t.cell !== undefined) return onText(t, fn, key);
   const slideId = openSlide();
   if (!slideId) return;
-  change((p) => withSlide(p, slideId, (s) => textOnSlide(s, objectId, fn, p.themeId ? overrides : [])), key);
+  change(
+    (p) => withSlide(p, slideId, (s) => textOnSlide(s, t.objectId, fn, p.themeId ? overrides : [])),
+    key,
+  );
 }
 
-/** The format bar: format the selection `[start, end)` of a text object. */
-export function formatSelection(objectId: string, start: number, end: number, patch: RunPatch): void {
-  onFormat(objectId, (o) => formatRange(o, start, end, patch), runOverrides(patch));
+/** The format bar: format the selection `[start, end)` of a text object or a table's cell. */
+export function formatSelection(target: TextTargetArg, start: number, end: number, patch: RunPatch): void {
+  onFormat(target, (o) => formatRange(o, start, end, patch), runOverrides(patch));
 }
 
 /** The format bar's Size ±: scale the selection's sizes (repeated clicks coalesce). */
-export function resizeSelection(objectId: string, start: number, end: number, factor: number): void {
+export function resizeSelection(target: TextTargetArg, start: number, end: number, factor: number): void {
   onFormat(
-    objectId,
+    target,
     (o) => resizeRange(o, start, end, factor),
     runOverrides({ sizeScale: factor }),
-    `size:${objectId}`,
+    targetKey('size', targetOf(target)),
+  );
+}
+
+/**
+ * The box style of a table's cell (the table bar's font, size, bold, colour and alignment with no characters
+ * selected): `fn` of the cell view's style, written to the cell's style entry. `key` coalesces repeated changes
+ * of one field into one step (`style:<id>:<i>:<field>`).
+ */
+export function setCellStyle(
+  target: TextTarget,
+  fn: (s: TextObject['style']) => TextObject['style'],
+  key?: string,
+) {
+  if (target.cell === undefined) return;
+  onText(
+    target,
+    (o) => {
+      const style = fn(o.style);
+      return style === o.style ? o : { ...o, style };
+    },
+    key ? `style:${target.objectId}:${target.cell}:${key}` : undefined,
   );
 }
 
@@ -135,18 +225,122 @@ export function resizeSelection(objectId: string, start: number, end: number, fa
  * step (a number field's arrows), e.g. `spaceBeforePx`.
  */
 export function setParagraphs(
-  objectId: string,
+  target: TextTargetArg,
   start: number,
   end: number,
   patch: ParaPatch,
   key?: string,
 ): void {
-  onText(objectId, (o) => setParas(o, start, end, patch), key ? `paras:${objectId}:${key}` : undefined);
+  const t = targetOf(target);
+  onText(t, (o) => setParas(o, start, end, patch), key ? `${targetKey('paras', t)}:${key}` : undefined);
 }
 
 /** 'Re-fit text'. */
 export function refit(objectId: string): void {
   onText(objectId, refitText);
+}
+
+// ---- A (tables): moving between a table's cells ---------------------------------------------------------
+
+/**
+ * The cell after cell `i` (before it, `back`) in reading order: `TableData.cells` order, which is where the
+ * cells sit row by row (`placeCells`), cells past the grid skipped. Undefined past the last (first) cell.
+ */
+export function nextCell(
+  t: Pick<TableData, 'rows' | 'cols' | 'cells'>,
+  i: number,
+  back: boolean,
+): number | undefined {
+  const { anchors } = placeCells(t);
+  for (let k = back ? i - 1 : i + 1; k >= 0 && k < anchors.length; k += back ? -1 : 1)
+    if (anchors[k]) return k;
+  return undefined;
+}
+
+/**
+ * Tab (Shift+Tab, `back`) from cell `cell` of table `objectId` on the open slide: the next (previous) cell.
+ * Tab in the last cell adds a row under the last one (`insertRow`, the last row's look, one undo step) when
+ * `grow`, and goes to its first cell, as PowerPoint does. The cell to select, or undefined (no such table, the
+ * first cell with Shift+Tab, a locked table, or a row past `TABLE_LIMITS`).
+ */
+export function tabCell(objectId: string, cell: number, back: boolean, grow = true): number | undefined {
+  const o = currentSlide()?.objects.find((x) => x.id === objectId);
+  if (o?.type !== 'shape' || !o.table) return undefined;
+  const n = nextCell(o.table, cell, back);
+  if (n !== undefined || back || !grow || o.locked) return n;
+  const { R } = placeCells(o.table);
+  let made: number | undefined;
+  onObject(objectId, (x) => {
+    if (x.type !== 'shape' || !x.table) return x;
+    const y = insertRow(x, R, R - 1);
+    if (y === x || !y.table) return x;
+    const p = placeCells(y.table);
+    const first = p.slots[R * p.C];
+    made = first !== undefined && first >= 0 ? first : undefined;
+    return y;
+  });
+  return made;
+}
+
+/**
+ * The canvas's keys on the selected table (EditorView's window handler, where the slide has the keys; design/15
+ * "Table editing"): Enter edits the selected cell (the first one when none is), its caret at the end of its
+ * text; Tab and Shift+Tab select the next or previous cell (a new row past the last, unless `readOnly`);
+ * Escape goes from a cell back to the whole table; Delete and Backspace empty the selected cell's text (the
+ * table stays: Delete with the whole table selected deletes it, as for any object). Whether the key was one.
+ */
+export function tableKey(e: { key: string; shiftKey: boolean }, o: SlideObject, readOnly: boolean): boolean {
+  if (o.type !== 'shape' || !o.table) return false;
+  const st = useEditor.getState();
+  const cell = st.objectId === o.id ? st.cell : undefined;
+  const first = nextCell(o.table, -1, false) ?? 0;
+  switch (e.key) {
+    case 'Enter': {
+      if (readOnly || o.locked) return false;
+      const at = cell ?? first;
+      const len = cellTextObject(o, at)?.text.length ?? 0;
+      selectCell(o.id, at);
+      startInlineEditing(o.id, { start: len, end: len, caret: len }, at);
+      return true;
+    }
+    case 'Tab': {
+      const next =
+        cell === undefined
+          ? e.shiftKey
+            ? nextCell(o.table, o.table.cells.length, true)
+            : first
+          : tabCell(o.id, cell, e.shiftKey, !readOnly);
+      if (next !== undefined) selectCell(o.id, next);
+      return true;
+    }
+    case 'Escape':
+      if (cell === undefined) return false;
+      stopInlineEditing();
+      selectCell(o.id, undefined);
+      return true;
+    case 'Delete':
+    case 'Backspace':
+      if (cell === undefined) return false;
+      if (!readOnly) typeText({ objectId: o.id, cell }, '', 0);
+      setTextRange({ start: 0, end: 0 });
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * What the canvas edits inline, as the text object the clipboard actions read (a text box, or a table cell's
+ * view, `cellTextObject`) with its target; undefined when nothing is edited.
+ */
+export function inlineText(): { view: TextObject; target: TextTarget } | undefined {
+  const t = inlineTarget();
+  if (!t) return undefined;
+  const o = currentSlide()?.objects.find((x) => x.id === t.objectId);
+  if (!o) return undefined;
+  if (t.cell === undefined) return o.type === 'text' ? { view: o, target: t } : undefined;
+  const view = o.type === 'shape' ? cellTextObject(o, t.cell) : undefined;
+  return view ? { view, target: t } : undefined;
 }
 
 // ---- Rich clipboard (text & slide objects) ----------------------------------------------------------
@@ -161,9 +355,9 @@ let lastObjectClip: {
   html: string;
 } | null = null;
 
-/** Paste a `RichTextSlice` into `[start, end)` of `objectId`; returns the new caret offset. */
+/** Paste a `RichTextSlice` into `[start, end)` of a text object or a table's cell; returns the new caret offset. */
 export function pasteRichSelection(
-  objectId: string,
+  to: TextTargetArg,
   start: number,
   end: number,
   slice: RichTextSlice,
@@ -171,6 +365,21 @@ export function pasteRichSelection(
   let caret = Math.min(start, end) + slice.text.length;
   const slideId = openSlide();
   if (!slideId) return caret;
+  const { objectId, cell } = targetOf(to);
+  if (cell !== undefined) {
+    change((p) =>
+      withObject(p, slideId, objectId, (o) =>
+        o.locked
+          ? o
+          : editCell(o, cell, (v) => {
+              const r = pasteRichText(v, start, end, slice);
+              caret = r.caret;
+              return r.object;
+            }),
+      ),
+    );
+    return caret;
+  }
   change((p) =>
     withSlide(p, slideId, (s) => {
       const target = s.objects.find((x) => x.id === objectId);
@@ -205,39 +414,45 @@ export function copyTextSelection(
   return slice;
 }
 
-/** Cut `[start, end)` of `o` as rich text + HTML; returns the new caret offset or null if empty. */
+/**
+ * Cut `[start, end)` of `o` (a text object, or a table cell's view with its `target`) as rich text + HTML;
+ * returns the new caret offset or null if empty.
+ */
 export function cutTextSelection(
   o: TextObject,
   start: number,
   end: number,
   clipboardData?: DataTransfer | null,
+  target: TextTargetArg = o.id,
 ): number | null {
   const slice = copyTextSelection(o, start, end, clipboardData);
   if (!slice) return null;
-  return pasteRichSelection(o.id, start, end, { text: '' });
+  return pasteRichSelection(target, start, end, { text: '' });
 }
 
 /**
- * Paste rich or plain text from `clipboardData` (or in-memory fallback) into `[start, end)` of `o`;
- * returns the new caret offset, or null if nothing was pasted.
+ * Paste rich or plain text from `clipboardData` (or in-memory fallback) into `[start, end)` of `o` (a text
+ * object, or a table cell's view with its `target`); returns the new caret offset, or null if nothing was
+ * pasted.
  */
 export function handleTextPaste(
   o: TextObject,
   start: number,
   end: number,
   clipboardData?: DataTransfer | null,
+  target: TextTargetArg = o.id,
 ): number | null {
   const html = clipboardData?.getData('text/html') ?? '';
   const plain = clipboardData?.getData('text/plain') ?? '';
   if (html) {
     const rich = htmlToRichText(html, o.style);
-    if (rich) return pasteRichSelection(o.id, start, end, rich);
+    if (rich) return pasteRichSelection(target, start, end, rich);
   }
   if (lastRichTextClip && (!plain || plain === lastRichTextClip.plain)) {
-    return pasteRichSelection(o.id, start, end, lastRichTextClip.slice);
+    return pasteRichSelection(target, start, end, lastRichTextClip.slice);
   }
   if (plain) {
-    return pasteRichSelection(o.id, start, end, { text: plain });
+    return pasteRichSelection(target, start, end, { text: plain });
   }
   return null;
 }

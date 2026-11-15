@@ -436,6 +436,20 @@ column's size, cell styles, fills and lines, keep no line inside a merged cell, 
 or remove a row's height to `box.h`; they refuse past `TABLE_LIMITS` and at the last row or column.
 <!-- /m9:tables-render -->
 
+<!-- r2b:editor-table -->
+**Table object: cell target and cellTextObject** (`packages/domain/src/table.ts`, r2b editor-table). The
+editor edits a cell as a text object: `cellTextObject(o, i, box?)` is cell `i` of table shape `o` as a
+`TextObject` (`cellRich`'s text, style, runs and paragraph styles, the table's id and opacity, in `box`,
+default the table's box: no text op reads it), and `cellBodyOf(view)` is an edited view's body for `setCell`.
+Every text op of the editor (`editText`, `formatRange`, `resizeRange`, `setParas`, a paste) then edits a cell
+unchanged, and its result goes back through `setCell` (which refuses past the cell's and the table's bounds, so
+an edit past them changes nothing). The operator names what an edit goes to with a text target
+`{ objectId, cell? }` (`apps/operator/src/views/editor/editorStore.ts` `TextTarget`): a text object, or one cell
+of a table. Fields of a cell's style that a cell style cannot hold (`cellStyleOf`'s keys: font family, weight,
+size, italics, colour, insets, language, fallback fonts, alignment, vertical alignment, direction) are not
+offered for a cell (no uppercase, outline, shadow or shrink-to-fit), so nothing typed or set on a cell is lost.
+<!-- /r2b:editor-table -->
+
 ## Live state
 
 Owned by the hub (or the operator in fallback), produced by the pure reducer in
