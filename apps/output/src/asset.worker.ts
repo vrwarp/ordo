@@ -651,6 +651,7 @@ function sceneParts(
   out: { w: number; h: number },
   scale: number,
   lookup: ImageLookup,
+  late: (key: string) => void,
 ): (SceneParts & { base: DrawnSprite<ImageBitmap> }) | undefined {
   const v = job.video;
   if (!v) return undefined;
@@ -659,6 +660,7 @@ function sceneParts(
     isSong: job.isSong,
     presentationKind: job.presentationKind,
     clip: { w: v.w, h: v.h },
+    late,
   };
   const frame = { width: out.w, height: out.h };
   const s = rasterSceneSprites(
@@ -722,6 +724,12 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
   let release: (() => void) | undefined;
   let units: UnitHold | undefined;
   let unitsMade: UnitJob | undefined;
+  // Units the raster left out until they are made (C2b, `SlideDrawOptions.late`: a decoration past
+  // DECOR_SPRITE drawn at once is one task of up to about 115 ms at 3840): they go to the late job and fade in.
+  const leftOut: string[] = [];
+  const late = (key: string) => {
+    if (!leftOut.includes(key)) leftOut.push(key);
+  };
   try {
     let draw: () => Drawn;
     if (job.kind === 'slide') {
@@ -741,12 +749,13 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
       skipped = pre.skipped;
       missing = geoms.length ? [...pre.missing, ...geoms] : pre.missing;
       draw = () => {
-        const scene = sceneParts(job, out, scale, pre.lookup);
+        const scene = sceneParts(job, out, scale, pre.lookup, late);
         if (scene) return { main: scene.base, scene };
         const opts = {
           nextSlide: job.nextSlide,
           isSong: job.isSong,
           presentationKind: job.presentationKind,
+          late,
         };
         const reach = slideReach(measure(), job.slide, { scale, look: job.look, ...opts });
         return {
@@ -809,8 +818,10 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
     const hold = units;
     if (units && job.kind === 'slide') keepUnits(`layer ${job.layer} ${held}`, units);
     units = undefined;
-    // The units it was drawn without: made in a late job, pinned with its own.
-    const left = unitsMade?.left ?? [];
+    // The units it was drawn without (their legacy copies drawn, or left out by the raster): made in a late
+    // job, pinned with its own.
+    const left = [...(unitsMade?.left ?? [])];
+    for (const k of leftOut) if (!left.includes(k)) left.push(k);
     if (hold && job.kind === 'slide' && left.length) queueLate(job, left, hold);
     // A slide whose content is past the raster budget by its drawing estimate (memoised by the draw, with the
     // effect sprites it made): health reports its time apart from the alarm's.

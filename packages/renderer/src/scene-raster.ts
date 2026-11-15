@@ -235,6 +235,8 @@ export function rasterScene<B>(
     isSong?: boolean;
     presentationKind?: 'song' | 'slides' | 'loop';
     clip?: { w?: number; h?: number };
+    /** An output raster's report of a part left out until its unit is made (`SlideDrawOptions.late`, C2b). */
+    late?: (key: string) => void;
   } = {},
 ): { base: B; over: B | null; plane: Float32Array } | undefined {
   const scene = sceneSlides(ctx, slide, look, scale, images, objectId, opts.clip);
@@ -273,11 +275,18 @@ export function rasterSceneSprites<B>(
     isSong?: boolean;
     presentationKind?: 'song' | 'slides' | 'loop';
     clip?: { w?: number; h?: number };
+    /** An output raster's report of a part left out until its unit is made (`SlideDrawOptions.late`, C2b). */
+    late?: (key: string) => void;
   } = {},
 ): { base: DrawnSprite<B>; over: DrawnSprite<B> | null; plane: Float32Array } | undefined {
   const scene = sceneSlides(ctx, slide, look, scale, images, objectId, opts.clip);
   if (!scene) return undefined;
-  const o = { nextSlide: opts.nextSlide, isSong: opts.isSong, presentationKind: opts.presentationKind };
+  const o = {
+    nextSlide: opts.nextSlide,
+    isSong: opts.isSong,
+    presentationKind: opts.presentationKind,
+    late: opts.late,
+  };
   const part = (s: Slide) =>
     drawSprite(
       surface,

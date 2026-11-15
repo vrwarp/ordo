@@ -416,10 +416,12 @@ drawing budget (`geombudget.ts`) would draw as a lesser legacy copy on the outpu
   copy that ended a full-slide soft edge's unit took 102 ms at 3840 before it).
 - **Drawn** by `drawSlide2D` (the slide objects' drawer `units.ts` registers): in z-order, an object whose unit is
   ready is copied 1:1 (`layers`: its body drawn live over it); one whose unit is not ready keeps its cheap legacy
-  copy as the placeholder (live-frame removes it in sub-wave 2). With `SlideDrawOptions.late` (an output raster:
-  units-live's C2b, wired by the integrator) a decoration past `DECOR_SPRITE` whose unit is not ready is left out
-  and reported by its key, to fade in once made: drawn at once it is a task of 100-115 ms at 3840. Without it
-  (the harness, thumbnails, the editor) it is drawn directly, as before.
+  copy as the placeholder (live-frame removes it in sub-wave 2). With `SlideDrawOptions.late` (C2b: every raster
+  of the output's asset worker passes it, a slide's and a scene's base and over, through `rasterSlide` and
+  `rasterSceneSprites`) a decoration past `DECOR_SPRITE` whose unit is not ready is left out and reported by its
+  key, to fade in once made: drawn at once it is a task of 100-115 ms at 3840. The worker adds the keys to the
+  units the job left (`done.unitsLeft`), so its late job makes them and the link fades them in ("Late units"
+  below). Without it (the harness, thumbnails, the editor) it is drawn directly, as before.
 - **Bounded**: a slide's units cover at most `UNIT_SLIDE_AREAS` (one frame, z-order first; a prepared picture has
   no area of its own), so a cue (the slide and the next one a look shows) holds at most two frames, about 63 MiB
   at 4K, in the one unit cache (`UNIT_CACHE_BYTES`, 192 MiB, `unitCacheBytes`). An object past that frame keeps

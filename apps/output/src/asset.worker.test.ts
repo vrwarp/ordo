@@ -28,6 +28,9 @@ import {
   unitWork,
 } from '@ordo/renderer/units.ts';
 import { lineArtSlide } from '@ordo/renderer/units.test-util.ts';
+import { cappedSlide } from '@ordo/renderer/decor/test-util.ts';
+// The decoration drawer, as the worker's drawers step loads it before a decorated slide's units are planned.
+import '@ordo/renderer/decor/index.ts';
 import { CONTENT_CASES, contentCase } from '@ordo/domain/content.test-util.ts';
 import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';
 import { geomFile } from '@ordo/renderer/geom/stored.ts';
@@ -62,11 +65,20 @@ const H = 540;
  * The worker's clock in the tests that time unit making (`performance.now` while `on`): only unit steps move it
  * (`stepMs` each, `fakeCtx`), so how long units take, and when a picture is sent, depends on no real time.
  */
-const clock: { on: boolean; t: number; stepMs: number; at?: { t: number; fn: () => void } } = {
+const clock: {
+  on: boolean;
+  t: number;
+  stepMs: number;
+  /** Each fill or stroke call on any canvas takes this long of the clock while `on` (0: none). */
+  paintMs?: number;
+  at?: { t: number; fn: () => void };
+} = {
   on: false,
   t: 0,
   stepMs: 0,
 };
+/** Fill and stroke calls made on every canvas so far (the work a raster or a unit step drew). */
+let paints = 0;
 const realNow = performance.now.bind(performance);
 /** Geometry files the fake hub serves, by hash, and one it does not have. */
 const GEOM_READ = 'a'.repeat(64);
@@ -80,7 +92,13 @@ const GEOM_FILES = new Map([
 
 /** A 2D context that logs fillText and drawImage on `rec` (every glyph is 10 device px wide). */
 function fakeCtx(rec: { ops: string[]; drawn: FakeBitmap[] }) {
-  const state: Record<string | symbol, unknown> = { font: '10px x', letterSpacing: '0px', globalAlpha: 1 };
+  const state: Record<string | symbol, unknown> = {
+    font: '10px x',
+    letterSpacing: '0px',
+    globalAlpha: 1,
+    // The transform these fakes never move (a decoration's drawer reads it to place its sprite).
+    getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }),
+  };
   return new Proxy(state, {
     get(t, k) {
       if (k === 'measureText') return (s: string) => ({ width: s.length * 10 });
@@ -101,6 +119,10 @@ function fakeCtx(rec: { ops: string[]; drawn: FakeBitmap[] }) {
         };
       if (k in t) return t[k];
       return (...args: unknown[]) => {
+        if (k === 'fill' || k === 'stroke') {
+          paints++;
+          if (clock.on && clock.paintMs) clock.t += clock.paintMs;
+        }
         if (k === 'fillText') rec.ops.push(`text:${args[0]}`);
         else if (k === 'drawImage') {
           const img = args[0] as FakeBitmap;
@@ -175,8 +197,18 @@ const scope: { postMessage: (m: unknown) => void; onmessage: ((ev: { data: unkno
   postMessage: () => undefined,
   onmessage: null,
 };
-/** Pictures sent to the renderer, with the units made on the thread and the test's clock when each was sent. */
-const rendered: { msg: AssetToRender; transfer: unknown[]; made: number; steps: number; at: number }[] = [];
+/**
+ * Pictures sent to the renderer, with the units made on the thread, the fill and stroke calls drawn so far and
+ * the test's clock when each was sent.
+ */
+const rendered: {
+  msg: AssetToRender;
+  transfer: unknown[];
+  made: number;
+  steps: number;
+  paints: number;
+  at: number;
+}[] = [];
 /** Files decoded (createImageBitmap of a fetched file). */
 const decoded: string[] = [];
 const replies: FromAsset[] = [];
@@ -191,7 +223,7 @@ const link: {
 };
 const render = {
   postMessage: (msg: AssetToRender, transfer: unknown[]) =>
-    rendered.push({ msg, transfer, made: unitWork().made, steps: unitWork().steps, at: clock.t }),
+    rendered.push({ msg, transfer, made: unitWork().made, steps: unitWork().steps, paints, at: clock.t }),
   close: () => undefined,
 };
 
@@ -753,6 +785,7 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
   afterEach(() => {
     clock.on = false;
     clock.stepMs = 0;
+    clock.paintMs = 0;
     clock.at = undefined;
     init();
   });
@@ -792,6 +825,52 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
       'late',
     );
     expect(unitCopies(again.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(units.length);
+    expect(again.msg).toMatchObject({ refresh: true, refreshFadeMs: 300 });
+  });
+
+  it('a jump to a slide with a capped decoration is sent at once without it, and it fades in once made (C2b)', async () => {
+    // The largest decoration allowed (`cappedSlide`, past DECOR_SPRITE): drawn at once it is one task of about
+    // 100-115 ms at 3840. Each fill or stroke takes 0.4 ms of the clock here, each unit step 1 ms.
+    const s = cappedSlide();
+    const units = unitsOf(s);
+    expect(units.map((u) => u.of)).toEqual(['decor']);
+    timed(1);
+    clock.paintMs = 0.4;
+    rendered.length = 0;
+    replies.length = 0;
+    const p0 = paints;
+    send({
+      t: 'job',
+      job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|capped' }),
+      role: 'live',
+    });
+    await vi.waitFor(() => expect(rendered.length).toBeGreaterThan(0));
+    // Sent in the raster's own turn, the decoration left out (its unit is not made): nothing of it drawn, so
+    // no task near 50 ms of the clock (drawn directly it would be several hundred calls).
+    expect(rendered[0]!.paints - p0).toBe(0);
+    expect(rendered[0]!.at).toBeLessThan(50);
+    await vi.waitFor(() => expect(replies.find((r) => r.t === 'done')).toBeDefined());
+    expect(replies.find((r) => r.t === 'done')).toMatchObject({ key: 'sl|capped', unitsLeft: 1 });
+    // The late job makes it in turns and says so; the re-draw the link sends copies it and fades in.
+    await vi.waitFor(() =>
+      expect(ready().find((r) => r.slideKey === 'sl|capped' && r.left === 0)).toBeDefined(),
+    );
+    expect(ready().flatMap((r) => r.keys)).toEqual([units[0]!.key]);
+    expect(unitReady(units[0]!)).toBeDefined();
+    const p1 = paints;
+    const again = await runAs(
+      slideJob({
+        slide: s,
+        images: {},
+        video: undefined,
+        key: 'sl|capped',
+        refresh: true,
+        refreshFadeMs: 300,
+      }),
+      'late',
+    );
+    expect(unitCopies(again.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
+    expect(rendered[0]!.paints - p1).toBe(0);
     expect(again.msg).toMatchObject({ refresh: true, refreshFadeMs: 300 });
   });
 
