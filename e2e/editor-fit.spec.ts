@@ -10,13 +10,13 @@ import {
   editorState,
   frames,
   importDeck,
-  M4_PORT,
   type Obj,
   openEditor,
   openSlide,
   type PresentationRec,
   slidesOf,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import type { HubProcess } from './hubproc.ts';
 import { hubApi } from './linkhelpers.ts';
 
@@ -30,9 +30,9 @@ import { hubApi } from './linkhelpers.ts';
  * - the floating bar (and the Stage lens under the stage) fits its pane with the Slide drawer open, and the
  *   bar never covers the selection's handles at Fit, 75 % and 50 %;
  * - the font select is named "Font" (or "Font (mixed)", showing Mixed, for a selection of several fonts).
- * Port M4_PORT + 11.
+ * Its port: e2e/ports.ts row 'editor-fit'.
  */
-const PORT = M4_PORT + 11;
+const PORT = portOf('editor-fit');
 const OUT = 'test-results/editor-fit';
 /** CI machines are slower: timing bounds are scaled there. */
 const SLOW = process.env.CI ? 3 : 1;

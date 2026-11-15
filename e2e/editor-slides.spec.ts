@@ -10,7 +10,6 @@ import {
   editorState,
   frames,
   importDeck,
-  M4_PORT,
   type Obj,
   opOrigin,
   openEditor,
@@ -19,6 +18,7 @@ import {
   saveAndReload,
   slidesOf,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import { uploadMedia } from './helpers.ts';
 import { hubApi, login } from './linkhelpers.ts';
 import { ffmpeg } from './pptxdecks.ts';
@@ -31,9 +31,9 @@ import { apiJson, liveEvent } from './pptxlive.ts';
  * view and shown by a click; the background replaced on all slides with a picture of another aspect, as
  * the presentation's cover-fit background and as an imported 4:3 deck's background pictures, re-cropped
  * with the picture replace rule (item D's `replacePicture`), never distorted. Each ends in Save and a
- * reload with the presentation JSON identical. Port 8905.
+ * reload with the presentation JSON identical. Its port: e2e/ports.ts row 'editor-slides'.
  */
-const PORT = M4_PORT + 5;
+const PORT = portOf('editor-slides');
 const OUT = 'test-results/editor-slides';
 
 type Pic = Obj & { fit?: string; crop?: { l: number; t: number; r: number; b: number } };

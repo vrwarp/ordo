@@ -20,7 +20,7 @@
  */
 import { getHeapStatistics } from 'node:v8';
 import { newId } from '@ordo/domain';
-import { nameShapeFiles } from '@ordo/importers/pptx-geoms.ts';
+import { emittedShapeFiles, nameShapeFiles } from '@ordo/importers/pptx-geoms.ts';
 import { extrasOf, scanDeck } from '@ordo/importers/pptx-scan.ts';
 import { convertDeck, rescueDeck } from '@ordo/pptx-scene';
 import { openPackage } from '@ordo/pptx-scene/opc.ts';
@@ -66,16 +66,18 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
 }
 
 /**
- * The batch's geometry files named here, in the worker (the import core's `nameShapeFiles`: re-tokenised,
- * checked, serialised and hashed), slide by slide: a slide whose new files would take the batch past
- * `maxBytes` keeps none and is listed in `geomOver` (the job leaves out the objects that name them).
- * `result.geoms` is emptied: the job reads only the named files, whose bytes are all it holds.
+ * The batch's shape files (geometry files and M9 decoration files, `emittedShapeFiles`) named here, in the
+ * worker (the import core's `nameShapeFiles`: re-tokenised, checked, serialised and hashed), slide by slide: a
+ * slide whose new files would take the batch past `maxBytes` keeps none and is listed in `geomOver` (the job
+ * leaves out the objects that name them). `result.geoms` and `result.decors` are emptied: the job reads only
+ * the named files, whose bytes are all it holds.
  */
 export function nameGeomFiles(out: SceneTaskOutput, maxBytes: number): void {
-  const geoms = out.result.geoms ?? [];
-  if (!geoms.length) return;
-  const named = nameShapeFiles(out.result.slides, geoms, maxBytes);
+  const files = emittedShapeFiles(out.result);
+  if (!files.length) return;
+  const named = nameShapeFiles(out.result.slides, files, maxBytes);
   out.result.geoms = [];
+  out.result.decors = [];
   out.geomFiles = named.files;
   if (named.over.length) out.geomOver = named.over;
 }

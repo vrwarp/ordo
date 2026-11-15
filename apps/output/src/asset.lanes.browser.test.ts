@@ -1,9 +1,9 @@
-import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { GeometryCase, PropsRun } from './asset.lanes.page.test-util.ts';
+import { findChromium } from '../../../tools/find-chromium.ts';
 
 /**
  * Headless check of the asset worker's raster lanes and crop-aware decode (design/27 §7.5, M7): bundles
@@ -29,18 +29,6 @@ const root = resolve(here, '../../..');
 /** The link sends each props job this long before its second (link-core.ts PROPS_LEAD_MS). */
 const PROPS_LEAD_MS = 150;
 const FRAME_MS = 1000 / 60;
-
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
-  try {
-    const { chromium } = await import('@playwright/test');
-    const exe = chromium.executablePath();
-    if (existsSync(exe)) return exe;
-  } catch {
-    /* Playwright not installed */
-  }
-  return existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : undefined;
-}
 
 type Esbuild = { build(o: Record<string, unknown>): Promise<{ outputFiles: { text: string }[] }> };
 

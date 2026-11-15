@@ -31,7 +31,8 @@ export const BOX_FACTOR = 2;
  * text in its turned box, a `centerBlock` as the lines at their own alignment, a metafile through LibreOffice
  * or left out, an `adjWide` angle clamped, a geometry file within the M6 bounds. Without 'decorFile' a
  * decoration keeps its parts in the slide (`decor.ts` `decorFiles`, `DecorData.ref` never written): what an
- * importer that stores no decoration files needs (the hub's and the client's until `decor-render` names them).
+ * importer that stores no decoration files needs (the hub and the client name and store them since
+ * `decor-render`: both write 'decorFile').
  */
 export const M9_FIELDS = [
   'table',

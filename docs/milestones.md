@@ -98,6 +98,18 @@ Stage lens in P1, a words editor on the Lyric Script's operations in P2); a phon
 outputs on separate machines; auto-shrink and RTL text; per-object builds; cloud sync and
 user accounts.
 
+**Phones P0 ("A phone is safe to sign in", design/28 §9)** is built alongside M9 at the owner's request
+(2026-11-14; branches `p0/hub` and `p0/client`, integrated on `p0/integrate`): caps at every route failing
+closed, capped sign-ins never remembered, the `Origin` and `x-ordo` checks, the LAN out of the hub-wide PIN
+bucket, live fonts locked, the narrower `affectsContext`, jobs paced while live, one stringify per delta; the
+compact shell with its tab bar, sheets and phone sign-in, every compact control at least 44 px, and the editor,
+Setup and settings out of the phone's first load (at most 300 KB gzip). What changes the venue PC with no phone
+involved (pacing every heavy job while live, `x-ordo` from full sessions) waits behind **Phones are used during
+services** (`settings.phones.enabled`, Settings → PINs, off by default). Its gate is a rehearsal service with
+real outputs and phones (`pnpm soak --phones 20 --upload-video 500 --upload-photo`, design/23 "Soak test") and
+the device checks (keyboard open, VoiceOver and TalkBack, Request Desktop Website); the switch stays off until
+both pass (design/28 owner question 11). P1 to P3 stay candidates.
+
 ## PowerPoint without LibreOffice (design/27 M9)
 
 M9 ships in pull requests on main, each published at once as the edge image and the Pages demo:
@@ -108,7 +120,8 @@ M9 ships in pull requests on main, each published at once as the edge image and 
   convert with the same version and fields, and M9's exit is measured on the client path.
 - `M9_WRITES` (`@ordo/pptx-scene` `version.ts`, for the hub and the client parse) is the kill switch: a field the converter writes stays out of it
   until its drawer is on main, and can be taken out again without a release of the drawers. Decorations and
-  picture sheets stay out until `decor-render` (design/27 §15 M9 "rollout").
+  their files are on since `decor-render` (wave r2); picture sheets stay out until `decor-sheets` (design/27
+  §15 M9 "rollout").
 
 ## Implementation status
 

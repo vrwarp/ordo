@@ -295,22 +295,33 @@ are byte-identical, and the tests pin each seam's calls by digest against the co
   cancelled job stops at `host.check`), the operator's thumbnail worker at once, from one registry
   (`registerPrepareStep`), so thumbnails draw what outputs draw. Steps run in order and return the files they
   found missing, which the asset worker reports with the missing pictures. Built in: the M9 shape drawers the
-  slides need (`shape drawers`, below) and the geometry files (`ShapeGeom.ref`); M9 adds table layout, warp
-  faces, vector pictures and decoration files.
+  slides need (`shape drawers`, below), the geometry files (`ShapeGeom.ref`) and the decoration files
+  (`DecorData.ref`, `decoration files`: `drawnDecorRefs`, read into the renderer's small decoration-file store,
+  `decor/files.ts`, as geometry files are; a file not there yet is reported missing and the slide drawn again
+  once it is cached, the decoration drawing nothing meanwhile); M9 adds table layout, warp faces and vector
+  pictures.
 - **Shape dispatch** (`renderer/src/shape.ts` `drawShapeObject`): `table` → `chart` → `decor` → geometry → legacy,
   by the first of the fields the clamp kept whose drawer is registered (`registerShapeDrawer`); until then such a
   shape draws what an older build draws once it strips the field. A kind's drawer may instead be loaded the first
-  time a slide holds that kind (`registerShapeDrawerLoader`: the renderer's index registers the table's, so its
-  code stays out of the operator's first paint, design/24 "Bundle budget"); the workers' prepare step `shape
+  time a slide holds that kind (`registerShapeDrawerLoader`: the renderer's index registers the table's and the
+  decoration's, so their code stays out of the operator's first paint, design/24 "Bundle budget"); the workers' prepare step `shape
   drawers` and the editor canvas call `loadShapeDrawers` before they draw (the canvas draws again once loaded).
   A registered 3-D look (`registerLook3d`) resolves a plan the effect composite draws (`EffectSource.look3d`).
+  A decoration (`decor/draw.ts`) is one draw: at its caps (16,384 points, 24 shadows) about 100 ms cold at 3840,
+  past the 50 ms asset-worker task until the effect units (wave r2b) make it in slices of `drawDecorRange`: an
+  open must item before release (design/27 §13), not a relaxed bound.
 - **Paint hooks** (`renderer/src/text/paint.ts`): `paintRich` puts glyphs on the context through a glyph painter
   (`PLAIN_PAINTER`; upright and warp ones registered by kind), and its rectangles too (a line mask's straps,
   highlights, underlines and strikes: `rect` with the pass) and draws its face on a face target
   (`DIRECT_TARGET`; a face sprite registered by the 3-D look, whose alpha casts the shadow and glow), chosen per
   object and independently.
-- **One sprite cache** (`renderer/src/spritecache.ts`): 64 MiB for every kind of sprite (effects today; geometry,
+- **One sprite cache** (`renderer/src/spritecache.ts`): for every kind of sprite (effects today; geometry,
   decorations, 3-D faces and charts in M9), least recently used first, with counted pins as the bitmap cache has.
+  Its budget is 64 MiB, raised to 4 frames of the largest raster its thread draws (127 MB on a 4K output's asset
+  worker, at most 128 MiB): a slide's sprites grow with its device pixels. A slide's draw is one raster: its own
+  sprites never evict each other, and one that does not fit beside them is not kept (a decoration's sprite is
+  then not made at all), so a 4K slide whose sprites pass the budget draws from those that fit instead of
+  making every one again on every draw (r2a repair; design/27 `spritecache.ts`).
 - **Picture pipeline** (`renderer/src/picture.ts`): `PictureSource` is a canvas image or a `VectorPicture`, which
   the source step that accepts it draws wherever `drawImage` would (`registerPictureSource`); target extensions
   widen a target's key or refuse to prepare it (`registerPictureTarget`); post steps change a prepared bitmap
@@ -329,6 +340,41 @@ synchronous draw, so the draw lays out nothing and no task passes design/27 §13
 are kept by their content, so the next job, a slide sent again and the thumbnails find them. A look that does
 not draw the slide as authored prepares nothing.
 <!-- /m9:tables-render -->
+
+<!-- m9:geometry-units -->
+**Geometry units** (design/27 §13 "Geometry units", M9 decisions "Slow-to-draw elements", Runtime: draw it,
+never drop it). A shape of a stored geometry the slide's drawing budget sends to its legacy copy (past
+`GEOM_COST.slide`, such as the leaf template's line art) is drawn whole from a unit: its object drawn without
+effects at the output's scale over its reach, cut to the frame at a whole-pixel origin, which the slide's draw
+copies 1:1 where the legacy copy would be drawn (`renderer/src/units.ts`). A slide copies at most one frame of
+units (`UNIT_SLIDE_AREAS`: about 5 ms at 4K on the asset worker's software canvas, on top of the budget's draw),
+z-order first; past it, and for a shape that alone is past `GEOM_COST.slide` (no task could draw it), the legacy
+copy stays.
+- **Prepare step `geometry units`** (`apps/output/src/prepare/units.ts`, after `geometry files`, whose paths it
+  draws): the job's slide's units, made in the job's lane turns, one draw call a step (a path's fill or outline,
+  on a scratch canvas of the frame at the frame's own transform, then the rect copied out), as many a turn as
+  fit in about 5 ms (`SLICE_MS` 10 halved), after a turn that plans them; a step is one call of a shape within
+  `GEOM_COST.slide` (about 38 ms at 4K cold), within design/27 §13's 50 ms. Bounded per job: at most
+  `UNIT_WAIT_MS` (1 s) of making; the rest draw as their legacy copies this time and the next job of the slide
+  goes on. A job cancelled meanwhile keeps nothing of a half-made unit.
+- **Unit cache** (`unitCache`, one per asset worker): 192 MiB (the owner's figure for all units; effect units
+  extend it, never a second cache), least recently used first, keyed by what a unit draws (`unitKey`: its drawn
+  fields with its geometry file's hash, never its id; scale, origin and cut; `UNIT_VERSION`). The asset worker
+  pins a slide job's units from its prepare step to its raster and keeps them pinned while that job is its
+  layer's last of its role (live, armed), and a warm job's until the next warm job (`holdUnits`, `keepUnits`):
+  the live, armed and warmed cues hold at most three frames (100 MB at 4K).
+- **When they are made.** An armed or warmed cue's units are made by its slide or warm job, so its GO does no
+  unit work and never waits. A jump (a cue neither armed nor warmed) waits for its units in its own job, as
+  for its table layouts, within the bounds above: the leaf template's first slide (one unit of 10.7 MiB at 4K)
+  arms cold within 0.5 s at 4K, its pictures, its units and its first draw in 245 ms at 3840 and 195 ms at 1920
+  (the fidelity harness's cold time, median of five on the bench machine; design/23). Effect units (M9 r2b)
+  replace that wait: a GO never waits, the slide shows at once and a late unit fades in (about 0.3 s, the
+  owner's call). Until then the jump's wait is a GO that waits, so that item (effect units item 5) is a must item
+  before the follow-up PR merges (r2a repair).
+- **Thumbnails.** The operator's thumbnail worker runs the same step, only when its page says the pointer is
+  fine (`init`, `lib/capabilities.ts` `coarsePointer`): a desktop's thumbnails draw the shapes whole, a phone or
+  tablet keeps the legacy copies and makes nothing. The editor canvas keeps the legacy copies (leaf-editor).
+<!-- /m9:geometry-units -->
 
 ## Frame loop
 

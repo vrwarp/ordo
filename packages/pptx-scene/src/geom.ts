@@ -57,6 +57,7 @@ import {
 } from '@ordo/renderer/geom/path.ts';
 import { parsePathData } from '@ordo/domain/pathdata.ts';
 import { type DrawnGeom, type DrawSpec, geomCost, slowGradient } from '@ordo/renderer/geom/cost.ts';
+import { evenOddArea } from '@ordo/renderer/geom/nesting.ts';
 import { type OutlineFields, outlineOf } from '@ordo/renderer/geom/outline.ts';
 import { apply, boxPx, decompose, multiply, xfrmAffine } from './frame.ts';
 import type { Affine, CustomPaths, Element, Fill, Frame, Line, RectEmu, Rgba, ShapeElement } from './ir.ts';
@@ -470,16 +471,40 @@ export function customPaths(
   const fx = (x: number) => (bw > 0 ? x / bw : 0);
   const fy = (y: number) => (bh > 0 ? y / bh : 0);
   const g = { w: bw * s, h: bh * s, paths: drawn };
+  // What its legacy shape is chosen by (`emit.ts`), for a geometry drawn natively.
+  const ink = over ? undefined : inkOf(g);
   return {
     paths: out,
     points,
     fillCost: geomCost(drawn),
     cost: rate(g),
+    ...(ink !== undefined ? { ink } : {}),
     text: [fx(atBox.text.l), fy(atBox.text.t), fx(atBox.text.r), fy(atBox.text.b)],
     sites: atBox.sites.map((p) => ({ x: fx(p.x), y: fy(p.y), angle: p.angle })),
     ...(over ? { over: true } : {}),
     notes,
   };
+}
+
+/**
+ * The share of its box a built geometry fills (`CustomPaths.ink`): the even-odd area of each filled path
+ * (renderer `nesting.ts` `evenOddArea`: sub-paths signed by their nesting, holes taken away), summed and
+ * capped at 1, over the box. Undefined when a path's nesting is past the renderer's bounds
+ * (`UNION_NESTING_LIMIT`, `UNION_NESTING_WORK`), a point is not a number or the box has no area; 0 when no
+ * path is filled.
+ */
+export function inkOf(g: { w: number; h: number; paths: readonly GeomPath[] }): number | undefined {
+  const box = g.w * g.h;
+  if (!(box > 0) || !Number.isFinite(box)) return undefined;
+  let area = 0;
+  for (const p of g.paths) {
+    if (p.fill === 'none') continue;
+    const a = evenOddArea(p);
+    if (a === undefined) return undefined;
+    area += a;
+  }
+  const share = area / box;
+  return Number.isFinite(share) ? Math.min(1, share) : undefined;
 }
 
 /** A built path's points as the render clamp counts them: each coordinate pair, and each close. */

@@ -10,9 +10,16 @@
  *
  * A regression fails the run: a slide whose class or hub class got worse (native < hybrid < picture), a shown
  * slide that is gone, a deck of the baseline that is missing from the corpus or that the converter can no
- * longer read. Everything else is reported and passes: a better class (record it with --write, so it cannot
- * slip back), other reasons on the same class, a deck or slide the baseline does not have yet. The census
- * itself prints nothing of the decks; this report names decks and slide numbers only (the corpus is public).
+ * longer read, and (M9 leaf-legacy, baseline or not) a slide with a legacy fill over line art (`legacyFills`:
+ * a filled legacy rect or ellipse over a built custom geometry that fills under half its box, the box every
+ * drawer without a geometry unit would draw). Everything else is reported and passes: a better class (record
+ * it with --write, so it cannot slip back), other reasons on the same class, another count of objects the slide
+ * budget draws as their legacy shapes (`budgetLegacy`, version 2), a deck or slide the baseline does not have
+ * yet. The census itself prints nothing of the decks; this report names decks and slide numbers only (the
+ * corpus is public).
+ *
+ * Baseline version 2 adds each slide's `budgetLegacy` (0 when none) as a fifth entry; a version 1 baseline
+ * (four entries a slide) still reads, without that comparison, and `--write` records version 2.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -23,10 +30,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../..');
 
 export type SlideClass = 'native' | 'hybrid' | 'picture';
-/** One shown slide in the baseline: its shown number, class, hub class and reasons (sorted). */
-export type BaselineSlide = [n: number, cls: SlideClass, hub: SlideClass, reasons: string[]];
+/**
+ * One shown slide in the baseline: its shown number, class, hub class and reasons (sorted), and since version 2
+ * the objects the slide budget draws as their legacy shapes (`census.ts` `budgetLegacy`).
+ */
+export type BaselineSlide =
+  | [n: number, cls: SlideClass, hub: SlideClass, reasons: string[]]
+  | [n: number, cls: SlideClass, hub: SlideClass, reasons: string[], budgetLegacy: number];
 export type Baseline = {
-  version: 1;
+  version: 1 | 2;
   /** What the baseline was recorded from (for the reader; not compared). */
   note: string;
   decks: Record<string, BaselineSlide[]>;
@@ -37,15 +49,24 @@ export type CensusLine = {
   name: string;
   error?: string;
   unreadable?: string;
-  slides?: { n: number; class: SlideClass; hub: SlideClass; reasons: string[] }[];
+  slides?: {
+    n: number;
+    class: SlideClass;
+    hub: SlideClass;
+    reasons: string[];
+    budgetLegacy?: number;
+    legacyFills?: number;
+    unitsLeft?: number;
+    unitsAlone?: number;
+  }[];
 };
 
 const RANK: Record<SlideClass, number> = { native: 0, hybrid: 1, picture: 2 };
 const rank = (c: string): number => RANK[c as SlideClass] ?? 3;
 
-/** The baseline entries of one census line (slides in shown order, reasons sorted). */
+/** The baseline entries of one census line (version 2: slides in shown order, reasons sorted). */
 export function baselineOf(line: CensusLine): BaselineSlide[] {
-  return (line.slides ?? []).map((s) => [s.n, s.class, s.hub, [...s.reasons].sort()]);
+  return (line.slides ?? []).map((s) => [s.n, s.class, s.hub, [...s.reasons].sort(), s.budgetLegacy ?? 0]);
 }
 
 export type RatchetResult = {
@@ -75,14 +96,14 @@ export function compareCensus(baseline: Baseline, census: readonly CensusLine[])
     }
     out.decks++;
     const got = new Map(baselineOf(line).map((s) => [s[0], s] as const));
-    for (const [n, cls, hub, reasons] of want) {
+    for (const [n, cls, hub, reasons, legacy] of want) {
       const s = got.get(n);
       if (!s) {
         out.failures.push(`${deck} slide ${n}: no longer a shown slide`);
         continue;
       }
       out.slides++;
-      const [, cls2, hub2, reasons2] = s;
+      const [, cls2, hub2, reasons2, legacy2] = s;
       if (rank(cls2) > rank(cls))
         out.failures.push(`${deck} slide ${n}: ${cls} -> ${cls2} (${reasons2.join(', ')})`);
       else if (rank(hub2) > rank(hub))
@@ -93,12 +114,33 @@ export function compareCensus(baseline: Baseline, census: readonly CensusLine[])
         out.notes.push(
           `${deck} slide ${n}: reasons ${reasons.join(', ') || '-'} -> ${reasons2.join(', ') || '-'}`,
         );
+      // Version 2: what the slide budget draws as legacy shapes (geometry units on outputs) is reported.
+      if (legacy !== undefined && legacy2 !== legacy)
+        out.notes.push(`${deck} slide ${n}: legacy shapes past the drawing budget ${legacy} -> ${legacy2}`);
       got.delete(n);
     }
     for (const n of got.keys()) out.notes.push(`${deck} slide ${n}: new shown slide (not in the baseline)`);
   }
   for (const line of census)
     if (!(line.name in baseline.decks)) out.notes.push(`${line.name}: new deck (not in the baseline)`);
+  // A legacy fill over line art fails wherever it is, in the baseline or not; so does an object past the
+  // drawing budget alone (no geometry unit: outputs draw its legacy shape, nothing for thin line art). Other
+  // objects outputs draw as their legacy shapes are reported (effect-units gives them units).
+  for (const line of census)
+    for (const s of line.slides ?? []) {
+      if (s.legacyFills)
+        out.failures.push(
+          `${line.name} slide ${s.n}: ${s.legacyFills} legacy fill(s) over custom geometry filling under half its box (a rect or ellipse where the legacy shape must be a line)`,
+        );
+      if (s.unitsAlone)
+        out.failures.push(
+          `${line.name} slide ${s.n}: ${s.unitsAlone} object(s) past the drawing budget alone, with no geometry unit (outputs draw the legacy shape)`,
+        );
+      else if (s.unitsLeft)
+        out.notes.push(
+          `${line.name} slide ${s.n}: ${s.unitsLeft} object(s) past the drawing budget outputs draw as legacy shapes (no unit until effect units)`,
+        );
+    }
   return out;
 }
 
@@ -107,7 +149,7 @@ export function recordBaseline(census: readonly CensusLine[], note: string): Bas
   const decks: Record<string, BaselineSlide[]> = {};
   for (const line of [...census].sort((a, b) => a.name.localeCompare(b.name)))
     if (!line.error && !line.unreadable) decks[line.name] = baselineOf(line);
-  return { version: 1, note, decks };
+  return { version: 2, note, decks };
 }
 
 /** The baseline as JSON: one slide a line, so a change reads as a one-line diff. */
@@ -116,7 +158,7 @@ export function baselineJson(b: Baseline): string {
     ([name, slides]) =>
       `    ${JSON.stringify(name)}: [${slides.length ? '\n' : ''}${slides.map((s) => `      ${JSON.stringify(s)}`).join(',\n')}${slides.length ? '\n    ' : ''}]`,
   );
-  return `{\n  "version": 1,\n  "note": ${JSON.stringify(b.note)},\n  "decks": {\n${decks.join(',\n')}\n  }\n}\n`;
+  return `{\n  "version": ${b.version},\n  "note": ${JSON.stringify(b.note)},\n  "decks": {\n${decks.join(',\n')}\n  }\n}\n`;
 }
 
 type Args = { corpus: string; baseline: string; out: string; write: boolean };

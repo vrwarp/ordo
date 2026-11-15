@@ -23,11 +23,12 @@ import { errorMessage, notFound } from './errors.ts';
 import { outputFonts } from './fonts/bundled.ts';
 import { FontService } from './fonts/service.ts';
 import { venueTimeZone } from './hub.ts';
-import { createHttpApp, HEADER_INTERNAL, HEADER_LIBRARY_SEQ, withTimeout } from './http.ts';
+import { createHttpApp, HEADER_INTERNAL, HEADER_LIBRARY_SEQ, type RouteInfo, withTimeout } from './http.ts';
 import { ImportService } from './imports.ts';
 import type { LocksMsg, ProcessStatus } from './ipc.ts';
 import { JobQueue } from './jobs.ts';
-import { type Change, Library } from './library.ts';
+import { JobPacing } from './pacing.ts';
+import { type Change, Library, phonesSwitch } from './library.ts';
 import { type LibraryStats, LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
@@ -79,9 +80,12 @@ const STATS_DELAY_MS = 3000;
 
 export type LibraryProcess = {
   app: FastifyInstance;
+  /** Every route with its access role and lowest cap (phones-routes.test.ts). */
+  routes: RouteInfo[];
   cfg: HubConfig;
   db: DB;
   lib: Library;
+  jobs: JobQueue;
   log: Logger;
   url: string;
   /** Apply the live process's locks (relayed by the supervisor). */
@@ -98,6 +102,12 @@ export async function createLibraryProcess(
     onChanges?: (changes: Change[], seq: number) => void;
     /** The library's size for hub health (design/27 §3.4): at start, then after changes, every few seconds. */
     onStats?: (s: LibraryStats) => void;
+    /**
+     * The live service's locks as last reported (ORDO_LIVE_LOCKS, set by the supervisor for a restarted
+     * library): applied before the job queue starts, so a library restarted during a service holds the
+     * heavy jobs it holds (design/28 §5.3) instead of relaunching one that was interrupted.
+     */
+    initialLocks?: LocksMsg;
   },
 ): Promise<LibraryProcess> {
   const cfg: HubConfig = { ...loadConfig(process.env), ...overrides };
@@ -111,7 +121,19 @@ export async function createLibraryProcess(
   await store.init();
   const auth = new Auth(db, lib, log);
   if (cfg.devPin) await auth.devSetup(cfg.devPin);
-  const jobs = new JobQueue(db, log, cfg.jobs, (job) => lib.emit([{ kind: 'job', id: job.id, entity: job }]));
+  const phones = phonesSwitch(lib);
+  const pacing = new JobPacing({ graceMs: cfg.paceGraceMs, enabled: phones.enabled() });
+  const jobs = new JobQueue(
+    db,
+    log,
+    cfg.jobs,
+    (job) => lib.emit([{ kind: 'job', id: job.id, entity: job }]),
+    {
+      pacing,
+      notifyMany: (all) => lib.emit(all.map((job) => ({ kind: 'job' as const, id: job.id, entity: job }))),
+    },
+  );
+  phones.onChange((on) => jobs.setPhones(on));
   const media = new MediaService(lib, store, jobs, cfg, log);
   const fonts = new FontService(lib, store, jobs, cfg, log);
   const imports = new ImportService(lib, store, jobs, media, cfg, log, (id) =>
@@ -121,8 +143,19 @@ export async function createLibraryProcess(
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
 
   // The live service's locks, as last reported (idle until the live process says otherwise).
-  let locks: LocksMsg = { t: 'locks', mode: 'idle', presentations: [], media: [] };
-  let lockSets = { presentations: new Set<string>(), media: new Set<string>() };
+  let locks: LocksMsg = opts.initialLocks ?? {
+    t: 'locks',
+    mode: 'idle',
+    presentations: [],
+    media: [],
+    fonts: [],
+  };
+  const setsOf = (m: LocksMsg) => ({
+    presentations: new Set(m.presentations),
+    media: new Set(m.media),
+    fonts: new Set(Array.isArray(m.fonts) ? m.fonts : []),
+  });
+  let lockSets = setsOf(locks);
   const liveView: LiveView = {
     locks: () => ({ playlistId: locks.playlistId, ...lockSets }),
     mode: () => locks.mode,
@@ -131,7 +164,13 @@ export async function createLibraryProcess(
   const libStats = new LibraryStatsCache(lib, log, { minIntervalMs: 0 });
   let status: ProcessStatus[] = [];
 
-  const http = await createHttpApp({ cfg, log, auth: () => auth, behindLiveProxy: { secret: opts.secret } });
+  const http = await createHttpApp({
+    cfg,
+    log,
+    auth: () => auth,
+    behindLiveProxy: { secret: opts.secret },
+    phonesEnabled: phones.enabled,
+  });
   const app = http.app;
   const ctx: LibraryApiCtx = {
     cfg,
@@ -178,7 +217,7 @@ export async function createLibraryProcess(
   });
 
   const route = (url: string, handler: RouteHandlerMethod) =>
-    app.route({ method: 'GET', url, config: { access: 'public' }, handler });
+    app.route({ method: 'GET', url, config: { access: 'public', cap: 'full' }, handler });
   route('/internal/context', async () => {
     const settings = lib.getSettings();
     const logoId = settings.general.logoMediaId;
@@ -253,6 +292,7 @@ export async function createLibraryProcess(
   await cleanupStaleUploads({ lib, store, cfg }).catch((e) =>
     log.warn({ err: errorMessage(e) }, 'upload cleanup failed'),
   );
+  jobs.onLiveMode(locks.mode);
   jobs.start();
   if (cfg.scheduleBackups) backups.schedule();
   // Loopback only, on a port of the OS's choosing: the live process is the only way in.
@@ -264,14 +304,17 @@ export async function createLibraryProcess(
 
   return {
     app,
+    routes: http.routes,
     cfg,
     db,
     lib,
+    jobs,
     log,
     url,
     setLocks(m) {
       locks = m;
-      lockSets = { presentations: new Set(m.presentations), media: new Set(m.media) };
+      lockSets = setsOf(m);
+      jobs.onLiveMode(m.mode);
     },
     setLiveUrl(u) {
       liveUrl = u;

@@ -1,8 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { SONG, json } from './helpers.ts';
 import { HubProcess } from './hubproc.ts';
+import { portOf } from './ports.ts';
 
-const PORT = 8095;
+const PORT = portOf('playlist-continuous-scroll');
 const op = `http://op.localhost:${PORT}`;
 
 const SONG2 = `Second Test Song

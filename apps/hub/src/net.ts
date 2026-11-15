@@ -61,6 +61,41 @@ export const PRIVATE_NETS = [
   'fe80::/10',
 ];
 
+/**
+ * A request's `Origin` against the host it addressed (design/28 §4): absent (a same-origin GET, a tool), the
+ * request's own host, or the venue domain or one of its role hosts (`op.`, `outN.`, `stage.`). Anything else,
+ * `null` included, is refused. The WebSocket upgrade's rule since M1, now also every API write's.
+ */
+export function originAllowed(origin: string | undefined, host: string, domain: string): boolean {
+  if (!origin) return true;
+  let h: string;
+  let hostname: string;
+  try {
+    const u = new URL(origin);
+    h = u.host.toLowerCase();
+    hostname = u.hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (h === host.toLowerCase()) return true;
+  const d = domain.toLowerCase();
+  return hostname === d || hostname.endsWith(`.${d}`);
+}
+
+/**
+ * A LAN or loopback address (design/28 §4): 10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, ::1, fc00::/7 and
+ * fe80::/10, an IPv4-mapped IPv6 address read as its IPv4. Carrier-grade NAT (100.64/10) is a public address.
+ * These leave the hub-wide PIN bucket; the per-address bucket still holds them.
+ */
+export function isPrivateAddress(ip: string): boolean {
+  const a = normaliseIp(ip.trim());
+  if (isIPv4(a)) return LAN_V4.some((c) => ipInCidr(a, c));
+  if (isIPv6(a)) return LAN_V6.some((c) => ipInCidr(a, c));
+  return false;
+}
+const LAN_V4 = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '127.0.0.0/8', '169.254.0.0/16'];
+const LAN_V6 = ['::1/128', 'fc00::/7', 'fe80::/10'];
+
 /** Hostname of a Host header value: lower-cased, port and IPv6 brackets removed. */
 export function hostnameOf(host: string): string {
   const h = host.trim().toLowerCase();

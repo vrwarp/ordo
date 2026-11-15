@@ -43,8 +43,8 @@ export type { Bounds } from './geom/bounds.ts';
 /** Device pixels of one effect sprite at most (the 16 MP of a prepared picture). */
 export const EFFECT_MAX_PIXELS = 16_000_000;
 /**
- * Bytes of cached sprites (design/27 §7.5: ≤ 64 MiB): the budget of the sprite cache, which the effect sprites
- * share with every other kind (`spritecache.ts`).
+ * Bytes of cached sprites (design/27 §7.5: 64 MiB): the sprite cache's budget at least, which a large frame
+ * raises (`spritecache.ts`), shared by the effect sprites with every other kind.
  */
 export const EFFECT_CACHE_BYTES = SPRITE_CACHE_BYTES;
 /** σ of a stack blur of radius r, over r (a triangular kernel's √(r²/6)). */

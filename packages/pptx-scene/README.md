@@ -770,10 +770,25 @@ whether.
   (`3d:flat-in-decoration`, plan decision 6: otherwise 3-D never joins a decoration, and `shapeRuns` merges
   3-D shapes only with an equal 3-D XML digest, `classify.ts` `threeDigest`, and disjoint boxes). A slide whose
   objects left are text or unmergeable keeps up to 190 (`MAX_SLIDE_OBJECTS_TEXT`); past that the **guard**
-  leaves the topmost elements without text out (then text) until 200, the render clamp
-  (`Classification.missing`, class hybrid, `missing:<kind>`; never reached in the corpus). Past 12 distinct
+  leaves the topmost elements without text out (then text) until 200, the render clamp. Past 12 distinct
   pictures an **atlas** packs the fewest smallest into one sheet, each object keeping its box and showing its
-  cell through its crop (`Classification.atlas`, `sheet.ts` `atlasSlide`).
+  cell through its crop (`Classification.atlas`, `sheet.ts` `atlasSlide`); without sheets, or past what an
+  atlas holds, the topmost pictures past the clamp's 16 are left out the guard's way.
+- **The guard per kind of hub** (`lo-forms`, the owner's decision of 2026-11-13; `BudgetOptions.libreoffice`,
+  from `ParseOptions.libreoffice`, the same flag as `EmitOptions.libreoffice`): the guard is the render
+  clamp's count, never slowness. **With LibreOffice** (the default) what it leaves out goes to LibreOffice's
+  art, as at M9 wave 1: each element is made residual for its budget (`budget:shapes` for the guard's,
+  `budget:pictures` for the pictures past the clamp; `budget.ts` `toArt`, `sentToArt`), emits nothing in
+  version 1 (`emit.ts` `pastBudget`), and the art draws exactly those elements (with a kept element between
+  them that one of them covers, as for any art, and a SmartArt drawing it touches whole, `wholeDiagrams`;
+  `EmittedSlide.art`, the left-out text in `art.text`); so that
+  the art itself is drawn, the guard keeps one of the clamp's objects for it, and without sheets one of its
+  pictures when the slide had no art (the slide is classed hybrid, `art:budget:shapes` /
+  `art:budget:pictures`, nothing missing). **Without LibreOffice** it is culled as `budget` and listed
+  (`Classification.missing`, class hybrid, `missing:decoration` for shapes and pictures, `missing:element`
+  for text, tables and charts; `leftKinds`), as before. Parse and emit a deck with the same flag (the
+  harness's census parses a deck twice where the guard gave elements to the art). On E's worship slides the
+  guard is reached on 16 (5 stored in full, 11 over 64 KB that a hub with LibreOffice keeps as its page).
 - **A decoration draws what the separate shapes draw** (`emitDecor`): each member is emitted by the
   single-shape emitter, then its geometry built at its box as the renderer builds it, placed (flips, rotation)
   into the decoration's space (its box in logical px); a member's parts start with `s: 1`; its look is a paint
@@ -785,7 +800,7 @@ whether.
   `decor-render` draws decorations) no decoration is planned at all, and with `sheets: false` (theirs until it
   stores sheets) no composite or atlas: `ParseOptions.m9Writes` and `sheets` reach the budgets
   (`BudgetOptions`), every member and picture is its own object, and the guard leaves the topmost past 190
-  objects or the render clamp's 16 pictures out and lists them.
+  objects or the render clamp's 16 pictures out: LibreOffice's art with it, listed without it (above).
 - **Kept whole** (the wave 1 re-review): `emit.ts` `fitDrawing` and `fitEffects` no longer flatten an object
   past the slide's drawing or effect budget to its legacy copy (its gradient, geometry, dash, ends and effects
   stay, so the editor still edits it and a radial glow stays a glow); `walk.ts` no longer sends a shape past
@@ -798,7 +813,8 @@ whether.
 - **The A/B** (`ParseOptions.budgetArt`, the harness only): M6's and M9 wave 1's budgets (`fitTables`,
   `wholeDiagrams`' budget step, `fit3d`, `fitShapes`, picture class past a budget), kept for comparison.
 - Tests: `budget.test.ts` (culling by the slide area, reach, media and SmartArt kept, steps in order, nothing
-  to the art, the text ceiling and the guard, a property test of 40 random slides of up to 2,000 elements,
+  to the art, the text ceiling and the guard on both kinds of hub, a property test of 40 random slides of up
+  to 2,000 elements on both,
   3-D merges and 3-D drawn flat in decorations), `decor.test.ts` (who joins, scopes, caps, skipped pictures,
   geometry and paint equal to the separate shapes', chains, files, plates), `sheet.test.ts` (composite runs and
   cells, turns, one recipe a deck, the atlas and its crops, `applySheet`, `checkSheet`), and the M6 budget
@@ -1002,7 +1018,10 @@ Done (design/27 §4, §15 M1):
   anywhere: footers not drawn, others the whole slide; empty slide placeholders (prompt text only) not drawn.
 - Run style through the whole chain (own rPr, shape lstStyle, layout and master placeholder lstStyles,
   `p:style/a:fontRef` colour and major/minor font, master txStyles for placeholders, `defaultTextStyle` for
-  everything else, never otherStyle): size, fill, bold, italic, underline, strike, caps, spacing, baseline,
+  everything else, never otherStyle): size, fill (the nearest decides; a picture or group fill gives the
+  text colour tx1, as no fill does, marked `textFill` and noted once a slide), bold, italic, underline,
+  strike, caps, spacing, baseline (the nearest, 0 included; a 0 under a farther non-zero one is
+  `escZero`, which LibreOffice reads as unset: `loCompat` writes that shift, design/27 §4 "Baseline 0"),
   Latin/EA/CS/sym typefaces through the theme (+mj for titles, +mn otherwise), outline (`a:ln`), outer
   shadow, highlight, lang. Paragraphs: algn, level, marL/indent, rtl, spcBef/spcAft/lnSpc, the nearest
   bullet setting (buNone wins). Bodies: insets, anchor, wrap, normAutofit/spAutoFit, vert, numCol,
@@ -1063,7 +1082,7 @@ Done (design/27 §3.1, §3.2, §4 "Text bodies", §6, §11 "Mapping"):
 - **Runs**: whatever differs from the box, merged while unchanged: family per script (a run's Latin,
   East Asian or complex-script typeface by LibreOffice's block table, weak characters taking the script
   before them), weight, slant, `sizeScale`, colour (gradient as its first stop until M6, hollow text
-  transparent), highlight, underline, strike, caps, letter spacing, `baseline`, outline and shadow (null
+  transparent, picture-filled text in the text colour with its outline), highlight, underline, strike, caps, letter spacing, `baseline`, outline and shadow (null
   where only the box has one), language (primary subtag). The '\n' ending an empty paragraph carries its end
   mark; the a:br before an empty last line carries the paragraph's end mark. Known limit: when the line
   before an empty last paragraph is empty too, its '\n' ends both and carries the last paragraph's end mark

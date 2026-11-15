@@ -1,10 +1,14 @@
 import { type APIRequestContext, type BrowserContext, expect, type Page, request } from '@playwright/test';
 import { SONG, shownSlideCue, waitCacheReady } from './helpers.ts';
+import { leftBusIn } from './linklog.ts';
 
 /** Shared steps for the operator-to-output link specs (items 1, 2 and 13 of the 2026-11-03 review). */
 
 export async function hubApi(port: number): Promise<APIRequestContext> {
-  const ctx = await request.newContext({ baseURL: `http://localhost:${port}/api/v1/` });
+  const ctx = await request.newContext({
+    baseURL: `http://localhost:${port}/api/v1/`,
+    extraHTTPHeaders: { 'x-ordo': '1' },
+  });
   expect((await ctx.post('auth/pin', { data: { pin: '246810' } })).ok()).toBe(true);
   return ctx;
 }
@@ -51,7 +55,12 @@ export function outputPages(context: BrowserContext): Page[] {
   return context.pages().filter((p) => !p.isClosed() && /\/\/out\d\.localhost/.test(p.url()));
 }
 
-/** Click Launch (or Relaunch) and wait for `n` output windows with their caches filled. */
+/**
+ * Click Launch (or Relaunch) and wait for `n` output windows with their caches filled. The click waits until the
+ * operator lists its outputs (the Program pane): the button shows as soon as the live view does, and a Launch
+ * before the library has come from the hub opens nothing (it says the library is still loading), as seen on a
+ * loaded machine.
+ */
 export async function launchOutputs(
   page: Page,
   context: BrowserContext,
@@ -59,6 +68,7 @@ export async function launchOutputs(
   button: 'Launch outputs' | 'Relaunch' = 'Launch outputs',
 ): Promise<Page[]> {
   const before = new Set(outputPages(context));
+  await expect(page.locator('.program .pv').first()).toBeVisible({ timeout: 20_000 });
   await page.getByRole('button', { name: button }).click();
   await expect
     .poll(() => outputPages(context).filter((p) => !before.has(p)).length, { timeout: 20_000 })
@@ -84,6 +94,22 @@ export async function busOf(p: Page): Promise<string> {
       () => (window as unknown as { __ordo?: { state(): { bus: string } } }).__ordo?.state().bus ?? '',
     )
     .catch(() => '');
+}
+
+/**
+ * When the window left its bus for none at or after `since` (epoch ms), by its own clock, and why: the first
+ * `bus: none (<reason>)` line of its link's recent log (`linklog.ts`). Undefined when it has not logged one
+ * (yet).
+ */
+export async function leftBusAt(p: Page, since: number): Promise<{ at: number; reason: string } | undefined> {
+  const log = await p
+    .evaluate(
+      () =>
+        (window as unknown as { __ordo?: { telemetry(): { recentLog?: string[] } } }).__ordo?.telemetry()
+          .recentLog ?? [],
+    )
+    .catch(() => [] as string[]);
+  return leftBusIn(log, since);
 }
 
 export async function go(page: Page): Promise<void> {

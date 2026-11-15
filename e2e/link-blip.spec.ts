@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { HubProcess } from './hubproc.ts';
+import { portOf } from './ports.ts';
 import { expectCue, go, hubApi, hubLive, launchOutputs, liveService, login } from './linkhelpers.ts';
 import { TcpProxy } from './tcpproxy.ts';
 
-const PROXY_PORT = 8382;
-const HUB_PORT = 8383;
+const PROXY_PORT = portOf('link-blip', 0);
+const HUB_PORT = portOf('link-blip', 1);
 const op = `http://op.localhost:${PROXY_PORT}`;
 
 /**

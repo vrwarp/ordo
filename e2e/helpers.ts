@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { type APIRequestContext, type BrowserContext, type Page, expect, request } from '@playwright/test';
+import { SHARED_PORT } from './ports.ts';
 
-export const PORT = Number(process.env.ORDO_E2E_PORT ?? 8090);
+export const PORT = SHARED_PORT;
 export const PIN = '246810';
 export const OP = `http://op.localhost:${PORT}`;
 export const outUrl = (k: number) => `http://out${k}.localhost:${PORT}`;
@@ -21,7 +22,10 @@ export type OutputRec = {
 
 /** An authenticated API client on the operator origin. */
 export async function operatorApi(): Promise<APIRequestContext> {
-  const api = await request.newContext({ baseURL: `http://localhost:${PORT}/api/v1/` });
+  const api = await request.newContext({
+    baseURL: `http://localhost:${PORT}/api/v1/`,
+    extraHTTPHeaders: { 'x-ordo': '1' },
+  });
   const r = await api.post('auth/pin', { data: { pin: PIN } });
   expect(r.ok(), await r.text()).toBe(true);
   return api;

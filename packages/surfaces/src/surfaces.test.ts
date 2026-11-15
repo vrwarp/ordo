@@ -71,6 +71,45 @@ function keydown(
 }
 
 describe('KeyboardDriver', () => {
+  it('acts on no key while blocked (a modal dialog is open); keys behind the dialog lose their default', () => {
+    const got: unknown[] = [];
+    let blocked = true;
+    const d = new KeyboardDriver(DEFAULT_KEYMAP, (a) => got.push(a), {
+      now: () => 0,
+      blocked: () => blocked,
+    });
+    const t = new FakeTarget();
+    d.attach(t as unknown as Window);
+    // In the dialog (`data-keys="off"`): left alone, default included (Space presses its focused button).
+    const inDialog = {
+      tagName: 'BUTTON',
+      isContentEditable: false,
+      closest: (s: string) => s === '[data-keys="off"]',
+    };
+    const press = (code: string, target: unknown) => {
+      const e = new Event('keydown', { cancelable: true });
+      Object.assign(e, { code, key: '', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false });
+      Object.assign(e, { repeat: false, isComposing: false });
+      Object.defineProperty(e, 'target', { value: target });
+      t.dispatchEvent(e);
+      return e;
+    };
+    for (const code of ['Space', 'Enter', 'PageDown', 'Escape', 'F2'])
+      expect(press(code, inDialog).defaultPrevented, code).toBe(false);
+    // Behind it (the focus on Clear all, on the page): nothing at all, its default included, for a key that
+    // would press or scroll a control or is a live key; other keys (Tab, a letter) keep theirs.
+    const behind = { tagName: 'BUTTON', isContentEditable: false, closest: () => null };
+    for (const code of ['Space', 'Enter', 'NumpadEnter', 'ArrowDown', 'PageDown', 'Home', 'F2', 'Escape'])
+      expect(press(code, behind).defaultPrevented, code).toBe(true);
+    for (const code of ['Tab', 'KeyQ']) expect(press(code, behind).defaultPrevented, code).toBe(false);
+    expect(keydown(t, 'Space').defaultPrevented).toBe(true);
+    expect(got).toEqual([]);
+    blocked = false;
+    expect(keydown(t, 'Space').defaultPrevented).toBe(true);
+    expect(got).toEqual([{ id: 'next' }]);
+    d.detach(t as unknown as Window);
+  });
+
   it('dispatches mapped actions and prevents default', () => {
     const got: Action[] = [];
     const d = new KeyboardDriver(DEFAULT_KEYMAP, (a, src) => {

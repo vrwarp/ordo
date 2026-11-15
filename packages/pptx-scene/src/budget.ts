@@ -1,9 +1,10 @@
 /**
  * The slide budgets (design/27 §5, §15 M9, `budget-decorations.md` §3.1, plan decision 3 step 1;
  * `decor-conv`): what keeps a slide within `MAX_SLIDE_OBJECTS` objects and `MAX_SLIDE_PICTURES` distinct
- * pictures while drawing all of it natively. Nothing goes to LibreOffice's art for a budget again, and nothing
- * is dropped because it is slow to draw (decisions.md "Slow-to-draw elements": the drawing budgets choose how
- * an element is drawn, plate or live, never whether).
+ * pictures while drawing all of it natively. Nothing goes to LibreOffice's art for a budget again but what the
+ * guard leaves out on a hub with LibreOffice (below), and nothing is dropped because it is slow to draw
+ * (decisions.md "Slow-to-draw elements": the drawing budgets choose how an element is drawn, plate or live,
+ * never whether).
  *
  * `fitBudgets` runs the reliefs in order, each after the first only while the slide is over the object
  * budget (`budgetCost`), stopping as soon as it fits; within a step the runs that save most go first:
@@ -21,18 +22,29 @@
  *    (`3d:flat-in-decoration`; plan decision 6);
  * 6. **the text ceiling**: a slide whose objects left are text or nothing a step can merge keeps up to
  *    `MAX_SLIDE_OBJECTS_TEXT` (190);
- * 7. **the guard** (never reached in the corpus): past that, the topmost elements that are not text are
+ * 7. **the guard** (rarely reached in the corpus): past that, the topmost elements that are not text are
  *    left out until at most 190 such objects and `MAX_DRAWN_OBJECTS` (200, the render clamp) in all remain,
- *    then the topmost text; what is left out is culled as `budget` and listed (`Classification.missing`);
+ *    then the topmost text;
  * P. **the atlas** (`sheet.ts` `atlasParts`): past `MAX_SLIDE_PICTURES` distinct pictures the fewest
  *    smallest are packed into one (`Classification.atlas`); a slide an atlas cannot bring within it leaves
  *    its topmost pictures out (the guard's way).
+ *
+ * What the guard and P leave out is the render clamp's count, never slowness (decisions.md 2026-11-07), and
+ * where it goes depends on the hub (`BudgetOptions.libreoffice`, the owner's decision of 2026-11-13):
+ * - **with LibreOffice** (the default) it goes to LibreOffice's art, as at M9 wave 1: each element is made
+ *   residual for its budget (`budget:shapes` for the guard's, `budget:pictures` for P's), version 1 emits
+ *   nothing for it (`emit.ts` `pastBudget`) and version 2's art draws exactly those elements (with whatever
+ *   kept element between them one of them covers, as for any art; `hybrid.ts`), the text of left-out text in
+ *   the art's text (`Slide.pptx.artText`, search). So that the art itself is drawn, the guard keeps room for
+ *   it: one of the clamp's objects, and without sheets one of its pictures when the slide had no art;
+ * - **without LibreOffice** it is culled as `budget` and listed (`Classification.missing`, `leftKinds`).
  *
  * Decorations and sheets are planned only when the importer stores them (`BudgetOptions`, from
  * `EmitOptions.m9Writes` 'decor' and `EmitOptions.sheets`; the hub and the client turn both off until
  * `decor-render` draws decorations and stores sheets): without decorations steps 3, 5 and 5' are skipped;
  * without sheets step 4 and the atlas are, and the picture budget is the render clamp's 16
- * (`MAX_DRAWN_PICTURES`). What the guard then leaves out is listed, never dropped without a word.
+ * (`MAX_DRAWN_PICTURES`). What the guard then leaves out is LibreOffice's art or listed, never dropped
+ * without a word.
  *
  * The budget halves of M6's art (`classify.ts` `fitTables`, `wholeDiagrams`' budget step, `fitShapes`,
  * M9 wave 1's `fit3d`) stay only behind `ParseOptions.budgetArt`, for the harness's A/B.
@@ -82,6 +94,12 @@ export interface BudgetOptions {
    * importer cannot resolve would drop without a word.
    */
   sheets?: boolean;
+  /**
+   * Whether LibreOffice draws what ordo leaves to it (`EmitOptions.libreoffice`, `ParseOptions.libreoffice`;
+   * default true, a hub with LibreOffice): what the guard and P leave out goes to its art
+   * (`budget:shapes`, `budget:pictures`), with room kept for the art. False: it is left out and listed.
+   */
+  libreoffice?: boolean;
 }
 
 /** What the budgets did to a slide (its notes say it; the census counts it). */
@@ -97,8 +115,10 @@ export interface BudgetPlan {
   flat3d: number;
   /** Picture parts packed into an atlas. */
   atlas: string[];
-  /** Elements the guard left out. */
+  /** Elements the guard left out and listed (without LibreOffice). */
   left: number;
+  /** Elements past the guard that LibreOffice's art draws instead (with LibreOffice). */
+  art: number;
   /** The slide's objects and distinct pictures once planned. */
   objects: number;
   pictures: number;
@@ -191,11 +211,22 @@ function ownObjects(e: Element): number {
 const hasText = (e: Element) => (e.kind === 'shape' && !!e.text) || e.kind === 'table';
 
 /**
+ * Whether a budget gave an element to LibreOffice's art (`toArt`, with LibreOffice; or the art A/B of
+ * `ParseOptions.budgetArt`): version 1 emits nothing for it (`emit.ts` `pastBudget`), the art draws it.
+ */
+export function sentToArt(e: Element): boolean {
+  return (
+    e.support === 'residual' && !!e.reasons?.some((r) => r === 'budget:shapes' || r === 'budget:pictures')
+  );
+}
+
+/**
  * What a slide costs as planned: its objects as version 1 draws them (the background one, a table or a chart
  * one, each run of merged shapes, each decoration and each composite one, and the elements of the art range
  * as themselves: version 1, and a hub without LibreOffice for good, draws them until the art replaces them,
- * which only lowers the count) and its distinct pictures (the background's, the art range's, the art one and
- * each composite one; the atlas's parts as one).
+ * which only lowers the count; not those a budget gave to the art, which version 1 never emits: `sentToArt`)
+ * and its distinct pictures (the background's, the art range's, the art one and each composite one; the
+ * atlas's parts as one).
  */
 export function budgetCost(
   elements: readonly Element[],
@@ -211,7 +242,7 @@ export function budgetCost(
   if (background.fill.kind !== 'none') objects++;
   if (background.fill.kind === 'picture') pictures.add(background.fill.picture.part);
   elements.forEach((e, i) => {
-    if (e.hidden || e.kind === 'residual') return;
+    if (e.hidden || e.kind === 'residual' || sentToArt(e)) return;
     if (inArt.has(i)) {
       // The art's elements that are not residual elements (and the stand-ins of residual text) are drawn by
       // version 1, and by a hub without LibreOffice for good, until the art replaces them: as themselves.
@@ -317,6 +348,7 @@ export function fitBudgets(
   const frame = ctx.frame;
   const decorations = opts.decorations !== false;
   const sheets = opts.sheets !== false;
+  const lo = opts.libreoffice !== false;
   const plan: BudgetPlan = {
     culled: { offSlide: 0, invisible: 0 },
     merged: { shapes: 0, objects: 0 },
@@ -325,6 +357,7 @@ export function fitBudgets(
     flat3d: 0,
     atlas: [],
     left: 0,
+    art: 0,
     objects: 0,
     pictures: 0,
   };
@@ -391,19 +424,29 @@ export function fitBudgets(
       if (objects > MAX_SLIDE_OBJECTS) markShapeRuns(elements, frame, inArt);
     }
   }
-  // 7: the guard. Elements that are not text first, topmost first; then text.
-  if (cost().objects > MAX_SLIDE_OBJECTS_TEXT) plan.left += guard(elements, background, art, inArt);
+  // What the guard and P leave out, with the budget each was past (LibreOffice's art draws it, or it is listed).
+  const leftOut = new Map<number, 'budget:shapes' | 'budget:pictures'>();
+  // 7: the guard. Elements that are not text first, topmost first; then text. With LibreOffice the art that
+  // draws what it leaves out is one more of the render clamp's objects.
+  if (cost().objects > MAX_SLIDE_OBJECTS_TEXT)
+    for (const i of guard(elements, background, art, inArt, lo ? 1 : 0)) leftOut.set(i, 'budget:shapes');
   // P: the atlas, then the guard's way for what it cannot hold. Without sheets, the guard's way past what the
-  // render clamp draws.
-  const pictures = cost().pictures;
+  // render clamp draws, where an art new on the slide is one more of its pictures.
   const pictureBudget = sheets ? MAX_SLIDE_PICTURES : MAX_DRAWN_PICTURES;
-  if (pictures > pictureBudget) {
+  const pictureRoom = lo && !sheets && !art ? 1 : 0;
+  const pictures = cost().pictures;
+  if (pictures > pictureBudget - (leftOut.size ? pictureRoom : 0)) {
     const keep = new Set<string>();
     if (background.fill.kind === 'picture') keep.add(background.fill.picture.part);
     if (sheets) plan.atlas = atlasParts(elements, frame, pictures, MAX_SLIDE_PICTURES, keep, inArt);
-    const left = cost().pictures - pictureBudget;
-    if (left > 0) plan.left += leavePictures(elements, inArt, [...plan.atlas, ...keep], left);
+    const over = cost().pictures - (pictureBudget - pictureRoom);
+    if (over > 0)
+      for (const i of leavePictures(elements, inArt, [...plan.atlas, ...keep], over))
+        leftOut.set(i, 'budget:pictures');
   }
+  // With LibreOffice what is left out is the art's, each for its budget; without it, culled and listed.
+  if (lo) for (const [i, reason] of leftOut) toArt(elements[i]!, reason);
+  plan[lo ? 'art' : 'left'] = leftOut.size;
   // The plan and its notes.
   const runs = (key: 'merge' | 'decor' | 'sheet') => {
     const by = new Map<number, number>();
@@ -431,6 +474,7 @@ export function fitBudgets(
   if (plan.atlas.length)
     ctx.log(`${plan.atlas.length} pictures are drawn from one picture (the slide's picture budget)`);
   if (plan.left) ctx.log(`${plan.left} element(s) past the slide's budgets are not drawn`);
+  if (plan.art) ctx.log(`${plan.art} element(s) past the slide's budgets: LibreOffice draws them`);
   return plan;
 }
 
@@ -438,6 +482,22 @@ export function fitBudgets(
 function leave(e: Element): void {
   e.culled = 'budget';
   e.hidden = true;
+}
+
+/**
+ * An element the guard left out, given to LibreOffice's art instead (with LibreOffice): shown again,
+ * residual for its budget (`reason`), and in no run of the budgets (its decoration, composite or merged shapes
+ * go with it whole: the guard and P leave runs out whole), so version 1 emits nothing for it (`emit.ts`
+ * `pastBudget`) and the art draws it.
+ */
+function toArt(e: Element, reason: 'budget:shapes' | 'budget:pictures'): void {
+  delete e.culled;
+  delete e.hidden;
+  delete e.decor;
+  delete e.sheet;
+  if (e.kind === 'shape') delete e.merge;
+  e.support = 'residual';
+  e.reasons = [...(e.reasons ?? []), reason];
 }
 
 /** The run an element is drawn in (a decoration, a composite, merged shapes), as a key, or undefined. */
@@ -452,14 +512,16 @@ function runOf(e: Element): string | undefined {
  * The guard (step 7): while the slide passes `MAX_DRAWN_OBJECTS` objects or its objects that hold no text
  * pass `MAX_SLIDE_OBJECTS_TEXT`, its topmost element without text is left out (a decoration, a composite
  * or a run of merged shapes whole); then, while it still passes `MAX_DRAWN_OBJECTS`, its topmost element.
- * Linear: the counts are kept as elements go. Returns how many elements were left out.
+ * Once anything is left out, `room` more objects are kept free (LibreOffice's art, which draws them).
+ * Linear: the counts are kept as elements go. Returns the elements left out.
  */
 function guard(
   elements: Element[],
   background: Background,
   art: ArtRange | undefined,
   inArt: ReadonlySet<number>,
-): number {
+  room: number,
+): number[] {
   // Each drawn unit (an element, or a run as one) with its objects and whether it holds text.
   type Unit = { members: number[]; objects: number; text: boolean; gone?: true };
   const units: Unit[] = [];
@@ -491,21 +553,20 @@ function guard(
     if (t) text++;
     units.push({ members: [i], objects: n, text: t });
   });
-  let left = 0;
+  const left: number[] = [];
+  const max = () => MAX_DRAWN_OBJECTS - (left.length ? room : 0);
   const drop = (u: Unit) => {
-    for (const i of u.members) leave(elements[i]!);
-    left += u.members.length;
+    for (const i of u.members) {
+      leave(elements[i]!);
+      left.push(i);
+    }
     all -= u.objects;
     if (u.text) text--;
     u.gone = true;
   };
-  for (
-    let k = units.length - 1;
-    k >= 0 && (all > MAX_DRAWN_OBJECTS || all - text > MAX_SLIDE_OBJECTS_TEXT);
-    k--
-  )
+  for (let k = units.length - 1; k >= 0 && (all > max() || all - text > MAX_SLIDE_OBJECTS_TEXT); k--)
     if (!units[k]!.text) drop(units[k]!);
-  for (let k = units.length - 1; k >= 0 && all > MAX_DRAWN_OBJECTS; k--) if (!units[k]!.gone) drop(units[k]!);
+  for (let k = units.length - 1; k >= 0 && all > max(); k--) if (!units[k]!.gone) drop(units[k]!);
   return left;
 }
 
@@ -513,14 +574,14 @@ function guard(
  * The pictures an atlas could not hold (`over` distinct pictures past `MAX_SLIDE_PICTURES`): the topmost
  * pictures are left out until that many distinct ones are no longer drawn: every use of a part that is not
  * the background's nor the atlas's (`kept`), or a composite whole (each is one picture). A clip's poster
- * never. Linear but for the sort of the pictures.
+ * never. Linear but for the sort of the pictures. Returns the elements left out.
  */
 function leavePictures(
   elements: Element[],
   inArt: ReadonlySet<number>,
   kept: readonly string[],
   over: number,
-): number {
+): number[] {
   const packed = new Set(kept);
   const units = new Map<string, number[]>();
   const posters = new Set<string>();
@@ -539,18 +600,19 @@ function leavePictures(
   const order = [...units]
     .filter(([key]) => !posters.has(key))
     .sort((p, q) => q[1][q[1].length - 1]! - p[1][p[1].length - 1]!);
-  let left = 0;
+  const left: number[] = [];
   for (const [, list] of order.slice(0, over))
     for (const i of list) {
       leave(elements[i]!);
-      left++;
+      left.push(i);
     }
   return left;
 }
 
 /**
- * What a hub records for the elements the guard left out (`Slide.pptx.missing` kinds): 'decoration' for
- * shapes and pictures, 'element' for text, tables and charts.
+ * What a hub without LibreOffice records for the elements the guard left out (`Slide.pptx.missing` kinds):
+ * 'decoration' for shapes and pictures, 'element' for text, tables and charts. With LibreOffice nothing is
+ * culled as `budget` (its art draws them), so this is empty.
  */
 export function leftKinds(elements: readonly Element[]): MissingKind[] {
   const kinds: MissingKind[] = [];

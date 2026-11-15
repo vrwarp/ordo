@@ -58,8 +58,8 @@ once (like a crash: no goodbyes), the library process stops its jobs (re-queued 
 
 **Routing** (`src/liveproc.ts`, `src/proxy.ts`): the live process listens on `ORDO_PORT` and answers
 itself `/ws`, `/api/v1/{live, live/summary, live/events, actions, cache/manifest, output/config, auth/me, health}`,
-`/api/v1/files/<hash>` for files it knows (the live playlist's media, geometry files and fonts, every font,
-the logo) and
+`/api/v1/files/<hash>` for files it knows (the live playlist's media, geometry and decoration files and
+fonts, every font, the logo) and
 every non-API path (the built apps). Everything else under `/api/v1` is streamed to the library process
 over loopback. We chose the live process as the front door rather than the supervisor so the supervisor
 stays free of network input, and rather than two DSM rules so the deployment is unchanged. The proxy is
@@ -85,9 +85,12 @@ the library only through `GET /internal/context` (all settings with tokens, font
 /internal/golive/<playlist>` (fetched when the operator goes live), and keeps the last copy of each in
 `live.db`, so a library outage blocks neither a reconnect nor a GO, and a goLive of a playlist fetched
 before still works. Library changes are applied in order: a batch touching the context (settings, fonts,
-the logo media) first refreshes the copy (bounded by the 1.5 s fetch timeout), and only then is the delta
-broadcast, so an output that refetches its config on the delta gets the new look. Outputs and the stage
-receive ids only, for settings, fonts and the logo. A context refresh that is not part of a delta (the
+and the media the settings name: the logo and the looks' holding images, `contextMediaIds`) first refreshes
+the copy (bounded by the 1.5 s fetch timeout), and only then is the delta broadcast, so an output that
+refetches its config on the delta gets the new look. Outputs and the stage receive ids only, for settings,
+fonts and those media. Any other media change (a photo upload: uploaded, processing, ready) neither
+refreshes the copy nor reaches the outputs (design/28 P0; before, every media change counted while no logo
+was set). A context refresh that is not part of a delta (the
 library came back; the first refresh after a live-process restart) sends outputs and the stage a
 settings-only delta so they refetch; they also refetch on every `welcome`.
 
@@ -124,33 +127,36 @@ that dies while working fails that task.
 ## HTTP API
 
 All under `https://hub.<venue>.synology.me/api/v1`. JSON bodies validated with the
-`packages/domain` schemas. Errors are `{ error: { code, message } }`.
+`packages/domain` schemas. Errors are `{ error: { code, message } }`. "Lowest cap" is the lowest session cap
+the route accepts (design/28 §3.2); a capped session below it gets 403 `cap`.
 
-| Method and path                                                                                                        | Role                                                 | Purpose                                                                                                                                                                                                                                                                      |
-| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /auth/pin`                                                                                                       | none                                                 | Exchange a PIN for a session cookie; returns the role                                                                                                                                                                                                                        |
-| `POST /auth/logout`                                                                                                    | any                                                  | End session                                                                                                                                                                                                                                                                  |
-| `GET /library/snapshot?since=<seq>`                                                                                    | edit, operate                                        | Full snapshot or deltas of presentations, playlists, media, fonts, themes, looks, outputs                                                                                                                                                                                    |
-| `GET                                                                                                                   | POST                                                 | PUT                                                                                                                                                                                                                                                                          | DELETE /presentations[/:id]` | edit | CRUD; PUT requires `rev` and returns 409 on mismatch |
-| `GET /presentations/:id/revisions`, `POST /presentations/:id/restore/:rev`                                             | edit                                                 | Version history                                                                                                                                                                                                                                                              |
-| `GET                                                                                                                   | POST                                                 | PUT                                                                                                                                                                                                                                                                          | DELETE /playlists[/:id]`     | edit | CRUD; live playlist returns 423 Locked on PUT        |
-| `POST /media` (multipart, resumable via `Upload-Offset`)                                                               | edit                                                 | Upload; returns media in `uploaded` state. An SVG may come with its still (part `raster`, see "Media pipeline"); a bad one is 400 `bad_raster`                                                                                                                               |
-| `GET /media/:id`, `PUT /media/:id`, `DELETE /media/:id`                                                                | edit                                                 | Metadata; `DELETE` of media that stored presentations or playlists use answers 409 `media_in_use` naming them (`presentations`, `playlists`), unless `?force=1`                                                                                                              |
-| `GET /files/:hash`                                                                                                     | output token or any role                             | Content-addressed file delivery with long cache headers and range support; an SVG as `Content-Disposition: attachment` (design/21)                                                                                                                                           |
-| `POST /fonts/upload`, `POST /fonts/google { family }`, `GET /fonts`                                                    | edit                                                 | Fonts                                                                                                                                                                                                                                                                        |
-| `POST /import/pro7` (zip or NAS path), `POST /import/songselect` (file or text), `POST /import/document` (pptx or pdf) | edit                                                 | Import jobs; return a job id. `document`: form field `renderer`, `native` by default (editable slides, `pptx-native`, design/27), `libreoffice` or `pptx-preview` (page pictures); native options `extendBackgrounds`, `transitionSounds` (`1`/`0`)                          |
-| `GET /jobs/:id`                                                                                                        | edit                                                 | Job state and log                                                                                                                                                                                                                                                            |
-| `POST /presentations/:id/pptx-reference`                                                                               | edit                                                 | 'Show PowerPoint picture': queues `pptx-reference` (design/27 §5); body `{ showPicture? }` (slide ids switched to the picture, ≤ 5,000; absent: all); 423 while live                                                                                                         |
-| `GET /presentations/:id/pptx-reimport`, `POST /presentations/:id/pptx-reimport`                                        | edit                                                 | 'Re-import from PowerPoint' (design/27 §11): `GET` answers the plan (each slide's kind and action, nothing written); `POST` queues `pptx-reimport` (202) with `{ slideIds?, reset?, keep? }` (strict, ≤ 5,000 ids each); 400 `no_pptx` without a stored deck, 423 while live |
-| `POST /presentations/:id/slides/:slideId/make-editable`                                                                | edit                                                 | 'Make editable' on an imported page: a legacy PowerPoint page whose deck is stored is rebuilt natively (202, the `pptx-reimport` job of that slide); any other page (a PDF, a deck gone) gets text boxes over its picture (200, the presentation); 423 while live            |
-| `GET                                                                                                                   | PUT /settings/{looks,outputs,audio,keymap,surfaces}` | operate                                                                                                                                                                                                                                                                      | Settings                     |
-| `POST /outputs/:id/token/rotate`                                                                                       | operate                                              | New output token                                                                                                                                                                                                                                                             |
-| `GET /live`                                                                                                            | operate, output                                      | Current live state (full)                                                                                                                                                                                                                                                    |
-| `GET /live/summary`                                                                                                    | edit, operate                                        | What an edit-profile device needs: `{ seq, mode, playlistId?, playlistName?, liveLabel?, lockedPresentationIds }` (no tokens, no full state; answered by the live process)                                                                                                   |
-| `POST /live/events`                                                                                                    | operate                                              | Submit live events over HTTP (used by surfaces' HTTP bridge and tests); WebSocket is the normal path                                                                                                                                                                         |
-| `GET /cache/manifest`                                                                                                  | operate, output                                      | The live service cache manifest                                                                                                                                                                                                                                              |
-| `GET /health`, `GET /diagnostics/export`                                                                               | operate                                              | Hub health; zip of logs, journal tail, settings                                                                                                                                                                                                                              |
-| `POST /backup/run`, `GET /backup/list`                                                                                 | operate                                              | Backups                                                                                                                                                                                                                                                                      |
+| Method and path                                                                                                        | Role                     | Lowest cap                                                  | Purpose                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/pin`                                                                                                       | none                     | view                                                        | Exchange a PIN for a session cookie; returns the role. `{ pin, remember?, cap? }`: with `cap` `light` or `view` (a phone, design/28 §3.2) the answer is `{ role: 'edit', cap }` whatever PIN matched, a one-hour capped session, never remembered (the device cookie is cleared); no `cap` or `full`: as before |
+| `GET /auth/me`                                                                                                         | none                     | view                                                        | `{ role, setupRequired, version, domain, cap?, caps }`: `cap` for a capped session; `caps` (`['full','light','view']`) signed in or not, absent from an older hub                                                                                                                                               |
+| `POST /auth/logout`                                                                                                    | any                      | view                                                        | End session                                                                                                                                                                                                                                                                                                     |
+| `GET /library/snapshot?since=<seq>`                                                                                    | edit, operate            | view                                                        | Full snapshot or deltas of presentations, playlists, media, fonts, themes, looks, outputs                                                                                                                                                                                                                       |
+| `GET`, `POST`, `PUT`, `DELETE /presentations[/:id]`                                                                    | edit                     | view (GET), light (POST, PUT), full (DELETE)                | CRUD; PUT requires `rev` and returns 409 on mismatch. A capped session's save (design/28 §3.2) is compared with the stored version per slide id when its `rev` matches: a change to `midiCues`, `pptx` or `source` is 403 `cap` with `field` and `slideId`                                                      |
+| `GET /presentations/:id/revisions`, `POST /presentations/:id/restore/:rev`                                             | edit                     | light                                                       | Version history                                                                                                                                                                                                                                                                                                 |
+| `GET`, `POST`, `PUT`, `DELETE /playlists[/:id]`                                                                        | edit                     | view (GET), light (POST, PUT), full (DELETE)                | CRUD; live playlist returns 423 Locked on PUT. A capped session's save is compared per item id when its `rev` matches: `keepBackground`, `audioMediaId`, `countdownTimer`, media items' `loop`, `onEnd`, `audio`, and action and timer items are 403 `cap` with `field` and `itemId`                            |
+| `POST /media` (multipart, resumable via `Upload-Offset`)                                                               | edit                     | light (with `POST`, `GET` and `PATCH /media/uploads[/:id]`) | Upload; returns media in `uploaded` state. An SVG may come with its still (part `raster`, see "Media pipeline"); a bad one is 400 `bad_raster`                                                                                                                                                                  |
+| `PUT /media/:id/still` (multipart, part `raster`)                                                                      | edit                     | light                                                       | An SVG's still sent after the SVG (the resumable upload carries none): checked as at upload; 409 when the SVG has one or its job runs, 400 `bad_raster`, 413 over 96 MB                                                                                                                                         |
+| `GET /media/:id`, `PUT /media/:id`, `DELETE /media/:id`                                                                | edit                     | view (GET), light (PUT; per field), full (DELETE)           | Metadata; `DELETE` of media that stored presentations or playlists use answers 409 `media_in_use` naming them (`presentations`, `playlists`), unless `?force=1`. From a capped session `PUT` changes name and tags only (`loop`, `isBackground`, `audio`: 403 `cap` with `field`)                               |
+| `GET /files/:hash`                                                                                                     | output token or any role | view                                                        | Content-addressed file delivery with long cache headers and range support; an SVG as `Content-Disposition: attachment` (design/21)                                                                                                                                                                              |
+| `POST /fonts/upload`, `POST /fonts/google { family }`, `GET /fonts`                                                    | edit                     | full (`GET /fonts`: view)                                   | Fonts. `DELETE /fonts/:id` of a face the live playlist draws with answers 423 "This font is used by the live playlist" (design/28 P0; the live process reports the frozen copy's font ids with its locks, as for media)                                                                                         |
+| `POST /import/pro7` (zip or NAS path), `POST /import/songselect` (file or text), `POST /import/document` (pptx or pdf) | edit                     | full                                                        | Import jobs; return a job id. `document`: form field `renderer`, `native` by default (editable slides, `pptx-native`, design/27), `libreoffice` or `pptx-preview` (page pictures); native options `extendBackgrounds`, `transitionSounds` (`1`/`0`)                                                             |
+| `GET /jobs/:id`                                                                                                        | edit                     | full                                                        | Job state and log                                                                                                                                                                                                                                                                                               |
+| `POST /presentations/:id/pptx-reference`                                                                               | edit                     | full                                                        | 'Show PowerPoint picture': queues `pptx-reference` (design/27 §5); body `{ showPicture? }` (slide ids switched to the picture, ≤ 5,000; absent: all); 423 while live                                                                                                                                            |
+| `GET /presentations/:id/pptx-reimport`, `POST /presentations/:id/pptx-reimport`                                        | edit                     | full                                                        | 'Re-import from PowerPoint' (design/27 §11): `GET` answers the plan (each slide's kind and action, nothing written); `POST` queues `pptx-reimport` (202) with `{ slideIds?, reset?, keep? }` (strict, ≤ 5,000 ids each); 400 `no_pptx` without a stored deck, 423 while live                                    |
+| `POST /presentations/:id/slides/:slideId/make-editable`                                                                | edit                     | full                                                        | 'Make editable' on an imported page: a legacy PowerPoint page whose deck is stored is rebuilt natively (202, the `pptx-reimport` job of that slide); any other page (a PDF, a deck gone) gets text boxes over its picture (200, the presentation); 423 while live                                               |
+| `GET`, `PUT /settings/{looks,outputs,audio,keymap,surfaces,phones}`                                                    | operate                  | view (GET), full (PUT)                                      | Settings; `GET` also for edit (outputs without tokens). `phones`: the Phones switch (design/28 P0), `{ enabled }`, off by default                                                                                                                                                                               |
+| `POST /outputs/:id/token/rotate`                                                                                       | operate                  | full                                                        | New output token                                                                                                                                                                                                                                                                                                |
+| `GET /live`                                                                                                            | operate, output          | full                                                        | Current live state (full)                                                                                                                                                                                                                                                                                       |
+| `GET /live/summary`                                                                                                    | edit, operate            | view (`liveLabel` left out below full)                      | What an edit-profile device needs: `{ seq, mode, playlistId?, playlistName?, liveLabel?, lockedPresentationIds }` (no tokens, no full state; answered by the live process)                                                                                                                                      |
+| `POST /live/events`                                                                                                    | operate                  | full                                                        | Submit live events over HTTP (used by surfaces' HTTP bridge and tests); WebSocket is the normal path                                                                                                                                                                                                            |
+| `GET /cache/manifest`                                                                                                  | operate, output          | full                                                        | The live service cache manifest                                                                                                                                                                                                                                                                                 |
+| `GET /health`, `GET /diagnostics/export`                                                                               | operate                  | view (`/health`), full (`/diagnostics/export`)              | Hub health; zip of logs, journal tail, settings                                                                                                                                                                                                                                                                 |
+| `POST /backup/run`, `GET /backup/list`                                                                                 | operate                  | full                                                        | Backups                                                                                                                                                                                                                                                                                                         |
 
 <!-- m9:lo-detect -->
 _M9 (design/27, track `lo-detect`): LibreOffice is optional._ `GET /capabilities` (edit, operate) answers
@@ -173,6 +179,13 @@ stage) or `?token=` (outputs). Message schemas in `packages/protocol`
 
 Broadcast fan-out keeps per-socket queues; if an output's queue exceeds 100 messages the
 hub sends a full `live.state` instead of deltas and resets the queue.
+
+A library delta is serialised once (design/28 P0): operate sockets get the whole batch, edit sockets
+(capped ones included) the same string unless the batch carries the outputs with their tokens, when a
+second string without tokens is built for them; outputs and the stage get ids only, for what their config
+holds. Before P0 every batch was stringified twice on the live process's main thread (37 ms together for one
+4 MiB deck on the test machine); the bytes each socket receives are unchanged
+(`apps/hub/test/phones-broadcast.test.ts` compares them with the old code).
 
 Command validation on the hub (`live.ts`):
 
@@ -204,7 +217,8 @@ bounded, so the process exits within about 2 s even with a frozen client; `main.
 
 SQLite file at `/data/ordo.db`, WAL mode, `synchronous=NORMAL`. Tables: `presentations`,
 `presentation_revisions`, `playlists`, `media`, `files`, `fonts`, `themes`, `looks`,
-`outputs`, `settings`, `sessions`, `auth_attempts`, `jobs`, `job_attempts`, `library_changes`,
+`outputs`, `settings`, `sessions`, `capped_sessions`, `auth_attempts`, `auth_global_failures`, `jobs`,
+`job_attempts`, `library_changes`,
 `uploads`, `media_hashes` (the SHA-256 media hash index: imports find media with the same content without
 scanning `media`; its `content` rows are kept by triggers on `media`, its `source` rows record the deck
 part a prepared picture was made from, design/20 "Pictures of the native import"). Migrations with a
@@ -246,6 +260,23 @@ A single in-process job queue (one video job at a time, two light jobs concurren
 the NAS CPU is shared with other services). Jobs are persisted in `jobs` so a restart
 resumes them.
 
+**Jobs paced while live** (design/28 P0, `pacing.ts`, `jobs.ts`). A heavy job (video and animated-GIF
+transcodes, `document`, `pptx-lo`, `pptx-reference`) is held while a service is live and for
+`ORDO_PACE_GRACE_MS` (default 2 minutes) after End service: when **Phones** is on
+(`settings.phones.enabled`), every one; with it off, only those queued during a capped (phone) request or by a
+job that was (`job_paced`, migration 13: a media upload, a resumable upload's completion, the PowerPoint
+follow-up a save queues), so a phone never starts heavy work during a service. Held jobs are left out in SQL,
+so they never fill the queue's window and starve one that may run; a held job carries `waiting: 'service'` in
+its job changes and its media stays `uploaded`. A heavy job running at goLive that the rule now holds is
+stopped and queued again without counting an attempt (media back to `uploaded`; it starts again from the
+beginning after the service). While live no pacing timer runs; after End service one wakes the queue at the
+end of the grace (at most 2^31-1 ms ahead). With Phones on, light tools (stills, images, audio) run under
+`nice -n 19` with `-threads 1` while live. The library process applies the live locks before its queue
+starts (`ORDO_LIVE_LOCKS`), so a library restarted during a service keeps held jobs held. Each handler runs in
+its own job's scope, so a pump started inside a capped request never marks another session's jobs.
+`PACE_EXEMPT` (empty in P0) names a kind a running service needs. Phones off and no capped request: nothing
+is held, nothing niced, no timer.
+
 | Job                | Tool                                                                                                                                                                                                                                                                                                                                                                                                  | Output                                                                                    |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `probe`            | `ffprobe`                                                                                                                                                                                                                                                                                                                                                                                             | duration, dimensions, alpha, audio channels                                               |
@@ -268,13 +299,17 @@ resumes them.
 **SVG** (review 2026-11-13 R4, R5, R13). Outputs cannot decode an SVG (design/14 "Pictures that are SVGs"),
 so an SVG's delivery is a PNG still: the operator draws the SVG through an `<img>` into a canvas at
 `svgRasterSizeFor` (at least 1920 px on the longer side, at most 3840 wide and 16.7 MP) and posts it as part
-`raster` of `POST /media` (one SVG with one still; the resumable upload carries none). Before anything is
-stored the hub checks it by its header: a PNG within those caps, at most 96 MB, of the shape the SVG's root
+`raster` of `POST /media` (one SVG with one still). An SVG over 24 MB goes through the resumable upload,
+which carries the SVG alone; after its 201 the operator draws the still and sends it to
+`PUT /media/:id/still` (part `raster`), which stores it as the delivery only for an SVG that has none (409
+`has_still`; 409 `busy` while the item's job runs: the operator sends it again; 423 while the live playlist
+uses the item), emits the media delta and processes the item again. Before anything is
+stored the hub checks a still by its header: a PNG within those caps, at most 96 MB, of the shape the SVG's root
 element declares (`svgIntrinsicSize` reads `width`, `height` and `viewBox` of the root only: never a
 child's `stroke-width`, a percentage counts as none); anything else is 400 `bad_raster`. The media job
 decodes the still's header with `ffprobe` and drops one that lies about its pixels (logged; the file is
-released). An SVG without a still (a library from before, a client that could not draw it, one sent through the
-resumable upload, over 24 MB) keeps no delivery, and outputs draw it on their window, up to
+released). An SVG without a still (a library from before, which keeps the advice to upload it again; a
+client that could not draw it) keeps no delivery, and outputs draw it on their window, up to
 `SVG_SCREEN_MAX_BYTES` (2 MB; a larger one is not shown, and the operator says so where it is picked). The item's `width` and `height` are the still's, else
 `svgRasterSizeFor` with the browser's default 300x150 for an SVG that declares nothing. An animated SVG is
 a still on the screens (its first frame).
@@ -290,7 +325,8 @@ uploading browser parsed (`POST /import/document` part `clientScene`, design/27 
 parsed"): the route drops a `clientScene` part over 32 MB before it is stored, the pool task
 `pptx-client-scene` reads, parses and checks the stored scene off the event loop (`pptx/clientScene.ts`: a
 zod schema with a bound on every list, string and part name; this hub's `CONVERTER_VERSION`, `M9_WRITES` and
-LibreOffice state; every shape file checked again with `geomFileOf` and re-hashed), and any doubt about it
+LibreOffice state; every shape file checked again by its kind, `storedShapeFileOf`: a geometry file with
+`geomFileOf`, an M9 decoration file with `decorFileOf`, and re-hashed), and any doubt about it
 makes the hub parse the deck itself (the job's log says why); the scene file is released once version 1 is
 saved or the import fails. Steps 3-5 are the import core's in `@ordo/importers` (`pptx-core.ts`,
 `pptx-scan.ts`, `pptx-geoms.ts`, `pptx-pictures.ts`, `pptx-ladder.ts`), which the browser's parse and the Pages
@@ -355,12 +391,23 @@ of every script in the presentations' text, so CJK faces ship only with Han, Kan
 ## Auth
 
 - PIN hashes with Argon2id. Sessions in SQLite with role, device fingerprint
-  (user agent hash), expiry. Cookie `ordo_session`, `HttpOnly; Secure; SameSite=Lax;
-  Domain=.<venue>.synology.me` so one login covers the operator and stage origins.
+  (user agent hash), expiry. Cookie `ordo_session`, `HttpOnly; SameSite=Lax; Path=/`, `Secure` behind
+  https, host-only (no `Domain`; design 28 §4's correction of the earlier text). A capped session (design/28 §3.2, a phone's `cap: 'light'`) is a row of the side
+  table `capped_sessions` (migration 11): role `edit` whatever PIN matched, its cap (`light`, `view`), the PIN
+  that matched (`pin`: changing that PIN ends it, and changing the edit PIN ends every capped session), one hour
+  sliding, never remembered; expired rows are pruned at
+  the next capped sign-in. Every session lookup reads `sessions`, then `capped_sessions`, in both processes; a hub
+  downgraded past migration 11 never finds a capped cookie (401). The principal carries the cap (`full` for a
+  `sessions` row). Writes need a matching `Origin` when one is sent and the `x-ordo` header from capped sessions (and from
+  full ones once Phones is on), design/21 "Transport and headers".
 - Output tokens: 32 random bytes base64url, stored hashed, one per output, carried as
   `?token=` on the output URL and the WebSocket.
 - Rate limiter keyed by forwarded client IP for `/auth/pin`.
-- Role checks are route-level decorators; tests assert every route declares one.
+- Role checks are route-level decorators; tests assert every route declares one, and its lowest cap
+  (design/28 §3.2: `view`, `light` or `full`; `apps/hub/test/phones-routes.test.ts` holds the table). A
+  capped session's cap is checked before its role (403 `cap` with `need`), so a phone on an operate route is
+  told it is a phone; a route without a cap stops the process at startup and means `full` at run time. Full
+  sessions, tokens and anonymous callers are never checked against a cap.
 
 ## Backups
 
@@ -456,7 +503,12 @@ CPU-heavy parsing, 1 to 8, default 1), `ORDO_SINGLE_PROCESS=1` (one process inst
 supervisor and its two children; development and diagnosis), `ORDO_LOG_LEVEL`, and for
 development and tests only `ORDO_DEV_PIN` and `ORDO_APPS_DIR`. The supervisor sets
 `ORDO_INTERNAL_SECRET`, `ORDO_LIBRARY_URL`, `ORDO_LIVE_URL` and `ORDO_LIVE_LOCKS` for its
-children; they are not configuration. First run with no PINs serves a setup
+children; they are not configuration. `ORDO_PACE_GRACE_MS` (default 120000): how long held heavy jobs keep
+waiting after End service (design/28 P0, "Jobs paced while live" below). Settings that switch behaviour are settings, not environment
+variables (design/24): `settings.phones.enabled` ("Phones are used during services", Settings → PINs, off by
+default) makes the library process hold heavy jobs while a service is live and both processes need the
+`x-ordo` header on writes from signed-in full sessions (design/28 P0); each process caches it and follows the
+settings delta. First run with no PINs serves a setup
 page on the operator origin that sets both PINs; the setup page is disabled once PINs
 exist.
 

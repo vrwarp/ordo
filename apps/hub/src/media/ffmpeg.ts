@@ -44,7 +44,7 @@ function rate(s?: string): number | undefined {
 const IN_SAFE = ['-protocol_whitelist', 'file,pipe'];
 
 export async function probe(file: string, timeoutMs: number): Promise<ProbeInfo> {
-  const r = await run(
+  const r = await runTool(
     'ffprobe',
     ['-v', 'error', ...IN_SAFE, '-print_format', 'json', '-show_format', '-show_streams', file],
     { timeoutMs },
@@ -103,7 +103,22 @@ type TOpts = {
   signal?: AbortSignal;
   durationMs?: number;
   onProgress?: (f: number) => void;
+  /** Niceness of the tool (`run`'s `nice`; design/28 §5.3). */
+  nice?: number;
+  /** ffmpeg's thread count for the output (`-threads`); absent: ffmpeg's own choice. */
+  threads?: number;
 };
+
+/** `run`, with ffmpeg's `-threads` from the options (design/28 §5.3: one thread for light jobs while live). */
+function runTool(cmd: string, args: string[], o: Parameters<typeof run>[2] & { threads?: number }) {
+  return run(cmd, cmd === 'ffmpeg' ? withThreads(args, o.threads) : args, o);
+}
+
+/** An ffmpeg command line with `-threads n` before its output (the last argument), when asked. */
+export function withThreads(args: readonly string[], threads: number | undefined): string[] {
+  if (!threads || args.length === 0) return [...args];
+  return [...args.slice(0, -1), '-threads', String(threads), args[args.length - 1]!];
+}
 /** The kept part of a source, in its own timeline (Media.trim). */
 export type Trim = { startMs: number; endMs: number };
 const BASE = ['-hide_banner', '-nostdin', '-y', '-loglevel', 'error'];
@@ -129,7 +144,7 @@ export async function transcodeH264(
   vf.push('format=yuv420p');
   const audio =
     info.audio && !o.noAudio ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '256k', '-ac', '2'] : ['-an'];
-  await run(
+  await runTool(
     'ffmpeg',
     [
       ...BASE,
@@ -188,7 +203,7 @@ export async function transcodeVp9Alpha(
   vf.push('format=yuva420p');
   const audio =
     info.audio && !o.noAudio ? ['-map', '0:a:0', '-c:a', 'libopus', '-b:a', '192k', '-ac', '2'] : ['-an'];
-  await run(
+  await runTool(
     'ffmpeg',
     [
       ...BASE,
@@ -238,7 +253,7 @@ export async function transcodeVp9Alpha(
 export async function poster(input: string, output: string, info: ProbeInfo, o: TOpts): Promise<void> {
   const t = info.durationMs ? Math.min(1, info.durationMs / 2000) : 0;
   const dec = info.video?.codec_name === 'vp9' && info.video.hasAlpha ? ['-c:v', 'libvpx-vp9'] : [];
-  await run(
+  await runTool(
     'ffmpeg',
     [
       ...BASE,
@@ -262,7 +277,7 @@ export async function poster(input: string, output: string, info: ProbeInfo, o: 
 
 /** First frame as PNG (still GIFs). */
 export async function firstFramePng(input: string, output: string, o: TOpts): Promise<void> {
-  await run('ffmpeg', [...BASE, ...IN_SAFE, '-i', input, '-frames:v', '1', output], o);
+  await runTool('ffmpeg', [...BASE, ...IN_SAFE, '-i', input, '-frames:v', '1', output], o);
 }
 
 /** Downscale an image to `maxWidth` wide (PNG keeps alpha, JPEG otherwise). */
@@ -283,7 +298,7 @@ export async function downscaleImage(
     `scale=${maxWidth}:-2:flags=lanczos`,
   ];
   if (output.endsWith('.jpg')) args.push('-q:v', '2');
-  await run('ffmpeg', [...args, output], o);
+  await runTool('ffmpeg', [...args, output], o);
 }
 
 /**
@@ -294,7 +309,7 @@ export async function measureLoudness(
   input: string,
   o: TOpts & { trim?: Trim },
 ): Promise<number | undefined> {
-  const r = await run(
+  const r = await runTool(
     'ffmpeg',
     [
       '-hide_banner',
@@ -326,7 +341,7 @@ export async function transcodeAudio(
   output: string,
   o: TOpts & { trim?: Trim },
 ): Promise<void> {
-  await run(
+  await runTool(
     'ffmpeg',
     [
       ...BASE,
@@ -363,7 +378,7 @@ export async function transcodeAudio(
 
 /** Scale and pad an image onto an exact 1920x1080 frame (document pages). */
 export async function fitPage(input: string, output: string, o: TOpts): Promise<void> {
-  await run(
+  await runTool(
     'ffmpeg',
     [
       ...BASE,
@@ -382,7 +397,7 @@ export async function fitPage(input: string, output: string, o: TOpts): Promise<
 
 /** Render every PDF page to PNG at 144 dpi; returns the page files in order. */
 export async function pdfToPngs(pdf: string, outDir: string, o: TOpts): Promise<string[]> {
-  await run('pdftoppm', ['-r', '144', '-png', pdf, join(outDir, 'page')], o);
+  await runTool('pdftoppm', ['-r', '144', '-png', pdf, join(outDir, 'page')], o);
   const files = (await readdir(outDir)).filter((f) => /^page-\d+\.png$/.test(f));
   files.sort((a, b) => Number(/(\d+)/.exec(a)![1]) - Number(/(\d+)/.exec(b)![1]));
   return files.map((f) => join(outDir, f));
@@ -401,7 +416,7 @@ export async function pdfPage(
 ): Promise<string> {
   if (!Number.isInteger(page) || page < 1) throw new Error(`no page ${page}`);
   const size = (v: number) => String(Math.max(1, Math.min(16_384, Math.round(v))));
-  await run(
+  await runTool(
     'pdftoppm',
     [
       '-f',
@@ -524,10 +539,10 @@ export async function pictureFile(input: string, output: string, o: PictureFileO
   args.push('-noautorotate', '-f', PICTURE_DEMUXER[o.input], '-i', input, '-map', '0:v:0', '-frames:v', '1');
   args.push('-vf', vf.join(','), '-map_metadata', '-1');
   if (o.output === 'rgba') {
-    await run('ffmpeg', [...args, '-f', 'rawvideo', '-pix_fmt', 'rgba', output], o);
+    await runTool('ffmpeg', [...args, '-f', 'rawvideo', '-pix_fmt', 'rgba', output], o);
     return;
   }
   if (o.output === 'png') args.push('-c:v', 'png');
   else args.push('-c:v', 'mjpeg', '-q:v', '2');
-  await run('ffmpeg', [...args, '-f', 'image2', output], o);
+  await runTool('ffmpeg', [...args, '-f', 'image2', output], o);
 }

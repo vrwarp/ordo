@@ -1021,13 +1021,24 @@ describe('placement', () => {
 
   it("keeps a slide within the render clamp's 200 objects, and caps one behind budgetArt at 1,000", () => {
     const many = sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(run('x'))) }).repeat(1_100);
-    // M9: the budgets' guard keeps the background and the lowest 199 text boxes, and lists what it left out.
-    const kept = emitOne({ slides: [{ shapes: many }] });
+    // M9: the budgets' guard keeps the background and the lowest 199 text boxes; without LibreOffice it lists
+    // what it left out.
+    const noLo = { libreoffice: false };
+    const kept = emitOne({ slides: [{ shapes: many }] }, noLo, noLo);
     expect(kept.objects).toHaveLength(200);
     expect(kept.out.slides[0]!.missing).toEqual(['element']);
     expect(kept.scene.slides[0]!.classification).toMatchObject({ class: 'hybrid', missing: ['element'] });
     expect(kept.out.slides[0]!.classification.reasons).toContain('missing:element');
     expect(kept.notes.join(' ')).toMatch(/901 element\(s\) past the slide's budgets are not drawn/);
+    // With LibreOffice its art draws them: version 1 keeps one object less (the art makes 200), lists nothing.
+    const withLo = emitOne({ slides: [{ shapes: many }] });
+    expect(withLo.objects).toHaveLength(199);
+    expect(withLo.out.slides[0]!.missing).toBeUndefined();
+    expect(withLo.out.slides[0]!.art?.elements).toHaveLength(902);
+    expect(withLo.out.slides[0]!.classification.reasons).toContain('art:budget:shapes');
+    expect(withLo.notes.join(' ')).toMatch(
+      /902 element\(s\) past the slide's budgets: LibreOffice draws them/,
+    );
     // Text boxes: shapes without text over the budget would go to the art (and emit nothing).
     const { objects, notes } = emitOne({ slides: [{ shapes: many }] }, {}, { budgetArt: true });
     expect(objects).toHaveLength(1_000);

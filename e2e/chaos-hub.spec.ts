@@ -6,6 +6,7 @@ import { fixtures, SONG, uploadMedia, waitCacheReady } from './helpers.ts';
 import { HubProcess } from './hubproc.ts';
 import { expectCue, go, hubApi, hubLive, launchOutputs, login } from './linkhelpers.ts';
 import { PNG } from './png.ts';
+import { portOf } from './ports.ts';
 
 /**
  * Chaos for the two-process hub (design/25 "Hub", phase D): kill the library process mid-service, kill the
@@ -13,9 +14,9 @@ import { PNG } from './png.ts';
  * WebSocket, and crash the library past its restart budget. Through every outage the audience screen is
  * sampled about every 100 ms, from the fault until recovery + 500 ms: it must keep showing the held cue
  * and its picture (a pixel of the background compared with the value before the fault), never black.
- * Ports 8820-8839 (ORDO_E2E_CHAOS_HUB_PORT overrides).
+ * Its hub's port: e2e/ports.ts row 'chaos-hub'.
  */
-const PORT = Number(process.env.ORDO_E2E_CHAOS_HUB_PORT ?? 8820);
+const PORT = portOf('chaos-hub');
 const op = `http://op.localhost:${PORT}`;
 // Native modules and ws are dependencies of the hub; resolve them from there.
 const hubRequire = createRequire(resolve('apps/hub/package.json'));

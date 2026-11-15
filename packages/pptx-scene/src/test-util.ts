@@ -970,3 +970,89 @@ export function inlineGeoms<T extends Pick<EmitResult, 'slides' | 'geoms'>>(out:
   }));
   return { ...out, slides };
 }
+
+/**
+ * An `a:path` of line art (M9 leaf-legacy; like the leaf template's, design/27 §3.2 legacy values): one outline
+ * of `w` x `h` (path space) holding `cols` x `rows` holes, each a rounded rectangle of four lines and four
+ * corners of two cubic curves each, filling its cell but for a `gap` share of its sides, so the even-odd fill is
+ * the thin lines between the holes (about `1 − (1 − gap)²` of the box). Each hole wobbles by a fixed pattern
+ * (no randomness: the same arguments always write the same string). Points as the converter counts them
+ * (`lineArtPoints`): 5 for the outline, 30 a hole; commands with a point (what `walk.ts` `pathCoverage` reads):
+ * 4 and 13.
+ */
+export function lineArtPath(
+  o: { w?: number; h?: number; cols?: number; rows?: number; gap?: number; seed?: number } = {},
+): string {
+  const w = o.w ?? 100_000;
+  const h = o.h ?? 60_000;
+  const cols = o.cols ?? 20;
+  const rows = o.rows ?? 15;
+  const gap = o.gap ?? 0.12;
+  const seed = o.seed ?? 0;
+  const r = (v: number) => Math.round(v);
+  const p = (x: number, y: number) => `<a:pt x="${r(x)}" y="${r(y)}"/>`;
+  const line = (x: number, y: number) => `<a:lnTo>${p(x, y)}</a:lnTo>`;
+  // A quarter turn about (cx, cy) from `from` (radians, y down) as two cubics of an eighth turn each.
+  const K = (4 / 3) * Math.tan(Math.PI / 16);
+  const corner = (cx: number, cy: number, rad: number, from: number) => {
+    let out = '';
+    for (let k = 0; k < 2; k++) {
+      const a = from + (k * Math.PI) / 4;
+      const b = a + Math.PI / 4;
+      const [ax, ay] = [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
+      const [bx, by] = [cx + rad * Math.cos(b), cy + rad * Math.sin(b)];
+      out +=
+        `<a:cubicBezTo>${p(ax - K * rad * Math.sin(a), ay + K * rad * Math.cos(a))}` +
+        `${p(bx + K * rad * Math.sin(b), by - K * rad * Math.cos(b))}${p(bx, by)}</a:cubicBezTo>`;
+    }
+    return out;
+  };
+  let d = `<a:moveTo>${p(0, 0)}</a:moveTo>${line(w, 0)}${line(w, h)}${line(0, h)}<a:close/>`;
+  const cw = w / cols;
+  const ch = h / rows;
+  for (let j = 0; j < rows; j++)
+    for (let i = 0; i < cols; i++) {
+      // A fixed wobble per hole: its corners rounder or sharper, the hole a little off its cell's centre.
+      const k = (i * 7 + j * 13 + seed * 5) % 11;
+      const x0 = i * cw + cw * (gap / 2) * (0.6 + 0.2 * (k % 5));
+      const y0 = j * ch + ch * (gap / 2) * (0.6 + 0.2 * ((k + 2) % 5));
+      const x1 = x0 + cw * (1 - gap);
+      const y1 = y0 + ch * (1 - gap);
+      const rad = Math.min(cw, ch) * (1 - gap) * (0.1 + 0.05 * (k % 4));
+      d +=
+        `<a:moveTo>${p(x0 + rad, y0)}</a:moveTo>${line(x1 - rad, y0)}${corner(x1 - rad, y0 + rad, rad, -Math.PI / 2)}` +
+        `${line(x1, y1 - rad)}${corner(x1 - rad, y1 - rad, rad, 0)}` +
+        `${line(x0 + rad, y1)}${corner(x0 + rad, y1 - rad, rad, Math.PI / 2)}` +
+        `${line(x0, y0 + rad)}${corner(x0 + rad, y0 + rad, rad, Math.PI)}<a:close/>`;
+    }
+  return `<a:path w="${w}" h="${h}">${d}</a:path>`;
+}
+
+/**
+ * The even-odd ink of `lineArtPath` with the same options: the share of its box the lines between the holes
+ * fill (the outline less every hole, a rounded rectangle of its cell's size less the gap, less its four
+ * corners' `(4 − π) rad²`; the cubics' quarter turns are within 0.03 % of a circle's).
+ */
+export function lineArtInk(o: { cols?: number; rows?: number; gap?: number; seed?: number } = {}): number {
+  const w = 100_000;
+  const h = 60_000;
+  const cols = o.cols ?? 20;
+  const rows = o.rows ?? 15;
+  const gap = o.gap ?? 0.12;
+  const seed = o.seed ?? 0;
+  const cw = w / cols;
+  const ch = h / rows;
+  let holes = 0;
+  for (let j = 0; j < rows; j++)
+    for (let i = 0; i < cols; i++) {
+      const k = (i * 7 + j * 13 + seed * 5) % 11;
+      const rad = Math.min(cw, ch) * (1 - gap) * (0.1 + 0.05 * (k % 4));
+      holes += cw * (1 - gap) * ch * (1 - gap) - (4 - Math.PI) * rad * rad;
+    }
+  return 1 - holes / (w * h);
+}
+
+/** The points of `lineArtPath` as the converter counts them (moveTo, lnTo and close 1, cubicBezTo 3). */
+export function lineArtPoints(cols = 20, rows = 15): number {
+  return 5 + 30 * cols * rows;
+}

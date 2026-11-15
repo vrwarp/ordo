@@ -1,8 +1,11 @@
 /**
- * Geometry files of a native import (design/27 §3.1 `ShapeGeom.ref`, §3.4, §15 M6 round 2). The converter
- * writes a geometry whose paths are large on its slide (a Google-Slides-traced decoration: 100-1,000 KB of
- * path text, which a layout repeats on every slide and a slide at several sizes) once, as a geometry file
- * named by a placeholder (`pptxgeom:<n>`, `EmitResult.geoms`, numbered per batch). The job:
+ * Shape files of a native import (design/27 §3.1 `ShapeGeom.ref`, §3.4, §15 M6 round 2; M9 `DecorData.ref`).
+ * The converter writes a geometry whose paths are large on its slide (a Google-Slides-traced decoration:
+ * 100-1,000 KB of path text, which a layout repeats on every slide and a slide at several sizes) once, as a
+ * geometry file named by a placeholder (`pptxgeom:<n>`, `EmitResult.geoms`, numbered per batch), and a
+ * decoration whose parts are large as a decoration file (`pptxdecor:<n>`, `EmitResult.decors`): one kind of
+ * stored file to the hub, kept and shipped alike (`fileReferenced` keeps any SHA-256 `ref` a presentation
+ * names; goLive lists `drawnShapeFileRefs`). The job:
  *
  * - **Names** each file by the SHA-256 of its JSON (the import core's `geomFileOf` and `nameGeoms`, in the
  *   pool's worker or, for a client scene, re-checked in the pool, `clientScene.ts`), before the size budget
@@ -20,12 +23,19 @@ import type { NamedGeomFile } from '@ordo/importers/pptx-geoms.ts';
 
 // Naming, checking and bounding shape files is the import core's (`@ordo/importers` `pptx-geoms.ts`), which
 // the pool task, the client-scene check and the client parse share; storing them is the hub's.
-export { geomFileOf, type NamedGeomFile, nameGeoms } from '@ordo/importers/pptx-geoms.ts';
+export {
+  decorFileOf,
+  geomFileOf,
+  isShapeFilePlaceholder,
+  type NamedGeomFile,
+  nameGeoms,
+  nameShapeFiles,
+} from '@ordo/importers/pptx-geoms.ts';
 
 /**
- * Store the geometry files `names` (file names the kept slides use) of `files`, each once: a file the store
- * indexes already is left as it is. Returns how many were written and the names that could not be (warned
- * through `warn` once): their shapes draw their legacy form until a re-import.
+ * Store the shape files `names` (file names the kept slides use: geometry and decoration files) of `files`,
+ * each once: a file the store indexes already is left as it is. Returns how many were written and the names
+ * that could not be (warned through `warn` once): the caller leaves out the objects that name them.
  */
 export async function storeGeomFiles(
   store: Pick<Store, 'putBytes'>,

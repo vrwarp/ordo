@@ -23,6 +23,7 @@ import {
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
 import { ImportLog, importResult, missingFonts, SOURCE_LOG_CHARS } from '../src/pptx/report.ts';
+import { nameGeoms } from '../src/pptx/geoms.ts';
 import { scanDeck, sceneTask } from '../src/pptx/sceneTask.ts';
 import { M9_WRITES, PPTX_SHEETS } from '../src/pptx/shared.ts';
 
@@ -115,7 +116,7 @@ describe('scanDeck', () => {
   });
 });
 
-describe('decorations and sheets held back (the M9 rollout, until decor-render draws and stores them)', () => {
+describe('decorations on both paths, sheets held back (the M9 rollout)', () => {
   /** A layout of 160 text-less rectangles of as many colours in one group: decorations past the object budget. */
   function decorated() {
     let shapes = '';
@@ -158,28 +159,45 @@ describe('decorations and sheets held back (the M9 rollout, until decor-render d
     return importPptxClient(await zip.generateAsync({ type: 'uint8array' }), name);
   }
 
-  it('writes no decoration while no drawer draws one: every shape drawn as itself, no placeholder', async () => {
-    expect(M9_WRITES.has('decor')).toBe(false);
-    expect(M9_WRITES.has('decorFile')).toBe(false);
+  it('names the same decoration files on the hub batch and the client scene by one SHA-256, no placeholder left', async () => {
+    expect(M9_WRITES.has('decor')).toBe(true);
+    expect(M9_WRITES.has('decorFile')).toBe(true);
     expect([...CLIENT_M9_WRITES].sort()).toEqual([...M9_WRITES].sort());
     const parts = decorated();
-    // With every field the converter draws them as decorations, in decoration files (`pptxdecor:<n>`).
+    // The converter draws the 160 shapes as decorations, in decoration files (`pptxdecor:<n>`).
     const all = convertDeck(parts, { m9Writes: ALL_M9_FIELDS });
     expect(all.decors.length).toBeGreaterThan(0);
-    // The hub's batch (`M9_WRITES`): no decoration, each of the 160 shapes its own object.
+    // The hub's batch (`M9_WRITES`): the files named in the worker by the SHA-256 of their JSON (placeholder
+    // → name, `geomFiles`); the job puts the names in place of the placeholders (`nameGeoms`): none left.
     const out = sceneTask({ parts, pictureSizes: [], range: { from: 0, to: 1 }, options: {} });
     expect(out.result.decors).toEqual([]);
+    expect(out.geomOver).toBeUndefined();
+    const hubFiles = new Map((out.geomFiles ?? []).map((f) => [f.hash, f]));
     const [s] = out.result.slides;
-    expect(s!.slide.objects.some((o) => o.type === 'shape' && o.decor)).toBe(false);
-    expect(s!.slide.objects.filter((o) => o.type === 'shape' && o.origin?.role !== 'bg')).toHaveLength(160);
+    const named = nameGeoms(s!.slide, new Map((out.geomFiles ?? []).map((f) => [f.id, f.hash])));
+    const hubDecors = named.objects.filter((o) => o.type === 'shape' && o.decor);
+    expect(hubDecors.length).toBeGreaterThan(0);
+    const hubRefs = hubDecors.map((o) => (o.type === 'shape' ? o.decor!.ref : undefined));
+    for (const ref of hubRefs) {
+      expect(ref).toMatch(/^[0-9a-f]{64}$/);
+      expect(hubFiles.has(ref!)).toBe(true);
+    }
     expect(s!.missing).toBeUndefined();
-    expect(JSON.stringify(out.result)).not.toContain(DECOR_PREFIX);
-    // The client's parse (`CLIENT_M9_WRITES`) and the scene it sends the hub: the same.
+    expect(JSON.stringify(named)).not.toContain(DECOR_PREFIX);
+    // The client's parse (`CLIENT_M9_WRITES`) and the scene it sends the hub: the same names for the same
+    // files, and the files the slides name, nothing else.
     const parsed = await clientParse(parts, 'Decorated.pptx');
     expect(JSON.stringify(parsed.clientScene)).not.toContain(DECOR_PREFIX);
     expect(JSON.stringify(parsed.presentation)).not.toContain(DECOR_PREFIX);
     const shown = parsed.clientScene.slides.flatMap((x) => x.slide.objects);
-    expect(shown.some((o) => o.type === 'shape' && o.decor)).toBe(false);
+    const clientRefs = shown.flatMap((o) => (o.type === 'shape' && o.decor?.ref ? [o.decor.ref] : []));
+    expect(clientRefs).toEqual(hubRefs);
+    const clientFiles = new Map(parsed.clientScene.geomFiles.map((f) => [f.hash, f.json]));
+    for (const ref of clientRefs) {
+      expect(clientFiles.get(ref)).toBe(new TextDecoder().decode(hubFiles.get(ref)!.bytes));
+    }
+    // The client assembly keeps them for the store under the same names.
+    for (const ref of clientRefs) expect(parsed.geoms.some((g) => g.hash === ref)).toBe(true);
   });
 
   it('draws no picture from a sheet: a slide of 14 distinct pictures keeps every one, on both paths', async () => {

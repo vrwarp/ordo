@@ -97,26 +97,36 @@ function imageFor(hash: string | undefined): HTMLImageElement | undefined {
   return img.complete && img.naturalWidth > 0 ? img : undefined;
 }
 /**
- * Read the geometry file a shape or a picture's mask names (`ShapeGeom.ref`) if it is not yet; the canvas
- * draws again once it is (the shape draws its fallback meanwhile).
+ * Read the shape file a shape or a picture's mask names (`ShapeGeom.ref`; a decoration's `DecorData.ref`, M9,
+ * into the renderer's decoration-file store, loaded the first time a slide has one: no decoration code in the
+ * first paint) if it is not yet; the canvas draws again once it is (the shape draws its fallback meanwhile, a
+ * filed decoration nothing).
  */
 function readGeomOf(o: SlideObject): void {
-  const g = o.type === 'shape' ? o.geom : o.type === 'image' ? o.mask : undefined;
-  if (!g || !isGeomFileRef(g.ref) || !geomPending(g)) return;
-  void readGeomFiles([g.ref], async (hash) => {
+  const read = async (hash: string) => {
     const r = await fetch(fileUrl(hash), { credentials: 'same-origin' });
     if (!r.ok) return undefined;
-    // A file larger than a geometry file can be is refused unread, as the workers refuse it (a ref can name
-    // any file of the content store).
+    // A file larger than a shape file can be is refused unread, as the workers refuse it (a ref can name any
+    // file of the content store).
     if (Number(r.headers.get('content-length')) > GEOM_FILE_MAX_BYTES) {
       void r.body?.cancel();
       return null;
     }
     const b = await r.blob();
     return b.size > GEOM_FILE_MAX_BYTES ? null : b.text();
-  }).then((left) => {
+  };
+  const redraw = (left: ReadonlyMap<string, unknown>) => {
     if (!left.size) for (const l of imageListeners) l();
-  });
+  };
+  const d = o.type === 'shape' ? o.decor : undefined;
+  const dref = d?.ref;
+  if (isGeomFileRef(dref))
+    void import('@ordo/renderer/decor/files.ts').then((f) => {
+      if (f.decorPending(d)) void f.readDecorFiles([dref], read).then(redraw);
+    });
+  const g = o.type === 'shape' ? o.geom : o.type === 'image' ? o.mask : undefined;
+  if (!g || !isGeomFileRef(g.ref) || !geomPending(g)) return;
+  void readGeomFiles([g.ref], read).then(redraw);
 }
 /**
  * Load the drawer an M9 object needs (a table's, loaded per kind: `loadShapeDrawers`) if it is not yet; the

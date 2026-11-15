@@ -16,13 +16,14 @@
 import type { Slide } from '@ordo/domain';
 import type { DeckScene } from '@ordo/pptx-scene';
 import { cellRows } from './cellRows.ts';
+import { escZero } from './escZero.ts';
 import { inheritedFit } from './inheritedFit.ts';
 import { refit } from './refit.ts';
 import { runShadow } from './runShadow.ts';
 import { textOutline } from './textOutline.ts';
 
 /** Every rule, in report order. */
-export const COMPAT_REGISTRY = [runShadow, textOutline, refit, inheritedFit, cellRows] as const;
+export const COMPAT_REGISTRY = [runShadow, textOutline, refit, inheritedFit, cellRows, escZero] as const;
 
 export type CompatRule = (typeof COMPAT_REGISTRY)[number]['key'];
 export type { CompatRuleDef } from './rule.ts';

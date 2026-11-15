@@ -1,22 +1,30 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import { allFiles, compactFiles, type SetBundle } from './src/sw/sets.ts';
 import { swSource } from './src/sw/template.ts';
 
-/** Emits sw.js precaching every built file of the app shell (design/17). */
+/**
+ * Emits sw.js precaching every built file of the app shell (design/17), and the phone's set beside it
+ * (src/sw/sets.ts: a phone registers ./sw.js?set=compact). The version hash is of every file, as before.
+ */
 function serviceWorker(): Plugin {
+  let root = '';
   return {
     name: 'ordo-operator-sw',
     apply: 'build',
     enforce: 'post',
+    configResolved(c) {
+      root = c.root;
+    },
     generateBundle(_opts, bundle) {
-      const files = Object.keys(bundle).filter((f) => !f.endsWith('.map') && f !== 'sw.js');
-      if (!files.includes('index.html')) files.push('index.html');
+      const files = allFiles(bundle as unknown as SetBundle);
       let h = 0;
-      for (const f of files.sort()) for (let i = 0; i < f.length; i++) h = (h * 31 + f.charCodeAt(i)) | 0;
+      for (const f of files) for (let i = 0; i < f.length; i++) h = (h * 31 + f.charCodeAt(i)) | 0;
+      const compact = compactFiles(bundle as unknown as SetBundle, { root });
       this.emitFile({
         type: 'asset',
         fileName: 'sw.js',
-        source: swSource(files, `op-${(h >>> 0).toString(36)}`),
+        source: swSource(files, `op-${(h >>> 0).toString(36)}`, undefined, compact),
       });
     },
   };

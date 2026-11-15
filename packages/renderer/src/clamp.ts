@@ -773,6 +773,16 @@ export function isClamped(o: unknown): boolean {
   return !!o && typeof o === 'object' && CLAMPED.has(o);
 }
 
+/**
+ * Marks `o`, a copy of a clamped object with optional fields left out (geombudget.ts `legacyCopy`), as clamped:
+ * clamping it again would only copy it, and `clampSlide` keeps it as it is, so a part of a slide
+ * (`sceneSlides`) holds the very copies the slide's drawing budget made.
+ */
+export function keepClamped<T extends object>(o: T): T {
+  CLAMPED.add(o);
+  return o;
+}
+
 export function clampObject(o: unknown): SlideObject | undefined {
   const out = clampObjectOf(o);
   if (out) CLAMPED.add(out);

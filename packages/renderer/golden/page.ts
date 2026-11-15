@@ -735,6 +735,9 @@ export const SAME_AS: Record<string, string> = {
   'edited-slide-output': 'edited-slide',
   'edited-slide-editor': 'edited-slide',
   'table-vs-group': 'table-basic',
+  // M9 decorations (decor-cases.ts): the shapes one by one, and the decoration without its sprite.
+  'shape-decor-equivalence': 'shape-decor',
+  'decor-sprite': 'shape-decor',
 };
 
 /** The faces the runner injects: each family is also registered directly under its own name. */

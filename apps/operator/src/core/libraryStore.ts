@@ -46,6 +46,8 @@ export function withDefaults(s: Partial<Settings> | undefined): Settings {
       ...DEFAULT_SURFACES,
       ...((upgradeStoredSurfaces(s?.surfaces) as Settings['surfaces']) ?? {}),
     },
+    // Off unless the hub says on (an older hub sends no `phones`).
+    phones: { enabled: s?.phones?.enabled === true },
   };
 }
 

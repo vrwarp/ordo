@@ -105,8 +105,10 @@ import type {
 import { drawnBounds } from '@ordo/renderer/geom/bounds.ts';
 import { geometryAt, legacyGeometry } from '@ordo/renderer/geom/built.ts';
 import {
+  charged,
   EFFECT_COST,
   effectArea,
+  GEOM_COST,
   type LegacyPart,
   objectCost,
   type Rated,
@@ -117,6 +119,7 @@ import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from '@ordo/render
 import { outlineOf } from '@ordo/renderer/geom/outline.ts';
 import { apply, boxPx, decompose, lenPx, multiply, slideRect } from './frame.ts';
 import { bakeKey, bakeOf, type PictureBake, type SheetBake, sheetKey } from './bake.ts';
+import { sentToArt } from './budget.ts';
 import { emitChart } from './chart.ts';
 import { boundsOf, unionBox } from './classify.ts';
 import { DECOR_PREFIX, decorFiles, emitDecor, type PlatePlan, platePlan } from './decor.ts';
@@ -394,8 +397,9 @@ export interface EmitResult {
   geoms: { id: string; file: GeomFile }[];
   /**
    * M9 (`decor-conv`): the decoration files the slides name (`DecorData.ref`, `pptxdecor:<n>`), each once in
-   * first-use order. An importer stores each as it stores geometry files (`decor-render`) and puts its name in
-   * place of the placeholder; one that cannot leaves the decoration drawing nothing.
+   * first-use order. An importer stores each as it stores geometry files (the import core's `pptx-geoms.ts`
+   * `decorFileOf`, on the hub and the client) and puts its name in place of the placeholder; one that cannot
+   * leaves the object out (`withoutFiles`: the decoration would draw nothing) and lists it missing.
    */
   decors: { id: string; file: DecorFile }[];
   /**
@@ -666,7 +670,8 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
     if (at?.origin) for (const o of sh.objects) o.origin ??= { ...at.origin };
   }
   // M9: what is only slow to draw is kept whole (decisions.md "Slow-to-draw elements"): the drawing budgets
-  // choose how it is drawn, from a decoration plate or live, never whether (`fitEffects`, `fitDrawing`).
+  // choose how it is drawn, whole from a geometry unit or a decoration plate or live, never whether
+  // (`fitEffects`, `fitDrawing`).
   const slow = new Set([...fitEffects(ctx, objects), ...fitDrawing(ctx, objects)]);
   const plan = platePlan(slide);
   if (plan.stack.length || plan.effects.length || slow.size)
@@ -735,8 +740,13 @@ function fitEffects(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
  * their legacy shapes or without their effects. Since M9 (`decor-conv`, decisions.md "Slow-to-draw
  * elements", the wave 1 re-review) they are stored whole, never flattened to their legacy copy (their
  * gradient, geometry, dash and ends kept, so the editor still edits them and a centre-white radial glow
- * stays a glow): the slide's decoration plate holds them (`platePlan`), and until it is made each drawer
- * draws them as its budget allows. Returns their ids, with a note.
+ * stays a glow): on the outputs one whose geometry the budget holds back is drawn whole from a geometry unit
+ * (renderer `units.ts`, made in slices before the slide is drawn), and every drawer without one (an older
+ * build, a phone's editor, a thumbnail) draws its legacy shape (`emitShape`'s legacy values: a line for
+ * line art); the slide's decoration plate (`platePlan`) is the later home of the static ones. Returns their
+ * ids, with a note: one for those drawn from geometry units, one for those no unit draws (a plain shape past
+ * the budget for its paint, a masked picture, a geometry past `GEOM_COST.slide` alone: drawn as their legacy
+ * shapes on outputs too, until effect units), one for those only drawn without their effects.
  */
 function fitDrawing(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
   const rate = (o: SlideObject, part?: LegacyPart): Rated => {
@@ -744,8 +754,17 @@ function fitDrawing(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
     const at = geometryOf(x);
     return { est: objectCost(x, at?.built), points: at?.points ?? 0 };
   };
+  // Whether a geometry unit draws `o` on outputs (renderer `units.ts` `unitOf`): a shape with a stored
+  // geometry and its own drawer's fields only, whose drawing without its effects is within GEOM_COST.slide.
+  const unitDraws = (o: SlideObject): boolean => {
+    if (o.type !== 'shape' || o.geom === undefined) return false;
+    if (o.table || o.chart || o.decor || o.look3d) return false;
+    return charged(rate(o, 'effects')) <= GEOM_COST.slide;
+  };
   const parts = slidePlan(objects, rate, effectAreaOf);
   const past: string[] = [];
+  let effectsOnly = 0;
+  let whole = 0;
   parts.forEach((part, i) => {
     const o = objects[i]!;
     // A stored geometry too costly to fill at once is drawn as its legacy shape by every drawer, whatever
@@ -753,22 +772,35 @@ function fitDrawing(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
     const g = o.type === 'shape' ? o.geom : o.type === 'image' ? o.mask : undefined;
     const costly = !!g?.paths?.length && g.ref === undefined && !geometryAt(g, o.box.w, o.box.h);
     if (part || costly) past.push(o.id);
+    if (part === 'effects' && !costly) effectsOnly++;
+    else if (part && !costly && unitDraws(o)) whole++;
   });
-  if (past.length)
+  // What no geometry unit draws (renderer `units.ts` `slideUnitsLeft`): a plain shape past the budget for its
+  // gradient or dash, a masked picture, a geometry past `GEOM_COST.slide` alone or too costly to build.
+  const legacy = past.length - effectsOnly - whole;
+  if (whole)
     ctx.log(
-      `${past.length} object(s) past the slide's drawing budget are drawn from its decoration plate (as their legacy shapes until it is made)`,
+      `${whole} object(s) past the slide's drawing budget are drawn whole from a geometry unit on outputs; their legacy shapes elsewhere`,
+    );
+  if (legacy)
+    ctx.log(
+      `${legacy} object(s) past the slide's drawing budget are drawn as their legacy shapes until effect units are made`,
+    );
+  if (effectsOnly)
+    ctx.log(
+      `${effectsOnly} object(s) past the slide's drawing budget are drawn without their effects until effect units are made`,
     );
   return past;
 }
 
 /**
- * An element the object budget sent to the art (`classify.ts` `fitShapes`, 'budget:shapes', only behind
- * `ParseOptions.budgetArt`, the harness's A/B): like a residual table it emits nothing, so version 1 stays
- * within the budget with the slide's own text drawn, until the art replaces what it draws. Since M9 nothing
- * else is left to the art for a budget, and nothing at all for being slow to draw (`walk.ts`).
+ * An element a budget sent to the art (`budget.ts` `sentToArt`: what the guard leaves out on a hub with
+ * LibreOffice, 'budget:shapes' / 'budget:pictures'; `classify.ts` `fitShapes` behind `ParseOptions.budgetArt`,
+ * the harness's A/B): like a residual table it emits nothing, so version 1 stays within the render clamp with
+ * the slide's own text drawn, until the art draws it. Nothing is left to the art for being slow to draw.
  */
 function pastBudget(e: Element): boolean {
-  return e.support === 'residual' && !!e.reasons?.includes('budget:shapes');
+  return sentToArt(e);
 }
 
 /**
@@ -1157,6 +1189,20 @@ function styleShape(ctx: EmitCtx, o: ShapeObject, e: ShapeElement, geom: ShapeGe
   if (look3d) o.look3d = look3d;
 }
 
+/**
+ * Whether a custom geometry fills too little of its box for a legacy rect (design/27 §3.2 legacy values: what
+ * an older build, a phone's editor and every drawer past the slide's drawing budget draw). A built one
+ * (`built`: its paths are stored) is rated by the even-odd area of its built paths (`CustomPaths.ink`), and
+ * one whose share cannot be worked out (past the renderer's nesting bounds) counts as thin: its legacy is a
+ * line, never a box of its fill over line art. One past the converter's bounds (no paths stored) keeps the
+ * rule of its read points (`ShapeElement.coverage`): thin only when that is known and below
+ * MIN_RECT_COVERAGE, else its rect, so nothing drawn as a rect before is left undrawn.
+ */
+function thinCustom(e: ShapeElement, built: boolean): boolean {
+  if (built) return !(e.custom?.ink !== undefined && e.custom.ink >= MIN_RECT_COVERAGE);
+  return e.coverage !== undefined && e.coverage < MIN_RECT_COVERAGE;
+}
+
 /** Straight lines: one `line` object from the start (0, 0) of the unit square to its end (1, 1). */
 const STRAIGHT: ReadonlySet<string> = new Set(['line', 'straightConnector1']);
 /** Connector presets drawn as their route (`routeObject`). */
@@ -1196,7 +1242,7 @@ function emitShape(ctx: EmitCtx, e: ShapeElement, out: SlideObject[], texts: Emi
   // PowerPoint casts a shape's shadow on its text only when the shape itself shows nothing.
   const visible = e.fill.kind === 'picture' || fill !== undefined || stroke !== undefined;
   const geom = geomOf(e);
-  const thin = e.geom === 'custom' && e.coverage !== undefined && e.coverage < MIN_RECT_COVERAGE;
+  const thin = e.geom === 'custom' && thinCustom(e, geom !== undefined);
   if (STRAIGHT.has(e.geom) || isRoute(e.geom)) {
     if (stroke && e.line) {
       const width = strokeWidth(ctx, e.line.width);
@@ -1218,8 +1264,8 @@ function emitShape(ctx: EmitCtx, e: ShapeElement, out: SlideObject[], texts: Emi
   } else if (e.geom === 'custom' && !geom && thin) {
     if (fill || stroke) ctx.log('custom geometry that fills little of its box is not drawn');
   } else if (fill || stroke) {
-    // A thin custom geometry's legacy is a line (its midline outline at most): a rect over a swoosh is
-    // further from it than nothing.
+    // A thin custom geometry's legacy is a line (its midline outline at most): a rect over a swoosh, or a
+    // black box over line art with hundreds of holes, is further from it than nothing.
     const kind = geom && thin ? 'line' : ELLIPTIC.has(e.geom) ? 'ellipse' : 'rect';
     const o = shape(ctx, box, kind, fill);
     if (stroke && e.line) o.stroke = { width: strokeWidth(ctx, e.line.width), color: stroke };

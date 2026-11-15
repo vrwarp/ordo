@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   chartFamilies,
   chartText,
+  drawnDecorRefs,
   drawnShapeFileRefs,
   extraFontFamilies,
   objectSearchText,
@@ -145,6 +146,8 @@ describe('drawnShapeFileRefs', () => {
     });
     // In drawing order, once each.
     expect(drawnShapeFileRefs(s)).toEqual(['d'.repeat(64), 'g'.repeat(64)]);
+    // The decorations' refs alone: what a drawer reads into its decoration store.
+    expect(drawnDecorRefs(s)).toEqual(['d'.repeat(64)]);
   });
 
   it('lists only what the slide draws: not the imported objects behind its PowerPoint picture', () => {
@@ -152,7 +155,9 @@ describe('drawnShapeFileRefs', () => {
     const decor = obj(s, 'decor') as ShapeObject;
     decor.decor = { ...decor.decor!, ref: 'pptxdecor:1' };
     expect(drawnShapeFileRefs(s)).toEqual(['pptxdecor:1']);
+    expect(drawnDecorRefs(s)).toEqual(['pptxdecor:1']);
     s.pptx = { ...s.pptx!, show: 'picture', refMediaId: 'ref' };
     expect(drawnShapeFileRefs(s)).toEqual([]);
+    expect(drawnDecorRefs(s)).toEqual([]);
   });
 });

@@ -28,8 +28,13 @@
  * composites, an atlas instead), so the `budget:*` rows are written only behind `ParseOptions.budgetArt`
  * (the harness's A/B), and `3d:flat-in-decoration` (approx) marks real 3-D drawn flat inside a decoration.
  * Nothing goes to the art for being slow to draw (decisions.md "Slow-to-draw elements"): `custGeom:complex`
- * and `geom:complex` are native, kept whole and drawn from the slide's decoration plate, and no longer
- * written.
+ * and `geom:complex` are native, kept whole, drawn whole from a geometry unit on outputs and as their legacy
+ * shapes elsewhere, and no longer written.
+ *
+ * M9 wave 2 (`lo-forms`, the owner's decision of 2026-11-13): on a hub with LibreOffice what the budgets'
+ * guard leaves out (the render clamp's objects and pictures, `budget.ts` step 7 and P) goes to the art again,
+ * as at wave 1: `budget:shapes` for the guard's, `budget:pictures` for the pictures past the clamp. Without
+ * LibreOffice the guard culls it and lists it (`missing:decoration` / `missing:element`), as before.
  *
  * Pure: tables and lookups; deck strings are only compared, never used as object keys.
  */
@@ -211,6 +216,13 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
     by: 'classify',
     note: 'a centred text block that moves text',
   },
+  {
+    reason: 'textFill:picture',
+    features: [],
+    decision: 'approx',
+    by: 'classify',
+    note: 'picture-filled text: drawn in the text colour (tx1), its outline kept',
+  },
   // ── Pictures ──
   {
     reason: 'metafile',
@@ -285,14 +297,14 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
     features: ['custGeom'],
     decision: 'native',
     by: 'reader',
-    note: "custom geometry past the slide's drawing budget: kept whole, drawn from the slide's decoration plate (M9; no longer written)",
+    note: "custom geometry past the slide's drawing budget: kept whole, drawn whole from a geometry unit on outputs; its legacy shape elsewhere (M9; no longer written)",
   },
   {
     reason: 'geom:complex',
     features: [],
     decision: 'native',
     by: 'reader',
-    note: "a preset past the slide's drawing budget: kept whole, drawn from the slide's decoration plate (M9; no longer written)",
+    note: "a preset past the slide's drawing budget: kept whole, drawn whole from a geometry unit on outputs; its legacy shape elsewhere (M9; no longer written)",
   },
   {
     reason: 'preset:*',
@@ -328,7 +340,15 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
     decision: 'residual',
     missing: 'decoration',
     by: 'budget',
-    note: "shapes and pictures past the slide's object budget (M9: only behind ParseOptions.budgetArt)",
+    note: "what the guard leaves out past the render clamp's objects, to LibreOffice's art (M9: with LibreOffice; and behind ParseOptions.budgetArt)",
+  },
+  {
+    reason: 'budget:pictures',
+    features: [],
+    decision: 'residual',
+    missing: 'decoration',
+    by: 'budget',
+    note: "the topmost pictures past the render clamp's pictures, to LibreOffice's art (M9: with LibreOffice)",
   },
   {
     reason: '3d:flat-in-decoration',

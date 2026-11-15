@@ -2,13 +2,15 @@ import { api, upload } from '@ordo/client';
 import type { Presentation } from '@ordo/domain';
 import type { HubCapabilities, Job } from '@ordo/protocol';
 import { useEffect, useState } from 'react';
-import { useHubCaps } from '../../lib/hubCaps.ts';
+import { loadHubCaps, useHubCaps } from '../../lib/hubCaps.ts';
 import {
   documentAccept,
   documentFields,
   hubHasLibreOffice,
+  importCaps,
   importJobTitle,
   isImportJob,
+  isPptxName,
   PPTX_NATIVE_JOB,
   type PptxImportChoice,
   picturesOffered,
@@ -227,9 +229,12 @@ export function ImportTab() {
     }
   };
   const documents = async (files: File[]) => {
+    // The hub's capabilities decide how a PowerPoint is parsed: a deck dropped before the tab heard them waits
+    // briefly for the answer (`importCaps`), never parsed for a LibreOffice the hub turns out not to have.
+    const known = files.some((f) => isPptxName(f.name)) ? await importCaps(caps, () => loadHubCaps()) : caps;
     for (const f of files) {
       const fd = new FormData();
-      const fields = documentFields(f.name, choice, caps);
+      const fields = documentFields(f.name, choice, known);
       for (const [k, v] of fields) fd.append(k, v);
       try {
         setProgress(0);
@@ -242,7 +247,7 @@ export function ImportTab() {
             file: f,
             name: f.name,
             extendBackgrounds: choice.extendBackgrounds,
-            libreoffice: hubHasLibreOffice(caps),
+            libreoffice: hubHasLibreOffice(known),
             fonts,
             live,
             onProgress: (pct) => setProgress(pct * 0.5),

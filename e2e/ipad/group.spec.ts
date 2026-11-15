@@ -1,12 +1,14 @@
 import { expect, type Page, test } from '@playwright/test';
-import { BASE, json, signInByTapping, startHub } from './ipadhelpers.ts';
+import { json, signInByTapping, startHub, tabletSlot } from './ipadhelpers.ts';
+import { portOf } from '../ports.ts';
 
 /**
  * A group under a finger (M4 item B; design/27 §11 item 5, design/15 "Touch"): a tap on a shape's text
  * selects the shape and its text together, a long press selects the text alone (Alt-click's touch
  * equivalent), 'Select the group' in the panel takes the pair back, and a finger drag moves both. Runs in
  * the webkit-ipad projects; the touches are dispatched in the page as `touch.spec.ts` does (pointer events
- * with pointerType "touch" and TouchEvents, as iPadOS sends them). Hubs on ORDO_E2E_IPAD_PORT + 20 / + 21.
+ * with pointerType "touch" and TouchEvents, as iPadOS sends them). Hubs on e2e/ports.ts row 'ipad-group'
+ * (landscape, portrait, and chromium-tablet, which skips).
  */
 
 type Box = { x: number; y: number; w: number; h: number; rotation: number };
@@ -95,8 +97,7 @@ const editor = (page: Page) =>
 test('a tap selects a shape with its text, a long press the text alone, a drag moves both', async ({
   page,
 }) => {
-  const portrait = test.info().project.name.includes('portrait');
-  const { hub, api, url } = await startHub(BASE + 20 + (portrait ? 1 : 0));
+  const { hub, api, url } = await startHub(portOf('ipad-group', tabletSlot()));
   try {
     const made = await json<{ id: string }>(api.post('import/songselect', { data: { text: SONG } }));
     const p = await json<Pres>(api.get(`presentations/${made.id}`));

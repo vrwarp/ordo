@@ -416,7 +416,8 @@ export function walkTree(
               const p = decompose(base.xf);
               const g = presetDrawn(pic.geom, pic.adj, p.w * ctx.frame.s, p.h * ctx.frame.s);
               // Past the budget it is kept whole, charged as its legacy copy: the emitted slide's own plan
-              // (`emit.ts` `fitDrawing`) names it for the slide's decoration plate (M9, `decor-conv`).
+              // (`emit.ts` `fitDrawing`) names it, drawn whole from a geometry unit on outputs and as its
+              // legacy shape elsewhere (M9, `decor-conv`).
               if (!chargeDrawing(st, rate(g), floor)) chargeFloor(st, floor);
             }
           }
@@ -582,8 +583,9 @@ function readShape(
     // M9 (`decor-conv`, decisions.md "Slow-to-draw elements"): a shape past the slide's drawing budget (its
     // pixels, its outline, dashes or arrowheads) is kept whole, never sent to the art: the budget decides how
     // it is drawn, not whether. It is charged as its legacy copy (what every drawer draws at least), and the
-    // emitted slide's own plan (`emit.ts` `fitDrawing`) names it for the slide's decoration plate; until a
-    // plate holds it each drawer draws it natively where the slide's plan has room, else as its legacy shape.
+    // emitted slide's own plan (`emit.ts` `fitDrawing`) names it: each drawer draws it natively where the
+    // slide's plan has room, else the outputs draw it whole from a geometry unit and every other drawer as its
+    // legacy shape.
     if (!chargeDrawing(st, rate(g), floor)) chargeFloor(st, floor);
   }
   // A shape not drawn natively but still emitted (`emit.ts`: its legacy rect, ellipse or line, under its text)
@@ -648,10 +650,11 @@ function readShape(
  * `GEOM_COST.point` a stored point) against the slide's `GEOM_COST.slide` (`chargeDrawing`). Past the slide's
  * points it is over the bounds (residual), and charges nothing. Past the drawing budgets (M9, `decor-conv`,
  * decisions.md "Slow-to-draw elements") it is kept whole (`complex`), charged as its legacy copy (`floor`):
- * the slide's decoration plate holds it, and until then the renderer, which holds a slide to the same budgets
- * the same way (`geom/cost.ts` `slidePlan`, `geombudget.ts`, `stored.ts` past `GEOM_COST.geometry`), draws
- * it as its legacy shape; the emitted slide's plan names it (`emit.ts` `fitDrawing`). Its compile notes go to
- * the slide's log.
+ * the renderer, which holds a slide to the same budgets the same way (`geom/cost.ts` `slidePlan`,
+ * `geombudget.ts`), draws it whole from a geometry unit on outputs and as its legacy shape elsewhere (the
+ * legacy values of `emit.ts` `emitShape`: a line for line art); past `GEOM_COST.geometry` alone (`stored.ts`)
+ * every drawer draws its legacy shape until the slide's decoration plate holds it. The emitted slide's plan
+ * names it (`emit.ts` `fitDrawing`). Its compile notes go to the slide's log.
  */
 export function slideCustom(
   ctx: SlideCtx,
@@ -677,7 +680,7 @@ export function slideCustom(
   const costly = (custom.fillCost ?? 0) > GEOM_COST.geometry * COST_MARGIN;
   if (costly)
     ctx.log(
-      "a custom geometry too costly to draw at once (its edges cross the box many times) is drawn from the slide's decoration plate",
+      "a custom geometry too costly to draw at once (its edges cross the box many times) is drawn as its legacy shape until the slide's decoration plate holds it",
     );
   st.points = (st.points ?? 0) + points;
   if (costly || !chargeDrawing(st, (custom.cost ?? 0) + points * GEOM_COST.point, floor)) {
@@ -704,8 +707,9 @@ function chargeDrawing(st: WalkState, cost: number, floor = cost): boolean {
  * Charges an element the drawing budget cannot take whole as its legacy copy (`floor`), what every drawer
  * draws for it at least (renderer `geom/cost.ts` `slidePlan`: counted first and never refused). Since M9
  * (`decor-conv`, decisions.md "Slow-to-draw elements") such an element is always kept whole: past the floors
- * too (a stack of full-slide fills: 140 legacy fills took 300 ms at 4K) the slide's decoration plate draws
- * it, or the asset worker's sliced sprite until one exists (`decor-render`), never LibreOffice.
+ * too (a stack of full-slide fills: 140 legacy fills took 300 ms at 4K) the outputs draw it whole from a
+ * geometry unit made in slices (renderer `units.ts`), later from the slide's decoration plate, and every
+ * other drawer as its legacy shape, never LibreOffice.
  */
 function chargeFloor(st: WalkState, floor: number): void {
   st.floors = (st.floors ?? 0) + floor;

@@ -89,20 +89,7 @@ import {
   type Summary,
   writeReport,
 } from './report.ts';
-
-async function findChromium(given?: string): Promise<string> {
-  if (given) return given;
-  if (process.env.ORDO_CHROMIUM) return process.env.ORDO_CHROMIUM;
-  try {
-    const exe = (await import('@playwright/test')).chromium.executablePath();
-    if (existsSync(exe)) return exe;
-  } catch {
-    /* not installed */
-  }
-  for (const exe of ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'])
-    if (existsSync(exe)) return exe;
-  return 'chromium';
-}
+import { findChromium } from '../../find-chromium.ts';
 
 /** Decks given as files, or found in folders (and their subfolders), each with a name unique in the run. */
 async function decksIn(paths: string[]): Promise<{ file: string; name: string }[]> {
@@ -467,7 +454,7 @@ async function main(): Promise<void> {
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => process.exit(130));
   const out = resolve(a.out);
   await mkdir(out, { recursive: true });
-  const chromium = await findChromium(a.chromium);
+  const chromium = a.chromium ?? (await findChromium({ system: true })) ?? 'chromium';
   const decks = await decksIn(a.decks);
   if (a.corpus)
     decks.unshift(...(await buildCorpus(join(out, 'corpus'))).map((f) => ({ file: f, name: basename(f) })));

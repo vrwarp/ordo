@@ -10,6 +10,7 @@ import {
   stillFile,
 } from '@ordo/domain';
 import { useEffect, useState } from 'react';
+import { capabilities } from '../lib/capabilities.ts';
 import type { ThumbIn, ThumbJob, ThumbOut } from '../workers/thumb.worker.ts';
 
 const MAX_ENTRIES = 800;
@@ -51,9 +52,9 @@ export function tileHash(m: Media | undefined): string | undefined {
 
 /**
  * What a volunteer is told where an SVG is picked (design/15 "Media library"): the screens show it as a still,
- * an animated one at its first frame. One without its still (`delivery`: uploaded over 24 MB, or one this
- * browser could not draw, or from before) is drawn by each Audience screen itself, during the service, and
- * not at all past `SVG_SCREEN_MAX_BYTES`.
+ * an animated one at its first frame. One without its still (`delivery`: one this browser could not draw or
+ * whose still the hub refused, or from before) is drawn by each Audience screen itself, during the service,
+ * and not at all past `SVG_SCREEN_MAX_BYTES`.
  */
 export function svgNote(m: Pick<Media, 'original' | 'delivery'> | undefined): string | undefined {
   if (!m || !isSvgMime(m.original.mime)) return undefined;
@@ -136,6 +137,8 @@ class Thumbs {
       p.resolve(ev.data.blob ? URL.createObjectURL(ev.data.blob) : undefined);
       this.pump();
     };
+    // Geometry units only with a fine pointer: phones and tablets keep the legacy copies (design/27 §13).
+    w.postMessage({ t: 'init', finePointer: !capabilities().coarsePointer } satisfies ThumbIn);
     if (this.fontMsg) w.postMessage(this.fontMsg);
   }
 
@@ -189,9 +192,16 @@ class Thumbs {
       fonts: list.map((f) => ({ ...f, url: new URL(f.url, location.href).href })),
     };
     this.fontMsg = msg;
-    this.ensure()?.postMessage(msg);
+    // Only to a running worker: a worker started later gets the list first thing (wire). A phone starts it
+    // with its first thumbnail (design/28 §7: the thumbnail worker is not part of a phone's first load).
+    this.worker?.postMessage(msg);
     // Fonts changed: drop cached thumbnails so text re-renders with the right faces.
     this.invalidate();
+  }
+
+  /** Start the worker now (the regular layout, at Shell mount, as the venue PC and the iPad always did). */
+  warm(): void {
+    this.ensure();
   }
 
   /** Drop every cached thumbnail: the next request of each draws it again. */

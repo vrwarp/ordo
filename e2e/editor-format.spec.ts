@@ -10,7 +10,6 @@ import {
   editorState,
   frames,
   importDeck,
-  M4_PORT,
   type Obj,
   openEditor,
   openSlide,
@@ -19,6 +18,7 @@ import {
   selectText,
   slidesOf,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import type { HubProcess } from './hubproc.ts';
 import { hubApi } from './linkhelpers.ts';
 import { VERSE_TEXT } from './pptxdecks.ts';
@@ -34,9 +34,9 @@ import { VERSE_TEXT } from './pptxdecks.ts';
  * - shrink to fit (the box options: the overflow edge on the canvas and the panel's note, then 'Shrink text
  *   to fit');
  * and the 4:3 guide of a deck that is not 16:9. The bar and the strip apply item A's ops (`formatRange`,
- * `setParas`). Port 8903.
+ * `setParas`). Its port: e2e/ports.ts row 'editor-format'.
  */
-const PORT = M4_PORT + 3;
+const PORT = portOf('editor-format');
 const OUT = 'test-results/editor-format';
 /** John 3:18 (WEB), the verse added. */
 const VERSE_18 = 'He who believes in him is not judged.';

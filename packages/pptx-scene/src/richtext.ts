@@ -71,7 +71,8 @@ export interface RichOptions {
    * from PowerPoint's, so the native column can be compared with its pictures. Shrink-to-fit only when the
    * shape's own `a:bodyPr` asks for it (an inherited `normAutofit` is not applied), always re-fitted from
    * full size (no stored scale); no run shadows (the shadow an unfilled shape casts stays); no outline on
-   * filled text (the copy LibreOffice draws has them stripped).
+   * filled text (the copy LibreOffice draws has them stripped); a run whose `baseline="0"` LibreOffice reads
+   * as unset shifted by the chain's next baseline (`RunStyle.escZero`, drawn at 58 %).
    */
   lo?: boolean;
   /**
@@ -495,6 +496,8 @@ function runDiff(
   if (s.underline !== (box.underline ?? false)) d.underline = s.underline;
   if (s.strike) d.strike = true;
   if (s.baseline) d.baseline = bound(s.baseline, -1, 1);
+  // LibreOffice reads `baseline="0"` as unset and shifts the run by the chain's next baseline (`escZero`).
+  else if (ctx.lo && s.escZero) d.baseline = bound(s.escZero, -1, 1);
   const spacing = bound(ptPx(ctx.f, s.spacingPt), -1000, 1000);
   if (Math.abs(spacing - box.letterSpacing) > 1e-6) d.letterSpacing = spacing;
   const caps = s.caps;

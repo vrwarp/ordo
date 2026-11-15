@@ -16,6 +16,7 @@ import { errorMessage, HttpError } from '../errors.ts';
 import type { Job } from '@ordo/protocol';
 import type { JobCtx, JobQueue } from '../jobs.ts';
 import type { Library } from '../library.ts';
+import { lightToolPace } from '../pacing.ts';
 import { extensionAgrees, extOf, hashFile, readHead, type Sniffed, sniff, type Store } from '../store.ts';
 import {
   downscaleImage,
@@ -166,6 +167,13 @@ export class MediaService {
         const cur = this.lib.media.get(mediaId);
         if (cur && cur.state !== 'ready') this.save({ ...cur, state: 'failed', error: error.slice(0, 500) });
       },
+      {
+        // Stopped for a service (design/28 §5.3): the item waits as uploaded, not as processing.
+        onPause: ({ mediaId }) => {
+          const cur = this.lib.media.get(mediaId);
+          if (cur?.state === 'processing') this.save({ ...cur, state: 'uploaded', error: undefined });
+        },
+      },
     );
   }
 
@@ -236,13 +244,58 @@ export class MediaService {
   }
 
   /**
+   * An SVG's still sent after the SVG itself (`PUT /media/:id/still`, design/12 "Media pipeline"): an SVG over
+   * the one-request limit is uploaded in chunks, then the uploading client draws its still and sends it. It is
+   * checked like a still that came with the upload (`checkRaster`) and stored as the delivery only for an SVG
+   * that has none (409 `has_still` otherwise), never while the item's job runs (409 `busy`: send it again).
+   * The item is then processed again, which decodes the still and takes its size; the media delta follows.
+   * The raster file is consumed either way.
+   */
+  async attachStill(id: string, raster: { path: string; hash?: string; bytes?: number }): Promise<Media> {
+    let delivery: FileRef;
+    try {
+      const m = this.lib.media.must(id);
+      if (!isSvgMime(m.original.mime))
+        throw new HttpError(400, 'bad_raster', `${m.name}: a still picture can only come with an SVG`);
+      if (m.delivery)
+        throw new HttpError(409, 'has_still', `${m.name}: the SVG already has its still picture`);
+      if (m.state === 'processing')
+        throw new HttpError(
+          409,
+          'busy',
+          `${m.name}: the SVG is being processed; send its still again shortly`,
+        );
+      await this.checkRaster(this.store.abs(m.original.path), m.original, raster, m.name);
+      delivery = await this.store.put(raster.path, {
+        ext: 'png',
+        mime: 'image/png',
+        hash: raster.hash,
+        bytes: raster.bytes,
+      });
+    } catch (e) {
+      await rm(raster.path, { force: true });
+      throw e;
+    }
+    // Read again: the item may have changed while the still was checked and stored.
+    const cur = this.lib.media.get(id);
+    if (!cur || cur.delivery || cur.state === 'processing') {
+      await this.store.release(delivery.hash);
+      if (!cur) throw new HttpError(404, 'not_found', 'Media not found');
+      throw new HttpError(409, cur.delivery ? 'has_still' : 'busy', `${cur.name}: try again`);
+    }
+    const saved = this.save({ ...cur, delivery, state: 'uploaded', error: undefined });
+    this.queue(id);
+    return saved;
+  }
+
+  /**
    * Check an SVG's still (`IngestOpts.raster`) before anything is stored: the original must be an SVG and the
    * raster a PNG within the caps, of the shape the SVG declares (`svgRasterProblem`). Header reads only: the
    * media job decodes it (ffprobe) before the item is ready.
    */
   private async checkRaster(
     svgPath: string,
-    s: Sniffed,
+    s: Pick<Sniffed, 'mime'>,
     raster: { path: string; bytes?: number },
     name: string,
   ): Promise<void> {
@@ -410,6 +463,9 @@ export class MediaService {
       onProgress: (f: number) => ctx.progress(f * 0.9),
       trim,
     };
+    // A light job's tools (stills, images, audio) run niced on one thread while a service is live, when Phones
+    // is on or a phone queued the job (design/28 §5.3); heavy ones (video, animated GIF) are held then instead.
+    const pace = lightToolPace(this.jobs.pacing, this.jobs.paced(ctx.id));
 
     if (m.original.mime === 'image/gif') {
       const gi = gifInfo(await readFile(input));
@@ -425,7 +481,7 @@ export class MediaService {
         return this.video({ ...m, kind: 'video', loop: true }, input, ginfo, gi.transparent, ctx, opts);
       }
       const out = this.store.tmpPath('png');
-      await firstFramePng(input, out, { timeoutMs: t.light, signal: ctx.signal });
+      await firstFramePng(input, out, { timeoutMs: t.light, signal: ctx.signal, ...pace });
       const delivery = await this.store.put(out, { ext: 'png', mime: 'image/png' });
       return { ...m, kind: 'image', delivery, width: gi.width, height: gi.height, hasAlpha: gi.transparent };
     }
@@ -438,7 +494,11 @@ export class MediaService {
         const ext = hasAlpha ? 'png' : 'jpg';
         const out = this.store.tmpPath(ext);
         ctx.log(`downscaling ${v.width}x${v.height} to ${MAX_IMAGE_WIDTH} wide`);
-        await downscaleImage(input, out, MAX_IMAGE_WIDTH, { timeoutMs: t.light, signal: ctx.signal });
+        await downscaleImage(input, out, MAX_IMAGE_WIDTH, {
+          timeoutMs: t.light,
+          signal: ctx.signal,
+          ...pace,
+        });
         const delivery = await this.store.put(out, { ext, mime: ext === 'png' ? 'image/png' : 'image/jpeg' });
         const h = Math.round((v.height * MAX_IMAGE_WIDTH) / v.width / 2) * 2;
         return { ...m, delivery, width: MAX_IMAGE_WIDTH, height: h, hasAlpha };
@@ -450,10 +510,16 @@ export class MediaService {
 
     if (info.audio) {
       ctx.log('measuring loudness');
-      const lufs = await measureLoudness(input, { timeoutMs: t.light * 4, signal: ctx.signal, trim });
+      const lufs = await measureLoudness(input, {
+        timeoutMs: t.light * 4,
+        signal: ctx.signal,
+        trim,
+        ...pace,
+      });
       ctx.progress(0.3);
       const out = this.store.tmpPath('m4a');
       await transcodeAudio(input, out, {
+        ...pace,
         timeoutMs: t.transcode,
         signal: ctx.signal,
         durationMs: opts.durationMs,

@@ -2,6 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { type APIRequestContext, expect, type Locator, type Page, request, test } from '@playwright/test';
 import { rotaterAngle } from '../../apps/operator/src/views/editor/touchGeometry.ts';
 import { HubProcess } from '../hubproc.ts';
+import { portOf } from '../ports.ts';
+import { touchDevice } from '../touchdevice.ts';
 
 /**
  * iPad touch editing (design/15 "Touch"): reordering by long-press drag and by buttons, the slide editor
@@ -20,16 +22,18 @@ import { HubProcess } from '../hubproc.ts';
  */
 
 const PIN = '246810';
-const BASE = Number(process.env.ORDO_E2E_TOUCH_PORT ?? 9124);
-
+/** Test n's hub: e2e/ports.ts row 'ipad-touch', 0-2 in landscape and 3-5 in portrait. */
 function portFor(n: number): number {
-  return BASE + n + (test.info().project.name.includes('portrait') ? 10 : 0);
+  return portOf('ipad-touch', n + (test.info().project.name.includes('portrait') ? 3 : 0));
 }
 
 async function startHub(port: number) {
   const hub = HubProcess.fresh(port);
   await hub.start();
-  const api = await request.newContext({ baseURL: `http://localhost:${port}/api/v1/` });
+  const api = await request.newContext({
+    baseURL: `http://localhost:${port}/api/v1/`,
+    extraHTTPHeaders: { 'x-ordo': '1' },
+  });
   const r = await api.post('auth/pin', { data: { pin: PIN } });
   expect(r.ok(), await r.text()).toBe(true);
   return { hub, api, url: `http://localhost:${port}/` };
@@ -76,6 +80,7 @@ async function song(api: APIRequestContext, title: string): Promise<Pres> {
 
 async function signIn(page: Page, url: string): Promise<void> {
   page.on('pageerror', (e) => console.error('pageerror', e.message));
+  await touchDevice(page);
   await page.goto(url);
   await page.locator('input.pin').fill(PIN);
   await page.getByRole('button', { name: 'OK' }).tap();

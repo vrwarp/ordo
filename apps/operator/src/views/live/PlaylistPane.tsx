@@ -1,5 +1,6 @@
 import type { PlaylistItem } from '@ordo/domain';
 import { VirtualList } from '../../components/VirtualList.tsx';
+import { itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
 import { itemGoTarget } from '../../lib/sections.ts';
 import { startService } from '../../lib/startService.ts';
 import { controller } from '../../services/controller.ts';
@@ -16,36 +17,9 @@ export const KIND_ICON: Record<PlaylistItem['kind'], string> = {
   action: '⚡',
 };
 
-export function itemTitle(it: PlaylistItem, op: Pick<OperatorPlaylist, 'presentation' | 'media'>): string {
-  switch (it.kind) {
-    case 'presentation':
-      return op.presentation(it.presentationId)?.title ?? 'Missing presentation';
-    case 'media':
-      return op.media(it.mediaId)?.name ?? 'Missing media';
-    case 'timer':
-      return (
-        it.timer.label ??
-        (it.timer.kind === 'elapsed' ? 'Elapsed timer' : `Countdown to ${it.timer.timeOfDay}`)
-      );
-    case 'action':
-      return `Action: ${it.action}`;
-  }
-}
-
-export function itemSubtitle(it: PlaylistItem, op: Pick<OperatorPlaylist, 'presentation' | 'media'>): string {
-  if (it.kind === 'presentation') {
-    const p = op.presentation(it.presentationId);
-    const a = p?.arrangements.find((x) => x.id === it.arrangementId) ?? p?.arrangements[0];
-    return a ? a.name : '';
-  }
-  if (it.kind === 'media') {
-    const m = op.media(it.mediaId);
-    if (!m) return '';
-    const st = m.state !== 'ready' ? ` · ${m.state}` : '';
-    return `${m.kind}${(it.loop ?? m.loop) ? ' · loop' : ''}${st}`;
-  }
-  return '';
-}
+// Re-exported from their own module (lib/playlistItems.ts), which the playlist editor imports without the
+// live view's controller and startService.
+export { itemSubtitle, itemTitle };
 
 export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem: number }) {
   const playlists = useLibrary((s) => s.data.playlists);

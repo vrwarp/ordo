@@ -5,18 +5,33 @@
  * loads the app. Hashed assets are cache-first. Only the precached files and a navigation to the app root
  * are handled; /api, /ws and every other path (including /output/ and /stage/ in path mode) pass straight
  * to the network.
+ *
+ * What it precaches depends on the device class it was registered for, decided once at startup (main.tsx):
+ * `./sw.js` precaches every built file (FILES: the venue PC, iPads, Android tablets); `./sw.js?set=compact`
+ * (a phone) only FILES_COMPACT, what a phone can open (src/sw/sets.ts), so it never downloads the editor, the
+ * live view, Setup, the settings pages or the import worker (design/28 §3.1). Either way every app file is
+ * handled cache-first when fetched, and the cache's name is the same.
  */
 export const SW_NAV_TIMEOUT_MS = 4000;
 
-export function swSource(files: string[], version: string, navTimeoutMs = SW_NAV_TIMEOUT_MS): string {
-  const list = JSON.stringify(files.map((f) => f.replace(/^\.?\//, '')));
+const clean = (files: string[]) => JSON.stringify(files.map((f) => f.replace(/^\.?\//, '')));
+
+export function swSource(
+  files: string[],
+  version: string,
+  navTimeoutMs = SW_NAV_TIMEOUT_MS,
+  compactFiles: string[] = files,
+): string {
   return `/* ordo operator service worker ${version} (generated) */
 const VERSION = ${JSON.stringify(version)};
 const CACHE = 'ordo-shell-' + VERSION;
-const FILES = ${list};
+const FILES = ${clean(files)};
+const FILES_COMPACT = ${clean(compactFiles)};
 const NAV_TIMEOUT_MS = ${navTimeoutMs};
 const scopeUrl = new URL(self.registration ? self.registration.scope : './', self.location.href);
-const PRECACHE = FILES.map((f) => new URL(f, scopeUrl).href);
+const KNOWN = FILES.map((f) => new URL(f, scopeUrl).href);
+const COMPACT = new URL(self.location.href).searchParams.get('set') === 'compact';
+const PRECACHE = COMPACT ? FILES_COMPACT.map((f) => new URL(f, scopeUrl).href) : KNOWN;
 const SHELL = new URL('index.html', scopeUrl).href;
 
 function isNeverCached(url) {
@@ -83,7 +98,7 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin || isNeverCached(url)) return;
   const isRootNav = req.mode === 'navigate' && (url.pathname === scopeUrl.pathname || url.href.split('?')[0].split('#')[0] === SHELL);
   const clean = url.origin + url.pathname;
-  if (!isRootNav && !PRECACHE.includes(clean)) return;
+  if (!isRootNav && !KNOWN.includes(clean)) return;
   const key = isRootNav ? SHELL : clean;
   event.respondWith(
     caches.open(CACHE).then((c) => (isRootNav ? navigationResponse(c, req, key) : assetResponse(c, req, key))),

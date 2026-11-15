@@ -11,6 +11,7 @@ import {
 import { initialState, reduce } from '@ordo/live-state';
 import type { LiveDeltaMsg } from '@ordo/protocol';
 import { type HubOut, LiveCore, type LiveCoreDeps, type LiveNotice } from '../src/lib/liveCore.ts';
+import { midiCuesOnChange } from '../src/lib/midiOut.ts';
 
 function resolved(id = 'pl', name = 'Sunday'): ResolvedPlaylist {
   const a = songFromParsed(parseLyrics('Verse 1\na\nb\n\nChorus\nc\nd'), { linesPerSlide: 1 });
@@ -742,5 +743,114 @@ describe('LiveCore hand-back size (design/27 §3.4)', () => {
     g.core.submit({ k: 'endService', at: 5 });
     g.core.onState(liveHub());
     expect(g.sent.at(-1)).toMatchObject({ t: 'live.adopt', force: true, state: { mode: 'idle' } });
+  });
+});
+
+describe('LiveCore after a hand-back, then a silent hub (run 76, design/17)', () => {
+  /**
+   * CI run 76's order on the operator: the hub dies, the operator takes over and GO moves to cue 1; the
+   * restarted hub (which kept cue 0) is handed the service; one GO through the hub, which then falls silent
+   * (no delta, no ack, no pong) until the liveness drop and the grace; the operator takes over again, then the
+   * hub answers once more. `hubApplied`: whether the silent hub had journalled that GO before it fell silent.
+   */
+  function run76(hubApplied: boolean) {
+    const h = harness();
+    const views: LiveState[] = [];
+    const sample = () => views.push(h.core.view);
+    // A live service whose cues carry MIDI show-control cues, at cue 0 on the hub (seq 2).
+    const withMidi = (s: LiveState): LiveState => ({
+      ...s,
+      cues: s.cues.map((c, i) => ({
+        ...c,
+        midiCues: [{ id: `m${i}`, type: 'noteOn' as const, channel: 1, number: 60 + i, value: 127 }],
+      })),
+    });
+    const hub0 = reduce(withMidi(liveHub()), { k: 'next', at: 10 });
+    expect(hub0.live).toBe(0);
+    h.core.onStatus(true);
+    h.core.onState(hub0);
+    sample();
+    // The hub dies; after the grace the operator is the authority; GO to cue 1 over the fallback bus.
+    h.core.onStatus(false);
+    h.setHub(false);
+    h.fire(5000);
+    sample();
+    h.core.submit({ k: 'next', at: 20 });
+    sample();
+    expect(h.core.view.live).toBe(1);
+    // The hub restarts with its own copy (cue 0, seq 2): welcome, its state, the adopt, its adopted state.
+    h.setHub(true);
+    h.core.onStatus(true);
+    sample();
+    h.core.onWelcome();
+    h.core.onState(hub0);
+    sample();
+    const adopt = h.sent.at(-1) as Extract<HubOut, { t: 'live.adopt' }>;
+    expect(adopt).toMatchObject({ t: 'live.adopt' });
+    expect(adopt.state.live).toBe(1);
+    const hub1 = adopt.state;
+    h.core.onState(hub1);
+    h.core.onAck({ id: 'adopt', seq: hub1.seq });
+    sample();
+    expect(h.core.authority).toBe('hub');
+    // One GO through the hub, then the hub is silent: the liveness drop, the grace, the second fallback.
+    h.core.submit({ k: 'next', at: 30 });
+    sample();
+    const go = h.sent.at(-1) as Extract<HubOut, { t: 'live.event' }>;
+    expect(go).toMatchObject({ t: 'live.event', event: { k: 'next' } });
+    h.core.onStatus(false);
+    h.setHub(false);
+    sample();
+    h.fire(5000);
+    sample();
+    expect(h.core.authority).toBe('fallback');
+    // The hub answers again, with or without the GO in its journal.
+    const hub2 = hubApplied ? reduce(hub1, go.event as LiveEvent) : hub1;
+    h.setHub(true);
+    h.core.onStatus(true);
+    h.core.onWelcome();
+    h.core.onState(hub2);
+    sample();
+    const last = h.sent.at(-1);
+    if (last?.t === 'live.adopt') {
+      h.core.onState(last.state);
+      h.core.onAck({ id: 'adopt', seq: last.state.seq });
+    }
+    sample();
+    return { h, views, hub0, hub2, last };
+  }
+
+  for (const hubApplied of [false, true]) {
+    it(`never shows an older cue, lands the GO once, sends no MIDI twice (hub ${hubApplied ? 'had' : 'lost'} the GO)`, () => {
+      const { h, views, last } = run76(hubApplied);
+      expect(h.core.authority).toBe('hub');
+      expect(h.core.view.live).toBe(2);
+      expect(h.core.pendingCount).toBe(0);
+      expect(h.notices.filter((n) => n.kind === 'conflict')).toEqual([]);
+      // The second hand-back: the hub that lost the GO is handed cue 2; one that had it is followed.
+      if (hubApplied) expect(last?.t).not.toBe('live.adopt');
+      else expect(last).toMatchObject({ t: 'live.adopt', state: { live: 2 } });
+      // The operator's view from the fallback GO on: never below cue 1, its seq never going back.
+      const from = views.findIndex((v) => v.live === 1);
+      const after = views.slice(from);
+      expect(after.map((v) => v.live).every((l) => l !== undefined && l >= 1)).toBe(true);
+      for (let i = 1; i < after.length; i++) expect(after[i]!.seq).toBeGreaterThanOrEqual(after[i - 1]!.seq);
+      // MIDI out (services/surfaces.ts) fed the same views: cue 1's and cue 2's cues once each, never cue 0's again.
+      const sent: number[] = [];
+      for (let i = 1; i < views.length; i++)
+        for (const c of midiCuesOnChange(views[i - 1]!, views[i]!)) sent.push(c.number);
+      expect(sent).toEqual([61, 62]);
+    });
+  }
+
+  it('MIDI out would send cue 0 again if a view stepped back (why the view must not)', () => {
+    const { views } = run76(false);
+    const at1 = views.find((v) => v.live === 1)!;
+    const at2 = views.find((v) => v.live === 2)!;
+    const back = { ...at1, live: 0 };
+    const sent = [at1, back, at2]
+      .slice(1)
+      .flatMap((v, i) => midiCuesOnChange([at1, back, at2][i]!, v).map((c) => c.number));
+    expect(sent).toEqual([60, 62]);
   });
 });

@@ -342,6 +342,11 @@ type AudioSettings = {
   masterDb: number;
 };
 
+// Phones (design/28 P0; design/24 "Feature flags are settings"): `settings.phones`, off by default. Optional in
+// the protocol's `Settings` type (an older hub sends none); readers write `settings.phones?.enabled === true`.
+type PhoneSettings = { enabled: boolean /* "Phones are used during services" */ };
+// A job the hub holds until the service ends carries `Job.waiting: 'service'` (its media stays 'uploaded').
+
 // Scripture (data model only in the prototype)
 type ScriptureRef = {
   translation: string;

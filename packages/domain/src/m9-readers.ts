@@ -236,3 +236,18 @@ export function drawnShapeFileRefs(slide: Pick<Slide, 'objects' | 'imported' | '
   }
   return [...out];
 }
+
+/**
+ * The decoration files a slide draws (`DecorData.ref` of its shapes, M9), in drawing order and once each: the
+ * refs of `drawnShapeFileRefs` a drawer reads into its decoration store (the rest are geometry files,
+ * `drawnGeomRefs`). Refs as stored, as there.
+ */
+export function drawnDecorRefs(slide: Pick<Slide, 'objects' | 'imported' | 'pptx'>): string[] {
+  const out = new Set<string>();
+  for (const o of slideContent(slide).objects) {
+    if (!isObj(o) || o.type !== 'shape' || !isObj(o.decor)) continue;
+    const ref = o.decor.ref;
+    if (typeof ref === 'string' && ref) out.add(ref);
+  }
+  return [...out];
+}

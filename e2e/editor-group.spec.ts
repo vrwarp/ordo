@@ -10,7 +10,6 @@ import {
   editorState,
   frames,
   importDeck,
-  M4_PORT,
   type Obj,
   openEditor,
   openSlide,
@@ -19,6 +18,7 @@ import {
   selectRange,
   slidesOf,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import { hubApi } from './linkhelpers.ts';
 
 /**
@@ -30,9 +30,9 @@ import { hubApi } from './linkhelpers.ts';
  * them back, arrows nudge both, Align to slide (the floating bar's Align menu and the drawer's align bar)
  * moves both as one block; Alt-click selects the text alone to edit it; Delete
  * takes the pair away and Undo brings it back. After save and reload the presentation JSON is identical.
- * Port 8902.
+ * Its port: e2e/ports.ts row 'editor-group'.
  */
-const PORT = M4_PORT + 2;
+const PORT = portOf('editor-group');
 const OUT = 'test-results/editor-group';
 
 type Box = Obj['box'];

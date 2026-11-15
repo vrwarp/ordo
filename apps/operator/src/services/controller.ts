@@ -372,6 +372,7 @@ function installTestHooks(ctl: Controller): void {
         mainThreadStallMaxMs: s.core?.mainThreadStallMaxMs,
         unacknowledged: s.unacknowledged,
         workers: s.workers,
+        conflict: !!s.conflict,
       };
     },
     chaos: {

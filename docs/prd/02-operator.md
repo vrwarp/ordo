@@ -46,7 +46,7 @@ data at small sizes. Program thumbnails are video streamed from the outputs
 | Next presentation     | Page Down                                                 | First slide of the next item                                                                                                                                                  |
 | Previous presentation | Page Up                                                   | First slide of the previous item                                                                                                                                              |
 | Section jump          | Click a section label                                     | First slide of that section in the presentation shown in the centre column (which may not be the live one); Stream Deck and MIDI section actions act on the live presentation |
-| Clear slide           | F1, Escape                                                | Clears the Slide layer; background keeps playing. While a dialog is open (Diagnostics, a confirmation), Escape only closes it                                                 |
+| Clear slide           | F1, Escape                                                | Clears the Slide layer; background keeps playing. While a dialog is open (Diagnostics, a confirmation), Escape only closes it and F1 does nothing (see Dialogs below)         |
 | Clear all to black    | F2 (press twice within 2 s, or hold for 1 s)              | Every layer black on every output. Confirmed by the double press, or by holding the key or the Clear all button for one second, to avoid accidents                            |
 | Clear lower third     | F3                                                        | Clears the Lower third layer only                                                                                                                                             |
 | Clear props           | F4                                                        | Clears Props                                                                                                                                                                  |
@@ -56,7 +56,18 @@ data at small sizes. Program thumbnails are video streamed from the outputs
 | Launch outputs        | Ctrl+Shift+L                                              | See Outputs                                                                                                                                                                   |
 
 Keys are handled on keydown with no debounce. Keys act only when the operator window is
-focused; Stream Deck and MIDI act regardless of focus ([prd/07](07-control-surfaces.md)).
+focused and no dialog is open; Stream Deck and MIDI act regardless of focus and of dialogs
+([prd/07](07-control-surfaces.md)).
+
+Dialogs: while any dialog is open, no live key in the table above acts (Space, the arrows,
+Page Up and Page Down, F1 to F8, Ctrl+Shift+L, the digits), whoever opened the dialog. Space
+or Enter presses the dialog's own focused button (Space on End service's confirmation ends
+the service), Tab and Shift+Tab move only between the dialog's own controls, and Escape
+closes it. Dialogs that can open during a service: Diagnostics, End service's confirmation,
+and, without the operator doing anything, "Place outputs
+on screens", "The hub is back with a different service", "The hub is back", "Go live without
+the hub?" and "Could not go live". Close the dialog to use the keys again; the Stream Deck
+and MIDI keep working meanwhile.
 
 ### Arming
 

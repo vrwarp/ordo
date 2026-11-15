@@ -6,6 +6,7 @@
   "scripts": {
     "start": "tsx src/main.ts",
     "census:ratchet": "tsx src/census-ratchet.ts",
+    "gen:line-art-holes": "tsx src/gen/line-art-holes.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {

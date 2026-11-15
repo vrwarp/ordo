@@ -393,7 +393,7 @@ describe('decorations (M9, decor-conv)', () => {
     const inline = emitSlides(parseDeck(deck), { geomFiles: false });
     expect(inline.decors).toEqual([]);
     expect(decorsOf(inline.slides[0]!.slide.objects)[0]!.decor!.parts.length).toBeGreaterThan(0);
-    // So too without the 'decorFile' field (the importers' `M9_WRITES` until `decor-render` names the files):
+    // So too without the 'decorFile' field (an importer that stores no decoration files; the kill switch):
     // the same decorations, their parts in the slide, and no placeholder anywhere.
     const noFiles = new Set([...ALL_M9_FIELDS].filter((f) => f !== 'decorFile'));
     const held = emitSlides(parseDeck(deck), { m9Writes: noFiles });

@@ -3,7 +3,9 @@
 How faithfully ordo draws PowerPoint decks (design/27 §14). LibreOffice 24.2 is the reference: each deck is
 drawn by LibreOffice (as the hub draws it: outline repair, PDF export, 144 dpi pages), by pptx-preview and
 natively (`@ordo/pptx-scene` drawn by `@ordo/renderer` in headless Chromium), and every slide is scored
-against LibreOffice's page with SSIM of greyscale pictures at 960x540 (1 = identical, ffmpeg).
+against LibreOffice's page with SSIM of greyscale pictures at 960x540 (1 = identical, ffmpeg). The native
+page's browser draws text with glyph hinting off, whatever the machine's fontconfig asks for
+(`unhintedFontconfig` in `native.ts`), so lines keep the fonts' own advances as an output draws them.
 
 Real decks stay outside the repository: pass their paths. Decks are untrusted input; the harness reads them
 only through the converter and the hub's zip reader.
@@ -35,7 +37,7 @@ by the next run with the same `--out` (they are the slow part); `--fresh-lo` dra
 | `--corpus`                   | add the synthetic decks of `src/corpus.ts`                                                                                                                      |
 | `--raw`                      | also draw with pptx-preview unmodified                                                                                                                          |
 | `--script-stand-ins`         | serve a missing script fallback family with fontconfig's face for the script                                                                                    |
-| `--chromium PATH`            | the Chromium to drive (else `ORDO_CHROMIUM`, Playwright's, or the system's)                                                                                     |
+| `--chromium PATH`            | the Chromium to drive (else `ORDO_CHROMIUM`, Playwright's, `ORDO_TEST_CHROMIUM`, or the system's)                                                               |
 
 The run writes `<dir>/summary.json`, `<dir>/native-baseline.json` and `<dir>/report.html`, and prints the
 means. Native pictures are `<dir>/<deck>/native/slide-NNNN.png`; delete them after measuring when disk is
@@ -86,8 +88,10 @@ tight (the summaries keep every number).
   `exit_ssim.py`'s groups (first match: 3d, warp, table, decorations, pictures, vertical, metafile/ole,
   chart, smartart; then ladder for a picture slide, other): before-harness, before-hub (and how many from the
   hub), the paste, without LibreOffice, black, `missing`, exceptions and the largest object.
-- `rasterMs`: the median `drawSlide2D` time (draw and flush) at 1920 and 3840 px wide, pictures prepared.
-- `coldMs`: preparing the pictures the deck's cache lacks plus the first draw, at each width.
+- `rasterMs`: the median `drawSlide2D` time (draw and flush) at 1920 and 3840 px wide, pictures prepared and
+  geometry units made (a shape past the slide's drawing budget copied from its unit).
+- `coldMs`: preparing the pictures the deck's cache lacks and making the slide's geometry units (design/27 §13
+  "Geometry units", as an output's prepare step makes them), plus the first draw, at each width.
 - `maxObjectMs` and `maxObjectId`: the largest single object's draw and flush at 1920 and 3840 px, cold
   (design/27 §13's 50 ms task). After every slide's own timings, each slide is drawn again on a canvas of its
   own, object by object as `drawSlide2D` draws them (the authored objects within the slide's drawing budget),
@@ -105,17 +109,24 @@ npx tsx src/census.ts --out census.jsonl <deck | folder>...
 
 The tier, class and reasons of every shown slide of every deck as this checkout's converter writes them,
 and the slide's class in the hub once its budgets ran, one JSON line per deck (`src/census.ts` documents the
-columns: `n`, `i`, `tier`, `class`, `reasons`, `objects`, `geom`, `refs`, `bytes`, `metafiles`, `stored`,
-`hub`, `hubWhy`; per deck `geomFiles`, `geomBytes`, `error`). It reads the same files as a fidelity run
+columns: `n`, `i`, `tier`, `class`, `reasons`, `objects`, `geom`, `refs`, `bytes`, `metafiles`, the slide
+budgets' `decors`, `sheets`, `culled`, `plate`, what the legacy shapes draw (M9 leaf-legacy: `budgetLegacy`,
+objects the slide budget draws as their legacy shapes; `legacyFills`, a filled legacy rect or ellipse over
+custom geometry filling under half its box; `unitsLeft` and `unitsAlone`, objects past the budget no geometry
+unit draws on outputs, and those of them past `GEOM_COST.slide` alone), `stored`, `hub`, `hubWhy`; per deck
+`geomFiles`, `geomBytes`,
+`error`). It reads the same files as a fidelity run
 (`DECK_RE`); a link whose deck is gone is listed as `unreadable: "missing target"` without slides, never as
 an error. Each deck is converted in the harness's worker, with the pool's heap limit and timeout.
 
 The census and every fidelity run convert with what an import stores: the M9 fields of `M9_WRITES` and
-`PPTX_SHEETS` (`@ordo/pptx-scene` `version.ts`, the hub's and the client parse's one switch). A field held back
-until its drawer is on main (`M9_HELD_BACK`: decorations and their files, and picture sheets until
-`decor-render`) is therefore not measured as if it shipped: such a slide keeps each shape, and past the
-slide budgets' guard its topmost objects are listed missing. To measure a held-back field, add it to
-`M9_WRITES` in a scratch checkout.
+`PPTX_SHEETS` (`@ordo/pptx-scene` `version.ts`, the hub's and the client parse's one switch). Decorations and
+their files are written since `decor-render` (`M9_HELD_BACK` is empty): the native page draws them (the
+decoration drawer is registered at once) and reads the deck's decoration files beside its geometry files
+(`NativeDeck.geoms`, `pptxdecor:<n>` placeholders; from a hub, by their SHA-256 names). Picture sheets stay off
+until `decor-sheets` (`PPTX_SHEETS` false): a slide past the render clamp's 16 pictures lists the topmost
+missing. A field held back until its drawer is on main is not measured as if it shipped; to measure one, add it
+to `M9_WRITES` in a scratch checkout.
 
 A census line names its deck. Tables made from a census of private decks print counts only.
 
@@ -126,14 +137,30 @@ pnpm --filter @ordo/pptx-fidelity census:ratchet            # compare; exit 1 on
 pnpm --filter @ordo/pptx-fidelity census:ratchet -- --write # record golden-census-baseline.json
 ```
 
-`src/census-ratchet.ts` runs the census over the committed public corpus (`golden-pptx/`, 112 decks, 1,071
+`src/census-ratchet.ts` runs the census over the committed public corpus (`golden-pptx/`, 113 decks, 1,072
 shown slides, about 15 s here) and compares it with `golden-census-baseline.json`: per deck, each shown
-slide's number, class, class in the hub and reasons. A slide whose class or hub class got worse (native <
-hybrid < picture), a shown slide that is gone, or a deck of the baseline that is missing or that the converter
-can no longer read fails the run. A better class, other reasons on the same class and decks or slides the
+slide's number, class, class in the hub, reasons and (baseline version 2) `budgetLegacy`. A slide whose class or
+hub class got worse (native < hybrid < picture), a shown slide that is gone, a deck of the baseline that is
+missing or that the converter can no longer read, or any slide with `legacyFills` or `unitsAlone` above 0
+fails the run; another `budgetLegacy`, and a slide with `unitsLeft`, is reported. A version 1 baseline still reads (no `budgetLegacy` comparison). A better class, other reasons on the same class and decks or slides the
 baseline lacks pass and are reported; record an improvement with `--write` in the same PR, so it cannot slip
 back. The census goes to `test-results/census-golden.jsonl` and the comparison to
 `test-results/census-ratchet.json`. CI's fidelity job runs it on every pull request.
+
+### The guard deck (generated)
+
+```
+pnpm --filter @ordo/pptx-fidelity gen:line-art-holes             # write golden-pptx/.../line-art-holes.pptx
+pnpm --filter @ordo/pptx-fidelity gen:line-art-holes -- --check  # exit 1 when the committed deck differs
+```
+
+`golden-pptx/challenging-features/custom-geometry/line-art-holes.pptx` is written by `src/gen/line-art-holes.ts`
+(raw XML from `@ordo/pptx-scene` `test-util.ts`, `lineArtPath`), never downloaded: three line-art paths like the
+leaf template's (320 holes, 9,605 points, even-odd ink about 0.23 of their boxes; one turned in an unevenly
+scaled group) that pass the slide's drawing budget together, so the census ratchet sees what a drawer without a
+geometry unit draws for line art: its legacy shape, a line, never a box of its fill. The zip is stored, its
+entries dated 1980-01-01, so the bytes are the same everywhere; `src/gen/line-art-holes.test.ts` regenerates and
+compares them.
 
 <!-- m9:harness -->
 ## Hub import (M9)
@@ -167,7 +194,11 @@ two stored presentations modulo ids, media ids (by file), times, the import log 
 
 - `src/compat/`: one LibreOffice policy rule per file (`compatRule`: key, text, `hits(element, slide)`),
   listed once in `COMPAT_REGISTRY` (`index.ts`), in report order. An M9 track adds its rule (`flat3d`,
-  `warpRuns`, `vertLo`, `mirrorTurn`, `chartLo`) as a file and one line there.
+  `warpRuns`, `vertLo`, `mirrorTurn`, `chartLo`) as a file and one line there. The rules: `runShadow`,
+  `textOutline` (it counts picture-filled text as filled: the converter draws it in the text colour, and the
+  render copy LibreOffice draws has its outline removed), `refit`, `inheritedFit`, `cellRows` and `escZero`
+  (a run's `baseline="0"` under a non-zero inherited baseline, which LibreOffice reads as unset: drawn shifted
+  by that one at 58 %, as `src/esczero-probe.ts` measured).
 - `src/features/`: one family of XML features per file (`featureFamily`: key, features in report order,
   optional targets, `detect(source)` with the slide's XML and the parts it names, `related('/chart')`),
   listed once in `FEATURE_FAMILIES`. The text family is `textFeatures` (as since M2); every other family's
@@ -197,6 +228,8 @@ something out), `hubWhy` (`slide`, `presentation`, `geoms`), `level` (when not `
 
 - `src/placement.ts`: the M1 placement check on the synthetic 4:3 deck (boxes within 2 px of LibreOffice's).
 - `src/table-probe.ts`: the probe deck that measured LibreOffice's table row rule.
+- `src/esczero-probe.ts`: the probe decks that measured LibreOffice's reading of `baseline="0"` (`LO_ESC_ZERO`,
+  checked against the converter's `--lo-compat` emission in `esczero-probe.test.ts`).
 
 ## Tests
 

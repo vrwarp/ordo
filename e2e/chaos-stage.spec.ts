@@ -1,10 +1,11 @@
 import { expect, type Page, test } from '@playwright/test';
 import { SONG } from './helpers.ts';
 import { HubProcess } from './hubproc.ts';
+import { portOf } from './ports.ts';
 import { go, hubApi, launchOutputs, liveService, login } from './linkhelpers.ts';
 
-/** Ports 8620-8639 belong to this spec. */
-const HUB_PORT = 8620;
+/** Its two hubs: e2e/ports.ts row 'chaos-stage'. */
+const HUB_PORT = portOf('chaos-stage', 0);
 const STAGE = `http://stage.localhost:${HUB_PORT}`;
 
 type Telemetry = {
@@ -129,7 +130,7 @@ test('the stage survives a killed link worker and a malformed delta', async ({ c
  */
 test('the stage follows the fallback bus across a link worker restart', async ({ context, page }) => {
   test.setTimeout(120_000);
-  const port = 8622;
+  const port = portOf('chaos-stage', 1);
   const op = `http://op.localhost:${port}`;
   const hub = HubProcess.fresh(port);
   await hub.start();

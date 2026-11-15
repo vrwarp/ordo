@@ -14,16 +14,18 @@
  *   and the hub builds from what that parse returns, never the raw object (it is sanitised and parsed again
  *   when version 1 is assembled); bake recipes, clips and art plans are
  *   checked field by field. Fields the hub does not use are dropped (`sheets`, `plate`).
- * - **Shape files**: every one is checked again as the pool's own are named (`geomFileOf`: re-tokenised,
- *   `GeomFile`, `GEOM_FILE_MAX_BYTES`) and re-hashed; a file whose name is not the hash of what it holds, or
- *   that is not storable, is dropped and the slides' refs to it removed (their shapes draw their geometry
- *   beside it, else their legacy form, as a batch's unusable file). At most `PPTX_LIMITS.geomFileBytes` of
- *   them in all.
+ * - **Shape files**: every one is checked again as the pool's own are named, by its kind (`storedShapeFileOf`:
+ *   a geometry file's paths re-tokenised and checked by `GeomFile`, a decoration file's parts by `DecorFile`
+ *   and `DECOR_LIMITS`, both within `GEOM_FILE_MAX_BYTES`) and re-hashed; a file whose name is not the hash of
+ *   what it holds, or that is not storable, is dropped and the slides' refs to it removed (their shapes draw
+ *   their geometry beside it, else their legacy form; a decoration its inline parts, none for a filed one: it
+ *   draws nothing, as an older build), as a batch's unusable file. At most `PPTX_LIMITS.geomFileBytes` of them
+ *   in all.
  */
 import { readFileSync, statSync } from 'node:fs';
 import { GEOM_FILE_MAX_BYTES, ImageObject, MISSING_LIMITS, Slide } from '@ordo/domain';
 import type { PptxClientScene } from '@ordo/importers';
-import { geomFileOf, type NamedGeomFile } from '@ordo/importers/pptx-geoms.ts';
+import { type NamedGeomFile, storedShapeFileOf } from '@ordo/importers/pptx-geoms.ts';
 import { z } from 'zod';
 import { CONVERTER_VERSION, M9_WRITES, PPTX_LIMITS } from './shared.ts';
 
@@ -258,7 +260,7 @@ function check(raw: unknown, o: { libreoffice: boolean }): ClientSceneTaskOutput
     } catch {
       continue;
     }
-    const f = geomFileOf(json);
+    const f = storedShapeFileOf(json);
     if (!f || f.hash !== g.hash || bytes + f.bytes.length > L.geomFileBytes) continue;
     bytes += f.bytes.length;
     kept.add(f.hash);

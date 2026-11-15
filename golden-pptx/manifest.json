@@ -1433,5 +1433,17 @@
     "category": "challenging-features",
     "source_url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/slideshow/SampleShow.pptx",
     "description": "Timing: Slide show transitions, trigger delays, and timing nodes"
+  },
+  {
+    "slide_count": 1,
+    "master_count": 1,
+    "features": [
+      "customGeom"
+    ],
+    "file_size_bytes": 1070600,
+    "rel_path": "challenging-features/custom-geometry/line-art-holes.pptx",
+    "category": "challenging-features",
+    "generator": "tools/pptx-fidelity/src/gen/line-art-holes.ts",
+    "description": "Custom geometry: three line-art paths of 320 holes (9,605 points each) past the slide's drawing budget; the legacy shape of line art is a line, never a box of its fill (synthetic, generated here)"
   }
 ]

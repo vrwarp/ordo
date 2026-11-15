@@ -7,7 +7,6 @@ import {
   churchDeck,
   editorHub,
   importDeck,
-  M4_PORT,
   openEditor,
   openSlide,
   saveAndReload,
@@ -15,6 +14,7 @@ import {
   selectText,
   slidesOf,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import { hubApi } from './linkhelpers.ts';
 import { apiJson, liveEvent, type OutputRec, roleWindow } from './pptxlive.ts';
 
@@ -24,9 +24,10 @@ import { apiJson, liveEvent, type OutputRec, roleWindow } from './pptxlive.ts';
  * and after a reload the same presentation), the stage look's 'Notes' turned on in the look editor, and
  * then, live, the stage screen shows the live slide's notes in their own box under the next slide, clear
  * of the current lyrics, following the live slide, and draws the Hebrew line right to left beside the
- * English one, each paragraph taking its direction from its own text. Port 8907.
+ * English one, each paragraph taking its direction from its own text. Its port: e2e/ports.ts row
+ * 'editor-stage'.
  */
-const PORT = M4_PORT + 7;
+const PORT = portOf('editor-stage');
 const OUT = 'test-results/editor-stage';
 const HEBREW = 'ברוכים הבאים!';
 

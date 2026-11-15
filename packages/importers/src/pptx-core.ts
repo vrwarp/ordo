@@ -29,7 +29,7 @@
 import {
   type Box,
   compactSlideBytes,
-  drawnGeomRefs,
+  drawnShapeFileRefs,
   formatBytes,
   IMPORT_RESERVE_BYTES,
   type ImageObject,
@@ -123,7 +123,8 @@ export type Draft = {
   artText?: string;
   /**
    * M9 `ladder`: what the budgets or a failure left out of the slide (`Slide.pptx.missing` entries: decoration,
-   * chart, slide), with LibreOffice or without (nothing draws it: LibreOffice draws no budget's art).
+   * chart, slide), with LibreOffice or without (nothing draws it; the guard's left-outs are LibreOffice's art
+   * on a hub with it, `budgetLeft`).
    */
   dropped?: string[];
   /** The budget ladder simplified it (`simplified` in the result). */
@@ -224,7 +225,7 @@ export class ImportCore {
   readonly log: ImportLog;
   /** LibreOffice can draw what ordo cannot (decided once the tools are known). */
   lo: boolean;
-  /** The deck's outline files by name: what the kept slides' refs name. */
+  /** The deck's shape files (geometry and M9 decoration files) by name: what the kept slides' refs name. */
   readonly geomFiles = new Map<string, NamedGeomFile>();
   /** Bytes of `geomFiles`. */
   geomBytes = 0;
@@ -347,10 +348,12 @@ export class ImportCore {
   }
 
   /**
-   * M9, with LibreOffice: what the slide budgets' guard left out (`EmittedSlide.missing`, which lists nothing
-   * else when the converter plans for LibreOffice) is listed as dropped: LibreOffice draws no budget's art, so
-   * nothing draws it (`provenance` writes it to `Slide.pptx.missing` either way). The slide is then hybrid.
-   * The hub's job and the client parse both list it, through these drafts.
+   * M9, with LibreOffice: what the slide budgets' guard left out and nothing draws (`EmittedSlide.missing`,
+   * which lists nothing else when the converter plans for LibreOffice) is listed as dropped (`provenance`
+   * writes it to `Slide.pptx.missing` either way); the slide is then hybrid. Since `lo-forms` the converter
+   * gives the guard's left-outs to LibreOffice's art on such a hub (`budget:shapes` / `budget:pictures`, the
+   * owner's decision of 2026-11-13), so its scenes list nothing here; one that still lists them (a converter
+   * that culled them) has them listed. The hub's job and the client parse both run it, through these drafts.
    */
   budgetLeft(d: Draft, e: EmittedSlide): void {
     for (const m of Array.isArray(e.missing) ? e.missing : [])
@@ -436,13 +439,13 @@ export class ImportCore {
    * out).
    */
   budget(drafts: Draft[]): number {
-    // Outline files, admitted one by one in slide order while the import's budget holds; what names one past
-    // it (or one dropped as its batch arrived) is left out.
+    // Shape files (geometry and M9 decoration files), admitted one by one in slide order while the import's
+    // budget holds; what names one past it (or one dropped as its batch arrived) is left out.
     const admitted = new Set<string>();
     let fileBytes = 0;
     for (const d of drafts) {
       if (d.cls === 'picture') continue;
-      const refs = drawnGeomRefs(d.slide);
+      const refs = drawnShapeFileRefs(d.slide);
       if (!refs.length) continue;
       const keep = new Set<string>();
       for (const name of refs) {

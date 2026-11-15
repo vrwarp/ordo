@@ -5,7 +5,14 @@ import type { Ctx2D } from './ctx.ts';
 import { digest } from './digest.ts';
 import { drawEffected, type Look3dPlan } from './effects.ts';
 import { type Bounds, drawnBounds, geomBounds } from './geom/bounds.ts';
-import { drawGeom, type GeomFill, type GeomStroke, geomFillPath2D, geomPath2D } from './geom/draw.ts';
+import {
+  drawGeom,
+  type GeomFill,
+  type GeomStroke,
+  geomFillPath2D,
+  geomPath2D,
+  pathOpen,
+} from './geom/draw.ts';
 import { arrowFor, arrowReach } from './geom/ends.ts';
 import { hasShapeExtras, lineStyleOf, outlineOf, SHAPE_MITER_LIMIT } from './geom/outline.ts';
 import { gradientStyle } from './geom/paint.ts';
@@ -341,6 +348,46 @@ export function drawShapeObject(ctx: Ctx2D, o: ShapeObject, scale: number): bool
     return true;
   }
   return false;
+}
+
+/**
+ * A shape `drawGeomShape` draws without effects (no shadow, glow, soft edge or 3-D look), as its draw calls, in
+ * its order: each path's fill and its closed outline, then the open outlines (`drawGeom`). Each step draws one
+ * call under the same transform and state as the whole draw, so the steps drawn in order on one canvas give
+ * the very pixels of drawing it at once: what a geometry unit draws one step at a time (units.ts). Empty for a
+ * shape whose geometry file is not read yet or that draws nothing.
+ */
+export function geomShapeSteps(raw: ShapeObject, scale: number): ((ctx: Ctx2D) => void)[] {
+  const o = clampShapeObject(raw);
+  const opacity = num(o.opacity, 0, 1, 1);
+  if (geomAwaited(o.geom) || opacity <= 0) return [];
+  const s = num(scale, 0.01, 8, 1);
+  const step =
+    (at: number, fill: boolean, stroke: boolean) =>
+    (ctx: Ctx2D): void => {
+      const plan = planOf(ctx, o);
+      const path = plan.built.paths[at];
+      const f = fill ? plan.fill : null;
+      const st = stroke ? plan.stroke : null;
+      if (!path || (!f && !st)) return;
+      ctx.save();
+      placeBox(ctx, o.box, s, o.flipH === true, o.flipV === true);
+      ctx.globalAlpha *= opacity;
+      styleLines(ctx, o);
+      drawGeom(ctx, { ...plan.built, paths: [path] }, f, st);
+      ctx.restore();
+    };
+  const built = shapeGeometry(o);
+  const steps: ((ctx: Ctx2D) => void)[] = [];
+  const open: number[] = [];
+  built.paths.forEach((p, i) => {
+    steps.push(step(i, true, false));
+    if (!o.stroke) return;
+    if (pathOpen(p, built)) open.push(i);
+    else steps.push(step(i, false, true));
+  });
+  for (const i of open) steps.push(step(i, false, true));
+  return steps;
 }
 
 /** Draw a shape with M6 fields (`hasShapeExtras`) at `scale` device px per logical px. */

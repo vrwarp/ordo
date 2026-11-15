@@ -581,8 +581,13 @@ const FILL_ELEMENTS = [
  * entry), or undefined when it sets none (inherit). Picture fills go through `blip`.
  */
 export function readFill(parent: XNode | undefined, ctx: ColorCtx, blip?: BlipReader): Fill | undefined {
-  const el = firstChild(parent, FILL_ELEMENTS);
+  const el = fillElementOf(parent);
   return el ? fillOf(el, ctx, blip) : undefined;
+}
+
+/** The fill element set directly inside `parent`, the one `readFill` reads; undefined when it sets none. */
+export function fillElementOf(parent: XNode | undefined): XNode | undefined {
+  return firstChild(parent, FILL_ELEMENTS);
 }
 
 /** `ST_PresetPatternVal`. */

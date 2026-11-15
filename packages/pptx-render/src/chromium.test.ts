@@ -8,18 +8,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { annotatePptx } from './annotate.ts';
 import { renderWithPptxPreview } from './chromium.ts';
 import { budgetMs } from './timing.test-util.ts';
-
-/** A Chromium to drive: ORDO_TEST_CHROMIUM, else Playwright's when it is installed. */
-async function findChromium(): Promise<string | undefined> {
-  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
-  try {
-    const { chromium } = await import('@playwright/test');
-    const exe = chromium.executablePath();
-    return existsSync(exe) ? exe : undefined;
-  } catch {
-    return undefined;
-  }
-}
+import { findChromium } from '../../../tools/find-chromium.ts';
 
 const chromium = await findChromium();
 const dirs: string[] = [];

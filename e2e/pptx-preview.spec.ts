@@ -5,15 +5,17 @@ import { chromium, expect, test } from '@playwright/test';
 import pptxgen from 'pptxgenjs';
 import { HubProcess } from './hubproc.ts';
 import { hubApi, login } from './linkhelpers.ts';
+import { portOf } from './ports.ts';
 
 /**
  * PowerPoint import drawn by pptx-preview (design/20 "PPTX and PDF"): the hub draws the slides in headless
  * Chromium (Playwright's here, ORDO_CHROMIUM), and the presentation records which renderer drew it. Since
  * design/27 M3 the import screen offers 'Editable (recommended)' and 'Pictures (LibreOffice)' only; the route
  * still takes `renderer=pptx-preview` until M8 retires it, so the deck goes in through the API. The screen's
- * own choice is checked too: editable by default, and remembered on the device. Port 8392.
+ * own choice is checked too: editable by default, and remembered on the device. Its port: e2e/ports.ts row
+ * 'pptx-preview', #0.
  */
-const PORT = 8392;
+const PORT = portOf('pptx-preview', 0);
 
 test('a PowerPoint sent with renderer=pptx-preview is drawn by pptx-preview', async ({ page }) => {
   test.setTimeout(120_000);
@@ -109,16 +111,17 @@ test('a PowerPoint sent with renderer=pptx-preview is drawn by pptx-preview', as
 /**
  * A hub without LibreOffice (design/27 M9, `ORDO_LIBREOFFICE=off`): the import screen has no 'Pictures
  * (LibreOffice)' choice; a choice remembered on this device from a hub that had it imports as editable slides,
- * and the screen says so; the route refuses pictures with 501. Port 8393.
+ * and the screen says so; the route refuses pictures with 501. Port #1 of its row.
  */
 test('without LibreOffice the import screen offers editable slides only', async ({ page }) => {
   test.setTimeout(120_000);
   const before = process.env.ORDO_LIBREOFFICE;
   process.env.ORDO_LIBREOFFICE = 'off';
-  const hub = HubProcess.fresh(8393);
+  const LITE_PORT = portOf('pptx-preview', 1);
+  const hub = HubProcess.fresh(LITE_PORT);
   await hub.start();
   try {
-    await login(page, 'http://op.localhost:8393');
+    await login(page, `http://op.localhost:${LITE_PORT}`);
     await page.evaluate(() => {
       localStorage.setItem('ordo.pptxImport', 'libreoffice');
       location.hash = '#/library/import';
@@ -133,7 +136,7 @@ test('without LibreOffice the import screen offers editable slides only', async 
       page.getByText('This hub has no LibreOffice, so PowerPoint files are imported as editable slides.'),
     ).toBeVisible();
     await expect(page.getByRole('checkbox', { name: /Extend plain backgrounds to 16:9/ })).toBeEnabled();
-    const a = await hubApi(8393);
+    const a = await hubApi(LITE_PORT);
     const res = await a.post('import/document', {
       multipart: {
         renderer: 'libreoffice',

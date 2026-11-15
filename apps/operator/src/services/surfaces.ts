@@ -11,8 +11,10 @@ import {
   StreamDeckDriver,
 } from '@ordo/surfaces';
 import { create } from 'zustand';
+import { modalOpen } from '../components/dialogEscape.ts';
 import { HoldGuard } from '../lib/confirm.ts';
 import { deckView } from '../lib/deckView.ts';
+import { midiCuesOnChange } from '../lib/midiOut.ts';
 import { saveSettings } from '../state/library.ts';
 import { useLibrary } from '../state/library.ts';
 import { useLive } from '../state/live.ts';
@@ -65,11 +67,12 @@ export class Surfaces {
    * the key for CLEAR_HOLD_MS sends the confirming press. Auto-repeat keydowns are ignored by the driver.
    */
   private onHoldDown = (e: KeyboardEvent) => {
-    if (e.repeat || e.isComposing || isModifierOnly(e) || inTextField(e)) return;
+    if (e.repeat || e.isComposing || isModifierOnly(e) || inTextField(e) || modalOpen()) return;
     const a = useLibrary.getState().data.settings.keymap[normalizeCombo(e)];
     if (a?.id !== 'clearAll') return;
     this.hold.down(() => {
-      if (useLive.getState().clearAllUntil !== undefined) this.ctl.dispatch({ id: 'clearAll' }, 'keyboard');
+      if (useLive.getState().clearAllUntil !== undefined && !modalOpen())
+        this.ctl.dispatch({ id: 'clearAll' }, 'keyboard');
     });
   };
   private onHoldUp = () => this.hold.up();
@@ -78,7 +81,8 @@ export class Surfaces {
   constructor(ctl: Controller) {
     this.ctl = ctl;
     const s = useLibrary.getState().data.settings;
-    this.keyboard = new KeyboardDriver(s.keymap, ctl.dispatch);
+    // No live key acts while a modal dialog is open (design/15 "Dialogs"); the Stream Deck and MIDI still do.
+    this.keyboard = new KeyboardDriver(s.keymap, ctl.dispatch, { blocked: modalOpen });
     this.deck = new StreamDeckDriver(ctl.dispatch);
     this.midi = new MidiDriver(ctl.dispatch);
     this.midi.setMappings(s.surfaces.midi);
@@ -104,12 +108,8 @@ export class Surfaces {
       }),
       useLive.subscribe((st, prev) => {
         if (st.state !== prev.state || st.hubConnected !== prev.hubConnected) this.pushView(st.state);
-        if (st.state.live !== prev.state.live && st.state.live !== undefined) {
-          const liveCue = st.state.cues[st.state.live];
-          if (liveCue?.midiCues?.length) {
-            this.midi.sendCues(liveCue.midiCues);
-          }
-        }
+        const cues = midiCuesOnChange(prev.state, st.state);
+        if (cues.length) this.midi.sendCues(cues);
       }),
     );
   }

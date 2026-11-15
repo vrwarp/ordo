@@ -74,8 +74,13 @@ function slowMeasurer(ms: number) {
 }
 
 describe('the table prepare step (M9)', () => {
-  it('is registered after the geometry files', () => {
-    expect(prepareSteps().map((s) => s.name)).toEqual(['shape drawers', 'geometry files', 'table layouts']);
+  it('is registered after the shape files (geometry and decoration files)', () => {
+    expect(prepareSteps().map((s) => s.name)).toEqual([
+      'shape drawers',
+      'geometry files',
+      'decoration files',
+      'table layouts',
+    ]);
   });
 
   it(`lays a large table out in slices of about ${TABLE_SLICE_MS} ms, and the draw then lays out nothing`, async () => {

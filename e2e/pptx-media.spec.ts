@@ -2,6 +2,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
 import { hubApi, login } from './linkhelpers.ts';
+import { portOf } from './ports.ts';
 import { BOXED_ROT, LOOP_SLIDES, loopDeck, MEDIA_SLIDES, mediaDeck, probeMedia } from './pptxdecks.ts';
 import {
   apiJson,
@@ -30,9 +31,10 @@ import {
  * video; [2] a text slide; [3] a looping muted full-slide motion background; [4] a numSld=3 sound, [5] a
  * hidden slide, [6-8] text slides; [9] a clip that is not a video; [10] a clip whose processing fails;
  * [11] a looping clip trimmed by p14:trim to its middle two seconds. "Probe loop" [12-15]: a 4-slide
- * looping announcement deck with music across its slides. Port 8398.
+ * looping announcement deck with music across its slides. Its port: e2e/ports.ts row
+ * 'pptx-media'.
  */
-const PORT = 8398;
+const PORT = portOf('pptx-media');
 const OUT = 'test-results/pptx-media';
 const SKEW_MS = process.env.ORDO_E2E_REAL_GPU === '1' ? 17 : 100;
 
@@ -328,8 +330,10 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
     for (const p of both) {
       const n = name(p);
       const centres: RGB[] = [];
+      const times: (number | undefined)[] = [];
       for (let i = 0; i < 5; i++) {
         const img = await frame(p, i === 0 ? 'boxed' : undefined);
+        times.push((await slotOf(p, boxedKey))?.t);
         const c = at(img, probe.centre);
         centres.push(c);
         expect(isSweep(c), `${n}: the clip in its box (${c})`).toBe(true);
@@ -342,10 +346,25 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
         expect(isGrey(at(img, probe.slide)), `${n}: the slide`).toBe(true);
         await p.waitForTimeout(250);
       }
-      expect(
-        centres.some((c) => dist(c, centres[0]!) > 40),
-        `${n}: the clip plays`,
-      ).toBe(true);
+      // The clip plays: a capture's centre differs from the first. The sweep loops every 6 s, and on a loaded
+      // machine one capture can take about as long (screenshots of 4 to 6.6 s: five Canvas 2D captures 5 to 8 s
+      // apart all landed on the loop's green while the clip played), so while none differs it captures on,
+      // waiting 0.9 s longer each time to step through the loop. A clip that does not play never differs.
+      const moved = () => centres.some((c) => dist(c, centres[0]!) > 40);
+      for (let more = 1; !moved() && more <= 8; more++) {
+        await p.waitForTimeout(250 + 900 * more);
+        const c = at(await frame(p), probe.centre);
+        // Each extra capture must still show the clip in its box, as the first five do: a black or
+        // re-init frame differs from the first without the clip playing.
+        expect(isSweep(c), `${n}: the clip in its box (${c})`).toBe(true);
+        centres.push(c);
+        times.push((await slotOf(p, boxedKey))?.t);
+      }
+      const seen =
+        `centres ${centres.map((c) => `(${c})`).join(' ')}; clip time after each capture ` +
+        `${times.map((t) => t?.toFixed(2) ?? '-').join(', ')} s`;
+      if (centres.length > 5) console.log(`${n}: the boxed clip after ${centres.length} captures: ${seen}`);
+      expect(moved(), `${n}: the clip plays (${seen})`).toBe(true);
     }
 
     // ---- Clear media during the in-slide clip, then arm the next slide's clip: the live slide shows its
@@ -429,23 +448,31 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
     await expect.poll(async () => (await live()).live, { timeout: 15_000 }).toBe(2);
     await expect.poll(async () => (await live()).layers.media.content).toBeNull();
 
-    // ---- [3] The motion background: a muted looping video behind the slide's text, moving.
+    // ---- [3] The motion background: a muted looping video behind the slide's text, moving from each capture to
+    // the next. Its clip (12 s, `probeMedia`) shows no frame twice in a loop, so two captures differ unless they
+    // are a whole loop apart, and one capture with its waits takes 2 to 6 s (CI runner, a loaded machine). With
+    // a 4 s clip the CI runner's first and last captures were once a loop apart and saw the same frame.
+    const bgId = slides[3]!.backgroundMediaId!;
+    const clipTime = async (p: Page) => (await slots(p)).find((s) => s.key.includes(bgId))?.t;
     await go(3);
     for (const p of both) {
       await expect.poll(() => cueOn(p), { timeout: 20_000 }).toBe(3);
       const shots = [];
+      const times: (number | undefined)[] = [];
       for (let i = 0; i < 3; i++) {
         shots.push(await frame(p, `motion-${i}`));
+        times.push(await clipTime(p));
         await p.waitForTimeout(400);
       }
       const blue = at(shots[0]!, [200, 1000]);
       expect(blue[2] > 150 && blue[0] < 40, `${name(p)}: the blue motion background (${blue})`).toBe(true);
-      const moved = diffShare(shots[0]!, shots[2]!);
-      expect(moved, `${name(p)}: it moves (${(moved * 100).toFixed(2)}% of pixels changed)`).toBeGreaterThan(
-        0.005,
-      );
+      const moved = [diffShare(shots[0]!, shots[1]!), diffShare(shots[1]!, shots[2]!)];
+      const said =
+        `${moved.map((m) => `${(m * 100).toFixed(2)}%`).join(', ')} of pixels changed from one capture to the ` +
+        `next; clip time after each capture ${times.map((t) => t?.toFixed(2) ?? '-').join(', ')} s`;
+      console.log(`${name(p)}: motion background ${said}`);
+      for (const m of moved) expect(m, `${name(p)}: it moves (${said})`).toBeGreaterThan(0.005);
     }
-    const bgId = slides[3]!.backgroundMediaId!;
     await expect
       .poll(async () => (await slots(gpu)).some((s) => s.key.includes(bgId) && !s.paused), {
         timeout: 10_000,

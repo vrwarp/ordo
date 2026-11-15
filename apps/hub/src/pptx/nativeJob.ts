@@ -19,8 +19,8 @@
  *    picture. A pool that cannot start fails the import with a clean message: the deck is never
  *    parsed on the event loop, and LibreOffice never sees a deck as uploaded (its render copy needs the pool
  *    too). Every zip read refuses overlapping entries (`deckParts.ts`).
- * 3. Classification and the §3.4 size budgets, the budget ladder of M9 (`ladder.ts`): an object naming an
- *    outline file past the import's budget is left out (`withoutFiles`); a slide over 64 KB as stored takes
+ * 3. Classification and the §3.4 size budgets, the budget ladder of M9 (`ladder.ts`): an object naming a
+ *    shape file (an outline or an M9 decoration file) past the import's budget is left out (`withoutFiles`); a slide over 64 KB as stored takes
  *    the first level of `fitSlideBudget` that fits (its outlines re-gridded, its text formatting dropped, its
  *    decorations left out), and once the presentation passes 3 MiB the slides from there on are stored
  *    minimal (text, pictures, background; `planImportSizes`). None becomes a picture; what a level leaves out
@@ -66,7 +66,7 @@
  * saved or the import fails.
  */
 import { open, rm, stat } from 'node:fs/promises';
-import { type Box, drawnGeomRefs, newId, type Presentation, type Slide } from '@ordo/domain';
+import { type Box, drawnShapeFileRefs, newId, type Presentation, type Slide } from '@ordo/domain';
 import {
   bodyBoxes,
   bodyTexts,
@@ -80,7 +80,6 @@ import { withoutFiles } from '@ordo/importers/pptx-ladder.ts';
 import { ImportLog } from '@ordo/importers/pptx-report.ts';
 import { type PictureHeader, pictureSize, type SectionInfo, type SlideRef } from '@ordo/pptx-scene';
 import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
-import { GEOM_PREFIX } from '@ordo/pptx-scene/emit.ts';
 import { relsPartOf } from '@ordo/pptx-scene/opc.ts';
 import type { Job } from '@ordo/protocol';
 import { errorMessage } from '../errors.ts';
@@ -92,7 +91,7 @@ import type { ClientSceneTaskOutput } from './clientScene.ts';
 import { type ClipFile, ClipImport, spillClips } from './clips.ts';
 import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
 import { sceneFontFiles } from './faces.ts';
-import { nameGeoms, storeGeomFiles } from './geoms.ts';
+import { isShapeFilePlaceholder, nameGeoms, storeGeomFiles } from './geoms.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { importResult, logSafe } from './report.ts';
 import {
@@ -686,7 +685,7 @@ class NativeImport {
       if (want && !want.has(s.index)) continue;
       let geomLeft: Converted['geomLeft'];
       if (geomOver.has(s.index)) {
-        const left = withoutFiles(s.slide, (ref) => !ref.startsWith(GEOM_PREFIX));
+        const left = withoutFiles(s.slide, (ref) => !isShapeFilePlaceholder(ref));
         s.slide = left.slide;
         geomLeft = { dropped: left.dropped, unmasked: left.unmasked, missing: left.missing };
       }
@@ -1118,7 +1117,7 @@ class NativeImport {
     for (const s of r.result.slides) {
       let geomLeft: Converted['geomLeft'];
       if (geomOver.has(s.index)) {
-        const left = withoutFiles(s.slide, (ref) => !ref.startsWith(GEOM_PREFIX) || names.has(ref));
+        const left = withoutFiles(s.slide, (ref) => !isShapeFilePlaceholder(ref) || names.has(ref));
         s.slide = left.slide;
         geomLeft = { dropped: left.dropped, unmasked: left.unmasked, missing: left.missing };
       }
@@ -1141,13 +1140,14 @@ class NativeImport {
   }
 
   /**
-   * Step 3b: the geometry files the kept slides name, stored once each (`storeGeomFiles`). The objects that
-   * name a file that could not be stored are left out (a shape whose file never arrives draws nothing,
-   * `geom/stored.ts`); the slide keeps the rest.
+   * Step 3b: the shape files the kept slides name (geometry files and M9 decoration files,
+   * `drawnShapeFileRefs`), stored once each (`storeGeomFiles`). The objects that name a file that could not be
+   * stored are left out (a shape whose file never arrives draws nothing, `geom/stored.ts`, `decor/files.ts`);
+   * the slide keeps the rest.
    */
   private async storeGeoms(drafts: Draft[]): Promise<void> {
     const names: string[] = [];
-    for (const d of drafts) if (d.cls !== 'picture') names.push(...drawnGeomRefs(d.slide));
+    for (const d of drafts) if (d.cls !== 'picture') names.push(...drawnShapeFileRefs(d.slide));
     if (!names.length) return;
     const r = await storeGeomFiles(this.deps.store, this.deps.lib, this.core.geomFiles, names, (m) =>
       this.warn('geometry', m),
@@ -1156,7 +1156,7 @@ class NativeImport {
     if (!r.failed.length) return;
     const failed = new Set(r.failed);
     for (const d of drafts) {
-      if (d.cls === 'picture' || !drawnGeomRefs(d.slide).some((x) => failed.has(x))) continue;
+      if (d.cls === 'picture' || !drawnShapeFileRefs(d.slide).some((x) => failed.has(x))) continue;
       const left = withoutFiles(d.slide, (ref) => !failed.has(ref));
       d.slide = left.slide;
       this.core.leftOut(d, left, 'store');

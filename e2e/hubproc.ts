@@ -9,6 +9,8 @@ export class HubProcess {
   readonly dataDir: string;
   /** Where the hub's log lines go (appended across restarts); none: next to the data, `<data>.log`. */
   readonly logFile: string;
+  /** Variables of this hub's own environment, over the test worker's (never written into `process.env`). */
+  readonly env: Record<string, string> = {};
   constructor(port: number, dataDir: string, logFile = `${dataDir}.log`) {
     this.port = port;
     this.dataDir = dataDir;
@@ -63,6 +65,7 @@ export class HubProcess {
     this.proc = spawn(cmd!, args, {
       env: {
         ...process.env,
+        ...this.env,
         ORDO_DATA: this.dataDir,
         ORDO_DOMAIN: 'localhost',
         ORDO_PORT: String(this.port),
@@ -100,10 +103,12 @@ export class HubProcess {
     } catch {
       /* no supervisor.json */
     }
+    const supervisor = this.proc?.pid;
+    this.frozen = [];
     this.proc?.kill('SIGKILL');
     this.proc = undefined;
     for (const pid of stopped) {
-      if (!listed.includes(pid)) continue;
+      if (!listed.includes(pid) && pid !== supervisor) continue;
       try {
         process.kill(pid, 'SIGKILL');
       } catch {
@@ -123,6 +128,40 @@ export class HubProcess {
     process.kill(pid, 'SIGSTOP');
     return pid;
   }
+
+  /**
+   * Freeze the whole hub, supervisor and both children (SIGSTOP each): its sockets stay open and silent, no
+   * pong, no delta, no close, and the supervisor's own watchdog is frozen with them, so the silence lasts as
+   * long as the test wants (freezing only the live child gets it replaced after 5 s). `thaw()` resumes them.
+   */
+  freeze(): number[] {
+    const pids = [this.proc?.pid ?? 0];
+    try {
+      for (const c of Object.values(this.children())) pids.push(c.pid ?? 0);
+    } catch {
+      /* no supervisor.json yet */
+    }
+    const frozen = pids.filter((p) => p > 0);
+    for (const pid of frozen) {
+      this.stopped.push(pid);
+      process.kill(pid, 'SIGSTOP');
+    }
+    this.frozen = frozen;
+    return frozen;
+  }
+
+  /** Resume a hub frozen by `freeze()`. */
+  thaw(): void {
+    for (const pid of this.frozen.splice(0)) {
+      try {
+        process.kill(pid, 'SIGCONT');
+      } catch {
+        /* gone */
+      }
+    }
+  }
+
+  private frozen: number[] = [];
 
   /** The supervisor's children (two-process hub): pids from <data>/supervisor.json. */
   children(): Record<'live' | 'library', { pid?: number; state: string; restarts: number }> {

@@ -1363,6 +1363,16 @@ export const SurfaceSettings = z.object({
 });
 export type SurfaceSettings = z.infer<typeof SurfaceSettings>;
 
+/**
+ * Phones (design/28, design/24 "Feature flags are settings"): `enabled` says phones are used during services.
+ * Off by default, which is today's behaviour for the venue PC; on, the hub holds heavy jobs while live and
+ * needs the `x-ordo` header on writes from signed-in full sessions. Phones can sign in either way.
+ */
+export const PhoneSettings = z.object({
+  enabled: z.boolean().default(false),
+});
+export type PhoneSettings = z.infer<typeof PhoneSettings>;
+
 export const GeneralSettings = z.object({
   venueName: z.string().max(200).default('ordo'),
   timeZone: z.string().max(100).default('UTC'),

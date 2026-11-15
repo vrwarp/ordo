@@ -97,6 +97,33 @@ export function documentFields(
   ];
 }
 
+/** How long a document import waits for the hub's first capabilities answer before it goes ahead (ms). */
+export const IMPORT_CAPS_WAIT_MS = 3_000;
+
+/**
+ * The capabilities a document import goes by: those known, else the hub's first answer, waited for at most
+ * `waitMs` (`loadCaps`: `hubCaps.ts` `loadHubCaps`). A deck dropped before the Import tab heard the hub would
+ * otherwise be parsed in the browser for a hub with LibreOffice (unknown counts as having it,
+ * `hubHasLibreOffice`), which a hub without it refuses, parsing the deck again itself on the NAS (review r2a).
+ * Undefined when the hub does not answer in time: the import goes ahead as before.
+ */
+export async function importCaps(
+  caps: HubCapabilities | undefined,
+  loadCaps: () => Promise<HubCapabilities | undefined>,
+  waitMs = IMPORT_CAPS_WAIT_MS,
+): Promise<HubCapabilities | undefined> {
+  if (caps) return caps;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), waitMs);
+  });
+  try {
+    return await Promise.race([loadCaps().catch(() => undefined), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** The files the import screen's drop zone takes: what the hub accepts (`HubCapabilities.documents`). */
 export function documentAccept(caps: HubCapabilities | undefined): string {
   const exts = caps?.documents.filter((d) => /^[a-z0-9]{1,8}$/.test(d)) ?? ['pptx', 'pdf'];

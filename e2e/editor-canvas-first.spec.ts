@@ -10,13 +10,13 @@ import {
   editorState,
   frames,
   importDeck,
-  M4_PORT,
   type Obj,
   openEditor,
   openSlide,
   opOrigin,
   slidesOf,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import { uploadMedia } from './helpers.ts';
 import type { HubProcess } from './hubproc.ts';
 import { hubApi, login } from './linkhelpers.ts';
@@ -46,9 +46,9 @@ import { ffmpeg } from './pptxdecks.ts';
  *   chosen; before, the floating bar's Soft shadow was dropped and the drawer's got the theme's outline back.
  * - The editing overlay on its own layer and the cached object nodes: on the shape+text slide the caret
  *   still blinks, typing shows, and the rounded box (a cached node) stays drawn under the text.
- * Port M4_PORT + 11.
+ * Its port: e2e/ports.ts row 'editor-canvas-first'.
  */
-const PORT = M4_PORT + 11;
+const PORT = portOf('editor-canvas-first');
 const OUT = 'test-results/editor-canvas-first';
 let hub: HubProcess;
 let deck: string;

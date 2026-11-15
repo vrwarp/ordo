@@ -381,7 +381,7 @@ describe('pptx-native: classes, budgets and timing', () => {
     expect(loJobs(p.id)).toEqual([]);
   });
 
-  it('lists what the slide budgets leave out with LibreOffice too: it draws no budget art (M9)', async () => {
+  it("gives what the slide budgets' guard leaves out to LibreOffice's art, and lists nothing (M9, lo-forms)", async () => {
     // 208 text boxes: past the 200 the render clamp draws, the topmost are left out by the converter's guard.
     const many = Array.from({ length: 208 }, (_, i) =>
       sp({
@@ -396,13 +396,21 @@ describe('pptx-native: classes, budgets and timing', () => {
     ).join('');
     const { result, p } = await importDeck(buildDeck({ slides: [{ shapes: many }] }), 'Crowded.pptx');
     const [s] = slidesOf(p) as [Slide];
-    expect(s.objects.filter((o) => o.type === 'text').length).toBeLessThan(208);
-    // This hub has LibreOffice, and still nothing draws them: listed, the slide hybrid, nothing waits.
-    expect(s.pptx).toMatchObject({ class: 'hybrid', missing: ['element'] });
-    expect(s.pptx!.pending).toBeUndefined();
-    expect(s.pptx!.notes!.join(' ')).toMatch(/element\(s\) past the slide's budgets are not drawn/);
-    expect(result).toMatchObject({ hybrid: 1, pending: 0 });
-    expect(loJobs(p.id)).toEqual([]);
+    // Version 1 draws 198 of them (and the white page: the art makes the clamp's 200); this hub has LibreOffice,
+    // so its art draws the ten topmost: the slide waits for it, lists nothing missing and keeps their text.
+    expect(s.objects.filter((o) => o.type === 'text')).toHaveLength(198);
+    expect(s.pptx).toMatchObject({ class: 'hybrid', pending: true });
+    expect(s.pptx!.missing).toBeUndefined();
+    expect(s.pptx!.artText?.split('\n')).toEqual(Array.from({ length: 10 }, () => 'Word'));
+    expect(s.pptx!.notes!.join(' ')).toMatch(
+      /10 element\(s\) past the slide's budgets: LibreOffice draws them/,
+    );
+    expect(result).toMatchObject({ hybrid: 1, pending: 1, missing: 0 });
+    const [lo] = loJobs(p.id);
+    expect(lo?.slides).toMatchObject([{ slideId: s.id, class: 'hybrid' }]);
+    expect(lo?.slides[0]?.art?.elements.map((r) => r.shapeId)).toEqual(
+      Array.from({ length: 10 }, (_, k) => 208 + k),
+    );
   });
 
   /** Slide 2 of an import is over 64 KB: simplified by the budget ladder (M9), logged once, counted once. */

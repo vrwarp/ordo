@@ -192,3 +192,32 @@ describe('the table drawer reach', () => {
     expect(tableReach(ctx, table(300))).not.toBeNull();
   });
 });
+
+// Last in this file: it registers the real decoration drawer, which then stays registered.
+describe('the decoration drawer reach', () => {
+  it('reaches where its shapes and their shadows draw, not the whole frame', async () => {
+    const { decorReach } = await import('./decor/index.ts');
+    const { decorOf, decorShowcase } = await import('./decor/test-util.ts');
+    const members = decorShowcase(12);
+    const o = decorOf(members);
+    const r = objectReach(ctx, o, 1);
+    expect(r).not.toBeNull();
+    expect(r).toEqual(decorReach(o));
+    // Every unturned member's own reach as a separate shape (its geometry, outline and shadow) inside it,
+    // within a pixel. (A turned member's own reach holds its turned box's corners, `drawnBounds`; the
+    // decoration's, its placed points only: tighter.)
+    for (const m of members) {
+      if (m.box.rotation) continue;
+      const own = objectReach(ctx, m, 1)!;
+      const grown = { x: r!.x - 1, y: r!.y - 1, w: r!.w + 2, h: r!.h + 2 };
+      expect(contains(grown, own), m.id).toBe(true);
+    }
+    // A row of four small shapes reaches their row, not the slide.
+    const row = decorOf(members.slice(0, 4));
+    const rr = objectReach(ctx, row, 1)!;
+    expect(rr.w * rr.h).toBeLessThan(0.2 * 1920 * 1080);
+    // Nothing drawn: an empty reach; no decoration: its legacy line's.
+    expect(objectReach(ctx, { ...o, opacity: 0 }, 1)).toMatchObject({ w: 0, h: 0 });
+    expect(objectReach(ctx, without(o, 'decor'), 1)).toEqual(objectReach(ctx, without(o, 'decor'), 1));
+  });
+});

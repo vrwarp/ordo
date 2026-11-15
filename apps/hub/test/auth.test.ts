@@ -123,6 +123,11 @@ describe('auth', () => {
     for (const r of hub.routes)
       expect(['public', 'edit', 'operate', 'token', 'live', 'any']).toContain(r.access);
     expect(() => checkRouteAccess({ method: 'GET', url: '/x' })).toThrow(/does not declare/);
+    // And its lowest cap (design/28 §3.2; phones-routes.test.ts has the table).
+    for (const r of hub.routes) expect(['view', 'light', 'full']).toContain(r.cap);
+    expect(() => checkRouteAccess({ method: 'GET', url: '/x', config: { access: 'edit' } })).toThrow(
+      /does not declare a cap/,
+    );
     const byUrl = (u: string, m = 'POST') =>
       hub!.routes.find((r) => r.url === `/api/v1${u}` && r.method.includes(m));
     expect(byUrl('/live/events')?.access).toBe('operate');

@@ -34,6 +34,7 @@ export {
 } from './eval.ts';
 export {
   drawGeom,
+  evenOddArea,
   FILL_BRIGHTNESS,
   GEOM_CLIP_RULE,
   GEOM_FILL_RULE,

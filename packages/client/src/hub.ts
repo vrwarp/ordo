@@ -80,6 +80,11 @@ export const AUTH_RETRY_MS = 30_000;
 export const AUTH_RETRY_MAX_MS = 120_000;
 /** How often liveness is judged (independent of the ping period, so loss is noticed within a second). */
 const CHECK_MS = 1000;
+/**
+ * A check tick this much later than its period means this thread itself was blocked (a long task, a GC, a
+ * frozen tab): the pongs that arrived meanwhile may still be queued behind the tick, so it does not judge.
+ */
+export const STALL_MS = 2000;
 
 /**
  * One WebSocket to the hub with hello, clock sync, liveness and automatic reconnect.
@@ -89,6 +94,11 @@ const CHECK_MS = 1000;
  * playlist is live the hub is pinged every 3 s and the connection is declared lost after 9 s without a
  * pong; idle, every 10 s and 30 s. On loss the socket is discarded at once (no close handshake, which
  * never completes on a dead peer), `status { connected: false }` fires and a reconnect is scheduled.
+ *
+ * A check that runs more than STALL_MS late (this thread was blocked, not the hub) does not judge: pongs that
+ * arrived during the stall may be queued behind it. It pings and leaves the judgement for one more live ping
+ * period (at most until 9 s + 3 s after the last pong), so a stall shorter than that never drops a live
+ * socket, and a dead hub is still lost within 12 s.
  */
 export class HubConnection extends Emitter<HubEvents> {
   private ws?: WebSocket;
@@ -99,6 +109,9 @@ export class HubConnection extends Emitter<HubEvents> {
   private burstTimers: ReturnType<typeof setTimeout>[] = [];
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private lastPong = 0;
+  /** When the liveness check last ran, and until when it does not judge after a stall of this thread. */
+  private lastCheckAt = 0;
+  private judgeAfter = 0;
   private lastSeq?: number;
   private live = false;
   private authRetry = AUTH_RETRY_MS;
@@ -295,11 +308,30 @@ export class HubConnection extends Emitter<HubEvents> {
   private startPinging(): void {
     clearInterval(this.pingTimer);
     this.pingTimer = setInterval(() => this.ping(), this.pingIntervalMs);
-    if (!this.checkTimer) this.checkTimer = setInterval(() => this.check(), CHECK_MS);
+    if (!this.checkTimer) {
+      this.lastCheckAt = Date.now();
+      this.judgeAfter = 0;
+      this.checkTimer = setInterval(() => this.check(), CHECK_MS);
+    }
   }
 
   private check(): void {
+    const now = Date.now();
+    const late = now - this.lastCheckAt - CHECK_MS;
+    this.lastCheckAt = now;
     if (!this.ws || !this.connected) return;
+    if (late > STALL_MS && !this.judgeAfter) {
+      // This thread was blocked, not necessarily the hub: ask again and judge one live ping period later,
+      // after the pongs queued behind this tick (if any) have been read, but no later than one live ping
+      // period past the usual limit. Once per stall: a tick that is late again right after (timers throttled
+      // in a background tab) judges, so liveness is never put off twice.
+      const extra = this.opts.livePingIntervalMs ?? LIVE_PING_MS;
+      this.judgeAfter = Math.max(now + 1, Math.min(now + extra, this.lastPong + this.lostAfterMs + extra));
+      this.ping();
+      return;
+    }
+    if (now < this.judgeAfter) return;
+    this.judgeAfter = 0;
     if (this.sincePongMs >= this.lostAfterMs) this.lose('liveness');
   }
 

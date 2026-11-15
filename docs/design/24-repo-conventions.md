@@ -38,13 +38,32 @@ ordo/
 - **Bundle budget.** `node tools/bundle-report.mjs` prints what each built app (operator, output, stage)
   loads before its first paint (`initial`: index.html's entry and the chunks it imports statically, with
   gzip), its CSS, its workers and its lazy chunks (named by their source maps: the PowerPoint `importer`,
-  the `table drawer`); `--json <file>` writes the same. CI runs it with `--check` after `pnpm build`: an
-  app's initial JavaScript may grow at most 2 % over `tools/bundle-baseline.json`. New code the first paint
-  does not need is loaded when first used: a page opened before or after a service (Setup, the settings
-  pages: `React.lazy` in `App.tsx`; the service worker precaches every chunk, so they open offline), an M9
+  the `table drawer`, the `editor`, the `live view`, the `operate services`, the `renderer`); `--json
+  <file>` writes the same. CI runs it with `--check` after `pnpm build`: an app's initial JavaScript may
+  grow at most 2 % over `tools/bundle-baseline.json`. For the operator it also reports the **compact
+  path**, what a phone loads (design/28 §3.1, §7): the compact first load (the initial chunks, the
+  compact shell's start modules of `apps/operator/src/pageSets.ts` with their imports, the core worker and
+  the CSS) at most `compact.firstLoadGzip` (300,000 B gzip, an absolute budget `--write` keeps), with its
+  headroom printed; the compact precache (`FILES_COMPACT` of `dist/sw.js`); and a violation for any file
+  of either set whose source map lists a `COMPACT_FORBIDDEN` source (the canvas editor, Konva, the live
+  view, Setup, the settings pages, the output and control-surface services, the preset geometry, the import
+  worker) or a worker other than the core and thumbnail workers; `--check` fails on either. The operator's
+  regular total (every script but the workers: what the venue PC loads before its Shell mounts, since the code
+  split) is recorded in the baseline (`regularTotal`, `regularTotalGzip`) and held to the same 2 % budget by
+  `--check`; a baseline without it is not checked on it. New code
+  the first paint does not need is loaded when first used: pages come from the page registry
+  (`apps/operator/src/pages.ts`: one memoized load per module, rendered synchronously once loaded; not
+  `React.lazy`, whose Suspense fallback costs about 300 ms on every first open, even from cache), which a
+  regular device preloads at startup in parallel with the session (the venue PC mounts its Shell once every
+  regular page and the operate services have settled, so it is no slower; only the live view and the operate
+  services must have loaded, any other page that failed is its own page's error, and a Retry reloads the page
+  when importing again cannot work, as in Chromium, which keeps a failed import), and a phone never loads; an M9
   object kind's drawer (`registerShapeDrawerLoader`, loaded by the workers' slide prepare steps and the
-  editor canvas before they draw). A PR whose growth is accepted re-records the baseline with `--write`
-  and gives the numbers in its description.
+  editor canvas before they draw). The service worker precaches by device class (every built file on the
+  venue PC and tablets, the compact set on a phone: `apps/operator/src/sw/sets.ts`), so the pages open
+  offline. `apps/operator/test/entry.test.ts` fails, before a build, on a static import from the entry into
+  editor, live, settings, Setup or output code. A PR whose growth is accepted re-records the baseline with
+  `--write` and gives the numbers in its description.
 
 ## TypeScript that Node can run as it is
 
@@ -72,7 +91,10 @@ schema does not have, fails the check rather than quietly testing something else
 - No `await` inside the frame loop. Promises resolve into pre-allocated slots.
 - Every message type is a Zod schema; no untyped `postMessage`.
 - Reducer is pure; side effects live in bus adapters.
-- Feature flags are settings, not build flags.
+- Feature flags are settings, not build flags. Example: `settings.phones.enabled` (design/28 P0, "Phones are
+  used during services" in Settings → PINs, off by default, which is today's behaviour). On, the hub holds
+  heavy jobs while a service is live and needs the `x-ordo` header on writes from signed-in full sessions;
+  off, it does neither. Each hub process caches the value and updates it on the settings delta.
 
 ## How Claude Code sessions should work in this repo
 

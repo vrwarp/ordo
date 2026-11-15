@@ -44,7 +44,13 @@ import {
   layoutRich,
 } from './text/rich.ts';
 import type { Measurer, RichLayout } from './text/types.ts';
-import { bandSource, baselineOffset, layoutText, lyricTextFor } from './text2d.ts';
+import {
+  bandSource,
+  baselineOffset,
+  layoutText,
+  lyricTextFor,
+  registeredSlideObjectsDrawer,
+} from './text2d.ts';
 
 /**
  * Tight sprites (design/27 §7.3, M7): a layer's raster is the bounding box of what it draws, at its offset
@@ -547,9 +553,11 @@ export function slideReach(
     // The slide's PowerPoint or page picture covers the frame.
     if (drawn.pictureMediaId) return null;
     let r: Reach = EMPTY;
-    // As `drawSlide2D` draws them: past the slide's drawing budget, as their legacy shapes or without effects.
+    // As `drawSlide2D` draws them: past the slide's drawing budget, as their legacy shapes or without effects;
+    // an object past it whose geometry unit is ready (units.ts) as the unit draws it, its original's bounds.
+    const units = registeredSlideObjectsDrawer();
     for (const o of withinDrawBudget(drawn.objects)) {
-      r = union(r, objectReach(ctx, o, scale));
+      r = union(r, units?.reach?.(o, scale) ?? objectReach(ctx, o, scale));
       if (r === null) return null;
     }
     return r;

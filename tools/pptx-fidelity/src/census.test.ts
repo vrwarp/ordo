@@ -5,8 +5,11 @@ import { DEFAULT_LYRIC_STYLE, type Slide } from '@ordo/domain';
 import { extractZip } from '@ordo/importers/zip-stream.ts';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
-import { budgetColumns, hubClasses, parseCensusArgs, runCensus } from './census.ts';
+import { lineArtD } from '@ordo/renderer/units.test-util.ts';
+import { budgetColumns, hubClasses, legacyColumns, parseCensusArgs, runCensus } from './census.ts';
+import { LINE_ART_HOLES_PATH } from './gen/line-art-holes.ts';
 import { listDecks } from './decks.ts';
+import { dataUri, testPicture } from './png.ts';
 import { zipStore } from './table-probe.ts';
 
 const dirs: string[] = [];
@@ -148,11 +151,105 @@ describe('budgetColumns (M9, decor-conv)', () => {
     const notes = [
       '12 element(s) outside the slide are not imported',
       '2 shape(s) that show nothing are not imported',
-      "3 object(s) past the slide's drawing budget are drawn from its decoration plate (as their legacy shapes until it is made)",
+      "2 object(s) past the slide's drawing budget are drawn whole from a geometry unit on outputs; their legacy shapes elsewhere",
+      "1 object(s) past the slide's drawing budget are drawn without their effects until effect units are made",
     ];
     expect(budgetColumns(slide, notes)).toEqual({ decors: 1, sheets: 1, culled: 14, plate: 3 });
     expect(budgetColumns({ objects: [] }, [])).toEqual({});
   });
+});
+
+describe('legacyColumns (M9 leaf-legacy)', () => {
+  const red = { r: 255, g: 0, b: 0, a: 1 };
+  const shape = (id: string, kind: string, d: string, extra: Record<string, unknown> = {}) =>
+    ({
+      id,
+      type: 'shape',
+      shape: kind,
+      box,
+      radius: 0,
+      opacity: 1,
+      fill: red,
+      geom: { paths: [{ d, w: 100, h: 100 }] },
+      ...extra,
+    }) as Slide['objects'][number];
+  // A frame: an outline and one big hole (even-odd ink 0.19 of the box).
+  const frame = 'M 0 0 L 100 0 L 100 100 L 0 100 Z M 5 5 L 95 5 L 95 95 L 5 95 Z';
+  const full = 'M 0 0 L 100 0 L 100 100 L 0 100 Z';
+
+  it('counts a filled legacy rect or ellipse over a geometry that fills under half its box', () => {
+    expect(
+      legacyColumns(
+        slide([
+          shape('a', 'rect', frame),
+          shape('b', 'ellipse', frame),
+          // Its legacy is a line, an outline only, or the geometry fills its box: none of these.
+          shape('c', 'line', frame),
+          shape('d', 'rect', frame, { fill: undefined, stroke: { width: 2, color: red } }),
+          shape('e', 'rect', full),
+          { ...shape('f', 'rect', frame), geom: { preset: 'frame' } } as Slide['objects'][number],
+          // A table's grid: its fills' bounding box is its legacy shape by design.
+          shape('g', 'rect', frame, { origin: { src: 'pptx', shapeId: 2, role: 'grid' } }),
+        ]),
+      ),
+    ).toEqual({ legacyFills: 2 });
+    // 2,049 squares filling the box, stored as a chain of three pieces: past the renderer's nesting bound,
+    // the share is unknown, and a rect over it counts.
+    const squares = Array.from({ length: 2_049 }, () => full);
+    const pieces = [0, 819, 1_638].map((at, k) => ({
+      d: squares.slice(at, at + 819).join(' '),
+      w: 100,
+      h: 100,
+      ...(k ? { cont: true } : {}),
+    }));
+    expect(
+      legacyColumns(
+        slide([{ ...shape('g', 'rect', full), geom: { paths: pieces } } as Slide['objects'][number]]),
+      ),
+    ).toEqual({
+      legacyFills: 1,
+    });
+    // Within both bounds (801 squares, each tested against the others' 5 points: 3.2M of UNION_NESTING_WORK's
+    // 4M), an odd count fills the box: its rect is its legacy and does not count.
+    const within = { d: squares.slice(0, 801).join(' '), w: 100, h: 100 };
+    expect(
+      legacyColumns(
+        slide([{ ...shape('h', 'rect', full), geom: { paths: [within] } } as Slide['objects'][number]]),
+      ),
+    ).toEqual({});
+    expect(legacyColumns(slide([]))).toEqual({});
+  });
+
+  it('counts an object past the drawing budget alone, which no geometry unit draws (r2a repair)', () => {
+    // One full-slide line art of 8 paths with 20 x 15 holes each: about 1.2 x GEOM_COST.slide alone.
+    const art = {
+      id: 'art',
+      type: 'shape',
+      box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+      shape: 'line',
+      opacity: 1,
+      radius: 0,
+      fill: red,
+      geom: {
+        paths: Array.from({ length: 8 }, (_, i) => ({
+          d: lineArtD({ w: 4000, h: 3000, cols: 20, rows: 15, wall: 0.1 + 0.02 * i }),
+          w: 4000,
+          h: 3000,
+        })),
+      },
+    } as Slide['objects'][number];
+    expect(legacyColumns(slide([art]))).toEqual({ budgetLegacy: 1, unitsLeft: 1, unitsAlone: 1 });
+  });
+
+  it("counts what the slide budget draws as legacy shapes, and the guard deck's line art draws no fill", async () => {
+    const dir = await work();
+    const out = join(dir, 'guard.jsonl');
+    await runCensus([join(import.meta.dirname, '../../..', LINE_ART_HOLES_PATH)], out);
+    const row = JSON.parse((await readFile(out, 'utf8')).trim()) as { slides: Record<string, unknown>[] };
+    // At b50d486 its three line-art paths were rects of their fills: legacyFills 3.
+    expect(row.slides[0]).toMatchObject({ n: 1, class: 'native', budgetLegacy: 1 });
+    expect(row.slides[0]).not.toHaveProperty('legacyFills');
+  }, 120_000);
 });
 
 describe('census', () => {
@@ -223,5 +320,39 @@ describe('census', () => {
       ext: 'pptx',
       unreadable: 'missing target',
     });
+  }, 120_000);
+
+  it("rates the guard's left-outs as LibreOffice's art with it, and as missing without it (lo-forms)", async () => {
+    const dir = await work();
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    const slide = p.addSlide();
+    for (let i = 0; i < 20; i++)
+      slide.addImage({
+        data: dataUri(testPicture(40 + i, 30, i / 20)),
+        x: (i % 5) * 2,
+        y: Math.floor(i / 5),
+        w: 1.5,
+        h: 0.8,
+      });
+    await writeFile(join(dir, 'pictures.pptx'), (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    const row = async (noLibreOffice: boolean) => {
+      const out = join(dir, `census-${noLibreOffice}.jsonl`);
+      await runCensus([join(dir, 'pictures.pptx')], out, () => {}, { noLibreOffice });
+      return (
+        (JSON.parse(await readFile(out, 'utf8')) as Record<string, unknown>).slides as Record<
+          string,
+          unknown
+        >[]
+      )[0]!;
+    };
+    const lo = await row(false);
+    expect(lo.class).toBe('hybrid');
+    expect(lo.reasons).toContain('art:budget:pictures');
+    expect(lo.missing).toBeUndefined();
+    const noLo = await row(true);
+    expect(noLo.reasons).toContain('missing:decoration');
+    expect(noLo.reasons).not.toContain('art:budget:pictures');
+    expect(noLo.missing).toEqual(['decoration']);
   }, 120_000);
 });

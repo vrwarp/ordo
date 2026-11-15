@@ -169,7 +169,8 @@ function previewPlayer(): PreviewPlayer {
   return preview;
 }
 
-function MediaPreview({ m, onClose }: { m: Media; onClose: () => void }) {
+/** A media item's preview dialog (a sheet on the compact layout, where the phone's Media tab opens it). */
+export function MediaPreview({ m, onClose }: { m: Media; onClose: () => void }) {
   // An SVG previews as itself (an animated one moves here; the screens draw its still).
   const f = svgNote(m) ? m.original : (m.delivery ?? m.original);
   return (

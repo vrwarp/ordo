@@ -1,10 +1,12 @@
 import { DecorData, cleanPathData } from '@ordo/domain';
 
 /**
- * `ShapeObject.decor` for drawing (design/27 M9): re-validated against the schema and kept, else undefined,
- * and the shape draws its legacy fields (a line without a stroke: nothing). Each part's path string is
- * re-tokenised as every stored path is (`cleanPathData`), and a part left empty is dropped. A stub of the
- * schema track; the decoration track adds the full clamp here (paint indices, the point and shadow caps).
+ * `ShapeObject.decor` for the render plan (design/27 M9): re-validated against the schema and kept, else
+ * undefined, and the shape draws its legacy fields (a line without a stroke: nothing). Each part's path string
+ * is re-tokenised as every stored path is (`cleanPathData`), and a part left empty is dropped. Only what tells
+ * the shape dispatch that a decoration is there: the field-by-field clamp (paint indices, the point and shadow
+ * caps, `DECOR_LIMITS`) is the decoration drawer's (`decor/clamp.ts`), loaded with it, so the operator's first
+ * paint carries no decoration code (design/24 "Bundle budget").
  */
 export function clampDecor(v: unknown): DecorData | undefined {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;

@@ -8,7 +8,6 @@ import {
   editorHub,
   editorState,
   importDeck,
-  M4_PORT,
   type Obj,
   openEditor,
   openSlide,
@@ -19,6 +18,7 @@ import {
   slidesOf,
   stored,
 } from './editorhelpers.ts';
+import { portOf } from './ports.ts';
 import { hubApi } from './linkhelpers.ts';
 
 /**
@@ -27,9 +27,9 @@ import { hubApi } from './linkhelpers.ts';
  * on the revision both opened, changes the welcome title and saves: the hub refuses it (409), the editor
  * merges the first one's save with its draft and saves again, so both edits are stored. Then the first edits
  * the same welcome title differently: the conflict dialog names it by slide number, and 'Reload theirs'
- * takes the stored version over. It ends with a save and a reload, the presentation JSON identical. Port 8908.
+ * takes the stored version over. It ends with a save and a reload, the presentation JSON identical. Its port: e2e/ports.ts row 'editor-merge'.
  */
-const PORT = M4_PORT + 8;
+const PORT = portOf('editor-merge');
 const OUT = 'test-results/editor-merge';
 
 /** Select `[start, end)` of a text object's field on the open slide and type over it. */

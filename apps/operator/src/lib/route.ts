@@ -99,3 +99,91 @@ export function allowedForRole(
   if (profile === 'full') return true;
   return r.name === 'settings' && EDIT_PROFILE_SETTINGS.includes(r.page);
 }
+
+/** What a page key names: the regular bodies App renders (lib/route.ts is pure; src/pages.ts loads them). */
+export type PageKey = 'library' | 'live' | 'edit' | 'playlists' | 'previews' | 'settings' | 'setup';
+
+type LibraryTab = Extract<Route, { name: 'library' }>['tab'];
+
+/** The page a route shows, with the props its body takes. */
+export type PageChoice =
+  | { page: 'library'; props: { tab: LibraryTab } }
+  | { page: 'live'; props: Record<string, never> }
+  | { page: 'edit'; props: { id: string } }
+  | { page: 'playlists'; props: { id?: string } }
+  | { page: 'previews'; props: { id?: string; slideId?: string } }
+  | { page: 'settings'; props: { page: string } }
+  | { page: 'setup'; props: Record<string, never> };
+
+/**
+ * pageFor's answer: a page to render, a redirect (with `replace`: no history entry, decided during render so
+ * the refused page's chunk is never requested), or nothing.
+ */
+export type PageDecision = PageChoice | { page: null; redirect: Route; replace: boolean } | { page: null };
+
+const LIBRARY: Route = { name: 'library', tab: 'presentations' };
+
+/**
+ * Where a route goes on the compact layout or on a phone (design/28 §2.1, §3.1): Setup and the checklist,
+ * every settings page, the live view, the Themes, Fonts and Import tabs and the Previews page without a
+ * presentation go to the Library; the canvas editor goes to the presentation's previews (owner question 6;
+ * P1 moves it to #/view, P2 to the words editor). Null: the route opens as it is.
+ */
+export function compactRedirect(r: Route): Route | null {
+  switch (r.name) {
+    case 'settings':
+    case 'setup':
+    case 'checklist':
+    case 'live':
+      return LIBRARY;
+    case 'library':
+      return r.tab === 'themes' || r.tab === 'fonts' || r.tab === 'import' ? LIBRARY : null;
+    case 'previews':
+      return r.id ? null : LIBRARY;
+    case 'edit':
+      return { name: 'previews', id: r.id };
+    case 'playlists':
+      return null;
+  }
+}
+
+/**
+ * The page for a route (App renders it; design/28 §3.1 "Routes"). On the compact layout, or when `restricted`
+ * (a phone on either layout, Safari's "Request Desktop Website" included; the shell adds a capped session),
+ * compactRedirect wins and its redirect replaces the history entry; what stays is the Library (Presentations
+ * and Media), the playlists and a presentation's previews. Otherwise today's rules, unchanged: allowedForRole
+ * (a refused route renders nothing and is pushed to the Library), the settings for the operate role only,
+ * the live view for the operate role on the full profile only.
+ */
+export function pageFor(
+  r: Route,
+  ctx: {
+    role: 'operate' | 'edit';
+    profile: 'full' | 'edit';
+    layout: 'compact' | 'regular';
+    restricted: boolean;
+  },
+): PageDecision {
+  if (ctx.layout === 'compact' || ctx.restricted) {
+    const target = compactRedirect(r);
+    if (target) return { page: null, redirect: target, replace: true };
+  } else if (!allowedForRole(r, ctx.role, ctx.profile))
+    return { page: null, redirect: LIBRARY, replace: false };
+  switch (r.name) {
+    case 'live':
+      return ctx.role === 'operate' && ctx.profile === 'full' ? { page: 'live', props: {} } : { page: null };
+    case 'library':
+      return { page: 'library', props: { tab: r.tab } };
+    case 'edit':
+      return { page: 'edit', props: { id: r.id } };
+    case 'playlists':
+      return { page: 'playlists', props: { id: r.id } };
+    case 'settings':
+      return ctx.role === 'operate' ? { page: 'settings', props: { page: r.page } } : { page: null };
+    case 'setup':
+    case 'checklist':
+      return { page: 'setup', props: {} };
+    case 'previews':
+      return { page: 'previews', props: { id: r.id, slideId: r.slideId } };
+  }
+}

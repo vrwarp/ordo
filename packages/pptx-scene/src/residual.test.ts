@@ -55,7 +55,8 @@ const BASE: Readonly<Record<string, Decision>> = {
 /**
  * M9's policy changes: wave 1 (`conv-seams`), real 3-D is drawn flat; wave 2 (`decor-conv`), nothing is
  * left to the art for being slow to draw (decisions.md "Slow-to-draw elements"), and real 3-D drawn flat in a
- * decoration is a row of its own.
+ * decoration is a row of its own; `lo-forms`, the pictures the guard leaves out past the render clamp go to
+ * LibreOffice's art on a hub with it, a row of their own.
  */
 const M9_CHANGES: Readonly<Record<string, Decision>> = {
   '3d': 'approx',
@@ -63,6 +64,9 @@ const M9_CHANGES: Readonly<Record<string, Decision>> = {
   'custGeom:complex': 'native',
   'geom:complex': 'native',
   '3d:flat-in-decoration': 'approx',
+  'budget:pictures': 'residual',
+  // text-fix (r2a): picture-filled text is drawn in the text colour, a row of its own.
+  'textFill:picture': 'approx',
 };
 
 const IN = 914_400;
@@ -93,8 +97,10 @@ describe('the residual decision table (M9)', () => {
     expect(RESIDUAL_ROWS.filter((r) => r.decision !== BASE[r.reason]).map((r) => r.reason)).toEqual([
       '3d',
       '3d:camera',
+      'textFill:picture',
       'custGeom:complex',
       'geom:complex',
+      'budget:pictures',
       '3d:flat-in-decoration',
     ]);
     // Rows name census features the census has (fallback features or tier blockers).
@@ -121,6 +127,9 @@ describe('the residual decision table (M9)', () => {
     expect(decisionOf('no such reason', 'native')).toBe('native');
     expect(missingKindOf(['shear', 'chart', 'ole'])).toBe('chart');
     expect(missingKindOf(['budget:shapes'])).toBe('decoration');
+    // The guard's left-outs given to the art (with LibreOffice) are rated residual, art for the census.
+    expect([decisionOf('budget:shapes'), decisionOf('budget:pictures')]).toEqual(['residual', 'residual']);
+    expect(missingKindOf(['budget:pictures'])).toBe('decoration');
     expect(missingKindOf(['warp'])).toBe('element');
     expect(missingKindOf(undefined)).toBe('element');
   });
@@ -152,6 +161,7 @@ describe('the residual decision table (M9)', () => {
       ['vert', text('vert="vert"')],
       ['numCol', text('numCol="2"')],
       ['anchorCtr', text('anchorCtr="1"')],
+      ['textFill:picture', text('', '', para(run('AMOR', '', '<a:blipFill><a:blip/></a:blipFill>')))],
     ];
     for (const [reason, shapes] of cases) {
       const e = parseDeck(buildDeck({ slides: [{ shapes }] })).slides[0]!.elements[0]!;

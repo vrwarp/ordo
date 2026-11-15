@@ -12,13 +12,16 @@ import {
   PROTOCOL_VERSION,
   type Role,
   type ServerMessage,
+  type SessionCap,
 } from '@ordo/protocol';
 import type { Logger } from 'pino';
 import { WebSocket, WebSocketServer } from 'ws';
-import type { Auth, Principal } from './auth.ts';
+import { type Auth, capAtLeast, type Principal } from './auth.ts';
+import { CLIENT_MESSAGE_CAP, SERVER_MESSAGE_CAP } from './caps.ts';
 import { errorMessage, HttpError } from './errors.ts';
 import type { Change } from './library.ts';
 import { LiveRejection, type LiveService } from './live.ts';
+import { originAllowed } from './net.ts';
 
 export const QUEUE_LIMIT = 100;
 const HEALTH_STALE_MS = 3500;
@@ -43,6 +46,11 @@ export const RATE_PER_S = 50;
 type Client = {
   ws: WebSocket;
   principal: Principal | null;
+  /**
+   * The session's cap (design/28 §3.3); 'full' for every other socket. Below full (a phone) the socket's
+   * messages are checked against CLIENT_MESSAGE_CAP and SERVER_MESSAGE_CAP; a full socket runs no such check.
+   */
+  cap: SessionCap;
   role?: Role;
   outputId?: string;
   inflight: number;
@@ -185,22 +193,9 @@ export class SocketHub {
     return this.clients.size;
   }
 
-  /** Origin must be the request's own host or one of the venue's role hosts. */
+  /** Origin must be the request's own host or one of the venue's role hosts (net.ts `originAllowed`). */
   originAllowed(req: IncomingMessage): boolean {
-    const origin = req.headers.origin;
-    if (!origin) return true;
-    let host: string;
-    let hostname: string;
-    try {
-      const u = new URL(origin);
-      host = u.host.toLowerCase();
-      hostname = u.hostname.toLowerCase();
-    } catch {
-      return false;
-    }
-    if (host === (req.headers.host ?? '').toLowerCase()) return true;
-    const d = this.opts.domain;
-    return hostname === d || hostname.endsWith(`.${d}`);
+    return originAllowed(req.headers.origin, req.headers.host ?? '', this.opts.domain);
   }
 
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -232,6 +227,7 @@ export class SocketHub {
     const c: Client = {
       ws,
       principal,
+      cap: principal?.kind === 'session' ? principal.cap : 'full',
       inflight: 0,
       needsState: false,
       alive: true,
@@ -355,6 +351,9 @@ export class SocketHub {
 
   private send(c: Client, m: ServerMessage | string): void {
     if (c.ws.readyState !== WebSocket.OPEN) return;
+    // A capped socket never receives what its cap does not reach (the broadcasts that build a string already
+    // skip edit sockets for live state, health and signalling).
+    if (c.cap !== 'full' && typeof m !== 'string' && !capAtLeast(c.cap, SERVER_MESSAGE_CAP[m.t])) return;
     c.inflight++;
     c.ws.send(typeof m === 'string' ? m : JSON.stringify(m), () => {
       c.inflight--;
@@ -388,6 +387,12 @@ export class SocketHub {
       return;
     }
     if (m.t !== 'hello' && !c.role) return;
+    // A capped socket (a phone) sends only what its cap reaches: a live command is refused with an ack, the rest
+    // is dropped (design/28 §3.3, §10 item 1).
+    if (c.cap !== 'full' && !capAtLeast(c.cap, CLIENT_MESSAGE_CAP[m.t])) {
+      if (m.t === 'live.event') this.send(c, { t: 'live.ack', v: 1, id: m.id, rejected: 'forbidden: cap' });
+      return;
+    }
     switch (m.t) {
       case 'hello': {
         if (m.appVersion !== APP_VERSION) return this.bye(c, 'version');
@@ -540,12 +545,26 @@ export class SocketHub {
     changes: Change[],
     forOutputs: (ch: Change) => boolean = (ch) => ch.kind === 'settings',
   ): void {
+    const tokens = (ch: Change) => ch.kind === 'settings' && ch.id === 'outputs' && Array.isArray(ch.entity);
     const strip = (ch: Change): Change =>
-      ch.kind === 'settings' && ch.id === 'outputs' && Array.isArray(ch.entity)
+      tokens(ch)
         ? { ...ch, entity: (ch.entity as { token?: string }[]).map(({ token: _t, ...o }) => o) }
         : ch;
-    const full = JSON.stringify({ t: 'library.delta', v: PROTOCOL_VERSION, changes });
-    const stripped = JSON.stringify({ t: 'library.delta', v: PROTOCOL_VERSION, changes: changes.map(strip) });
+    // One stringify per delta (design/28 §3.4): the whole batch is serialised when the first session socket
+    // needs it, and a second time without tokens only when the batch has outputs with tokens; otherwise edit
+    // sockets get the same string (its bytes are those of the stripped one: strip changes nothing then).
+    let full: string | undefined;
+    let stripped: string | undefined;
+    const needsStrip = changes.some(tokens);
+    const fullMsg = () => {
+      full ??= JSON.stringify({ t: 'library.delta', v: PROTOCOL_VERSION, changes });
+      return full;
+    };
+    const strippedMsg = () => {
+      if (!needsStrip) return fullMsg();
+      stripped ??= JSON.stringify({ t: 'library.delta', v: PROTOCOL_VERSION, changes: changes.map(strip) });
+      return stripped;
+    };
     const relevant = changes.filter(forOutputs);
     const toOutputs = relevant.length
       ? JSON.stringify({
@@ -555,8 +574,8 @@ export class SocketHub {
         })
       : undefined;
     for (const c of this.clients) {
-      if (c.role === 'operate') this.send(c, full);
-      else if (c.role === 'edit') this.send(c, stripped);
+      if (c.role === 'operate') this.send(c, fullMsg());
+      else if (c.role === 'edit') this.send(c, strippedMsg());
       else if ((c.role === 'output' || c.role === 'stage') && toOutputs) this.send(c, toOutputs);
     }
   }

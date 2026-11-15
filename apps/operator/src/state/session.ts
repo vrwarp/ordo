@@ -1,8 +1,74 @@
 import { api, ApiFailure } from '@ordo/client';
-import { type AuthMeRes, ROUTES } from '@ordo/protocol';
+import { type AuthMeRes, ROUTES, type SessionCap } from '@ordo/protocol';
 import { create } from 'zustand';
+import { thisIsPhone } from '../lib/layout.ts';
 
 const LAST_ROLE = 'ordo.op.lastRole';
+
+export type { SessionCap };
+
+/** The caps a client knows (the protocol's SessionCap), for reading the hub's answer defensively. */
+const KNOWN_CAPS: readonly SessionCap[] = ['full', 'light', 'view'];
+const knownCap = (v: unknown): v is SessionCap => KNOWN_CAPS.includes(v as SessionCap);
+
+/**
+ * A session's cap (design/28 §3.2, the protocol's `SessionCap`): 'full' (as today: the venue PC, an iPad),
+ * 'light' (a phone) or 'view', from `AuthMeRes.cap`. Read defensively, as the hub's data may come from an older
+ * or newer build: no cap is 'full' (an older hub, or an uncapped session), an unknown one is 'view' (the
+ * narrowest).
+ */
+export function capOf(me: AuthMeRes | undefined | null): SessionCap {
+  const cap: unknown = me?.cap satisfies AuthMeRes['cap'];
+  if (cap === undefined || cap === null) return 'full';
+  return knownCap(cap) ? cap : 'view';
+}
+
+/**
+ * The hub grants this cap on sign-in (`AuthMeRes.caps` lists it; absent or malformed: an older hub that grants
+ * none).
+ */
+export function hubGrants(me: AuthMeRes | undefined | null, cap: SessionCap): boolean {
+  const caps: unknown = me?.caps satisfies AuthMeRes['caps'];
+  if (!Array.isArray(caps) || caps.length > 16) return false;
+  return caps.includes(cap);
+}
+
+/**
+ * Pre-upgrade phones (design/28 owner question 12): a phone that signed in before caps holds an uncapped session
+ * (12 h, often with a remembered device) that its polls keep alive. Signed in, on a phone, with a hub that grants
+ * `light` and an uncapped session: sign out once, so the next sign-in asks for the cap. `flag` is the
+ * sessionStorage mark of RESIGN_KEY: once set, never again in this tab (no loop if the sign-out did not take).
+ */
+export function phoneMustSignInAgain(
+  me: AuthMeRes | undefined | null,
+  phone: boolean,
+  flag: string | null,
+): boolean {
+  if (!phone || flag !== null || !me) return false;
+  if (me.role !== 'operate' && me.role !== 'edit') return false;
+  return hubGrants(me, 'light') && capOf(me) === 'full';
+}
+
+/** sessionStorage: 'signed-out' after the one sign-out (the sign-in says why), 'done' once signed in again. */
+export const RESIGN_KEY = 'ordo.op.phoneSignIn';
+
+export function readResignFlag(): string | null {
+  try {
+    return typeof sessionStorage === 'undefined' ? null : sessionStorage.getItem(RESIGN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Store the mark; false where sessionStorage is unavailable (then the phone is never signed out: no loop). */
+export function writeResignFlag(value: 'signed-out' | 'done'): boolean {
+  try {
+    sessionStorage.setItem(RESIGN_KEY, value);
+    return sessionStorage.getItem(RESIGN_KEY) === value;
+  } catch {
+    return false;
+  }
+}
 
 type SessionState = {
   status: 'loading' | 'ready' | 'offline' | 'error';
@@ -20,9 +86,16 @@ export function currentRole(): 'operate' | 'edit' | null {
   return r === 'operate' || r === 'edit' ? r : null;
 }
 
+/** The session error while the hub cannot be reached at all (the compact layout words it its own way). */
+export const HUB_UNREACHABLE = 'The hub is unreachable. Retrying…';
+
 export async function refreshSession(): Promise<void> {
   try {
     const me = await api<AuthMeRes>(ROUTES.me);
+    if (phoneMustSignInAgain(me, thisIsPhone(), readResignFlag()) && writeResignFlag('signed-out')) {
+      await logout();
+      return;
+    }
     if (me.role === 'operate' || me.role === 'edit') {
       try {
         localStorage.setItem(LAST_ROLE, me.role);
@@ -44,7 +117,7 @@ export async function refreshSession(): Promise<void> {
       /* ignore */
     }
     if (last === 'operate' || last === 'edit') useSession.setState({ status: 'offline', offlineRole: last });
-    else useSession.setState({ status: 'error', error: 'The hub is unreachable. Retrying…' });
+    else useSession.setState({ status: 'error', error: HUB_UNREACHABLE });
   }
 }
 
