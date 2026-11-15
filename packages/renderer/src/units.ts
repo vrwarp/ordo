@@ -833,6 +833,13 @@ export interface SlideUnitsOptions {
   pin?(key: string): void;
   /** `UNIT_WAIT_MS` unless given. */
   waitMs?: number;
+  /** Called with each unit's key once this call has made it (not for a unit ready already). */
+  onUnit?(key: string): void;
+  /**
+   * Checked before each unit is made: true leaves it, and those after it, to their legacy copies this time
+   * (an output's live or hurried job, which must not wait; even at t = 0, where `waitMs` 0 still makes one).
+   */
+  stop?(): boolean;
 }
 
 /**
@@ -867,6 +874,10 @@ export async function prepareSlideUnits(
       bytes += u.bytes;
       continue;
     }
+    if (opts.stop?.()) {
+      left++;
+      continue;
+    }
     if (now() - t0 > waitMs) {
       left++;
       continue;
@@ -879,6 +890,7 @@ export async function prepareSlideUnits(
       continue;
     }
     made++;
+    opts.onUnit?.(u.key);
     bytes += u.bytes;
     longestMs = Math.max(longestMs, longest);
   }

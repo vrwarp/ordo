@@ -987,6 +987,32 @@ describe('link worker core', () => {
       t.close();
     });
 
+    it('a GO to the warmed cue hurries its warm job, under a background too (r2b units-live)', async () => {
+      const t = setup();
+      await t.core.start();
+      const d = pictureDeck();
+      // A picture background: its key ('bg|<media>|<file>') sits in the warm key after the slide's.
+      const withBg = (s: LiveState): LiveState => ({
+        ...s,
+        layers: {
+          ...s.layers,
+          background: { content: { kind: 'background', mediaId: 'p0' }, at: 0, seq: 0 },
+        },
+      });
+      t.hub.emit('state', stateMsg(withBg(d.at(d.first, d.first + 1, 40))));
+      await tick(30);
+      const warm = t.toAsset.flatMap((m) => (m.t === 'warm' ? [m.warm] : []))[0]!;
+      expect(warm.key).toContain('|bg|p0|');
+      // A jump to the warmed cue while its warm job runs: that job stops waiting for its units.
+      t.toAsset.length = 0;
+      t.hub.emit('state', stateMsg(withBg(d.at(d.first + 2, d.first + 3, 41))));
+      await tick(30);
+      expect(t.toAsset).toContainEqual({ t: 'hurry', keys: [warm.key] });
+      t.core.sync();
+      expect(t.toAsset.filter((m) => m.t === 'hurry')).toHaveLength(1);
+      t.close();
+    });
+
     it('cancels the jobs no plan needs any more, and sends a key needed again anew', async () => {
       const t = setup();
       await t.core.start();
@@ -1047,5 +1073,166 @@ describe('link worker core', () => {
       ).toMatch(/interactive 20 jobs, wait p95 18 ms/);
       t.close();
     });
+  });
+});
+
+describe('link worker core: a GO never waits for drawing (r2b units-live, design/14 "Late units")', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  type JobMsg = Extract<ToAsset, { t: 'job' }>;
+  const slideJobs = (msgs: ToAsset[]) =>
+    msgs.filter((m): m is JobMsg => m.t === 'job' && m.job.kind === 'slide');
+  const jobOf = (msgs: ToAsset[], cue: number) =>
+    slideJobs(msgs).find((m) => m.job.kind === 'slide' && m.job.cueIndex === cue);
+  /** Answer a job as the asset worker does. */
+  const done = (
+    t: ReturnType<typeof setup>,
+    key: string,
+    extra: Partial<Extract<FromAsset, { t: 'done' }>> = {},
+  ) => t.asset.port2.postMessage({ t: 'done', layer: 1, key, ms: 1, ...extra } satisfies FromAsset);
+  const ready = (t: ReturnType<typeof setup>, slideKey: string, left = 0) =>
+    t.asset.port2.postMessage({ t: 'unitsReady', layer: 1, slideKey, keys: ['u'], left } satisfies FromAsset);
+
+  it('unitsReady while on screen re-renders with a 300 ms fade, below the live and armed cues; armed swaps silently', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const live = jobOf(t.toAsset, 0)!;
+    const armed = jobOf(t.toAsset, 1)!;
+    expect(live.role).toBe('live');
+    expect(armed.role).toBe('armed');
+    done(t, live.job.key, { unitsLeft: 2 });
+    done(t, armed.job.key);
+    await tick(20);
+    t.toAsset.length = 0;
+    ready(t, live.job.key);
+    await tick(30);
+    const again = slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key);
+    expect(again).toHaveLength(1);
+    expect(again[0]!.role).toBe('late');
+    expect(again[0]!.job).toMatchObject({ refresh: true, refreshFadeMs: 300 });
+    // No flip: the copy is replaced in place.
+    expect(t.toRender.filter((m) => m.t === 'flip' && m.key === live.job.key)).toHaveLength(1);
+    // The armed cue's late parts: drawn again silently (no fade), as late work too.
+    t.toAsset.length = 0;
+    ready(t, armed.job.key);
+    await tick(30);
+    const swap = slideJobs(t.toAsset).find((m) => m.job.key === armed.job.key)!;
+    expect(swap.role).toBe('late');
+    expect(swap.job.kind === 'slide' && swap.job.refresh).toBe(true);
+    expect(swap.job.kind === 'slide' && swap.job.refreshFadeMs).toBeUndefined();
+    t.close();
+  });
+
+  it('20 units ready one after another give at most one refresh per 300 ms and none ahead of a GO’s raster', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const live = jobOf(t.toAsset, 0)!;
+    done(t, live.job.key, { unitsLeft: 20 });
+    done(t, jobOf(t.toAsset, 1)!.job.key);
+    await tick(20);
+    // The asset worker answers each refresh at once; the units are reported one by one, 20 ms apart.
+    const sentAt: number[] = [];
+    t.asset.port2.onmessage = (e) => {
+      const m = e.data as ToAsset;
+      t.toAsset.push(m);
+      if (m.t === 'job' && m.job.key === live.job.key) {
+        sentAt.push(Date.now());
+        done(t, m.job.key);
+      }
+    };
+    const t0 = Date.now();
+    for (let i = 0; i < 20; i++) {
+      ready(t, live.job.key, 19 - i);
+      await tick(20);
+    }
+    await tick(350);
+    const span = Date.now() - t0;
+    expect(sentAt.length).toBeGreaterThanOrEqual(1);
+    expect(sentAt.length).toBeLessThanOrEqual(Math.ceil(span / 300) + 1);
+    for (let i = 1; i < sentAt.length; i++) expect(sentAt[i]! - sentAt[i - 1]!).toBeGreaterThanOrEqual(295);
+    // A GO jumps to cue 2: its live job is in flight. Late parts of the slide that left are not drawn again,
+    // and the new slide's are drawn only after its GO's raster.
+    t.toAsset.length = 0;
+    t.hub.emit('state', stateMsg({ ...slideLive(2, 5000), seq: 3 }));
+    await tick(30);
+    const go = jobOf(t.toAsset, 2)!;
+    expect(go.role).toBe('live');
+    ready(t, live.job.key);
+    ready(t, go.job.key);
+    await tick(400);
+    expect(slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key)).toHaveLength(0);
+    expect(slideJobs(t.toAsset).filter((m) => m.job.key === go.job.key)).toHaveLength(1);
+    done(t, go.job.key);
+    await tick(40);
+    const late = slideJobs(t.toAsset).filter((m) => m.job.key === go.job.key);
+    expect(late).toHaveLength(2);
+    expect(late[1]!.role).toBe('late');
+    expect(late[1]!.job).toMatchObject({ refresh: true, refreshFadeMs: 300 });
+    t.close();
+  });
+
+  it('a GO to a cue whose armed job is still running hurries it instead of waiting for it', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const armed = jobOf(t.toAsset, 1)!;
+    expect(armed.role).toBe('armed');
+    done(t, jobOf(t.toAsset, 0)!.job.key);
+    await tick(20);
+    // GO 20 ms after the arm, its job still in flight.
+    t.toAsset.length = 0;
+    t.hub.emit('state', stateMsg({ ...slideLive(1, 3000), seq: 3 }));
+    await tick(30);
+    expect(t.toAsset).toContainEqual({ t: 'hurry', keys: [armed.job.key] });
+    expect(slideJobs(t.toAsset).filter((m) => m.job.key === armed.job.key)).toHaveLength(0);
+    // Once, however often the link plans.
+    t.core.sync();
+    t.core.sync();
+    expect(t.toAsset.filter((m) => m.t === 'hurry')).toHaveLength(1);
+    // Shown with parts left: counted once as a slide with late parts (W49).
+    done(t, armed.job.key, { unitsLeft: 3, unitsMade: 7, unitCacheBytes: 1234 });
+    await tick(20);
+    const h = t.core.buildHealth();
+    expect(h).toMatchObject({ unitsMade: 7, unitsLate: 1, unitCacheBytes: 1234 });
+    t.close();
+  });
+
+  it('warms the live playlist’s authored slides in cue order from the live cue, once per playlist', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const warm = t.toAsset.filter((m) => m.t === 'warmUnits');
+    expect(warm).toHaveLength(1);
+    const w = warm[0]!.t === 'warmUnits' ? warm[0]!.warm : undefined;
+    // From the live cue (0): the cues after it, then the live one; the video cue (4) has no slide.
+    expect(w!.slides.map((s) => s.cueIndex)).toEqual([1, 2, 3, 0]);
+    expect(w!.slides.map((s) => s.slide.id)).toEqual(['s2', 't1', 't2', 's1']);
+    // A GO is not a playlist change.
+    t.hub.emit('state', stateMsg({ ...slideLive(1, 3000), seq: 3 }));
+    await tick(30);
+    expect(t.toAsset.filter((m) => m.t === 'warmUnits')).toHaveLength(1);
+    // What the worker warmed shows in __ordo.state().
+    t.asset.port2.postMessage({
+      t: 'unitsWarmed',
+      key: w!.key,
+      cueIndex: 2,
+      units: 2,
+      ready: 2,
+      unitCacheBytes: 99,
+    } satisfies FromAsset);
+    await tick(20);
+    expect((t.core.introspect() as { units: { warmed: number[] } }).units.warmed).toEqual([2]);
+    t.close();
   });
 });

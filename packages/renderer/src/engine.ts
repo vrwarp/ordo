@@ -357,6 +357,8 @@ export class RenderEngine {
       const ls = this.layers[l]!;
       for (const s of ls.stacks) if (s.key !== '') c.prepare(l, s);
       if (ls.hasQueued && ls.queued.key !== '') c.prepare(l, ls.queued);
+      // An in-place fade's copy (a late parts refresh): its compositor makes what it draws it with.
+      if (ls.hasIncoming) c.prepare(l, { ...ls.incoming, refresh: true, refreshFadeMs: ls.refadeMs });
     }
   }
 

@@ -5,6 +5,7 @@ import {
   type AssetToMain,
   type AssetToRender,
   BitmapCache,
+  type DrawingSwitches,
   DEFAULT_BITMAP_BUDGET,
   type DrawnSprite,
   FALLBACK_FAMILIES,
@@ -20,6 +21,7 @@ import {
   type Reach,
   type ToAsset,
   type WarmJob,
+  type WarmUnitsJob,
   contextMetrics,
   coversFrame,
   drawSprite,
@@ -43,14 +45,16 @@ import {
   slideReach,
   spriteRect,
 } from '@ordo/renderer';
+import { UNIT_CACHE_BYTES, unitCache, unitsOfSlide, unitWork } from '@ordo/renderer/units.ts';
 import { LOGICAL_WIDTH, type Look, type Slide } from '@ordo/domain';
 import { DecodeError, createDecoder } from './decode.ts';
+import { LATE_UNIT, REFRESH_FADE_MS } from './late.ts';
 import { Cancelled, Lanes, RANK, type Steps } from './lanes.ts';
 import { OpaqueFiles } from './opaque.ts';
 import { PICTURE_LIMITS, preloadPictures, sourcePicture } from './pictures.ts';
 import { jobSlides, type PrepareHost, prepareSlides } from './prepare/index.ts';
 import './prepare/tables.ts';
-import { holdUnits, type UnitHold } from './prepare/units.ts';
+import { holdInto, holdUnits, type UnitHold, type UnitJob, unitJob } from './prepare/units.ts';
 
 /**
  * Asset worker: OPFS reads, image decoding, font loading and text rasterization at output resolution.
@@ -62,9 +66,19 @@ import { holdUnits, type UnitHold } from './prepare/units.ts';
  * the channel ends (`ports`). Supervised: heartbeat every 250 ms.
  *
  * Jobs run in raster lanes (lanes.ts, design/27 §7.5): props first, then the live cue's layers, then the
- * armed cue's, and bulk work (the pictures of the cue after the armed one) last. Each layer is a chain of
- * its own; synchronous work runs in short turns (a picture is prepared in bands), so a slide that decodes
- * never holds a props flip up by more than one turn. A job the link cancels stops at its next turn.
+ * armed cue's, then late work, and bulk work (the pictures of the cue after the armed one, the live playlist's
+ * units warmed ahead) last. Each layer is a chain of its own; synchronous work runs in short turns (a picture
+ * is prepared in bands), so a slide that decodes never holds a props flip up by more than one turn. A job the
+ * link cancels stops at its next turn.
+ *
+ * A GO never waits for drawing (design/14 "Late units", owner decision 2026-11-13): a live slide job (a jump to
+ * a cue neither armed nor warmed) and a re-draw never wait for geometry units, and an armed or warm job stops
+ * waiting the moment the link says its cue went live (`hurry`). The slide is drawn with what is ready, the
+ * units not ready as their legacy copies this time; a late job (RANK.late) makes them, pinned with the job's
+ * own, and `unitsReady` tells the link, which draws the slide again with a fade (or, with `?late=next`, leaves
+ * them to its next draw). When the link sends the live playlist (`warmUnits`), its slides' units are made ahead
+ * in bulk work, in cue order from the live cue, until two thirds of the unit cache (`WARM_UNITS_BYTES`);
+ * every live job stops that work and it goes on afterwards.
  */
 
 const scope = self as unknown as {
@@ -85,6 +99,12 @@ let token = '';
 let apiPrefix = '/api/v1';
 let canvas: OffscreenCanvas | null = null;
 let ctx: OffscreenCanvasRenderingContext2D | null = null;
+/**
+ * The output's drawing switches (`init`, `DrawingSwitches`: `?late=next`, `?warm=off`, `?effects=base`, and in
+ * test mode `?unitTurnMs=`). `effects` is carried for C6 (wave r2b): the integrator calls effect-units'
+ * `setEffectUnits(false)` for 'base' where it is applied (`applyDrawing`).
+ */
+let drawing: DrawingSwitches = {};
 /** The surface was just taken (`take`): it is transparent, and needs no clear before the next draw. */
 let fresh = false;
 const store = new OpfsStore();
@@ -340,20 +360,239 @@ async function prepare(
   job: { slide?: Slide; nextSlide?: Slide; look?: Look },
   scale: number,
   steps: Steps,
-): Promise<{ missing: string[]; units: UnitHold }> {
-  const host: PrepareHost = {
-    read: async (hash) => (await readFile(hash)).blob,
-    slice: (fn) => steps.slice(fn),
-    check: () => steps.check(),
-  };
+  how?: { key: string; stop(): boolean },
+): Promise<{ missing: string[]; units: UnitHold; made?: UnitJob }> {
+  const host = jobHost(steps);
   // The geometry units it makes or finds stay pinned until the job lets them go (`keepUnits`).
   const units = holdUnits(host);
+  // How it waits for units: absent, as long as `UNIT_WAIT_MS` (prepare/units.ts).
+  const made = how ? unitJob(host, { stop: how.stop, afterTurn: turnWait(how.key) }) : undefined;
   try {
-    return { missing: await prepareSlides({ slides: jobSlides(job), scale, look: job.look }, host), units };
+    return {
+      missing: await prepareSlides({ slides: jobSlides(job), scale, look: job.look }, host),
+      units,
+      made,
+    };
   } catch (err) {
     units.release();
     throw err;
   }
+}
+
+/** A prepare host on a job's lane turns (`steps`). */
+function jobHost(steps: Steps): PrepareHost {
+  return {
+    read: async (hash) => (await readFile(hash)).blob,
+    slice: (fn) => steps.slice(fn),
+    check: () => steps.check(),
+  };
+}
+
+/**
+ * Keys of the armed and warm jobs a GO hurried (`hurry`): their units step stops waiting at once (the unit it is
+ * making is abandoned at its next turn) and they draw with what is ready. Forgotten when the job ends or is
+ * cancelled: the same key sent again later (the operator came back to that cue) waits as any job of its role.
+ */
+const hurried = new Set<string>();
+/** Waits of unit turns (`turnWait`) by job key, ended at once by a hurry or a cancel. */
+const turnWaits = new Map<string, Set<() => void>>();
+
+/**
+ * Test mode (`?unitTurnMs=`): each turn of unit making is followed by a wait of that long, so a unit takes a
+ * known time to make without holding the thread (the e2e's slow units). Undefined otherwise.
+ */
+function turnWait(key: string): (() => Promise<void>) | undefined {
+  const ms = drawing.unitTurnMs;
+  if (!(typeof ms === 'number' && ms > 0)) return undefined;
+  return () =>
+    new Promise<void>((resolve) => {
+      let set = turnWaits.get(key);
+      if (!set) turnWaits.set(key, (set = new Set()));
+      const waits = set;
+      const end = () => {
+        clearTimeout(timer);
+        waits.delete(end);
+        if (!waits.size && turnWaits.get(key) === waits) turnWaits.delete(key);
+        resolve();
+      };
+      const timer = setTimeout(end, ms);
+      waits.add(end);
+    });
+}
+
+function endTurnWaits(keys: Iterable<string>): void {
+  for (const k of keys) for (const end of [...(turnWaits.get(k) ?? [])]) end();
+}
+
+/**
+ * The units of slides drawn without some of theirs (a live or hurried job, a re-draw), made in a late job each
+ * (RANK.late, one chain): by slide key, with its layer. A live job of another slide on the layer drops them:
+ * that slide left the screen (shown again, the link draws it again and its late job starts over).
+ */
+const lateJobs = new Map<string, { layer: number }>();
+/** Late rounds of making at most (each bounded by `UNIT_WAIT_MS`), while each makes some. */
+const LATE_ROUNDS = 4;
+const lateKey = (slideKey: string) => `lu|${slideKey}`;
+
+/**
+ * Make the units `job` was drawn without (`left`), pinned into its hold (`holdInto`: as long as the job's own,
+ * while its slide is live or armed), reporting them with `unitsReady` once all are made, or at most once per
+ * `REFRESH_FADE_MS` while some remain (none with `?late=next`: the slide's next draw copies them).
+ */
+async function lateUnits(
+  job: Extract<AssetJob, { kind: 'slide' }>,
+  left: readonly string[],
+  hold: UnitHold,
+  scale: number,
+  steps: Steps,
+): Promise<void> {
+  const host = jobHost(steps);
+  holdInto(host, hold);
+  const fade = (drawing.late ?? LATE_UNIT) === 'fade';
+  const outstanding = new Set(left);
+  let fresh: string[] = [];
+  let last = performance.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const flush = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    // Those made meanwhile by another job (an arm, the warm-up) are ready too.
+    for (const k of outstanding)
+      if (unitCache.has('unit', k)) {
+        outstanding.delete(k);
+        fresh.push(k);
+      }
+    if (!fresh.length || steps.cancelled) return;
+    if (fade)
+      post({ t: 'unitsReady', layer: job.layer, slideKey: job.key, keys: fresh, left: outstanding.size });
+    fresh = [];
+    last = performance.now();
+  };
+  const made = unitJob(host, {
+    stop: () => false,
+    onUnit: (k) => {
+      if (!outstanding.delete(k)) return;
+      fresh.push(k);
+      const since = performance.now() - last;
+      if (!outstanding.size || since >= REFRESH_FADE_MS) flush();
+      else timer ??= setTimeout(flush, REFRESH_FADE_MS - since);
+    },
+    afterTurn: turnWait(lateKey(job.key)),
+  });
+  try {
+    for (let round = 0; round < LATE_ROUNDS && outstanding.size; round++) {
+      const before = made.made.length;
+      await prepareSlides({ slides: jobSlides(job), scale, look: job.look }, host);
+      flush();
+      if (made.made.length === before) break;
+    }
+    flush();
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (lateJobs.get(job.key)) lateJobs.delete(job.key);
+  }
+}
+
+/** Queue the late job of a slide job that left `left` of its units (none twice for one slide). */
+function queueLate(job: Extract<AssetJob, { kind: 'slide' }>, left: readonly string[], hold: UnitHold): void {
+  if (!left.length || lateJobs.has(job.key)) return;
+  const scale = width / LOGICAL_WIDTH;
+  lateJobs.set(job.key, { layer: job.layer });
+  lanes.push({
+    key: lateKey(job.key),
+    chain: 'late',
+    rank: RANK.late,
+    gate: fonts$,
+    run: (s) => lateUnits(job, left, hold, scale, s),
+  });
+}
+
+/** The live playlist's units made ahead (`warmUnits`): the list, the next slide, and why it stopped. */
+let warmList: { job: WarmUnitsJob; next: number; stopped?: 'full' | 'done' } | undefined;
+const WARM_UNITS_KEY = 'warm units';
+/** Warm-up stops once the unit cache holds this much (two thirds of it): the rest is the live, armed and late cues'. */
+const WARM_UNITS_BYTES = Math.floor((UNIT_CACHE_BYTES * 2) / 3);
+
+/** The warm-up's lane job queued or running and not cancelled (its number), 0 none. */
+let warmQueued = 0;
+let warmSeq = 0;
+
+/** Queue the warm-up (bulk: it starts once nothing interactive is queued or running). */
+function queueWarmUnits(): void {
+  const w = warmList;
+  if (!w || w.stopped || drawing.warm === false || warmQueued) return;
+  const n = ++warmSeq;
+  warmQueued = n;
+  lanes.push({
+    key: WARM_UNITS_KEY,
+    chain: WARM_UNITS_KEY,
+    rank: RANK.bulk,
+    gate: fonts$,
+    run: async (s) => {
+      try {
+        await warmUnits(w, s);
+      } finally {
+        if (warmQueued === n) warmQueued = 0;
+      }
+    },
+  });
+}
+
+/** Stop the warm-up's lane job (it stops at its next turn); `queueWarmUnits` goes on from its slide. */
+function stopWarmUnits(): void {
+  if (!warmQueued) return;
+  warmQueued = 0;
+  lanes.cancel([WARM_UNITS_KEY]);
+  endTurnWaits([WARM_UNITS_KEY]);
+}
+
+/**
+ * Make the units of the live playlist's slides, in cue order from the live cue, unpinned, until the unit cache
+ * holds `WARM_UNITS_BYTES` (two thirds of it): after each slide, the nearer cues' units are used last, so they
+ * are evicted last. A live job cancels this (`onJobMessage`) and it goes on from the slide it was at.
+ */
+async function warmUnits(w: NonNullable<typeof warmList>, steps: Steps): Promise<void> {
+  const scale = width / LOGICAL_WIDTH;
+  const full = () => unitCache.bytes('unit') >= WARM_UNITS_BYTES;
+  /** Keys warmed so far, nearest cue first. */
+  const kept: string[] = [];
+  while (w.next < w.job.slides.length && warmList === w) {
+    if (full()) {
+      w.stopped = 'full';
+      break;
+    }
+    const { cueIndex, slide } = w.job.slides[w.next]!;
+    const host = jobHost(steps);
+    unitJob(host, { stop: full, afterTurn: turnWait(WARM_UNITS_KEY) });
+    await prepareSlides({ slides: [slide], scale, look: w.job.look }, host);
+    const ready = await steps.slice(() => {
+      const plan = unitsOfSlide(slide, scale, w.job.look);
+      const have = plan.filter((u) => unitCache.has('unit', u.key));
+      for (const u of have) kept.push(u.key);
+      for (let i = kept.length - 1; i >= 0; i--) unitCache.get('unit', kept[i]!);
+      return { units: plan.length, ready: have.length };
+    });
+    w.next++;
+    if (w.next >= w.job.slides.length) w.stopped = 'done';
+    post({
+      t: 'unitsWarmed',
+      key: w.job.key,
+      cueIndex,
+      ...ready,
+      ...(w.stopped ? { stopped: w.stopped } : {}),
+      unitCacheBytes: unitCache.bytes('unit'),
+    });
+  }
+  if (w.stopped === 'full')
+    post({
+      t: 'unitsWarmed',
+      key: w.job.key,
+      cueIndex: w.job.slides[w.next]?.cueIndex ?? -1,
+      units: 0,
+      ready: 0,
+      stopped: 'full',
+      unitCacheBytes: unitCache.bytes('unit'),
+    });
 }
 
 /**
@@ -482,13 +721,20 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
   let missing: string[] = [];
   let release: (() => void) | undefined;
   let units: UnitHold | undefined;
+  let unitsMade: UnitJob | undefined;
   try {
     let draw: () => Drawn;
     if (job.kind === 'slide') {
       // Prepare steps first (geometry files): a masked picture is prepared with its mask's paths, and the
-      // slide's reach and drawing budget are worked out with them; then its geometry units, pinned.
-      const prep = await prepare(job, scale, steps);
+      // slide's reach and drawing budget are worked out with them; then its geometry units, pinned. Only an
+      // armed job waits for its units, until its cue goes live (`hurry`); a live job and a re-draw never do.
+      const waits = (role ?? 'armed') === 'armed';
+      const prep = await prepare(job, scale, steps, {
+        key: job.key,
+        stop: () => !waits || hurried.has(job.key),
+      });
       units = prep.units;
+      unitsMade = prep.made;
       const geoms = prep.missing;
       const pre = await preload(job.images, slidePictures(job.slide, { scale, look: job.look }), out, steps);
       release = pre.release;
@@ -550,9 +796,22 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
       release = undefined;
       return deliver(job, d, t0);
     });
-    // Drawn: its units stay pinned while it is its layer's last job of its role (live or armed).
-    if (units && job.kind === 'slide') keepUnits(`layer ${job.layer} ${role ?? 'armed'}`, units);
+    // Drawn: its units stay pinned while it is its layer's last job of its role (live or armed): a hurried job's
+    // cue is live, and a re-draw's is live when it fades in (`refreshFadeMs`), else armed.
+    const held =
+      role === 'late'
+        ? job.kind === 'slide' && job.refreshFadeMs
+          ? 'live'
+          : 'armed'
+        : hurried.has(job.key)
+          ? 'live'
+          : (role ?? 'armed');
+    const hold = units;
+    if (units && job.kind === 'slide') keepUnits(`layer ${job.layer} ${held}`, units);
     units = undefined;
+    // The units it was drawn without: made in a late job, pinned with its own.
+    const left = unitsMade?.left ?? [];
+    if (hold && job.kind === 'slide' && left.length) queueLate(job, left, hold);
     // A slide whose content is past the raster budget by its drawing estimate (memoised by the draw, with the
     // effect sprites it made): health reports its time apart from the alarm's.
     const heavy =
@@ -565,7 +824,7 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
     } catch (err) {
       if (!(err instanceof Cancelled)) throw err;
     }
-    done(job, ms, timing, steps, skipped, missing, uncovered, heavy);
+    done(job, ms, timing, steps, skipped, missing, uncovered, heavy, left.length);
   } catch (err) {
     if (err instanceof Cancelled) return;
     const d = err instanceof DecodeError ? err : undefined;
@@ -582,6 +841,7 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
   } finally {
     release?.();
     units?.release();
+    hurried.delete(job.key);
   }
 }
 
@@ -621,6 +881,7 @@ function deliver(job: AssetJob, d: Drawn, t0: number): number {
     cueIndex,
     refresh: job.kind === 'slide' ? job.refresh : undefined,
   };
+  if (job.kind === 'slide' && job.refresh && job.refreshFadeMs) msg.refreshFadeMs = job.refreshFadeMs;
   if (main.tight) {
     msg.x = main.x;
     msg.y = main.y;
@@ -654,6 +915,7 @@ function done(
   missing: string[],
   uncovered: string,
   heavy: boolean,
+  unitsLeft = 0,
 ): void {
   const t = steps.timing();
   post({
@@ -671,6 +933,9 @@ function done(
     waitMs: round(t.waitMs),
     busyMs: round(t.busyMs),
     longestMs: round(t.longestMs),
+    unitsLeft: unitsLeft || undefined,
+    unitsMade: unitWork().made,
+    unitCacheBytes: unitCache.bytes('unit'),
   });
 }
 
@@ -688,8 +953,12 @@ async function warmUp(wj: WarmJob, steps: Steps): Promise<void> {
   let decodes = 0;
   if (wj.slide) {
     // Its prepare steps first, as its slide job runs them: a masked picture is prepared cut to its mask, and
-    // its geometry units are made and stay pinned until the next warm job (arming it then makes none).
-    keepUnits('warm', (await prepare(wj, scale, steps)).units);
+    // its geometry units are made and stay pinned until the next warm job (arming it then makes none). A GO to
+    // its cue meanwhile stops its waiting (`hurry`): the live job draws at once and its late job goes on.
+    keepUnits(
+      'warm',
+      (await prepare(wj, scale, steps, { key: wj.key, stop: () => hurried.has(wj.key) })).units,
+    );
     const pre = await preloadPictures(
       images,
       jobDecoder(steps),
@@ -724,10 +993,10 @@ async function warmUp(wj: WarmJob, steps: Steps): Promise<void> {
   });
 }
 
-/** A job's rank in the lanes: props first, then the live cue's layers, then the armed cue's. */
+/** A job's rank in the lanes: props first, then the live cue's layers, then the armed cue's, then re-draws. */
 function rankOf(job: AssetJob, role: JobRole | undefined): number {
   if (job.kind === 'props') return RANK.props;
-  return role === 'live' ? RANK.live : RANK.armed;
+  return role === 'live' ? RANK.live : role === 'late' ? RANK.late : RANK.armed;
 }
 
 function onJobMessage(m: ToAsset): void {
@@ -743,6 +1012,24 @@ function onJobMessage(m: ToAsset): void {
     }
     case 'job': {
       const job = m.job;
+      if (m.role === 'live') {
+        // The slides this layer showed before left the screen: their late units are not made now.
+        const gone: string[] = [];
+        for (const [k, l] of lateJobs)
+          if (l.layer === job.layer && k !== job.key) {
+            lateJobs.delete(k);
+            gone.push(lateKey(k));
+          }
+        if (gone.length) {
+          lanes.cancel(gone);
+          endTurnWaits(gone);
+        }
+        // A GO stops the warm-up: it goes on once the live work is done (bulk waits for it).
+        if (warmQueued) {
+          stopWarmUnits();
+          queueWarmUnits();
+        }
+      }
       // Each layer is a chain: its content reaches the renderer in the order its stacks expect.
       lanes.push({
         key: job.key,
@@ -755,11 +1042,32 @@ function onJobMessage(m: ToAsset): void {
     }
     case 'warm': {
       const wj = m.warm;
-      lanes.push({ key: wj.key, chain: 'warm', rank: RANK.bulk, gate: fonts$, run: (s) => warmUp(wj, s) });
+      lanes.push({
+        key: wj.key,
+        chain: 'warm',
+        rank: RANK.bulk,
+        gate: fonts$,
+        run: (s) => warmUp(wj, s).finally(() => hurried.delete(wj.key)),
+      });
+      return;
+    }
+    case 'warmUnits':
+      warmList = { job: m.warm, next: 0 };
+      stopWarmUnits();
+      queueWarmUnits();
+      return;
+    case 'hurry': {
+      // Only jobs still queued or running: a hurry that arrives after its job is forgotten.
+      const pending = new Set(Object.values(lanes.keys()).flat());
+      const keys = m.keys.filter((k) => pending.has(k));
+      for (const k of keys) hurried.add(k);
+      endTurnWaits(keys);
       return;
     }
     case 'cancel':
       lanes.cancel(m.keys);
+      endTurnWaits(m.keys);
+      for (const k of m.keys) hurried.delete(k);
       return;
     case 'prune':
       images.prune(new Set(m.keep));
@@ -767,6 +1075,19 @@ function onJobMessage(m: ToAsset): void {
     default:
       return;
   }
+}
+
+/** The output's drawing switches (`init`). */
+function applyDrawing(d: DrawingSwitches): void {
+  drawing = {
+    ...(d.late === 'next' || d.late === 'fade' ? { late: d.late } : {}),
+    ...(d.warm === false ? { warm: false } : {}),
+    ...(d.effects === 'base' ? { effects: 'base' as const } : {}),
+    ...(typeof d.unitTurnMs === 'number' && d.unitTurnMs > 0
+      ? { unitTurnMs: Math.min(d.unitTurnMs, 5000) }
+      : {}),
+  };
+  if (drawing.warm === false) stopWarmUnits();
 }
 
 scope.onmessage = (ev) => {
@@ -779,6 +1100,7 @@ scope.onmessage = (ev) => {
       height = m.height;
       token = m.token;
       apiPrefix = m.apiPrefix;
+      applyDrawing(m.drawing ?? {});
       return;
     case 'ports':
       try {
@@ -790,6 +1112,8 @@ scope.onmessage = (ev) => {
       port = m.render;
       linkPort = m.link;
       linkPort.onmessage = (e: MessageEvent<ToAsset>) => onJobMessage(e.data);
+      // The switches this worker draws with, for the link's diagnostics.
+      post({ t: 'drawing', switches: drawing });
       return;
     case 'resize':
       width = m.width;

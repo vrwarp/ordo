@@ -448,6 +448,58 @@ describe('making geometry units in slices', () => {
     expect(unitCache.bytes('unit')).toBe(units.reduce((n, u) => n + u.bytes, 0));
   });
 
+  it('a stop() that is true makes no unit, even at t = 0 (an output job that must not wait, r2b units-live)', async () => {
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+    const slide = busySlide();
+    const units = unitsOfSlide(slide, 1);
+    expect(units.length).toBeGreaterThanOrEqual(2);
+    const before = unitWork();
+    const pins: string[] = [];
+    // The clock never moves: `now() - t0 > waitMs` is false for the first unit, so waitMs 0 alone makes one.
+    const clockless = { ...run({ slices: 0, checks: 0 }), now: () => 0 };
+    const stopped = await prepareSlideUnits(slide, 1, undefined, clockless, {
+      waitMs: 0,
+      stop: () => true,
+      pin: (k) => pins.push(k),
+    });
+    expect(stopped).toMatchObject({ units: units.length, made: 0, ready: 0, left: units.length });
+    expect(unitWork().made).toBe(before.made);
+    expect(pins).toEqual([]);
+    // A stop that turns true after the first unit: the rest are left.
+    let n = 0;
+    const one = await prepareSlideUnits(slide, 1, undefined, clockless, {
+      stop: () => n > 0,
+      onUnit: () => n++,
+    });
+    expect(one).toMatchObject({ made: 1, left: units.length - 1 });
+  });
+
+  it('calls onUnit once for each unit it makes, never for one ready already; without stop it waits as before', async () => {
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+    const slide = busySlide();
+    const units = unitsOfSlide(slide, 1);
+    // The first unit made beforehand (ready): the call makes the others, each reported once, in z-order.
+    expect(await makeUnit(units[0]!, run({ slices: 0, checks: 0 }))).toBeDefined();
+    const made: string[] = [];
+    const r = await prepareSlideUnits(slide, 1, undefined, run({ slices: 0, checks: 0 }), {
+      onUnit: (k) => made.push(k),
+    });
+    expect(r).toMatchObject({ units: units.length, made: units.length - 1, ready: 1, left: 0 });
+    expect(made).toEqual(units.slice(1).map((u) => u.key));
+    // Without a stop the wait bounds it as before: past waitMs after the first unit, nothing more is started.
+    clearUnits();
+    let clock = 0;
+    const waited = await prepareSlideUnits(
+      slide,
+      1,
+      undefined,
+      { ...run({ slices: 0, checks: 0 }), now: () => (clock += 100) },
+      { waitMs: 150, onUnit: (k) => made.push(k) },
+    );
+    expect(waited).toMatchObject({ made: 1, left: units.length - 1 });
+    expect(made.at(-1)).toBe(units[0]!.key);
+  });
+
   it("keeps the shadow the budget kept: a 'geom' legacy copy's unit draws the shape with it (r2a repair)", async () => {
     // Twelve shadowed zigzags: the shadows fit the effect budget, the geometry does not, so the later ones go
     // to legacy copies that keep their shadows ('geom'), which their units draw too, in one call.

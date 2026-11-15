@@ -10,6 +10,7 @@ import {
   type Presentation,
   type Slide,
   drawnMediaIds,
+  isHiddenCue,
   playableFile,
   stillFile,
 } from '@ordo/domain';
@@ -37,6 +38,7 @@ import {
   type ToAsset,
   type ToRender,
   type WarmJob,
+  type WarmUnitsJob,
   armStatus,
   buildHealth,
   clampLook,
@@ -49,6 +51,7 @@ import {
   propsEvalTime,
   propsModel,
   propsTickDelay,
+  findSlide,
   rememberManifest,
   resolveLook,
 } from '@ordo/renderer';
@@ -63,6 +66,7 @@ import type {
   WorkerName,
 } from './host-protocol.ts';
 import { LaneStats } from './lane-stats.ts';
+import { REFRESH_FADE_MS } from './late.ts';
 import { SlotPair } from './media.ts';
 import { PerfHealth, perfDiagnostics } from './perf-health.ts';
 import {
@@ -111,6 +115,8 @@ const REFRESH_MIN_MS = 2000;
 const FILE_ATTEMPTS = 4;
 /** A media event replayed by the host is acted on only while this fresh. */
 const PENDING_ENDED_MS = 60_000;
+/** Slides of the live playlist a warm-up job carries at most (design/14 "Late units"). */
+const WARM_UNITS_MAX_SLIDES = 200;
 
 /** What "Send to preview" asked an idle output to show (prd/03). */
 export type PreviewRequest = {
@@ -198,6 +204,8 @@ export class LinkCore {
   private held: HeldKeys[] = [];
   private heldSet = new Set<string>();
   private inflight = new Set<string>();
+  /** The role each in-flight asset job was sent with: a GO hurries an armed one (`hurry`). */
+  private inflightRole = new Map<string, JobRole | undefined>();
   /**
    * Asset jobs sent and not answered, in the order sent. The asset worker's lanes run each layer's jobs in
    * order and the most urgent first (design/27 §7.5), so the first is the likeliest to be the one it was
@@ -211,6 +219,31 @@ export class LinkCore {
   private warmSent = '';
   private warmRunning = '';
   private warmWanted = '';
+  /** The slide key of the warm job running (a GO to it hurries it). */
+  private warmRunningSlide = '';
+  /** The live playlist's warm-up last sent (`warmUnits`: its key), and the cues it made or found units for. */
+  private warmUnitsSent = '';
+  private warmUnitsResolved?: LiveState['resolved'];
+  private warmUnitsLook = '';
+  private warmedCues: number[] = [];
+  private warmUnitsStopped = '';
+  /**
+   * Late units (design/14 "Late units"): slide keys the asset worker made units for that the renderer's copy was
+   * drawn without (`unitsReady`), to draw again with a fade on screen (silently when only armed), at most once
+   * per `REFRESH_FADE_MS` a key and never while a GO's live job is in flight; and when each was last sent.
+   */
+  private unitRefresh = new Set<string>();
+  private unitRefreshedAt = new Map<string, number>();
+  private unitRefreshTimer?: ReturnType<typeof setTimeout>;
+  /** Slide keys drawn with units left for a late job (`done.unitsLeft`), until all are reported made. */
+  private lateParts = new Set<string>();
+  /** When the last re-draws with late parts reached the renderer (Date ms, by slide key; e2e and diagnostics). */
+  private lateDrawn = new Map<string, number>();
+  private prevLiveSlide = '';
+  /** Health: units made by the asset worker, slides shown with parts that came late, its unit-cache bytes. */
+  private unitsMade = 0;
+  private unitsLate = 0;
+  private unitCacheBytes = 0;
   /** Per-lane timing of the asset worker's jobs, and the jobs cancelled as superseded. */
   private laneStats = new LaneStats();
   private delivered = new Map<string, number>();
@@ -253,6 +286,8 @@ export class LinkCore {
   private fontFallbackKeys = new Map<string, string[]>();
   /** The asset worker's last font report had failures: the next complete cache fill asks it to retry. */
   private fontsFailed = false;
+  /** The asset worker's drawing switches (`?late=next`, `?warm=off`, `?effects=base`), for diagnostics. */
+  private drawingSwitches = '';
   /** Slide raster times, characters without a face and budget alarms (design/27 §13, M7). */
   private perf = new PerfHealth();
   private cacheRepairs = 0;
@@ -560,6 +595,7 @@ export class LinkCore {
     this.assetInflight.clear();
     // Content travelling through the old channels is lost: forget what was in flight and arm again.
     this.inflight.clear();
+    this.inflightRole.clear();
     for (const s of this.slots) if (s.waiter) this.inflight.add(s.waiter.key);
     if (renderChanged) {
       this.held = [];
@@ -590,6 +626,7 @@ export class LinkCore {
       this.fontsSig = '';
       this.warmSent = '';
       this.warmRunning = '';
+      this.warmUnitsSent = '';
       if (!firstStart) {
         this.diagLog(`asset worker generation ${gens.asset}: reloading fonts, checking the cache`);
         void this.verifyCache(true);
@@ -923,6 +960,13 @@ export class LinkCore {
     this.livePlan = live;
     this.armedPlan = armed;
     this.waitingSound = waitingSound;
+    // A slide shown again whose late parts never came (its late job was dropped when it left the screen): drawn
+    // again in place, which makes them late again.
+    if (live.slide.key !== this.prevLiveSlide) {
+      this.prevLiveSlide = live.slide.key;
+      if (this.lateParts.has(live.slide.key) && this.has(live.slide.key))
+        this.unitRefresh.add(live.slide.key);
+    }
     // Before anything is armed: a video that just left keeps its slot until its fade ends, and the clips
     // playing inside the live and armed slides get their slots (the slide jobs below carry them).
     this.markOutgoing(live);
@@ -954,8 +998,56 @@ export class LinkCore {
     }
     this.syncProps(false);
     this.syncWarm(afterGo, planOpts);
+    this.syncWarmUnits(state);
     this.cancelSuperseded();
     this.checkCover();
+  }
+
+  /**
+   * The live playlist's units made ahead (design/14 "Late units", warm-up): when the playlist changes, its slides
+   * this look draws as authored, in cue order from the live cue (the rest after it, then those before), each once,
+   * go to the asset worker in one bulk job, which makes their units until two thirds of its unit cache. Sent again
+   * after an asset worker restart; a live job pauses it there, never here.
+   */
+  private syncWarmUnits(state: LiveState): void {
+    if (state.mode !== 'live' || this.preview || !this.assetPort) return;
+    if (clampLook(this.look).layers.slide.mode !== 'authored') return;
+    const pl = state.resolved?.playlist;
+    if (!pl) return;
+    if (
+      state.resolved === this.warmUnitsResolved &&
+      this.lookSig === this.warmUnitsLook &&
+      this.warmUnitsSent
+    )
+      return;
+    this.warmUnitsResolved = state.resolved;
+    this.warmUnitsLook = this.lookSig;
+    const cues = state.cues;
+    let sig = `${pl.id}|${this.lookSig}|${cues.length}`;
+    for (const c of cues) sig = `${sig}|${c.slideId ?? ''}`;
+    const key = `wu|${pl.id}|${hashString(sig)}`;
+    if (key === this.warmUnitsSent) return;
+    const from = state.live ?? -1;
+    const order: number[] = [];
+    for (let i = from + 1; i < cues.length; i++) order.push(i);
+    for (let i = 0; i <= from && i < cues.length; i++) order.push(i);
+    const seen = new Set<string>();
+    const slides: WarmUnitsJob['slides'] = [];
+    for (const i of order) {
+      const c = cues[i]!;
+      if (isHiddenCue(c) || !c.presentationId || !c.slideId) continue;
+      const id = `${c.presentationId}|${c.slideId}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const found = findSlide(state.resolved?.presentations, c.presentationId, c.slideId);
+      if (!found) continue;
+      slides.push({ cueIndex: i, slide: found.slide });
+      if (slides.length >= WARM_UNITS_MAX_SLIDES) break;
+    }
+    this.warmUnitsSent = key;
+    this.warmedCues = [];
+    this.warmUnitsStopped = '';
+    if (slides.length) this.postAsset({ t: 'warmUnits', warm: { key, slides, look: this.look } });
   }
 
   /**
@@ -965,12 +1057,14 @@ export class LinkCore {
    */
   private syncWarm(afterGo: LiveState | undefined, planOpts: Parameters<typeof planFrame>[2]): void {
     let warm: WarmJob | undefined;
+    // The warmed cue’s slide key: a GO to it hurries the warm job (`ensureContent`).
+    let slideKey = '';
     const next = afterGo?.armed;
     if (afterGo && next !== undefined && next !== afterGo.live) {
       try {
-        warm = this.warmJob(
-          planFrame(reduce(afterGo, { k: 'go', cueIndex: next, at: 0 }), this.look, planOpts),
-        );
+        const plan = planFrame(reduce(afterGo, { k: 'go', cueIndex: next, at: 0 }), this.look, planOpts);
+        warm = this.warmJob(plan);
+        slideKey = plan.slide.key;
       } catch {
         warm = undefined;
       }
@@ -981,6 +1075,7 @@ export class LinkCore {
     this.cancelSuperseded();
     this.warmSent = warm.key;
     this.warmRunning = warm.key;
+    this.warmRunningSlide = slideKey;
     this.postAsset({ t: 'warm', warm });
   }
 
@@ -1016,6 +1111,7 @@ export class LinkCore {
     for (const k of gone) {
       this.assetInflight.delete(k);
       this.inflight.delete(k);
+      this.inflightRole.delete(k);
       if (this.missingImages.has(k)) this.refreshKeys.add(k);
     }
     if (this.warmRunning && this.warmRunning !== this.warmWanted) {
@@ -1101,13 +1197,22 @@ export class LinkCore {
     // free then, or the slot was loaded again since) is drawn again in place.
     const scene = name === 'slide' && plan.slide.desc ? this.slideVideo(plan.slide.desc, plan) : undefined;
     const stale = !!scene && this.sceneVideo.get(key) !== sceneSig(scene);
+    if (role === 'live' && name === 'slide') {
+      // A GO to the cue whose armed job is still running (it is in flight, so nothing is sent for it below), or
+      // whose warm job is: that job stops waiting for units, so the GO never waits for them.
+      if (this.inflight.has(key)) this.hurry(name, key);
+      else if (this.warmRunning && this.warmRunningSlide === key) {
+        this.postAsset({ t: 'hurry', keys: [this.warmRunning] });
+        this.warmRunningSlide = '';
+      }
+    }
     if (video) {
       // A video key is only valid while a media slot still holds that video (slots are reused).
       const pair = name === 'background' ? this.bgPair : this.mdPair;
       const slot = pair.find(key);
       if (this.inflight.has(key)) return;
       if (slot?.ready && this.has(key)) return;
-    } else if (this.has(key) && !this.refreshKeys.has(key) && !stale) return;
+    } else if (this.has(key) && !this.refreshKeys.has(key) && !stale && !this.unitRefreshDue(key)) return;
     if (this.inflight.has(key) && !stale) return;
     if (name === 'background' && plan.background.desc) {
       const d = plan.background.desc;
@@ -1115,10 +1220,15 @@ export class LinkCore {
       else this.armVideo(this.bgPair, layer, key, d.hash, true, FIT_COVER);
     } else if (name === 'slide' && plan.slide.desc) {
       const d = plan.slide.desc;
-      // A re-draw for an image that arrived late replaces the renderer's copy in place.
+      // A re-draw for an image that arrived late replaces the renderer's copy in place; one for late units
+      // (`unitsReady`) fades in over REFRESH_FADE_MS while the slide is on screen, swaps silently while armed,
+      // and runs below the live and armed cues (role 'late').
       const images = this.refreshKeys.delete(key);
       if (images) this.refreshedAt.set(key, Date.now());
-      const refresh = images || (stale && this.has(key));
+      const units = this.has(key) && this.unitRefresh.delete(key);
+      if (units) this.unitRefreshedAt.set(key, Date.now());
+      const refresh = images || units || (stale && this.has(key));
+      const onScreen = this.livePlan?.slide.key === key;
       this.sceneVideo.set(key, scene ? sceneSig(scene) : '');
       this.job(
         {
@@ -1133,9 +1243,10 @@ export class LinkCore {
           look: this.look,
           images: this.slideImages(d.slide, d.nextSlide),
           refresh: refresh || undefined,
+          ...(units && onScreen ? { refreshFadeMs: REFRESH_FADE_MS } : {}),
           video: scene,
         },
-        role,
+        units && !images && !stale ? 'late' : role,
       );
     } else if (name === 'lowerThird' && plan.lowerThird.desc) {
       this.job({ kind: 'lowerThird', layer, key, text: plan.lowerThird.desc.text, look: this.look }, role);
@@ -1210,10 +1321,39 @@ export class LinkCore {
     return out;
   }
 
+  /**
+   * A GO to a cue whose armed job of `key` is still running (`ensureContent` skips an in-flight key): the asset
+   * worker stops its wait for units at once (`hurry`), so the GO never waits for that job's units.
+   */
+  private hurry(name: PlanLayer, key: string): void {
+    if (name !== 'slide' || (this.inflightRole.get(key) ?? 'armed') !== 'armed') return;
+    this.inflightRole.set(key, 'live');
+    this.postAsset({ t: 'hurry', keys: [key] });
+  }
+
+  /**
+   * Whether `key`'s late units are to be drawn in now: reported ready, at most once per REFRESH_FADE_MS, and never
+   * ahead of a GO's raster (no live job in flight). Not due yet: a sync is asked for when it may be.
+   */
+  private unitRefreshDue(key: string): boolean {
+    if (!this.unitRefresh.has(key)) return false;
+    if (this.inflight.has(key)) return false;
+    for (const r of this.inflightRole.values()) if (r === 'live') return false;
+    const wait = (this.unitRefreshedAt.get(key) ?? 0) + REFRESH_FADE_MS - Date.now();
+    if (wait <= 0) return true;
+    if (!this.unitRefreshTimer)
+      this.unitRefreshTimer = setTimeout(() => {
+        this.unitRefreshTimer = undefined;
+        this.requestSync();
+      }, wait + 5);
+    return false;
+  }
+
   /** Send a job to the asset worker; `role`: whether it draws for the live or the armed cue (its lane). */
   private job(job: AssetJob, role?: JobRole): void {
     if (!this.assetPort) return;
     this.inflight.add(job.key);
+    this.inflightRole.set(job.key, role);
     this.assetInflight.delete(job.key);
     this.assetInflight.add(job.key);
     this.postAsset(role ? { t: 'job', job, role } : { t: 'job', job });
@@ -1974,6 +2114,8 @@ export class LinkCore {
         for (const k of this.missingImages.keys()) if (!this.has(k)) this.missingImages.delete(k);
         for (const k of this.fontFallbackKeys.keys()) if (!this.has(k)) this.fontFallbackKeys.delete(k);
         for (const k of this.refreshKeys) if (!this.has(k)) this.refreshKeys.delete(k);
+        for (const k of this.unitRefresh) if (!this.has(k)) this.unitRefresh.delete(k);
+        for (const k of this.lateParts) if (!this.has(k)) this.lateParts.delete(k);
         for (const k of this.sceneVideo.keys()) if (!this.has(k)) this.sceneVideo.delete(k);
         this.requestSync();
         this.queueView();
@@ -2003,10 +2145,31 @@ export class LinkCore {
 
   private onAsset(m: FromAsset): void {
     switch (m.t) {
-      case 'done':
+      case 'done': {
+        const role = this.inflightRole.get(m.key);
         this.inflight.delete(m.key);
+        this.inflightRole.delete(m.key);
         this.assetInflight.delete(m.key);
         this.delivered.set(m.key, Date.now());
+        if (m.unitsMade !== undefined) this.unitsMade = m.unitsMade;
+        if (m.unitCacheBytes !== undefined) this.unitCacheBytes = m.unitCacheBytes;
+        if (m.unitsLeft) {
+          // Shown (live, or a GO hurried its arm) with parts left to a late job: they come in late.
+          if (role === 'live' && !this.lateParts.has(m.key)) {
+            this.unitsLate++;
+            this.diagLog(
+              `${m.key.slice(0, 60)}: shown with ${m.unitsLeft} part(s) drawn late (its job ${Math.round(m.ms)} ms: wait ${Math.round(m.waitMs ?? 0)}, busy ${Math.round(m.busyMs ?? 0)}, draw ${Math.round(m.rasterMs ?? 0)})`,
+            );
+          }
+          this.lateParts.add(m.key);
+        } else this.lateParts.delete(m.key);
+        // A refresh waiting for the GO's live job to be drawn may go now.
+        if (role === 'live' && this.unitRefresh.size) this.requestSync();
+        if (role === 'late') {
+          this.lateDrawn.delete(m.key);
+          this.lateDrawn.set(m.key, Date.now());
+          if (this.lateDrawn.size > 8) this.lateDrawn.delete(this.lateDrawn.keys().next().value!);
+        }
         if (m.lane) this.laneStats.add(m.lane, m.waitMs ?? 0, m.busyMs ?? 0, m.longestMs ?? 0);
         this.errors.delete(m.key);
         this.unavailable.delete(m.key);
@@ -2037,8 +2200,10 @@ export class LinkCore {
         } else if (this.missingImages.delete(m.key))
           this.diagLog(`${m.key.slice(0, 60)}: drawn again with its images`);
         return;
+      }
       case 'error': {
         this.inflight.delete(m.key);
+        this.inflightRole.delete(m.key);
         this.assetInflight.delete(m.key);
         if (m.cause !== 'missing') this.diagLog(`arm ${m.key.slice(0, 60)}: ${m.error}`);
         const unavailable = m.cause === 'unavailable' || m.cause === 'missing';
@@ -2049,9 +2214,41 @@ export class LinkCore {
         return;
       }
       case 'warmed':
-        if (m.key === this.warmRunning) this.warmRunning = '';
+        if (m.key === this.warmRunning) {
+          this.warmRunning = '';
+          this.warmRunningSlide = '';
+        }
         this.laneStats.add('bulk', m.waitMs, m.busyMs, m.longestMs);
         return;
+      case 'unitsReady':
+        // The slide's late parts are made: drawn again in place (with a fade while on screen), coalesced.
+        if (!m.left) this.lateParts.delete(m.slideKey);
+        if (!this.has(m.slideKey)) return;
+        this.unitRefresh.add(m.slideKey);
+        this.requestSync();
+        return;
+      case 'unitsWarmed':
+        if (m.key !== this.warmUnitsSent) return;
+        this.unitCacheBytes = m.unitCacheBytes;
+        if (m.units && m.ready >= m.units && !this.warmedCues.includes(m.cueIndex))
+          this.warmedCues = [...this.warmedCues, m.cueIndex].slice(-64);
+        if (m.stopped) {
+          this.warmUnitsStopped = m.stopped;
+          this.diagLog(
+            m.stopped === 'full'
+              ? `units warmed ahead for ${this.warmedCues.length} cue(s), stopped at two thirds of the unit cache`
+              : `units warmed ahead for ${this.warmedCues.length} cue(s)`,
+          );
+        }
+        return;
+      case 'drawing': {
+        const on = Object.entries(m.switches)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ');
+        if (on) this.diagLog(`drawing switches: ${on}`);
+        this.drawingSwitches = on;
+        return;
+      }
       case 'fonts':
         this.diagLog(
           `fonts loaded: ${m.loaded}${m.failed.length ? `, failed: ${m.failed.join(', ')}` : ''}${m.ready?.length ? `; ready: ${m.ready.join(', ')}` : ''}`,
@@ -2209,6 +2406,9 @@ export class LinkCore {
       fontFallbacks: this.fontFallbacks.size ? [...this.fontFallbacks].slice(0, 20) : undefined,
       cacheRepairs: this.cacheRepairs || undefined,
       busTransport: this.link.fallback?.transport,
+      unitsMade: this.unitsMade || undefined,
+      unitsLate: this.unitsLate || undefined,
+      unitCacheBytes: this.unitCacheBytes || undefined,
     };
     return out;
   }
@@ -2305,6 +2505,17 @@ export class LinkCore {
       held: this.held,
       inflight: [...this.inflight],
       warm: { sent: this.warmSent, running: this.warmRunning },
+      units: {
+        made: this.unitsMade,
+        late: this.unitsLate,
+        cacheBytes: this.unitCacheBytes,
+        warmed: [...this.warmedCues],
+        warmStopped: this.warmUnitsStopped,
+        lateParts: [...this.lateParts],
+        refresh: [...this.unitRefresh],
+        lateDrawn: Object.fromEntries(this.lateDrawn),
+      },
+      drawing: this.drawingSwitches,
       errors: Object.fromEntries([...this.errors].map(([k, v]) => [k, v.error])),
       quarantined: [...this.quarantine.keys()],
       missingImages: Object.fromEntries(this.missingImages),
@@ -2359,6 +2570,7 @@ export class LinkCore {
       fonts: this.fontFallbacks.size ? `fallback for ${[...this.fontFallbacks].join(', ')}` : 'ok',
       ...perfDiagnostics(h),
       rasterLanes: this.laneStats.line(),
+      units: `${this.unitsMade} made, ${this.unitsLate} slide(s) with late parts, cache ${Math.round(this.unitCacheBytes / 1e6)} MB${this.warmedCues.length ? `, ${this.warmedCues.length} cue(s) warmed` : ''}${this.drawingSwitches ? `; ${this.drawingSwitches}` : ''}`,
       workers: workers || '-',
       audio: h.audio ?? (this.config?.output.audioMaster ? 'none' : 'not master'),
       media:
@@ -2369,6 +2581,16 @@ export class LinkCore {
       error: h.error ?? '-',
     };
   }
+}
+
+/** A short hash of a string (FNV-1a, 32 bits), for a key. */
+function hashString(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
 }
 
 /** The slot and load generation a slide's scene was drawn for. */

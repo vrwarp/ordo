@@ -180,6 +180,13 @@ export const PORT_TABLE = {
     spec: 'effect-units.spec.ts',
     what: '0 hub (effects past the budget), 1 hub (hostile lone line art, upload route)',
   },
+  // units-live: a GO never waits for drawing; late parts fade in; the playlist warmed ahead.
+  'units-live': {
+    offset: 405,
+    count: 2,
+    spec: 'units-live.spec.ts',
+    what: '0 hub (a jump to a slide not prepared; a GO 50 ms after its arm), 1 hub (the playlist warmed ahead)',
+  },
   'editor-table': { offset: 420, count: 1, spec: 'editor-table.spec.ts', what: 'hub' },
   'ipad-table-targets': {
     offset: 421,

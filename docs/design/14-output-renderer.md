@@ -364,13 +364,12 @@ copy stays.
   layer's last of its role (live, armed), and a warm job's until the next warm job (`holdUnits`, `keepUnits`):
   the live, armed and warmed cues hold at most three frames (100 MB at 4K).
 - **When they are made.** An armed or warmed cue's units are made by its slide or warm job, so its GO does no
-  unit work and never waits. A jump (a cue neither armed nor warmed) waits for its units in its own job, as
-  for its table layouts, within the bounds above: the leaf template's first slide (one unit of 10.7 MiB at 4K)
-  arms cold within 0.5 s at 4K, its pictures, its units and its first draw in 245 ms at 3840 and 195 ms at 1920
-  (the fidelity harness's cold time, median of five on the bench machine; design/23). Effect units (M9 r2b)
-  replace that wait: a GO never waits, the slide shows at once and a late unit fades in (about 0.3 s, the
-  owner's call). Until then the jump's wait is a GO that waits, so that item (effect units item 5) is a must item
-  before the follow-up PR merges (r2a repair).
+  unit work and never waits; the live playlist's slides are warmed ahead too ("Late units" below). A GO never
+  waits for them (owner decision 2026-11-13): a jump (a cue neither armed nor warmed) is drawn and shown at
+  once with the units not ready as their legacy copies, and a GO while the cue's armed or warm job is still
+  making them stops that wait; the units are made in a late job and fade in ("Late units"). Cold, the leaf
+  template's first slide (one unit of 10.7 MiB at 4K) takes 239 ms at 3840 for its pictures, its units and its
+  first draw (r2b base, median of three under the bench lock), which is now late making, not a GO's wait.
 - **Thumbnails.** The operator's thumbnail worker runs the same step, only when its page says the pointer is
   fine (`init`, `lib/capabilities.ts` `coarsePointer`): a desktop's thumbnails draw the shapes whole, a phone or
   tablet keeps the legacy copies and makes nothing. The editor canvas keeps the legacy copies (leaf-editor).
@@ -436,6 +435,62 @@ drawing budget (`geombudget.ts`) would draw as a lesser legacy copy on the outpu
 - **Switch** (`setEffectUnits(false)`, an output's `?effects=base` once the integrator wires it, C6): 62a1c3a's
   drawing, geometry units only (a stored geometry past the budget, its effects kept only within one call).
 <!-- /r2b:effect-units -->
+
+### Late units
+
+<!-- r2b:units-live -->
+A GO never waits for drawing (owner decision 2026-11-13, "fill in when ready with a fade"; design/17 "A GO never
+waits for drawing"). What a slide's units are not ready for is shown at once without them, their legacy copies
+drawn this time, and the parts fade in when they are made (`apps/output/src/late.ts`: `LATE_UNIT = 'fade'`,
+`REFRESH_FADE_MS` 300).
+
+- **Who waits.** Only an armed job waits for its units (bounded by `UNIT_WAIT_MS`, as before), and a warm job.
+  A live job (a jump to a cue neither armed nor warmed) and a re-draw (`role: 'late'`) never do: the asset worker
+  tells the units step through `unitJob` (keyed by the job's prepare host, as `holdUnits`), whose `stop` is
+  checked before each unit (`SlideUnitsOptions.stop`, renderer units.ts) and at each turn of the unit being made.
+  The harness, the thumbnail worker and bakes pass no job and wait for complete drawing as before.
+- **Hurry.** A GO to a cue whose armed or warm job is still running (the link's `ensureContent` skips an
+  in-flight key) sends `{t: 'hurry', keys}`: that job's `stop` turns true at once, the unit it is making is
+  abandoned at its next turn (nothing of it kept), and it is drawn and sent with what is ready, within one turn
+  of the hurry (a turn is about `SLICE_MS` / 2 plus the step running, design/27 §13). The link finds a warm job
+  by the slide key of the plan it warmed (a warm key also holds the background and media keys). A hurry lasts
+  as long as its job: once the job ends or is cancelled, the same key sent again waits as any job of its role.
+- **Late job.** A slide job that left units (`done.unitsLeft`) queues a late job for them (`RANK.late`: below
+  the live and armed cues, above bulk work; chain `late`), which pins what it makes into the slide job's own hold
+  (`holdInto`: while the slide is live or armed) and reports them with `{t: 'unitsReady', slideKey, keys,
+  left}`, coalesced: once all are made, or at most once per `REFRESH_FADE_MS` while some remain. A live job of
+  another slide on the layer drops the late jobs of the slides it replaced on screen. With `?late=next` the late
+  job still makes them, but reports nothing: the slide's next draw copies them.
+- **Fade in, coalesced** (link-core): `unitsReady` for a key the renderer holds draws the slide again in place
+  (`refresh`, as for a late image or font) as late work (`role: 'late'`, `RANK.late`), with `refreshFadeMs` 300
+  while it is on screen (it fades in over the old copy, "Layer stacks" below) and none while it is only armed (a
+  silent swap). A key is drawn again at most once per `REFRESH_FADE_MS` and never while a GO's live job is in
+  flight (it goes after that raster); a refresh of a slide that left the screen is cancelled with it
+  (`cancelSuperseded`). A slide shown again whose late parts never came (its late job was dropped) is drawn
+  again in place when it goes live, which makes them late again.
+- **Warm-up.** When the live playlist changes, the link sends the slides this look draws as authored, in cue order
+  from the live cue (the rest after it, then those before; each slide once, at most 200) in one `warmUnits` job;
+  the asset worker makes their units in bulk work (`RANK.bulk`), unpinned, until its unit cache holds two thirds
+  of `UNIT_CACHE_BYTES` (128 MiB), touching the nearer cues' units last so they are evicted last, and says per cue
+  what it made (`unitsWarmed`, `__ordo.state().units.warmed`). Every live job cancels it at its next turn (a GO
+  waits for at most the step running) and it goes on from that slide once the live work is done.
+- **Health** (design/13 "Output health: units"): `unitsMade`, `unitsLate` (slides shown with parts that came
+  late, counted once a showing) and `unitCacheBytes`; the operator's technical line, and W49 "Parts of 2 slides
+  appeared a moment late on this screen." (design 29 §3) as a note.
+- **Switches** (venue troubleshooting, on the output URL beside `?renderer=2d`; `apps/output/src/switches.ts`,
+  carried to the asset worker in its `init` as `drawing`, which it reports back for the diagnostics):
+  `?late=next` (late parts at the slide's next draw, `LATE_UNIT`'s other mode), `?warm=off` (no warm-up),
+  `?effects=base` (62a1c3a's drawing of effects and decorations: the integrator wires effect-units'
+  `setEffectUnits(false)` to it, C6). In test mode only, `?unitTurnMs=N` (1-5000) waits N ms after each turn of
+  unit making, so the e2e can make units slow; outside test mode it is refused with a console line.
+- **Tested** by `e2e/units-live.spec.ts` (rows `units-live` 0 and 1 of `e2e/ports.ts`): line-art decks through the
+  upload route, `?unitTurnMs=40`; a jump to a cue neither armed nor warmed (`?warm=off`) and a GO 50 ms after its
+  cue was armed both flip on their frame with the line art's stand-in and the line art fades in within 1 s
+  (`__ordo.state().units.lateDrawn`); after Go live the next three cues' units are made before they are armed
+  (`units.warmed`). Canvas 2D there: this container's WebGPU is SwiftShader, whose strip uploads of a full-frame
+  picture alone take a frame or more (measured: the same jump flipped 75 ms late on it, its job done before the
+  GO's time).
+<!-- /r2b:units-live -->
 
 ## Frame loop
 
@@ -581,7 +636,20 @@ Arm sequence for a cue (asset worker, then render worker):
 Memory bound: two stacks per layer (live and armed) plus a one-deep queue for content that
 arrives while the armed stack is busy (the outgoing side of a fade, or the target of a flip
 not yet due; the latest wins), so at most three pictures per layer, six for scenes (base and
-over). The host keeps six media elements (two background, two media, two audio slots); the
+over), and a fourth while the live bitmap's late parts fade in (below).
+
+**In-place fade** (late parts, "Late units" above): a `refresh` of the live bitmap with
+`refreshFadeMs` goes to the layer's `incoming` stack instead of replacing the live copy. WebGPU
+uploads it in strips into a third texture of the layer (`layerN-fade`, made when the layer's first
+such refresh is offered: +33 MB at 4K, counted in `gpuMB`), after the content a pending flip waits
+for; once it can be drawn it fades in over the live copy (the pair pipeline on WebGPU, the
+crossfade's scratch mix on Canvas 2D) over `refreshFadeMs`, the old copy kept until the end, when
+the live stack takes the fresh copy with its content version and WebGPU copies it from the fade
+texture on the GPU (`copyTextureToTexture`, never a second upload). Only a bitmap over a bitmap
+fades; anything else, and a refresh during a flip's crossfade, swaps in place as before. A GO
+during the fade ends it at once and flips: the slide leaves as its fresh copy when that was
+uploaded (else the copy is dropped); the armed content is never touched, so the GO flips on time.
+A newer refresh during the fade ends the running one first (its parts stay) and fades in on top. The host keeps six media elements (two background, two media, two audio slots); the
 renderer presents at most `MAX_VIDEO_SLOTS` (4) video slots, two newest frames each
 (`FrameRing`).
 

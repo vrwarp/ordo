@@ -1750,10 +1750,11 @@ budget only decides that it is drawn so.
   thumbnail worker; never on a phone, never in the editor (it keeps the legacy copies; leaf-editor), never stored.
 - **Bounded**: a job makes units for at most `UNIT_WAIT_MS` (1 s) and a slide's units cover at most
   `UNIT_SLIDE_AREAS` (one frame; a unit at most half of `UNIT_CACHE_BYTES`); the rest draw as their legacy
-  copies this time. An armed or warmed cue's GO does no unit work; a jump waits for its units (as
-  for its table layouts) until effect units make a late unit fade in instead. _That wait is a GO waiting (the
-  owner's call of 2026-11-13: a GO never waits), so effect units item 5 is a must item before the follow-up PR
-  merges (r2a repair)._
+  copies this time. An armed or warmed cue's GO does no unit work. _A GO never waits for units_ (the owner's
+  call of 2026-11-13; r2a must b, closed by wave r2b units-live): a jump is drawn at once with the units not
+  ready as their legacy copies, a GO while the cue's arm or warm job is still making them hurries it, and the
+  units are made in a late job and fade in over 300 ms (design/14 "Late units"); only an armed job, a warm job,
+  the harness, thumbnails and bakes wait for complete drawing within these bounds.
 - **With its effects** (r2a repair): a shape whose legacy copy keeps its effects ('geom': the budget held back
   its geometry, not its shadow, glow or soft edge) is drawn from a unit with them, in one call through the effects
   path, when the shape and its effects are within `GEOM_COST.slide` together (`unitDrawn`); a 'both' copy's

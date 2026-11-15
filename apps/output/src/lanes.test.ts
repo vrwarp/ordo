@@ -76,6 +76,23 @@ describe('raster lanes: order', () => {
     expect(laneOf(RANK.bulk)).toBe('bulk');
   });
 
+  it('runs a late job (late units, a refresh) below the live and armed cues and above bulk work', async () => {
+    const h = harness();
+    // A late job of two slices: a GO's live job and an arm that arrive meanwhile go ahead of its second slice,
+    // and the bulk job (warm-up) waits until it is done.
+    h.lanes.push(h.job('late', { chain: 'late', rank: RANK.late, slices: 2 }));
+    h.lanes.push(h.job('bulk', { chain: 'warm', rank: RANK.bulk }));
+    await h.step();
+    expect(h.log).toEqual(['late0']);
+    h.lanes.push(h.job('armed', { chain: 'slide', rank: RANK.armed }));
+    h.lanes.push(h.job('live', { chain: 'bg', rank: RANK.live }));
+    await h.drain();
+    expect(h.log).toEqual(['late0', 'live0', 'armed0', 'late1', 'bulk0']);
+    expect(RANK.armed).toBeLessThan(RANK.late);
+    expect(RANK.late).toBeLessThan(RANK.bulk);
+    expect(laneOf(RANK.late)).toBe('interactive');
+  });
+
   it('runs the jobs of one chain one at a time, queued in rank then arrival order', async () => {
     const h = harness();
     h.lanes.push(h.job('a1', { chain: 'slide', rank: RANK.armed, slices: 2 }));
