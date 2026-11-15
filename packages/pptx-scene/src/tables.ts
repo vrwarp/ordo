@@ -1073,8 +1073,9 @@ class EdgeLines {
  * How LibreOffice 24.2 spaces a cell's lines when it sizes a table's rows (`Cell::getMinimumHeight`, the
  * draw outliner's `GetTextHeight`; measured with the table probe deck,
  * `tools/pptx-fidelity/src/table-probe.ts`):
- * - 'independent': font-independent line spacing, 1.2 × the font height in 1/100 mm, truncated
- *   (`ImplCalculateFontIndependentLineSpacing`). The draw outliner is left in this mode by a text shape
+ * - 'independent': font-independent line spacing, 1.2 × the font height in 1/100 mm, rounded
+ *   (`ImplCalculateFontIndependentLineSpacing`; the probe's 9 and 14 pt rows, 1, 3 and 7 lines, are 382 and
+ *   593 a line, where truncating gives 381 and 592). The draw outliner is left in this mode by a text shape
  *   that grew to its text (its own `a:spAutoFit`, with text) earlier on the same slide, and the table's
  *   rows are measured in it: any face, any size.
  * - 'font': the face's ascent and descent at the reference device (600 dpi: the font's pixel height
@@ -1147,7 +1148,7 @@ export function loAscent(pt: number, face: FaceMetrics | undefined, lines: LoLin
 export function loLineHeight(pt: number, face: FaceMetrics | undefined, lines: LoLines): number {
   const h = mm100(pt);
   if (lines === 'independent' || face?.ascent === undefined || face.descent === undefined)
-    return Math.trunc((h * 120) / 100);
+    return Math.round((h * 120) / 100);
   const px = Math.round((h * LO_REF_DPI) / 2540);
   const back = (v: number) => Math.round((v * 2540) / LO_REF_DPI);
   return back(Math.round(px * face.ascent)) + back(Math.round(px * face.descent));

@@ -933,8 +933,10 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
     // 18 pt is 635/100 mm, 150 px at 600 dpi: ascent 143 px and descent 40 px, 605 and 169/100 mm.
     expect(loLineHeight(18, carlito('', false, false), 'font')).toBe(774);
     expect(loAscent(18, carlito('', false, false), 'font')).toBe(605);
-    // Font-independent: 1.2 × 635, truncated; the ascent is the font height.
+    // Font-independent: 1.2 × 635, rounded (the probe's 14 pt lines: 1.2 × 494 = 592.8 is 593); the ascent is
+    // the font height.
     expect(loLineHeight(18, undefined, 'independent')).toBe(762);
+    expect(loLineHeight(14, undefined, 'independent')).toBe(593);
     expect(loAscent(18, carlito('', false, false), 'independent')).toBe(635);
     const t = tableOf(one());
     expect(t.lo?.lines).toBe('font');
