@@ -22,11 +22,12 @@ import { APP_VERSION } from './index.ts';
 // drawer or geometry units, and its cached pages must reload rather than draw these slides the old way. The
 // digest is unchanged (it leaves the APP_VERSION line out).
 // 0.7.0 again on r2b/prerender-model (wave r2b sub-wave 1, design/29): schemas.ts Slide.prerender, draw, cut and
-// meta.draw, optional fields nothing writes yet (an older client strips them); the wave's one bump, 0.8.0, comes
-// at its end and the integrator re-records the digest once after the sub-wave's last merge.
+// meta.draw, optional fields nothing writes yet (an older client strips them); content.ts slideContent's picture
+// form, used only when a caller passes a picture file (none does yet). The wave's one bump, 0.8.0, comes at its
+// end and the integrator re-records the digest once after the sub-wave's last merge.
 const RECORDED = {
   version: '0.7.0',
-  digest: '1b158079245294a40bf64492a5475e1f699e86192a7236ac5c14834595639ac8',
+  digest: '68f8424dfb13b15cef2df20ac0a992be6d616e79c47d67c1c8fc35da8ddb2d73',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

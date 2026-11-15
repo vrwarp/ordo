@@ -496,6 +496,13 @@ in):
   writer changes a pre-rendered slide (prerender-editor, editor-slideops, hub-writers): plans the result again,
   writes its pages, rebuilds the stand-in and the key; inline whole when it needs no picture, inline with its
   record when only `chosen`, stand-in only when the store cannot hold it (W18).
+
+**Drawing** (`content.ts`): `slideContent(slide, { picture, look })` draws a pre-rendered slide's picture file
+(`SlideDrawing.picture = { hash, w, h }`) under its live set, in the shape of a reference picture, only when the
+caller passes the file and draws the authored look (lyric-only, bands and hidden draw the stand-in's text live).
+The output's link worker chooses the file (prerender-outputs, behind `PRERENDER_ON`); the media listers
+(`referencedMediaIds`, `drawnMediaIds`, `slideImages`, `previewMedia`) never pass one, so they list the stand-in's
+pictures and never the picture file.
 <!-- /r2b:prerender -->
 
 ## Live state
