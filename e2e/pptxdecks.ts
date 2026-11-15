@@ -612,8 +612,11 @@ export const LINE_ART_BLACK_BOX = { x: 120, y: 90, w: 1680, h: 900 } as const;
  */
 export function lineArtDeck(dir: string, variant = 0): string {
   mkdirSync(dir, { recursive: true });
-  // A variant moves the art a few px (`variant` x 6): the same geometry, units of its own (keyed by their rect).
-  const dx = variant * 6;
+  // A variant moves the art a few px and a sixteenth of a px (`variant` x 6 1/16): the same geometry, units of
+  // its own. Units are keyed by what they draw and its sub-pixel phase on the output, not where (r2b effect
+  // units), so a whole-pixel move alone would share the first variant's units; a sixteenth gives each of
+  // variants 0-7 a phase of its own at 1920 and at 3840.
+  const dx = variant * 6 + variant / 16;
   const EMU = 6_350; // EMU per logical px (12,192,000 / 1,920)
   const art = (
     id: number,
@@ -625,7 +628,7 @@ export function lineArtDeck(dir: string, variant = 0): string {
     sp({
       id,
       name,
-      x: (box.x + dx) * EMU,
+      x: Math.round((box.x + dx) * EMU),
       y: box.y * EMU,
       cx: box.w * EMU,
       cy: box.h * EMU,
