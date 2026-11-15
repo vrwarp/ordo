@@ -548,6 +548,22 @@ cells in place of the shape fields).
   keeps its legacy drawing. Shadow on adds PowerPoint's 'Offset: Bottom Right' outer shadow, or keeps an
   imported one. A locked shape's style fields are read-only; its box stays editable.
 
+### Object bars
+
+_The floating bar's registry (`views/editor/objectBars.ts`, `FloatingContextBar.tsx`)._ Like the Object panel's
+sections, the floating bar is a list of bars, each a component given one context (the object; `off` for the
+live lock or a locked object, `readOnly` for the live lock alone; `setObj`, the one way a bar changes the object
+as an undo step; the tail actions; the text selection; the slide, the draft and how many objects are selected).
+The bar shown is the first by `order` among those that apply to the primary object (for a selection of
+several objects, among the multi-selection bars) and that no applying bar replaces. The built-ins
+(`BUILTIN_BARS`, `OBJECT_BAR_ORDER`): the multi-selection bar (Align), a text box's, a plain shape's (geometry,
+fill, stroke), a picture's (Crop, Replace, Use as BG, loop) and the neutral bar, last: what the object is
+('Chart', 'Decoration', 'Rect (locked)'), then the tail actions. The shape bar applies to unlocked shapes
+without a table, a chart or a decoration only: its geometry select and fill pill write the legacy fields
+(`shape`, `fill`, `gradient`) that only an older build draws for those, and a locked shape's fields are
+read-only, so those objects get the neutral bar (`test/objectBars.test.ts`). M9's editor tracks add their bars
+with one line in `OBJECT_BARS` (or `registerObjectBar` at run time), as the panel's sections are added.
+
 ### Canvas-first layout
 
 The desktop editor (a fine pointer; #24) puts the slide first. A touch device keeps the docked panel
@@ -568,8 +584,8 @@ under a finger.
   clicked at 1024x768 and 1280x720, and the editor clips rather than scrolls (`overflow: clip`), so
   focusing a control by keyboard never shifts the slide list off screen (`e2e/editor-fit.spec.ts`).
 - **Floating bar** (`FloatingContextBar.tsx`, placed by `floatingBarSpot` in `touchGeometry.ts`). It shows
-  while an object is selected, unless the drawer is open on Object; text, shape, picture and multi-selection
-  bars end with Layer, Duplicate, Delete and More…. Its tiers: above the box and its rotate handle; below a
+  while an object is selected, unless the drawer is open on Object; the bar is the registry's (see "Object
+  bars"), and every bar ends with Layer, Duplicate, Delete and More…. Its tiers: above the box and its rotate handle; below a
   box near the top of the slide; docked inside the top edge of a tall box (the top bezel while its text is
   edited inline); clear of an open Find card. It fits its pane (`e2e/editor-fit.spec.ts`): its width is its one-row width,
   at most the pane's less 16 px whatever its offset, and a wider row wraps to a second row instead of
