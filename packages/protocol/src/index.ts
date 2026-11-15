@@ -96,6 +96,16 @@ export const OutputHealth = z.object({
   cacheRepairs: z.number().optional(),
   /** What carries the window's fallback bus: a handed-over MessagePort, or the window.postMessage relay. */
   busTransport: z.enum(['port', 'window']).optional(),
+  // ---- units (design/13 "Output health: units"; design/14 "Late units", wave r2b) ----
+  /** Units (slow parts drawn ahead in slices) the window's asset worker has made since it started. */
+  unitsMade: z.number().int().min(0).max(1e9).optional(),
+  /**
+   * Slides this window showed before all their units were ready, whose late parts came in a moment later
+   * (faded in; W49 "Parts of 2 slides appeared a moment late on this screen.").
+   */
+  unitsLate: z.number().int().min(0).max(1e9).optional(),
+  /** Bytes the asset worker's unit cache holds now (at most 192 MiB). */
+  unitCacheBytes: z.number().min(0).max(1e12).optional(),
 });
 export type OutputHealth = z.infer<typeof OutputHealth>;
 export type OutputHealthEntry = OutputHealth & {

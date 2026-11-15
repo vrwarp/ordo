@@ -21,9 +21,12 @@ import { APP_VERSION } from './index.ts';
 // 0.7.0 for PR #27 (wave r2a and phones P0), the one bump at merge: main published 0.6.0 without the decoration
 // drawer or geometry units, and its cached pages must reload rather than draw these slides the old way. The
 // digest is unchanged (it leaves the APP_VERSION line out).
+// Wave r2b (units-live): OutputHealth gains unitsMade, unitsLate and unitCacheBytes, optional fields an older
+// hub's parse strips; re-recorded at 0.7.0 on the track branch (the wave's one bump, 0.8.0, is in its last
+// commit; the integrator records the merged digest once).
 const RECORDED = {
   version: '0.7.0',
-  digest: 'da518616675d5b4e9a158c06c8933ba1afbbf14570b8eea189b07d8dc7610e60',
+  digest: '06b4c1a97bd74dfaf3adabf0c1033a418de848367b1e0d0d94fddf196cc49b4f',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

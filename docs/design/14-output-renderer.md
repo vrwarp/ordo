@@ -398,6 +398,22 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   left}`, coalesced: once all are made, or at most once per `REFRESH_FADE_MS` while some remain. A live job of
   another slide on the layer drops the late jobs of the slides it replaced on screen. With `?late=next` the late
   job still makes them, but reports nothing: the slide's next draw copies them.
+- **Fade in, coalesced** (link-core): `unitsReady` for a key the renderer holds draws the slide again in place
+  (`refresh`, as for a late image or font) as late work (`role: 'late'`, `RANK.late`), with `refreshFadeMs` 300
+  while it is on screen (it fades in over the old copy, "Layer stacks" below) and none while it is only armed (a
+  silent swap). A key is drawn again at most once per `REFRESH_FADE_MS` and never while a GO's live job is in
+  flight (it goes after that raster); a refresh of a slide that left the screen is cancelled with it
+  (`cancelSuperseded`). A slide shown again whose late parts never came (its late job was dropped) is drawn
+  again in place when it goes live, which makes them late again.
+- **Warm-up.** When the live playlist changes, the link sends the slides this look draws as authored, in cue order
+  from the live cue (the rest after it, then those before; each slide once, at most 200) in one `warmUnits` job;
+  the asset worker makes their units in bulk work (`RANK.bulk`), unpinned, until its unit cache holds two thirds
+  of `UNIT_CACHE_BYTES` (128 MiB), touching the nearer cues' units last so they are evicted last, and says per cue
+  what it made (`unitsWarmed`, `__ordo.state().units.warmed`). Every live job cancels it at its next turn (a GO
+  waits for at most the step running) and it goes on from that slide once the live work is done.
+- **Health** (design/13 "Output health: units"): `unitsMade`, `unitsLate` (slides shown with parts that came
+  late, counted once a showing) and `unitCacheBytes`; the operator's technical line, and W49 "Parts of 2 slides
+  appeared a moment late on this screen." (design 29 §3) as a note.
 <!-- /r2b:units-live -->
 
 ## Frame loop

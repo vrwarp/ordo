@@ -96,6 +96,18 @@ The operator acts as the hub: it stamps `seq` continuing from the last hub `seq`
 with the same playlist and its `seq` is lower; otherwise the operator resyncs from the
 hub and surfaces a warning. Details in [design/17](17-offline-and-degraded.md).
 
+## Output health: units
+
+`OutputHealth` (`health`, and the hub's `health.summary` to the operator) carries three counters of an output's
+units, the slow parts of a slide drawn ahead in slices (design/14 "Late units"; wave r2b), all optional so an older
+hub's parse strips them:
+
+| Field | Meaning |
+| --- | --- |
+| `unitsMade` | units the window's asset worker has made since it started |
+| `unitsLate` | slides the window showed before all their units were ready, whose late parts faded in a moment later (counted once a showing); the operator shows W49 "Parts of 2 slides appeared a moment late on this screen." (design 29 §3) as a note |
+| `unitCacheBytes` | bytes the asset worker's unit cache holds now (at most 192 MiB; warm-up stops at two thirds) |
+
 ## Versioning
 
 `v` is the protocol version. Hub and apps are deployed together from one image, so a
