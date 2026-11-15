@@ -12,6 +12,9 @@ export type EditorInspect = {
   slideId?: string;
   objectId?: string;
   objectIds: string[];
+  /** The selected cell of a selected table, and the target edited on the canvas (design/15 "Table editing"). */
+  cell?: number;
+  inline?: { objectId: string; cell?: number };
   /** The draft as the editor holds it (what Save would send, with the base rev). */
   draft?: Presentation;
 };
@@ -31,6 +34,12 @@ export function inspectEditor(): EditorInspect {
     slideId: s.slideId,
     objectId: s.objectId,
     objectIds: [...s.objectIds],
+    cell: s.cell,
+    inline: s.inlineEditingId
+      ? s.inlineEditingCell === undefined
+        ? { objectId: s.inlineEditingId }
+        : { objectId: s.inlineEditingId, cell: s.inlineEditingCell }
+      : undefined,
     draft: s.draft ? structuredClone(s.draft) : undefined,
   };
 }

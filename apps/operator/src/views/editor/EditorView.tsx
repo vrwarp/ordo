@@ -15,6 +15,8 @@ import {
   addToSlide,
   copySelection,
   copyTextSelection,
+  inlineText,
+  tableKey,
   cutSelection,
   cutTextSelection,
   deleteSelection,
@@ -291,6 +293,11 @@ export function EditorView({ id }: { id: string }) {
         }
       }
       if (place !== 'canvas' || ctrl || e.altKey) return;
+      // A selected table's cells: Enter, Tab, Escape and Delete (design/15 "Table editing").
+      if (tableKey(e, o, readOnly)) {
+        e.preventDefault();
+        return;
+      }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
         deleteSelection();
@@ -325,15 +332,13 @@ export function EditorView({ id }: { id: string }) {
       const place = keyPlace(e.target);
       if (place === 'field' || place === 'dialog') return;
       const st = useEditor.getState();
-      if (st.inlineEditingId && st.draft && st.slideId) {
-        const s = getSlide(st.draft, st.slideId);
-        const inlineObj = s?.objects.find((x) => x.id === st.inlineEditingId);
-        if (inlineObj?.type === 'text') {
-          if (copyTextSelection(inlineObj, st.textRange.start, st.textRange.end, e.clipboardData)) {
-            e.preventDefault();
-          }
-          return;
+      // A text box or a table's cell edited on the canvas (`inlineText`).
+      const inline = st.inlineEditingId && st.draft && st.slideId ? inlineText() : undefined;
+      if (inline) {
+        if (copyTextSelection(inline.view, st.textRange.start, st.textRange.end, e.clipboardData)) {
+          e.preventDefault();
         }
+        return;
       }
       if (place === 'canvas') {
         if (copySelection(e.clipboardData) || writeLastObjectClip(e.clipboardData)) {
@@ -347,18 +352,16 @@ export function EditorView({ id }: { id: string }) {
       const place = keyPlace(e.target);
       if (place === 'field' || place === 'dialog') return;
       const st = useEditor.getState();
-      if (st.inlineEditingId && st.draft && st.slideId) {
-        const s = getSlide(st.draft, st.slideId);
-        const inlineObj = s?.objects.find((x) => x.id === st.inlineEditingId);
-        if (inlineObj?.type === 'text') {
-          const caret = cutTextSelection(inlineObj, st.textRange.start, st.textRange.end, e.clipboardData);
-          if (caret !== null) {
-            e.preventDefault();
-            setTextRange({ start: caret, end: caret, caret });
-            syncInlineTextarea(caret);
-          }
-          return;
+      const inline = st.inlineEditingId && st.draft && st.slideId ? inlineText() : undefined;
+      if (inline) {
+        const { view, target } = inline;
+        const caret = cutTextSelection(view, st.textRange.start, st.textRange.end, e.clipboardData, target);
+        if (caret !== null) {
+          e.preventDefault();
+          setTextRange({ start: caret, end: caret, caret });
+          syncInlineTextarea(caret);
         }
+        return;
       }
       if (place === 'canvas') {
         if (cutSelection(e.clipboardData) || writeLastObjectClip(e.clipboardData)) {
@@ -375,18 +378,16 @@ export function EditorView({ id }: { id: string }) {
       if (!st.draft || !st.slideId) return;
 
       // 1. If inline editing a text box on the canvas, paste into that text box at `textRange`.
-      if (st.inlineEditingId) {
-        const s = getSlide(st.draft, st.slideId);
-        const inlineObj = s?.objects.find((x) => x.id === st.inlineEditingId);
-        if (inlineObj?.type === 'text') {
-          const caret = handleTextPaste(inlineObj, st.textRange.start, st.textRange.end, e.clipboardData);
-          if (caret !== null) {
-            e.preventDefault();
-            setTextRange({ start: caret, end: caret, caret });
-            syncInlineTextarea(caret);
-          }
-          return;
+      const inline = st.inlineEditingId ? inlineText() : undefined;
+      if (inline) {
+        const { view, target } = inline;
+        const caret = handleTextPaste(view, st.textRange.start, st.textRange.end, e.clipboardData, target);
+        if (caret !== null) {
+          e.preventDefault();
+          setTextRange({ start: caret, end: caret, caret });
+          syncInlineTextarea(caret);
         }
+        return;
       }
 
       if (place !== 'canvas') return;

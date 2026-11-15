@@ -6,6 +6,7 @@ import {
   LOGICAL_HEIGHT,
   LOGICAL_WIDTH,
   type Media,
+  type ShapeObject,
   type Slide,
   type SlideObject,
   type TextObject,
@@ -29,6 +30,7 @@ import {
   toLocalBoxPoint,
   wordRangeAt,
 } from '@ordo/renderer';
+import type * as TableKit from '@ordo/renderer/table/index.ts';
 import type Konva from 'konva';
 import {
   type ReactNode,
@@ -50,12 +52,15 @@ import { CropHandles } from './CropControl.tsx';
 import {
   type CanvasTextSelection,
   change,
+  currentSlide,
   redo,
+  selectCell,
   selectObject,
   selectObjects,
   setTextRange,
   startInlineEditing,
   stopInlineEditing,
+  type TextTarget,
   undo,
   useEditor,
 } from './editorStore.ts';
@@ -68,6 +73,7 @@ import {
   dragSelection,
   formatSelection,
   handleTextPaste,
+  tabCell,
   transformSelection,
   typeText,
 } from './actions.ts';
@@ -137,6 +143,109 @@ function loadDrawerOf(o: SlideObject): void {
   void loadShapeDrawers([o]).then((loaded) => {
     if (loaded) for (const l of imageListeners) l();
   });
+}
+
+// ---- tables: the cell editing kit (design/15 "Table editing") ----
+/**
+ * The renderer's table module (its drawer, layout and cell edit views), the one `loadShapeDrawers` loads for a
+ * table: loaded with the first table the canvas shows, so the editor's own chunk holds no table code. Until it
+ * is, a table is drawn as its legacy shape and selected as a whole.
+ */
+let tableKit: typeof TableKit | undefined;
+let tableKitLoading = false;
+function loadTableKit(): void {
+  if (tableKit || tableKitLoading) return;
+  tableKitLoading = true;
+  void import('@ordo/renderer/table/index.ts').then(
+    (m) => {
+      tableKit = m;
+      for (const l of imageListeners) l();
+    },
+    () => {
+      tableKitLoading = false;
+    },
+  );
+}
+
+/** A shape drawn as a table (`ShapeObject.table`). */
+export function isTable(o: SlideObject | undefined): o is ShapeObject & Required<Pick<ShapeObject, 'table'>> {
+  return o?.type === 'shape' && !!o.table;
+}
+
+/** The layout the table's drawer makes of `o` (undefined until the table kit is loaded). */
+function tableLayoutOf(o: SlideObject): TableKit.TableLayout | undefined {
+  if (!isTable(o) || !tableKit) return undefined;
+  try {
+    return tableKit.tableEditLayout(getMeasureCtx(), o);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The height an object is drawn at: a table's rows grow with their text (`TableLayout.height`), so its node's
+ * hit area, cache rect and Transformer use that; every other object its box's.
+ */
+export function drawnHeight(o: SlideObject): number {
+  const l = tableLayoutOf(o);
+  return l ? Math.max(o.box.h, l.height) : o.box.h;
+}
+
+/** The box an object is drawn in (a table's grown height): what the floating bar and the tools avoid. */
+function drawnBox(o: SlideObject): Box {
+  return isTable(o) ? { ...o.box, h: drawnHeight(o) } : o.box;
+}
+
+/** A table's cell under slide point (x, y), or -1 (no table kit yet, or outside the cells). */
+function cellAt(o: SlideObject, x: number, y: number): number {
+  const l = tableLayoutOf(o);
+  return l && isTable(o) && tableKit ? tableKit.cellAtPoint(o, l, x, y) : -1;
+}
+
+/**
+ * What the canvas edits for a target: a text object itself, or a table cell's edit view (its drawn text in slide
+ * coordinates, `cellEditView`) with the cell's rect as the frame the pointer edits in.
+ */
+type EditTarget = { view: TextObject; target: TextTarget; frame: Box; locked: boolean };
+function editTargetOf(
+  objects: readonly SlideObject[],
+  objectId: string | undefined,
+  cell: number | undefined,
+): EditTarget | undefined {
+  const o = objectId ? objects.find((x) => x.id === objectId) : undefined;
+  if (!o) return undefined;
+  if (cell === undefined)
+    return o.type === 'text'
+      ? { view: o, target: { objectId: o.id }, frame: o.box, locked: isLocked(o) }
+      : undefined;
+  const l = tableLayoutOf(o);
+  if (!l || !isTable(o) || !tableKit) return undefined;
+  const view = tableKit.cellEditView(o, l, cell);
+  const frame = tableKit.cellRect(o, l, cell);
+  return view && frame ? { view, target: { objectId: o.id, cell }, frame, locked: isLocked(o) } : undefined;
+}
+
+/**
+ * A table's box after a Transformer resize of its node (`node`: its position, the pivot at the box's centre,
+ * and its scale): its width scaled, its height set from the drawn height `drawnH` scaled (a height drag sets
+ * `box.h`; a drag of the width alone keeps it), unrotated in the editor (tables do not turn there; a stored
+ * turn stays).
+ */
+export function tableBoxAfterTransform(
+  o: Pick<SlideObject, 'box'>,
+  drawnH: number,
+  node: { x: number; y: number; scaleX: number; scaleY: number },
+): Box {
+  const b = o.box;
+  const w = Math.max(8, Math.round(b.w * Math.abs(node.scaleX)));
+  const h = Math.abs(node.scaleY - 1) < 1e-6 ? b.h : Math.max(8, Math.round(drawnH * Math.abs(node.scaleY)));
+  return {
+    x: Math.round(node.x - (b.w / 2) * node.scaleX),
+    y: Math.round(node.y - (b.h / 2) * node.scaleY),
+    w,
+    h,
+    rotation: b.rotation ?? 0,
+  };
 }
 function useImageTick(): number {
   const [n, setN] = useState(0);
@@ -355,13 +464,14 @@ export const NODE_CACHE_MAX_PX = 8_000_000;
  * strokes, arrowheads, a geometry past its box) united with its hit area, a little margin for antialiasing.
  * Undefined when it is not to be cached: text (its raster is cached already, `textCanvas`), an object whose
  * reach the renderer does not know (fields it does not bound: it is drawn live, never clipped), or one past
- * `NODE_CACHE_MAX_PX` at `density`.
+ * `NODE_CACHE_MAX_PX` at `density`. `hitHeight` is the hit area's (a table's drawn height, `drawnHeight`).
  */
 export function nodeCacheRect(
   o: SlideObject,
   drawAs: SlideObject | undefined,
   density: number,
   ctx?: Parameters<typeof objectReach>[0],
+  hitHeight: number = o.box.h,
 ): { x: number; y: number; width: number; height: number } | undefined {
   if (o.type === 'text' || !(density > 0)) return undefined;
   const measure = ctx ?? (typeof document === 'undefined' ? undefined : getMeasureCtx());
@@ -375,7 +485,7 @@ export function nodeCacheRect(
   }
   if (!r) return undefined;
   const w = o.box.w;
-  const h = Math.max(o.box.h, 12);
+  const h = Math.max(hitHeight, 12);
   const x0 = Math.floor(Math.min(r.x, 0) - 2);
   const y0 = Math.floor(Math.min(r.y, 0) - 2);
   const x1 = Math.ceil(Math.max(r.x + r.w, w) + 2);
@@ -398,6 +508,8 @@ function ObjectNode(props: {
   scale: number;
   /** What the slide's drawing budget draws instead (`slideBudget`), as the outputs draw it. */
   drawAs?: SlideObject;
+  /** The height it is drawn at (`drawnHeight`: a table's grown rows): its hit area and Transformer frame. */
+  height: number;
   readOnly: boolean;
   selected?: boolean;
   coarse?: boolean;
@@ -405,7 +517,7 @@ function ObjectNode(props: {
   badge: number;
   on: NodeHandlers;
   onEditText?: () => void;
-  onStartInlineEdit?: (id: string, range?: CanvasTextSelection) => void;
+  onStartInlineEdit?: (id: string, range?: CanvasTextSelection, cell?: number) => void;
   isEditingInline?: boolean;
   registerNode: (id: string, n: Konva.Shape | null) => void;
 }) {
@@ -420,13 +532,13 @@ function ObjectNode(props: {
   useLayoutEffect(() => {
     const n = node.current;
     if (!n) return;
-    const rect = nodeCacheRect(o, props.drawAs, props.density);
+    const rect = nodeCacheRect(o, props.drawAs, props.density, undefined, props.height);
     if (!rect) {
       if (n.isCached()) n.clearCache();
       return;
     }
     n.cache({ ...rect, pixelRatio: props.density, hitCanvasPixelRatio: Math.min(1, props.scale) });
-  }, [o, props.drawAs, props.density, props.scale, props.badge, props.media, tick]);
+  }, [o, props.drawAs, props.density, props.scale, props.badge, props.media, props.height, tick]);
   return (
     <Shape
       ref={(n) => {
@@ -436,7 +548,9 @@ function ObjectNode(props: {
       x={b.x + b.w / 2}
       y={b.y + b.h / 2}
       width={b.w}
-      height={b.h}
+      // The drawn height (a table's rows grow with their text): the Transformer's frame. The pivot stays the
+      // box's centre, where every drawer turns the object.
+      height={props.height}
       offsetX={b.w / 2}
       offsetY={b.h / 2}
       rotation={b.rotation ?? 0}
@@ -477,7 +591,7 @@ function ObjectNode(props: {
       }}
       hitFunc={(context, shape) => {
         context.beginPath();
-        context.rect(0, 0, b.w, Math.max(b.h, 12));
+        context.rect(0, 0, b.w, Math.max(props.height, 12));
         context.closePath();
         context.fillStrokeShape(shape);
       }}
@@ -494,9 +608,27 @@ function ObjectNode(props: {
           const idx = pos ? hitTestObjectOffset(o, pos.x / props.scale, pos.y / props.scale) : o.text.length;
           props.onStartInlineEdit?.(o.id, { start: idx, end: idx, caret: idx });
         }
+        // A table's cell: double-click edits it, the caret where the click landed (design/15 "Table editing").
+        if (!props.readOnly && isTable(o) && !isLocked(o) && !props.coarse && props.selected) {
+          const pos = e.target.getStage()?.getPointerPosition();
+          const x = pos ? pos.x / props.scale : Number.NaN;
+          const y = pos ? pos.y / props.scale : Number.NaN;
+          const cell = cellAt(o, x, y);
+          const t = cell >= 0 ? editTargetOf([o], o.id, cell) : undefined;
+          if (t) {
+            const idx = hitTestObjectOffset(t.view, x, y);
+            props.onStartInlineEdit?.(o.id, { start: idx, end: idx, caret: idx }, cell);
+          }
+        }
       }}
       onDblTap={(e) => {
         e.cancelBubble = true;
+        // A table: the cell under the finger is the one its panel edits.
+        if (isTable(o)) {
+          const pos = e.target.getStage()?.getPointerPosition();
+          const cell = pos ? cellAt(o, pos.x / props.scale, pos.y / props.scale) : -1;
+          if (cell >= 0) selectCell(o.id, cell);
+        }
         props.onEditText?.();
       }}
       onDragStart={(e) => on.dragStart(o, e)}
@@ -524,14 +656,18 @@ function TextEditingOverlay(props: {
   layerRef: RefObject<Konva.Layer | null>;
 }) {
   const inlineEditingId = useEditor((s) => s.inlineEditingId);
+  const inlineEditingCell = useEditor((s) => s.inlineEditingCell);
   const selectedId = useEditor((s) => s.objectId);
+  const selectedCell = useEditor((s) => s.cell);
   const selectedCount = useEditor((s) => s.objectIds.length);
   const range = useEditor((s) => s.textRange);
   const targetId = inlineEditingId ?? (selectedCount === 1 ? selectedId : undefined);
-  const o = targetId
-    ? props.objects.find((x): x is TextObject => x.id === targetId && x.type === 'text')
-    : undefined;
-  const editing = !!o && inlineEditingId === o.id;
+  // A table's cell (edited, or selected) is edited as its edit view, in the table node's frame.
+  const cell = inlineEditingId ? inlineEditingCell : selectedCell;
+  const target = editTargetOf(props.objects, targetId, cell);
+  const o = target?.view;
+  const host = target ? props.objects.find((x) => x.id === target.target.objectId) : undefined;
+  const editing = !!target && inlineEditingId === target.target.objectId;
   const [visible, setVisible] = useState(true);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new caret, selection or text restarts the blink
   useEffect(() => {
@@ -540,7 +676,7 @@ function TextEditingOverlay(props: {
     const timer = setInterval(() => setVisible((v) => !v), CARET_BLINK_MS);
     return () => clearInterval(timer);
   }, [editing, o?.id, o?.text, range.start, range.end, range.caret]);
-  const show = !!o && (editing || range.start < range.end);
+  const show = !!o && (editing || range.start < range.end || cell !== undefined);
   return (
     <Layer
       ref={props.layerRef}
@@ -549,14 +685,14 @@ function TextEditingOverlay(props: {
       scaleY={props.scale}
       listening={false}
     >
-      {show && o && (
+      {show && o && host && target && (
         <Shape
           listening={false}
           perfectDrawEnabled={false}
           sceneFunc={(context) => {
             const ctx = context._context as CanvasRenderingContext2D;
-            const b = o.box;
-            const n = props.nodes.get(o.id);
+            const b = host.box;
+            const n = props.nodes.get(host.id);
             ctx.save();
             if (n) {
               const [ma, mb, mc, md, me, mf] = n.getTransform().getMatrix() as [
@@ -579,6 +715,19 @@ function TextEditingOverlay(props: {
               caret: range.caret,
               showCaret: editing && visible,
             };
+            if (target.target.cell !== undefined) {
+              // The selected cell's outline, in the table's frame.
+              const f = target.frame;
+              ctx.save();
+              ctx.strokeStyle = '#3b82f6';
+              ctx.lineWidth = 2 / props.scale;
+              ctx.strokeRect(f.x - b.x, f.y - b.y, f.w, f.h);
+              ctx.restore();
+              if (!editing && range.start >= range.end) {
+                ctx.restore();
+                return;
+              }
+            }
             if (isRichText(o)) {
               ctx.translate(-b.x, -b.y);
               drawTextEditingOverlay(ctx, unrotatedFor(o), overlay);
@@ -695,6 +844,12 @@ export function SlideCanvas(props: {
     return drawn.objects.filter((o) => ids.has(o.id));
   }, [drawn.objects, objectIds]);
   const lockedSel = selected.some(isLocked);
+  // Tables do not turn in the editor (PowerPoint does not turn them; a stored turn is kept and drawn).
+  const tableSel = selected.some(isTable);
+  // The table kit loads with the first table on a slide (its cells' layout and edit views).
+  useEffect(() => {
+    if (drawn.objects.some(isTable)) loadTableKit();
+  }, [drawn.objects]);
   // A locked art picture alone keeps its aspect: corner anchors only.
   const aspect = selected.length === 1 && keepsAspect(selected[0]!);
   // Past the slide's drawing budget, stored geometries draw as their legacy shapes and effects are left out,
@@ -711,7 +866,7 @@ export function SlideCanvas(props: {
     t.nodes(ns);
     t.getLayer()?.batchDraw();
   }, [objectIds, slide, props.readOnly]);
-  const selBox = selected.length > 1 ? groupBox(selected) : selected[0]?.box;
+  const selBox = selected.length > 1 ? groupBox(selected) : selected[0] && drawnBox(selected[0]);
   // A long press under a finger (Alt-click's touch equivalent) is pending.
   const press = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | undefined>(undefined);
   const endPress = () => {
@@ -737,6 +892,21 @@ export function SlideCanvas(props: {
       // Shift toggles, so it acts once per press: on its pointer event (a mouse press fires mousedown too).
       if (mods.shift && kind !== 'pointer') return;
       const st = useEditor.getState();
+      // A press on the table already selected alone selects the cell under it (design/15 "Table editing").
+      if (
+        kind === 'pointer' &&
+        !mods.shift &&
+        !mods.alt &&
+        isTable(o) &&
+        st.objectId === o.id &&
+        st.objectIds.length === 1
+      ) {
+        const pos = e.target.getStage()?.getPointerPosition();
+        const cell = pos ? cellAt(o, pos.x / scale, pos.y / scale) : -1;
+        if (cell >= 0 && !(st.inlineEditingId === o.id && st.inlineEditingCell === cell))
+          selectCell(o.id, cell);
+        return;
+      }
       const sel = clickSelection(
         { objects: drawn.objects },
         { ids: st.objectIds, primary: st.objectId },
@@ -843,6 +1013,20 @@ export function SlideCanvas(props: {
       // A multi-object selection is transformed as one by the Transformer's own end (below).
       if (inGroup(o.id)) return;
       const n = e.target;
+      if (isTable(o)) {
+        // A height drag sets box.h from the drawn height (rows grown by their text); tables do not turn.
+        const box = tableBoxAfterTransform(o, drawnHeight(o), {
+          x: n.x(),
+          y: n.y(),
+          scaleX: n.scaleX(),
+          scaleY: n.scaleY(),
+        });
+        n.scaleX(1);
+        n.scaleY(1);
+        n.rotation(o.box.rotation ?? 0);
+        change((p) => updateObject(p, slide.id, o.id, (ob) => ({ ...ob, box })));
+        return;
+      }
       let w = Math.max(8, Math.round(n.width() * n.scaleX()));
       let h = Math.max(8, Math.round(n.height() * n.scaleY()));
       if (keepsAspect(o) && o.box.w > 0 && o.box.h > 0) {
@@ -888,9 +1072,13 @@ export function SlideCanvas(props: {
   const inlineEditingId = useEditor((s) => s.inlineEditingId);
   const selectedId = useEditor((s) => s.objectId);
   const selectedCount = useEditor((s) => s.objectIds.length);
-  const editingObj = inlineEditingId
-    ? drawn.objects.find((x): x is TextObject => x.id === inlineEditingId && x.type === 'text')
+  const inlineEditingCell = useEditor((s) => s.inlineEditingCell);
+  const selectedCell = useEditor((s) => s.cell);
+  // What is edited inline: a text box, or a table's cell as its edit view (design/15 "Table editing").
+  const editing = inlineEditingId
+    ? editTargetOf(drawn.objects, inlineEditingId, inlineEditingCell)
     : undefined;
+  const editingObj = editing?.view;
   const floatingAt =
     showFloatingBar && selBox
       ? floatingBarSpot(
@@ -906,11 +1094,9 @@ export function SlideCanvas(props: {
           },
         )
       : undefined;
-  const backingTextObj =
-    editingObj ??
-    (selectedCount === 1 && selectedId
-      ? drawn.objects.find((x): x is TextObject => x.id === selectedId && x.type === 'text')
-      : undefined);
+  // The hidden backing field's text: what is edited, else the selected text box or table cell.
+  const backing =
+    editing ?? (selectedCount === 1 ? editTargetOf(drawn.objects, selectedId, selectedCell) : undefined);
   // Inline editing ended (Escape, a click away): the hidden backing field gives the keys back to the slide.
   // A layout effect: done with the commit that ends editing, before the next key can arrive.
   const wasEditing = useRef<string | undefined>(undefined);
@@ -974,15 +1160,16 @@ export function SlideCanvas(props: {
                   density={density}
                   scale={scale}
                   drawAs={budget.get(o)}
+                  height={drawnHeight(o)}
                   readOnly={props.readOnly}
                   selected={isPrimarySelected}
                   coarse={coarse}
                   badge={22 / scale}
                   on={on}
                   isEditingInline={isInline}
-                  onStartInlineEdit={(id, range) => startInlineEditing(id, range)}
+                  onStartInlineEdit={(id, range, cell) => startInlineEditing(id, range, cell)}
                   onEditText={
-                    o.type === 'text' && !props.readOnly && props.onEditText
+                    (o.type === 'text' || isTable(o)) && !props.readOnly && props.onEditText
                       ? () => props.onEditText?.(o.id)
                       : undefined
                   }
@@ -1015,7 +1202,7 @@ export function SlideCanvas(props: {
             <CropHandles objects={drawn.objects} scale={scale} readOnly={props.readOnly} />
             <Transformer
               ref={tr}
-              rotateEnabled={!lockedSel}
+              rotateEnabled={!lockedSel && !tableSel}
               keepRatio={aspect}
               enabledAnchors={aspect ? CORNER_ANCHORS : ALL_ANCHORS}
               onTransformStart={() => {
@@ -1084,20 +1271,27 @@ export function SlideCanvas(props: {
             </Layer>
           )}
         </Stage>
-        {!props.hasExternalTextEditor && backingTextObj && (
+        {!props.hasExternalTextEditor && backing && (
           <CanvasBackingTextEditor
-            obj={backingTextObj}
-            readOnly={props.readOnly}
+            obj={backing.view}
+            target={backing.target}
+            readOnly={props.readOnly || backing.locked}
             stage={{ scale, w: size.w, h: size.h }}
           />
         )}
-        {editingObj && (
+        {editing && editingObj && (
           <CanvasTextEditor
-            key={editingObj.id}
+            key={`${editing.target.objectId}:${editing.target.cell ?? ''}`}
             obj={editingObj}
+            frame={editing.frame}
             scale={scale}
             stageContainerRef={stageContainerRef}
-            onCommit={() => stopInlineEditing()}
+            onCommit={() => {
+              const cell = useEditor.getState().inlineEditingCell;
+              stopInlineEditing();
+              // Escape in a cell returns to the table, selected as a whole.
+              if (cell !== undefined) selectCell(editing.target.objectId, undefined);
+            }}
           />
         )}
       </div>
@@ -1166,16 +1360,33 @@ function syncBackingTextarea(start: number, end: number, caret: number): void {
  */
 export function CanvasBackingTextEditor({
   obj,
+  target = { objectId: obj.id },
   readOnly,
   stage,
 }: {
   obj: TextObject;
+  /** What the field edits: `obj` itself, or a table's cell (`obj` is then the cell's edit view). */
+  target?: TextTarget;
   readOnly: boolean;
   /** The stage's scale and size: the field sits at the caret, so an input method's window opens there. */
   stage?: { scale: number; w: number; h: number };
 }) {
   const off = readOnly || isLocked(obj);
   const caret = useEditor((s) => s.textRange.caret);
+  // A table's cell edited on the canvas: when Tab moves to another cell, the field holds that cell's text and
+  // its selection at once (in the commit that shows it), before the next key reaches the field.
+  const editingCell = useEditor(
+    (s) =>
+      target.cell !== undefined &&
+      s.inlineEditingId === target.objectId &&
+      s.inlineEditingCell === target.cell,
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: another cell edited syncs the field again
+  useLayoutEffect(() => {
+    if (!editingCell) return;
+    const r = useEditor.getState().textRange;
+    syncBackingTextarea(r.start, r.end, r.caret);
+  }, [editingCell, target.objectId, target.cell]);
   const at = stage
     ? backingAt(obj, caret, stage.scale, { w: stage.w, h: stage.h })
     : { left: 0, top: 0, height: 1 };
@@ -1212,6 +1423,14 @@ export function CanvasBackingTextEditor({
       }}
       onKeyDown={(e) => {
         if (composing(e)) return;
+        // Tab and Shift+Tab in a table's cell: the next or previous cell, its text selected (a new row past
+        // the last cell, as PowerPoint adds one).
+        if (target.cell !== undefined && e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          moveToCell(target, e.shiftKey, !off);
+          return;
+        }
         const step = historyKey(e);
         if (step) {
           e.preventDefault();
@@ -1238,7 +1457,7 @@ export function CanvasBackingTextEditor({
           const end = el.selectionEnd;
           if (off || start === end) return;
           const state = barState(obj, selectionStyle(obj, start, end));
-          formatSelection(obj.id, start, end, togglePatch(t, obj, state));
+          formatSelection(target, start, end, togglePatch(t, obj, state));
           refocusText(start, end);
         }
       }}
@@ -1246,7 +1465,7 @@ export function CanvasBackingTextEditor({
         const next = e.target.value;
         const caret = e.target.selectionEnd;
         setTextRange({ start: e.target.selectionStart, end: caret, caret });
-        if (!off) typeText(obj.id, next, caret);
+        if (!off) typeText(target, next, caret);
       }}
       onCopy={(e) => {
         const el = e.currentTarget;
@@ -1257,7 +1476,7 @@ export function CanvasBackingTextEditor({
       onCut={(e) => {
         if (off) return;
         const el = e.currentTarget;
-        const caret = cutTextSelection(obj, el.selectionStart, el.selectionEnd, e.clipboardData);
+        const caret = cutTextSelection(obj, el.selectionStart, el.selectionEnd, e.clipboardData, target);
         if (caret !== null) {
           e.preventDefault();
           setTextRange({ start: caret, end: caret, caret });
@@ -1267,7 +1486,7 @@ export function CanvasBackingTextEditor({
       onPaste={(e) => {
         if (off) return;
         const el = e.currentTarget;
-        const caret = handleTextPaste(obj, el.selectionStart, el.selectionEnd, e.clipboardData);
+        const caret = handleTextPaste(obj, el.selectionStart, el.selectionEnd, e.clipboardData, target);
         if (caret !== null) {
           e.preventDefault();
           setTextRange({ start: caret, end: caret, caret });
@@ -1276,6 +1495,25 @@ export function CanvasBackingTextEditor({
       }}
     />
   );
+}
+
+/**
+ * Tab (Shift+Tab, `back`) from a table's cell: the next (previous) cell is selected, and edited on the canvas
+ * with its whole text selected when the cell being left was; past the last cell a new row is added when `grow`
+ * (`tabCell`). The keys stay in the backing field.
+ */
+export function moveToCell(at: TextTarget, back: boolean, grow: boolean): void {
+  if (at.cell === undefined) return;
+  const st = useEditor.getState();
+  const next = tabCell(at.objectId, at.cell, back, grow);
+  if (next === undefined) return;
+  const editing = st.inlineEditingId === at.objectId && st.inlineEditingCell === at.cell;
+  selectCell(at.objectId, next);
+  const table = currentSlide()?.objects.find((o) => o.id === at.objectId);
+  const len = isTable(table) ? (table.table.cells[next]?.text?.length ?? 0) : 0;
+  const range = { start: 0, end: len, caret: len };
+  setTextRange(range);
+  if (editing) startInlineEditing(at.objectId, range, next);
 }
 
 /**
@@ -1289,16 +1527,19 @@ export function CanvasBackingTextEditor({
  */
 function CanvasTextEditor({
   obj,
+  frame,
   scale,
   stageContainerRef,
   onCommit,
 }: {
   obj: TextObject;
+  /** Where pointer editing happens (default `obj.box`; a table cell's rect for its edit view). */
+  frame?: Box;
   scale: number;
   stageContainerRef: React.RefObject<HTMLDivElement | null>;
   onCommit: () => void;
 }) {
-  const b = obj.box;
+  const b = frame ?? obj.box;
   const draggingRef = useRef(false);
   const anchorRef = useRef(useEditor.getState().textRange.start);
   const preferredXRef = useRef<number | undefined>(undefined);

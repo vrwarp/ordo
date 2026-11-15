@@ -4,7 +4,14 @@ import { findAndReplace } from './actions.ts';
 import { composing } from './editorKeys.ts';
 import { getSlide } from './ops.ts';
 import { isLocked } from './ops/group.ts';
-import { selectObject, selectSlide, setTextRange, startInlineEditing, useEditor } from './editorStore.ts';
+import {
+  selectCell,
+  selectObject,
+  selectSlide,
+  setTextRange,
+  startInlineEditing,
+  useEditor,
+} from './editorStore.ts';
 import { type FindOptions, findText, type TextMatch } from './ops/slides.ts';
 
 /*
@@ -66,6 +73,11 @@ function context(t: string, start: number, end: number): Pick<FindRow, 'before' 
   };
 }
 
+/** Where a match is: its object, and its cell for a table's. */
+export function matchKey(m: Pick<TextMatch, 'objectId' | 'cell'>): string {
+  return m.cell === undefined ? m.objectId : `${m.objectId}\u0000${m.cell}`;
+}
+
 /** The dialog's rows for `matches` of `p` (at most `LIST_LIMIT`). */
 export function findRows(p: Presentation, matches: readonly TextMatch[]): FindRow[] {
   const numbers = new Map<
@@ -76,15 +88,22 @@ export function findRows(p: Presentation, matches: readonly TextMatch[]): FindRo
   for (const sec of p.sections)
     for (const s of sec.slides) {
       n++;
+      // A text box's text by its id; a table cell's by its id and cell (`matchKey`).
       const texts = new Map<string, string>();
-      for (const o of s.objects) if (o.type === 'text') texts.set(o.id, o.text);
+      for (const o of s.objects) {
+        if (o.type === 'text') texts.set(o.id, o.text);
+        else if (o.type === 'shape' && o.table)
+          o.table.cells.forEach((c, i) => {
+            if (c.text) texts.set(matchKey({ objectId: o.id, cell: i }), c.text);
+          });
+      }
       const drawn = new Set(slideContent(s).objects.map((o) => o.id));
       numbers.set(s.id, { n, hidden: !!s.hidden, texts, drawn });
     }
   const rows: FindRow[] = [];
   for (const m of matches.slice(0, LIST_LIMIT)) {
     const info = numbers.get(m.slideId);
-    const t = info?.texts.get(m.objectId);
+    const t = info?.texts.get(matchKey(m));
     if (!info || t === undefined) continue;
     rows.push({
       ...m,
@@ -304,7 +323,7 @@ export function FindReplaceView(props: FindReplaceViewProps) {
           >
             {props.rows.map((r, idx) => (
               <li
-                key={`${r.objectId}:${r.start}`}
+                key={`${matchKey(r)}:${r.start}`}
                 className={`row ed-find-row${idx === activeIdx ? ' active' : ''}`}
                 style={{ gap: 8 }}
                 data-find-row
@@ -354,12 +373,20 @@ export function FindReplaceView(props: FindReplaceViewProps) {
  */
 export function goToMatch(r: FindRow, readOnly: boolean): boolean {
   selectSlide(r.slideId);
-  selectObject(r.objectId);
+  if (r.cell === undefined) selectObject(r.objectId);
+  else selectCell(r.objectId, r.cell);
   const range = { start: r.start, end: r.end, caret: r.end };
   setTextRange(range);
   const st = useEditor.getState();
   const o = st.draft ? getSlide(st.draft, r.slideId)?.objects.find((x) => x.id === r.objectId) : undefined;
-  if (readOnly || r.unseen || o?.type !== 'text' || isLocked(o)) return false;
+  if (readOnly || r.unseen || !o || isLocked(o)) return false;
+  // A table's cell is edited on the canvas as a text box is (design/15 "Table editing").
+  if (r.cell !== undefined) {
+    if (o.type !== 'shape' || !o.table) return false;
+    startInlineEditing(r.objectId, range, r.cell);
+    return true;
+  }
+  if (o.type !== 'text') return false;
   startInlineEditing(r.objectId, range);
   return true;
 }
@@ -391,7 +418,8 @@ export function FindReplaceDialog({ readOnly, onClose }: { readOnly: boolean; on
 
   const highlightMatchOnStage = (r: FindRow) => {
     selectSlide(r.slideId);
-    selectObject(r.objectId);
+    if (r.cell === undefined) selectObject(r.objectId);
+    else selectCell(r.objectId, r.cell);
     setTextRange({ start: r.start, end: r.end, caret: r.end });
   };
 

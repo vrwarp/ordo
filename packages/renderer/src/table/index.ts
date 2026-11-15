@@ -10,6 +10,7 @@ import { tableReach } from './reach.ts';
  */
 
 export { drawTable } from './draw.ts';
+export { cellAtPoint, cellEditView, cellRect, tableEditLayout } from './edit.ts';
 export { tableHit, tablePoint } from './hit.ts';
 export {
   CELL_CACHE,

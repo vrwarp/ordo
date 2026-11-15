@@ -3014,3 +3014,16 @@ tr.rev-row-selected td {
 .dialog:focus {
   outline: none;
 }
+
+/*
+ * The Table section's cell format row (views/editor/TableTools.tsx: the floating bar's text controls in the
+ * Object panel): 44 px targets under a finger, over the bar's compact sizes (so last in the file).
+ */
+@media (pointer: coarse) {
+  .ed-cell-format .row button,
+  .ed-cell-format .row select,
+  .ed-cell-format .stepper-box button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

@@ -11,8 +11,10 @@ import {
   type TextRun,
 } from './schemas.ts';
 import {
+  cellBodyOf,
   cellRich,
   cellStyleOf,
+  cellTextObject,
   cellTextStyle,
   deleteCol,
   deleteRow,
@@ -152,6 +154,35 @@ describe('cell views', () => {
     expect(cellStyleOf(base, base)).toEqual({});
   });
 });
+
+describe("cellTextObject (the editor's cell target)", () => {
+  it("is the cell's rich body as a text object in the table's box, and goes back through setCell unchanged", () => {
+    const o = shape(m9Table());
+    const v = cellTextObject(o, 4)!;
+    const rich = cellRich(t$(o), 4)!;
+    expect(v).toMatchObject({ id: 't', type: 'text', box: o.box, opacity: o.opacity });
+    expect({ text: v.text, style: v.style, runs: v.runs, paras: v.paras }).toEqual(rich);
+    expect(cellBodyOf(v)).toEqual(rich);
+    // Written back as it is, the table's cells are equal (palettes compacted the same way).
+    expect(t$(setCell(o, 4, cellBodyOf(v)))).toEqual(t$(o));
+    const inCell = { x: 300, y: 260, w: 400, h: 0, rotation: 0 };
+    expect(cellTextObject(o, 4, inCell)!.box).toBe(inCell);
+    // A cell without runs or paragraph styles has none on its view.
+    expect(cellTextObject(o, 0)).not.toHaveProperty('runs');
+    expect(cellTextObject(o, 99)).toBeUndefined();
+    expect(cellTextObject({ ...o, table: undefined }, 0)).toBeUndefined();
+  });
+
+  it("a typed edit of the view is the cell's new text, its runs kept", () => {
+    const o = shape(m9Table());
+    const v = cellTextObject(o, 4)!;
+    const next = setCell(o, 4, cellBodyOf({ ...v, text: `${v.text}!` }));
+    expect(cellRich(t$(next), 4)!.text).toBe('Call to worship\nOpening hymn!');
+    expect(cellRich(t$(next), 4)!.runs).toEqual(rich4().runs);
+  });
+});
+
+const rich4 = () => cellRich(m9Table(), 4)!;
 
 describe('cell text', () => {
   it('setCell round-trips runs through the run palette', () => {
