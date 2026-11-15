@@ -20,6 +20,7 @@ import {
   preparedKey,
 } from '@ordo/renderer';
 import {
+  effectUnits,
   putUnit,
   UNIT_CACHE_BYTES,
   unitCache,
@@ -1025,6 +1026,13 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
       t: 'drawing',
       switches: { late: 'next', warm: false, effects: 'base', unitTurnMs: 30 },
     });
+    // `?effects=base` turns effect units off in the worker (C6): a capped decoration gets no unit, and is drawn
+    // as 62a1c3a drew it; the next init without it turns them on again.
+    expect(effectUnits()).toBe(false);
+    expect(unitsOf(cappedSlide())).toEqual([]);
+    init({});
+    expect(effectUnits()).toBe(true);
+    expect(unitsOf(cappedSlide()).map((u) => u.of)).toEqual(['decor']);
     // Each unit turn of a late job is followed by a 30 ms wait (real time).
     init({ unitTurnMs: 30 });
     const s = busy('turn-wait', 43.3125);

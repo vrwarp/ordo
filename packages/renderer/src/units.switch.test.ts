@@ -10,8 +10,8 @@ import { lineArtSlide } from './units.test-util.ts';
 import { clearUnits, setEffectUnits, unitsOfSlide } from './units.ts';
 
 /*
- * The venue troubleshooting switch (r2b effect units, C6): `setEffectUnits(false)` (an output's `?effects=base`
- * once the integrator wires it) draws as 62a1c3a drew. Each slide below (the raster bench's area cases, the line
+ * The venue troubleshooting switch (r2b effect units, C6): `setEffectUnits(false)` (an output's `?effects=base`,
+ * set by the asset worker's `applyDrawing`) draws as 62a1c3a drew. Each slide below (the raster bench's area cases, the line
  * art, effects past the budget and past one frame of units, gradients past it) is drawn at 3840 with nothing
  * cached, and its draw calls (a trace) and its planned units are digested: FIXTURE holds the digests 62a1c3a gave
  * (recorded by bundling this very drawing against the r2b-before checkout at 62a1c3a).

@@ -434,7 +434,7 @@ drawing budget (`geombudget.ts`) would draw as a lesser legacy copy on the outpu
   outputs and to legacy copies on the editor and coarse-pointer thumbnails. Where units are planned (the asset
   worker) `slideJobCost` rates an object drawn from a unit at its 1:1 copy (`pictures`), its making at arm apart
   (`slideUnitsCost`): a warm copied unit is never rated at its making cost.
-- **Switch** (`setEffectUnits(false)`, an output's `?effects=base` once the integrator wires it, C6): 62a1c3a's
+- **Switch** (`setEffectUnits(false)`, an output's `?effects=base`: the asset worker sets it at each `init`, C6): 62a1c3a's
   drawing, geometry units only (a stored geometry past the budget, its effects kept only within one call).
 <!-- /r2b:effect-units -->
 
@@ -482,8 +482,8 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
 - **Switches** (venue troubleshooting, on the output URL beside `?renderer=2d`; `apps/output/src/switches.ts`,
   carried to the asset worker in its `init` as `drawing`, which it reports back for the diagnostics):
   `?late=next` (late parts at the slide's next draw, `LATE_UNIT`'s other mode), `?warm=off` (no warm-up),
-  `?effects=base` (62a1c3a's drawing of effects and decorations: the integrator wires effect-units'
-  `setEffectUnits(false)` to it, C6). In test mode only, `?unitTurnMs=N` (1-5000) waits N ms after each turn of
+  `?effects=base` (62a1c3a's drawing of effects and decorations: the asset worker's `applyDrawing` calls
+  effect-units' `setEffectUnits(false)`, C6). In test mode only, `?unitTurnMs=N` (1-5000) waits N ms after each turn of
   unit making, so the e2e can make units slow; outside test mode it is refused with a console line.
 - **Tested** by `e2e/units-live.spec.ts` (rows `units-live` 0 and 1 of `e2e/ports.ts`): line-art decks through the
   upload route, `?unitTurnMs=40`; a jump to a cue neither armed nor warmed (`?warm=off`) and a GO 50 ms after its

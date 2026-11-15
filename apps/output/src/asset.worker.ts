@@ -45,7 +45,7 @@ import {
   slideReach,
   spriteRect,
 } from '@ordo/renderer';
-import { UNIT_CACHE_BYTES, unitCache, unitsOfSlide, unitWork } from '@ordo/renderer/units.ts';
+import { setEffectUnits, UNIT_CACHE_BYTES, unitCache, unitsOfSlide, unitWork } from '@ordo/renderer/units.ts';
 import { LOGICAL_WIDTH, type Look, type Slide } from '@ordo/domain';
 import { DecodeError, createDecoder } from './decode.ts';
 import { LATE_UNIT, REFRESH_FADE_MS } from './late.ts';
@@ -101,8 +101,8 @@ let canvas: OffscreenCanvas | null = null;
 let ctx: OffscreenCanvasRenderingContext2D | null = null;
 /**
  * The output's drawing switches (`init`, `DrawingSwitches`: `?late=next`, `?warm=off`, `?effects=base`, and in
- * test mode `?unitTurnMs=`). `effects` is carried for C6 (wave r2b): the integrator calls effect-units'
- * `setEffectUnits(false)` for 'base' where it is applied (`applyDrawing`).
+ * test mode `?unitTurnMs=`). `effects: 'base'` turns effect units off in this worker (`setEffectUnits(false)`,
+ * C6, in `applyDrawing`): effects and decorations drawn as 62a1c3a drew them.
  */
 let drawing: DrawingSwitches = {};
 /** The surface was just taken (`take`): it is transparent, and needs no clear before the next draw. */
@@ -1099,6 +1099,8 @@ function applyDrawing(d: DrawingSwitches): void {
       : {}),
   };
   if (drawing.warm === false) stopWarmUnits();
+  // C6: `?effects=base` draws effects and decorations as 62a1c3a did (geometry units only); each init sets it.
+  setEffectUnits(drawing.effects !== 'base');
 }
 
 scope.onmessage = (ev) => {
