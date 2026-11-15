@@ -15,8 +15,8 @@
  *   Sans KR for Hangul ...) the library has, upright and regular; the converter spaces such a cell's lines by
  *   it (`tables.ts` `Measure`). One rule, so the hub's pool task and the browser's parse write the same line
  *   spacing.
- * - **What a deck needs** (`deckFaceNeeds`): only tables are measured today, so only a deck with a table
- *   needs faces: the families its parts name (`typeface` attributes of runs, themes and tables), their metric
+ * - **What a deck needs** (`deckFaceNeeds`): only tables are measured today, so only a deck with a table (on
+ *   a slide, a layout or a master, as the hub's task measures every table the walk reaches) needs faces: the families its parts name (`typeface` attributes of runs, themes and tables), their metric
  *   substitutes, the script fallbacks of the scripts its text uses (`SCRIPT_FALLBACK_FONTS`) and ordo's default
  *   face. Bounded: `FACE_LIMITS`.
  */
@@ -110,6 +110,8 @@ const TEXT_PART =
 /** `typeface="…"` of `a:latin`, `a:ea`, `a:cs`, `a:sym`, `a:font` (themes) and `a:buFont`. */
 const TYPEFACE = /\btypeface="([^"]{1,200})"/g;
 const TABLE = /<a:tbl[\s>]/;
+/** Parts whose shapes a slide shows: slides, their layouts and masters. */
+const SHOWN_PART = /^ppt\/(slides|slideLayouts|slideMasters)\//i;
 /** Text runs' contents (for the scripts the deck writes in). */
 const RUN_TEXT = /<a:t>([^<]{1,5000})<\/a:t>/g;
 /** Families and characters looked at, at most. */
@@ -125,13 +127,15 @@ export function deckFaceNeeds(parts: ReadonlyMap<string, Uint8Array>): Set<strin
   for (const [path, bytes] of parts) {
     if (!bytes.length || !TEXT_PART.test(path)) continue;
     const xml = decoder.decode(bytes);
-    if (!tables && /^ppt\/slides\//i.test(path) && TABLE.test(xml)) tables = true;
+    // A table on a slide, its layout or its master (a template's grid on the master): the hub's task measures
+    // every table the walk reaches, so the browser's parse needs faces for each of them as well.
+    if (!tables && SHOWN_PART.test(path) && TABLE.test(xml)) tables = true;
     for (const m of xml.matchAll(TYPEFACE)) {
       const f = m[1]!.trim();
       // Theme references (+mj-lt, +mn-ea …) name no family: the theme's own typefaces are listed anyway.
       if (f && !f.startsWith('+') && families.size < MAX_FAMILIES) families.add(f);
     }
-    if (text.length < MAX_TEXT_CHARS && /^ppt\/slides\//i.test(path))
+    if (text.length < MAX_TEXT_CHARS && SHOWN_PART.test(path))
       for (const m of xml.matchAll(RUN_TEXT)) {
         text += m[1]!;
         if (text.length >= MAX_TEXT_CHARS) break;

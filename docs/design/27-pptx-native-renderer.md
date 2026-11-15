@@ -2932,7 +2932,9 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
   measured by its unshaped advances, wrapped a line early and took its face's line, the cec bible readings'
   slide 6 0.805 -> 0.741): one rule for the hub's pool task and the browser's parse (`@ordo/importers`
   `faceSourceOf`: the first of the script's fallback families the library has, Noto Sans KR for Hangul), so
-  both write the same line spacing; the harness asks fontconfig for a letter of the script
+  both write the same line spacing (the browser's parse loads the library's faces for a table on a layout or a
+  master as well: the summer-vibes template's grid, measured estimated in the browser until then, made the
+  only deck of `hub-import --equivalence` whose scenes differed); the harness asks fontconfig for a letter of the script
   (`fc-match :charset=<hex>`, the face Chromium falls back to on its host: WenQuanYi Zen Hei for Hangul).
 - **Vertical cells stay residual** (`'vert'`, LibreOffice's art) until the writing engine lays them out: drawn
   horizontally they would replace LibreOffice's art on a hub with it by text turned the wrong way (the WIP's

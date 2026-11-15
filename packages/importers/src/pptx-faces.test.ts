@@ -87,6 +87,24 @@ describe("the browser parse measures tables with the library's faces (as the hub
     expect(none?.('Wide Face', false, false)).toBeUndefined();
   });
 
+  it("needs the faces of a table on the master or a layout too (as the hub's task, which reads every table)", () => {
+    // The summer-vibes template's 640-cell grid is on its master: a table object since tables-conv, measured
+    // with the library's faces on the hub; the browser's parse looked for tables in slides only, loaded no face
+    // and measured the grid estimated (hub-import --equivalence: the deck's 21 slides differed).
+    const grid = (typeface: string) =>
+      tableFrame({
+        id: 9,
+        x: 0,
+        y: 0,
+        cols: [IN, IN],
+        rows: [{ h: IN / 4, cells: [tc('1', { rPrChildren: `<a:latin typeface="${typeface}"/>` }), tc('')] }],
+      });
+    const onMaster = buildDeck({ slides: [{ shapes: '' }], master: { shapes: grid('Wide Face') } });
+    expect(deckFaceNeeds(onMaster)?.has('Wide Face')).toBe(true);
+    const onLayout = buildDeck({ slides: [{ shapes: '' }], layouts: [{ shapes: grid('Wide Face') }] });
+    expect(deckFaceNeeds(onLayout)?.has('Wide Face')).toBe(true);
+  });
+
   it('chooses faces as the hub does: slant first, then the nearest weight', () => {
     const m = (a: number) => () => ({ advance: (cp: number) => (cp === 0x61 ? a : undefined) });
     const faces = faceSourceOf([
