@@ -8,7 +8,7 @@ import {
 } from '@ordo/domain';
 import { clearEffectCache } from '../src/effects.ts';
 import { spriteCache } from '../src/spritecache.ts';
-import { AREA_BENCH_CASES } from './cases/index.ts';
+import { AREA_BENCH_CASES, type BenchRun } from './cases/index.ts';
 import { rasterSlide } from '../src/raster.ts';
 import { FontResolver, installFontEnv } from '../src/text/fonts.ts';
 import { WidthCache, canvasMeasurer, measurerFor } from '../src/text/measure.ts';
@@ -634,9 +634,18 @@ export type BenchReport = {
     chars: number;
     layoutColdMs: number;
     layoutWarmCache: Stats;
-    raster: Record<string, { first: number; steady: Stats; paintOnly: Stats; units?: UnitsMade }>;
+    raster: Record<
+      string,
+      { first: number; steady: Stats; paintOnly: Stats; units?: UnitsMade; alternation?: Alternation }
+    >;
   }[];
 };
+
+/**
+ * A case drawn in turn with another (`BenchRun` `alternate`): each slide's draw times, round by round (the
+ * case's `steady` holds both slides' draws of rounds 3 on).
+ */
+export type Alternation = { rounds: number; slide: number[]; other: number[] };
 
 /**
  * The geometry units a slide's jobs copy (design/27 §13 "Geometry units"), made before its first job as the asset
@@ -675,6 +684,7 @@ export async function bench(
   bold: ArrayBuffer,
   iterations: number,
   context: string,
+  only?: string,
 ): Promise<BenchReport> {
   const resolver = new FontResolver({ set, data: async (f) => (f.hash === 'bold' ? bold : font).slice(0) });
   await resolver.sync([
@@ -726,7 +736,10 @@ export async function bench(
     ['6-line lyric (rich, no shadow)', LYRIC_NO_SHADOW],
     ['6-line lyric (rich, no shadow or outline)', LYRIC_PLAIN],
     ...AREA_BENCH_CASES,
-  ] as const) {
+  ] as readonly (readonly [string, Slide, BenchRun?])[]) {
+    // `--only`: the cases whose name holds it (a quick run of a few rows; the gates read what ran).
+    if (only && !name.includes(only)) continue;
+    const run = AREA_BENCH_CASES.find((c) => c[0] === name)?.[2];
     const objs = textObjects(slide);
     const chars = objs.reduce((n, o) => n + o.text.length, 0);
     // Layout with an empty width cache (every string measured: the median of 15 runs, the code already
@@ -761,10 +774,10 @@ export async function bench(
       const cold = name.includes(', cold');
       // A slide with units is planned by the job's prepare step before its draw, as on the asset worker.
       let planned = false;
-      const job = () => {
+      const job = (of: Slide = slide) => {
         // A cold decoration is drawn directly every job: its sprite (and the mark that it was drawn) made again.
         if (cold) spriteCache.clear('decor');
-        const s = clone(slide);
+        const s = clone(of);
         if (cold) clearEffectCache();
         if (planned) unitsOfSlide(s, scale, LOOK_MAIN);
         const t0 = performance.now();
@@ -777,10 +790,15 @@ export async function bench(
       // The slide's geometry units, made first as the asset worker's prepare step makes them (none for a slide
       // within its drawing budget): the jobs then copy them.
       clearUnits();
+      if (run) {
+        // Drawn in turn or for its second draw: from a cold start, every cache emptied.
+        spriteCache.clear();
+        clearEffectCache();
+      }
       const turns: number[] = [];
       const u0 = performance.now();
-      const made = await prepareSlideUnits(slide, scale, LOOK_MAIN, {
-        slice: async (fn) => {
+      const prepareRun = {
+        slice: async <T>(fn: () => T) => {
           await new Promise((r) => setTimeout(r, 0));
           const t1 = performance.now();
           const out = fn();
@@ -788,21 +806,48 @@ export async function bench(
           return out;
         },
         check: () => {},
-      });
-      const units: UnitsMade | undefined = made.units
-        ? {
-            count: made.made + made.ready,
-            bytes: made.bytes,
-            makeMs: performance.now() - u0,
-            longestTurnMs: Math.max(0, ...turns),
-            turns: turns.length,
-          }
-        : undefined;
+      };
+      const made = await prepareSlideUnits(slide, scale, LOOK_MAIN, prepareRun);
+      const otherMade =
+        run && 'alternate' in run
+          ? await prepareSlideUnits(run.alternate, scale, LOOK_MAIN, prepareRun)
+          : undefined;
+      const units: UnitsMade | undefined =
+        made.units || otherMade?.units
+          ? {
+              count: made.made + made.ready + (otherMade ? otherMade.made + otherMade.ready : 0),
+              bytes: made.bytes + (otherMade?.bytes ?? 0),
+              makeMs: performance.now() - u0,
+              longestTurnMs: Math.max(0, ...turns),
+              turns: turns.length,
+            }
+          : undefined;
       planned = units !== undefined;
-      const first = job();
-      for (let i = 0; i < 5; i++) job();
+      let first: number;
       const steady: number[] = [];
-      for (let i = 0; i < iterations; i++) steady.push(job());
+      let alternation: Alternation | undefined;
+      if (run && 'alternate' in run) {
+        // The two slides in turn, one raster each, round after round (rounds 1-2 make what both draw).
+        alternation = { rounds: run.rounds, slide: [], other: [] };
+        for (let i = 0; i < run.rounds; i++) {
+          alternation.slide.push(job());
+          alternation.other.push(job(run.alternate));
+        }
+        first = alternation.slide[0]!;
+        for (let i = 2; i < run.rounds; i++) steady.push(alternation.slide[i]!, alternation.other[i]!);
+      } else if (run && 'second' in run) {
+        // The draw after the one that marked the slide's decorations: it makes their sprites.
+        first = job();
+        for (let i = 0; i < run.rounds; i++) {
+          spriteCache.clear('decor');
+          job();
+          steady.push(job());
+        }
+      } else {
+        first = job();
+        for (let i = 0; i < 5; i++) job();
+        for (let i = 0; i < iterations; i++) steady.push(job());
+      }
       // Painting alone (layouts memoised): what a repaint at another scale costs.
       const paint: number[] = [];
       const laid = objs.map((o) => {
@@ -822,6 +867,7 @@ export async function bench(
         steady: stats(steady),
         paintOnly: stats(paint),
         ...(units ? { units } : {}),
+        ...(alternation ? { alternation } : {}),
       };
     }
     report.slides.push({ name, chars, layoutColdMs, layoutWarmCache: stats(warm), raster });
@@ -835,11 +881,13 @@ const inWorker = typeof WorkerGlobalScope !== 'undefined' && typeof window === '
 
 if (inWorker) {
   const scope = self as unknown as { fonts: FontFaceSet; onmessage: unknown; postMessage(m: unknown): void };
-  scope.onmessage = async (e: MessageEvent<{ font: ArrayBuffer; bold: ArrayBuffer; iterations: number }>) => {
+  scope.onmessage = async (
+    e: MessageEvent<{ font: ArrayBuffer; bold: ArrayBuffer; iterations: number; only?: string }>,
+  ) => {
     try {
       scope.postMessage({
         ok: true,
-        report: await bench(scope.fonts, e.data.font, e.data.bold, e.data.iterations, 'worker'),
+        report: await bench(scope.fonts, e.data.font, e.data.bold, e.data.iterations, 'worker', e.data.only),
       });
     } catch (err) {
       scope.postMessage({ ok: false, error: String((err as Error)?.stack ?? err) });
@@ -853,7 +901,7 @@ if (inWorker) {
     return out.buffer;
   };
   (window as unknown as { __bench: unknown }).__bench = {
-    worker: (source: string, font: string, bold: string, iterations: number) =>
+    worker: (source: string, font: string, bold: string, iterations: number, only?: string) =>
       new Promise<BenchReport>((resolve, reject) => {
         const w = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
         w.onmessage = (e: MessageEvent<{ ok: boolean; report?: BenchReport; error?: string }>) => {
@@ -862,7 +910,7 @@ if (inWorker) {
           else reject(new Error(e.data.error));
         };
         w.onerror = (e) => reject(new Error(e.message));
-        w.postMessage({ font: b64(font), bold: b64(bold), iterations });
+        w.postMessage({ font: b64(font), bold: b64(bold), iterations, only });
       }),
   };
 }

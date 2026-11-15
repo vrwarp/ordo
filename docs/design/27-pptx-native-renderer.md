@@ -1759,14 +1759,16 @@ budget only decides that it is drawn so.
   path, when the shape and its effects are within `GEOM_COST.slide` together (`unitDrawn`); a 'both' copy's
   unit draws it without them, as the budget does. Before, every unit drew the shape without its effects, which
   dropped a 'geom' shape's shadow that the legacy copy had drawn.
-- **Open must items for effect units** (r2a repair; `units.ts` `slideUnitsLeft`, counted by the census as
-  `unitsLeft`, and `unitsAlone`, which the ratchet fails): until effect units, outputs draw as their legacy shapes
-  (1) a geometry past `GEOM_COST.slide` alone (no single call fits a task: for thin line art its legacy line draws
-  nothing, a drop; a unit sliced by sub-path groups or `cont` pieces must draw it), (2) objects past the slide's
-  `UNIT_SLIDE_AREAS`, (3) plain shapes past the budget for their gradient or dash (their first colour) and masked
-  pictures (without their masks), and (4) a 'geom' shape whose effects would put its one call past a task is drawn
-  without them. None occurs in E, golden-pptx or the sermons today (21 objects past the budget there, every one
-  with a unit at 1920 and 3840, none with an effect).
+- **Effect units** (r2b, closing the r2a repair's open must items; design/14 "Effect units"): on the outputs an
+  object past the budget gets a unit, never a lesser legacy copy, within one frame of units a slide. Closed: (1)
+  a geometry past `GEOM_COST.slide` alone is a `sliced` unit, one group of sub-paths a step (one sub-path past
+  `GEOM_COST.geometry` keeps its legacy copy, `unitsAlone`, which the census fails); (3) plain shapes past the
+  budget for their gradient or dash are `whole` units with them, and masked pictures are drawn from their
+  prepared bitmap with their mask; (4) a geometry whose effects would put its one call past a task is a `whole`
+  unit with its effects, made in steps; shapes past `EFFECT_COST.slide` are `layers` (shadow and glow; the body
+  live) or `whole` (soft-edged, translucent) units. Left to live-frame (sub-wave 2): (2) objects past the slide's
+  `UNIT_SLIDE_AREAS` keep their legacy copies, counted `unitsLeft` 'area' (a census note), as do effects past
+  one frame of units; a picture's effects past the budget keep theirs (`kind`).
 <!-- /m9:geometry-units -->
 
 **Named exception to the editor's 15 ms thumbnail at 640 px** (M6 merge review): _the first thumbnail of a heavy traced-outline slide_, which builds its geometry paths and its effect layers: 22.6 ms for a slide of 136 shadowed geometry-file shapes, 19.2 ms and 13.9 ms for two others; later draws take 1 to 8 ms. The thumbnail worker draws in a worker of its own, so the editor's main thread does not wait for it.
@@ -1774,12 +1776,13 @@ budget only decides that it is drawn so.
 **Named exceptions to the 50 ms asset-worker task** (M6 finish review; a slide's draw is one task, §7.5 "Two raster lanes"):
 - _A slide at its effect budget, drawn cold_ (no layer cached): on the CPU-backed canvases of the asset worker, enlarging a reduced blur layer costs about 20 ms a slide area at 4K and a composite's allocation about 14 ms more, so 10 slide areas of layers take a few hundred ms the first time (the review's twenty custGeoms past their boxes with shadows, nine kept: 379 ms p95 at 3840, 300 ms at 1920; the corpus's most effected slides, 6.4 to 9.1 slide areas, 120 to 225 ms cold and 15 to 94 ms warm at 3840, 32 to 87 ms cold at 1920). Rasters after the first reuse the cached composites and layers. The raster bench checks these slides at 400 / 500 ms (1920 / 3840) cold. Bounding them at 50 ms would cut the effect budget to about one slide area, which 102 of the corpus's 2,927 slides pass (12 decks); the way out is a slide draw that yields between objects, or effect layers composed by the GPU compositor (M7).
 - _A full-slide soft edge, drawn cold_: its first raster makes the eroded, blurred mask and a full-resolution body cut by it, 97 to 118 ms at 3840 (134 ms before the body was cut in place, without a copy), 15 ms warm.
-- **Open must item before release, not a relaxed bound** (M9 decorations, `decor-render`): _a decoration at its
-  caps_ (16,384 points, 24 shadowed shapes) is one draw of about 100 ms cold at 3840 on the shared 4-CPU bench
-  machine (its sprite, made on its second draw, is then a 1:1 copy). The M9 exit stays at 50 ms: the outputs'
-  effect units (wave r2b, items 1-4, must before merge) make it in slices of `drawDecorRange` (32 shapes a
-  turn). Until they land the raster bench reports it (`bench/cases/decor.ts`, cold and warm at 3840) and holds
-  a decoration to at most its shapes drawn one by one + 10 % (checked).
+- **Decorations past `DECOR_SPRITE` on the outputs, closed** (r2b effect units; was the M9 decorations' open must
+  item): _a decoration at its caps_ (16,384 points, 24 shadowed shapes) is one draw of about 100-115 ms cold at
+  3840 on the shared 4-CPU bench machine when drawn at once. On the outputs it is a `whole` effect unit made in
+  slices of `drawDecorRange` (one shape a step, at most 32 a turn, each turn within `SLICE_MS`), and an output
+  raster with `late` leaves it out until its unit is made (it fades in), never drawing it at once. Drawn at once
+  it stays where a caller waits (the harness, thumbnails, the editor); the raster bench reports that draw and
+  holds a decoration to at most its shapes drawn one by one + 10 % (checked).
 
 ## 14. Testing and fidelity measurement
 

@@ -33,7 +33,7 @@ import '@ordo/renderer/decor/index.ts';
  * Each slide is drawn as the operator's thumbnail worker draws it: black, the slide's background picture
  * cover-fit, then the real `drawSlide2D` of `@ordo/renderer`. The picture is taken at 1920x1080 and cut to
  * the deck's slide rectangle, so a 4:3 deck compares with LibreOffice's 4:3 page like for like. The slide is
- * then drawn again at 1920 and 3840 px for the raster timings: warm (the median of repeated draws, pictures
+ * then drawn again at 1920 and 3840 px for the raster timings: warm (the median and the slowest of repeated draws, pictures
  * prepared) and cold (preparing the pictures the cache lacks and making the slide's geometry units, plus the
  * first draw, as an output pays it on a slide change: design/27 §13 "Geometry units").
  *
@@ -88,6 +88,9 @@ export type RenderResult = {
   /** Median draw time in ms (draw and flush) at 1920 and 3840 px wide: pictures prepared (warm). */
   ms1920: number;
   ms3840: number;
+  /** The slowest of those warm draws at each width, in ms (r2a must a4: the median hides one slow draw a cue). */
+  max1920: number;
+  max3840: number;
   /**
    * The cold time at each width, in ms: preparing the pictures the deck's cache lacks (decode and resample,
    * what the output's asset worker pays inside the slide job on a cache miss) plus the first draw and flush.
@@ -301,7 +304,7 @@ function timed(
   width: number,
   images: ImageLookup,
   repeats: number,
-): number {
+): { median: number; max: number } {
   const times: number[] = [];
   for (let i = 0; i < repeats; i++) {
     const t0 = performance.now();
@@ -310,7 +313,9 @@ function timed(
     times.push(performance.now() - t0);
   }
   times.sort((a, b) => a - b);
-  return times.length ? times[times.length >> 1]! : 0;
+  return times.length
+    ? { median: times[times.length >> 1]!, max: times[times.length - 1]! }
+    : { median: 0, max: 0 };
 }
 
 async function blobToBase64(b: Blob): Promise<string> {
@@ -430,8 +435,8 @@ const page: NativePage = {
     const crop = new OffscreenCanvas(w, h);
     crop.getContext('2d')!.drawImage(ctx.canvas, x, y, w, h, 0, 0, w, h);
     const png = await blobToBase64(await crop.convertToBlob({ type: 'image/png' }));
-    const ms1920 = job.repeats ? timed(ctx, job.slide, 1920, images, job.repeats) : 0;
-    let ms3840 = 0;
+    const t1920 = job.repeats ? timed(ctx, job.slide, 1920, images, job.repeats) : { median: 0, max: 0 };
+    let t3840 = { median: 0, max: 0 };
     let cold3840 = 0;
     if (job.repeats) {
       const t1 = performance.now();
@@ -441,9 +446,20 @@ const page: NativePage = {
       draw(ctx4, job.slide, 3840, big);
       ctx4.getImageData(0, 0, 1, 1);
       cold3840 = performance.now() - t1;
-      ms3840 = timed(ctx4, job.slide, 3840, big, job.repeats);
+      t3840 = timed(ctx4, job.slide, 3840, big, job.repeats);
     }
-    return { png, width: w, height: h, ms1920, ms3840, cold1920, cold3840, missing };
+    return {
+      png,
+      width: w,
+      height: h,
+      ms1920: t1920.median,
+      ms3840: t3840.median,
+      max1920: t1920.max,
+      max3840: t3840.max,
+      cold1920,
+      cold3840,
+      missing,
+    };
   },
   async objects(job) {
     const missing: string[] = [];

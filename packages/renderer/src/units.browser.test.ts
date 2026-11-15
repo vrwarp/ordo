@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import type { runEffectUnits } from './units.effects.page.test-util.ts';
 import type { runUnits } from './units.page.test-util.ts';
 import { findChromium } from '../../../tools/find-chromium.ts';
 
@@ -100,4 +101,57 @@ describe.skipIf(!executablePath)('geometry units in headless Chromium', () => {
       'a slide drawn as a tight sprite',
     ).toBe(true);
   }, 180_000);
+
+  it('draws effects, gradients, a geometry with its shadow, a lone chain and a capped decoration from their units as drawing them whole does', async () => {
+    const esbuild = await loadEsbuild();
+    const built = await esbuild.build({
+      entryPoints: [join(here, 'units.effects.page.test-util.ts')],
+      bundle: true,
+      write: false,
+      format: 'iife',
+      target: 'es2022',
+      absWorkingDir: root,
+      logLevel: 'silent',
+    });
+    const { chromium } = await import('@playwright/test');
+    const browser = await chromium.launch({ headless: true, executablePath });
+    let out: Awaited<ReturnType<typeof runEffectUnits>>;
+    try {
+      const page = await browser.newPage();
+      const errors: string[] = [];
+      page.on('pageerror', (e) => errors.push(e.message));
+      await page.setContent('<!doctype html><html><body></body></html>');
+      await page.addScriptTag({ content: built.outputFiles[0]!.text });
+      type Run = { __effectUnits: typeof runEffectUnits };
+      out = await page.evaluate(() => (window as unknown as Run).__effectUnits());
+      expect(errors).toEqual([]);
+    } finally {
+      await browser.close();
+    }
+    for (const c of out)
+      console.log(
+        `effect units, ${c.slide} at ${c.width}: ${c.kinds.join(', ')} (${(c.bytes / 2 ** 20).toFixed(1)} MiB, cache ${(c.cacheBytes / 2 ** 20).toFixed(1)} MiB); ` +
+          `slide max ${c.maxDiff} (${c.overTwo} px over 2); legacy copies differ at ${c.legacyPixels} px; ` +
+          `longest turn ${c.longestMs.toFixed(1)} ms over ${c.turns} turns [${c.turnMs.join(' ')}]; draw ${c.drawMs.toFixed(1)} ms`,
+      );
+    const want: Record<string, string[]> = {
+      effects: ['layers shape', 'layers shape', 'layers shape'],
+      translucent: ['whole shape', 'whole shape', 'whole shape'],
+      gradients: ['whole shape'],
+      'geom-shadow': ['whole shape'],
+      chain: ['sliced shape'],
+      capped: ['whole decor'],
+    };
+    for (const c of out) {
+      const at = `${c.slide} at ${c.width}`;
+      expect(c.kinds, at).toEqual(want[c.slide]);
+      // The units' pixels are the whole drawing's: within 2 levels, but at a few rounding pixels of their edges.
+      expect(c.overTwo / (c.width * c.width * 0.5625), `${at}: pixels off by more than 2`).toBeLessThan(
+        0.0005,
+      );
+      // The legacy copies are another picture (the test would pass without units otherwise); a decoration
+      // without its unit is drawn directly here (no late option), the same picture.
+      if (c.slide !== 'capped') expect(c.legacyPixels, `${at}: legacy copies`).toBeGreaterThan(c.width * 4);
+    }
+  }, 240_000);
 });

@@ -376,6 +376,67 @@ copy stays.
   tablet keeps the legacy copies and makes nothing. The editor canvas keeps the legacy copies (leaf-editor).
 <!-- /m9:geometry-units -->
 
+<!-- r2b:effect-units -->
+**Effect units** (r2b; design/27 §13 "Effect units"; M9 decisions "Slow-to-draw elements" and the owner's
+decisions of 2026-11-13: never drop an effect). Geometry units grow into one mechanism for everything the slide's
+drawing budget (`geombudget.ts`) would draw as a lesser legacy copy on the outputs: an object past
+`GEOM_COST.slide` or `EFFECT_COST.slide` gets a unit, never its legacy copy, within one frame of units a slide
+(`renderer/src/units.ts`, `slideUnits`).
+- **Kinds** (`UnitKind`): `whole` (the object entirely: a shape past the geometry budget with its gradient, dash
+  and effects; a soft-edged or translucent shape past the effect budget; a decoration past `DECOR_SPRITE`),
+  `layers` (the shadow and glow of a full-opacity shape past the effect budget: its body is drawn live over the
+  unit by `drawGeomShape` 'body', within the budget) and `sliced` (a geometry past `GEOM_COST.slide` on its own:
+  its outline made one group of sub-paths a step, `shape.ts` `geomBodySteps`, each group within `SLICE_UNITS`,
+  half of `SLICE_MS` at 4K; one sub-path past `GEOM_COST.geometry`, the per-call bound, keeps its legacy copy,
+  counted `unitsLeft` 'alone', which the census fails). A masked picture past the budget is drawn from its prepared
+  bitmap, which holds its mask (`of: 'prepared'`: no bitmap of its own; `slidePictures` asks for it). Never
+  units: text (always live), tables, charts, 3-D looks, video, prepared picture feathers, a picture's effects past
+  the budget (they keep their legacy copy, `kind`: a picture unit needs the decoded picture at the prepare step).
+- **Key** (`unitKey`): a digest (`digest.ts`) of canonical JSON (`palette.ts` `canonicalJson`) of `UNIT_VERSION`
+  (2), the kind, what it is of and the drawn fields (no `id`, `origin` or `locked`; a geometry file by its hash; a
+  picture's media id as its file through `setUnitMedia`, a media id that resolves to nothing keyed `missing`, so
+  no unit made before a media delete matches), the box's position left out unless the frame cuts the unit (then
+  its origin is in the key), with the device scale, the box's sub-pixel phase and the unit's size in memory. Two
+  objects drawing the same pixels share one unit, copied at each one's rect. Keys never leave the asset worker.
+- **Made** in the job's lane turns by `prepareSlideUnits` (the outputs' prepare step, a desktop's thumbnail
+  worker, the harness), each kind through `makeUnit` and kept by `putUnit`: a whole shape without effects and a
+  sliced one on a scratch of the frame at its own transform (as geometry units), one draw call a step; a shape
+  with effects through `effects.ts` `effectSteps`, the compose path of `drawEffected` in steps (each reduced layer
+  painted call by call and blurred, enlarged into the composite in bands of `EFFECT_STEP_PIXELS`, the body call
+  by call, a soft edge's mask made once and multiplied in bands, as a prepared picture's soft edge), then the
+  composite's part on the frame copied into the unit at the shape's opacity; a decoration by `drawDecorRange`, one
+  source shape a step and at most `DECOR_TURN_SHAPES` (32) a turn. The copy into the unit is a band of rows
+  (`EFFECT_STEP_PIXELS`) a step; a unit that is the whole frame, or a composite all on the frame at full opacity,
+  is the canvas it was drawn on and is not copied. A decoration is drawn on a canvas of its rect, the frame's
+  transform moved by the rect's whole-pixel origin (the same pixels; that canvas is the unit): a canvas of the
+  frame for each of a slide's 18 decoration units cost wake 20 about 350 ms of its cold arm. A stored geometry
+  keeps the frame's scratch: at a whole-pixel offset its drawing differs by up to 167 levels at 3840. A turn takes steps while within half of
+  `SLICE_MS`; a step is at most one call of a shape within `GEOM_COST.slide` (about 38 ms at 4K, cold). Every
+  step ends by reading one pixel back from each canvas it drew on: Chromium records 2D calls and draws them when
+  the canvas is read, copied or transferred, so a step that only recorded would be drawn by a later one (the
+  copy that ended a full-slide soft edge's unit took 102 ms at 3840 before it).
+- **Drawn** by `drawSlide2D` (the slide objects' drawer `units.ts` registers): in z-order, an object whose unit is
+  ready is copied 1:1 (`layers`: its body drawn live over it); one whose unit is not ready keeps its cheap legacy
+  copy as the placeholder (live-frame removes it in sub-wave 2). With `SlideDrawOptions.late` (an output raster:
+  units-live's C2b, wired by the integrator) a decoration past `DECOR_SPRITE` whose unit is not ready is left out
+  and reported by its key, to fade in once made: drawn at once it is a task of 100-115 ms at 3840. Without it
+  (the harness, thumbnails, the editor) it is drawn directly, as before.
+- **Bounded**: a slide's units cover at most `UNIT_SLIDE_AREAS` (one frame, z-order first; a prepared picture has
+  no area of its own), so a cue (the slide and the next one a look shows) holds at most two frames, about 63 MiB
+  at 4K, in the one unit cache (`UNIT_CACHE_BYTES`, 192 MiB, `unitCacheBytes`). An object past that frame keeps
+  its legacy copy this time (`unitsLeft` 'area', a census note) for live-frame's frame unit (sub-wave 2).
+- **The look gate** (`authoredObjects`): a lyric-only, hidden or band look makes no unit of any kind.
+- **Decorations rated** (`geombudget.ts` `ratedOf`): a decoration is rated as its shapes drawn one by one
+  (`decorCost`: estimate, points, shadow layers), through the decoration's hooks once its drawer is loaded, so the
+  budget, health's raster alarm and `heavySlide` count them (r2a rated them about 0). A decoration is never drawn
+  as a lesser copy (it has no legacy part): rating it can only send later objects past the budget, to units on the
+  outputs and to legacy copies on the editor and coarse-pointer thumbnails. Where units are planned (the asset
+  worker) `slideJobCost` rates an object drawn from a unit at its 1:1 copy (`pictures`), its making at arm apart
+  (`slideUnitsCost`): a warm copied unit is never rated at its making cost.
+- **Switch** (`setEffectUnits(false)`, an output's `?effects=base` once the integrator wires it, C6): 62a1c3a's
+  drawing, geometry units only (a stored geometry past the budget, its effects kept only within one call).
+<!-- /r2b:effect-units -->
+
 ## Frame loop
 
 ```

@@ -7,6 +7,7 @@ import {
   SPRITE_CACHE_FRAMES,
   SPRITE_CACHE_MAX_BYTES,
   SPRITE_MARKS,
+  SPRITE_SPARE_RASTERS,
   SpriteCache,
   spriteCache,
 } from './spritecache.ts';
@@ -270,5 +271,53 @@ describe('effects in the sprite cache', () => {
     clearEffectCache();
     expect(effectCacheBytes()).toBe(0);
     expect(spriteCache.has('geom', 'other')).toBe(true);
+  });
+});
+
+describe('sprites of slides drawn in turn (r2a land review)', () => {
+  /**
+   * A slide drawn as one raster whose one sprite of `bytes` is made when it is missing and the kind's share
+   * (`cap`) has room (as a decoration's: `fitKind`, then `set`); how many it made.
+   */
+  const drawer = (cache: SpriteCache, key: string, bytes: number, cap: number) => {
+    let made = 0;
+    return {
+      draw: () =>
+        cache.raster(() => {
+          if (cache.get('decor', key)) return;
+          if (cache.fitKind('decor', bytes, cap) && cache.set('decor', key, { bytes })) made++;
+        }),
+      made: () => made,
+    };
+  };
+
+  it('two slides drawn in turn make at most one sprite each over 20 rounds', () => {
+    // Their sprites together pass the kind's share: before, each slide's draw evicted the other's sprite (the
+    // raster before used it) and the next draw made it again, every round (worst 93.5 ms at 3840).
+    const cache = new SpriteCache(100);
+    const a = drawer(cache, 'a', 30, 50);
+    const b = drawer(cache, 'b', 30, 50);
+    for (let i = 0; i < 20; i++) {
+      a.draw();
+      b.draw();
+    }
+    expect(a.made()).toBeLessThanOrEqual(1);
+    expect(b.made()).toBeLessThanOrEqual(1);
+    expect(a.made() + b.made()).toBeGreaterThan(0);
+  });
+
+  it(`spares a sprite for ${SPRITE_SPARE_RASTERS} rasters after its last use, then makes room with it`, () => {
+    const cache = new SpriteCache(100);
+    const a = drawer(cache, 'a', 30, 50);
+    a.draw();
+    expect(cache.has('decor', 'a')).toBe(true);
+    // Recently used: kept, and the newcomer does not fit.
+    for (let i = 0; i < SPRITE_SPARE_RASTERS - 1; i++) cache.raster(() => {});
+    expect(cache.raster(() => cache.fitKind('decor', 30, 50))).toBe(false);
+    expect(cache.has('decor', 'a')).toBe(true);
+    // Unused for SPRITE_SPARE_RASTERS rasters: it makes way.
+    cache.raster(() => {});
+    expect(cache.raster(() => cache.fitKind('decor', 30, 50))).toBe(true);
+    expect(cache.has('decor', 'a')).toBe(false);
   });
 });

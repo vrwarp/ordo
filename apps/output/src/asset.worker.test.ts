@@ -698,7 +698,9 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
   });
 
   it('a jump to a cue neither armed nor warmed waits for its units in its own job', async () => {
-    const s = busy('jump', 13);
+    // Half a pixel over: units are keyed by what they draw and its sub-pixel phase, not where (r2b effect
+    // units), so a whole-pixel move of the earlier tests' shapes would find their units made.
+    const s = busy('jump', 13.5);
     const before = unitWork();
     const { reply, msg } = await runAs(
       slideJob({ slide: s, images: {}, video: undefined, key: 'sl|jump' }),

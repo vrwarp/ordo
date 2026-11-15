@@ -17,13 +17,16 @@ import { clearUnits, prepareSlideUnits, unitCache, unitsOfSlide } from './units.
 class FakeOffscreenCanvas {
   readonly width: number;
   readonly height: number;
-  private readonly ctx = traceCtx();
+  private readonly ctx: ReturnType<typeof traceCtx>;
   constructor(w: number, h: number) {
     this.width = w;
     this.height = h;
-    (this.ctx as unknown as { getImageData: unknown }).getImageData = () => ({
+    const t = traceCtx();
+    (t as unknown as { getImageData: unknown }).getImageData = () => ({
       data: new Uint8ClampedArray(4),
     });
+    // Its `canvas` is this canvas, as an OffscreenCanvas's context's is (a unit may be the canvas it was drawn on).
+    this.ctx = new Proxy(t, { get: (target, k) => (k === 'canvas' ? this : Reflect.get(target, k)) });
   }
   getContext() {
     return this.ctx;

@@ -593,6 +593,14 @@ export type SlideDrawOptions = {
   isSong?: boolean;
   /** Explicit presentation kind so loop slides suppress lower-third extraction in previews too. */
   presentationKind?: 'song' | 'slides' | 'loop';
+  /**
+   * An output raster's report of a part left out because its unit is not ready (C2b, units.ts): with it, a
+   * decoration past `DECOR_SPRITE` whose effect unit is not made yet is not drawn directly (a task of up to
+   * about 115 ms at 3840) but left out and reported by its unit's key, to fade in once made. Without it (the
+   * harness, thumbnails, the editor: callers that wait) it is drawn directly as before. Geometry and effect
+   * units not ready keep their cheap legacy copies either way.
+   */
+  late?: (key: string) => void;
 };
 
 /**
@@ -690,8 +698,11 @@ export function slidePictures(
   const out: SlidePicture[] = [];
   if (drawn.pictureMediaId)
     out.push({ mediaId: drawn.pictureMediaId, target: pictureTarget(SLIDE_PICTURE, scale) });
-  for (const o of withinDrawBudget(drawn.objects))
+  for (const b of withinDrawBudget(drawn.objects)) {
+    // What the slide objects' drawer draws in its place (effect units: a masked picture's prepared bitmap).
+    const o = slideObjectsDrawer?.drawnFor?.(b, scale) ?? b;
     if (o.type === 'image') out.push({ mediaId: o.mediaId, target: pictureTarget(o, scale) });
+  }
   return out;
 }
 
@@ -702,8 +713,20 @@ export function slidePictures(
  * when `draw` draws it otherwise (logical px), undefined to leave it to `objectReach` (`sprite.ts`).
  */
 export interface SlideObjectsDrawer {
-  draw(ctx: Ctx2D, raw: Slide, objects: readonly SlideObject[], scale: number, images?: ImageLookup): boolean;
+  draw(
+    ctx: Ctx2D,
+    raw: Slide,
+    objects: readonly SlideObject[],
+    scale: number,
+    images?: ImageLookup,
+    late?: (key: string) => void,
+  ): boolean;
   reach?(o: SlideObject, scale: number): { x: number; y: number; w: number; h: number } | undefined;
+  /**
+   * The object whose picture `draw` asks the image lookup for in place of `o` (as the budget draws it), if
+   * another: a masked picture past the budget drawn from its prepared bitmap (its mask cut in, effect units).
+   */
+  drawnFor?(o: SlideObject, scale: number): SlideObject | undefined;
 }
 
 let slideObjectsDrawer: SlideObjectsDrawer | undefined;
@@ -750,8 +773,8 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
     // One raster of the sprite cache (spritecache.ts): the slide's own sprites never evict each other, and the
     // cache holds a few frames at this scale.
     spriteCache.raster(() => {
-      // M9 geometry units (units.ts): an object past the budget whose unit is ready is copied from it.
-      if (slideObjectsDrawer?.draw(ctx, rawSlide, drawn.objects, scale, opts.images)) return;
+      // Units (units.ts): an object past the budget whose unit is ready is copied from it 1:1 in z-order.
+      if (slideObjectsDrawer?.draw(ctx, rawSlide, drawn.objects, scale, opts.images, opts.late)) return;
       // Past the slide's drawing budget, later stored geometries draw as their legacy shapes and later effects
       // are left out (geombudget.ts).
       for (const o of withinDrawBudget(drawn.objects)) drawObject(ctx, o, scale, opts.images);

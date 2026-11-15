@@ -909,3 +909,67 @@ export async function tableDeck(dir: string): Promise<string> {
   writeFileSync(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
   return file;
 }
+
+// ---- the lone line-art deck (raw XML: one thin chain past the slide's drawing budget alone, r2b effect units) --
+
+/**
+ * The lone chain's links (`loneChainPath`): `links` closed rings of `sides` corners each (a moveTo, `sides - 1`
+ * lines and a close: `sides + 1` points as the converter counts them), 900 x 24 = 21,600 points in all.
+ */
+export const LONE_CHAIN = { links: 900, sides: 23 } as const;
+
+/** Where the lone chain is on the slide, in logical px (16:9 at 1920 px wide). */
+export const LONE_CHAIN_BOX = { x: 120, y: 90, w: 1680, h: 900 } as const;
+
+/**
+ * An `a:path` of one thin chain (`w` x `h` path space): `links` small rings strung along three turns of a
+ * sine across the box, each its own closed sub-path, none touching the next. Stroked thin and not filled, it is
+ * cheap to fill (nothing) but its outline's legs, joins and stored points together pass the slide's drawing
+ * budget on their own (`GEOM_COST.slide`), so no single draw call within a task draws it: the legacy copy of a
+ * stored geometry is a line, which draws nothing here, until a unit sliced by sub-path groups draws it.
+ */
+export function loneChainPath(o: { w?: number; h?: number; links?: number; sides?: number } = {}): string {
+  const w = o.w ?? 168_000;
+  const h = o.h ?? 90_000;
+  const links = o.links ?? LONE_CHAIN.links;
+  const sides = o.sides ?? LONE_CHAIN.sides;
+  const r = Math.min(w, h) * 0.004;
+  const p = (x: number, y: number) => `<a:pt x="${Math.round(x)}" y="${Math.round(y)}"/>`;
+  let d = '';
+  for (let i = 0; i < links; i++) {
+    const t = (i + 0.5) / links;
+    const cx = r * 2 + t * (w - r * 4);
+    const cy = h / 2 + (h / 2 - r * 3) * Math.sin(t * Math.PI * 6);
+    for (let k = 0; k < sides; k++) {
+      const a = (k / sides) * Math.PI * 2;
+      const pt = p(cx + r * Math.cos(a), cy + r * Math.sin(a));
+      d += k ? `<a:lnTo>${pt}</a:lnTo>` : `<a:moveTo>${pt}</a:moveTo>`;
+    }
+    d += '<a:close/>';
+  }
+  return `<a:path w="${w}" h="${h}" fill="none">${d}</a:path>`;
+}
+
+/**
+ * A one-slide deck of one thin chain past the slide's drawing budget on its own (r2b effect units, design/27
+ * §13 "Effect units"): on a pale background, a black chain of `LONE_CHAIN` links stroked 2 px wide
+ * (`loneChainPath`), nothing else. Before effect units its legacy copy (a line) drew nothing on the outputs;
+ * a sliced unit draws it, one sub-path group a step.
+ */
+export function loneLineArtDeck(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  const EMU = 6_350; // EMU per logical px (12,192,000 / 1,920)
+  const b = LONE_CHAIN_BOX;
+  const shapes = sp({
+    id: 2,
+    name: 'Lone chain',
+    x: b.x * EMU,
+    y: b.y * EMU,
+    cx: b.w * EMU,
+    cy: b.h * EMU,
+    geom: 'none',
+    fill: `${custGeom({ paths: loneChainPath() })}<a:noFill/>`,
+    ln: `<a:ln w="12700">${solid('000000')}</a:ln>`,
+  });
+  return zip(buildDeck({ slides: [{ bg: solidBg('F4EFE6'), shapes }] }), join(dir, 'Lone chain.pptx'));
+}

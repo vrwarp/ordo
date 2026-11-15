@@ -173,6 +173,13 @@ export const PORT_TABLE = {
   'phones-live-load': { offset: 345, count: 1, spec: 'phones-live-load.spec.ts', what: 'hub' },
   'phones-writes': { offset: 346, count: 1, spec: 'phones-writes.spec.ts', what: 'hub' },
   // M9 wave r2b's specs: offsets 400-659.
+  // effect-units: effects past the budget and lone line art drawn from units.
+  'effect-units': {
+    offset: 400,
+    count: 2,
+    spec: 'effect-units.spec.ts',
+    what: '0 hub (effects past the budget), 1 hub (hostile lone line art, upload route)',
+  },
   'editor-table': { offset: 420, count: 1, spec: 'editor-table.spec.ts', what: 'hub' },
   'ipad-table-targets': {
     offset: 421,

@@ -417,6 +417,9 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
         for (const s of drawn.slides) {
           expect(s.rasterMs!['1920']).toBeGreaterThan(0);
           expect(s.rasterMs!['3840']).toBeGreaterThan(0);
+          // The slowest warm draw beside the median (r2a must a4: a median hides one slow draw a cue).
+          for (const w of ['1920', '3840'] as const)
+            expect(s.rasterMaxMs![w]).toBeGreaterThanOrEqual(s.rasterMs![w]);
           // Each object drawn cold on its own: the largest, and which object it was.
           expect(s.maxObjectMs!['1920']).toBeGreaterThan(0);
           expect(s.maxObjectMs!['3840']).toBeGreaterThan(0);
