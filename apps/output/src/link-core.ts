@@ -1057,12 +1057,14 @@ export class LinkCore {
    */
   private syncWarm(afterGo: LiveState | undefined, planOpts: Parameters<typeof planFrame>[2]): void {
     let warm: WarmJob | undefined;
+    // The warmed cue’s slide key: a GO to it hurries the warm job (`ensureContent`).
+    let slideKey = '';
     const next = afterGo?.armed;
     if (afterGo && next !== undefined && next !== afterGo.live) {
       try {
-        warm = this.warmJob(
-          planFrame(reduce(afterGo, { k: 'go', cueIndex: next, at: 0 }), this.look, planOpts),
-        );
+        const plan = planFrame(reduce(afterGo, { k: 'go', cueIndex: next, at: 0 }), this.look, planOpts);
+        warm = this.warmJob(plan);
+        slideKey = plan.slide.key;
       } catch {
         warm = undefined;
       }
@@ -1073,7 +1075,7 @@ export class LinkCore {
     this.cancelSuperseded();
     this.warmSent = warm.key;
     this.warmRunning = warm.key;
-    this.warmRunningSlide = warmSlideKey(warm.key);
+    this.warmRunningSlide = slideKey;
     this.postAsset({ t: 'warm', warm });
   }
 
@@ -2579,13 +2581,6 @@ export class LinkCore {
       error: h.error ?? '-',
     };
   }
-}
-
-/** The slide key a warm job's key names (`wm|<slide>|<background>|<media>`, `warmJob`). */
-function warmSlideKey(key: string): string {
-  const parts = key.split('|');
-  // Slide keys hold '|' themselves: everything between 'wm' and the last two keys.
-  return parts.length >= 4 ? parts.slice(1, -2).join('|') : '';
 }
 
 /** A short hash of a string (FNV-1a, 32 bits), for a key. */

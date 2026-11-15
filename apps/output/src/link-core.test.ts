@@ -987,6 +987,32 @@ describe('link worker core', () => {
       t.close();
     });
 
+    it('a GO to the warmed cue hurries its warm job, under a background too (r2b units-live)', async () => {
+      const t = setup();
+      await t.core.start();
+      const d = pictureDeck();
+      // A picture background: its key ('bg|<media>|<file>') sits in the warm key after the slide's.
+      const withBg = (s: LiveState): LiveState => ({
+        ...s,
+        layers: {
+          ...s.layers,
+          background: { content: { kind: 'background', mediaId: 'p0' }, at: 0, seq: 0 },
+        },
+      });
+      t.hub.emit('state', stateMsg(withBg(d.at(d.first, d.first + 1, 40))));
+      await tick(30);
+      const warm = t.toAsset.flatMap((m) => (m.t === 'warm' ? [m.warm] : []))[0]!;
+      expect(warm.key).toContain('|bg|p0|');
+      // A jump to the warmed cue while its warm job runs: that job stops waiting for its units.
+      t.toAsset.length = 0;
+      t.hub.emit('state', stateMsg(withBg(d.at(d.first + 2, d.first + 3, 41))));
+      await tick(30);
+      expect(t.toAsset).toContainEqual({ t: 'hurry', keys: [warm.key] });
+      t.core.sync();
+      expect(t.toAsset.filter((m) => m.t === 'hurry')).toHaveLength(1);
+      t.close();
+    });
+
     it('cancels the jobs no plan needs any more, and sends a key needed again anew', async () => {
       const t = setup();
       await t.core.start();
