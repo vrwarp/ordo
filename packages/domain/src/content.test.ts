@@ -253,9 +253,13 @@ describe('resolvePlaylist: geometry files (M6 round 2)', () => {
     expect(r.degraded?.[0]?.slideId).toBe('b');
   });
 
-  it('lists nothing without a file index (the operator PC resolving from its cache)', () => {
+  it('lists each file by name without a file index (the operator PC resolving from its cache, design/29 §1.7)', () => {
+    // The operator's offline download and the direct link fetch them by name; nothing is judged missing.
     const r = resolvePlaylist(base, 'pl', { digest: localDigest });
-    expect(r.files).toEqual([]);
+    expect(r.files).toEqual([
+      { hash: ref, bytes: 0, mime: 'application/json' },
+      { hash: lost, bytes: 0, mime: 'application/json' },
+    ]);
     expect(r).not.toHaveProperty('geoms');
     expect(r.degraded).toBeUndefined();
   });

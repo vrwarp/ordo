@@ -503,6 +503,20 @@ caller passes the file and draws the authored look (lyric-only, bands and hidden
 The output's link worker chooses the file (prerender-outputs, behind `PRERENDER_ON`); the media listers
 (`referencedMediaIds`, `drawnMediaIds`, `slideImages`, `previewMedia`) never pass one, so they list the stand-in's
 pictures and never the picture file.
+
+**goLive** (`goLive.ts`, design/29 §1.7): `ResolvedPlaylist.prerenders` lists the pictures the hub keeps of the
+service's pre-rendered slides (`GoLiveInputs.prerenders`: the newest per slide, variant and size, of the key set
+or a stand-by, W39) and `prerenderKeys` carries the key set the live process checks `prerender.add` against. Into
+`files` (and `geoms`, which the live process serves while the library is down) go, in cue order from the first
+cue, each slide's geometry and decoration files and, for a pre-rendered slide, its pictures, its head, its pages
+(`GoLiveInputs.slideHead`) and the shape files it uses; then the slides no cue shows. Past
+`GOLIVE_GEOM_FILES_MAX` (20,000) the rest are not listed and a whole-service line says so (W60; it was a silent
+cut). The fonts and media a slide file uses (`uses`) are shipped, the media optional like a reference picture (a
+line, never a refusal). New `degraded` kinds: `slideFile` (W40, one line a presentation: its slides' full copies
+are missing on the hub) and `picture` (W33, one a presentation: slides without a picture yet, only while
+`PRERENDER_ON`); a slide's `cut` lines are listed as they are. Without a file index (the operator PC resolving
+from its cache) the slides' shape files, heads and pages are listed by name (bytes 0), for the offline download
+and the direct link to fetch.
 <!-- /r2b:prerender -->
 
 ## Live state

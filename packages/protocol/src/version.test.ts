@@ -23,11 +23,12 @@ import { APP_VERSION } from './index.ts';
 // digest is unchanged (it leaves the APP_VERSION line out).
 // 0.7.0 again on r2b/prerender-model (wave r2b sub-wave 1, design/29): schemas.ts Slide.prerender, draw, cut and
 // meta.draw, optional fields nothing writes yet (an older client strips them); content.ts slideContent's picture
-// form, used only when a caller passes a picture file (none does yet). The wave's one bump, 0.8.0, comes at its
-// end and the integrator re-records the digest once after the sub-wave's last merge.
+// form, used only when a caller passes a picture file (none does yet); live.ts ResolvedPlaylist.prerenders and
+// prerenderKeys, optional, listed only from the hub's picture rows (none yet). The wave's one bump, 0.8.0, comes
+// at its end and the integrator re-records the digest once after the sub-wave's last merge.
 const RECORDED = {
   version: '0.7.0',
-  digest: '68f8424dfb13b15cef2df20ac0a992be6d616e79c47d67c1c8fc35da8ddb2d73',
+  digest: '73e4f2c2b4c9548afc428b7bdc7da4aebf5ae3969b8be1267bbe7c273622a7c2',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

@@ -156,7 +156,8 @@ The playlist editor on the venue PC (operate PIN, full profile) has **Download f
 resolves the playlist from the operator's copy of the library (the same `resolvePlaylist` the hub runs,
 `packages/domain/src/goLive.ts`) and fills the operator's file cache (Cache API; the operator app asks the
 browser for persistent storage on every profile, so the files are not evicted under pressure) with every
-media file and font the service uses. The operator chooses when: the evening before, a week before, or on
+media file and font the service uses, and the shape files and pre-rendered slides' files the slides draw (listed
+by name: the PC has no file index, design/29 §1.7). The operator chooses when: the evening before, a week before, or on
 arrival. The status line says whether every file is on this PC; it re-checks when the playlist changes.
 The library itself (playlists, presentations, settings) is already kept on the PC by the core worker.
 

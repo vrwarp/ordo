@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  ContentHash,
   FileRef,
   Font,
   Id,
@@ -13,6 +14,27 @@ import {
   type ActionId,
   type MidiCue,
 } from './schemas.ts';
+
+/** The sizes a screen fetches of a pre-rendered slide's picture (design/29 §1.2, §1.7): 4K, and the 1080p copy. */
+export const PrerenderSize = z.union([z.literal(3840), z.literal(1920)]);
+export type PrerenderSize = z.infer<typeof PrerenderSize>;
+
+/**
+ * A pre-rendered slide's picture file (design/29 §1.7): which slide it is of, its key (the variant without
+ * backdrops has a key of its own), its size and its content-store file. What goLive lists and `prerender.add`
+ * announces; outputs never compute keys.
+ */
+export const PrerenderPicture = z.object({
+  presentationId: Id,
+  slideId: Id,
+  key: ContentHash,
+  size: PrerenderSize,
+  file: ContentHash,
+});
+export type PrerenderPicture = z.infer<typeof PrerenderPicture>;
+
+/** At most this many pictures and keys a goLive carries, and pictures `state.prerendered` keeps. */
+export const PRERENDERS_MAX = 20_000;
 
 /** One entry of the service cache manifest. Content addressed by sha256. */
 export const ManifestFile = z.object({ hash: z.string(), bytes: z.number().int(), mime: z.string() });
@@ -31,11 +53,26 @@ export const ResolvedPlaylist = z.object({
   logoMediaId: Id.optional(),
   files: z.array(ManifestFile),
   /**
-   * The geometry files the slides draw (`drawnGeomRefs`, design/27 §3.1 `ShapeGeom.ref`): their hashes are
-   * in `files` too, so outputs cache them with the pictures; the live process serves them from here while
-   * the library is down. Absent when no slide draws one.
+   * The content-store files the slides draw besides media and fonts: geometry and decoration files
+   * (`drawnShapeFileRefs`, design/27 §3.1 `ShapeGeom.ref`) and pre-rendered slides' pictures, heads and pages
+   * (design/29 §1.7), in cue order. Their hashes are in `files` too, so outputs cache them with the pictures;
+   * the live process serves them from here while the library is down. Absent when no slide draws one.
    */
   geoms: z.array(FileRef).max(100_000).optional(),
+  /**
+   * design/29 §1.7: the pictures of the service's pre-rendered slides the hub has, the newest per slide, variant
+   * and size; `standby` marks one found by its stand-by id (an older renderer or font set, W39). Their files are
+   * in `files` (and `geoms`, for the live process) in cue order. Absent when there are none.
+   */
+  prerenders: z
+    .array(PrerenderPicture.extend({ standby: z.boolean().optional() }))
+    .max(PRERENDERS_MAX)
+    .optional(),
+  /**
+   * design/29 §1.3: the picture keys of the service's presentations (the hub's `prerender_keys`): the live
+   * process accepts `prerender.add` only for one of them. Absent when there are none.
+   */
+  prerenderKeys: z.array(ContentHash).max(PRERENDERS_MAX).optional(),
   manifestId: z.string(),
   /**
    * Content that failed validation at goLive and was quarantined (design/25): a bad slide is replaced by an
