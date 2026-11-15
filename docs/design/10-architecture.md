@@ -90,6 +90,10 @@ pnpm workspace, TypeScript everywhere, Vite for the browser apps.
 6. Hub loss: the operator detects socket loss, switches its bus to `postMessage` on its
    opener handles, and keeps emitting the same `live.state` deltas; outputs accept either
    bus with the same sequence rules ([design/17](17-offline-and-degraded.md)).
+7. Big and crowded slides (design/29, being built behind `PRERENDER_ON`): the full slide
+   is kept out of line in a slide file of small pages, the presentation keeps a stand-in,
+   and a desktop draws a picture of its static part that outputs show under the live
+   parts ([design/29](29-prerender-and-limits.md)).
 
 ## Time
 

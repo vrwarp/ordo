@@ -5,6 +5,9 @@ TypeScript types. The hub stores them as JSON columns in SQLite beside indexed s
 columns. Identifiers are ULIDs. Every stored entity carries `id`, `createdAt`,
 `updatedAt`, and `rev` (monotonic per entity).
 
+Pre-rendered slides (the stand-in, slide files, the picture key and the live events for pictures) are designed in
+[design/29](29-prerender-and-limits.md).
+
 ## Entities
 
 ```ts

@@ -4,6 +4,9 @@ Defined in `packages/protocol` as Zod schemas. JSON text frames. Every message h
 `{ t: string, v: 1, ...payload }`. The same message types are used on the hub WebSocket
 and on the fallback bus (`postMessage`), so outputs have one receive path.
 
+The live events of pre-rendered slides (`prerender.add`, `prerender.use`) are designed in
+[design/29](29-prerender-and-limits.md) §1.7 and §1.11.
+
 ## Client to hub
 
 | `t`              | From             | Payload                                     | Notes                                              |
