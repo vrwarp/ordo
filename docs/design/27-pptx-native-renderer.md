@@ -2918,13 +2918,19 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
 - **No cell cap.** A table is one object of the slide's budget (`budget.ts` `ownObjects`), its cells' JSON
   counted against the slide's text budget as it is written. The 640-cell master grid of the summer-vibes
   template is one object a slide, a 160-cell bulletin native.
-- **The deck's default table style.** A table whose `a:tblPr` names no style takes `a:tblStyleLst def` (as
-  LibreOffice and PowerPoint do): the suite's brutalism deck (slide 14) names only its default, and the cells
-  without a fill of their own showed the picture under the table where LibreOffice draws them opaque.
+- **No default table style.** A table whose `a:tblPr` names no style has none, whatever `a:tblStyleLst def`
+  says: LibreOffice 24.2 leaves its cells unfilled (probe decks `regroup/r2b/tables-conv/lodef`: the default
+  named and undefined, or defined in the list, both unfilled; only `a:tableStyleId` fills them; it does draw a
+  cell fill's alpha). Taking the default (as a548707 did for the suite's brutalism deck) turned the worship deck
+  "Depression" (white text on black cells, a list defining Medium Style 2 - Accent 1 as default) light blue:
+  0.86 -> 0.05. Brutalism's slide 14 differs from LibreOffice for another reason: the picture under its table is
+  an SVG (`asvg:svgBlip`, white where the table is) with a PNG stand-in, and ordo draws the stand-in.
 - **Korean and other scripts' cells** (tables-object.md §3): the measure breaks where the renderer breaks
   (`@ordo/renderer` text/breaks.ts `breakOpportunities`: UAX#14 with Korean words kept whole, never before
   `)` `」` `,` `?` `・` or after `(` `「`) and spaces a paragraph by the face that draws its script
-  (`FaceSource.script`): one rule for the hub's pool task and the browser's parse (`@ordo/importers`
+  (`FaceSource.script`, asked for Han, Kana and Hangul only, `GLYPH_SCRIPTS`: a shaped script such as Arabic,
+  measured by its unshaped advances, wrapped a line early and took its face's line, the cec bible readings'
+  slide 6 0.805 -> 0.741): one rule for the hub's pool task and the browser's parse (`@ordo/importers`
   `faceSourceOf`: the first of the script's fallback families the library has, Noto Sans KR for Hangul), so
   both write the same line spacing; the harness asks fontconfig for a letter of the script
   (`fc-match :charset=<hex>`, the face Chromium falls back to on its host: WenQuanYi Zen Hei for Hangul).

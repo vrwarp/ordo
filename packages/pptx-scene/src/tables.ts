@@ -16,7 +16,7 @@
  *   art) until the vertical text engine lays cells out (`writing-engine`).
  * - **Style.** `a:tableStyleId` names a style of `ppt/tableStyles.xml`, else one of PowerPoint's built-in
  *   styles (`tablestyles.ts`, LibreOffice's table); `a:tblPr/a:tableStyle` is an inline one; a table that
- *   names none takes the deck's default (`a:tblStyleLst def`), as LibreOffice and PowerPoint do. Its parts
+ *   names none has no style, whatever the deck's default (`a:tblStyleLst def`), as LibreOffice draws it. Its parts
  *   apply to a cell in `CT_TableStyle` order, a later part overriding what an earlier one set: whole table,
  *   row bands (`bandRow`: band1H for the first body row, then alternating; not the first or last row when
  *   those are on), column bands (`bandCol`, likewise), last column, first column, last row, first row (each
@@ -710,27 +710,24 @@ export function gridObjects(
 
 // ── Styles ──────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The table style list of a `ppt/tableStyles.xml`: its styles by id (upper case) and its default, read once per deck. */
-const styleLists = new WeakMap<XNode, StyleList>();
+/** The `a:tblStyle` elements of a `ppt/tableStyles.xml` by id (upper case), indexed once per deck. */
+const styleLists = new WeakMap<XNode, Map<string, XNode>>();
 
 /**
- * The table's style: inline, else by id from the deck's style list, else a built-in one; a table that names
- * none takes the deck's default (`a:tblStyleLst def`), as LibreOffice and PowerPoint do (the suite's brutalism
- * deck: without it the cells that have no fill of their own showed the picture under the table).
+ * The table's style: inline, else by id from the deck's style list, else a built-in one. A table that names
+ * none has none: LibreOffice 24.2 leaves its cells unfilled whatever `a:tblStyleLst def` says (probed with the
+ * default named and undefined, and defined in the list; the worship deck "Depression" draws white text on
+ * black cells that the default would fill light blue).
  */
 function tableStyleOf(ctx: SlideCtx, tblPr: XNode | undefined): XNode | undefined {
   const inline = child(tblPr, 'a:tableStyle');
   if (inline) return inline;
-  const list = deckStyles(ctx);
-  const id = textOf(child(tblPr, 'a:tableStyleId')).trim().slice(0, 64).toUpperCase() || list?.def;
+  const id = textOf(child(tblPr, 'a:tableStyleId')).trim().slice(0, 64).toUpperCase();
   if (!id) return undefined;
-  return list?.byId.get(id) ?? predefinedTableStyle(id);
+  return deckStyles(ctx)?.get(id) ?? predefinedTableStyle(id);
 }
 
-/** A deck's table style list (`ppt/tableStyles.xml`): its styles by id and its default style's id. */
-type StyleList = { byId: Map<string, XNode>; def: string | undefined };
-
-function deckStyles(ctx: SlideCtx): StyleList | undefined {
+function deckStyles(ctx: SlideCtx): Map<string, XNode> | undefined {
   const rel = ctx.pkg.relOfType(ctx.deck.presentationPart, 'tableStyles');
   if (!rel || rel.external) return undefined;
   let root: XNode | undefined;
@@ -740,19 +737,17 @@ function deckStyles(ctx: SlideCtx): StyleList | undefined {
     return undefined; // a style list that cannot be read is no list: built-in styles still apply
   }
   if (!root) return undefined;
-  let found = styleLists.get(root);
-  if (found) return found;
-  const byId = new Map<string, XNode>();
+  let byId = styleLists.get(root);
+  if (byId) return byId;
+  byId = new Map();
   const list = root.children;
   for (let i = 0; i < list.length && i < MAX_STYLE_SCAN; i++) {
     const s = list[i]!;
     const id = s.name === 'a:tblStyle' ? s.attrs.styleId?.trim().slice(0, 64).toUpperCase() : undefined;
     if (id && !byId.has(id)) byId.set(id, s);
   }
-  const def = root.name === 'a:tblStyleLst' ? root.attrs.def?.trim().slice(0, 64).toUpperCase() : undefined;
-  found = { byId, def: def || undefined };
-  styleLists.set(root, found);
-  return found;
+  styleLists.set(root, byId);
+  return byId;
 }
 
 type Flags = Record<'firstRow' | 'lastRow' | 'firstCol' | 'lastCol' | 'bandRow' | 'bandCol', boolean>;
@@ -1176,6 +1171,15 @@ export function loLineHeight(pt: number, face: FaceMetrics | undefined, lines: L
  * included (`lines` with `lo`). A paragraph's lines are spaced by the face that draws its main run's script
  * (`spaceByFont`), not by a family that lacks it (fontconfig gives one for any name).
  */
+/**
+ * The scripts whose fallback face `Measure` asks for (`FaceSource.script`): Han, Kana and Hangul, drawn glyph
+ * by glyph (no joining, no reordering), so their advances measure a line. A shaped script (Arabic's joining
+ * letters, Indic clusters) keeps the chain's faces or the estimate and the office model's spacing: measured
+ * by its unshaped advances it wrapped a line early and took its face's line (the cec bible readings' Arabic
+ * cells, 0.805 -> 0.741 against LibreOffice's rows).
+ */
+const GLYPH_SCRIPTS: ReadonlySet<string> = new Set(['Hani', 'Hira', 'Kana', 'Hang']);
+
 export class Measure {
   readonly missing = new Set<string>();
   private readonly chains = new Map<string, FaceMetrics[]>();
@@ -1209,9 +1213,12 @@ export class Measure {
     return c;
   }
 
-  /** The face the caller's fallback draws a script in (`FaceSource.script`), asked once per script. */
+  /**
+   * The face the caller's fallback draws a script in (`FaceSource.script`), asked once per script, and only
+   * for the scripts drawn glyph by glyph (`GLYPH_SCRIPTS`): a shaped script's advances do not measure its line.
+   */
   private scriptFace(code: string | undefined): FaceMetrics | undefined {
-    if (!code || !this.faces?.script) return undefined;
+    if (!code || !GLYPH_SCRIPTS.has(code) || !this.faces?.script) return undefined;
     if (this.scripts.has(code)) return this.scripts.get(code);
     let f: FaceMetrics | undefined;
     try {

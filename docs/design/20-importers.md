@@ -272,10 +272,10 @@ The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
   object imported"), edited cell by cell in the editor: the deck's columns and stored rows (the drawer grows
   each row to its text, cells never shrink), each cell's rich text, spans, fill and diagonals, the palettes of
   styles, fills and lines; one object of the slide's budget however many cells it has (the 640-cell master
-  grid of a template is one object a slide). A table that names no style takes the deck's default
-  (`a:tblStyleLst def`), as LibreOffice and PowerPoint do; a cell whose family lacks its script (Hangul in a
+  grid of a template is one object a slide). A table that names no style has none, whatever the deck's
+  default (`a:tblStyleLst def`), as LibreOffice draws it; a cell whose family lacks its script (Hangul in a
   Latin face) is measured and spaced by the library face of its script (`FaceSource.script`, the same on the hub
-  and in the browser). A table with vertical cell text stays for LibreOffice. On a hub with LibreOffice, until
+  and in the browser; Han, Kana and Hangul, which are drawn glyph by glyph). A table with vertical cell text stays for LibreOffice. On a hub with LibreOffice, until
   the owner decides question 3 of the LibreOffice inventory, a slide whose tables as their M6 group would pass
   64 KB keeps LibreOffice's page, as before (`EmittedSlide.tableGroupBytes`, `ImportCore.pageForBudget`);
 - bakes recoloured pictures (duotone, colour change, grayscale, black and white, brightness and contrast:

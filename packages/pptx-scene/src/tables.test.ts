@@ -359,10 +359,11 @@ describe('tables: styles', () => {
     expect(texts[0]!.style).toMatchObject({ fontWeight: 700, color: { r: 255, g: 255, b: 255 } });
   });
 
-  it("takes the deck's default style (a:tblStyleLst def) for a table that names none: its cells opaque", () => {
-    // The suite's brutalism deck (slide 14): ppt/tableStyles.xml names only its default, Medium Style 2 -
-    // Accent 1, and a table without a:tableStyleId shows a picture under it through every cell without a fill
-    // of its own, where LibreOffice (and PowerPoint) draw the default style's fills.
+  it("gives a table that names no style none, whatever the deck's default (a:tblStyleLst def), as LibreOffice", () => {
+    // LibreOffice 24.2 draws such a table without a style (regroup/r2b/tables-conv/lodef: the default named
+    // and undefined, or defined in ppt/tableStyles.xml, both leave the cells unfilled; only a:tableStyleId
+    // fills them). The worship deck "Depression" (white text on black cells, a list defining Medium Style 2 -
+    // Accent 1 as its default) fell from 0.86 to 0.05 when the default was taken.
     const shapes = table({
       cols: [IN, IN],
       rows: [
@@ -376,18 +377,21 @@ describe('tables: styles', () => {
       convert(shapes, { styles, ...(def ? { def } : {}) })
         .rects.sort((a, b) => a.y - b.y || a.x - b.x)
         .map(rgb);
-    expect(fills('', DEF)).toEqual([
-      [17, 17, 17], // its own fill
-      [232, 235, 244], // wholeTbl: accent1 tint 20 %
-      [232, 235, 244], // the second row, joined
-    ]);
-    // A default the deck's list defines is its own; a list without a default leaves the cells as they are.
     const deckDefault = `<a:tblStyle styleId="${DEF}" styleName="Deck"><a:wholeTbl><a:tcStyle><a:fill>${solid('DDEEFF')}</a:fill></a:tcStyle></a:wholeTbl></a:tblStyle>`;
-    expect(fills(deckDefault, DEF).slice(1)).toEqual([
-      [221, 238, 255],
-      [221, 238, 255],
-    ]);
+    // Only the cell's own fill, with the default named (built in) or defined, or no default at all.
+    expect(fills('', DEF)).toEqual([[17, 17, 17]]);
+    expect(fills(deckDefault, DEF)).toEqual([[17, 17, 17]]);
     expect(fills(deckDefault)).toEqual([[17, 17, 17]]);
+    // Named, the same style fills every cell.
+    const named = convert(
+      table({
+        cols: [IN, IN],
+        rows: [{ h: IN / 2, cells: [tc('a'), tc('b')] }],
+        tblPr: `<a:tblPr><a:tableStyleId>${DEF}</a:tableStyleId></a:tblPr>`,
+      }),
+      { styles: deckDefault, def: DEF },
+    );
+    expect(named.rects.map(rgb)).toEqual([[221, 238, 255]]);
   });
 
   it('puts the table background (the own fill of a:tblPr) under every cell', () => {
@@ -719,6 +723,35 @@ describe('tables: rows grow to their text', () => {
     const o = out.slides[0]!.slide.objects.find((x) => x.type === 'shape' && x.table) as ShapeObject;
     const c = cellRich(o.table!, 0)!;
     expect(c.paras?.[0]?.lineSpacing ?? c.style.lineHeight / 1.2).toBeCloseTo(1.26 / 1.2, 6);
+  });
+
+  it("asks the script's face only for scripts drawn glyph by glyph (Han, Kana, Hangul), never for Arabic", () => {
+    // Arabic is shaped (its letters join), which the measure does not do: its script's face (fontconfig's
+    // DejaVu Sans in the harness) measured the cec bible readings' Arabic cells a line too long and spaced them
+    // by its own line, and the slide's rows fell from LibreOffice's (0.805 -> 0.741). Such a cell keeps the
+    // chain's faces (or the estimate) and their spacing, as before the script's face.
+    const latin = { advance: (cp: number) => (cp === 0x20 ? 0.25 : undefined), lineHeight: 1.21 };
+    const arabic = {
+      advance: (cp: number) => (cp >= 0x600 && cp <= 0x6ff ? 2 : undefined),
+      lineHeight: 1.8,
+    };
+    const asked: string[] = [];
+    const faces: FaceSource = Object.assign((family: string) => (family === 'Inter' ? latin : undefined), {
+      script: (code: string) => {
+        asked.push(code);
+        return code === 'Arab' ? arabic : undefined;
+      },
+    });
+    const shapes = table({
+      cols: [2 * IN],
+      rows: [{ h: 0, cells: [tc('سلام عليكم', { rPr: 'lang="ar-EG" sz="2000"' })] }],
+    });
+    const out = convertDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: faces });
+    const o = out.slides[0]!.slide.objects.find((x) => x.type === 'shape' && x.table) as ShapeObject;
+    const c = cellRich(o.table!, 0)!;
+    // Spaced by the chain's face (Inter's 1.21), as before the script's face, not by the Arabic face's 1.8.
+    expect(c.paras?.[0]?.lineSpacing ?? c.style.lineHeight / 1.2).toBeCloseTo(1.21 / 1.2, 6);
+    expect(asked).not.toContain('Arab');
   });
 
   it('measures text with the faces in the office line model and grows the row', () => {
