@@ -407,7 +407,10 @@ drawing budget (`geombudget.ts`) would draw as a lesser legacy copy on the outpu
   composite's part on the frame copied into the unit at the shape's opacity; a decoration by `drawDecorRange`, one
   source shape a step and at most `DECOR_TURN_SHAPES` (32) a turn. The copy into the unit is a band of rows
   (`EFFECT_STEP_PIXELS`) a step; a unit that is the whole frame, or a composite all on the frame at full opacity,
-  is the canvas it was drawn on and is not copied. A turn takes steps while within half of
+  is the canvas it was drawn on and is not copied. A decoration is drawn on a canvas of its rect, the frame's
+  transform moved by the rect's whole-pixel origin (the same pixels; that canvas is the unit): a canvas of the
+  frame for each of a slide's 18 decoration units cost wake 20 about 350 ms of its cold arm. A stored geometry
+  keeps the frame's scratch: at a whole-pixel offset its drawing differs by up to 167 levels at 3840. A turn takes steps while within half of
   `SLICE_MS`; a step is at most one call of a shape within `GEOM_COST.slide` (about 38 ms at 4K, cold). Every
   step ends by reading one pixel back from each canvas it drew on: Chromium records 2D calls and draws them when
   the canvas is read, copied or transferred, so a step that only recorded would be drawn by a later one (the

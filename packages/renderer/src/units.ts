@@ -622,13 +622,33 @@ type UnitSteps = { steps: (() => void)[]; picture(): OffscreenCanvas | undefined
  * A unit drawn as the frame draws its object (a shape without effects, a sliced shape, a decoration): a scratch
  * canvas of the frame, the object's draw calls on it at the frame's own transform (`draws`), then its rect
  * copied 1:1 into the unit's own canvas, a band of rows a step (a unit of the whole frame is the scratch). No clip
- * and no other transform on the drawing, which would move Skia's anti-aliasing.
+ * and no other transform on the drawing, which would move Skia's anti-aliasing (a stored geometry drawn at a
+ * whole-pixel offset differs by up to 167 levels at 3840). A decoration (`own`) is drawn on a canvas of its rect at
+ * the frame's transform moved by the rect's whole-pixel origin, the very pixels (its shapes are filled and stroked
+ * paths and their shadows): that canvas is the unit, so a slide of 18 decoration units does not make 18 canvases of
+ * the frame (33 MB each at 4K, about 350 ms of wake 20's cold arm).
  */
-function onFrame(u: GeomUnit, draws: ((ctx: Ctx2D) => void)[], perTurn: number): UnitSteps {
+function onFrame(u: GeomUnit, draws: ((ctx: Ctx2D) => void)[], perTurn: number, own = false): UnitSteps {
   const frame = frameAt(u.scale);
   const { x, y, w, h } = u.rect;
   let scratch: ReturnType<typeof canvas2d>;
   let unit: ReturnType<typeof canvas2d>;
+  if (own) {
+    // A canvas defers its drawing: each step is made to draw now (a one-pixel read), so its time is the step's.
+    const steps: (() => void)[] = [
+      () => {
+        unit = canvas2d(w, h);
+        unit?.c.setTransform(1, 0, 0, 1, -x, -y);
+        unit?.c.getImageData(0, 0, 1, 1);
+      },
+      ...draws.map((draw) => () => {
+        if (!unit) return;
+        draw(unit.c as unknown as Ctx2D);
+        unit.c.getImageData(0, 0, 1, 1);
+      }),
+    ];
+    return { steps, picture: () => unit?.canvas, perTurn };
+  }
   // A canvas defers its drawing: each step is made to draw now (a one-pixel read), so its time is the step's.
   const steps: (() => void)[] = [
     () => {
@@ -733,7 +753,7 @@ function unitSteps(u: GeomUnit): UnitSteps | undefined {
     const n = hooks.count(o);
     const draws: ((ctx: Ctx2D) => void)[] = [];
     for (let i = 0; i < n; i++) draws.push((ctx) => hooks.range(ctx, o, u.scale, i, i + 1));
-    return onFrame(u, draws, DECOR_TURN_SHAPES);
+    return onFrame(u, draws, DECOR_TURN_SHAPES, true);
   }
   if (hasPart(o, 'effects')) return composite(u, o);
   if (u.kind === 'sliced') {

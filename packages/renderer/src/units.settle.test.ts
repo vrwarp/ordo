@@ -152,23 +152,25 @@ describe('effect units in steps', () => {
 });
 
 describe('a unit copied out of the frame', () => {
-  it('copies a unit in bands of rows within EFFECT_STEP_PIXELS, and does not copy one that is its whole canvas', async () => {
+  it('copies a unit drawn on the frame in bands of rows within EFFECT_STEP_PIXELS, and not one that is its whole canvas', async () => {
     // A full-frame copy at 4K is one 33 MB draw and a 33 MB canvas (15-38 ms on the bench machine, the longest turn
-    // of a capped decoration's unit): a unit of the whole frame is the canvas it was drawn on, and any other is
-    // copied a band of rows a step, as an effect unit's copy is.
+    // of a capped decoration's unit when it was drawn on the frame): a unit of the whole frame is the canvas it was
+    // drawn on, and any other is copied a band of rows a step, as an effect unit's copy is.
     vi.stubGlobal('OffscreenCanvas', RecordingCanvas);
     const soft = { ...softFrame(), id: 's1', fill: { r: 200, g: 120, b: 60, a: 1 } };
-    // The capped decoration with its first star a full-slide rect instead (within its caps): its unit is the
-    // whole frame.
-    const framed = cappedSlide();
-    const decor = framed.objects[0] as ShapeObject;
-    const [, ...stars] = decor.decor!.parts!;
-    const parts = [{ d: 'M 0 0 L 1920 0 L 1920 1080 L 0 1080 Z', p: 0, s: 1 }, ...stars];
-    framed.objects = [{ ...decor, decor: { ...decor.decor!, parts } }];
+    // The lone chain over the whole slide with an outline of its box: its unit is the whole frame.
+    const chain = loneChain();
+    const geom = chain.geom as { paths: { d: string; w: number; h: number }[] };
+    const { w: gw, h: gh } = geom.paths[0]!;
+    const framed = {
+      ...chain,
+      id: 'framed',
+      box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+      geom: { paths: [...geom.paths, { d: `M 0 0 L ${gw} 0 L ${gw} ${gh} L 0 ${gh} Z`, w: gw, h: gh }] },
+    } as ShapeObject;
     const slides: Slide[] = [
-      { ...cappedSlide(), id: 'capped' },
-      { ...framed, id: 'capped-frame' },
       { id: 'chain', objects: [loneChain()] },
+      { id: 'chain-frame', objects: [framed] },
       { id: 'soft-edges', objects: [softFrame(), soft] },
     ];
     const seen: string[] = [];
@@ -207,10 +209,28 @@ describe('a unit copied out of the frame', () => {
       expect(rows, slide.id).toBe(u!.rect.h);
     }
     expect(seen).toEqual([
-      'capped whole decor',
-      'capped-frame whole decor whole frame',
       'chain sliced shape',
+      'chain-frame sliced shape whole frame',
       'soft-edges whole shape whole frame',
     ]);
+  });
+});
+
+describe('a decoration unit on its own canvas', () => {
+  it('draws a decoration unit on a canvas of its rect at a whole-pixel offset, never on one of the frame', async () => {
+    // A canvas of the frame for every decoration unit (33 MB at 4K) cost a slide of 18 of them (wake 20) about
+    // 350 ms of its cold arm: a decoration is drawn on a canvas of its rect, which is the unit.
+    vi.stubGlobal('OffscreenCanvas', RecordingCanvas);
+    const [u] = slideUnits(objectsOf({ ...cappedSlide(), id: 'capped' }), 2);
+    expect(u).toMatchObject({ kind: 'whole', of: 'decor' });
+    const { x, y, w, h } = u!.rect;
+    expect(w * h).toBeLessThan(3840 * 2160);
+    RecordingCanvas.made = [];
+    const { undrawn } = await makeChecked(u!);
+    expect(undrawn).toEqual([]);
+    expect(RecordingCanvas.made.filter((c) => c.width === 3840 && c.height === 2160)).toEqual([]);
+    const own = RecordingCanvas.made.filter((c) => c.width === w && c.height === h);
+    expect(own).toHaveLength(1);
+    expect(own[0]!.trace.find((e) => e[0] === 'call')).toEqual(['call', 'setTransform', 1, 0, 0, 1, -x, -y]);
   });
 });
