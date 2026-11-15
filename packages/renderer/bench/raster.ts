@@ -23,7 +23,9 @@ import type { BenchReport, Stats } from './raster.page.ts';
  * 3840; or a bounded effects one's (drawn cold, the effect cache emptied before every job: §13's named
  * exception for a slide at its effect budget) over 400 and 500 ms. Each case's geometry units are made before
  * its jobs, as the asset worker's prepare step makes them (`units` lines): --check also fails when one of their
- * slices passes the 50 ms task, or a '(… units' case's passes 16 ms at 3840.
+ * slices passes the 50 ms task, or a '(… units' case's passes 16 ms at 3840; when a draw of an '(alternation'
+ * case (two slides in turn, rounds 3 on) passes 50 ms or a slide's mean 28 ms; and when a '(second draw' (the
+ * draw that makes a slide's decoration sprites) passes 50 ms.
  * The face is DejaVu Sans (fonts-dejavu-core). Timings depend on the machine and its load.
  */
 
@@ -69,6 +71,18 @@ const DECOR_OVER_SHAPES = 0.1;
  * design/27 §13's 50 ms task at both sizes; its sprites pass a 64 MiB cache at 3840.
  */
 const WARM_TASK: Record<string, number> = { '1920': 50, '3840': 50 };
+/**
+ * An '(alternation' case (bench/cases/decor.ts, r2b effect units): two decorated slides drawn in turn, rounds 3
+ * on: --check fails when a draw passes the task or a slide's mean draw passes `ALTERNATION_MEAN` (r2a land
+ * review at 62a1c3a: worst 93.5 ms, the capped slide's mean 27.5 ms at 3840).
+ */
+const ALTERNATION_WORST = 50;
+const ALTERNATION_MEAN = 28;
+/**
+ * A '(second draw' case: the draw that makes a slide's decoration sprites, held to the task (target 35 ms;
+ * r2a land re-review: the wake template's slide 12 took 58-73 ms at 3840).
+ */
+const SECOND_DRAW: Record<string, number> = { '1920': 50, '3840': 50 };
 
 async function loadEsbuild(): Promise<typeof import('esbuild')> {
   try {
@@ -148,6 +162,7 @@ async function main(): Promise<number> {
       const unitsCase = /\(.*units/.test(s.name);
       const effects = s.name.includes('(bounded effects');
       const warmTask = s.name.includes('(warm task');
+      const second = s.name.includes('(second draw');
       if (rich)
         console.log(
           `  layout: empty width cache ${ms(s.layoutColdMs)} ms (median); warm width cache ${fmt(s.layoutWarmCache)}`,
@@ -167,6 +182,13 @@ async function main(): Promise<number> {
         )[w]!;
         const checked = rich || bounded || warmTask;
         const bad = checked && r.steady.p95 > budget;
+        if (second) {
+          const late = r.steady.max > SECOND_DRAW[w]!;
+          if (late) over++;
+          console.log(
+            `  second draw ${w}: slowest ${ms(r.steady.max)} ms, p50 ${ms(r.steady.p50)} ms (budget ${SECOND_DRAW[w]} ms, target 35${late ? ': OVER' : ''})`,
+          );
+        }
         if (bad) over++;
         console.log(
           `  raster ${w}: first ${ms(r.first)} ms; per job ${fmt(r.steady)}${checked ? ` (budget p95 ${budget} ms${bad ? ': OVER' : ''})` : ''}${rich ? `; paint only ${fmt(r.paintOnly)}` : ''}`,
@@ -180,9 +202,13 @@ async function main(): Promise<number> {
           };
           const a = of(alt.slide);
           const b = of(alt.other);
+          const late =
+            Math.max(a.worst, b.worst) > ALTERNATION_WORST || Math.max(a.mean, b.mean) > ALTERNATION_MEAN;
+          if (late) over++;
           console.log(
             `  alternation ${w}: rounds 3-${alt.rounds}: this slide worst ${ms(a.worst)} mean ${ms(a.mean)} ms; the other worst ${ms(b.worst)} mean ${ms(b.mean)} ms; ` +
-              `rounds 1-2 ${[alt.slide[0], alt.other[0], alt.slide[1], alt.other[1]].map((x) => ms(x ?? 0)).join(' / ')} ms`,
+              `rounds 1-2 ${[alt.slide[0], alt.other[0], alt.slide[1], alt.other[1]].map((x) => ms(x ?? 0)).join(' / ')} ms ` +
+              `(budget worst ${ALTERNATION_WORST} ms, mean ${ALTERNATION_MEAN} ms${late ? ': OVER' : ''})`,
           );
           console.log(`    this slide: ${alt.slide.map((x) => x.toFixed(1)).join(' ')}`);
           console.log(`    the other:  ${alt.other.map((x) => x.toFixed(1)).join(' ')}`);

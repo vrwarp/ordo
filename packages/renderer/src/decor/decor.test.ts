@@ -6,7 +6,7 @@ import { RecPath } from '../geom/path2d.test-util.ts';
 import { shapeDrawKind } from '../shape.ts';
 import { drawShape } from '../text2d.ts';
 import { traceCtx } from '../trace.test-util.ts';
-import { spriteCache } from '../spritecache.ts';
+import { SPRITE_SPARE_RASTERS, spriteCache } from '../spritecache.ts';
 import { DECOR_SPRITE, decorCost, decorShapes, drawDecor } from './draw.ts';
 import { clearDecorFiles, decorFileParts, decorPending, putDecorFile, readDecorFiles } from './files.ts';
 // Registers the drawer with the shape dispatch.
@@ -305,6 +305,9 @@ describe('sprite admission (r2a repair)', () => {
       spriteCache.set('decor', 'slide 12, second', { bytes: half });
     });
     expect(spriteCache.bytes('decor')).toBe(DECOR_SPRITE.share * spriteCache.budgetBytes);
+    // Spared while one of the last SPRITE_SPARE_RASTERS rasters used them (a slide drawn in turn with this one):
+    // the slide left the screens some rasters ago.
+    for (let i = 0; i < SPRITE_SPARE_RASTERS; i++) spriteCache.raster(() => {});
     draw(o);
     draw(o);
     // Made on its second draw; the other slide's least recently used sprite went, and only as much as needed.
@@ -315,6 +318,31 @@ describe('sprite admission (r2a repair)', () => {
     const third = draw(o);
     expect(fills(third)).toBe(0);
     expect(third.trace.filter((e) => e[1] === 'drawImage')).toHaveLength(1);
+  });
+
+  it('a raster makes at most one decoration sprite: the others are drawn directly and made in later rasters', () => {
+    // r2a land re-review: the draw that made the wake template slide 12's four sprites took 58-73 ms at 3840.
+    // Four different decorations (each its own space width: its own sprite key).
+    const four = [0, 1, 2, 3].map((i) => shape({ ...m9Decor(), w: m9Decor().w + i }, { id: `d${i}` }));
+    const slide = () => {
+      const ctx = traceCtx(3840, 2160);
+      spriteCache.raster(() => {
+        for (const o of four) drawShape(ctx, o, 2);
+      });
+      return ctx;
+    };
+    slide();
+    expect(spriteCache.markCount('decor')).toBe(4);
+    const made: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      slide();
+      made.push(spriteCache.count('decor'));
+    }
+    // One more each raster, never two.
+    expect(made).toEqual([1, 2, 3, 4]);
+    const warm = slide();
+    expect(fills(warm)).toBe(0);
+    expect(warm.trace.filter((e) => e[1] === 'drawImage')).toHaveLength(4);
   });
 
   it('a pinned sprite, or one the raster used, is never evicted to make that room', () => {

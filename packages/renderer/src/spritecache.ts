@@ -16,7 +16,8 @@
  *   plain LRU would evict, on every draw, exactly the sprites the rest of that draw (and the next) needs, and
  *   make all of them again every time. `room` says beforehand whether a sprite would be kept, so a drawer
  *   whose sprite only saves time once kept (a decoration's) does not make one to throw away; `fitKind` keeps a
- *   kind within its share by evicting that kind's oldest entries of earlier rasters, never the running one's.
+ *   kind within its share by evicting that kind's oldest entries no recent raster used (`SPRITE_SPARE_RASTERS`),
+ *   never the running one's; `madeInRaster` counts what a raster made (a decoration makes at most one).
  * - **Marks** (`mark`, `marked`): keys a drawer remembers without a sprite (a decoration drawn once, its sprite
  *   made the second time), in an LRU of their own of at most `SPRITE_MARKS` keys, cleared with their kind.
  *
@@ -33,6 +34,12 @@ export const SPRITE_CACHE_FRAMES = 4;
 export const SPRITE_CACHE_MAX_BYTES = 128 * 1024 * 1024;
 /** Keys remembered without a sprite (`mark`) at most. */
 export const SPRITE_MARKS = 512;
+/**
+ * Rasters a sprite is spared for after its last use: `fitKind` never evicts a sprite the running raster or one
+ * of the `SPRITE_SPARE_RASTERS` rasters before it used (two slides drawn in turn, for two looks showing a slide and the next one,
+ * keep each other's; r2a land review: worst draw 93.5 ms at 3840 when they pushed each other out).
+ */
+export const SPRITE_SPARE_RASTERS = 3;
 
 /** Who made a sprite: its cache key's namespace and the bytes reported per kind. */
 export type SpriteKind = 'effect' | 'geom' | 'decor' | 'look3d' | 'chart' | 'unit';
@@ -66,6 +73,8 @@ export class SpriteCache<S extends CachedSprite = CachedSprite> {
   private current = 0;
   private rasters = 0;
   private rasterBytes = 0;
+  /** Sprites `set` during the running raster, by kind (`madeInRaster`). */
+  private readonly rasterMade = new Map<SpriteKind, number>();
 
   /**
    * `budgetBytes`: the budget; a raster's frame raises it to `SPRITE_CACHE_FRAMES` frames, up to `maxBytes`
@@ -96,6 +105,7 @@ export class SpriteCache<S extends CachedSprite = CachedSprite> {
     if (this.depth++ === 0) {
       this.current = ++this.rasters;
       this.rasterBytes = 0;
+      this.rasterMade.clear();
     }
     try {
       return fn();
@@ -103,6 +113,7 @@ export class SpriteCache<S extends CachedSprite = CachedSprite> {
       if (--this.depth === 0) {
         this.current = 0;
         this.rasterBytes = 0;
+        this.rasterMade.clear();
       }
     }
   }
@@ -139,16 +150,24 @@ export class SpriteCache<S extends CachedSprite = CachedSprite> {
     return held + b <= this.budget;
   }
 
+  /** Sprites of `kind` kept by `set` during the running raster (0 outside one). */
+  madeInRaster(kind: SpriteKind): number {
+    return this.current === 0 ? 0 : (this.rasterMade.get(kind) ?? 0);
+  }
+
   /**
    * Room for a sprite of `bytes` of `kind` within `cap` bytes of that kind (a kind's share of the budget): the
-   * least recently used unpinned entries of `kind` that the running raster has not used are evicted until it fits
-   * (another slide's decorations make way for this one's), nothing of another kind. False, evicting nothing, when
-   * the raster's own entries of the kind and the pinned ones leave no room.
+   * least recently used unpinned entries of `kind` that neither the running raster nor one of the
+   * `SPRITE_SPARE_RASTERS` before it used are evicted until it fits (another slide's decorations make way for this one's,
+   * but not those of a slide drawn in turn with it), nothing of another kind. False, evicting nothing, when the
+   * recent rasters' entries of the kind and the pinned ones leave no room.
    */
   fitKind(kind: SpriteKind, bytes: number, cap: number): boolean {
     const b = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+    // The raster now (or the last one, between rasters) and how many rasters ago an entry was last used.
+    const now = this.current || this.rasters;
     const evictable = (k: string, v: Entry<S>) =>
-      v.kind === kind && !this.pins.has(k) && (this.current === 0 || v.raster !== this.current);
+      v.kind === kind && !this.pins.has(k) && (v.raster === 0 || now - v.raster > SPRITE_SPARE_RASTERS);
     if (this.bytes(kind) + b <= cap) return true;
     let kept = this.bytes(kind);
     for (const [k, v] of this.map) if (evictable(k, v)) kept -= v.bytes;
@@ -181,6 +200,7 @@ export class SpriteCache<S extends CachedSprite = CachedSprite> {
       this.drop(k, entry, false);
       return false;
     }
+    if (this.current !== 0) this.rasterMade.set(kind, (this.rasterMade.get(kind) ?? 0) + 1);
     return true;
   }
 

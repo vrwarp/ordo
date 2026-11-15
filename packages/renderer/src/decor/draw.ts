@@ -66,7 +66,8 @@ import { decorFilesVersion, decorParts, decorPending } from './files.ts';
  *   runs (a caller that cuts its work into slices, `drawDecorRange`, which a sprite made at once would not);
  *   none the cache would not keep (`SpriteCache.room`: beside the sprites the slide's raster holds already, and
  *   within `DECOR_SPRITE.share` of the budget for all decorations, other slides' oldest decoration sprites
- *   evicted to make room, `SpriteCache.fitKind`): such a decoration is drawn directly, so a
+ *   evicted to make room, `SpriteCache.fitKind`, those of the last rasters spared), nor more than one a raster
+ *   (`SpriteCache.madeInRaster`): such a decoration is drawn directly, so a
  *   slide whose sprites pass the cache (a 4K slide of four large decorations and 220 shadowed shapes) never
  *   makes, on every draw, sprites the cache then drops (r2a repair: 208 ms a warm draw at 3840, now 20-30).
  * - **Files.** `ref` names a decoration file (`DecorFile`, stored as a geometry file is; read into the store of
@@ -528,6 +529,9 @@ function drawDecorSprite(ctx: Ctx2D, d: DecorData, geo: DecorGeometry, opacity: 
     // The share counts this raster's decorations and evicts other slides' oldest to make room (`fitKind`): an
     // earlier slide's decorations never keep this one's from their sprites for good.
     const bytes = W * H * 4;
+    // At most one decoration sprite a raster (r2a land re-review: the draw that made the wake template slide
+    // 12's four took 58-73 ms at 3840): the others are drawn directly this time and made in the next rasters.
+    if (spriteCache.madeInRaster('decor') >= 1) return false;
     if (!spriteCache.room(bytes)) return false;
     if (!spriteCache.fitKind('decor', bytes, DECOR_SPRITE.share * spriteCache.budgetBytes)) return false;
     const c = new OffscreenCanvas(W, H);
