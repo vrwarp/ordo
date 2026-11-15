@@ -420,6 +420,13 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   `?effects=base` (62a1c3a's drawing of effects and decorations: the integrator wires effect-units'
   `setEffectUnits(false)` to it, C6). In test mode only, `?unitTurnMs=N` (1-5000) waits N ms after each turn of
   unit making, so the e2e can make units slow; outside test mode it is refused with a console line.
+- **Tested** by `e2e/units-live.spec.ts` (rows `units-live` 0 and 1 of `e2e/ports.ts`): line-art decks through the
+  upload route, `?unitTurnMs=40`; a jump to a cue neither armed nor warmed (`?warm=off`) and a GO 50 ms after its
+  cue was armed both flip on their frame with the line art's stand-in and the line art fades in within 1 s
+  (`__ordo.state().units.lateDrawn`); after Go live the next three cues' units are made before they are armed
+  (`units.warmed`). Canvas 2D there: this container's WebGPU is SwiftShader, whose strip uploads of a full-frame
+  picture alone take a frame or more (measured: the same jump flipped 75 ms late on it, its job done before the
+  GO's time).
 <!-- /r2b:units-live -->
 
 ## Frame loop

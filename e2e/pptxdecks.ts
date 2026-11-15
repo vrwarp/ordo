@@ -610,8 +610,10 @@ export const LINE_ART_BLACK_BOX = { x: 120, y: 90, w: 1680, h: 900 } as const;
  * drawer without geometry units draws the black one as its legacy copy (a black rect at b50d486, nothing once
  * the legacy kind is a line), and with them draws it whole. No text: the comparison is about the art.
  */
-export function lineArtDeck(dir: string): string {
+export function lineArtDeck(dir: string, variant = 0): string {
   mkdirSync(dir, { recursive: true });
+  // A variant moves the art a few px (`variant` x 6): the same geometry, units of its own (keyed by their rect).
+  const dx = variant * 6;
   const EMU = 6_350; // EMU per logical px (12,192,000 / 1,920)
   const art = (
     id: number,
@@ -623,7 +625,7 @@ export function lineArtDeck(dir: string): string {
     sp({
       id,
       name,
-      x: box.x * EMU,
+      x: (box.x + dx) * EMU,
       y: box.y * EMU,
       cx: box.w * EMU,
       cy: box.h * EMU,
@@ -634,7 +636,10 @@ export function lineArtDeck(dir: string): string {
     art(2, 'White line art', { x: 860, y: 380, w: 1000, h: 650 }, 'FFFFFF', 1) +
     art(3, 'Navy line art', { x: 60, y: 160, w: 1000, h: 650 }, '1F3864', 2) +
     art(4, 'Black line art', LINE_ART_BLACK_BOX, '000000', 0);
-  return zip(buildDeck({ slides: [{ bg: solidBg('C9D9EE'), shapes }] }), join(dir, 'Line art.pptx'));
+  return zip(
+    buildDeck({ slides: [{ bg: solidBg('C9D9EE'), shapes }] }),
+    join(dir, variant ? `Line art ${variant}.pptx` : 'Line art.pptx'),
+  );
 }
 
 // ---- the crowded deck (M9 decorations, decor-render) ----------------------------------------------------

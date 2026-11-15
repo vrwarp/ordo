@@ -237,6 +237,8 @@ export class LinkCore {
   private unitRefreshTimer?: ReturnType<typeof setTimeout>;
   /** Slide keys drawn with units left for a late job (`done.unitsLeft`), until all are reported made. */
   private lateParts = new Set<string>();
+  /** When the last re-draws with late parts reached the renderer (Date ms, by slide key; e2e and diagnostics). */
+  private lateDrawn = new Map<string, number>();
   private prevLiveSlide = '';
   /** Health: units made by the asset worker, slides shown with parts that came late, its unit-cache bytes. */
   private unitsMade = 0;
@@ -2153,12 +2155,19 @@ export class LinkCore {
           // Shown (live, or a GO hurried its arm) with parts left to a late job: they come in late.
           if (role === 'live' && !this.lateParts.has(m.key)) {
             this.unitsLate++;
-            this.diagLog(`${m.key.slice(0, 60)}: shown with ${m.unitsLeft} part(s) drawn late`);
+            this.diagLog(
+              `${m.key.slice(0, 60)}: shown with ${m.unitsLeft} part(s) drawn late (its job ${Math.round(m.ms)} ms: wait ${Math.round(m.waitMs ?? 0)}, busy ${Math.round(m.busyMs ?? 0)}, draw ${Math.round(m.rasterMs ?? 0)})`,
+            );
           }
           this.lateParts.add(m.key);
         } else this.lateParts.delete(m.key);
         // A refresh waiting for the GO's live job to be drawn may go now.
         if (role === 'live' && this.unitRefresh.size) this.requestSync();
+        if (role === 'late') {
+          this.lateDrawn.delete(m.key);
+          this.lateDrawn.set(m.key, Date.now());
+          if (this.lateDrawn.size > 8) this.lateDrawn.delete(this.lateDrawn.keys().next().value!);
+        }
         if (m.lane) this.laneStats.add(m.lane, m.waitMs ?? 0, m.busyMs ?? 0, m.longestMs ?? 0);
         this.errors.delete(m.key);
         this.unavailable.delete(m.key);
@@ -2502,6 +2511,7 @@ export class LinkCore {
         warmStopped: this.warmUnitsStopped,
         lateParts: [...this.lateParts],
         refresh: [...this.unitRefresh],
+        lateDrawn: Object.fromEntries(this.lateDrawn),
       },
       drawing: this.drawingSwitches,
       errors: Object.fromEntries([...this.errors].map(([k, v]) => [k, v.error])),
