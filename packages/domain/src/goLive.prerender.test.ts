@@ -12,6 +12,7 @@ import {
 import { ResolvedPlaylist } from './live.ts';
 import { type FileRef, type Media, type Presentation, type Slide, Slide as SlideSchema } from './schemas.ts';
 import type { SlideFileHead } from './slidefile.ts';
+import { GOLIVE_SLOW_BYTES, resolvedBytes } from './size.ts';
 
 /*
  * design/29 §1.7: goLive lists each pre-rendered slide's picture rows and the service's key set, puts slide heads
@@ -247,8 +248,11 @@ describe('goLive: pre-rendered slides (design/29 §1.7)', () => {
     }
     const r = go(inputs([pres('p', 'Line art', slides)], { file: (x) => files.get(x) }));
     expect(r.files).toHaveLength(GOLIVE_GEOM_FILES_MAX);
+    // 21,000 shapes also pass the GO-lead size (golive-prepare's W59), which follows the cap's line.
+    expect(resolvedBytes(r)).toBeGreaterThan(GOLIVE_SLOW_BYTES);
     expect(r.degraded?.map((d) => d.reason)).toEqual([
       'Some slides near the end of this service are shown without their full detail: it has more files than ordo sends at once. Split the playlist into two services.',
+      'Going live with this service takes a few seconds on the screens. Go live before the service starts.',
     ]);
     expect(r.degraded?.[0]?.cueIndex).toBe(-1);
     expect(DEGRADED_MAX).toBeGreaterThan(1);
