@@ -1,4 +1,5 @@
-import { canonicalJson, Palette, paletteIndex } from './palette.ts';
+import { cellStyleOf, cellTextStyle } from './cellstyle.ts';
+import { Palette, paletteIndex } from './palette.ts';
 import {
   type Box,
   type CellStyle,
@@ -96,51 +97,12 @@ export function placeCells(t: Pick<TableData, 'rows' | 'cols' | 'cells'>): Table
 
 // ── Cell views ──────────────────────────────────────────────────────────────────────────────────────────
 
-/** The text style keys a cell style sets over `base` as they are (the others are mapped: `align`). */
-const PLAIN_KEYS = [
-  'fontFamily',
-  'fontWeight',
-  'fontSizePx',
-  'color',
-  'insets',
-  'lang',
-  'fallbackFonts',
-  'fontStyle',
-  'valign',
-  'direction',
-] as const satisfies readonly (keyof CellStyle & keyof TextStyle)[];
-
-/**
- * The text box style a cell is drawn in: `base` with the cell style's fields over it. A cell never shrinks
- * its text (its row grows instead), so the style has no autofit; a cell aligned 'justify' is left aligned and
- * justified, one aligned otherwise is not justified.
+/*
+ * A cell's text box style and its style entry: the one mapping lives in the pure `cellstyle.ts` (the PowerPoint
+ * converter writes each cell's entry with it, `@ordo/pptx-scene` admitting only such domain modules); the
+ * table model reads it back with the same functions.
  */
-export function cellTextStyle(base: TextStyle, s: CellStyle | undefined): TextStyle {
-  const out: TextStyle = { ...base };
-  delete out.autofit;
-  delete out.fitScale;
-  if (!s) return out;
-  const w = out as Record<string, unknown>;
-  for (const k of PLAIN_KEYS) if (s[k] !== undefined) w[k] = s[k];
-  if (s.align !== undefined) {
-    out.align = s.align === 'justify' ? 'left' : s.align;
-    if (s.align === 'justify') out.justify = true;
-    else delete out.justify;
-  }
-  return out;
-}
-
-/** The cell style that makes `style` over `base` (`cellTextStyle`'s inverse), keeping `vert` as given. */
-export function cellStyleOf(base: TextStyle, style: TextStyle, vert?: CellStyle['vert']): CellStyle {
-  const out: CellStyle = {};
-  const w = out as Record<string, unknown>;
-  for (const k of PLAIN_KEYS)
-    if (style[k] !== undefined && canonicalJson(style[k]) !== canonicalJson(base[k])) w[k] = style[k];
-  const align = (s: TextStyle) => (s.justify ? 'justify' : s.align);
-  if (align(style) !== align(base)) out.align = align(style);
-  if (vert !== undefined && vert !== 'horz') out.vert = vert;
-  return out;
-}
+export { CELL_TEXT_KEYS, cellStyleOf, cellTextStyle } from './cellstyle.ts';
 
 /** A cell's text as a rich text body: its text, its style, its runs and its paragraph styles. */
 export type CellRich = {

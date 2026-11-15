@@ -7,8 +7,7 @@ import type { CellStyle, TextStyle } from './schemas.ts';
  * and edited in. Pure and free of the zod schemas at run time (types only), so the PowerPoint converter
  * (`@ordo/pptx-scene`, whose purity test admits only such domain modules) writes each cell's entry with the
  * same inverse the domain's table model reads it back with (`table.ts` `cellTextStyle`, `cellStyleOf`,
- * `cellRich`). `table.ts` keeps the same two functions (tested equal in `cellstyle.test.ts`) until it
- * re-exports these.
+ * `cellRich`); `table.ts` re-exports these, so there is one mapping.
  */
 
 /** The text style keys a cell style sets over `base` as they are (the others are mapped: `align`). */

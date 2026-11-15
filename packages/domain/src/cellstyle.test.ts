@@ -40,7 +40,9 @@ const ENTRIES: (CellStyle | undefined)[] = [
 ];
 
 describe('cell styles (cellstyle.ts, the pure module the converter writes entries with)', () => {
-  it("are the domain table model's: cellStyleOf and cellTextStyle agree with table.ts on every case", () => {
+  it("are the domain table model's: table.ts re-exports them, and they agree on every case", () => {
+    expect(table.cellStyleOf).toBe(cellStyleOf);
+    expect(table.cellTextStyle).toBe(cellTextStyle);
     for (const s of STYLES)
       for (const vert of [undefined, 'horz', 'vert', 'eaVert'] as const)
         expect(cellStyleOf(BASE, s, vert)).toEqual(table.cellStyleOf(BASE, s, vert));
