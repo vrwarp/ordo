@@ -33,11 +33,11 @@ coordinates in the data model), with the slide's background shown behind.
 
 Objects, in z-order, each selectable, movable, resizable, rotatable:
 
-| Object   | Properties                                                                                                                                                                                                                                |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Text box | Position, size, text, font family, size, weight, style, colour, alignment (horizontal and vertical), line height, letter spacing, outline (width, colour), shadow (offset, blur, colour), padding, fill colour and opacity, corner radius |
-| Image    | Position, size, media reference, fit (contain, cover, stretch), opacity, corner radius                                                                                                                                                    |
-| Shape    | Rectangle, ellipse, line, PowerPoint shapes (geometry shown read-only); fill (solid colour or gradient), stroke (width, colour, dash, arrowheads on open lines), shadow, opacity, corner radius                                           |
+| Object   | Properties                                                                                                                                                                                                                                    |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Text box | Position, size, text, font family, size, weight, style, colour, alignment (horizontal and vertical), line height, letter spacing, outline (width, colour), shadow (offset, blur, colour), padding, fill colour and opacity, corner radius     |
+| Image    | Position, size, media reference, fit (contain, cover, stretch), opacity, corner radius                                                                                                                                                        |
+| Shape    | Rectangle, ellipse, line, PowerPoint shapes (geometry shown read-only); fill (solid colour or gradient), stroke (width, colour, dash, arrowheads on open lines), shadow, opacity, corner radius                                               |
 | Table    | Position, size; each cell's text and its formatting (font, size, bold, italic, underline, colour, alignment), cell fill (solid colour or none), rows and columns added and deleted; merged cells, borders and column widths shown as imported |
 
 - Multiple text boxes per slide. The first text box of a song slide is the lyric box and

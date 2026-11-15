@@ -1381,6 +1381,7 @@ export function CanvasBackingTextEditor({
       s.inlineEditingId === target.objectId &&
       s.inlineEditingCell === target.cell,
   );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: another cell edited syncs the field again
   useLayoutEffect(() => {
     if (!editingCell) return;
     const r = useEditor.getState().textRange;

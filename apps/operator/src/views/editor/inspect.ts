@@ -1,5 +1,5 @@
 import type { Presentation } from '@ordo/domain';
-import { inlineTarget, useEditor } from './editorStore.ts';
+import { useEditor } from './editorStore.ts';
 
 /** What `window.__ordo.editor` reports: the open editor, for the end-to-end specs (e2e/editorhelpers.ts). */
 export type EditorInspect = {
@@ -35,7 +35,11 @@ export function inspectEditor(): EditorInspect {
     objectId: s.objectId,
     objectIds: [...s.objectIds],
     cell: s.cell,
-    inline: inlineTarget(s),
+    inline: s.inlineEditingId
+      ? s.inlineEditingCell === undefined
+        ? { objectId: s.inlineEditingId }
+        : { objectId: s.inlineEditingId, cell: s.inlineEditingCell }
+      : undefined,
     draft: s.draft ? structuredClone(s.draft) : undefined,
   };
 }
