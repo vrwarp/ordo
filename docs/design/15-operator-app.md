@@ -599,13 +599,16 @@ _A table (`ShapeObject.table`, design/27 M9) is edited cell by cell (`SlideCanva
   alignment; `TextControls.tsx`), without uppercase, the contrast menu or shrink-to-fit (a cell style holds
   none of them, domain `cellStyleOf`; a cell's row grows instead of its text shrinking), led by the cell's place
   ('Row 2, column 3'); with the whole table selected it says 'Table'. Both have 'Cell fill' (solid or none,
-  `setCellFill`: the selected cell, or every cell with none selected) and 'Rows & columns' (Row above, Row below,
+  `setCellFill`: the selected cell, or every cell with none selected; a fill they already have is no step) and 'Rows & columns' (Row above, Row below,
   Column left, Column right, Delete row, Delete column: around the selected cell, at the table's edges with none;
   each one undo step; disabled past `TABLE_LIMITS`, at the last row or column, and for a delete with no cell;
   the selection follows its cell). The panel's section has the cell's text field (`#ordo-text-editor`, which
   the canvas's inline editing types through while the panel is open; Ctrl+B, I and U format the selected
-  words), its font, size, Bold, Italic, colour and alignment, and the six row and column ops as buttons (44 px
-  under a finger). Not built: merging and splitting cells, borders, column widths, table styles.
+  words; a paste or cut in it goes through as typing, plain), the bar's text controls in a plain row, and the
+  six row and column ops as buttons, all 44 px under a finger (`.ed-cell-format`;
+  `e2e/ipad/table-targets.spec.ts`). On a tablet a tap on the selected table selects the cell, and a
+  double-tap opens the panel on its text. Not built: merging and splitting cells, borders, column widths,
+  table styles.
 - **Find & Replace and New slide like this.** Find & Replace searches and replaces in the cells of every
   unlocked table as in text boxes (`findInCells` in `ops/slides.ts`, the one place the find walks cells; a
   match carries its `cell`); the Find card lists a cell's match and opens it for editing on the canvas. 'New
@@ -698,7 +701,10 @@ Controls are 44 px with 16 px inputs (no focus zoom), the canvas-first editor's 
 list, and the Lyric Script's arrangement pills get 44 px back under a coarse pointer);
 `e2e/ipad/touch-targets.spec.ts` audits every visible control of the editor, the docked panel, the slides
 list, the paint picker and the Lyric Script in both orientations, the picker's 32 px swatch grid and the
-ramp's stop pins its named exceptions. The audit itself is `e2e/touchaudit.ts` (`auditTargets`); a phone's
+ramp's stop pins its named exceptions; `e2e/ipad/table-targets.spec.ts` does the same with a table's cell
+selected (its Table section: the cell's text, its format row, Cell fill, Rows & columns; `TABLE_TOOLS`, with
+the same exceptions, `TABLET_EXCEPTIONS`) in the three tablet projects. The audit itself is
+`e2e/touchaudit.ts` (`auditTargets`); a phone's
 compact layout runs it on every compact route and sheet with links, `role="button"` and checkbox labels added
 and no exceptions (`layoutChecks` in `e2e/phone/phonehelpers.ts`, design/28 §8 "Layout"). In portrait the editor's property panel and the
 playlist's add panel move under the main pane. File pickers are a plain button to the native picker

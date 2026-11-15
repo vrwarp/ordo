@@ -2075,12 +2075,6 @@ input.color-hex-box {
   border-color: rgba(59, 130, 246, 0.35);
 }
 
-/* The Table section's cell format row (views/editor/TableTools.tsx): its icon buttons are 44 px targets. */
-@media (pointer: coarse) {
-  .ed-cell-format button {
-    min-width: 44px;
-  }
-}
 @media (pointer: coarse) {
   .color-pill-chip {
     width: 32px;
@@ -3019,4 +3013,17 @@ tr.rev-row-selected td {
 /* A dialog takes the focus when it opens (components/Dialog.tsx): no ring around the whole box. */
 .dialog:focus {
   outline: none;
+}
+
+/*
+ * The Table section's cell format row (views/editor/TableTools.tsx: the floating bar's text controls in the
+ * Object panel): 44 px targets under a finger, over the bar's compact sizes (so last in the file).
+ */
+@media (pointer: coarse) {
+  .ed-cell-format .row button,
+  .ed-cell-format .row select,
+  .ed-cell-format .stepper-box button {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }

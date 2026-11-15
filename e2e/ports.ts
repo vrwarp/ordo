@@ -172,6 +172,14 @@ export const PORT_TABLE = {
   },
   'phones-live-load': { offset: 345, count: 1, spec: 'phones-live-load.spec.ts', what: 'hub' },
   'phones-writes': { offset: 346, count: 1, spec: 'phones-writes.spec.ts', what: 'hub' },
+  // M9 wave r2b's specs: offsets 400-659.
+  'editor-table': { offset: 420, count: 1, spec: 'editor-table.spec.ts', what: 'hub' },
+  'ipad-table-targets': {
+    offset: 421,
+    count: 3,
+    spec: 'ipad/table-targets.spec.ts',
+    what: '0 webkit-ipad, 1 webkit-ipad-portrait, 2 chromium-tablet',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;
