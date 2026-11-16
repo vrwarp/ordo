@@ -3107,6 +3107,13 @@ be measured):
   golden-pptx w65_00H's 12 table slides (defaultTextStyle left at 120 % with 65 pt before, otherStyle centred
   at 100 %) 0.367-0.768 -> 0.784-0.981, w65_THREE 16 0.614 -> 0.963 (with the stored form under it); no other
   table slide of E moved. Both cell forms take it (the table object and the M6 group).
+- **`CONVERTER_VERSION` stays 2 through sub-wave 1b** (`version.ts`), although the stored form changed: it
+  marks the converter generation that writes the M9 fields, gates client scenes (a hub uses one only from its
+  own version) and is written to every stored slide, so a bump mid-wave would refuse every older operator's
+  scene and change what re-import and 'Make editable' see. The cost: an operator tab loaded from a sub-wave 1
+  hub can still send a version-2 scene whose tables are in the grown-row form, which a 1b hub stores as sent
+  (it draws as sub-wave 1's did; Re-import gives LibreOffice's form). Whether `CONVERTER_VERSION` moves with
+  the wave's one `APP_VERSION` bump is decided at the wave's end (owner question N1).
 <!-- /r2b:tables-form -->
 
 <!-- r2b:tables-cells -->
