@@ -1810,8 +1810,11 @@ wave's integration measures them: `regroup/r2b/integrate-1.md`).
   the job leaves it to the late job, which fades it in.)
 - _Tables (tables-conv):_ question 3 of the LibreOffice inventory stays open: on a hub with LibreOffice the 8
   dense table slides keep LibreOffice's page (the interim rule, §15 M9 "The table object imported"; the table
-  object missed the gate on all 8); vertical cells stay LibreOffice's art; the Korean bulletin's slide 20 is still
-  under blank (Latin punctuation and circled digits take the Korean face in LibreOffice).
+  object missed the gate on all 8). A hostile table at `TABLE_LIMITS` (60,000 characters in 6 cells of 10,000) draws
+  in 61-63 ms at 3840 (`bench:tables`, named there; 4,096 cells of 60,000 characters: 35-39 ms; the corpus's table
+  slides at most 43.5 ms): render-bounds' 20,000-character bound and pre-rendered big slides take it off the GO
+  path. Vertical cells stay LibreOffice's art; the Korean bulletin's slide 20 is still under blank (Latin
+  punctuation and circled digits take the Korean face in LibreOffice).
 <!-- /r2b:open-items -->
 
 ## 14. Testing and fidelity measurement

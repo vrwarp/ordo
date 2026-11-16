@@ -1,5 +1,5 @@
 import type { ShapeObject } from '@ordo/domain';
-import { bulletin, chart, masterGrid } from '../../bench/cases/table.ts';
+import { bulletin, chart, limitTable, masterGrid } from '../../bench/cases/table.ts';
 import { clampShapeObject } from '../shape.ts';
 import { currentFontEnv } from '../text/fonts.ts';
 import { measurerFor } from '../text/measure.ts';
@@ -9,7 +9,7 @@ import { clearTableCache, layoutTable, prepareTableLayout } from './layout.ts';
 /**
  * Browser side of table.browser.test.ts (design/27 M9 tables, §13's 50 ms task): in headless Chromium with a
  * real face, each of the bench's large tables (the 13,782-character chart, the 96-cell bulletin, the 640-cell
- * master grid) is prepared as the asset worker prepares it, in slices of 8 ms (`prepareTableLayout`), then
+ * master grid; the bench adds two at `TABLE_LIMITS`: 4,096 cells, or 6 cells of 10,000 characters) is prepared as the asset worker prepares it, in slices of 8 ms (`prepareTableLayout`), then
  * drawn at 3840: every slice and the draw must stay within the 50 ms task. The chart is drawn in words its
  * page has not measured before (as an output's first draw of a slide).
  */
@@ -27,7 +27,7 @@ export type TableTiming = {
   height: number;
 };
 
-async function run(face: ArrayBuffer): Promise<TableTiming[]> {
+async function run(face: ArrayBuffer, limits: boolean): Promise<TableTiming[]> {
   const f = new FontFace('Bench', face);
   await f.load();
   document.fonts.add(f);
@@ -39,11 +39,18 @@ async function run(face: ArrayBuffer): Promise<TableTiming[]> {
   // Each table in words no other has (`vocab`), so its widths are measured for the first time, as on an
   // output drawing a slide first: once whole (cold), once in slices (another vocabulary, as cold).
   let vocab = 1;
-  for (const [name, make] of [
+  const tables: [string, (vocab: number) => ShapeObject][] = [
     ['13,782-character chart', (v: number) => chart(v)],
     ['96-cell bulletin', () => bulletin()],
     ['640-cell master grid', () => masterGrid()],
-  ] as [string, (vocab: number) => ShapeObject][]) {
+  ];
+  // The bench's rows of tables at the clamp's limits (bench/tables.ts; the browser test keeps the corpus's).
+  if (limits)
+    tables.push(
+      ['table at TABLE_LIMITS (4,096 cells, 60,000 characters)', (v: number) => limitTable(v, 'grid')],
+      ['table at TABLE_LIMITS (6 cells of 10,000 characters)', (v: number) => limitTable(v, 'cells')],
+    );
+  for (const [name, make] of tables) {
     // Warm the code: a layout of a copy in a vocabulary of its own.
     clearTableCache();
     layoutTable(m, clampShapeObject(make(vocab++)), env);
@@ -83,5 +90,7 @@ async function run(face: ArrayBuffer): Promise<TableTiming[]> {
   return out;
 }
 
-(window as unknown as { __tables: (face: string) => Promise<TableTiming[]> }).__tables = (b64: string) =>
-  run(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer);
+(window as unknown as { __tables: (face: string, limits?: boolean) => Promise<TableTiming[]> }).__tables = (
+  b64: string,
+  limits = false,
+) => run(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer, limits);
