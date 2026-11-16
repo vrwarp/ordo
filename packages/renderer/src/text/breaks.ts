@@ -24,6 +24,14 @@ import LineBreaker from 'linebreak';
  *   clusters (`Intl.Segmenter`) joined across a conjunct-forming virama, so Tamil 'க்ஷி' and Kannada
  *   'ಕ್ಷಿ' stay whole whatever Unicode version the browser's segmenter has.
  *
+ * - Office text (`office`: `TextStyle.lineModel` 'office', imported PowerPoint text and table cells, and the
+ *   converter's table measure): LibreOffice's breaks where they differ from UAX#14, as its pages show them
+ *   (LibreOffice 24.2, the text-lines probe deck): a line may end after a hyphen-minus before a digit
+ *   ('John 3:16-' / '17', LB25 'HY × NU' would not), after the spaces between a quotation mark and an
+ *   opening bracket ('“every month” ' / '[offerings]', LB15 of Unicode 15.0 'QU SP* × OP' would not), and
+ *   never after a slash before a letter or digit ('https://books.google.as/books' stays whole, where
+ *   UAX#14 allows 'SY ÷ AL'). Ordo's own text (songs, scripture, slides made in ordo) keeps UAX#14.
+ *
  * Breaks never depend on the font or the device size: the same text breaks at the same offsets in every
  * drawer, and lines.ts only chooses among them by width.
  */
@@ -46,9 +54,16 @@ export function isBreakSpace(c: number): boolean {
 /**
  * Offsets b with start < b < end where a line may end before `text[b]`, ascending. The paragraph's end
  * is always a (mandatory) break and is not listed. A mandatory break inside the paragraph (U+2028, a lone
- * CR) is listed as an ordinary opportunity: paragraphs are the '\n' pieces of the text.
+ * CR) is listed as an ordinary opportunity: paragraphs are the '\n' pieces of the text. `office`: the office
+ * rules of imported text (header), else UAX#14 as it is.
  */
-export function breakOpportunities(text: string, start: number, end: number, lang: string): number[] {
+export function breakOpportunities(
+  text: string,
+  start: number,
+  end: number,
+  lang: string,
+  office = false,
+): number[] {
   const out: number[] = [];
   if (end - start < 2) return out;
   const s = text.slice(start, end);
@@ -58,27 +73,80 @@ export function breakOpportunities(text: string, start: number, end: number, lan
     const p = b.position;
     const before = s.charCodeAt(p - 1);
     if (hangul && keepAll(s, p)) continue;
+    if (office && before === SLASH && letterOrDigitAt(s, p)) continue;
     if (p > 0 && !isGlue(before) && (!isGlue(s.charCodeAt(p)) || isBreakSpace(before))) out.push(start + p);
   }
-  if (!SA_BLOCK.test(s)) return out;
+  const extra = office ? officeBreaks(s) : NONE;
+  const merged = extra.length ? mergeSorted(out, extra, start) : out;
+  if (!SA_BLOCK.test(s)) return merged;
   const sa = saBreaks(s, lang);
-  if (!sa.length) return out;
+  if (!sa.length) return merged;
+  return mergeSorted(merged, sa, start);
+}
+
+const NONE: readonly number[] = [];
+
+/** `a` (offsets of the whole text) and `b` (offsets into the paragraph, `start` added), merged, ascending. */
+function mergeSorted(a: readonly number[], b: readonly number[], start: number): number[] {
   const merged: number[] = [];
   let i = 0;
   let j = 0;
-  while (i < out.length || j < sa.length) {
-    const a = out[i] ?? Number.POSITIVE_INFINITY;
-    const b = start + (sa[j] ?? Number.POSITIVE_INFINITY);
-    if (a <= b) {
-      merged.push(a);
+  while (i < a.length || j < b.length) {
+    const x = a[i] ?? Number.POSITIVE_INFINITY;
+    const y = start + (b[j] ?? Number.POSITIVE_INFINITY);
+    if (x <= y) {
+      merged.push(x);
       i++;
-      if (a === b) j++;
+      if (x === y) j++;
     } else {
-      merged.push(b);
+      merged.push(y);
       j++;
     }
   }
   return merged;
+}
+
+// ---- Office breaks: where LibreOffice's pages break and UAX#14 does not ----
+
+const SLASH = 0x2f;
+const HYPHEN_MINUS = 0x2d;
+/** A quotation mark: an initial or final quote (UAX#14 QU's Pi and Pf), '"' or "'". */
+const QUOTE = /[\p{Pi}\p{Pf}"']/u;
+/** An opening bracket (UAX#14 OP). */
+const OPENER = /\p{Ps}/u;
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+
+const isAsciiDigit = (c: number) => c >= 0x30 && c <= 0x39;
+
+/** Whether the code point at `s[p]` is a letter or a digit (a surrogate pair read whole). */
+function letterOrDigitAt(s: string, p: number): boolean {
+  const c = s.codePointAt(p);
+  return c !== undefined && LETTER_OR_DIGIT.test(String.fromCodePoint(c));
+}
+
+/**
+ * Offsets into `s` where LibreOffice 24.2 ends a line and UAX#14 (`linebreak` 1.1.0) does not, ascending (the
+ * text-lines probe deck, every case in text boxes and table cells, at 10, 12 and 18 pt):
+ * - after a hyphen-minus before an ASCII digit, whatever is before the hyphen ('3:16-|17', 'A-|1',
+ *   'x -|5'); never after one that starts the paragraph, and never after U+2212 (a minus sign), which
+ *   LibreOffice keeps with its number as UAX#14 does;
+ * - after the breaking spaces between a quotation mark of any kind and an opening bracket ('earth” |[“made',
+ *   'rock?” |(Num.', 'said “ |(aside)'); never without a space, and never at a no-break space (glue).
+ */
+function officeBreaks(s: string): number[] {
+  const out: number[] = [];
+  for (let p = 2; p < s.length; p++) {
+    const c = s.charCodeAt(p);
+    if (s.charCodeAt(p - 1) === HYPHEN_MINUS && isAsciiDigit(c)) {
+      out.push(p);
+      continue;
+    }
+    if (!isBreakSpace(s.charCodeAt(p - 1)) || !OPENER.test(s[p]!)) continue;
+    let q = p - 1;
+    while (q > 0 && isBreakSpace(s.charCodeAt(q - 1))) q--;
+    if (q > 0 && QUOTE.test(s[q - 1]!)) out.push(p);
+  }
+  return out;
 }
 
 // ---- Korean (keep-all) ----

@@ -213,6 +213,11 @@ export type Itemized = {
   /** `TextObject.text`. */
   text: string;
   paras: ItemPara[];
+  /**
+   * The box lays text out in the office line model (`TextStyle.lineModel` 'office': imported PowerPoint text,
+   * table cells): its paragraphs break by the office rules (breaks.ts `breakOpportunities`).
+   */
+  office?: true;
 };
 
 /** UAX#9 result for one paragraph (bidi.ts). */

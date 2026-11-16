@@ -202,6 +202,24 @@ describe('line breaking through layoutRich', () => {
     // The accent (10 px in the test measurer) never parts from its letter.
     expect(lineTexts(obj('ab\u{0301}cd'), 20)).toEqual(['a', 'b\u{0301}', 'cd']);
   });
+
+  it('breaks imported (office-model) text where LibreOffice does, and ordo text by UAX#14', () => {
+    // 1000 Years p1: 'Isa. 2:6-10, 24:21-' / '22'; Colossians: '“every month”' / '[offerings]'; Matthew: the
+    // address stays whole. 10 px a character: 160 px holds 'Read John 3:16-' (150) but not '...3:16-17'.
+    const office = { lineModel: 'office' as const, lineHeight: 1.2 };
+    const verse = 'Read John 3:16-17 today';
+    expect(lineTexts(obj(verse, {}, office), 160)).toEqual(['Read John 3:16-', '17 today']);
+    expect(lineTexts(obj(verse), 160)).toEqual(['Read John ', '3:16-17 today']);
+    const quote = 'the “every month” [offerings] given';
+    expect(lineTexts(obj(quote, {}, office), 190)).toEqual(['the “every month” ', '[offerings] given']);
+    expect(lineTexts(obj(quote), 190)).toEqual(['the “every ', 'month” [offerings] ', 'given']);
+    const url = 'see https://books.google.as/books?id=x';
+    expect(lineTexts(obj(url, {}, office), 300)).toEqual(['see ', 'https://books.google.as/books?', 'id=x']);
+    expect(lineTexts(obj(url), 300)).toEqual(['see https://books.google.as/', 'books?id=x']);
+    // A box's line model decides, whatever its paragraphs (prepare reads it from itemize).
+    expect(itemize(obj(verse, {}, office)).office).toBe(true);
+    expect(itemize(obj(verse)).office).toBeUndefined();
+  });
 });
 
 describe('style cuts inside clusters', () => {
