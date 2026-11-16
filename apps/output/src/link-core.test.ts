@@ -1463,6 +1463,64 @@ describe('link worker core: a GO never waits for drawing (r2b units-live, design
     t.close();
   });
 
+  it('a slide on screen whose late job stopped with parts left (another slide’s draw took the live units) is drawn again, which makes them; at most twice a showing, never off screen (repair 4)', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const key = jobOf(t.toAsset, 0)!.job.key;
+    done(t, key, { unitsLeft: 3, rasterMs: 30 });
+    done(t, jobOf(t.toAsset, 1)!.job.key);
+    await tick(20);
+    /** The late job's last report when it stopped: `left` parts not made. */
+    const stopped = (left: number, keys: string[] = []) =>
+      t.asset.port2.postMessage({
+        t: 'unitsReady',
+        layer: 1,
+        slideKey: key,
+        keys,
+        left,
+        ended: true,
+        stopped: true,
+      } satisfies FromAsset);
+    const redraws = () => slideJobs(t.toAsset).filter((m) => m.job.key === key);
+    // On screen all the same (a late re-draw of the slide before it ran after the GO): drawn again with a fade.
+    t.toAsset.length = 0;
+    stopped(3);
+    await tick(400);
+    expect(redraws()).toHaveLength(1);
+    expect(redraws()[0]!.role).toBe('late');
+    expect(redraws()[0]!.job).toMatchObject({ refresh: true, refreshFadeMs: 300 });
+    done(t, key, { unitsLeft: 3, rasterMs: 30 });
+    // Stopped again: once more, then no more this showing (nothing loops).
+    for (const expected of [1, 0]) {
+      t.toAsset.length = 0;
+      stopped(2);
+      await tick(400);
+      expect(redraws()).toHaveLength(expected);
+      if (expected) done(t, key, { unitsLeft: 2, rasterMs: 30 });
+    }
+    // A GO away: a stop reported then draws nothing (the slide is not on screen).
+    t.hub.emit('state', stateMsg({ ...slideLive(1, 3000), seq: 3 }));
+    await tick(30);
+    const next = jobOf(t.toAsset, 2);
+    if (next) done(t, next.job.key);
+    t.toAsset.length = 0;
+    stopped(2);
+    await tick(400);
+    expect(redraws()).toHaveLength(0);
+    // Shown again: drawn with its parts (its late parts), and a stop is answered again.
+    t.hub.emit('state', stateMsg({ ...slideLive(0, 5000), seq: 4 }));
+    await tick(400);
+    expect(redraws()).toHaveLength(1);
+    done(t, key, { unitsLeft: 2, rasterMs: 30 });
+    t.toAsset.length = 0;
+    stopped(2);
+    await tick(400);
+    expect(redraws()).toHaveLength(1);
+    t.close();
+  });
+
   it('20 units ready one after another give at most one refresh per 300 ms and none ahead of a GO’s raster', async () => {
     const t = setup();
     await t.core.start();

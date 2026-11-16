@@ -442,6 +442,13 @@ type SlideJob = Extract<AssetJob, { kind: 'slide' }>;
  * adds them, `grew`); those made, or found unmakeable, since its last report and when that was; and whether its
  * last report went (`ended`: nothing joins it after). A live job of another slide on the layer drops it: that
  * slide left the screen (shown again, the link draws it again, which starts a new late job).
+ *
+ * Its hold let go by the layer's chain while it runs (`keepUnits`, repair 4): by the live chain (another slide's
+ * hurried arm or fading re-draw, a restart's `units`), its slide left the screen, so it stops at its next turn
+ * (`stopped`) and reports its end, the parts it did not make left to the slide's next draw; by the armed chain
+ * (the next cue armed), its slide either went live by a GO to its armed cue, which the worker is not told, or left,
+ * so it keeps the hold itself (`owns`) until it ends or a draw of the slide takes it over. So what it made is never
+ * evicted before a re-draw copies it while it runs, and it never makes a part twice.
  */
 type LateJob = {
   layer: number;
@@ -453,12 +460,30 @@ type LateJob = {
   fresh: string[];
   last: number;
   ended: boolean;
+  /** `hold` is its own (let go by the layer's armed chain): released when it ends or hands it on. */
+  owns: boolean;
+  /** Its hold was let go by the layer's live chain: its slide left the screen, it makes nothing more. */
+  stopped: boolean;
+  /** A restart's `units` job not planned yet (`remakeUnits`): a draw of the slide meanwhile replaces it. */
+  pending?: boolean;
 };
 const lateJobs = new Map<string, LateJob>();
+/** The hold of a restart's `units` job until it is planned: pins nothing. */
+const NO_HOLD: UnitHold = { keys: new Set<string>(), release: () => undefined };
+/** Drop a late job from `lateJobs` (its lane job is cancelled by the caller): the hold it owns is let go. */
+function dropLate(slideKey: string, late: LateJob): void {
+  if (lateJobs.get(slideKey) === late) lateJobs.delete(slideKey);
+  if (late.owns) {
+    late.owns = false;
+    late.hold.release();
+  }
+}
 /**
  * Rounds of making one lane job of a late job takes at most (each bounded by `UNIT_WAIT_MS`). While its last round
- * made some, the late job goes on in a new lane job, after the late work queued meanwhile (the slide's parts are
- * never left unmade because rounds ran out: repair 3); a round that makes nothing ends it.
+ * made one of its parts (or found one unmakeable, or a draw added some), the late job goes on in a new lane job,
+ * after the late work queued meanwhile (the slide's parts are never left unmade because rounds ran out: repair 3);
+ * a round that made none of them ends it. Units it makes again that are not its parts (evicted after it made them)
+ * never count (repair 4): so it goes on at most once per part, and every round makes one or ends it.
  */
 const LATE_ROUNDS = 4;
 const lateKey = (slideKey: string) => `lu|${slideKey}`;
@@ -467,9 +492,9 @@ const lateKey = (slideKey: string) => `lu|${slideKey}`;
  * One lane job of `late` (see `LateJob`): make its parts in rounds, pinned into its hold, reporting them with
  * `unitsReady` at most once per `REFRESH_FADE_MS` while some remain and after each round, a part found unmakeable
  * as one drawn differently now (renderer units.ts `unitUnmade`: a decoration is then drawn directly). Its last
- * report says `ended` (all made, a round that made nothing, or an error; `left` the parts it did not make), so
- * the link never waits for parts no job makes. A cancelled job reports nothing. None with `?late=next`: the
- * slide's next draw copies them.
+ * report says `ended` (all made, a round that made none of its parts, stopped, or an error; `left` the parts it did
+ * not make), so the link never waits for parts no job makes. A cancelled or replaced job reports nothing. None with
+ * `?late=next`: the slide's next draw copies them.
  */
 async function lateUnits(job: SlideJob, late: LateJob, scale: number, steps: Steps): Promise<void> {
   const host = jobHost(steps);
@@ -500,12 +525,14 @@ async function lateUnits(job: SlideJob, late: LateJob, scale: number, steps: Ste
         keys: late.fresh,
         left: outstanding.size,
         ...(last ? { ended: true as const } : {}),
+        ...(last && late.stopped && outstanding.size ? { stopped: true as const } : {}),
       });
     late.fresh = [];
     late.last = performance.now();
   };
-  const made = unitJob(host, {
-    stop: () => false,
+  unitJob(host, {
+    // Stopped (its slide left the screen): the unit it is making is abandoned at its next turn.
+    stop: () => late.stopped,
     // A unit whose making failed is not tried again by its late job (one failing slowly would use up each round).
     skip: (k) => unitUnmade(k),
     onUnit: (k) => {
@@ -520,24 +547,33 @@ async function lateUnits(job: SlideJob, late: LateJob, scale: number, steps: Ste
   let more = false;
   try {
     let progressed = true;
-    for (let round = 0; round < LATE_ROUNDS && outstanding.size && progressed && !late.ended; round++) {
+    const going = () => outstanding.size > 0 && !late.ended && !late.stopped;
+    for (let round = 0; round < LATE_ROUNDS && progressed && going(); round++) {
       // Pinned with the slide's last draw (a draw meanwhile hands its hold on).
       holdInto(host, late.hold);
       late.grew = false;
-      const made0 = made.made.length;
       const left0 = outstanding.size;
       await prepareSlides({ slides: jobSlides(job), scale, look: job.look }, host);
       flush();
-      progressed = made.made.length > made0 || outstanding.size !== left0 || late.grew;
+      // Only its own parts count: a unit made again after it was evicted is not one (repair 4).
+      progressed = outstanding.size < left0 || late.grew;
     }
-    more = progressed && outstanding.size > 0 && !late.ended;
+    more = progressed && going();
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     timer = undefined;
-    if (more && !steps.cancelled && lateJobs.get(job.key) === late) pushLate(job, late, scale);
+    const current = lateJobs.get(job.key) === late;
+    if (more && !steps.cancelled && current) pushLate(job, late, scale);
     else {
-      if (lateJobs.get(job.key) === late) lateJobs.delete(job.key);
-      flush(true);
+      // Replaced by a newer late job of the slide (this one stopped): only that one reports.
+      if (current) {
+        lateJobs.delete(job.key);
+        flush(true);
+      } else late.ended = true;
+      if (late.owns) {
+        late.owns = false;
+        late.hold.release();
+      }
     }
   }
 }
@@ -559,11 +595,18 @@ function pushLate(job: SlideJob, late: LateJob, scale: number): void {
  */
 function lateFor(job: SlideJob, left: readonly string[], hold: UnitHold): void {
   const running = lateJobs.get(job.key);
-  if (running && !running.ended) {
+  // A restart's `units` job not planned yet: this draw does what it would (its parts left go to a late job).
+  if (running?.pending) lateJobs.delete(job.key);
+  else if (running && !running.ended && !running.stopped) {
     if (running.hold !== hold) {
-      holdKeys(hold, running.hold.keys);
+      const old = running.hold;
+      holdKeys(hold, old.keys);
       running.hold = hold;
       if (running.host) holdInto(running.host, hold);
+      if (running.owns) {
+        running.owns = false;
+        old.release();
+      }
     }
     for (const k of left)
       if (!running.outstanding.has(k)) {
@@ -581,6 +624,8 @@ function lateFor(job: SlideJob, left: readonly string[], hold: UnitHold): void {
     fresh: [],
     last: performance.now(),
     ended: false,
+    owns: false,
+    stopped: false,
   };
   lateJobs.set(job.key, late);
   pushLate(job, late, width / LOGICAL_WIDTH);
@@ -592,26 +637,44 @@ function lateFor(job: SlideJob, left: readonly string[], hold: UnitHold): void {
  * this worker has ready pinned as the layer's hold of `role` (as a draw of it would), the rest made as by a late
  * job and reported; nothing drawn (a re-draw now would draw the parts made before as their stand-ins). Found all
  * made (the warm-up): reported at once, so the link draws it with them.
+ *
+ * It is the slide's late job (`late`, pending) from the message on, so a live job of another slide on the layer
+ * drops it, queued or planning, as any late job (repair 4); a draw of the slide meanwhile replaces it. Planned, it
+ * takes the layer's hold of `role` only while no other job took it since the message (`seq`): taken on the live
+ * chain, its slide left the screen and nothing is made or kept; on the armed chain, it keeps its hold itself.
  */
-async function remakeUnits(job: SlideJob, role: 'live' | 'armed', steps: Steps): Promise<void> {
-  const running = lateJobs.get(job.key);
-  if (running && !running.ended) return;
+async function remakeUnits(
+  job: SlideJob,
+  role: 'live' | 'armed',
+  late: LateJob,
+  seq: number,
+  steps: Steps,
+): Promise<void> {
   const scale = width / LOGICAL_WIDTH;
-  const prep = await prepare(job, scale, steps, { key: lateKey(job.key), stop: () => true });
-  keepUnits(`layer ${job.layer} ${role}`, prep.units);
-  const again = lateJobs.get(job.key);
-  if (again && !again.ended) return;
+  const chain = `layer ${job.layer} ${role}`;
+  const gone = () => steps.cancelled || lateJobs.get(job.key) !== late;
+  if (gone()) return;
+  let prep: Awaited<ReturnType<typeof prepare>>;
+  try {
+    prep = await prepare(job, scale, steps, { key: lateKey(job.key), stop: () => true });
+  } catch (err) {
+    if (lateJobs.get(job.key) === late) lateJobs.delete(job.key);
+    throw err;
+  }
+  const taken = (heldSeq.get(chain) ?? 0) !== seq;
+  if (gone() || (taken && role === 'live')) {
+    prep.units.release();
+    if (lateJobs.get(job.key) === late) lateJobs.delete(job.key);
+    return;
+  }
+  late.pending = false;
+  late.hold = prep.units;
+  if (taken) late.owns = true;
+  else keepUnits(chain, prep.units);
   const left = prep.made?.left ?? [];
-  const late: LateJob = {
-    layer: job.layer,
-    hold: prep.units,
-    outstanding: new Set(left),
-    grew: false,
-    fresh: left.length ? [] : [...prep.units.keys],
-    last: performance.now(),
-    ended: false,
-  };
-  lateJobs.set(job.key, late);
+  for (const k of left) late.outstanding.add(k);
+  late.fresh = left.length ? [] : [...prep.units.keys];
+  late.last = performance.now();
   await lateUnits(job, late, scale, steps);
 }
 
@@ -709,11 +772,30 @@ async function warmUnits(w: NonNullable<typeof warmList>, steps: Steps): Promise
  * let go when the next job of the same kind holds its own.
  */
 const heldUnits = new Map<string, UnitHold>();
+/** How many holds each chain kept so far (a restart's `units` job takes its chain only while it is unchanged). */
+const heldSeq = new Map<string, number>();
 
+/**
+ * Keep `hold` as `chain`'s, letting the older one go. A late job still pinning into the older one (`LateJob`): on a
+ * layer's live chain it stops (its slide left the screen), on any other it keeps that hold itself until it ends.
+ */
 function keepUnits(chain: string, hold: UnitHold): void {
   const old = heldUnits.get(chain);
   heldUnits.set(chain, hold);
-  if (old !== hold) old?.release();
+  heldSeq.set(chain, (heldSeq.get(chain) ?? 0) + 1);
+  if (!old || old === hold) return;
+  const live = chain.endsWith(' live');
+  for (const [k, late] of lateJobs) {
+    if (late.hold !== old || late.ended || late.stopped || late.owns) continue;
+    if (live) {
+      late.stopped = true;
+      endTurnWaits([lateKey(k)]);
+    } else {
+      late.owns = true;
+      return;
+    }
+  }
+  old.release();
 }
 
 /** Missing families a 'done' message reports: as many as the link keeps (FromAsset, protocol health). */
@@ -1140,7 +1222,7 @@ function onJobMessage(m: ToAsset): void {
         const gone: string[] = [];
         for (const [k, l] of lateJobs)
           if (l.layer === job.layer && k !== job.key) {
-            lateJobs.delete(k);
+            dropLate(k, l);
             gone.push(lateKey(k));
           }
         if (gone.length) {
@@ -1183,13 +1265,29 @@ function onJobMessage(m: ToAsset): void {
       // After an asset worker restart: a held slide's parts made again before it is drawn again.
       const job = m.job;
       const running = lateJobs.get(job.key);
-      if (job.kind !== 'slide' || (running && !running.ended)) return;
+      if (job.kind !== 'slide' || (running && !running.ended && !running.stopped)) return;
+      // Its slide's late job from now on (pending until planned): a live job of another slide drops it.
+      const late: LateJob = {
+        layer: job.layer,
+        hold: NO_HOLD,
+        outstanding: new Set(),
+        grew: false,
+        fresh: [],
+        last: performance.now(),
+        ended: false,
+        owns: false,
+        stopped: false,
+        pending: true,
+      };
+      lateJobs.set(job.key, late);
+      const role = m.role;
+      const seq = heldSeq.get(`layer ${job.layer} ${role}`) ?? 0;
       lanes.push({
         key: lateKey(job.key),
         chain: 'late',
         rank: RANK.late,
         gate: fonts$,
-        run: (s) => remakeUnits(job, m.role, s),
+        run: (s) => remakeUnits(job, role, late, seq, s),
       });
       return;
     }

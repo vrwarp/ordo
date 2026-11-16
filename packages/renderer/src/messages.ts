@@ -320,8 +320,19 @@ export type FromAsset =
    * unit could not be drawn: a decoration is then drawn directly, renderer units.ts `unitUnmade`). `ended`: the
    * late job's last report (a late job that is not cancelled ends with one; a later draw that leaves parts
    * queues another), `left` then the parts it did not make; the link no longer waits for them (repair 3).
+   * `stopped` (with `ended` and `left`): the job stopped before making them, its hold taken by another slide's
+   * draw on the layer's live chain (that slide is on screen now, as far as the worker knows); a draw of this
+   * slide makes them in a new late job, which the link sends if this slide is on screen all the same (repair 4).
    */
-  | { t: 'unitsReady'; layer: number; slideKey: string; keys: string[]; left: number; ended?: true }
+  | {
+      t: 'unitsReady';
+      layer: number;
+      slideKey: string;
+      keys: string[];
+      left: number;
+      ended?: true;
+      stopped?: true;
+    }
   /** The drawing switches the worker applied from its `init` (diagnostics). */
   | { t: 'drawing'; switches: DrawingSwitches }
   /** Warm-up made (or found) the units of the playlist's cue `cueIndex` (`ready` of the plan's `units`). */

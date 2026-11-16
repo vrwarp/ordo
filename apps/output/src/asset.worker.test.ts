@@ -90,6 +90,8 @@ const GEOM_FILES = new Map([
   [GEOM_READ, JSON.stringify({ paths: [{ d: 'M 0 0 L 10 0 L 10 10 Z', w: 10, h: 10 }] })],
   [GEOM_WARM, JSON.stringify({ paths: [{ d: 'M 0 0 L 10 0 L 0 10 Z', w: 10, h: 10 }] })],
 ]);
+/** Geometry files the hub serves only once their gate opens (a slow read: a job reading one waits there). */
+const slowGeoms = new Map<string, Promise<void>>();
 
 /** A 2D context that logs fillText and drawImage on `rec` (every glyph is 10 device px wide). */
 function fakeCtx(rec: { ops: string[]; drawn: FakeBitmap[] }) {
@@ -242,7 +244,9 @@ beforeAll(async () => {
   vi.stubGlobal('fetch', async (url: string) => {
     const hash = /files\/([^?]+)/.exec(url)?.[1] ?? '';
     if (hash === GEOM_GONE) return { status: 404, ok: false, blob: async () => ({}) };
-    const json = GEOM_FILES.get(hash);
+    const gate = slowGeoms.get(hash);
+    if (gate) await gate;
+    const json = gate ? GEOM_FILES.get(GEOM_READ) : GEOM_FILES.get(hash);
     if (json)
       return { status: 200, ok: true, blob: async () => ({ size: json.length, text: async () => json }) };
     // A file's head (opaque.ts reads it): a .jpg starts with the JPEG marker, anything else is unknown.
@@ -1030,7 +1034,11 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
     return { ...base, id, objects: [{ ...o, box: { ...o.box, x: o.box.x + dx } }] };
   };
   const readyOf = (key: string) => ready().filter((r) => r.slideKey === key);
-  /** `many` moved by `dx` logical px: units of its own (`many` alone gives every test the same units). */
+  /**
+   * `many` moved by `dx` logical px: units of its own (`many` alone gives every test the same units). Its first
+   * eight copies get units (one frame's area), at phases i / 16 + dx / 2 device px: two slides share none while
+   * their `dx` differ by other than a multiple of 1/8 (repair 4's slides: odd multiples of 1/256).
+   */
   const manyAt = (id: string, n: number, dx: number): Slide => {
     const s = many(id, n);
     return { ...s, objects: s.objects.map((o) => ({ ...o, box: { ...o.box, x: o.box.x + dx } })) };
@@ -1259,6 +1267,396 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
     expect(readyOf('sl|remade')[0]!.keys.sort()).toEqual(units.map((u) => u.key).sort());
     expect(rendered).toEqual([]);
   });
+
+  /** Units of other slides pinned (their holds), as fillers: the cache keeps room for `share` of `units`' bytes. */
+  const fillers: string[] = [];
+  const pressure = (units: readonly { bytes: number }[], share = 0.6) => {
+    const total = units.reduce((n, u) => n + u.bytes, 0);
+    const each = (UNIT_CACHE_BYTES - Math.round(total * share)) / 3;
+    for (let i = 0; i < 3; i++) {
+      const k = `filler-${fillers.length}`;
+      fillers.push(k);
+      unitCache.pin('unit', k);
+      unitCache.set('unit', k, {
+        source: {} as CanvasImageSource,
+        w: 1,
+        h: 1,
+        bytes: each,
+        close: () => undefined,
+      } as never);
+    }
+  };
+  afterEach(() => {
+    for (const k of fillers.splice(0)) {
+      unitCache.unpin('unit', k);
+      unitCache.delete('unit', k);
+    }
+  });
+  /** A live job of another slide on layer 1: it drops every late job of the layer (a test that failed leaves none). */
+  const dropLate = (id: string) =>
+    send({
+      t: 'job',
+      job: slideJob({
+        slide: { id, objects: [] },
+        images: {},
+        video: undefined,
+        key: `sl|${id}`,
+        cueIndex: 9,
+      }),
+      role: 'live',
+    });
+  const madeSince = (w0: number) => unitWork().made - w0;
+  const doneOf = (key: string) => replies.filter((r) => r.t === 'done' && r.key === key);
+
+  it('a hurried GO away stops the late job of the slide that left the screen, under cache pressure too: it ends, makes no part twice, and bulk work gets its turn (repair 4)', async () => {
+    const s = manyAt('gone', 20, 0.00390625);
+    const units = unitsOf(s);
+    expect(units.length).toBeGreaterThanOrEqual(8);
+    // The other slides' units pinned leave room for 60% of this slide's: once its hold is let go, each unit its
+    // late job made would evict an earlier one, which a round made again (36f06d2: 70,000 units in 6 s, no end).
+    pressure(units);
+    // 120 ms of the clock a unit step: a round of UNIT_WAIT_MS makes a few units.
+    timed(120);
+    rendered.length = 0;
+    replies.length = 0;
+    const w0 = unitWork().made;
+    try {
+      // The slide goes live by a jump: drawn at once, its parts left to its late job ...
+      send({
+        t: 'job',
+        job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|gone' }),
+        role: 'live',
+      });
+      // ... and the operator GOes on to the next cue while its arm runs: the link hurries it (no live job is
+      // sent), and the hurried job holds the layer's live units now.
+      const next: Slide = { id: 'gone-next', objects: [] };
+      send({
+        t: 'job',
+        job: slideJob({ slide: next, images: {}, video: undefined, key: 'sl|gone-next' }),
+        role: 'armed',
+      });
+      send({ t: 'hurry', keys: ['sl|gone-next'] });
+      await vi.waitFor(() => expect(readyOf('sl|gone').some((r) => r.ended)).toBe(true), { timeout: 10_000 });
+      const made = madeSince(w0);
+      // It stopped with parts left, which the slide's next draw makes (the link sends one if the slide is on
+      // screen all the same); none was made twice.
+      expect(readyOf('sl|gone').at(-1)).toMatchObject({ ended: true, stopped: true });
+      expect(readyOf('sl|gone').at(-1)!.left).toBeGreaterThan(0);
+      expect(made).toBeLessThanOrEqual(units.length);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(madeSince(w0)).toBe(made);
+      // Bulk work gets its turn: the pictures of the cue after the armed one (36f06d2: no answer in 8 s).
+      send({
+        t: 'warm',
+        warm: { key: 'wm|after-gone', slide: { id: 'after', objects: [] }, look: LOOK_MAIN, images: {} },
+      });
+      await vi.waitFor(
+        () => expect(replies.some((r) => r.t === 'warmed' && r.key === 'wm|after-gone')).toBe(true),
+        { timeout: 2_000 },
+      );
+    } finally {
+      dropLate('gone-stop');
+    }
+  }, 30_000);
+
+  it('the next arm lets go of the hold of a slide whose late job runs (it may be on screen by a GO to its armed cue): the job keeps it and makes each part once, under cache pressure too (repair 4)', async () => {
+    const s = manyAt('armed-away', 20, 0.01171875);
+    const units = unitsOf(s);
+    pressure(units);
+    timed(120);
+    rendered.length = 0;
+    replies.length = 0;
+    const w0 = unitWork().made;
+    const key = 'sl|armed-away';
+    try {
+      // The slide armed: its arm waits UNIT_WAIT_MS and is drawn with the rest left to its late job.
+      send({ t: 'job', job: slideJob({ slide: s, images: {}, video: undefined, key }), role: 'armed' });
+      // A GO to it (drawn already: the worker is told nothing) and the next cue armed at once: the layer's armed
+      // units are that cue's now, and no re-draw of the slide has come yet.
+      const next: Slide = { id: 'armed-away-next', objects: [] };
+      send({
+        t: 'job',
+        job: slideJob({ slide: next, images: {}, video: undefined, key: 'sl|armed-away-next' }),
+        role: 'armed',
+      });
+      await vi.waitFor(() => expect([...doneOf(key), ...doneOf('sl|armed-away-next')]).toHaveLength(2), {
+        timeout: 5_000,
+      });
+      const left = (doneOf(key)[0] as { unitsLeft?: number }).unitsLeft;
+      expect(left).toBeGreaterThan(0);
+      await vi.waitFor(() => expect(readyOf(key).some((r) => r.ended)).toBe(true), { timeout: 10_000 });
+      // Every part made, each once (none evicted while the job ran), and reported: its re-draw fades them in.
+      expect(readyOf(key).at(-1)).toMatchObject({ left: 0, ended: true });
+      expect(madeSince(w0)).toBe(units.length);
+      expect(readyOf(key).flatMap((r) => r.keys).length).toBe(left);
+      // Its hold let go at its end, the pressure takes the parts before that re-draw copies them: the re-draw
+      // leaves them again and its late job makes them, pinned with it while the slide is live; nothing more.
+      replies.length = 0;
+      send({
+        t: 'job',
+        job: slideJob({ slide: s, images: {}, video: undefined, key, refresh: true, refreshFadeMs: 300 }),
+        role: 'late',
+      });
+      await vi.waitFor(() => expect(readyOf(key).some((r) => r.ended)).toBe(true), { timeout: 10_000 });
+      expect((doneOf(key)[0] as { unitsLeft?: number }).unitsLeft).toBeGreaterThan(0);
+      expect(readyOf(key).at(-1)).toMatchObject({ left: 0, ended: true });
+      expect(madeSince(w0)).toBeLessThanOrEqual(2 * units.length);
+      unitCache.clear('unit');
+      expect(units.filter((u) => !unitReady(u)).map((u) => u.key)).toEqual([]);
+    } finally {
+      dropLate('armed-away-stop');
+    }
+  }, 30_000);
+
+  it('a stopped late job replaced by a new draw of its slide (shown again) says nothing more; the new one makes the parts (repair 4)', async () => {
+    const s = manyAt('again', 10, 0.07421875);
+    const units = unitsOf(s);
+    const busyOther = manyAt('again-other', 20, 0.08203125);
+    // A late job of another layer's slide keeps the late lane busy (60 ms of real time after each unit turn),
+    // so the slide's own late job is still queued when it stops.
+    init({ unitTurnMs: 60 });
+    rendered.length = 0;
+    replies.length = 0;
+    try {
+      send({
+        t: 'job',
+        job: slideJob({ slide: busyOther, images: {}, video: undefined, key: 'sl|again-other', layer: 2 }),
+        role: 'live',
+      });
+      await vi.waitFor(() => expect(doneOf('sl|again-other')).toHaveLength(1));
+      send({
+        t: 'job',
+        job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|again' }),
+        role: 'live',
+      });
+      await vi.waitFor(() => expect(doneOf('sl|again')).toHaveLength(1));
+      // A GO away (the next cue's arm hurried) stops its late job, still queued; a jump back draws it again.
+      const next: Slide = { id: 'again-next', objects: [] };
+      send({
+        t: 'job',
+        job: slideJob({ slide: next, images: {}, video: undefined, key: 'sl|again-next' }),
+        role: 'armed',
+      });
+      send({ t: 'hurry', keys: ['sl|again-next'] });
+      await vi.waitFor(() => expect(doneOf('sl|again-next')).toHaveLength(1));
+      send({
+        t: 'job',
+        job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|again' }),
+        role: 'live',
+      });
+      await vi.waitFor(() => expect(readyOf('sl|again').some((r) => r.ended)).toBe(true), {
+        timeout: 15_000,
+      });
+      // One end only, the new job's, with every part.
+      expect(readyOf('sl|again').filter((r) => r.ended)).toEqual([
+        expect.objectContaining({ left: 0, ended: true }),
+      ]);
+      expect(readyOf('sl|again').some((r) => r.stopped)).toBe(false);
+      expect(
+        readyOf('sl|again')
+          .flatMap((r) => r.keys)
+          .sort(),
+      ).toEqual(units.map((u) => u.key).sort());
+    } finally {
+      dropLate('again-stop');
+      send({
+        t: 'job',
+        job: slideJob({
+          slide: { id: 'again-l2', objects: [] },
+          images: {},
+          video: undefined,
+          key: 'sl|again-l2',
+          layer: 2,
+        }),
+        role: 'live',
+      });
+    }
+  }, 30_000);
+
+  it('a hold a late job kept itself is let go when the job is dropped: nothing of it stays pinned (repair 4)', async () => {
+    const s = manyAt('owned-drop', 20, 0.08984375);
+    const units = unitsOf(s);
+    const key = 'sl|owned-drop';
+    timed(120);
+    init({ unitTurnMs: 60 });
+    rendered.length = 0;
+    replies.length = 0;
+    // Armed, its parts left late; the next cue armed (the job keeps the hold); then a jump to another slide.
+    send({ t: 'job', job: slideJob({ slide: s, images: {}, video: undefined, key }), role: 'armed' });
+    await vi.waitFor(() => expect(doneOf(key)).toHaveLength(1), { timeout: 5_000 });
+    expect((doneOf(key)[0] as { unitsLeft?: number }).unitsLeft).toBeGreaterThan(0);
+    send({
+      t: 'job',
+      job: slideJob({
+        slide: { id: 'owned-next', objects: [] },
+        images: {},
+        video: undefined,
+        key: 'sl|owned-next',
+      }),
+      role: 'armed',
+    });
+    await vi.waitFor(() => expect(doneOf('sl|owned-next')).toHaveLength(1));
+    dropLate('owned-jump');
+    await vi.waitFor(() => expect(doneOf('sl|owned-jump')).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readyOf(key).some((r) => r.ended)).toBe(false);
+    // Its units are no longer pinned: a clear takes every one of them.
+    unitCache.clear('unit');
+    expect(units.filter((u) => unitReady(u)).map((u) => u.key)).toEqual([]);
+  }, 30_000);
+
+  it('a re-draw of the slide takes over the hold its late job kept: what it made stays pinned while the slide is live (repair 4)', async () => {
+    const s = manyAt('kept', 20, 0.01953125);
+    const units = unitsOf(s);
+    const key = 'sl|kept';
+    // The arm's wait runs on the test's clock (120 ms a step); 60 ms of real time after each unit turn keeps the
+    // late job making parts when the re-draw comes.
+    timed(120);
+    init({ unitTurnMs: 60 });
+    rendered.length = 0;
+    replies.length = 0;
+    const record = link.postMessage;
+    let next = false;
+    let redrawn = false;
+    link.postMessage = (m) => {
+      record(m);
+      // Armed and drawn: a GO to it (the worker is told nothing), then the next cue armed.
+      if (m.t === 'done' && m.key === key && !next) {
+        next = true;
+        send({
+          t: 'job',
+          job: slideJob({
+            slide: { id: 'kept-next', objects: [] },
+            images: {},
+            video: undefined,
+            key: 'sl|kept-next',
+          }),
+          role: 'armed',
+        });
+      }
+      // On screen: its first report draws it again with a fade, as the link does.
+      if (m.t === 'unitsReady' && m.slideKey === key && !redrawn) {
+        redrawn = true;
+        send({
+          t: 'job',
+          job: slideJob({ slide: s, images: {}, video: undefined, key, refresh: true, refreshFadeMs: 300 }),
+          role: 'late',
+        });
+      }
+    };
+    try {
+      send({ t: 'job', job: slideJob({ slide: s, images: {}, video: undefined, key }), role: 'armed' });
+      await vi.waitFor(() => expect(readyOf(key).some((r) => r.ended)).toBe(true), { timeout: 15_000 });
+      await vi.waitFor(() => expect(doneOf(key)).toHaveLength(2));
+      expect(redrawn).toBe(true);
+      expect((doneOf(key)[0] as { unitsLeft?: number }).unitsLeft).toBeGreaterThan(0);
+      // Memory pressure clears what is not pinned: the slide's parts stay for its next re-draw.
+      unitCache.clear('unit');
+      expect(units.filter((u) => !unitReady(u)).map((u) => u.key)).toEqual([]);
+    } finally {
+      link.postMessage = record;
+      dropLate('kept-stop');
+    }
+  }, 30_000);
+
+  /** `manyAt`'s slide with a shape whose geometry file the hub serves only once `open` is called. */
+  const slowSlide = (id: string, dx: number, hash: string) => {
+    let open: () => void = () => undefined;
+    slowGeoms.set(
+      hash,
+      new Promise<void>((r) => {
+        open = r;
+      }),
+    );
+    const s = manyAt(id, 10, dx);
+    const geom = {
+      id: `${id}-geom`,
+      type: 'shape',
+      box: box(100, 100, 40, 30),
+      shape: 'rect',
+      fill: { r: 255, g: 0, b: 0, a: 1 },
+      opacity: 1,
+      radius: 0,
+      geom: { ref: hash },
+    } as SlideObject;
+    return { slide: { ...s, objects: [geom, ...s.objects] }, open: () => open() };
+  };
+
+  it('a live job of another slide drops a restart’s `units` job still queued or planning: it makes nothing, the new slide’s units stay pinned (repair 4)', async () => {
+    const a = manyAt('remake-a', 10, 0.02734375);
+    const b = manyAt('remake-b', 10, 0.03515625);
+    const ub = unitsOf(b);
+    rendered.length = 0;
+    replies.length = 0;
+    // After a restart the link asks the new worker to make the live slide's parts ...
+    send({
+      t: 'units',
+      job: slideJob({ slide: a, images: {}, video: undefined, key: 'sl|ra' }),
+      role: 'live',
+    });
+    // ... and the operator jumps to another slide at once.
+    send({ t: 'job', job: slideJob({ slide: b, images: {}, video: undefined, key: 'sl|rb' }), role: 'live' });
+    await vi.waitFor(() => expect(readyOf('sl|rb').some((r) => r.ended)).toBe(true), { timeout: 10_000 });
+    await new Promise((r) => setTimeout(r, 100));
+    // 36f06d2: the first slide's parts were made and reported after it left, and its `units` job took the live
+    // slide's hold, so a clear left none of the new slide's parts.
+    expect(readyOf('sl|ra')).toEqual([]);
+    unitCache.clear('unit');
+    expect(ub.filter((u) => !unitReady(u)).map((u) => u.key)).toEqual([]);
+  }, 30_000);
+
+  it('a restart’s `units` job for the live slide makes nothing once another slide holds the layer’s live units: a GO hurried its arm meanwhile (repair 4)', async () => {
+    // The GO to another slide hurries that slide's arm while the `units` job reads a geometry file.
+    const a = slowSlide('remake-slow-a', 0.04296875, 'd'.repeat(64));
+    const b = manyAt('remake-slow-b', 10, 0.05078125);
+    const ub = unitsOf(b);
+    rendered.length = 0;
+    replies.length = 0;
+    send({
+      t: 'units',
+      job: slideJob({ slide: a.slide, images: {}, video: undefined, key: 'sl|rsa' }),
+      role: 'live',
+    });
+    send({
+      t: 'job',
+      job: slideJob({ slide: b, images: {}, video: undefined, key: 'sl|rsb' }),
+      role: 'armed',
+    });
+    send({ t: 'hurry', keys: ['sl|rsb'] });
+    // Drawn, it holds the layer's live units; then the geometry file comes.
+    await vi.waitFor(() => expect(doneOf('sl|rsb')).toHaveLength(1));
+    a.open();
+    await vi.waitFor(() => expect(readyOf('sl|rsb').some((r) => r.ended)).toBe(true), { timeout: 10_000 });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readyOf('sl|rsa')).toEqual([]);
+    unitCache.clear('unit');
+    expect(ub.filter((u) => !unitReady(u)).map((u) => u.key)).toEqual([]);
+  }, 30_000);
+
+  it('a restart’s `units` job for the armed slide, the next cue armed meanwhile: it makes and reports the parts with a hold of its own (the slide may be on screen by a GO), and the armed cue’s units stay pinned (repair 4)', async () => {
+    const c = slowSlide('remake-slow-c', 0.05859375, 'e'.repeat(64));
+    const d = manyAt('remake-slow-d', 10, 0.06640625);
+    const uc = unitsOf(c.slide);
+    const ud = unitsOf(d);
+    replies.length = 0;
+    send({
+      t: 'units',
+      job: slideJob({ slide: c.slide, images: {}, video: undefined, key: 'sl|rsc' }),
+      role: 'armed',
+    });
+    await runAs(slideJob({ slide: d, images: {}, video: undefined, key: 'sl|rsd' }), 'armed');
+    replies.length = 0;
+    c.open();
+    await vi.waitFor(() => expect(readyOf('sl|rsc').some((r) => r.ended)).toBe(true), { timeout: 10_000 });
+    expect(readyOf('sl|rsc').at(-1)).toMatchObject({ left: 0, ended: true });
+    expect(
+      readyOf('sl|rsc')
+        .flatMap((r) => r.keys)
+        .sort(),
+    ).toEqual(uc.map((u) => u.key).sort());
+    unitCache.clear('unit');
+    expect(ud.filter((u) => !unitReady(u)).map((u) => u.key)).toEqual([]);
+  }, 30_000);
 
   it('the drawing switches of the asset init reach the worker; ?unitTurnMs waits after each unit turn', async () => {
     init({ late: 'next', warm: false, effects: 'base', unitTurnMs: 30, other: 'ignored' });

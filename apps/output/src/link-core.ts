@@ -66,7 +66,7 @@ import type {
   WorkerName,
 } from './host-protocol.ts';
 import { LaneStats } from './lane-stats.ts';
-import { LATE_HOLD_MS, LATE_REDRAW_MAX_MS, REFRESH_FADE_MS } from './late.ts';
+import { LATE_HOLD_MS, LATE_REDRAW_MAX_MS, LATE_RESTARTS, REFRESH_FADE_MS } from './late.ts';
 import { SlotPair } from './media.ts';
 import { PerfHealth, perfDiagnostics } from './perf-health.ts';
 import {
@@ -245,6 +245,8 @@ export class LinkCore {
    * while any are and the job has not ended (`unitsReady.ended`).
    */
   private lateLeft = new Map<string, { left: number; at: number }>();
+  /** Slides drawn again this showing because their late job stopped with parts left (`LATE_RESTARTS`). */
+  private lateRestarts = new Map<string, number>();
   private unitRefreshTimer?: ReturnType<typeof setTimeout>;
   /** When `unitRefreshTimer` syncs (Date ms). */
   private unitRefreshAt = 0;
@@ -992,6 +994,7 @@ export class LinkCore {
     // again in place, which makes them late again (a new late job: the dropped one's count no longer holds it).
     if (live.slide.key !== this.prevLiveSlide) {
       this.prevLiveSlide = live.slide.key;
+      this.lateRestarts.delete(live.slide.key);
       if (this.lateParts.has(live.slide.key) && this.has(live.slide.key)) {
         this.lateLeft.delete(live.slide.key);
         this.unitRefresh.add(live.slide.key);
@@ -2199,6 +2202,7 @@ export class LinkCore {
         for (const k of this.unitRefresh) if (!this.has(k)) this.unitRefresh.delete(k);
         for (const k of this.lateParts) if (!this.has(k)) this.lateParts.delete(k);
         for (const k of this.lateLeft.keys()) if (!this.has(k)) this.lateLeft.delete(k);
+        for (const k of this.lateRestarts.keys()) if (!this.has(k)) this.lateRestarts.delete(k);
         for (const k of this.remake) if (!this.has(k)) this.remake.delete(k);
         for (const k of this.sceneVideo.keys()) if (!this.has(k)) this.sceneVideo.delete(k);
         this.requestSync();
@@ -2319,6 +2323,15 @@ export class LinkCore {
         else this.lateLeft.delete(m.slideKey);
         if (!this.has(m.slideKey)) return;
         if (m.keys.length) this.unitRefresh.add(m.slideKey);
+        // Stopped with parts left because another slide's draw took the layer's live units, this slide on screen
+        // all the same: drawn again, which makes them in a new late job (repair 4; at most LATE_RESTARTS a showing).
+        else if (m.ended && m.stopped && m.left && this.livePlan?.slide.key === m.slideKey) {
+          const n = this.lateRestarts.get(m.slideKey) ?? 0;
+          if (n < LATE_RESTARTS) {
+            this.lateRestarts.set(m.slideKey, n + 1);
+            this.unitRefresh.add(m.slideKey);
+          }
+        }
         this.requestSync();
         return;
       case 'unitsWarmed':

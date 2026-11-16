@@ -29,3 +29,11 @@ export const LATE_REDRAW_MAX_MS = 50;
  * A working late job reports at most every `REFRESH_FADE_MS` while it makes parts.
  */
 export const LATE_HOLD_MS = 1_000;
+
+/**
+ * A late job that stopped with parts left because another slide's draw took its layer's live units
+ * (`unitsReady.stopped`) while its own slide is on screen all the same (a late re-draw of the slide before it ran
+ * after the GO): the link draws the slide again, which makes them in a new late job, at most this many times a
+ * showing (repair 4). Nothing loops: each needs another slide's draw on the live chain meanwhile.
+ */
+export const LATE_RESTARTS = 2;
