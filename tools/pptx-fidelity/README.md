@@ -212,7 +212,12 @@ two stored presentations modulo ids, media ids (by file), times, the import log 
   `textOutline` (it counts picture-filled text as filled: the converter draws it in the text colour, and the
   render copy LibreOffice draws has its outline removed), `refit`, `inheritedFit`, `cellRows` and `escZero`
   (a run's `baseline="0"` under a non-zero inherited baseline, which LibreOffice reads as unset: drawn shifted
-  by that one at 58 %, as `src/esczero-probe.ts` measured).
+  by that one at 58 %, as `src/esczero-probe.ts` measured). `cellRows` (LibreOffice's columns, rows, sizes,
+  spill and lift) is harness-only for the M6 group alone (the kill switch, `m9Writes` without 'table'): since
+  sub-wave 1b (`tables-form`) the table object stores that form on every hub, so a slide whose tables are table
+  objects draws alike with and without `--lo-compat` there and keeps no `cellRows` (`drawingKey`;
+  `compat.test.ts`). What stays harness-only on a table object is the cells' run-text policies, as a text
+  box's: `runShadow`, `textOutline`, `escZero`.
 - `src/features/`: one family of XML features per file (`featureFamily`: key, features in report order,
   optional targets, `detect(source)` with the slide's XML and the parts it names, `related('/chart')`),
   listed once in `FEATURE_FAMILIES`. The text family is `textFeatures` (as since M2); every other family's

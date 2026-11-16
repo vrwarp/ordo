@@ -2945,7 +2945,8 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
 - **What is written.** The grid as the deck stores it: `cols` its column widths, `rows` its `a:tr h` heights
   (`TableElement.storedRows`), `box.h` their sum, so the drawer grows the rows to their text (its layout, never
   the converter's measure: cells never shrink, which removes the "row one line short" squeeze of the M6 group
-  and the Korean cells' second breaker). Cells row-major as `placeCells` reads them back (the reader cuts spans
+  and the Korean cells' second breaker); since sub-wave 1b LibreOffice's grid instead ("The stored form",
+  below). Cells row-major as `placeCells` reads them back (the reader cuts spans
   at a covered slot as the stored table places them), each with its rich text from `richText` without autofit
   (runs, paragraph styles, fallback fonts; plain once the slide passes its text budget), spans, fill (a
   gradient with its first stop as colour, a pattern as its blended colour) and per-cell diagonals (the M6 group
@@ -2958,7 +2959,8 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
   cell's text 10,000 characters and a table's 60,000, a palette past its size gives later entries none, each
   noted). Origin role `'table'`, not locked; legacy fields a rect of the background (decision 4: no legacy
   group). Under the harness's LibreOffice policy (`loCompat`, rule `cellRows`) `rowRule: 'fixed'` with
-  LibreOffice's columns and rows, its sizes and its spill and lift folded into each cell's insets.
+  LibreOffice's columns and rows, its sizes and its spill and lift folded into each cell's insets (since
+  sub-wave 1b, on every hub: "The stored form", below).
 - **No cell cap.** A table is one object of the slide's budget (`budget.ts` `ownObjects`), its cells' JSON
   counted against the slide's text budget as it is written. The 640-cell master grid of the summer-vibes
   template is one object a slide, a 160-cell bulletin native.
@@ -3023,6 +3025,33 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
   text boxes over it until tables-cells (1b) rebuilds the table natively there. A table object's cells count as
   the slide's text bodies (`bodyTexts`, a picture slide's search text), as the group's cells did.
 <!-- /m9:tables-conv -->
+
+<!-- r2b:tables-form -->
+**Built for wave r2b sub-wave 1b: the stored form (tables-form track).** The owner's "prioritize native tables"
+(2026-11-15) and owner question T2's default (imported tables in LibreOffice's layout, their text in the
+master's style for other text, on every hub; PowerPoint's rule not verified, look again when its exports can
+be measured):
+- **The stored form is LibreOffice's, on every hub** (`emit-table.ts` `emitTableObject`, from r2b-diag
+  all-tables' P1b). The table object stores the converter's model of how LibreOffice 24.2 lays the table out
+  (`TableElement.lo`; when absent the converter's own grid, which then agrees with it): its columns (widened
+  to their cells' minimums, `loColumns`), its grown rows (`loGrowRows`, a merge's height on its last row) with
+  `rowRule: 'fixed'`, `box` the table's frame at that size (`lo.xf`), the cells' text at LibreOffice's sizes
+  (`loSizePt`: whole pixels at 600 dpi, so 14 pt is stored 14.04 pt), and where LibreOffice's row is shorter than
+  the text or draws its lines higher, the spill into the margins and the baseline lift folded into each cell's
+  insets (`asLibreOffice`). Until 1b every hub stored the deck's `a:tr h` and let the drawer grow the rows with
+  its own lines, which no harness column scored (`nativeSsim` drew this form under `loCompat` only): E's 63
+  table slides as hubs drew them averaged 0.745, with the stored form 0.850 (r2b-diag all-tables, 5cc7129; the
+  8 dense slides 0.508 -> 0.752), none lower by more than 0.01. Rows are fixed because rows left to grow
+  (all-tables' P1) dropped 7 of the 63 by 0.01-0.49 (2 Corinthians 3 vs 7 0.683 -> 0.191, Churchcraft 0.655 ->
+  0.260): the drawer's lines are taller than the converter's model of LibreOffice's there. Nothing in the
+  layout reads `loCompat`: the grid, rows, sizes and insets are the same with and without it
+  (`emit-table.test.ts`, `e2e/table-form.test.ts` on the e2e table deck); the harness's `cellRows` stays for the
+  M6 group (the kill switch) only, and `loCompat` still reaches the cells' run-text policies (run shadows,
+  outlines on filled text, `baseline="0"`, as a text box's: harness-only, §17).
+- **Text past a fixed row** overflows it, upwards and downwards as its anchor says, as a text box's overflows
+  its box (the layout's rule for `rowRule: 'fixed'`, above): an output whose faces lay a cell out taller than
+  the converter measured draws the text past the row, never clipped and never moving the rows below.
+<!-- /r2b:tables-form -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 

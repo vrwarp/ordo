@@ -193,18 +193,17 @@ describe('compatRules', () => {
     expect(cell(true).box.h).toBeCloseTo(((2 * 601 + 255) * 360) / 6350, 6);
     expect(cell(true).style.fontSizePx).toBeCloseTo(28.08, 6);
     expect(cell(true).style.insets!.t).toBeLessThan(cell(false).style.insets!.t);
-    // The table object (M9 tables-conv): LibreOffice's row, fixed, under the rule; the deck's own row, which
-    // the drawer grows, without it.
+    // The table object (M9 tables-conv; 1b tables-form): LibreOffice's row, fixed, on every hub, with and
+    // without the rule; the rule is harness-only for the M6 group above (the kill switch), and a slide whose
+    // table is the table object draws alike either way (the harness keeps no rule for it, `drawingKey`).
+    const slideOf = (lo: boolean) => emitSlides(scene, lo ? { loCompat: true } : {}).slides[0]!.slide;
     const tableOf = (lo: boolean) =>
-      (
-        emitSlides(scene, lo ? { loCompat: true } : {}).slides[0]!.slide.objects.find(
-          (o) => o.type === 'shape' && o.table,
-        ) as ShapeObject
-      ).table!;
-    expect(tableOf(true).rowRule).toBe('fixed');
-    expect(tableOf(true).rows[0]).toBeCloseTo(((2 * 601 + 255) * 360) / 6350, 6);
-    expect(tableOf(false).rowRule).toBeUndefined();
-    expect(tableOf(false).rows).toEqual([0]);
+      (slideOf(lo).objects.find((o) => o.type === 'shape' && o.table) as ShapeObject).table!;
+    for (const lo of [true, false]) {
+      expect(tableOf(lo).rowRule).toBe('fixed');
+      expect(tableOf(lo).rows[0]).toBeCloseTo(((2 * 601 + 255) * 360) / 6350, 6);
+    }
+    expect(drawingKey(slideOf(false))).toBe(drawingKey(slideOf(true)));
   });
 
   it('leaves a scene with nothing to change without rules', () => {
