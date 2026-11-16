@@ -523,7 +523,10 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   the wait never applies to it. With three more copies of its line art (9 late parts; `?unitTurnMs=40` to spread
   their making), at d1636fb: two re-draws a jump, 1.03-1.07 s and 1.67-1.72 s after it, the re-draw waiting
   0.53-0.62 s between them (re-draws of 64-97 ms), every part on screen at the end (the screen identical to the
-  slide drawn whole), 5 of 5 jumps. Which slides re-draw past one task
+  slide drawn whole), 5 of 5 jumps; at 1d38fd1 (repair 4) the same, 1.02-1.22 s and 1.70-1.86 s, held 0.55-0.74 s.
+  Reached by a GO to its armed cue instead (its arm leaving parts, the next cue armed at once, so the late job keeps
+  the hold; `?unitTurnMs=80`): the GO flips on time (-4 to 9 ms), two re-draws 52-71 ms and 0.99-1.06 s after it,
+  every part on screen, 9 units made for its 9 parts, 5 of 5. Which slides re-draw past one task
   on an output is not counted: E has 65 whose warm draw passes 50 ms in the harness, and the leaf slide re-draws
   slower on an output than in the harness (35-50 ms), so more do; live-frame and render-bounds take the slowest off
   the screens.
