@@ -862,9 +862,9 @@ export const PLAN = { rows: 28, cols: 5 } as const;
  * 1. **The bulletin** (`TABLE`): past M6's cell cap, so before the table object LibreOffice's art drew it on a
  *    hub with LibreOffice and a hub without it listed it missing; now one table object on every hub.
  * 2. **The reading plan** (`PLAN`): 140 cells, within the cap, but its M6 group (a text object a cell, its
- *    rules as shapes) passes 64 KB where the table object is under 16 KB: on a hub with LibreOffice the slide
- *    keeps LibreOffice's page (the interim rule of question 3, `ImportCore.pageForBudget`), on one without it
- *    the table object.
+ *    rules as shapes: what the kill switch, `m9Writes` without 'table', writes) passes 64 KB where the table
+ *    object is under 16 KB (`table-deck.test.ts` measures both): sub-wave 1's interim rule kept LibreOffice's
+ *    page for it on a hub with LibreOffice; now the table object on every hub (the owner: every table).
  * Neither slide has text outside its table: no Bottom-Third strap, and the Stage shows the deck's title.
  */
 export async function tableDeck(dir: string): Promise<string> {
