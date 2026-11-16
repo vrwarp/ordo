@@ -460,9 +460,24 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
 - **Late job.** A slide job that left units (`done.unitsLeft`) queues a late job for them (`RANK.late`: below
   the live and armed cues, above bulk work; chain `late`), which pins what it makes into the slide job's own hold
   (`holdInto`: while the slide is live or armed) and reports them with `{t: 'unitsReady', slideKey, keys,
-  left}`, coalesced: once all are made, or at most once per `REFRESH_FADE_MS` while some remain. A live job of
-  another slide on the layer drops the late jobs of the slides it replaced on screen. With `?late=next` the late
-  job still makes them, but reports nothing: the slide's next draw copies them.
+  left}`, coalesced: once all are made, or at most once per `REFRESH_FADE_MS` while some remain. Its last report
+  says so (`ended`, its `left` the parts it did not make; a cancelled late job reports nothing). It makes its parts
+  in rounds of at most `UNIT_WAIT_MS`, `LATE_ROUNDS` (4) a lane job; while its last round made some it goes on in a
+  new lane job after the late work queued meanwhile, so rounds running out never leave a part unmade, and a round
+  that makes nothing ends it. A draw of the slide while its late job runs (a re-draw) hands its hold on before the
+  older one is let go, so a part made after a re-draw is never evicted before the next re-draw copies it, and adds
+  the parts it left (one evicted meanwhile is made again). A unit whose making fails (no canvas, a drawing error,
+  the cache refused it; renderer `unitUnmade`, remembered until made) is skipped by late rounds and queues no late
+  job; a job that waits (an arm, the warm-up) still tries it. It keeps its stand-in, and a decoration (which has
+  none) is drawn directly by the slide's next draw, which its late job's report asks for: a long task, never a
+  dropped effect. A live job of another slide on the layer drops the late jobs of the slides it replaced on screen.
+  With `?late=next` the late job still makes them, but reports nothing: the slide's next draw copies them; nothing
+  is left out then (a decoration not made is drawn at once, as at 62a1c3a), since no fade would bring it in.
+- **Asset worker restart.** The late jobs and every unit go with the worker. A slide the renderer still holds with
+  parts left late, or made and not drawn in yet (a refresh pending or not), is not drawn again by the new worker at
+  once (its parts would be its stand-ins, its decorations missing): the link sends `{t: 'units', job, role}`, the
+  new worker plans the slide, pins what it has as that layer's hold, makes the rest as a late job does and reports
+  them, and the slide is drawn again, fading in, when it does (reported at once when all were made already).
 - **Fade in, coalesced** (link-core): `unitsReady` for a key the renderer holds draws the slide again in place
   (`refresh`, as for a late image or font) as late work (`role: 'late'`, `RANK.late`), with `refreshFadeMs` 300
   while it is on screen (it fades in over the old copy, "Layer stacks" below) and none while it is only armed (a
@@ -474,8 +489,11 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   raster, or one to an armed cue still being drawn; a GO to an armed cue already drawn flips its picture and waits
   for nothing) waits for it. So a re-draw's own time (`done.rasterMs` of the 'late' job at the output's size, kept
   per key) decides the next: past one task (`LATE_REDRAW_MAX_MS` 50) the slide is drawn again on screen only once
-  more, when its late job reports its last part (`left` 0), and every part left fades in then (a showing usually has
-  two such re-draws, the first part's and the last's). The slide's first draw does not decide it: that cold job
+  more, when its late job reports its last part (`left` 0) or ends (`ended`), and every part left fades in then (a
+  showing usually has two such re-draws, the first part's and the last's); that wait lasts at most `LATE_HOLD_MS`
+  (1 s) after the late job's last report, so a job that stops reporting never keeps a made part off the screen. A
+  report that names no part (a late job that ends having made nothing more) draws nothing again: no loop. The
+  slide's first draw does not decide it: that cold job
   decodes its pictures, builds its geometry and makes or leaves its units, and a re-draw copies the made units.
   Parts made while a re-draw runs are drawn in after it (the link syncs on a late job's `done`), and a slide shown
   again starts a new late job (reviews of r2b sub-wave 1, rounds 1-2). Measured at 3840 in software Canvas 2D: the
