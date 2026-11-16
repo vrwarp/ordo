@@ -11,7 +11,7 @@ import {
   type Slide,
   expandCues,
 } from '@ordo/domain';
-import { fadeMsFor, lookSignature, planFrame, planPreview, resolveLook } from './plan.ts';
+import { fadeMsFor, lookSignature, planFrame, planPreview, resolveLook, slideVisible } from './plan.ts';
 import { liveState, resolved, slideLive } from './fixtures.test-util.ts';
 
 describe('look visibility rules', () => {
@@ -124,6 +124,53 @@ describe('look visibility rules', () => {
     const edited = { ...LOOK_MAIN, clearColor: { r: 1, g: 2, b: 3, a: 1 } };
     const b = planFrame(slideLive(0), edited, { lookSig: lookSignature(edited, 1920, 1080) });
     expect(a.slide.key).not.toBe(b.slide.key);
+  });
+});
+
+describe('a stage look (PR #28)', () => {
+  const withProps = (look: Look, props: Partial<Look['layers']['props']>): Look => ({
+    ...look,
+    layers: { ...look.layers, props: { ...look.layers.props, ...props } },
+  });
+  const picture: Slide = {
+    id: 'pic',
+    objects: [
+      {
+        id: 'img',
+        type: 'image',
+        box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+        mediaId: 'm1',
+        fit: 'cover',
+        opacity: 1,
+        radius: 0,
+      },
+    ],
+    notes: 'Read Psalm 23 slowly. Pause after verse 4.',
+  };
+  const empty: Slide = { id: 'empty', objects: [], notes: 'Welcome everyone; announce the potluck.' };
+
+  it('draws the notes of a slide with no text of its own (the stage preview), only while its notes are on', () => {
+    expect(slideVisible(LOOK_STAGE, picture, 'slides')).toBe(true);
+    expect(slideVisible(LOOK_STAGE, empty, 'slides')).toBe(true);
+    expect(slideVisible(LOOK_STAGE, empty, 'song')).toBe(true);
+    expect(slideVisible(withProps(LOOK_STAGE, { notes: false }), empty, 'slides')).toBe(false);
+    expect(slideVisible(LOOK_STAGE, { ...empty, notes: '  ' }, 'slides')).toBe(false);
+    // A look that is not a stage look shows notes only when they are turned on.
+    expect(slideVisible(LOOK_LOWER_THIRD, empty, 'slides')).toBe(false);
+    expect(slideVisible(withProps(LOOK_LOWER_THIRD, { notes: true }), empty, 'slides')).toBe(true);
+  });
+
+  it("an output's planned slide carries no notes: its slide raster never draws them", () => {
+    const s = slideLive(0);
+    const r = structuredClone(s.resolved) as ResolvedPlaylist;
+    const c = s.cues[0]!;
+    const slide = r.presentations[c.presentationId!]!.sections.flatMap((x) => x.slides).find(
+      (x) => x.id === c.slideId,
+    )!;
+    slide.notes = 'Band: key change after verse 2';
+    const p = planFrame({ ...s, resolved: r }, LOOK_STAGE);
+    expect(p.slide.desc?.slide.id).toBe(c.slideId);
+    expect(p.slide.desc?.slide.notes).toBeUndefined();
   });
 });
 

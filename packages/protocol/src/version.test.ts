@@ -36,10 +36,11 @@ import { APP_VERSION } from './index.ts';
 // recorded the merged digest once, after its last merge, and again after main's PR #28 was merged in.
 // The main merge's repair (still 0.8.0): protocol index.ts Hello.view ('lectern', a Pulpit Lectern on the stage
 // output's link, which the hub then neither lets replace the Stage Display window nor replaces; an older hub
-// strips it).
+// strips it), and plan.ts slideVisible's stage-preview notes (the planner's own slides carry no notes, so no
+// plan changes).
 const RECORDED = {
   version: '0.8.0',
-  digest: 'a5027283e42113a1605fc189a7117b636e918149d8b56eb2b39049700e833834',
+  digest: '7077a1437610daeacb64027cc37a534a758d091ad298af39f1b1e1f3c7c20511',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

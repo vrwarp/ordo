@@ -786,18 +786,9 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
     return;
   }
   const kind = opts.presentationKind ?? opts.isSong ?? true;
-  const isSong = kind === true || kind === 'song';
-  const rawNotes =
-    look && stageNotesEnabled(look) && typeof rawSlide.notes === 'string'
-      ? formatStageNotesPlain(rawSlide.notes.slice(0, 4000))
-      : '';
-  const preset = look?.layers.props.stagePreset;
-  if (
-    look &&
-    stageNotesEnabled(look) &&
-    (rawNotes.length > 0 || preset === 'split' || preset === 'prompter')
-  ) {
-    drawStagePreview2D(ctx, slide, next, look, rule, kind, isSong, rawNotes, scale);
+  const preview = stagePreview(rawSlide, slide, next, look, kind);
+  if (preview) {
+    drawStagePreview2D(ctx, preview, scale);
     return;
   }
   const text = lyricTextFor(slide, look, kind);
@@ -818,17 +809,52 @@ function paintCardBox(ctx: Ctx2D, box: Box, fill: TextStyle['fill'], scale: numb
   ctx.restore();
 }
 
-function drawStagePreview2D(
-  ctx: Ctx2D,
+/** A card of the stage preview: its box and fill, and the band text drawn in it (without the fill). */
+export type StageCard = {
+  box: Box;
+  fill: TextStyle['fill'];
+  style: TextStyle;
+  text: string;
+  src: TextObject | undefined;
+};
+
+/** What the stage preview draws: the current and next cards, then the notes box (clipped to it). */
+export type StagePreview = {
+  cards: StageCard[];
+  notes: { box: Box; fill: TextStyle['fill']; style: PropBox; text: string } | null;
+};
+
+/**
+ * The speaker notes a look's stage preview shows for a slide (PR #28): its `Slide.notes`, plain (`**x**` as
+ * x, bullets as '•'), at most 4,000 characters read, when the look's stage notes are on; '' otherwise. An
+ * output's slides carry none (the planner's `clampSlide` keeps no notes); look previews and thumbnails do.
+ */
+export function stageNotesText(rawSlide: Pick<Slide, 'notes'>, look: Look | undefined): string {
+  if (!look || !stageNotesEnabled(look) || typeof rawSlide.notes !== 'string') return '';
+  return formatStageNotesPlain(rawSlide.notes.slice(0, 4000));
+}
+
+/**
+ * Whether a lyric-only look draws a slide as the stage preview (PR #28's adaptive stage regions,
+ * `adaptStageRegions`), and what it draws: a look whose stage notes are on (`stageNotesEnabled`), for a slide
+ * with notes, or with the split or prompter preset. Null when the look draws the plain bands. `drawSlide2D`
+ * draws it, and `sprite.ts` `slideReach` and `plan.ts` `slideVisible` read the same regions, so a slide
+ * raster is never cut short of a moved card or of the notes box. `look` and `slide` are clamped; the notes
+ * are read from `rawSlide` (`clampSlide` keeps none).
+ */
+export function stagePreview(
+  rawSlide: Pick<Slide, 'notes'>,
   slide: Slide,
   next: Slide | undefined,
-  look: Look,
-  rule: Extract<Look['layers']['slide'], { mode: 'lyricOnly' }>,
+  look: Look | undefined,
   kind: boolean | 'song' | 'slides' | 'loop',
-  isSong: boolean,
-  notesText: string,
-  scale: number,
-): void {
+): StagePreview | null {
+  const rule = look?.layers.slide;
+  if (!look || rule?.mode !== 'lyricOnly' || !stageNotesEnabled(look)) return null;
+  const notesText = stageNotesText(rawSlide, look);
+  const preset = look.layers.props.stagePreset;
+  if (!(notesText.length > 0 || preset === 'split' || preset === 'prompter')) return null;
+  const isSong = kind === true || kind === 'song';
   const customNotes = look.layers.props.style.notes;
   const defaultNotesBox: PropBox = customNotes ?? {
     fontFamily: rule.style.fontFamily,
@@ -858,43 +884,44 @@ function drawStagePreview2D(
     next: rule.nextSlide ? { box: rule.nextSlide.band, style: rule.nextSlide.style } : null,
     notes: defaultNotesBox,
   });
-  if (adapted.current && text) {
-    paintCardBox(ctx, adapted.current.box, adapted.current.style.fill, scale);
-    drawBandText(
-      ctx,
+  const cards: StageCard[] = [];
+  if (adapted.current && text)
+    cards.push({
+      box: adapted.current.box,
+      fill: adapted.current.style.fill,
+      style: { ...adapted.current.style, fill: undefined },
       text,
-      { ...adapted.current.style, fill: undefined },
-      adapted.current.box,
-      scale,
-      bandSource(slide, text),
-    );
+      src: bandSource(slide, text),
+    });
+  if (adapted.next && nt)
+    cards.push({
+      box: adapted.next.box,
+      fill: adapted.next.style.fill,
+      style: { ...adapted.next.style, fill: undefined },
+      text: nt,
+      src: next ? bandSource(next, nt) : undefined,
+    });
+  const notes =
+    adapted.notes && notesText
+      ? { box: adapted.notes.box, fill: adapted.notes.fill, style: adapted.notes, text: notesText }
+      : null;
+  return { cards, notes };
+}
+
+function drawStagePreview2D(ctx: Ctx2D, preview: StagePreview, scale: number): void {
+  for (const c of preview.cards) {
+    paintCardBox(ctx, c.box, c.fill, scale);
+    drawBandText(ctx, c.text, c.style, c.box, scale, c.src);
   }
-  if (adapted.next && nt) {
-    paintCardBox(ctx, adapted.next.box, adapted.next.style.fill, scale);
-    drawBandText(
-      ctx,
-      nt,
-      { ...adapted.next.style, fill: undefined },
-      adapted.next.box,
-      scale,
-      next ? bandSource(next, nt) : undefined,
-    );
-  }
-  if (adapted.notes && notesText) {
-    const nb = adapted.notes.box;
-    paintCardBox(ctx, nb, adapted.notes.fill, scale);
+  const n = preview.notes;
+  if (n) {
+    const nb = n.box;
+    paintCardBox(ctx, nb, n.fill, scale);
     ctx.save();
     ctx.beginPath();
-    roundRect(
-      ctx,
-      nb.x * scale,
-      nb.y * scale,
-      nb.w * scale,
-      nb.h * scale,
-      (adapted.notes.fill?.radius ?? 0) * scale,
-    );
+    roundRect(ctx, nb.x * scale, nb.y * scale, nb.w * scale, nb.h * scale, (n.fill?.radius ?? 0) * scale);
     ctx.clip();
-    drawText(ctx, notesText, { ...adapted.notes, fill: undefined, valign: 'top' }, nb, scale, { fit: false });
+    drawText(ctx, n.text, { ...n.style, fill: undefined, valign: 'top' }, nb, scale, { fit: false });
     ctx.restore();
   }
 }
