@@ -261,6 +261,50 @@ describe('an output job that must not wait for its units (r2b units-live: a GO n
     expect(job.made).toEqual([]);
   });
 
+  it('a live job leaves no prepared picture to a late job: its own job prepares it, a late job never could (repair 3)', async () => {
+    // A full-slide radial gradient, then a masked picture past the budget: drawn from its prepared bitmap
+    // (`of: 'prepared'`, no picture of its own), which the slide job's pictures step prepares.
+    const radial: ShapeObject = {
+      id: 'bg',
+      type: 'shape',
+      box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+      shape: 'rect',
+      fill: { r: 255, g: 255, b: 255, a: 1 },
+      opacity: 1,
+      radius: 0,
+      gradient: {
+        kind: 'radial',
+        stops: [
+          { at: 0, color: { r: 255, g: 255, b: 255, a: 1 } },
+          { at: 0.4, color: { r: 200, g: 40, b: 40, a: 1 } },
+          { at: 1, color: { r: 20, g: 20, b: 120, a: 1 } },
+        ],
+      },
+    };
+    let d = 'M 1000 1000';
+    for (let k = 1; k < 400; k++) {
+      const a = (k / 400) * Math.PI * 2 * 37;
+      const r = k % 2 ? 1000 : 50;
+      d += ` L ${(1000 + r * Math.cos(a)).toFixed(1)} ${(1000 + r * Math.sin(a)).toFixed(1)}`;
+    }
+    const pic = {
+      id: 'pic',
+      type: 'image',
+      mediaId: 'm1',
+      box: { x: 300, y: 100, w: 1000, h: 800, rotation: 0 },
+      fit: 'cover',
+      opacity: 1,
+      radius: 0,
+      mask: { paths: [{ d: `${d} Z`, w: 2000, h: 2000 }] },
+    } as Slide['objects'][number];
+    const slide: Slide = { id: 'masked', objects: [radial, pic] };
+    expect(unitsOfSlide(slide, 1).map((u) => u.of)).toEqual(['prepared']);
+    const h = host({ slices: 0, checks: 0 });
+    const job = unitJob(h, { stop: () => true });
+    await geometryUnits.run({ slides: [slide], scale: 1 }, h);
+    expect(job.left).toEqual([]);
+  });
+
   it('a hurried job (stop turns true while a unit is made) abandons that unit at its next turn', async () => {
     const slide = lineArtSlide();
     const keys = unitsOfSlide(slide, 1).map((u) => u.key);
