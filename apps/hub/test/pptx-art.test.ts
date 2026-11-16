@@ -3,8 +3,7 @@
  * pdftoppm reader, the render copy's zip, the version-2 patch, page geometry, soffice's command and the job
  * queue's deferral.
  */
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { inflateSync } from 'node:zlib';
 import { newId, type Slide, type SlideObject } from '@ordo/domain';
@@ -28,8 +27,9 @@ import {
 import { digestMatches, importDigest } from '../src/pptx/digest.ts';
 import { writeZip } from '../src/pptx/renderCopyTask.ts';
 import type { PptxLoSlide, RasterImage } from '../src/pptx/shared.ts';
+import { tempDir } from './helpers.ts';
 
-const dir = () => mkdtempSync(join(tmpdir(), 'ordo-art-'));
+const dir = () => tempDir('ordo-art-');
 
 /**
  * A synthetic art layer (RGBA, straight alpha) printed over white and over a second colour (black unless
