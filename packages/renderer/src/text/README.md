@@ -275,8 +275,8 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   layout identity; context state is assigned only when it changes.
 - Device pixels (text-lines, sub-wave 1b): `paintRich(..., { devicePixels: true })` paints with
   `DEVICE_PIXEL_PAINTER` when the object's painter is the plain one: each run's baseline on the device row it
-  falls in (`deviceRow`, floor), its start on the quarter of the device column it falls in (`deviceColumn`,
-  floor of 4 x), underlines and strikes (and their shadows) on whole rows (`deviceRows`), under an axis-aligned
+  falls in (floor), its start on the quarter of the device column it falls in (floor of 4 x), underlines and
+  strikes (and their shadows) on whole rows (both edges rounded, at least one row), under an axis-aligned
   transform with positive scales only; layout stays scale-free. That is where the reference rasterizer
   (pdftoppm) puts LibreOffice's text at 144 and 288 dpi. Only the table drawer asks for it (its cells' text);
   `PLAIN_PAINTER` and every other caller paint as before (paint.gate.test.ts holds it).

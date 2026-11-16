@@ -73,7 +73,7 @@ export function breakOpportunities(
     const p = b.position;
     const before = s.charCodeAt(p - 1);
     if (hangul && keepAll(s, p)) continue;
-    if (office && before === SLASH && letterOrDigitAt(s, p)) continue;
+    if (office && before === 0x2f && LETTER_OR_DIGIT.test(s.slice(p, p + 2))) continue; // a slash
     if (p > 0 && !isGlue(before) && (!isGlue(s.charCodeAt(p)) || isBreakSpace(before))) out.push(start + p);
   }
   const extra = office ? officeBreaks(s) : NONE;
@@ -108,44 +108,26 @@ function mergeSorted(a: readonly number[], b: readonly number[], start: number):
 
 // ---- Office breaks: where LibreOffice's pages break and UAX#14 does not ----
 
-const SLASH = 0x2f;
-const HYPHEN_MINUS = 0x2d;
-/** A quotation mark: an initial or final quote (UAX#14 QU's Pi and Pf), '"' or "'". */
-const QUOTE = /[\p{Pi}\p{Pf}"']/u;
-/** An opening bracket (UAX#14 OP). */
-const OPENER = /\p{Ps}/u;
-const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
-
-const isAsciiDigit = (c: number) => c >= 0x30 && c <= 0x39;
-
-/** Whether the code point at `s[p]` is a letter or a digit (a surrogate pair read whole). */
-function letterOrDigitAt(s: string, p: number): boolean {
-  const c = s.codePointAt(p);
-  return c !== undefined && LETTER_OR_DIGIT.test(String.fromCodePoint(c));
-}
+/** A letter or a digit at the start of a string (a surrogate pair read whole): no break after a slash before one. */
+const LETTER_OR_DIGIT = /^[\p{L}\p{N}]/u;
 
 /**
- * Offsets into `s` where LibreOffice 24.2 ends a line and UAX#14 (`linebreak` 1.1.0) does not, ascending (the
- * text-lines probe deck, every case in text boxes and table cells, at 10, 12 and 18 pt):
- * - after a hyphen-minus before an ASCII digit, whatever is before the hyphen ('3:16-|17', 'A-|1',
- *   'x -|5'); never after one that starts the paragraph, and never after U+2212 (a minus sign), which
- *   LibreOffice keeps with its number as UAX#14 does;
- * - after the breaking spaces between a quotation mark of any kind and an opening bracket ('earth” |[“made',
- *   'rock?” |(Num.', 'said “ |(aside)'); never without a space, and never at a no-break space (glue).
+ * Where LibreOffice 24.2 ends a line and UAX#14 (`linebreak` 1.1.0) does not (the text-lines probe deck, every
+ * case in text boxes and table cells, at 10, 12 and 18 pt); a line may end after a match:
+ * - a hyphen-minus before an ASCII digit, whatever is before the hyphen ('3:16-|17', 'A-|1', 'x -|5'); never
+ *   one that starts the paragraph (`officeBreaks`), and never U+2212 (a minus sign), which LibreOffice keeps
+ *   with its number as UAX#14 does;
+ * - a quotation mark of any kind (UAX#14 QU's Pi and Pf, '"', "'") and the breaking spaces after it, before an
+ *   opening bracket (OP): 'earth” |[“made', 'rock?” |(Num.', 'said “ |(aside)'; never without a space, and
+ *   never at a no-break space (glue). The spaces are `isBreakSpace`'s (breaks.test.ts pins the class to it).
  */
-function officeBreaks(s: string): number[] {
+const OFFICE_BREAK =
+  /-(?=[0-9])|[\p{Pi}\p{Pf}"'][\t \u1680\u2000-\u2006\u2008-\u200a\u205f\u3000]+(?=\p{Ps})/gu;
+
+/** Offsets into `s` where an office line may end and UAX#14's may not (`OFFICE_BREAK`), ascending. */
+export function officeBreaks(s: string): number[] {
   const out: number[] = [];
-  for (let p = 2; p < s.length; p++) {
-    const c = s.charCodeAt(p);
-    if (s.charCodeAt(p - 1) === HYPHEN_MINUS && isAsciiDigit(c)) {
-      out.push(p);
-      continue;
-    }
-    if (!isBreakSpace(s.charCodeAt(p - 1)) || !OPENER.test(s[p]!)) continue;
-    let q = p - 1;
-    while (q > 0 && isBreakSpace(s.charCodeAt(q - 1))) q--;
-    if (q > 0 && QUOTE.test(s[q - 1]!)) out.push(p);
-  }
+  for (const m of s.matchAll(OFFICE_BREAK)) if (m.index || m[0] !== '-') out.push(m.index + m[0].length);
   return out;
 }
 

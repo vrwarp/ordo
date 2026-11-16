@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { breakOpportunities, graphemeBoundaries, isBreakSpace, isGlue } from './breaks.ts';
+import { breakOpportunities, graphemeBoundaries, isBreakSpace, isGlue, officeBreaks } from './breaks.ts';
 
 /** `text` cut at its break opportunities (the whole text is one paragraph); `office`: the office rules. */
 function lines(text: string, lang = '', office = false): string[] {
@@ -217,6 +217,30 @@ describe('office break opportunities (LibreOffice 24.2, the text-lines probe dec
       'PA24',
     ]);
     expect(office('and/or 1/2 a/ b AND/OR')).toEqual(['and/or ', '1/2 ', 'a/ ', 'b ', 'AND/OR']);
+  });
+
+  it('takes the spaces between a quotation mark and a bracket to be exactly the breaking spaces', () => {
+    // The office rule's space class is `isBreakSpace`'s, for every UTF-16 unit but the surrogates.
+    const wrong: string[] = [];
+    let spaces = 0;
+    for (let c = 0; c <= 0xffff; c++) {
+      if (c >= 0xd800 && c <= 0xdfff) continue;
+      const got = officeBreaks(`x”${String.fromCharCode(c)}(y`);
+      if (got.length !== (isBreakSpace(c) ? 1 : 0) || (got.length && got[0] !== 3))
+        wrong.push(c.toString(16));
+      if (got.length) spaces++;
+    }
+    expect(wrong).toEqual([]);
+    expect(spaces).toBe(15); // tab, space, U+1680, U+2000-U+2006, U+2008-U+200A, U+205F, U+3000
+    expect(officeBreaks('x” \t\u3000(y')).toEqual([5]);
+    // Never a hyphen that starts the paragraph; a quote that does is a quote.
+    expect(officeBreaks('-5 x-5')).toEqual([5]);
+    expect(officeBreaks('” (y')).toEqual([2]);
+  });
+
+  it('reads a letter after a slash whole (a surrogate pair), and keeps breaks before other characters', () => {
+    expect(lines('a/\u{1D400}b')).toEqual(['a/', '\u{1D400}b']);
+    expect(office('a/\u{1D400}b c/\u{1F600}')).toEqual(['a/\u{1D400}b ', 'c/', '\u{1F600}']);
   });
 
   it('lists offsets of the whole text and merges with the SA breaks', () => {
