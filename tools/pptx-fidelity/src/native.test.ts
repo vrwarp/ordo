@@ -808,7 +808,11 @@ function harness(args: string[]): void {
   });
 }
 
-/** One slide holding a table and nothing else (pptxgenjs, Calibri): LibreOffice lays its rows out otherwise. */
+/**
+ * One slide holding a table and nothing else (pptxgenjs, Calibri). Its head row's runs carry an outline on filled
+ * text (`a:ln`), which LibreOffice does not draw: the harness's `textOutline` policy removes it from the compat
+ * drawing only, so the two drawings of the table differ (its rows do not: every hub stores LibreOffice's).
+ */
 async function tableOnlyDeck(): Promise<string> {
   const p = new pptxgen();
   p.layout = 'LAYOUT_16x9';
@@ -820,7 +824,12 @@ async function tableOnlyDeck(): Promise<string> {
     'For the church',
   ]);
   p.addSlide().addTable(
-    [head, ...body].map((r, i) => r.map((text) => ({ text, options: { bold: i === 0 } }))),
+    [head, ...body].map((r, i) =>
+      r.map((text) => ({
+        text,
+        options: i === 0 ? { bold: true, outline: { size: 1.5, color: 'C00000' } } : { bold: false },
+      })),
+    ),
     {
       x: 0.5,
       y: 0.5,
@@ -846,8 +855,9 @@ describe.skipIf(!chromium || !(await findOnPath('soffice')))("main.ts: a table s
     ]);
     const summary = JSON.parse(await readFile(join(out, 'summary.json'), 'utf8')) as { decks: DeckScore[] };
     const [s] = summary.decks[0]!.perSlide;
-    // The converter's drawing under the LibreOffice policies (LibreOffice's rows) is not what a hub stores.
-    expect(s!.compat).toContain('cellRows');
+    // The converter's drawing under the LibreOffice policies (its head row without the outlines) is not what a
+    // hub stores. Its rows are the same in both: every hub stores LibreOffice's.
+    expect(s!.compat).toContain('textOutline');
     expect(s!.policySsim).toBeDefined();
     expect(s!.policySsim).not.toBe(s!.nativeSsim);
     // Neither hub was asked (the table object is stored native on both): both columns score the stored slide.
