@@ -404,6 +404,13 @@ cells in place of the shape fields).
   (`ConflictDialog.tsx`) lists what overlaps by slide number and keeps 'Reload theirs (discard mine)' and
   'Save mine anyway'; Cancel has the focus, which goes back where it was when the dialog closes. The
   'Someone else saved' banner says that saving combines the two.
+- Speaker notes (PR #28): the Speaker Notes Dock under the canvas (`SpeakerNotesDock.tsx`; Alt+N opens and
+  closes it, and it opens by itself on a deck with notes in a tall window) edits the slide's `Slide.notes`
+  with `**highlights**`, bullets and `[PAUSE]` cues (Ctrl+B in it marks a key phrase) and shows them as the
+  stage will; its 'Manuscript Studio' and the slide list's 'Presenter Notes' open the Presenter Notes Studio
+  (`DeckNotesEditor.tsx`, lazy), every slide's notes in two columns in place of the canvas (the toolbar's
+  'Presenter Notes' and 'Slide Canvas' switch shows there; 'Slide Canvas' goes back). Both write through
+  `updateSlide` on the draft.
 - Disabled with a banner when the presentation is referenced by the live playlist.
 - The editor's shortcuts follow the focus (`views/editor/editorKeys.ts`): an open dialog keeps every key
   (Delete on its Close button never deletes the object behind it, Enter presses its buttons); a field keeps
