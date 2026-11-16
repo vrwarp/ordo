@@ -23,8 +23,13 @@ import { APP_VERSION } from './index.ts';
 // digest is unchanged (it leaves the APP_VERSION line out).
 // 0.8.0 for adaptive stage presets and speaker notes scale: PropsRule.stagePreset and PropsRule.notesScale in
 // schemas.ts, which a stale client would strip when saving looks.
-// 0.8.0 kept through wave r2b's sub-waves (main published 0.8.0 with PR #28, merged into sub-wave 1 before the wave
-// PR opened; the wave's one bump, 0.9.0, is the wave PR's last commit), with the merged digest recorded at 0.8.0.
+// 0.8.1 for the Pulpit Lectern's own hello: protocol index.ts Hello.view ('lectern'), which a stale 0.8.0 stage
+// tab never sends, so the hub would still take its lectern for a newer Stage Display; stale stage and lectern
+// tabs reload on the hub's bye version. Re-recorded at 0.8.1 for plan.ts slideVisible's stage-preview notes (the
+// planner's own slides carry no notes, so no plan changes).
+// Main's version kept through wave r2b's sub-waves (main published 0.8.0 with PR #28, merged into sub-wave 1
+// before the wave PR opened, and 0.8.1 with PR #30, merged into the wave PR; the wave's one bump, 0.9.0, is the
+// wave PR's last commit), with the merged digest recorded at main's version.
 // Sub-wave 1: golive-prepare (design/29 M8) adds the POST /live/prepare request and answer types, which no older
 // client sends or reads; units-live adds OutputHealth's optional unitsMade, unitsLate and unitCacheBytes, which an
 // older hub's parse strips; prerender-model (design/29) adds schemas.ts Slide.prerender, draw, cut and meta.draw,
@@ -34,12 +39,12 @@ import { APP_VERSION } from './index.ts';
 // prerender.add (hub only) and prerender.use events, state.prerendered and state.drawOverride, which no client
 // sends before the sub-waves that use them. Each track re-recorded on its branch; the sub-wave's integrator
 // recorded the merged digest once, after its last merge, and again after main's PR #28 was merged in.
-// The main merge's repair (still 0.8.0): protocol index.ts Hello.view ('lectern', a Pulpit Lectern on the stage
-// output's link, which the hub then neither lets replace the Stage Display window nor replaces; an older hub
-// strips it), and plan.ts slideVisible's stage-preview notes (the planner's own slides carry no notes, so no
-// plan changes).
+// The main merge's repair made PR #30's two shared changes on the wave while it was still at 0.8.0 (Hello.view
+// and plan.ts slideVisible's stage-preview notes, the same code as main's 0.8.1 above). With PR #30 merged in,
+// the shared sources are the wave's as they were (the digest leaves the APP_VERSION line out), so the merged
+// digest is the wave's, recorded at 0.8.1.
 const RECORDED = {
-  version: '0.8.0',
+  version: '0.8.1',
   digest: '7077a1437610daeacb64027cc37a534a758d091ad298af39f1b1e1f3c7c20511',
 };
 

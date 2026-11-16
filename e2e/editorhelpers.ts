@@ -221,6 +221,8 @@ export type EditorInspect = {
   objectIds: string[];
   /** The selected cell of a selected table (apps/operator/src/views/editor/inspect.ts). */
   cell?: number;
+  /** The text box, or the table's cell, being typed in on the canvas (inline editing). */
+  inline?: { objectId: string; cell?: number };
   /** The canvas's table kit has loaded. */
   tableKit?: boolean;
   draft?: PresentationRec;
