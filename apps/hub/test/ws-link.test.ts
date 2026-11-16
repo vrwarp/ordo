@@ -124,13 +124,30 @@ describe('WebSocket link under failure', () => {
     const display2 = await connectWs(hub.url, { token: stage.token, hello: helloOf() });
     await display2.next(byType('welcome'));
     expect((await display.next(byType('bye'))).reason).toBe('superseded');
-    await new Promise((r) => setTimeout(r, 100));
+    // A round trip on each other window (time.ping, time.pong): whatever the hub sent it before is in by then.
+    for (const w of [display2, lectern, lectern2]) {
+      w.send({ t: 'time.ping', c: 1 });
+      await w.next(byType('time.pong'));
+    }
     for (const w of [display2, lectern, lectern2]) expect(w.messages.some((m) => m.t === 'bye')).toBe(false);
 
-    // With the displays gone, the stage output is not connected, though both lecterns are still open.
+    // With the displays gone, the stage output is not connected, though both lecterns are still open. The newer
+    // display reports its health first, so the output's health is fresh when the displays close: a summary sent
+    // after they closed, within 2 s, says not connected because they closed, not because their health went
+    // stale (after 3.5 s, HEALTH_STALE_MS in ws.ts).
+    display2.send({
+      t: 'health',
+      health: { presented: 61, missed: 0, longTasks: 0, cache: { ready: 3, total: 3 } },
+    });
+    await ops.next((m) => presented(m)?.presented === 61);
+    const closedAt = ops.messages.length;
     display.close();
     display2.close();
-    await ops.next((m) => m.t === 'health.summary' && presented(m)?.connected === false, 4000);
+    await ops.next(
+      (m) =>
+        m.t === 'health.summary' && ops.messages.indexOf(m) >= closedAt && presented(m)?.connected === false,
+      2000,
+    );
     for (const w of [lectern, lectern2]) expect(w.messages.some((m) => m.t === 'bye')).toBe(false);
     // A lectern is a window of the stage output only: an Audience output's token with `view` is its own window.
     const audience = hub.lib.getSetting('outputs').find((o) => o.kind !== 'stage')!;
