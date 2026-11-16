@@ -1,6 +1,8 @@
 import {
   DEFAULT_LYRIC_STYLE,
   LOOK_MAIN,
+  LOOK_STAGE,
+  type Look,
   type Rgba,
   type Slide,
   type SlideObject,
@@ -38,7 +40,11 @@ import { FontResolver, installFontEnv } from '../src/text/fonts.ts';
  * - **feathered photo** (ProPresenter): the photo over the whole frame with a soft edge of 54 px (a 0.1
  *   feather on a 1080 px element), prepared with its soft edge (`SOFT_EDGE_STEP`) and copied 1:1, under a lyric;
  * - **rounded photo with a shadow** (ProPresenter): the photo in a large rounded rectangle with a soft edge and
- *   a shadow: cut to its corners and feathered when prepared, its shadow a cached layer under it.
+ *   a shadow: cut to its corners and feathered when prepared, its shadow a cached layer under it;
+ * - **a stage look's split preset** (PR #28): an output given the Stage look with the split preset draws a
+ *   sermon slide as the stage preview (text2d.ts `stagePreview`): the current and next slides' text in filled
+ *   cards in the left column. An output's slides carry no notes (the planner's `clampSlide`), so this is all a
+ *   stage look draws on an output that the plain bands do not.
  * Pictures are prepared in steps as the raster lanes prepare them (`preparePictureSteps`, PREPARE_STEP_PIXELS a
  * step), and the longest step is reported (`prepareStepMs`): a step is a task of the asset worker (50 ms).
  * A job is what the worker does for a slide whose pictures are cached (`raster`): measure the slide's reach
@@ -455,6 +461,39 @@ export const ROUNDED_PHOTO: Slide = {
   ] as SlideObject[],
 };
 
+/** The Stage look with the split preset (PR #28), its bands in the bench's face. */
+export const STAGE_SPLIT: Look = (() => {
+  const rule = LOOK_STAGE.layers.slide;
+  if (rule.mode !== 'lyricOnly' || !rule.nextSlide) throw new Error('the Stage look draws lyric bands');
+  return {
+    ...LOOK_STAGE,
+    layers: {
+      ...LOOK_STAGE.layers,
+      slide: {
+        ...rule,
+        style: { ...rule.style, fontFamily: 'Bench' },
+        nextSlide: { ...rule.nextSlide, style: { ...rule.nextSlide.style, fontFamily: 'Bench' } },
+      },
+      props: { ...LOOK_STAGE.layers.props, stagePreset: 'split' },
+    },
+  };
+})();
+const sermonText = (id: string, t: string): Slide => ({
+  id,
+  objects: [
+    { id: 'body', type: 'text', box: box(120, 160, 1680, 760), text: t, style: { ...base }, opacity: 1 },
+  ],
+});
+/** A sermon slide and the one after it, as the stage preview shows them. */
+export const STAGE_SERMON = sermonText(
+  'stage-sermon',
+  'The Lord is my shepherd; I shall not want. He makes me lie down in green pastures. He leads me beside still waters. He restores my soul.',
+);
+export const STAGE_SERMON_NEXT = sermonText(
+  'stage-sermon-next',
+  'He leads me in paths of righteousness for his name’s sake.',
+);
+
 export const KINDS = [
   { kind: 'sermon over a photo', slide: SERMON_PHOTO },
   { kind: 'lyric with a shadow', slide: LYRIC_SHADOW },
@@ -464,6 +503,13 @@ export const KINDS = [
   { kind: 'gradient decorations (M6)', slide: GRADIENT_DECO },
   { kind: 'feathered photo (ProPresenter)', slide: FEATHERED_PHOTO },
   { kind: 'rounded photo, shadow (ProPresenter)', slide: ROUNDED_PHOTO },
+  {
+    kind: 'stage look, split preset',
+    slide: STAGE_SERMON,
+    look: STAGE_SPLIT,
+    isSong: false,
+    nextSlide: STAGE_SERMON_NEXT,
+  },
 ] as const;
 
 export type Stats = { n: number; p50: number; p95: number; max: number; mean: number };
@@ -633,12 +679,14 @@ export async function bench(
     const blankTimes: number[] = [];
     for (let i = 0; i < iterations; i++) blankTimes.push(blankJob());
     blank.push({ width, height, raster: stats(blankTimes) });
-    for (const { kind, slide } of KINDS) {
+    for (const k of KINDS) {
+      const { kind, slide } = k;
+      const look: Look = 'look' in k ? k.look : LOOK_MAIN;
       // The worker's picture cache: each use prepared once for its device target, then copied 1:1.
       const prepared = new Map<string, ImageBitmap>();
       const p0 = performance.now();
       let prepareStepMs = 0;
-      for (const u of slidePictures(slide, { scale, look: LOOK_MAIN })) {
+      for (const u of slidePictures(slide, { scale, look })) {
         const src = sources[u.mediaId];
         if (!src || !u.target) continue;
         // In steps, as the raster lanes prepare a picture: each step is a task of its own.
@@ -659,7 +707,10 @@ export async function bench(
       const lookup: ImageLookup = (id, target) =>
         (target && prepared.get(pictureKey(id, target))) || sources[id];
       const scene = kind.startsWith('scene');
-      const opts = { isSong: kind.startsWith('lyric') };
+      const opts = {
+        isSong: 'isSong' in k ? k.isSong : kind.startsWith('lyric'),
+        ...('nextSlide' in k ? { nextSlide: k.nextSlide } : {}),
+      };
       let share = 1;
       // As the asset worker draws a slide job now (asset.worker.ts `run`).
       const job = () => {
@@ -674,9 +725,9 @@ export async function bench(
           sc?.base.bitmap.close();
           sc?.over?.bitmap.close();
         } else {
-          const reach = slideReach(measure(), s, { scale, look: LOOK_MAIN, ...opts });
+          const reach = slideReach(measure(), s, { scale, look, ...opts });
           const d = drawSprite(surface, take, width, height, spriteRect(reach, scale, width, height), (c) =>
-            rasterSlide(c, s, LOOK_MAIN, scale, lookup, opts),
+            rasterSlide(c, s, look, scale, lookup, opts),
           );
           share = (d.bitmap.width * d.bitmap.height) / (width * height);
           d.bitmap.close();
@@ -693,7 +744,7 @@ export async function bench(
           sc?.base.close();
           sc?.over?.close();
         } else {
-          rasterSlide(c, s, LOOK_MAIN, scale, lookup, opts);
+          rasterSlide(c, s, look, scale, lookup, opts);
           take().close();
         }
         measure();
@@ -711,7 +762,7 @@ export async function bench(
         fullTimes.push(full());
       }
       for (const b of prepared.values()) b.close();
-      const cost = slideJobCost(slide, LOOK_MAIN);
+      const cost = slideJobCost(slide, look);
       rows.push({
         kind,
         width,

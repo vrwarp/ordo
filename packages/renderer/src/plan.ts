@@ -14,7 +14,7 @@ import {
 } from '@ordo/domain';
 import { clampLook, clampSlide, clampText } from './clamp.ts';
 import { drawableContent } from './content.ts';
-import { lyricTextFor } from './text2d.ts';
+import { lyricTextFor, stagePreview } from './text2d.ts';
 
 /**
  * What each layer of an output shows for a live state under a look. Pure: the output's main thread runs
@@ -170,7 +170,11 @@ export function slideVisible(
     return drawn.objects.length > 0 || !!drawn.pictureMediaId;
   }
   if (lyricTextFor(slide, look, kindOrIsSong) !== null) return true;
-  return !!(rule.nextSlide && nextSlide && lyricTextFor(nextSlide, look, kindOrIsSong) !== null);
+  if (rule.nextSlide && nextSlide && lyricTextFor(nextSlide, look, kindOrIsSong) !== null) return true;
+  // A stage look's preview (PR #28, `stagePreview`) draws a slide's notes in their box though the slide has no
+  // text of its own (a picture or an empty slide). The planner's own slides carry no notes (`clampSlide`
+  // keeps none), so for them this adds nothing; it holds for a slide given with its notes.
+  return !!stagePreview(slide, slide, nextSlide, look, kindOrIsSong)?.notes;
 }
 
 const EMPTY = <D>(at = 0): LayerPlan<D> => ({ key: '', desc: null, at, fadeMs: 0 });

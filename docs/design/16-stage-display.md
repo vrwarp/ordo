@@ -47,6 +47,12 @@ off) shows the displayed slide's `Slide.notes`:
 - Notes show for every slide that has them, non-song slides included when the look shows no non-song
   text; a slide without notes, or a cleared slide layer, shows no notes box.
 - The look editor's 'Stage screen' card turns them on and sets their box and text (design/15 "Settings").
+- **The same look on an output.** An Audience window given a stage look draws its slides with the renderer's
+  stage preview (`text2d.ts` `stagePreview`, the same regions): with the split or prompter preset its current
+  and next cards move to the preset's places, and `sprite.ts` `slideReach` and `plan.ts` `slideVisible` read
+  the same regions, so the slide raster holds every card. An output's planned slides carry no notes
+  (`clampSlide` keeps none), so an output never draws notes; the look editor's preview and the thumbnails,
+  which draw a slide with its notes, show them in the preset's notes box.
 
 **Pulpit Lectern** (PR #28; `/stage?view=lectern`, `LecternView.tsx`). The Outputs page's 'Copy Lectern URL' and
 'Open Pulpit Lectern' give the stage output's own URL and token with `view=lectern`: a tablet or laptop at the

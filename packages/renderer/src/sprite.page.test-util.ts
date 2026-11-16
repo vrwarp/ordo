@@ -2,6 +2,7 @@ import {
   DEFAULT_LYRIC_STYLE,
   LOOK_LOWER_THIRD,
   LOOK_MAIN,
+  LOOK_STAGE,
   type Look,
   type Slide,
   type SlideObject,
@@ -121,6 +122,85 @@ type Case = {
 };
 
 const lyricLook: Look = LOOK_LOWER_THIRD;
+
+/**
+ * A stage look (PR #28) on an output: with its stage notes on (the default for a stage look), a slide with
+ * notes, or the split or prompter preset, is drawn as the stage preview (text2d.ts `stagePreview`): the
+ * current and next cards moved and filled, and the notes box. Every part of it must be in the reach.
+ */
+const stageLook = (props: Partial<Look['layers']['props']> = {}): Look => ({
+  ...LOOK_STAGE,
+  layers: { ...LOOK_STAGE.layers, props: { ...LOOK_STAGE.layers.props, ...props } },
+});
+const NOTES = 'Pray for the Smith family.\nWelcome visitors: coffee in the hall after the service.';
+const stageSlide = (id: string, t: string, notes?: string): Slide => ({
+  id,
+  objects: [text('t', t, box(100, 200, 1700, 400))],
+  ...(notes ? { notes } : {}),
+});
+const STAGE_CASES: Case[] = [
+  {
+    name: 'stage look: a song slide with a band note (worship preset), its notes band at the bottom',
+    job: {
+      kind: 'slide',
+      slide: stageSlide('sw', LYRICS, 'Band: key change after verse 2'),
+      look: stageLook(),
+    },
+    // The lyrics card and the notes band span most of the frame.
+    tight: false,
+  },
+  {
+    name: 'stage look: a non-song slide with notes (split preset), the left cards and the notes column',
+    job: {
+      kind: 'slide',
+      slide: stageSlide('ss', 'Welcome to our church', NOTES),
+      look: stageLook(),
+      isSong: false,
+      nextSlide: stageSlide('ss2', 'Announcements'),
+    },
+    tight: false,
+  },
+  {
+    name: 'stage look with its own notes box: the lyrics and the notes box apart from them',
+    job: {
+      kind: 'slide',
+      slide: stageSlide('sb', LYRICS, NOTES),
+      look: stageLook({
+        style: {
+          notes: {
+            ...style({ fontSizePx: 32, align: 'left', valign: 'top' }),
+            fill: { color: { r: 255, g: 255, b: 255, a: 0.1 }, radius: 10 },
+            box: box(60, 420, 900, 180),
+          },
+        },
+      }),
+    },
+    tight: true,
+  },
+  {
+    // An output's slides carry no notes (the planner's clampSlide), so on an output a stage look takes this
+    // path only with the split or prompter preset: the cards move although no notes are drawn.
+    name: 'stage look, prompter preset, no notes: the current slide as a strip at the top',
+    job: {
+      kind: 'slide',
+      slide: stageSlide('sp', 'Welcome to our church'),
+      look: stageLook({ stagePreset: 'prompter' }),
+      isSong: false,
+    },
+    tight: true,
+  },
+  {
+    name: 'stage look, split preset, no notes: the current and next cards in the left column',
+    job: {
+      kind: 'slide',
+      slide: stageSlide('sl', 'Welcome to our church'),
+      look: stageLook({ stagePreset: 'split' }),
+      isSong: false,
+      nextSlide: stageSlide('sl2', 'Announcements'),
+    },
+    tight: true,
+  },
+];
 
 /**
  * Glyph parts that are shapes of their own and lie wholly outside their line box with tight line spacing,
@@ -549,6 +629,7 @@ const CASES: Case[] = [
     },
     tight: true,
   },
+  ...STAGE_CASES,
   ...MARK_CASES,
 ];
 
