@@ -875,7 +875,8 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   listed (`EmittedSlide.missing`; the import core's `ImportCore.budgetLeft` lists what a scene names), as the ladder's are
   (`Slide.pptx.missing`), so goLive's degraded list
   names them; a slide hybrid only for them waits for nothing. On a hub with LibreOffice a slide over 64 KB
-  that the ladder would simplify keeps LibreOffice's page instead (`ImportCore.pageForBudget`, above).
+  that the ladder would simplify keeps LibreOffice's page instead (`ImportCore.pageForBudget`, above), unless it
+  holds a table object (every table is the table object, §15 M9 "The table object imported").
 - **What came back with decorations** (`decor-render`, wave r2; E's worship slides): while decorations were
   held back the guard left out topmost objects that main sent to LibreOffice's art, and LibreOffice draws no
   budget's art: an emoji game slide (0.956 at wave 1, 0.795 as stored: its connector lines and emojis listed
