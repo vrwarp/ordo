@@ -54,6 +54,11 @@ import type { FontEnv, RichLayout, RunStyle } from './types.ts';
  * (`registerGlyphPainter`, `registerFaceTarget`), independently, so a bevelled warped title gets its rim on
  * the warped glyphs. With nothing registered it is the plain painter on the direct target: the calls above,
  * exactly as before the seam (paint.hooks.test.ts).
+ *
+ * Device pixels (text-lines, sub-wave 1b): a caller may ask for the plain painter on whole device pixels
+ * (`PaintHooks.devicePixels`, `DEVICE_PIXEL_PAINTER`): baselines on the device row, run starts on the quarter
+ * of a device column, underlines and strikes on whole rows, under an axis-aligned transform only. The table drawer asks
+ * for it (table text sits on the pixels LibreOffice's page uses); every other caller paints as before.
  */
 
 /** Underline and strike thickness, × the segment's drawn size (LibreOffice's F/18). */
@@ -170,6 +175,88 @@ export const PLAIN_PAINTER: GlyphPainter = {
   },
 };
 
+/**
+ * The context's transform when it is axis-aligned with positive scales (no rotation, skew or flip) and
+ * finite, else null: device-pixel placement applies only then (`DEVICE_PIXEL_PAINTER`).
+ */
+function axisAligned(ctx: Ctx2D): { a: number; d: number; e: number; f: number } | null {
+  if (typeof ctx.getTransform !== 'function') return null;
+  const m = ctx.getTransform();
+  if (m.b !== 0 || m.c !== 0 || !(m.a > 0) || !(m.d > 0)) return null;
+  if (!Number.isFinite(m.a) || !Number.isFinite(m.d) || !Number.isFinite(m.e) || !Number.isFinite(m.f))
+    return null;
+  return m;
+}
+
+/** A tolerance for float noise when a position already sits on a device pixel (1e-6 device px). */
+const ON_PIXEL = 1e-6;
+
+/**
+ * `y` (logical px under `ctx`'s transform) moved to the top of the device pixel row it falls in (floor):
+ * the row LibreOffice's page draws a baseline on (its PDF drawn by pdftoppm, the hub's and the measuring
+ * tool's rasterizer, puts every baseline on floor(position × scale) at 144 and 288 dpi, text-lines probe),
+ * where Chromium's canvas rounds to the nearest row. `y` itself under any other transform.
+ */
+export function deviceRow(ctx: Ctx2D, y: number): number {
+  const m = axisAligned(ctx);
+  if (!m || !Number.isFinite(y)) return y;
+  return (Math.floor(m.d * y + m.f + ON_PIXEL) - m.f) / m.d;
+}
+
+/** Steps a device pixel column is cut into for a glyph run's start: quarters, as the reference rasterizer has. */
+export const COLUMN_STEPS = 4;
+
+/**
+ * `x` moved to the start of the quarter of a device pixel column it falls in (floor): where LibreOffice's page
+ * starts a glyph run (pdftoppm places each glyph at floor(position × scale × 4) / 4, at 144 and 288 dpi,
+ * text-lines probe). Chromium's canvas draws a run at its exact position, so ordo's run starts land on
+ * LibreOffice's. `x` itself under a transform that is not axis-aligned.
+ */
+export function deviceColumn(ctx: Ctx2D, x: number): number {
+  const m = axisAligned(ctx);
+  if (!m || !Number.isFinite(x)) return x;
+  return (Math.floor((m.a * x + m.e) * COLUMN_STEPS + ON_PIXEL) / COLUMN_STEPS - m.e) / m.a;
+}
+
+/**
+ * A rectangle's top and height on whole device rows: both edges rounded to the nearest row boundary, at least
+ * one row tall, as the reference rasterizer draws LibreOffice's underlines and strikes (stroke adjustment:
+ * whole rows, no partial row, text-lines probe). Unchanged under a transform that is not axis-aligned.
+ */
+export function deviceRows(ctx: Ctx2D, y: number, h: number): [y: number, h: number] {
+  const m = axisAligned(ctx);
+  if (!m || !Number.isFinite(y) || !Number.isFinite(h)) return [y, h];
+  const top = Math.round(m.d * y + m.f);
+  const bottom = Math.max(top + 1, Math.round(m.d * (y + h) + m.f));
+  return [(top - m.f) / m.d, (bottom - top) / m.d];
+}
+
+/**
+ * The plain painter on device pixels: each run's baseline on its device row and its start on the quarter of
+ * its device column (`deviceRow`, `deviceColumn`), underlines and strikes (and their shadows) on whole rows
+ * (`deviceRows`). Layout stays scale-free: only the painted positions snap, to the pixels of the output
+ * being drawn (1920, 3840, a preview). Table-cell text only (the table drawer asks for it with
+ * `PaintHooks.devicePixels`): LibreOffice's pages put table text there; imported text boxes and ordo's own
+ * text paint as the plain painter does (owner question T5).
+ */
+export const DEVICE_PIXEL_PAINTER: GlyphPainter = {
+  kind: 'plain',
+  glyphs(ctx, g, pass) {
+    const x = deviceColumn(ctx, g.x);
+    const y = deviceRow(ctx, g.y);
+    if (pass === 'outline') ctx.strokeText(g.text, x, y);
+    else ctx.fillText(g.text, x, y);
+  },
+  rect(ctx, r, pass) {
+    if (pass !== 'decoration' && pass !== 'shadow') {
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      return;
+    }
+    const [y, h] = deviceRows(ctx, r.y, r.h);
+    ctx.fillRect(r.x, y, r.w, h);
+  },
+};
+
 /** The passes after the fill box and highlights, for a face target to draw where it needs them. */
 export interface PaintPasses {
   /** Passes 2 and 3 (shadows, glow) on `c`, which the target has set up as `ctx` (transform and alpha). */
@@ -240,8 +327,12 @@ export function faceTargetFor(o: TextObject): FaceTarget {
   return spriteTarget?.applies(o) ? spriteTarget.hook : DIRECT_TARGET;
 }
 
-/** A painter and target chosen by the caller instead of the registered ones. */
-export type PaintHooks = { painter?: GlyphPainter; target?: FaceTarget };
+/**
+ * A painter and target chosen by the caller instead of the registered ones. `devicePixels`: the plain
+ * painter (when it is the one the object gets) paints on whole device pixels (`DEVICE_PIXEL_PAINTER`), as the
+ * table drawer asks for its cells' text.
+ */
+export type PaintHooks = { painter?: GlyphPainter; target?: FaceTarget; devicePixels?: boolean };
 
 /** Paint a layout of `o` (made by `layoutRich` for the same object) at `scale` device px per logical px. */
 export function paintRich(
@@ -252,7 +343,8 @@ export function paintRich(
   _env: FontEnv,
   hooks?: PaintHooks,
 ): void {
-  const painter = hooks?.painter ?? glyphPainterFor(o);
+  const chosen = hooks?.painter ?? glyphPainterFor(o);
+  const painter = hooks?.devicePixels && chosen === PLAIN_PAINTER ? DEVICE_PIXEL_PAINTER : chosen;
   const target = hooks?.target ?? faceTargetFor(o);
   const plan = painter.plan?.(o, l) ?? paintPlan(o, l);
   ctx.save();

@@ -22,7 +22,10 @@ const FIXTURE: readonly (readonly [name: string, trace: string, plan: string])[]
   ['table: 96-cell bulletin (M6 group)', '1sfbu331rkjhre1796', 'w7k42t4e2jux2'],
   ['table: 640-cell master grid (M9 object)', 'eh49yd11l8dm636w', 'w7k42t4e2jux2'],
   ['table: 640-cell master grid (M6 group)', 'gx2e3j14t2e6k2am', 'w7k42t4e2jux2'],
-  ['table: 13,782-character chart (M9 object)', '1domlvkpgezcw4k5a', 'w7k42t4e2jux2'],
+  // Re-pinned by text-lines (sub-wave 1b): the table drawer paints cell text on device pixels (baselines on
+  // the device row, run starts on the quarter column), which moves this chart's runs at 3840; 62a1c3a's digest
+  // was 1domlvkpgezcw4k5a. The other two tables' runs already sit on device pixels at 3840.
+  ['table: 13,782-character chart (M9 object)', 'm4diaq1extefw4lq9', 'w7k42t4e2jux2'],
   ['table: 13,782-character chart (M6 group)', 'wkhqjo14lb7jq47nb', 'w7k42t4e2jux2'],
   ['line art past the slide budget (units)', 'u9qitd1a0qu38fpi7', 'dwfdm3xona5y11'],
   [
