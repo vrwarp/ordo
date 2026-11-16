@@ -5,7 +5,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ShapeObject } from '@ordo/domain';
 import { type PptxClientScene, parsePptxScene } from '@ordo/importers';
+import { type Converted, ImportCore } from '@ordo/importers/pptx-core.ts';
+import { ImportLog } from '@ordo/importers/pptx-report.ts';
 import {
   body,
   buildDeck,
@@ -309,19 +312,35 @@ describe("a slide past the guard (lo-forms: the guard's left-outs to LibreOffice
   });
 });
 
-describe('a dense table slide (M9 tables-conv: the interim table rule)', () => {
-  it("keeps a table slide's group bytes (the interim table rule): the client's scene weighs as the hub's own", async () => {
-    // M9 tables-conv: with LibreOffice, a slide whose tables as their M6 group pass 64 KB keeps LibreOffice's
-    // page; a client's scene must carry the same count, or its import would differ from the hub's.
+describe('a dense table slide (M9: every table is the table object, on every hub)', () => {
+  it("an older operator's scene with tableGroupBytes is accepted, the field dropped: the table object on a hub with LibreOffice", async () => {
+    // An operator of the interim rule's build (M9 tables-conv) sent, with LibreOffice, what the slide's tables
+    // would add as their M6 group; the hub takes its scene and stores the slide as the table object all the same.
     const parts = denseTableDeck(28);
     const z = new JSZip();
     for (const [k, v] of parts) z.file(k, v);
     const client = (await parsePptxScene(await z.generateAsync({ type: 'uint8array' }))).scene;
+    const older = structuredClone(client);
+    (older.slides[0] as unknown as Record<string, unknown>).tableGroupBytes = 90_000;
+    const taken = checkClientScene(older, { libreoffice: true });
+    if (!('scene' in taken)) throw new Error(`refused: ${taken.refused}`);
+    const slide = taken.scene.slides[0]!;
+    // The import core's steps 3-4 as the hub's job runs them on a checked scene (`nativeJob.ts`).
+    const core = new ImportCore({ lo: true, log: new ImportLog(), warn: () => {}, geomFileBytes: 1 << 20 });
+    const converted = new Map<number, Converted>([[slide.index, { s: slide, media: new Map() }]]);
+    const drafts = core.drafts(taken.scene.listed, converted, taken.scene.scan);
+    core.budget(drafts);
+    const d = drafts[0]!;
+    expect(d.cls).toBe('native');
+    const tables = d.slide.objects.filter((o) => o.type === 'shape' && (o as ShapeObject).table);
+    expect(tables).toHaveLength(1);
+    expect((tables[0] as ShapeObject).table!.cells).toHaveLength(140);
+    expect(d.notes.some((n) => /LibreOffice draws its page/.test(n))).toBe(false);
+    // The field is not this hub's: the schema drops it.
+    expect(slide).not.toHaveProperty('tableGroupBytes');
+    // The hub's own parse of the deck weighs no M6 group either.
     const own = sceneTask({ parts: new Map(parts), pictureSizes: [], range: { from: 0, to: 1 }, options: {} })
       .result.slides[0]!;
-    expect(own.tableGroupBytes).toBeGreaterThan(64 * 1024);
-    expect(client.slides[0]!.tableGroupBytes).toBe(own.tableGroupBytes);
-    const taken = checkClientScene(structuredClone(client), { libreoffice: true });
-    expect('scene' in taken && taken.scene.slides[0]!.tableGroupBytes).toBe(own.tableGroupBytes);
+    expect(own).not.toHaveProperty('tableGroupBytes');
   });
 });

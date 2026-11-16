@@ -45,9 +45,17 @@ export type SlideScore = {
   /** The slide's class in the hub when its budgets made it differ from `class` (`census.ts` `hubClasses`). */
   hub?: string;
   /**
+   * M9: the slide holds a table object (`NativeSlide.table`): its hub columns score it as stored (`noLoSsim`,
+   * and `beforeHubSsim` when the hub is not asked: `policySsim`, or `nativeSsim` where the two drawings are
+   * equal), never its drawing under the LibreOffice policies. The slides an older run's `reasons` ('table' or
+   * 'deco:table', not 'art:table') select for `--stored-tables`.
+   */
+  table?: true;
+  /**
    * `--before hub`: what a hub with LibreOffice showed, scored against LibreOffice (`beforehub.ts`): its
    * version 2 drawn (`beforeHubFrom: 'hub'`), else the pixel paste (`'paste'`); a slide the hub stores native
-   * without metafiles has its `nativeSsim` (and no `beforeHubFrom`).
+   * without metafiles has its `nativeSsim` (and no `beforeHubFrom`), a slide holding a table object its
+   * stored form (`table`).
    */
   beforeHubSsim?: number;
   beforeHubFrom?: 'hub' | 'paste';

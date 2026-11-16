@@ -1,7 +1,18 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { type APIRequestContext, type BrowserContext, expect, type Page, test } from '@playwright/test';
-import { opOrigin } from './editorhelpers.ts';
+import {
+  canvasPoint,
+  type EditorInspect,
+  editorState,
+  frames,
+  opOrigin,
+  openEditor,
+  openSlide,
+  SECOND_PRESS_MS,
+  save,
+  tableKitReady,
+} from './editorhelpers.ts';
 import { hubApi, login } from './linkhelpers.ts';
 import type { Pixels } from './png.ts';
 import { PLAN, TABLE, tableCellCentre, tableDeck } from './pptxdecks.ts';
@@ -23,17 +34,19 @@ import {
 
 /**
  * PowerPoint tables imported as one table object, end to end (design/27 §15 M9 "The table object imported",
- * tables-conv). The deck (`pptxdecks.ts` `tableDeck`, written by pptxgenjs) has two table-only slides: a
- * 159-cell bulletin with a navy header row and a merged cell, past M6's 150-cell cap, so before the table object
- * LibreOffice's art drew it on a hub with LibreOffice and a hub without it listed it missing; and a 140-cell
- * reading plan, within the cap but past 64 KB as its M6 group. On three hubs of the 'pptx-tables' row:
+ * tables-conv, tables-flip). The deck (`pptxdecks.ts` `tableDeck`, written by pptxgenjs) has two table-only
+ * slides: a 159-cell bulletin with a navy header row and a merged cell, past M6's 150-cell cap, so before the
+ * table object LibreOffice's art drew it on a hub with LibreOffice and a hub without it listed it missing; and a
+ * 140-cell reading plan, within the cap but past 64 KB as its M6 group, which sub-wave 1's interim rule kept as
+ * LibreOffice's page on a hub with LibreOffice. Every table is the table object on every kind of hub (the owner's
+ * answer to question 3 of the LibreOffice inventory, 2026-11-15). On three hubs of the 'pptx-tables' row:
  * - **port 0, without LibreOffice** (`ORDO_LIBREOFFICE=off`): the deck dropped on the Import tab in 'Editable'
  *   mode, parsed in the operator, version 1 built by the hub from the browser's scene;
  * - **port 1, without LibreOffice**: the same deck through the upload route, parsed by the hub;
- * - **port 2, with LibreOffice**: the upload route and its follow-ups; the interim rule of question 3
- *   (`ImportCore.pageForBudget`): the bulletin, which M6 never grouped, is the table object here too, and the
- *   reading plan keeps LibreOffice's page.
- * Each: both slides stored as the rule says, nothing missing in the import report; live, the Audience window
+ * - **port 2, with LibreOffice**: the upload route; both slides the table object here too, nothing waiting for
+ *   LibreOffice (no follow-up), no slide noting LibreOffice's page, and the reading plan's cells editable in the
+ *   editor (a double-click on a cell, typing, Save).
+ * Each: both slides stored as table objects, nothing missing in the import report; live, the Audience window
  * shows the bulletin's header fill and its text, the Lobby and the Bottom-Third Stream draw no band of its cells
  * (a slide whose only text is a table has no strap), and the Stage shows the deck's title, not its cells.
  */
@@ -43,8 +56,10 @@ const LO_PORT = portOf('pptx-tables', 2);
 const OUT = 'test-results/pptx-tables';
 /** Channel difference allowed between the header's fill and what is drawn at a header cell's centre. */
 const TOL = 12;
-/** The interim rule's slide note (`@ordo/importers` `TABLE_PAGE_NOTE`). */
+/** The note sub-wave 1's interim rule gave a table slide kept as LibreOffice's page: no slide carries it now. */
 const PAGE_NOTE = 'its tables as shapes would be over 64 KB: LibreOffice draws its page';
+/** Any note of a slide kept as LibreOffice's page for its size (`ImportCore.pageForBudget`). */
+const PAGE = /LibreOffice draws its page/;
 
 type Job = { id: string; kind: string; state: string; log: string[]; result?: { presentationId: string } };
 type Table = { cells: { text?: string; colSpan?: number }[]; fills?: unknown[] };
@@ -96,11 +111,11 @@ function tableOf(s: StoredSlide): Table {
 }
 
 /**
- * The stored deck as the rule says: the bulletin one native table object (159 cells, the merge, the header's
- * fill), nothing missing or waiting; the reading plan the table object without LibreOffice, LibreOffice's page
- * with it. Returns the presentation.
+ * The stored deck as the rule says, on every kind of hub: the bulletin one native table object (159 cells, the
+ * merge, the header's fill), the reading plan one native table object (140 cells), nothing missing or waiting,
+ * no note of LibreOffice's page. Returns the presentation.
  */
-async function storedAsTheRuleSays(a: APIRequestContext, id: string, lo: boolean): Promise<Presentation> {
+async function storedAsTheRuleSays(a: APIRequestContext, id: string): Promise<Presentation> {
   const p = await apiJson<Presentation>(a, `presentations/${id}`);
   const slides = p.sections.flatMap((s) => s.slides);
   expect(slides).toHaveLength(2);
@@ -114,20 +129,65 @@ async function storedAsTheRuleSays(a: APIRequestContext, id: string, lo: boolean
   expect(t.cells.slice(0, 5).map((c) => c.text)).toEqual([...TABLE.headerText]);
   expect(t.fills?.length ?? 0, "the header's fill").toBeGreaterThan(0);
   expect(plan.pptx?.missing ?? []).toEqual([]);
-  expect(plan.pptx?.pending, 'nothing waits once the follow-ups are done').toBeUndefined();
-  if (lo) {
-    // The interim rule: LibreOffice's page (version 2), the cells' text kept for search.
-    expect(plan.pptx?.class).toBe('picture');
-    expect(plan.pptx?.notes ?? []).toContain(PAGE_NOTE);
-    expect(plan.objects).toEqual([]);
-    expect(plan.imported?.imageMediaId, "LibreOffice's page picture").toBeDefined();
-    expect(plan.pptx?.artText).toMatch(/^Day 1: Psalm 1, verses 1-9\n/);
-  } else {
-    expect(plan.pptx?.class).toBe('native');
-    expect(tableOf(plan).cells).toHaveLength(PLAN.rows * PLAN.cols);
-    expect(plan.pptx?.notes ?? []).not.toContain(PAGE_NOTE);
+  expect(plan.pptx?.pending, 'nothing waits for LibreOffice').toBeUndefined();
+  expect(plan.pptx?.class).toBe('native');
+  expect(tableOf(plan).cells).toHaveLength(PLAN.rows * PLAN.cols);
+  expect(plan.imported, "no LibreOffice's page").toBeUndefined();
+  for (const s of [bulletin, plan]) {
+    expect(s.pptx?.notes ?? []).not.toContain(PAGE_NOTE);
+    expect((s.pptx?.notes ?? []).filter((n) => PAGE.test(n))).toEqual([]);
   }
   return p;
+}
+
+/** The reading plan's cell edited on port 2: row 1, column 2 (from 0: the first row, the second column). */
+const PLAN_ROW = 0;
+const PLAN_COL = 1;
+const PLAN_TYPED = ' and Psalm 119';
+
+/**
+ * The reading plan's cells are editable: in the editor (slide 2) a click selects the table, a click on it selected
+ * selects the cell, a double-click edits it on the canvas, and typing adds to its text; Save stores it.
+ */
+async function planCellEdited(
+  page: Page,
+  port: number,
+  a: APIRequestContext,
+  p: Presentation,
+): Promise<void> {
+  const plan = p.sections.flatMap((s) => s.slides)[1]!;
+  const obj = plan.objects.find((o) => o.type === 'shape' && o.table)!;
+  const text = `Day ${PLAN_ROW + 1}: Psalm ${PLAN_ROW * PLAN.cols + PLAN_COL + 1}, verses ${PLAN_COL + 1}-${PLAN_COL + 9}`;
+  const cell = obj.table!.cells.findIndex((c) => c.text === text);
+  expect(cell, 'the edited cell').toBeGreaterThan(0);
+  type State = EditorInspect & { cell?: number; inline?: { objectId: string; cell?: number } };
+  const state = async () => (await editorState(page)) as State;
+  await openEditor(page, port, p.id);
+  await openSlide(page, 2);
+  await frames(page);
+  // pptxdecks.ts: the plan at (0.4 in, 0.4 in), five columns of 2.5 in, rows of 0.24 in at least.
+  const at = await canvasPoint(
+    page,
+    (0.4 + 2.5 * PLAN_COL + 1.25) * 144,
+    (0.4 + 0.24 * PLAN_ROW + 0.12) * 144,
+  );
+  await tableKitReady(page);
+  await page.mouse.click(at.x, at.y);
+  await expect.poll(async () => (await state()).objectId).toBe(obj.id);
+  await page.waitForTimeout(SECOND_PRESS_MS);
+  await page.mouse.click(at.x, at.y);
+  await expect.poll(async () => (await state()).cell).toBe(cell);
+  await page.waitForTimeout(SECOND_PRESS_MS);
+  await page.mouse.dblclick(at.x, at.y);
+  await expect(page.getByTestId('ordo-inline-canvas-editor')).toBeVisible();
+  await expect.poll(async () => (await state()).inline).toEqual({ objectId: obj.id, cell });
+  await page.keyboard.press('End');
+  await page.keyboard.type(PLAN_TYPED);
+  await page.keyboard.press('Escape');
+  await save(page);
+  const after = await apiJson<Presentation>(a, `presentations/${p.id}`);
+  const t = tableOf(after.sections.flatMap((s) => s.slides)[1]!);
+  expect(t.cells[cell]!.text).toBe(`${text}${PLAN_TYPED}`);
 }
 
 /** Dark pixels (text ink on the white cells) in a rectangle of logical px. */
@@ -266,7 +326,7 @@ test('tables imported in the browser for a hub without LibreOffice are table obj
     const native = jobs.find((j) => j.kind === 'pptx-native')!;
     const full = await apiJson<Job>(a, `jobs/${native.id}`);
     expect(full.log.join('\n')).toMatch(/parsed in the browser: the hub checked its scene/);
-    const p = await storedAsTheRuleSays(a, full.result!.presentationId, false);
+    const p = await storedAsTheRuleSays(a, full.result!.presentationId);
     await liveAsATable(a, context, TAB_PORT, p, 'tab');
   } finally {
     hub.kill();
@@ -287,15 +347,16 @@ test('tables uploaded to a hub without LibreOffice are table objects', async ({ 
     const jobs = await settled(a);
     expect(jobs.filter((j) => j.kind === 'pptx-lo')).toHaveLength(0);
     expect(job.log.join('\n')).not.toMatch(/parsed in the browser/);
-    const p = await storedAsTheRuleSays(a, job.result!.presentationId, false);
+    const p = await storedAsTheRuleSays(a, job.result!.presentationId);
     await liveAsATable(a, context, UPLOAD_PORT, p, 'upload');
   } finally {
     hub.kill();
   }
 });
 
-test("on a hub with LibreOffice the bulletin is a table object and the dense plan keeps LibreOffice's page", async ({
+test('on a hub with LibreOffice both tables are table objects, nothing waits, and the plan edits cell by cell', async ({
   context,
+  page,
 }) => {
   test.setTimeout(360_000);
   rmSync(join(OUT, 'lo'), { recursive: true, force: true });
@@ -308,10 +369,13 @@ test("on a hub with LibreOffice the bulletin is a table object and the dense pla
     expect(caps.libreoffice.state, 'this hub has LibreOffice').not.toBe('off');
     const job = await importPptx(a, deck);
     const jobs = await settled(a);
-    const lo = jobs.filter((j) => j.kind === 'pptx-lo');
-    expect(lo, 'the LibreOffice follow-up ran once (the plan page)').toHaveLength(1);
-    expect(lo[0]!.state, lo[0]!.log.join('\n')).toBe('done');
-    const p = await storedAsTheRuleSays(a, job.result!.presentationId, true);
+    expect(
+      jobs.filter((j) => j.kind === 'pptx-lo'),
+      'no LibreOffice follow-up: no page to draw',
+    ).toHaveLength(0);
+    expect(job.log.join('\n')).not.toMatch(PAGE);
+    const p = await storedAsTheRuleSays(a, job.result!.presentationId);
+    await planCellEdited(page, LO_PORT, a, p);
     await liveAsATable(a, context, LO_PORT, p, 'lo');
   } finally {
     hub.kill();

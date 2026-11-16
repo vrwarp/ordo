@@ -36,6 +36,8 @@ export type Args = {
   hubBudget: boolean;
   /** `--slides`, in the order given; empty: every slide of every deck. */
   slides: SlideSpec[];
+  /** `--ask-hub`, in the order given: slides `--before hub` asks the hub for whatever it stores. */
+  askHub: SlideSpec[];
   decks: string[];
 };
 
@@ -44,22 +46,22 @@ const MAX_SLIDE = 100_000;
 const MAX_RANGE = 10_000;
 
 /**
- * A `--slides` value: `3`, `1,4-6`, or `<deck>:<list>` for the decks whose run name contains `<deck>`
- * (run names never contain ':'). Throws on anything else.
+ * A `--slides` (or `--ask-hub`, `flag`) value: `3`, `1,4-6`, or `<deck>:<list>` for the decks whose run name
+ * contains `<deck>` (run names never contain ':'). Throws on anything else.
  */
-export function parseSlideSpec(v: string | undefined): SlideSpec {
-  if (!v) throw new Error('--slides takes a list such as 3,5-7 or deck:3,5-7');
+export function parseSlideSpec(v: string | undefined, flag = '--slides'): SlideSpec {
+  if (!v) throw new Error(`${flag} takes a list such as 3,5-7 or deck:3,5-7`);
   const at = v.lastIndexOf(':');
   const deck = at >= 0 ? v.slice(0, at).trim() : undefined;
   const list = at >= 0 ? v.slice(at + 1) : v;
-  if (deck === '') throw new Error(`--slides ${v}: the deck before ':' is empty`);
+  if (deck === '') throw new Error(`${flag} ${v}: the deck before ':' is empty`);
   const slides = new Set<number>();
   for (const item of list.split(',')) {
     const m = /^\s*(\d{1,6})\s*(?:-\s*(\d{1,6})\s*)?$/.exec(item);
     const from = Number(m?.[1]);
     const to = m?.[2] === undefined ? from : Number(m[2]);
     if (!m || from < 1 || to < from || to > MAX_SLIDE || to - from >= MAX_RANGE)
-      throw new Error(`--slides ${v}: '${item}' is not a slide number or a range a-b of them`);
+      throw new Error(`${flag} ${v}: '${item}' is not a slide number or a range a-b of them`);
     for (let n = from; n <= to; n++) slides.add(n);
   }
   return { ...(deck !== undefined ? { deck } : {}), slides };
@@ -91,6 +93,7 @@ export function parseArgs(argv: readonly string[]): Args {
     noLibreOffice: false,
     hubBudget: false,
     slides: [],
+    askHub: [],
     decks: [],
   };
   let noPpv = false;
@@ -117,6 +120,7 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (v === '--baseline') a.baseline = value(++i, v);
     else if (v === '--manifest') a.manifest = value(++i, v);
     else if (v === '--slides') a.slides.push(parseSlideSpec(value(++i, v)));
+    else if (v === '--ask-hub') a.askHub.push(parseSlideSpec(value(++i, v), v));
     else if (v === '--before') {
       const b = value(++i, v);
       if (b !== 'hub' && b !== 'paste') throw new Error('--before takes hub or paste');

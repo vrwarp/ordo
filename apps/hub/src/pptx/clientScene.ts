@@ -136,9 +136,7 @@ const EmittedSlideS = z.object({
     .max(MISSING_LIMITS.entries * 4)
     .optional(),
   artText: str(20_000).optional(),
-  // M9 (`tables-conv`): with LibreOffice, what the slide's tables would add as their M6 group (the interim
-  // table rule of `pptx-core.ts` `pageForBudget`); a scene that misstates it only changes that slide's form.
-  tableGroupBytes: int(2 ** 30).optional(),
+  // M9: no `tableGroupBytes` (the interim table rule is gone): z.object drops it from an older operator's scene.
 });
 
 const RecolorS = z.discriminatedUnion('kind', [

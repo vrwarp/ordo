@@ -81,13 +81,15 @@ between 16000 and 32767.
   hostile lone line art through the upload route), `units-live` (405-406: a jump to a slide not prepared and a GO
   50 ms after its arm, and the playlist warmed ahead), `editor-table` (420) and `ipad-table-targets` (421-423, one
   per tablet project) are the table editing's; `pptx-table-edit` (425, sub-wave 1's integration: the table deck
-  imported on a hub without LibreOffice, a cell edited on the canvas, live); `pptx-tables` (430-432, tables-conv:
-  the table deck on a hub without LibreOffice through the Import tab and through the upload route, and on a hub
-  with LibreOffice); `golive-prepare` (450-451: Go live again during a service on a hub with a slowed library, and
+  imported on a hub without LibreOffice, a cell edited on the canvas, live); `pptx-tables` (430-432, tables-conv
+  and tables-flip: the table deck on a hub without LibreOffice through the Import tab and through the upload
+  route, and on a hub with LibreOffice, where both slides are table objects too, nothing waits for LibreOffice and
+  a reading-plan cell is edited on the canvas); `golive-prepare` (450-451: Go live again during a service on a hub with a slowed library, and
   the size ceiling). The integrations of sub-waves 2-4 hold 630-659. An explicit `ORDO_E2E_PORT_BASE` may sit below
   16000 (design/29 §4; `e2e/ports.ts` says what it must avoid).
   `e2e/table-deck.test.ts` checks the deck still tests what the spec is about (the bulletin past M6's cell cap,
-  the reading plan's M6 group past 64 KB), as `e2e/lineart-deck.test.ts` does for the line-art deck.
+  the reading plan's M6 group past 64 KB, measured with the kill switch, and both table objects through the import
+  core on both kinds of hub), as `e2e/lineart-deck.test.ts` does for the line-art deck.
 
 ### Projects
 

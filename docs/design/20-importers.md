@@ -275,11 +275,11 @@ The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
   grid of a template is one object a slide). A table that names no style has none, whatever the deck's
   default (`a:tblStyleLst def`), as LibreOffice draws it; a cell whose family lacks its script (Hangul in a
   Latin face) is measured and spaced by the library face of its script (`FaceSource.script`, the same on the hub
-  and in the browser; Han, Kana and Hangul, which are drawn glyph by glyph). A table with vertical cell text stays for LibreOffice. On a hub with LibreOffice
-  a slide whose tables as their M6 group would pass 64 KB keeps LibreOffice's page for now, as before
-  (`EmittedSlide.tableGroupBytes`, `ImportCore.pageForBudget`; sub-wave 1's interim rule). The owner decided
-  question 3 of the LibreOffice inventory on 2026-11-15 ("prioritize native tables": the table object on every
-  kind of hub); sub-wave 1b (tables-flip) removes the rule and its second emission;
+  and in the browser; Han, Kana and Hangul, which are drawn glyph by glyph). A table with vertical cell text stays for LibreOffice. Every other
+  table is the table object on every kind of hub, the 8 dense study-chart and bulletin slides of E on a hub with
+  LibreOffice included: the owner decided question 3 of the LibreOffice inventory on 2026-11-15 ("prioritize
+  native tables"), and sub-wave 1b (tables-flip) removed sub-wave 1's interim rule (a slide whose tables as their
+  M6 group would pass 64 KB kept LibreOffice's page there) and its second emission of each table;
 - bakes recoloured pictures (duotone, colour change, grayscale, black and white, brightness and contrast:
   PowerPoint's recolour presets) and tiled picture fills (shapes and backgrounds, tiles sized by the
   picture's stated resolution, else 96 per inch) into new prepared pictures, so they are drawn as PowerPoint

@@ -454,11 +454,11 @@ one object of the slide's 150 (no cell cap), its cells' JSON counted against the
 harness's LibreOffice policy (`loCompat`) `rowRule: 'fixed'` holds LibreOffice's rows. Not written: vertical
 cells (the table stays LibreOffice's art until the writing engine lays them out) and the legacy group (M9
 decision 4). Without 'table' in the converter's `m9Writes` (the kill switch) the M6 group is written, counted as
-its objects, and M6's cell cap holds. On a hub with LibreOffice, a slide whose tables as their M6 group would
-pass 64 KB keeps LibreOffice's page for now (picture class, its cells' text in `pptx.artText`; design/27 §15 M9
-"The table object imported"): an interim rule of sub-wave 1. The owner decided question 3 of the LibreOffice
-inventory on 2026-11-15 ("prioritize native tables": the table object on every kind of hub, these slides
-included), and sub-wave 1b (tables-flip) removes the rule. A table's non-empty
+its objects, and M6's cell cap holds. Every table is the table object on every kind of hub: the owner decided
+question 3 of the LibreOffice inventory on 2026-11-15 ("prioritize native tables"), and sub-wave 1b (tables-flip)
+removed sub-wave 1's interim rule, by which a hub with LibreOffice kept LibreOffice's page for a slide whose
+tables as their M6 group would pass 64 KB (design/27 §15 M9 "The table object imported"); a slide that an older
+import stored so becomes the table object on a re-import or Reset slide. A table's non-empty
 cells are its slide's text bodies for search and re-import, each at its cell's place.
 <!-- /m9:tables-conv -->
 

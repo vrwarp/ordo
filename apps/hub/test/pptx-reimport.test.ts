@@ -21,9 +21,11 @@ import {
   type TextObject,
 } from '@ordo/domain';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
+import { importDigest } from '@ordo/importers/pptx-core.ts';
 import {
   body,
   buildDeck,
+  denseTableDeck,
   imageRel,
   NS_A,
   NS_P,
@@ -1061,4 +1063,76 @@ describe("'Re-import from PowerPoint' through the hub", () => {
       hub.lib.db.prepare(`DELETE FROM jobs WHERE id = ?`).run(lo);
     }
   }, 60_000);
+});
+
+describe("a table slide an older import stored as LibreOffice's page (M9: every table is the table object)", () => {
+  /** The reading plan of 28 rows (`denseTableDeck`): its M6 group passes 64 KB, the table object does not. */
+  let plan: string;
+  beforeAll(async () => {
+    plan = await storeDeck(hub, await zipDeck(denseTableDeck(28), dir, 'plan.pptx'));
+  }, 60_000);
+
+  /**
+   * A presentation as a hub with LibreOffice stored the deck: its one slide LibreOffice's page (version 2: no
+   * objects, the page picture in `imported`), with the note of the build that made it the page.
+   */
+  async function storedAsPage(note: string): Promise<Presentation> {
+    const sid = newId();
+    const slide = Slide.parse({
+      id: newId(),
+      objects: [],
+      notes: 'Read one psalm a day.',
+      imported: { fileId: plan, page: 1, imageMediaId: await pagePicture(1), textAligned: true },
+      pptx: {
+        fileId: plan,
+        index: 0,
+        shown: 0,
+        class: 'picture',
+        version: CONVERTER_VERSION,
+        digest: importDigest([]),
+        notes: [note],
+        artText: 'Day 1: Psalm 1, verses 1-9',
+      },
+    });
+    return hub.lib.savePresentation(
+      {
+        id: newId(),
+        rev: 1,
+        title: 'Reading plan',
+        kind: 'slides',
+        meta: { tags: [] },
+        sections: [{ id: sid, label: 'Slides', short: 'S', slides: [slide] }],
+        arrangements: [{ id: newId(), name: 'Default', sectionIds: [sid] }],
+        source: { kind: 'pptx', fileId: plan },
+        archived: false,
+      },
+      { create: true, by: 'pptx-import' },
+    );
+  }
+
+  const tablesOf = (s: Slide) => s.objects.filter((o) => o.type === 'shape' && (o as ShapeObject).table);
+
+  for (const [label, note, req] of [
+    // r2b's interim rule (tables-conv's TABLE_PAGE_NOTE; no released build carries it), by a whole re-import.
+    ['the interim rule', 'its tables as shapes would be over 64 KB: LibreOffice draws its page', 'all'],
+    // main's 64 KB rule (62a1c3a: the M6 group stored plain or minimal kept LibreOffice's page), by Reset slide.
+    ["main's 64 KB rule", 'over 64 KB: LibreOffice draws its page', 'reset'],
+  ] as const)
+    it(`turns a page kept by ${label} into the table object (${req === 'all' ? 're-import' : 'Reset slide'})`, async () => {
+      const before = await storedAsPage(note);
+      const [page] = slidesOf(before);
+      const job = await reimport(before.id, req === 'all' ? {} : { slideIds: [page!.id], reset: [page!.id] });
+      expect(job.result).toMatchObject({ regenerated: 1, keptEdited: 0, rev: before.rev + 1 });
+      const [one] = slidesOf(hub.lib.presentations.must(before.id));
+      expect(one!.id).toBe(page!.id);
+      expect(one!.pptx).toMatchObject({ fileId: plan, index: 0, class: 'native' });
+      expect(one!.imported).toBeUndefined();
+      expect(one!.pptx!.notes ?? []).not.toContain(note);
+      expect((one!.pptx!.notes ?? []).some((n) => /LibreOffice draws its page/.test(n))).toBe(false);
+      const tables = tablesOf(one!);
+      expect(tables).toHaveLength(1);
+      expect((tables[0] as ShapeObject).table!.cells).toHaveLength(140);
+      expect(one!.notes).toBe('Read one psalm a day.');
+      expect(unedited(one!)).toBe(true);
+    }, 180_000);
 });

@@ -15,7 +15,8 @@
  *   minimal). Without LibreOffice no slide becomes a picture for its size: the client's old compact step is
  *   gone. With LibreOffice, a slide over 64 KB that the ladder would store without its formatting or
  *   decorations ('plain', 'minimal') keeps LibreOffice's page instead, as before M9 (`pageForBudget`): a hub
- *   with LibreOffice never shows less of a slide than one without it, nor less than before M9.
+ *   with LibreOffice never shows less of a slide than one without it, nor less than before M9; but a slide
+ *   holding a table object keeps the table object, the owner's "every table" (2026-11-15).
  * - **Assembly** (`ImportCore.assemble`): placeholders remapped (`remapMediaIds`), a background with alpha
  *   laid on white, one background on every slide made the presentation's, provenance (`Slide.pptx`),
  *   sections and the Default arrangement, `sanitizePresentation`, `Slide.safeParse` (a refused slide stored
@@ -23,8 +24,8 @@
  *   follow-up's plan (`loSlides`) and the families the library lacks.
  *
  * A slide is picture class when the converter classes it so (more pictures than a slide may hold), or, with
- * LibreOffice only, when its slide budget would store it plain or minimal; no failure makes one (M9, plan
- * decision 3; the before-hub gate of decision 2 for hubs with LibreOffice).
+ * LibreOffice only, when its slide budget would store it plain or minimal and it holds no table object; no
+ * failure makes one (M9, plan decision 3; the before-hub gate of decision 2 for hubs with LibreOffice).
  */
 import {
   type Box,
@@ -81,11 +82,6 @@ export const NOTES_TOTAL_BYTES = 1024 * 1024;
  */
 export const LOOP_IMPORT_NOTE =
   'PowerPoint plays this deck as a loop with every slide timed: imported as an announcement loop (the import report can treat it as slides)';
-/**
- * The note of a slide that keeps LibreOffice's page by the interim table rule (M9 `tables-conv`,
- * `pageForBudget`): its tables as their M6 group would take it past 64 KB.
- */
-export const TABLE_PAGE_NOTE = 'its tables as shapes would be over 64 KB: LibreOffice draws its page';
 /** Notes of a slide past `NOTES_TOTAL_BYTES` keep this many characters. */
 const NOTES_CUT_CHARS = 200;
 /** A slide's `pptx.notes` (the schema's bound). */
@@ -149,11 +145,6 @@ export type Draft = {
   missing?: string[];
   /** M9, with LibreOffice: the kinds its art holds (`artKinds`), for `PptxLoSlide.kinds`. */
   artKinds?: MissingKind[];
-  /**
-   * M9 (`tables-conv`), with LibreOffice: how many bytes more the slide would be with its tables as their M6
-   * group (`EmittedSlide.tableGroupBytes`), for the interim rule of `pageForBudget`.
-   */
-  tableGroupBytes?: number;
 };
 
 /** One slide of the LibreOffice follow-up, as version 1 left it (the hub's `pptx-lo` payload). */
@@ -293,7 +284,6 @@ export class ImportCore {
             notes: own,
             ...(c.s.art && !c.rescued ? { art: c.s.art, artText: c.s.art.text } : {}),
             ...(c.s.clips?.length && !c.rescued ? { clips: c.s.clips } : {}),
-            ...(groupBytes(c.s) && !c.rescued ? { tableGroupBytes: groupBytes(c.s) } : {}),
           }
         : {
             // Nothing of it could be read, not even its text (M9: never a picture).
@@ -427,11 +417,11 @@ export class ImportCore {
    * With LibreOffice: the size of LibreOffice's page form of a slide the ladder stores as `r` (picture class,
    * its text kept for search, the follow-up draws the page), when the slide keeps that form instead, as every
    * slide over 64 KB did before M9; else undefined. Only for a slide over 64 KB that the ladder fitted by
-   * leaving something out ('plain': its formatting; 'minimal': its decorations), or (M9 `tables-conv`, the
-   * interim rule) a slide whose tables as their M6 group (`Draft.tableGroupBytes`) would take it past 64 KB:
-   * question 3 of the LibreOffice inventory missed its gate (the table object scored 0.62-0.88 against
-   * LibreOffice's page's 0.93-0.98 on E's 8 dense table slides), so such a slide keeps the page it had while
-   * tables were their group, until the owner decides; only when the page form (`compactSlideBytes`, with
+   * leaving something out ('plain': its formatting; 'minimal': its decorations), and never a slide that holds
+   * a table object: the owner decided (2026-11-15, question 3 of the LibreOffice inventory) that every table
+   * is the table object on every hub, so such a slide keeps the ladder's level (the interim rule that kept the
+   * page of a slide whose tables as their M6 group would pass 64 KB is gone too); only when the page form
+   * (`compactSlideBytes`, with
    * version 2's page record) is within 64 KB, and only while it grows the presentation by no more than
    * `room`, so the presentation's plan still holds. The presentation's tail stays minimal on every hub (its
    * slides are whole text slides past 3 MiB: editable, and no page to wait for), so a hub with LibreOffice
@@ -441,7 +431,9 @@ export class ImportCore {
    */
   pageForBudget(d: Draft, r: LadderSlide, room: number): number | undefined {
     if (!this.lo || d.cls === 'picture' || r.tail) return undefined;
-    if (!leftOut(r) && !tablesOver(d, r)) return undefined;
+    if (!leftOut(r)) return undefined;
+    // Every table is the table object on every hub (the owner, 2026-11-15): never LibreOffice's page for its size.
+    if (d.slide.objects.some((o) => o.type === 'shape' && !!o.table)) return undefined;
     const bytes = compactSlideBytes(record(d, DIGEST_STANDIN, true), d.artText);
     if (bytes > SIZE_BUDGETS.slideMax || bytes - r.bytes > Math.max(0, room)) return undefined;
     return bytes;
@@ -451,9 +443,8 @@ export class ImportCore {
    * Step 3: the §3.4 budgets, M9's budget ladder (`ladder.ts`): outline files within the import's budget,
    * each slide within 64 KB (`fitSlideBudget`), the presentation within 4 MiB (its tail stored minimal).
    * Without LibreOffice no slide becomes a picture; with it, a slide over 64 KB that would be stored plain or
-   * minimal, or one whose tables as their M6 group would pass 64 KB (the interim table rule), keeps
-   * LibreOffice's page (`pageForBudget`). Returns how many slides it simplified (formatting or decorations
-   * left out).
+   * minimal keeps LibreOffice's page (`pageForBudget`), unless it holds a table object. Returns how many slides
+   * it simplified (formatting or decorations left out).
    */
   budget(drafts: Draft[]): number {
     // Shape files (geometry and M9 decoration files), admitted one by one in slide order while the import's
@@ -499,7 +490,7 @@ export class ImportCore {
     let room = SIZE_BUDGETS.presentationMax - (IMPORT_RESERVE_BYTES + this.reserve) - plan.total;
     drafts.forEach((d, i) => {
       const r = slides[i]!;
-      if (d.cls === 'picture' || (r.level === 'full' && !tablesOver(d, r))) return;
+      if (d.cls === 'picture' || r.level === 'full') return;
       const n = d.ref.index + 1;
       const page = this.pageForBudget(d, r, room);
       if (page !== undefined) {
@@ -507,15 +498,6 @@ export class ImportCore {
         toPicture(d);
         room -= page - r.bytes;
         pages++;
-        if (!leftOut(r)) {
-          // The interim rule (`pageForBudget`): within 64 KB as a table object, past it as its M6 group.
-          addNote(d.notes, TABLE_PAGE_NOTE);
-          this.log.add(
-            'info',
-            `slide ${n}: its tables as shapes would be over ${max / 1024} KB (${formatBytes(r.bytes + d.tableGroupBytes!)}): LibreOffice draws its page`,
-          );
-          return;
-        }
         addNote(d.notes, `over ${max / 1024} KB: LibreOffice draws its page`);
         this.log.add(
           'info',
@@ -868,23 +850,9 @@ export function toPicture(d: Draft): void {
   else delete d.artText;
 }
 
-/** `EmittedSlide.tableGroupBytes` when it is a usable count (a client's scene is checked by the hub), else 0. */
-function groupBytes(e: EmittedSlide): number {
-  const v = e.tableGroupBytes;
-  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(Math.round(v), 2 ** 30) : 0;
-}
-
 /** The ladder fitted the slide within 64 KB by leaving something out ('plain': its formatting; 'minimal': its decorations). */
 function leftOut(r: LadderSlide): boolean {
   return (r.level === 'plain' || r.level === 'minimal') && (r.dropped > 0 || r.plain > 0);
-}
-
-/**
- * The interim table rule (`pageForBudget`): the slide as stored (`r.bytes`) with its tables as their M6 group
- * (`Draft.tableGroupBytes` more) would be over 64 KB.
- */
-function tablesOver(d: Draft, r: LadderSlide): boolean {
-  return !!d.tableGroupBytes && r.bytes + d.tableGroupBytes > SIZE_BUDGETS.slideMax;
 }
 
 /** A stand-in for `Slide.pptx.digest` in size estimates: as long as `digestOf`'s. */
