@@ -250,7 +250,16 @@ something out), `hubWhy` (`slide`, `presentation`, `geoms`), `level` (when not `
 ## Other tools
 
 - `src/placement.ts`: the M1 placement check on the synthetic 4:3 deck (boxes within 2 px of LibreOffice's).
-- `src/table-probe.ts`: the probe deck that measured LibreOffice's table row rule.
+- `src/table-probe.ts`: the probe deck that measured LibreOffice's table row rule; `table-probe.test.ts` checks
+  the converter's rows (`TableElement.lo`) against its 324 rows and the layouter slides' columns and merged rows
+  to the 1/100 mm (LibreOffice's logic unit: the PDF's points over the page's 0.998969 drawing scale, rounded;
+  sub-wave 1b, tables-cells; within 0.05 pt + 0.15 % before, which hid the 1/100 mm of a 10 or 18 pt line).
+- `src/cell-probe.ts`: the cell probe deck (1b, tables-cells): centred cells full, overflowing (font-independent
+  rows after an autogrow text box) and with room, with and without top and bottom margins, 107 %, 2 pt spacer
+  paragraphs, mixed sizes, Carlito 10 and 12 pt. `LO_CELL_PROBE` holds LibreOffice 24.2.7's 80 rows and 272
+  baselines (read from its PDF with `pdftocairo -svg`: the borders' strokes, each glyph's position, `pdfRowEdges`,
+  `pdfBaselines`); `cell-probe.test.ts` checks the converter's rows and the model's line rule and anchoring
+  (`tables.ts` `loLineHeight`, `loAscent`, `loBlockTop`) against them to the 1/100 mm.
 - `src/esczero-probe.ts`: the probe decks that measured LibreOffice's reading of `baseline="0"` (`LO_ESC_ZERO`,
   checked against the converter's `--lo-compat` emission in `esczero-probe.test.ts`).
 

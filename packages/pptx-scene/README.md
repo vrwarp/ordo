@@ -295,7 +295,8 @@ error moved every row below it (cells are mostly centred). Three changes:
   and measured with the table probe deck (`tools/pptx-fidelity/src/table-probe.ts`, `LO_PROBE_ROWS`) that
   spacing is one of two (`LoLines`): 'font', the face's ascent and descent at the 600 dpi reference device
   (the font's pixel height rounded, then ascent and descent rounded: Carlito 1.215-1.229 × the size), or
-  'independent', 1.2 × the font height truncated (`ImplCalculateFontIndependentLineSpacing`), for any face.
+  'independent', 1.2 × the font height truncated (`ImplCalculateFontIndependentLineSpacing`), for any face
+  (both to the 1/100 mm since sub-wave 1b: "LibreOffice's cell rules", below).
   The second holds after a text shape that grew to its text (its own `a:spAutoFit`, with text) earlier on
   the same slide: that shape leaves the shared outliner in font-independent mode (a group's child counts; a
   title without its own `a:spAutoFit`, `a:normAutofit`, a shape after the table, a layout's shape, a
@@ -876,6 +877,34 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
   no default style for a table naming none, Korean cells measured and spaced by their script's face),
   `domain/src/cellstyle.test.ts` (the pure mapping equals `table.ts`'s).
 <!-- /m9:tables-conv -->
+
+## Wave r2b sub-wave 1b: LibreOffice's cell rules (`tables.ts`; `tables-cells`)
+
+<!-- r2b:tables-cells -->
+Where LibreOffice 24.2 puts a cell's text, to its 1/100 mm (the model `TableElement.lo` carries: the stored form
+on every hub since tables-form, the M6 group's under `loCompat`), from the table probe (`LO_PROBE_ROWS`) and a
+cell probe of 80 rows and 272 baselines (`tools/pptx-fidelity/src/cell-probe.ts`, `LO_CELL_PROBE`):
+- **Line heights** (`loLineHeight`): font-independent, 1.2 × the font height rounded (the probe's 9 and 14 pt
+  rows: 382 and 593, truncated 381 and 592; Moral Character's 16 pt rows 932, not 931); font-spaced, the larger
+  of the two conversions VCL makes of the ascent and descent pixels at 600 dpi back to 1/100 mm, apart and
+  added or summed (9 pt Carlito 301 + 85 = 386, the sum 385; 10 pt the sum 428, apart 427: the 1000 Years
+  chart's eleven row rules; 18 pt 775; Liberation Sans 6 pt 238, 8 pt 318). `loAscent` is one conversion.
+- **Imported lengths** (`loImported`): a row's stored `a:tr h` and a column's width are LibreOffice's in whole
+  1/100 mm, truncated (635000 EMU, 1763.89, is 1763), before `loGrowRows` and `loColumns`.
+- **The lift** (`asLibreOffice`): centred text keeps its whole lift whatever its margins (a cell with
+  `marT="0"` kept half of it: the Boletims' reading plans 0.75 px of 1.49, the Flesh and Spirit chart's 84
+  cells, the seal, Churchcraft and Ten Commandments charts); top and bottom anchors as before.
+- **The anchor** (`loBlockTop`): LibreOffice centres the drawn block (the face's line heights) in the cell's
+  inner height, the offset truncated to the 1/100 mm, and starts a block taller than that (font-independent
+  rows draw lines taller than they were measured) 1/100 mm above the top margin, never centred above it
+  (Moral Character's 690 drawn in 678; the Depression deck's lines). The lift aims ordo's centred block there.
+- **Not modelled, named**: ordo spaces a cell's lines by the face's line height times the proportion,
+  unrounded, LibreOffice by whole 1/100 mm a line (Carlito 10 pt at 107 %: 26.02 against 25.91 px at 1920):
+  one lift a cell leaves the lines spread around LibreOffice's by (n - 1) / 2 × the difference (1c).
+- Tests: `tables.test.ts` (the line rules at 9, 10, 14 and 18 pt, `asLibreOffice` with both prototypes' cases,
+  the anchor on a full and a roomy row), `tools/pptx-fidelity/src/table-probe.test.ts` and `cell-probe.test.ts`
+  (every probe row and baseline to the 1/100 mm).
+<!-- /r2b:tables-cells -->
 
 ## Module map
 

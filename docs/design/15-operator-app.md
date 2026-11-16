@@ -861,7 +861,10 @@ of the box, such as Carlito for Calibri, is a library font) with 'Upload font' (
 'Make editable' on a legacy PowerPoint page (a picture import from before M3) rebuilds the page from the
 stored deck: the hub reroutes it to the re-import of that slide (202 and the job), the editor follows the
 job and takes it over, and the page becomes the native slide with the objects added over it on top and its
-notes. A PDF page, or a deck no longer stored, keeps today's text boxes over the page picture.
+notes. Since sub-wave 1b the same holds for LibreOffice's page that a native import stored (an older
+library's table page becomes the table object to edit); a slide the deck still gives as LibreOffice's page
+(too large as objects) gets its text boxes over the page from the same job, and the editor says it could not
+rebuild the slide. A PDF page, or a deck no longer stored, keeps today's text boxes over the page picture.
 
 The Presentation panel of a PowerPoint presentation ends with its import report (`PptxReport.tsx`): the
 slides per class (`source.native`) or, for a legacy import, that its slides are pictures; legacy pages
