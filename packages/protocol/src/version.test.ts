@@ -34,9 +34,12 @@ import { APP_VERSION } from './index.ts';
 // prerender.add (hub only) and prerender.use events, state.prerendered and state.drawOverride, which no client
 // sends before the sub-waves that use them. Each track re-recorded on its branch; the sub-wave's integrator
 // recorded the merged digest once, after its last merge, and again after main's PR #28 was merged in.
+// The main merge's repair (still 0.8.0): protocol index.ts Hello.view ('lectern', a Pulpit Lectern on the stage
+// output's link, which the hub then neither lets replace the Stage Display window nor replaces; an older hub
+// strips it).
 const RECORDED = {
   version: '0.8.0',
-  digest: '467481830c96895231af866ca4afe0de3a16cd32b86542a4bc3fbc4c1f3a7ea1',
+  digest: 'a5027283e42113a1605fc189a7117b636e918149d8b56eb2b39049700e833834',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

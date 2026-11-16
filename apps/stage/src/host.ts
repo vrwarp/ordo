@@ -48,6 +48,12 @@ export class StageHost {
   readonly outputId: string;
   readonly token: string;
   readonly testMode: boolean;
+  /**
+   * Opened as a Pulpit Lectern (`?view=lectern` when the page loaded): the link's hello says so (protocol
+   * `Hello.view`). The window keeps this for its life: the in-page switch between the Stage Display and the
+   * lectern changes what is drawn, not which window of the output this is (a reload takes the URL's view).
+   */
+  readonly windowView: 'lectern' | undefined;
   private snap: Snapshot = { view: initialView(), fontsVersion: 0, linkDown: false };
   private listeners = new Set<() => void>();
   private sup: Supervisor;
@@ -68,6 +74,7 @@ export class StageHost {
     this.outputId = env.outputId ?? 'unknown';
     this.token = env.token ?? '';
     this.testMode = new URLSearchParams(location.search).get('test') === '1';
+    this.windowView = new URLSearchParams(location.search).get('view') === 'lectern' ? 'lectern' : undefined;
     this.operatorOrigin = operatorOrigin(env);
     this.sup = new Supervisor();
     this.sup.on('restart', ({ name, generation, reason }) => {
@@ -174,6 +181,7 @@ export class StageHost {
       outputId: this.outputId,
       token: this.token,
       testMode: this.testMode,
+      ...(this.windowView ? { view: this.windowView } : {}),
       generation,
       bridge,
       reloadReason,

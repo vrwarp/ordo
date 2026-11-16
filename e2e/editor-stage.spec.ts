@@ -24,7 +24,9 @@ import { apiJson, liveEvent, type OutputRec, roleWindow } from './pptxlive.ts';
  * and after a reload the same presentation), the stage look's 'Notes' turned on in the look editor, and
  * then, live, the stage screen shows the live slide's notes in their own box under the next slide, clear
  * of the current lyrics, following the live slide, and draws the Hebrew line right to left beside the
- * English one, each paragraph taking its direction from its own text. Its port: e2e/ports.ts row
+ * English one, each paragraph taking its direction from its own text. Then the Stage Display and a Pulpit
+ * Lectern open at once on the stage output's link, as a venue runs them: both follow a GO, a Go live of the
+ * next service mid-service and its first GO, and neither closes the other. Its port: e2e/ports.ts row
  * 'editor-stage'.
  */
 const PORT = portOf('editor-stage');
@@ -184,6 +186,71 @@ test('the stage shows the live slide’s notes and a Hebrew line right to left',
     await expect(lectern.locator('[data-lectern-manuscript]')).toContainText('Point 1: tell the story');
     await lectern.screenshot({ path: join(OUT, 'stage-lectern.png') });
     await lectern.close();
+  } finally {
+    hub.kill();
+  }
+});
+
+test('the Stage Display and a Pulpit Lectern open at once both follow a GO, a Go live mid-service and its first GO', async ({
+  context,
+}) => {
+  test.setTimeout(300_000);
+  const dir = join(OUT, 'both');
+  mkdirSync(dir, { recursive: true });
+  const deck = await churchDeck(join(dir, 'deck'));
+  const hub = await editorHub(PORT);
+  try {
+    const a = await hubApi(PORT);
+    const p = await importDeck(a, deck);
+    const playlist = async (name: string) =>
+      apiJson<{ id: string }>(a, 'playlists', {
+        post: { name, items: [{ id: `deck-${name}`, kind: 'presentation', presentationId: p.id }] },
+      });
+    const early = await playlist('Early');
+    const late = await playlist('Late');
+    await liveEvent(a, { k: 'goLive', playlistId: early.id });
+    await liveEvent(a, { k: 'go', cueIndex: 1, at: Date.now() });
+    const outs = await apiJson<OutputRec[]>(a, 'settings/outputs');
+    const out = outs.find((o) => o.kind === 'stage')!;
+    // The Outputs page's "Open Pulpit Lectern" is the stage output's own URL and token with view=lectern.
+    const stage = await roleWindow(context, PORT, out, { width: 1920, height: 1080 }, 'test=1');
+    const told: string[] = [];
+    const watch = (w: Page, name: string) => {
+      w.on('console', (m) => {
+        if (/supersed/i.test(m.text())) told.push(`${name}: ${m.text()}`);
+      });
+    };
+    watch(stage, 'stage');
+    const stageNotes = stage.locator('.notes');
+    await expect(stageNotes).toHaveText(CHURCH.announcement.notes, { timeout: 30_000 });
+    const lectern = await roleWindow(context, PORT, out, { width: 1024, height: 768 }, 'test=1&view=lectern');
+    watch(lectern, 'lectern');
+    const lecternNotes = lectern.locator('[data-lectern-notes]');
+    await expect(lecternNotes).toContainText(CHURCH.announcement.notes, { timeout: 30_000 });
+
+    // A GO with both open: both follow it.
+    await liveEvent(a, { k: 'go', cueIndex: 0, at: Date.now() });
+    await expect(stageNotes).toHaveText(CHURCH.welcome.notes);
+    await expect(lecternNotes).toContainText(CHURCH.welcome.notes);
+
+    // The next service goes live mid-service: neither window keeps the old service's notes; its first GO (a
+    // slide whose notes neither window showed yet) reaches both.
+    await liveEvent(a, { k: 'goLive', playlistId: late.id });
+    const shown = async (w: Page, sel: string) => (await w.locator(sel).allTextContents()).join('|');
+    await expect.poll(() => shown(stage, '.notes')).not.toContain(CHURCH.welcome.notes);
+    await expect.poll(() => shown(lectern, '[data-lectern-notes]')).not.toContain(CHURCH.welcome.notes);
+    await liveEvent(a, { k: 'go', cueIndex: 2, at: Date.now() });
+    await expect(stageNotes).toHaveText(CHURCH.verses.notes);
+    await expect(lecternNotes).toContainText(CHURCH.verses.notes);
+
+    // Neither window was told it was replaced, and both are still open.
+    expect(told).toEqual([]);
+    expect(stage.isClosed()).toBe(false);
+    expect(lectern.isClosed()).toBe(false);
+    await stage.screenshot({ path: join(dir, 'stage.png') });
+    await lectern.screenshot({ path: join(dir, 'lectern.png') });
+    await lectern.close();
+    await stage.close();
   } finally {
     hub.kill();
   }

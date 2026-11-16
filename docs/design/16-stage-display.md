@@ -48,6 +48,19 @@ off) shows the displayed slide's `Slide.notes`:
   text; a slide without notes, or a cleared slide layer, shows no notes box.
 - The look editor's 'Stage screen' card turns them on and sets their box and text (design/15 "Settings").
 
+**Pulpit Lectern** (PR #28; `/stage?view=lectern`, `LecternView.tsx`). The Outputs page's 'Copy Lectern URL' and
+'Open Pulpit Lectern' give the stage output's own URL and token with `view=lectern`: a tablet or laptop at the
+pulpit shows the live slide's notes (Follow Live, or a peek at the previous and next slides), the whole
+manuscript, three themes and a font zoom, and changes nothing on the hub. It is the stage app on the stage
+output's link, so it follows every GO and Go live as the Stage Display does; its `hello` says
+`view: 'lectern'` (design/13), and the hub then keeps it apart from the output's own window: a lectern never
+replaces the Stage Display window and a newer display never replaces a lectern (`bye 'superseded'` goes only
+from display to display), any number of lecterns follow one output, the output's health is the display's
+(a lectern's health message is not stored) and the output shows as connected only while a display window is
+(`ws.ts` `healthTable`). A token rotation or a deleted output closes lecterns too. A window keeps the view it
+was opened with: the in-page switch between the Stage Display and the lectern changes what it draws, not which
+window of the output it is (a reload takes the URL's `view`).
+
 ## Behaviour
 
 - Applies `live.delta` with the shared reducer (in the link worker, below); the page renders the view model derived from `LiveState`.
@@ -113,7 +126,8 @@ relay), acceptPorts, Supervisor                 invariant checks, health and the
   250 ms again after it. (It used to be the time since the host's 1 s stats message, read by the worker's
   own 1 s timer: the phase difference of two timers, 43 to 318 ms on a healthy stage.)
 - **Superseded / new version**: a `bye` from the hub is handled in the worker; `version` asks the host to
-  reload, `superseded` stops the worker and the host closes the window.
+  reload, `superseded` stops the worker and the host closes the window. Only a newer Stage Display window
+  supersedes one; a Pulpit Lectern on the same link does not (above).
 - **Diagnostics and tests**: `ordoStage.telemetry()` / `ordoStage.view()` in the console. With `?test=1`,
   `window.__ordo` exposes `telemetry()`, `view()` and `chaos` (`killWorker('link')`, `inject('delta' |
   'state', msg)`, `badState()`); `e2e/chaos-stage.spec.ts` kills the worker (hub and fallback bus) and

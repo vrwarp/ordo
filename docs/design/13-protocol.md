@@ -11,7 +11,7 @@ The live events of pre-rendered slides (`prerender.add`, `prerender.use`) are de
 
 | `t`              | From             | Payload                                     | Notes                                              |
 | ---------------- | ---------------- | ------------------------------------------- | -------------------------------------------------- |
-| `hello`          | all              | `{ role, outputId?, appVersion, lastSeq? }` | First message. Hub replies `welcome`               |
+| `hello`          | all              | `{ role, outputId?, view?, appVersion, lastSeq? }` | First message. Hub replies `welcome`. `view: 'lectern'`: a Pulpit Lectern on the stage output's link (design/16 "Pulpit Lectern") |
 | `time.ping`      | all              | `{ c: clientSentMs }`                       | Hub replies `time.pong { c, s: hubMs }`            |
 | `live.event`     | operator         | `{ id, event: LiveEvent, clientSeq }`       | A reducer event. Hub applies, journals, broadcasts |
 | `live.resync`    | any              | `{}`                                        | Ask for a full state                               |

@@ -60,6 +60,8 @@ export type HubConnectionOptions = {
   role: Role;
   appVersion: string;
   outputId?: string;
+  /** A Pulpit Lectern on the stage output's link (protocol `Hello.view`): not the output's own window. */
+  view?: 'lectern';
   token?: string;
   clock?: HubClock;
   /** Override for tests. Default: ws(s)://<current host>/ws */
@@ -238,6 +240,7 @@ export class HubConnection extends Emitter<HubEvents> {
           v: PROTOCOL_VERSION,
           role: this.opts.role,
           outputId: this.opts.outputId,
+          ...(this.opts.view ? { view: this.opts.view } : {}),
           appVersion: this.opts.appVersion,
           lastSeq: this.lastSeq,
         }),

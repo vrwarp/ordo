@@ -50,6 +50,7 @@ function init(m: Extract<MainToLink, { t: 'init' }>): void {
     role: 'stage',
     appVersion: APP_VERSION,
     outputId: m.outputId,
+    ...(m.view ? { view: m.view } : {}),
     token: m.token,
     fallback,
   });
