@@ -1,5 +1,11 @@
 import { type FileStore, type JsonStore, MemoryStore } from '@ordo/cache';
-import { type LiveState, parseLyrics, type ResolvedPlaylist, songFromParsed } from '@ordo/domain';
+import {
+  GOLIVE_ENDED_REASON,
+  type LiveState,
+  parseLyrics,
+  type ResolvedPlaylist,
+  songFromParsed,
+} from '@ordo/domain';
 import { initialState, reduce } from '@ordo/live-state';
 import { checkInvariants } from '@ordo/live-state';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -642,5 +648,15 @@ describe('Go live prepared beside the running service (design/29 M8, W41)', () =
     e.handle({ t: 'call', aid: 'e1', name: 'endService', args: [] });
     await new Promise((r) => setTimeout(r, 500));
     expect(goLives).toEqual([]);
+  });
+
+  it("a goLive the hub cancelled for End service opens no 'Could not go live' dialog; other refusals do", async () => {
+    const { posts, e } = await connected(live());
+    const errors = () => posts.flatMap((p) => (p.t === 'ui' && p.e.k === 'goLiveError' ? [p.e.reason] : []));
+    const command = { k: 'goLive' as const, playlistId: 'pl2' };
+    e.core.onAck({ id: 'g1', rejected: GOLIVE_ENDED_REASON }, command);
+    expect(errors()).toEqual([]);
+    e.core.onAck({ id: 'g2', rejected: 'Playlist pl2 not found' }, command);
+    expect(errors()).toEqual(['Playlist pl2 not found']);
   });
 });

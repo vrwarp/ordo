@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   DEGRADED_MAX,
   type Degraded as DomainDegraded,
+  GOLIVE_ENDED_REASON,
   type GoLiveInputs as DomainGoLiveInputs,
   GoLiveRejection,
   type LiveCommand,
@@ -94,6 +95,8 @@ type Prepared = { ok: true; buffer: Uint8Array; resolvedId: string } | { ok: fal
 type Prep = {
   playlistId: string;
   saved: boolean;
+  /** Refused before it fetched anything: PREPARES_IN_FLIGHT_MAX others were in flight. */
+  busy: boolean;
   ctrl: AbortController;
   state: PrepareState;
   promise: Promise<Prepared>;
@@ -106,6 +109,13 @@ type Prep = {
 
 /** A prepared goLive not applied within this is dropped; a goLive after it prepares again (design/29 M8). */
 export const PREPARED_TTL_MS = 10_000;
+/**
+ * Prepares in flight at once: each holds its copy (up to BUNDLE_MAX_BYTES) while it arrives and its checked
+ * form after, in the process that runs the service. One more is refused with PREPARE_BUSY_REASON.
+ */
+export const PREPARES_IN_FLIGHT_MAX = 2;
+export const PREPARE_BUSY_REASON =
+  'Another service is still being got ready to go live; try Go live again in a moment';
 /** Progress is reported at most this often. */
 const PROGRESS_EVERY_MS = 100;
 const CANCELLED = 'cancelled';
@@ -153,6 +163,10 @@ export class LiveService {
   private queue: Promise<unknown> = Promise.resolve();
   /** goLives in arrival order among themselves, each entering `queue` once prepared (design/29 M8). */
   private goLiveChain: Promise<unknown> = Promise.resolve();
+  /** Bumped by End service: a goLive sent before it and still being prepared is not applied after it. */
+  private goLiveGen = 0;
+  /** Playlists of goLives sent and not yet applied or refused, by count. */
+  private pendingGoLives = new Map<string, number>();
   private preps = new Map<string, Prep>();
   private worker?: GoLiveWorker;
   /** Warnings from the last restore (tests and diagnostics). */
@@ -442,25 +456,48 @@ export class LiveService {
    * (design/29 §2.3 M8): fetched and checked beside the running service, so GO, Next and Clear sent meanwhile
    * apply to the running service at once; the goLive then applies with one parse of the prepared copy.
    * goLives keep their order among themselves. The operator sends goLive once POST /live/prepare reports it
-   * ready, so a `next` it sends after Go live still applies to the new playlist.
+   * ready, so a `next` it sends after Go live still applies to the new playlist. End service keeps its place
+   * after a goLive still being prepared: that goLive is cancelled (its fetch abandoned) and refused with
+   * GOLIVE_ENDED_REASON, so the screens never go live again after the operator ended the service.
    */
   submitQueued(cmd: LiveCommand | LiveEvent, origin: Origin): Promise<number> {
-    if (
-      cmd.k === 'goLive' &&
-      'playlistId' in cmd &&
-      !('resolved' in cmd) &&
-      this.source.bundle &&
-      (origin.role === 'operate' || origin.role === 'system')
-    ) {
+    const trusted = origin.role === 'operate' || origin.role === 'system';
+    if (cmd.k === 'goLive' && 'playlistId' in cmd && !('resolved' in cmd) && this.source.bundle && trusted) {
       const playlistId = cmd.playlistId;
+      const gen = this.goLiveGen;
+      this.pendingGoLives.set(playlistId, (this.pendingGoLives.get(playlistId) ?? 0) + 1);
       const prepared = this.preparedFor(playlistId);
       const p = this.goLiveChain
         .then(() => prepared)
-        .then((r) => this.enqueue(() => this.applyPrepared(playlistId, r, origin)));
+        .then((r) =>
+          this.enqueue(() => {
+            if (gen !== this.goLiveGen) throw new LiveRejection(GOLIVE_ENDED_REASON);
+            return this.applyPrepared(playlistId, r, origin);
+          }),
+        )
+        .finally(() => {
+          const n = (this.pendingGoLives.get(playlistId) ?? 1) - 1;
+          if (n > 0) this.pendingGoLives.set(playlistId, n);
+          else this.pendingGoLives.delete(playlistId);
+        });
       this.goLiveChain = p.catch(() => undefined);
       return p;
     }
+    if (cmd.k === 'endService' && trusted) this.cancelPendingGoLives();
     return this.enqueue(() => this.submit(cmd, origin));
+  }
+
+  /** End service: the goLives sent before it and still being prepared are cancelled (see submitQueued). */
+  private cancelPendingGoLives(): void {
+    if (!this.pendingGoLives.size) return;
+    this.goLiveGen++;
+    for (const playlistId of this.pendingGoLives.keys()) {
+      const p = this.preps.get(playlistId);
+      if (!p || p.result) continue;
+      p.ctrl.abort();
+      // A goLive sent after End service prepares afresh instead of joining the abandoned fetch.
+      this.preps.delete(playlistId);
+    }
   }
 
   private enqueue<T>(run: () => T): Promise<T> {
@@ -485,9 +522,12 @@ export class LiveService {
   /**
    * Start preparing a playlist's goLive (POST /live/prepare), or report the prepare under way. `saved`: go
    * live from the hub's saved copy instead of waiting for the library (W41's button); a fresh copy already
-   * prepared is kept. Without a remote source there is nothing to prepare: ready at once.
+   * prepared is kept. `seen` (a poll that continues a Go live) gets the fresh result of the prepare it
+   * watched; only a first request starts afresh after one that finished (a failure is not repeated, and a
+   * prepare that ended between two polls is not fetched again). Without a remote source there is nothing to
+   * prepare: ready at once.
    */
-  prepare(playlistId: string, opts: { saved?: boolean } = {}): PrepareState {
+  prepare(playlistId: string, opts: { saved?: boolean; seen?: number } = {}): PrepareState {
     if (!this.source.bundle) return { playlistId, state: 'ready', pct: 100 };
     const cur = this.preps.get(playlistId);
     const fresh = cur?.result && this.now() - (cur.doneAt ?? 0) <= PREPARED_TTL_MS;
@@ -498,6 +538,7 @@ export class LiveService {
       return this.startPrepare(playlistId, true).state;
     }
     if (cur && !cur.result) return cur.state;
+    if (cur && fresh && opts.seen !== undefined) return cur.state;
     return this.startPrepare(playlistId, false).state;
   }
 
@@ -548,9 +589,20 @@ export class LiveService {
   private startPrepare(playlistId: string, saved: boolean): Prep {
     const prev = this.preps.get(playlistId);
     if (prev) clearTimeout(prev.expiry);
+    let inFlight = 0;
+    for (const [id, p] of this.preps) {
+      if (id === playlistId) continue;
+      if (!p.result) inFlight++;
+      else {
+        // Only the latest prepare's copy is kept ready; a goLive already waiting on an older one still has it.
+        clearTimeout(p.expiry);
+        this.preps.delete(id);
+      }
+    }
     const prep: Prep = {
       playlistId,
       saved,
+      busy: inFlight >= PREPARES_IN_FLIGHT_MAX,
       ctrl: new AbortController(),
       state: { playlistId, state: 'preparing', pct: 0, ...this.savedAtOf(playlistId) },
       promise: Promise.resolve({ ok: false, reason: CANCELLED }),
@@ -591,6 +643,13 @@ export class LiveService {
 
   private async runPrepare(prep: Prep): Promise<Prepared> {
     const { playlistId } = prep;
+    if (prep.busy) {
+      this.log.warn(
+        { playlistId, inFlight: PREPARES_IN_FLIGHT_MAX },
+        'goLive prepare refused: others in flight',
+      );
+      return { ok: false, reason: PREPARE_BUSY_REASON };
+    }
     let bundle: RawBundle | undefined;
     try {
       bundle = await this.source.bundle!(playlistId, {

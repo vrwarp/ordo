@@ -427,6 +427,12 @@ export function degradedKind(reason: string): DegradedKind {
   return 'other';
 }
 
+/**
+ * Why a goLive the hub was still preparing is not applied: End service was pressed after it (design/29 M8).
+ * The operator who ended the service shows no refusal for it.
+ */
+export const GOLIVE_ENDED_REASON = 'Go live cancelled by End service';
+
 /** The reason a slide waiting for the LibreOffice follow-up of a PowerPoint import is listed in `degraded`. */
 export const PENDING_SLIDE_REASON =
   'PowerPoint slide still being drawn by LibreOffice: its chart, art or page picture is missing until then';

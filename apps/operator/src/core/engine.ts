@@ -11,6 +11,7 @@ import {
 } from '@ordo/client';
 import {
   formatBytes,
+  GOLIVE_ENDED_REASON,
   type LiveCommand,
   type LiveEvent,
   type LiveState,
@@ -1200,6 +1201,8 @@ export class CoreEngine {
       case 'rejected': {
         this.log('warn', `hub rejected ${n.command.k}: ${n.reason}`);
         this.recordBudget('rejected', `${n.command.k}: ${n.reason}`);
+        // A goLive cancelled by End service (pressed after it, design/29 M8) is what the operator asked for.
+        if (n.command.k === 'goLive' && n.reason === GOLIVE_ENDED_REASON) return;
         if (n.command.k === 'goLive') this.post({ t: 'ui', e: { k: 'goLiveError', reason: n.reason } });
         else this.toast(`Hub refused ${n.command.k}: ${n.reason}`, 'warn');
         return;

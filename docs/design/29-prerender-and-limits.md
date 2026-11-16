@@ -892,7 +892,10 @@ Storage and transport:
   queue only once the hub reports it ready; it then applies at once (one parse of the prepared buffer, bounded by
   D13). While a service is live, after 5 s the toast offers "Go live from the saved copy". Bundles carry slide-page
   references and the key set; one `live_kv` row per bundle, written after the goLive is applied. A10, A17, A18.
-  golive-prepare.
+  golive-prepare. (Review of sub-wave 1: a poll that continues a Go live gets the result of the prepare it
+  watched, never a fresh prepare, so a prepare ending between two polls is not fetched again; End service
+  cancels a goLive still being prepared, so it never applies after the service was ended; at most two prepares
+  are in flight and only the latest one's copy is kept ready. design/13 "Prepare before goLive".)
 
 Import:
 - **X1 Compact path parse**: path children packed into numbers while tokenizing, no node per point; separate bounds

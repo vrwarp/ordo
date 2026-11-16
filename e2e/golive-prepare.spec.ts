@@ -4,7 +4,9 @@
  * Row 0: during a service, Go live again while the library sends its copy slowly (e2e/slow-library.mjs, 12 s):
  * a GO pressed meanwhile applies to the running service at once and flips on time (no late flip), the
  * operator's toast shows the progress, and after 5 s offers the saved copy, which goes live at once and says
- * so. Row 1: a service past the size ceiling (32 MiB) is refused with W58's words.
+ * so. Then Go live again with the button left alone: the fresh copy goes live once it has arrived (one
+ * fetch, not restarted between the operator's polls). Row 1: a service past the size ceiling (32 MiB) is
+ * refused with W58's words.
  */
 import { rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -155,6 +157,26 @@ test('Go live again during a service with a slow library: GO flips on time, the 
     expect((await hubLive(a)).resolved?.degraded?.[0]?.reason).toMatch(
       /^Went live from the copy of this playlist saved/,
     );
+    await expect(toast).toBeHidden({ timeout: 5_000 });
+
+    // Go live again, the library still slow, the saved-copy button left alone: the fresh copy goes live once
+    // it has arrived (12 s), not after the operator's 45 s give-up.
+    const t2 = Date.now();
+    await page.evaluate(
+      (id) => (window as unknown as { __ordo: { ctl: { goLive(id: string): void } } }).__ordo.ctl.goLive(id),
+      first.id,
+    );
+    await expect
+      .poll(async () => (await hubLive(a)).resolved?.playlist.id, {
+        timeout: 12_000 + 6_000,
+        intervals: [100],
+      })
+      .toBe(first.id);
+    console.log(
+      `Go live with the slow library, button untouched: live on the hub after ${Date.now() - t2} ms`,
+    );
+    expect(Date.now() - t2).toBeGreaterThanOrEqual(11_000);
+    expect((await hubLive(a)).resolved?.degraded).toBeUndefined();
     await expect(toast).toBeHidden({ timeout: 5_000 });
   } finally {
     hub.kill();

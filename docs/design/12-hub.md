@@ -118,7 +118,10 @@ its SHA-256 is the copy's `resolvedId` (design/29 M2). The operator sends goLive
 `ready` (or `failed`: the goLive is then refused with its reason); the goLive applies at once with one
 `JSON.parse` of the prepared buffer. A goLive that arrives without a prepare (an older operator, the
 `/actions` bridge, a test) prepares itself the same way, outside the queue; goLives keep their order among
-themselves. A prepared copy not used within 10 s is dropped. The in-process source (`createHub`, `--single`)
+themselves, and End service keeps its order with them (a goLive sent before it and still being prepared is
+cancelled: "Go live cancelled by End service"). A prepared copy not used within 10 s is dropped; only the
+latest prepare's copy is kept ready, and at most two prepares are in flight (each holds its copy, up to
+64 MiB, in the live process), a third refused with a reason. The in-process source (`createHub`, `--single`)
 still resolves on its loop.
 Sessions live in ordo.db, which the live process opens directly (WAL readers never wait for the library;
 its sliding-expiry writes use a 50 ms busy timeout and are skipped when busy; it never checkpoints).

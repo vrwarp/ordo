@@ -4,12 +4,14 @@
  * PROGRESS_TIMEOUT_MS ends it) under a BUNDLE_CEILING_MS ceiling; each cached bundle is its own live_kv
  * row, written after the goLive applied.
  */
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { LIVE_PREPARE_WAIT_MS } from '@ordo/protocol';
 import { join } from 'node:path';
 import pino from 'pino';
 import { describe, expect, it } from 'vitest';
 import { type DB, openLiveDb } from '../src/db.ts';
 import { FETCH_TIMEOUT_MS, LibraryLink } from '../src/librarylink.ts';
-import { LiveRejection, LiveService } from '../src/live.ts';
+import { LiveRejection, LiveService, PREPARE_BUSY_REASON } from '../src/live.ts';
 import { sleep, song, tempDir } from './helpers.ts';
 
 const quiet = pino({ level: 'silent' });
@@ -268,5 +270,61 @@ describe('POST /live/prepare beside the running service (design/29 M8, W41)', ()
     ctl.mode = { k: 'ok' };
     s = await live.prepareWait('pl', { waitMs: 2000 });
     expect(s.state).toBe('ready');
+  });
+
+  it("the operator's poll, 150 ms between answers, sees 'ready' after one fetch of a copy that takes 1.2 s", async () => {
+    const { live, ctl } = linked();
+    // During a service (the goLive check's worker thread already running, so a check takes a few ms).
+    await goLive(live, 'now');
+    ctl.mode = { k: 'stream', bodyMs: 1200, steps: 12 };
+    // The operator's loop (apps/operator/src/core/engine.ts goLive): each answer carries the progress seen,
+    // and the next request waits PREPARE_POLL_MIN_MS (150 ms) after the last one was asked.
+    const t0 = Date.now();
+    let seen: number | undefined;
+    let s = await live.prepareWait('pl', { waitMs: LIVE_PREPARE_WAIT_MS });
+    const shown: number[] = [];
+    for (let asked = t0; s.state === 'preparing' && Date.now() - t0 < 8000; ) {
+      seen = s.pct;
+      shown.push(s.pct);
+      const gap = 150 - (Date.now() - asked);
+      if (gap > 0) await sleep(gap);
+      asked = Date.now();
+      s = await live.prepareWait('pl', { seen, waitMs: LIVE_PREPARE_WAIT_MS });
+    }
+    const ms = Date.now() - t0;
+    expect(s.state).toBe('ready');
+    expect(ms).toBeLessThan(budgetMs(1200 + 500));
+    // One fetch of 'pl' (and the one of 'now' before it).
+    expect(ctl.calls).toBe(2);
+    // The toast never went back to 0 %.
+    expect(shown).toEqual([...shown].sort((a, b) => a - b));
+  });
+
+  it('holds at most two prepares in flight: a third playlist is refused with a reason, fetching nothing', async () => {
+    const { live, ctl } = linked();
+    ctl.mode = { k: 'stall' };
+    expect(live.prepare('a').state).toBe('preparing');
+    expect(live.prepare('b').state).toBe('preparing');
+    const c = await live.prepareWait('c', { waitMs: 1000 });
+    expect(c).toMatchObject({ state: 'failed', reason: PREPARE_BUSY_REASON });
+    expect(ctl.calls).toBe(2);
+    await expect(goLive(live, 'c')).rejects.toThrow(PREPARE_BUSY_REASON);
+    expect(ctl.calls).toBe(2);
+    // Another prepare of a playlist already in flight joins it, as before.
+    expect(live.prepare('a').state).toBe('preparing');
+    expect(ctl.calls).toBe(2);
+    live.stop();
+  });
+
+  it('keeps the ready copy of the latest prepare only: an older one is dropped and fetched again', async () => {
+    const { live, ctl } = linked();
+    expect((await live.prepareWait('a', { waitMs: 2000 })).state).toBe('ready');
+    expect((await live.prepareWait('b', { waitMs: 2000 })).state).toBe('ready');
+    expect(ctl.calls).toBe(2);
+    await goLive(live, 'b');
+    expect(ctl.calls).toBe(2);
+    await goLive(live, 'a');
+    expect(ctl.calls).toBe(3);
+    expect(live.state.resolved?.playlist.id).toBe('a');
   });
 });
