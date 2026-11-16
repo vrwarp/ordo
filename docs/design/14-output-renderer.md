@@ -462,11 +462,27 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   (`holdInto`: while the slide is live or armed) and reports them with `{t: 'unitsReady', slideKey, keys,
   left}`, coalesced: once all are made, or at most once per `REFRESH_FADE_MS` while some remain. Its last report
   says so (`ended`, its `left` the parts it did not make; a cancelled late job reports nothing). It makes its parts
-  in rounds of at most `UNIT_WAIT_MS`, `LATE_ROUNDS` (4) a lane job; while its last round made some it goes on in a
-  new lane job after the late work queued meanwhile, so rounds running out never leave a part unmade, and a round
-  that makes nothing ends it. A draw of the slide while its late job runs (a re-draw) hands its hold on before the
-  older one is let go, so a part made after a re-draw is never evicted before the next re-draw copies it, and adds
-  the parts it left (one evicted meanwhile is made again). A unit whose making fails (no canvas, a drawing error,
+  in rounds of at most `UNIT_WAIT_MS`, `LATE_ROUNDS` (4) a lane job; while its last round made one of its parts (or
+  found one unmakeable, or a draw added some) it goes on in a new lane job after the late work queued meanwhile, so
+  rounds running out never leave a part unmade, and a round that made none of its parts ends it. A unit it makes
+  again that is not one of its parts (evicted after it made it) never counts: at 36f06d2 it did, and a late job
+  whose units were evicted as fast as it made them went on for ever (70,000 units in 6 s for an 8-unit slide in the
+  review's test), holding the bulk lane off (repair 4). So a late job goes on at most once per part. A draw of the
+  slide while its late job runs (a re-draw) hands its hold on before the older one is let go, so a part made after a
+  re-draw is never evicted before the next re-draw copies it, and adds the parts it left (one evicted meanwhile is
+  made again).
+- **Its hold let go.** The hold a late job pins into is its layer's live or armed one (`keepUnits`), and the next
+  job of that role lets it go. On the live chain (another slide's hurried arm or fading re-draw, a restart's `units`)
+  that slide is on screen now, so the late job stops at its next turn (`stopped`: the unit it is making is
+  abandoned) and ends, its last report saying `stopped` with the parts it did not make; nothing copies them and the
+  late lane and bulk work go on (a GO to an armed cue sends the worker nothing, so before repair 4 such a job went
+  on while nothing would show its parts). On the armed chain (the next cue armed) its slide either went live by a
+  GO to its armed cue or left, which the worker cannot tell: the job keeps the hold itself (`owns`) until it ends or a
+  draw of the slide takes it over, so what it made stays pinned until the slide's re-draw copies it, and each part
+  is made once. The link draws a slide again for a `stopped` end that left parts when that slide is on screen all
+  the same (a late re-draw of the slide before it, sent while that one was on screen, ran after the GO): that draw
+  makes them in a new late job, at most `LATE_RESTARTS` (2) times a showing. A slide that left the screen keeps its
+  parts for when it is shown again, which draws it again. A unit whose making fails (no canvas, a drawing error,
   the cache refused it; renderer `unitUnmade`, remembered until made) is skipped by late rounds and queues no late
   job; a job that waits (an arm, the warm-up) still tries it. It keeps its stand-in, and a decoration (which has
   none) is drawn directly by the slide's next draw, which its late job's report asks for: a long task, never a
@@ -477,7 +493,11 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   parts left late, or made and not drawn in yet (a refresh pending or not), is not drawn again by the new worker at
   once (its parts would be its stand-ins, its decorations missing): the link sends `{t: 'units', job, role}`, the
   new worker plans the slide, pins what it has as that layer's hold, makes the rest as a late job does and reports
-  them, and the slide is drawn again, fading in, when it does (reported at once when all were made already).
+  them, and the slide is drawn again, fading in, when it does (reported at once when all were made already). It is
+  the slide's late job from the message on, so a live job of another slide drops it, queued or planning, and a draw
+  of the slide meanwhile replaces it; it takes the layer's hold of its role only while no other job took that hold
+  since the message: taken on the live chain, the slide left the screen and nothing is made or kept, on the armed
+  chain it keeps a hold of its own (repair 4: at 36f06d2 it took the live hold of the slide shown meanwhile).
 - **Fade in, coalesced** (link-core): `unitsReady` for a key the renderer holds draws the slide again in place
   (`refresh`, as for a late image or font) as late work (`role: 'late'`, `RANK.late`), with `refreshFadeMs` 300
   while it is on screen (it fades in over the old copy, "Layer stacks" below) and none while it is only armed (a
@@ -492,7 +512,8 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   more, when its late job reports its last part (`left` 0) or ends (`ended`), and every part left fades in then (a
   showing usually has two such re-draws, the first part's and the last's); that wait lasts at most `LATE_HOLD_MS`
   (1 s) after the late job's last report, so a job that stops reporting never keeps a made part off the screen. A
-  report that names no part (a late job that ends having made nothing more) draws nothing again: no loop. The
+  report that names no part (a late job that ends having made nothing more) draws nothing again, but a `stopped`
+  end of the slide on screen (above, at most twice a showing): no loop. The
   slide's first draw does not decide it: that cold job
   decodes its pictures, builds its geometry and makes or leaves its units, and a re-draw copies the made units.
   Parts made while a re-draw runs are drawn in after it (the link syncs on a late job's `done`), and a slide shown
