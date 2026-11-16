@@ -202,7 +202,7 @@ describe('goLive: pre-rendered slides (design/29 §1.7)', () => {
     const r = go(inputs([p], { file: (x) => (x === HEAD ? undefined : FILES.get(x)) }));
     const lines = (r.degraded ?? []).map((d) => d.reason);
     expect(lines).toEqual([
-      '2 slides of "Sunday deck" are missing their full copy on the hub, so the screens show a simplified version (their text and pictures only).',
+      "2 slides of 'Sunday deck' are missing their full copy on the hub, so the screens show a simplified version (their text and pictures only).",
     ]);
     expect(degradedKind(lines[0]!)).toBe('slideFile');
     const one = go(
@@ -211,7 +211,7 @@ describe('goLive: pre-rendered slides (design/29 §1.7)', () => {
       }),
     );
     expect(one.degraded?.map((d) => d.reason)).toEqual([
-      'Slide 2 of "Q" is missing its full copy on the hub, so the screens show a simplified version (its text and pictures only).',
+      "Slide 2 of 'Q' is missing its full copy on the hub, so the screens show a simplified version (its text and pictures only).",
     ]);
     expect(one.degraded?.[0]?.slideId).toBe('a');
     // Pictures: a line only while the switch is on (the screens draw every slide live while it is off).

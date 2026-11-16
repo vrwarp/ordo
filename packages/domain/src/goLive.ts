@@ -463,8 +463,8 @@ export const FILES_CUT_REASON =
 /** The degraded line of pre-rendered slides of one presentation whose full copy the hub lacks (W40; critical). */
 function slideFileMissing(title: string, slides: number[]): string {
   return slides.length === 1
-    ? `Slide ${slides[0]} of "${title}" is missing its full copy on the hub, so the screens show a simplified version (its text and pictures only).`
-    : `${slides.length} slides of "${title}" are missing their full copy on the hub, so the screens show a simplified version (their text and pictures only).`;
+    ? `Slide ${slides[0]} of '${title}' is missing its full copy on the hub, so the screens show a simplified version (its text and pictures only).`
+    : `${slides.length} slides of '${title}' are missing their full copy on the hub, so the screens show a simplified version (their text and pictures only).`;
 }
 const SLIDE_FILE_MARK = ' full copy on the hub, ';
 
