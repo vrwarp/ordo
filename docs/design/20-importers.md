@@ -269,8 +269,9 @@ The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
   (as LibreOffice takes it); a drawing with a residual shape (3D, vertical text) goes to the art whole, and
   SmartArt without a drawing stays for LibreOffice;
 - writes each table as one table object (`ShapeObject.table`, M9 tables-conv; design/27 §15 M9 "The table
-  object imported"), edited cell by cell in the editor: the deck's columns and stored rows (the drawer grows
-  each row to its text, cells never shrink), each cell's rich text, spans, fill and diagonals, the palettes of
+  object imported"), edited cell by cell in the editor: LibreOffice's columns and rows in whole 1/100 mm, fixed
+  at import (`rowRule: 'fixed'`; since sub-wave 1b, design/27 §15 "The stored form"; an edit grows a row by what
+  its text needs more), each cell's rich text at LibreOffice's sizes, spans, fill and diagonals, the palettes of
   styles, fills and lines; one object of the slide's budget however many cells it has (the 640-cell master
   grid of a template is one object a slide). A table that names no style has none, whatever the deck's
   default (`a:tblStyleLst def`), as LibreOffice draws it; a cell whose family lacks its script (Hangul in a

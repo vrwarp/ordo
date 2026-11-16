@@ -1792,8 +1792,9 @@ budget only decides that it is drawn so.
   holds a decoration to at most its shapes drawn one by one + 10 % (checked).
 
 <!-- r2b:open-items -->
-**Open items of §12-13 after wave r2b sub-wave 1** (one list, from effect-units, units-live and tables-conv; the
-wave's integration measures them: `regroup/r2b/integrate-1.md`).
+**Open items of §12-13 after wave r2b sub-waves 1 and 1b** (one list: sub-wave 1's effect-units, units-live and
+tables-conv, then sub-wave 1b's tables-flip, tables-form, tables-cells and text-lines; the wave's integrations
+measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`).
 - _Closed in sub-wave 1:_ r2a must a (a decoration at its caps drawn at once on the outputs): a `whole` effect unit
   made in slices, left out of an output raster until made (`SlideDrawOptions.late`, C2b, on every asset-worker
   raster) and faded in. r2a must b (a GO waits for units): a jump is drawn at once, a GO hurries an armed or warm
@@ -1813,33 +1814,49 @@ wave's integration measures them: `regroup/r2b/integrate-1.md`).
   decoded picture at the prepare step); the editor and coarse-pointer thumbnails keep legacy copies (leaf-editor,
   sub-wave 2). (A unit an armed job did not finish within `UNIT_WAIT_MS` is no longer seen only at a later draw:
   the job leaves it to the late job, which fades it in.)
-- _Tables (tables-conv, tables-flip):_ every table is the table object on every kind of hub: the owner decided
-  question 3 on 2026-11-15 ("prioritize native tables": the 8 dense table slides on a hub with LibreOffice
-  included), and sub-wave 1b (tables-flip) removed sub-wave 1's interim rule and its second emission (§15 M9 "The
-  table object imported"). Question 3's gate (each of the 8 ≥ its LibreOffice page − 0.04, the mean ≥ 0.939) is
-  the fidelity target, measured on the stored form (what both kinds of hub show: 0.161-0.852, mean 0.508, at
-  tables-flip; tables-form, text-lines and tables-cells close the gap). A hostile table at `TABLE_LIMITS`
-  (60,000 characters in 6 cells of 10,000) draws in 61-63 ms at 3840 (`bench:tables`, named there; 4,096 cells
-  of 60,000 characters: 35-39 ms; the corpus's table slides at most 43.5 ms): render-bounds' 20,000-character
-  bound and pre-rendered big slides take it off the GO path. Vertical cells stay LibreOffice's art (owner
-  question T4's default, until 1c). The Korean bulletin's slide 20 is still under blank: LibreOffice 24.2 draws
-  the Latin punctuation inside its Korean text in the Latin face (not the Korean one, as this entry said
-  before; probe decks, tables/gaps-flip B.1); the extra lines come from the 1/4 em spacing LibreOffice adds at
-  every boundary between East Asian and other text, and from the weak characters (circled digits, corner
-  brackets) taking the face of the script around them (1c, ko-weak).
-- _Tables, cell rules (tables-cells, 1b):_ ordo draws a cell's lines a whole cell lift from LibreOffice's, but
-  spaces them by the face's line height times the proportion, unrounded, where LibreOffice spaces each line in
-  whole 1/100 mm (Carlito 10 pt at 107 %: 26.02 against 25.91 px at 1920): the lines spread around LibreOffice's
-  by (n - 1) / 2 × the difference (the 666 chart's tall cells); storing LibreOffice's line heights as exact
-  spacing would remove it and changes what the editor shows of a cell's spacing (1c). Bottom-anchored cells
-  that overflow are not probed (`loBlockTop` keeps them on the inner bottom, never above the top).
-- _Text (text-lines, sub-wave 1b):_ imported text breaks where LibreOffice breaks it (a hyphen before a digit,
-  spaces between a quote and a bracket, no break after a slash before a letter) and sizes each line by its own
-  runs; table-cell text is painted on the device row and quarter column LibreOffice's page uses (§6). Still
-  open, named: LibreOffice's breaks after the slashes of a paragraph's first word and its width cut of a URL
-  that begins a line (not modelled); owner questions T1 (ordo's own text breaks as today) and T5 (imported text
-  boxes on whole pixels: not done, numbers in the 1b report). Moral Character's cell floor, measured with
-  tables-cells' anchor in, is a gain (stored form 0.838 → 0.847; −0.008 before the anchor).
+- _Closed in sub-wave 1b (native tables first; the owner, 2026-11-15, "prioritize native tables"):_ every table
+  is the table object on every kind of hub, the 8 dense table slides on a hub with LibreOffice included
+  (question 3 decided): tables-flip removed sub-wave 1's interim rule, its note and its second emission, and a
+  slide holding a table object is never LibreOffice's page for its size (§15 M9 "The table object imported").
+  The table object stores LibreOffice's layout on every hub (tables-form, owner question T2's default: its
+  columns, its rows fixed, its sizes, the master's `otherStyle` for cell text; an edit grows a row by what its
+  text needs more), LibreOffice's cell rules (tables-cells: line heights, lengths in whole 1/100 mm, the lift,
+  the anchor), and 'Make editable' on a stored table page gives the table. Imported text breaks where LibreOffice
+  breaks it (a hyphen before a digit, spaces between a quote and a bracket, no break after a slash before a
+  letter) and sizes each line by its own runs; table-cell text is painted on the device row and quarter column
+  LibreOffice's page uses (text-lines, §6; Moral Character's cell floor, measured with tables-cells' anchor in,
+  is a gain: stored form 0.838 → 0.847, −0.008 before the anchor). Question 3's gate (each of the 8 ≥ its
+  LibreOffice page − 0.04, the mean ≥ 0.939) is the fidelity target, measured on the stored form (what both
+  kinds of hub show): the 8 0.508 at tables-flip, 0.848 after the four tracks, 1 of 8 at its target (Flesh and
+  Spirit); never a rule that picks LibreOffice.
+- _Left to sub-wave 1c (tables, the rest of the owner's list):_
+  - LibreOffice's glyph-advance model and one row measure (`tables-widths`): with the harness's faces, 148 of
+    15,163 cells on 11 of E's 66 table slides need more than their fixed row by over 1 px (§15 "The stored
+    form"); Flesh and Spirit, 1000 Years and Colossians gain there.
+  - ordo draws a cell's lines a whole cell lift from LibreOffice's, but spaces them by the face's line height
+    times the proportion, unrounded, where LibreOffice spaces each line in whole 1/100 mm (Carlito 10 pt at
+    107 %: 26.02 against 25.91 px at 1920): the lines spread around LibreOffice's by (n - 1) / 2 × the
+    difference (the 666 chart's tall cells, Colossians −0.007 at tables-cells); storing LibreOffice's line
+    heights as exact spacing would remove it and changes what the editor shows of a cell's spacing.
+    Bottom-anchored cells that overflow are not probed (`loBlockTop` keeps them on the inner bottom, never above
+    the top).
+  - Vertical cells stay LibreOffice's art (owner question T4's default; `vert-cells`).
+  - The Korean bulletin's slide 20 is still under blank: LibreOffice 24.2 draws the Latin punctuation inside its
+    Korean text in the Latin face (not the Korean one, as this entry said before; probe decks, tables/gaps-flip
+    B.1); the extra lines come from the 1/4 em spacing LibreOffice adds at every boundary between East Asian and
+    other text, and from the weak characters (circled digits, corner brackets) taking the face of the script
+    around them (`ko-weak`). The other script table slides (Coptic and Arabic cells) are `script-cells`'.
+  - Text: LibreOffice's breaks after the slashes of a paragraph's first word and its width cut of a URL that
+    begins a line are not modelled; owner questions T1 (ordo's own text breaks as today) and T5 (imported text
+    boxes on whole pixels: not done; the 8 would go 0.848 → 0.869, numbers in the 1b report) stay open. What
+    the 8 still miss is mostly outside the table objects (John 5 vs 18's and Colossians' text boxes, the
+    Boletims' dashed outlines: LibreOffice-only habits kept in the measuring tool, owner question T3).
+  - No e2e opens a version-2 table page through 'Make editable' (no build stores one; the hub's tests cover
+    main's and the interim rule's table pages).
+- _Left to render-bounds (sub-wave 3), tables:_ a hostile table at `TABLE_LIMITS` (60,000 characters in 6 cells
+  of 10,000) draws in 61-63 ms at 3840 (`bench:tables`, named there; 4,096 cells of 60,000 characters: 35-39 ms;
+  the corpus's table slides at most 43.5 ms): render-bounds' 20,000-character bound and pre-rendered big slides
+  take it off the GO path.
 <!-- /r2b:open-items -->
 
 ## 14. Testing and fidelity measurement
@@ -3021,21 +3038,22 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
   size either (`pageForBudget`: one guarded line; a table object past 64 KB keeps the ladder's level, 0 slides in
   E and golden-pptx, the largest 55,631 B); a table page an older import stored (the interim note, or main's
   "over 64 KB: LibreOffice draws its page") becomes the table object on a re-import or Reset slide. The numbers, kept as the target (the table
-  object as the converter draws it under the harness's LibreOffice policies, `nativeSsim`, and as both kinds of
-  hub store and show it, the stored form; the hub without LibreOffice before, where the M6 group was stored
-  minimal):
+  object as the converter draws it under the harness's LibreOffice policies, `nativeSsim` at tables-flip, and as
+  both kinds of hub store and show it, the stored form, at tables-flip and after sub-wave 1b's four tracks, the
+  hub with LibreOffice asked and within 0.001 of it; the hub without LibreOffice before, where the M6 group was
+  stored minimal):
 
-  | Slide (deck, page)        | LibreOffice's page | Target | Table object (nativeSsim) | Stored form (hubs) | Without LibreOffice before |
-  | ------------------------- | -----------------: | -----: | ------------------------: | -----------------: | -------------------------: |
-  | 1000 Years, 1             |              0.972 |  0.932 |                     0.622 |              0.477 |                      0.399 |
-  | John 5 vs 18, 1           |              0.949 |  0.909 |                     0.619 |              0.511 |                      0.351 |
-  | Colossians 2-14-16, 1     |              0.931 |  0.891 |                     0.634 |              0.458 |                      0.340 |
-  | Matthew 16v18, 1          |              0.963 |  0.923 |                     0.783 |              0.418 |                      0.477 |
-  | Flesh and Spirit chart, 1 |              0.956 |  0.916 |                     0.817 |              0.161 |                      0.514 |
-  | Boletim Fev-17, 2         |              0.976 |  0.936 |                     0.866 |              0.840 |                      0.577 |
-  | Boletim Mai-17, 2         |              0.975 |  0.935 |                     0.877 |              0.852 |                      0.586 |
-  | Moral Character, 1        |              0.946 |  0.906 |                     0.872 |              0.344 |                      0.606 |
-  | Mean                      |              0.959 |  0.939 |                     0.761 |              0.508 |                      0.481 |
+  | Slide (deck, page)        | LibreOffice's page | Target | Table object (nativeSsim) | Stored form at tables-flip | Stored form after 1b | Without LibreOffice before |
+  | ------------------------- | -----------------: | -----: | ------------------------: | -------------------------: | -------------------: | -------------------------: |
+  | 1000 Years, 1             |              0.972 |  0.932 |                     0.622 |                      0.477 |                0.923 |                      0.399 |
+  | John 5 vs 18, 1           |              0.949 |  0.909 |                     0.619 |                      0.511 |                0.633 |                      0.351 |
+  | Colossians 2-14-16, 1     |              0.931 |  0.891 |                     0.634 |                      0.458 |                0.747 |                      0.340 |
+  | Matthew 16v18, 1          |              0.963 |  0.923 |                     0.783 |                      0.418 |                0.907 |                      0.477 |
+  | Flesh and Spirit chart, 1 |              0.956 |  0.916 |                     0.817 |                      0.161 |                0.927 |                      0.514 |
+  | Boletim Fev-17, 2         |              0.976 |  0.936 |                     0.866 |                      0.840 |                0.899 |                      0.577 |
+  | Boletim Mai-17, 2         |              0.975 |  0.935 |                     0.877 |                      0.852 |                0.903 |                      0.586 |
+  | Moral Character, 1        |              0.946 |  0.906 |                     0.872 |                      0.344 |                0.847 |                      0.606 |
+  | Mean                      |              0.959 |  0.939 |                     0.761 |                      0.508 |                0.848 |                      0.481 |
 
   The stored form is what churches see on either kind of hub (since sub-wave 1b LibreOffice's form, "The stored
   form" below; before it the deck's row heights grown by the drawer's lines); the harness scores a table slide
