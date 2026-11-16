@@ -482,7 +482,7 @@ offered for a cell (no uppercase, outline, shadow or shrink-to-fit), so nothing 
 A big or crowded slide is kept whole in a **slide file** and the presentation stores its **stand-in**: the live
 objects whole (the lyric box, step-by-step text, playing pictures and what lies above them), the rest simplified
 (`minimalSlide`), within the live-raster bounds. The fields are optional, each with `.catch(undefined)`; older
-builds (0.7.0 and 0.5.0, `schemas.prev.test-util.ts` and `schemas.prev05.test-util.ts`) strip them and draw the
+builds (0.8.0 and 0.5.0, `schemas.prev.test-util.ts` and `schemas.prev05.test-util.ts`) strip them and draw the
 stand-in. Nothing writes them in sub-wave 1, and every path that would use them reads `PRERENDER_ON` (false).
 
 ```ts

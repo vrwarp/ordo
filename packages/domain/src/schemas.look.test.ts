@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_LYRIC_STYLE, LOOK_STAGE } from './defaults.ts';
 import { Look, PropsRule } from './schemas.ts';
+import * as prev from './schemas.prev.test-util.ts';
+import * as prev05 from './schemas.prev05.test-util.ts';
 import { parseStageNoteLine, stageNotesEnabled } from './stageNotes.ts';
 
 describe("a stage look's notes region (design/27 §3.1 PropsRule.notes, §11 item 13)", () => {
@@ -82,5 +84,37 @@ describe("a stage look's notes region (design/27 §3.1 PropsRule.notes, §11 ite
         { kind: 'cue', text: 'PAUSE' },
       ],
     });
+  });
+});
+
+/*
+ * design/27 §3.2 "Older builds", design/29 §1.6: a stage look this build saves, as the older builds read it. The
+ * build a venue runs before wave r2b is main's 0.8.0 (PR #28, `schemas.prev.test-util.ts`), which added the
+ * adaptive stage preset and the notes size; 0.5.0 (`schemas.prev05.test-util.ts`) predates them.
+ */
+describe('a stage look this build saves, read by the older builds', () => {
+  const look = () =>
+    Look.parse({
+      ...LOOK_STAGE,
+      layers: {
+        ...LOOK_STAGE.layers,
+        props: { ...LOOK_STAGE.layers.props, notes: true, stagePreset: 'prompter', notesScale: 'sm' },
+      },
+    });
+
+  it('the older build (0.8.0) keeps its stage preset, notes size and notes switch, and saves back the same look', () => {
+    const old = prev.Look.parse(look());
+    expect(old.layers.props.stagePreset).toBe('prompter');
+    expect(old.layers.props.notesScale).toBe('sm');
+    expect(old.layers.props.notes).toBe(true);
+    expect(Look.parse(old)).toEqual(look());
+  });
+
+  it('0.5.0 strips the stage preset and notes size and keeps the notes switch; what it saves back parses here', () => {
+    const old = prev05.Look.parse(look());
+    expect(old.layers.props).not.toHaveProperty('stagePreset');
+    expect(old.layers.props).not.toHaveProperty('notesScale');
+    expect(old.layers.props.notes).toBe(true);
+    expect(Look.safeParse(old).success).toBe(true);
   });
 });

@@ -441,7 +441,7 @@ SlidePptx  += { missing: string[] ≤ 16 of ≤ 40 }                   // '<kind
   kind 'drawing'); a slide waiting for LibreOffice is reported as waiting instead.
 - **Older builds**: `schemas.prev05.test-util.ts` is main's 0.5.0 schema, as published (M9 is 0.6.0; every push
   to main publishes the edge image and the Pages demo, so 0.5.0 is what a venue rolls back to; since wave r2b
-  `schemas.prev.test-util.ts` is 0.7.0, the release before it, design/29 §1.2, and these cases keep 0.5.0). It strips every
+  `schemas.prev.test-util.ts` is 0.8.0, main's PR #28, the release before it, design/29 §1.2, and these cases keep 0.5.0). It strips every
   M9 field (`table`, `chart`, `decor`, `look3d`, `warp`, `writing`, `centerBlock`, `vectorFonts`, `adjWide`,
   `SlidePptx.missing`) and keeps what 0.5.0 already had: geometry and its files, rich text, provenance,
   `midiCues`, `bottomThirdText`, a playlist item's `keepBackground`, `audioMediaId` and `countdownTimer`, a
