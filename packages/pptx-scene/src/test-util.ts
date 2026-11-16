@@ -751,8 +751,8 @@ const BANDED_TABLE_STYLE = `<a:tblStyle styleId="${BANDED_TABLE_STYLE_ID}" style
 /**
  * M9 (`tables-conv`): a one-slide deck of a dense table, `rows` × 5 cells of a reading plan (a few words in
  * 10 pt each, a header band, every inner rule drawn), as E's dense table slides are: within 64 KB as the
- * table object, past it as its M6 group (`EmittedSlide.tableGroupBytes`) from 20 rows; past M6's cell
- * cap (150) from 31.
+ * table object up to about 230 rows, past it as its M6 group (what the kill switch, `m9Writes` without
+ * 'table', writes) from 20 rows; past M6's cell cap (150) from 31.
  */
 export function denseTableDeck(rows: number): PartSource {
   const IN = 914_400;

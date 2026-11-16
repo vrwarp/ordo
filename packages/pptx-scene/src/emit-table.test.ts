@@ -406,38 +406,36 @@ describe('the table object (M9, ShapeObject.table)', () => {
   });
 });
 
-describe("the M6 group's bytes a hub with LibreOffice weighs (EmittedSlide.tableGroupBytes, interim rule)", () => {
+describe('with LibreOffice no table is emitted twice (the owner: every table is the table object)', () => {
   const dense = (rows: number, opts: ConvertOptions = {}) =>
     convertDeck(denseTableDeck(rows), { fontFace: HALF_EM, ...opts });
 
-  it('with LibreOffice: what the slide would add with its tables as their M6 group', () => {
+  it('with LibreOffice the slide is emitted as without it: no M6 group weighed, nothing written for one', () => {
     const deck = dense(28);
     const native = deck.slides[0]!;
+    const nolo = dense(28, { libreoffice: false });
+    expect(tablesOf(native.slide.objects)).toHaveLength(1);
+    // No second emission: no group's bytes on the slide, the emitter's notes and slide as without LibreOffice.
+    expect(native).not.toHaveProperty('tableGroupBytes');
+    expect(native.notes).toEqual(nolo.slides[0]!.notes);
+    expect(native.slide.objects).toHaveLength(2);
+    expect(native.slide).toEqual({ ...nolo.slides[0]!.slide, id: native.slide.id });
+    expect(deck.geoms).toEqual([]);
+    // The M6 group the interim rule weighed is still past 64 KB as stored (the kill switch writes it).
     const kill = dense(28, { m9Writes: NO_TABLE });
     const group = kill.slides[0]!;
-    expect(tablesOf(native.slide.objects)).toHaveLength(1);
     expect(tablesOf(group.slide.objects)).toHaveLength(0);
-    // The group's grid geometries go to files as stored (`fitBytes`); the table object's do not.
     expect(kill.geoms.length).toBeGreaterThan(0);
-    // The kill switch's slide as stored (its large geometries in files), less the table object's: exact.
-    const extra = storedSlideBytes(group.slide, []) - storedSlideBytes(native.slide, []);
-    expect(extra).toBeGreaterThan(64 * 1024);
-    expect(native.tableGroupBytes).toBe(extra);
-    // Nothing of the scratch group reaches the slide or the import's geometry files.
-    expect(native.slide.objects).toHaveLength(2);
-    expect(deck.geoms).toEqual([]);
-    // The emitter's own budget and its notes are as without the estimate.
-    expect(native.notes).toEqual(dense(28, { libreoffice: false }).slides[0]!.notes);
+    expect(storedSlideBytes(group.slide, [])).toBeGreaterThan(64 * 1024);
   });
 
-  it('none without LibreOffice, none with a table M6 never grouped (past 150 cells), none without a table', () => {
-    expect(dense(28, { libreoffice: false }).slides[0]!.tableGroupBytes).toBeUndefined();
+  it('nothing for a table M6 never grouped (past 150 cells), nor for a slide without a table', () => {
     const big = dense(32).slides[0]!;
     expect(tablesOf(big.slide.objects)[0]!.table!.cells).toHaveLength(160);
-    expect(big.tableGroupBytes).toBeUndefined();
+    expect(big).not.toHaveProperty('tableGroupBytes');
     const plain = convert({
       slides: [{ shapes: sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, fill: solid('FF0000') }) }],
     });
-    expect(plain.slides[0]!.tableGroupBytes).toBeUndefined();
+    expect(plain.slides[0]!).not.toHaveProperty('tableGroupBytes');
   });
 });

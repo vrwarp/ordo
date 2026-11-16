@@ -853,14 +853,10 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
 - **The kill switch** (`m9Writes` without 'table'): the M6 group, counted as its objects by the budgets
   (`BudgetOptions.tables` false: `budgetCost`, the guard's text objects one per cell), and M6's cell cap
   (`budget.ts` `m6TableCap`, `MAX_TABLE_CELLS` 150, 'budget:table') before the support is refined.
-- **The M6 group's bytes** (`EmittedSlide.tableGroupBytes`, with LibreOffice only; question 3 of the LibreOffice
-  inventory missed its gate; the owner has since decided it, 2026-11-15, for native tables on every hub, and
-  sub-wave 1b, tables-flip, removes this second emission): each table object's M6 group is emitted once more into a scratch list
-  (`emit-table.ts` `groupForm`: ids of a ULID's length, no log, the text budget as it stood before the table;
-  none past `MAX_TABLE_CELLS`), and once the slide is fitted `emit-budget.ts` `groupFormExtra` weighs the slide
-  with the groups in place of the table objects (`fitBytes` on copies, a stand-in for file names: no file is
-  added) less the slide as it is. The import core's interim rule keeps LibreOffice's page for a slide this takes
-  past 64 KB (`@ordo/importers` `pptx-core.ts` `pageForBudget`).
+- **One emission, every hub**: each table is emitted once, as the table object, with LibreOffice or without
+  it (the owner decided question 3 of the LibreOffice inventory on 2026-11-15: every table is the table object
+  on every kind of hub). Sub-wave 1's second emission of each table as its M6 group, weighed for the import
+  core's interim rule (`EmittedSlide.tableGroupBytes`), is gone with the rule (sub-wave 1b, tables-flip).
 - Tests: `emit-table.test.ts` (one object with palettes, background and gradient fills, spans, diagonals, rtl,
   the cell entries as the domain reads them, 96 and 160 cells native, the 640-cell master grid one object a
   slide, the older build's strip, the kill switch under 150 objects, stored rows, LibreOffice's rows, the text

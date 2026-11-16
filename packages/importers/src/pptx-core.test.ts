@@ -1,5 +1,7 @@
 import { type ShapeObject, slideBytes } from '@ordo/domain';
-import { convertDeck } from '@ordo/pptx-scene';
+import { type ConvertOptions, convertDeck } from '@ordo/pptx-scene';
+import { storedSlideBytes } from '@ordo/pptx-scene/emit-budget.ts';
+import { M9_FIELDS } from '@ordo/pptx-scene/emit-ctx.ts';
 import { denseTableDeck } from '@ordo/pptx-scene/test-util.ts';
 import { PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
 import { describe, expect, it } from 'vitest';
@@ -10,7 +12,6 @@ import {
   type Converted,
   type Draft,
   ImportCore,
-  TABLE_PAGE_NOTE,
   toPicture,
 } from './pptx-core.ts';
 import { pictureGuardDeck } from './pptx-guard.test-util.ts';
@@ -53,8 +54,8 @@ describe("ImportCore.budgetLeft: what the slide budgets' guard left out (M9, lo-
 });
 
 /** A deck's drafts through the import core's budgets (step 3), as the hub's job and a client assembly run them. */
-function budgeted(parts: ReturnType<typeof denseTableDeck>, lo: boolean) {
-  const r = convertDeck(parts, { sheets: PPTX_SHEETS, libreoffice: lo });
+function budgeted(parts: ReturnType<typeof denseTableDeck>, lo: boolean, opts: ConvertOptions = {}) {
+  const r = convertDeck(parts, { sheets: PPTX_SHEETS, libreoffice: lo, ...opts });
   const log = new ImportLog();
   const c = new ImportCore({ lo, log, warn: () => {}, geomFileBytes: 1 << 20 });
   const converted = new Map<number, Converted>(r.slides.map((s) => [s.index, { s, media: new Map() }]));
@@ -66,8 +67,12 @@ function budgeted(parts: ReturnType<typeof denseTableDeck>, lo: boolean) {
 
 const tableObjects = (d: Draft) =>
   d.slide.objects.filter((o) => o.type === 'shape' && (o as ShapeObject).table !== undefined);
+/** The kill switch (`m9Writes` without 'table'): tables are written as their M6 group. */
+const NO_TABLE = { m9Writes: new Set(M9_FIELDS.filter((f) => f !== 'table')) };
+/** The words of a slide that keeps LibreOffice's page for its size (`ImportCore.pageForBudget`). */
+const PAGE = /LibreOffice draws its page/;
 
-describe('ImportCore.budget: a dense table (M9 tables-conv, the interim rule of question 3)', () => {
+describe('ImportCore.budget: a dense table is the table object on every hub (M9, the owner: every table)', () => {
   it('no LibreOffice: native, one table object kept whole (before: the M6 group past 64 KB, stored minimal)', () => {
     // 140 cells: about 8 KB as the table object, about 95 KB as M6's group.
     const { d, simplified } = budgeted(denseTableDeck(28), false);
@@ -76,23 +81,31 @@ describe('ImportCore.budget: a dense table (M9 tables-conv, the interim rule of 
     expect(d.cls).toBe('native');
     expect(tableObjects(d)).toHaveLength(1);
     expect(d.dropped).toBeUndefined();
-    expect(d.notes).not.toContain(TABLE_PAGE_NOTE);
-    expect(d.tableGroupBytes).toBeUndefined();
+    expect(d.notes.filter((n) => PAGE.test(n))).toEqual([]);
+    expect(d).not.toHaveProperty('tableGroupBytes');
     expect(slideBytes(d.slide)).toBeLessThan(16 * 1024);
   });
 
-  it("with LibreOffice: a slide whose tables as their M6 group pass 64 KB keeps LibreOffice's page", () => {
+  it('with LibreOffice, a slide whose tables as their M6 group would pass 64 KB is the table object', () => {
+    // The kill switch's slide (the M6 group) as stored: past 64 KB, as the interim rule weighed it.
+    const group = budgeted(denseTableDeck(28), true, NO_TABLE).emitted;
+    expect(storedSlideBytes(group.slide, [])).toBeGreaterThan(64 * 1024);
     const { d, simplified, log, emitted } = budgeted(denseTableDeck(28), true);
-    expect(d.cls).toBe('picture');
-    expect(emitted.tableGroupBytes).toBeGreaterThan(64 * 1024);
-    expect(d.slide.objects).toEqual([]);
-    expect(d.notes).toContain(TABLE_PAGE_NOTE);
-    expect(d.artText).toMatch(/^Day 1: Psalm 1, verses 1-9\nDay 1: Psalm 2/);
+    expect(d.cls).toBe('native');
+    expect(tableObjects(d)).toHaveLength(1);
+    expect((tableObjects(d)[0] as ShapeObject).table!.cells).toHaveLength(140);
+    expect(d.notes.filter((n) => PAGE.test(n))).toEqual([]);
+    expect(log).not.toMatch(PAGE);
+    expect(d.artText).toBeUndefined();
     expect(d.simplified).toBeFalsy();
     expect(simplified).toBe(0);
-    expect(log).toMatch(
-      /slide 1: its tables as shapes would be over 64 KB \(9\d KiB\): LibreOffice draws its page/,
-    );
+    // No second emission: the converter weighs no M6 group, and the draft carries none.
+    expect(emitted).not.toHaveProperty('tableGroupBytes');
+    expect(d).not.toHaveProperty('tableGroupBytes');
+    // As a hub without LibreOffice stores it.
+    const nolo = budgeted(denseTableDeck(28), false).d;
+    expect(d.slide).toEqual({ ...nolo.slide, id: d.slide.id });
+    expect(d.notes).toEqual(nolo.notes);
   });
 
   it('with LibreOffice: a table whose group stays within 64 KB, or that M6 never grouped (past 150 cells), stays native', () => {
@@ -101,8 +114,20 @@ describe('ImportCore.budget: a dense table (M9 tables-conv, the interim rule of 
       const { d } = budgeted(denseTableDeck(rows), true);
       expect(d.cls, `${rows} rows`).toBe('native');
       expect(tableObjects(d), `${rows} rows`).toHaveLength(1);
-      expect(d.notes).not.toContain(TABLE_PAGE_NOTE);
+      expect(d.notes.filter((n) => PAGE.test(n))).toEqual([]);
     }
+  });
+
+  it("the kill switch on a hub with LibreOffice: the M6 group past 64 KB is LibreOffice's page by the generic rule", () => {
+    const { d, log, emitted } = budgeted(denseTableDeck(28), true, NO_TABLE);
+    expect(storedSlideBytes(emitted.slide, [])).toBeGreaterThan(64 * 1024);
+    expect(d.cls).toBe('picture');
+    expect(d.slide.objects).toEqual([]);
+    expect(d.notes).toContain('over 64 KB: LibreOffice draws its page');
+    expect(d.artText).toMatch(/^Day 1: Psalm 1, verses 1-9\nDay 1: Psalm 2/);
+    expect(log).toMatch(
+      /slide 1 is over 64 KB: LibreOffice draws its page \(fitted, it would leave out its decorations\)/,
+    );
   });
 });
 

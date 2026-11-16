@@ -1808,14 +1808,20 @@ wave's integration measures them: `regroup/r2b/integrate-1.md`).
   decoded picture at the prepare step); the editor and coarse-pointer thumbnails keep legacy copies (leaf-editor,
   sub-wave 2). (A unit an armed job did not finish within `UNIT_WAIT_MS` is no longer seen only at a later draw:
   the job leaves it to the late job, which fades it in.)
-- _Tables (tables-conv):_ on a hub with LibreOffice the 8 dense table slides keep LibreOffice's page for now (the
-  interim rule, §15 M9 "The table object imported"; the table object missed question 3's gate on all 8). The owner
-  decided question 3 on 2026-11-15 ("prioritize native tables": the table object on every kind of hub, these 8
-  included; the gate becomes the fidelity target), and sub-wave 1b (tables-flip) removes the interim rule and its
-  second emission. A hostile table at `TABLE_LIMITS` (60,000 characters in 6 cells of 10,000) draws in 61-63 ms at
-  3840 (`bench:tables`, named there; 4,096 cells of 60,000 characters: 35-39 ms; the corpus's table slides at most
-  43.5 ms): render-bounds' 20,000-character bound and pre-rendered big slides take it off the GO path. Vertical
-  cells stay LibreOffice's art; the Korean bulletin's slide 20 is still under blank (Latin punctuation and circled digits take the Korean face in LibreOffice).
+- _Tables (tables-conv, tables-flip):_ every table is the table object on every kind of hub: the owner decided
+  question 3 on 2026-11-15 ("prioritize native tables": the 8 dense table slides on a hub with LibreOffice
+  included), and sub-wave 1b (tables-flip) removed sub-wave 1's interim rule and its second emission (§15 M9 "The
+  table object imported"). Question 3's gate (each of the 8 ≥ its LibreOffice page − 0.04, the mean ≥ 0.939) is
+  the fidelity target, measured on the stored form (what both kinds of hub show: 0.161-0.852, mean 0.508, at
+  tables-flip; tables-form, text-lines and tables-cells close the gap). A hostile table at `TABLE_LIMITS`
+  (60,000 characters in 6 cells of 10,000) draws in 61-63 ms at 3840 (`bench:tables`, named there; 4,096 cells
+  of 60,000 characters: 35-39 ms; the corpus's table slides at most 43.5 ms): render-bounds' 20,000-character
+  bound and pre-rendered big slides take it off the GO path. Vertical cells stay LibreOffice's art (owner
+  question T4's default, until 1c). The Korean bulletin's slide 20 is still under blank: LibreOffice 24.2 draws
+  the Latin punctuation inside its Korean text in the Latin face (not the Korean one, as this entry said
+  before; probe decks, tables/gaps-flip B.1); the extra lines come from the 1/4 em spacing LibreOffice adds at
+  every boundary between East Asian and other text, and from the weak characters (circled digits, corner
+  brackets) taking the face of the script around them (1c, ko-weak).
 <!-- /r2b:open-items -->
 
 ## 14. Testing and fidelity measurement
@@ -2980,37 +2986,39 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
   written, and the budgets count it as the objects it emits (`BudgetOptions.tables`,
   `TableElement.objects`, the guard's text objects one per cell) and keep M6's cell cap (`m6TableCap`,
   `MAX_TABLE_CELLS` 150, 'budget:table'), so no slide passes the 150 objects either way.
-- **Question 3 of the LibreOffice inventory missed its gate: the interim rule.** On a hub with LibreOffice,
-  E's 8 dense table slides showed LibreOffice's page at 62a1c3a (their tables as M6 groups passed 64 KB, so the
-  ladder would have fitted them, `pageForBudget`). The gate for giving them the table object there was each
-  slide ≥ its LibreOffice page − 0.04 and the mean ≥ − 0.02. Measured at a548707 (`fid.sh --both`, shards
-  0-2, the 8 slides of tables-object.md §1; the page as LibreOffice drew it, the table object as the native
-  hub draws it, and the hub without LibreOffice before, where the M6 group was stored minimal):
+- **Question 3 of the LibreOffice inventory: every table is the table object (the owner, 2026-11-15).** At
+  62a1c3a a hub with LibreOffice showed E's 8 dense table slides as LibreOffice's page (their tables as M6 groups
+  passed 64 KB, so the ladder would have fitted them, `pageForBudget`). Question 3's gate for giving them the
+  table object there was each slide ≥ its LibreOffice page − 0.04 and the mean ≥ − 0.02; measured at a548707
+  (`fid.sh --both`, shards 0-2) it missed on every slide, and sub-wave 1 kept LibreOffice's page for a slide whose
+  tables as their M6 group passed 64 KB (an interim rule: the converter emitted each table a second time as its
+  M6 group to weigh it, `EmittedSlide.tableGroupBytes`, and the slide carried the note "its tables as shapes would
+  be over 64 KB: LibreOffice draws its page"). The owner answered "prioritize native tables": the table object on
+  every kind of hub, these 8 included, even where LibreOffice's page scores higher, and the gate becomes the
+  fidelity target, measured and reported, never a rule that picks LibreOffice. Sub-wave 1b (tables-flip) removed
+  the rule, its note and the second emission; a table page an older import stored (the interim note, or main's
+  "over 64 KB: LibreOffice draws its page") becomes the table object on a re-import or Reset slide. The numbers, kept as the target (the table
+  object as the converter draws it under the harness's LibreOffice policies, `nativeSsim`, and as both kinds of
+  hub store and show it, the stored form; the hub without LibreOffice before, where the M6 group was stored
+  minimal):
 
-  | Slide (deck, page)        | LibreOffice's page | Table object | Without LibreOffice before |
-  | ------------------------- | -----------------: | -----------: | -------------------------: |
-  | 1000 Years, 1             |              0.972 |        0.622 |                      0.399 |
-  | John 5 vs 18, 1           |              0.949 |        0.619 |                      0.351 |
-  | Colossians 2-14-16, 1     |              0.931 |        0.634 |                      0.340 |
-  | Matthew 16v18, 1          |              0.963 |        0.783 |                      0.477 |
-  | Flesh and Spirit chart, 1 |              0.956 |        0.817 |                      0.514 |
-  | Boletim Fev-17, 2         |              0.976 |        0.866 |                      0.577 |
-  | Boletim Mai-17, 2         |              0.975 |        0.877 |                      0.586 |
-  | Moral Character, 1        |              0.946 |        0.872 |                      0.606 |
-  | Mean                      |              0.959 |        0.761 |                      0.481 |
+  | Slide (deck, page)        | LibreOffice's page | Target | Table object (nativeSsim) | Stored form (hubs) | Without LibreOffice before |
+  | ------------------------- | -----------------: | -----: | ------------------------: | -----------------: | -------------------------: |
+  | 1000 Years, 1             |              0.972 |  0.932 |                     0.622 |              0.477 |                      0.399 |
+  | John 5 vs 18, 1           |              0.949 |  0.909 |                     0.619 |              0.511 |                      0.351 |
+  | Colossians 2-14-16, 1     |              0.931 |  0.891 |                     0.634 |              0.458 |                      0.340 |
+  | Matthew 16v18, 1          |              0.963 |  0.923 |                     0.783 |              0.418 |                      0.477 |
+  | Flesh and Spirit chart, 1 |              0.956 |  0.916 |                     0.817 |              0.161 |                      0.514 |
+  | Boletim Fev-17, 2         |              0.976 |  0.936 |                     0.866 |              0.840 |                      0.577 |
+  | Boletim Mai-17, 2         |              0.975 |  0.935 |                     0.877 |              0.852 |                      0.586 |
+  | Moral Character, 1        |              0.946 |  0.906 |                     0.872 |              0.344 |                      0.606 |
+  | Mean                      |              0.959 |  0.939 |                     0.761 |              0.508 |                      0.481 |
 
-  Missed (every slide by 0.07-0.35). So, until the owner decides: **with LibreOffice, a slide whose tables as
-  their M6 group pass 64 KB keeps LibreOffice's page**, as it did while tables were their group. The
-  converter weighs the group (`EmittedSlide.tableGroupBytes`, with LibreOffice only: each table emitted once
-  more as its M6 group into a scratch list, the slide as stored with the groups in place less as it is, after
-  `fitBytes`; none for a table past M6's cell cap, which M6 left to LibreOffice's art unmeasured, so a
-  160-cell bulletin is a table object on every hub) and the import core applies it (`pptx-core.ts`
-  `pageForBudget`, the slide's note "its tables as shapes would be over 64 KB: LibreOffice draws its page"),
-  within 64 KB as the page form and the presentation's room, like the plain and minimal forms. A client's
-  scene carries the same count (`clientScene.ts`). Without LibreOffice every table is the table object (the
-  8 slides 0.62-0.88, from 0.34-0.61 stored minimal). 'Make editable' on such a page lays text boxes over it,
-  as before: the table object there waits for the owner's answer. A table object's cells count as the slide's
-  text bodies (`bodyTexts`, a picture slide's search text), as the group's cells did.
+  The stored form is what churches see on either kind of hub (the converter's own drawing: the deck's row heights
+  grown by the drawer's lines, not LibreOffice's form); the harness scores a table slide that way in both hub
+  columns (`perSlide.table`, `tools/pptx-fidelity/README.md`). 'Make editable' on a stored table page still lays
+  text boxes over it until tables-cells (1b) rebuilds the table natively there. A table object's cells count as
+  the slide's text bodies (`bodyTexts`, a picture slide's search text), as the group's cells did.
 <!-- /m9:tables-conv -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)

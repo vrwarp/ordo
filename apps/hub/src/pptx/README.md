@@ -760,12 +760,12 @@ instead) and, on a hub with LibreOffice, for a slide over 64 KB that the ladder 
     the page form (`compactSlideBytes`) is within 64 KB and the presentation's plan still holds; the tail stays
     minimal. A hub with LibreOffice so never shows less of a slide than one without it, nor less than before
     M9 (22 worship slides of E stored plain or minimal scored 0.13-0.94 against LibreOffice; their page
-    0.90-0.999). **The interim table rule** (M9 `tables-conv`, question 3 of the LibreOffice inventory
-    missed): a slide within 64 KB with its tables as table objects, but past it with them as their M6 group
-    (`EmittedSlide.tableGroupBytes`, what the converter weighs the group at, with LibreOffice only), keeps
-    LibreOffice's page too, with the note 'its tables as shapes would be over 64 KB: LibreOffice draws its
-    page' (E's 8 dense table slides: the page 0.93-0.98, the table object 0.62-0.88). `clientScene.ts` takes
-    the count from a client's scene (a bounded integer), so a client's parse is weighed as the hub's own.
+    0.90-0.999). No table keeps the page: the owner decided question 3 of the LibreOffice inventory on
+    2026-11-15 (every table is the table object on every kind of hub), and sub-wave 1b (tables-flip) removed
+    sub-wave 1's interim rule, which kept LibreOffice's page for a slide whose tables as their M6 group passed
+    64 KB (E's 8 dense table slides). `clientScene.ts` drops the `tableGroupBytes` an older operator's scene
+    still carries (the schema keeps known fields only); a re-import or Reset slide makes the table object of a
+    slide an older import stored as LibreOffice's page (`reimport.ts`: the fresh conversion is native).
 - **Step 5 text**: a table object's cells are the slide's text bodies as the M6 group's text objects were
   (`bodyTexts`, `bodyBoxes`, `toPicture`'s search text, the rescue's text boxes).
 - **Step 3b**: an object naming a file the store could not take is left out the same way (was: the slide a

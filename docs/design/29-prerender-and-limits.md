@@ -46,7 +46,9 @@ ordo has size limits, and each one costs content:
   instead (`pageForBudget`, `pptx-core.ts:426-431`): empty until LibreOffice draws it, and without its in-slide
   video, motion background and lyric box. Worship set E after r2a (275 decks, 2,893 slides): 16 slides (12
   minimal, 4 plain; on hubs with LibreOffice 16 pages: 8 tables, 5 decorative, 3 plain text); 106 slides are over
-  48 KB. Raw corpus: 132 + 36 slides over 64 KB in 39 / 21 decks.
+  48 KB. Since r2b the 8 table slides are table objects within 64 KB (tables-conv) and the table object on every
+  kind of hub (the owner's answer to the LibreOffice inventory's question 3, sub-wave 1b): 8 slides remain.
+  Raw corpus: 132 + 36 slides over 64 KB in 39 / 21 decks.
 - Past 3 MiB of presentation the remaining slides keep only text, pictures and background (`size.ts:37-43`,
   `planImportSizes` :157-198), and near 4 MiB their text is cut to 200 characters a box (`pptx-core.ts:90`,
   :543-576). No E deck reaches it (largest 1.47 MiB); two raw decks did before geometry files (5.7 and 7.8 MB).
@@ -538,16 +540,13 @@ picture on every kind of hub, and keeps its video, motion background and lyric b
 2026-11-13 decision gave to LibreOffice's art (`budget.ts:493`, `toArt`) are a count limit too, so those slides
 become `count` slides (owner question 2, default yes). "Show original" (`Slide.pptx.refMediaId`, `show`) stays on
 demand.
-- **Tables are not decided here.** r2b tables-conv's interim rule (keep LibreOffice's page for a table slide whose
-  M6 group form passes 64 KB) is a size rule and goes with prerender-import: such a slide is a big slide. Whether a
-  table slide is native at all on a hub with LibreOffice is the LibreOffice inventory's question 3, still pending
-  with its default "native table when within 0.02-0.04 of LibreOffice's page" (`lo-inventory/inventory.md:277`),
-  measured by tables-conv. ordo's picture cannot close a fidelity gap, since it has the pixels of ordo's live
-  drawing; so until the owner answers, a table slide whose native form misses that gate keeps LibreOffice's page on
-  hubs with LibreOffice, as today, for fidelity and not for size. _Decided since:_ the owner answered question 3 on
-  2026-11-15 ("prioritize native tables"): every table is the table object on every kind of hub, the 8 dense
-  slides included, and the gate becomes a fidelity target; sub-wave 1b (tables-flip) removes the interim rule and
-  its second emission, so prerender-import keeps no table rule.
+- **Tables were not decided here.** r2b tables-conv's interim rule kept LibreOffice's page for a table slide whose
+  M6 group form passed 64 KB, until the LibreOffice inventory's question 3 (is a table slide native on a hub with
+  LibreOffice?) was answered; ordo's picture cannot close a fidelity gap, since it has the pixels of ordo's live
+  drawing. _Decided since:_ the owner answered question 3 on 2026-11-15 ("prioritize native tables"): every table
+  is the table object on every kind of hub, the 8 dense slides included, and the gate becomes a fidelity target;
+  sub-wave 1b (tables-flip) removed the interim rule and its second emission, so prerender-import finds no table
+  rule.
 - **The follow-up writes the full slide.** On hubs with LibreOffice the pptx-lo follow-up still draws charts,
   SmartArt, OLE objects and metafiles; `patchSlide` (`apps/hub/src/pptx/fallback.ts:347-427`) decides "unedited" by
   `digestMatches(slide.objects, …)` (:350) and patches inline objects. For a big slide it reads and writes the slide
@@ -555,7 +554,8 @@ demand.
 - **Make editable** on a stored 64 KB LibreOffice page (from before this design) routes to the native per-slide
   re-import, so it becomes a big slide; today `makeEditableNative` returns nothing for a slide with `pptx`
   (`apps/hub/src/imports.ts:751-757`) and `makeEditable` lays text boxes over LibreOffice's picture (:760-806),
-  which leaves LibreOffice inventory item C4 open.
+  which leaves LibreOffice inventory item C4 open. A table page an older import stored becomes the table object
+  on a re-import or Reset slide since sub-wave 1b (tables-flip); Make editable on it is tables-cells' (1b).
 - No LibreOffice stand-by (owner question 12, default no): a big slide whose picture no computer has made yet is
   drawn by the screens themselves, not shown as LibreOffice's page meanwhile.
 
@@ -644,8 +644,9 @@ Tests (each fails before its change):
 Measures (gates in brackets):
 1. **Fidelity on the 16 big slides of E**, each in the form it will have: the 5 decorative and 3 plain text slides
    as big slides, ordo's picture against LibreOffice's reference on a hub with LibreOffice [each ≥ LibreOffice's
-   page − 0.02, mean ≥ − 0.005: M9 decision 2's gate]; the 8 table slides in tables-conv's form against LibreOffice's
-   page (inventory question 3's gate); without LibreOffice against today's stored slide [up; today minimal 0.776,
+   page − 0.02, mean ≥ − 0.005: M9 decision 2's gate]; the 8 table slides are not big slides (table objects within
+   64 KB, native on every hub since sub-wave 1b; question 3's gate is their fidelity target, measured with the
+   tables, not here); without LibreOffice against today's stored slide [up; today minimal 0.776,
    plain 0.345 by kind]. Pixel parity of the picture against the live full drawing at 3840 [≤ 1/255, alpha rounding
    aside] and the 1920 copy against live 1080p [SSIM ≥ 0.99 on text].
 2. **GO timing** on a venue PC with 2 and 4 Audience windows: GO-to-flip p95 and `lateFlips` with and without the
@@ -1123,11 +1124,10 @@ merges into #27 before r2b's base and moves lines in `ws.ts`, `routes.ts`, `libr
 | import-scale      |      8 | prerender-import, xml-compact                                   | `pptx-scan.ts`, `pptx-client.ts`, `nativeJob.ts`                                                                                                                    |
 
 Ordering with the planned tracks:
-- **tables-conv**: its item 3 (keep LibreOffice's page for a table slide whose M6 group form passes 64 KB) is
-  interim; prerender-import removes `pageForBudget`, including that branch, and owns `pptx-core.ts` and `budget.ts`
-  after tables-conv merges. The LibreOffice inventory's question 3 (tables on hubs with LibreOffice) stayed with
-  tables-conv's gate (§1.9); the owner decided it on 2026-11-15 (native tables on every hub; sub-wave 1b,
-  tables-flip, removes the interim rule before prerender-import).
+- **tables-conv**: its item 3 (keep LibreOffice's page for a table slide whose M6 group form passes 64 KB) was
+  interim; the owner decided the LibreOffice inventory's question 3 on 2026-11-15 (native tables on every hub), and
+  sub-wave 1b (tables-flip) removed that branch of `pageForBudget` before prerender-import, which removes the rest
+  of `pageForBudget` and owns `pptx-core.ts` and `budget.ts` after it.
 - **effect-units** owns `units.ts`, `clamp.ts`, `text2d.ts`, `asset.worker.ts`, `link-core.ts`, `stacks.ts` and the
   fade. `packages/domain/src/sha256.ts` is prerender-model's alone (the r2b plan, overlap 3): effect-units' unit
   keys never leave an asset worker this wave and stay in memory;
@@ -1207,7 +1207,7 @@ gains that an explicit base may sit below 16000.
 
 Not decided here, and since decided by the owner (2026-11-15, "prioritize native tables"): the LibreOffice
 inventory's question 3 (tables on hubs with LibreOffice, §1.9): the table object on every kind of hub; sub-wave 1b
-(tables-flip) removes the interim rule.
+(tables-flip) removed the interim rule.
 
 **Applied in wave r2b** (the owner has not answered; the defaults): 1-4 yes; 5 yes, dormant until the go-live bake
 is switched on (§1.5: such a cue draws the full slide live meanwhile); 6-9 yes; 10 tail slides kept whole in their
@@ -1301,7 +1301,7 @@ rejected whole. R1 is the first review (28 findings), R2 the second (22).
 | R2.8  | phones fetch 1920 copies (same as R1.11)                                              | as R1.11                                                                                                                                                                                                                                              | accepted                      | as R1.11                                                                                                                                                                                                                         |
 | R2.9  | the bake goes through the live clamp; e2e order wrong                                 | `text2d.ts:737`, `clamp.ts:866-882`                                                                                                                                                                                                                   | accepted                      | bake profile from live-frame (bake-worker depends on it); e2e seeded through the hub API; import trigger in bake-worker (§1.4, §4)                                                                                               |
 | R2.10 | offline download and the Pages demo drop slide files                                  | `OfflineControl.tsx:8-57`, `engine.ts:658-678`, `demo/src/hub.ts:506-520`                                                                                                                                                                             | accepted                      | golive-warnings (offline), hub-writers (demo) (A32)                                                                                                                                                                              |
-| R2.11 | tables on LibreOffice hubs decided without the pending question                       | `inventory.md:277`                                                                                                                                                                                                                                    | partly                        | not decided here; question 3's gate holds. Rejected: "pre-render instead of LibreOffice's page" for tables that miss the gate, since ordo's picture has the pixels of ordo's live drawing and cannot close a fidelity gap (§1.9) |
+| R2.11 | tables on LibreOffice hubs decided without the pending question                       | `inventory.md:277`                                                                                                                                                                                                                                    | partly                        | not decided here; the owner decided question 3 on 2026-11-15 (the table object on every hub, the gate a target). Rejected: "pre-render instead of LibreOffice's page", since ordo's picture cannot close a fidelity gap (§1.9)   |
 | R2.12 | the live set past 200 drops content; W24 misleads (same as R1.17)                     | as R1.17                                                                                                                                                                                                                                              | accepted                      | as R1.17                                                                                                                                                                                                                         |
 | R2.13 | editing very large slides unmeasured; clipboard cut at 200; iPads                     | `SlideCanvas.tsx:350`, `ops/clipboard.ts:45-51`                                                                                                                                                                                                       | accepted                      | measure 11, W63, F12, W26 trigger widened (§1.8)                                                                                                                                                                                 |
 | R2.14 | `DEGRADED_MAX` and the listing cap hide critical lines                                | `goLive.ts:66`, :199-201, :408                                                                                                                                                                                                                        | accepted                      | one line per presentation, critical first, W60 (A34)                                                                                                                                                                             |
