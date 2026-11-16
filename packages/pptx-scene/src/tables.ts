@@ -1079,8 +1079,12 @@ class EdgeLines {
  *   that grew to its text (its own `a:spAutoFit`, with text) earlier on the same slide, and the table's
  *   rows are measured in it: any face, any size.
  * - 'font': the face's ascent and descent at the reference device (600 dpi: the font's pixel height
- *   rounded, then each of ascent and descent rounded, and each back to 1/100 mm rounded): Carlito
- *   1.215-1.229 × the size, Liberation Sans 1.11-1.13. Otherwise.
+ *   rounded, then each of ascent and descent rounded), back in 1/100 mm as the larger of the two
+ *   conversions VCL makes: each converted and added, or their sum converted (its font metric's line
+ *   height). The table probe's rows need both: 9 pt Carlito is 71 + 20 px, 301 + 85 = 386 (the sum
+ *   converted, 385); 10 pt is 79 + 22 px, 101 px = 428 (converted apart, 334 + 93 = 427: the 1000 Years
+ *   chart's eleven row rules need 428), 18 pt 775 (not 774), 8 pt Liberation Sans 318 (not 317), 6 pt 238
+ *   (not 237). Carlito 1.215-1.229 × the size, Liberation Sans 1.11-1.13. Otherwise.
  * Either way the cell's text is drawn with the face's own line height (the second), so text in a row
  * measured 'independent' runs into the cell's margins.
  */
@@ -1136,7 +1140,10 @@ export function loSizePt(pt: number): number {
   return (Math.round((mm100(pt) * LO_REF_DPI) / 2540) * 72) / LO_REF_DPI;
 }
 
-/** A line's ascent (its baseline below its top) of a face at a size, LibreOffice's way (1/100 mm). */
+/**
+ * A line's ascent (its baseline below its top) of a face at a size, LibreOffice's way (1/100 mm): the ascent in
+ * whole pixels at 600 dpi, back to 1/100 mm once (`loLineHeight` converts the ascent and descent together).
+ */
 export function loAscent(pt: number, face: FaceMetrics | undefined, lines: LoLines): number {
   const h = mm100(pt);
   if (lines === 'independent' || face?.ascent === undefined || face.descent === undefined) return h;
@@ -1151,7 +1158,10 @@ export function loLineHeight(pt: number, face: FaceMetrics | undefined, lines: L
     return Math.round((h * 120) / 100);
   const px = Math.round((h * LO_REF_DPI) / 2540);
   const back = (v: number) => Math.round((v * 2540) / LO_REF_DPI);
-  return back(Math.round(px * face.ascent)) + back(Math.round(px * face.descent));
+  const a = Math.round(px * face.ascent);
+  const d = Math.round(px * face.descent);
+  // The larger of the two conversions (see `LoLines`): apart and added, or summed and converted.
+  return Math.max(back(a) + back(d), back(a + d));
 }
 
 /**

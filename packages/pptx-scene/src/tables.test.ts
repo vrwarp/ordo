@@ -930,18 +930,26 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
     });
 
   it("sizes a line at the face's ascent and descent at a 600 dpi reference device", () => {
-    // 18 pt is 635/100 mm, 150 px at 600 dpi: ascent 143 px and descent 40 px, 605 and 169/100 mm.
-    expect(loLineHeight(18, carlito('', false, false), 'font')).toBe(774);
+    // 18 pt is 635/100 mm, 150 px at 600 dpi: ascent 143 px and descent 40 px, 183 px together, converted back
+    // once: 774.7, 775/100 mm, the larger (the probe's 18 pt rows; converted apart, 605 + 169 = 774).
+    expect(loLineHeight(18, carlito('', false, false), 'font')).toBe(775);
     expect(loAscent(18, carlito('', false, false), 'font')).toBe(605);
-    // Font-independent: 1.2 × 635, rounded (the probe's 14 pt lines: 1.2 × 494 = 592.8 is 593); the ascent is
-    // the font height.
+    // 10 pt Carlito Bold (its vertical metrics are Carlito's): 83 px, 79 and 22 px, 101 px together, 427.6:
+    // 428/100 mm a line, as the 1000 Years chart's eleven row rules show (334 + 93 = 427 converted apart).
+    expect(loLineHeight(10, carlito('Calibri', true, false), 'font')).toBe(428);
+    expect(loAscent(10, carlito('Calibri', true, false), 'font')).toBe(334);
+    // 9 pt: 75 px, 71 and 20 px: 301 + 85 = 386 converted apart, the larger (their 91 px converted: 385).
+    expect(loLineHeight(9, carlito('', false, false), 'font')).toBe(386);
+    // Font-independent: 1.2 × 635, rounded (the probe's 14 pt lines: 1.2 × 494 = 592.8 is 593, and its 9 pt
+    // ones 1.2 × 318 = 381.6 is 382); the ascent is the font height.
     expect(loLineHeight(18, undefined, 'independent')).toBe(762);
     expect(loLineHeight(14, undefined, 'independent')).toBe(593);
+    expect(loLineHeight(9, undefined, 'independent')).toBe(382);
     expect(loAscent(18, carlito('', false, false), 'independent')).toBe(635);
     const t = tableOf(one());
     expect(t.lo?.lines).toBe('font');
     // The line, LibreOffice's extra 1/100 mm, and the two margins of 127/100 mm.
-    expect(t.lo?.rows).toEqual([(774 + 1 + 254) * MM]);
+    expect(t.lo?.rows).toEqual([(775 + 1 + 254) * MM]);
     // ordo's own row: 1.2207 × 36 px and the margins.
     expect(t.rows[0]! / 6350).toBeCloseTo((2500 / 2048) * 36 + 14.4, 6);
   });
@@ -957,7 +965,7 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
 
   it('scales a line by its proportional spacing, truncated, and keeps exact spacing', () => {
     const pct = tableOf(one('<a:pPr><a:lnSpc><a:spcPct val="107000"/></a:lnSpc></a:pPr>'));
-    expect(pct.lo?.rows).toEqual([(Math.trunc(774 * 1.07) + 255) * MM]);
+    expect(pct.lo?.rows).toEqual([(Math.trunc(775 * 1.07) + 255) * MM]);
     const pts = tableOf(one('<a:pPr><a:lnSpc><a:spcPts val="2000"/></a:lnSpc></a:pPr>'));
     expect(pts.lo?.rows).toEqual([(706 + 255) * MM]); // 20 pt is 705.6/100 mm
   });
@@ -988,8 +996,8 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
 
   it('puts the whole height of a merge from the first row on its last row, as LayoutTableHeight does', () => {
     // One line of 18 pt Carlito and three, each with the extra 1/100 mm and the margins.
-    const one = 774 + 1 + 254;
-    const three = 3 * 774 + 1 + 254;
+    const one = 775 + 1 + 254;
+    const three = 3 * 775 + 1 + 254;
     const merged = (start: number) =>
       tableOf(
         table({
