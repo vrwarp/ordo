@@ -184,17 +184,18 @@ export function needsHub(s: HubBefore | undefined): boolean {
 }
 
 /** A shown slide as `hubBeforeOf` reads it: what the converter emitted of it (`NativeSlide`). */
-export type AskedSlide = Pick<NativeSlide, 'art' | 'metafiles'>;
+export type AskedSlide = Pick<NativeSlide, 'art' | 'metafiles' | 'table'>;
 /** The census's model of a slide on a hub with LibreOffice (`census.ts` `hubClasses`). */
 export type HubModel = { hub: HubBefore['hub']; hubWhy: string | null; level: string };
 
 /**
  * What a hub with LibreOffice shows of a shown slide (`HubBefore`), from its emission `s` and the census's
- * model of it `h`; undefined for a shown slide the converter did not emit (a LibreOffice picture there).
+ * model of it `h`; undefined for a shown slide the converter did not emit (a LibreOffice picture there). A
+ * slide holding a table object never keeps LibreOffice's page for its size (`ImportCore.pageForBudget`).
  */
 export function hubBeforeOf(s: AskedSlide | undefined, h: HubModel | undefined): HubBefore | undefined {
   if (!s || !h) return undefined;
-  const budget = keepsPage(h);
+  const budget = !s.table && keepsPage(h);
   return {
     hub: h.hub,
     ...(s.art ? { art: s.art } : {}),

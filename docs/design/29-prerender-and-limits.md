@@ -43,8 +43,8 @@ ordo has size limits, and each one costs content:
 - A slide over 64 KB is simplified: its text loses its formatting (`plain`) or its decorations are left out
   (`minimal`) (`fitSlideBudget`, `packages/domain/src/size.ts:314-361`; `ImportCore.budget`,
   `packages/importers/src/pptx-core.ts:441-583`). On a hub with LibreOffice the slide becomes LibreOffice's page
-  instead (`pageForBudget`, `pptx-core.ts:426-431`): empty until LibreOffice draws it, and without its in-slide
-  video, motion background and lyric box. Worship set E after r2a (275 decks, 2,893 slides): 16 slides (12
+  instead (`pageForBudget`, `pptx-core.ts:426-431`; never a slide holding a table object, since sub-wave 1b):
+  empty until LibreOffice draws it, and without its in-slide video, motion background and lyric box. Worship set E after r2a (275 decks, 2,893 slides): 16 slides (12
   minimal, 4 plain; on hubs with LibreOffice 16 pages: 8 tables, 5 decorative, 3 plain text); 106 slides are over
   48 KB. Since r2b the 8 table slides are table objects within 64 KB (tables-conv) and the table object on every
   kind of hub (the owner's answer to the LibreOffice inventory's question 3, sub-wave 1b): 8 slides remain.

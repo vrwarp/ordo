@@ -2,7 +2,7 @@ import { type ShapeObject, slideBytes } from '@ordo/domain';
 import { type ConvertOptions, convertDeck } from '@ordo/pptx-scene';
 import { storedSlideBytes } from '@ordo/pptx-scene/emit-budget.ts';
 import { M9_FIELDS } from '@ordo/pptx-scene/emit-ctx.ts';
-import { denseTableDeck } from '@ordo/pptx-scene/test-util.ts';
+import { denseTableDeck, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import { PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
 import { describe, expect, it } from 'vitest';
 import {
@@ -72,6 +72,16 @@ const NO_TABLE = { m9Writes: new Set(M9_FIELDS.filter((f) => f !== 'table')) };
 /** The words of a slide that keeps LibreOffice's page for its size (`ImportCore.pageForBudget`). */
 const PAGE = /LibreOffice draws its page/;
 
+/** `denseTableDeck(rows)` with a decoration shape under the table, which a slide past 64 KB may leave out. */
+function withDecoration(rows: number): ReturnType<typeof denseTableDeck> {
+  const parts = denseTableDeck(rows);
+  const name = 'ppt/slides/slide1.xml';
+  const xml = new TextDecoder().decode(parts.get(name));
+  const deco = sp({ id: 3, x: 0, y: 0, cx: 914_400, cy: 914_400, fill: solid('FFCC00') });
+  parts.set(name, new TextEncoder().encode(xml.replace('<p:graphicFrame>', `${deco}<p:graphicFrame>`)));
+  return parts;
+}
+
 describe('ImportCore.budget: a dense table is the table object on every hub (M9, the owner: every table)', () => {
   it('no LibreOffice: native, one table object kept whole (before: the M6 group past 64 KB, stored minimal)', () => {
     // 140 cells: about 8 KB as the table object, about 95 KB as M6's group.
@@ -128,6 +138,34 @@ describe('ImportCore.budget: a dense table is the table object on every hub (M9,
     expect(log).toMatch(
       /slide 1 is over 64 KB: LibreOffice draws its page \(fitted, it would leave out its decorations\)/,
     );
+  });
+
+  it("a table object past 64 KB stays the table object with LibreOffice, at the ladder's level (never LibreOffice's page)", () => {
+    // 250 rows, 1,250 cells: about 69 KB as the table object. The table alone has nothing the ladder may leave
+    // out: stored whole on both hubs, over the budget (its text).
+    for (const lo of [true, false]) {
+      const { d } = budgeted(denseTableDeck(250), lo);
+      expect(d.cls, `lo ${lo}`).toBe('native');
+      expect((tableObjects(d)[0] as ShapeObject).table!.cells).toHaveLength(1_250);
+      expect(slideBytes(d.slide)).toBeGreaterThan(64 * 1024);
+    }
+    // With a decoration the ladder leaves out ('minimal'): before the owner's 'every table', LibreOffice's page
+    // on a hub with LibreOffice (the generic rule); now the table object, the decoration listed missing, as on a
+    // hub without LibreOffice.
+    const nolo = budgeted(withDecoration(250), false);
+    for (const { d, log } of [budgeted(withDecoration(250), true), nolo]) {
+      expect(d.cls).toBe('hybrid');
+      expect(tableObjects(d)).toHaveLength(1);
+      expect((tableObjects(d)[0] as ShapeObject).table!.cells).toHaveLength(1_250);
+      // The decoration (shape 3) is what the ladder left out; the page's background stays.
+      expect(d.slide.objects.some((o) => o.origin?.shapeId === 3)).toBe(false);
+      expect(d.dropped).toEqual(['decoration']);
+      expect(d.simplified).toBe(true);
+      expect(d.notes).toContain('simplified to fit the slide budget: 1 decoration shape(s) left out');
+      expect(d.notes.filter((n) => PAGE.test(n))).toEqual([]);
+      expect(log).not.toMatch(PAGE);
+      expect(d.notes).toEqual(nolo.d.notes);
+    }
   });
 });
 

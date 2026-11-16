@@ -89,6 +89,9 @@ describe('which slides the hub is asked for', () => {
     expect([...askedSet({ n: 4, lo, before })]).toEqual([1, 2]);
     expect(before(0)).toEqual({ hub: 'native' });
     expect([...askedSet({ n: 4, lo, before, only: new Set([0, 1]) })]).toEqual([1]);
+    // A table slide the ladder fitted plain keeps the table object, never LibreOffice's page (pageForBudget).
+    expect(hubBeforeOf({ table: true }, plain)).toEqual({ hub: 'native' });
+    expect(hubBeforeOf({}, plain)).toEqual({ hub: 'native', budget: true });
     // `--ask-hub` adds a slide the hub stores as the native column draws it (never one without a page, nor
     // one `--slides` leaves out).
     const extra = new Set([0, 3]);

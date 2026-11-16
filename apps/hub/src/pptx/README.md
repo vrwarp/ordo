@@ -755,7 +755,8 @@ instead) and, on a hub with LibreOffice, for a slide over 64 KB that the ladder 
     counts them; `compact` is 0;
   - **with LibreOffice** (the 2026-11-13 review, `ImportCore.pageForBudget`): a slide over 64 KB that the
     ladder would fit by leaving something out ('plain': formatting; 'minimal': decorations) keeps
-    LibreOffice's page instead, as every such slide did before M9: picture class, `pending`, its whole text in
+    LibreOffice's page instead, as every such slide did before M9, unless it holds a table object (every table
+    is the table object, below): picture class, `pending`, its whole text in
     `pptx.artText`, the note 'over 64 KB: LibreOffice draws its page' and one warning for the import. Only when
     the page form (`compactSlideBytes`) is within 64 KB and the presentation's plan still holds; the tail stays
     minimal. A hub with LibreOffice so never shows less of a slide than one without it, nor less than before

@@ -2996,7 +2996,9 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
   be over 64 KB: LibreOffice draws its page"). The owner answered "prioritize native tables": the table object on
   every kind of hub, these 8 included, even where LibreOffice's page scores higher, and the gate becomes the
   fidelity target, measured and reported, never a rule that picks LibreOffice. Sub-wave 1b (tables-flip) removed
-  the rule, its note and the second emission; a table page an older import stored (the interim note, or main's
+  the rule, its note and the second emission; a slide holding a table object is never LibreOffice's page for its
+  size either (`pageForBudget`: one guarded line; a table object past 64 KB keeps the ladder's level, 0 slides in
+  E and golden-pptx, the largest 55,631 B); a table page an older import stored (the interim note, or main's
   "over 64 KB: LibreOffice draws its page") becomes the table object on a re-import or Reset slide. The numbers, kept as the target (the table
   object as the converter draws it under the harness's LibreOffice policies, `nativeSsim`, and as both kinds of
   hub store and show it, the stored form; the hub without LibreOffice before, where the M6 group was stored
