@@ -995,6 +995,26 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
       expect(ours.style.insets![k as 'l']).toBeCloseTo(v, 9);
   });
 
+  it('starts a drawn block taller than its cell at the top margin, and centres one with room (dense-c C2)', () => {
+    // 16 pt Calibri after a text shape that grows to its text (font-independent rows): LibreOffice measures the
+    // line 1.2 × 564 = 677/100 mm and draws it 690 (127 + 36 px at 600 dpi), so a row grown to it holds 678 of
+    // inner height. The drawn line starts at the top margin, not centred 6/100 mm above it: Moral Character's
+    // 120 single-line cells, and the Depression deck's 145 lines (offset = max(0, (inner - drawn) / 2)). Rows
+    // stored taller give the line room, and it is centred there, as before.
+    const row = (h: number) => ({ h, cells: [tc('one line', { tcPr: ' anchor="ctr"', rPr: 'sz="1600"' })] });
+    const t = tableOf(
+      autogrow() +
+        table({ cols: [4 * IN], rows: [row(0), row((690 + 254 + 200) * MM), row((690 + 254 + 400) * MM)] }),
+    );
+    expect(t.lo?.lines).toBe('independent');
+    expect(t.lo?.rows).toEqual([(677 + 1 + 254) * MM, (690 + 254 + 200) * MM, (690 + 254 + 400) * MM]);
+    const [full, room, more] = t.lo!.lift;
+    // With room the drawn line is centred: where it sits from the cell's centre does not depend on the room.
+    expect(more).toBe(room);
+    // Full: 6/100 mm lower than centred, so ordo's line (centred in its cell) is lifted 6/100 mm less.
+    expect(full).toBe(room! - 6 * MM);
+  });
+
   it('puts the whole height of a merge from the first row on its last row, as LayoutTableHeight does', () => {
     // One line of 18 pt Carlito and three, each with the extra 1/100 mm and the margins.
     const one = 775 + 1 + 254;

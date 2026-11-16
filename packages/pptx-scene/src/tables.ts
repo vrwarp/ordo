@@ -392,10 +392,11 @@ export function readTable(
   const loH = loRows.reduce((s, h) => s + h, 0);
   // Where LibreOffice's row is shorter than the text as drawn, the text runs into the cell's margins; and
   // its lines sit at the face's ascent, where ordo's office model puts them a size below the line's top.
-  // LibreOffice anchors the drawn lines by the text's height as its rows measured it (`height`, in `loLines`'
-  // mode), not by the drawn block's: under font-independent spacing a 16 pt Carlito line is 677/100 mm
-  // measured and 690 drawn, and the Moral Character deck's twenty centred rows put each baseline at the
-  // margin plus the face's ascent (floor of that, every row), not 6/100 mm above it.
+  // LibreOffice anchors the drawn block (`drawn`) in the cell's inner height, but never above its top
+  // margin: a block taller than the cell starts at the margin and runs out at the bottom. Under
+  // font-independent spacing a 16 pt Carlito line is 677/100 mm measured and 690 drawn: the Moral Character
+  // deck's 120 centred lines sit at the margin plus the face's ascent (the floor of that, every line), not
+  // 6/100 mm above it; the Depression deck's 145 lines fit this on 140 (centring the measured height: 58).
   const spill = cells.map((c, i) => {
     let h = 0;
     for (let y = c.row; y < c.row + c.rows; y++) h += loRows[y]!;
@@ -407,11 +408,16 @@ export function readTable(
     const n = Math.min(ours.baselines.length, theirs.baselines.length);
     if (!n) return 0;
     const at = (h: number) => (c.text.anchor === 'top' ? 0 : c.text.anchor === 'bottom' ? h : h / 2);
+    // LibreOffice's block from the inner top (1/100 mm): anchored, at least 0.
+    let rowsH = 0;
+    for (let y = c.row; y < c.row + c.rows; y++) rowsH += loRows[y]!;
+    const inner = rowsH / EMU_PER_MM100 - mm100Emu(c.text.insets.t) - mm100Emu(c.text.insets.b);
+    const top = Math.max(0, at(inner) - at(theirs.height));
     let d = 0;
     for (let k = 0; k < n; k++)
       d +=
         (ours.baselines[k]! - at(ours.height)) / ctx.frame.s -
-        (theirs.baselines[k]! - at(lo[i]!.height)) * EMU_PER_MM100;
+        (theirs.baselines[k]! + top - at(inner)) * EMU_PER_MM100;
     return Math.round(d / n);
   });
   const gridded = gridObjects(cells, tableLines);
