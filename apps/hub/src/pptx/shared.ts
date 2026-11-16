@@ -273,6 +273,12 @@ export type PptxReimportPayload = {
   reset?: string[];
   /** Made-editable slides kept as they are. */
   keep?: string[];
+  /**
+   * 'Make editable' on a page (`imports.ts` `makeEditableNative`, `reimport.ts` `madeEditable`): a slide of
+   * `slideIds` that shows LibreOffice's page and whose deck slide converts to LibreOffice's page again takes
+   * the page's extracted text boxes over it, as 'Make editable' did before, instead of the page again.
+   */
+  pageBoxes?: boolean;
   /** The import options of the first import, when known (`source.native`); absent: the defaults. */
   options?: PptxImportOptions;
   /** Times the job found the presentation live-locked and deferred itself (the backoff step). */

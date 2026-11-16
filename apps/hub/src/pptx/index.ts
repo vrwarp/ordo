@@ -137,9 +137,16 @@ export class PptxImports {
    * Queue 'Re-import from PowerPoint' for a presentation (M4 item F, `reimport.ts`; the route refuses it
    * while the presentation is locked or has no stored deck), with the options of its first import when the
    * queue still has that job. The same request while one is queued or running gets that job: repeated
-   * clicks never stack conversions.
+   * clicks never stack conversions. `pageBoxes`: 'Make editable''s (`PptxReimportPayload.pageBoxes`), a
+   * request of its own.
    */
-  queueReimport(presentationId: string, hash: string, req: PptxReimportReq, by?: string): Job {
+  queueReimport(
+    presentationId: string,
+    hash: string,
+    req: PptxReimportReq,
+    by?: string,
+    pageBoxes = false,
+  ): Job {
     const { jobs, lib } = this.deps;
     const active = lib.db
       .prepare(
@@ -148,7 +155,7 @@ export class PptxImports {
          ORDER BY created_at, id`,
       )
       .all(PPTX_JOBS.reimport, presentationId, hash) as { id: string; payload: string }[];
-    const ask = requestKey(req);
+    const ask = requestKey({ ...req, pageBoxes });
     for (const r of active) {
       try {
         if (requestKey(JSON.parse(r.payload) as PptxReimportPayload) === ask) return jobs.get(r.id);
@@ -157,14 +164,14 @@ export class PptxImports {
       }
     }
     const options = importOptionsOf(this.deps, presentationId, hash);
-    return queueReimport(this.deps, presentationId, hash, req, by, options);
+    return queueReimport(this.deps, presentationId, hash, req, by, options, pageBoxes);
   }
 }
 
 /** A re-import request compared by what it asks (the order of the ids does not matter). */
-function requestKey(r: Pick<PptxReimportReq, 'slideIds' | 'reset' | 'keep'>): string {
+function requestKey(r: Pick<PptxReimportPayload, 'slideIds' | 'reset' | 'keep' | 'pageBoxes'>): string {
   const ids = (v: unknown) => (Array.isArray(v) ? [...new Set(v.map(String))].sort() : null);
-  return JSON.stringify([ids(r.slideIds), ids(r.reset), ids(r.keep)]);
+  return JSON.stringify([ids(r.slideIds), ids(r.reset), ids(r.keep), r.pageBoxes === true]);
 }
 
 /** Slides a reference job switches, merged: absent (every slide) wins; ids at most the route's 5,000. */

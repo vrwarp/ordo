@@ -13,6 +13,7 @@ import { convertDeck, parseDeck } from './index.ts';
 import type { Line, TableCell, TableElement, TableLine } from './ir.ts';
 import type { FaceSource } from './metrics.ts';
 import {
+  asLibreOffice,
   GRID_LINES_PER_PATH,
   GRID_RECTS_PER_PATH,
   gridObjects,
@@ -930,16 +931,26 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
     });
 
   it("sizes a line at the face's ascent and descent at a 600 dpi reference device", () => {
-    // 18 pt is 635/100 mm, 150 px at 600 dpi: ascent 143 px and descent 40 px, 605 and 169/100 mm.
-    expect(loLineHeight(18, carlito('', false, false), 'font')).toBe(774);
+    // 18 pt is 635/100 mm, 150 px at 600 dpi: ascent 143 px and descent 40 px, 183 px together, converted back
+    // once: 774.7, 775/100 mm, the larger (the probe's 18 pt rows; converted apart, 605 + 169 = 774).
+    expect(loLineHeight(18, carlito('', false, false), 'font')).toBe(775);
     expect(loAscent(18, carlito('', false, false), 'font')).toBe(605);
-    // Font-independent: 1.2 × 635, truncated; the ascent is the font height.
+    // 10 pt Carlito Bold (its vertical metrics are Carlito's): 83 px, 79 and 22 px, 101 px together, 427.6:
+    // 428/100 mm a line, as the 1000 Years chart's eleven row rules show (334 + 93 = 427 converted apart).
+    expect(loLineHeight(10, carlito('Calibri', true, false), 'font')).toBe(428);
+    expect(loAscent(10, carlito('Calibri', true, false), 'font')).toBe(334);
+    // 9 pt: 75 px, 71 and 20 px: 301 + 85 = 386 converted apart, the larger (their 91 px converted: 385).
+    expect(loLineHeight(9, carlito('', false, false), 'font')).toBe(386);
+    // Font-independent: 1.2 × 635, rounded (the probe's 14 pt lines: 1.2 × 494 = 592.8 is 593, and its 9 pt
+    // ones 1.2 × 318 = 381.6 is 382); the ascent is the font height.
     expect(loLineHeight(18, undefined, 'independent')).toBe(762);
+    expect(loLineHeight(14, undefined, 'independent')).toBe(593);
+    expect(loLineHeight(9, undefined, 'independent')).toBe(382);
     expect(loAscent(18, carlito('', false, false), 'independent')).toBe(635);
     const t = tableOf(one());
     expect(t.lo?.lines).toBe('font');
     // The line, LibreOffice's extra 1/100 mm, and the two margins of 127/100 mm.
-    expect(t.lo?.rows).toEqual([(774 + 1 + 254) * MM]);
+    expect(t.lo?.rows).toEqual([(775 + 1 + 254) * MM]);
     // ordo's own row: 1.2207 × 36 px and the margins.
     expect(t.rows[0]! / 6350).toBeCloseTo((2500 / 2048) * 36 + 14.4, 6);
   });
@@ -955,7 +966,7 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
 
   it('scales a line by its proportional spacing, truncated, and keeps exact spacing', () => {
     const pct = tableOf(one('<a:pPr><a:lnSpc><a:spcPct val="107000"/></a:lnSpc></a:pPr>'));
-    expect(pct.lo?.rows).toEqual([(Math.trunc(774 * 1.07) + 255) * MM]);
+    expect(pct.lo?.rows).toEqual([(Math.trunc(775 * 1.07) + 255) * MM]);
     const pts = tableOf(one('<a:pPr><a:lnSpc><a:spcPts val="2000"/></a:lnSpc></a:pPr>'));
     expect(pts.lo?.rows).toEqual([(706 + 255) * MM]); // 20 pt is 705.6/100 mm
   });
@@ -984,10 +995,31 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
       expect(ours.style.insets![k as 'l']).toBeCloseTo(v, 9);
   });
 
+  it('starts a drawn block taller than its cell at the top margin, and centres one with room (dense-c C2)', () => {
+    // 16 pt Calibri after a text shape that grows to its text (font-independent rows): LibreOffice measures the
+    // line 1.2 × 564 = 677/100 mm and draws it 690 (127 + 36 px at 600 dpi), so a row grown to it holds 678 of
+    // inner height. The drawn line starts at the top margin, not centred 6/100 mm above it: Moral Character's
+    // 120 single-line cells, and the Depression deck's 145 lines (offset = max(0, (inner - drawn) / 2)). Rows
+    // stored taller give the line room, and it is centred there, as before.
+    const row = (h: number) => ({ h, cells: [tc('one line', { tcPr: ' anchor="ctr"', rPr: 'sz="1600"' })] });
+    const t = tableOf(
+      autogrow() +
+        table({ cols: [4 * IN], rows: [row(0), row((690 + 254 + 200) * MM), row((690 + 254 + 400) * MM)] }),
+    );
+    expect(t.lo?.lines).toBe('independent');
+    expect(t.lo?.rows).toEqual([(677 + 1 + 254) * MM, (690 + 254 + 200) * MM, (690 + 254 + 400) * MM]);
+    const [full, room, more] = t.lo!.lift;
+    // With room the drawn line is centred: where it sits from the cell's centre does not depend on the room.
+    expect(more).toBe(room);
+    // Full: from the top margin, less the 1/100 mm LibreOffice starts an overflowing block above it (the cell
+    // probe, `loBlockTop`): 5/100 mm lower than centred, so ordo's line (centred in its cell) is lifted 5 less.
+    expect(full).toBe(room! - 5 * MM);
+  });
+
   it('puts the whole height of a merge from the first row on its last row, as LayoutTableHeight does', () => {
     // One line of 18 pt Carlito and three, each with the extra 1/100 mm and the margins.
-    const one = 774 + 1 + 254;
-    const three = 3 * 774 + 1 + 254;
+    const one = 775 + 1 + 254;
+    const three = 3 * 775 + 1 + 254;
     const merged = (start: number) =>
       tableOf(
         table({
@@ -1277,5 +1309,40 @@ describe('tables: shape text is unchanged', () => {
     expect(texts.map((t) => t.text)).toEqual(['hi']);
     // A shape's own text (M4's origin), not a table cell's.
     expect(texts[0]!.origin).toEqual({ src: 'pptx', role: 'text', shapeId: 2 });
+  });
+});
+
+describe('asLibreOffice', () => {
+  const style = (valign: 'top' | 'middle' | 'bottom', t: number, b: number) =>
+    ({ valign, insets: { l: 0, t, r: 0, b } }) as unknown as TextObject['style'];
+  // A centred text's top is (h + t - b - text) / 2: it moves by half the change of t - b.
+  const top = (s: TextObject['style']) => (s.insets!.t - s.insets!.b) / 2;
+
+  it('lifts centred text by the whole lift in a cell with no top margin (marT="0")', () => {
+    const lifted = asLibreOffice(style('middle', 0, 0), 0, 1.5);
+    expect(top(lifted) - top(style('middle', 0, 0))).toBeCloseTo(-1.5, 9);
+    expect(lifted.insets!.t).toBeGreaterThanOrEqual(0);
+    expect(lifted.insets!.b).toBeGreaterThanOrEqual(0);
+  });
+
+  it('keeps centred text centred under a spill wider than one margin', () => {
+    const s = asLibreOffice(style('middle', 0, 4), 6, 0);
+    expect(top(s)).toBeCloseTo(top(style('middle', 0, 4)), 9);
+  });
+
+  it('moves centred text with margins as before', () => {
+    expect(asLibreOffice(style('middle', 7.2, 7.2), 2, 1).insets).toEqual({ l: 0, t: 5.2, r: 0, b: 7.2 });
+  });
+
+  // r2b-diag/dense-c 910492b, the same rule found on the Flesh and Spirit chart (its 84 cells with marT="0").
+  it('lifts centred text by its whole lift when the top margin is smaller than it, either way', () => {
+    const lr = (valign: 'top' | 'middle' | 'bottom', t: number, b: number) =>
+      ({ valign, insets: { l: 1, t, r: 1, b } }) as unknown as TextObject['style'];
+    // No top or bottom margin: a 1 px lift moves the centre 1 px up (margins 0 and 2), not 0.5 px (0 and 1).
+    expect(asLibreOffice(lr('middle', 0, 0), 0, 1).insets).toEqual({ l: 1, t: 0, r: 1, b: 2 });
+    expect(asLibreOffice(lr('middle', 0, 0), 0, -1).insets).toEqual({ l: 1, t: 2, r: 1, b: 0 });
+    // Within the margins as before: the spill shared, the lift from top to bottom.
+    expect(asLibreOffice(lr('middle', 5, 5), 2, 1).insets).toEqual({ l: 1, t: 3, r: 1, b: 5 });
+    expect(asLibreOffice(lr('top', 5, 5), 2, 1).insets).toEqual({ l: 1, t: 4, r: 1, b: 4 });
   });
 });

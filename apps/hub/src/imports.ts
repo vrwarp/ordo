@@ -2,9 +2,7 @@ import type { Dirent } from 'node:fs';
 import { copyFile, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import {
-  DEFAULT_THEME,
   type ExtractedText,
-  type ImageObject,
   newId,
   type PptxRenderer,
   parseLyrics,
@@ -12,7 +10,6 @@ import {
   type Presentation,
   type Slide,
   songFromParsed,
-  type TextObject,
   type Theme,
 } from '@ordo/domain';
 import * as realImporters from '@ordo/importers';
@@ -31,6 +28,7 @@ import { baseName, type MediaService } from './media/service.ts';
 import { cpuPool, transferables, WorkerStartError } from './pool.ts';
 import { renderCopyForDocument, sofficeToPdf } from './pptx/fallback.ts';
 import { PptxImports } from './pptx/index.ts';
+import { boxesOverPage, rebuildsFromDeck, themeOf } from './pptx/reimport.ts';
 import { mediaForFile } from './pptx/mediaParts.ts';
 import { logSafe } from './pptx/report.ts';
 import { type DeckText, pagesOf, readDeckText } from './pptx/textRepair.ts';
@@ -183,12 +181,7 @@ export class ImportService {
   }
 
   theme(p?: { themeId?: string }): Theme {
-    const general = this.lib.getSetting('general');
-    return (
-      (p?.themeId ? this.lib.themes.get(p.themeId) : undefined) ??
-      (general.defaultThemeId ? this.lib.themes.get(general.defaultThemeId) : undefined) ??
-      DEFAULT_THEME
-    );
+    return themeOf(this.lib, p);
   }
 
   /** SongSelect lyrics/ChordPro text → a saved song presentation. */
@@ -742,19 +735,22 @@ export class ImportService {
   }
 
   /**
-   * 'Make editable' on a legacy PowerPoint page (design/27 §11 "'Make editable' … runs the native converter
-   * for that page, which removes the doubled text"; M4 item F): while the presentation's deck is stored, the
-   * page is re-imported natively (`pptx-reimport` with `slideIds: [slideId]`), its id, notes and the objects
-   * added over the page kept. The job to follow; undefined when the slide is not such a page (a PDF page, a
-   * slide rebuilt natively, a deck no longer stored): `makeEditable` lays text boxes over the picture then.
+   * 'Make editable' on a PowerPoint page (design/27 §11 "'Make editable' … runs the native converter for that
+   * page, which removes the doubled text"; M4 item F; 1b tables-cells): while the presentation's deck is
+   * stored, a legacy page or LibreOffice's page a native import stored (version 2, whatever its note: an older
+   * import's table page becomes the table object) is re-imported natively (`pptx-reimport` with `slideIds:
+   * [slideId]`, `reimport.ts` `rebuildsFromDeck`), its id, notes and the objects added over the page kept; a
+   * page whose deck slide is LibreOffice's page again ends with its text boxes over it (`pageBoxes`). The job
+   * to follow; undefined when the slide is no such page (a PDF page, a native slide, a deck no longer
+   * stored): `makeEditable` lays text boxes over the picture then.
    */
   makeEditableNative(presentationId: string, slideId: string, by?: string): Job | undefined {
     const p = this.lib.presentations.must(presentationId);
     const fileId = p.source?.kind === 'pptx' ? p.source.fileId : undefined;
     if (!fileId || !this.lib.getFile(fileId)) return undefined;
     const slide = p.sections.flatMap((s) => s.slides).find((sl) => sl.id === slideId);
-    if (!slide?.imported || slide.pptx || slide.imported.fileId !== fileId) return undefined;
-    return this.pptx.queueReimport(presentationId, fileId, { slideIds: [slideId] }, by);
+    if (!slide || !rebuildsFromDeck(slide, fileId)) return undefined;
+    return this.pptx.queueReimport(presentationId, fileId, { slideIds: [slideId] }, by, true);
   }
 
   /** Turn an imported page's extracted text boxes into editable text objects over the page image. */
@@ -767,38 +763,9 @@ export class ImportService {
       slides: sec.slides.map((sl) => {
         if (sl.id !== slideId) return sl;
         found = sl;
-        if (!sl.imported) return sl;
-        // On a PowerPoint slide these are the import's, as every object the native job writes is (design/27
-        // §3.1, §11): 'Show PowerPoint picture' leaves them out (`slideContent`), and a re-import can tell
-        // them from what the operator added. The page is the slide's background picture.
-        const origin = (role?: string) =>
-          sl.pptx ? { origin: { src: 'pptx', ...(role ? { role } : {}) } } : {};
-        const back: ImageObject = {
-          id: newId(),
-          type: 'image',
-          box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
-          mediaId: sl.imported.imageMediaId,
-          fit: 'contain',
-          opacity: 1,
-          radius: 0,
-          ...origin('bg'),
-        };
-        const texts: TextObject[] = (sl.imported.textBoxes ?? []).map((tb) => ({
-          id: newId(),
-          type: 'text',
-          box: { ...tb.box, rotation: tb.box.rotation ?? 0 },
-          text: tb.text,
-          style: {
-            ...theme.textBoxDefaults,
-            fontSizePx: tb.fontSizePx ?? theme.textBoxDefaults.fontSizePx,
-            align: 'left',
-            valign: 'top',
-          },
-          opacity: 1,
-          ...origin('text'),
-        }));
-        const { imported: _i, ...rest } = sl;
-        return { ...rest, objects: [back, ...sl.objects, ...texts] };
+        // On a PowerPoint slide the page picture and the boxes are the import's, as every object the native
+        // job writes is (design/27 §3.1, §11; `boxesOverPage`).
+        return boxesOverPage(sl, theme);
       }),
     }));
     if (!found) throw badRequest(`Slide ${slideId} not found`, 'not_found');

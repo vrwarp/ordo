@@ -1547,7 +1547,7 @@ The extensions, in priority order (M4 unless noted):
   - **any other slide:** kept as it is.
 
   Slide ids, sections, arrangements, notes (unless empty), durations and per-slide backgrounds are kept. The result is one new revision.
-- **'Make editable'** on a single legacy slide runs the native converter for that page, which removes the doubled text.
+- **'Make editable'** on a single legacy slide runs the native converter for that page, which removes the doubled text. Since sub-wave 1b (tables-cells) it does the same on LibreOffice's page that a native import stored (version 2, class 'picture', whatever its note: a table page an older import kept becomes the table object), and a page whose deck slide converts to LibreOffice's page again (a slide still past 64 KB as anything else) gets its extracted text boxes over the page, as 'Make editable' did before, so the request always ends editable (§15 M9 "LibreOffice's cell rules and 'Make editable'").
 - **Fix-now items for legacy slides (M3):**
   - the gated text fallback and the repair job (above);
   - `previewMedia` includes the imported picture;
@@ -1823,6 +1823,12 @@ wave's integration measures them: `regroup/r2b/integrate-1.md`).
   before; probe decks, tables/gaps-flip B.1); the extra lines come from the 1/4 em spacing LibreOffice adds at
   every boundary between East Asian and other text, and from the weak characters (circled digits, corner
   brackets) taking the face of the script around them (1c, ko-weak).
+- _Tables, cell rules (tables-cells, 1b):_ ordo draws a cell's lines a whole cell lift from LibreOffice's, but
+  spaces them by the face's line height times the proportion, unrounded, where LibreOffice spaces each line in
+  whole 1/100 mm (Carlito 10 pt at 107 %: 26.02 against 25.91 px at 1920): the lines spread around LibreOffice's
+  by (n - 1) / 2 × the difference (the 666 chart's tall cells); storing LibreOffice's line heights as exact
+  spacing would remove it and changes what the editor shows of a cell's spacing (1c). Bottom-anchored cells
+  that overflow are not probed (`loBlockTop` keeps them on the inner bottom, never above the top).
 <!-- /r2b:open-items -->
 
 ## 14. Testing and fidelity measurement
@@ -2177,7 +2183,8 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   converted whole gets its one background back as the presentation's; the presentation becomes a native
   import (`source.native` counted over its slides, the fresh `source.log` on a whole re-import). The job
   defers while live and while a `pptx-lo` of the presentation is queued or running. 'Make editable' on a
-  legacy page with a stored deck is that job (`imports.ts` `makeEditableNative`, 202). Editors take the
+  legacy page with a stored deck is that job (`imports.ts` `makeEditableNative`, 202; since 1b also on a native
+  import's LibreOffice page, `reimport.ts` `rebuildsFromDeck`, `madeEditable`). Editors take the
   revision over (`PPTX_JOB_SAVERS`). Operator: `PptxSlideCard.tsx` (edited state, fonts to upload, 'Show the
   PowerPoint picture on the screens' with the digest warning, 'Reset slide from PowerPoint'),
   `PptxReport.tsx` (the import report and the re-import dialog), `pptxJobs.ts` (follow and take over).
@@ -3019,10 +3026,10 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
   | Moral Character, 1        |              0.946 |  0.906 |                     0.872 |              0.344 |                      0.606 |
   | Mean                      |              0.959 |  0.939 |                     0.761 |              0.508 |                      0.481 |
 
-  The stored form is what churches see on either kind of hub (the converter's own drawing: the deck's row heights
-  grown by the drawer's lines, not LibreOffice's form); the harness scores a table slide that way in both hub
-  columns (`perSlide.table`, `tools/pptx-fidelity/README.md`). 'Make editable' on a stored table page still lays
-  text boxes over it until tables-cells (1b) rebuilds the table natively there. A table object's cells count as
+  The stored form is what churches see on either kind of hub (since sub-wave 1b LibreOffice's form, "The stored
+  form" below; before it the deck's row heights grown by the drawer's lines); the harness scores a table slide
+  that way in both hub columns (`perSlide.table`, `tools/pptx-fidelity/README.md`). 'Make editable' on a stored
+  table page rebuilds the table natively there since tables-cells (1b, below). A table object's cells count as
   the slide's text bodies (`bodyTexts`, a picture slide's search text), as the group's cells did.
 <!-- /m9:tables-conv -->
 
@@ -3072,6 +3079,51 @@ be measured):
   at 100 %) 0.367-0.768 -> 0.784-0.981, w65_THREE 16 0.614 -> 0.963 (with the stored form under it); no other
   table slide of E moved. Both cell forms take it (the table object and the M6 group).
 <!-- /r2b:tables-form -->
+
+<!-- r2b:tables-cells -->
+**Built for wave r2b sub-wave 1b: LibreOffice's cell rules and 'Make editable' (tables-cells track).** Where
+LibreOffice 24.2 puts a cell's text, to its 1/100 mm, in the converter's model of its layout (`TableElement.lo`:
+what the table object stores on every hub, "The stored form" above; the M6 group's under `loCompat`), checked
+against the table probe's 324 rows and a cell probe's 80 rows and 272 baselines (`tools/pptx-fidelity/src/
+cell-probe.ts`: centred cells full, overflowing and with room, with and without margins, 107 %, spacers, mixed
+sizes, read from LibreOffice's PDF), all to the 1/100 mm (`pptx-scene` README "LibreOffice's cell rules"):
+- **Line heights** (`loLineHeight`): font-independent rows 1.2 × the font height rounded (truncated before:
+  Moral Character's 16 pt rows were 931, LibreOffice's 932; r2b-diag/dense-c 22644b3); a font-spaced line the
+  larger of the two conversions VCL makes of the ascent and descent pixels at 600 dpi back to 1/100 mm, apart
+  and added or summed (10 pt Carlito 428, not 427: the 1000 Years chart's row rules, dense-a C6; 9 pt 386, where
+  the sum alone gives 385).
+- **Imported lengths**: a stored row height or column width is LibreOffice's in whole 1/100 mm, truncated.
+- **The lift** (`asLibreOffice`, r2b-diag/dense-d d5c32ec, dense-c 910492b the same rule): centred text keeps
+  its whole lift whatever its margins; a cell with `marT="0"` kept half of it (the Boletims' reading plans, the
+  Flesh and Spirit chart, the seal, Churchcraft, Ten Commandments and 2 Corinthians 3 vs 7 charts).
+- **The anchor** (`loBlockTop`, dense-c 245ac4b and 9424bc0, refined by the cell probe): LibreOffice centres
+  the drawn block in the inner height, truncated to the 1/100 mm, and starts a block taller than that
+  (font-independent rows draw lines taller than they were measured) 1/100 mm above the top margin, never
+  centred above it (Moral Character's 690 drawn in 678; the Depression deck).
+- **The 666 chart** (rows 6-9 moved up by the full lift): LibreOffice anchors full and overflowing cells as the
+  model does (the lift is not too large there, dense-d's hypothesis); the rows above them were short in the
+  model by its 10 pt line, 1/100 mm a line (dense-c's per-line heights), which the conversion rule gives back.
+  What is left is ordo's own line pitch in a cell (§13 open items).
+- **'Make editable' on a stored page** (`imports.ts` `makeEditableNative`, `reimport.ts` `rebuildsFromDeck`,
+  `madeEditable`; gaps-flip A.3): LibreOffice's page that a native import stored (version 2, class 'picture', in
+  churches' libraries for tables since main's "over 64 KB: LibreOffice draws its page") is re-imported natively
+  like a legacy page, keyed on the page class and the stored deck, never the note: a table page becomes the
+  table object; a page whose deck slide is LibreOffice's page again gets its extracted text boxes over the page
+  (`boxesOverPage`, as 'Make editable' did), in one revision. The route answers 202 and the `pptx-reimport` job
+  (`pageBoxes` set) either way; a page rebuilt counts as made editable (`replaced`). Hub-writers (sub-wave 4)
+  extends it to other 64 KB pages on the same helper.
+- Measured at the track's head on both kinds of hub, against the merged stored form (tables-form, the hub with
+  LibreOffice asked for the 8, equal to the stored form within 0.001): E's 66 table slides 0.863 -> 0.872 (the 8
+  0.752 -> 0.767, the 58 others 0.878 -> 0.886), the table decks' 43 0.840 -> 0.853. Up: the charts with no top
+  margin (the seal 0.839 -> 0.932, Churchcraft 0.802 -> 0.894, Ten Commandments 0.800 -> 0.887, 2 Corinthians 3
+  vs 7 0.811 -> 0.872), the 666 chart 0.756 -> 0.805, Flesh and Spirit 0.817 -> 0.864, Moral Character 0.799 ->
+  0.838 (`nativeSsim` 0.872 -> 0.899; the rest is the harness's outline policy on its cells), the Boletims'
+  reading plans +0.016 and +0.020, Depression 0.859 -> 0.877, the Korean slide 18 0.611 -> 0.637; Jesus and
+  Stephen unchanged. None down by more than 0.01 on either kind of hub or in `nativeSsim` (Colossians and the
+  Coptic Peace verses' slide 4 -0.007), no slide without a table moved, no class changed, the 8 stay 'full'
+  (Colossians 58,715 B stored, the largest). The question-3 target is still met by 0 of 8 (mean 0.767 against
+  0.939; text-lines follows). Details: `regroup/r2b/tables-cells/notes.md`.
+<!-- /r2b:tables-cells -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 

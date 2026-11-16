@@ -211,6 +211,13 @@ export const PORT_TABLE = {
     spec: 'pptx-tables.spec.ts',
     what: '0 hub without LibreOffice (Import tab), 1 hub without LibreOffice (upload route), 2 hub with LibreOffice',
   },
+  // tables-cells (1b): 'Make editable' on LibreOffice's page a native import stored, on a hub with LibreOffice.
+  'editor-reimport-lo': {
+    offset: 440,
+    count: 1,
+    spec: 'editor-reimport-lo.spec.ts',
+    what: 'hub with LibreOffice (a 64 KB page made editable: 202, the job, its text boxes)',
+  },
   // golive-prepare (design/29 §2.3 M8): Go live prepared beside the running service.
   'golive-prepare': {
     offset: 450,

@@ -210,15 +210,16 @@ describe('the table object (M9, ShapeObject.table)', () => {
     // The bold 28 pt head and the right-aligned cell: two style entries over one base (the body's); the
     // justified cell keeps its paragraph's alignment (`paras`, as a text box's). The head is stored in
     // LibreOffice's form: at 28 pt's size at 600 dpi (233 device px: 27.96 pt, 55.92 logical px), its row grown
-    // to LibreOffice's line (1.2 x 28 pt = 1,185/100 mm with no face metrics, + 1 + its margins 2 x 127: 1,440
-    // /100 mm), its text 588 EMU lower than ordo's office line puts it (the converter's lift, in its insets).
+    // to LibreOffice's line (1.2 x 28 pt = 1.2 x 988 = 1,185.6, rounded 1,186/100 mm with no face metrics, + 1 +
+    // its margins 2 x 127: 1,441/100 mm), its text 588 EMU lower than ordo's office line puts it (the
+    // converter's lift, in its insets).
     expect(t.styles).toHaveLength(2);
     const head = cellRich(t, 0)!;
     expect(head.style.fontWeight).toBe(700);
     expect(head.style.fontSizePx).toBeCloseTo(55.92, 6);
     expect(head.style.insets!.t).toBeCloseTo(7.2 + 588 / 6350, 6);
     expect(head.style.insets!.b).toBeCloseTo(7.2 - 588 / 6350, 6);
-    expect(t.rows[0]!).toBeCloseTo((1440 * 360) / 6350, 6);
+    expect(t.rows[0]!).toBeCloseTo((1441 * 360) / 6350, 6);
     expect(t.rows.slice(1)).toEqual([PX / 2, PX / 2]);
     expect(head.style.autofit).toBeUndefined();
     expect(cellRich(t, 1)!.style.align).toBe('right');

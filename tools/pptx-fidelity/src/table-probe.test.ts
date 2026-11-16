@@ -32,12 +32,16 @@ async function probeTables() {
   return scene.slides.map((s) => s.elements.filter((e): e is TableElement => e.kind === 'table'));
 }
 
-/** Within LibreOffice's PDF of the slide at 0.99897 (as for the rows). */
+/** LibreOffice's PDF page draws the slide at this scale (its strokes' matrix): the probe's points are scaled by it. */
+const PDF_SCALE = 0.998969;
+/** 1/100 mm (LibreOffice's logic unit) per point. */
+const MM100_PER_PT = 2540 / 72;
+/** A size LibreOffice drew, read off its PDF in points (to 0.01 pt), in its own whole 1/100 mm. */
+const loMm100 = (pt: number) => Math.round((pt / PDF_SCALE) * MM100_PER_PT);
+
+/** Sizes as LibreOffice drew them, to the 1/100 mm: `got` in EMU (360 a 1/100 mm), `want` in its PDF's points. */
 function near(got: readonly number[], want: readonly number[]): void {
-  expect(got).toHaveLength(want.length);
-  got.forEach((v, i) => {
-    expect(Math.abs(v - want[i]!)).toBeLessThanOrEqual(0.05 + 0.0015 * want[i]!);
-  });
+  expect(got.map((v) => v / 360)).toEqual(want.map(loMm100));
 }
 
 describe('table probe deck', () => {
@@ -63,22 +67,17 @@ describe('table probe deck', () => {
     expect(LO_PROBE_LAYOUT).toHaveLength(LAYOUT_SLIDES.length);
   });
 
-  it.skipIf(!faces)("sizes LibreOffice's rows as LibreOffice 24.2 drew them, within 0.25 pt", async () => {
+  it.skipIf(!faces)("sizes LibreOffice's rows as LibreOffice 24.2 drew them, to the 1/100 mm", async () => {
     const tables = (await probeTables()).slice(0, probeSlides().length);
-    let worst = 0;
     tables.forEach((t, i) => {
       t.forEach((e, k) => {
-        const want = LO_PROBE_ROWS[i]![k]!;
-        const got = (e.lo?.rows ?? e.rows).map((h) => h / EMU_PER_PT);
-        expect(got).toHaveLength(want.length);
-        got.forEach((h, r) => {
-          // The PDF page is the slide scaled by 0.99897: allow for it on tall rows.
-          worst = Math.max(worst, Math.abs(h - want[r]!));
-          expect(Math.abs(h - want[r]!)).toBeLessThanOrEqual(0.05 + 0.0015 * want[r]!);
-        });
+        // LibreOffice's rows in its whole 1/100 mm (the PDF's points, to 0.01 pt, at the page's scale, rounded:
+        // each of the 324 rows reads within 0.27 of a whole 1/100 mm), the converter's in EMU (360 a 1/100 mm).
+        const want = LO_PROBE_ROWS[i]![k]!.map(loMm100);
+        const got = (e.lo?.rows ?? e.rows).map((h) => h / 360);
+        expect(got, `slide ${i + 1}, table ${k + 1}`).toEqual(want);
       });
     });
-    expect(worst).toBeLessThan(0.25);
   });
 
   it("widens narrow columns and sizes merges from the first column as LibreOffice 24.2's layouter", async () => {
@@ -89,26 +88,19 @@ describe('table probe deck', () => {
       tables[j]!.forEach((e, k) => {
         expect(e.support).toBe('native');
         expect(e.cols).toEqual(l.tables[k]!.cols);
-        if (l.measure === 'cols')
-          near(
-            (e.lo?.cols ?? e.cols).map((w) => w / EMU_PER_PT),
-            LO_PROBE_LAYOUT[j]![k]!,
-          );
+        if (l.measure === 'cols') near(e.lo?.cols ?? e.cols, LO_PROBE_LAYOUT[j]![k]!);
       });
     });
   });
 
   it.skipIf(!faces)(
-    "sizes merges from the first row as LibreOffice 24.2's layouter, within 0.15 pt",
+    "sizes merges from the first row as LibreOffice 24.2's layouter, to the 1/100 mm",
     async () => {
       const tables = (await probeTables()).slice(probeSlides().length);
       LAYOUT_SLIDES.forEach((l, j) => {
         if (l.measure !== 'rows') return;
         tables[j]!.forEach((e, k) => {
-          near(
-            (e.lo?.rows ?? e.rows).map((h) => h / EMU_PER_PT),
-            LO_PROBE_LAYOUT[j]![k]!,
-          );
+          near(e.lo?.rows ?? e.rows, LO_PROBE_LAYOUT[j]![k]!);
         });
       });
     },

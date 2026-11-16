@@ -44,6 +44,7 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
  light job 'pptx-text-repair' (legacy imported.textBoxes, once)                                                [G]
  light job 'pptx-reimport' ('Re-import from PowerPoint', reimport.ts): steps 1-5 again (buildNative), merged
      into the stored presentation, one revision, then 'pptx-lo' as above; 'Make editable' on a legacy page  [M4 F]
+     or a native import's LibreOffice page (`pageBoxes`: a page again gets its text boxes)                    [1b]
  goLive ─► resolvePlaylist: bundled and script-fallback fonts, CJK faces by text scan [E]; > 12 MiB warning [F];
            the geometry files the slides draw in the manifest and `geoms` (the bundle's `files`)             [M6 r2]
  operator: ImportTab and import card [H]; previewSlice and the adopt check [F]; MediaTab and gated text [G]
@@ -828,3 +829,26 @@ sheets) gets LibreOffice's art again, for those objects only; without LibreOffic
   of hub, the Audience screen's colour).
 <!-- /m9:lo-forms -->
 
+## Wave r2b sub-wave 1b: 'Make editable' on a stored page (tables-cells)
+
+<!-- r2b:tables-cells -->
+Every hub stores a PowerPoint table as the table object since sub-wave 1b (tables-flip), but churches' libraries
+hold table slides an older import kept as LibreOffice's page (main's "over 64 KB: LibreOffice draws its page", r2b's
+interim note): version-2 slides, class 'picture', the page and its extracted text in `imported`. 'Make editable'
+laid text boxes over such a page (`makeEditableNative` refused any slide with `pptx`). Now:
+- **`reimport.ts` `rebuildsFromDeck`** decides which pages 'Make editable' rebuilds from the stored deck: a legacy
+  page of the deck, or a version-2 page of it (`pptx.class` 'picture' and `pptx.fileId` the deck), whatever its
+  note; the one helper hub-writers' other 64 KB pages build on. `imports.ts` `makeEditableNative` queues the
+  per-slide re-import for them (`PptxImports.queueReimport(..., pageBoxes)`: a request of its own, joined only by
+  the same request), so the route keeps answering 202 and the job.
+- **The job** (`pageBoxes` on `PptxReimportPayload`, `madeEditable`): pages whose deck slide converts to anything
+  but LibreOffice's page are merged as a re-import merges them (a table page becomes the table object; counted
+  `replaced`, as a legacy page, so the editor says the slide was rebuilt); a page the conversion makes
+  LibreOffice's page again (`pagesAgain`: a slide still past 64 KB as anything else) gets its text boxes over the
+  page (`boxesOverPage`, the transform `makeEditable` uses), logged, in the same revision, nothing queued for
+  LibreOffice. A request with no slide to convert (a page whose digest no longer matches) still lays its boxes.
+- Tests: `apps/hub/test/pptx-reimport.test.ts` (through the route: a table page kept by main's rule and one kept
+  by the interim rule become the table object, a 64 KB page with no table gets its text boxes, each 202 and the
+  job; `rebuildsFromDeck` by class and deck); end to end `e2e/editor-reimport-lo.spec.ts` (row 'editor-reimport-lo',
+  a hub with LibreOffice: a 64 KB page drawn by the follow-up, 'Make editable', 202, its text boxes over it).
+<!-- /r2b:tables-cells -->

@@ -41,8 +41,10 @@
  */
 import {
   type Box,
+  DEFAULT_THEME,
   formatBytes,
   type ImageObject,
+  newId,
   type Presentation,
   Presentation as PresentationSchema,
   presentationBytes,
@@ -50,6 +52,8 @@ import {
   Slide,
   type SlideObject,
   slideBytes,
+  type TextObject,
+  type Theme,
 } from '@ordo/domain';
 import type {
   Job,
@@ -63,6 +67,7 @@ import type {
 import { errorMessage, HttpError, notFound } from '../errors.ts';
 import { digestMatches, importDigest } from './digest.ts';
 import { type JobCtx, JobDeferred, type JobHandler } from '../jobs.ts';
+import type { Library } from '../library.ts';
 import { deferDelay } from './fallback.ts';
 import { buildNative, type NativeBuild, type NativeJobEnv } from './nativeJob.ts';
 import { logSafe, SOURCE_LOG_CHARS } from './report.ts';
@@ -119,6 +124,71 @@ function kindOf(sl: Slide, deck: string | undefined, tags: MediaTags): PptxReimp
   if (sl.pptx) return sl.pptx.fileId === deck ? 'native' : 'other';
   if (sl.imported) return sl.imported.fileId === deck ? 'page' : 'other';
   return pagePicture(sl, tags) ? 'made-editable' : 'other';
+}
+
+/**
+ * Whether 'Make editable' rebuilds `slide` from the presentation's stored deck `fileId` (the re-import of that
+ * slide, `imports.ts` `makeEditableNative`): a legacy page of the deck (`imported`, no `pptx`), or LibreOffice's
+ * page that a native import of the deck stored (`pptx.class` 'picture', version 2), whatever its notes say:
+ * main's 64 KB pages ('over 64 KB: LibreOffice draws its page', the table pages churches' libraries hold) and
+ * r2b's interim table pages alike. The one place this is decided: it keys on the page class, never a note.
+ */
+export function rebuildsFromDeck(slide: Pick<Slide, 'imported' | 'pptx'>, fileId: string): boolean {
+  if (slide.pptx) return slide.pptx.class === 'picture' && slide.pptx.fileId === fileId;
+  return !!slide.imported && slide.imported.fileId === fileId;
+}
+
+/** A slide that shows LibreOffice's page with its extracted text: a legacy page or a version-2 picture slide. */
+function showsPage(sl: Pick<Slide, 'imported' | 'pptx'>): boolean {
+  return !!sl.imported && (!sl.pptx || sl.pptx.class === 'picture');
+}
+
+/** The theme a presentation's new text boxes take: its own, else the library's default, else ordo's. */
+export function themeOf(lib: Pick<Library, 'getSetting' | 'themes'>, p?: { themeId?: string }): Theme {
+  const general = lib.getSetting('general');
+  return (
+    (p?.themeId ? lib.themes.get(p.themeId) : undefined) ??
+    (general.defaultThemeId ? lib.themes.get(general.defaultThemeId) : undefined) ??
+    DEFAULT_THEME
+  );
+}
+
+/**
+ * A page's text made editable over its picture ('Make editable' without the stored deck, and on a page whose
+ * deck slide is LibreOffice's page again): the page picture as the bottom object, the extracted text boxes as
+ * theme-styled text objects over it (left and top aligned), `imported` dropped. On a PowerPoint slide they are
+ * the import's (`origin`: 'Show PowerPoint picture' leaves them out, a re-import tells them from the
+ * operator's). A slide without `imported` is returned as it is.
+ */
+export function boxesOverPage(sl: Slide, theme: Theme): Slide {
+  if (!sl.imported) return sl;
+  const origin = (role?: string) => (sl.pptx ? { origin: { src: 'pptx', ...(role ? { role } : {}) } } : {});
+  const back: ImageObject = {
+    id: newId(),
+    type: 'image',
+    box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+    mediaId: sl.imported.imageMediaId,
+    fit: 'contain',
+    opacity: 1,
+    radius: 0,
+    ...origin('bg'),
+  };
+  const texts: TextObject[] = (sl.imported.textBoxes ?? []).map((tb) => ({
+    id: newId(),
+    type: 'text',
+    box: { ...tb.box, rotation: tb.box.rotation ?? 0 },
+    text: tb.text,
+    style: {
+      ...theme.textBoxDefaults,
+      fontSizePx: tb.fontSizePx ?? theme.textBoxDefaults.fontSizePx,
+      align: 'left',
+      valign: 'top',
+    },
+    opacity: 1,
+    ...origin('text'),
+  }));
+  const { imported: _i, ...rest } = sl;
+  return { ...rest, objects: [back, ...sl.objects, ...texts] };
 }
 
 /**
@@ -624,7 +694,77 @@ export function mergeReimport(
   return { p, counts, lo };
 }
 
-/** Queue a re-import (the route has checked the lock and the stored deck). */
+/**
+ * The slides of `ids` that show LibreOffice's page (`imported`: a legacy page, or a version-2 picture slide)
+ * and whose deck slide the fresh conversion makes LibreOffice's page again, or does not convert: 'Make
+ * editable' (`PptxReimportPayload.pageBoxes`) lays their text boxes over the page (`boxesOverPage`) instead
+ * of storing the page again. Pure.
+ */
+export function pagesAgain(
+  p: Presentation,
+  fresh: FreshDeck,
+  ids: readonly string[],
+  tags: MediaTags,
+  names?: MediaNames,
+): Set<string> {
+  const want = new Set(ids);
+  const listed =
+    fresh.listed ??
+    fresh.slides.map((s) => ({ index: s.index, hidden: s.shown === undefined, shown: s.shown }));
+  const indexes = deckIndexes(p, listed, tags, names);
+  const byIndex = new Map(fresh.slides.map((s) => [s.index, s]));
+  const out = new Set<string>();
+  for (const sec of p.sections)
+    for (const sl of sec.slides) {
+      if (!want.has(sl.id) || !showsPage(sl)) continue;
+      const i = indexes.get(sl.id);
+      const f = i === undefined ? undefined : byIndex.get(i);
+      if (!f?.slide.pptx || f.slide.pptx.class === 'picture') out.add(sl.id);
+    }
+  return out;
+}
+
+/**
+ * 'Make editable' on the pages `ids` (`PptxReimportPayload.pageBoxes`, design/27 §11): `mergeReimport` of
+ * those whose deck slide converts to something else than LibreOffice's page (a table page an older import kept
+ * becomes the table object), and the page's text boxes over it (`boxesOverPage`) for those it makes a page
+ * again (`pagesAgain`: a slide still past 64 KB as anything else), so the request always ends in an editable
+ * slide. A page rebuilt counts as made editable (`replaced`), a version-2 page as a legacy one does, so the
+ * editor says it was rebuilt. Pure; `current` itself when nothing changes.
+ */
+export function madeEditable(
+  current: Presentation,
+  fresh: FreshDeck,
+  req: PptxReimportReq,
+  ids: readonly string[],
+  theme: Theme,
+  tags: MediaTags,
+  names?: MediaNames,
+): { p: Presentation; counts: ReimportCounts; lo: PptxLoSlide[] } {
+  const again = pagesAgain(current, fresh, ids, tags, names);
+  const scoped = (req.slideIds ?? ids).filter((id) => !again.has(id));
+  const m = mergeReimport(current, fresh, { ...req, slideIds: scoped }, tags, names);
+  const before = new Map(current.sections.flatMap((s) => s.slides).map((sl) => [sl.id, sl]));
+  let pages = 0;
+  for (const sec of m.p.sections)
+    for (const sl of sec.slides) {
+      const was = before.get(sl.id);
+      if (was && was !== sl && was.pptx?.class === 'picture' && scoped.includes(sl.id)) pages++;
+    }
+  const counts = {
+    ...m.counts,
+    regenerated: m.counts.regenerated - pages,
+    replaced: m.counts.replaced + pages,
+  };
+  if (!again.size) return { ...m, counts };
+  const sections = m.p.sections.map((sec) => ({
+    ...sec,
+    slides: sec.slides.map((sl) => (again.has(sl.id) ? boxesOverPage(sl, theme) : sl)),
+  }));
+  return { p: { ...m.p, sections }, counts, lo: m.lo };
+}
+
+/** Queue a re-import (the route has checked the lock and the stored deck); `pageBoxes`: 'Make editable''s. */
 export function queueReimport(
   deps: Pick<PptxDeps, 'jobs'>,
   presentationId: string,
@@ -632,6 +772,7 @@ export function queueReimport(
   req: PptxReimportReq,
   by?: string,
   options?: PptxImportOptions,
+  pageBoxes = false,
 ): Job {
   return enqueuePptx(deps.jobs, PPTX_JOBS.reimport, {
     presentationId,
@@ -641,6 +782,7 @@ export function queueReimport(
     ...(req.reset ? { reset: req.reset } : {}),
     ...(req.keep ? { keep: req.keep } : {}),
     ...(options && Object.keys(options).length ? { options } : {}),
+    ...(pageBoxes ? { pageBoxes: true } : {}),
   });
 }
 
@@ -867,42 +1009,47 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
     const plan = planReimport(p0, req, tags);
     const todo = plan.slides.filter((s) => s.action === 'regenerate' || s.action === 'replace');
     const edited = plan.slides.filter((s) => s.action === 'keep-edited').length;
-    if (!todo.length) {
+    // 'Make editable' (`pageBoxes`): a page that stays LibreOffice's page takes its text boxes over it.
+    const boxes = pl.pageBoxes && pl.slideIds ? pl.slideIds : [];
+    if (!todo.length && !boxes.length) {
       ctx.log('nothing to re-import: no slide of this presentation comes unedited from its PowerPoint file');
       return zero(p0.id, edited);
     }
-    ctx.log(`re-importing ${todo.length} slide(s) from the stored PowerPoint file`);
-
-    // Steps 1-5 of the native import, under this presentation's id, its resume points in this payload.
-    const nctx: JobCtx<PptxNativePayload> = {
-      id: ctx.id,
-      payload: {
-        hash: pl.hash,
-        name: p0.title,
-        ...(pl.options ? { options: pl.options } : {}),
-        done: { media: [], ...pl.done, presentationId: p0.id },
-      },
-      signal: ctx.signal,
-      log: (m) => ctx.log(m),
-      progress: (f) => ctx.progress(0.9 * f),
-      setPayload: (np) => {
-        nctx.payload = np;
-        ctx.setPayload({ ...ctx.payload, ...(np.done ? { done: np.done } : {}) });
-      },
-    };
-    let build: NativeBuild;
-    try {
-      build = await buildNative(deps, nctx, {
-        ...env,
-        only: scopeOf(p0, req, tags, names),
-        reserve: keptBytes(p0, plan, !!req.slideIds),
-      });
-    } catch (e) {
-      if (ctx.signal.aborted) throw e;
-      throw new Error(`The PowerPoint file could not be converted again: ${logSafe(errorMessage(e), 300)}`);
+    let fresh: FreshDeck = { slides: [] };
+    let clips: string[] = [];
+    if (todo.length) {
+      ctx.log(`re-importing ${todo.length} slide(s) from the stored PowerPoint file`);
+      // Steps 1-5 of the native import, under this presentation's id, its resume points in this payload.
+      const nctx: JobCtx<PptxNativePayload> = {
+        id: ctx.id,
+        payload: {
+          hash: pl.hash,
+          name: p0.title,
+          ...(pl.options ? { options: pl.options } : {}),
+          done: { media: [], ...pl.done, presentationId: p0.id },
+        },
+        signal: ctx.signal,
+        log: (m) => ctx.log(m),
+        progress: (f) => ctx.progress(0.9 * f),
+        setPayload: (np) => {
+          nctx.payload = np;
+          ctx.setPayload({ ...ctx.payload, ...(np.done ? { done: np.done } : {}) });
+        },
+      };
+      let build: NativeBuild;
+      try {
+        build = await buildNative(deps, nctx, {
+          ...env,
+          only: scopeOf(p0, req, tags, names),
+          reserve: keptBytes(p0, plan, !!req.slideIds),
+        });
+      } catch (e) {
+        if (ctx.signal.aborted) throw e;
+        throw new Error(`The PowerPoint file could not be converted again: ${logSafe(errorMessage(e), 300)}`);
+      }
+      fresh = freshOf(build, !req.slideIds);
+      clips = [...new Set([...build.clipIds, ...build.clipsCreated])];
     }
-    const fresh = freshOf(build, !req.slideIds);
-    const clips = [...new Set([...build.clipIds, ...build.clipsCreated])];
 
     // Merged into the newest copy and saved in the same synchronous step; a save that meets a newer
     // revision (another process) merges again.
@@ -921,7 +1068,14 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
         deferWhileFollowUp();
       }
       if (deckOf(cur) !== pl.hash) throw new Error('The presentation was changed to another PowerPoint file');
-      const m = mergeReimport(cur, fresh, req, tags, names);
+      const again = boxes.length ? pagesAgain(cur, fresh, boxes, tags, names) : new Set<string>();
+      if (again.size)
+        ctx.log(
+          `${again.size} slide(s) stay LibreOffice's page again (too large as objects): their text is laid over the page in boxes`,
+        );
+      const m = boxes.length
+        ? madeEditable(cur, fresh, req, boxes, themeOf(deps.lib, cur), tags, names)
+        : mergeReimport(cur, fresh, req, tags, names);
       if (m.p === cur) {
         for (const id of clips) deps.media.queue(id);
         ctx.log('nothing changed: every slide is as the PowerPoint file and this converter make it');
