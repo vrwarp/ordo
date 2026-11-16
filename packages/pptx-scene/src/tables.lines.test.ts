@@ -56,3 +56,30 @@ describe("the converter's table measure breaks office text where LibreOffice doe
     expect(measure().layout(q, 9.5 * 18).baselines).toHaveLength(2);
   });
 });
+
+describe("the converter's table measure sizes each line by its own runs", () => {
+  it('makes a short line of a smaller citation that wraps onto it, in all three measures (Matthew 16v18)', () => {
+    // 'aaaa ' at 18 pt (18 px a character), then 'bbbb cccc' at 9 pt (9 px): 140 px holds 'aaaa bbbb ', so
+    // 'cccc' wraps onto a line of its own. That line is as tall as a 9 pt line, as LibreOffice draws it.
+    const w = 140;
+    const mixed = body(paraOf(['aaaa ', 18], ['bbbb cccc', 9]));
+    const big = body(paraOf(['aaaa', 18]));
+    const small = body(paraOf(['cccc', 9]));
+    const m = measure();
+    // Ordo's rows (the office model's single spacing): 1.2 × 36 + 1.2 × 18.
+    expect(m.height(mixed, w)).toBeCloseTo(m.height(big, w) + m.height(small, w), 6);
+    expect(m.height(mixed, w)).toBeCloseTo(1.2 * 36 + 1.2 * 18, 6);
+    // The block the drawer draws: its second baseline is a 9 pt ascent below the first line.
+    const block = m.layout(mixed, w);
+    expect(block.height).toBeCloseTo(1.2 * 36 + 1.2 * 18, 6);
+    expect(block.baselines[1]! - block.baselines[0]!).toBeCloseTo(1.2 * 36 - 36 + 18, 6);
+    // LibreOffice's rows (1/100 mm, the face's own line heights).
+    for (const mode of ['font', 'independent'] as const) {
+      const lo = m.loLayout(mixed, w, mode);
+      expect(lo.height).toBe(m.loLayout(big, w, mode).height + m.loLayout(small, w, mode).height);
+      expect(lo.drawn.height).toBe(
+        m.loLayout(big, w, mode).drawn.height + m.loLayout(small, w, mode).drawn.height,
+      );
+    }
+  });
+});

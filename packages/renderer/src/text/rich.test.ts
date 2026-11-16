@@ -153,6 +153,14 @@ describe("the 'ordo' line model", () => {
     const raised = obj('17 For', {}, { runs: [{ start: 0, end: 2, baseline: 0.3, sizeScale: 3 }] });
     expect(layoutRich(m(), raised, LEGACY_FONT_ENV).lines[0]!.height).toBe(20);
   });
+
+  it("keeps the paragraph's main size as every line's floor (ordo's own text is unchanged)", () => {
+    // 'aaaa ' at 20 px, then 'bbbb cccc' at 10 px: 'cccc' wraps onto a line of its own, still 20 px tall.
+    const o = obj('aaaa bbbb cccc', {}, { box: box(90), runs: [{ start: 5, end: 14, sizeScale: 0.5 }] });
+    const l = layoutRich(m(), o, LEGACY_FONT_ENV);
+    expect(lineTexts(o, l)).toEqual(['aaaa bbbb ', 'cccc']);
+    expect(l.lines.map((line) => line.height)).toEqual([20, 20]);
+  });
 });
 
 describe('office line model', () => {
@@ -170,6 +178,40 @@ describe('office line model', () => {
     hidden: false,
     ...p,
   });
+  it('sizes a wrapped line of smaller runs by its own runs, not the paragraph main size', () => {
+    // A 20 px paragraph whose 10 px citation wraps onto a line of its own (Matthew 16v18's right column:
+    // 5 pt references after 7 pt text): LibreOffice's editeng sizes each line by the portions on it.
+    const office = { lineModel: 'office' as const, lineHeight: 1.2 };
+    const o = obj('aaaa bbbb cccc', office, { box: box(90), runs: [{ start: 5, end: 14, sizeScale: 0.5 }] });
+    const l = layoutRich(m(), o, LEGACY_FONT_ENV);
+    expect(lineTexts(o, l)).toEqual(['aaaa bbbb ', 'cccc']);
+    expect(l.lines.map((line) => line.height)).toEqual([24, 12]);
+    // Its baseline is its own size below its top.
+    expect(l.lines[1]!.baseline - l.lines[1]!.top).toBe(10);
+    // A line of shifted runs only keeps the paragraph's main size; a larger run still raises its line.
+    const raised = obj('aaaa 17', office, { box: box(60), runs: [{ start: 5, end: 7, baseline: 0.3 }] });
+    expect(layoutRich(m(), raised, LEGACY_FONT_ENV).lines.map((line) => line.height)).toEqual([24, 24]);
+    const big = obj('aa bb', office, { runs: [{ start: 3, end: 5, sizeScale: 1.5 }] });
+    expect(layoutRich(m(), big, LEGACY_FONT_ENV).lines[0]!.height).toBe(36);
+  });
+
+  it('still fits a mixed-size paragraph when shrinking (own-run lines in the autofit search)', () => {
+    // Eight 40 px words then eight 20 px ones in a 400 x 100 box: three lines, too tall at full size. The
+    // search lays lines out by their own runs as the final layout does, so what it finds fits.
+    const words = 'aaaa bbbb cccc dddd eeee ffff gggg hhhh';
+    const o = obj(
+      `${words} ${words}`,
+      { lineModel: 'office', lineHeight: 1.2, fontSizePx: 40, autofit: 'shrink' },
+      { box: { x: 0, y: 0, w: 400, h: 100, rotation: 0 }, runs: [{ start: 40, end: 79, sizeScale: 0.5 }] },
+    );
+    const l = layoutRich(m(), o, LEGACY_FONT_ENV);
+    expect(l.fontScale).toBeLessThan(1);
+    expect(l.overflow).toBe(false);
+    // The small run's line is shorter than the large run's: the search and the layout sized it alike.
+    const last = l.lines[l.lines.length - 1]!;
+    expect(last.height).toBeLessThan(l.lines[0]!.height);
+  });
+
   it('has single spacing 1.2F with the baseline F below the top', () => {
     expect(officeLine(40, para(), 1)).toEqual({ height: 48, ascent: 40 });
     expect(officeLine(40, para({ lineSpacing: 1.5 }), 1)).toEqual({ height: 72, ascent: 64 });
