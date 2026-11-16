@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, type Page, test } from '@playwright/test';
+import { expect, type Locator, type Page, test } from '@playwright/test';
 import {
   ANNOUNCEMENT_TEXT,
   CHURCH,
@@ -8,17 +8,20 @@ import {
   clickObject,
   editorHub,
   editorState,
+  frames,
   importDeck,
   type Obj,
   openEditor,
   openSlide,
+  opOrigin,
   saveAndReload,
   selectRange,
   slidesOf,
 } from './editorhelpers.ts';
 import { portOf } from './ports.ts';
 import type { HubProcess } from './hubproc.ts';
-import { hubApi } from './linkhelpers.ts';
+import { hubApi, login } from './linkhelpers.ts';
+import { apiJson } from './pptxlive.ts';
 
 /**
  * The editor's keyboard for a volunteer without a mouse (design/15 "Accessibility"; `editorKeys.ts`), in the
@@ -29,7 +32,9 @@ import { hubApi } from './linkhelpers.ts';
  *   typing (the typed text stays); Ctrl+Y brings it back; a selection made in the same moment is kept;
  * - Backspace on a focused format button deletes nothing;
  * - in the Find dialog, Enter on 'Replace all' replaces, and Delete on its Close button does not delete the
- *   text box selected behind the dialog.
+ *   text box selected behind the dialog;
+ * - in the Presenter Notes Studio over a selected text box and over a selected picture, and in the Lyric
+ *   Script over a selected lyric box, the canvas is not shown, so its keys leave the hidden slide alone.
  * Its port: e2e/ports.ts row 'editor-keys'.
  */
 const PORT = portOf('editor-keys');
@@ -284,4 +289,177 @@ test('arrow up and down navigate slides when nothing has focus', async ({ page }
   await expect.poll(async () => (await editorState(page)).slideId).toBe(slides[2]!.id);
   await page.keyboard.press('PageUp');
   await expect.poll(async () => (await editorState(page)).slideId).toBe(slides[1]!.id);
+});
+
+/**
+ * Every key the slide canvas takes for a selection: Tab, the arrows' nudge, Enter (inline editing), Escape
+ * (deselect), Delete and Backspace, duplicate, copy and paste, and cut (design/15 "Keyboard"). In the Presenter
+ * Notes Studio and the Lyric Script the canvas is not shown, so none of them may act on what it had selected.
+ */
+const CANVAS_KEYS = [
+  'Tab',
+  'Shift+Tab',
+  'ArrowRight',
+  'ArrowDown',
+  'Shift+ArrowLeft',
+  'Enter',
+  'Escape',
+  'Delete',
+  'Backspace',
+  'Control+d',
+  'Control+c',
+  'Control+v',
+  'Control+x',
+];
+
+/**
+ * Press every canvas key with the focus on the page (as it is once the button that opened the studio has
+ * gone with the canvas): the slide and the selection stay as they were, and `shown` stays on screen.
+ */
+async function keysLeaveHiddenSlide(
+  page: Page,
+  before: Obj[],
+  objectId: string,
+  shown: Locator,
+): Promise<void> {
+  for (const key of CANVAS_KEYS) {
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press(key);
+    await frames(page);
+    const s = await editorState(page);
+    expect(slidesOf(s.draft!)[0]!.objects, `${key}: the hidden slide unchanged`).toEqual(before);
+    expect(s.objectId, `${key}: the selection unchanged`).toBe(objectId);
+    await expect(shown, `${key}: still shown`).toHaveCount(1);
+  }
+}
+
+test('in the Presenter Notes Studio no key acts on the text box or picture selected on the hidden canvas', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const a = await hubApi(PORT);
+  // The church deck's photo, on a slide of its own with a text box and notes (one slide: Up and Down, which
+  // move between slides in the studio, have nowhere to go).
+  const church = await importDeck(a, deck);
+  const photo = slidesOf(church)
+    .flatMap((s) => s.objects)
+    .find((o) => o.type === 'image' && o.mediaId)!;
+  const words = { x: 120, y: 760, w: 900, h: 200, rotation: 0 };
+  const picture = { x: 1100, y: 120, w: 640, h: 480, rotation: 0 };
+  const p = await apiJson<{ id: string }>(a, 'presentations', {
+    post: {
+      title: 'Welcome, with notes',
+      kind: 'slides',
+      sections: [
+        {
+          id: 'sec',
+          label: 'Welcome',
+          short: 'W',
+          slides: [
+            {
+              id: 'welcome',
+              notes: CHURCH.welcome.notes,
+              objects: [
+                {
+                  id: 'words',
+                  type: 'text',
+                  box: words,
+                  text: CHURCH.welcome.title,
+                  style: { fontFamily: 'Inter', fontSizePx: 64, color: { r: 255, g: 255, b: 255, a: 1 } },
+                  opacity: 1,
+                },
+                {
+                  id: 'photo',
+                  type: 'image',
+                  box: picture,
+                  mediaId: photo.mediaId,
+                  fit: 'cover',
+                  opacity: 1,
+                  radius: 0,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  });
+  // A tall window: the Speaker Notes Dock opens by itself on a deck with notes (PR #28).
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openEditor(page, PORT, p.id);
+  await frames(page);
+  const before = slidesOf((await editorState(page)).draft!)[0]!.objects;
+  const studio = page.locator('[data-deck-notes-studio]');
+  const select = async (id: string, box: Obj['box']) =>
+    expect(async () => {
+      await clickObject(page, { box });
+      expect((await editorState(page)).objectId).toBe(id);
+    }).toPass({ timeout: 15_000 });
+
+  // 1. The text box selected on the canvas, then the dock's Manuscript Studio: the button goes away with the
+  // canvas, so the focus falls to the page, where the window's key handler reads keys as the canvas's.
+  await select('words', words);
+  await expect(page.locator('[data-notes-dock]')).toHaveAttribute('data-notes-dock', 'expanded');
+  await page.getByRole('button', { name: /Manuscript Studio/ }).click();
+  await expect(studio).toHaveCount(1, { timeout: 20_000 });
+  await keysLeaveHiddenSlide(page, before, 'words', studio);
+
+  // 2. Back on the canvas the keys are the canvas's again: ArrowRight nudges the box, Ctrl+Z takes it back.
+  await page
+    .getByRole('button', { name: /Slide Canvas/ })
+    .first()
+    .click();
+  await expect(studio).toHaveCount(0);
+  await frames(page);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('ArrowRight');
+  const wordsNow = async () =>
+    slidesOf((await editorState(page)).draft!)[0]!.objects.find((o) => o.id === 'words')!.box.x;
+  await expect.poll(wordsNow).toBe(words.x + 1);
+  await page.keyboard.press('Control+z');
+  await expect.poll(wordsNow).toBe(words.x);
+
+  // 3. The picture selected, then the slide list's Presenter Notes: no nudge, no delete, no copy.
+  await page.keyboard.press('Escape');
+  await select('photo', picture);
+  await page
+    .getByRole('button', { name: /Presenter Notes/ })
+    .first()
+    .click();
+  await expect(studio).toHaveCount(1, { timeout: 20_000 });
+  await keysLeaveHiddenSlide(page, before, 'photo', studio);
+});
+
+test('in the Lyric Script no key acts on the lyric box selected on the hidden canvas', async ({ page }) => {
+  test.setTimeout(180_000);
+  const a = await hubApi(PORT);
+  // One verse, one slide: Up and Down, which move between slides in the Lyric Script, have nowhere to go.
+  const song = (await (
+    await a.post('import/songselect', {
+      data: {
+        text: 'Amazing Grace\n\nVerse 1\nAmazing grace how sweet the sound\nThat saved a wretch like me\n',
+      },
+    })
+  ).json()) as { id: string };
+  await login(page, opOrigin(PORT));
+  await page.evaluate((pid) => {
+    location.hash = `#/edit/${encodeURIComponent(pid)}`;
+  }, song.id);
+  const script = page.locator('textarea[data-reflow-slide]');
+  await expect(script).toHaveCount(1, { timeout: 20_000 });
+  await expect.poll(async () => (await editorState(page).catch(() => undefined))?.draft?.id).toBe(song.id);
+  const slide = slidesOf((await editorState(page)).draft!)[0]!;
+  const lyric = slide.objects.find((o) => o.id === slide.lyricObjectId) ?? slide.objects[0]!;
+
+  // The lyric box selected on the canvas, then the Lyric Script: what the canvas selected stays selected.
+  await page.getByRole('button', { name: 'Slide Canvas', exact: true }).click();
+  await expect(page.locator('.canvasbox canvas').first()).toBeVisible({ timeout: 20_000 });
+  await frames(page);
+  await expect(async () => {
+    await clickObject(page, lyric);
+    expect((await editorState(page)).objectId).toBe(lyric.id);
+  }).toPass({ timeout: 15_000 });
+  await page.getByRole('button', { name: 'Lyric Script', exact: true }).click();
+  await expect(script).toHaveCount(1, { timeout: 20_000 });
+  await keysLeaveHiddenSlide(page, slide.objects, lyric.id, script);
 });
