@@ -66,7 +66,7 @@ import type {
   WorkerName,
 } from './host-protocol.ts';
 import { LaneStats } from './lane-stats.ts';
-import { REFRESH_FADE_MS } from './late.ts';
+import { LATE_REDRAW_MAX_MS, REFRESH_FADE_MS } from './late.ts';
 import { SlotPair } from './media.ts';
 import { PerfHealth, perfDiagnostics } from './perf-health.ts';
 import {
@@ -234,6 +234,8 @@ export class LinkCore {
    */
   private unitRefresh = new Set<string>();
   private unitRefreshedAt = new Map<string, number>();
+  /** The last draw time of each slide key (`done.rasterMs`, at most 64 keys): a slow one is not re-drawn on screen. */
+  private slideDrawMs = new Map<string, number>();
   private unitRefreshTimer?: ReturnType<typeof setTimeout>;
   /** Slide keys drawn with units left for a late job (`done.unitsLeft`), until all are reported made. */
   private lateParts = new Set<string>();
@@ -1338,6 +1340,10 @@ export class LinkCore {
   private unitRefreshDue(key: string): boolean {
     if (!this.unitRefresh.has(key)) return false;
     if (this.inflight.has(key)) return false;
+    // A slide that draws in more than one task: not drawn again while on screen (a GO would wait behind that
+    // draw); its parts come in when it is armed again, or at its next draw (LATE_REDRAW_MAX_MS).
+    if (this.livePlan?.slide.key === key && (this.slideDrawMs.get(key) ?? 0) > LATE_REDRAW_MAX_MS)
+      return false;
     for (const r of this.inflightRole.values()) if (r === 'live') return false;
     const wait = (this.unitRefreshedAt.get(key) ?? 0) + REFRESH_FADE_MS - Date.now();
     if (wait <= 0) return true;
@@ -2152,6 +2158,11 @@ export class LinkCore {
         this.assetInflight.delete(m.key);
         this.delivered.set(m.key, Date.now());
         if (m.unitsMade !== undefined) this.unitsMade = m.unitsMade;
+        if (m.rasterMs !== undefined && m.key.startsWith('sl|')) {
+          this.slideDrawMs.delete(m.key);
+          this.slideDrawMs.set(m.key, m.rasterMs);
+          if (this.slideDrawMs.size > 64) this.slideDrawMs.delete(this.slideDrawMs.keys().next().value!);
+        }
         if (m.unitCacheBytes !== undefined) this.unitCacheBytes = m.unitCacheBytes;
         if (m.unitsLeft) {
           // Shown (live, or a GO hurried its arm) with parts left to a late job: they come in late.

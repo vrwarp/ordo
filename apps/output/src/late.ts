@@ -14,3 +14,9 @@ export const LATE_UNIT: LateUnitMode = 'fade';
 
 /** A late part fades in over this long (ms), and a slide is drawn again for its late parts at most this often. */
 export const REFRESH_FADE_MS = 300;
+/**
+ * A slide whose own draw took longer than this (one task at the output's size) is not drawn again on screen
+ * for its late parts: that draw is one slice of the asset worker, and a GO arriving meanwhile would wait for it.
+ * Its parts are drawn in when it is armed again (silently), or at its next draw (review of r2b sub-wave 1).
+ */
+export const LATE_REDRAW_MAX_MS = 50;

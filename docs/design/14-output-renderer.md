@@ -469,7 +469,11 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   silent swap). A key is drawn again at most once per `REFRESH_FADE_MS` and never while a GO's live job is in
   flight (it goes after that raster); a refresh of a slide that left the screen is cancelled with it
   (`cancelSuperseded`). A slide shown again whose late parts never came (its late job was dropped) is drawn
-  again in place when it goes live, which makes them late again.
+  again in place when it goes live, which makes them late again. A slide whose own draw took more than one task
+  (`LATE_REDRAW_MAX_MS` 50, `done.rasterMs` at the output's size) is not drawn again while on screen: that draw
+  is one slice of the asset worker, and a GO arriving meanwhile (a jump that needs its own raster) would wait for
+  it; its parts are swapped in when it is armed again, or come with its next draw (review of r2b sub-wave 1;
+  the 65 slides of E over 50 ms at 3840 are live-frame's and render-bounds').
 - **Warm-up.** When the live playlist changes, the link sends the slides this look draws as authored, in cue order
   from the live cue (the rest after it, then those before; each slide once, at most 200) in one `warmUnits` job;
   the asset worker makes their units in bulk work (`RANK.bulk`), unpinned, until its unit cache holds two thirds

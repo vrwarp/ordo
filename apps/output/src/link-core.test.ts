@@ -1130,6 +1130,40 @@ describe('link worker core: a GO never waits for drawing (r2b units-live, design
     t.close();
   });
 
+  it('a slide whose draw passes the task is not drawn again on screen for its late parts (a GO would wait behind it); armed, it swaps them in', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const live = jobOf(t.toAsset, 0)!;
+    const armed = jobOf(t.toAsset, 1)!;
+    // Both drawn in more than one task (50 ms) at this output's size, with parts left for a late job.
+    done(t, live.job.key, { unitsLeft: 2, rasterMs: 80 });
+    done(t, armed.job.key, { unitsLeft: 1, rasterMs: 120 });
+    await tick(20);
+    t.toAsset.length = 0;
+    ready(t, live.job.key);
+    await tick(400);
+    expect(slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key)).toHaveLength(0);
+    // The armed cue's parts are drawn in silently while it waits (an armed job, as before).
+    ready(t, armed.job.key);
+    await tick(30);
+    const swap = slideJobs(t.toAsset).filter((m) => m.job.key === armed.job.key);
+    expect(swap).toHaveLength(1);
+    expect(swap[0]!.role).toBe('late');
+    expect(swap[0]!.job.kind === 'slide' && swap[0]!.job.refreshFadeMs).toBeUndefined();
+    // A slide drawn within the task still fades its parts in on screen.
+    done(t, live.job.key, { rasterMs: 30 });
+    await tick(20);
+    t.toAsset.length = 0;
+    ready(t, live.job.key);
+    await tick(400);
+    const fade = slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key);
+    expect(fade).toHaveLength(1);
+    expect(fade[0]!.job).toMatchObject({ refresh: true, refreshFadeMs: 300 });
+    t.close();
+  });
+
   it('20 units ready one after another give at most one refresh per 300 ms and none ahead of a GO’s raster', async () => {
     const t = setup();
     await t.core.start();
