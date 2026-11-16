@@ -87,6 +87,7 @@ import {
 import type { SlideRect } from './CanvasGuides.tsx';
 import { addObject, getSlide, type ZOrder } from './ops.ts';
 import { type AlignTo, alignedBox, placeObjects, placementArea } from './placement.ts';
+import { fitTable } from './tableFit.ts';
 // F: the PowerPoint card's slide ops (pure, beside the card's other readers).
 import { showObjects, showPicture } from '../../lib/pptxImport.ts';
 import { toast } from '../../state/toasts.ts';
@@ -127,15 +128,16 @@ export const targetOf = (t: TextTargetArg): TextTarget => (typeof t === 'string'
 /**
  * `fn` applied to cell `cell` of table `o` as the cell's text object view (`cellTextObject`) and written back
  * through `setCell` (design/15 "Table editing"): so every text op (typing, a format, paragraph styles, a paste)
- * edits a cell as it edits a text box. `o` itself when it is no table, `fn` changes nothing, or the cell's or
- * the table's bounds refuse the result (`setCell`).
+ * edits a cell as it edits a text box. A table whose rows are fixed (imported) grows the cell's row by what
+ * the edit made its text need more (`tableFit.ts` `fitTable`). `o` itself when it is no table, `fn` changes
+ * nothing, or the cell's or the table's bounds refuse the result (`setCell`).
  */
 export function editCell(o: SlideObject, cell: number, fn: (t: TextObject) => TextObject): SlideObject {
   if (o.type !== 'shape' || !o.table) return o;
   const view = cellTextObject(o, cell);
   if (!view) return o;
   const next = fn(view);
-  return next === view ? o : setCell(o, cell, cellBodyOf(next));
+  return next === view ? o : fitTable(o, setCell(o, cell, cellBodyOf(next)));
 }
 
 /** `fn` on the text of `target`: a text object of the open slide, or a table's cell (locked objects left alone). */
@@ -490,7 +492,9 @@ export function rowCol(objectId: string, drawnOp: RowColOp, cell?: number): numb
       const k = p.slots[at.row * p.C + at.col];
       next = k !== undefined && k >= 0 ? k : undefined;
     }
-    return y;
+    // Columns rescaled to the table's width (keepWidth) wrap text more: a fixed-row table's rows grow by
+    // what its text needs more (tableFit.ts; the cells keep their places).
+    return fitTable(x, y);
   });
   return next;
 }

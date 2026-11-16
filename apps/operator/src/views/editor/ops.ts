@@ -17,6 +17,7 @@ import {
 } from '@ordo/domain';
 import { moveItem } from '../../lib/arrangement.ts';
 import { themedRuns } from './ops/text.ts';
+import { fitTable } from './tableFit.ts';
 
 /** Pure presentation editing operations used by the editor. Each returns a new presentation. */
 
@@ -49,6 +50,11 @@ export function updateSlide(p: Presentation, slideId: string, fn: (s: Slide) => 
   }));
 }
 
+/**
+ * Object `objectId` of slide `slideId` changed by `fn`. A table whose rows are fixed (imported) and whose box
+ * the change resized (the canvas's Transformer, the Object panel's size fields) grows the rows its narrower
+ * columns made its text need more (`tableFit.ts` `fitTable`).
+ */
 export function updateObject(
   p: Presentation,
   slideId: string,
@@ -57,7 +63,7 @@ export function updateObject(
 ): Presentation {
   return updateSlide(p, slideId, (s) => ({
     ...s,
-    objects: s.objects.map((o) => (o.id === objectId ? fn(o) : o)),
+    objects: s.objects.map((o) => (o.id === objectId ? fitTable(o, fn(o)) : o)),
   }));
 }
 

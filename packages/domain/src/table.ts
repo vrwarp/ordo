@@ -37,7 +37,8 @@ import {
  * row or column grow or shrink; no edge is kept inside a merged cell; the result is written back row-major,
  * which places each cell where it was. A table keeps its width (columns are rescaled to their old sum, which
  * the renderer maps to `box.w`); a row adds or removes its height to `box.h`. An op past `TABLE_LIMITS`, at the
- * last row or column, or with an index out of range returns the object unchanged.
+ * last row or column, or with an index out of range returns the object unchanged. `growRow` grows one row of a
+ * table whose rows are fixed (`rowRule: 'fixed'`, an imported table) when an edit makes its text need more.
  *
  * Not built here (M9 decision 4): the legacy table group and its digest (`tableShadows`), so neither is
  * 'Rebuild table from cells'.
@@ -638,6 +639,27 @@ export function insertRow(o: ShapeObject, at: number, from: number): ShapeObject
   rows.splice(at, 0, h);
   const table = gcTable({ ...encode(g, t), rows, cols: t.cols.slice(0, C) });
   return { ...o, box: { ...o.box, h: o.box.h + rowPx(o, t, h) }, table };
+}
+
+/** The schema's bound on a length (a row's stored height, `box.h`). */
+const MAX_LENGTH = 100_000;
+
+/**
+ * Row `row` grown to the stored height `h` (never shrunk): `rows[row] = max(rows[row], h)` and the box by the
+ * height added at the table's row scale, as `insertRow` adds a row (the editor's `fitRows` after an edit whose
+ * text needs more room than its fixed row; design/15 "Table editing"). Within the schema's length bound; the
+ * object itself for a row out of range, a height that is not finite or not taller than the row, or no table.
+ */
+export function growRow(o: ShapeObject, row: number, h: number): ShapeObject {
+  const t = tableOf(o);
+  // A row out of range reads undefined (its height NaN): no comparison holds.
+  const old = t && row < TABLE_LIMITS.rows ? Number(t.rows[row]) : Number.NaN;
+  const next = Math.min(MAX_LENGTH, h);
+  if (!t || !Number.isFinite(h) || !(next > old)) return o;
+  const rows = t.rows.slice();
+  rows[row] = next;
+  const box = { ...o.box, h: Math.min(MAX_LENGTH, o.box.h + rowPx(o, t, next - old)) };
+  return { ...o, box, table: { ...t, rows } };
 }
 
 /**

@@ -15,6 +15,7 @@
  *     shorter than the text, or draws its lines higher, the spill into the margins and the baseline lift are
  *     folded into each cell's insets (`tables.ts` `asLibreOffice`). Nothing in the layout reads the harness's
  *     policies (`EmitOptions.loCompat`): with and without them the grid, rows, sizes and insets are the same.
+ *     An edit grows a row by what its text needs more (the operator's `fitRows`, design/15 "Table editing").
  *   - **Cells** in the order the stored table places them (row-major, `@ordo/domain` `placeCells`), each
  *     with its rich text (`richText`, as text boxes are written: runs, paragraph styles, fallback fonts;
  *     plain once the slide passes its text budget) without autofit, its spans, fill and diagonals.

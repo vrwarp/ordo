@@ -19,6 +19,7 @@ import {
 } from '@ordo/domain';
 import { CLAMP } from '@ordo/renderer';
 import { cloneSlide, findSlide, getSlide, lyricObject, markOverride } from '../ops.ts';
+import { fitTable } from '../tableFit.ts';
 import { withEverySlide, withSlide } from './common.ts';
 import { type PictureSize, replacePicture } from './pictures.ts';
 
@@ -168,7 +169,8 @@ export function findInCells(
     out = next;
     replaced += r.n;
   }
-  return { o: out, matches, replaced };
+  // A table whose rows are fixed (imported) grows the rows whose text now needs more (tableFit.ts).
+  return { o: out === o ? o : fitTable(o, out), matches, replaced };
 }
 
 /**

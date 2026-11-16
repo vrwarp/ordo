@@ -3051,6 +3051,10 @@ be measured):
 - **Text past a fixed row** overflows it, upwards and downwards as its anchor says, as a text box's overflows
   its box (the layout's rule for `rowRule: 'fixed'`, above): an output whose faces lay a cell out taller than
   the converter measured draws the text past the row, never clipped and never moving the rows below.
+- **An edit grows a row by what its text needs more** (design/15 "Table editing", the operator's `fitRows`,
+  domain `growRow`): never by the absolute shortfall, which would make a one-letter fix move the rows of a cell
+  that already needs more than its fixed row in the drawer (all-tables' P1, rows grown to the drawer's need:
+  2 Corinthians 3 vs 7 0.683 -> 0.191, Churchcraft 0.655 -> 0.260).
 - **Cell text in the master's otherStyle** (`inherit.ts` `paraChainParts`, `Chain.cell` set by `tables.ts`
   `cellText`; from r2b-diag all-tables 022b990): a cell's paragraphs read the master's `p:otherStyle` before
   the presentation's `defaultTextStyle`, as LibreOffice lays table text out (a non-placeholder text box still

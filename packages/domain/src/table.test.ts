@@ -19,6 +19,7 @@ import {
   deleteCol,
   deleteRow,
   gcTable,
+  growRow,
   insertCol,
   insertRow,
   placeCells,
@@ -356,6 +357,32 @@ describe('rows and columns', () => {
     }
     expect(deleteRow(o, 2)).toBe(o);
     expect(deleteCol(o, Number.NaN)).toBe(o);
+  });
+
+  it("growRow grows one row to a height, never shrinks it, and the box by the table's row scale", () => {
+    const o = shape({ ...grid(3, 2), rowRule: 'fixed' }, 240); // rows of 40 drawn at 80 (row scale 2)
+    const g = growRow(o, 1, 55);
+    expect(t$(g).rows).toEqual([40, 55, 40]);
+    expect(g.box).toEqual({ ...o.box, h: 240 + 15 * 2 });
+    expect(t$(g).cells).toBe(t$(o).cells);
+    expect(t$(g).rowRule).toBe('fixed');
+    // Never shrinks: a height at or under the row's is the object itself.
+    expect(growRow(o, 1, 40)).toBe(o);
+    expect(growRow(o, 1, 12)).toBe(o);
+    // Grown twice by the same height is grown once.
+    expect(growRow(g, 1, 55)).toBe(g);
+    valid(t$(g));
+  });
+
+  it('growRow refuses rows out of range and heights that are not finite, and keeps the schema bound', () => {
+    const o = shape(grid(2, 2));
+    for (const r of [-1, 2, 0.5, Number.NaN]) expect(growRow(o, r, 60)).toBe(o);
+    for (const h of [Number.NaN, Number.POSITIVE_INFINITY]) expect(growRow(o, 0, h)).toBe(o);
+    const big = growRow(o, 0, 1e9);
+    expect(t$(big).rows[0]).toBe(100_000);
+    expect(big.box.h).toBeLessThanOrEqual(100_000);
+    const plain = { ...o, table: undefined } as ShapeObject;
+    expect(growRow(plain, 0, 60)).toBe(plain);
   });
 
   it('tableText still reads the edited table row by row', () => {

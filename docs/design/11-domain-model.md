@@ -468,7 +468,11 @@ T2's default). Every hub stores an imported table in LibreOffice's layout: `cols
 `rows` its grown rows with `rowRule: 'fixed'` (the renderer keeps them as stored; text taller than its row
 overflows it, as a text box's overflows its box), the cells' sizes at LibreOffice's 600 dpi sizes (14 pt is
 stored 14.04 pt, `fontSizePx` 28.08) and each cell's `insets` adjusted for where LibreOffice draws its text (the
-lift moved into `t` and `b`, the spill into the margins shrinking them). Rows are fixed at import.
+lift moved into `t` and `b`, the spill into the margins shrinking them). Rows are fixed at import and grow only
+on an edit, by what the edited text needs more than before (`fitRows` in the operator, design/15 "Table
+editing"; the domain's `growRow(o, row, h)`: `rows[row] = max(rows[row], h)`, `box.h` by the table's row
+scale as `insertRow` adds a row; never shrinks, other rows unchanged; the object itself for a row out of range,
+a height that is not finite or not taller, within the schema's length bound).
 <!-- /r2b:tables-form -->
 
 <!-- r2b:editor-table -->
