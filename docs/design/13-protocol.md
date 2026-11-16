@@ -9,16 +9,19 @@ The live events of pre-rendered slides (`prerender.add`, `prerender.use`) are de
 
 ## Client to hub
 
-| `t`              | From             | Payload                                     | Notes                                              |
-| ---------------- | ---------------- | ------------------------------------------- | -------------------------------------------------- |
-| `hello`          | all              | `{ role, outputId?, view?, appVersion, lastSeq? }` | First message. Hub replies `welcome`. `view: 'lectern'`: a Pulpit Lectern on the stage output's link (design/16 "Pulpit Lectern") |
-| `time.ping`      | all              | `{ c: clientSentMs }`                       | Hub replies `time.pong { c, s: hubMs }`            |
-| `live.event`     | operator         | `{ id, event: LiveEvent, clientSeq }`       | A reducer event. Hub applies, journals, broadcasts |
-| `live.resync`    | any              | `{}`                                        | Ask for a full state                               |
-| `health`         | output, stage    | `OutputHealth` minus `lastSeenHub`          | Once per second                                    |
-| `cache.progress` | output, operator | `{ ready, total }`                          | During service cache fill                          |
-| `rtc.signal`     | operator, output | `{ to: outputId                             | 'operator', sdp?, ice? }`                          | Program-view signalling |
-| `surface.event`  | operator         | `{ device, control, value }`                | Optional telemetry of surface presses              |
+| `t`              | From             | Payload                                            | Notes                                              |
+| ---------------- | ---------------- | -------------------------------------------------- | -------------------------------------------------- |
+| `hello`          | all              | `{ role, outputId?, view?, appVersion, lastSeq? }` | First message. Hub replies `welcome`               |
+| `time.ping`      | all              | `{ c: clientSentMs }`                              | Hub replies `time.pong { c, s: hubMs }`            |
+| `live.event`     | operator         | `{ id, event: LiveEvent, clientSeq }`              | A reducer event. Hub applies, journals, broadcasts |
+| `live.resync`    | any              | `{}`                                               | Ask for a full state                               |
+| `health`         | output, stage    | `OutputHealth` minus `lastSeenHub`                 | Once per second                                    |
+| `cache.progress` | output, operator | `{ ready, total }`                                 | During service cache fill                          |
+| `rtc.signal`     | operator, output | `{ to: outputId                                    | 'operator', sdp?, ice? }`                          | Program-view signalling |
+| `surface.event`  | operator         | `{ device, control, value }`                       | Optional telemetry of surface presses              |
+
+`hello`'s `view: 'lectern'` marks a Pulpit Lectern on the stage output's link (design/16 "Pulpit Lectern"): the hub
+then neither lets it replace the output's own window nor replaces it with one.
 
 ### Per-message caps (design/28 P0)
 
