@@ -16,9 +16,16 @@ export const LATE_UNIT: LateUnitMode = 'fade';
 export const REFRESH_FADE_MS = 300;
 /**
  * A slide whose re-draw for late parts took longer than this (one task at the output's size; the re-draw's own
- * `rasterMs`, not the slide's first, cold draw) is drawn again on screen only once more, when its last late part
- * is made: each such re-draw is one slice of the asset worker, and a jump arriving meanwhile waits for it. Every
- * part still fades in (owner decision 2026-11-13); those made before the last wait for it (reviews of r2b
- * sub-wave 1).
+ * `rasterMs`, not the slide's first, cold draw) is drawn again on screen only once more, when its late job has
+ * made its last part or ended (`unitsReady.ended`): each such re-draw is one slice of the asset worker, and a jump
+ * arriving meanwhile waits for it. Every part still fades in (owner decision 2026-11-13); those made before the
+ * last wait for it, at most `LATE_HOLD_MS` after the late job's last report (reviews of r2b sub-wave 1).
  */
 export const LATE_REDRAW_MAX_MS = 50;
+
+/**
+ * A slow slide's re-draw waits for its late job's last part at most this long after the job's last report
+ * (ms): a late job that stops reporting (lost, or a fault) never keeps a made part off the screen (repair 3).
+ * A working late job reports at most every `REFRESH_FADE_MS` while it makes parts.
+ */
+export const LATE_HOLD_MS = 1_000;

@@ -237,6 +237,13 @@ export type ToAsset =
    */
   | { t: 'hurry'; keys: string[] }
   /**
+   * After an asset worker restart (design/14 "Late units"): the renderer holds this slide (live or armed) with
+   * parts left late, or made by the worker that went away and not drawn in yet. This worker makes the units its
+   * draw copies in a late job and reports them (`unitsReady`) without drawing it: a re-draw now would draw the
+   * parts made before as their stand-ins, the decorations not at all.
+   */
+  | { t: 'units'; job: Extract<AssetJob, { kind: 'slide' }>; role: 'live' | 'armed' }
+  /**
    * Jobs (and warm jobs) that were superseded: a queued one is dropped, a running one stops at its next step
    * and sends nothing. The link has already forgotten them (no answer comes).
    */
@@ -309,9 +316,12 @@ export type FromAsset =
   /**
    * Units a slide was drawn without are made (`keys`; `left` still to make): the link draws the slide again,
    * fading them in while it is on screen (`refreshFadeMs`). Once all are made, or at most once per
-   * `refreshFadeMs` while some remain; never with `?late=next`.
+   * `refreshFadeMs` while some remain; never with `?late=next`. `keys` also names a part found unmakeable (its
+   * unit could not be drawn: a decoration is then drawn directly, renderer units.ts `unitUnmade`). `ended`: the
+   * late job's last report (a late job that is not cancelled ends with one; a later draw that leaves parts
+   * queues another), `left` then the parts it did not make; the link no longer waits for them (repair 3).
    */
-  | { t: 'unitsReady'; layer: number; slideKey: string; keys: string[]; left: number }
+  | { t: 'unitsReady'; layer: number; slideKey: string; keys: string[]; left: number; ended?: true }
   /** The drawing switches the worker applied from its `init` (diagnostics). */
   | { t: 'drawing'; switches: DrawingSwitches }
   /** Warm-up made (or found) the units of the playlist's cue `cueIndex` (`ready` of the plan's `units`). */

@@ -24,6 +24,7 @@ import {
   unitOf,
   unitReady,
   unitsOfSlide,
+  unitUnmade,
   unitWork,
 } from './units.ts';
 
@@ -472,6 +473,33 @@ describe('making geometry units in slices', () => {
       onUnit: () => n++,
     });
     expect(one).toMatchObject({ made: 1, left: units.length - 1 });
+  });
+
+  it('a unit whose making failed is remembered until made; `skip` leaves it untried, so it cannot use up a job’s wait (repair 3)', async () => {
+    const slide = busySlide();
+    const units = unitsOfSlide(slide, 1);
+    expect(units.length).toBeGreaterThanOrEqual(2);
+    // No canvas: every unit's making fails, and each is remembered.
+    await prepareSlideUnits(slide, 1, undefined, run({ slices: 0, checks: 0 }));
+    expect(units.map((u) => unitUnmade(u.key))).toEqual(units.map(() => true));
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+    // A late job skips the first (it failed: drawn as its legacy copy, or a decoration directly): within a wait
+    // of one unit, the next one is made, not the failed one again.
+    let clock = 0;
+    const late = await prepareSlideUnits(
+      slide,
+      1,
+      undefined,
+      { ...run({ slices: 0, checks: 0 }), now: () => (clock += 100) },
+      { waitMs: 150, skip: (k: string) => k === units[0]!.key },
+    );
+    expect(late).toMatchObject({ made: 1, left: units.length - 1 });
+    expect(unitReady(units[0]!)).toBeUndefined();
+    expect(unitReady(units[1]!)).toBeDefined();
+    expect(unitUnmade(units[1]!.key)).toBe(false);
+    // A job that waits still tries it (a canvas refused once may be had later), and made, it is forgotten.
+    expect(await makeUnit(units[0]!, run({ slices: 0, checks: 0 }))).toBeDefined();
+    expect(unitUnmade(units[0]!.key)).toBe(false);
   });
 
   it('calls onUnit once for each unit it makes, never for one ready already; without stop it waits as before', async () => {

@@ -1,4 +1,11 @@
-import { pinUnit, prepareSlideUnits, unitCache, unitsOfSlide, unpinUnit } from '@ordo/renderer/units.ts';
+import {
+  pinUnit,
+  prepareSlideUnits,
+  unitCache,
+  unitsOfSlide,
+  unitUnmade,
+  unpinUnit,
+} from '@ordo/renderer/units.ts';
 import { type PrepareHost, type PrepareStep, registerPrepareStep } from './index.ts';
 
 /*
@@ -75,6 +82,20 @@ export function holdInto(host: PrepareHost, hold: UnitHold): void {
   if (state) holds.set(host, state);
 }
 
+/**
+ * Pin `keys` into `hold` too, unless it was let go: a late job's units handed on to its slide's newer draw (the
+ * asset worker does it before the older hold is let go, so none is unpinned meanwhile).
+ */
+export function holdKeys(hold: UnitHold, keys: Iterable<string>): void {
+  const state = holdStates.get(hold);
+  if (!state || state.released) return;
+  for (const k of keys)
+    if (!state.keys.has(k)) {
+      state.keys.add(k);
+      pinUnit(k);
+    }
+}
+
 /** How an output's job makes its units (the asset worker); absent, a job waits as before. */
 export interface UnitJobOptions {
   /**
@@ -84,13 +105,19 @@ export interface UnitJobOptions {
   stop(): boolean;
   /** Each unit the job made, as it is kept (a late job reports readiness with it). */
   onUnit?(key: string): void;
+  /** Units left untried (renderer `SlideUnitsOptions.skip`: a late job's units whose making failed). */
+  skip?(key: string): boolean;
   /** Awaited after each turn of unit making while the job does not stop (test mode `?unitTurnMs`). */
   afterTurn?(): Promise<void>;
 }
 
 /** What the step did for a job (`unitJob`). */
 export interface UnitJob extends UnitJobOptions {
-  /** Keys of the units the slide's plan copies that are not ready after the step: drawn as legacy copies. */
+  /**
+   * Keys of the units the slide's plan copies that are not ready after the step: drawn as legacy copies (a late job
+   * makes them). Not those that could not be made (`unitUnmade`), nor a prepared picture (its slide job prepares
+   * it, never a late job): no late job is queued for them (repair 3).
+   */
   left: string[];
   /** Keys of the units the step made, in order. */
   made: string[];
@@ -147,8 +174,10 @@ export const geometryUnits: PrepareStep = {
           ...(hold
             ? {
                 pin: (k: string) => {
-                  if (hold.released || hold.keys.has(k)) return;
-                  hold.keys.add(k);
+                  // The host's hold now: a late job's is handed on while it makes (`holdInto` again).
+                  const h = holds.get(host) ?? hold;
+                  if (h.released || h.keys.has(k)) return;
+                  h.keys.add(k);
                   pinUnit(k);
                 },
               }
@@ -164,6 +193,7 @@ export const geometryUnits: PrepareStep = {
                   uj.made.push(k);
                   uj.onUnit?.(k);
                 },
+                ...(uj.skip ? { skip: (k: string) => uj.skip!(k) } : {}),
               }
             : {}),
         },
@@ -173,7 +203,7 @@ export const geometryUnits: PrepareStep = {
     }
     if (uj)
       uj.left = unitsOfSlide(slide, job.scale, job.look)
-        .filter((u) => !unitCache.has('unit', u.key))
+        .filter((u) => u.of !== 'prepared' && !unitCache.has('unit', u.key) && !unitUnmade(u.key))
         .map((u) => u.key);
     return undefined;
   },

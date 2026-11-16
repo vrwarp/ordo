@@ -66,7 +66,7 @@ import type {
   WorkerName,
 } from './host-protocol.ts';
 import { LaneStats } from './lane-stats.ts';
-import { LATE_REDRAW_MAX_MS, REFRESH_FADE_MS } from './late.ts';
+import { LATE_HOLD_MS, LATE_REDRAW_MAX_MS, REFRESH_FADE_MS } from './late.ts';
 import { SlotPair } from './media.ts';
 import { PerfHealth, perfDiagnostics } from './perf-health.ts';
 import {
@@ -240,9 +240,19 @@ export class LinkCore {
    * and units); a re-draw copies the made units.
    */
   private redrawMs = new Map<string, number>();
-  /** The parts each slide's late job has still to make (its last `unitsReady.left`), while any are. */
-  private lateLeft = new Map<string, number>();
+  /**
+   * The parts each slide's late job has still to make (its last `unitsReady.left`) and when it said so (Date ms),
+   * while any are and the job has not ended (`unitsReady.ended`).
+   */
+  private lateLeft = new Map<string, { left: number; at: number }>();
   private unitRefreshTimer?: ReturnType<typeof setTimeout>;
+  /** When `unitRefreshTimer` syncs (Date ms). */
+  private unitRefreshAt = 0;
+  /**
+   * Slides the renderer holds that a restarted asset worker makes the parts of again before they are drawn again
+   * (`{t: 'units'}`): drawn by the worker that went away, with parts left late or made and not drawn in yet.
+   */
+  private remake = new Set<string>();
   /** Slide keys drawn with units left for a late job (`done.unitsLeft`), until all are reported made. */
   private lateParts = new Set<string>();
   /** When the last re-draws with late parts reached the renderer (Date ms, by slide key; e2e and diagnostics). */
@@ -604,8 +614,7 @@ export class LinkCore {
     // Content travelling through the old channels is lost: forget what was in flight and arm again.
     this.inflight.clear();
     this.inflightRole.clear();
-    // The late jobs went with the old asset worker: a slide waiting for its last late part is drawn again, which
-    // makes the parts left late again in a new late job.
+    // The late jobs went with the old asset worker, and the units it made: no slide waits for them any more.
     if (assetChanged) this.lateLeft.clear();
     for (const s of this.slots) if (s.waiter) this.inflight.add(s.waiter.key);
     if (renderChanged) {
@@ -641,6 +650,14 @@ export class LinkCore {
       if (!firstStart) {
         this.diagLog(`asset worker generation ${gens.asset}: reloading fonts, checking the cache`);
         void this.verifyCache(true);
+        // A slide held with parts left late, or made and not drawn in yet: the new worker makes them again first
+        // (`remake`), with or without a refresh pending; drawn again now, its parts would be its stand-ins.
+        for (const k of new Set([...this.lateParts, ...this.unitRefresh])) {
+          this.unitRefresh.delete(k);
+          if (!this.has(k)) continue;
+          this.remake.add(k);
+          this.lateParts.add(k);
+        }
       }
     }
     this.ensureFiles();
@@ -1225,7 +1242,19 @@ export class LinkCore {
       const slot = pair.find(key);
       if (this.inflight.has(key)) return;
       if (slot?.ready && this.has(key)) return;
-    } else if (this.has(key) && !this.refreshKeys.has(key) && !stale && !this.unitRefreshDue(key)) return;
+    } else {
+      // After an asset worker restart: the new worker makes the held slide's parts again; it is drawn again once
+      // they are reported (`unitsReady`).
+      if (
+        name === 'slide' &&
+        this.remake.delete(key) &&
+        plan.slide.desc &&
+        this.has(key) &&
+        !this.inflight.has(key)
+      )
+        this.remakeUnits(plan.slide.desc, key, layer, role);
+      if (this.has(key) && !this.refreshKeys.has(key) && !stale && !this.unitRefreshDue(key)) return;
+    }
     if (this.inflight.has(key) && !stale) return;
     if (name === 'background' && plan.background.desc) {
       const d = plan.background.desc;
@@ -1345,29 +1374,61 @@ export class LinkCore {
   }
 
   /**
+   * Ask the restarted asset worker to make the units of the slide the renderer holds under `key` (`remake`): a
+   * late job of it, reported with `unitsReady` as any; nothing is drawn until then.
+   */
+  private remakeUnits(d: SlideDesc, key: string, layer: number, role: JobRole): void {
+    this.postAsset({
+      t: 'units',
+      job: {
+        kind: 'slide',
+        layer,
+        key,
+        cueIndex: d.cueIndex,
+        slide: d.slide,
+        nextSlide: d.nextSlide,
+        isSong: d.isSong,
+        presentationKind: d.presentationKind,
+        look: this.look,
+        images: this.slideImages(d.slide, d.nextSlide),
+      },
+      role: role === 'live' ? 'live' : 'armed',
+    });
+  }
+
+  /**
    * Whether `key`'s late units are to be drawn in now: reported ready, at most once per REFRESH_FADE_MS, and never
    * ahead of a GO's raster (no live job in flight). Not due yet: a sync is asked for when it may be.
    */
   private unitRefreshDue(key: string): boolean {
     if (!this.unitRefresh.has(key)) return false;
     if (this.inflight.has(key)) return false;
+    const now = Date.now();
+    let at = (this.unitRefreshedAt.get(key) ?? 0) + REFRESH_FADE_MS;
     // A slide whose re-draw took more than one task (LATE_REDRAW_MAX_MS): drawn again on screen once more, when
-    // its last late part is made (a jump would wait behind each such re-draw), every part left fading in then.
-    if (
-      this.livePlan?.slide.key === key &&
-      (this.lateLeft.get(key) ?? 0) > 0 &&
-      (this.redrawMs.get(key) ?? 0) > LATE_REDRAW_MAX_MS
-    )
-      return false;
+    // its late job has made its last part or ended (a jump would wait behind each such re-draw), every part left
+    // fading in then; at most LATE_HOLD_MS after the job's last report (a job that stops reporting holds nothing).
+    const waiting = this.lateLeft.get(key);
+    if (waiting && this.livePlan?.slide.key === key && (this.redrawMs.get(key) ?? 0) > LATE_REDRAW_MAX_MS)
+      at = Math.max(at, waiting.at + LATE_HOLD_MS);
     for (const r of this.inflightRole.values()) if (r === 'live') return false;
-    const wait = (this.unitRefreshedAt.get(key) ?? 0) + REFRESH_FADE_MS - Date.now();
-    if (wait <= 0) return true;
-    if (!this.unitRefreshTimer)
-      this.unitRefreshTimer = setTimeout(() => {
+    if (at <= now) return true;
+    this.syncAt(at);
+    return false;
+  }
+
+  /** A sync at `at` (Date ms) for a refresh not due before, unless one is set for earlier. */
+  private syncAt(at: number): void {
+    if (this.unitRefreshTimer && this.unitRefreshAt <= at) return;
+    clearTimeout(this.unitRefreshTimer);
+    this.unitRefreshAt = at;
+    this.unitRefreshTimer = setTimeout(
+      () => {
         this.unitRefreshTimer = undefined;
         this.requestSync();
-      }, wait + 5);
-    return false;
+      },
+      Math.max(0, at - Date.now()) + 5,
+    );
   }
 
   /** Send a job to the asset worker; `role`: whether it draws for the live or the armed cue (its lane). */
@@ -2138,6 +2199,7 @@ export class LinkCore {
         for (const k of this.unitRefresh) if (!this.has(k)) this.unitRefresh.delete(k);
         for (const k of this.lateParts) if (!this.has(k)) this.lateParts.delete(k);
         for (const k of this.lateLeft.keys()) if (!this.has(k)) this.lateLeft.delete(k);
+        for (const k of this.remake) if (!this.has(k)) this.remake.delete(k);
         for (const k of this.sceneVideo.keys()) if (!this.has(k)) this.sceneVideo.delete(k);
         this.requestSync();
         this.queueView();
@@ -2249,12 +2311,14 @@ export class LinkCore {
         this.laneStats.add('bulk', m.waitMs, m.busyMs, m.longestMs);
         return;
       case 'unitsReady':
-        // The slide's late parts are made: drawn again in place (with a fade while on screen), coalesced.
+        // The slide's late parts are made (or, `keys`, drawn differently now): drawn again in place (with a fade
+        // while on screen), coalesced. Its late job's last report (`ended`): nothing waits for it any more, the
+        // parts it did not make (`left`) stay as drawn this showing; one that names nothing draws nothing again.
         if (!m.left) this.lateParts.delete(m.slideKey);
-        if (m.left) this.lateLeft.set(m.slideKey, m.left);
+        if (m.left && !m.ended) this.lateLeft.set(m.slideKey, { left: m.left, at: Date.now() });
         else this.lateLeft.delete(m.slideKey);
         if (!this.has(m.slideKey)) return;
-        this.unitRefresh.add(m.slideKey);
+        if (m.keys.length) this.unitRefresh.add(m.slideKey);
         this.requestSync();
         return;
       case 'unitsWarmed':
@@ -2543,6 +2607,7 @@ export class LinkCore {
         warmStopped: this.warmUnitsStopped,
         lateParts: [...this.lateParts],
         refresh: [...this.unitRefresh],
+        remake: [...this.remake],
         lateDrawn: Object.fromEntries(this.lateDrawn),
         redrawMs: Object.fromEntries(this.redrawMs),
       },

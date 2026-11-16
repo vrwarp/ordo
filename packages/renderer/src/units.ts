@@ -67,7 +67,8 @@ import { drawObject, type ImageLookup, registerSlideObjectsDrawer } from './text
  *   (`unitKey`): canonical JSON of what is drawn, digested; the position only where the frame cuts the unit.
  * - **Drawing** (the slide objects' drawer registered below): `drawSlide2D` copies each ready unit 1:1 in
  *   z-order under a whole-pixel translation; a unit not ready leaves the legacy copy, and with `late` (an output
- *   raster) a decoration's is left out and reported.
+ *   raster) a decoration's is left out and reported, unless its unit could not be made (`unitUnmade`): it is
+ *   then drawn directly, never dropped.
  */
 
 /** Bumped whenever a unit's pixels for the same key would change (keys of older units then miss). */
@@ -155,9 +156,33 @@ export function unitWork(): { made: number; steps: number; turns: number } {
   return { ...work };
 }
 
-/** Forget every unpinned unit (tests, a cold measurement, memory pressure). */
+/** Forget every unpinned unit (tests, a cold measurement, memory pressure), and which could not be made. */
 export function clearUnits(): void {
   unitCache.clear('unit');
+  unmade.clear();
+}
+
+/** Keys of units that could not be made remembered at most (`unitUnmade`), the oldest forgotten first. */
+export const UNMADE_KEYS = 256;
+/**
+ * Units whose last making failed on this thread (`makeUnit`: no plan or canvas, a drawing error, a picture the
+ * cache refused), until one is made: no late job is queued for them (the output's prepare step), so none is made
+ * over and over; the object keeps its legacy copy, and an output raster (`late`) draws a decoration directly
+ * instead of leaving it out (never dropped; repair 3 of r2b sub-wave 1). A job that waits (an arm, a warm-up, the
+ * harness) still tries them: a canvas refused under memory pressure may be had later.
+ */
+const unmade = new Set<string>();
+
+/** Whether `key`'s unit could not be made on this thread when last tried (see `unmade`). */
+export function unitUnmade(key: string): boolean {
+  return unmade.has(key);
+}
+
+function unmadeOf(u: GeomUnit): undefined {
+  unmade.delete(u.key);
+  unmade.add(u.key);
+  if (unmade.size > UNMADE_KEYS) unmade.delete(unmade.keys().next().value!);
+  return undefined;
 }
 
 /** Keep a unit from eviction until it is unpinned as often (made already or not yet). */
@@ -768,14 +793,14 @@ function unitSteps(u: GeomUnit): UnitSteps | undefined {
  * `SLICE_MS` (at least one; a decoration's at most `DECOR_TURN_SHAPES`), each step one draw call of the object,
  * one blur of a reduced layer or one band of rows. Its picture is kept in `unitCache` (`putUnit`). Resolves with
  * the longest turn (ms), 0 when it was ready already (or has no picture of its own, `prepared`), or undefined when
- * no unit could be made (no canvas, a drawing error): the object then keeps its legacy copy. A cancelled job
- * (`run.check`) stops between turns, and nothing is kept.
+ * no unit could be made (no canvas, a drawing error, the cache refused it; remembered until made, `unitUnmade`):
+ * the object then keeps its legacy copy. A cancelled job (`run.check`) stops between turns, and nothing is kept.
  */
 export async function makeUnit(u: GeomUnit, run: UnitRun): Promise<number | undefined> {
   if (u.of === 'prepared' || unitCache.has('unit', u.key)) return 0;
   const now = run.now ?? (() => performance.now());
   const plan = unitSteps(u);
-  if (!plan) return undefined;
+  if (!plan) return unmadeOf(u);
   const { steps } = plan;
   let at = 0;
   let failed = false;
@@ -801,10 +826,11 @@ export async function makeUnit(u: GeomUnit, run: UnitRun): Promise<number | unde
     longest = Math.max(longest, now() - t0);
   }
   const picture = failed ? undefined : plan.picture();
-  if (!picture) return undefined;
+  if (!picture) return unmadeOf(u);
   run.check();
   // Its bitmap taken from the canvas (no copy).
-  if (!putUnit(u, picture.transferToImageBitmap())) return undefined;
+  if (!putUnit(u, picture.transferToImageBitmap())) return unmadeOf(u);
+  unmade.delete(u.key);
   work.made++;
   return longest;
 }
@@ -840,6 +866,12 @@ export interface SlideUnitsOptions {
    * (an output's live or hurried job, which must not wait; even at t = 0, where `waitMs` 0 still makes one).
    */
   stop?(): boolean;
+  /**
+   * True leaves this unit (by key) untried this time, to its legacy copy, and goes on with the next (an output's
+   * late job skips the units whose making failed, `unitUnmade`: one that fails slowly ahead of others never uses
+   * up the job's wait; repair 3).
+   */
+  skip?(key: string): boolean;
 }
 
 /**
@@ -872,6 +904,10 @@ export async function prepareSlideUnits(
       opts.pin?.(u.key);
       ready++;
       bytes += u.bytes;
+      continue;
+    }
+    if (opts.skip?.(u.key)) {
+      left++;
       continue;
     }
     if (opts.stop?.()) {
@@ -961,7 +997,7 @@ function drawWithUnits(
     const f = unitFor(drawn[i]!, s, images);
     if (!f) continue;
     (found ??= [])[i] = f;
-    if (f.ready || (late && f.u.of === 'decor')) any = true;
+    if (f.ready || (late && leftOut(f.u))) any = true;
   }
   if (!found || !any) return false;
   const copies = wholePixels(ctx);
@@ -980,7 +1016,7 @@ function drawWithUnits(
       }
       continue;
     }
-    if (f && late && f.u.of === 'decor') {
+    if (f && late && leftOut(f.u)) {
       late(f.u.key);
       continue;
     }
@@ -988,6 +1024,9 @@ function drawWithUnits(
   }
   return true;
 }
+
+/** Whether an output raster (`late`) leaves `u`'s object out until it is made: a decoration that can be made. */
+const leftOut = (u: GeomUnit) => u.of === 'decor' && !unmade.has(u.key);
 
 /** Where `o`, as the budget draws it, reaches when its unit is drawn (the unit's rect, logical px). */
 function unitReach(

@@ -45,7 +45,14 @@ import {
   slideReach,
   spriteRect,
 } from '@ordo/renderer';
-import { setEffectUnits, UNIT_CACHE_BYTES, unitCache, unitsOfSlide, unitWork } from '@ordo/renderer/units.ts';
+import {
+  setEffectUnits,
+  UNIT_CACHE_BYTES,
+  unitCache,
+  unitsOfSlide,
+  unitUnmade,
+  unitWork,
+} from '@ordo/renderer/units.ts';
 import { LOGICAL_WIDTH, type Look, type Slide } from '@ordo/domain';
 import { DecodeError, createDecoder } from './decode.ts';
 import { LATE_UNIT, REFRESH_FADE_MS } from './late.ts';
@@ -54,7 +61,7 @@ import { OpaqueFiles } from './opaque.ts';
 import { PICTURE_LIMITS, preloadPictures, sourcePicture } from './pictures.ts';
 import { jobSlides, type PrepareHost, prepareSlides } from './prepare/index.ts';
 import './prepare/tables.ts';
-import { holdInto, holdUnits, type UnitHold, type UnitJob, unitJob } from './prepare/units.ts';
+import { holdInto, holdKeys, holdUnits, type UnitHold, type UnitJob, unitJob } from './prepare/units.ts';
 
 /**
  * Asset worker: OPFS reads, image decoding, font loading and text rasterization at output resolution.
@@ -424,87 +431,188 @@ function endTurnWaits(keys: Iterable<string>): void {
   for (const k of keys) for (const end of [...(turnWaits.get(k) ?? [])]) end();
 }
 
+type SlideJob = Extract<AssetJob, { kind: 'slide' }>;
+
 /**
- * The units of slides drawn without some of theirs (a live or hurried job, a re-draw), made in a late job each
- * (RANK.late, one chain): by slide key, with its layer. A live job of another slide on the layer drops them:
- * that slide left the screen (shown again, the link draws it again and its late job starts over).
+ * A slide's late job (by slide key, one at a time): the units its draws were made without (a live or hurried job,
+ * a re-draw), made in lane jobs of `RANK.late` on one chain. Its layer; the hold it pins what it makes into, the
+ * slide's last draw's (`holdInto`: as long as that draw's own units, while the slide is live or armed; a draw of
+ * the slide while the late job runs hands its hold on, so a part made after a re-draw is never evicted before the
+ * next re-draw copies it); the parts it has still to make (`outstanding`: a draw that leaves more while it runs
+ * adds them, `grew`); those made, or found unmakeable, since its last report and when that was; and whether its
+ * last report went (`ended`: nothing joins it after). A live job of another slide on the layer drops it: that
+ * slide left the screen (shown again, the link draws it again, which starts a new late job).
  */
-const lateJobs = new Map<string, { layer: number }>();
-/** Late rounds of making at most (each bounded by `UNIT_WAIT_MS`), while each makes some. */
+type LateJob = {
+  layer: number;
+  hold: UnitHold;
+  /** The prepare host of the lane job running it, whose pins go to `hold`. */
+  host?: PrepareHost;
+  outstanding: Set<string>;
+  grew: boolean;
+  fresh: string[];
+  last: number;
+  ended: boolean;
+};
+const lateJobs = new Map<string, LateJob>();
+/**
+ * Rounds of making one lane job of a late job takes at most (each bounded by `UNIT_WAIT_MS`). While its last round
+ * made some, the late job goes on in a new lane job, after the late work queued meanwhile (the slide's parts are
+ * never left unmade because rounds ran out: repair 3); a round that makes nothing ends it.
+ */
 const LATE_ROUNDS = 4;
 const lateKey = (slideKey: string) => `lu|${slideKey}`;
 
 /**
- * Make the units `job` was drawn without (`left`), pinned into its hold (`holdInto`: as long as the job's own,
- * while its slide is live or armed), reporting them with `unitsReady` once all are made, or at most once per
- * `REFRESH_FADE_MS` while some remain (none with `?late=next`: the slide's next draw copies them).
+ * One lane job of `late` (see `LateJob`): make its parts in rounds, pinned into its hold, reporting them with
+ * `unitsReady` at most once per `REFRESH_FADE_MS` while some remain and after each round, a part found unmakeable
+ * as one drawn differently now (renderer units.ts `unitUnmade`: a decoration is then drawn directly). Its last
+ * report says `ended` (all made, a round that made nothing, or an error; `left` the parts it did not make), so
+ * the link never waits for parts no job makes. A cancelled job reports nothing. None with `?late=next`: the
+ * slide's next draw copies them.
  */
-async function lateUnits(
-  job: Extract<AssetJob, { kind: 'slide' }>,
-  left: readonly string[],
-  hold: UnitHold,
-  scale: number,
-  steps: Steps,
-): Promise<void> {
+async function lateUnits(job: SlideJob, late: LateJob, scale: number, steps: Steps): Promise<void> {
   const host = jobHost(steps);
-  holdInto(host, hold);
+  late.host = host;
   const fade = (drawing.late ?? LATE_UNIT) === 'fade';
-  const outstanding = new Set(left);
-  let fresh: string[] = [];
-  let last = performance.now();
+  const { outstanding } = late;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const flush = () => {
+  /** Report the parts ready since the last report; `end`: the late job's last report, also with none. */
+  const flush = (end = false) => {
     if (timer !== undefined) clearTimeout(timer);
     timer = undefined;
-    // Those made meanwhile by another job (an arm, the warm-up) are ready too.
+    if (late.ended || steps.cancelled) return;
+    // Those made meanwhile by another job (an arm, the warm-up) are ready too, and one that could not be made
+    // is drawn differently now.
     for (const k of outstanding)
-      if (unitCache.has('unit', k)) {
+      if (unitCache.has('unit', k) || unitUnmade(k)) {
         outstanding.delete(k);
-        fresh.push(k);
+        late.fresh.push(k);
       }
-    if (!fresh.length || steps.cancelled) return;
+    const last = end || !outstanding.size;
+    if (!late.fresh.length && !last) return;
+    late.ended = last;
     if (fade)
-      post({ t: 'unitsReady', layer: job.layer, slideKey: job.key, keys: fresh, left: outstanding.size });
-    fresh = [];
-    last = performance.now();
+      post({
+        t: 'unitsReady',
+        layer: job.layer,
+        slideKey: job.key,
+        keys: late.fresh,
+        left: outstanding.size,
+        ...(last ? { ended: true as const } : {}),
+      });
+    late.fresh = [];
+    late.last = performance.now();
   };
   const made = unitJob(host, {
     stop: () => false,
+    // A unit whose making failed is not tried again by its late job (one failing slowly would use up each round).
+    skip: (k) => unitUnmade(k),
     onUnit: (k) => {
-      if (!outstanding.delete(k)) return;
-      fresh.push(k);
-      const since = performance.now() - last;
+      if (late.ended || !outstanding.delete(k)) return;
+      late.fresh.push(k);
+      const since = performance.now() - late.last;
       if (!outstanding.size || since >= REFRESH_FADE_MS) flush();
-      else timer ??= setTimeout(flush, REFRESH_FADE_MS - since);
+      else timer ??= setTimeout(() => flush(), REFRESH_FADE_MS - since);
     },
     afterTurn: turnWait(lateKey(job.key)),
   });
+  let more = false;
   try {
-    for (let round = 0; round < LATE_ROUNDS && outstanding.size; round++) {
-      const before = made.made.length;
+    let progressed = true;
+    for (let round = 0; round < LATE_ROUNDS && outstanding.size && progressed && !late.ended; round++) {
+      // Pinned with the slide's last draw (a draw meanwhile hands its hold on).
+      holdInto(host, late.hold);
+      late.grew = false;
+      const made0 = made.made.length;
+      const left0 = outstanding.size;
       await prepareSlides({ slides: jobSlides(job), scale, look: job.look }, host);
       flush();
-      if (made.made.length === before) break;
+      progressed = made.made.length > made0 || outstanding.size !== left0 || late.grew;
     }
-    flush();
+    more = progressed && outstanding.size > 0 && !late.ended;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
-    if (lateJobs.get(job.key)) lateJobs.delete(job.key);
+    timer = undefined;
+    if (more && !steps.cancelled && lateJobs.get(job.key) === late) pushLate(job, late, scale);
+    else {
+      if (lateJobs.get(job.key) === late) lateJobs.delete(job.key);
+      flush(true);
+    }
   }
 }
 
-/** Queue the late job of a slide job that left `left` of its units (none twice for one slide). */
-function queueLate(job: Extract<AssetJob, { kind: 'slide' }>, left: readonly string[], hold: UnitHold): void {
-  if (!left.length || lateJobs.has(job.key)) return;
-  const scale = width / LOGICAL_WIDTH;
-  lateJobs.set(job.key, { layer: job.layer });
+function pushLate(job: SlideJob, late: LateJob, scale: number): void {
   lanes.push({
     key: lateKey(job.key),
     chain: 'late',
     rank: RANK.late,
     gate: fonts$,
-    run: (s) => lateUnits(job, left, hold, scale, s),
+    run: (s) => lateUnits(job, late, scale, s),
   });
+}
+
+/**
+ * The parts a draw of `job` left (`left`; `hold`, that draw's units, before it is kept and the older hold let go):
+ * made by its slide's late job, a new one unless one is running, which they join, its units (those made so far
+ * with them) pinned into this draw's hold from now on.
+ */
+function lateFor(job: SlideJob, left: readonly string[], hold: UnitHold): void {
+  const running = lateJobs.get(job.key);
+  if (running && !running.ended) {
+    if (running.hold !== hold) {
+      holdKeys(hold, running.hold.keys);
+      running.hold = hold;
+      if (running.host) holdInto(running.host, hold);
+    }
+    for (const k of left)
+      if (!running.outstanding.has(k)) {
+        running.outstanding.add(k);
+        running.grew = true;
+      }
+    return;
+  }
+  if (!left.length) return;
+  const late: LateJob = {
+    layer: job.layer,
+    hold,
+    outstanding: new Set(left),
+    grew: false,
+    fresh: [],
+    last: performance.now(),
+    ended: false,
+  };
+  lateJobs.set(job.key, late);
+  pushLate(job, late, width / LOGICAL_WIDTH);
+}
+
+/**
+ * `units` (the link, after an asset worker restart, design/14 "Late units"): the renderer holds `job`'s slide,
+ * drawn by the worker that went away, with parts left late or made and not drawn in yet. Planned here with what
+ * this worker has ready pinned as the layer's hold of `role` (as a draw of it would), the rest made as by a late
+ * job and reported; nothing drawn (a re-draw now would draw the parts made before as their stand-ins). Found all
+ * made (the warm-up): reported at once, so the link draws it with them.
+ */
+async function remakeUnits(job: SlideJob, role: 'live' | 'armed', steps: Steps): Promise<void> {
+  const running = lateJobs.get(job.key);
+  if (running && !running.ended) return;
+  const scale = width / LOGICAL_WIDTH;
+  const prep = await prepare(job, scale, steps, { key: lateKey(job.key), stop: () => true });
+  keepUnits(`layer ${job.layer} ${role}`, prep.units);
+  const again = lateJobs.get(job.key);
+  if (again && !again.ended) return;
+  const left = prep.made?.left ?? [];
+  const late: LateJob = {
+    layer: job.layer,
+    hold: prep.units,
+    outstanding: new Set(left),
+    grew: false,
+    fresh: left.length ? [] : [...prep.units.keys],
+    last: performance.now(),
+    ended: false,
+  };
+  lateJobs.set(job.key, late);
+  await lateUnits(job, late, scale, steps);
 }
 
 /** The live playlist's units made ahead (`warmUnits`): the list, the next slide, and why it stopped. */
@@ -651,7 +759,7 @@ function sceneParts(
   out: { w: number; h: number },
   scale: number,
   lookup: ImageLookup,
-  late: (key: string) => void,
+  late: ((key: string) => void) | undefined,
 ): (SceneParts & { base: DrawnSprite<ImageBitmap> }) | undefined {
   const v = job.video;
   if (!v) return undefined;
@@ -660,7 +768,7 @@ function sceneParts(
     isSong: job.isSong,
     presentationKind: job.presentationKind,
     clip: { w: v.w, h: v.h },
-    late,
+    ...(late ? { late } : {}),
   };
   const frame = { width: out.w, height: out.h };
   const s = rasterSceneSprites(
@@ -726,10 +834,14 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
   let unitsMade: UnitJob | undefined;
   // Units the raster left out until they are made (C2b, `SlideDrawOptions.late`: a decoration past
   // DECOR_SPRITE drawn at once is one task of up to about 115 ms at 3840): they go to the late job and fade in.
+  // With `?late=next` nothing fades in, so nothing is left out: such a decoration is drawn at once (repair 3).
   const leftOut: string[] = [];
-  const late = (key: string) => {
-    if (!leftOut.includes(key)) leftOut.push(key);
-  };
+  const late =
+    (drawing.late ?? LATE_UNIT) === 'fade'
+      ? (key: string) => {
+          if (!leftOut.includes(key)) leftOut.push(key);
+        }
+      : undefined;
   try {
     let draw: () => Drawn;
     if (job.kind === 'slide') {
@@ -755,7 +867,7 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
           nextSlide: job.nextSlide,
           isSong: job.isSong,
           presentationKind: job.presentationKind,
-          late,
+          ...(late ? { late } : {}),
         };
         const reach = slideReach(measure(), job.slide, { scale, look: job.look, ...opts });
         return {
@@ -816,13 +928,13 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
           ? 'live'
           : (role ?? 'armed');
     const hold = units;
-    if (units && job.kind === 'slide') keepUnits(`layer ${job.layer} ${held}`, units);
-    units = undefined;
-    // The units it was drawn without (their legacy copies drawn, or left out by the raster): made in a late
-    // job, pinned with its own.
+    // The units it was drawn without (their legacy copies drawn, or left out by the raster): made by its late
+    // job, pinned with its own (handed on before the layer's older hold is let go).
     const left = [...(unitsMade?.left ?? [])];
     for (const k of leftOut) if (!left.includes(k)) left.push(k);
-    if (hold && job.kind === 'slide' && left.length) queueLate(job, left, hold);
+    if (hold && job.kind === 'slide') lateFor(job, left, hold);
+    if (units && job.kind === 'slide') keepUnits(`layer ${job.layer} ${held}`, units);
+    units = undefined;
     // A slide whose content is past the raster budget by its drawing estimate (memoised by the draw, with the
     // effect sprites it made): health reports its time apart from the alarm's.
     const heavy =
@@ -1067,6 +1179,20 @@ function onJobMessage(m: ToAsset): void {
       stopWarmUnits();
       queueWarmUnits();
       return;
+    case 'units': {
+      // After an asset worker restart: a held slide's parts made again before it is drawn again.
+      const job = m.job;
+      const running = lateJobs.get(job.key);
+      if (job.kind !== 'slide' || (running && !running.ended)) return;
+      lanes.push({
+        key: lateKey(job.key),
+        chain: 'late',
+        rank: RANK.late,
+        gate: fonts$,
+        run: (s) => remakeUnits(job, m.role, s),
+      });
+      return;
+    }
     case 'hurry': {
       // Only jobs still queued or running: a hurry that arrives after its job is forgotten.
       const pending = new Set(Object.values(lanes.keys()).flat());

@@ -148,9 +148,13 @@ class FakeOffscreenCanvas {
   private h: number;
   /** Every size a surface was set to (the asset worker sizes it to each tight sprite). */
   static sizes: [number, number][] = [];
+  /** While true, a canvas made has no 2D context (an allocation refused under memory pressure). */
+  static refuse2d = false;
+  private readonly refused: boolean;
   constructor(width: number, height: number) {
     this.w = width;
     this.h = height;
+    this.refused = FakeOffscreenCanvas.refuse2d;
   }
   // Setting a size clears the canvas, as in Chromium.
   get width(): number {
@@ -173,7 +177,7 @@ class FakeOffscreenCanvas {
     FakeOffscreenCanvas.sizes.push([this.w, this.h]);
   }
   getContext() {
-    return this.ctx;
+    return this.refused ? null : this.ctx;
   }
   transferToImageBitmap(): FakeBitmap {
     const ops = this.rec.ops.splice(0);
@@ -788,6 +792,7 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
     clock.stepMs = 0;
     clock.paintMs = 0;
     clock.at = undefined;
+    FakeOffscreenCanvas.refuse2d = false;
     init();
   });
   const ready = () =>
@@ -1016,6 +1021,243 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
     await vi.waitFor(() => expect(ready().find((r) => r.slideKey === 'sl|b' && r.left === 0)).toBeDefined());
     expect(ready().filter((r) => r.slideKey === 'sl|a' && r.left === 0)).toEqual([]);
     expect(unitsOf(a).filter((u) => unitReady(u)).length).toBeLessThan(unitsOf(a).length);
+  });
+
+  /** The largest decoration allowed (`cappedSlide`) at a sub-pixel phase of its own (a unit of its own). */
+  const cappedAt = (id: string, dx: number): Slide => {
+    const base = cappedSlide();
+    const o = base.objects[0]!;
+    return { ...base, id, objects: [{ ...o, box: { ...o.box, x: o.box.x + dx } }] };
+  };
+  const readyOf = (key: string) => ready().filter((r) => r.slideKey === key);
+  /** `many` moved by `dx` logical px: units of its own (`many` alone gives every test the same units). */
+  const manyAt = (id: string, n: number, dx: number): Slide => {
+    const s = many(id, n);
+    return { ...s, objects: s.objects.map((o) => ({ ...o, box: { ...o.box, x: o.box.x + dx } })) };
+  };
+
+  it('a late job whose rounds run out goes on while it makes parts: every part comes, its last report ends it (repair 3)', async () => {
+    const s = manyAt('rounds', 10, 0.03125);
+    const units = unitsOf(s);
+    // 400 ms a step on the clock: one unit a round of UNIT_WAIT_MS, so LATE_ROUNDS (4) rounds make 4 of them.
+    expect(units.length).toBeGreaterThan(4);
+    timed(400);
+    rendered.length = 0;
+    replies.length = 0;
+    send({
+      t: 'job',
+      job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|rounds' }),
+      role: 'live',
+    });
+    await vi.waitFor(() => expect(readyOf('sl|rounds').at(-1)?.left).toBe(0), { timeout: 10_000 });
+    expect(units.filter((u) => unitReady(u)).length).toBe(units.length);
+    const r = readyOf('sl|rounds');
+    expect(r.flatMap((x) => x.keys).sort()).toEqual(units.map((u) => u.key).sort());
+    // One report ends the late job (the link lets a held re-draw go on it), and it is the last.
+    expect(r.filter((x) => x.ended)).toHaveLength(1);
+    expect(r.at(-1)).toMatchObject({ left: 0, ended: true });
+  });
+
+  it('a decoration whose unit cannot be made is drawn directly by the next draw: its late job ends and names it, once (repair 3)', async () => {
+    const s = cappedAt('unmade', 0.375);
+    const [u] = unitsOf(s);
+    expect(u?.of).toBe('decor');
+    rendered.length = 0;
+    replies.length = 0;
+    const p0 = paints;
+    // The unit's canvas gets no 2D context (memory pressure): it cannot be made.
+    FakeOffscreenCanvas.refuse2d = true;
+    send({
+      t: 'job',
+      job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|unmade' }),
+      role: 'live',
+    });
+    await vi.waitFor(() => expect(readyOf('sl|unmade').length).toBeGreaterThan(0));
+    FakeOffscreenCanvas.refuse2d = false;
+    // Shown at once without it ...
+    expect(rendered[0]!.paints - p0).toBe(0);
+    expect(replies.find((r) => r.t === 'done')).toMatchObject({ key: 'sl|unmade', unitsLeft: 1 });
+    // ... its late job could not make it: it ends, naming the part the next draw draws differently.
+    expect(readyOf('sl|unmade')).toEqual([
+      { t: 'unitsReady', layer: 1, slideKey: 'sl|unmade', keys: [u!.key], left: 0, ended: true },
+    ]);
+    expect(unitReady(u!)).toBeUndefined();
+    // The re-draw the link sends draws it directly (one long task, never dropped) and leaves nothing late.
+    const p1 = paints;
+    const again = await runAs(
+      slideJob({
+        slide: s,
+        images: {},
+        video: undefined,
+        key: 'sl|unmade',
+        refresh: true,
+        refreshFadeMs: 300,
+      }),
+      'late',
+    );
+    expect(rendered[0]!.paints - p1).toBeGreaterThan(200);
+    expect(again.reply).toMatchObject({ t: 'done', key: 'sl|unmade' });
+    expect((again.reply as { unitsLeft?: number }).unitsLeft).toBeUndefined();
+    // Nothing loops: no late job tries it again, nothing more is reported.
+    const w0 = unitWork();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(readyOf('sl|unmade')).toEqual([]);
+    expect(unitWork()).toEqual(w0);
+  });
+
+  it('with ?late=next nothing is left out: a capped decoration is drawn at once, its unit made for the next draw (repair 3)', async () => {
+    init({ late: 'next' });
+    const s = cappedAt('next-decor', 0.625);
+    const [u] = unitsOf(s);
+    rendered.length = 0;
+    replies.length = 0;
+    const p0 = paints;
+    send({
+      t: 'job',
+      job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|next-decor' }),
+      role: 'live',
+    });
+    await vi.waitFor(() => expect(rendered.length).toBeGreaterThan(0));
+    // No fade comes with ?late=next: a decoration left out would stay off the screen while the slide is shown.
+    expect(rendered[0]!.paints - p0).toBeGreaterThan(200);
+    await vi.waitFor(() => expect(unitReady(u!)).toBeDefined());
+    expect(readyOf('sl|next-decor')).toEqual([]);
+  });
+
+  it('a late job pins what it makes with the slide’s last draw: parts made after a re-draw are not evicted before theirs (repair 3)', async () => {
+    const s = manyAt('pinned', 10, 0.046875);
+    const units = unitsOf(s);
+    expect(units.length).toBeGreaterThanOrEqual(3);
+    // 100 ms of real time after each unit turn (a unit is one turn here): the first report, 300 ms after the job
+    // starts, comes while it still makes parts.
+    init({ unitTurnMs: 100 });
+    rendered.length = 0;
+    replies.length = 0;
+    // At the first report the link draws the slide again (as late work); the late job goes on meanwhile.
+    const record = link.postMessage;
+    let redrawn = false;
+    link.postMessage = (m) => {
+      record(m);
+      if (m.t === 'unitsReady' && !redrawn) {
+        redrawn = true;
+        send({
+          t: 'job',
+          job: slideJob({
+            slide: s,
+            images: {},
+            video: undefined,
+            key: 'sl|pin',
+            refresh: true,
+            refreshFadeMs: 300,
+          }),
+          role: 'late',
+        });
+      }
+    };
+    try {
+      send({
+        t: 'job',
+        job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|pin' }),
+        role: 'live',
+      });
+      await vi.waitFor(() => expect(readyOf('sl|pin').at(-1)?.left).toBe(0), { timeout: 10_000 });
+      await vi.waitFor(() =>
+        expect(replies.filter((r) => r.t === 'done' && r.key === 'sl|pin')).toHaveLength(2),
+      );
+    } finally {
+      link.postMessage = record;
+    }
+    // The re-draw came while parts were still being made.
+    expect(readyOf('sl|pin').length).toBeGreaterThan(1);
+    // Every part reported stays pinned while the slide is live: memory pressure (or other slides' units) cannot
+    // take one before the re-draw that fades it in copies it.
+    unitCache.clear('unit');
+    expect(units.filter((x) => !unitReady(x)).map((x) => x.key)).toEqual([]);
+  });
+
+  it('a part evicted before its re-draw is made again and reported, also while the late job still runs (repair 3)', async () => {
+    const s = manyAt('evicted', 10, 0.078125);
+    const units = unitsOf(s);
+    init({ unitTurnMs: 100 });
+    rendered.length = 0;
+    replies.length = 0;
+    const record = link.postMessage;
+    let gone = '';
+    link.postMessage = (m) => {
+      record(m);
+      // At the first report its first part is evicted, and the re-draw for it comes while the late job runs.
+      if (m.t === 'unitsReady' && !gone) {
+        gone = m.keys[0]!;
+        unitCache.delete('unit', gone);
+        send({
+          t: 'job',
+          job: slideJob({
+            slide: s,
+            images: {},
+            video: undefined,
+            key: 'sl|ev',
+            refresh: true,
+            refreshFadeMs: 300,
+          }),
+          role: 'late',
+        });
+      }
+    };
+    try {
+      send({
+        t: 'job',
+        job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|ev' }),
+        role: 'live',
+      });
+      await vi.waitFor(() => expect(readyOf('sl|ev').at(-1)?.left).toBe(0), { timeout: 10_000 });
+      await vi.waitFor(() =>
+        expect(replies.filter((r) => r.t === 'done' && r.key === 'sl|ev')).toHaveLength(2),
+      );
+    } finally {
+      link.postMessage = record;
+    }
+    const redraw = replies.filter((r) => r.t === 'done' && r.key === 'sl|ev')[1] as { unitsLeft?: number };
+    expect(redraw.unitsLeft).toBeGreaterThan(0);
+    // The evicted part is reported again after that re-draw, so the next re-draw fades it in.
+    const reports = readyOf('sl|ev');
+    expect(reports.length).toBeGreaterThan(1);
+    expect(reports.slice(1).flatMap((r) => r.keys)).toContain(gone);
+    expect(reports.at(-1)).toMatchObject({ left: 0, ended: true });
+    for (const u of units) expect(unitReady(u)).toBeDefined();
+  });
+
+  it('after an asset worker restart, `units` makes a held slide’s parts again without drawing it, and reports them (repair 3)', async () => {
+    const s = busy('remake', 47.4375);
+    const units = unitsOf(s);
+    rendered.length = 0;
+    replies.length = 0;
+    send({
+      t: 'units',
+      job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|remake' }),
+      role: 'live',
+    });
+    await vi.waitFor(() => expect(readyOf('sl|remake').at(-1)?.ended).toBe(true));
+    // Nothing is drawn: the renderer's copy stays on screen until the link draws the slide with them.
+    expect(rendered).toEqual([]);
+    expect(replies.filter((r) => r.t === 'done')).toEqual([]);
+    expect(
+      readyOf('sl|remake')
+        .flatMap((r) => r.keys)
+        .sort(),
+    ).toEqual(units.map((u) => u.key).sort());
+    expect(readyOf('sl|remake').at(-1)).toMatchObject({ left: 0, ended: true });
+    for (const u of units) expect(unitReady(u)).toBeDefined();
+    // Found made already (by the warm-up, say): reported at once, so the slide is drawn with them.
+    replies.length = 0;
+    send({
+      t: 'units',
+      job: slideJob({ slide: s, images: {}, video: undefined, key: 'sl|remade' }),
+      role: 'armed',
+    });
+    await vi.waitFor(() => expect(readyOf('sl|remade').at(-1)?.ended).toBe(true));
+    expect(readyOf('sl|remade')).toHaveLength(1);
+    expect(readyOf('sl|remade')[0]!.keys.sort()).toEqual(units.map((u) => u.key).sort());
+    expect(rendered).toEqual([]);
   });
 
   it('the drawing switches of the asset init reach the worker; ?unitTurnMs waits after each unit turn', async () => {
