@@ -14,6 +14,16 @@ export type Bus = 'hub' | 'fallback' | 'none';
 
 export type ViewMessage = { id: string; text: string };
 
+/** One slide of the active presentation item for the interactive Pulpit Lectern view (`/stage?view=lectern`). */
+export type LecternSlide = {
+  slideId: string;
+  cueIndex: number;
+  number: number;
+  section?: string;
+  text: string;
+  notes: string | null;
+};
+
 /** Everything the stage draws, computed by the link worker. */
 export type StageView = {
   /** A live state has been applied (from the hub, the operator or the IndexedDB cache). */
@@ -24,6 +34,13 @@ export type StageView = {
   next: StageText | null;
   /** The displayed slide's notes when the look shows them (`layout.notes`), cut to `NOTES_MAX`. */
   notes: string | null;
+  /** Next slide's speaker notes preview for lectern look-ahead, when available. */
+  nextNotes?: string | null;
+  /** Active slide ID and presentation slides for interactive Pulpit Lectern mode. */
+  activeSlideId?: string;
+  presentationTitle?: string;
+  isSong?: boolean;
+  lecternSlides?: LecternSlide[];
   clock: string;
   countdown: TimerDisplay | null;
   elapsed: TimerDisplay | null;

@@ -510,16 +510,45 @@ export function SongReflowEditor(props: {
                       />
 
                       {/* Inline Chords / Musician Notes */}
-                      <div className="row" style={{ alignItems: 'center', gap: 6 }}>
-                        <span className="muted small" style={{ fontSize: 11, width: 95 }}>
-                          Chords / Notes:
-                        </span>
-                        <input
-                          type="text"
+                      <div className="col" style={{ gap: 4 }}>
+                        <div
+                          className="row wrap"
+                          style={{ justifyContent: 'space-between', alignItems: 'center', gap: 6 }}
+                        >
+                          <span className="muted small" style={{ fontSize: 11 }}>
+                            🎸 Band Chords &amp; Stage Cues:
+                          </span>
+                          {!readOnly && (
+                            <div className="row" style={{ gap: 4 }}>
+                              {(['[BUILD]', '[SOFT / PADS]', '[HOLD]'] as const).map((cue) => (
+                                <button
+                                  key={cue}
+                                  type="button"
+                                  className="small ghost"
+                                  style={{ padding: '1px 6px', fontSize: 10.5 }}
+                                  onClick={() => {
+                                    const cur = slide.notes?.trim() ?? '';
+                                    updateSlideNotes(slide.id, cur ? `${cur} ${cue}` : cue);
+                                  }}
+                                >
+                                  + {cue}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <textarea
+                          rows={Math.max(1, Math.min(4, (slide.notes ?? '').split('\n').length))}
                           value={slide.notes ?? ''}
                           disabled={readOnly}
-                          placeholder="e.g. G - C - Em - D (shown on Stage Display)"
-                          style={{ fontSize: 12, flex: 1, padding: '4px 6px' }}
+                          placeholder="e.g. Key: G · Capo 2 | G - C - Em - D (shown in amber on Stage Display)"
+                          style={{
+                            fontSize: 12.5,
+                            lineHeight: 1.35,
+                            padding: '5px 8px',
+                            resize: 'vertical',
+                            fontFamily: 'inherit',
+                          }}
                           onFocus={() => selectSlide(slide.id)}
                           onChange={(e) => updateSlideNotes(slide.id, e.target.value)}
                         />

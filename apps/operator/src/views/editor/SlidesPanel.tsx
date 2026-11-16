@@ -59,6 +59,8 @@ function SlideItem(props: {
   const dim = hidden ? HIDDEN_DIM : undefined;
   const hasAudio = !!props.slide.audio;
   const hasMidi = (props.slide.midiCues?.length ?? 0) > 0;
+  const notesPreview = props.slide.notes?.trim() ?? '';
+  const hasNotes = notesPreview.length > 0;
   const loopSec =
     props.p.kind === 'loop' && props.slide.durationMs
       ? Math.round(props.slide.durationMs / 100) / 10
@@ -86,8 +88,17 @@ function SlideItem(props: {
         </span>
         <div className="ed-slide-thumb-wrap">
           {url ? <img src={url} alt="" draggable={false} style={dim} /> : <div className="ph" style={dim} />}
-          {(hasAudio || hasMidi || loopSec !== undefined) && (
+          {(hasNotes || hasAudio || hasMidi || loopSec !== undefined) && (
             <div className="ed-slide-cue-badges">
+              {hasNotes && (
+                <span
+                  className="ed-cue-badge notes"
+                  title={`Speaker notes: ${notesPreview.slice(0, 140)}`}
+                  data-slide-has-notes
+                >
+                  📝
+                </span>
+              )}
               {hasAudio && (
                 <span className="ed-cue-badge" title="Slide has audio cue">
                   ♪
@@ -184,10 +195,12 @@ export function SlidesPanel({
   p,
   readOnly,
   onSwitchToReflow,
+  onOpenDeckNotes,
 }: {
   p: Presentation;
   readOnly: boolean;
   onSwitchToReflow?: () => void;
+  onOpenDeckNotes?: () => void;
 }) {
   const slideId = useEditor((s) => s.slideId);
   const themes = useLibrary((s) => s.data.themes);
@@ -250,6 +263,26 @@ export function SlidesPanel({
             title="Switch back to full-song lyric script view"
           >
             ← Lyric Script View
+          </button>
+        </div>
+      )}
+      {onOpenDeckNotes && (
+        <div style={{ padding: '8px 8px 4px' }}>
+          <button
+            type="button"
+            className="small ghost"
+            style={{ width: '100%', justifyContent: 'space-between', border: '1px solid var(--line)' }}
+            onClick={onOpenDeckNotes}
+            title="Open continuous Presenter Notes & Sermon Manuscript Studio"
+          >
+            <span>📝 Presenter Notes</span>
+            <span className="muted" style={{ fontSize: 11 }}>
+              {p.sections.reduce(
+                (acc, sec) => acc + sec.slides.filter((sl) => Boolean(sl.notes?.trim())).length,
+                0,
+              )}
+              /{p.sections.reduce((acc, sec) => acc + sec.slides.length, 0)} ↗
+            </span>
           </button>
         </div>
       )}

@@ -4,11 +4,12 @@ import {
   type Look,
   nearColor,
   newId,
-  type PropBox,
   parseLyrics,
   rgbaCss,
+  type Slide,
   type SlideRule,
   songFromParsed,
+  stageNotesEnabled,
 } from '@ordo/domain';
 import { drawSlide2D } from '@ordo/renderer';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -18,7 +19,7 @@ import { BoxEditor, Check, Field, Select, TextField, TransitionEditor } from '..
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { useFontGeneration } from '../../services/fonts.ts';
 import { BackgroundPicker } from '../editor/BackgroundPicker.tsx';
-import { notesOf, StageNotesOptions } from './StageNotesOptions.tsx';
+import { StageNotesOptions } from './StageNotesOptions.tsx';
 import { SaveBar, useSettingsDraft } from './useSettingsDraft.tsx';
 
 const SAMPLE = songFromParsed(
@@ -30,10 +31,48 @@ const SAMPLE = songFromParsed(
   },
 );
 
+const SAMPLE_SONG_SLIDE: Slide = {
+  ...SAMPLE.sections[0]!.slides[0]!,
+  notes: 'Key: G · Capo 2 | Build drums into Chorus',
+};
+
+const SAMPLE_SERMON_SLIDE: Slide = {
+  id: 'sample-sermon-1',
+  objects: [
+    {
+      id: 't1',
+      type: 'text',
+      box: { x: 120, y: 340, w: 1680, h: 360, rotation: 0 },
+      text: 'The Good Shepherd\nJohn 10:11–15',
+      style: { ...DEFAULT_LYRIC_STYLE, fontSizePx: 84 },
+      opacity: 1,
+    },
+  ],
+  notes:
+    '• Welcome everyone to week 3 of our Gospel of John series\n• **Jesus lays down His life** willingly — not a hired hand\n• [PAUSE] Invite congregation to open John 10:11',
+};
+
+const SAMPLE_SERMON_NEXT: Slide = {
+  id: 'sample-sermon-2',
+  objects: [
+    {
+      id: 't2',
+      type: 'text',
+      box: { x: 120, y: 340, w: 1680, h: 360, rotation: 0 },
+      text: '1. Known by Name\n“I know my own and my own know me”',
+      style: { ...DEFAULT_LYRIC_STYLE, fontSizePx: 72 },
+      opacity: 1,
+    },
+  ],
+};
+
 function LookPreview({ look }: { look: Look }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const fontGen = useFontGeneration();
-  // biome-ignore lint/correctness/useExhaustiveDependencies: redraw when the canvas fonts change
+  const hasStageNotes = stageNotesEnabled(look);
+  const [sampleKind, setSampleKind] = useState<'sermon' | 'song'>('sermon');
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: redraw when the canvas fonts or sample kind change
   useEffect(() => {
     const c = ref.current;
     const ctx = c?.getContext('2d');
@@ -47,37 +86,53 @@ function LookPreview({ look }: { look: Look }) {
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, c.width, c.height);
     }
-    const s0 = SAMPLE.sections[0]!.slides[0]!;
-    const s1 = SAMPLE.sections[1]!.slides[0]!;
-    drawSlide2D(ctx, s0, { scale: c.width / 1920, look, isSong: true, nextSlide: s1 });
-    if (look.layers.props.notes) drawNotesSample(ctx, notesOf(look), c.width / 1920);
-  }, [look, fontGen]);
-  return (
-    <canvas
-      ref={ref}
-      width={480}
-      height={270}
-      style={{ width: 480, maxWidth: '100%', borderRadius: 6, border: '1px solid var(--line)' }}
-    />
-  );
-}
+    const useSermon = hasStageNotes && sampleKind === 'sermon';
+    const s0 = useSermon
+      ? SAMPLE_SERMON_SLIDE
+      : hasStageNotes
+        ? SAMPLE_SONG_SLIDE
+        : SAMPLE.sections[0]!.slides[0]!;
+    const s1 = useSermon ? SAMPLE_SERMON_NEXT : SAMPLE.sections[1]!.slides[0]!;
+    drawSlide2D(ctx, s0, {
+      scale: c.width / 1920,
+      look,
+      isSong: !useSermon,
+      presentationKind: useSermon ? 'slides' : 'song',
+      nextSlide: s1,
+    });
+  }, [look, fontGen, hasStageNotes, sampleKind]);
 
-/** Where a stage look's notes go (its notes box, a sample line in their style), on the preview. */
-function drawNotesSample(ctx: CanvasRenderingContext2D, n: PropBox, k: number) {
-  const { x, y, w, h } = n.box;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(x * k, y * k, w * k, h * k);
-  ctx.clip();
-  if (n.fill) {
-    ctx.fillStyle = rgbaCss(n.fill.color);
-    ctx.fillRect(x * k, y * k, w * k, h * k);
-  }
-  ctx.fillStyle = rgbaCss(n.color);
-  ctx.font = `${n.fontStyle} ${n.fontWeight} ${n.fontSizePx * k}px "${n.fontFamily}", Inter, sans-serif`;
-  ctx.textBaseline = 'top';
-  ctx.fillText('Notes for the preacher', (x + n.padding) * k, (y + n.padding) * k);
-  ctx.restore();
+  return (
+    <div className="col" style={{ gap: 6 }}>
+      {hasStageNotes && (
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <span className="muted small">Preview sample:</span>
+          <div className="ed-seg-bar">
+            <button
+              type="button"
+              className={`small ${sampleKind === 'sermon' ? 'on' : ''}`}
+              onClick={() => setSampleKind('sermon')}
+            >
+              Sermon Slide
+            </button>
+            <button
+              type="button"
+              className={`small ${sampleKind === 'song' ? 'on' : ''}`}
+              onClick={() => setSampleKind('song')}
+            >
+              Worship Song
+            </button>
+          </div>
+        </div>
+      )}
+      <canvas
+        ref={ref}
+        width={480}
+        height={270}
+        style={{ width: 480, maxWidth: '100%', borderRadius: 6, border: '1px solid var(--line)' }}
+      />
+    </div>
+  );
 }
 
 /** Data-driven look editor (prd/04): layer rules, slide mode, props, clear/key colour, transition. */
@@ -165,7 +220,17 @@ export function LooksPage() {
                 { value: 'stream', label: 'Livestream key (Chroma / Green screen)' },
                 { value: 'custom', label: 'Custom' },
               ]}
-              onChange={(kind) => set({ kind: kind as Look['kind'] })}
+              onChange={(kind) => {
+                const nextKind = kind as Look['kind'];
+                if (nextKind === 'stage' && look.layers.props.notes === undefined) {
+                  set({
+                    kind: nextKind,
+                    layers: { ...look.layers, props: { ...look.layers.props, notes: true } },
+                  });
+                } else {
+                  set({ kind: nextKind });
+                }
+              }}
             />
           </div>
           <span className="muted small" style={{ marginTop: -4 }}>

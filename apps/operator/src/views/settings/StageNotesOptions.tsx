@@ -5,6 +5,9 @@ import {
   type PropBox,
   type PropsRule,
   type Rgba,
+  type StageNotesScale,
+  stageNotesEnabled,
+  type StagePreset,
   type TextStyle,
 } from '@ordo/domain';
 import { BoxEditor, Check } from '../../components/fields.tsx';
@@ -13,14 +16,53 @@ import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 /*
  * The stage look's notes region in the look editor (design/27 §11 item 13; design/16): 'Notes' shows the
  * live slide's notes (`Slide.notes`) on the stage screen for the preacher, in `props.style['notes']`, or,
- * while the look gives none, in the stage's default box under the next-slide band. The defaults below are
- * the stage's (`apps/stage/src/model.ts` `defaultNotes`, `notesRegion`); `apps/operator/test/stageNotes.test.ts`
- * checks that they agree.
+ * while the look gives none, in the stage's adaptive layout (Preacher Split on sermon/slide decks, amber
+ * Band Cue strip on songs). `notesDefault` reflects the unadapted `stageLayout` fallback box so unit tests
+ * verify agreement with `apps/stage/src/model.ts`.
  */
 
 const STAGE_H = 1080;
 const NOTES_GAP = 12;
 const NOTES_MARGIN = 16;
+
+export const STAGE_PRESET_CARDS: readonly {
+  id: StagePreset;
+  title: string;
+  badge: string;
+  desc: string;
+}[] = [
+  {
+    id: 'auto',
+    title: 'Auto Adaptive',
+    badge: 'Recommended',
+    desc: 'Lyrics + band cue on songs; 35/65 Preacher Split on sermon slides.',
+  },
+  {
+    id: 'split',
+    title: 'Preacher Split',
+    badge: '35 / 65',
+    desc: 'Current & next slide cards on left, large 58pt speaker notes on right.',
+  },
+  {
+    id: 'prompter',
+    title: 'Full Prompter',
+    badge: '90% Notes',
+    desc: 'Giant 64pt teleprompter manuscript across the stage screen.',
+  },
+  {
+    id: 'worship',
+    title: 'Worship Band',
+    badge: 'Lyrics First',
+    desc: '72pt lyrics + next slide + bottom amber chord & cue strip.',
+  },
+];
+
+export const NOTES_SCALES: readonly { id: StageNotesScale; label: string; px: string }[] = [
+  { id: 'sm', label: 'S', px: '42pt' },
+  { id: 'md', label: 'M', px: '50pt' },
+  { id: 'lg', label: 'L', px: '58pt' },
+  { id: 'xl', label: 'XL', px: '68pt' },
+];
 
 /** The notes' text when the look styles none (the stage's `defaultNotesStyle`). */
 export function notesDefaultStyle(fontFamily: string): TextStyle {
@@ -75,21 +117,24 @@ export function notesOverLyrics(look: Look): boolean {
 }
 
 /**
- * The 'Stage screen' card of the look editor: the 'Notes' toggle and, while it is on, the notes box and
- * text style (editing either stores them in `style['notes']`; 'Use the default box and text' removes them,
- * so the box follows the lyric bands again). Props only: the page applies `onChange` to its draft.
+ * The 'Stage screen' card of the look editor: the 'Notes' toggle, adaptive layout presets, text scale,
+ * and custom box/typography overrides. Props only: the page applies `onChange` to its draft.
  */
 export function StageNotesOptions(props: { look: Look; onChange: (props: PropsRule) => void }) {
   const pr = props.look.layers.props;
-  const on = pr.notes === true;
+  const on = stageNotesEnabled(props.look);
   const styled = pr.style.notes;
+  const preset: StagePreset = pr.stagePreset ?? 'auto';
+  const scale: StageNotesScale = pr.notesScale ?? 'lg';
   const n = notesOf(props.look);
+
   const setNotes = (notes: PropBox | undefined) => {
     const { notes: _old, ...rest } = pr.style;
     props.onChange({ ...pr, style: notes ? { ...rest, notes } : rest });
   };
+
   return (
-    <div className="card col" data-stage-notes>
+    <div className="card col" data-stage-notes style={{ gap: 10 }}>
       <h4>Stage screen</h4>
       <Check
         label="Notes: show the live slide’s notes, for the preacher"
@@ -98,6 +143,66 @@ export function StageNotesOptions(props: { look: Look; onChange: (props: PropsRu
       />
       {on && (
         <>
+          <div className="col" style={{ gap: 6 }}>
+            <span className="small" style={{ fontWeight: 600, color: 'var(--fg2)' }}>
+              Stage layout preset
+            </span>
+            <div className="grid2" style={{ gap: 8 }}>
+              {STAGE_PRESET_CARDS.map((c) => {
+                const active = !styled && preset === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    data-stage-preset={c.id}
+                    className={`stage-preset-card${active ? ' on' : ''}`}
+                    onClick={() => {
+                      const { notes: _drop, ...rest } = pr.style;
+                      props.onChange({
+                        ...pr,
+                        stagePreset: c.id === 'auto' ? undefined : c.id,
+                        style: rest,
+                      });
+                    }}
+                  >
+                    <div className="row" style={{ justifyContent: 'space-between', width: '100%' }}>
+                      <strong>{c.title}</strong>
+                      <span className="tag" style={{ fontSize: 10 }}>
+                        {c.badge}
+                      </span>
+                    </div>
+                    <span className="muted small" style={{ textAlign: 'left', lineHeight: 1.3 }}>
+                      {c.desc}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {!styled && (
+            <div
+              className="row wrap"
+              style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+            >
+              <span className="small" style={{ fontWeight: 600, color: 'var(--fg2)' }}>
+                Speaker notes text scale
+              </span>
+              <div className="ed-seg-bar" role="group" aria-label="Speaker notes text scale">
+                {NOTES_SCALES.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={`small ${scale === s.id ? 'on' : ''}`}
+                    onClick={() => props.onChange({ ...pr, notesScale: s.id === 'lg' ? undefined : s.id })}
+                  >
+                    {s.label} · {s.px}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <span className="muted small">
             Long notes are cut to their box. They never cover the current lyrics.
           </span>

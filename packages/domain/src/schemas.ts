@@ -1310,6 +1310,12 @@ export type SlideRule = z.infer<typeof SlideRule>;
 export const PropBox = TextStyle.extend({ box: Box });
 export type PropBox = z.infer<typeof PropBox>;
 
+export const StagePreset = z.enum(['auto', 'worship', 'split', 'prompter']);
+export type StagePreset = z.infer<typeof StagePreset>;
+
+export const StageNotesScale = z.enum(['sm', 'md', 'lg', 'xl']);
+export type StageNotesScale = z.infer<typeof StageNotesScale>;
+
 export const PropsRule = z.object({
   logo: z.boolean().default(false),
   countdown: z.boolean().default(false),
@@ -1324,9 +1330,14 @@ export const PropsRule = z.object({
   style: bounded(z.record(z.string().max(100), PropBox), 100).default({}),
   /**
    * Stage look: show the live slide's notes (`Slide.notes`) for the preacher, drawn in `style['notes']`
-   * (design/27 §11 item 13). Optional so stored looks need no migration; absent means off.
+   * or the adaptive stage layout (design/27 §11 item 13). Optional so stored looks need no migration;
+   * absent means on for `kind === 'stage'` looks (`stageNotesEnabled`) and off for other looks.
    */
   notes: z.boolean().optional(),
+  /** Adaptive stage layout preset when `style['notes']` is not customized; absent means `'auto'`. */
+  stagePreset: StagePreset.catch('auto').optional(),
+  /** Stage notes font size tier when `style['notes']` is not customized; absent means `'lg'`. */
+  notesScale: StageNotesScale.catch('lg').optional(),
 });
 export type PropsRule = z.infer<typeof PropsRule>;
 

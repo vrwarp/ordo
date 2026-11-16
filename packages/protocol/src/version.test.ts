@@ -21,19 +21,22 @@ import { APP_VERSION } from './index.ts';
 // 0.7.0 for PR #27 (wave r2a and phones P0), the one bump at merge: main published 0.6.0 without the decoration
 // drawer or geometry units, and its cached pages must reload rather than draw these slides the old way. The
 // digest is unchanged (it leaves the APP_VERSION line out).
-// 0.7.0 kept through wave r2b sub-wave 1 (its one bump, 0.8.0, is the wave PR's last commit): golive-prepare
-// (design/29 M8) adds the POST /live/prepare request and answer types, which no older client sends or reads;
-// units-live adds OutputHealth's optional unitsMade, unitsLate and unitCacheBytes, which an older hub's parse
-// strips; prerender-model (design/29) adds schemas.ts Slide.prerender, draw, cut and meta.draw, optional fields
-// nothing writes yet (an older client strips them), content.ts slideContent's picture form (used only when a
-// caller passes a picture file: none does yet), live.ts ResolvedPlaylist.prerenders and prerenderKeys (listed
-// only from the hub's picture rows: none yet), and in live.ts, live-state and protocol index.ts the
+// 0.8.0 for adaptive stage presets and speaker notes scale: PropsRule.stagePreset and PropsRule.notesScale in
+// schemas.ts, which a stale client would strip when saving looks.
+// 0.8.0 kept through wave r2b's sub-waves (main published 0.8.0 with PR #28, merged into sub-wave 1 before the wave
+// PR opened; the wave's one bump, 0.9.0, is the wave PR's last commit), with the merged digest recorded at 0.8.0.
+// Sub-wave 1: golive-prepare (design/29 M8) adds the POST /live/prepare request and answer types, which no older
+// client sends or reads; units-live adds OutputHealth's optional unitsMade, unitsLate and unitCacheBytes, which an
+// older hub's parse strips; prerender-model (design/29) adds schemas.ts Slide.prerender, draw, cut and meta.draw,
+// optional fields nothing writes yet (an older client strips them), content.ts slideContent's picture form (used
+// only when a caller passes a picture file: none does yet), live.ts ResolvedPlaylist.prerenders and prerenderKeys
+// (listed only from the hub's picture rows: none yet), and in live.ts, live-state and protocol index.ts the
 // prerender.add (hub only) and prerender.use events, state.prerendered and state.drawOverride, which no client
 // sends before the sub-waves that use them. Each track re-recorded on its branch; the sub-wave's integrator
-// recorded the merged digest once, after its last merge.
+// recorded the merged digest once, after its last merge, and again after main's PR #28 was merged in.
 const RECORDED = {
-  version: '0.7.0',
-  digest: '716c5b07c94aa49c54e70224452eb3e897c4fa6294e94fce355442d7cd766317',
+  version: '0.8.0',
+  digest: '467481830c96895231af866ca4afe0de3a16cd32b86542a4bc3fbc4c1f3a7ea1',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

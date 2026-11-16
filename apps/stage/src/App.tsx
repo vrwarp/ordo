@@ -1,8 +1,10 @@
 import { hubNow } from '@ordo/client';
-import { type PropBox, rgbaCss, type TextStyle } from '@ordo/domain';
+import { parseStageNoteLine, type PropBox, rgbaCss, type TextStyle } from '@ordo/domain';
 import {
   type CSSProperties,
   Fragment,
+  lazy,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -19,6 +21,17 @@ import {
   stageParagraphs,
   textCss,
 } from './model.ts';
+
+const LecternView = lazy(() => import('./LecternView.tsx'));
+
+function initialLecternMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return new URLSearchParams(window.location.search).get('view') === 'lectern';
+  } catch {
+    return false;
+  }
+}
 
 /** Scale the 1920x1080 logical stage to fit the window, letterboxed. */
 function useStageScale(): number {
@@ -64,18 +77,54 @@ function useFitText(ref: React.RefObject<HTMLDivElement | null>, baseSize: numbe
  * direction from its own first strong character whatever the look's style says. A '\n' between the blocks
  * keeps the text content as the text (collapsed between blocks, so it draws no extra line).
  */
-export function Paragraphs(props: { text: string; className?: string }) {
+export function Paragraphs(props: { text: string; className?: string; richNotes?: boolean }) {
   return (
     <div className={props.className}>
-      {stageParagraphs(props.text).map((p, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: paragraphs are positional
-        <Fragment key={i}>
-          {i > 0 ? '\n' : null}
-          <div className="para" dir="auto">
-            {p}
-          </div>
-        </Fragment>
-      ))}
+      {stageParagraphs(props.text).map((p, i) => {
+        if (props.richNotes) {
+          const parsed = parseStageNoteLine(p);
+          if (!parsed.plain) {
+            return (
+              // biome-ignore lint/suspicious/noArrayIndexKey: paragraphs are positional
+              <Fragment key={i}>
+                {i > 0 ? '\n' : null}
+                <div className={parsed.bullet ? 'para note-bullet' : 'para'} dir="auto">
+                  {parsed.bullet ? <span className="note-dot">{'• '}</span> : null}
+                  {parsed.tokens.map((tok, k) => {
+                    if (tok.kind === 'highlight') {
+                      return (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: positional tokens
+                        <strong key={k} className="note-hl">
+                          {tok.text}
+                        </strong>
+                      );
+                    }
+                    if (tok.kind === 'cue') {
+                      return (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: positional tokens
+                        <span key={k} className="note-cue">
+                          {tok.text}
+                        </span>
+                      );
+                    }
+                    // biome-ignore lint/suspicious/noArrayIndexKey: positional tokens
+                    return <Fragment key={k}>{tok.text}</Fragment>;
+                  })}
+                </div>
+              </Fragment>
+            );
+          }
+        }
+        return (
+          // biome-ignore lint/suspicious/noArrayIndexKey: paragraphs are positional
+          <Fragment key={i}>
+            {i > 0 ? '\n' : null}
+            <div className="para" dir="auto">
+              {p}
+            </div>
+          </Fragment>
+        );
+      })}
     </div>
   );
 }
@@ -90,7 +139,11 @@ export function TextRegion(props: {
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const t = props.text;
-  useFitText(ref, props.style.fontSizePx, `${t?.text}|${t?.label}|${t?.position}|${props.fontsVersion}`);
+  useFitText(
+    ref,
+    props.style.fontSizePx,
+    `${t?.text}|${t?.label}|${t?.position}|${props.box.w}x${props.box.h}|${props.fontsVersion}`,
+  );
   const css = textCss(props.style);
   const { justifyContent, padding, background, borderRadius, ...font } = css;
   const outer: CSSProperties = {
@@ -131,15 +184,24 @@ function kickerCss(style: TextStyle): CSSProperties {
  * the layout keeps off the current lyrics. Long notes are cut to the box, never shrunk: their start stays
  * in view whatever the vertical alignment (`safe`), and the last line fades out when something is cut.
  */
-export function NotesRegion(props: { prop: PropBox; text: string; fontsVersion: number }) {
+export function NotesRegion(props: {
+  prop: PropBox;
+  text: string;
+  fontsVersion: number;
+  scrollable?: boolean;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const { justifyContent, padding, background, borderRadius, ...font } = textCss(props.prop);
-  const sig = `${props.text}|${props.fontsVersion}|${JSON.stringify(props.prop)}`;
+  const sig = `${props.text}|${props.fontsVersion}|${props.scrollable ? '1' : '0'}|${JSON.stringify(props.prop)}`;
   // biome-ignore lint/correctness/useExhaustiveDependencies: `sig` changes whenever the text, box or fonts do
   useLayoutEffect(() => {
     const clip = ref.current;
     const inner = clip?.firstElementChild as HTMLElement | null;
     if (!clip || !inner) return;
+    if (props.scrollable) {
+      clip.dataset.cut = '';
+      return;
+    }
     clip.dataset.cut = inner.scrollHeight > clip.clientHeight + 1 ? '1' : '';
   }, [sig]);
   const outer: CSSProperties = {
@@ -149,13 +211,13 @@ export function NotesRegion(props: { prop: PropBox; text: string; fontsVersion: 
     borderRadius: borderRadius as string | undefined,
   };
   return (
-    <div className="region notes" style={outer}>
+    <div className={`region notes${props.scrollable ? ' notes-scrollable' : ''}`} style={outer}>
       <div
         ref={ref}
         className="notes-clip"
         style={{ ...(font as CSSProperties), justifyContent: `safe ${justifyContent as string}` }}
       >
-        <Paragraphs className="notes-text" text={props.text} />
+        <Paragraphs className="notes-text" text={props.text} richNotes />
       </div>
     </div>
   );
@@ -222,6 +284,32 @@ export function App(props: { host: StageHost }) {
   const v = snap.view;
   const { layout } = v;
 
+  const [lectern, setLectern] = useState(initialLecternMode);
+  const [hudAwake, setHudAwake] = useState(false);
+  const [notesZoom, setNotesZoom] = useState(1);
+  const [notesScroll, setNotesScroll] = useState(false);
+  const hudTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const setLecternMode = (on: boolean) => {
+    setLectern(on);
+    try {
+      const url = new URL(window.location.href);
+      if (on) url.searchParams.set('view', 'lectern');
+      else url.searchParams.delete('view');
+      window.history.replaceState(null, '', url.toString());
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const wakeHud = () => {
+    setHudAwake(true);
+    clearTimeout(hudTimer.current);
+    hudTimer.current = setTimeout(() => setHudAwake(false), 4000);
+  };
+
+  useEffect(() => () => clearTimeout(hudTimer.current), []);
+
   // Messages: reconcile with the active list so new ones fade in and removed ones fade out.
   const [shownMsgs, setShownMsgs] = useState<ShownMessage[]>([]);
   const activeSig = v.messages.map((m) => `${m.id}:${m.text}`).join('|');
@@ -241,18 +329,45 @@ export function App(props: { host: StageHost }) {
     return () => clearTimeout(t);
   }, [shownMsgs]);
 
+  if (lectern) {
+    return (
+      <Suspense fallback={<div className="viewport" style={{ background: '#0b0d12' }} />}>
+        <LecternView
+          view={v}
+          shownMessages={shownMsgs}
+          linkDown={snap.linkDown}
+          onExitLectern={() => setLecternMode(false)}
+        />
+      </Suspense>
+    );
+  }
+
   const stageStyle: CSSProperties = {
     transform: `translate(-50%, -50%) scale(${scale})`,
     background: rgbaCss(layout.clearColor),
   };
   const { countdown, elapsed, remaining } = v;
+  const scaledNotesProp: PropBox | null = layout.notes
+    ? notesZoom === 1
+      ? layout.notes
+      : { ...layout.notes, fontSizePx: Math.round(layout.notes.fontSizePx * notesZoom) }
+    : null;
 
   return (
-    <div className="viewport" style={{ background: rgbaCss(layout.clearColor) }}>
+    <div
+      className={`viewport${hudAwake ? ' hud-awake' : ''}`}
+      style={{ background: rgbaCss(layout.clearColor) }}
+      onPointerDown={wakeHud}
+    >
       <div className="stage" style={stageStyle}>
         {/* Under the lyrics in the stacking order too, although the layout keeps it off them. */}
-        {layout.notes && v.notes ? (
-          <NotesRegion prop={layout.notes} text={v.notes} fontsVersion={snap.fontsVersion} />
+        {scaledNotesProp && v.notes ? (
+          <NotesRegion
+            prop={scaledNotesProp}
+            text={v.notes}
+            fontsVersion={snap.fontsVersion}
+            scrollable={notesScroll}
+          />
         ) : null}
         {layout.current ? (
           <TextRegion
@@ -306,6 +421,43 @@ export function App(props: { host: StageHost }) {
           />
         ) : null}
       </div>
+
+      {/* Auto-hiding Touch / Lectern Wake Pill (invisible on passive TVs until tapped/clicked) */}
+      {hudAwake && (
+        <div
+          className="stage-hud-pill"
+          role="toolbar"
+          aria-label="Stage display controls"
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            wakeHud();
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setNotesZoom((z) => Math.max(0.7, Math.round((z - 0.15) * 100) / 100))}
+          >
+            A−
+          </button>
+          <button type="button" onClick={() => setNotesZoom(1)}>
+            {Math.round(notesZoom * 100)}%
+          </button>
+          <button
+            type="button"
+            onClick={() => setNotesZoom((z) => Math.min(1.6, Math.round((z + 0.15) * 100) / 100))}
+          >
+            A+
+          </button>
+          <span className="hud-sep" />
+          <button type="button" className={notesScroll ? 'on' : ''} onClick={() => setNotesScroll((s) => !s)}>
+            {notesScroll ? 'Scroll ON' : 'Fit Box'}
+          </button>
+          <span className="hud-sep" />
+          <button type="button" className="primary" onClick={() => setLecternMode(true)}>
+            Pulpit Lectern
+          </button>
+        </div>
+      )}
     </div>
   );
 }
