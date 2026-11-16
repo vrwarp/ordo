@@ -827,10 +827,20 @@ whether.
 
 Every table the reader keeps is written as one `ShapeObject.table` (`emitTableObject`; design/27 §15 M9 "The
 table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of the section above:
-- **The grid as stored**: `cols` the deck's widths, `rows` its `a:tr h` (`TableElement.storedRows`), `box.h` their
-  sum; the renderer grows the rows to the text it lays out (cells never shrink, no autofit). `TableElement.rows`
-  (the measured rows) are what the M6 group and the harness's LibreOffice rows (`loCompat`: `rowRule: 'fixed'`,
-  LibreOffice's columns and rows, its spill and lift in the insets) use.
+- **The grid as stored: LibreOffice's form, on every hub** (sub-wave 1b, `tables-form`; owner question T2's
+  default; design/27 §15 "The stored form"): `cols` and `rows` are LibreOffice's columns and grown rows as the
+  converter models LibreOffice 24.2 (`TableElement.lo`, else `TableElement.cols` and `.rows`, which then agree
+  with it), `rowRule: 'fixed'` (the renderer keeps them; cells never shrink, no autofit: text past a fixed row
+  overflows it as a text box's does), `box` the table's frame at their size (`lo.xf`); the cells' text at
+  LibreOffice's sizes (`tables.ts` `loSizePt`: 14 pt is stored 14.04 pt), the spill into the margins and the
+  baseline lift folded into each cell's insets (`asLibreOffice`). Until 1b the object stored the deck's
+  `a:tr h` (`TableElement.storedRows`, still read) and let the drawer grow them with its own lines; rows grown
+  that way passed LibreOffice's wherever the drawer's lines disagree with the converter's model (r2b-diag
+  all-tables P1: 7 of 63 table slides fell by 0.01-0.49), so they are fixed at import and an edit grows a
+  row by what its text needs more (the operator's `fitRows`, design/15 "Table editing"). The layout reads
+  nothing of `loCompat`: with and without it the table object is the same (`emit-table.test.ts` "stores LibreOffice's form on every hub",
+  `e2e/table-form.test.ts` on the e2e table deck); `loCompat` reaches only the cells' run-text policies (run
+  shadows, outlines on filled text, `baseline="0"`), as a text box's, and the M6 group's layout (`cellRows`).
 - **Cells** row-major as the stored table places them (`readTable` cuts a span at a slot an earlier cell covers),
   each its rich text (`richText`, plain past the slide's text budget), spans, fill, diagonals (read per cell
   now, `TableCell.diag`: the M6 group notes them undrawn).
@@ -843,7 +853,8 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
   (`measuredBodies`); the emitter cuts the same and leaves later palette entries out (noted). No cell cap: a
   table is one object of the slide's 150.
 - **Styles and scripts**: a table naming no style has none, whatever `a:tblStyleLst def` says (`tableStyleOf`, as
-  LibreOffice draws it);
+  LibreOffice draws it); a cell's paragraphs read the master's `p:otherStyle` before `defaultTextStyle`
+  (`inherit.ts` `Chain.cell`, set by `cellText`; sub-wave 1b, as LibreOffice lays table text out);
   the measure breaks at the renderer's break opportunities (`breakOpportunities`, Korean words whole) and
   spaces a paragraph by the face that draws its script (`FaceSource.script`: `@ordo/importers` `faceSourceOf` on
   the hub and in the browser, `fc-match :charset` in the harness), asked for Han, Kana and Hangul only

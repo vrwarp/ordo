@@ -208,10 +208,18 @@ describe('the table object (M9, ShapeObject.table)', () => {
       }),
     );
     // The bold 28 pt head and the right-aligned cell: two style entries over one base (the body's); the
-    // justified cell keeps its paragraph's alignment (`paras`, as a text box's).
+    // justified cell keeps its paragraph's alignment (`paras`, as a text box's). The head is stored in
+    // LibreOffice's form: at 28 pt's size at 600 dpi (233 device px: 27.96 pt, 55.92 logical px), its row grown
+    // to LibreOffice's line (1.2 x 28 pt = 1,185/100 mm with no face metrics, + 1 + its margins 2 x 127: 1,440
+    // /100 mm), its text 588 EMU lower than ordo's office line puts it (the converter's lift, in its insets).
     expect(t.styles).toHaveLength(2);
     const head = cellRich(t, 0)!;
-    expect(head.style).toMatchObject({ fontWeight: 700, fontSizePx: 56 });
+    expect(head.style.fontWeight).toBe(700);
+    expect(head.style.fontSizePx).toBeCloseTo(55.92, 6);
+    expect(head.style.insets!.t).toBeCloseTo(7.2 + 588 / 6350, 6);
+    expect(head.style.insets!.b).toBeCloseTo(7.2 - 588 / 6350, 6);
+    expect(t.rows[0]!).toBeCloseTo((1440 * 360) / 6350, 6);
+    expect(t.rows.slice(1)).toEqual([PX / 2, PX / 2]);
     expect(head.style.autofit).toBeUndefined();
     expect(cellRich(t, 1)!.style.align).toBe('right');
     expect(cellRich(t, 2)!.style).toEqual({ ...t.base });
@@ -337,8 +345,10 @@ describe('the table object (M9, ShapeObject.table)', () => {
     );
   });
 
-  it('keeps the stored rows: box.h is their sum, the drawer grows them to the text', () => {
-    // A cell of four lines in a row stored a quarter inch tall: the converter does not grow the stored row.
+  it("fixes LibreOffice's rows at import: box.h is their sum, a row grown to its lines as LibreOffice grows it", () => {
+    // A cell of four lines in a row stored a quarter inch tall: LibreOffice's row holds the four lines at 18 pt
+    // (1.2 x 635/100 mm each, no face metrics: 4 x 762 + 1 + the margins 2 x 127 = 3,303/100 mm), the row of
+    // one line 762 + 1 + 254 = 1,017/100 mm, taller than its quarter inch; both fixed (the drawer keeps them).
     const { o, t } = one(
       table({
         cols: [IN],
@@ -348,21 +358,50 @@ describe('the table object (M9, ShapeObject.table)', () => {
         ],
       }),
     );
-    expect(t.rows).toEqual([PX / 4, PX / 4]);
-    expect(o.box.h).toBe(PX / 2);
-    expect(t.rowRule).toBeUndefined();
+    expect(t.rows[0]!).toBeCloseTo((3303 * 360) / 6350, 6);
+    expect(t.rows[1]!).toBeCloseTo((1017 * 360) / 6350, 6);
+    expect(o.box.h).toBeCloseTo(((3303 + 1017) * 360) / 6350, 6);
+    expect(t.rowRule).toBe('fixed');
     expect(t.cells[0]!.paras ?? []).toHaveLength(0);
   });
 
-  it("draws LibreOffice's rows under loCompat: fixed rows, its sizes, text into the margins", () => {
+  it("stores LibreOffice's rows on every hub, as the harness's policies draw them: fixed, its sizes, its lines", () => {
+    // Three lines of 18 pt in a row stored 1 pt tall: LibreOffice's row of 3 x 762 + 1 + 254 = 2,541/100 mm,
+    // the same with and without loCompat.
     const rows = [{ h: 12_700, cells: [tc('one\ntwo\nthree')] }];
     const own = one(table({ cols: [2 * IN], rows }));
     const lo = one(table({ cols: [2 * IN], rows }), { loCompat: true });
-    expect(own.t.rowRule).toBeUndefined();
-    expect(lo.t.rowRule).toBe('fixed');
-    // LibreOffice's row holds the three lines: grown by the converter's LibreOffice rule.
-    expect(lo.t.rows[0]!).toBeGreaterThan(3 * 36);
-    expect(lo.o.box.h).toBeCloseTo(lo.t.rows[0]!, 6);
+    expect(own.t.rowRule).toBe('fixed');
+    expect(own.t.rows[0]!).toBeCloseTo((2541 * 360) / 6350, 6);
+    expect(own.o.box.h).toBeCloseTo(own.t.rows[0]!, 6);
+    expect(own.t).toEqual(lo.t);
+    expect(own.o.box).toEqual(lo.o.box);
+  });
+
+  it("stores LibreOffice's form on every hub: the grid, rows, sizes and insets are the same with and without loCompat", () => {
+    // A head of 28 pt bold, a cell of two sizes (14 pt then 9 pt), three lines in a row stored 1 pt tall (the
+    // text spills into the margins), a centred cell (its baseline lift goes into the insets) and an empty cell.
+    const shapes = table({
+      cols: [2 * IN, IN],
+      rows: [
+        { h: IN / 3, cells: [tc('Head', { rPr: 'b="1" sz="2800"' }), tc('', { rPr: 'sz="1800"' })] },
+        { h: IN / 3, cells: [tc2('Large ', 'and small', 'sz="900"'), tc('mid', { tcPr: ' anchor="ctr"' })] },
+        { h: 12_700, cells: [tc('one\ntwo\nthree', { rPr: 'sz="1400"' }), tc('x')] },
+      ],
+    });
+    const own = one(shapes);
+    const lo = one(shapes, { loCompat: true });
+    expect(own.o.box).toEqual(lo.o.box);
+    expect(own.t).toEqual(lo.t);
+    // LibreOffice's form: fixed rows, the third grown to its three lines, the head at 28 pt's size at 600 dpi
+    // (233 device px: 27.96 pt, 55.92 logical px).
+    expect(own.t.rowRule).toBe('fixed');
+    expect(own.t.rows[2]!).toBeGreaterThan(3 * 28);
+    expect(own.o.box.h).toBeCloseTo(
+      own.t.rows.reduce((s, h) => s + h, 0),
+      6,
+    );
+    expect(cellRich(own.t, 0)!.style.fontSizePx).toBeCloseTo(55.92, 6);
   });
 
   it('counts the cells against the slide text budget and writes the later ones plain past it', () => {

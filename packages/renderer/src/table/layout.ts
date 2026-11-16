@@ -42,6 +42,12 @@ export type TableCellLayout = {
   dy: number;
   /** The laid text's height (its lines), without the insets. */
   textHeight: number;
+  /**
+   * What the cell needs of its rows: `textHeight` plus its top and bottom insets (an empty cell one line of
+   * its style's size), as the row rule grows rows to it; the editor's `fitRows` compares it before and after
+   * an edit of a table whose rows are fixed.
+   */
+  need: number;
 };
 
 export type TableLayout = {
@@ -231,6 +237,7 @@ export function layoutTable(meas: Measurer, o: ShapeObject, env: FontEnv): Table
       layout: laid.layout,
       dy: 0,
       textHeight: laid.height,
+      need: need[i]!,
     });
   }
   const rowH = Float64Array.from(rowMin);

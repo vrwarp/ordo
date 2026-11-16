@@ -629,6 +629,30 @@ _A table (`ShapeObject.table`, design/27 M9) is edited cell by cell (`SlideCanva
   double-tap opens the panel on its text; the section's hint then reads 'Tap a cell, then double-tap to
   type.' ('Click a cell to edit its text (double-click on the slide).' with a mouse). Not built: merging and splitting cells, borders, column widths,
   table styles.
+- **Rows follow the text on an edit** (sub-wave 1b, tables-form; `tableFit.ts`). An imported table stores
+  LibreOffice's rows, fixed (`rowRule: 'fixed'`, design/27 §15 "The stored form"), so the drawer does not grow
+  them; every op that commits a table change grows them instead, in the same undo step: an edit of a cell
+  (`editCell`: typing, a format, paragraph styles, a paste), Find & Replace in cells (`findInCells`), a row or
+  column added or deleted (`rowCol`: `keepWidth` narrows the columns), and the box resized (`updateObject`: the
+  canvas's Transformer and the Object panel's size fields; `transformGroup`; a single object's screen placement).
+  `fitRows(before, after, layout)` (pure) lays both out with the drawer's layout (renderer `layoutTable`; a
+  cell's `need` is its text height plus its insets) and grows a single-row cell's row by
+  max(0, needAfter - max(rowHeight, needBefore)), the largest per row, then a merged cell's last row by what it
+  needs past its rows; rows never shrink, the others stay, `box.h` follows (domain `growRow`). By the increase
+  only: where the drawer's lines are taller than the converter's model of LibreOffice's (2 Corinthians 3 vs 7,
+  Churchcraft), cells need a few px more than their fixed row before any edit, so a one-letter fix or a Find &
+  Replace that wraps nothing moves no row, and a long line grows its row by what it added. A cell is the same
+  cell before and after by its index (an edit, a resize) or by its content (a row or column added or deleted); a
+  new cell grows nothing. A table made in ordo grows its rows itself (`rowRule` 'grow'). The layout is the
+  canvas's table kit (the renderer's table module, a chunk of its own), measured as the canvas measures; the
+  editor's ops ask for it when they load, so Find & Replace in a table on a slide not yet shown grows its rows
+  too; until it is here, an op changes no row.
+- **What the editor shows of the stored form** (sub-wave 1b). The size field shows whole px as a typed size
+  shows (`TextControls.tsx`): an imported cell stored at LibreOffice's 600 dpi size (14 pt is 14.04 pt, 28.08 px)
+  shows 28, the stored size unchanged (Size − and + step from the stored one). A cell has no margin fields: its
+  insets as stored (LibreOffice's lift moved into the top and bottom, its spill shrinking them) are drawn, not
+  shown or edited. A cell's text copied and pasted into a text box takes the box's size, its runs keeping their
+  ratio to the cell's size (a slice carries run formatting, never the cell's box): no 600 dpi size travels.
 - **Find & Replace and New slide like this.** Find & Replace searches and replaces in the cells of every
   unlocked table as in text boxes (`findInCells` in `ops/slides.ts`, the one place the find walks cells; a
   match carries its `cell`); the Find card lists a cell's match and opens it for editing on the canvas. 'New

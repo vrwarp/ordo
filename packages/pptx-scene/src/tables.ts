@@ -38,16 +38,16 @@
  * - **Rows grow** (design/27 §15 M6): a row is as tall as its stored `h` or as its tallest cell's text plus
  *   the cell's margins, as LibreOffice and PowerPoint draw it, whichever is more; a merge's extra height
  *   goes to its last row, and an empty cell is one line of its end mark. The deck's rows are kept too
- *   (`TableElement.storedRows`): the table object stores them and its drawer grows them to the text. Text is
+ *   (`TableElement.storedRows`). Text is
  *   measured in the office line model (design/27 §6 step 7) with the advances and pair kerning of the faces
  *   the fonts would draw it with (`ParseOptions.fontFace`: the run's family, its metric substitute, the
  *   script fallbacks, ordo's default face, then the caller's face for the character's script,
  *   `FaceSource.script`), breaking where the renderer breaks (`@ordo/renderer` text/breaks.ts
  *   `breakOpportunities`: UAX#14 with Korean words kept whole), each paragraph spaced by the face that draws
  *   its script (`Measure`). A family with no face is measured with conservative estimated widths (noted).
- *   For the fidelity harness's LibreOffice policy the rows are also sized as LibreOffice 24.2 sizes them
- *   (`TableElement.lo`, `LoLines`, `loSizePt`), and its layouter's column minimums and merge rules apply
- *   (`loColumns`, `loGrowRows`).
+ *   The rows are also sized as LibreOffice 24.2 sizes them (`TableElement.lo`, `LoLines`, `loSizePt`), and
+ *   its layouter's column minimums and merge rules apply (`loColumns`, `loGrowRows`): the table object stores
+ *   that form on every hub (`emit-table.ts`), the M6 group draws it under the harness's LibreOffice policy.
  *
  * Emission of the M6 group (`emitTable`): locked `ShapeObject`s with role 'grid' (the background as one
  * rect; the cell fills, neighbouring cells of a row with the same fill as one rect, one object per fill; the
@@ -885,9 +885,10 @@ function cellText(
   rtl = false,
 ): TextBody {
   const own = child(tc, 'a:txBody');
-  // The cell's body as a shape's, so the text chain reads its list style and paragraphs.
+  // The cell's body as a shape's, so the text chain reads its list style and paragraphs; as a cell's
+  // (`Chain.cell`), the master's otherStyle before the presentation's defaultTextStyle, as LibreOffice reads it.
   const txBody = el('p:txBody', {}, own?.children.length ? own.children : [el('a:p', {})]);
-  const body = readTextBody(ctx, { own: el('p:sp', {}, [txBody]), from: base.from }, styled) ?? {
+  const body = readTextBody(ctx, { own: el('p:sp', {}, [txBody]), from: base.from, cell: true }, styled) ?? {
     paras: [],
     insets: { ...CELL_MARGINS },
     anchor: 'top',

@@ -1,4 +1,4 @@
-import { compatRule, shapeText, visibleRuns } from './rule.ts';
+import { compatRule, drawnRuns } from './rule.ts';
 
 /**
  * LibreOffice draws no run's own text shadow (PowerPoint's "Text Shadow"). A shadow an unfilled shape casts
@@ -8,7 +8,6 @@ export const runShadow = compatRule({
   key: 'runShadow',
   text: "no run's own text shadow (a shadow an unfilled shape casts stays)",
   hits(e) {
-    const t = shapeText(e);
-    return !!t && visibleRuns(t).some((r) => r.style.shadow !== undefined);
+    return drawnRuns(e).some((r) => r.style.shadow !== undefined);
   },
 });

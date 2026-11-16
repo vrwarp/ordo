@@ -130,6 +130,12 @@ export interface Chain {
   layout?: XNode;
   /** The matching master placeholder (for a slide or layout element). */
   master?: XNode;
+  /**
+   * A table cell's body (`tables.ts` `cellText`): its paragraphs read the master's otherStyle before the
+   * presentation's defaultTextStyle, as LibreOffice lays table text out (r2b sub-wave 1b, owner question T2's
+   * default; measured on two decks, both ways; PowerPoint's rule not verified).
+   */
+  cell?: boolean;
 }
 
 export function chainOf(ctx: SlideCtx, own: XNode, from: Source): Chain {
@@ -238,8 +244,8 @@ export function listLevel(lst: XNode | undefined, level: number): XNode[] {
  * The paragraph-property chain of a paragraph at `level`, after its own `a:pPr`, split where a shape's
  * `p:style/a:fontRef` applies: `local` holds the shape's lstStyle and its layout and master placeholders'
  * (nearer than the font reference), `styles` the master's txStyles entry (titleStyle for titles,
- * bodyStyle for other placeholders, otherStyle for dt/ftr/sldNum/hdr; nothing for non-placeholders) and the
- * presentation's defaultTextStyle.
+ * bodyStyle for other placeholders, otherStyle for dt/ftr/sldNum/hdr and for a table cell's text,
+ * `Chain.cell`; nothing for other non-placeholders) and the presentation's defaultTextStyle.
  */
 export function paraChainParts(ctx: SlideCtx, c: Chain, level: number): { local: XNode[]; styles: XNode[] } {
   const local: XNode[] = [];
@@ -249,7 +255,7 @@ export function paraChainParts(ctx: SlideCtx, c: Chain, level: number): { local:
     const cls = masterClass(c.ph.type);
     const style = cls === 'title' ? 'p:titleStyle' : cls === 'body' ? 'p:bodyStyle' : 'p:otherStyle';
     styles.push(...listLevel(path(ctx.master, 'p:txStyles', style), level));
-  }
+  } else if (c.cell) styles.push(...listLevel(path(ctx.master, 'p:txStyles', 'p:otherStyle'), level));
   styles.push(...listLevel(ctx.deck.defaultTextStyle, level));
   return { local, styles };
 }

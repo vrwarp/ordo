@@ -442,16 +442,16 @@ or remove a row's height to `box.h`; they refuse past `TABLE_LIMITS` and at the 
 <!-- m9:tables-conv -->
 **Table object: import** (`@ordo/pptx-scene` `emit-table.ts`, M9 tables-conv). A PowerPoint table is imported as
 one `ShapeObject.table` (origin role `'table'`, not locked; its legacy fields a rect of the table's background,
-no stroke), never the M6 group of grid shapes and cell text boxes: `cols` are the deck's column widths and
-`rows` its stored row heights (`a:tr h`) in logical px, `box.h` their sum, so the drawer's row scale is 1 at
-import and it grows each row to its text; cells in the order `placeCells` reads them back (row-major, spans cut
-at a covered slot), each with its rich text (as a text box writes it, without autofit), spans, fill and
+no stroke), never the M6 group of grid shapes and cell text boxes: `cols` and `rows` are LibreOffice's columns
+and grown rows in logical px (since sub-wave 1b; until then the deck's `a:tr h`, grown by the drawer), fixed at
+import ("Table object: the stored form", below), `box` their size; cells in the order `placeCells` reads them
+back (row-major, spans cut at a covered slot), each with its rich text (as a text box writes it, without autofit), spans, fill and
 diagonals; `base` the cells' most common box style, each cell's `style` entry what its box differs from it in
 (`cellStyleOf` of the pure `cellstyle.ts`, the same mapping `table.ts` reads back with `cellTextStyle`, within
 `CellStyle`'s bounds), formatting of part of a cell's text in `runStyles`, fills, line styles and the resolved
 edges `h` and `v`; within `TABLE_LIMITS` (a palette past its size gives later entries none, noted). A table is
-one object of the slide's 150 (no cell cap), its cells' JSON counted against the slide's text budget. Under the
-harness's LibreOffice policy (`loCompat`) `rowRule: 'fixed'` holds LibreOffice's rows. Not written: vertical
+one object of the slide's 150 (no cell cap), its cells' JSON counted against the slide's text budget. The
+harness's LibreOffice policy (`loCompat`) changes only the cells' run-text policies. Not written: vertical
 cells (the table stays LibreOffice's art until the writing engine lays them out) and the legacy group (M9
 decision 4). Without 'table' in the converter's `m9Writes` (the kill switch) the M6 group is written, counted as
 its objects, and M6's cell cap holds. Every table is the table object on every kind of hub: the owner decided
@@ -461,6 +461,19 @@ tables as their M6 group would pass 64 KB (design/27 §15 M9 "The table object i
 import stored so becomes the table object on a re-import or Reset slide. A table's non-empty
 cells are its slide's text bodies for search and re-import, each at its cell's place.
 <!-- /m9:tables-conv -->
+
+<!-- r2b:tables-form -->
+**Table object: the stored form** (`@ordo/pptx-scene` `emit-table.ts`, r2b sub-wave 1b tables-form; owner question
+T2's default). Every hub stores an imported table in LibreOffice's layout: `cols` LibreOffice's column widths,
+`rows` its grown rows with `rowRule: 'fixed'` (the renderer keeps them as stored; text taller than its row
+overflows it, as a text box's overflows its box), the cells' sizes at LibreOffice's 600 dpi sizes (14 pt is
+stored 14.04 pt, `fontSizePx` 28.08) and each cell's `insets` adjusted for where LibreOffice draws its text (the
+lift moved into `t` and `b`, the spill into the margins shrinking them). Rows are fixed at import and grow only
+on an edit, by what the edited text needs more than before (`fitRows` in the operator, design/15 "Table
+editing"; the domain's `growRow(o, row, h)`: `rows[row] = max(rows[row], h)`, `box.h` by the table's row
+scale as `insertRow` adds a row; never shrinks, other rows unchanged; the object itself for a row out of range,
+a height that is not finite or not taller, within the schema's length bound).
+<!-- /r2b:tables-form -->
 
 <!-- r2b:editor-table -->
 **Table object: cell target and cellTextObject** (`packages/domain/src/table.ts`, r2b editor-table). The

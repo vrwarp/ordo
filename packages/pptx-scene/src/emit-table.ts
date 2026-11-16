@@ -5,10 +5,17 @@
  *   (`@ordo/domain` `TableData`), origin role 'table', not locked, written when `EmitOptions.m9Writes` has
  *   'table' (the hub's `M9_WRITES`, default all). Its legacy fields are what an older build draws: a rect
  *   in the table's frame filled with the table's background (M9 decision 4: no legacy group is written).
- *   - **Grid.** `cols` are the grid's widths and `rows` the heights the deck stores (`a:tr h`), in logical
- *     px; `box.h` is their sum, so the drawer's row scale is 1 at import and it grows each row to its text
- *     as it lays it out (the renderer's rows, never the converter's measure: cells never shrink). The box is
- *     the frame's top part at that height (rows grow down from it).
+ *   - **The stored form: LibreOffice's, on every hub** (design/27 §15 "The stored form"; owner question T2's
+ *     default). `cols` and `rows` are the columns and grown rows of the converter's model of how LibreOffice
+ *     24.2 lays the table out (`TableElement.lo`; else the converter's own, which then agree with it), in
+ *     logical px, with `rowRule: 'fixed'`: the drawer keeps them as stored (rows grown by its own lines grew
+ *     past LibreOffice's wherever they disagree with the converter's model of LibreOffice's: 7 of 63 table
+ *     slides fell by 0.01-0.49). `box` is the table's frame at their width and height (`lo.xf`). The cells'
+ *     text is at LibreOffice's sizes (`loSizePt`: 14 pt is stored 14.04 pt), and where LibreOffice's row is
+ *     shorter than the text, or draws its lines higher, the spill into the margins and the baseline lift are
+ *     folded into each cell's insets (`tables.ts` `asLibreOffice`). Nothing in the layout reads the harness's
+ *     policies (`EmitOptions.loCompat`): with and without them the grid, rows, sizes and insets are the same.
+ *     An edit grows a row by what its text needs more (the operator's `fitRows`, design/15 "Table editing").
  *   - **Cells** in the order the stored table places them (row-major, `@ordo/domain` `placeCells`), each
  *     with its rich text (`richText`, as text boxes are written: runs, paragraph styles, fallback fonts;
  *     plain once the slide passes its text budget) without autofit, its spans, fill and diagonals.
@@ -27,10 +34,10 @@
  *     1,000 paragraphs, the table's within 60,000 characters (later cells empty), 8,000 runs and 8,000
  *     paragraphs; a palette past its size gives later entries none (the base style, no fill, no line,
  *     noted). The slide's text budget (`TEXT_BUDGET_BYTES`) counts each cell's JSON as it is written.
- *   - **LibreOffice's policies** (`EmitOptions.loCompat`, the harness's compat rule `cellRows`):
- *     `rowRule:'fixed'` with LibreOffice's columns and rows (`TableElement.lo`, else the converter's grown
- *     ones), the text at LibreOffice's sizes, and its spill into the margins and baseline lift folded into
- *     each cell's insets.
+ *   - **LibreOffice's run-text policies** (`EmitOptions.loCompat`, harness only): the cells' runs as
+ *     LibreOffice draws them where PowerPoint differs (no run shadow, no outline on filled text, `baseline="0"`
+ *     read as unset: `richtext.ts` `RichOptions.lo`), as a text box's. They are not layout and no hub stores
+ *     them (design/27 §17 "LibreOffice is not PowerPoint").
  * - **The M6 group** (`emitTableGroup`, `tables.ts` `emitTable`): locked grid shapes (background, cell fills,
  *   lines) and one rich `TextObject` per cell; what the converter writes without 'table' in `m9Writes` (the
  *   kill switch, `version.ts` `M9_HELD_BACK`), the budgets then counting its objects and keeping M6's cell
@@ -57,7 +64,7 @@ import { cellStyleOf } from '@ordo/domain/cellstyle.ts';
 import { canonicalJson, Palette } from '@ordo/domain/palette.ts';
 import { chargeText, overText, SLIDE_BUDGET_NOTE } from './emit-budget.ts';
 import { clampBox, type EmitCtx, legacyColor, utf8Bytes, writes } from './emit-ctx.ts';
-import { boxPx, lenPx, multiply } from './frame.ts';
+import { boxPx, lenPx } from './frame.ts';
 import { dashOf, gradientOf } from './geom.ts';
 import type { Fill, Line, TableElement, TextBody } from './ir.ts';
 import { type RichText, richText } from './richtext.ts';
@@ -96,19 +103,14 @@ const bound = (v: number, lo: number, hi: number) =>
 export function emitTableObject(ctx: EmitCtx, e: TableElement, out: SlideObject[]): boolean {
   if (!writes(ctx, 'table') || e.support === 'residual') return false;
   const f = ctx.frame;
-  const lo = ctx.lo;
-  // The grid: LibreOffice's (fixed) under its policies, else the stored rows the drawer grows.
-  const colsEmu = lo ? (e.lo?.cols ?? e.cols) : e.cols;
-  const grown = lo ? (e.lo?.rows ?? e.rows) : e.rows;
-  const rowsEmu = lo ? grown : (e.storedRows ?? e.rows);
+  // LibreOffice's form on every hub (design/27 §15 "The stored form"): its columns and grown rows
+  // (`TableElement.lo`, else the converter's, which then agree with them), fixed (`rowRule: 'fixed'`), and the
+  // table's affine at their size. Nothing here reads the harness's policies (`ctx.lo`).
+  const colsEmu = e.lo?.cols ?? e.cols;
+  const rowsEmu = e.lo?.rows ?? e.rows;
   const W = colsEmu.reduce((s, w) => s + w, 0);
   if (!(W > 0) || !colsEmu.length || !rowsEmu.length) return false;
-  const xf = lo ? (e.lo?.xf ?? e.xf) : e.xf;
-  const H = e.rows.reduce((s, h) => s + h, 0);
-  const Hs = rowsEmu.reduce((s, h) => s + h, 0);
-  // The frame's top part at the stored height: `xf` maps the unit square to the grown table.
-  const top = lo || !(H > 0) ? xf : multiply(xf, [1, 0, 0, Hs / H, 0, 0]);
-  const box = clampBox(boxPx(f, top));
+  const box = clampBox(boxPx(f, e.lo?.xf ?? e.xf));
   const px = (v: number) => bound(lenPx(f, v), 0, MAX_COORD);
 
   // Palettes.
@@ -137,13 +139,14 @@ export function emitTableObject(ctx: EmitCtx, e: TableElement, out: SlideObject[
     return i;
   };
 
-  // Cell text: each body as a text box writes it, without autofit (rows grow, cells never shrink).
+  // Cell text: each body as a text box writes it, without autofit (cells never shrink: text past its fixed row
+  // overflows it, as a text box's overflows its box).
   type Cell = { rich: RichText | undefined; style: TextStyle | undefined };
   const texts: Cell[] = [];
   let tableChars = 0;
   for (const [i, c] of e.cells.entries()) {
-    let body: TextBody = { ...c.text, autofit: { kind: 'none' } };
-    if (lo) body = atLoSizes(body);
+    // At LibreOffice's sizes (`loSizePt`: 14 pt is stored 14.04 pt), as its rows were measured.
+    const body: TextBody = atLoSizes({ ...c.text, autofit: { kind: 'none' } });
     const plain = overText(ctx) || tableChars >= TABLE_OBJECT_LIMITS.tableText;
     let rich = tableChars >= TABLE_OBJECT_LIMITS.tableText ? undefined : cellRich(ctx, body, plain);
     if (rich) {
@@ -151,7 +154,8 @@ export function emitTableObject(ctx: EmitCtx, e: TableElement, out: SlideObject[
       tableChars += rich.text.length;
     }
     let style = rich?.style ?? emptyStyle(ctx, body);
-    if (style && lo && e.lo)
+    // The spill into the margins and the baseline lift, folded into the insets.
+    if (style && e.lo)
       style = asLibreOffice(style, lenPx(f, e.lo.spill[i] ?? 0), lenPx(f, e.lo.lift[i] ?? 0));
     if (style) style = withoutFit(style);
     texts.push({ rich, style });
@@ -259,7 +263,7 @@ export function emitTableObject(ctx: EmitCtx, e: TableElement, out: SlideObject[
     ...(v.length ? { v } : {}),
     ...(background !== undefined ? { background } : {}),
     ...(e.rtl ? { rtl: true } : {}),
-    ...(lo ? { rowRule: 'fixed' as const } : {}),
+    rowRule: 'fixed',
   };
   const legacy = e.background ? legacyColor(e.background) : undefined;
   const o: ShapeObject = {
@@ -321,7 +325,10 @@ function emitTableGroup(ctx: EmitCtx, e: TableElement, out: SlideObject[]): void
 
 // ── Cells ───────────────────────────────────────────────────────────────────────────────────────────────
 
-/** A cell's rich text, counted against the slide's text budget (`MAX_SLIDE_BYTES`) as it is written. */
+/**
+ * A cell's rich text, counted against the slide's text budget (`MAX_SLIDE_BYTES`) as it is written. `ctx.lo`
+ * reaches only the run-text policies (see the module header), never the layout.
+ */
 function cellRich(ctx: EmitCtx, body: TextBody, plain: boolean): RichText | undefined {
   const rich = richText(body, {
     frame: ctx.frame,
