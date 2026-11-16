@@ -3039,9 +3039,12 @@ be measured):
   (`loSizePt`: whole pixels at 600 dpi, so 14 pt is stored 14.04 pt), and where LibreOffice's row is shorter than
   the text or draws its lines higher, the spill into the margins and the baseline lift folded into each cell's
   insets (`asLibreOffice`). Until 1b every hub stored the deck's `a:tr h` and let the drawer grow the rows with
-  its own lines, which no harness column scored (`nativeSsim` drew this form under `loCompat` only): E's 63
-  table slides as hubs drew them averaged 0.745, with the stored form 0.850 (r2b-diag all-tables, 5cc7129; the
-  8 dense slides 0.508 -> 0.752), none lower by more than 0.01. Rows are fixed because rows left to grow
+  its own lines, which no harness column scored (`nativeSsim` drew this form under `loCompat` only). Measured
+  at the track's head on both kinds of hub (the harness's `table: true` slides, against r2b-sw1m): E's 66 table
+  slides as hubs draw them 0.756 -> 0.863 (the 8 dense slides 0.508 -> 0.752, the hub with LibreOffice asked
+  for them within 0.0014 of the stored form; the 58 others 0.790 -> 0.878), 36 up by more than 0.02, none down
+  by more than 0.01 on either kind of hub or in `nativeSsim`; golden-pptx's 16 table slides (cut copies)
+  0.642 -> 0.923. Rows are fixed because rows left to grow
   (all-tables' P1) dropped 7 of the 63 by 0.01-0.49 (2 Corinthians 3 vs 7 0.683 -> 0.191, Churchcraft 0.655 ->
   0.260): the drawer's lines are taller than the converter's model of LibreOffice's there. Nothing in the
   layout reads `loCompat`: the grid, rows, sizes and insets are the same with and without it
@@ -3050,7 +3053,12 @@ be measured):
   outlines on filled text, `baseline="0"`, as a text box's: harness-only, §17).
 - **Text past a fixed row** overflows it, upwards and downwards as its anchor says, as a text box's overflows
   its box (the layout's rule for `rowRule: 'fixed'`, above): an output whose faces lay a cell out taller than
-  the converter measured draws the text past the row, never clipped and never moving the rows below.
+  the converter measured draws the text past the row, never clipped and never moving the rows below
+  (`renderer/src/table/fixed.test.ts`). Counted on E's table slides with the drawer's layout in the harness's
+  page: 148 of 15,163 cells, on 11 of the 66 slides, need more than their fixed row by over 1 px with the
+  harness's faces (most by 1.5-2.7 px: 2 Corinthians 3 vs 7, Churchcraft, Ten Commandments, the seal and 666
+  charts; one Arabic slide by 18 px); with every width 3 % wider, 198 cells on 26 slides (up to 89 px, a
+  wrapped line).
 - **An edit grows a row by what its text needs more** (design/15 "Table editing", the operator's `fitRows`,
   domain `growRow`): never by the absolute shortfall, which would make a one-letter fix move the rows of a cell
   that already needs more than its fixed row in the drawer (all-tables' P1, rows grown to the drawer's need:
