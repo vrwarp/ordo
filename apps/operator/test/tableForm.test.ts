@@ -62,7 +62,7 @@ afterEach(() => {
 
 /** The size shown between the bar's Size − and Size + buttons. */
 const shownSize = (html: string) =>
-  /aria-label="Decrease font size"[^]*?<span class="mono small"[^>]*>([^<]*)<\/span>/.exec(html)?.[1];
+  /aria-label="Decrease font size"[\s\S]*?<span class="mono small"[^>]*>([^<]*)<\/span>/.exec(html)?.[1];
 
 describe("the table bar on an imported table's cell", () => {
   it('shows a stored 600 dpi size as typed sizes are shown (28.08 px as 28), the stored size unchanged', () => {
