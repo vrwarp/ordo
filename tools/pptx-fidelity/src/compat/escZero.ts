@@ -1,4 +1,4 @@
-import { compatRule, shapeText, visibleRuns } from './rule.ts';
+import { compatRule, drawnRuns } from './rule.ts';
 
 /**
  * A run whose nearest `baseline` is 0 under a non-zero one farther along its chain (a text box's runs set
@@ -10,7 +10,6 @@ export const escZero = compatRule({
   key: 'escZero',
   text: 'a run with baseline 0 under a non-zero inherited baseline shifted by it at 58 % (LibreOffice reads the 0 as unset)',
   hits(e) {
-    const t = shapeText(e);
-    return !!t && visibleRuns(t).some((r) => r.style.escZero !== undefined);
+    return drawnRuns(e).some((r) => r.style.escZero !== undefined);
   },
 });

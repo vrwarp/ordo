@@ -206,6 +206,47 @@ describe('compatRules', () => {
     expect(drawingKey(slideOf(false))).toBe(drawingKey(slideOf(true)));
   });
 
+  it("names the run-text rules a table's cells hit, as a text box's: the only drawing they change", () => {
+    // One table a slide, one cell each: an outline on filled text, a run's own shadow, baseline 0 under an
+    // inherited baseline, and plain text. The table object stores LibreOffice's layout either way (cellRows
+    // changes the M6 group only), so the plain cell's slide draws alike and the others differ by their run.
+    const cell = (r: string, lst = '') =>
+      `<a:tc><a:txBody><a:bodyPr/><a:lstStyle>${lst}</a:lstStyle>${para(r)}</a:txBody><a:tcPr/></a:tc>`;
+    const one = (c: string) => ({
+      shapes: tableFrame({
+        id: 4,
+        x: 914_400,
+        y: 914_400,
+        cols: [3 * 914_400],
+        rows: [{ h: 457_200, cells: [c] }],
+      }),
+    });
+    const scene = parseDeck(
+      buildDeck({
+        slides: [
+          one(cell(run('Outlined', 'sz="2000"', `${OUTLINE}${solid('FFFFFF')}`))),
+          one(cell(run('Shadowed', 'sz="2000"', `${solid('FFFFFF')}${SHADOW}`))),
+          one(
+            cell(
+              run('Jeshua', 'sz="2000" baseline="0"'),
+              '<a:lvl1pPr><a:defRPr baseline="-25000"/></a:lvl1pPr>',
+            ),
+          ),
+          one(cell(run('Plain', 'sz="2000"'))),
+        ],
+      }),
+    );
+    expect([...compatRules(scene)].map(([i, h]) => [i, [...h]])).toEqual([
+      [0, ['textOutline', 'cellRows']],
+      [1, ['runShadow', 'cellRows']],
+      [2, ['cellRows', 'escZero']],
+      [3, ['cellRows']],
+    ]);
+    const ordo = emitSlides(scene).slides.map((s) => s.slide);
+    const lo = emitSlides(scene, { loCompat: true }).slides.map((s) => s.slide);
+    expect(ordo.map((s, k) => drawingKey(lo[k]!) !== drawingKey(s))).toEqual([true, true, true, false]);
+  });
+
   it('leaves a scene with nothing to change without rules', () => {
     expect(compatRules(deck(sp({ id: 2, ...box, txBody: body(para(run('Plain', 'sz="4000"'))) }))).size).toBe(
       0,
