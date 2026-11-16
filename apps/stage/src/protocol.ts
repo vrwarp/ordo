@@ -86,6 +86,11 @@ export type MainToLink =
       t: 'init';
       outputId: string;
       token: string;
+      /**
+       * The window was opened as a Pulpit Lectern (`?view=lectern` when the page loaded): its hello says so, so
+       * the hub neither takes it for the Stage Display window nor lets a display replace it.
+       */
+      view?: 'lectern';
       testMode: boolean;
       /** Supervisor generation of this link worker (0 on the first start). */
       generation: number;

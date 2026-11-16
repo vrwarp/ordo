@@ -23,9 +23,12 @@ import { APP_VERSION } from './index.ts';
 // digest is unchanged (it leaves the APP_VERSION line out).
 // 0.8.0 for adaptive stage presets and speaker notes scale: PropsRule.stagePreset and PropsRule.notesScale in
 // schemas.ts, which a stale client would strip when saving looks.
+// 0.8.1 for the Pulpit Lectern's own hello: protocol index.ts Hello.view ('lectern'), which a stale 0.8.0 stage
+// tab never sends, so the hub would still take its lectern for a newer Stage Display; stale stage and lectern
+// tabs reload on the hub's bye version.
 const RECORDED = {
-  version: '0.8.0',
-  digest: 'c626ec41754b42f77ecc6f6ec3a4e95c6f39205e102599e63d7e693cc371ce15',
+  version: '0.8.1',
+  digest: '03f14454258794dba1ba7e82a0824761a20aaa595ae95010317cd037e3d502f3',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

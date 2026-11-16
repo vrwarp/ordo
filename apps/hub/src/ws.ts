@@ -53,6 +53,11 @@ type Client = {
   cap: SessionCap;
   role?: Role;
   outputId?: string;
+  /**
+   * A Pulpit Lectern on the stage output's link (hello `view: 'lectern'`): it gets the live state as the stage
+   * does, but it is not the output's window (no superseding either way, no health, not counted as connected).
+   */
+  view?: 'lectern';
   inflight: number;
   needsState: boolean;
   alive: boolean;
@@ -408,11 +413,15 @@ export class SocketHub {
           else return this.bye(c, 'forbidden');
         }
         c.role = role;
-        if (c.outputId) {
+        // Only the stage output has a lectern; any other window that says so is the output's own window.
+        if (role === 'stage' && m.view === 'lectern') c.view = 'lectern';
+        if (c.outputId && !c.view) {
           // A newer window for this output (a Relaunch from another operator tab, which cannot reach the
-          // old window by name) supersedes any older one, which closes itself on this bye (item 1).
+          // old window by name) supersedes any older one, which closes itself on this bye (item 1). A Pulpit
+          // Lectern opened on the stage output's link is neither: it never replaces the Stage Display window,
+          // nor a newer display it (any number of lecterns follow one stage output).
           for (const o of this.clients) {
-            if (o === c || !o.role || o.outputId !== c.outputId) continue;
+            if (o === c || !o.role || o.outputId !== c.outputId || o.view) continue;
             this.log.info({ outputId: c.outputId }, 'output window superseded by a newer one');
             this.bye(o, 'superseded');
           }
@@ -427,7 +436,7 @@ export class SocketHub {
         });
         if (this.receivesLive(c)) this.sendState(c);
         if (role === 'operate') this.sendHealth(c);
-        if (c.outputId) {
+        if (c.outputId && !c.view) {
           const h = this.health.get(c.outputId);
           this.health.set(c.outputId, { health: h?.health ?? EMPTY_HEALTH, lastSeen: Date.now() });
         }
@@ -493,7 +502,8 @@ export class SocketHub {
         return;
       }
       case 'health': {
-        if (!c.outputId) return;
+        // The output's health is its own window's; a lectern's is not taken for it.
+        if (!c.outputId || c.view) return;
         this.health.set(c.outputId, { health: m.health, lastSeen: Date.now() });
         return;
       }
@@ -597,7 +607,7 @@ export class SocketHub {
   healthTable(): Record<string, OutputHealthEntry> {
     const now = Date.now();
     const connected = new Set<string>();
-    for (const c of this.clients) if (c.outputId && c.role) connected.add(c.outputId);
+    for (const c of this.clients) if (c.outputId && c.role && !c.view) connected.add(c.outputId);
     const out: Record<string, OutputHealthEntry> = {};
     for (const o of this.outputs()) {
       const h = this.health.get(o.id);

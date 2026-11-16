@@ -87,6 +87,8 @@ export class OutputLink extends Emitter<{
     hub?: HubConnection;
     fallback?: FallbackClient | null;
     outputId?: string;
+    /** A Pulpit Lectern on the stage output's link (`HubConnectionOptions.view`). */
+    view?: 'lectern';
     token?: string;
   }) {
     super();
@@ -100,6 +102,7 @@ export class OutputLink extends Emitter<{
         role: opts.role,
         appVersion: opts.appVersion,
         outputId: this.outputId,
+        ...(opts.view ? { view: opts.view } : {}),
         token: this.token,
       });
     if (opts.fallback !== undefined) this.fallback = opts.fallback ?? undefined;

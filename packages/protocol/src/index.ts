@@ -4,7 +4,7 @@ import { LiveCommand, LiveEvent, type LiveState, type ResolvedPlaylist, Id } fro
 export const PROTOCOL_VERSION = 1;
 
 /** Version of the hub and the browser apps, deployed together from one image. A mismatch on hello means a stale tab. */
-export const APP_VERSION = '0.8.0';
+export const APP_VERSION = '0.8.1';
 
 export const Role = z.enum(['operate', 'edit', 'output', 'stage']);
 export type Role = z.infer<typeof Role>;
@@ -111,6 +111,13 @@ export const Hello = z.object({
   v: z.literal(PROTOCOL_VERSION),
   role: Role,
   outputId: Id.optional(),
+  /**
+   * Which window of the output this is: absent for the output's own window (an Audience screen, the Stage
+   * Display), 'lectern' for a Pulpit Lectern (`/stage?view=lectern`) on the stage output's link. A lectern
+   * follows the stage output without being its window: it neither replaces the Stage Display window nor is
+   * replaced by one (`bye 'superseded'`), and the output's health and connection are the display's (design/16).
+   */
+  view: z.literal('lectern').optional(),
   appVersion: z.string(),
   lastSeq: z.number().optional(),
 });
