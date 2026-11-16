@@ -28,6 +28,7 @@ by the next run with the same `--out` (they are the slow part); `--fresh-lo` dra
 | `--no-ppv`                   | leave pptx-preview out whatever `--engine` says                                                                                                                 |
 | `--lo-compat`                | draw native slides with LibreOffice's policies where ordo's differ (`src/compat/`); each slide a rule changes is drawn both ways                                |
 | `--before hub\|paste`        | also score what a hub with LibreOffice shows (`beforeHubSsim`, below): its real version 2, or (`paste`) the pixel paste alone                                   |
+| `--ask-hub [DECK:]LIST`      | with `--before hub`, also ask the hub for these slides (the `--slides` syntax), whatever it stores: measured on the real hub, not inferred; repeatable          |
 | `--hub dist\|source`         | the hub `--before hub` imports through: this checkout's sources (default) or its built bundle                                                                   |
 | `--no-libreoffice`           | also score what a hub without LibreOffice shows (`noLoSsim`, `missing`, below)                                                                                  |
 | `--hub-budget`               | draw every slide as the hub stores it once its budgets ran (a slide it makes a picture loses its objects)                                                       |
@@ -62,8 +63,12 @@ tight (the summaries keep every number).
   scored (`beforeHubFrom: 'hub'`). A slide LibreOffice could not draw in the hub (its bounded follow-up gave
   up: on one deck of E, LibreOffice crashes under the hub's resource limits on every attempt) is scored as
   the hub shows it, without its art (`beforeHubFailed`).
-  Any other slide scores `nativeSsim`. Decks have the mean as `beforeHubSsim`, the summary as
-  `beforeHubMean` (and `before`).
+  `--ask-hub` adds slides the hub is asked for whatever it stores (a table slide, to measure the stored form
+  on a real hub). Any other slide scores what the native column drew of it as stored: `nativeSsim`, but for a
+  slide holding a table object (`table: true`), which every hub stores as the converter writes it, never in
+  LibreOffice's form (the owner, 2026-11-15: every table is the table object): its stored form, `policySsim`
+  where `--lo-compat` drew it both ways, else `nativeSsim` (the two drawings are equal). Decks have the mean as
+  `beforeHubSsim`, the summary as `beforeHubMean` (and `before`).
 - `beforeHubPaste` (`--before`, F only): the labelled fallback. LibreOffice's pixels inside the art box and
   the metafiles' boxes (grown by 2 px before and 3 px after) pasted over the native page, scored as the
   native page is; a picture slide (or a slide the converter did not emit) scores 1. It stands in as
@@ -77,8 +82,15 @@ tight (the summaries keep every number).
 - `noLoSsim` (`--no-libreoffice`): what a hub **without** LibreOffice shows: the deck emitted with
   `EmitOptions.libreoffice: false` (M9: the art and the metafile conversions left out and listed), each slide
   as the hub stores it (`hubStoredSlide`: a picture slide loses its objects; the budget ladder will fill that
-  hook). It is `nativeSsim` where the two draw alike, and `nativeNoLo` names its picture where they do not.
-  `missing` lists the kinds nothing draws (`EmittedSlide.missing`). Summary: `noLoMean`.
+  hook). It is `nativeSsim` where the two draw alike, and `nativeNoLo` names its picture where they do not;
+  a slide holding a table object (`table: true`) is drawn as stored here too (with `--lo-compat`, emitted
+  once more without the policies), so where it draws alike it is its stored form (`policySsim`, or
+  `nativeSsim` when the two are equal), never the policies' drawing. `missing` lists the kinds nothing draws
+  (`EmittedSlide.missing`). Summary: `noLoMean`.
+- `table` (M9): the slide holds a table object; its two hub columns score it as stored (above). `nativeSsim`
+  stays the converter's drawing under the LibreOffice policies (with `--lo-compat`: LibreOffice's rows,
+  columns and sizes), reported beside it. An older run without the mark is read this way by the measuring
+  scripts' `--stored-tables` (`reasons` holding 'table' or 'deco:table', not 'art:table').
 - `metafiles`: metafile pictures left to LibreOffice on the slide (pending; such a slide is in F even when
   native). `exception`: the reason of a named exception (`src/exceptions.ts`) for the slide, which lifts
   gate 2 (before-hub) only, unless `exceptionGate: 'all'` says it lifts gate 1 (before-harness) too; decks

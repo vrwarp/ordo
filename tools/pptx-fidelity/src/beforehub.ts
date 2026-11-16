@@ -40,8 +40,7 @@ export type HubBefore = {
   metafiles?: readonly Box[];
   /**
    * A hub with LibreOffice keeps LibreOffice's page for it (`keepsPage`: its slide budget fitted it by leaving
-   * something out, or its tables as their M6 group pass 64 KB; `ImportCore.pageForBudget`), so the hub is asked
-   * whatever its class.
+   * something out; `ImportCore.pageForBudget`), so the hub is asked whatever its class.
    */
   budget?: boolean;
 };
@@ -166,28 +165,63 @@ export async function pasteSsim(
   return ssim(page.lo, page.scratch);
 }
 
-/** A slide's JSON budget on the hub (design/27 §3.4, `SIZE_BUDGETS.slideMax`). */
-const SLIDE_MAX = 64 * 1024;
-
 /**
  * Whether a hub with LibreOffice keeps LibreOffice's page for a slide (`ImportCore.pageForBudget`), from the
  * census's model of its budgets (`hubClasses`): the slide fitted by leaving something out ('plain',
- * 'minimal'), or (M9 `tables-conv`, the interim rule of question 3) its tables as their M6 group would take it
- * past 64 KB (`EmittedSlide.tableGroupBytes`, the converter's count with LibreOffice). The hub itself decides
- * (its page form within 64 KB, the presentation's room): this only says which slides to ask it for.
+ * 'minimal'). Never for its tables: the owner decided (2026-11-15) that every table is the table object on
+ * every hub, and the interim rule that kept the page of a slide whose tables as their M6 group passed 64 KB
+ * is gone. The hub itself decides (its page form within 64 KB, the presentation's room): this only says which
+ * slides to ask it for.
  */
-export function keepsPage(
-  h: { hub: string; hubWhy: string | null; level: string; stored: number },
-  tableGroupBytes = 0,
-): boolean {
+export function keepsPage(h: { hub: string; hubWhy: string | null; level: string }): boolean {
   if (h.hub === 'picture') return false;
-  if (h.hubWhy === 'slide' && (h.level === 'plain' || h.level === 'minimal')) return true;
-  return tableGroupBytes > 0 && h.stored + tableGroupBytes > SLIDE_MAX;
+  return h.hubWhy === 'slide' && (h.level === 'plain' || h.level === 'minimal');
 }
 
 /** A slide the hub does not show as the native column draws it: `--before hub` asks the hub for it. */
 export function needsHub(s: HubBefore | undefined): boolean {
   return s?.hub !== 'native' || !!s.metafiles?.length || !!s.budget;
+}
+
+/** A shown slide as `hubBeforeOf` reads it: what the converter emitted of it (`NativeSlide`). */
+export type AskedSlide = Pick<NativeSlide, 'art' | 'metafiles'>;
+/** The census's model of a slide on a hub with LibreOffice (`census.ts` `hubClasses`). */
+export type HubModel = { hub: HubBefore['hub']; hubWhy: string | null; level: string };
+
+/**
+ * What a hub with LibreOffice shows of a shown slide (`HubBefore`), from its emission `s` and the census's
+ * model of it `h`; undefined for a shown slide the converter did not emit (a LibreOffice picture there).
+ */
+export function hubBeforeOf(s: AskedSlide | undefined, h: HubModel | undefined): HubBefore | undefined {
+  if (!s || !h) return undefined;
+  const budget = keepsPage(h);
+  return {
+    hub: h.hub,
+    ...(s.art ? { art: s.art } : {}),
+    ...(s.metafiles ? { metafiles: s.metafiles } : {}),
+    ...(budget ? { budget } : {}),
+  };
+}
+
+/**
+ * The shown slides (0-based) `--before hub` asks the hub for: each with a LibreOffice page (`lo[i]`), within
+ * `only` when given, that the hub does not show as the native column draws it (`needsHub` of `before(i)`), and
+ * each that `extra` names (`--ask-hub`: a slide the hub stores as the native column draws it, asked to measure
+ * that on a real hub).
+ */
+export function askedSet(o: {
+  n: number;
+  lo: readonly (string | undefined)[];
+  before: (i: number) => HubBefore | undefined;
+  only?: ReadonlySet<number>;
+  extra?: ReadonlySet<number>;
+}): Set<number> {
+  const asked = new Set<number>();
+  for (let i = 0; i < o.n; i++) {
+    if (!o.lo[i] || (o.only && !o.only.has(i))) continue;
+    if (o.extra?.has(i) || needsHub(o.before(i))) asked.add(i);
+  }
+  return asked;
 }
 
 /** Past this much data, the hub is replaced by a fresh one before the next deck (disk is the limit). */

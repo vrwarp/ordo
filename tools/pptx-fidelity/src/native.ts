@@ -121,10 +121,12 @@ export type NativeSlide = {
   /** Classed picture by the converter's slide budget alone (`EmittedSlide.overBudget`). */
   overBudget?: true;
   /**
-   * M9 (`tables-conv`): what the slide's tables would add as their M6 group (`EmittedSlide.tableGroupBytes`,
-   * with LibreOffice): `--before hub` asks the hub for a slide this takes past 64 KB (`keepsPage`).
+   * M9: the slide holds a table object (`ShapeObject.table`), which both kinds of hub store as the converter
+   * writes it, never in LibreOffice's form (the owner: every table is the table object): the run draws it as
+   * stored in both hub columns (`noLoSsim`, and `beforeHubSsim` when the hub is not asked), never its
+   * `compatSlide`.
    */
-  tableGroupBytes?: number;
+  table?: true;
   /**
    * With `noLibreOffice`: the slide as a hub without LibreOffice emits it (`EmitOptions.libreoffice: false`,
    * with the policies `slide` or `compatSlide` is drawn with), when that differs from the slide drawn.
@@ -146,6 +148,11 @@ export type NativeSlide = {
    */
   noLoDraw?: Slide;
 };
+
+/** Whether a slide holds a table object (`ShapeObject.table`): `NativeSlide.table`. */
+export function holdsTable(slide: Slide): boolean {
+  return slide.objects.some((o) => o.type === 'shape' && o.table !== undefined);
+}
 
 /** What `convertDeck` is asked for besides the slides. */
 export type ConvertOptions = {
@@ -408,6 +415,26 @@ export async function convertDeck(
       } catch (e) {
         note(`the slides as a hub without LibreOffice emits them could not be emitted: ${errorText(e)}`);
       }
+    // A slide holding a table object is drawn as stored in the no-LibreOffice column, policies and all: where
+    // the emission above has the policies, the deck is emitted once more without them for those slides.
+    let noLoStored: Map<number, EmittedSlide> | undefined;
+    if (noLo && opts.loCompat && hits.size && emitted.slides.some((s) => holdsTable(s.slide)))
+      try {
+        const o: EmitOptions = {
+          ...ids,
+          ...noLoIds,
+          libreoffice: false,
+          m9Writes: M9_WRITES,
+          sheets: PPTX_SHEETS,
+        };
+        const r = emitSlides(scene, o);
+        for (const g of [...r.geoms, ...r.decors]) if (!geoms.has(g.id)) geoms.set(g.id, g);
+        noLoStored = new Map(r.slides.map((s) => [s.index, s] as const));
+      } catch (e) {
+        note(
+          `the table slides as a hub without LibreOffice stores them could not be emitted: ${errorText(e)}`,
+        );
+      }
     out.geoms = [...geoms.values()];
     emitted.media.push(...noLoOnly);
     out.slides = emitted.slides.map((s) => {
@@ -416,7 +443,10 @@ export async function convertDeck(
       const lo = compatSlides?.get(s.index);
       const differs = lo !== undefined && drawingKey(lo) !== drawingKey(slide);
       const rules: CompatRule[] = differs ? [...(hits.get(s.index) ?? [])].sort() : [];
-      const nl = noLo?.get(s.index);
+      // A table slide's no-LibreOffice form is its emission without the policies, compared with the slide as
+      // stored (what that column draws of it).
+      const table = holdsTable(slide);
+      const nl = (table ? noLoStored?.get(s.index) : undefined) ?? noLo?.get(s.index);
       const nlSlide = nl ? still(nl) : undefined;
       const drawn = opts.loCompat && differs ? lo : slide;
       const missing = nl?.missing;
@@ -438,8 +468,10 @@ export async function convertDeck(
         ...(s.art ? { art: { ...s.art.box } } : {}),
         ...(s.metafiles?.length ? { metafiles: s.metafiles.map((m) => ({ ...m.object.box })) } : {}),
         ...(s.overBudget ? { overBudget: true as const } : {}),
-        ...(s.tableGroupBytes ? { tableGroupBytes: s.tableGroupBytes } : {}),
-        ...(nl && nlSlide && drawingKey(nlSlide) !== drawingKey(drawn) ? { noLoSlide: nlSlide } : {}),
+        ...(table ? { table: true as const } : {}),
+        ...(nl && nlSlide && drawingKey(nlSlide) !== drawingKey(table ? slide : drawn)
+          ? { noLoSlide: nlSlide }
+          : {}),
         ...(nl && nl.classification.class !== s.classification.class
           ? { noLoClass: nl.classification.class }
           : {}),

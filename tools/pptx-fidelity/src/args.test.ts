@@ -24,6 +24,29 @@ describe('parseArgs', () => {
     expect(() => parseArgs(['--slides', '--lo-compat'])).toThrow(/needs a value/);
   });
 
+  it('reads repeated --ask-hub lists as --slides reads its own, and names the flag in its errors', () => {
+    expect(parseArgs(['decks']).askHub).toEqual([]);
+    const a = parseArgs([
+      '--before',
+      'hub',
+      '--ask-hub',
+      'Colossians:1',
+      '--ask-hub',
+      'Boletim:2,3',
+      'decks',
+    ]);
+    expect(a.askHub.map((s) => [s.deck, [...s.slides]])).toEqual([
+      ['Colossians', [1]],
+      ['Boletim', [2, 3]],
+    ]);
+    expect(a.slides).toEqual([]);
+    expect([...slidesFor(a.askHub, 'Boletim_Fev-17')!]).toEqual([2, 3]);
+    expect(slidesFor(a.askHub, 'other')!.size).toBe(0);
+    expect(() => parseArgs(['--ask-hub'])).toThrow(/needs a value/);
+    expect(() => parseArgs(['--ask-hub', 'x:0'])).toThrow(/^--ask-hub x:0: '0' is not a slide number/);
+    expect(() => parseArgs(['--slides', 'x:0'])).toThrow(/^--slides x:0: '0' is not a slide number/);
+  });
+
   it('reads --before hub or paste and refuses anything else', () => {
     expect(parseArgs(['decks']).before).toBeUndefined();
     expect(parseArgs(['--before', 'hub', 'decks'])).toMatchObject({ before: 'hub', decks: ['decks'] });

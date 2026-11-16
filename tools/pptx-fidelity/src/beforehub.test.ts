@@ -5,8 +5,11 @@ import { join } from 'node:path';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  type AskedSlide,
+  askedSet,
   BeforeHub,
   boundsOf,
+  hubBeforeOf,
   keepsPage,
   needsHub,
   pagePx,
@@ -61,17 +64,36 @@ describe('which slides the hub is asked for', () => {
   });
 
   it("asks for a slide a hub with LibreOffice keeps as LibreOffice's page (keepsPage, ImportCore.pageForBudget)", () => {
-    const stored = { hub: 'native', hubWhy: null, level: 'full', stored: 9_000 };
+    const stored = { hub: 'native' as const, hubWhy: null, level: 'full', stored: 9_000 };
     // Fitted by leaving something out: the page, as before M9.
     expect(keepsPage({ ...stored, hubWhy: 'slide', level: 'plain' })).toBe(true);
     expect(keepsPage({ ...stored, hubWhy: 'slide', level: 'minimal' })).toBe(true);
     expect(keepsPage({ ...stored, hubWhy: 'slide', level: 'grid' })).toBe(false);
-    // M9 tables-conv, the interim rule: its tables as their M6 group would take it past 64 KB.
-    expect(keepsPage(stored, 86_079)).toBe(true);
-    expect(keepsPage(stored, 64 * 1024 - 9_000)).toBe(false);
     expect(keepsPage(stored)).toBe(false);
     // A picture slide is LibreOffice's page whatever the rule says (`needsHub` asks for it by its class).
-    expect(keepsPage({ ...stored, hub: 'picture' }, 86_079)).toBe(false);
+    expect(keepsPage({ ...stored, hub: 'picture', hubWhy: 'slide', level: 'minimal' })).toBe(false);
+  });
+
+  it('builds the asked set as main.ts does: never for tables (the interim rule is gone), and the slides --ask-hub names', () => {
+    const full = { hub: 'native' as const, hubWhy: null, level: 'full', stored: 9_000 };
+    const plain = { ...full, hubWhy: 'slide', level: 'plain' };
+    // A scene from a run of the interim rule's build, read back from its slides.json: it still carries what
+    // its tables would add as their M6 group (86,079 B: past 64 KB with the slide's 9,000).
+    const older = JSON.parse('{"tableGroupBytes":86079}') as AskedSlide;
+    const models = [full, plain, full];
+    const slides: (AskedSlide | undefined)[] = [older, {}, undefined];
+    const before = (i: number) => hubBeforeOf(slides[i], models[i]);
+    const lo = ['p1.png', 'p2.png', 'p3.png', undefined];
+    // The table slide stays the table object on a hub with LibreOffice: not asked; the plain slide keeps its
+    // page; a slide the converter did not emit is LibreOffice's picture; a slide without a page is never asked.
+    expect([...askedSet({ n: 4, lo, before })]).toEqual([1, 2]);
+    expect(before(0)).toEqual({ hub: 'native' });
+    expect([...askedSet({ n: 4, lo, before, only: new Set([0, 1]) })]).toEqual([1]);
+    // `--ask-hub` adds a slide the hub stores as the native column draws it (never one without a page, nor
+    // one `--slides` leaves out).
+    const extra = new Set([0, 3]);
+    expect([...askedSet({ n: 4, lo, before, extra })]).toEqual([0, 1, 2]);
+    expect([...askedSet({ n: 4, lo, before, extra, only: new Set([1, 3]) })]).toEqual([1]);
   });
 });
 
