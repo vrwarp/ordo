@@ -496,9 +496,13 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   slide's first draw does not decide it: that cold job
   decodes its pictures, builds its geometry and makes or leaves its units, and a re-draw copies the made units.
   Parts made while a re-draw runs are drawn in after it (the link syncs on a late job's `done`), and a slide shown
-  again starts a new late job (reviews of r2b sub-wave 1, rounds 1-2). Measured at 3840 in software Canvas 2D: the
+  again starts a new late job (reviews of r2b sub-wave 1, rounds 1-3). Measured at 3840 in software Canvas 2D: the
   leaf template's slide 1 is shown by a 75-109 ms cold draw and re-drawn in 61-71 ms, its line art fading in
-  0.95-1.03 s after the jump (at c9c7a39, which judged by the cold draw, never). Which slides re-draw past one task
+  0.95-1.03 s after the jump (at c9c7a39, which judged by the cold draw, never); that slide has one late part, so
+  the wait never applies to it. With three more copies of its line art (9 late parts; `?unitTurnMs=40` to spread
+  their making), at d1636fb: two re-draws a jump, 1.03-1.07 s and 1.67-1.72 s after it, the re-draw waiting
+  0.53-0.62 s between them (re-draws of 64-97 ms), every part on screen at the end (the screen identical to the
+  slide drawn whole), 5 of 5 jumps. Which slides re-draw past one task
   on an output is not counted: E has 65 whose warm draw passes 50 ms in the harness, and the leaf slide re-draws
   slower on an output than in the harness (35-50 ms), so more do; live-frame and render-bounds take the slowest off
   the screens.
