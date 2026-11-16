@@ -89,11 +89,13 @@ export function TextFloatingControls({
   };
 
   const shownFont = hasSelection ? (st.font ?? s.fontFamily) : s.fontFamily;
+  // Whole px, as a typed size shows: an imported table stores LibreOffice's 600 dpi sizes (14 pt is 14.04 pt,
+  // 28.08 px; design/15 "Table editing"), shown as 28, the stored size unchanged.
   const shownSize = hasSelection
     ? st.sizePx !== undefined
       ? Math.round(st.sizePx)
       : undefined
-    : s.fontSizePx;
+    : Math.round(s.fontSizePx);
   const shownColor: Rgba = hasSelection ? (st.color ?? s.color) : s.color;
   const boldOn = hasSelection ? st.bold === true : s.fontWeight >= 600;
   const italicOn = hasSelection ? st.italic === true : s.fontStyle === 'italic';

@@ -647,6 +647,12 @@ _A table (`ShapeObject.table`, design/27 M9) is edited cell by cell (`SlideCanva
   canvas's table kit (the renderer's table module, a chunk of its own), measured as the canvas measures; the
   editor's ops ask for it when they load, so Find & Replace in a table on a slide not yet shown grows its rows
   too; until it is here, an op changes no row.
+- **What the editor shows of the stored form** (sub-wave 1b). The size field shows whole px as a typed size
+  shows (`TextControls.tsx`): an imported cell stored at LibreOffice's 600 dpi size (14 pt is 14.04 pt, 28.08 px)
+  shows 28, the stored size unchanged (Size − and + step from the stored one). A cell has no margin fields: its
+  insets as stored (LibreOffice's lift moved into the top and bottom, its spill shrinking them) are drawn, not
+  shown or edited. A cell's text copied and pasted into a text box takes the box's size, its runs keeping their
+  ratio to the cell's size (a slice carries run formatting, never the cell's box): no 600 dpi size travels.
 - **Find & Replace and New slide like this.** Find & Replace searches and replaces in the cells of every
   unlocked table as in text boxes (`findInCells` in `ops/slides.ts`, the one place the find walks cells; a
   match carries its `cell`); the Find card lists a cell's match and opens it for editing on the canvas. 'New
