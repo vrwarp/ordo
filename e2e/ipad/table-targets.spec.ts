@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { m9Table } from '../../packages/domain/src/m9.test-util.ts';
+import { editorState, SECOND_PRESS_MS, tableKitReady } from '../editorhelpers.ts';
 import { portOf } from '../ports.ts';
 import { auditTargets, type Miss, TABLE_TOOLS, TABLET_EXCEPTIONS } from '../touchaudit.ts';
 import { json, shot, signInByTapping, startHub, tabletSlot } from './ipadhelpers.ts';
@@ -57,14 +58,18 @@ test("a table's cell tools are 44 px touch targets", async ({ page }) => {
     await expect(stage).toBeVisible({ timeout: 20_000 });
     expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
 
-    // 'Leader' (the header row's last cell): a tap selects the table, a tap on the table selected its cell (once
-    // the table's drawer, loaded with the first table, has drawn it).
+    // 'Leader' (the header row's last cell): a tap selects the table, a tap on the table selected its cell (the
+    // canvas's table kit, loaded with the first table, waited for once).
     const tools = page.locator(TABLE_TOOLS);
-    await expect(async () => {
-      const b = (await stage.boundingBox())!;
-      await stage.tap({ position: { x: (1290 / 1920) * b.width, y: (195 / 1080) * b.height } });
-      await expect(tools.getByLabel('Cell text')).toBeVisible({ timeout: 2000 });
-    }).toPass({ timeout: 30_000 });
+    await tableKitReady(page);
+    const b = (await stage.boundingBox())!;
+    const leader = { x: (1290 / 1920) * b.width, y: (195 / 1080) * b.height };
+    await stage.tap({ position: leader });
+    await expect.poll(async () => (await editorState(page)).objectId).toBe('table');
+    await page.waitForTimeout(SECOND_PRESS_MS);
+    await stage.tap({ position: leader });
+    await expect(tools.getByLabel('Cell text')).toBeVisible();
+    expect((await editorState(page)).cell).toBe(2);
     await expect(tools.getByRole('button', { name: 'Row below' })).toBeVisible();
     await tools.scrollIntoViewIfNeeded();
     misses.push(

@@ -4,10 +4,18 @@
  * `box.h` from that drawn height while a drag of the width alone keeps it, and tables do not turn there.
  */
 import { m9Table } from '@ordo/domain/m9.test-util.ts';
-import type { SlideObject } from '@ordo/domain';
+import { Presentation, type SlideObject } from '@ordo/domain';
 import { recordingCtx } from '@ordo/renderer/text/test-util.ts';
-import { describe, expect, it } from 'vitest';
-import { isTable, nodeCacheRect, tableBoxAfterTransform } from '../src/views/editor/SlideCanvas.tsx';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { openPresentation, selectObject, useEditor } from '../src/views/editor/editorStore.ts';
+import { inspectEditor } from '../src/views/editor/inspect.ts';
+import {
+  isTable,
+  nodeCacheRect,
+  pressTable,
+  tableBoxAfterTransform,
+  tableKitLoaded,
+} from '../src/views/editor/SlideCanvas.tsx';
 
 const box = { x: 100, y: 200, w: 800, h: 300, rotation: 0 };
 const table = {
@@ -45,5 +53,37 @@ describe('a table on the canvas', () => {
     });
     expect(turned.rotation).toBe(15);
     expect(turned.h).toBe(150);
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('a press on the selected table before the table kit has loaded selects its cell once the kit arrives', async () => {
+    // The canvas measures with a 2D context of its own; here the recording one the renderer's tests use.
+    const ctx = recordingCtx();
+    vi.stubGlobal('document', { createElement: () => ({ width: 1, height: 1, getContext: () => ctx }) });
+    const t = { ...table, id: 'table', box: { x: 120, y: 160, w: 1320, h: 410, rotation: 0 } } as SlideObject;
+    openPresentation(
+      Presentation.parse({
+        id: 'deck',
+        title: 'Order of service',
+        kind: 'slides',
+        sections: [{ id: 'sec', label: 'Main', short: 'M', slides: [{ id: 'sl', objects: [t] }] }],
+      }),
+    );
+    useEditor.setState({ slideId: 'sl' });
+    selectObject('table');
+    // The editor's inspect hook says whether the kit is there (the e2e specs wait for it once).
+    expect(inspectEditor().tableKit).toBe(false);
+    expect(tableKitLoaded()).toBe(false);
+    // 'Leader' (cell 2): x 1140-1440, y 160-230.
+    const loaded = pressTable(t, 1290, 195);
+    expect(useEditor.getState().cell).toBeUndefined();
+    await loaded;
+    expect(tableKitLoaded()).toBe(true);
+    expect(inspectEditor().tableKit).toBe(true);
+    expect(useEditor.getState()).toMatchObject({ objectId: 'table', cell: 2 });
+    // With the kit there, a press selects at once.
+    await pressTable(t, 210, 195);
+    expect(useEditor.getState().cell).toBe(0);
   });
 });

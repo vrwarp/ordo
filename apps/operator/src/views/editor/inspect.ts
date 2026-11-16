@@ -1,5 +1,6 @@
 import type { Presentation } from '@ordo/domain';
 import { useEditor } from './editorStore.ts';
+import { tableKitLoaded } from './tableKitState.ts';
 
 /** What `window.__ordo.editor` reports: the open editor, for the end-to-end specs (e2e/editorhelpers.ts). */
 export type EditorInspect = {
@@ -15,6 +16,8 @@ export type EditorInspect = {
   /** The selected cell of a selected table, and the target edited on the canvas (design/15 "Table editing"). */
   cell?: number;
   inline?: { objectId: string; cell?: number };
+  /** The canvas's table kit has loaded (loaded with the first table it shows; until then cells are not hit). */
+  tableKit: boolean;
   /** The draft as the editor holds it (what Save would send, with the base rev). */
   draft?: Presentation;
 };
@@ -40,6 +43,7 @@ export function inspectEditor(): EditorInspect {
         ? { objectId: s.inlineEditingId }
         : { objectId: s.inlineEditingId, cell: s.inlineEditingCell }
       : undefined,
+    tableKit: tableKitLoaded(),
     draft: s.draft ? structuredClone(s.draft) : undefined,
   };
 }

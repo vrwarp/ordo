@@ -231,10 +231,8 @@ describe("the canvas's keys on a selected table (tableKey)", () => {
   });
 
   it('Tab and Shift+Tab select the next and previous cell; Escape goes back to the table; Delete empties the cell', () => {
-    selectObject('table');
+    selectCell('table', 0);
     expect(key('Tab')).toBe(true);
-    expect(useEditor.getState().cell).toBe(0);
-    key('Tab');
     expect(useEditor.getState().cell).toBe(1);
     key('Tab', true);
     expect(useEditor.getState().cell).toBe(0);
@@ -250,5 +248,51 @@ describe("the canvas's keys on a selected table (tableKey)", () => {
     expect(key('Delete')).toBe(false);
     expect(key('a')).toBe(false);
     expect(tableKey({ key: 'Enter', shiftKey: false }, lyric(), false)).toBe(false);
+  });
+
+  it('Tab leaves the canvas with the whole table selected, and past the last cell when a cell is only selected (no row added)', () => {
+    const rows = table().table!.rows.length;
+    selectObject('table');
+    expect(useEditor.getState()).toMatchObject({ objectId: 'table', cell: undefined });
+    expect(key('Tab')).toBe(false);
+    expect(key('Tab', true)).toBe(false);
+    expect(useEditor.getState()).toMatchObject({ objectId: 'table', cell: undefined });
+    const last = table().table!.cells.length - 1;
+    selectCell('table', last);
+    expect(key('Tab')).toBe(false);
+    expect(table().table!.rows).toHaveLength(rows);
+    expect(useEditor.getState().cell).toBe(last);
+    selectCell('table', 0);
+    expect(key('Tab', true)).toBe(false);
+    expect(useEditor.getState().cell).toBe(0);
+  });
+
+  it('the arrow keys with a cell selected move between cells as drawn, not the table', () => {
+    const box = { ...table().box };
+    // m9Table's grid (4 columns, 5 rows): row 1 is 3 '10:00' | 4 'Call to worship' | 5 'Psalm 23' (two rows) |
+    // 6 'Pastor Kim'; row 2 is 7 '10:15' | 8 | (5) | 9 'Worship team'; row 3 is 10 | 11 (two columns) | 12.
+    const at = (c: number, k: string) => {
+      selectCell('table', c);
+      expect(key(k)).toBe(true);
+      return useEditor.getState().cell;
+    };
+    expect(at(8, 'ArrowLeft')).toBe(7);
+    expect(at(7, 'ArrowRight')).toBe(8);
+    expect(at(8, 'ArrowRight')).toBe(5);
+    expect(at(9, 'ArrowLeft')).toBe(5);
+    expect(at(9, 'ArrowUp')).toBe(6);
+    expect(at(9, 'ArrowDown')).toBe(12);
+    // From the merged cell, down goes past both its rows.
+    expect(at(5, 'ArrowDown')).toBe(11);
+    // At an edge the selection stays (the key is still the table's: the table does not move).
+    selectCell('table', 0);
+    expect(key('ArrowUp')).toBe(true);
+    expect(key('ArrowLeft')).toBe(true);
+    expect(useEditor.getState().cell).toBe(0);
+    expect(table().box).toEqual(box);
+    // The whole table selected: the arrows are the editor's (they nudge it).
+    selectCell('table', undefined);
+    expect(useEditor.getState()).toMatchObject({ objectId: 'table', cell: undefined });
+    expect(key('ArrowLeft')).toBe(false);
   });
 });

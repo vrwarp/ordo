@@ -289,11 +289,37 @@ export function tabCell(objectId: string, cell: number, back: boolean, grow = tr
 }
 
 /**
+ * The cell beside `cell` as drawn, for an arrow key (a right-to-left table draws its first column on the
+ * right), past a merged cell's whole span; undefined at the table's edge.
+ */
+export function cellBeside(
+  t: Pick<TableData, 'rows' | 'cols' | 'cells' | 'rtl'>,
+  cell: number,
+  key: string,
+): number | undefined {
+  const { R, C, anchors, slots } = placeCells(t);
+  const a = anchors[cell];
+  if (!a) return undefined;
+  const drawnDc = key === 'ArrowLeft' ? -1 : key === 'ArrowRight' ? 1 : 0;
+  const dc = t.rtl ? -drawnDc : drawnDc;
+  const dr = key === 'ArrowUp' ? -1 : key === 'ArrowDown' ? 1 : 0;
+  if (!dc && !dr) return undefined;
+  const row = dr < 0 ? a.row - 1 : dr > 0 ? a.row + a.rows : a.row;
+  const col = dc < 0 ? a.col - 1 : dc > 0 ? a.col + a.cols : a.col;
+  if (row < 0 || row >= R || col < 0 || col >= C) return undefined;
+  const k = slots[row * C + col];
+  return k !== undefined && k >= 0 ? k : undefined;
+}
+
+/**
  * The canvas's keys on the selected table (EditorView's window handler, where the slide has the keys; design/15
  * "Table editing"): Enter edits the selected cell (the first one when none is), its caret at the end of its
- * text; Tab and Shift+Tab select the next or previous cell (a new row past the last, unless `readOnly`);
- * Escape goes from a cell back to the whole table; Delete and Backspace empty the selected cell's text (the
- * table stays: Delete with the whole table selected deletes it, as for any object). Whether the key was one.
+ * text; with a cell selected (not edited), Tab and Shift+Tab select the next or previous cell in reading order
+ * and the arrow keys the cell beside it as drawn (at an edge the cell stays selected); past the last or first
+ * cell, and with the whole table selected, Tab is not the table's, so focus leaves the canvas (a row is added
+ * only while a cell is being edited, SlideCanvas's text field). Escape goes from a cell back to the whole
+ * table; Delete and Backspace empty the selected cell's text (the table stays: Delete with the whole table
+ * selected deletes it, as for any object). Whether the key was one.
  */
 export function tableKey(e: { key: string; shiftKey: boolean }, o: SlideObject, readOnly: boolean): boolean {
   if (o.type !== 'shape' || !o.table) return false;
@@ -301,6 +327,15 @@ export function tableKey(e: { key: string; shiftKey: boolean }, o: SlideObject, 
   const cell = st.objectId === o.id ? st.cell : undefined;
   const first = nextCell(o.table, -1, false) ?? 0;
   switch (e.key) {
+    case 'ArrowLeft':
+    case 'ArrowRight':
+    case 'ArrowUp':
+    case 'ArrowDown': {
+      if (cell === undefined) return false;
+      const next = cellBeside(o.table, cell, e.key);
+      if (next !== undefined) selectCell(o.id, next);
+      return true;
+    }
     case 'Enter': {
       if (readOnly || o.locked) return false;
       const at = cell ?? first;
@@ -310,13 +345,10 @@ export function tableKey(e: { key: string; shiftKey: boolean }, o: SlideObject, 
       return true;
     }
     case 'Tab': {
-      const next =
-        cell === undefined
-          ? e.shiftKey
-            ? nextCell(o.table, o.table.cells.length, true)
-            : first
-          : tabCell(o.id, cell, e.shiftKey, !readOnly);
-      if (next !== undefined) selectCell(o.id, next);
+      if (cell === undefined) return false;
+      const next = nextCell(o.table, cell, e.shiftKey);
+      if (next === undefined) return false;
+      selectCell(o.id, next);
       return true;
     }
     case 'Escape':
@@ -412,13 +444,22 @@ export function canRowCol(
 /**
  * 'Rows & columns' on table `objectId` (design/15 "Table editing"): from cell `cell` (its first row and column;
  * a merged cell's span grows over an inserted line), or without one at the table's top, bottom, left or right
- * edge. One undo step (`insertRow`, `deleteRow`, `insertCol`, `deleteCol`: a new line copies the look of the one
- * beside it). The cell to select afterwards (the same cell where it moved, its neighbour when its line was
- * deleted), or undefined when nothing changed or no cell was selected.
+ * edge. Left and right are as drawn: a right-to-left table draws its first column on the right, so there
+ * 'Column left' adds the column after the cell's last one. One undo step (`insertRow`, `deleteRow`,
+ * `insertCol`, `deleteCol`: a new line copies the look of the one beside it). The cell to select afterwards
+ * (the same cell where it moved, its neighbour when its line was deleted), or undefined when nothing changed
+ * or no cell was selected.
  */
-export function rowCol(objectId: string, op: RowColOp, cell?: number): number | undefined {
+export function rowCol(objectId: string, drawnOp: RowColOp, cell?: number): number | undefined {
   const o = currentSlide()?.objects.find((x) => x.id === objectId);
-  if (o?.type !== 'shape' || !o.table || o.locked || !canRowCol(o.table, op, cell)) return undefined;
+  if (o?.type !== 'shape' || !o.table || o.locked || !canRowCol(o.table, drawnOp, cell)) return undefined;
+  const op: RowColOp = !o.table.rtl
+    ? drawnOp
+    : drawnOp === 'colLeft'
+      ? 'colRight'
+      : drawnOp === 'colRight'
+        ? 'colLeft'
+        : drawnOp;
   const { R, C, anchors } = placeCells(o.table);
   const a = cell === undefined ? undefined : anchors[cell];
   let next: number | undefined;

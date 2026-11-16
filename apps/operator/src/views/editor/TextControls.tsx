@@ -35,6 +35,15 @@ export function textObjectStyle(
     setObj((x) => (x.type === 'text' ? { ...x, style: fn(x.style) } : x), `style:${id}:${key}`, overridePath);
 }
 
+/**
+ * The alignment button's next style: left, centre, right in turn, and justification dropped (a justified
+ * box or cell keeps `align` beside `justify: true`; the button would otherwise change nothing it draws).
+ */
+export function nextAlign(s: TextStyle): TextStyle {
+  const { justify: _, ...rest } = s;
+  return { ...rest, align: s.align === 'left' ? 'center' : s.align === 'center' ? 'right' : 'left' };
+}
+
 export function TextFloatingControls({
   o,
   range,
@@ -281,9 +290,9 @@ export function TextFloatingControls({
           title={`Align: ${s.align} (click to cycle)`}
           aria-label="Cycle text alignment"
           onMouseDown={(e) => e.preventDefault()}
-          onClick={() =>
-            setBox('align', s.align === 'left' ? 'center' : s.align === 'center' ? 'right' : 'left')
-          }
+          onClick={() => {
+            if (!off) setStyle(nextAlign, 'align', ['style.align', 'style.justify']);
+          }}
         >
           <AlignIcon align={s.align} />
         </button>

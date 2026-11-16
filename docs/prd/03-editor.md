@@ -31,7 +31,8 @@ belong to the live playlist.
 Canvas at the output's logical size (1920x1080 by default, resolution-independent
 coordinates in the data model), with the slide's background shown behind.
 
-Objects, in z-order, each selectable, movable, resizable, rotatable:
+Objects, in z-order, each selectable, movable, resizable, rotatable (tables do not turn: they have no rotate
+handle, and a turn stored in an imported table is kept and drawn):
 
 | Object   | Properties                                                                                                                                                                                                                                    |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -58,9 +59,11 @@ Objects, in z-order, each selectable, movable, resizable, rotatable:
   silently missing on the screens. Something pasted that the editor cannot use is left out, and a part of
   the editor that fails to draw shows a message there while the rest of the app, the live controls
   included, keeps working.
-- Tables are edited cell by cell: a click on the selected table picks a cell, a double-click (or Enter) types
-  in it, Tab moves to the next cell and adds a row after the last one, as in PowerPoint; Find and replace also
-  finds text in tables. A table is never the lyric box.
+- Tables are edited cell by cell: a click on the selected table picks a cell (on an iPad, a tap; a
+  double-tap opens the cell's text in the panel), a double-click (or Enter) types in it; while typing, Tab
+  moves to the next cell and adds a row after the last one, as in PowerPoint; with a cell picked, Tab and the
+  arrow keys pick the next cell (Tab past the last one leaves the slide). Find and replace also finds text in
+  tables. A table is never the lyric box.
 - Undo and redo within an editing session; save creates a presentation revision
   ([prd/05](05-library-media-import.md), version history).
 - Keyboard: arrow nudges, Shift for 10 px, Ctrl+D duplicate, Delete, Ctrl+Z, Ctrl+Y,

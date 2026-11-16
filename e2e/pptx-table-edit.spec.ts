@@ -9,9 +9,11 @@ import {
   opOrigin,
   openEditor,
   type PresentationRec,
+  SECOND_PRESS_MS,
   save,
   slidesOf,
   stored,
+  tableKitReady,
 } from './editorhelpers.ts';
 import { hubApi, login } from './linkhelpers.ts';
 import type { Pixels } from './png.ts';
@@ -139,18 +141,19 @@ test('a PowerPoint table imported on a hub without LibreOffice, a cell edited on
     const cell = table.table!.cells.findIndex((c) => c.text === tableCellText(ROW, COL));
     expect(cell, 'the edited cell').toBeGreaterThan(0);
 
-    // 2. The editor: a click selects the table, a click on it selected selects the cell under it (once the
-    // table's drawer has drawn it), a double-click edits the cell; End and typing add to its text.
+    // 2. The editor: a click selects the table, a click on it selected selects the cell under it (the canvas's
+    // table kit waited for once), a double-click edits the cell; End and typing add to its text.
     await openEditor(page, PORT, id);
     await frames(page);
     const [cx, cy] = tableCellCentre(ROW, COL);
     const at = await canvasPoint(page, cx, cy);
-    await expect(async () => {
-      await page.mouse.click(at.x, at.y);
-      const s = await state(page);
-      expect(s.objectId).toBe(table.id);
-      expect(s.cell).toBe(cell);
-    }).toPass({ timeout: 20_000 });
+    await tableKitReady(page);
+    await page.mouse.click(at.x, at.y);
+    await expect.poll(async () => (await state(page)).objectId).toBe(table.id);
+    await page.waitForTimeout(SECOND_PRESS_MS);
+    await page.mouse.click(at.x, at.y);
+    await expect.poll(async () => (await state(page)).cell).toBe(cell);
+    await page.waitForTimeout(SECOND_PRESS_MS);
     await page.mouse.dblclick(at.x, at.y);
     await expect(page.getByTestId('ordo-inline-canvas-editor')).toBeVisible();
     await expect.poll(async () => (await state(page)).inline).toEqual({ objectId: table.id, cell });

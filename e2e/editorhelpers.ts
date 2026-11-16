@@ -219,6 +219,10 @@ export type EditorInspect = {
   slideId?: string;
   objectId?: string;
   objectIds: string[];
+  /** The selected cell of a selected table (apps/operator/src/views/editor/inspect.ts). */
+  cell?: number;
+  /** The canvas's table kit has loaded. */
+  tableKit?: boolean;
   draft?: PresentationRec;
 };
 
@@ -228,6 +232,20 @@ export async function editorState(page: Page): Promise<EditorInspect> {
     () => (window as unknown as { __ordo: { editor(): EditorInspect } }).__ordo.editor() as EditorInspect,
   );
 }
+
+/**
+ * Wait, once, until the editor's canvas has loaded its table kit (with the first table it shows): from then on a
+ * press on a selected table selects the cell under it at once (a press before it is kept until it arrives).
+ */
+export async function tableKitReady(page: Page): Promise<void> {
+  await expect.poll(async () => (await editorState(page)).tableKit, { timeout: 20_000 }).toBe(true);
+}
+
+/**
+ * Two presses that are two presses, not a double-click or double-tap: past Konva's 400 ms double-click window
+ * after the first one (`Konva.dblClickWindow`).
+ */
+export const SECOND_PRESS_MS = 450;
 
 /** Sign in on the operator of `port` and open the editor on presentation `id`, its first slide shown. */
 export async function openEditor(page: Page, port: number, id: string): Promise<void> {

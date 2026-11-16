@@ -82,6 +82,7 @@ import { boxFromCorner, clickSelection, groupBox, groupMembers, isLocked, keepsA
 import { selectionStyle } from './ops/text.ts';
 import { useOriginalOver } from './original.ts';
 import { snapBox } from './snapping.ts';
+import { markTableKitLoaded, tableKitLoaded } from './tableKitState.ts';
 import { TEXT_MARGIN, textDensity, textRasterKey } from './textRaster.ts';
 import { floatingBarSpot, objectToolsSpot, rotaterAngle } from './touchGeometry.ts';
 
@@ -152,19 +153,50 @@ function loadDrawerOf(o: SlideObject): void {
  * is, a table is drawn as its legacy shape and selected as a whole.
  */
 let tableKit: typeof TableKit | undefined;
-let tableKitLoading = false;
-function loadTableKit(): void {
-  if (tableKit || tableKitLoading) return;
-  tableKitLoading = true;
-  void import('@ordo/renderer/table/index.ts').then(
+let tableKitLoading: Promise<void> | undefined;
+/** A press on the selected table made before the kit arrived: its cell is selected once the kit has loaded. */
+let pressBeforeKit: { objectId: string; x: number; y: number } | undefined;
+function loadTableKit(): Promise<void> {
+  if (tableKit) return Promise.resolve();
+  tableKitLoading ??= import('@ordo/renderer/table/index.ts').then(
     (m) => {
       tableKit = m;
+      markTableKitLoaded();
+      const p = pressBeforeKit;
+      pressBeforeKit = undefined;
+      const st = useEditor.getState();
+      const o = p && currentSlide()?.objects.find((x) => x.id === p.objectId);
+      // Only while that table is still selected alone, with no cell chosen since.
+      if (p && o && st.objectId === p.objectId && st.objectIds.length === 1 && st.cell === undefined) {
+        const cell = cellAt(o, p.x, p.y);
+        if (cell >= 0) selectCell(o.id, cell);
+      }
       for (const l of imageListeners) l();
     },
     () => {
-      tableKitLoading = false;
+      tableKitLoading = undefined;
     },
   );
+  return tableKitLoading;
+}
+
+/** Whether the canvas's table kit has loaded (the editor's inspect hook reports it to the e2e specs). */
+export { tableKitLoaded };
+
+/**
+ * A press on table `o`, selected alone, at slide point (x, y): selects the cell under it. Before the table kit
+ * has loaded, the press is kept and its cell selected when the kit arrives (the press is never lost). Returns
+ * the kit's load (resolved at once when it is there).
+ */
+export function pressTable(o: SlideObject, x: number, y: number): Promise<void> {
+  if (!tableKit) {
+    pressBeforeKit = { objectId: o.id, x, y };
+    return loadTableKit();
+  }
+  const st = useEditor.getState();
+  const cell = cellAt(o, x, y);
+  if (cell >= 0 && !(st.inlineEditingId === o.id && st.inlineEditingCell === cell)) selectCell(o.id, cell);
+  return Promise.resolve();
 }
 
 /** A shape drawn as a table (`ShapeObject.table`). */
@@ -848,7 +880,7 @@ export function SlideCanvas(props: {
   const tableSel = selected.some(isTable);
   // The table kit loads with the first table on a slide (its cells' layout and edit views).
   useEffect(() => {
-    if (drawn.objects.some(isTable)) loadTableKit();
+    if (drawn.objects.some(isTable)) void loadTableKit();
   }, [drawn.objects]);
   // A locked art picture alone keeps its aspect: corner anchors only.
   const aspect = selected.length === 1 && keepsAspect(selected[0]!);
@@ -902,9 +934,7 @@ export function SlideCanvas(props: {
         st.objectIds.length === 1
       ) {
         const pos = e.target.getStage()?.getPointerPosition();
-        const cell = pos ? cellAt(o, pos.x / scale, pos.y / scale) : -1;
-        if (cell >= 0 && !(st.inlineEditingId === o.id && st.inlineEditingCell === cell))
-          selectCell(o.id, cell);
+        if (pos) void pressTable(o, pos.x / scale, pos.y / scale);
         return;
       }
       const sel = clickSelection(

@@ -1,6 +1,7 @@
 import { cellTextObject, placeCells, type ShapeObject } from '@ordo/domain';
 import { PaintPill, type PaintValue } from '../../components/ColorPicker.tsx';
 import { Menu } from '../../components/Menu.tsx';
+import { useCoarsePointer } from '../../components/pointer.ts';
 import {
   canRowCol,
   fillCells,
@@ -134,6 +135,8 @@ const TOUCH = { minWidth: 44 } as const;
 export function TableSection({ o, readOnly }: ObjectSectionContext) {
   const cell = useCell(o);
   const range = useEditor((s) => s.textRange);
+  // On a tablet a tap selects the cell and a double-tap opens this panel on its text (design/15).
+  const coarse = useCoarsePointer();
   if (!isTable(o)) return null;
   const view = cell === undefined ? undefined : cellTextObject(o, cell);
   const target: TextTarget | undefined = cell === undefined ? undefined : { objectId: o.id, cell };
@@ -198,7 +201,11 @@ export function TableSection({ o, readOnly }: ObjectSectionContext) {
           />
         </>
       ) : (
-        <span className="muted small">Click a cell to edit its text (double-click on the slide).</span>
+        <span className="muted small">
+          {coarse
+            ? 'Tap a cell, then double-tap to type.'
+            : 'Click a cell to edit its text (double-click on the slide).'}
+        </span>
       )}
       <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
         <span className="muted small">Cell fill</span>

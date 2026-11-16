@@ -580,9 +580,15 @@ _A table (`ShapeObject.table`, design/27 M9) is edited cell by cell (`SlideCanva
 - **Canvas.** The canvas loads the renderer's table module with the first table on a slide (the editor's chunk
   holds no table code). A press on the table already selected alone selects the cell under it
   (`cellAtPoint`: `tablePoint` and `tableHit`); a double-click, or Enter, edits it, the caret where the click
-  landed (Enter: at its end); Tab and Shift+Tab go to the next or previous cell in reading order (its text
-  selected), and Tab in the last cell adds a row (`insertRow`, the last row's look, one undo step), as
-  PowerPoint does; Escape goes from the cell back to the whole table, a second Escape drops the selection;
+  landed (Enter: at its end); while a cell is edited, Tab and Shift+Tab go to the next or previous cell in
+  reading order (its text selected), and Tab in the last cell adds a row (`insertRow`, the last row's look, one
+  undo step), as PowerPoint does. With a cell only selected (not edited), Tab and Shift+Tab select the next or
+  previous cell and add no row, and the arrow keys select the cell beside it as drawn (`cellBeside`: past a
+  merged cell's span; a right-to-left table's left is its next column; at an edge the cell stays selected);
+  Tab past the last or first cell, and Tab with the whole table selected, are not the table's, so focus
+  leaves the canvas (review of r2b sub-wave 1). A press on the selected table before the table module has
+  loaded is kept and selects its cell when it arrives (`pressTable`); the editor's inspect hook reports
+  `tableKit` once it has. Escape goes from the cell back to the whole table, a second Escape drops the selection;
   Delete and Backspace with a cell selected empty that cell (with the whole table selected they delete the
   table). The cell is edited as its edit view (`cellEditView`): the drawn cell text in slide coordinates (the
   table's corner plus the cell's, moved by its vertical anchor), memoised per laid cell and box, so the caret,
@@ -601,13 +607,16 @@ _A table (`ShapeObject.table`, design/27 M9) is edited cell by cell (`SlideCanva
   ('Row 2, column 3'); with the whole table selected it says 'Table'. Both have 'Cell fill' (solid or none,
   `setCellFill`: the selected cell, or every cell with none selected; a fill they already have is no step) and 'Rows & columns' (Row above, Row below,
   Column left, Column right, Delete row, Delete column: around the selected cell, at the table's edges with none;
+  left and right as drawn, so in a right-to-left table 'Column left' adds the column after the cell's last;
   each one undo step; disabled past `TABLE_LIMITS`, at the last row or column, and for a delete with no cell;
-  the selection follows its cell). The panel's section has the cell's text field (`#ordo-text-editor`, which
+  the selection follows its cell). The alignment button cycles left, centre, right and drops a justified cell's
+  or box's justification (`nextAlign`; a justified paragraph keeps `align` beside `justify`). The panel's section has the cell's text field (`#ordo-text-editor`, which
   the canvas's inline editing types through while the panel is open; Ctrl+B, I and U format the selected
   words; a paste or cut in it goes through as typing, plain), the bar's text controls in a plain row, and the
   six row and column ops as buttons, all 44 px under a finger (`.ed-cell-format`;
   `e2e/ipad/table-targets.spec.ts`). On a tablet a tap on the selected table selects the cell, and a
-  double-tap opens the panel on its text. Not built: merging and splitting cells, borders, column widths,
+  double-tap opens the panel on its text; the section's hint then reads 'Tap a cell, then double-tap to
+  type.' ('Click a cell to edit its text (double-click on the slide).' with a mouse). Not built: merging and splitting cells, borders, column widths,
   table styles.
 - **Find & Replace and New slide like this.** Find & Replace searches and replaces in the cells of every
   unlocked table as in text boxes (`findInCells` in `ops/slides.ts`, the one place the find walks cells; a

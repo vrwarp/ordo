@@ -9,9 +9,11 @@ import {
   frames,
   openEditor,
   type PresentationRec,
+  SECOND_PRESS_MS,
   save,
   slidesOf,
   stored,
+  tableKitReady,
 } from './editorhelpers.ts';
 import { hubApi } from './linkhelpers.ts';
 import type { Pixels } from './png.ts';
@@ -116,14 +118,16 @@ test('a table cell typed in, Tab, a row below and a fill, saved, live on the Aud
 
     // 'Leader' (cell 2) sits in the header row's last column: x 1140-1440, y 160-230 of the slide.
     const leader = await canvasPoint(page, 1290, 195);
-    // A click selects the table; a click on the table selected selects the cell under it (once the table's
-    // drawer, loaded with the first table, has drawn it).
-    await expect(async () => {
-      await page.mouse.click(leader.x, leader.y);
-      const s = await state(page);
-      expect(s.objectId).toBe('table');
-      expect(s.cell).toBe(2);
-    }).toPass({ timeout: 20_000 });
+    // A click selects the table; a click on the table selected selects the cell under it (the canvas's table
+    // kit, loaded with the first table, waited for once).
+    await tableKitReady(page);
+    await page.mouse.click(leader.x, leader.y);
+    await expect.poll(async () => (await state(page)).objectId).toBe('table');
+    await page.waitForTimeout(SECOND_PRESS_MS);
+    await page.mouse.click(leader.x, leader.y);
+    await expect.poll(async () => (await state(page)).cell).toBe(2);
+    expect((await state(page)).objectId).toBe('table');
+    await page.waitForTimeout(SECOND_PRESS_MS);
     const fbar = page.getByRole('toolbar', { name: 'Contextual format bar' });
     await expect(fbar.getByText('Row 1, column 4')).toBeVisible();
 
