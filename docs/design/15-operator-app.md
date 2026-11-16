@@ -431,11 +431,13 @@ cells in place of the shape fields).
   field, the typography card's shortcuts, Find's Enter and Escape, the Lyric Script's Alt+Enter): Escape
   cancels a candidate without ending inline editing, Enter confirms it without jumping to the next match or
   splitting a slide, and the arrows choose a candidate. In the Presenter Notes Studio and the Lyric Script the
-  canvas is not shown (and the button that opened them is gone, so the focus is on the page, which reads as
-  the canvas): what the canvas had selected stays selected but no key acts on it there, neither the arrows'
-  nudge, Delete, Backspace, Enter or Escape, nor duplicate, copy, cut or paste onto the slide (`studioRef` in
-  EditorView.tsx; e2e/editor-keys.spec.ts); Ctrl+S, undo and redo, Find, Alt+N and Up and Down between
-  slides still apply, and the studio's own fields keep their keys.
+  canvas is not shown, and the focus is often on the page, which reads as the canvas (the button that opened
+  the studio is gone; a click outside the Lyric Script's text leaves the focus on the page): what the canvas
+  had selected stays selected but no key acts on it there, neither the arrows' nudge, Delete, Backspace, Enter
+  or Escape, nor duplicate, copy, cut or paste onto the slide (`studioRef` in EditorView.tsx;
+  e2e/editor-keys.spec.ts). Ctrl+S, undo and redo, Find and Alt+N still apply; Up and Down (and Page Up and
+  Page Down) move between slides there even while the hidden canvas has something selected; and the
+  studio's own fields keep their keys.
 - Groups and locked objects (design/27 §11 item 5 and "Locked objects"; pure ops in `views/editor/ops/group.ts`,
   the panel's parts in `GroupPanel.tsx`). The selection is a set of objects with a primary one, which the
   Object panel edits. A click on an object of a group (`origin.group`: a flattened PowerPoint group, or a

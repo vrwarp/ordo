@@ -271,11 +271,11 @@ export function EditorView({ id }: { id: string }) {
         return;
       }
       const st = useEditor.getState();
-      // In the Presenter Notes Studio or the Lyric Script the canvas is not shown, and the button that opened
-      // them is gone, so the focus is on the page, which reads as the canvas (`keyPlace`). What the canvas had
-      // selected (an object, or a text box being typed in) is hidden there: no key acts on it (no nudge,
-      // Delete, Enter, Escape, duplicate, copy or cut); Up and Down still move between slides, which the
-      // studio shows.
+      // In the Presenter Notes Studio or the Lyric Script the canvas is not shown, and the focus is often on the
+      // page, which reads as the canvas (`keyPlace`): the button that opened the studio is gone, and a click
+      // outside the Lyric Script's text leaves the focus there. What the canvas had selected (an object, or a
+      // text box being typed in) is hidden there: no key acts on it (no nudge, Delete, Enter, Escape,
+      // duplicate, copy or cut), and Up and Down move between slides, which the studio shows.
       const studio = studioRef.current;
       const o = studio ? undefined : currentObject();
 

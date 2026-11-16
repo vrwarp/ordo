@@ -41,7 +41,8 @@ or unknown `'lg'`, both kept by an older 0.8.0 client): `auto` is the split for 
 the worship layout otherwise; `worship` keeps the lyrics and puts the notes in an amber band at the bottom
 (42 px at `lg`); `split` puts the current and next slides in cards in a left column and the notes in a right
 one (58 px); `prompter` puts the current slide in a strip at the top and the notes below it, full width (64 px).
-With a `style['notes']` box, the M4 rules below hold:
+The Box rule below is for a look's own `style['notes']` box (without one, the preset's region takes the place
+of `defaultNotes`); the Text rules hold for every notes box:
 - **Box.** `props.style['notes']` (a `PropBox`), else `defaultNotes`: under the lower lyric band (the
   next-slide band in the Stage look), as wide as it, down to 16 px above the bottom, at least two lines high
   (it then rises over that band's bottom edge), in 32 px light text on a faint card. Either way the box is
@@ -74,7 +75,9 @@ from display to display), any number of lecterns follow one output, the output's
 (a lectern's health message is not stored) and the output shows as connected only while a display window is
 (`ws.ts` `healthTable`). A token rotation or a deleted output closes lecterns too. A window keeps the view it
 was opened with: the in-page switch between the Stage Display and the lectern changes what it draws, not which
-window of the output it is (a reload takes the URL's `view`).
+window of the output it is. The switch rewrites the URL's `view`, so a reload, the upgrade's reload too, makes
+the window what it last showed: a stage screen left on the lectern comes back as a lectern, and the operator
+then shows the stage output as not connected until a Stage Display window opens.
 
 ## Behaviour
 
