@@ -4,6 +4,7 @@ import {
   type LiveEvent,
   type LiveState,
   parseLyrics,
+  type Presentation,
   type ResolvedPlaylist,
   songFromParsed,
 } from '@ordo/domain';
@@ -233,6 +234,79 @@ describe('StageLinkCore', () => {
     hub.emit('state', { t: 'live.state', v: 1, seq: liveAt(1).seq, state: liveAt(1) });
     expect(posted.some((m) => m.t === 'reload')).toBe(false);
     expect(last().current?.text).toBe('Chorus alpha\nChorus beta');
+    core.stop();
+  });
+
+  it('a Go live during a service (design/29 M8): the notes and the Pulpit Lectern follow the new service', async () => {
+    // The hub prepares the new service beside the running one and then applies its goLive as one delta: the
+    // stage drops the old service's slide, notes and lectern slides at once, and shows the new one's from its GO.
+    const deck = (id: string, words: string[]): Presentation => ({
+      id,
+      rev: 1,
+      title: id,
+      kind: 'slides',
+      meta: { tags: [] },
+      sections: [
+        {
+          id: `${id}-s`,
+          label: 'Slides',
+          short: 'S',
+          slides: words.map((w, i) => ({
+            id: `${id}-${i}`,
+            objects: [
+              {
+                id: `${id}-t${i}`,
+                type: 'text' as const,
+                text: w,
+                box: { x: 0, y: 0, w: 100, h: 100, rotation: 0 },
+                style: {} as never,
+                opacity: 1,
+              },
+            ],
+            notes: `${w}: notes`,
+          })),
+        },
+      ],
+      arrangements: [],
+      archived: false,
+    });
+    const service = (id: string, p: Presentation): ResolvedPlaylist => ({
+      ...resolved,
+      playlist: {
+        id,
+        rev: 1,
+        name: id,
+        items: [{ id: `${id}-i`, kind: 'presentation', presentationId: p.id }],
+      },
+      presentations: { [p.id]: p },
+    });
+    const { core, hub, last } = setup();
+    await core.start();
+    hub.connect();
+    let s = reduce(initialState(), {
+      k: 'goLive',
+      resolved: service('A', deck('a', ['Welcome', 'Offering'])),
+    });
+    s = reduce(s, { k: 'go', cueIndex: 1, at: 0 } as LiveEvent);
+    hub.emit('state', { t: 'live.state', v: 1, seq: s.seq, state: s });
+    expect(last().notes).toBe('Offering: notes');
+    expect(last().lecternSlides?.map((x) => x.notes)).toEqual(['Welcome: notes', 'Offering: notes']);
+    expect(last().activeSlideId).toBe('a-1');
+
+    const landed = { k: 'goLive', resolved: service('B', deck('b', ['Sermon', 'Prayer'])) } as LiveEvent;
+    hub.emit('delta', { t: 'live.delta', v: 1, seq: s.seq + 1, fromSeq: s.seq, event: landed });
+    s = reduce(s, landed);
+    expect(last().current).toBeNull();
+    expect(last().notes).toBeNull();
+    expect(last().lecternSlides).toEqual([]);
+    expect(last().activeSlideId).toBeUndefined();
+
+    const go = { k: 'go', cueIndex: 0, at: Date.now() } as LiveEvent;
+    hub.emit('delta', { t: 'live.delta', v: 1, seq: s.seq + 1, fromSeq: s.seq, event: go });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(last().notes).toBe('Sermon: notes');
+    expect(last().lecternSlides?.map((x) => x.slideId)).toEqual(['b-0', 'b-1']);
+    expect(last().activeSlideId).toBe('b-0');
     core.stop();
   });
 
