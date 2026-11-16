@@ -33,7 +33,9 @@ import {
  * an M9 table through the hub API (`m9Table()`, as bottom-third-m9.spec.ts makes one), then in the editor a
  * double-click on a cell and typing in it, Tab to the next cell (its text replaced), 'Row below' and 'Cell fill'
  * from the table bar, Save; the presentation goes live and the Audience screen draws the new fill and the new
- * row; Find finds the typed text in its cell; undo takes every edit back, one step each.
+ * row; Find finds the typed text in its cell; undo takes every edit back, one step each. Then the Presenter
+ * Notes Studio over a selected cell and over a selected text box: the canvas is not shown there, so its keys
+ * leave the hidden slide alone.
  */
 const PORT = portOf('editor-table');
 const OUT = 'test-results/editor-table';
@@ -218,6 +220,143 @@ test('a table cell typed in, Tab, a row below and a fill, saved, live on the Aud
     await page.getByTitle('Undo (Ctrl+Z)').first().click();
     await expect.poll(async () => (await draftTable(page)).cells[2]!.text).toBe('Leader');
     expect(await draftTable(page)).toEqual(original);
+  } finally {
+    hub.kill();
+  }
+});
+
+test('the Presenter Notes Studio over a selected cell or text box: the canvas keys leave the hidden slide alone', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  const hub = await editorHub(PORT);
+  try {
+    const a = await hubApi(PORT);
+    const textBox = { x: 120, y: 700, w: 900, h: 200, rotation: 0 };
+    const p = await apiJson<{ id: string }>(a, 'presentations', {
+      post: {
+        title: 'Order of service, with notes',
+        kind: 'slides',
+        sections: [
+          {
+            id: 'sec',
+            label: 'Order',
+            short: 'O',
+            slides: [
+              {
+                id: 'order',
+                notes: 'Preach grace',
+                objects: [
+                  {
+                    id: 'table',
+                    type: 'shape',
+                    box: BOX,
+                    shape: 'rect',
+                    fill: white,
+                    opacity: 1,
+                    radius: 0,
+                    table: interTable(),
+                  },
+                  {
+                    id: 'words',
+                    type: 'text',
+                    box: textBox,
+                    text: 'Welcome',
+                    style: { fontFamily: 'Inter', fontSizePx: 64, color: white },
+                    opacity: 1,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    // A tall window: the Speaker Notes Dock opens by itself on a deck with notes (PR #28).
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await openEditor(page, PORT, p.id);
+    await frames(page);
+    const before = slidesOf((await state(page)).draft!)[0]!.objects;
+    const studio = page.locator('[data-deck-notes-studio]');
+    /** The slide as the editor holds it, and the selection. */
+    const held = async () => {
+      const s = await state(page);
+      return {
+        objects: slidesOf(s.draft!)[0]!.objects,
+        objectId: s.objectId,
+        cell: s.cell,
+        inline: s.inline,
+      };
+    };
+    // Every key the slide canvas takes for a selection: the table's (Tab, the arrows, Enter, Escape), a nudge,
+    // Delete and Backspace, duplicate and cut (design/15 "Table editing", "Keyboard").
+    const KEYS = [
+      'Tab',
+      'Shift+Tab',
+      'ArrowRight',
+      'ArrowDown',
+      'Shift+ArrowLeft',
+      'Enter',
+      'Escape',
+      'Delete',
+      'Backspace',
+      'Control+d',
+      'Control+x',
+    ];
+    const pressInStudio = async (want: { objectId: string; cell?: number }) => {
+      for (const key of KEYS) {
+        await page.keyboard.press(key);
+        await frames(page);
+        const h = await held();
+        expect(h.objects, `${key} in the studio: the slide unchanged`).toEqual(before);
+        expect(
+          { objectId: h.objectId, cell: h.cell, inline: h.inline },
+          `${key}: the selection unchanged`,
+        ).toEqual({
+          ...want,
+          inline: undefined,
+        });
+        await expect(studio, `${key}: the studio still shown`).toHaveCount(1);
+      }
+    };
+
+    // 1. Cell 2 selected on the canvas, then the dock's Manuscript Studio: the button goes away with the canvas,
+    // so the focus falls to the page, where the window's key handler reads keys as the canvas's.
+    const leader = await canvasPoint(page, 1290, 195);
+    await tableKitReady(page);
+    await page.mouse.click(leader.x, leader.y);
+    await expect.poll(async () => (await state(page)).objectId).toBe('table');
+    await page.waitForTimeout(SECOND_PRESS_MS);
+    await page.mouse.click(leader.x, leader.y);
+    await expect.poll(async () => (await state(page)).cell).toBe(2);
+    await page.waitForTimeout(SECOND_PRESS_MS);
+    await expect(page.locator('[data-notes-dock]')).toHaveAttribute('data-notes-dock', 'expanded');
+    await page.getByRole('button', { name: /Manuscript Studio/ }).click();
+    await expect(studio).toHaveCount(1, { timeout: 20_000 });
+    await pressInStudio({ objectId: 'table', cell: 2 });
+
+    // 2. Back on the canvas the keys are the canvas's again: Tab moves to the next cell.
+    await page
+      .getByRole('button', { name: /Slide Canvas/ })
+      .first()
+      .click();
+    await expect(studio).toHaveCount(0);
+    await frames(page);
+    await page.keyboard.press('Tab');
+    await expect.poll(async () => (await state(page)).cell).toBe(3);
+
+    // 3. The text box selected, then the slide list's Presenter Notes: no nudge, no delete, no copy.
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    const words = await canvasPoint(page, textBox.x + textBox.w / 2, textBox.y + textBox.h / 2);
+    await page.mouse.click(words.x, words.y);
+    await expect.poll(async () => (await state(page)).objectId).toBe('words');
+    await page
+      .getByRole('button', { name: /Presenter Notes/ })
+      .first()
+      .click();
+    await expect(studio).toHaveCount(1, { timeout: 20_000 });
+    await pressInStudio({ objectId: 'words' });
   } finally {
     hub.kill();
   }
