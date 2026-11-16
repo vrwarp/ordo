@@ -175,7 +175,8 @@ export const PORT_TABLE = {
   },
   'phones-live-load': { offset: 345, count: 1, spec: 'phones-live-load.spec.ts', what: 'hub' },
   'phones-writes': { offset: 346, count: 1, spec: 'phones-writes.spec.ts', what: 'hub' },
-  // M9 wave r2b's specs: offsets 400-659, in offset order (sub-wave 1: 400-459; the integrations' 425, 630-659).
+  // M9 wave r2b's specs: offsets 400-659, in offset order (sub-wave 1: 400-459; sub-wave 1b: 440, and 445-449 kept
+  // for its integration; the integrations' 425, 630-659).
   // effect-units: effects past the budget and lone line art drawn from units.
   'effect-units': {
     offset: 400,
