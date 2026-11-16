@@ -303,6 +303,20 @@ describe('HubConnection liveness', () => {
     hub.stop();
   });
 
+  it("a Pulpit Lectern's hello says view 'lectern'; the output's own window's has no view", () => {
+    const { hub: display } = connect({ role: 'stage', outputId: 'stage-1' });
+    const d = lastSocket();
+    d.open();
+    expect(d.sent[0]).toMatchObject({ t: 'hello', role: 'stage', outputId: 'stage-1' });
+    expect(d.sent[0]).not.toHaveProperty('view');
+    const { hub: lectern } = connect({ role: 'stage', outputId: 'stage-1', view: 'lectern' });
+    const l = lastSocket();
+    l.open();
+    expect(l.sent[0]).toMatchObject({ t: 'hello', role: 'stage', outputId: 'stage-1', view: 'lectern' });
+    display.stop();
+    lectern.stop();
+  });
+
   it('send fails while disconnected and the hello carries the last seq', () => {
     const { hub } = connect();
     expect(hub.send({ t: 'live.resync' })).toBe(false);

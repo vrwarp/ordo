@@ -219,6 +219,8 @@ export type EditorInspect = {
   slideId?: string;
   objectId?: string;
   objectIds: string[];
+  /** The text box being typed in on the canvas (apps/operator/src/views/editor/inspect.ts). */
+  inline?: { objectId: string };
   draft?: PresentationRec;
 };
 

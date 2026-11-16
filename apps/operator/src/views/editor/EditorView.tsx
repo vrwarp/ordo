@@ -161,6 +161,9 @@ export function EditorView({ id }: { id: string }) {
   // The window key handler reads it without re-binding (its effect depends on readOnly only).
   const findingRef = useRef(false);
   findingRef.current = finding;
+  // The Presenter Notes Studio or the Lyric Script is shown instead of the slide canvas (set where the render
+  // decides it, below): the window's handlers then leave the canvas's selection alone.
+  const studioRef = useRef(false);
   const [dismissedRev, setDismissedRev] = useState(0);
   // The newest revision found saved by someone else (not only by the hub's PowerPoint jobs): the banner's.
   const [otherRev, setOtherRev] = useState(0);
@@ -268,11 +271,17 @@ export function EditorView({ id }: { id: string }) {
         return;
       }
       const st = useEditor.getState();
-      const o = currentObject();
+      // In the Presenter Notes Studio or the Lyric Script the canvas is not shown, and the focus is often on the
+      // page, which reads as the canvas (`keyPlace`): the button that opened the studio is gone, and a click
+      // outside the Lyric Script's text leaves the focus there. What the canvas had selected (an object, or a
+      // text box being typed in) is hidden there: no key acts on it (no nudge, Delete, Enter, Escape,
+      // duplicate, copy or cut), and Up and Down move between slides, which the studio shows.
+      const studio = studioRef.current;
+      const o = studio ? undefined : currentObject();
 
       // When nothing has focus (no object is selected on the canvas, and focus is not in a field or dialog),
       // Up/Down arrows and PageUp/PageDown navigate to the previous / next slide.
-      if (!o && !st.inlineEditingId && st.draft) {
+      if (!o && (studio || !st.inlineEditingId) && st.draft) {
         const delta = slideNavKey(e);
         if (delta !== 0) {
           const allSlides = st.draft.sections.flatMap((sec) => sec.slides);
@@ -341,6 +350,8 @@ export function EditorView({ id }: { id: string }) {
       if (e.defaultPrevented) return;
       const place = keyPlace(e.target);
       if (place === 'field' || place === 'dialog') return;
+      // The studio's own fields copy as fields do; the hidden canvas's selection is not copied (onKey).
+      if (studioRef.current) return;
       const st = useEditor.getState();
       if (st.inlineEditingId && st.draft && st.slideId) {
         const s = getSlide(st.draft, st.slideId);
@@ -363,6 +374,7 @@ export function EditorView({ id }: { id: string }) {
       if (e.defaultPrevented || readOnly) return;
       const place = keyPlace(e.target);
       if (place === 'field' || place === 'dialog') return;
+      if (studioRef.current) return;
       const st = useEditor.getState();
       if (st.inlineEditingId && st.draft && st.slideId) {
         const s = getSlide(st.draft, st.slideId);
@@ -388,6 +400,8 @@ export function EditorView({ id }: { id: string }) {
       if (e.defaultPrevented || readOnly) return;
       const place = keyPlace(e.target);
       if (place === 'field' || place === 'dialog') return;
+      // Nothing is pasted onto the hidden canvas (a picture, objects or a new text box) or into its text box.
+      if (studioRef.current) return;
       const st = useEditor.getState();
       if (!st.draft || !st.slideId) return;
 
@@ -527,6 +541,7 @@ export function EditorView({ id }: { id: string }) {
   const reflow = p.kind === 'song' && (songMode ?? (coarse ? 'canvas' : 'reflow')) === 'reflow';
   const deckNotesStudio = p.kind !== 'song' && deckMode === 'notes';
   const scriptStudio = reflow || deckNotesStudio;
+  studioRef.current = scriptStudio;
   const findDocked = !scriptStudio;
   // Touch: the keyboard-only actions as buttons, floating by the selected object (SlideCanvas places them).
   const objectTools =

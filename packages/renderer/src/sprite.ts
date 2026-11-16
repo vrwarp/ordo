@@ -50,6 +50,7 @@ import {
   layoutText,
   lyricTextFor,
   registeredSlideObjectsDrawer,
+  stagePreview,
 } from './text2d.ts';
 
 /**
@@ -564,9 +565,27 @@ export function slideReach(
   }
   let r: Reach = EMPTY;
   const kind = opts.presentationKind ?? opts.isSong ?? true;
+  const next = opts.nextSlide ? clampSlide(opts.nextSlide) : undefined;
+  // A stage look's preview (PR #28, `stagePreview`): its cards are where adaptStageRegions moved them, each
+  // filled box whole (the fill is the card), its text as the band draws it there, and the notes box, which
+  // the notes are clipped to.
+  const preview = stagePreview(rawSlide, slide, next, look, kind);
+  if (preview) {
+    const boxReach = (b: { x: number; y: number; w: number; h: number }): Reach => ({
+      x: b.x - INK_SLACK,
+      y: b.y - INK_SLACK,
+      w: b.w + 2 * INK_SLACK,
+      h: b.h + 2 * INK_SLACK,
+    });
+    for (const c of preview.cards) {
+      if (c.fill) r = union(r, boxReach(c.box));
+      r = union(r, bandReach(ctx, c.text, c.style, c.box, scale, c.src));
+    }
+    if (preview.notes) r = union(r, boxReach(preview.notes.box));
+    return r;
+  }
   const text = lyricTextFor(slide, look, kind);
   if (text) r = union(r, bandReach(ctx, text, rule.style, rule.band, scale, bandSource(slide, text)));
-  const next = opts.nextSlide ? clampSlide(opts.nextSlide) : undefined;
   if (rule.nextSlide && next && kind !== 'loop') {
     const nt = lyricTextFor(next, look, kind);
     if (nt)

@@ -11,7 +11,7 @@ the operator on the stage screen (token in URL like an output). No WebGPU, no me
 | Top right | Elapsed timer when running (label and `mm:ss`), countdown to service when active                                                                                                                                                                                                                               |
 | Centre    | Current slide lyric text, large, with the section label; next slide text below at 60 % size and reduced opacity (the slide Next goes to: hidden slides are skipped, design/27 §9). Non-song slides show their first text box (a picture slide its own extracted text, design/27 §11) or the presentation title |
 | Bottom    | Operator message, high contrast, with a 1 s fade in and out; multiple messages stack newest first                                                                                                                                                                                                              |
-| Notes     | When the Stage look's `PropsRule.notes` is on: the live slide's `Slide.notes` for the preacher, in `style['notes']`, else a box under the next-slide band (below)                                                                                                                                              |
+| Notes     | When the Stage look's notes are on (`stageNotesEnabled`: on unless `PropsRule.notes` is false): the live slide's `Slide.notes` for the preacher, in `style['notes']`, else where the look's stage preset puts them (below)                                                                                     |
 
 During an announcement loop (a `loop` presentation, typically pre-service) the centre shows 'Service
 Starting Soon' with the loop's title instead of the loop's text, and the next band looks ahead to the item
@@ -32,8 +32,17 @@ its punctuation at its left end, next to an English line that reads left to righ
 strong character is left to right. Alignment stays the look's (`left` is left in a right-to-left line, as
 on the outputs). The explicit paragraph directions of the slide (`paras[i].rtl`) are not applied here.
 
-**Notes region** (design/27 §11 item 13, M4). A stage look with `PropsRule.notes` (optional, absent is
-off) shows the displayed slide's `Slide.notes`:
+**Notes region** (design/27 §11 item 13, M4; PR #28). A look shows the displayed slide's `Slide.notes` when
+its notes are on (`stageNotesEnabled`, `@ordo/domain` `stageNotes.ts`): for a stage look (`kind === 'stage'`)
+unless `PropsRule.notes` is false (absent is on, so every stored and new stage look shows notes), for any other
+look only when it is true. Without a `style['notes']` box the look's stage preset places them
+(`adaptStageRegions`; `PropsRule.stagePreset`, absent or unknown `'auto'`, and `notesScale`, `sm` to `xl`, absent
+or unknown `'lg'`, both kept by an older 0.8.0 client): `auto` is the split for a non-song slide with notes and
+the worship layout otherwise; `worship` keeps the lyrics and puts the notes in an amber band at the bottom
+(42 px at `lg`); `split` puts the current and next slides in cards in a left column and the notes in a right
+one (58 px); `prompter` puts the current slide in a strip at the top and the notes below it, full width (64 px).
+The Box rule below is for a look's own `style['notes']` box (without one, the preset's region takes the place
+of `defaultNotes`); the Text rules hold for every notes box:
 - **Box.** `props.style['notes']` (a `PropBox`), else `defaultNotes`: under the lower lyric band (the
   next-slide band in the Stage look), as wide as it, down to 16 px above the bottom, at least two lines high
   (it then rises over that band's bottom edge), in 32 px light text on a faint card. Either way the box is
@@ -46,7 +55,29 @@ off) shows the displayed slide's `Slide.notes`:
   vertical alignment (`justify-content: safe …`) and the last line fades out when something is cut.
 - Notes show for every slide that has them, non-song slides included when the look shows no non-song
   text; a slide without notes, or a cleared slide layer, shows no notes box.
-- The look editor's 'Stage screen' card turns them on and sets their box and text (design/15 "Settings").
+- The look editor's 'Stage screen' card turns them on and sets their box and text (design/15 "Settings"); the
+  Outputs page's stage card picks the preset and the notes size.
+- **The same look on an output.** An Audience window given a stage look draws its slides with the renderer's
+  stage preview (`text2d.ts` `stagePreview`, the same regions): with the split or prompter preset its current
+  and next cards move to the preset's places, and `sprite.ts` `slideReach` and `plan.ts` `slideVisible` read
+  the same regions, so the slide raster holds every card. An output's planned slides carry no notes
+  (`clampSlide` keeps none), so an output never draws notes; the look editor's preview and the thumbnails,
+  which draw a slide with its notes, show them in the preset's notes box.
+
+**Pulpit Lectern** (PR #28; `/stage?view=lectern`, `LecternView.tsx`). The Outputs page's 'Copy Lectern URL' and
+'Open Pulpit Lectern' give the stage output's own URL and token with `view=lectern`: a tablet or laptop at the
+pulpit shows the live slide's notes (Follow Live, or a peek at the previous and next slides), the whole
+manuscript, three themes and a font zoom, and changes nothing on the hub. It is the stage app on the stage
+output's link, so it follows every GO and Go live as the Stage Display does; its `hello` says
+`view: 'lectern'` (design/13), and the hub then keeps it apart from the output's own window: a lectern never
+replaces the Stage Display window and a newer display never replaces a lectern (`bye 'superseded'` goes only
+from display to display), any number of lecterns follow one output, the output's health is the display's
+(a lectern's health message is not stored) and the output shows as connected only while a display window is
+(`ws.ts` `healthTable`). A token rotation or a deleted output closes lecterns too. A window keeps the view it
+was opened with: the in-page switch between the Stage Display and the lectern changes what it draws, not which
+window of the output it is. The switch rewrites the URL's `view`, so a reload, the upgrade's reload too, makes
+the window what it last showed: a stage screen left on the lectern comes back as a lectern, and the operator
+then shows the stage output as not connected until a Stage Display window opens.
 
 ## Behaviour
 
@@ -113,7 +144,8 @@ relay), acceptPorts, Supervisor                 invariant checks, health and the
   250 ms again after it. (It used to be the time since the host's 1 s stats message, read by the worker's
   own 1 s timer: the phase difference of two timers, 43 to 318 ms on a healthy stage.)
 - **Superseded / new version**: a `bye` from the hub is handled in the worker; `version` asks the host to
-  reload, `superseded` stops the worker and the host closes the window.
+  reload, `superseded` stops the worker and the host closes the window. Only a newer Stage Display window
+  supersedes one; a Pulpit Lectern on the same link does not (above).
 - **Diagnostics and tests**: `ordoStage.telemetry()` / `ordoStage.view()` in the console. With `?test=1`,
   `window.__ordo` exposes `telemetry()`, `view()` and `chaos` (`killWorker('link')`, `inject('delta' |
   'state', msg)`, `badState()`); `e2e/chaos-stage.spec.ts` kills the worker (hub and fallback bus) and

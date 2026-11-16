@@ -12,6 +12,8 @@ export type EditorInspect = {
   slideId?: string;
   objectId?: string;
   objectIds: string[];
+  /** The text box being typed in on the canvas (inline editing), if any. */
+  inline?: { objectId: string };
   /** The draft as the editor holds it (what Save would send, with the base rev). */
   draft?: Presentation;
 };
@@ -31,6 +33,7 @@ export function inspectEditor(): EditorInspect {
     slideId: s.slideId,
     objectId: s.objectId,
     objectIds: [...s.objectIds],
+    inline: s.inlineEditingId ? { objectId: s.inlineEditingId } : undefined,
     draft: s.draft ? structuredClone(s.draft) : undefined,
   };
 }
