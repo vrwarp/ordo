@@ -1011,8 +1011,9 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
     const [full, room, more] = t.lo!.lift;
     // With room the drawn line is centred: where it sits from the cell's centre does not depend on the room.
     expect(more).toBe(room);
-    // Full: 6/100 mm lower than centred, so ordo's line (centred in its cell) is lifted 6/100 mm less.
-    expect(full).toBe(room! - 6 * MM);
+    // Full: from the top margin, less the 1/100 mm LibreOffice starts an overflowing block above it (the cell
+    // probe, `loBlockTop`): 5/100 mm lower than centred, so ordo's line (centred in its cell) is lifted 5 less.
+    expect(full).toBe(room! - 5 * MM);
   });
 
   it('puts the whole height of a merge from the first row on its last row, as LayoutTableHeight does', () => {

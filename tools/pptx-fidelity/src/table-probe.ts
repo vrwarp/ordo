@@ -22,7 +22,7 @@
 export const SLIDE_W = 1920;
 export const SLIDE_H = 1080;
 export const EMU_PER_PX = 6350;
-const EMU_PER_PT = 12_700;
+export const EMU_PER_PT = 12_700;
 
 /** The faces probed, as decks name them (LibreOffice draws Calibri with Carlito, Arial with Liberation Sans). */
 export const PROBE_FACES = [
@@ -95,17 +95,17 @@ export const TABLES = [
   { x: 1040, y: 60, w: 820 },
 ] as const;
 
-const NS =
+export const NS =
   'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
   'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
   'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
-const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+export const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const CT = 'application/vnd.openxmlformats-officedocument';
 const TEXT = 'Hamburgefonstiv 0123';
 
-const BLACK = '<a:solidFill><a:srgbClr val="000000"/></a:solidFill>';
-const line = (tag: string) =>
+export const BLACK = '<a:solidFill><a:srgbClr val="000000"/></a:solidFill>';
+export const line = (tag: string) =>
   `<a:${tag} w="${EMU_PER_PT}" cap="flat" cmpd="sng" algn="ctr">${BLACK}<a:prstDash val="solid"/></a:${tag}>`;
 
 function rPr(tag: 'rPr' | 'endParaRPr', s: ProbeSlide, pt: number): string {
@@ -144,12 +144,12 @@ function tableXml(s: ProbeSlide, id: number, at: (typeof TABLES)[number], rows: 
   );
 }
 
-const GROUP_PROPS =
+export const GROUP_PROPS =
   '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>' +
   '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>';
 
 /** A text box at the slide's bottom that grows to its one line of text (`a:spAutoFit`). */
-const AUTOGROW =
+export const AUTOGROW =
   '<p:sp><p:nvSpPr><p:cNvPr id="4" name="Note"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>' +
   `<a:xfrm><a:off x="${60 * EMU_PER_PX}" y="${960 * EMU_PER_PX}"/><a:ext cx="${600 * EMU_PER_PX}" cy="${60 * EMU_PER_PX}"/></a:xfrm>` +
   '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr><p:txBody><a:bodyPr wrap="square" rtlCol="0">' +
@@ -343,7 +343,14 @@ function relsXml(rels: readonly [string, string, string][]): string {
  * font-independent line spacing (see `LO_PROBE_ROWS`), and almost every real deck has one.
  */
 export function probeParts(app = true): [string, string][] {
-  const slides = [...probeSlides().map(slideXml), ...LAYOUT_SLIDES.map(layoutSlideXml)];
+  return deckParts([...probeSlides().map(slideXml), ...LAYOUT_SLIDES.map(layoutSlideXml)], app);
+}
+
+/**
+ * A probe deck's parts around its slides' XML (`slides`, in order): content types, presentation, one
+ * master, one blank layout and the theme, with `docProps/app.xml` as PowerPoint writes it when `app`.
+ */
+export function deckParts(slides: readonly string[], app = true): [string, string][] {
   const nums = slides.map((_, i) => i + 1);
   const types =
     `${HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
@@ -498,7 +505,7 @@ export function probeDeck(app = true): Uint8Array {
  * The straight strokes of a page from `pdftocairo -svg` of LibreOffice's PDF (the tables' borders), in PDF
  * points: `matrix(a, 0, 0, -a, 0, ty)` maps a path's (x, y) to (a·x, ty - a·y).
  */
-function strokes(svg: string): { x0: number; y0: number; x1: number; y1: number }[] {
+export function strokes(svg: string): { x0: number; y0: number; x1: number; y1: number }[] {
   const re =
     /<path fill="none"[^>]*?d="M ([\d.]+) ([\d.]+) L ([\d.]+) ([\d.]+) "[^>]*?transform="matrix\(([\d.]+), 0, 0, -([\d.]+), 0, ([\d.]+)\)"/g;
   const out: { x0: number; y0: number; x1: number; y1: number }[] = [];

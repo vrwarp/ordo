@@ -351,7 +351,8 @@ export function readTable(
   // LibreOffice's columns), then ordo's, the lines spaced by their font's line height as LibreOffice draws
   // them and PowerPoint sizes rows. An empty cell is one line of its end mark.
   const stored = trs.map((tr) => emu(tr.attrs.h, 0));
-  const loCols = loColumns(cols, cells);
+  // LibreOffice's columns from the deck's widths in its whole 1/100 mm (400 px, 7055.56, is 7055), widened.
+  const loCols = loColumns(cols.map(loImported), cells);
   const textWidth = (c: TableCell, widths: readonly Emu[] = cols) => {
     let w = 0;
     for (let x = c.col; x < c.col + c.cols; x++) w += widths[x]!;
@@ -377,7 +378,8 @@ export function readTable(
   const loDrawn = cells.map((c, i) => measure.layout(spaced[i]!, textWidth(c, loCols), loSizePt));
   const loTallDrawn = loDrawn.map(withInsets);
   const rows = growRows(stored, cells, tall);
-  const loRows = loGrowRows(stored, cells, loTall);
+  // LibreOffice's rows from the deck's heights in its whole 1/100 mm (a:tr h 635000 EMU, 1763.89, is 1763).
+  const loRows = loGrowRows(stored.map(loImported), cells, loTall);
   if (measure.missing.size)
     ctx.log(
       `table text measured with estimated widths (no font for ${[...measure.missing]
@@ -392,8 +394,8 @@ export function readTable(
   const loH = loRows.reduce((s, h) => s + h, 0);
   // Where LibreOffice's row is shorter than the text as drawn, the text runs into the cell's margins; and
   // its lines sit at the face's ascent, where ordo's office model puts them a size below the line's top.
-  // LibreOffice anchors the drawn block (`drawn`) in the cell's inner height, but never above its top
-  // margin: a block taller than the cell starts at the margin and runs out at the bottom. Under
+  // LibreOffice anchors the drawn block (`drawn`) in the cell's inner height, but never centred above its top
+  // margin: a block taller than the cell starts at the margin and runs out at the bottom (`loBlockTop`). Under
   // font-independent spacing a 16 pt Carlito line is 677/100 mm measured and 690 drawn: the Moral Character
   // deck's 120 centred lines sit at the margin plus the face's ascent (the floor of that, every line), not
   // 6/100 mm above it; the Depression deck's 145 lines fit this on 140 (centring the measured height: 58).
@@ -412,7 +414,7 @@ export function readTable(
     let rowsH = 0;
     for (let y = c.row; y < c.row + c.rows; y++) rowsH += loRows[y]!;
     const inner = rowsH / EMU_PER_MM100 - mm100Emu(c.text.insets.t) - mm100Emu(c.text.insets.b);
-    const top = Math.max(0, at(inner) - at(theirs.height));
+    const top = loBlockTop(inner, theirs.height, c.text.anchor);
     let d = 0;
     for (let k = 0; k < n; k++)
       d +=
@@ -1160,6 +1162,25 @@ export function loAscent(pt: number, face: FaceMetrics | undefined, lines: LoLin
   const px = Math.round((h * LO_REF_DPI) / 2540);
   return Math.round((Math.round(px * face.ascent) * 2540) / LO_REF_DPI);
 }
+
+/**
+ * Where LibreOffice 24.2 starts a cell's drawn text block below the cell's inner top, in 1/100 mm (its logic
+ * unit; `inner` and `drawn` whole 1/100 mm), as the cell probe measured it (`tools/pptx-fidelity/src/
+ * cell-probe.ts`: 272 baselines of 80 centred cells, full, overflowing and with room, to the 1/100 mm):
+ * centred text half the room down, truncated, and a block taller than the inner height (the font-independent
+ * rows) 1/100 mm above the inner top, never centred above it (Moral Character's 690 drawn in 678, the
+ * Depression deck: dense-c C2). Bottom-anchored text sits on the inner bottom, never above the top; top-anchored
+ * text at the top (neither probed further).
+ */
+export function loBlockTop(inner: number, drawn: number, anchor: 'top' | 'middle' | 'bottom'): number {
+  const room = inner - drawn;
+  if (anchor === 'top') return 0;
+  if (anchor === 'bottom') return Math.max(0, room);
+  return room < 0 ? -1 : Math.trunc(room / 2);
+}
+
+/** A length LibreOffice imports from the deck (EMU), in its whole 1/100 mm: truncated (the probes' rows and columns). */
+const loImported = (v: Emu): Emu => Math.trunc(v / EMU_PER_MM100) * EMU_PER_MM100;
 
 /** A line of a face at a size, LibreOffice's way (1/100 mm). */
 export function loLineHeight(pt: number, face: FaceMetrics | undefined, lines: LoLines): number {

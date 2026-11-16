@@ -32,20 +32,17 @@ async function probeTables() {
   return scene.slides.map((s) => s.elements.filter((e): e is TableElement => e.kind === 'table'));
 }
 
-/** Within LibreOffice's PDF of the slide at 0.99897 (as for the rows). */
-function near(got: readonly number[], want: readonly number[]): void {
-  expect(got).toHaveLength(want.length);
-  got.forEach((v, i) => {
-    expect(Math.abs(v - want[i]!)).toBeLessThanOrEqual(0.05 + 0.0015 * want[i]!);
-  });
-}
-
 /** LibreOffice's PDF page draws the slide at this scale (its strokes' matrix): the probe's points are scaled by it. */
 const PDF_SCALE = 0.998969;
 /** 1/100 mm (LibreOffice's logic unit) per point. */
 const MM100_PER_PT = 2540 / 72;
 /** A size LibreOffice drew, read off its PDF in points (to 0.01 pt), in its own whole 1/100 mm. */
 const loMm100 = (pt: number) => Math.round((pt / PDF_SCALE) * MM100_PER_PT);
+
+/** Sizes as LibreOffice drew them, to the 1/100 mm: `got` in EMU (360 a 1/100 mm), `want` in its PDF's points. */
+function near(got: readonly number[], want: readonly number[]): void {
+  expect(got.map((v) => v / 360)).toEqual(want.map(loMm100));
+}
 
 describe('table probe deck', () => {
   it('writes every face at every size, alone and under an autogrow text box, the same bytes each time', async () => {
@@ -91,26 +88,19 @@ describe('table probe deck', () => {
       tables[j]!.forEach((e, k) => {
         expect(e.support).toBe('native');
         expect(e.cols).toEqual(l.tables[k]!.cols);
-        if (l.measure === 'cols')
-          near(
-            (e.lo?.cols ?? e.cols).map((w) => w / EMU_PER_PT),
-            LO_PROBE_LAYOUT[j]![k]!,
-          );
+        if (l.measure === 'cols') near(e.lo?.cols ?? e.cols, LO_PROBE_LAYOUT[j]![k]!);
       });
     });
   });
 
   it.skipIf(!faces)(
-    "sizes merges from the first row as LibreOffice 24.2's layouter, within 0.15 pt",
+    "sizes merges from the first row as LibreOffice 24.2's layouter, to the 1/100 mm",
     async () => {
       const tables = (await probeTables()).slice(probeSlides().length);
       LAYOUT_SLIDES.forEach((l, j) => {
         if (l.measure !== 'rows') return;
         tables[j]!.forEach((e, k) => {
-          near(
-            (e.lo?.rows ?? e.rows).map((h) => h / EMU_PER_PT),
-            LO_PROBE_LAYOUT[j]![k]!,
-          );
+          near(e.lo?.rows ?? e.rows, LO_PROBE_LAYOUT[j]![k]!);
         });
       });
     },
