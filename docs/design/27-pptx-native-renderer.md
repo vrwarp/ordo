@@ -1808,13 +1808,14 @@ wave's integration measures them: `regroup/r2b/integrate-1.md`).
   decoded picture at the prepare step); the editor and coarse-pointer thumbnails keep legacy copies (leaf-editor,
   sub-wave 2). (A unit an armed job did not finish within `UNIT_WAIT_MS` is no longer seen only at a later draw:
   the job leaves it to the late job, which fades it in.)
-- _Tables (tables-conv):_ question 3 of the LibreOffice inventory stays open: on a hub with LibreOffice the 8
-  dense table slides keep LibreOffice's page (the interim rule, §15 M9 "The table object imported"; the table
-  object missed the gate on all 8). A hostile table at `TABLE_LIMITS` (60,000 characters in 6 cells of 10,000) draws
-  in 61-63 ms at 3840 (`bench:tables`, named there; 4,096 cells of 60,000 characters: 35-39 ms; the corpus's table
-  slides at most 43.5 ms): render-bounds' 20,000-character bound and pre-rendered big slides take it off the GO
-  path. Vertical cells stay LibreOffice's art; the Korean bulletin's slide 20 is still under blank (Latin
-  punctuation and circled digits take the Korean face in LibreOffice).
+- _Tables (tables-conv):_ on a hub with LibreOffice the 8 dense table slides keep LibreOffice's page for now (the
+  interim rule, §15 M9 "The table object imported"; the table object missed question 3's gate on all 8). The owner
+  decided question 3 on 2026-11-15 ("prioritize native tables": the table object on every kind of hub, these 8
+  included; the gate becomes the fidelity target), and sub-wave 1b (tables-flip) removes the interim rule and its
+  second emission. A hostile table at `TABLE_LIMITS` (60,000 characters in 6 cells of 10,000) draws in 61-63 ms at
+  3840 (`bench:tables`, named there; 4,096 cells of 60,000 characters: 35-39 ms; the corpus's table slides at most
+  43.5 ms): render-bounds' 20,000-character bound and pre-rendered big slides take it off the GO path. Vertical
+  cells stay LibreOffice's art; the Korean bulletin's slide 20 is still under blank (Latin punctuation and circled digits take the Korean face in LibreOffice).
 <!-- /r2b:open-items -->
 
 ## 14. Testing and fidelity measurement

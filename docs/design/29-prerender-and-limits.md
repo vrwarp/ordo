@@ -544,7 +544,10 @@ demand.
   with its default "native table when within 0.02-0.04 of LibreOffice's page" (`lo-inventory/inventory.md:277`),
   measured by tables-conv. ordo's picture cannot close a fidelity gap, since it has the pixels of ordo's live
   drawing; so until the owner answers, a table slide whose native form misses that gate keeps LibreOffice's page on
-  hubs with LibreOffice, as today, for fidelity and not for size.
+  hubs with LibreOffice, as today, for fidelity and not for size. _Decided since:_ the owner answered question 3 on
+  2026-11-15 ("prioritize native tables"): every table is the table object on every kind of hub, the 8 dense
+  slides included, and the gate becomes a fidelity target; sub-wave 1b (tables-flip) removes the interim rule and
+  its second emission, so prerender-import keeps no table rule.
 - **The follow-up writes the full slide.** On hubs with LibreOffice the pptx-lo follow-up still draws charts,
   SmartArt, OLE objects and metafiles; `patchSlide` (`apps/hub/src/pptx/fallback.ts:347-427`) decides "unedited" by
   `digestMatches(slide.objects, …)` (:350) and patches inline objects. For a big slide it reads and writes the slide
@@ -1120,8 +1123,9 @@ merges into #27 before r2b's base and moves lines in `ws.ts`, `routes.ts`, `libr
 Ordering with the planned tracks:
 - **tables-conv**: its item 3 (keep LibreOffice's page for a table slide whose M6 group form passes 64 KB) is
   interim; prerender-import removes `pageForBudget`, including that branch, and owns `pptx-core.ts` and `budget.ts`
-  after tables-conv merges. The LibreOffice inventory's question 3 (tables on hubs with LibreOffice) stays with
-  tables-conv's gate (§1.9).
+  after tables-conv merges. The LibreOffice inventory's question 3 (tables on hubs with LibreOffice) stayed with
+  tables-conv's gate (§1.9); the owner decided it on 2026-11-15 (native tables on every hub; sub-wave 1b,
+  tables-flip, removes the interim rule before prerender-import).
 - **effect-units** owns `units.ts`, `clamp.ts`, `text2d.ts`, `asset.worker.ts`, `link-core.ts`, `stacks.ts` and the
   fade. `packages/domain/src/sha256.ts` is prerender-model's alone (the r2b plan, overlap 3): effect-units' unit
   keys never leave an asset worker this wave and stay in memory;
@@ -1199,7 +1203,9 @@ gains that an explicit base may sit below 16000.
 14. **How large may a service be?** Default: going live is refused above a size measured on a venue PC (about 32 MB
     to start), with a plain message; a warning above the size where going live takes the screens a few seconds.
 
-Still open from the LibreOffice inventory and not decided here: question 3 (tables on hubs with LibreOffice), §1.9.
+Not decided here, and since decided by the owner (2026-11-15, "prioritize native tables"): the LibreOffice
+inventory's question 3 (tables on hubs with LibreOffice, §1.9): the table object on every kind of hub; sub-wave 1b
+(tables-flip) removes the interim rule.
 
 **Applied in wave r2b** (the owner has not answered; the defaults): 1-4 yes; 5 yes, dormant until the go-live bake
 is switched on (§1.5: such a cue draws the full slide live meanwhile); 6-9 yes; 10 tail slides kept whole in their

@@ -854,7 +854,8 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
   (`BudgetOptions.tables` false: `budgetCost`, the guard's text objects one per cell), and M6's cell cap
   (`budget.ts` `m6TableCap`, `MAX_TABLE_CELLS` 150, 'budget:table') before the support is refined.
 - **The M6 group's bytes** (`EmittedSlide.tableGroupBytes`, with LibreOffice only; question 3 of the LibreOffice
-  inventory missed its gate): each table object's M6 group is emitted once more into a scratch list
+  inventory missed its gate; the owner has since decided it, 2026-11-15, for native tables on every hub, and
+  sub-wave 1b, tables-flip, removes this second emission): each table object's M6 group is emitted once more into a scratch list
   (`emit-table.ts` `groupForm`: ids of a ULID's length, no log, the text budget as it stood before the table;
   none past `MAX_TABLE_CELLS`), and once the slide is fitted `emit-budget.ts` `groupFormExtra` weighs the slide
   with the groups in place of the table objects (`fitBytes` on copies, a stand-in for file names: no file is
