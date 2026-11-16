@@ -401,7 +401,18 @@ function jobHost(steps: Steps): PrepareHost {
  * cancelled: the same key sent again later (the operator came back to that cue) waits as any job of its role.
  */
 const hurried = new Set<string>();
-/** Waits of unit turns (`turnWait`) by job key, ended at once by a hurry or a cancel. */
+/**
+ * Keys of the armed slide jobs a live job of their layer rushed: a jump to another slide while their cue stays
+ * armed (click-to-go on a hidden cue before it; a cue selected, then a GO to the one before it). Each layer is one
+ * chain, so the jump's live job would start only once the arm had waited its `UNIT_WAIT_MS`. Their units step
+ * stops waiting at once, as a hurried job's, and they draw with what is ready, the rest left to their late job;
+ * unlike a hurried job's, their cue is not live: their hold stays on the layer's armed chain and the live slide's
+ * late job goes on. Forgotten when the job ends or is cancelled.
+ */
+const rushed = new Set<string>();
+/** Armed slide jobs sent, by key: their layer (looked up only while lanes still hold the key). */
+const armedSlides = new Map<string, number>();
+/** Waits of unit turns (`turnWait`) by job key, ended at once by a hurry, a rush or a cancel. */
 const turnWaits = new Map<string, Set<() => void>>();
 
 /**
@@ -933,7 +944,7 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
       const waits = (role ?? 'armed') === 'armed';
       const prep = await prepare(job, scale, steps, {
         key: job.key,
-        stop: () => !waits || hurried.has(job.key),
+        stop: () => !waits || hurried.has(job.key) || rushed.has(job.key),
       });
       units = prep.units;
       unitsMade = prep.made;
@@ -1047,6 +1058,7 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
     release?.();
     units?.release();
     hurried.delete(job.key);
+    rushed.delete(job.key);
   }
 }
 
@@ -1234,7 +1246,17 @@ function onJobMessage(m: ToAsset): void {
           stopWarmUnits();
           queueWarmUnits();
         }
+        // A jump while another cue of the layer stays armed: the armed job it would start after stops waiting for
+        // units (`rushed`), so the jump is drawn within a unit turn, not after the arm's UNIT_WAIT_MS.
+        const pending = new Set(Object.values(lanes.keys()).flat());
+        for (const k of armedSlides.keys()) if (!pending.has(k)) armedSlides.delete(k);
+        const rush = lanes
+          .ahead(`layer ${job.layer}`, RANK.live)
+          .filter((k) => k !== job.key && armedSlides.get(k) === job.layer);
+        for (const k of rush) rushed.add(k);
+        endTurnWaits(rush);
       }
+      if (job.kind === 'slide' && (m.role ?? 'armed') === 'armed') armedSlides.set(job.key, job.layer);
       // Each layer is a chain: its content reaches the renderer in the order its stacks expect.
       lanes.push({
         key: job.key,
@@ -1302,7 +1324,10 @@ function onJobMessage(m: ToAsset): void {
     case 'cancel':
       lanes.cancel(m.keys);
       endTurnWaits(m.keys);
-      for (const k of m.keys) hurried.delete(k);
+      for (const k of m.keys) {
+        hurried.delete(k);
+        rushed.delete(k);
+      }
       return;
     case 'prune':
       images.prune(new Set(m.keep));

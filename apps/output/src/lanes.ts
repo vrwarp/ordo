@@ -223,6 +223,17 @@ export class Lanes {
     return n;
   }
 
+  /**
+   * Keys of the jobs a job of `rank` pushed to `chain` now would start after: the one running and the queued ones
+   * of no greater rank (the queue is in rank, then arrival order).
+   */
+  ahead(chain: string, rank: number): string[] {
+    const c = this.chains.get(chain);
+    if (!c) return [];
+    const queued = c.queue.filter((e) => e.job.rank <= rank).map((e) => e.job.key);
+    return c.running ? [c.running.job.key, ...queued] : queued;
+  }
+
   /** Keys of the jobs queued or running, by chain (introspection). */
   keys(): Record<string, string[]> {
     const out: Record<string, string[]> = {};

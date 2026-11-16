@@ -1658,6 +1658,70 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
     expect(ud.filter((u) => !unitReady(u)).map((u) => u.key)).toEqual([]);
   }, 30_000);
 
+  it('a jump while another cue stays armed does not wait for that arm: its unit wait stops, it draws with what is ready, its parts come late with its hold on the armed chain (integrate-1b)', async () => {
+    // The armed cue: more units than its arm can make in UNIT_WAIT_MS at 150 ms of real time a unit turn.
+    const t = manyAt('jump-armed', 20, 0.09765625);
+    const units = unitsOf(t);
+    expect(units.length).toBeGreaterThanOrEqual(8);
+    init({ unitTurnMs: 150 });
+    rendered.length = 0;
+    replies.length = 0;
+    try {
+      // The operator armed cue 10 (its arm waits for its units) and, 150 ms later, jumps to cue 9: the cue after
+      // the jump's target is still cue 10, so nothing cancels or hurries its arm.
+      send({
+        t: 'job',
+        job: slideJob({ slide: t, images: {}, video: undefined, key: 'sl|jump-armed', cueIndex: 10 }),
+        role: 'armed',
+      });
+      await new Promise((r) => setTimeout(r, 150));
+      const t0 = realNow();
+      send({
+        t: 'job',
+        job: slideJob({
+          slide: { id: 'jump-target', objects: [] },
+          images: {},
+          video: undefined,
+          key: 'sl|jump-target',
+          cueIndex: 9,
+        }),
+        role: 'live',
+      });
+      await vi.waitFor(() => expect(doneOf('sl|jump-target')).toHaveLength(1), { timeout: 10_000 });
+      // Answered within a unit turn or two, not after the arm's UNIT_WAIT_MS.
+      expect(realNow() - t0).toBeLessThan(2 * 150);
+      // The arm drew at once with what was ready, its parts left to its late job.
+      const armed = doneOf('sl|jump-armed');
+      expect(armed).toHaveLength(1);
+      expect((armed[0] as { unitsLeft?: number }).unitsLeft).toBeGreaterThan(0);
+      // Its cue is not live: the jump's slide holds the layer's live units, the arm keeps the armed chain's, so
+      // its late job is not stopped and makes every part, each once.
+      await vi.waitFor(() => expect(readyOf('sl|jump-armed').some((r) => r.ended)).toBe(true), {
+        timeout: 15_000,
+      });
+      expect(readyOf('sl|jump-armed').some((r) => r.stopped)).toBe(false);
+      expect(readyOf('sl|jump-armed').at(-1)).toMatchObject({ left: 0, ended: true });
+      const made = readyOf('sl|jump-armed').flatMap((r) => r.keys);
+      expect([...made].sort()).toEqual(units.map((u) => u.key).sort());
+      // Pinned with the armed cue: a GO to it does no unit work.
+      unitCache.clear('unit');
+      expect(units.filter((u) => !unitReady(u)).map((u) => u.key)).toEqual([]);
+    } finally {
+      dropLate('jump-armed-stop');
+      send({
+        t: 'job',
+        job: slideJob({
+          slide: { id: 'jump-armed-next', objects: [] },
+          images: {},
+          video: undefined,
+          key: 'sl|jump-armed-next',
+        }),
+        role: 'armed',
+      });
+      await vi.waitFor(() => expect(doneOf('sl|jump-armed-next')).toHaveLength(1));
+    }
+  }, 30_000);
+
   it('the drawing switches of the asset init reach the worker; ?unitTurnMs waits after each unit turn', async () => {
     init({ late: 'next', warm: false, effects: 'base', unitTurnMs: 30, other: 'ignored' });
     replies.length = 0;

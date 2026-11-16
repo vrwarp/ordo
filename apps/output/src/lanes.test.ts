@@ -103,6 +103,21 @@ describe('raster lanes: order', () => {
     expect(h.log).toEqual(['a10', 'a11', 'l10', 'a20']);
   });
 
+  it('names the jobs a job of a rank pushed now would start after: the running one and the queued of no greater rank', async () => {
+    const h = harness();
+    h.lanes.push(h.job('a1', { chain: 'slide', rank: RANK.armed, slices: 2 }));
+    h.lanes.push(h.job('p1', { chain: 'slide', rank: RANK.props }));
+    h.lanes.push(h.job('a2', { chain: 'slide', rank: RANK.armed }));
+    await h.step();
+    expect(h.lanes.keys()).toEqual({ slide: ['a1', 'p1', 'a2'] });
+    // A live job waits behind the running arm and the props job, not behind the arm queued after them.
+    expect(h.lanes.ahead('slide', RANK.live)).toEqual(['a1', 'p1']);
+    expect(h.lanes.ahead('slide', RANK.armed)).toEqual(['a1', 'p1', 'a2']);
+    expect(h.lanes.ahead('other', RANK.live)).toEqual([]);
+    await h.drain();
+    expect(h.lanes.ahead('slide', RANK.live)).toEqual([]);
+  });
+
   it('lets another chain run while a job awaits a decode off this thread', async () => {
     const h = harness();
     let decoded!: () => void;

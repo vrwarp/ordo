@@ -460,6 +460,15 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   of the hurry (a turn is about `SLICE_MS` / 2 plus the step running, design/27 §13). The link finds a warm job
   by the slide key of the plan it warmed (a warm key also holds the background and media keys). A hurry lasts
   as long as its job: once the job ends or is cancelled, the same key sent again waits as any job of its role.
+- **Rush** (sub-wave 1b's integration). Each layer is one chain, so a jump's live job starts only after the job
+  running on its layer. When the cue after the jump's target is the armed cue (click-to-go on a hidden cue just
+  before it; a cue selected, then a section button or a remote GO to the one before it), nothing cancels or
+  hurries that arm, and the jump waited for it to make its units, up to `UNIT_WAIT_MS` (a GO late by up to 1 s).
+  A live job therefore rushes the armed slide jobs of its layer it would start after (`Lanes.ahead`): their unit
+  wait stops at once, as a hurry's, so the jump is drawn within a unit turn, and they draw with what is ready,
+  their parts left to their late job. Unlike a hurry, their cue is not live: their hold stays on the layer's
+  armed chain, the jump's slide keeps the live chain's, and neither late job stops the other. A rush lasts as
+  long as its job, as a hurry does.
 - **Late job.** A slide job that left units (`done.unitsLeft`) queues a late job for them (`RANK.late`: below
   the live and armed cues, above bulk work; chain `late`), which pins what it makes into the slide job's own hold
   (`holdInto`: while the slide is live or armed) and reports them with `{t: 'unitsReady', slideKey, keys,

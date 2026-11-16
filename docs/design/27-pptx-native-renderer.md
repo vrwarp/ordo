@@ -1828,7 +1828,9 @@ measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`).
   is a gain: stored form 0.838 → 0.847, −0.008 before the anchor). Question 3's gate (each of the 8 ≥ its
   LibreOffice page − 0.04, the mean ≥ 0.939) is the fidelity target, measured on the stored form (what both
   kinds of hub show): the 8 0.508 at tables-flip, 0.848 after the four tracks, 1 of 8 at its target (Flesh and
-  Spirit); never a rule that picks LibreOffice.
+  Spirit); never a rule that picks LibreOffice. Live safety: a jump while another cue of the layer stays armed
+  no longer waits for that arm to make its units (up to `UNIT_WAIT_MS`, a GO 1.3 s late at 3840 here): the live
+  job rushes it (design/14 "Late units", Rush).
 - _Left to sub-wave 1c (tables, the rest of the owner's list):_
   - LibreOffice's glyph-advance model and one row measure (`tables-widths`): with the harness's faces, 148 of
     15,163 cells on 11 of E's 66 table slides need more than their fixed row by over 1 px (§15 "The stored
