@@ -306,7 +306,11 @@ describe('POST /live/prepare beside the running service (design/29 M8, W41)', ()
     expect(live.prepare('a').state).toBe('preparing');
     expect(live.prepare('b').state).toBe('preparing');
     const c = await live.prepareWait('c', { waitMs: 1000 });
-    expect(c).toMatchObject({ state: 'failed', reason: PREPARE_BUSY_REASON });
+    // W67 (design/29 §3, blocking), in its words.
+    expect(c).toMatchObject({
+      state: 'failed',
+      reason: 'Another service is still getting ready to go live. Try Go live again in a moment.',
+    });
     expect(ctl.calls).toBe(2);
     await expect(goLive(live, 'c')).rejects.toThrow(PREPARE_BUSY_REASON);
     expect(ctl.calls).toBe(2);

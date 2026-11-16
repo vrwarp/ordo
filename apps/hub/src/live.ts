@@ -114,8 +114,9 @@ export const PREPARED_TTL_MS = 10_000;
  * form after, in the process that runs the service. One more is refused with PREPARE_BUSY_REASON.
  */
 export const PREPARES_IN_FLIGHT_MAX = 2;
+/** W67 (design/29 §3, blocking): the operator's "Could not go live" dialog shows it. */
 export const PREPARE_BUSY_REASON =
-  'Another service is still being got ready to go live; try Go live again in a moment';
+  'Another service is still getting ready to go live. Try Go live again in a moment.';
 /** Progress is reported at most this often. */
 const PROGRESS_EVERY_MS = 100;
 const CANCELLED = 'cancelled';

@@ -898,7 +898,8 @@ Storage and transport:
   golive-prepare. (Review of sub-wave 1: a poll that continues a Go live gets the result of the prepare it
   watched, never a fresh prepare, so a prepare ending between two polls is not fetched again; End service
   cancels a goLive still being prepared, so it never applies after the service was ended; at most two prepares
-  are in flight and only the latest one's copy is kept ready. design/13 "Prepare before goLive".)
+  are in flight, a third refused with W67, and only the latest one's copy is kept ready. design/13 "Prepare
+  before goLive".)
 
 Import:
 - **X1 Compact path parse**: path children packed into numbers while tokenizing, no node per point; separate bounds
@@ -1060,6 +1061,7 @@ the Go-live check repeat it: "Slide 35 of 'Sunday deck' was imported with parts 
 | W58 | the running service past the goLive ceiling (D13)                   | "This service is too large to go live (40 MB). Split the longest presentations into smaller ones."                                                                                                                                                                                                                                                                                                                | blocking                              |
 | W59 | the service past the size whose first save passes the GO lead (D13) | "Going live with this service takes a few seconds on the screens. Go live before the service starts."                                                                                                                                                                                                                                                                                                             | critical                              |
 | W60 | the goLive listing cut (A31) or the degraded list full (A34)        | "Some slides near the end of this service are shown without their full detail: it has more files than ordo sends at once. Split the playlist into two services."                                                                                                                                                                                                                                                  | critical                              |
+| W67 | Go live while two other services are getting ready (M8)             | "Another service is still getting ready to go live. Try Go live again in a moment."                                                                                                                                                                                                                                                                                                                               | blocking                              |
 
 **Operator health**
 

@@ -98,10 +98,10 @@ Design/29 §2.3 M8. Going live has two steps, so a mid-service Go live never hol
    a prepare that ended since the last answer (within 10 s) is answered with its result, never restarted
    (the operator waits up to 150 ms between polls, so a prepare often ends between two of them). A first
    request (no `seen`) after a prepare that ended starts a fresh one. At most two prepares are in flight
-   (`PREPARES_IN_FLIGHT_MAX`): a third playlist's fails at once with "Another service is still being got ready
-   to go live; try Go live again in a moment", and only the latest prepare's ready copy is kept. `saved:
-   true` goes live from the hub's saved copy instead of waiting for the library (W41's button): the fetch
-   under way is abandoned, and the goLive carries the existing cached-copy `degraded` entry.
+   (`PREPARES_IN_FLIGHT_MAX`): a third playlist's fails at once with W67 (design/29 §3), "Another service is
+   still getting ready to go live. Try Go live again in a moment.", and only the latest prepare's ready copy
+   is kept. `saved: true` goes live from the hub's saved copy instead of waiting for the library (W41's
+   button): the fetch under way is abandoned, and the goLive carries the existing cached-copy `degraded` entry.
 2. Once `ready` (or `failed`), the operator sends the ordinary `{ k: 'goLive', playlistId }` command. It
    uses the prepared copy (once, within 10 s), applies at once with one parse, and is refused with the
    prepare's `reason` if it failed.
