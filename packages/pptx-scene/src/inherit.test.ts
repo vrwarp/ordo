@@ -239,6 +239,16 @@ describe('paragraph-property chain', () => {
     expect(sizes(ctx, own(ctx)[0]!)).toEqual(['1900', '1800']);
   });
 
+  it("reads the master's otherStyle before defaultTextStyle for a table cell's text", () => {
+    const ctx = ctxOf(spec(sp({ id: 2, txBody: body(para(run('x'))) })));
+    const cell = { ...chainOf(ctx, own(ctx)[0]!, 'slide'), cell: true };
+    expect(paraChain(ctx, cell, 0).map((p) => child(p, 'a:defRPr')?.attrs.sz)).toEqual([
+      '1000',
+      '1900',
+      '1800',
+    ]);
+  });
+
   it('uses titleStyle for titles and otherStyle for footers, and splits local styles from the rest', () => {
     const ctx = ctxOf(
       spec(sp({ id: 2, ph: 'type="ctrTitle"' }) + sp({ id: 3, ph: 'type="sldNum" idx="12"' })),

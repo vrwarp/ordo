@@ -885,9 +885,10 @@ function cellText(
   rtl = false,
 ): TextBody {
   const own = child(tc, 'a:txBody');
-  // The cell's body as a shape's, so the text chain reads its list style and paragraphs.
+  // The cell's body as a shape's, so the text chain reads its list style and paragraphs; as a cell's
+  // (`Chain.cell`), the master's otherStyle before the presentation's defaultTextStyle, as LibreOffice reads it.
   const txBody = el('p:txBody', {}, own?.children.length ? own.children : [el('a:p', {})]);
-  const body = readTextBody(ctx, { own: el('p:sp', {}, [txBody]), from: base.from }, styled) ?? {
+  const body = readTextBody(ctx, { own: el('p:sp', {}, [txBody]), from: base.from, cell: true }, styled) ?? {
     paras: [],
     insets: { ...CELL_MARGINS },
     anchor: 'top',

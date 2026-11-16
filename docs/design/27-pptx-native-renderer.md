@@ -3051,6 +3051,14 @@ be measured):
 - **Text past a fixed row** overflows it, upwards and downwards as its anchor says, as a text box's overflows
   its box (the layout's rule for `rowRule: 'fixed'`, above): an output whose faces lay a cell out taller than
   the converter measured draws the text past the row, never clipped and never moving the rows below.
+- **Cell text in the master's otherStyle** (`inherit.ts` `paraChainParts`, `Chain.cell` set by `tables.ts`
+  `cellText`; from r2b-diag all-tables 022b990): a cell's paragraphs read the master's `p:otherStyle` before
+  the presentation's `defaultTextStyle`, as LibreOffice lays table text out (a non-placeholder text box still
+  reads `defaultTextStyle` only). Measured where the two differ: CbcKk Dedication Service (defaultTextStyle
+  centred, otherStyle left; LibreOffice left) slide 22 0.650 -> 0.954, Dec 15 2019 slide 3 0.928 -> 0.977,
+  golden-pptx w65_00H's 12 table slides (defaultTextStyle left at 120 % with 65 pt before, otherStyle centred
+  at 100 %) 0.367-0.768 -> 0.784-0.981, w65_THREE 16 0.614 -> 0.963 (with the stored form under it); no other
+  table slide of E moved. Both cell forms take it (the table object and the M6 group).
 <!-- /r2b:tables-form -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)

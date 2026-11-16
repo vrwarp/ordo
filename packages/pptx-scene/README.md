@@ -852,7 +852,8 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
   (`measuredBodies`); the emitter cuts the same and leaves later palette entries out (noted). No cell cap: a
   table is one object of the slide's 150.
 - **Styles and scripts**: a table naming no style has none, whatever `a:tblStyleLst def` says (`tableStyleOf`, as
-  LibreOffice draws it);
+  LibreOffice draws it); a cell's paragraphs read the master's `p:otherStyle` before `defaultTextStyle`
+  (`inherit.ts` `Chain.cell`, set by `cellText`; sub-wave 1b, as LibreOffice lays table text out);
   the measure breaks at the renderer's break opportunities (`breakOpportunities`, Korean words whole) and
   spaces a paragraph by the face that draws its script (`FaceSource.script`: `@ordo/importers` `faceSourceOf` on
   the hub and in the browser, `fc-match :charset` in the harness), asked for Han, Kana and Hangul only

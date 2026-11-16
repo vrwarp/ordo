@@ -211,6 +211,33 @@ describe('tables: grid, cells and objects', () => {
     expect(texts[1]!.runs).toBeUndefined();
   });
 
+  it("lays a cell's text out in the master's otherStyle before defaultTextStyle, as LibreOffice does", () => {
+    // The deck's defaultTextStyle centres its text at 120 % lines; the master's otherStyle sets it left at 100 %
+    // (CbcKk Dedication Service and golden w65_00H differ so, both ways): a cell takes otherStyle's, as
+    // LibreOffice lays table text out; a text box, which is no placeholder, keeps defaultTextStyle's.
+    const deck: Partial<DeckSpec> = {
+      defaultTextStyle:
+        '<a:lvl1pPr algn="ctr"><a:lnSpc><a:spcPct val="120000"/></a:lnSpc><a:defRPr sz="2000"/></a:lvl1pPr>',
+      master: {
+        txStyles:
+          '<p:titleStyle/><p:bodyStyle/><p:otherStyle><a:lvl1pPr algn="l"><a:lnSpc><a:spcPct val="100000"/></a:lnSpc><a:defRPr sz="1600"/></a:lvl1pPr></p:otherStyle>',
+      },
+    };
+    const box = sp({ id: 9, x: 0, y: 5 * IN, cx: 2 * IN, cy: IN / 2, txBody: body(para(run('box'))) });
+    const shapes = table({ cols: [2 * IN], rows: [{ h: IN / 2, cells: [tc('cell')] }] }) + box;
+    // The M6 group: a text object per cell.
+    const { texts } = convert(shapes, { deck });
+    const cell = texts.find((t) => t.text === 'cell')!;
+    // 100 % of the office model's single line (1.2 x the size), where defaultTextStyle's 120 % gives 1.44.
+    expect(cell.style).toMatchObject({ align: 'left', fontSizePx: 32, lineHeight: 1.2 });
+    expect(texts.find((t) => t.text === 'box')!.style).toMatchObject({ align: 'center', fontSizePx: 40 });
+    // The table object: the same cell.
+    const out = convertDeck(buildDeck({ slides: [{ shapes }], ...deck }), { fontFace: HALF_EM });
+    const o = out.slides[0]!.slide.objects.find((x): x is ShapeObject => x.type === 'shape' && !!x.table)!;
+    expect(cellRich(o.table!, 0)!.style).toMatchObject({ align: 'left', lineHeight: 1.2 });
+    expect(cellRich(o.table!, 0)!.style.fontSizePx).toBeCloseTo(31.92, 6); // 16 pt at 600 dpi (133 px): 15.96 pt
+  });
+
   it('runs the cells of a right-to-left table right to left, starting at the right unless set (rtl)', () => {
     const { texts } = convert(
       table({
