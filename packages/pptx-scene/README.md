@@ -858,7 +858,10 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
 - **Styles and scripts**: a table naming no style has none, whatever `a:tblStyleLst def` says (`tableStyleOf`, as
   LibreOffice draws it); a cell's paragraphs read the master's `p:otherStyle` before `defaultTextStyle`
   (`inherit.ts` `Chain.cell`, set by `cellText`; sub-wave 1b, as LibreOffice lays table text out);
-  the measure breaks at the renderer's break opportunities (`breakOpportunities`, Korean words whole) and
+  the measure breaks at the renderer's break opportunities for office text (`breakOpportunities` with
+  `office`: Korean words whole, LibreOffice's breaks after a hyphen before a digit and after the spaces between
+  a quotation mark and an opening bracket, none after a slash before a letter; text-lines), sizes each line by
+  its own largest run (as the renderer's office model and LibreOffice's editeng do) and
   spaces a paragraph by the face that draws its script (`FaceSource.script`: `@ordo/importers` `faceSourceOf` on
   the hub and in the browser, `fc-match :charset` in the harness), asked for Han, Kana and Hangul only
   (`GLYPH_SCRIPTS`: a shaped script's unshaped advances do not measure its line).

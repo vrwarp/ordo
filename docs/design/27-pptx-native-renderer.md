@@ -1079,6 +1079,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 - Painting applies `ctx.scale(scale, scale)` on top of the caller's transform (thumbnails translate first, the editor adds devicePixelRatio) and draws each segment at its reference x.
 - Line breaks, autofit results and positions are therefore identical at 960, 1920 and 3840 wide, in the editor and in thumbnails. Today they are not: `text2d.ts:84-101` measures at device scale.
 - Advances at device size can differ from the reference × scale by a fraction of a pixel. That residue stays inside a segment and never moves a break.
+- One exception, in painting only (sub-wave 1b, text-lines): table-cell text is painted on the device pixels of the output being drawn (Paint passes below), so a cell's runs may sit up to one device pixel (a quarter, across) apart from `scale × position`; its layout is the same at every scale.
 
 **Pipeline**
 1. **Itemize.** Paragraphs are the `\n` pieces; `soft` continues the previous paragraph: it takes its style, spacing and direction, overriding only what its own `paras[i]` sets, and has no bullet and no space between them. Style runs are runs ∩ paragraphs. An empty paragraph's end mark is the run covering its `\n`; the last paragraph, which has none, takes the run covering the `\n` before it.
@@ -1086,6 +1087,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 3. **Breaks.**
    - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 (also U+2007, U+2011 and U+FEFF) never break on either side, which fixes the verified 'Dieu !' split. After a breaking space a line may still end before one (UAX#14 LB18), as LibreOffice breaks the ". \u00A0" that text pasted with two spaces after a full stop stores.
    - SA scripts (Thai, Lao, Khmer, Myanmar) break at `Intl.Segmenter` word boundaries; CJK follows the ID/CL/NS classes.
+   - **Office text** (`lineModel: 'office'`: imported PowerPoint text and table cells; the converter's table measure always) breaks where LibreOffice 24.2 breaks it and UAX#14 does not (sub-wave 1b, text-lines; measured on a probe deck through soffice, every case in text boxes and table cells at 10, 12 and 18 pt): after a hyphen-minus before a digit, whatever precedes it ('John 3:16-' / '17'; UAX#14 LB25 keeps 'HY × NU'; not after U+2212); after the breaking spaces between any quotation mark and an opening bracket ('“every month” ' / '[offerings]'; UAX#14 15.0's LB15 keeps 'QU SP* × OP'), never without a space or at a no-break space; and never after a slash before a letter or digit, so a web address in a citation stays whole (UAX#14 allows 'SY ÷ AL'). Not modelled: LibreOffice also breaks after the slashes of a slash word that starts its paragraph, and cuts a URL that begins a line inside a paragraph only at the line's width (its break before '-Sunday' in Moral Character's text box is such a cut). Ordo's own text (songs, scripture, slides made in ordo) keeps UAX#14 (owner question T1's default).
    - Emergency breaks fall only between clusters: `Intl.Segmenter` graphemes joined across a conjunct-forming virama, so Tamil 'க்ஷி' stays whole. Graphemes alone do not keep it whole: UAX#29 GB9c joins conjuncts in six Indic scripts only, not Tamil, Kannada or Sinhala.
    - An emergency break costs what its line holds, never what is left of the word: the cut is found by galloping from the piece's start (1, 2, 4, ... clusters, then a bisection), cluster boundaries are found only that far (one list per piece serves every line and autofit step), and the rest of the word is carried unmeasured until it may fit. A 10,000-letter word in a narrow box is laid out in linear time (`rich.fuzz.test.ts`).
 4. **Segments.** A segment is a maximal substring with one style run, one bidi level and no break opportunity inside. It is also cut between two scripts that need different fallback faces (Han and kana count as one), so each segment asks for one.
@@ -1099,7 +1101,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
    - A right-to-left paragraph mirrors its start: indents and the bullet are on the right and its trailing space hangs on the left. `align` stays visual.
    - Then UAX#9 L2 visual reordering between segments. The browser orders glyphs within a segment.
 7. **Line model `'office'`** (LibreOffice, measured in the pptx-render commits; `page.ts:202-353`).
-   - F = the size of the paragraph's main run: its first run without a baseline shift, else its first run, else the end mark, after autofit. A larger unshifted run raises F for its own line (LibreOffice sizes each line by its portions), so lines never overlap.
+   - F = the size of the paragraph's main run: its first run without a baseline shift, else its first run, else the end mark, after autofit. Each line with text is as tall as its own largest unshifted run (LibreOffice's editeng sizes each line by its portions): a larger run raises its line, so lines never overlap, and a smaller citation that wraps onto lines of its own makes short lines (sub-wave 1b, text-lines; Matthew 16v18's 5 pt references after 7 pt text). A line of shifted runs only keeps F. The `'ordo'` model keeps F as every line's floor. The converter's table measure sizes lines the same way.
    - Single spacing: pitch 1.2F, first baseline F below the line top.
    - Proportional p ≠ 1: h = 1.2F·p·k, where k is the autofit spacing scale. The baseline is F + (h − 1.2F) when p > 1, else min(F, 0.8h).
    - At PowerPoint's stored `fitScale` (step 10) its spacing is drawn the PowerPoint way: OOXML subtracts `lnSpcReduction` (1 − `fitScale.spacing`) from every paragraph's proportional spacing, single spacing included, so p becomes max(0, p − r) and k does not apply to it (100 % less 20 % is 80 %, 90 % is 70 %, where LibreOffice's k gives 72 % and leaves 100 % alone). Exact spacing and spcBef/spcAft are scaled by 1 − r. LibreOffice's k stays for the search and for `--lo-compat`.
@@ -1138,6 +1140,8 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 7. bullets.
 
 Hidden paragraphs (M8) are laid out but not painted, so revealed lines never move.
+
+**Device pixels for table-cell text** (sub-wave 1b, text-lines). The table drawer paints its cells' text with `PaintHooks.devicePixels`: each run's baseline on the device row its position falls in (floor), its start on the quarter of the device column it falls in (floor of 4×), underlines and strikes on whole device rows, under an axis-aligned transform with positive scales (a turned table paints as before), at every output scale; layout stays scale-free. That is where LibreOffice's pages put text as the hub and the measuring tool draw them (pdftoppm: 162 of 162 probe lines on floor(position × scale) at 144 and 288 dpi, glyph origins on quarter pixels, underlines on whole rows), while Chromium's canvas rounds a baseline to the nearest row and draws a run at its exact x. On the table decks (43 table slides) the stored form goes 0.859 → 0.877 and the 8 dense slides 0.807 → 0.829; the whole column instead of the quarter (the diagnosis' prototype) gives 0.877 / 0.826 with a slide down 0.016. Imported text boxes and ordo's own text paint as before: owner question T5 (whole pixels for imported text boxes too) is open, with its numbers in the 1b report (the 8: 0.829 → 0.849; one test deck's text box −0.06 in the compat drawing, the product drawing up on 37 of its 64 slides).
 
 **Not supported:** vertical text (residual until M9 emulates it), kashida, OpenType feature settings per call. harfbuzzjs (MIT) stays the escape hatch if browser-measured fitting proves non-deterministic across operating systems.
 
@@ -1829,6 +1833,13 @@ wave's integration measures them: `regroup/r2b/integrate-1.md`).
   by (n - 1) / 2 × the difference (the 666 chart's tall cells); storing LibreOffice's line heights as exact
   spacing would remove it and changes what the editor shows of a cell's spacing (1c). Bottom-anchored cells
   that overflow are not probed (`loBlockTop` keeps them on the inner bottom, never above the top).
+- _Text (text-lines, sub-wave 1b):_ imported text breaks where LibreOffice breaks it (a hyphen before a digit,
+  spaces between a quote and a bracket, no break after a slash before a letter) and sizes each line by its own
+  runs; table-cell text is painted on the device row and quarter column LibreOffice's page uses (§6). Still
+  open, named: LibreOffice's breaks after the slashes of a paragraph's first word and its width cut of a URL
+  that begins a line (not modelled); owner questions T1 (ordo's own text breaks as today) and T5 (imported text
+  boxes on whole pixels: not done, numbers in the 1b report); Moral Character's floor needs tables-cells'
+  anchor (−0.008 before it).
 <!-- /r2b:open-items -->
 
 ## 14. Testing and fidelity measurement

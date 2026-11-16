@@ -148,6 +148,14 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
   boundaries, never before a mark, ๆ or ฯ; CJK by UAX#14's classes.
   `isBreakSpace` (the trailing whitespace that hangs) is space, tab and the breaking space separators
   (U+1680, U+2000-U+200A except U+2007, U+205F, U+3000).
+  With `office` (the fifth argument: an office-model box, `Itemized.office`, and the converter's table measure
+  always), LibreOffice 24.2's breaks where UAX#14 differs, as the text-lines probe deck measured them: after a
+  hyphen-minus before an ASCII digit ('John 3:16-' / '17', whatever precedes the hyphen; not U+2212), after the
+  breaking spaces between any quotation mark and an opening bracket ('“every month” ' / '[offerings]', an
+  initial quote too), and none after a slash before a letter or digit (a web address stays whole). Ordo's own
+  text (no `lineModel`, or 'ordo') keeps UAX#14 (owner question T1's default). Not modelled: LibreOffice breaks
+  after the slashes of a slash word that starts its paragraph, and cuts a URL that begins a line inside a
+  paragraph only at the line's width.
 - `graphemeBoundaries(text, start, end)`: clusters, i.e. `Intl.Segmenter` graphemes joined across a
   conjunct-forming virama. Graphemes alone split Tamil 'க்ஷி' (UAX#29 GB9c covers six Indic scripts only);
   Tamil's pulli joins only in க்ஷ and ஸ்ர, Sinhala's al-lakuna only before a ZWJ. Without `Intl.Segmenter`:
@@ -204,7 +212,10 @@ Decisions the other items rely on:
   single. The converter writes a paragraph's spacing whenever it differs from the box's `lineHeight`.
 - **F is per line**: the paragraph's main run (§6 step 7), raised by a larger unshifted run on the same
   line, as LibreOffice sizes each line by its own portions (and page.ts's CSS strut did); never by a raised
-  or lowered run. An empty line takes the larger of F and its end mark.
+  or lowered run. In the office model a line with text is as tall as its own largest unshifted run, smaller
+  than F too (a citation in a smaller size that wraps onto lines of its own makes short lines, as LibreOffice's
+  editeng sizes them; text-lines); a line of shifted runs only keeps F. The 'ordo' model keeps F as every
+  line's floor. An empty line takes the larger of F and its end mark.
 - **Soft paragraphs continue the paragraph before them**: its alignment, indents, spacing, line spacing,
   main size and direction; no bullet, no space between them. The converter may write `{ soft: true }` only;
   the editor's paragraph strip edits the paragraph a soft one continues. `prepare` (A) gives a soft
@@ -262,6 +273,13 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   blur are multiplied by `scale`: `scale` is the whole device density, never folded into the context.
 - Cache: `paintPlan(o, l)` (drawn strings, resolved styles, CSS colours, merged rectangles) memoised by
   layout identity; context state is assigned only when it changes.
+- Device pixels (text-lines, sub-wave 1b): `paintRich(..., { devicePixels: true })` paints with
+  `DEVICE_PIXEL_PAINTER` when the object's painter is the plain one: each run's baseline on the device row it
+  falls in (`deviceRow`, floor), its start on the quarter of the device column it falls in (`deviceColumn`,
+  floor of 4 x), underlines and strikes (and their shadows) on whole rows (`deviceRows`), under an axis-aligned
+  transform with positive scales only; layout stays scale-free. That is where the reference rasterizer
+  (pdftoppm) puts LibreOffice's text at 144 and 288 dpi. Only the table drawer asks for it (its cells' text);
+  `PLAIN_PAINTER` and every other caller paint as before (paint.gate.test.ts holds it).
 - The legacy `ctx.direction` rule in `drawText` (`paragraphDirections`): only paragraphs with a strong RTL
   character are measured and drawn in their first strong direction, with `textAlign 'left'` for the whole
   block; LTR-only text assigns neither, and the goldens stay at max delta 0.
