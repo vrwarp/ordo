@@ -1250,6 +1250,43 @@ describe('link worker core: a GO never waits for drawing (r2b units-live, design
     t.close();
   });
 
+  it('a slow slide waiting for its last late part is drawn again on screen when the asset worker restarts (its late job is lost)', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const live = jobOf(t.toAsset, 0)!;
+    done(t, live.job.key, { unitsLeft: 3, rasterMs: 120 });
+    done(t, jobOf(t.toAsset, 1)!.job.key);
+    await tick(20);
+    t.toAsset.length = 0;
+    ready(t, live.job.key, 2);
+    await tick(30);
+    done(t, live.job.key, { unitsLeft: 2, rasterMs: 80 });
+    await tick(20);
+    // One more part made: it waits for the last (the re-draw passed the task) ...
+    ready(t, live.job.key, 1);
+    await tick(400);
+    expect(slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key)).toHaveLength(1);
+    // ... then the asset worker restarts, and its late job with it: the slide is drawn again, which makes the
+    // parts left late again in a new late job.
+    const render = new MessageChannel();
+    const asset = new MessageChannel();
+    const after: ToAsset[] = [];
+    asset.port2.onmessage = (e) => after.push(e.data as ToAsset);
+    t.core.onPorts(render.port1, asset.port1, { link: 0, render: 0, asset: 1 });
+    t.core.sync();
+    await tick(30);
+    const again = slideJobs(after).filter((m) => m.job.key === live.job.key);
+    expect(again).toHaveLength(1);
+    expect(again[0]!.job).toMatchObject({ refresh: true, refreshFadeMs: 300 });
+    for (const c of [render, asset]) {
+      c.port1.close();
+      c.port2.close();
+    }
+    t.close();
+  });
+
   it('20 units ready one after another give at most one refresh per 300 ms and none ahead of a GO’s raster', async () => {
     const t = setup();
     await t.core.start();

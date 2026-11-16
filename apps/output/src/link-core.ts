@@ -604,6 +604,9 @@ export class LinkCore {
     // Content travelling through the old channels is lost: forget what was in flight and arm again.
     this.inflight.clear();
     this.inflightRole.clear();
+    // The late jobs went with the old asset worker: a slide waiting for its last late part is drawn again, which
+    // makes the parts left late again in a new late job.
+    if (assetChanged) this.lateLeft.clear();
     for (const s of this.slots) if (s.waiter) this.inflight.add(s.waiter.key);
     if (renderChanged) {
       this.held = [];

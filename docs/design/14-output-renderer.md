@@ -478,8 +478,11 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   such re-draws, the first part's and the last's). The slide's first draw does not decide it: that cold job decodes
   its pictures, builds its geometry and makes or leaves its units, and a re-draw copies the made units. Parts made
   while a re-draw runs are drawn in after it (the link syncs on a late job's `done`), and a slide shown again starts
-  a new late job (reviews of r2b sub-wave 1, rounds 1-2; the slides of E whose warm draw passes 50 ms at 3840 are
-  live-frame's and render-bounds').
+  a new late job (reviews of r2b sub-wave 1, rounds 1-2). Measured at 3840 in software Canvas 2D: the leaf
+  template's slide 1 is shown by a 75-109 ms cold draw and re-drawn in 61-71 ms, its line art fading in 0.95-1.03 s
+  after the jump (at c9c7a39, which judged by the cold draw, never). Which slides re-draw past one task on an output
+  is not counted: E has 65 whose warm draw passes 50 ms in the harness, and the leaf slide re-draws slower on an
+  output than in the harness (35-50 ms), so more do; live-frame and render-bounds take the slowest off the screens.
 - **Warm-up.** When the live playlist changes, the link sends the slides this look draws as authored, in cue order
   from the live cue (the rest after it, then those before; each slide once, at most 200) in one `warmUnits` job;
   the asset worker makes their units in bulk work (`RANK.bulk`), unpinned, until its unit cache holds two thirds
