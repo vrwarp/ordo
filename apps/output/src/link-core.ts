@@ -234,8 +234,14 @@ export class LinkCore {
    */
   private unitRefresh = new Set<string>();
   private unitRefreshedAt = new Map<string, number>();
-  /** The last draw time of each slide key (`done.rasterMs`, at most 64 keys): a slow one is not re-drawn on screen. */
-  private slideDrawMs = new Map<string, number>();
+  /**
+   * The draw time of each slide key's last re-draw for late parts (`done.rasterMs` of a 'late' job, at most 64
+   * keys): what drawing it again costs. Not its first draw, which made the slide cold (its pictures, geometry
+   * and units); a re-draw copies the made units.
+   */
+  private redrawMs = new Map<string, number>();
+  /** The parts each slide's late job has still to make (its last `unitsReady.left`), while any are. */
+  private lateLeft = new Map<string, number>();
   private unitRefreshTimer?: ReturnType<typeof setTimeout>;
   /** Slide keys drawn with units left for a late job (`done.unitsLeft`), until all are reported made. */
   private lateParts = new Set<string>();
@@ -963,11 +969,13 @@ export class LinkCore {
     this.armedPlan = armed;
     this.waitingSound = waitingSound;
     // A slide shown again whose late parts never came (its late job was dropped when it left the screen): drawn
-    // again in place, which makes them late again.
+    // again in place, which makes them late again (a new late job: the dropped one's count no longer holds it).
     if (live.slide.key !== this.prevLiveSlide) {
       this.prevLiveSlide = live.slide.key;
-      if (this.lateParts.has(live.slide.key) && this.has(live.slide.key))
+      if (this.lateParts.has(live.slide.key) && this.has(live.slide.key)) {
+        this.lateLeft.delete(live.slide.key);
         this.unitRefresh.add(live.slide.key);
+      }
     }
     // Before anything is armed: a video that just left keeps its slot until its fade ends, and the clips
     // playing inside the live and armed slides get their slots (the slide jobs below carry them).
@@ -1340,9 +1348,13 @@ export class LinkCore {
   private unitRefreshDue(key: string): boolean {
     if (!this.unitRefresh.has(key)) return false;
     if (this.inflight.has(key)) return false;
-    // A slide that draws in more than one task: not drawn again while on screen (a GO would wait behind that
-    // draw); its parts come in when it is armed again, or at its next draw (LATE_REDRAW_MAX_MS).
-    if (this.livePlan?.slide.key === key && (this.slideDrawMs.get(key) ?? 0) > LATE_REDRAW_MAX_MS)
+    // A slide whose re-draw took more than one task (LATE_REDRAW_MAX_MS): drawn again on screen once more, when
+    // its last late part is made (a jump would wait behind each such re-draw), every part left fading in then.
+    if (
+      this.livePlan?.slide.key === key &&
+      (this.lateLeft.get(key) ?? 0) > 0 &&
+      (this.redrawMs.get(key) ?? 0) > LATE_REDRAW_MAX_MS
+    )
       return false;
     for (const r of this.inflightRole.values()) if (r === 'live') return false;
     const wait = (this.unitRefreshedAt.get(key) ?? 0) + REFRESH_FADE_MS - Date.now();
@@ -2122,6 +2134,7 @@ export class LinkCore {
         for (const k of this.refreshKeys) if (!this.has(k)) this.refreshKeys.delete(k);
         for (const k of this.unitRefresh) if (!this.has(k)) this.unitRefresh.delete(k);
         for (const k of this.lateParts) if (!this.has(k)) this.lateParts.delete(k);
+        for (const k of this.lateLeft.keys()) if (!this.has(k)) this.lateLeft.delete(k);
         for (const k of this.sceneVideo.keys()) if (!this.has(k)) this.sceneVideo.delete(k);
         this.requestSync();
         this.queueView();
@@ -2158,10 +2171,10 @@ export class LinkCore {
         this.assetInflight.delete(m.key);
         this.delivered.set(m.key, Date.now());
         if (m.unitsMade !== undefined) this.unitsMade = m.unitsMade;
-        if (m.rasterMs !== undefined && m.key.startsWith('sl|')) {
-          this.slideDrawMs.delete(m.key);
-          this.slideDrawMs.set(m.key, m.rasterMs);
-          if (this.slideDrawMs.size > 64) this.slideDrawMs.delete(this.slideDrawMs.keys().next().value!);
+        if (role === 'late' && m.rasterMs !== undefined && m.key.startsWith('sl|')) {
+          this.redrawMs.delete(m.key);
+          this.redrawMs.set(m.key, m.rasterMs);
+          if (this.redrawMs.size > 64) this.redrawMs.delete(this.redrawMs.keys().next().value!);
         }
         if (m.unitCacheBytes !== undefined) this.unitCacheBytes = m.unitCacheBytes;
         if (m.unitsLeft) {
@@ -2174,8 +2187,9 @@ export class LinkCore {
           }
           this.lateParts.add(m.key);
         } else this.lateParts.delete(m.key);
-        // A refresh waiting for the GO's live job to be drawn may go now.
-        if (role === 'live' && this.unitRefresh.size) this.requestSync();
+        // A refresh waiting for the GO's live job to be drawn, or for this re-draw (parts made while it ran), may
+        // go now.
+        if ((role === 'live' || role === 'late') && this.unitRefresh.size) this.requestSync();
         if (role === 'late') {
           this.lateDrawn.delete(m.key);
           this.lateDrawn.set(m.key, Date.now());
@@ -2234,6 +2248,8 @@ export class LinkCore {
       case 'unitsReady':
         // The slide's late parts are made: drawn again in place (with a fade while on screen), coalesced.
         if (!m.left) this.lateParts.delete(m.slideKey);
+        if (m.left) this.lateLeft.set(m.slideKey, m.left);
+        else this.lateLeft.delete(m.slideKey);
         if (!this.has(m.slideKey)) return;
         this.unitRefresh.add(m.slideKey);
         this.requestSync();
@@ -2525,6 +2541,7 @@ export class LinkCore {
         lateParts: [...this.lateParts],
         refresh: [...this.unitRefresh],
         lateDrawn: Object.fromEntries(this.lateDrawn),
+        redrawMs: Object.fromEntries(this.redrawMs),
       },
       drawing: this.drawingSwitches,
       errors: Object.fromEntries([...this.errors].map(([k, v]) => [k, v.error])),

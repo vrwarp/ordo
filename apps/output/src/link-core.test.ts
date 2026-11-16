@@ -1130,37 +1130,123 @@ describe('link worker core: a GO never waits for drawing (r2b units-live, design
     t.close();
   });
 
-  it('a slide whose draw passes the task is not drawn again on screen for its late parts (a GO would wait behind it); armed, it swaps them in', async () => {
+  it('a slide shown by a draw past the task still fades its late parts in: that draw made it cold, a re-draw copies its units', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const live = jobOf(t.toAsset, 0)!;
+    // A cold jump at 3840 (the leaf template's slide 1 in the integration: 73-100 ms), one part left.
+    done(t, live.job.key, { unitsLeft: 1, rasterMs: 90 });
+    done(t, jobOf(t.toAsset, 1)!.job.key, { rasterMs: 120 });
+    await tick(20);
+    t.toAsset.length = 0;
+    ready(t, live.job.key);
+    await tick(30);
+    const fade = slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key);
+    expect(fade).toHaveLength(1);
+    expect(fade[0]!.role).toBe('late');
+    expect(fade[0]!.job).toMatchObject({ refresh: true, refreshFadeMs: 300 });
+    t.close();
+  });
+
+  it('a slide whose re-draw passed the task is drawn again on screen once more, when its last late part is made; armed, it swaps them in', async () => {
     const t = setup();
     await t.core.start();
     t.hub.emit('state', stateMsg(slideLive(0)));
     await tick(30);
     const live = jobOf(t.toAsset, 0)!;
     const armed = jobOf(t.toAsset, 1)!;
-    // Both drawn in more than one task (50 ms) at this output's size, with parts left for a late job.
-    done(t, live.job.key, { unitsLeft: 2, rasterMs: 80 });
+    done(t, live.job.key, { unitsLeft: 3, rasterMs: 120 });
     done(t, armed.job.key, { unitsLeft: 1, rasterMs: 120 });
     await tick(20);
     t.toAsset.length = 0;
-    ready(t, live.job.key);
+    // The first part: faded in (nothing yet says what a re-draw of this slide costs).
+    ready(t, live.job.key, 2);
+    await tick(30);
+    const first = slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.job).toMatchObject({ refresh: true, refreshFadeMs: 300 });
+    // That re-draw takes 80 ms, more than one task: the part made meanwhile, and the next, wait (a jump would
+    // wait behind every such re-draw) ...
+    ready(t, live.job.key, 1);
+    await tick(10);
+    done(t, live.job.key, { unitsLeft: 1, rasterMs: 80 });
+    await tick(20);
+    t.toAsset.length = 0;
     await tick(400);
     expect(slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key)).toHaveLength(0);
+    expect((t.core.introspect() as { units: { redrawMs: Record<string, number> } }).units.redrawMs).toEqual({
+      [live.job.key]: 80,
+    });
+    // ... until the last is made: one re-draw fades in every part left.
+    ready(t, live.job.key, 0);
+    await tick(30);
+    const last = slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key);
+    expect(last).toHaveLength(1);
+    expect(last[0]!.role).toBe('late');
+    expect(last[0]!.job).toMatchObject({ refresh: true, refreshFadeMs: 300 });
     // The armed cue's parts are drawn in silently while it waits (an armed job, as before).
+    t.toAsset.length = 0;
     ready(t, armed.job.key);
     await tick(30);
     const swap = slideJobs(t.toAsset).filter((m) => m.job.key === armed.job.key);
     expect(swap).toHaveLength(1);
     expect(swap[0]!.role).toBe('late');
     expect(swap[0]!.job.kind === 'slide' && swap[0]!.job.refreshFadeMs).toBeUndefined();
-    // A slide drawn within the task still fades its parts in on screen.
-    done(t, live.job.key, { rasterMs: 30 });
+    t.close();
+  });
+
+  it('a slide whose re-draw is within the task fades each late part in as it is made, one made during a re-draw after it', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const live = jobOf(t.toAsset, 0)!;
+    done(t, live.job.key, { unitsLeft: 2, rasterMs: 120 });
+    done(t, jobOf(t.toAsset, 1)!.job.key);
     await tick(20);
     t.toAsset.length = 0;
-    ready(t, live.job.key);
+    ready(t, live.job.key, 1);
+    await tick(30);
+    expect(slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key)).toHaveLength(1);
+    // The second part is made while the re-draw runs; that re-draw took 30 ms. The second is drawn in after it,
+    // once REFRESH_FADE_MS has passed since the first (not at the link's 2 s retry).
+    ready(t, live.job.key, 0);
+    await tick(10);
+    done(t, live.job.key, { rasterMs: 30 });
+    t.toAsset.length = 0;
     await tick(400);
     const fade = slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key);
     expect(fade).toHaveLength(1);
     expect(fade[0]!.job).toMatchObject({ refresh: true, refreshFadeMs: 300 });
+    t.close();
+  });
+
+  it('a slow slide shown again whose late job was dropped is drawn again, which makes its parts late again', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const live = jobOf(t.toAsset, 0)!;
+    done(t, live.job.key, { unitsLeft: 2, rasterMs: 120 });
+    done(t, jobOf(t.toAsset, 1)!.job.key);
+    await tick(20);
+    ready(t, live.job.key, 1);
+    await tick(30);
+    done(t, live.job.key, { unitsLeft: 1, rasterMs: 80 });
+    await tick(20);
+    // A GO to cue 1 drops the slide's late job (one part never came); a GO back to cue 0 shows it again.
+    t.hub.emit('state', stateMsg({ ...slideLive(1, 3000), seq: 3 }));
+    await tick(30);
+    done(t, jobOf(t.toAsset, 2)!.job.key);
+    await tick(20);
+    t.toAsset.length = 0;
+    t.hub.emit('state', stateMsg({ ...slideLive(0, 5000), seq: 4 }));
+    await tick(400);
+    const again = slideJobs(t.toAsset).filter((m) => m.job.key === live.job.key);
+    expect(again).toHaveLength(1);
+    expect(again[0]!.job).toMatchObject({ refresh: true, refreshFadeMs: 300 });
     t.close();
   });
 
