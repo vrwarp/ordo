@@ -1951,16 +1951,24 @@ export function atLoSizes(body: TextBody): TextBody {
  * margins where the row is shorter than the text (centred text into both alike, top-anchored text into the
  * bottom one, bottom-anchored into the top one), then moved `lift` px up (down when negative). The box is
  * unchanged; margins stay at least 0, and what does not fit shrinks.
+ *
+ * Centred text sits at the middle of its margins, so it moves by half of what its margins' difference moves:
+ * where a margin would go below 0 (a cell with no top margin, `marT="0"`, lifted), the other one takes the
+ * whole difference, so the text still moves the full `lift` and stays centred under the spill (the inner
+ * height shrinks below the text, which then overflows both ways alike, as LibreOffice draws it).
  */
 export function asLibreOffice(style: TextObject['style'], spill: number, lift: number): TextObject['style'] {
   const ins = style.insets;
   if (!ins || (!(spill > 0) && !lift)) return style;
   let { t, b } = ins;
+  if (style.valign === 'middle') {
+    // The text's top is (h + t - b - text) / 2: keep b - t at its lifted value, the sum as small as allowed.
+    const d = b - t + 2 * lift;
+    const sum = Math.max(t + b - Math.max(0, spill), Math.abs(d));
+    return { ...style, insets: { ...ins, t: (sum - d) / 2, b: (sum + d) / 2 } };
+  }
   if (spill > 0) {
-    if (style.valign === 'middle') {
-      t -= spill / 2;
-      b -= spill / 2;
-    } else if (style.valign === 'bottom') t -= spill;
+    if (style.valign === 'bottom') t -= spill;
     else b -= spill;
   }
   t -= lift;

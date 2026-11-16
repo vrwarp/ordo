@@ -13,6 +13,7 @@ import { convertDeck, parseDeck } from './index.ts';
 import type { Line, TableCell, TableElement, TableLine } from './ir.ts';
 import type { FaceSource } from './metrics.ts';
 import {
+  asLibreOffice,
   GRID_LINES_PER_PATH,
   GRID_RECTS_PER_PATH,
   gridObjects,
@@ -1287,5 +1288,40 @@ describe('tables: shape text is unchanged', () => {
     expect(texts.map((t) => t.text)).toEqual(['hi']);
     // A shape's own text (M4's origin), not a table cell's.
     expect(texts[0]!.origin).toEqual({ src: 'pptx', role: 'text', shapeId: 2 });
+  });
+});
+
+describe('asLibreOffice', () => {
+  const style = (valign: 'top' | 'middle' | 'bottom', t: number, b: number) =>
+    ({ valign, insets: { l: 0, t, r: 0, b } }) as unknown as TextObject['style'];
+  // A centred text's top is (h + t - b - text) / 2: it moves by half the change of t - b.
+  const top = (s: TextObject['style']) => (s.insets!.t - s.insets!.b) / 2;
+
+  it('lifts centred text by the whole lift in a cell with no top margin (marT="0")', () => {
+    const lifted = asLibreOffice(style('middle', 0, 0), 0, 1.5);
+    expect(top(lifted) - top(style('middle', 0, 0))).toBeCloseTo(-1.5, 9);
+    expect(lifted.insets!.t).toBeGreaterThanOrEqual(0);
+    expect(lifted.insets!.b).toBeGreaterThanOrEqual(0);
+  });
+
+  it('keeps centred text centred under a spill wider than one margin', () => {
+    const s = asLibreOffice(style('middle', 0, 4), 6, 0);
+    expect(top(s)).toBeCloseTo(top(style('middle', 0, 4)), 9);
+  });
+
+  it('moves centred text with margins as before', () => {
+    expect(asLibreOffice(style('middle', 7.2, 7.2), 2, 1).insets).toEqual({ l: 0, t: 5.2, r: 0, b: 7.2 });
+  });
+
+  // r2b-diag/dense-c 910492b, the same rule found on the Flesh and Spirit chart (its 84 cells with marT="0").
+  it('lifts centred text by its whole lift when the top margin is smaller than it, either way', () => {
+    const lr = (valign: 'top' | 'middle' | 'bottom', t: number, b: number) =>
+      ({ valign, insets: { l: 1, t, r: 1, b } }) as unknown as TextObject['style'];
+    // No top or bottom margin: a 1 px lift moves the centre 1 px up (margins 0 and 2), not 0.5 px (0 and 1).
+    expect(asLibreOffice(lr('middle', 0, 0), 0, 1).insets).toEqual({ l: 1, t: 0, r: 1, b: 2 });
+    expect(asLibreOffice(lr('middle', 0, 0), 0, -1).insets).toEqual({ l: 1, t: 2, r: 1, b: 0 });
+    // Within the margins as before: the spill shared, the lift from top to bottom.
+    expect(asLibreOffice(lr('middle', 5, 5), 2, 1).insets).toEqual({ l: 1, t: 3, r: 1, b: 5 });
+    expect(asLibreOffice(lr('top', 5, 5), 2, 1).insets).toEqual({ l: 1, t: 4, r: 1, b: 4 });
   });
 });
