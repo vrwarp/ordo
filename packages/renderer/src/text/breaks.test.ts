@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { breakOpportunities, graphemeBoundaries, isBreakSpace, isGlue } from './breaks.ts';
+import { breakOpportunities, graphemeBoundaries, isBreakSpace, isGlue, officeBreaks } from './breaks.ts';
 
-/** `text` cut at its break opportunities (the whole text is one paragraph). */
-function lines(text: string, lang = ''): string[] {
+/** `text` cut at its break opportunities (the whole text is one paragraph); `office`: the office rules. */
+function lines(text: string, lang = '', office = false): string[] {
   const out: string[] = [];
   let at = 0;
-  for (const b of breakOpportunities(text, 0, text.length, lang)) {
+  for (const b of breakOpportunities(text, 0, text.length, lang, office)) {
     out.push(text.slice(at, b));
     at = b;
   }
@@ -31,6 +31,19 @@ describe('UAX#14 break opportunities', () => {
     expect(lines('well-known fact')).toEqual(['well-', 'known ', 'fact']);
     expect(lines('John 3:16-17 says')).toEqual(['John ', '3:16-17 ', 'says']);
     expect(lines('a\tb')).toEqual(['a\t', 'b']);
+  });
+
+  it('keeps UAX#14 for ordo text: no office rule unless asked', () => {
+    // Songs, scripture and slides made in ordo break as before (owner question T1's default).
+    expect(lines('Isa. 2:6-10, 24:21-22')).toEqual(['Isa. ', '2:6-10, ', '24:21-22']);
+    expect(lines('“every month” [offerings]')).toEqual(['“every ', 'month” [offerings]']);
+    expect(lines('and/or https://books.google.as/books')).toEqual([
+      'and/',
+      'or ',
+      'https://',
+      'books.google.as/',
+      'books',
+    ]);
   });
 
   it('lists offsets inside [start, end) of the whole text, not the paragraph end', () => {
@@ -161,5 +174,82 @@ describe('without Intl.Segmenter', () => {
       Object.defineProperty(Intl, 'Segmenter', saved);
       vi.resetModules();
     }
+  });
+});
+
+/** `text` cut at the office break opportunities (imported PowerPoint text, table cells, the converter's measure). */
+const office = (text: string) => lines(text, '', true);
+
+describe('office break opportunities (LibreOffice 24.2, the text-lines probe deck)', () => {
+  it('breaks after a hyphen-minus before a digit (1000 Years: Isa. 2:6-10, 24:21- / 22)', () => {
+    expect(office('Isa. 2:6-10, 24:21-22')).toEqual(['Isa. ', '2:6-', '10, ', '24:21-', '22']);
+    expect(office('John 3:16-17 says')).toEqual(['John ', '3:16-', '17 ', 'says']);
+    // Whatever is before the hyphen: a letter, a space (a minus), a bracket.
+    expect(office('Psalm A-1')).toEqual(['Psalm ', 'A-', '1']);
+    expect(office('x -5 (-6)')).toEqual(['x ', '-', '5 ', '(-', '6)']);
+    // Not after a hyphen that starts the paragraph, not after U+2212 MINUS SIGN, not before a letter
+    // beyond UAX#14's own break ('well-known').
+    expect(office('-5 x')).toEqual(['-5 ', 'x']);
+    expect(office('x \u22125')).toEqual(['x ', '\u22125']);
+    expect(office('well-known')).toEqual(['well-', 'known']);
+  });
+
+  it('breaks after the spaces between any quotation mark and an opening bracket (Colossians, Matthew)', () => {
+    expect(office('“every month” [offerings]')).toEqual(['“every ', 'month” ', '[offerings]']);
+    expect(office('this rock?” (Num. 20:10)')).toEqual(['this ', 'rock?” ', '(Num. ', '20:10)']);
+    expect(office('earth” [“made new”')).toEqual(['earth” ', '[“made ', 'new”']);
+    expect(office('"so"  (see')).toEqual(['"so"  ', '(see']);
+    expect(office("'so' (see")).toEqual(["'so' ", '(see']);
+    // An initial quote too: LibreOffice breaks 'he said “ (aside)' and 'x“ (y)'.
+    expect(office('said “ (aside)')).toEqual(['said ', '“ ', '(aside)']);
+    expect(office('x“ (y)')).toEqual(['x“ ', '(y)']);
+    // Never without a space, never at a no-break space, never inside the brackets.
+    expect(office('word”(Gen.')).toEqual(['word”(Gen.']);
+    expect(office('so”\u00A0(see')).toEqual(['so”\u00A0(see']);
+    expect(office('[“made”]')).toEqual(['[“made”]']);
+  });
+
+  it('never breaks after a slash before a letter or digit (Matthew: the books.google address stays whole)', () => {
+    expect(office('see https://books.google.as/books?id=wRY&pg=RA19-PA24')).toEqual([
+      'see ',
+      'https://books.google.as/books?',
+      'id=wRY&pg=RA19-',
+      'PA24',
+    ]);
+    expect(office('and/or 1/2 a/ b AND/OR')).toEqual(['and/or ', '1/2 ', 'a/ ', 'b ', 'AND/OR']);
+  });
+
+  it('takes the spaces between a quotation mark and a bracket to be exactly the breaking spaces', () => {
+    // The office rule's space class is `isBreakSpace`'s, for every UTF-16 unit but the surrogates.
+    const wrong: string[] = [];
+    let spaces = 0;
+    for (let c = 0; c <= 0xffff; c++) {
+      if (c >= 0xd800 && c <= 0xdfff) continue;
+      const got = officeBreaks(`x”${String.fromCharCode(c)}(y`);
+      if (got.length !== (isBreakSpace(c) ? 1 : 0) || (got.length && got[0] !== 3))
+        wrong.push(c.toString(16));
+      if (got.length) spaces++;
+    }
+    expect(wrong).toEqual([]);
+    expect(spaces).toBe(15); // tab, space, U+1680, U+2000-U+2006, U+2008-U+200A, U+205F, U+3000
+    expect(officeBreaks('x” \t\u3000(y')).toEqual([5]);
+    // Never a hyphen that starts the paragraph; a quote that does is a quote.
+    expect(officeBreaks('-5 x-5')).toEqual([5]);
+    expect(officeBreaks('” (y')).toEqual([2]);
+  });
+
+  it('reads a letter after a slash whole (a surrogate pair), and keeps breaks before other characters', () => {
+    expect(lines('a/\u{1D400}b')).toEqual(['a/', '\u{1D400}b']);
+    expect(office('a/\u{1D400}b c/\u{1F600}')).toEqual(['a/\u{1D400}b ', 'c/', '\u{1F600}']);
+  });
+
+  it('lists offsets of the whole text and merges with the SA breaks', () => {
+    const text = 'one\nIsa. 24:21-22';
+    expect(breakOpportunities(text, 4, text.length, '', true)).toEqual([9, 15]);
+    expect(breakOpportunities(text, 4, text.length, '', false)).toEqual([9]);
+    const th = 'ข้อ 3:16-17 สวัสดีครับ';
+    const plain = breakOpportunities(th, 0, th.length, 'th');
+    const withOffice = breakOpportunities(th, 0, th.length, 'th', true);
+    expect(withOffice).toEqual([...new Set([...plain, th.indexOf('17')])].sort((a, b) => a - b));
   });
 });

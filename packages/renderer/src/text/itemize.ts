@@ -136,7 +136,7 @@ export function itemize(o: TextObject): Itemized {
     if (nl < 0) break;
     start = nl + 1;
   }
-  return { text, paras };
+  return o.style.lineModel === 'office' ? { text, paras, office: true } : { text, paras };
 }
 
 /**

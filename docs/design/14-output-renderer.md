@@ -314,7 +314,10 @@ are byte-identical, and the tests pin each seam's calls by digest against the co
   (`PLAIN_PAINTER`; upright and warp ones registered by kind), and its rectangles too (a line mask's straps,
   highlights, underlines and strikes: `rect` with the pass) and draws its face on a face target
   (`DIRECT_TARGET`; a face sprite registered by the 3-D look, whose alpha casts the shadow and glow), chosen per
-  object and independently.
+  object and independently. A caller may ask for device pixels (`PaintHooks.devicePixels`): the plain painter
+  then puts each baseline on its device row, each run start on the quarter of its device column and underlines
+  and strikes on whole rows (`DEVICE_PIXEL_PAINTER`, axis-aligned transforms only). The table drawer asks for
+  it for its cells' text (design/27 §6); nothing else does.
 - **One sprite cache** (`renderer/src/spritecache.ts`): for every kind of sprite (effects today; geometry,
   decorations, 3-D faces and charts in M9), least recently used first, with counted pins as the bitmap cache has.
   Its budget is 64 MiB, raised to 4 frames of the largest raster its thread draws (127 MB on a 4K output's asset
@@ -760,7 +763,10 @@ rasterizer runs in the operator's thumbnail worker so previews match outputs.
 Text objects with runs, paragraph styles or a rich style field go through ordo's text engine
 (`packages/renderer/src/text`, design/27 §6): laid out in logical px whatever the output size, then
 painted under the scale transform in the same pass order (fill box and highlights, shadows, glow,
-outline, fill, underline and strike, bullets). Every other text object is drawn by `drawText` as above,
+outline, fill, underline and strike, bullets). Imported PowerPoint text (the office line model) breaks where
+LibreOffice breaks it and sizes each line by its own runs; a table's cell text is painted on the output's device
+pixels (rows and quarter columns), so it may sit up to a device pixel from where another output scale puts it,
+its lines unchanged (design/27 §6). Every other text object is drawn by `drawText` as above,
 byte for byte, except that a paragraph containing a strong right-to-left character is measured and drawn
 with `ctx.direction` set to its first strong character's direction. Lyric-only, next-slide and
 lower-third bands go through the engine when the source object is rich, the text has a strong

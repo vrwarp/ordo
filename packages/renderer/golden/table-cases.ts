@@ -13,6 +13,8 @@ import { rasterSlide } from '../src/raster.ts';
 import { layoutTable, legacyGroup } from '../src/table/index.ts';
 import { currentFontEnv } from '../src/text/fonts.ts';
 import { measurerFor } from '../src/text/measure.ts';
+import { paintRich } from '../src/text/paint.ts';
+import { clampTextObject, layoutRich } from '../src/text/rich.ts';
 import { fillColor } from '../src/text2d.ts';
 import type { GoldenCase } from './areas.ts';
 
@@ -337,9 +339,21 @@ export const TABLE_CASES: Readonly<Record<string, GoldenCase>> = {
   'table-rtl': (ctx) => draw(ctx, [rtl()]),
   'table-korean': (ctx) => draw(ctx, [korean()]),
   'table-vs-group': (ctx) => {
-    // The bulletin as the M6 group of its layout (as drawn now, with this page's fonts).
+    // The bulletin as the M6 group of its layout (as drawn now, with this page's fonts): its grid shapes, then
+    // its text boxes painted on device pixels as the table drawer paints cell text (text-lines: baselines on
+    // the device row, runs on the quarter column; a text box of a slide is not, owner question T5).
     const o = clampShapeObject(bulletin());
-    const l = layoutTable(measurerFor(ctx), o, currentFontEnv())!;
-    draw(ctx, legacyGroup(o, l));
+    const env = currentFontEnv();
+    const l = layoutTable(measurerFor(ctx), o, env)!;
+    const group = legacyGroup(o, l);
+    draw(
+      ctx,
+      group.filter((g) => g.type !== 'text'),
+    );
+    for (const g of group) {
+      if (g.type !== 'text') continue;
+      const c = clampTextObject(g);
+      paintRich(ctx, c, layoutRich(measurerFor(ctx), c, env), SCALE, env, { devicePixels: true });
+    }
   },
 };

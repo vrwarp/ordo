@@ -43,8 +43,9 @@
  *   the fonts would draw it with (`ParseOptions.fontFace`: the run's family, its metric substitute, the
  *   script fallbacks, ordo's default face, then the caller's face for the character's script,
  *   `FaceSource.script`), breaking where the renderer breaks (`@ordo/renderer` text/breaks.ts
- *   `breakOpportunities`: UAX#14 with Korean words kept whole), each paragraph spaced by the face that draws
- *   its script (`Measure`). A family with no face is measured with conservative estimated widths (noted).
+ *   `breakOpportunities` with the office rules: UAX#14 with Korean words kept whole, and LibreOffice's breaks
+ *   after a hyphen before a digit and before a bracket after a quote, none after a slash before a letter),
+ *   each paragraph spaced by the face that draws its script (`Measure`). A family with no face is measured with conservative estimated widths (noted).
  *   The rows are also sized as LibreOffice 24.2 sizes them (`TableElement.lo`, `LoLines`, `loSizePt`), and
  *   its layouter's column minimums and merge rules apply (`loColumns`, `loGrowRows`): the table object stores
  *   that form on every hub (`emit-table.ts`), the M6 group draws it under the harness's LibreOffice policy.
@@ -1199,8 +1200,10 @@ export function loLineHeight(pt: number, face: FaceMetrics | undefined, lines: L
  * Text heights in logical px, in the office line model (design/27 §6 step 7), from the faces' advances and
  * pair kerning. `missing` collects the families measured with estimated widths.
  *
- * Lines break as the renderer breaks them (M9: at `@ordo/renderer` text/breaks.ts `breakOpportunities`,
- * UAX#14 with Korean words kept whole, never before `)` `」` `,` `?` `・` or after `(` `「`), greedily: a word
+ * Lines break as the renderer breaks office text (M9: at `@ordo/renderer` text/breaks.ts
+ * `breakOpportunities` with `office`, UAX#14 with Korean words kept whole, never before `)` `」` `,` `?` `・`
+ * or after `(` `「`, plus LibreOffice's breaks UAX#14 forbids: after a hyphen before a digit, after the spaces
+ * between a quotation mark and an opening bracket, and none after a slash before a letter), greedily: a word
  * that does not fit goes to the next line, cut between characters only when it is wider than a whole line.
  * A word is measured as the renderer measures one piece of it: advances plus the face's pair kerning
  * between characters of one run (so a word that fits once kerned is not cut; kerning across a space or a
@@ -1412,12 +1415,11 @@ export class Measure {
         drawn.height += gap(p.spaceBefore);
       }
       for (const l of laid.lines) {
-        // A line no taller than the paragraph's main size is as tall as that size in its main face, or as
-        // a portion of that size in a taller face.
-        const parts =
-          l.pt > laid.Fpt
-            ? l.parts.filter((q) => q.pt === l.pt)
-            : [{ pt: laid.Fpt, face: laid.mainFace }, ...l.parts.filter((q) => q.pt === laid.Fpt)];
+        // A line is as tall as its own largest portions (editeng sizes each line by the portions on it, so a
+        // smaller citation on a line of its own makes a short line); a line without one (spaces of a
+        // shifted run only) as the paragraph's main size in its main face.
+        const own = l.pt > 0 ? l.parts.filter((q) => q.pt === l.pt) : [];
+        const parts = own.length ? own : [{ pt: laid.Fpt, face: laid.mainFace }];
         h += line(parts, mode).height;
         const d = line(parts, 'font');
         if (l.glyphs) drawn.baselines.push(drawn.height + d.ascent);
@@ -1461,7 +1463,8 @@ export class Measure {
         s === undefined ? 0 : 'pts' in s ? raw(s.pts) : s.pct * px(largestPt(p));
       if (i > 0) out.height += gap(p.spaceBefore);
       for (const l of laid.lines) {
-        const d = line(Math.max(laid.F, l.px));
+        // As tall as the line's own largest unshifted run (the renderer's office model, lines.ts).
+        const d = line(l.px > 0 ? l.px : laid.F);
         if (l.glyphs) out.baselines.push(out.height + d.ascent);
         out.height += d.height;
       }
@@ -1477,7 +1480,7 @@ export class Measure {
     const ls = p.lineSpacing;
     const pitch = (size: number) => (ls && 'pts' in ls ? px(ls.pts) : SINGLE_LINE * size * (ls?.pct ?? 1));
     let h = 0;
-    for (const l of laid.lines) h += pitch(Math.max(laid.F, l.px));
+    for (const l of laid.lines) h += pitch(l.px > 0 ? l.px : laid.F);
     // A trailing a:br adds a line as tall as the end mark, single spaced (exact spacing applies).
     if (laid.trailingBreak) h += ls && 'pts' in ls ? px(ls.pts) : SINGLE_LINE * px(p.end.sizePt);
     const gap = (s: Para['spaceBefore']) =>
@@ -1512,8 +1515,9 @@ export class Measure {
     const classes = scriptClasses(text);
     const lang = runs.find((r) => r.style.lang)?.style.lang;
     const fallbacks = scriptFallbacks(text, lang);
-    // Where a line may end (the renderer's rule): before `text[b]` for each b.
-    const breaks = new Set(breakOpportunities(text, 0, text.length, cleanLang(lang)));
+    // Where a line may end (the renderer's rule for office text: table cells are in the office line model,
+    // so they break where LibreOffice breaks them): before `text[b]` for each b.
+    const breaks = new Set(breakOpportunities(text, 0, text.length, cleanLang(lang), true));
     let at = 0;
     for (const r of runs) {
       if (r.kind === 'break') {

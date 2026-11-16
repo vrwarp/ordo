@@ -18,6 +18,8 @@ import type { BidiPara, ItemPara, Itemized, Piece, PreparedPara, RunStyle } from
  *   and final forms. The joiners exist only in the drawn string, never in offsets.
  * - 'auto' paragraphs take the direction of the first strong character of their whole soft-break chain
  *   (one PowerPoint paragraph), so a soft line continues its paragraph's direction.
+ * - Break opportunities: UAX#14, or for a box in the office line model (`Itemized.office`) the office rules
+ *   (breaks.ts), so imported text breaks where LibreOffice breaks it and ordo's own text as before.
  */
 
 /** Each paragraph's bidi levels, break opportunities and pieces. */
@@ -34,7 +36,7 @@ export function prepare(it: Itemized): PreparedPara[] {
       dir = chain;
     }
     const bidi = bidiParagraph(text, para.start, para.end, dir);
-    out.push(cutPieces(text, para, bidi));
+    out.push(cutPieces(text, para, bidi, it.office === true));
   }
   return out;
 }
@@ -53,11 +55,13 @@ function chainDirection(it: Itemized, i: number): 'ltr' | 'rtl' {
 
 type Span = { start: number; end: number; sr: number };
 
-function cutPieces(text: string, para: ItemPara, bidi: BidiPara): PreparedPara {
+function cutPieces(text: string, para: ItemPara, bidi: BidiPara, office: boolean): PreparedPara {
   const pieces: Piece[] = [];
   if (para.end <= para.start) return { para, bidi, pieces };
   const { spans, moved } = styleSpans(text, para);
-  const breaks = breakOpportunities(text, para.start, para.end, para.runs[0]?.style.lang ?? '');
+  // Office text (imported PowerPoint text, table cells) breaks where LibreOffice breaks it; ordo's own text
+  // keeps UAX#14 (breaks.ts).
+  const breaks = breakOpportunities(text, para.start, para.end, para.runs[0]?.style.lang ?? '', office);
   const levels = bidi.levels;
   const ps = para.start;
   let b = 0;

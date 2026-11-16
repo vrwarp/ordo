@@ -6,7 +6,7 @@ import { DASH_PATTERNS } from '../geom/outline.ts';
 import { gradientStyle } from '../geom/paint.ts';
 import { currentFontEnv } from '../text/fonts.ts';
 import { measurerFor } from '../text/measure.ts';
-import { paintRich } from '../text/paint.ts';
+import { type PaintHooks, paintRich } from '../text/paint.ts';
 import { type TableLayout, layoutTable, tableStrokes } from './layout.ts';
 
 /*
@@ -21,9 +21,15 @@ import { type TableLayout, layoutTable, tableStrokes } from './layout.ts';
  *    direction through that grid vertex, so corners close; none inside a merged cell; at least 0.5 px wide (a
  *    0 width is a hairline), dashed by the shape dash patterns, flat caps;
  * 4. diagonals (a:lnTlToBr, a:lnBlToTr);
- * 5. each cell's text through the rich engine's painter, at its cell's corner moved by its anchor.
+ * 5. each cell's text through the rich engine's painter, at its cell's corner moved by its anchor, on whole
+ *    device pixels (`PaintHooks.devicePixels`: baselines on the device row, run starts on the quarter of a
+ *    device column, underlines and strikes on whole rows, as LibreOffice's pages put table text; layout stays
+ *    scale-free).
  * The table is turned about its box's centre and drawn at its opacity; flips do not apply to tables.
  */
+
+/** How cell text is painted: on whole device pixels (paint.ts `DEVICE_PIXEL_PAINTER`). */
+const CELL_PAINT: PaintHooks = { devicePixels: true };
 
 type Rect = [x: number, y: number, w: number, h: number];
 
@@ -207,7 +213,7 @@ export function drawTable(
     if (!c.text.text) continue;
     ctx.save();
     ctx.translate((box.x + c.box.x) * s, (box.y + c.box.y + c.dy) * s);
-    paintRich(ctx, opacity === 1 ? c.text : { ...c.text, opacity }, c.layout, s, env);
+    paintRich(ctx, opacity === 1 ? c.text : { ...c.text, opacity }, c.layout, s, env, CELL_PAINT);
     ctx.restore();
   }
   ctx.restore();

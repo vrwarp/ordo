@@ -66,7 +66,8 @@ import type {
  *
  * Line models (F = the line's main size after autofit: the paragraph's main run, its first without a
  * baseline shift, else its first, else its end mark; a larger unshifted run on the line raises it, as
- * LibreOffice sizes each line by its own portions, so lines never overlap):
+ * LibreOffice sizes each line by its own portions, so lines never overlap; in the office model a line with
+ * text is as tall as its own largest unshifted run, smaller than F too, as LibreOffice's editeng sizes it):
  * - 'ordo': drawText's vertical model, pitch `lineHeight × F` with the baseline `(pitch - F)/2 + 0.8F`
  *   below the line's top (text2d.ts). A paragraph's `lineSpacing` p is a multiple of single spacing,
  *   pitch `p × 1.2F` (the same meaning as in the office model), `lineSpacingPx` the exact pitch.
@@ -683,7 +684,11 @@ function flowParas(
     broken.forEach((items, n) => {
       // An empty line after an a:br (an empty soft paragraph) is as tall as its own end mark, not as the
       // paragraph it continues (LibreOffice 24.2, measured): a small endParaRPr makes a short last line.
-      let lineF = !items.length && para.soft ? 0 : F;
+      // In the office model a line with text is as tall as its own largest unshifted run, not the
+      // paragraph's main size (LibreOffice's editeng sizes each line by the portions on it): a citation in a
+      // smaller size than the paragraph's first run that wraps onto lines of its own makes short lines
+      // (dense-b B, Matthew 16v18's right column). Ordo's own model keeps F as every line's floor.
+      let lineF = office && items.length ? 0 : !items.length && para.soft ? 0 : F;
       for (const c of items) if (!c.style.baseline && c.size > lineF) lineF = c.size;
       if (!items.length)
         for (const r of runs) if (!r.style.baseline) lineF = Math.max(lineF, size(r.style.sizePx, fit));
