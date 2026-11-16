@@ -296,7 +296,9 @@ error moved every row below it (cells are mostly centred). Three changes:
   spacing is one of two (`LoLines`): 'font', the face's ascent and descent at the 600 dpi reference device
   (the font's pixel height rounded, then ascent and descent rounded: Carlito 1.215-1.229 × the size), or
   'independent', 1.2 × the font height truncated (`ImplCalculateFontIndependentLineSpacing`), for any face
-  (both to the 1/100 mm since sub-wave 1b: "LibreOffice's cell rules", below).
+  (since sub-wave 1b the independent line is rounded, not truncated, and a font line is the larger of two
+  conversions, both to LibreOffice's 1/100 mm: "LibreOffice's cell rules", below; the stored form since
+  tables-form, "The table object imported").
   The second holds after a text shape that grew to its text (its own `a:spAutoFit`, with text) earlier on
   the same slide: that shape leaves the shared outliner in font-independent mode (a group's child counts; a
   title without its own `a:spAutoFit`, `a:normAutofit`, a shape after the table, a layout's shape, a

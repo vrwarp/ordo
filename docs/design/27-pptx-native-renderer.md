@@ -3112,7 +3112,17 @@ sizes, read from LibreOffice's PDF), all to the 1/100 mm (`pptx-scene` README "L
   (`boxesOverPage`, as 'Make editable' did), in one revision. The route answers 202 and the `pptx-reimport` job
   (`pageBoxes` set) either way; a page rebuilt counts as made editable (`replaced`). Hub-writers (sub-wave 4)
   extends it to other 64 KB pages on the same helper.
-- Measured: by the track's finish (after tables-form; `regroup/r2b/tables-cells/notes.md`).
+- Measured at the track's head on both kinds of hub, against the merged stored form (tables-form, the hub with
+  LibreOffice asked for the 8, equal to the stored form within 0.001): E's 66 table slides 0.863 -> 0.872 (the 8
+  0.752 -> 0.767, the 58 others 0.878 -> 0.886), the table decks' 43 0.840 -> 0.853. Up: the charts with no top
+  margin (the seal 0.839 -> 0.932, Churchcraft 0.802 -> 0.894, Ten Commandments 0.800 -> 0.887, 2 Corinthians 3
+  vs 7 0.811 -> 0.872), the 666 chart 0.756 -> 0.805, Flesh and Spirit 0.817 -> 0.864, Moral Character 0.799 ->
+  0.838 (`nativeSsim` 0.872 -> 0.899; the rest is the harness's outline policy on its cells), the Boletims'
+  reading plans +0.016 and +0.020, Depression 0.859 -> 0.877, the Korean slide 18 0.611 -> 0.637; Jesus and
+  Stephen unchanged. None down by more than 0.01 on either kind of hub or in `nativeSsim` (Colossians and the
+  Coptic Peace verses' slide 4 -0.007), no slide without a table moved, no class changed, the 8 stay 'full'
+  (Colossians 58,715 B stored, the largest). The question-3 target is still met by 0 of 8 (mean 0.767 against
+  0.939; text-lines follows). Details: `regroup/r2b/tables-cells/notes.md`.
 <!-- /r2b:tables-cells -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
