@@ -38,6 +38,15 @@ RUN apt-get update \
       fonts-dejavu fonts-liberation2 fonts-crosextra-carlito fonts-crosextra-caladea fonts-noto-core fonts-inter \
  && rm -rf /var/lib/apt/lists/* /usr/share/man/* \
  && find /usr/share/doc -mindepth 1 -maxdepth 1 ! -name 'fonts-*' -exec rm -rf {} +
+# Chinese, Japanese and Korean (design/27 §10): the Sans collections of fonts-noto-cjk (Noto Sans CJK, SIL OFL
+# 1.1, apps/hub/src/fonts/LICENSES.md), for LibreOffice and for the hub's measuring of table cells in those
+# scripts (apps/hub/src/pptx/systemFaces.ts). Never a library font and never sent to a screen. The dpkg rule
+# leaves out its Serif collections (54 MB): LibreOffice then draws serif CJK font names with the Sans face.
+# Its copyright file stays in /usr/share/doc/fonts-noto-cjk.
+RUN echo 'path-exclude=/usr/share/fonts/opentype/noto/NotoSerifCJK-*' > /etc/dpkg/dpkg.cfg.d/ordo-noto-cjk-sans \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends fonts-noto-cjk \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build --chown=node:node /out/hub/node_modules /app/apps/hub/node_modules
 COPY --from=build --chown=node:node /src/apps/hub/package.json /app/apps/hub/package.json
