@@ -29,7 +29,8 @@ by the next run with the same `--out` (they are the slow part); `--fresh-lo` dra
 | `--lo-compat`                | draw native slides with LibreOffice's policies where ordo's differ (`src/compat/`); each slide a rule changes is drawn both ways                                |
 | `--before hub\|paste`        | also score what a hub with LibreOffice shows (`beforeHubSsim`, below): its real version 2, or (`paste`) the pixel paste alone                                   |
 | `--ask-hub [DECK:]LIST`      | with `--before hub`, also ask the hub for these slides (the `--slides` syntax), whatever it stores: measured on the real hub, not inferred; repeatable          |
-| `--hub dist\|source`         | the hub `--before hub` imports through: this checkout's sources (default) or its built bundle                                                                   |
+| `--ask-hub-nolo [DECK:]LIST` | also ask a real hub **without** LibreOffice for these slides (the `--slides` syntax; `all-tables`: every table slide): `noLoHubSsim` below; repeatable          |
+| `--hub dist\|source`         | the hub `--before hub` and `--ask-hub-nolo` import through: this checkout's sources (default, even where a bundle is built) or its built bundle                 |
 | `--no-libreoffice`           | also score what a hub without LibreOffice shows (`noLoSsim`, `missing`, below)                                                                                  |
 | `--hub-budget`               | draw every slide as the hub stores it once its budgets ran (a slide it makes a picture loses its objects)                                                       |
 | `--slides [DECK:]LIST`       | score only these slides (1-based shown numbers, `3,5-7`), for every deck or the decks whose run name contains `DECK`; repeatable                                |
@@ -87,6 +88,17 @@ tight (the summaries keep every number).
   once more without the policies), so where it draws alike it is its stored form (`policySsim`, or
   `nativeSsim` when the two are equal), never the policies' drawing. `missing` lists the kinds nothing draws
   (`EmittedSlide.missing`). Summary: `noLoMean`.
+- `noLoHubSsim` (`--ask-hub-nolo`, sub-wave 1c): what a REAL hub **without** LibreOffice stores and draws. Each
+  deck with a slide asked is imported through this checkout's hub started with a PATH of the lite tools only
+  (`src/hub-import.ts` `toolsOnlyPath`: no soffice) and `ORDO_LIBREOFFICE=off` (its capabilities must say off
+  or absent), no follow-up waited for; the hub's version 1 of those slides is drawn and scored
+  (`noLoHubFrom: 'hub'`), or `noLoHubFrom` says why not ('import failed', 'pending', 'not drawn', 'no hub').
+  `all-tables` asks for every slide whose `reasons` hold `table`, `deco:table` or `art:table` (or `table`).
+  For a table slide this is the hub's column: `noLoSsim` measures table cells with this computer's fontconfig
+  faces (`src/faces.ts` `hostFace`) where a real hub measures with its font library's (and, for a glyph
+  script the library lacks, the computer's face it resolved at start), so it is reported beside, never
+  instead. summary.json's `askedHubs` records each hub asked: with or without LibreOffice, its entry
+  (`source` unless `--hub dist`) and LibreOffice's state there.
 - `table` (M9): the slide holds a table object; its two hub columns score it as stored (above). `nativeSsim`
   stays the converter's drawing under the LibreOffice policies (with `--lo-compat`: LibreOffice's rows,
   columns and sizes), reported beside it. An older run without the mark is read this way by the measuring
@@ -194,7 +206,8 @@ a goLive of it resolves every file it names (`resolvePlaylist`, then each file f
 reference resolved, no LibreOffice command in the hub log, sermon decks at version 1 within 5 s, RSS within
 `--mem-limit-mb`). `--libreoffice` runs with LibreOffice on the PATH and counts the slides left to it.
 `--dry-run` lists the decks and the dangling links (unreadable) without a hub. Decks under `--sermons` are
-reported as `sermon-<k>`.
+reported as `sermon-<k>`. `--hub` picks the hub's sources (the default, even where `apps/hub/dist` is
+built: a bundle built before the last edit would be a stale hub) or its built bundle (`dist`).
 
 `--client-scene` measures the path operators take (design/27 m9:import-core): each deck is parsed first as
 the operator's import worker parses it (`parsePptxScene` in Node, with the hub's library faces fetched from
@@ -202,7 +215,13 @@ the hub, for the LibreOffice the hub reports) and posted with its scene; each re
 used it (`scene`: used, refused, none) and the parse's time (`clientMs`). `--equivalence` (implies it)
 imports each deck twice, with its scene and parsed by the hub itself, and lists every difference between the
 two stored presentations modulo ids, media ids (by file), times, the import log and digests
-(`src/equivalence.ts`) in `equivalence.json`.
+(`src/equivalence.ts`) in `equivalence.json`. Sub-wave 1c (rule H): a hub measures table cells in a script its
+library has no face for with its computer's face, which a browser cannot know, so it refuses the scene of a deck
+whose table cells hold such a script and parses it itself. The run applies the same rule (`systemOnlyScriptsOf`:
+the hub's start log names its system faces, less the scripts its library serves; `sceneNeedsScripts`: the
+scene's table cells) and lists such a deck as 'parsed on the hub (script face)' (`equivalenceOf`), not 'equal';
+a refusal the rule does not explain, or a scene it says the hub should have refused, counts as 'differs'. The
+markdown's line: `equivalence: E of N deck(s) equal; P parsed on the hub (script face): <names>; D differ`.
 
 ## Registries (M9)
 

@@ -1,8 +1,12 @@
+import type { ShapeObject } from '@ordo/domain';
+import { cellRich } from '@ordo/domain/table.ts';
 import { describe, expect, it } from 'vitest';
 import { frameOf } from './frame.ts';
+import { convertDeck } from './index.ts';
 import type { Para, RunStyle, TextBody } from './ir.ts';
 import type { FaceSource } from './metrics.ts';
 import { Measure } from './tables.ts';
+import { buildDeck, tableFrame, tc } from './test-util.ts';
 
 /*
  * The converter's table measure breaks and sizes lines as the renderer lays out office text (text-lines,
@@ -137,5 +141,58 @@ describe("the converter's table measure keeps the kerning across an office-only 
     }
     // 85 px: 'aa 3-' / then '4bbbb' alone is 90 px (the pair is across the line end), cut once more: 3 lines.
     expect(kerned().layout(b, 85).baselines).toHaveLength(3);
+  });
+});
+
+describe("LibreOffice's rows hold its 1/4 em at East Asian/other boundaries (rule G, sub-wave 1c)", () => {
+  it("stores slide 20's cell in LibreOffice's 3 lines, its text and ordo's drawn lines as they were", () => {
+    // The Korean bulletin's slide 20, column 3, row 2 (gaps-flip B.1 item 4): 380.9 pt of text width; the
+    // second line fits without LibreOffice's gaps and does not with them, so '정리한다.' takes a third line.
+    const CELL = '기승전결을 명확히 하고, 요점은 가능하다면 3가지 이내로 정리한다.';
+    const metrics = (adv: Record<string, number>, ascent: number, descent: number) => {
+      const m = new Map([...Object.entries(adv)].map(([c, a]) => [c.codePointAt(0)!, a]));
+      return { advance: (cp: number) => m.get(cp), lineHeight: ascent + descent, ascent, descent };
+    };
+    const hangul = metrics(
+      {
+        ...Object.fromEntries([...new Set(CELL.replace(/[^가-힣]/g, ''))].map((c) => [c, 1])),
+        ' ': 0.299,
+      },
+      0.963,
+      0.297,
+    );
+    const inter = metrics({ ',': 0.27, '.': 0.28, '3': 0.62, ' ': 0.281 }, 0.969, 0.241);
+    const faces: FaceSource = (family) => (family === 'Inter' ? inter : undefined);
+    faces.script = (code) => (code === 'Hang' ? hangul : undefined);
+    const IN = 914_400;
+    const shapes = tableFrame({
+      id: 4,
+      x: IN / 4,
+      y: IN / 4,
+      cols: [5_019_760],
+      rows: [
+        {
+          h: 370_840,
+          cells: [
+            tc(CELL, {
+              rPr: 'lang="ko-KR" sz="2400"',
+              rPrChildren: '<a:latin typeface="Noto Sans KR"/><a:ea typeface="Noto Sans KR"/>',
+            }),
+          ],
+        },
+      ],
+    });
+    const out = convertDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: faces });
+    const t = out.slides[0]!.slide.objects.find((o): o is ShapeObject => o.type === 'shape' && !!o.table)!
+      .table!;
+    // LibreOffice's row: three lines of WenQuanYi's 1.26 em at 24 pt (30.24 pt each, 60.5 px) and the margins
+    // (2 x 3.6 pt), on a slide 1920 px wide: about 196 px (two lines: about 136).
+    expect(t.rows[0]!).toBeGreaterThan(190);
+    expect(t.rows[0]!).toBeLessThan(200);
+    // The stored text is the deck's: no run of its own, no letter spacing (the base style's 0 only).
+    const c = cellRich(t, 0)!;
+    expect(c.text).toBe(CELL);
+    expect([...JSON.stringify(t).matchAll(/"letterSpacing":([^,}]+)/g)].map((m) => m[1])).toEqual(['0']);
+    expect(t.cells[0]!.runs ?? []).toHaveLength(0);
   });
 });

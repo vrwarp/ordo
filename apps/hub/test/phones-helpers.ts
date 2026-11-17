@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { HubConfig } from '../src/config.ts';
 import { createLibraryProcess, type LibraryProcess } from '../src/libproc.ts';
 import { createLiveProcess, type LiveProcess } from '../src/liveproc.ts';
+import { noSystemFaces } from '../src/pptx/systemFaces.ts';
 import { type Client, client, EDIT_PIN, OPERATE_PIN, TEST_TOOLS, tempDir } from './helpers.ts';
 
 export type TwoProcesses = {
@@ -36,6 +37,7 @@ export async function twoProcesses(
     port: 0,
     healthIntervalMs: 100,
     toolProbe: TEST_TOOLS,
+    systemFaces: noSystemFaces,
     ...overrides,
   };
   let live: LiveProcess | undefined;

@@ -912,6 +912,33 @@ cell probe of 80 rows and 272 baselines (`tools/pptx-fidelity/src/cell-probe.ts`
   (every probe row and baseline to the 1/100 mm).
 <!-- /r2b:tables-cells -->
 
+## Wave r2b sub-wave 1c: LibreOffice's 1/4 em in its cell model (`asian-gaps.ts`; `ko-cells`)
+
+<!-- r2b:ko-cells -->
+LibreOffice 24.2 puts a quarter of the size of the character before it at every boundary between East Asian text
+and other text, in cells and boxes alike (editeng's Asian/Western spacing; probed: gaps-flip B.1, ko-cells probe 1,
+the lead probe): 6.0 pt at 24 pt, 3.0 at 12, 9.1 at 36. Rule G models it in the converter's model of LibreOffice's
+cell layout only:
+- **Portions** (`asianGapsAt`, by `fontmap.ts` `charClass`): a weak character (a space, a quotation mark, ⑥, ・)
+  joins the portion before it; a leading weak character (or several, or spaces) forms its own portion; a boundary
+  is between an East Asian portion and any other; never across a line break. '가 a' has one gap (on the space,
+  before 'a'); '가⑥가', '가・가', '가“나”' none; '“가', '⑥가', ' 가' one, after the leading portion.
+- **The rule is 0.25 em exactly** (`ASIAN_GAP_EM`, `loAsianGaps`: the character before the boundary in a run of
+  its own with that much more letter spacing). LibreOffice measured 6.04 pt with East Asian before the boundary,
+  5.69-5.81 with Latin before it in cells, 5.63-5.78 in boxes, 5.95-6.06 after a leading weak character; the cause
+  of the spread (up to 0.37 pt under the quarter) is not established, so the model keeps the quarter.
+- **Where**: `tables.ts` applies it to the `measured` bodies only (the input of `Measure.loLayout`: LibreOffice's
+  rows, `loTall`, `loRows` and LibreOffice's baselines for the lift). ordo draws no such gap: its model of its own
+  drawing (`spaced`) and the stored text and runs are untouched (owner question Q1c-3: the 1/4 em sizes the rows
+  only; storing it as letter spacing, option F, would leave stale spacing after edits). Text boxes are not touched.
+- The Korean bulletin's slide 20 (column 3, row 2: '... 가능하다면 3가지 이내로 정리한다.' in 380.9 pt): its second
+  line fits without the gaps and does not with them, so LibreOffice's row holds three lines; the rows below move.
+- Tests: `asian-gaps.test.ts` (0.25 em at every boundary both ways, the lead probe's leading characters, none inside
+  a portion, 12/24/36 pt, line breaks, surrogate pairs, the paragraph never changed, slide 20's cell 2 -> 3 lines in
+  LibreOffice's model and 2 in ordo's), `tables.lines.test.ts` (the stored table's row holds LibreOffice's three
+  lines; the stored text has no run or letter spacing of its own).
+<!-- /r2b:ko-cells -->
+
 ## Module map
 
 | File            | What                                                                                                                                 | Owner         |
@@ -931,6 +958,7 @@ cell probe of 80 rows and 272 baselines (`tools/pptx-fidelity/src/cell-probe.ts`
 | `emit.ts`       | IR → ordo objects, media placeholders, digest                                                                                        | C             |
 | `richtext.ts`   | A text body as rich ordo text: runs, paragraph styles, office box fields (M2)                                                        | C (M2)        |
 | `fontmap.ts`    | Script class of each character (Latin, East Asian, complex), substitutes and fallback families (M2)                                  | C (M2)        |
+| `asian-gaps.ts` | LibreOffice's 1/4 em at East Asian/other boundaries, in the converter's model of LibreOffice's cell layout only (1c rule G)          | 1c ko-cells   |
 | `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                                             | F             |
 | `geom.ts`       | Presets, custom geometry, text rectangles and sites, gradients, dashes, arrowheads, connector glue (M6)                              | M6b B         |
 | `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                                         | M3 B          |

@@ -74,6 +74,7 @@ import { DEFAULT_FONT } from '@ordo/domain/defaults.ts';
 import { FALLBACK_SCRIPTS } from '@ordo/domain/readable.ts';
 import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
 import { breakOpportunities } from '@ordo/renderer/text/breaks.ts';
+import { loAsianGaps } from './asian-gaps.ts';
 import { type ColorCtx, colorIn, readFill, styleFill } from './color.ts';
 import type { SlideCtx } from './context.ts';
 import { scriptClasses, scriptFallbacks, substituteOf } from './fontmap.ts';
@@ -362,8 +363,10 @@ export function readTable(
   };
   const loLines: LoLines = opts.afterAutogrow ? 'independent' : 'font';
   // The text measured: each cell's within `TABLE_LIMITS.cellText`, the table's within `tableText` (later
-  // cells as their empty end mark, as the stored table's bounds empty them).
-  const measured = measuredBodies(cells.map((c) => c.text));
+  // cells as their empty end mark, as the stored table's bounds empty them). LibreOffice's model only: with
+  // its 1/4 em at each East Asian/other boundary (`asian-gaps.ts`, rule G), never in the stored text or
+  // ordo's own model of its drawing (`spaced`).
+  const measured = measuredBodies(cells.map((c) => ({ ...c.text, paras: c.text.paras.map(loAsianGaps) })));
   const lo = cells.map((c, i) => measure.loLayout(measured[i]!, textWidth(c, loCols), loLines));
   // LibreOffice's row: the text and its extra 1/100 mm (`Cell::getMinimumHeight`), then the margins.
   const loTall = lo.map(

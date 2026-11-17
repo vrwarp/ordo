@@ -81,6 +81,7 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `reimport.ts`       | 'Re-import from PowerPoint': plan, merge and the `pptx-reimport` job (M4; editor/M4.md)    | M4 F   |
 | `digest.ts`         | `importDigest`, `digestMatches`: "unedited" over the objects with an origin, everywhere    | M4     |
 | `clientScene.ts`    | Pool task `pptx-client-scene`: a browser's scene parsed and checked off the event loop     | core   |
+| `systemFaces.ts`    | This computer's script faces (rule H): resolved once at start, awaited by every import     | 1c     |
 
 The import core (`@ordo/importers`: `pptx-scan.ts`, `pptx-geoms.ts`, `pptx-pictures.ts`, `pptx-ladder.ts`,
 `pptx-core.ts`, `pptx-report.ts`, `pptx-faces.ts`) holds the pure steps the browser's parse shares;
@@ -852,3 +853,48 @@ laid text boxes over such a page (`makeEditableNative` refused any slide with `p
   job; `rebuildsFromDeck` by class and deck); end to end `e2e/editor-reimport-lo.spec.ts` (row 'editor-reimport-lo',
   a hub with LibreOffice: a 64 KB page drawn by the follow-up, 'Make editable', 202, its text boxes over it).
 <!-- /r2b:tables-cells -->
+
+## Wave r2b sub-wave 1c: Korean and other scripts' cells (ko-cells)
+
+<!-- r2b:ko-cells -->
+A hub measures a table's cells with its font library's faces (`faces.ts`); for Han, Kana and Hangul the library
+has a face only when Noto Sans SC/TC/JP/KR was downloaded, so a Korean cell was measured by estimate and spaced by
+ordo's default face, its rows about 4 % shorter than LibreOffice draws them with the computer's Korean face (the
+Korean bulletin's slides 18-20: 0.593 / 0.538 / 0.439 on both kinds of hub). Rule H:
+- **`systemFaces.ts`**: at the hub's start (`ImportService`) one `fc-match -f '%{file}\t%{index}' :charset=<letter>`
+  per script (`SYSTEM_FACE_SCRIPTS`: 一 あ ア 가), in parallel, fc-match run by absolute path (`FC_MATCH_PATHS`: never
+  through PATH, which on a hub without LibreOffice may hold only the lite tools); a face is kept only when its file
+  fits `FACE_LIMITS.fileBytes` and maps the letter (read with `@ordo/pptx-scene`'s `sfntMetrics(bytes, index)`,
+  which reads a TrueType collection at its index: WenQuanYi Zen Hei is one, and the hub's own `metricTables`
+  refuses collections). `SystemFaces.ready` settles within 10 s whatever happens (then: none, logged); the start
+  log says what was found (`system faces: Hangul wqy-zenhei.ttc, ...`, or none).
+- **Awaited by every job that measures a table** (`nativeJob.ts` `batchCall`: imports, re-imports, Reset slide):
+  the faces ride in the `pptx-scene` input (`systemScriptFaces`), so a deck imported during the hub's start is
+  stored as one imported later. In the worker `faces.ts` answers `script(code)` with the library's face, else the
+  system face (read once per worker, counted in the task's `FACE_LIMITS`, used only when it maps the letter); the
+  converter asks only for the glyph scripts (`tables.ts` `GLYPH_SCRIPTS`), only for table cells. The job's log
+  names a face it used: `table cells in Hangul measured with this computer's face wqy-zenhei.ttc (the font library
+  has none for it)`.
+- **An explicit dependency** (`HubConfig.systemFaces`): production asks fontconfig (`fontconfigLookup`); the test
+  helpers give none (`noSystemFaces`), so a hub test means the same on every computer; a test injects a lookup.
+- **Measuring only**: nothing is stored or drawn with the system face; the outputs draw with their own faces. The
+  project's hub image has no CJK face (fonts-noto-core): there nothing is found, and those cells are measured by
+  estimate as before (owner question Q1c-2; its LibreOffice draws Korean as empty boxes there).
+- **The browser's scene** (`clientScene.ts`): a browser cannot ask the hub's computer for its fonts, so where the
+  hub measures a script with a face only its computer has (`systemOnlyScripts`: the faces resolved at start, less
+  the scripts whose fallback family the library has; computed on the main thread from those lists, no deck read),
+  the `pptx-client-scene` pool task refuses a scene whose TABLE cells hold a character of such a script, after it
+  parsed (`tablesNeedScripts`; groups included, text boxes never): `the scene parsed in the browser was not used
+  (its tables need a script face only this computer has): parsed here`. The decision awaits the faces as the
+  import does, so it is the same during start-up. Exact: a deck with CJK only in boxes keeps the browser's scene,
+  and a hub without such a face (the shipped image) uses every scene as before. The fidelity harness's
+  `hub-import --equivalence` applies the same rule (`tools/pptx-fidelity` `sceneNeedsScripts`, the hub's start
+  log for its faces) and lists such a deck as 'parsed on the hub (script face)'.
+- Tests: `apps/hub/test/pptx-system-faces.test.ts` (the task with an injected face, none, a face without the
+  letter, the library's face winning, a collection read at index 1; `SystemFaces` checks and its 10 s bound;
+  fc-match found by absolute path with a PATH of the lite tools; an import started before the resolution settles
+  stores the system-face rows, the same as a later one); `apps/hub/test/pptx-client-scene.test.ts` (the pool
+  task refuses a Korean-table scene with `systemOnlyScripts` ['Hang'], uses it with none, with another script's
+  face, and with Hangul in a box only; the same decision when the import starts before the faces settle; the
+  deck is away while the scene is checked).
+<!-- /r2b:ko-cells -->

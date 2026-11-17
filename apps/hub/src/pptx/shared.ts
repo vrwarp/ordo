@@ -7,6 +7,7 @@
  * their keys come from deck strings (part names). Part names are at most `PPTX_LIMITS.partName` characters.
  */
 import type { SceneFontFile } from './faces.ts';
+import type { SystemFaces, SystemScriptFace } from './systemFaces.ts';
 import type { ExtractedText, ImageObject } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import type { ArtInfo, ConvertResult, SlideClass } from '@ordo/pptx-scene';
@@ -73,6 +74,12 @@ export type PptxDeps = {
    * a tool await `tools.ready`, then never run one whose state is not 'available'.
    */
   tools: HubTools;
+  /**
+   * Sub-wave 1c (rule H, `systemFaces.ts`): this computer's script faces, resolved once at the hub's start;
+   * every job that builds a `pptx-scene` input and the client-scene check await them. Absent (deps built by
+   * hand in a test): none.
+   */
+  systemFaces?: SystemFaces;
 };
 
 // ── Jobs ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -353,6 +360,11 @@ export type SceneTaskInput = {
    * §15 M6: a row grows to its text). Absent: widths are estimated.
    */
   fonts?: SceneFontFile[];
+  /**
+   * Sub-wave 1c (rule H, `systemFaces.ts`): this computer's faces for the scripts drawn glyph by glyph, as the
+   * hub resolved them at start: a table cell in a script the library has no face for is measured with them.
+   */
+  systemScriptFaces?: SystemScriptFace[];
   /** Bytes of geometry files the batch may return (`PPTX_LIMITS.batchGeomBytes`; tests set less). */
   geomBytes?: number;
   /**
@@ -383,6 +395,8 @@ export type SceneTaskOutput = {
   geomFiles?: { id: string; hash: string; bytes: Uint8Array }[];
   /** Slides whose new geometry files would pass `PPTX_LIMITS.batchGeomBytes`: their objects naming them are left out. */
   geomOver?: number[];
+  /** Rule H: the system faces a table of the batch was measured with (`'Hang wqy-zenhei.ttc'`). */
+  systemFaces?: string[];
 };
 
 /**

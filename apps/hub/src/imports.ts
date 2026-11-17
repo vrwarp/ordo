@@ -33,6 +33,7 @@ import { mediaForFile } from './pptx/mediaParts.ts';
 import { logSafe } from './pptx/report.ts';
 import { type DeckText, pagesOf, readDeckText } from './pptx/textRepair.ts';
 import { readHead, sniff, type Store } from './store.ts';
+import { fontconfigLookup, SystemFaces } from './pptx/systemFaces.ts';
 import { HubTools } from './tools.ts';
 
 export type Pro7Result = {
@@ -143,6 +144,11 @@ export class ImportService {
    * per process, in the background; `GET /capabilities` reports them.
    */
   readonly tools: HubTools;
+  /**
+   * This computer's script faces (sub-wave 1c rule H, `pptx/systemFaces.ts`): resolved once per process at
+   * start, awaited by every job that measures a table and by the client-scene check.
+   */
+  readonly systemFaces: SystemFaces;
 
   private lib: Library;
   private store: Store;
@@ -170,7 +176,19 @@ export class ImportService {
     jobs.register<Pro7Payload>('pro7-import', (ctx) => this.pro7Job(ctx));
     jobs.register<DocPayload>('document', (ctx) => this.documentJob(ctx));
     this.tools = new HubTools(cfg, log, { tmpDir: () => store.tmpDir() });
-    this.pptx = new PptxImports({ lib, store, jobs, media, cfg, log, locked, tools: this.tools });
+    // This computer's script faces (rule H): resolved once, now, in the background; jobs await them.
+    this.systemFaces = new SystemFaces(cfg.systemFaces ?? fontconfigLookup(), log);
+    this.pptx = new PptxImports({
+      lib,
+      store,
+      jobs,
+      media,
+      cfg,
+      log,
+      locked,
+      tools: this.tools,
+      systemFaces: this.systemFaces,
+    });
     // Legacy PowerPoint text boxes are re-keyed once, in the background (design/27 §11): checked at every
     // start, it queues nothing once the library is repaired.
     try {

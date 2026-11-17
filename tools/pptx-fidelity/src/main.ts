@@ -6,7 +6,8 @@
  *   pnpm --filter @ordo/pptx-fidelity start -- [--engine ppv|native|both] [--no-ppv] [--corpus]
  *        [--out DIR] [--chromium PATH] [--raw] [--fresh-lo] [--manifest FILE] [--baseline FILE]
  *        [--max-drop 0.02] [--lo-compat] [--slides [DECK:]LIST]... [--script-stand-ins]
- *        [--before hub|paste] [--ask-hub [DECK:]LIST]... [--hub dist|source] [--no-libreoffice] [--hub-budget]
+ *        [--before hub|paste] [--ask-hub [DECK:]LIST]... [--ask-hub-nolo [DECK:]LIST|all-tables]...
+ *        [--hub dist|source] [--no-libreoffice] [--hub-budget]
  *        [deck.pptx | dir]...
  *
  * Folders are searched with their subfolders for PresentationML decks (src/decks.ts `DECK_RE`); a deck any
@@ -46,7 +47,14 @@
  * --ask-hub     with `--before hub`, also ask the hub for these slides (the `--slides` syntax, may be repeated)
  *               whatever it stores: a slide it stores as the native column draws it (a table object, say) is
  *               then scored as the real hub shows it (`beforeHubFrom: 'hub'`), not inferred
- * --hub         the hub `--before hub` imports through: `source` (this checkout's, the default) or `dist`
+ * --ask-hub-nolo  also ask a real hub WITHOUT LibreOffice (this checkout's, a PATH of the lite tools only,
+ *               `ORDO_LIBREOFFICE=off`, `beforehub.ts`) for these slides (the `--slides` syntax, may be repeated;
+ *               `all-tables`: every slide holding a PowerPoint table, its reasons `table`, `deco:table` or
+ *               `art:table`): `perSlide.noLoHubSsim`, `noLoHubFrom: 'hub'` or why not. Needs no `--before`; the
+ *               harness's `noLoSsim` (fontconfig's faces in table cells) is not what such a hub stores
+ * --hub         the hub `--before hub` and `--ask-hub-nolo` import through: `source` (this checkout's sources,
+ *               the default, even where a bundle is built) or `dist` (its built bundle); summary.json's
+ *               `askedHubs` records each hub asked
  * --no-libreoffice  also score what a hub without LibreOffice shows (`perSlide.noLoSsim`): the deck emitted
  *               with `EmitOptions.libreoffice: false` (art and metafile conversions left out, listed in
  *               `perSlide.missing`), each slide as the hub stores it (a picture slide: no objects)
@@ -67,7 +75,17 @@ import { basename, join, relative, resolve } from 'node:path';
 import { renderWithPptxPreview } from '@ordo/pptx-render';
 import { parseArgs, slidesFor } from './args.ts';
 import { type BaselineDeck, compareBaseline } from './baseline.ts';
-import { askedSet, BeforeHub, type HubBefore, type HubScores, hubBeforeOf, pasteSsim } from './beforehub.ts';
+import {
+  askedSet,
+  BeforeHub,
+  type HubBefore,
+  type HubScores,
+  hubBeforeOf,
+  isTableSlide,
+  noLoAskedSet,
+  noLoHubFields,
+  pasteSsim,
+} from './beforehub.ts';
 import { hubClasses } from './census.ts';
 import { drawingKey } from './compat/index.ts';
 import { buildCorpus } from './corpus.ts';
@@ -255,6 +273,9 @@ type NativeOpts = {
   hubBudget: boolean;
   /** `--ask-hub`: slides (1-based) the hub is asked for whatever it stores (`askedSet`'s `extra`). */
   askHub?: ReadonlySet<number>;
+  /** `--ask-hub-nolo`: slides (1-based) a hub without LibreOffice is asked for, and/or every table slide. */
+  askHubNoLo?: ReadonlySet<number>;
+  askHubNoLoTables?: boolean;
   /** The deck file's SHA-256 (`exceptions.ts`). */
   sha256?: string;
 };
@@ -270,6 +291,7 @@ async function nativeColumn(
   lo: string[],
   renderer: () => Promise<NativeRenderer>,
   beforeHub: () => BeforeHub,
+  noLoHub: () => BeforeHub,
   opts: NativeOpts,
 ): Promise<{ fields: Partial<DeckScore>; perSlide: SlideScore[] }> {
   const t0 = performance.now();
@@ -350,6 +372,28 @@ async function nativeColumn(
       work: join(nd, '.hub'),
     });
   notes.push(...fromHub.notes);
+  // `--ask-hub-nolo`: a real hub without LibreOffice, asked for these slides as it stores and draws them.
+  const extraNoLo = opts.askHubNoLo ? new Set([...opts.askHubNoLo].map((k) => k - 1)) : undefined;
+  const askedNoLo = noLoAskedSet({
+    n,
+    lo,
+    isTable: (i) => isTableSlide(shown[i]),
+    ...(opts.askHubNoLoTables ? { allTables: true } : {}),
+    ...(only ? { only } : {}),
+    ...(extraNoLo ? { extra: extraNoLo } : {}),
+  });
+  let fromNoLoHub: HubScores = { scores: new Map(), failed: new Set(), notes: [] };
+  if (askedNoLo.size) {
+    fromNoLoHub = await noLoHub().score({
+      deck,
+      shown: askedNoLo,
+      lo,
+      rect,
+      renderer: await renderer(),
+      work: join(nd, '.hub-nolo'),
+    });
+    notes.push(...fromNoLoHub.notes.map((x) => `hub without LibreOffice: ${x}`));
+  }
   const perSlide: SlideScore[] = [];
   for (let i = 0; i < n; i++) {
     if (only && !only.has(i)) continue;
@@ -397,6 +441,7 @@ async function nativeColumn(
           if (real !== undefined && fromHub.failed.has(i)) score.beforeHubFailed = true;
         }
       }
+      Object.assign(score, noLoHubFields(i, askedNoLo, fromNoLoHub));
     }
     if (s) {
       score.tier = s.tier;
@@ -478,6 +523,14 @@ async function main(): Promise<void> {
   let hubBefore: BeforeHub | undefined;
   const beforeHub = () =>
     (hubBefore ??= new BeforeHub({ dir: join(out, '.hub'), entry: hubEntry(a.hub ?? 'source') }));
+  // `--ask-hub-nolo`: this checkout's hub without LibreOffice, started with the first deck that needs it.
+  let hubNoLo: BeforeHub | undefined;
+  const noLoHub = () =>
+    (hubNoLo ??= new BeforeHub({
+      dir: join(out, '.hub-nolo'),
+      entry: hubEntry(a.hub ?? 'source'),
+      libreoffice: false,
+    }));
 
   const scores: DeckScore[] = [];
   const summaryOf = (tables = false): Summary => {
@@ -509,6 +562,9 @@ async function main(): Promise<void> {
         ? { noLibreOffice: true, noLoMean: mean(counted.map((s) => s.noLoSsim ?? s.nativeSsim!)) }
         : {}),
       ...(nativeOn && a.hubBudget ? { hubBudget: true } : {}),
+      ...(hubBefore || hubNoLo
+        ? { askedHubs: [hubBefore?.info(), hubNoLo?.info()].filter((h) => h !== undefined) }
+        : {}),
       ...(a.slides.length
         ? { slides: a.slides.map((x) => ({ ...(x.deck ? { deck: x.deck } : {}), slides: [...x.slides] })) }
         : {}),
@@ -536,6 +592,7 @@ async function main(): Promise<void> {
       const only = slidesFor(a.slides, name);
       if (only && !only.size) continue; // --slides names other decks
       const askHub = slidesFor(a.askHub, name);
+      const askHubNoLo = slidesFor(a.askHubNoLo, name);
       const keep = (n: number) => !only || only.has(n);
       const dir = join(out, name);
       const loDir = join(dir, 'libreoffice');
@@ -600,7 +657,7 @@ async function main(): Promise<void> {
       if (nativeOn) {
         // Whatever the converter or the page does with this deck, the run goes on.
         try {
-          const n = await nativeColumn(deck, dir, out, lo, renderer, beforeHub, {
+          const n = await nativeColumn(deck, dir, out, lo, renderer, beforeHub, noLoHub, {
             ...(only ? { only } : {}),
             loCompat: a.loCompat,
             standIns: a.scriptStandIns,
@@ -608,6 +665,8 @@ async function main(): Promise<void> {
             noLibreOffice: a.noLibreOffice,
             hubBudget: a.hubBudget,
             ...(askHub ? { askHub } : {}),
+            ...(askHubNoLo ? { askHubNoLo } : {}),
+            ...(a.askHubNoLoTables ? { askHubNoLoTables: true } : {}),
             ...(sha256 ? { sha256 } : {}),
           });
           Object.assign(s, n.fields);
@@ -636,6 +695,7 @@ async function main(): Promise<void> {
   } finally {
     if (nativeRenderer) await (await nativeRenderer.catch(() => undefined))?.close();
     await hubBefore?.close().catch(() => undefined);
+    await hubNoLo?.close().catch(() => undefined);
   }
   const summary = summaryOf(true);
   await writeFile(join(out, 'summary.json'), JSON.stringify(summary, null, 1));

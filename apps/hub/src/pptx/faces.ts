@@ -13,12 +13,19 @@
  * family, weight and slant (Google Fonts' unicode-range subsets) are tried in turn for each character; their
  * line metrics are the first face's, and a pair is kerned by a face that has both characters.
  * `FACE_LIMITS.bytes` counts what a face keeps (its tables, decompressed) or its file, whichever is more.
+ *
+ * Sub-wave 1c (rule H, `systemFaces.ts`): for a script the library has no face for, `script(code)` answers this
+ * computer's face for it when the hub found one at start (`SceneTaskInput.systemScriptFaces`): read with
+ * `@ordo/pptx-scene`'s `sfntMetrics` at its collection index, once per pool worker (cached), counted in each
+ * task's `FACE_LIMITS`, and used only when it maps the script's letter. The library's face always wins.
  */
 import { readFileSync, statSync } from 'node:fs';
+import { basename } from 'node:path';
 import type { Font } from '@ordo/domain';
 import { FACE_LIMITS, faceSourceOf, type LibraryFace } from '@ordo/importers/pptx-faces.ts';
-import { type FaceMetrics, type FaceSource, metricsOfTables } from '@ordo/pptx-scene';
+import { type FaceMetrics, type FaceSource, metricsOfTables, sfntMetrics } from '@ordo/pptx-scene';
 import { metricTables } from '../fonts/sfnt.ts';
+import { SYSTEM_FACE_SCRIPTS, type SystemScriptFace } from './systemFaces.ts';
 
 // The selection rule is the import core's (`@ordo/importers` `pptx-faces.ts`), which the operator's import
 // worker shares; reading the files lazily from disk is the hub's.
@@ -37,8 +44,24 @@ export function sceneFontFiles(fonts: readonly Font[], abs: (path: string) => st
   return out;
 }
 
-/** A `FaceSource` over the listed files, each read when a table first asks for its face (see the header). */
-export function libraryFaces(files: readonly SceneFontFile[]): FaceSource {
+/**
+ * This computer's script faces read in this pool worker (rule H), by file, index, size and change time: a
+ * collection of 17 MB is read once per worker, not once per batch.
+ */
+const systemRead = new Map<string, FaceMetrics | undefined>();
+/** System faces a worker keeps read at most (a hub resolves one per script: four). */
+const SYSTEM_READ_MAX = 8;
+
+/**
+ * A `FaceSource` over the listed files, each read when a table first asks for its face (see the header), and,
+ * for a script the library has no face for, this computer's face for it (`system`, rule H); each system face
+ * a table was measured with is added to `used` (`'Hang wqy-zenhei.ttc'`).
+ */
+export function libraryFaces(
+  files: readonly SceneFontFile[],
+  system: readonly SystemScriptFace[] = [],
+  used?: Set<string>,
+): FaceSource {
   const read = new Map<string, FaceMetrics | undefined>();
   let filesRead = 0;
   let bytesRead = 0;
@@ -70,5 +93,41 @@ export function libraryFaces(files: readonly SceneFontFile[]): FaceSource {
   const faces: LibraryFace[] = files
     .slice(0, FACE_LIMITS.listed)
     .map(([family, weight, italic, file]) => ({ family, weight, italic, metrics: () => metricsOf(file) }));
-  return faceSourceOf(faces);
+  const source = faceSourceOf(faces);
+  if (!system.length) return source;
+  // Rule H: this computer's face for a script the library has none for, read once per worker, counted in
+  // this task's limits, used only when it maps the script's letter.
+  const counted = new Set<string>();
+  const systemOf = (code: string): FaceMetrics | undefined => {
+    const letter = SYSTEM_FACE_SCRIPTS[code];
+    const entry = system.find(([s]) => s === code);
+    if (letter === undefined || !entry) return undefined;
+    const [, file, index] = entry;
+    try {
+      const st = statSync(file);
+      if (!st.isFile() || st.size > FACE_LIMITS.fileBytes) return undefined;
+      const key = `${file}\0${index}\0${st.size}\0${st.mtimeMs}`;
+      if (!counted.has(key) && (filesRead >= FACE_LIMITS.files || bytesRead + st.size > FACE_LIMITS.bytes))
+        return undefined;
+      let m = systemRead.get(key);
+      if (!systemRead.has(key)) {
+        m = sfntMetrics(new Uint8Array(readFileSync(file)), index);
+        if (systemRead.size >= SYSTEM_READ_MAX) systemRead.clear();
+        systemRead.set(key, m);
+      }
+      if (!counted.has(key)) {
+        counted.add(key);
+        filesRead++;
+        bytesRead += st.size;
+      }
+      if (!m || m.advance(letter) === undefined) return undefined;
+      used?.add(`${code} ${basename(file)}`);
+      return m;
+    } catch {
+      return undefined; // a file that cannot be read is no face
+    }
+  };
+  const library = source.script;
+  source.script = (code) => library?.(code) ?? systemOf(code);
+  return source;
 }

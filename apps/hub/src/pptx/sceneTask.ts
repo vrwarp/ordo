@@ -44,11 +44,16 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
   }
   const sizes = new Map(input.pictureSizes);
   const kinds = new Map(input.mediaKinds ?? []);
+  // The library's faces, and this computer's for a script the library has none for (rule H, `faces.ts`).
+  const used = new Set<string>();
+  const system = input.systemScriptFaces ?? [];
   const result = convertDeck(input.parts, {
     range: input.range,
     pictureSize: (part) => sizes.get(part),
     mediaKind: (part) => kinds.get(part),
-    ...(input.fonts?.length ? { fontFace: libraryFaces(input.fonts) } : {}),
+    ...(input.fonts?.length || system.length
+      ? { fontFace: libraryFaces(input.fonts ?? [], system, used) }
+      : {}),
     ...(input.libreoffice === false ? { libreoffice: false } : {}),
     extendBackgrounds: input.options.extendBackgrounds ?? true,
     transitionSounds: input.options.transitionSounds ?? false,
@@ -56,7 +61,7 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
     sheets: PPTX_SHEETS,
     newId,
   });
-  const out: SceneTaskOutput = { result, ms: 0, heapMb: 0 };
+  const out: SceneTaskOutput = { result, ms: 0, heapMb: 0, ...(used.size ? { systemFaces: [...used] } : {}) };
   nameGeomFiles(out, input.geomBytes ?? PPTX_LIMITS.batchGeomBytes);
   if (input.scan) out.scan = scanDeck(openPackage(input.parts), result.listed);
   else if (result.slides.length) out.extras = extrasOf(openPackage(input.parts), result);
