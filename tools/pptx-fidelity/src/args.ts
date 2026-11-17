@@ -38,6 +38,12 @@ export type Args = {
   slides: SlideSpec[];
   /** `--ask-hub`, in the order given: slides `--before hub` asks the hub for whatever it stores. */
   askHub: SlideSpec[];
+  /**
+   * `--ask-hub-nolo`, in the order given: slides a hub WITHOUT LibreOffice is asked for (`noLoHubSsim`,
+   * `beforehub.ts`); `--ask-hub-nolo all-tables` (`askHubNoLoTables`) asks it for every table slide.
+   */
+  askHubNoLo: SlideSpec[];
+  askHubNoLoTables: boolean;
   decks: string[];
 };
 
@@ -94,6 +100,8 @@ export function parseArgs(argv: readonly string[]): Args {
     hubBudget: false,
     slides: [],
     askHub: [],
+    askHubNoLo: [],
+    askHubNoLoTables: false,
     decks: [],
   };
   let noPpv = false;
@@ -121,7 +129,11 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (v === '--manifest') a.manifest = value(++i, v);
     else if (v === '--slides') a.slides.push(parseSlideSpec(value(++i, v)));
     else if (v === '--ask-hub') a.askHub.push(parseSlideSpec(value(++i, v), v));
-    else if (v === '--before') {
+    else if (v === '--ask-hub-nolo') {
+      const list = value(++i, v);
+      if (list === 'all-tables') a.askHubNoLoTables = true;
+      else a.askHubNoLo.push(parseSlideSpec(list, v));
+    } else if (v === '--before') {
       const b = value(++i, v);
       if (b !== 'hub' && b !== 'paste') throw new Error('--before takes hub or paste');
       a.before = b;

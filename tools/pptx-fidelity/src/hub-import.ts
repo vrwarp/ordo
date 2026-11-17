@@ -28,13 +28,12 @@
  *   the import log (`equivalence.ts`); every difference is listed per deck in `equivalence.json`.
  *
  * Options: `--out DIR` (default tmp/hub-import: `hub-import.json`, `hub-import.md`, the hub's data and log),
- * `--hub dist|source` (the built `apps/hub/dist/main.js`, the default when it exists, or the sources through
- * tsx), `--libreoffice`, `--dry-run`, `--sermons FOLDER` (repeatable; its decks are also posted),
+ * `--hub dist|source` (the sources through tsx, the default, or the built `apps/hub/dist/main.js`), `--libreoffice`, `--dry-run`, `--sermons FOLDER` (repeatable; its decks are also posted),
  * `--timeout-s N` per job (default 600), `--mem-limit-mb N` (the compose file's `mem_limit`, default 4096),
  * `--keep-data` (leave the hub's data folder), `--client-scene`, `--equivalence`.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
-import { constants, existsSync, openAsBlob, readFileSync } from 'node:fs';
+import { constants, openAsBlob, readFileSync } from 'node:fs';
 import { access, mkdir, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
@@ -125,11 +124,13 @@ function tsxLoaderUrl(): string {
   return pathToFileURL(join(dirname(pkg), 'dist', 'loader.mjs')).href;
 }
 
-/** The hub module a session starts: the built bundle, or the sources. */
-export function hubEntry(kind: 'dist' | 'source' | undefined): string {
-  const dist = join(root, 'apps/hub/dist/main.js');
-  if (kind === 'dist' || (kind === undefined && existsSync(dist))) return dist;
-  return join(root, 'apps/hub/src/main.ts');
+/**
+ * The hub module a session starts (of the checkout at `at`): its built bundle only when asked for (`dist`),
+ * else its sources, even where a bundle exists (a bundle built before the last edit would be a stale hub).
+ */
+export function hubEntry(kind: 'dist' | 'source' | undefined, at = root): string {
+  if (kind === 'dist') return join(at, 'apps/hub/dist/main.js');
+  return join(at, 'apps/hub/src/main.ts');
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

@@ -19,12 +19,27 @@
  *   picture either way: inside a box it takes LibreOffice's background, outside it misses the art's spill
  *   (a 3-D extrusion keeps `ART_MARGIN_PX` past the box), and a page of another size is resampled twice.
  * - Any other slide shows what the native column drew: its own score.
+ *
+ * **A hub without LibreOffice** (`--ask-hub-nolo`, sub-wave 1c): the same `BeforeHub` with `libreoffice: false`
+ * starts this checkout's hub with a PATH of the lite tools only (`hub-import.ts` `toolsOnlyPath`: no soffice) and
+ * `ORDO_LIBREOFFICE=off`, waits for no follow-up, and scores the slides asked as that hub stores and draws them:
+ * `perSlide.noLoHubSsim`, `noLoHubFrom: 'hub'` (or why there is none: `noLoHubFields`). A table slide is scored
+ * in its stored form on a REAL hub of each kind this way; the harness's own `noLoSsim` measures table cells with
+ * this computer's fontconfig faces where a real hub uses its library's, so it is reported beside, never instead.
  */
 import { execFile } from 'node:child_process';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { HubSession, hubSlides, importDeck } from './hub-import.ts';
+import {
+  findOnPath,
+  HubSession,
+  hubEntry,
+  hubSlides,
+  importDeck,
+  OFFICE_COMMANDS,
+  toolsOnlyPath,
+} from './hub-import.ts';
 import type { NativeDeck, NativeRenderer, NativeSlide } from './native.ts';
 import { pngSize, ssim } from './ssim.ts';
 
@@ -225,6 +240,63 @@ export function askedSet(o: {
   return asked;
 }
 
+/** Reasons a slide may hold a PowerPoint table (`--ask-hub-nolo all-tables`; the readout's table slides). */
+export const TABLE_REASONS: ReadonlySet<string> = new Set(['table', 'deco:table', 'art:table']);
+
+/** A shown slide holds a PowerPoint table: a table object (`NativeSlide.table`) or a table reason. */
+export function isTableSlide(s: Pick<NativeSlide, 'table' | 'reasons'> | undefined): boolean {
+  return !!s && (!!s.table || s.reasons.some((r) => TABLE_REASONS.has(r)));
+}
+
+/**
+ * The shown slides (0-based) `--ask-hub-nolo` asks a hub without LibreOffice for: each with a LibreOffice page
+ * (`lo[i]`), within `only` when given, that `extra` names or, with `allTables`, that holds a table (`isTable`).
+ */
+export function noLoAskedSet(o: {
+  n: number;
+  lo: readonly (string | undefined)[];
+  isTable: (i: number) => boolean;
+  allTables?: boolean;
+  only?: ReadonlySet<number>;
+  extra?: ReadonlySet<number>;
+}): Set<number> {
+  const asked = new Set<number>();
+  for (let i = 0; i < o.n; i++) {
+    if (!o.lo[i] || (o.only && !o.only.has(i))) continue;
+    if (o.extra?.has(i) || (o.allTables && o.isTable(i))) asked.add(i);
+  }
+  return asked;
+}
+
+/** The fields `--ask-hub-nolo` writes for one shown slide `i` (see the module comment): none when not asked. */
+export function noLoHubFields(
+  i: number,
+  asked: ReadonlySet<number>,
+  got: HubScores,
+): { noLoHubSsim?: number; noLoHubFrom?: string } {
+  if (!asked.has(i)) return {};
+  const v = got.scores.get(i);
+  if (v !== undefined) return { noLoHubSsim: v, noLoHubFrom: 'hub' };
+  return { noLoHubFrom: got.why?.get(i) ?? 'no score' };
+}
+
+/**
+ * How a `BeforeHub` session is started: with LibreOffice, this process's PATH and the hub's own default
+ * (nothing set); without it, a PATH of the lite tools only (found on `from`) and `ORDO_LIBREOFFICE=off`.
+ * Throws when a LibreOffice command would still be on that PATH.
+ */
+export async function hubSessionOptions(o: {
+  dir: string;
+  libreoffice: boolean;
+  from?: string;
+}): Promise<{ path?: string; env?: Record<string, string> }> {
+  if (o.libreoffice) return {};
+  const { path } = await toolsOnlyPath(join(o.dir, 'path'), undefined, o.from);
+  for (const c of OFFICE_COMMANDS)
+    if (await findOnPath(c, path)) throw new Error(`${c} is on the PATH of the hub without LibreOffice`);
+  return { path, env: { ORDO_LIBREOFFICE: 'off' } };
+}
+
 /** Past this much data, the hub is replaced by a fresh one before the next deck (disk is the limit). */
 export const RECYCLE_BYTES = 400 * 1024 * 1024;
 /** One deck's import and LibreOffice follow-up may take this long. */
@@ -232,30 +304,73 @@ const IMPORT_TIMEOUT_MS = 900_000;
 
 /**
  * What the hub gave for one deck: a score per shown slide (0-based) it showed, the slides LibreOffice could
- * not draw there (`failed`: the hub showed them without their art, and that is what is scored), and notes.
+ * not draw there (`failed`: the hub showed them without their art, and that is what is scored), notes, and
+ * why an asked slide has no score (`why`: 'import failed', 'pending', 'not drawn', 'no hub').
  */
-export type HubScores = { scores: Map<number, number>; failed: Set<number>; notes: string[] };
+export type HubScores = {
+  scores: Map<number, number>;
+  failed: Set<number>;
+  notes: string[];
+  why?: Map<number, string>;
+};
+
+/** What a `BeforeHub` asked (the run's summary records it): its kind, its hub entry, LibreOffice's state there. */
+export type HubInfo = {
+  libreoffice: boolean;
+  entry: 'source' | 'dist';
+  file: string;
+  /** `GET /capabilities`' `libreoffice.state` of the last session started ('available', 'off', ...). */
+  state?: string;
+  sessions: number;
+};
 
 /**
  * `--before hub`'s hub: this checkout's, started on first use with LibreOffice on the PATH, its data under
- * `dir`, replaced by a fresh one when its data passes `RECYCLE_BYTES` or it fails, closed by `close`.
+ * `dir`, replaced by a fresh one when its data passes `RECYCLE_BYTES` or it fails, closed by `close`. With
+ * `libreoffice: false` (`--ask-hub-nolo`), a hub without LibreOffice (`hubSessionOptions`), no follow-up.
+ * `entry` is the hub module (`hubEntry`: the sources unless the bundle is asked for).
  */
 export class BeforeHub {
   private session?: HubSession;
   private started = 0;
-  private readonly o: { dir: string; entry?: string };
+  private state?: string;
+  private readonly o: { dir: string; entry?: string; libreoffice?: boolean };
 
-  constructor(o: { dir: string; entry?: string }) {
+  constructor(o: { dir: string; entry?: string; libreoffice?: boolean }) {
     this.o = o;
+  }
+
+  private get libreoffice(): boolean {
+    return this.o.libreoffice !== false;
+  }
+
+  /** What this hub is (`HubInfo`), for the run's summary. */
+  info(): HubInfo {
+    const file = this.o.entry ?? hubEntry(undefined);
+    return {
+      libreoffice: this.libreoffice,
+      entry: file.endsWith('.js') ? 'dist' : 'source',
+      file: file.replace(/^.*?(apps\/hub\/)/, '$1'),
+      ...(this.state ? { state: this.state } : {}),
+      sessions: this.started,
+    };
   }
 
   private async hub(): Promise<HubSession> {
     if (this.session && this.session.proc.exitCode === null) return this.session;
     await this.session?.close();
+    const how = await hubSessionOptions({ dir: this.o.dir, libreoffice: this.libreoffice });
     this.session = await HubSession.start({
       dataDir: join(this.o.dir, `data-${++this.started}`),
       ...(this.o.entry ? { entry: this.o.entry } : {}),
+      ...how,
     });
+    const caps = await this.session.client
+      .maybe<{ libreoffice?: { state?: unknown } }>('capabilities')
+      .catch(() => undefined);
+    this.state = typeof caps?.libreoffice?.state === 'string' ? caps.libreoffice.state : 'unknown';
+    if (!this.libreoffice && this.state !== 'off' && this.state !== 'absent')
+      throw new Error(`the hub without LibreOffice says LibreOffice is ${this.state}`);
     return this.session;
   }
 
@@ -278,18 +393,26 @@ export class BeforeHub {
     const notes: string[] = [];
     const scores = new Map<number, number>();
     const failed = new Set<number>();
+    const why = new Map<number, string>();
+    const unscored = (reason: string) => {
+      for (const i of o.shown) if (!scores.has(i) && !why.has(i)) why.set(i, reason);
+    };
+    let reason = 'no hub';
     try {
       const s = await this.hub();
+      reason = 'import failed';
       // A hub before M9 takes .pptx uploads only; the converter reads a slide show or template alike.
       const imp = await importDeck(s.client, o.deck, {
         uploadName: 'deck.pptx',
         timeoutMs: IMPORT_TIMEOUT_MS,
-        followUp: true,
+        followUp: this.libreoffice,
       });
       if (imp.job.state !== 'done' || !imp.presentationId) {
         notes.push(`the hub's import ${imp.job.state}: ${(imp.job.error ?? '').slice(0, 200)}`);
-        return { scores, failed, notes };
+        unscored(reason);
+        return { scores, failed, notes, why };
       }
+      reason = 'not drawn';
       if (imp.followUp && imp.followUp.state !== 'done')
         notes.push(
           `the hub's LibreOffice follow-up ${imp.followUp.state}: ${(imp.followUp.error ?? '').slice(0, 200)}`,
@@ -303,6 +426,7 @@ export class BeforeHub {
         if (shown === undefined || !o.shown.has(shown)) continue;
         if (slide.pptx?.pending) {
           left++;
+          why.set(shown, 'pending');
           continue;
         }
         if (slide.pptx?.failed) failed.add(shown);
@@ -326,7 +450,10 @@ export class BeforeHub {
         notes.push(
           `LibreOffice could not draw ${failed.size} slide(s) in the hub: scored as the hub shows them`,
         );
-      if (!slides.length) return { scores, failed, notes };
+      if (!slides.length) {
+        unscored('not shown by the hub');
+        return { scores, failed, notes, why };
+      }
       const deck: NativeDeck = {
         slides,
         slideRect: o.rect,
@@ -356,7 +483,8 @@ export class BeforeHub {
     } finally {
       await rm(o.work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
-    return { scores, failed, notes };
+    unscored(reason);
+    return { scores, failed, notes, why };
   }
 
   async close(): Promise<void> {

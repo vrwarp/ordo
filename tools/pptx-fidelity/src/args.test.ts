@@ -47,6 +47,26 @@ describe('parseArgs', () => {
     expect(() => parseArgs(['--slides', 'x:0'])).toThrow(/^--slides x:0: '0' is not a slide number/);
   });
 
+  it('reads --ask-hub-nolo as --ask-hub, and all-tables for every table slide (sub-wave 1c)', () => {
+    expect(parseArgs(['decks'])).toMatchObject({ askHubNoLo: [], askHubNoLoTables: false });
+    const a = parseArgs(['--ask-hub-nolo', 'Korean:18-20', '--ask-hub-nolo', '2', 'decks']);
+    expect(a.askHubNoLo.map((s) => [s.deck, [...s.slides]])).toEqual([
+      ['Korean', [18, 19, 20]],
+      [undefined, [2]],
+    ]);
+    expect(a.askHubNoLoTables).toBe(false);
+    expect(a.askHub).toEqual([]);
+    expect(parseArgs(['--ask-hub-nolo', 'all-tables', 'd'])).toMatchObject({
+      askHubNoLo: [],
+      askHubNoLoTables: true,
+      decks: ['d'],
+    });
+    expect(() => parseArgs(['--ask-hub-nolo'])).toThrow(/needs a value/);
+    expect(() => parseArgs(['--ask-hub-nolo', 'x:0'])).toThrow(
+      /^--ask-hub-nolo x:0: '0' is not a slide number/,
+    );
+  });
+
   it('reads --before hub or paste and refuses anything else', () => {
     expect(parseArgs(['decks']).before).toBeUndefined();
     expect(parseArgs(['--before', 'hub', 'decks'])).toMatchObject({ before: 'hub', decks: ['decks'] });

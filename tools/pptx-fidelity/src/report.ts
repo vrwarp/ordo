@@ -1,4 +1,5 @@
 import { writeFile } from 'node:fs/promises';
+import type { HubInfo } from './beforehub.ts';
 import { COMPAT_RULE_TEXT, COMPAT_RULES, type CompatRule } from './compat/index.ts';
 import { M2_FEATURE_TARGETS, TEXT_FEATURES, xmlFeatureOrder } from './features/index.ts';
 import type { ScriptFace } from './fonts.ts';
@@ -68,6 +69,13 @@ export type SlideScore = {
   beforeHubPaste?: number;
   /** `--no-libreoffice`: what a hub without LibreOffice shows (its picture, when it differs from `native`). */
   noLoSsim?: number;
+  /**
+   * `--ask-hub-nolo` (sub-wave 1c): what a REAL hub without LibreOffice showed of this slide, its stored form
+   * drawn (`noLoHubFrom: 'hub'`); `noLoHubFrom` alone says why there is no score ('import failed', 'pending',
+   * 'not drawn', 'no hub', 'no score'). For a table slide this, not `noLoSsim` (fontconfig's faces), is the hub.
+   */
+  noLoHubSsim?: number;
+  noLoHubFrom?: string;
   nativeNoLo?: string;
   /** `--no-libreoffice`: what nothing draws without LibreOffice (`EmittedSlide.missing` kinds). */
   missing?: string[];
@@ -138,6 +146,8 @@ export type Summary = {
   noLoMean?: number;
   /** `--hub-budget`: every slide drawn as the hub stores it. */
   hubBudget?: boolean;
+  /** The real hubs the run asked (`--before hub`, `--ask-hub-nolo`): kind, hub entry, LibreOffice's state. */
+  askedHubs?: HubInfo[];
   /** The native column's tables (`nativeTables`): all decks, and worship decks when a manifest says. */
   native?: { all: NativeTables; worship?: NativeTables };
   /** How this machine served each script fallback family (`fonts.ts`). */

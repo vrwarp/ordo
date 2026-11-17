@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   type DeckRecord,
+  hubEntry,
   hubImportGates,
   type HubImportReport,
   hubLibreOffice,
@@ -64,6 +65,17 @@ describe('hub-import', () => {
     expect(readlinkSync(join(p.path, 'ffmpeg'))).toBe(join(bin, 'ffmpeg'));
     expect(readlinkSync(join(p.path, 'node'))).toBe(process.execPath);
     expect(p.missing).toEqual(['ffprobe', 'pdfinfo', 'prlimit']);
+  });
+
+  it('starts the sources unless the bundle is asked for, even where a built bundle exists (sub-wave 1c)', () => {
+    const at = join(dir, 'checkout');
+    mkdirSync(join(at, 'apps/hub/dist'), { recursive: true });
+    mkdirSync(join(at, 'apps/hub/src'), { recursive: true });
+    writeFileSync(join(at, 'apps/hub/dist/main.js'), '// a stale build\n');
+    writeFileSync(join(at, 'apps/hub/src/main.ts'), '// the sources\n');
+    expect(hubEntry(undefined, at)).toBe(join(at, 'apps/hub/src/main.ts'));
+    expect(hubEntry('source', at)).toBe(join(at, 'apps/hub/src/main.ts'));
+    expect(hubEntry('dist', at)).toBe(join(at, 'apps/hub/dist/main.js'));
   });
 
   it('parses its options and refuses unknown ones', () => {
