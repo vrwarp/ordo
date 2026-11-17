@@ -156,10 +156,12 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
   LibreOffice's i#17155 rule (its 24.2 source, probe C): it is dropped when whitespace comes at most 64 units
   before the slash in the PowerPoint paragraph (the seventh argument, `hardStart`, is where that paragraph
   starts; an a:br's '\n' is not whitespace there), so a web address in a citation stays whole, and kept in an
-  address or path that starts its paragraph or runs longer. Ordo's own text (no `lineModel`, or 'ordo') keeps
-  UAX#14 (owner question T1's default). Not modelled: LibreOffice cuts a line at its width when the dropped
-  break would move to the line's start (even past a break before '%' or a hyphen), breaks after a slash
-  before a digit, and never ends a line after a slash exactly at its width.
+  address or path that starts its paragraph or runs longer; the eighth argument, `glued`, receives each
+  dropped break with where LibreOffice moves it (just after the whitespace): lines.ts ends a line there when
+  such a break is the line's last before its width, or cuts the line at its width when that is at or before
+  the line's start (`slashBreak`). Ordo's own text (no `lineModel`, or 'ordo') keeps UAX#14 (owner question
+  T1's default). Not modelled: LibreOffice breaks after a slash before a digit, and never ends a line after a
+  slash exactly at its width.
 - `graphemeBoundaries(text, start, end)`: clusters, i.e. `Intl.Segmenter` graphemes joined across a
   conjunct-forming virama. Graphemes alone split Tamil 'க்ஷி' (UAX#29 GB9c covers six Indic scripts only);
   Tamil's pulli joins only in க்ஷ and ஸ்ர, Sinhala's al-lakuna only before a ZWJ. Without `Intl.Segmenter`:

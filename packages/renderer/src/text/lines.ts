@@ -57,6 +57,10 @@ import type {
  *   pieces measured apart: where the line goes on, the next piece of the run follows at the whole string's
  *   advance (`kernAfter`: the pair kerning across the cut, as Canvas and LibreOffice shape the whole string),
  *   both for whether it fits and where it is drawn; where the line ends there, the piece keeps its own width.
+ * - Office text follows LibreOffice's i#17155 rule for a break after a slash (breaks.ts): a break it drops
+ *   (`PreparedPara.glued`) that is the line's last before its width moves the line's end back to just after
+ *   its whitespace, or, when that is at or before the line's start, cuts the line at its width (`slashBreak`),
+ *   even where a break before '%' or a hyphen comes earlier in the word.
  * - `wrap: false` never breaks a line.
  * - Right-to-left paragraphs (bidi level 1) mirror the start: indents and the bullet are on the right, the
  *   pieces run from the right (UAX#9 L2 between pieces, `visualOrder`), and the hanging whitespace is on
@@ -639,6 +643,57 @@ function flowParas(
         cuts,
       };
     };
+    /** Whether the text of the word queue[i..j] from its start to offset `e` fits `room`. */
+    const fitsTo = (e: number, room: number): boolean => {
+      let w = 0;
+      for (let q = i; q <= j; q++) {
+        const c = queue[q]!;
+        const p = c.piece;
+        if (p.end <= e) {
+          w += c.a;
+          if (w > room + EPS) return false;
+          continue;
+        }
+        if (p.start < e)
+          w += widthOf(
+            c.style,
+            p.script,
+            p.level % 2 ? 'rtl' : 'ltr',
+            segText(text, p.start, e, c.style.caps),
+          );
+        break;
+      }
+      return w <= room + EPS;
+    };
+    /**
+     * LibreOffice's i#17155 rule where the word queue[i..j] does not fit after the pieces on the line: a break
+     * after a slash the rule drops (`PreparedPara.glued`) inside the word, with the character after the slash
+     * still on the line, is the line's last break before its width, and LibreOffice moves it back to just
+     * after its whitespace: the line ends there when that is after the line's start (how many of the line's
+     * pieces go to the next line), else it is cut at its width (0). null: the line ends before the word.
+     */
+    const slashBreak = (room: number): number | null => {
+      const glued = pp.glued;
+      if (!glued) return null;
+      const ws = queue[i]!.piece.start;
+      const we = queue[j]!.piece.end;
+      let best = -1;
+      let to = -1;
+      for (const [g, t] of glued) {
+        if (g <= ws || g >= we || g <= best) continue;
+        if (fitsTo(g + ((text.codePointAt(g) ?? 0) > 0xffff ? 2 : 1), room - adv)) {
+          best = g;
+          to = t;
+        }
+      }
+      if (best < 0) return null;
+      if (to <= cur[0]!.piece.start) return 0;
+      let n = 0;
+      while (n < cur.length && cur[cur.length - 1 - n]!.piece.start >= to) n++;
+      if (!n || cur[cur.length - n]!.piece.start !== to) return null;
+      for (let q = 0; q < n; q++) if (cur[cur.length - n + q] !== queue[i - n + q]) return null;
+      return n;
+    };
     let i = 0;
     // The word being placed: pieces i..j (j has a break after it, or is the last), and its width (each
     // piece's advance, the last one's without its trailing whitespace), kept in step as pieces leave it.
@@ -686,10 +741,22 @@ function flowParas(
         continue;
       }
       if (cur.length) {
-        endLine();
-        continue;
+        const back = slashBreak(room);
+        if (back === null) {
+          endLine();
+          continue;
+        }
+        if (back > 0) {
+          for (let n = 0; n < back; n++) adv -= cur.pop()!.a;
+          i -= back;
+          j = -1;
+          endLine();
+          continue;
+        }
+        // LibreOffice cuts the line at its width (i#17155, `slashBreak`): the word follows the line's pieces.
       }
-      // The word alone is wider than the line: whole pieces while they fit, then an emergency break.
+      // The word is wider than the line (or LibreOffice cuts it at the line's width after the pieces on it):
+      // whole pieces while they fit, then an emergency break.
       let q = i;
       while (q <= j && adv + queue[q]!.t <= room + EPS) take(q++);
       if (q <= j) {

@@ -68,6 +68,15 @@ describe("the converter's table measure breaks office text where LibreOffice doe
     // then '%20Language/mod' / 'e/2up' by width: seven lines (six without the '%' break).
     expect(measure().layout(body(paraOf([`see ${url}`, 18])), w).baselines).toHaveLength(7);
   });
+
+  it('moves a dropped slash break the line ends at to its whitespace, or cuts at the width, as the drawer', () => {
+    // LibreOffice's i#17155 rule (the renderer's `slashBreak`): 'ab ' / 'cd-ef/gh ' / 'ij' (three lines, two if
+    // the line ended at the hyphen) and 'see ' / 'https://aaaa' / '.bb/cccc%2/e' / 'eeeee end' (four, five if
+    // the line ended before the '%').
+    expect(measure().layout(body(paraOf(['ab cd-ef/gh ij', 18])), 10.5 * 18).baselines).toHaveLength(3);
+    const u = body(paraOf(['see https://aaaa.bb/cccc%2/eeeeee end', 18]));
+    expect(measure().layout(u, 12.5 * 18).baselines).toHaveLength(4);
+  });
 });
 
 describe("the converter's table measure sizes each line by its own runs", () => {

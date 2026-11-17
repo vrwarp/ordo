@@ -75,7 +75,8 @@ function cutPieces(
   // keeps UAX#14 (breaks.ts).
   const only = office ? new Set<number>() : undefined;
   const lang = para.runs[0]?.style.lang ?? '';
-  const breaks = breakOpportunities(text, para.start, para.end, lang, office, only, hardStart);
+  const glued = office ? new Map<number, number>() : undefined;
+  const breaks = breakOpportunities(text, para.start, para.end, lang, office, only, hardStart, glued);
   const levels = bidi.levels;
   const ps = para.start;
   let b = 0;
@@ -116,6 +117,7 @@ function cutPieces(
   }
   const out: PreparedPara = { para, bidi, pieces };
   if (moved) out.movedCuts = moved;
+  if (glued?.size) out.glued = glued;
   return out;
 }
 

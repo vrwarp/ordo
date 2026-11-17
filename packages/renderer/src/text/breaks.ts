@@ -64,7 +64,9 @@ export function isBreakSpace(c: number): boolean {
  * rules add (UAX#14 has none there): a line ending there keeps the kerning across it when it does not end
  * there (lines.ts, the converter's table measure). `hardStart`: where the PowerPoint paragraph holding
  * `[start, end)` starts in `text` (a soft paragraph after an a:br continues it; its '\n' is the a:br), how
- * far the slash rule looks back.
+ * far the slash rule looks back. `glued` receives each break after a slash the rule drops, with the offset
+ * LibreOffice moves it back to (just after the whitespace): where it is the last break before a line's width,
+ * the line breaks there instead, or is cut at its width when that is at or before the line's start.
  */
 export function breakOpportunities(
   text: string,
@@ -74,6 +76,7 @@ export function breakOpportunities(
   office = false,
   officeOnly?: Set<number>,
   hardStart = start,
+  glued?: Map<number, number>,
 ): number[] {
   const out: number[] = [];
   if (end - start < 2) return out;
@@ -84,8 +87,15 @@ export function breakOpportunities(
     const p = b.position;
     const before = s.charCodeAt(p - 1);
     if (hangul && keepAll(s, p)) continue;
-    if (office && before === 0x2f && slashGlued(text, start + p, hardStart)) continue; // a slash
-    if (p > 0 && !isGlue(before) && (!isGlue(s.charCodeAt(p)) || isBreakSpace(before))) out.push(start + p);
+    if (p <= 0 || isGlue(before) || (isGlue(s.charCodeAt(p)) && !isBreakSpace(before))) continue;
+    if (office && before === 0x2f) {
+      const to = slashTarget(text, start + p, hardStart);
+      if (to >= 0) {
+        glued?.set(start + p, to);
+        continue;
+      }
+    }
+    out.push(start + p);
   }
   const extra = office ? officeBreaks(s) : NONE;
   const merged = extra.length ? mergeSorted(out, extra, start, officeOnly) : out;
@@ -153,14 +163,14 @@ function isLoWhitespace(c: number): boolean {
 }
 
 /**
- * Whether the break at `b` (after the slash `text[b - 1]`) moves back to a whitespace before the slash, so
- * the slash is glued to its word: whitespace in `text[max(hardStart, b - 66), b - 2]`, the units before the
- * slash in the paragraph that LibreOffice's i#17155 rule reads (surrogate halves are never whitespace).
+ * Where LibreOffice's i#17155 rule moves the break at `b` (after the slash `text[b - 1]`): just after the
+ * nearest whitespace in `text[max(hardStart, b - 66), b - 2]`, the units before the slash in the paragraph
+ * (surrogate halves are never whitespace); -1 when there is none and the break after the slash stays.
  */
-function slashGlued(text: string, b: number, hardStart: number): boolean {
+function slashTarget(text: string, b: number, hardStart: number): number {
   for (let i = b - 2; i >= Math.max(hardStart, b - SLASH_LOOK_BACK); i--)
-    if (isLoWhitespace(text.charCodeAt(i))) return true;
-  return false;
+    if (isLoWhitespace(text.charCodeAt(i))) return i + 1;
+  return -1;
 }
 
 /**

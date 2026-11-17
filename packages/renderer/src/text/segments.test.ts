@@ -240,6 +240,17 @@ describe('line breaking through layoutRich', () => {
       '%20Language/',
       'mode/2up',
     ]);
+    // Where a dropped break after a slash is the line's last break before its width, LibreOffice moves it to
+    // just after its whitespace (i#17155): the line ends there when that is after the line's start ('ab ' /
+    // 'cd-ef/gh ', not 'ab cd-' at the hyphen), else the line is cut at its width ('.bb/cccc%2/e', not '.bb/cccc'
+    // at the '%': probe C 'url-after-words', 190 pt and 270 pt).
+    expect(lineTexts(obj('ab cd-ef/gh ij', {}, office), 100)).toEqual(['ab ', 'cd-ef/gh ', 'ij']);
+    expect(lineTexts(obj('see https://aaaa.bb/cccc%2/eeeeee end', {}, office), 120)).toEqual([
+      'see ',
+      'https://aaaa',
+      '.bb/cccc%2/e',
+      'eeeee end',
+    ]);
     // The same address as a paragraph of its own after 'Lead words.' breaks at its slashes again.
     const ownPara = obj(`Lead words.\n${addr}`, {}, office);
     expect(lineTexts(ownPara, 150).slice(1, 3)).toEqual(['https://', 'archive.org/']);

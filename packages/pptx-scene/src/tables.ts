@@ -1526,7 +1526,11 @@ export class Measure {
     // the pair kerning across one is kept, as the renderer places the next piece on the same line, and is
     // taken off again when the line ends there (`kern`).
     const officeOnly = new Set<number>();
-    const breaks = new Set(breakOpportunities(text, 0, text.length, cleanLang(lang), true, officeOnly));
+    // `glued`: the breaks after a slash LibreOffice's i#17155 rule drops, with where it moves them (breaks.ts).
+    const glued = new Map<number, number>();
+    const breaks = new Set(
+      breakOpportunities(text, 0, text.length, cleanLang(lang), true, officeOnly, 0, glued),
+    );
     let at = 0;
     for (const r of runs) {
       if (r.kind === 'break') {
@@ -1624,6 +1628,10 @@ export class Measure {
     let width = 0;
     let bp = -1; // a break opportunity: the line may end before chars[bp]
     let widthAtBp = 0;
+    // A break before chars[gp] that LibreOffice's slash rule moves (`glued`), chars[gp] on the line: when it is
+    // the line's last break before its width, the line ends at its whitespace, or is cut at the width when that
+    // is at or before the line's start (the renderer's `slashBreak`).
+    let gp = -1;
     const close = (end: number) => {
       let best = { px: 0, pt: 0, face: undefined as FaceMetrics | undefined };
       let glyphs = false;
@@ -1645,6 +1653,7 @@ export class Measure {
         start = k + 1;
         width = 0;
         bp = -1;
+        gp = -1;
         continue;
       }
       const room = lines.length ? avail : firstAvail;
@@ -1653,7 +1662,20 @@ export class Measure {
         widthAtBp = width;
       }
       if (!ch.space && width + ch.w > room + 0.01 && k > start) {
-        if (bp > start) {
+        const to = gp > bp ? glued.get(chars[gp]!.at)! : -1;
+        let wi = k;
+        if (to >= 0) while (wi > start && chars[wi - 1]!.at >= to) wi--;
+        if (to >= 0 && (wi <= start || chars[wi]!.at !== to)) {
+          close(k); // cut at the width: the moved break is at or before the line's start
+          width = 0;
+          start = k;
+        } else if (to >= 0) {
+          close(wi);
+          width = 0;
+          for (let q = wi; q < k; q++) width += chars[q]!.w;
+          width -= chars[wi]!.kern;
+          start = wi;
+        } else if (bp > start) {
           close(bp);
           // The line after the break starts with chars[bp] alone: without the pair kerning across the break.
           width -= widthAtBp + chars[bp]!.kern;
@@ -1664,7 +1686,9 @@ export class Measure {
           start = k;
         }
         bp = -1;
+        gp = -1;
       }
+      if (!ch.space && k > start && glued.has(ch.at)) gp = k;
       width += ch.w;
     }
     const empty = !textRuns.length;
