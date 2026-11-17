@@ -29,8 +29,13 @@ import LineBreaker from 'linebreak';
  *   (LibreOffice 24.2, the text-lines probe deck): a line may end after a hyphen-minus before a digit
  *   ('John 3:16-' / '17', LB25 'HY × NU' would not), after the spaces between a quotation mark and an
  *   opening bracket ('“every month” ' / '[offerings]', LB15 of Unicode 15.0 'QU SP* × OP' would not), and
- *   never after a slash before a letter or digit ('https://books.google.as/books' stays whole, where
- *   UAX#14 allows 'SY ÷ AL'). Ordo's own text (songs, scripture, slides made in ordo) keeps UAX#14.
+ *   after a letter before '%' ('…/Coptic' / '%20Language/', which LB24 'AL × PO' would not: text-falls
+ *   probe C, every case). A break after a slash is LibreOffice's i#17155 rule (i18npool
+ *   BreakIterator_Unicode::getLineBreak): it moves back to just after the nearest whitespace at most 64
+ *   units before the slash in the paragraph (an a:br is not whitespace to it), so 'see https://books.google.as/
+ *   books' stays whole; with no whitespace there, in an address or path that starts its paragraph or runs
+ *   longer than that, the break after the slash stays ('https://archive.org/' / 'details/', 03-Plural en-ar
+ *   p4). Ordo's own text (songs, scripture, slides made in ordo) keeps UAX#14.
  *
  * Breaks never depend on the font or the device size: the same text breaks at the same offsets in every
  * drawer, and lines.ts only chooses among them by width.
@@ -57,7 +62,9 @@ export function isBreakSpace(c: number): boolean {
  * CR) is listed as an ordinary opportunity: paragraphs are the '\n' pieces of the text. `office`: the office
  * rules of imported text (header), else UAX#14 as it is. `officeOnly` receives the offsets only the office
  * rules add (UAX#14 has none there): a line ending there keeps the kerning across it when it does not end
- * there (lines.ts, the converter's table measure).
+ * there (lines.ts, the converter's table measure). `hardStart`: where the PowerPoint paragraph holding
+ * `[start, end)` starts in `text` (a soft paragraph after an a:br continues it; its '\n' is the a:br), how
+ * far the slash rule looks back.
  */
 export function breakOpportunities(
   text: string,
@@ -66,6 +73,7 @@ export function breakOpportunities(
   lang: string,
   office = false,
   officeOnly?: Set<number>,
+  hardStart = start,
 ): number[] {
   const out: number[] = [];
   if (end - start < 2) return out;
@@ -76,7 +84,7 @@ export function breakOpportunities(
     const p = b.position;
     const before = s.charCodeAt(p - 1);
     if (hangul && keepAll(s, p)) continue;
-    if (office && before === 0x2f && LETTER_OR_DIGIT.test(s.slice(p, p + 2))) continue; // a slash
+    if (office && before === 0x2f && slashGlued(text, start + p, hardStart)) continue; // a slash
     if (p > 0 && !isGlue(before) && (!isGlue(s.charCodeAt(p)) || isBreakSpace(before))) out.push(start + p);
   }
   const extra = office ? officeBreaks(s) : NONE;
@@ -120,8 +128,40 @@ function mergeSorted(
 
 // ---- Office breaks: where LibreOffice's pages break and UAX#14 does not ----
 
-/** A letter or a digit at the start of a string (a surrogate pair read whole): no break after a slash before one. */
-const LETTER_OR_DIGIT = /^[\p{L}\p{N}]/u;
+/**
+ * LibreOffice's look-back for a break after a slash (i18npool BreakIterator_Unicode::getLineBreak, i#17155:
+ * `nOverlyLong` 66): from the unit before the slash back to 66 units before the break, within the paragraph.
+ */
+const SLASH_LOOK_BACK = 66;
+/**
+ * Whitespace as ICU's u_isWhitespace reads it (White_Space but the no-break spaces, and the ISO controls
+ * 0x09-0x0D, 0x1C-0x1F), except '\n': inside a PowerPoint paragraph it is an a:br, which editeng holds as a
+ * feature character, not as whitespace (text-falls probe C: 'url-after-br').
+ */
+function isLoWhitespace(c: number): boolean {
+  if (c <= 0x20) return c === 0x20 || c === 0x09 || (c >= 0x0b && c <= 0x0d) || (c >= 0x1c && c <= 0x1f);
+  if (c < 0x85) return false;
+  return (
+    c === 0x85 ||
+    c === 0x1680 ||
+    (c >= 0x2000 && c <= 0x200a && c !== 0x2007) ||
+    c === 0x2028 ||
+    c === 0x2029 ||
+    c === 0x205f ||
+    c === 0x3000
+  );
+}
+
+/**
+ * Whether the break at `b` (after the slash `text[b - 1]`) moves back to a whitespace before the slash, so
+ * the slash is glued to its word: whitespace in `text[max(hardStart, b - 66), b - 2]`, the units before the
+ * slash in the paragraph that LibreOffice's i#17155 rule reads (surrogate halves are never whitespace).
+ */
+function slashGlued(text: string, b: number, hardStart: number): boolean {
+  for (let i = b - 2; i >= Math.max(hardStart, b - SLASH_LOOK_BACK); i--)
+    if (isLoWhitespace(text.charCodeAt(i))) return true;
+  return false;
+}
 
 /**
  * Where LibreOffice 24.2 ends a line and UAX#14 (`linebreak` 1.1.0) does not (the text-lines probe deck, every
@@ -131,10 +171,12 @@ const LETTER_OR_DIGIT = /^[\p{L}\p{N}]/u;
  *   with its number as UAX#14 does;
  * - a quotation mark of any kind (UAX#14 QU's Pi and Pf, '"', "'") and the breaking spaces after it, before an
  *   opening bracket (OP): 'earth” |[“made', 'rock?” |(Num.', 'said “ |(aside)'; never without a space, and
- *   never at a no-break space (glue). The spaces are `isBreakSpace`'s (breaks.test.ts pins the class to it).
+ *   never at a no-break space (glue). The spaces are `isBreakSpace`'s (breaks.test.ts pins the class to it);
+ * - a letter before a '%' ('Coptic|%20Language', text-falls probe C: every case, at a paragraph start, after
+ *   words and after an a:br), which UAX#14's LB24 'AL × PO' forbids; a number keeps its '%' ('20%').
  */
 const OFFICE_BREAK =
-  /-(?=[0-9])|[\p{Pi}\p{Pf}"'][\t \u1680\u2000-\u2006\u2008-\u200a\u205f\u3000]+(?=\p{Ps})/gu;
+  /-(?=[0-9])|[\p{Pi}\p{Pf}"'][\t \u1680\u2000-\u2006\u2008-\u200a\u205f\u3000]+(?=\p{Ps})|\p{L}(?=%)/gu;
 
 /** Offsets into `s` where an office line may end and UAX#14's may not (`OFFICE_BREAK`), ascending. */
 export function officeBreaks(s: string): number[] {

@@ -29,16 +29,20 @@ export function prepare(it: Itemized): PreparedPara[] {
   const { text, paras } = it;
   const out: PreparedPara[] = [];
   let chain: 'ltr' | 'rtl' | null = null; // the 'auto' direction of the current soft-break chain
+  let hardStart = 0; // where the PowerPoint paragraph of the current soft-break chain starts
   for (let i = 0; i < paras.length; i++) {
     const para = paras[i]!;
-    if (!para.soft) chain = null;
+    if (!para.soft) {
+      chain = null;
+      hardStart = para.start;
+    }
     let dir = para.style.dir;
     if (dir === 'auto') {
       chain ??= chainDirection(it, i);
       dir = chain;
     }
     const bidi = bidiParagraph(text, para.start, para.end, dir);
-    out.push(cutPieces(text, para, bidi, it.office === true));
+    out.push(cutPieces(text, para, bidi, it.office === true, hardStart));
   }
   return out;
 }
@@ -57,14 +61,21 @@ function chainDirection(it: Itemized, i: number): 'ltr' | 'rtl' {
 
 type Span = { start: number; end: number; sr: number };
 
-function cutPieces(text: string, para: ItemPara, bidi: BidiPara, office: boolean): PreparedPara {
+function cutPieces(
+  text: string,
+  para: ItemPara,
+  bidi: BidiPara,
+  office: boolean,
+  hardStart: number,
+): PreparedPara {
   const pieces: Piece[] = [];
   if (para.end <= para.start) return { para, bidi, pieces };
   const { spans, moved } = styleSpans(text, para);
   // Office text (imported PowerPoint text, table cells) breaks where LibreOffice breaks it; ordo's own text
   // keeps UAX#14 (breaks.ts).
   const only = office ? new Set<number>() : undefined;
-  const breaks = breakOpportunities(text, para.start, para.end, para.runs[0]?.style.lang ?? '', office, only);
+  const lang = para.runs[0]?.style.lang ?? '';
+  const breaks = breakOpportunities(text, para.start, para.end, lang, office, only, hardStart);
   const levels = bidi.levels;
   const ps = para.start;
   let b = 0;

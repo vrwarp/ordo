@@ -216,6 +216,33 @@ describe('line breaking through layoutRich', () => {
     const url = 'see https://books.google.as/books?id=x';
     expect(lineTexts(obj(url, {}, office), 300)).toEqual(['see ', 'https://books.google.as/books?', 'id=x']);
     expect(lineTexts(obj(url), 300)).toEqual(['see https://books.google.as/', 'books?id=x']);
+    // An address that starts its paragraph keeps the breaks after its slashes (LibreOffice's i#17155 rule:
+    // no whitespace in the 64 units before the slash; text-falls probe C, 150 pt), and a letter before '%'
+    // breaks; after an a:br in the same paragraph the space of 'Lead words.' glues the slashes within 64 units
+    // of it, so the address is cut by width up to its '%' (probe C 'url-after-br', 150 pt).
+    const addr = 'https://archive.org/details/copticlanguage/Coptic%20Language/mode/2up';
+    expect(lineTexts(obj(addr, {}, office), 150)).toEqual([
+      'https://',
+      'archive.org/',
+      'details/',
+      'copticlanguage/',
+      'Coptic',
+      '%20Language/',
+      'mode/2up',
+    ]);
+    const afterBr = obj(`Lead words.\n${addr}`, { paras: [null, { soft: true }] }, office);
+    expect(lineTexts(afterBr, 150)).toEqual([
+      'Lead words.',
+      'https://archive',
+      '.org/details/co',
+      'pticlanguage/Co',
+      'ptic',
+      '%20Language/',
+      'mode/2up',
+    ]);
+    // The same address as a paragraph of its own after 'Lead words.' breaks at its slashes again.
+    const ownPara = obj(`Lead words.\n${addr}`, {}, office);
+    expect(lineTexts(ownPara, 150).slice(1, 3)).toEqual(['https://', 'archive.org/']);
     // A box's line model decides, whatever its paragraphs (prepare reads it from itemize).
     expect(itemize(obj(verse, {}, office)).office).toBe(true);
     expect(itemize(obj(verse)).office).toBeUndefined();

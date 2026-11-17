@@ -55,6 +55,19 @@ describe("the converter's table measure breaks office text where LibreOffice doe
     const q = body(paraOf(['the “aa” [bb] cc', 18]));
     expect(measure().layout(q, 9.5 * 18).baselines).toHaveLength(2);
   });
+
+  it('breaks an address that starts its paragraph after its slashes and before its %, as the drawer does', () => {
+    // LibreOffice keeps the break after a slash with no whitespace in the 64 units before it (text-falls probe
+    // C): 15.5 characters hold each of 'https://' / 'archive.org/' / 'details/' / 'copticlanguage/' / 'Coptic'
+    // / '%20Language/' / 'mode/2up' but never two: seven lines, where a cut by width would make five.
+    const url = 'https://archive.org/details/copticlanguage/Coptic%20Language/mode/2up';
+    const w = 15.5 * 18;
+    expect(measure().layout(body(paraOf([url, 18])), w).baselines).toHaveLength(7);
+    // After words in its paragraph every slash is within 64 units of the space and glued: 'see ', three cuts
+    // by width ('https://archive' / '.org/details/co' / 'pticlanguage/Co'), 'ptic' at the break before '%',
+    // then '%20Language/mod' / 'e/2up' by width: seven lines (six without the '%' break).
+    expect(measure().layout(body(paraOf([`see ${url}`, 18])), w).baselines).toHaveLength(7);
+  });
 });
 
 describe("the converter's table measure sizes each line by its own runs", () => {

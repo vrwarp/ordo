@@ -860,7 +860,8 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
   (`inherit.ts` `Chain.cell`, set by `cellText`; sub-wave 1b, as LibreOffice lays table text out);
   the measure breaks at the renderer's break opportunities for office text (`breakOpportunities` with
   `office`: Korean words whole, LibreOffice's breaks after a hyphen before a digit and after the spaces between
-  a quotation mark and an opening bracket, none after a slash before a letter; text-lines), sizes each line by
+  a quotation mark and an opening bracket and before a '%' after a letter, a slash glued to its word by
+  whitespace up to 64 units before it; text-lines, text-falls), sizes each line by
   its own largest run (as the renderer's office model and LibreOffice's editeng do) and
   spaces a paragraph by the face that draws its script (`FaceSource.script`: `@ordo/importers` `faceSourceOf` on
   the hub and in the browser, `fc-match :charset` in the harness), asked for Han, Kana and Hangul only

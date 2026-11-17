@@ -209,14 +209,64 @@ describe('office break opportunities (LibreOffice 24.2, the text-lines probe dec
     expect(office('[“made”]')).toEqual(['[“made”]']);
   });
 
-  it('never breaks after a slash before a letter or digit (Matthew: the books.google address stays whole)', () => {
+  it('glues a slash to its word when whitespace comes at most 64 units before it (Matthew: books.google stays whole)', () => {
     expect(office('see https://books.google.as/books?id=wRY&pg=RA19-PA24')).toEqual([
       'see ',
       'https://books.google.as/books?',
       'id=wRY&pg=RA19-',
       'PA24',
     ]);
-    expect(office('and/or 1/2 a/ b AND/OR')).toEqual(['and/or ', '1/2 ', 'a/ ', 'b ', 'AND/OR']);
+    // 'and/or' starts its paragraph: no whitespace before its slash, so the break after it stays (LibreOffice
+    // breaks 'www.x.com/|books' at a paragraph start, 18/18: text-lines' probe, round 2); 'AND/OR' after a
+    // space is glued.
+    expect(office('and/or 1/2 a/ b AND/OR')).toEqual(['and/', 'or ', '1/2 ', 'a/ ', 'b ', 'AND/OR']);
+    expect(office('this and/or that')).toEqual(['this ', 'and/or ', 'that']);
+  });
+
+  it("keeps the break after a slash with no whitespace in the 64 units before it (LibreOffice's i#17155 rule)", () => {
+    // LibreOffice 24.2 (i18npool BreakIterator_Unicode::getLineBreak): a break after a '/' moves back to just
+    // after the nearest whitespace at most 66 units before the break (64 before the slash); with none there,
+    // in an address that starts its paragraph or a path longer than that, the break after the slash stays.
+    // Probe C (text-falls; 18 pt Carlito in a 150 pt box): each of these pieces on a line of its own, the
+    // address of 03-Plural en-ar p4; and a letter before '%' breaks, in every case of the probe.
+    const url = 'https://archive.org/details/copticlanguage/Coptic%20Language/mode/2up';
+    expect(office(url)).toEqual([
+      'https://',
+      'archive.org/',
+      'details/',
+      'copticlanguage/',
+      'Coptic',
+      '%20Language/',
+      'mode/2up',
+    ]);
+    // After words in its paragraph, every slash within 64 units of the space is glued (probe C: such an
+    // address is cut by width, or at its '%').
+    expect(office(`See the book at ${url} today`)).toEqual([
+      'See ',
+      'the ',
+      'book ',
+      'at ',
+      'https://archive.org/details/copticlanguage/Coptic',
+      '%20Language/mode/2up ',
+      'today',
+    ]);
+    // After an a:br (the converter's '\n', a line break inside the paragraph, which LibreOffice does not take
+    // for whitespace): the slash after 'Language' is 68 units after the space of 'Lead words.' and breaks
+    // (probe C, 150 pt: '%20Language/' / 'mode/2up').
+    expect(office(`Lead words.\n${url}`)).toEqual([
+      'Lead ',
+      'words.\n',
+      'https://archive.org/details/copticlanguage/Coptic',
+      '%20Language/',
+      'mode/2up',
+    ]);
+    // The limit: whitespace 64 units before the slash glues it, 65 does not.
+    const path = (n: number) => `a ${'x'.repeat(n)}/y`;
+    expect(office(path(64))).toEqual(['a ', `${'x'.repeat(64)}/y`]);
+    expect(office(path(65))).toEqual(['a ', `${'x'.repeat(65)}/`, 'y']);
+    // A letter before '%' only; a number keeps its '%' (UAX#14), and ordo's own text keeps UAX#14 (T1).
+    expect(office('Coptic%20 20% x')).toEqual(['Coptic', '%20 ', '20% ', 'x']);
+    expect(lines('Coptic%20 a/b')).toEqual(['Coptic%20 ', 'a/', 'b']);
   });
 
   it('takes the spaces between a quotation mark and a bracket to be exactly the breaking spaces', () => {
@@ -238,9 +288,13 @@ describe('office break opportunities (LibreOffice 24.2, the text-lines probe dec
     expect(officeBreaks('” (y')).toEqual([2]);
   });
 
-  it('reads a letter after a slash whole (a surrogate pair), and keeps breaks before other characters', () => {
+  it('reads the units before a slash across surrogate pairs, and glues every break after a slash', () => {
     expect(lines('a/\u{1D400}b')).toEqual(['a/', '\u{1D400}b']);
-    expect(office('a/\u{1D400}b c/\u{1F600}')).toEqual(['a/\u{1D400}b ', 'c/', '\u{1F600}']);
+    // The first slash starts its paragraph (no whitespace before it): its break stays; the second is glued
+    // by the space before 'c', whatever follows it (LibreOffice reads only the character before the break).
+    expect(office('a/\u{1D400}b c/\u{1F600}')).toEqual(['a/', '\u{1D400}b ', 'c/\u{1F600}']);
+    expect(office('\u{1D400}/\u{1D400}')).toEqual(['\u{1D400}/', '\u{1D400}']);
+    expect(office('x \u{1D400}/\u{1D400}')).toEqual(['x ', '\u{1D400}/\u{1D400}']);
   });
 
   it('lists offsets of the whole text and merges with the SA breaks', () => {
