@@ -52,8 +52,8 @@ export function updateSlide(p: Presentation, slideId: string, fn: (s: Slide) => 
 
 /**
  * Object `objectId` of slide `slideId` changed by `fn`. A table whose rows are fixed (imported) and whose box
- * the change resized (the canvas's Transformer, the Object panel's size fields) grows the rows its narrower
- * columns made its text need more (`tableFit.ts` `fitTable`).
+ * the change resized (the canvas's Transformer, the Object panel's size fields) grows the rows the change left
+ * its text short of by more than before: narrower columns, a shorter box (`tableFit.ts` `fitTable`).
  */
 export function updateObject(
   p: Presentation,

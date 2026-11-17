@@ -264,7 +264,8 @@ export function transformGroup(
   return withSlide(p, slideId, (s) =>
     mapMembers(s, ids, (o) => {
       const box = transformMember(o, from, to);
-      // A fixed-row table grows the rows its narrower columns made its text need more (tableFit.ts).
+      // A fixed-row table grows the rows the change left its text short of by more than before (narrower
+      // columns, a shorter box; tableFit.ts).
       return sameBox(box, o.box) ? o : fitTable(o, { ...o, box });
     }),
   );

@@ -110,7 +110,8 @@ function updateSlideObject(p: Presentation, slideId: string, o: SlideObject, box
   if (same) return p;
   return updateSlide(p, slideId, (s) => ({
     ...s,
-    // A fixed-row table grows the rows its narrower columns made its text need more (tableFit.ts).
+    // A fixed-row table grows the rows the change left its text short of by more than before (narrower
+    // columns, a shorter box; tableFit.ts).
     objects: s.objects.map((x) => (x.id === o.id ? fitTable(x, { ...x, box } as SlideObject) : x)),
   }));
 }
