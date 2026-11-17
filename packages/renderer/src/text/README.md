@@ -102,7 +102,10 @@ Public surface (`index.ts`, re-exported by `@ordo/renderer`): `Measurer`, `Seg`,
 
 `Measurer.width(font, dir, lang, spacingPx, text)` is the advance of `text` drawn in that state **without**
 the letter spacing after its last character. A piece followed by another on the same line therefore
-advances by `w + letterSpacing` (lines.ts `Measured.a`).
+advances by `w + letterSpacing` (lines.ts `Measured.a`); a piece cut at a break only the office rules make
+(`Piece.officeBreak`, '3:16-' / '17') adds the pair kerning across the cut (`kernAfter`: the joined
+string's width less both pieces'), so on one line the next piece follows where the whole string draws it,
+and a line that ends there keeps the piece's own width.
 
 `FontEnv.font(req)` returns the CSS font string for `ctx.font` at `req.sizePx` (logical). `generation`
 changes whenever the face set changes; layouts memoised under another generation are recomputed.
@@ -176,7 +179,8 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
   style runs, levels, break opportunities, and between two fallback scripts (Han and kana count as one);
   `Piece.script` is the first fallback script in the piece, as `textScripts` names it (`scriptOf` reads the
   domain's `FALLBACK_SCRIPTS`). A style cut inside a
-  cluster moves to the cluster's end; `PreparedPara.movedCuts` counts them.
+  cluster moves to the cluster's end; `PreparedPara.movedCuts` counts them. A piece that ends at a break
+  only the office rules make (`breakOpportunities`' `officeOnly`) is marked `Piece.officeBreak`.
 - `segText(text, start, end, caps)`: U+200D on a side where the cut splits two joining letters (Arabic,
   Syriac, N'Ko, Mongolian, Adlam, by ArabicShaping joining types: none after alef, dal or waw). It applies at
   any cut, an emergency break included, so a measured and a drawn string always agree.
