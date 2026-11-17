@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ASIAN_GAP_EM, asianGapsAt, loAsianGaps } from './asian-gaps.ts';
+import { ASIAN_GAP_EM, asianGapsAt, asianGapsOf } from './asian-gaps.ts';
 import { frameOf } from './frame.ts';
 import type { Para, RunStyle, TextBody } from './ir.ts';
 import type { FaceMetrics, FaceSource } from './metrics.ts';
@@ -36,9 +36,16 @@ const paraOf = (...runs: [string, number][]): Para => ({
   rtl: false,
   end: { ...style, sizePt: runs[0]?.[1] ?? 24 },
 });
-/** Each run with extra spacing: [its text, the spacing in pt]. */
-const gaps = (p: Para) => p.runs.filter((r) => r.style.spacingPt > 0).map((r) => [r.text, r.style.spacingPt]);
-const gapsOf = (text: string, pt = 24) => gaps(loAsianGaps(paraOf([text, pt])));
+/** Each gap: [the character it follows (a surrogate pair whole), the gap in pt]. */
+const gaps = (p: Para) => {
+  let text = '';
+  for (const r of p.runs) text += r.kind === 'break' ? '\n' : r.text;
+  return [...asianGapsOf(p)].map(([i, pt]) => {
+    const u = text.charCodeAt(i);
+    return [u >= 0xdc00 && u <= 0xdfff ? text.slice(i - 1, i + 1) : text[i], pt];
+  });
+};
+const gapsOf = (text: string, pt = 24) => gaps(paraOf([text, pt]));
 
 describe("LibreOffice's 1/4 em at East Asian/other boundaries (rule G)", () => {
   it('puts exactly a quarter of the size on the character before each boundary, both directions', () => {
@@ -95,24 +102,24 @@ describe("LibreOffice's 1/4 em at East Asian/other boundaries (rule G)", () => {
       ['a', 9],
     ]);
     // Runs of two sizes: each gap a quarter of its own character's size.
-    expect(gaps(loAsianGaps(paraOf(['가', 24], ['a', 48], ['가', 12])))).toEqual([
+    expect(gaps(paraOf(['가', 24], ['a', 48], ['가', 12]))).toEqual([
       ['가', 6],
       ['a', 12],
     ]);
-    expect(gaps(loAsianGaps(paraOf(['가', 24], ['\n', 24], ['a', 24])))).toEqual([]);
-    // A surrogate pair before a boundary keeps both units in its run.
+    expect(gaps(paraOf(['가', 24], ['\n', 24], ['a', 24]))).toEqual([]);
+    // A surrogate pair before a boundary: the gap follows its low surrogate.
     expect(gapsOf('𠀀a')).toEqual([['𠀀', 6]]);
+    expect([...asianGapsOf(paraOf(['𠀀a', 24]))]).toEqual([[1, 6]]);
   });
 
   it('never changes the paragraph it is given: the stored text keeps its runs and spacing', () => {
     const p = paraOf(['기승전결을 명확히 하고, 요점은 가능하다면 3가지 이내로 정리한다.', 24]);
     const before = structuredClone(p);
-    const g = loAsianGaps(p);
+    // Five gaps: after '고' (before ','), after ', ' (before '요'), around '3', after '다' (before '.').
+    expect([...asianGapsOf(p).values()]).toEqual([6, 6, 6, 6, 6]);
+    new Measure(frameOf(12_192_000, 6_858_000), undefined).loLayout(body(p), 760, 'font', { gaps: true });
     expect(p).toEqual(before);
-    expect(g).not.toBe(p);
-    expect(g.runs.map((r) => r.text).join('')).toBe(p.runs[0]!.text);
-    const plain = paraOf(['가나다 라마', 24]);
-    expect(loAsianGaps(plain)).toBe(plain);
+    expect(asianGapsOf(paraOf(['가나다 라마', 24])).size).toBe(0);
   });
 });
 
@@ -147,7 +154,7 @@ describe("the Korean bulletin's slide 20 cell in LibreOffice's model (gaps-flip 
     const w = 380.85 * 2;
     const p = paraOf([CELL, 24]);
     expect(m.loLayout(body(p), w, 'font').drawn.baselines).toHaveLength(2);
-    expect(m.loLayout(body(loAsianGaps(p)), w, 'font').drawn.baselines).toHaveLength(3);
+    expect(m.loLayout(body(p), w, 'font', { gaps: true }).drawn.baselines).toHaveLength(3);
     // ordo's own drawing has no gap: its lines are those of the text as stored.
     expect(m.layout(body(p), w).baselines).toHaveLength(2);
   });

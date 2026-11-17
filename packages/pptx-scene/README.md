@@ -916,28 +916,39 @@ cell probe of 80 rows and 272 baselines (`tools/pptx-fidelity/src/cell-probe.ts`
 ## Wave r2b sub-wave 1c: LibreOffice's 1/4 em in its cell model (`asian-gaps.ts`; `ko-cells`)
 
 <!-- r2b:ko-cells -->
-LibreOffice 24.2 puts a quarter of the size of the character before it at every boundary between East Asian text
-and other text, in cells and boxes alike (editeng's Asian/Western spacing; probed: gaps-flip B.1, ko-cells probe 1,
-the lead probe): 6.0 pt at 24 pt, 3.0 at 12, 9.1 at 36. Rule G models it in the converter's model of LibreOffice's
-cell layout only:
+LibreOffice 24.2 puts a space at every boundary between East Asian text and other text, in cells and boxes alike
+(editeng's Asian/Western script space; probed: gaps-flip B.1, ko-cells probe 1, the lead probe): about 6.0 pt at
+24 pt, 3.0 at 12, 9.1 at 36 with WenQuanYi Zen Hei. Rule G models it as a quarter of the size of the character before
+the boundary, in the converter's model of LibreOffice's cell layout only:
 - **Portions** (`asianGapsAt`, by `fontmap.ts` `charClass`): a weak character (a space, a quotation mark, ⑥, ・)
   joins the portion before it; a leading weak character (or several, or spaces) forms its own portion; a boundary
   is between an East Asian portion and any other; never across a line break. '가 a' has one gap (on the space,
   before 'a'); '가⑥가', '가・가', '가“나”' none; '“가', '⑥가', ' 가' one, after the leading portion.
-- **The rule is 0.25 em exactly** (`ASIAN_GAP_EM`, `loAsianGaps`: the character before the boundary in a run of
-  its own with that much more letter spacing). LibreOffice measured 6.04 pt with East Asian before the boundary,
-  5.69-5.81 with Latin before it in cells, 5.63-5.78 in boxes, 5.95-6.06 after a leading weak character; the cause
-  of the spread (up to 0.37 pt under the quarter) is not established, so the model keeps the quarter.
-- **Where**: `tables.ts` applies it to the `measured` bodies only (the input of `Measure.loLayout`: LibreOffice's
-  rows, `loTall`, `loRows` and LibreOffice's baselines for the lift). ordo draws no such gap: its model of its own
-  drawing (`spaced`) and the stored text and runs are untouched (owner question Q1c-3: the 1/4 em sizes the rows
-  only; storing it as letter spacing, option F, would leave stale spacing after edits). Text boxes are not touched.
+- **The rule is 0.25 em** (`ASIAN_GAP_EM`, `asianGapsOf`: the gap in pt after each boundary character). LibreOffice's
+  own gap is the height of the face of the portion before the boundary (hhea ascent and descent) divided by 5: the
+  quarter for a face about 1.25 em tall. WenQuanYi Zen Hei (1.2598 em: 6.05 pt at 24 pt; measured 5.92-6.06) and
+  Inter (1.21 em: 5.81 pt; measured 5.69-5.81) are within 0.4 pt of the quarter; after a Liberation Sans (Arial)
+  portion (1.117 em: 5.36 pt at 24 pt) the quarter is about 0.64 pt too wide (the probe hold-out deck's 225 cell
+  gaps: |LibreOffice - height/5| at most 0.14 pt, |LibreOffice - 0.25 em| up to 1.04 pt, every gap over 0.4 pt after
+  an Arial portion). The quarter still gives LibreOffice's line count on all 114 cells of that deck, so the minimum
+  needs no more (the owner's rule 4); `trunc(loLineHeight / 5)` is a follow-up. Text boxes (about 5.75 pt either
+  side) are out of rule G's scope.
+- **Where**: `tables.ts` passes `gaps` to `Measure.loLayout` for the `measured` bodies only (LibreOffice's rows,
+  `loTall`, `loRows` and LibreOffice's baselines for the lift): `Measure.lines` adds each gap to its character's
+  advance inside the character's own run, as letter spacing, so the character keeps the face its run's East Asian
+  portion gives it. (1c first put the character in a run of its own; alone, a weak character such as '“', '①',
+  '「' or a space lost its portion's face and was measured in Inter: lines taller than LibreOffice's, +0.2 px rows,
+  and a cell LibreOffice keeps on one line wrapped; integrate-1c repair 1.) ordo draws no such gap: its model of
+  its own drawing (`spaced`) and the stored text and runs are untouched (owner question Q1c-3: the 1/4 em sizes the
+  rows only; storing it as letter spacing, option F, would leave stale spacing after edits). Text boxes are not
+  touched.
 - The Korean bulletin's slide 20 (column 3, row 2: '... 가능하다면 3가지 이내로 정리한다.' in 380.9 pt): its second
   line fits without the gaps and does not with them, so LibreOffice's row holds three lines; the rows below move.
 - Tests: `asian-gaps.test.ts` (0.25 em at every boundary both ways, the lead probe's leading characters, none inside
   a portion, 12/24/36 pt, line breaks, surrogate pairs, the paragraph never changed, slide 20's cell 2 -> 3 lines in
   LibreOffice's model and 2 in ordo's), `tables.lines.test.ts` (the stored table's row holds LibreOffice's three
-  lines; the stored text has no run or letter spacing of its own).
+  lines; the stored text has no run or letter spacing of its own; the probe hold-out deck's slides 2, 8 and 10 with
+  this computer's faces' metrics: every row within 0.1 px of LibreOffice's PDF, `『聖書』と“Bible”を読む` on one line).
 <!-- /r2b:ko-cells -->
 
 ## Wave r2b sub-wave 1c: East Asian vertical cells and the table's shadow (`tables.ts`; `vert-cells`)

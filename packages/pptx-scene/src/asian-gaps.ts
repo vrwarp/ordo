@@ -1,9 +1,9 @@
 /**
  * LibreOffice's space between East Asian and other text (design/27 §15 "Korean and other scripts' cells",
- * sub-wave 1c rule G). LibreOffice 24.2 (editeng's Asian/Western spacing) puts a quarter of the size of the
- * character before it at every boundary between an East Asian portion of a paragraph and another, in table cells
- * and text boxes alike (probed: gaps-flip B.1, ko-cells probe 1, the lead probe; 6.0 pt at 24 pt, 3.0 at 12 pt,
- * 9.1 at 36 pt). Its portions (`@ordo/pptx-scene` `charClass`):
+ * sub-wave 1c rule G). LibreOffice 24.2 (editeng's Asian/Western script space) puts a space at every boundary
+ * between an East Asian portion of a paragraph and another, in table cells and text boxes alike (probed: gaps-flip
+ * B.1, ko-cells probe 1, the lead probe; 6.0 pt at 24 pt, 3.0 at 12 pt, 9.1 at 36 pt). Its portions
+ * (`@ordo/pptx-scene` `charClass`):
  * - a weak character (a space, a quotation mark, ⑥, ・, …) joins the portion before it ('가 a': the space is East
  *   Asian, the gap comes before 'a'; none in '가⑥가', '가・가', '가“나”');
  * - a LEADING weak character (or space, or several) forms its own portion, which is not East Asian: '“가', '⑥가',
@@ -11,16 +11,23 @@
  * - a boundary is between an East Asian portion and any other (Latin, complex, the leading one); never across a
  *   line break.
  *
- * The rule is 0.25 em exactly. LibreOffice measured 6.04 pt with East Asian before the boundary, 5.69-5.81 with
- * Latin before it in cells, 5.63-5.78 in boxes and 5.95-6.06 after a leading weak character; the cause of that
- * spread (up to 0.37 pt under 0.25 em) is not established, so the model keeps the quarter.
+ * The rule is 0.25 em of the size of the character before the boundary. LibreOffice's own gap is the height of the
+ * face of the portion before the boundary (hhea ascent and descent) divided by 5, so the quarter is LibreOffice's
+ * gap for a face about 1.25 em tall: WenQuanYi Zen Hei (1.2598 em: 6.05 pt at 24 pt, where LibreOffice measured
+ * 5.92-6.06) and Inter (1.21 em: 5.81 pt, measured 5.69-5.81) are within 0.4 pt of it; after a Liberation Sans
+ * (Arial) portion (1.117 em) the quarter is about 0.64 pt more than LibreOffice's 5.36 pt at 24 pt (the probe
+ * hold-out deck, integrate-1c repair 1). The quarter reproduces LibreOffice's line count on every cell measured, so
+ * the minimum needs no more (the owner's rule 4: `trunc(loLineHeight / 5)` is a follow-up).
  *
- * Used only in the converter's model of LibreOffice's cell layout (`tables.ts`: the `measured` bodies that give
- * LibreOffice's rows and baselines): ordo draws no such gap, so ordo's own model of its drawing (`spaced`) and the
- * stored text are untouched (owner question Q1c-3: the 1/4 em for row heights only). Pure.
+ * Used only in the converter's model of LibreOffice's cell layout (`tables.ts` `Measure.loLayout` with `gaps`: the
+ * bodies that give LibreOffice's rows and baselines), where each gap is added to its character's advance inside
+ * the character's own run, so the character keeps its portion's face (a run split at the gap would measure a weak
+ * character alone in another face: integrate-1c repair 1). ordo draws no such gap, so ordo's own model of its
+ * drawing (`spaced`) and the stored text are untouched (owner question Q1c-3: the 1/4 em for row heights only).
+ * Pure.
  */
 import { charClass } from './fontmap.ts';
-import type { Para, Run } from './ir.ts';
+import type { Para } from './ir.ts';
 
 /** The share of the size of the character before a boundary that LibreOffice adds there. */
 export const ASIAN_GAP_EM = 0.25;
@@ -61,38 +68,22 @@ export function asianGapsAt(text: string): number[] {
 }
 
 /**
- * `p` as LibreOffice's model of a cell measures it (rule G): each character before an East Asian/other boundary
- * (`asianGapsAt`) in a run of its own with `ASIAN_GAP_EM` of its size more letter spacing. A new paragraph when
- * there is a gap (`p` itself otherwise); `p` is never changed.
+ * The gaps rule G adds in `p` (see the module comment): for each character before an East Asian/other boundary
+ * (`asianGapsAt`), keyed by the UTF-16 index of its last unit in the paragraph's text (its runs, a line break as
+ * '\n'), `ASIAN_GAP_EM` of its run's size in pt. `p` is never changed.
  */
-export function loAsianGaps(p: Para): Para {
+export function asianGapsOf(p: Para): Map<number, number> {
   let text = '';
   for (const r of p.runs) text += r.kind === 'break' ? '\n' : r.text;
-  const at = new Set(asianGapsAt(text));
-  if (!at.size) return p;
-  const runs: Run[] = [];
+  const gaps = new Map<number, number>();
+  const at = asianGapsAt(text);
+  if (!at.length) return gaps;
   let offset = 0;
+  let k = 0;
   for (const r of p.runs) {
-    if (r.kind === 'break') {
-      runs.push(r);
-      offset += 1;
-      continue;
-    }
-    let from = 0;
-    for (let i = 0; i < r.text.length; i++) {
-      if (!at.has(offset + i)) continue;
-      const unit = r.text.charCodeAt(i);
-      const start = i > 0 && unit >= 0xdc00 && unit <= 0xdfff ? i - 1 : i;
-      if (start > from) runs.push({ ...r, text: r.text.slice(from, start) });
-      runs.push({
-        ...r,
-        text: r.text.slice(start, i + 1),
-        style: { ...r.style, spacingPt: r.style.spacingPt + ASIAN_GAP_EM * r.style.sizePt },
-      });
-      from = i + 1;
-    }
-    if (from < r.text.length) runs.push(from ? { ...r, text: r.text.slice(from) } : r);
-    offset += r.text.length;
+    const n = r.kind === 'break' ? 1 : r.text.length;
+    while (k < at.length && at[k]! < offset + n) gaps.set(at[k++]!, ASIAN_GAP_EM * r.style.sizePt);
+    offset += n;
   }
-  return { ...p, runs };
+  return gaps;
 }

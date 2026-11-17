@@ -74,7 +74,7 @@ import { DEFAULT_FONT } from '@ordo/domain/defaults.ts';
 import { FALLBACK_SCRIPTS } from '@ordo/domain/readable.ts';
 import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
 import { breakOpportunities } from '@ordo/renderer/text/breaks.ts';
-import { loAsianGaps } from './asian-gaps.ts';
+import { asianGapsOf } from './asian-gaps.ts';
 import { type ColorCtx, colorIn, readFill, styleFill } from './color.ts';
 import type { SlideCtx } from './context.ts';
 import { scriptClasses, scriptFallbacks, substituteOf } from './fontmap.ts';
@@ -371,10 +371,12 @@ export function readTable(
   const loLines: LoLines = opts.afterAutogrow ? 'independent' : 'font';
   // The text measured: each cell's within `TABLE_LIMITS.cellText`, the table's within `tableText` (later
   // cells as their empty end mark, as the stored table's bounds empty them). LibreOffice's model only: with
-  // its 1/4 em at each East Asian/other boundary (`asian-gaps.ts`, rule G), never in the stored text or
-  // ordo's own model of its drawing (`spaced`).
-  const measured = measuredBodies(cells.map((c) => ({ ...c.text, paras: c.text.paras.map(loAsianGaps) })));
-  const lo = cells.map((c, i) => measure.loLayout(measured[i]!, textWidth(c, loCols), loLines));
+  // its 1/4 em at each East Asian/other boundary (`asian-gaps.ts`, rule G, `gaps`), never in the stored text
+  // or ordo's own model of its drawing (`spaced`).
+  const measured = measuredBodies(cells.map((c) => c.text));
+  const lo = cells.map((c, i) =>
+    measure.loLayout(measured[i]!, textWidth(c, loCols), loLines, { gaps: true }),
+  );
   // LibreOffice's row: the text and its extra 1/100 mm (`Cell::getMinimumHeight`), then the margins.
   const loTall = lo.map(
     (l, i) =>
@@ -1393,14 +1395,20 @@ export class Measure {
    * mm; the lines break as `height` breaks them): `height` the row's text height in `mode`, without the
    * insets and LibreOffice's extra 1/100 mm; `drawn` the block as drawn, with the face's own line heights
    * whatever `mode` (see `LoLines`), and its baselines (lines with text only, from the block's top). Call
-   * it before `spaceByFont`, with the deck's own spacing.
+   * it before `spaceByFont`, with the deck's own spacing. `gaps`: with LibreOffice's 1/4 em at each East
+   * Asian/other boundary (`asian-gaps.ts`, rule G), added to the boundary character's advance in its own run.
    */
-  loLayout(body: TextBody, widthPx: number, mode: LoLines): { height: number; drawn: Block } {
+  loLayout(
+    body: TextBody,
+    widthPx: number,
+    mode: LoLines,
+    o: { gaps?: boolean } = {},
+  ): { height: number; drawn: Block } {
     let h = 0;
     const drawn: Block = { height: 0, baselines: [] };
     const last = body.paras.length - 1;
     body.paras.forEach((p, i) => {
-      const laid = this.lines(p, widthPx, loSizePt, true);
+      const laid = this.lines(p, widthPx, loSizePt, true, o.gaps === true);
       const ls = p.lineSpacing;
       const pct = ls && 'pct' in ls ? Math.trunc(ls.pct * 100 + 1e-6) : 100;
       // A line's height and ascent: its tallest portion's ascent and descent (editeng's line metrics, each
@@ -1511,8 +1519,16 @@ export class Measure {
    * A paragraph's lines laid out `widthPx` wide (see the class comment). `drawn` maps a run's size to the
    * size it is drawn at (`loSizePt` for LibreOffice's layout): widths and `px` sizes follow it, `pt` stays
    * the deck's size. `lo`: each run's East Asian or complex-script portion in one face (LibreOffice's).
+   * `gaps` (with `lo`): rule G's 1/4 em (`asianGapsOf`) added to the advance of the character before each East
+   * Asian/other boundary, inside its run, so the character keeps the face its run's portion gives it.
    */
-  private lines(p: Para, widthPx: number, drawn: (pt: number) => number = (pt) => pt, lo = false): LaidPara {
+  private lines(
+    p: Para,
+    widthPx: number,
+    drawn: (pt: number) => number = (pt) => pt,
+    lo = false,
+    gaps = false,
+  ): LaidPara {
     const px = (pt: number) => ptPx(this.frame, drawn(pt));
     // The characters with their widths, sizes, whether they raise the line, and their offset in `text`.
     const chars: {
@@ -1534,6 +1550,8 @@ export class Measure {
     const classes = scriptClasses(text);
     const lang = runs.find((r) => r.style.lang)?.style.lang;
     const fallbacks = scriptFallbacks(text, lang);
+    // Rule G: the gap (pt) after each character before an East Asian/other boundary, by its last unit's offset.
+    const gapPt = lo && gaps ? asianGapsOf(p) : undefined;
     // Where a line may end (the renderer's rule for office text: table cells are in the office line model,
     // so they break where LibreOffice breaks them): before `text[b]` for each b.
     // `officeOnly`: the breaks only the office rules make ('3:16-' / '17'), inside a word UAX#14 keeps whole:
@@ -1612,6 +1630,9 @@ export class Measure {
           }
           prev = { cp: c, face: g.face, space, wide };
         }
+        // Rule G's gap, as letter spacing on this character (once, after its last shown glyph).
+        const gap = gapPt?.get(at + i + unit - 1);
+        if (gap) w += px(s.spacingPt + gap) - spacing;
         chars.push({
           w,
           kern: pairKern,

@@ -1896,10 +1896,11 @@ vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, 
   - Korean, Chinese and Japanese cells after sub-wave 1c (rule G took LibreOffice's 1/4 em for the rows, above):
     the weak characters (circled digits, corner brackets) take the face of the script around them in LibreOffice
     (`ko-weak` beyond 1c: their face in cells and in line heights); LibreOffice breaks between a Latin character
-    and the Hangul after it inside a word, where ordo keeps the word; rule G puts a leading weak character in a run of
-    its own, measured in the chain's face instead of its portion's (the gap per character inside `Measure.lines`
-    would keep it); the 1/4 em stored in the cells' text too (option F, 0.699 on slide 20) only if owner question
-    Q1c-3 is answered no. A CJK face for the shipped hub image (fonts-wqy-zenhei) or the library (Noto Sans KR and
+    and the Hangul after it inside a word, where ordo keeps the word; rule G's gap as LibreOffice sizes it, the
+    height of the face of the portion before the boundary divided by 5 (`trunc(loLineHeight / 5)`, with a probe row
+    after Arial and Carlito: the quarter is about 0.64 pt wide after Liberation Sans at 24 pt, and still gives
+    LibreOffice's line count on every probe cell); the 1/4 em stored in the cells' text too (option F, 0.699 on
+    slide 20) only if owner question Q1c-3 is answered no. A CJK face for the shipped hub image (fonts-wqy-zenhei) or the library (Noto Sans KR and
     the other CJK faces) so rule H holds there (Q1c-2). The bulletin's non-table slides under 0.60 (5, 12, 14, 11
     and 4, unchanged by 1c) are not table slides. The other script table slides (Coptic and Arabic cells) are
     `script-cells`'; the picture under a table (Brutalism 14) is `svg-under`'s.
@@ -3284,20 +3285,29 @@ Two rules, both for measuring only, and the browser's parse kept equal to the hu
   hold a script the hub measures with a system face (`systemOnlyScripts`) is refused and the hub parses the deck
   itself, one stored form whichever side parses. `hub-import --equivalence` lists such decks as "parsed on the hub
   (script face)".
-- **LibreOffice's 1/4 em (rule G, `packages/pptx-scene/src/asian-gaps.ts`).** LibreOffice 24.2 puts a quarter of the
-  size of the character before it at every boundary between an East Asian portion of a paragraph and another: a weak
-  character joins the portion before it, a leading weak character or space is a portion of its own, never across a
-  line break (probed: every gap within 0.37 pt of the quarter; the spread under it is LibreOffice's and unexplained).
-  It is applied only in the converter's model of LibreOffice's cell layout (`tables.ts`, the `measured` bodies that
-  give LibreOffice's rows and baselines), never in the stored text or in ordo's own model of its drawing (owner
-  question Q1c-3: the 1/4 em for row heights only): ordo draws no such gap.
+- **LibreOffice's 1/4 em (rule G, `packages/pptx-scene/src/asian-gaps.ts`).** LibreOffice 24.2 puts a space at every
+  boundary between an East Asian portion of a paragraph and another: a weak character joins the portion before it, a
+  leading weak character or space is a portion of its own, never across a line break. Rule G makes it a quarter of
+  the size of the character before the boundary. LibreOffice's own gap is the height (hhea ascent and descent) of the
+  face of the portion before the boundary divided by 5 (editeng's script space): the quarter for a face about
+  1.25 em tall, within 0.4 pt of it after WenQuanYi Zen Hei (1.2598 em) and Inter (1.21 em), the faces of the
+  diagnosis probes, and about 0.64 pt wider after Liberation Sans (Arial, 1.117 em) at 24 pt (the probe hold-out
+  deck's 225 cell gaps: |LibreOffice - height/5| at most 0.14 pt). The quarter gives LibreOffice's line count on all
+  114 cells of that deck, so the minimum needs no more (rule 4; height/5 is a follow-up). It is applied only in the
+  converter's model of LibreOffice's cell layout (`tables.ts`: `Measure.loLayout` with `gaps` for the `measured`
+  bodies that give LibreOffice's rows and baselines), as extra advance on the boundary character inside its own run,
+  so the character keeps its portion's face (1c first put it in a run of its own, where a weak character alone was
+  measured in Inter: rows 0.2 px taller than LibreOffice's and one probe cell wrapped; integrate-1c repair 1), never
+  in the stored text or in ordo's own model of its drawing (owner question Q1c-3: the 1/4 em for row heights only):
+  ordo draws no such gap.
 - **Measured** on real hubs of this code, with and without LibreOffice, each asked for every slide of the deck: the
   Korean slides 18, 19 and 20 at 0.634, 0.759 and 0.665 on both; slide 2 unchanged (LibreOffice's art, 0.947, with
   LibreOffice; 0.490 without: `vert-cells`); every other table slide of the tables set and shards 0-2, the held-out
   set included, identical. Probe cells outside LibreOffice's lines or rows, named with their cause and left as
   follow-ups: LibreOffice breaks between a Latin character and the Hangul after it inside a word, where ordo keeps
-  the word; a leading weak character, put in a run of its own by rule G, is measured in the chain's face instead of
-  its portion's (0.9 pt on one probe row); the weak characters' faces in line heights. Details:
+  the word; the weak characters' faces in line heights. (A leading weak character that rule G put in a run of its
+  own was measured in the chain's face instead of its portion's, 0.9 pt on one probe row: fixed in integrate-1c
+  repair 1, the gap now inside the character's run.) Details:
   `regroup/r2b/1c/ko-cells/notes.md`, `probe/probe.md`.
 <!-- /r2b:ko-cells -->
 
