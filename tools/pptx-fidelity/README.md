@@ -212,7 +212,10 @@ built: a bundle built before the last edit would be a stale hub) or its built bu
 `--client-scene` measures the path operators take (design/27 m9:import-core): each deck is parsed first as
 the operator's import worker parses it (`parsePptxScene` in Node, with the hub's library faces fetched from
 the hub, for the LibreOffice the hub reports) and posted with its scene; each record says whether the hub
-used it (`scene`: used, refused, none) and the parse's time (`clientMs`). `--equivalence` (implies it)
+used it (`scene`: used, refused, none) and the parse's time (`clientMs`). The first parse waits until the hub
+has registered its bundled fonts (`waitForBundledFonts`, its log's 'bundled fonts' line, at most 60 s): before
+that its library lists only some of its faces, and a deck parsed then (the first of the run) measured its text
+with fewer faces than the hub's own parse a moment later (sub-wave 1c's integration). `--equivalence` (implies it)
 imports each deck twice, with its scene and parsed by the hub itself, and lists every difference between the
 two stored presentations modulo ids, media ids (by file), times, the import log and digests
 (`src/equivalence.ts`) in `equivalence.json`. Sub-wave 1c (rule H): a hub measures table cells in a script its

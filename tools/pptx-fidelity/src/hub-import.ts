@@ -22,7 +22,9 @@
  * - **`--client-scene`**: each deck is parsed first as the operator's import worker parses it
  *   (`parsePptxScene` in Node, the hub's library faces fetched from the hub, for the LibreOffice the hub
  *   says it has) and posted with its scene (`clientScene`), so the run measures the path operators take;
- *   each record says whether the hub used the scene (its job log) and the parse's time.
+ *   each record says whether the hub used the scene (its job log) and the parse's time. The first parse waits
+ *   until the hub has registered its bundled fonts (`waitForBundledFonts`): before that its library lists only
+ *   some of its faces.
  * - **`--equivalence`** (implies `--client-scene`): each deck is imported twice, with its scene and parsed by
  *   the hub itself, and the two stored presentations are compared modulo ids, media ids (by file), times and
  *   the import log (`equivalence.ts`); every difference is listed per deck in `equivalence.json`. A deck whose
@@ -874,6 +876,43 @@ export function equivalenceOf(
   return refusedForFace ? 'differs' : 'equal';
 }
 
+/**
+ * Whether the hub's start-up registration of its bundled fonts has settled, read from its log: `fonts/bundled.ts`
+ * logs 'bundled fonts' when it is done, `fonts/service.ts` 'bundled fonts not registered' when it failed. Until
+ * then the hub's library lists only some of its faces. Never throws.
+ */
+export function bundledFontsSettled(lines: readonly string[]): boolean {
+  for (const line of lines) {
+    if (!line.includes('bundled fonts')) continue;
+    try {
+      const msg = (JSON.parse(line) as { msg?: unknown }).msg;
+      if (msg === 'bundled fonts' || msg === 'bundled fonts not registered') return true;
+    } catch {
+      /* not a JSON line */
+    }
+  }
+  return false;
+}
+
+/**
+ * Wait (at most `timeoutMs`) until the hub's bundled fonts are registered (`bundledFontsSettled` over its log as
+ * `lines()` gives it). A scene parsed in the browser before that measures text with fewer faces than the hub's
+ * own parse a moment later, so the first deck of a `--client-scene` or `--equivalence` run could differ for
+ * that reason alone (sub-wave 1c integration: the hub's start-up font work made it frequent). True when settled.
+ */
+export async function waitForBundledFonts(
+  lines: () => readonly string[],
+  timeoutMs = 60_000,
+  pollMs = 100,
+): Promise<boolean> {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    if (bundledFontsSettled(lines())) return true;
+    if (Date.now() >= until) return false;
+    await sleep(pollMs);
+  }
+}
+
 /** The library's families (`GET /fonts`). */
 async function libraryFamilies(client: HubClient): Promise<string[]> {
   const fonts = await client.json<{ family: string }[]>('fonts');
@@ -973,6 +1012,11 @@ export async function runHubImport(argv: readonly string[]): Promise<HubImportRe
   });
   try {
     report.capabilities = await session.client.maybe('capabilities');
+    // A browser's parse reads the library's faces: wait until the hub has registered its bundled ones.
+    if (a.clientScene && !(await waitForBundledFonts(() => session.lines)))
+      session.lines.push(
+        '{"level":40,"msg":"hub-import: the hub did not say its bundled fonts were registered"}',
+      );
     for (const d of readable) {
       const rec: DeckRecord = {
         name: d.label,

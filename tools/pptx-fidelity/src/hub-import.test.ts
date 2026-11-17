@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  bundledFontsSettled,
   type DeckRecord,
   equivalenceOf,
   hubEntry,
@@ -27,6 +28,7 @@ import {
   sceneRefusalOf,
   systemOnlyScriptsOf,
   toolsOnlyPath,
+  waitForBundledFonts,
 } from './hub-import.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'ordo-hub-import-'));
@@ -128,6 +130,35 @@ describe('hub-import', () => {
     expect(md).toMatch(
       /equivalence: 1 of 2 deck\(s\) equal; 1 parsed on the hub \(script face\): ko\.pptx; 0 differ/,
     );
+  });
+
+  it('waits for the hub to register its bundled fonts before a browser parse (sub-wave 1c integration)', async () => {
+    // Until the hub's start-up registration of its bundled fonts settles, its library lists only some faces, so a
+    // scene parsed then (the first deck of a --client-scene or --equivalence run) measured text with fewer faces
+    // than the hub's own parse a moment later: the Biblical Mary deck's Hebrew and Greek table at the 1c head.
+    const done = JSON.stringify({ level: 30, dir: '/usr/share/fonts', registered: 24, msg: 'bundled fonts' });
+    const failed = JSON.stringify({
+      level: 50,
+      dir: '/x',
+      err: 'EACCES',
+      msg: 'bundled fonts not registered',
+    });
+    const missing = JSON.stringify({
+      level: 40,
+      missing: ['Noto Sans Hebrew 400'],
+      msg: 'bundled fonts not installed',
+    });
+    expect(bundledFontsSettled([])).toBe(false);
+    expect(bundledFontsSettled(['{"level":30,"msg":"ordo hub listening"}', 'not json', missing])).toBe(false);
+    expect(bundledFontsSettled(['x', done])).toBe(true);
+    expect(bundledFontsSettled([failed])).toBe(true);
+    const lines: string[] = [];
+    setTimeout(() => lines.push(done), 150);
+    const t0 = Date.now();
+    expect(await waitForBundledFonts(() => lines, 5000, 10)).toBe(true);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(140);
+    // Bounded: a hub that never says so is waited for at most the timeout.
+    expect(await waitForBundledFonts(() => [], 50, 10)).toBe(false);
   });
 
   it('parses its options and refuses unknown ones', () => {
