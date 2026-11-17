@@ -506,7 +506,8 @@ describe('a scene whose table cells need a script face only this computer has (r
     const hangul = join(dir, 'hangul-1c.ttf');
     writeFileSync(
       hangul,
-      sfntFont(Object.fromEntries([...new Set(`${KO}가`)].map((c) => [c, 1000])), {
+      // A Hangul face: it maps the letters rule H checks a face for (`SYSTEM_FACE_LETTERS`).
+      sfntFont(Object.fromEntries([...new Set(`${KO}가나다라마바사아자하한글`)].map((c) => [c, 1000])), {
         vertical: { ascender: 1000, descender: -260 },
       }),
     );

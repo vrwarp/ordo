@@ -57,8 +57,9 @@ function ttc(fonts: readonly Uint8Array[]): Uint8Array {
   return new Uint8Array(Buffer.concat([h, ...parts]));
 }
 
-// Every Hangul face maps 가 (U+AC00), the letter the hub asks fontconfig to cover (`SYSTEM_FACE_SCRIPTS`).
-const hangulChars = Object.fromEntries([...new Set(`${TEXT}가`)].map((c) => [c, 1000]));
+// Every Hangul face maps 가 (U+AC00), the letter the hub asks fontconfig to cover (`SYSTEM_FACE_SCRIPTS`), and the
+// common letters a face must map to be kept for Hangul (`SYSTEM_FACE_LETTERS`).
+const hangulChars = Object.fromEntries([...new Set(`${TEXT}가나다라마바사아자하한글`)].map((c) => [c, 1000]));
 /** ordo's default face stand-in: Latin only, its line 1.2 of the size. */
 const latin = file(
   'Inter.ttf',
@@ -192,6 +193,43 @@ describe('SystemFaces: resolved once, checked, bounded', () => {
         silent,
       ).ready,
     ).toEqual([['Hang', hangul, 0]]);
+  });
+
+  it("keeps a face for a script only when it maps the script's common letters, not the one asked for", async () => {
+    // fonts-noto-core's Nushu face (NotoTraditionalNushu): U+4E00 is its only ideograph, and fontconfig names it for
+    // `:charset=4e00` on a computer without a CJK face (the project's hub image as built).
+    const nushu = file('nushu.ttf', sfntFont({ 一: 1000, a: 500, ' ': 250 }));
+    expect(await new SystemFaces(lookupOf({ Hani: { file: nushu, index: 0 } }), silent).ready).toEqual([]);
+    // A face with a few Hangul letters only is no Hangul face either.
+    const few = file('few-hangul.ttf', sfntFont({ 가: 1000, 이: 1000, 야: 1000 }));
+    expect(await new SystemFaces(lookupOf({ Hang: { file: few, index: 0 } }), silent).ready).toEqual([]);
+    // A CJK face with the common letters of all four scripts is kept for each.
+    const cjk = file(
+      'cjk.ttf',
+      sfntFont(
+        Object.fromEntries(
+          [
+            ...'一人大日中上下天山水火木あいうえおかきくのをんすアイウエオカキクンストー가나다라마바사아자하한글',
+          ].map((c) => [c, 1000]),
+        ),
+      ),
+    );
+    expect(
+      await new SystemFaces(
+        lookupOf({
+          Hani: { file: cjk, index: 0 },
+          Hira: { file: cjk, index: 0 },
+          Kana: { file: cjk, index: 0 },
+          Hang: { file: cjk, index: 0 },
+        }),
+        silent,
+      ).ready,
+    ).toEqual([
+      ['Hani', cjk, 0],
+      ['Hira', cjk, 0],
+      ['Kana', cjk, 0],
+      ['Hang', cjk, 0],
+    ]);
   });
 
   it('settles with no face when the lookup does not answer in time, and says so', async () => {

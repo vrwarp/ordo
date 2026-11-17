@@ -15,14 +15,20 @@
  *   check (`clientScene.ts`) awaits it, so a deck imported during start-up is stored as one imported later.
  * - **fc-match by absolute path** (`FC_MATCH_PATHS`), never through PATH (a hub without LibreOffice may have only
  *   the lite tools there); `execFile`, 10 s, the letter's code point the only argument that varies.
- * - **Checked**: a face is kept only when its file fits `FACE_LIMITS.fileBytes` and it maps the letter, read
- *   with `@ordo/pptx-scene`'s `sfntMetrics(bytes, index)`, which reads a TrueType collection at its index
- *   (WenQuanYi Zen Hei is one; the hub's own `fonts/sfnt.ts` `metricTables` refuses collections).
+ * - **Checked**: a face is kept for a script only when its file fits `FACE_LIMITS.fileBytes` and it maps the
+ *   script's common letters (`SYSTEM_FACE_LETTERS`: a dozen, not only the letter fontconfig was asked to cover),
+ *   read with `@ordo/pptx-scene`'s `sfntMetrics(bytes, index)`, which reads a TrueType collection at its index
+ *   (WenQuanYi Zen Hei is one; the hub's own `fonts/sfnt.ts` `metricTables` refuses collections). Each distinct
+ *   face (file and index) is read and parsed once, however many scripts fontconfig names it for. The check runs
+ *   on the process that starts the hub's imports (`ImportService`: the library process in production), never on a
+ *   request.
  * - **An explicit dependency** (`HubConfig.systemFaces`): production asks fontconfig; the hub's test helpers
  *   give none (`noSystemFaces`), so a hub test means the same on every computer; a test injects its own.
  *
- * The project's hub image has no CJK face (fonts-noto-core): there nothing is found and the cells are measured
- * by estimate, as before (owner question Q1c-2).
+ * The project's hub image as built has no CJK face (fonts-noto-core): there fc-match names fonts-noto-core's
+ * Nushu face (NotoTraditionalNushu, whose only ideograph is U+4E00) for Han and faces without Kana or Hangul for
+ * the others, the check keeps none, and the cells are measured by estimate, as before (owner question Q1c-2).
+ * Until integrate-1c repair 1 the check asked for the one letter and kept the Nushu face for Han.
  */
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
@@ -31,7 +37,7 @@ import { basename, isAbsolute } from 'node:path';
 import type { Font } from '@ordo/domain';
 import { SCRIPT_FALLBACK_FONTS } from '@ordo/domain/defaults.ts';
 import { FACE_LIMITS } from '@ordo/importers/pptx-faces.ts';
-import { sfntMetrics } from '@ordo/pptx-scene';
+import { type FaceMetrics, sfntMetrics } from '@ordo/pptx-scene';
 import { errorMessage } from '../errors.ts';
 import { logSafe } from './report.ts';
 
@@ -42,6 +48,27 @@ export const SYSTEM_FACE_SCRIPTS: Readonly<Record<string, number>> = {
   Kana: 0x30a2,
   Hang: 0xac00,
 };
+
+/**
+ * The letters a face must map to be kept for a script: the one fontconfig is asked to cover
+ * (`SYSTEM_FACE_SCRIPTS`) and eleven more of the script's commonest (the ideographs drawn alike in Chinese,
+ * Japanese and Korean), so a face with a few of them (fonts-noto-core's Nushu face has U+4E00 only) is not taken
+ * for the script's face.
+ */
+export const SYSTEM_FACE_LETTERS: Readonly<Record<string, readonly number[]>> = Object.fromEntries(
+  Object.entries({
+    Hani: '一人大日中上下天山水火木',
+    Hira: 'あいうえおかきくのをんす',
+    Kana: 'アイウエオカキクンストー',
+    Hang: '가나다라마바사아자하한글',
+  }).map(([script, letters]) => [script, [...letters].map((c) => c.codePointAt(0)!)]),
+);
+
+/** Whether a face maps every one of a script's common letters (`SYSTEM_FACE_LETTERS`). */
+export function mapsScript(m: Pick<FaceMetrics, 'advance'> | undefined, script: string): boolean {
+  const letters = SYSTEM_FACE_LETTERS[script];
+  return !!m && !!letters?.length && letters.every((c) => m.advance(c) !== undefined);
+}
 
 /** The scripts' names in the job log. */
 export const SCRIPT_NAMES: Readonly<Record<string, string>> = {
@@ -121,18 +148,22 @@ export function fontconfigLookup(
 type Log = { info(obj: object, msg: string): void; warn(obj: object, msg: string): void };
 
 /**
- * A face kept only when its file fits `FACE_LIMITS.fileBytes` and maps `letter` (`sfntMetrics` at `index`, a
- * collection's face included). Never throws.
+ * A face's metrics (`sfntMetrics` at `index`, a collection's face included) when its file fits
+ * `FACE_LIMITS.fileBytes`; undefined otherwise. Never throws.
  */
-export async function checkSystemFace(file: string, index: number, letter: number): Promise<boolean> {
+async function readSystemFace(file: string, index: number): Promise<FaceMetrics | undefined> {
   try {
     const st = await stat(file);
-    if (!st.isFile() || st.size > FACE_LIMITS.fileBytes) return false;
-    const m = sfntMetrics(new Uint8Array(await readFile(file)), index);
-    return m?.advance(letter) !== undefined;
+    if (!st.isFile() || st.size > FACE_LIMITS.fileBytes) return undefined;
+    return sfntMetrics(new Uint8Array(await readFile(file)), index);
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+/** A face kept for `script` only when its file fits `FACE_LIMITS.fileBytes` and `mapsScript`. Never throws. */
+export async function checkSystemFace(file: string, index: number, script: string): Promise<boolean> {
+  return mapsScript(await readSystemFace(file, index), script);
 }
 
 /** The script faces of this hub's computer, resolved once at start (see the module comment). */
@@ -170,7 +201,10 @@ export class SystemFaces {
     });
   }
 
-  /** Each script's face, looked up in parallel and checked; the scripts in `SYSTEM_FACE_SCRIPTS`'s order. */
+  /**
+   * Each script's face, looked up in parallel, then checked (`mapsScript`), each distinct face (file and index)
+   * read and parsed once; the scripts in `SYSTEM_FACE_SCRIPTS`'s order.
+   */
   private static async resolve(lookup: SystemFaceLookup): Promise<SystemScriptFace[]> {
     const found = await Promise.all(
       Object.entries(SYSTEM_FACE_SCRIPTS).map(
@@ -178,11 +212,24 @@ export class SystemFaces {
           const got = await lookup(script, letter).catch(() => undefined);
           if (!got || !isAbsolute(got.file)) return undefined;
           const index = Number.isInteger(got.index) && got.index >= 0 ? got.index : 0;
-          return (await checkSystemFace(got.file, index, letter)) ? [script, got.file, index] : undefined;
+          return [script, got.file, index];
         },
       ),
     );
-    return found.filter((f): f is SystemScriptFace => f !== undefined);
+    const read = new Map<string, Promise<FaceMetrics | undefined>>();
+    const out: SystemScriptFace[] = [];
+    for (const f of found) {
+      if (!f) continue;
+      const [script, file, index] = f;
+      const key = `${file}\0${index}`;
+      let m = read.get(key);
+      if (!m) {
+        m = readSystemFace(file, index);
+        read.set(key, m);
+      }
+      if (mapsScript(await m, script)) out.push(f);
+    }
+    return out;
   }
 }
 

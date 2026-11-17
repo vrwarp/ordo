@@ -25,7 +25,7 @@ import type { Font } from '@ordo/domain';
 import { FACE_LIMITS, faceSourceOf, type LibraryFace } from '@ordo/importers/pptx-faces.ts';
 import { type FaceMetrics, type FaceSource, metricsOfTables, sfntMetrics } from '@ordo/pptx-scene';
 import { metricTables } from '../fonts/sfnt.ts';
-import { SYSTEM_FACE_SCRIPTS, type SystemScriptFace } from './systemFaces.ts';
+import { mapsScript, SYSTEM_FACE_SCRIPTS, type SystemScriptFace } from './systemFaces.ts';
 
 // The selection rule is the import core's (`@ordo/importers` `pptx-faces.ts`), which the operator's import
 // worker shares; reading the files lazily from disk is the hub's.
@@ -96,7 +96,7 @@ export function libraryFaces(
   const source = faceSourceOf(faces);
   if (!system.length) return source;
   // Rule H: this computer's face for a script the library has none for, read once per worker, counted in
-  // this task's limits, used only when it maps the script's letter.
+  // this task's limits, used only when it maps the script's common letters (`mapsScript`, as at start).
   const counted = new Set<string>();
   const systemOf = (code: string): FaceMetrics | undefined => {
     const letter = SYSTEM_FACE_SCRIPTS[code];
@@ -120,7 +120,7 @@ export function libraryFaces(
         filesRead++;
         bytesRead += st.size;
       }
-      if (!m || m.advance(letter) === undefined) return undefined;
+      if (!mapsScript(m, code)) return undefined;
       used?.add(`${code} ${basename(file)}`);
       return m;
     } catch {

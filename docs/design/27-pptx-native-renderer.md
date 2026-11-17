@@ -1444,8 +1444,12 @@ or Hangul that its library has no face for with the face its own computer's font
 script (`apps/hub/src/pptx/systemFaces.ts`: `fc-match` by absolute path, once at start, awaited by every import job;
 a TrueType collection read at its index): the face LibreOffice and a browser on that computer fall back to. It is
 for measuring only: never registered in the library, stored or shipped; the outputs draw with their own faces, and
-the library's face always wins. The project's hub image has no CJK face, so there the cells are measured by estimate
-as before (owner question Q1c-2). Details: §15, M9, "Built for wave r2b sub-wave 1c".
+the library's face always wins. A face is kept for a script only when it maps a dozen of the script's common letters:
+fontconfig names the face that best covers the one letter it is asked for, which on a computer without a CJK face can
+be a face with that letter only. The project's hub image as built has no CJK face (there fontconfig names
+fonts-noto-core's Nushu face for 一, which has no other ideograph), so there the cells are measured by estimate as
+before (owner question Q1c-2; until integrate-1c repair 1 the Nushu face was kept for Han). Details: §15, M9, "Built
+for wave r2b sub-wave 1c".
 
 **Embedded fonts (M8).** They are EOT, 88% MTX-compressed.
 - Decoded on the pool by a bounded TypeScript MTX/LZCOMP+CTF decoder written from the W3C MTX submission. `eot2ttf` via `tools.run` (timeout, SIGKILL, address-space cap, ≤32 MB in, ≤64 MB out) is the stop-gap.
@@ -3271,15 +3275,18 @@ Two rules, both for measuring only, and the browser's parse kept equal to the hu
 - **The hub's script face from its computer (rule H, `apps/hub/src/pptx/systemFaces.ts`).** For a script drawn glyph
   by glyph (Han, Hiragana, Katakana, Hangul: `GLYPH_SCRIPTS`) that the library has no face for, a table cell is
   measured with the face this computer's fontconfig gives for a letter of the script (`fc-match -f
-  '%{file}\t%{index}' :charset=<hex>`, run by absolute path, never through PATH; a face is kept only when it maps the
-  letter, read with `sfntMetrics(bytes, index)`, which reads a TrueType collection at its index, and fits
-  `FACE_LIMITS.fileBytes`). It is resolved once, when the hub starts, as a promise that every job building a
+  '%{file}\t%{index}' :charset=<hex>`, run by absolute path, never through PATH; a face is kept for a script only
+  when it maps a dozen of the script's common letters (`SYSTEM_FACE_LETTERS`), read once per distinct face with
+  `sfntMetrics(bytes, index)`, which reads a TrueType collection at its index, and fits `FACE_LIMITS.fileBytes`). It is resolved once, when the hub starts, as a promise that every job building a
   `pptx-scene` input (imports, re-imports, Reset slide) and the client-scene check await (10 s at most; then no
   system face, logged), so a deck imported during start-up is stored as one imported later. The library's face
   always wins; nothing is stored or drawn with the system face; the job log names it ("table cells in Hangul
-  measured with this computer's face wqy-zenhei.ttc"). **The project's hub image has no CJK face**
-  (`fonts-noto-core`): there nothing is found and the cells are measured by estimate, as before (owner question
-  Q1c-2: nothing changes there in 1c; a follow-up is recommended).
+  measured with this computer's face wqy-zenhei.ttc"). **The project's hub image as built has no CJK face**
+  (`fonts-noto-core`): there fontconfig names fonts-noto-core's Nushu face (NotoTraditionalNushu, whose only
+  ideograph is U+4E00) for Han and faces without Kana or Hangul for the others, the check keeps none, and the cells
+  are measured by estimate, as before (owner question Q1c-2). Until integrate-1c repair 1 the check asked for the one
+  letter and kept the Nushu face for Han: Chinese and Japanese cells on that image were measured with it (a 1.172 em
+  line), lower than at the 1b head on two extension slides (integrate-1c.md, "Repair 1").
 - **The browser's scene is refused for such a deck** (`clientScene.ts` `SCRIPT_FACE_REFUSAL`, in the
   `pptx-client-scene` task): a browser cannot measure with the hub's computer's faces, so a scene whose table cells
   hold a script the hub measures with a system face (`systemOnlyScripts`) is refused and the hub parses the deck

@@ -863,23 +863,32 @@ ordo's default face, its rows about 4 % shorter than LibreOffice draws them with
 Korean bulletin's slides 18-20: 0.593 / 0.538 / 0.439 on both kinds of hub). Rule H:
 - **`systemFaces.ts`**: at the hub's start (`ImportService`) one `fc-match -f '%{file}\t%{index}' :charset=<letter>`
   per script (`SYSTEM_FACE_SCRIPTS`: 一 あ ア 가), in parallel, fc-match run by absolute path (`FC_MATCH_PATHS`: never
-  through PATH, which on a hub without LibreOffice may hold only the lite tools); a face is kept only when its file
-  fits `FACE_LIMITS.fileBytes` and maps the letter (read with `@ordo/pptx-scene`'s `sfntMetrics(bytes, index)`,
-  which reads a TrueType collection at its index: WenQuanYi Zen Hei is one, and the hub's own `metricTables`
-  refuses collections). `SystemFaces.ready` settles within 10 s whatever happens (then: none, logged); the start
-  log says what was found (`system faces: Hangul wqy-zenhei.ttc, ...`, or none).
+  through PATH, which on a hub without LibreOffice may hold only the lite tools); a face is kept for a script only
+  when its file fits `FACE_LIMITS.fileBytes` and it maps the script's common letters (`SYSTEM_FACE_LETTERS`, a
+  dozen each, `mapsScript`: fontconfig names the face that best covers the ONE letter asked, which on a computer
+  without a CJK face can be a face with that letter only, such as fonts-noto-core's Nushu face for 一). Each
+  distinct face (file and index) is read and parsed once, with `@ordo/pptx-scene`'s `sfntMetrics(bytes, index)`,
+  which reads a TrueType collection at its index (WenQuanYi Zen Hei is one, 16.8 MB, named for all four scripts
+  here; the hub's own `metricTables` refuses collections). The check reads and parses the face on the process that
+  starts the imports (`ImportService`: the library process in production, never the live process): one read and
+  one parse per distinct face on its event loop at start (the collection's parse took 2.6-13 ms in review). `SystemFaces.ready` settles within 10 s whatever happens
+  (then: none, logged); the start log says what was found (`system faces: Hangul wqy-zenhei.ttc, ...`, or none).
 - **Awaited by every job that measures a table** (`nativeJob.ts` `batchCall`: imports, re-imports, Reset slide):
   the faces ride in the `pptx-scene` input (`systemScriptFaces`), so a deck imported during the hub's start is
   stored as one imported later. In the worker `faces.ts` answers `script(code)` with the library's face, else the
-  system face (read once per worker, counted in the task's `FACE_LIMITS`, used only when it maps the letter); the
+  system face (read once per worker, counted in the task's `FACE_LIMITS`, used only when it maps the script's
+  common letters, as at start); the
   converter asks only for the glyph scripts (`tables.ts` `GLYPH_SCRIPTS`), only for table cells. The job's log
   names a face it used: `table cells in Hangul measured with this computer's face wqy-zenhei.ttc (the font library
   has none for it)`.
 - **An explicit dependency** (`HubConfig.systemFaces`): production asks fontconfig (`fontconfigLookup`); the test
   helpers give none (`noSystemFaces`), so a hub test means the same on every computer; a test injects a lookup.
 - **Measuring only**: nothing is stored or drawn with the system face; the outputs draw with their own faces. The
-  project's hub image has no CJK face (fonts-noto-core): there nothing is found, and those cells are measured by
-  estimate as before (owner question Q1c-2; its LibreOffice draws Korean as empty boxes there).
+  project's hub image as built has no CJK face (fonts-noto-core): there fc-match names fonts-noto-core's Nushu face
+  (NotoTraditionalNushu: U+4E00 is its only ideograph) for Han and faces without Kana or Hangul for the others,
+  the check keeps none, and those cells are measured by estimate as before (owner question Q1c-2; its LibreOffice
+  draws Korean as empty boxes there). Until integrate-1c repair 1 the check asked for the one letter and kept the
+  Nushu face for Han, so Chinese and Japanese cells there were measured with it.
 - **The browser's scene** (`clientScene.ts`): a browser cannot ask the hub's computer for its fonts, so where the
   hub measures a script with a face only its computer has (`systemOnlyScripts`: the faces resolved at start, less
   the scripts whose fallback family the library has; computed on the main thread from those lists, no deck read),
@@ -891,7 +900,9 @@ Korean bulletin's slides 18-20: 0.593 / 0.538 / 0.439 on both kinds of hub). Rul
   `hub-import --equivalence` applies the same rule (`tools/pptx-fidelity` `sceneNeedsScripts`, the hub's start
   log for its faces) and lists such a deck as 'parsed on the hub (script face)'.
 - Tests: `apps/hub/test/pptx-system-faces.test.ts` (the task with an injected face, none, a face without the
-  letter, the library's face winning, a collection read at index 1; `SystemFaces` checks and its 10 s bound;
+  letter, the library's face winning, a collection read at index 1; `SystemFaces` checks and its 10 s bound; a
+  face with 一 only (the Nushu face) or a few Hangul letters is kept for no script, a CJK face for all four;
+  `pptx-system-faces-once.test.ts`: a face named for four scripts is read once;
   fc-match found by absolute path with a PATH of the lite tools; an import started before the resolution settles
   stores the system-face rows, the same as a later one); `apps/hub/test/pptx-client-scene.test.ts` (the pool
   task refuses a Korean-table scene with `systemOnlyScripts` ['Hang'], uses it with none, with another script's
