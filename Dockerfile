@@ -29,8 +29,9 @@ ARG VERSION=dev
 LABEL org.opencontainers.image.title="ordo-hub" org.opencontainers.image.version=$VERSION
 # Fonts (design/27 §10): metric-compatible substitutes (Carlito, Caladea, Liberation), the Noto script
 # fallbacks and Inter. The hub registers them as bundled library fonts (ORDO_FONTS_DIR) and LibreOffice draws
-# with the same files. All are SIL OFL 1.1 (apps/hub/src/fonts/LICENSES.md); their packages' copyright files
-# stay in /usr/share/doc.
+# with the same files. They are SIL OFL 1.1; DejaVu, a general fallback face that is not served, is under the
+# Bitstream Vera licence (apps/hub/src/fonts/LICENSES.md). Their packages' copyright files stay in
+# /usr/share/doc.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ffmpeg poppler-utils libreoffice-impress chromium tini ca-certificates \
