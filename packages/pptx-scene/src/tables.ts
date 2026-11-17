@@ -99,7 +99,7 @@ import { clean, type Log } from './log.ts';
 import type { FaceMetrics, FaceSource } from './metrics.ts';
 import type { RichText } from './richtext.ts';
 import { predefinedTableStyle } from './tablestyles.ts';
-import { readTextBody } from './text.ts';
+import { readShadow, readTextBody } from './text.ts';
 import { styleLine, typefaceName } from './theme.ts';
 import { child, num, path, textOf, type XNode } from './xml.ts';
 
@@ -437,6 +437,9 @@ export function readTable(
   const gridded = gridObjects(cells, tableLines);
   const objects =
     (background && paints(background) ? 1 : 0) + gridded.fills.length + gridded.lines.length + cells.length;
+  // The table's own outer shadow (sub-wave 1c): read, noted, not emitted or drawn (`TableElement.shadow`).
+  const shadow = readShadow(child(child(tblPr, 'a:effectLst'), 'a:outerShdw'), ctx.color);
+  if (shadow) ctx.log("a table's shadow is not drawn");
   return {
     ...base,
     kind: 'table',
@@ -449,6 +452,7 @@ export function readTable(
     objects,
     ...(rtl ? { rtl: true } : {}),
     storedRows: stored,
+    ...(shadow ? { shadow } : {}),
     ...(loRows.some((h, r) => h !== rows[r]) ||
     loCols.some((w, c) => w !== cols[c]) ||
     spill.some((v) => v > 0) ||

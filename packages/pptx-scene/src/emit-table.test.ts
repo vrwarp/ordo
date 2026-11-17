@@ -199,6 +199,7 @@ describe('the table object (M9, ShapeObject.table)', () => {
   it("stores a table with East Asian vertical cells (eaVert) as the table object, the cell style's vert 'eaVert'", () => {
     // Rule V (sub-wave 1c): LibreOffice 24.2 draws eaVert cells as horz ones (probe deck A); the stored cell
     // keeps the deck's vert for a later vertical text engine, and today's renderer draws it horizontally.
+    // With the bulletin's table-level outer shadow, which is read and noted, never stored (sub-wave 1c).
     const { s, o, t } = one(
       table({
         cols: [IN / 2, 2 * IN],
@@ -209,6 +210,8 @@ describe('the table object (M9, ShapeObject.table)', () => {
           },
           { h: IN / 4, cells: [tc('', { attrs: 'vMerge="1"' }), tc('2020')] },
         ],
+        tblPr:
+          '<a:tblPr><a:effectLst><a:outerShdw blurRad="50800" dist="38100" dir="16200000" rotWithShape="0"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst></a:tblPr>',
       }),
     );
     expect(s.classification.class).toBe('native');
@@ -234,7 +237,10 @@ describe('the table object (M9, ShapeObject.table)', () => {
     });
     // TableData parses it back as stored (CellStyle.vert, schema 0.8.0).
     expect(TableData.parse(t)).toEqual(t);
+    // No shadow on the table object: `hasShapeExtras` stays false, so no fallback drawer draws one and the
+    // slide's effect budget charges none; the slide says it is not drawn.
     expect(o.shadow).toBeUndefined();
+    expect(s.notes).toContain("a table's shadow is not drawn");
   });
 
   it("writes each cell's style as the domain reads it back (cellRich is the converter's cell box)", () => {
