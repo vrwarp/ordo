@@ -1826,13 +1826,27 @@ measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`).
   glued to its word by whitespace up to 64 units before it) and sizes each line by its own runs (in boxes that
   do not shrink their text and in cells; text-falls); table-cell text is painted on the device row and quarter column
   LibreOffice's page uses (text-lines, §6; Moral Character's cell floor, measured with tables-cells' anchor in,
-  is a gain: stored form 0.838 → 0.847, −0.008 before the anchor). Question 3's gate (each of the 8 ≥ its
-  LibreOffice page − 0.04, the mean ≥ 0.939) is the fidelity target, measured on the stored form (what both
-  kinds of hub show): the 8 0.508 at tables-flip, 0.848 after the four tracks, 1 of 8 at its target (Flesh and
-  Spirit); never a rule that picks LibreOffice. Live safety: a jump while another cue of the layer stays armed
+  is a gain: stored form 0.838 → 0.847, −0.008 before the anchor). The fidelity target is the owner's, measured
+  on the stored form (what both kinds of hub show), never a rule that picks LibreOffice: question 3's gate (each of
+  the 8 ≥ its LibreOffice page − 0.04) was replaced on 2026-11-16 by "no slide below its score at 8e8a294
+  (tables-cells merged) by 0.005 or more", and on 2026-11-17 by a 0.60 minimum for every table slide on both kinds
+  of hub, after which table fidelity work stops chasing LibreOffice. At the 1b head no slide of the measured sets is
+  0.005 or more below its 8e8a294 score; the 8 are 0.508 at tables-flip, 0.849 at the head (0.633-0.927, each above
+  its 8e8a294 score); 61 of the 63 table slides are ≥ 0.60 on both kinds of hub (the two others are 1c's,
+  below). Live safety: a jump while another cue of the layer stays armed
   no longer waits for that arm to make its units (up to `UNIT_WAIT_MS`, a GO 1.3 s late at 3840 here): the live
   job rushes it (design/14 "Late units", Rush).
-- _Left to sub-wave 1c (tables, the rest of the owner's list):_
+- _Left to sub-wave 1c (the owner, 2026-11-17: every table slide ≥ 0.60 on both kinds of hub, then the wave's
+  pull request merges):_
+  - The Korean deck's slide 2, the one table with vertical cells, is still LibreOffice's art on a hub with
+    LibreOffice (owner question T4's default) and 0.490 without it: `vert-cells` makes it the table object (and
+    reads that table's outer shadow).
+  - The Korean deck's slide 20 (0.543 on both kinds of hub): `ko-weak`'s measured LibreOffice behaviour in table
+    cells (below), with a probe deck; T2 makes in-cell spacing as LibreOffice's product behaviour there.
+  - Each with the table slides 1b never tuned on (the held-out set of the 1b report) measured before and after,
+    and no regression; a slide that cannot reach 0.60 goes to the owner with the options, nothing lowered.
+- _Left to a follow-up pull request (the owner, 2026-11-17: once the minimum is met, table and text fidelity work
+  stops chasing LibreOffice; with sub-waves 2-4):_
   - LibreOffice's glyph-advance model and one row measure (`tables-widths`): with the harness's faces, 148 of
     15,163 cells on 11 of E's 66 table slides need more than their fixed row by over 1 px (§15 "The stored
     form"); Flesh and Spirit, 1000 Years and Colossians gain there.
@@ -1843,12 +1857,12 @@ measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`).
     heights as exact spacing would remove it and changes what the editor shows of a cell's spacing.
     Bottom-anchored cells that overflow are not probed (`loBlockTop` keeps them on the inner bottom, never above
     the top).
-  - Vertical cells stay LibreOffice's art (owner question T4's default; `vert-cells`).
-  - The Korean bulletin's slide 20 is still under blank: LibreOffice 24.2 draws the Latin punctuation inside its
+  - The Korean bulletin's slide 20 (1c, above) is still under blank: LibreOffice 24.2 draws the Latin punctuation inside its
     Korean text in the Latin face (not the Korean one, as this entry said before; probe decks, tables/gaps-flip
     B.1); the extra lines come from the 1/4 em spacing LibreOffice adds at every boundary between East Asian and
     other text, and from the weak characters (circled digits, corner brackets) taking the face of the script
-    around them (`ko-weak`). The other script table slides (Coptic and Arabic cells) are `script-cells`'.
+    around them (`ko-weak`; slide 18, 0.634, and slide 19 stay here). The other script table slides (Coptic and
+    Arabic cells) are `script-cells`'; the picture under a table (Brutalism 14) is `svg-under`'s.
   - Text: LibreOffice's break after a slash before a digit and its exact-width rule for a slash are not modelled
     (text-falls probe C; §6 step 3); own-run
     line heights in a box that shrinks its text wait for LibreOffice's autofit model (its spacing scale on single
@@ -3056,9 +3070,13 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
   | Matthew 16v18, 1          |              0.963 |  0.923 |                     0.783 |                      0.418 |                0.907 |                      0.477 |
   | Flesh and Spirit chart, 1 |              0.956 |  0.916 |                     0.817 |                      0.161 |                0.927 |                      0.514 |
   | Boletim Fev-17, 2         |              0.976 |  0.936 |                     0.866 |                      0.840 |                0.899 |                      0.577 |
-  | Boletim Mai-17, 2         |              0.975 |  0.935 |                     0.877 |                      0.852 |                0.903 |                      0.586 |
-  | Moral Character, 1        |              0.946 |  0.906 |                     0.872 |                      0.344 |                0.847 |                      0.606 |
-  | Mean                      |              0.959 |  0.939 |                     0.761 |                      0.508 |                0.848 |                      0.481 |
+  | Boletim Mai-17, 2         |              0.975 |  0.935 |                     0.877 |                      0.852 |                0.904 |                      0.586 |
+  | Moral Character, 1        |              0.946 |  0.906 |                     0.872 |                      0.344 |                0.853 |                      0.606 |
+  | Mean                      |              0.959 |  0.939 |                     0.761 |                      0.508 |                0.849 |                      0.481 |
+
+  The target column is question 3's gate. The owner replaced it on 2026-11-16 (no slide below its score at 8e8a294,
+  tables-cells merged, by 0.005 or more) and on 2026-11-17 (every table slide ≥ 0.60 on both kinds of hub): all 8
+  meet it at the 1b head, each above its 8e8a294 score; the Korean deck's slides 2 and 20 are sub-wave 1c's (§13).
 
   The stored form is what churches see on either kind of hub (since sub-wave 1b LibreOffice's form, "The stored
   form" below; before it the deck's row heights grown by the drawer's lines); the harness scores a table slide
