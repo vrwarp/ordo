@@ -1878,6 +1878,15 @@ measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`).
     Boletims' dashed outlines: LibreOffice-only habits kept in the measuring tool, owner question T3).
   - No e2e opens a version-2 table page through 'Make editable' (no build stores one; the hub's tests cover
     main's and the interim rule's table pages).
+  - Found by review 1b: the converter writes a tab in imported text as a space (`richtext.ts` `clean`), so ordo
+    breaks a line after a tab and lets a tab end the slash rule's look-back, where LibreOffice never breaks after
+    a tab and keeps the slash break after one (review probes E and F); keeping a tab apart from a space in the
+    converter's text, its table measure and the drawer together is the fix (a rule in the drawer alone cannot
+    see the tab, and one in the measure alone makes a cell's fixed rows hold other lines than it draws:
+    `tables.lines.test.ts`). 'Shrink text to fit' turned on or off on an imported box with mixed sizes moves
+    its lines even when nothing shrinks (own-run line heights depend on the flag), with LibreOffice's autofit
+    model above. `kernAfter` (lines.ts) is measured again at every step of the autofit search: once per piece
+    and reference scale would do (verse-heavy text lays out about twice as slowly as before 1b, still linear).
 - _Left to render-bounds (sub-wave 3), tables:_ a hostile table at `TABLE_LIMITS` (60,000 characters in 6 cells
   of 10,000) draws in 61-63 ms at 3840 (`bench:tables`, named there; 4,096 cells of 60,000 characters: 35-39 ms;
   the corpus's table slides at most 43.5 ms): render-bounds' 20,000-character bound and pre-rendered big slides
