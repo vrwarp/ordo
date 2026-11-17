@@ -21,8 +21,10 @@
  * - **An explicit dependency** (`HubConfig.systemFaces`): production asks fontconfig; the hub's test helpers
  *   give none (`noSystemFaces`), so a hub test means the same on every computer; a test injects its own.
  *
- * The project's hub image has no CJK face (fonts-noto-core): there nothing is found and the cells are measured
- * by estimate, as before (owner question Q1c-2).
+ * The project's hub image installs fonts-noto-cjk's Sans collections, for this and for LibreOffice (owner answer
+ * to Q1c-2; Dockerfile): there fc-match gives `NotoSansCJK-Regular.ttc` face 0 (Noto Sans CJK JP: the image sets
+ * no language), whose Hangul and Han advances and line height equal the Korean face's (face 1). It is never a
+ * library font.
  */
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
