@@ -145,11 +145,12 @@ function mergeSorted(
 const SLASH_LOOK_BACK = 66;
 /**
  * Whitespace as ICU's u_isWhitespace reads it (White_Space but the no-break spaces, and the ISO controls
- * 0x09-0x0D, 0x1C-0x1F), except '\n': inside a PowerPoint paragraph it is an a:br, which editeng holds as a
- * feature character, not as whitespace (text-falls probe C: 'url-after-br').
+ * 0x09-0x0D, 0x1C-0x1F), except '\n' and the tab: inside a PowerPoint paragraph '\n' is an a:br, and editeng
+ * holds an a:br and a tab as feature characters, not as whitespace (text-falls probe C: 'url-after-br'; review
+ * 1b probes E and F: a slash after a tab keeps its break, in a box and in a cell).
  */
 function isLoWhitespace(c: number): boolean {
-  if (c <= 0x20) return c === 0x20 || c === 0x09 || (c >= 0x0b && c <= 0x0d) || (c >= 0x1c && c <= 0x1f);
+  if (c <= 0x20) return c === 0x20 || (c >= 0x0b && c <= 0x0d) || (c >= 0x1c && c <= 0x1f);
   if (c < 0x85) return false;
   return (
     c === 0x85 ||

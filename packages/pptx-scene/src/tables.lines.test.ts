@@ -77,6 +77,14 @@ describe("the converter's table measure breaks office text where LibreOffice doe
     const u = body(paraOf(['see https://aaaa.bb/cccc%2/eeeeee end', 18]));
     expect(measure().layout(u, 12.5 * 18).baselines).toHaveLength(4);
   });
+
+  it('keeps the break after a slash whose nearest whitespace before it is a tab, as LibreOffice (probe F)', () => {
+    // editeng holds a tab as a feature character, not whitespace to the i#17155 rule (review 1b probe F, a
+    // 1x1 table): 'ab\t' + 'xxxx/' fit 9.5 characters ('ab\txxxx/' / 'yyyyyyy', two lines); were the tab
+    // whitespace, the slash break would move back to it: 'ab\t' / 'xxxx/yyyyyyy' cut by width, three lines.
+    const t = body(paraOf(['ab\txxxx/yyyyyyy', 18]));
+    expect(measure().layout(t, 9.5 * 18).baselines).toHaveLength(2);
+  });
 });
 
 describe("the converter's table measure sizes each line by its own runs", () => {
