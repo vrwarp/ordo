@@ -91,7 +91,7 @@ import type { ClientSceneTaskOutput } from './clientScene.ts';
 import { type ClipFile, ClipImport, spillClips } from './clips.ts';
 import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
 import { sceneFontFiles } from './faces.ts';
-import { SCRIPT_NAMES, type SystemScriptFace } from './systemFaces.ts';
+import { SCRIPT_NAMES, type SystemScriptFace, systemOnlyScripts } from './systemFaces.ts';
 import { isShapeFilePlaceholder, nameGeoms, storeGeomFiles } from './geoms.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { importResult, logSafe } from './report.ts';
@@ -639,11 +639,20 @@ class NativeImport {
     const { ctx } = this;
     const sf = this.deps.lib.getFile(sceneHash);
     if (!sf) return undefined;
+    // Rule H: the scripts this hub measures table cells in with a face only its computer has (the faces it
+    // resolved at start, awaited, and the library's list; no deck read): the pool task refuses a scene with a
+    // table cell in one of them.
+    const only = systemOnlyScripts((await this.deps.systemFaces?.ready) ?? [], this.deps.lib.listFonts());
+    this.checkCancelled();
     let checked: ClientSceneTaskOutput;
     try {
       checked = await this.pool.run(
         'pptx-client-scene',
-        { file: this.deps.store.abs(sf.path), libreoffice: this.lo },
+        {
+          file: this.deps.store.abs(sf.path),
+          libreoffice: this.lo,
+          ...(only.length ? { systemOnlyScripts: only } : {}),
+        },
         { signal: ctx.signal },
       );
     } catch (e) {

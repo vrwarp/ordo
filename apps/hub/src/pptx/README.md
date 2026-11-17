@@ -880,8 +880,21 @@ Korean bulletin's slides 18-20: 0.593 / 0.538 / 0.439 on both kinds of hub). Rul
 - **Measuring only**: nothing is stored or drawn with the system face; the outputs draw with their own faces. The
   project's hub image has no CJK face (fonts-noto-core): there nothing is found, and those cells are measured by
   estimate as before (owner question Q1c-2; its LibreOffice draws Korean as empty boxes there).
+- **The browser's scene** (`clientScene.ts`): a browser cannot ask the hub's computer for its fonts, so where the
+  hub measures a script with a face only its computer has (`systemOnlyScripts`: the faces resolved at start, less
+  the scripts whose fallback family the library has; computed on the main thread from those lists, no deck read),
+  the `pptx-client-scene` pool task refuses a scene whose TABLE cells hold a character of such a script, after it
+  parsed (`tablesNeedScripts`; groups included, text boxes never): `the scene parsed in the browser was not used
+  (its tables need a script face only this computer has): parsed here`. The decision awaits the faces as the
+  import does, so it is the same during start-up. Exact: a deck with CJK only in boxes keeps the browser's scene,
+  and a hub without such a face (the shipped image) uses every scene as before. The fidelity harness's
+  `hub-import --equivalence` applies the same rule (`tools/pptx-fidelity` `sceneNeedsScripts`, the hub's start
+  log for its faces) and lists such a deck as 'parsed on the hub (script face)'.
 - Tests: `apps/hub/test/pptx-system-faces.test.ts` (the task with an injected face, none, a face without the
   letter, the library's face winning, a collection read at index 1; `SystemFaces` checks and its 10 s bound;
   fc-match found by absolute path with a PATH of the lite tools; an import started before the resolution settles
-  stores the system-face rows, the same as a later one).
+  stores the system-face rows, the same as a later one); `apps/hub/test/pptx-client-scene.test.ts` (the pool
+  task refuses a Korean-table scene with `systemOnlyScripts` ['Hang'], uses it with none, with another script's
+  face, and with Hangul in a box only; the same decision when the import starts before the faces settle; the
+  deck is away while the scene is checked).
 <!-- /r2b:ko-cells -->

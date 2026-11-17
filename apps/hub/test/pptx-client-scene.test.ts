@@ -2,7 +2,7 @@
  * The hub's check of a scene parsed in the browser (`clientScene.ts`, design/27 §12): what it takes, what it
  * refuses (the hub then parses the deck itself), and that no input makes it throw.
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ShapeObject } from '@ordo/domain';
@@ -19,15 +19,30 @@ import {
   para,
   pic,
   run,
+  sfntFont,
   solid,
   sp,
+  tableFrame,
+  tc,
 } from '@ordo/pptx-scene/test-util.ts';
 import fc from 'fast-check';
 import JSZip from 'jszip';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import { pictureGuardDeck } from '@ordo/importers/pptx-guard.test-util.ts';
-import { checkClientScene, clientSceneTask } from '../src/pptx/clientScene.ts';
+import {
+  type ClientSceneTaskInput,
+  checkClientScene,
+  clientSceneTask,
+  SCRIPT_FACE_REFUSAL,
+  tablesNeedScripts,
+} from '../src/pptx/clientScene.ts';
+import type { JobCtx } from '../src/jobs.ts';
+import type { CpuPool } from '../src/pool.ts';
+import { nativeJob } from '../src/pptx/nativeJob.ts';
+import type { PptxNativePayload, PptxNativeResult, SceneTaskInput } from '../src/pptx/shared.ts';
+import { startHub } from './helpers.ts';
+import { storeDeck, zipDeck } from './pptx-helpers.ts';
 import { nameGeoms } from '../src/pptx/geoms.ts';
 import { sceneTask } from '../src/pptx/sceneTask.ts';
 
@@ -404,4 +419,179 @@ describe('a dense table slide (M9: every table is the table object, on every hub
     expect(tableIn(slide.objects).table!.cells).toHaveLength(60);
     expect(slide).not.toHaveProperty('tableGroupBytes');
   });
+});
+
+describe('a scene whose table cells need a script face only this computer has (rule H, sub-wave 1c)', () => {
+  const KO = '이야기를 나누는 시간';
+  const koCell = (text: string) =>
+    tc(text, {
+      rPr: 'lang="ko-KR"',
+      rPrChildren: '<a:latin typeface="Malgun Gothic"/><a:ea typeface="Malgun Gothic"/>',
+    });
+  const table = (text: string) =>
+    tableFrame({ id: 4, x: IN, y: IN, cols: [4 * IN], rows: [{ h: 1, cells: [koCell(text)] }] });
+  /** A Korean table cell; Korean only in a text box (its table Latin); Korean in a table inside a group. */
+  const decks = {
+    table: () => buildDeck({ slides: [{ shapes: table(KO) }] }),
+    boxOnly: () =>
+      buildDeck({
+        slides: [
+          {
+            shapes:
+              table('Amazing grace') +
+              sp({
+                id: 9,
+                x: IN,
+                y: 4 * IN,
+                cx: 6 * IN,
+                cy: IN,
+                txBody: body(para(run(KO, 'lang="ko-KR"'))),
+              }),
+          },
+        ],
+      }),
+  };
+  const zip = async (parts: Map<string, Uint8Array>) => {
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    return z.generateAsync({ type: 'uint8array' });
+  };
+  const sceneFile = async (parts: Map<string, Uint8Array>, name: string) => {
+    const s = (await parsePptxScene(await zip(parts), { libreoffice: true })).scene;
+    const file = join(dir, name);
+    writeFileSync(file, JSON.stringify(s));
+    return { scene: s, file };
+  };
+
+  it("the pool task refuses it when the hub measures that script with its computer's face; else, and for boxes, it is used", async () => {
+    const t = await sceneFile(decks.table(), 'ko-table.json');
+    expect(clientSceneTask({ file: t.file, libreoffice: true, systemOnlyScripts: ['Hang'] })).toEqual({
+      refused: SCRIPT_FACE_REFUSAL,
+    });
+    expect(SCRIPT_FACE_REFUSAL).toBe('its tables need a script face only this computer has');
+    expect('scene' in clientSceneTask({ file: t.file, libreoffice: true, systemOnlyScripts: [] })).toBe(true);
+    expect('scene' in clientSceneTask({ file: t.file, libreoffice: true })).toBe(true);
+    // A face for another script only (Han): the Hangul cell is measured as the browser measures it.
+    expect('scene' in clientSceneTask({ file: t.file, libreoffice: true, systemOnlyScripts: ['Hani'] })).toBe(
+      true,
+    );
+    // Hangul in a text box only: text boxes are not measured, so the browser's scene is the hub's.
+    const b = await sceneFile(decks.boxOnly(), 'ko-box.json');
+    expect('scene' in clientSceneTask({ file: b.file, libreoffice: true, systemOnlyScripts: ['Hang'] })).toBe(
+      true,
+    );
+  });
+
+  it('reads table cells only, in groups too, and never throws', () => {
+    const cell = (text: string) => ({ type: 'shape', table: { cells: [{}, { text }] } });
+    const slide = (objects: unknown[]) => ({ slide: { objects } });
+    expect(tablesNeedScripts([slide([cell('가')])], ['Hang'])).toBe(true);
+    expect(tablesNeedScripts([slide([cell('一')])], ['Hang'])).toBe(false);
+    expect(tablesNeedScripts([slide([cell('一')])], ['Hani', 'Hang'])).toBe(true);
+    expect(tablesNeedScripts([slide([{ type: 'text', text: '가' }])], ['Hang'])).toBe(false);
+    expect(tablesNeedScripts([slide([{ type: 'group', objects: [cell('あ')] }])], ['Hira'])).toBe(true);
+    expect(tablesNeedScripts([slide([cell('가')])], [])).toBe(false);
+    for (const junk of [
+      null,
+      1,
+      'x',
+      { table: { cells: 'x' } },
+      { objects: 'x' },
+      { table: { cells: [null] } },
+    ])
+      expect(tablesNeedScripts([slide([junk])], ['Hang'])).toBe(false);
+  });
+
+  it('through a hub: the same decision whether the import starts before its faces settle or after; the deck is not opened for it', async () => {
+    const hangul = join(dir, 'hangul-1c.ttf');
+    writeFileSync(
+      hangul,
+      sfntFont(Object.fromEntries([...new Set(`${KO}가`)].map((c) => [c, 1000])), {
+        vertical: { ascender: 1000, descender: -260 },
+      }),
+    );
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const hub = await startHub({
+      systemFaces: async (script) => {
+        await gate;
+        return script === 'Hang' ? { file: hangul, index: 0 } : undefined;
+      },
+    });
+    try {
+      const run = async (parts: Map<string, Uint8Array>, name: string) => {
+        const hash = await storeDeck(hub, await zipDeck(parts, dir, `${name}.pptx`));
+        const s = await sceneFile(parts, `${name}.json`);
+        const tmp = hub.store.tmpPath('json');
+        writeFileSync(tmp, readFileSync(s.file));
+        const sceneHash = (await hub.store.put(tmp, { ext: 'json', mime: 'application/json' })).hash;
+        // The deck is away while the scene is checked: the check reads the scene file only.
+        const deckFile = hub.store.abs(hub.lib.getFile(hash)!.path);
+        renameSync(deckFile, `${deckFile}.away`);
+        const checked: Record<string, unknown>[] = [];
+        const pool = {
+          run: (async (kind: string, input: SceneTaskInput) => {
+            if (kind === 'pptx-client-scene') {
+              checked.push({
+                ...(input as unknown as Record<string, unknown>),
+                deckThere: existsSync(deckFile),
+              });
+              const out = clientSceneTask(input as unknown as ClientSceneTaskInput);
+              renameSync(`${deckFile}.away`, deckFile);
+              return out;
+            }
+            return sceneTask(input);
+          }) as CpuPool['run'],
+        };
+        const logs: string[] = [];
+        let cur: PptxNativePayload = { hash, name: `${name}.pptx`, options: {}, sceneHash };
+        const job = nativeJob(hub.imports.pptx.deps, { pool })({
+          id: `scene-${name}`,
+          payload: cur,
+          signal: new AbortController().signal,
+          progress: () => undefined,
+          log: (line: string) => {
+            logs.push(line);
+          },
+          setPayload: (next) => {
+            cur = next;
+          },
+        } as JobCtx<PptxNativePayload>) as Promise<PptxNativeResult>;
+        return { job, logs, checked };
+      };
+      // Started during start-up: it waits for the faces before the scene is checked.
+      const early = await run(decks.table(), 'ko-early');
+      await new Promise((r) => setTimeout(r, 200));
+      expect(early.checked).toEqual([]);
+      release();
+      await early.job;
+      const refusal = `the scene parsed in the browser was not used (${SCRIPT_FACE_REFUSAL}): parsed here`;
+      expect(early.logs).toContain(refusal);
+      expect(early.checked).toHaveLength(1);
+      expect(early.checked[0]).toMatchObject({
+        libreoffice: true,
+        systemOnlyScripts: ['Hang'],
+        deckThere: false,
+      });
+      expect(Object.keys(early.checked[0]!).sort()).toEqual([
+        'deckThere',
+        'file',
+        'libreoffice',
+        'systemOnlyScripts',
+      ]);
+      // After start-up: the same decision; a deck with Hangul only in a box keeps the browser's scene.
+      const later = await run(decks.table(), 'ko-later');
+      await later.job;
+      expect(later.logs).toContain(refusal);
+      const box = await run(decks.boxOnly(), 'ko-box');
+      await box.job;
+      expect(box.logs.some((l) => /parsed in the browser: the hub checked/.test(l))).toBe(true);
+      expect(box.logs.join('\n')).not.toMatch(/was not used/);
+    } finally {
+      release();
+      await hub.cleanup();
+    }
+  }, 180_000);
 });

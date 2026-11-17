@@ -25,7 +25,11 @@
  *   each record says whether the hub used the scene (its job log) and the parse's time.
  * - **`--equivalence`** (implies `--client-scene`): each deck is imported twice, with its scene and parsed by
  *   the hub itself, and the two stored presentations are compared modulo ids, media ids (by file), times and
- *   the import log (`equivalence.ts`); every difference is listed per deck in `equivalence.json`.
+ *   the import log (`equivalence.ts`); every difference is listed per deck in `equivalence.json`. A deck whose
+ *   table cells hold a script the hub measures with a face only its computer has (sub-wave 1c rule H: the
+ *   hub's start log names its system faces, `systemOnlyScriptsOf`; the cells read with `sceneNeedsScripts`) is
+ *   one the hub must refuse the scene of and parse itself: it is listed as 'parsed on the hub (script face)'
+ *   when it did, and counted as a difference when it did not (or refused one without such a cell).
  *
  * Options: `--out DIR` (default tmp/hub-import: `hub-import.json`, `hub-import.md`, the hub's data and log),
  * `--hub dist|source` (the sources through tsx, the default, or the built `apps/hub/dist/main.js`), `--libreoffice`, `--dry-run`, `--sermons FOLDER` (repeatable; its decks are also posted),
@@ -45,7 +49,9 @@ import {
   type Media,
   type Presentation,
   resolvePlaylist,
+  SCRIPT_FALLBACK_FONTS,
   type Slide,
+  textScripts,
   utf8Bytes,
 } from '@ordo/domain';
 import { type FaceFile, loadDeckFaces, parsePptxScene } from '@ordo/importers';
@@ -578,6 +584,13 @@ export type DeckRecord = {
    * the parse failed and the deck was posted without one), the parse's time and its error.
    */
   scene?: 'used' | 'refused' | 'none';
+  /** Why the hub did not use the scene (its job log's reason), when it said. */
+  sceneWhy?: string;
+  /**
+   * Sub-wave 1c (rule H): the scene's table cells hold a script the hub measures with a face only its computer
+   * has: the hub must refuse the scene ('parsed on the hub (script face)').
+   */
+  scriptFace?: true;
   clientMs?: number;
   clientError?: string;
   /** `--equivalence`: the differences between the hub's own parse and the scene's (at most 50 listed). */
@@ -749,11 +762,15 @@ export function hubImportMarkdown(r: HubImportReport): string {
     );
   }
   const eq = r.decks.filter((d) => d.differences !== undefined);
-  if (eq.length)
+  if (eq.length) {
+    const kinds = eq.map((d) => [d, equivalenceOf(d)] as const);
+    const onHub = kinds.filter(([, k]) => k === 'parsed on the hub (script face)').map(([d]) => d.name);
+    const differs = kinds.filter(([, k]) => k === 'differs').length;
     lines.push(
-      `equivalence: ${eq.filter((d) => d.differences === 0).length} of ${eq.length} deck(s) equal; ${eq.reduce((x, d) => x + (d.differences ?? 0), 0)} difference(s) in all (equivalence.json)`,
+      `equivalence: ${kinds.filter(([, k]) => k === 'equal').length} of ${eq.length} deck(s) equal; ${onHub.length} parsed on the hub (script face)${onHub.length ? `: ${onHub.filter((n) => !/^sermon-/.test(n)).join(', ')}` : ''}; ${differs} differ; ${eq.reduce((x, d) => x + (d.differences ?? 0), 0)} difference(s) in all (equivalence.json)`,
       '',
     );
+  }
   if (!r.dryRun) {
     const done = r.decks.filter((d) => d.classes);
     const c = { native: 0, hybrid: 0, picture: 0 };
@@ -772,6 +789,95 @@ export function hubImportMarkdown(r: HubImportReport): string {
     );
   }
   return lines.join('\n');
+}
+
+/** The hub's script-face refusal (`apps/hub` `clientScene.ts` `SCRIPT_FACE_REFUSAL`), as its job log says it. */
+export const SCRIPT_FACE_REASON = 'its tables need a script face only this computer has';
+
+/** Why the hub did not use a scene, from its job log ('the scene parsed in the browser was not used (...)'). */
+export function sceneRefusalOf(log: readonly string[]): string | undefined {
+  for (const l of log) {
+    const m = /the scene parsed in the browser was not used \((.{1,300})\): parsed here/.exec(l);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
+/**
+ * Sub-wave 1c (rule H): the scripts a hub measures table cells in with a face only its computer has: those its
+ * start log names a system face for (`system faces: ...`, pino's `faces` field) whose fallback families
+ * (`SCRIPT_FALLBACK_FONTS`) its library has none of. Never throws.
+ */
+export function systemOnlyScriptsOf(lines: readonly string[], families: readonly string[]): string[] {
+  const lib = new Set(families.map((f) => f.trim().toLowerCase()));
+  for (const line of lines) {
+    if (!line.includes('system faces')) continue;
+    try {
+      const faces = (JSON.parse(line) as { faces?: unknown }).faces;
+      if (!Array.isArray(faces)) continue;
+      const out: string[] = [];
+      for (const f of faces) {
+        const script = typeof f === 'string' ? f.split(' ')[0]! : '';
+        if (!script || out.includes(script)) continue;
+        if (!(SCRIPT_FALLBACK_FONTS[script] ?? []).some((x) => lib.has(x.toLowerCase()))) out.push(script);
+      }
+      return out;
+    } catch {
+      /* not the JSON line */
+    }
+  }
+  return [];
+}
+
+/**
+ * Whether a parsed scene's table cells (in groups too; never text boxes) hold a character of `scripts`, as the
+ * hub's pool task decides it (`clientScene.ts` `tablesNeedScripts`). Bounded; never throws.
+ */
+export function sceneNeedsScripts(scene: unknown, scripts: readonly string[]): boolean {
+  if (!scripts.length) return false;
+  const want = new Set(scripts);
+  let seen = 0;
+  const walk = (objects: unknown, depth: number): boolean => {
+    if (depth > 16 || !Array.isArray(objects)) return false;
+    for (const o of objects) {
+      if (++seen > 200_000) return false;
+      if (!o || typeof o !== 'object') continue;
+      const x = o as { table?: { cells?: unknown }; objects?: unknown };
+      const cells = x.table?.cells;
+      if (Array.isArray(cells))
+        for (const c of cells) {
+          const text = (c as { text?: unknown } | null)?.text;
+          if (typeof text === 'string' && [...textScripts(text)].some((k) => want.has(k))) return true;
+        }
+      if (walk(x.objects, depth + 1)) return true;
+    }
+    return false;
+  };
+  const slides = (scene as { slides?: unknown } | null)?.slides;
+  return (
+    Array.isArray(slides) &&
+    slides.some((s) => walk((s as { slide?: { objects?: unknown } })?.slide?.objects, 0))
+  );
+}
+
+/**
+ * A deck's equivalence (`--equivalence`): 'equal' (the scene stored as the hub's own parse), 'parsed on the hub
+ * (script face)' (rule H: the hub refused a scene whose tables need its computer's face, as it must), or
+ * 'differs' (a difference, a refusal rule H does not explain, or a scene rule H should have refused).
+ */
+export function equivalenceOf(
+  d: Pick<DeckRecord, 'differences' | 'scene' | 'sceneWhy' | 'scriptFace'>,
+): 'equal' | 'parsed on the hub (script face)' | 'differs' {
+  const refusedForFace = d.scene === 'refused' && d.sceneWhy === SCRIPT_FACE_REASON;
+  if ((d.differences ?? 0) > 0) return 'differs';
+  if (d.scriptFace) return refusedForFace ? 'parsed on the hub (script face)' : 'differs';
+  return refusedForFace ? 'differs' : 'equal';
+}
+
+/** The library's families (`GET /fonts`). */
+async function libraryFamilies(client: HubClient): Promise<string[]> {
+  const fonts = await client.json<{ family: string }[]>('fonts');
+  return fonts.map((f) => f.family);
 }
 
 /** Whether the hub has LibreOffice for an import, as the operator reads its capabilities (`hubHasLibreOffice`). */
@@ -831,6 +937,8 @@ export async function runHubImport(argv: readonly string[]): Promise<HubImportRe
           report.decks.map((d) => ({
             name: d.name,
             scene: d.scene,
+            ...(d.sceneWhy ? { sceneWhy: d.sceneWhy } : {}),
+            ...(d.differences !== undefined ? { equivalence: equivalenceOf(d) } : {}),
             differences: d.differences,
             diff: d.diff,
           })),
@@ -893,10 +1001,16 @@ export async function runHubImport(argv: readonly string[]): Promise<HubImportRe
           followUp: false,
           ...(scene ? { scene } : {}),
         });
-        if (scene)
+        if (scene) {
           rec.scene = imp.job.log.some((l) => /parsed in the browser: the hub checked/.test(l))
             ? 'used'
             : 'refused';
+          const why = sceneRefusalOf(imp.job.log);
+          if (why) rec.sceneWhy = why;
+          // Rule H, as the hub applies it: its system faces (start log) less its library's scripts.
+          const only = systemOnlyScriptsOf(session.lines, await libraryFamilies(session.client));
+          if (sceneNeedsScripts(JSON.parse(new TextDecoder().decode(scene)), only)) rec.scriptFace = true;
+        }
         if (a.equivalence && scene && imp.presentationId) {
           const own = await importDeck(session.client, d.file, {
             uploadName: `deck-${report.decks.length}-hub.${rec.ext}`,
