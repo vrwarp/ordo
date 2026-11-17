@@ -196,6 +196,47 @@ describe('the table object (M9, ShapeObject.table)', () => {
     expect(s.notes).toContain('a table with vertical cell text is drawn by LibreOffice (M8)');
   });
 
+  it("stores a table with East Asian vertical cells (eaVert) as the table object, the cell style's vert 'eaVert'", () => {
+    // Rule V (sub-wave 1c): LibreOffice 24.2 draws eaVert cells as horz ones (probe deck A); the stored cell
+    // keeps the deck's vert for a later vertical text engine, and today's renderer draws it horizontally.
+    const { s, o, t } = one(
+      table({
+        cols: [IN / 2, 2 * IN],
+        rows: [
+          {
+            h: IN / 4,
+            cells: [tc('1년차', { tcPr: ' vert="eaVert" anchor="ctr"', attrs: 'rowSpan="2"' }), tc('2019')],
+          },
+          { h: IN / 4, cells: [tc('', { attrs: 'vMerge="1"' }), tc('2020')] },
+        ],
+      }),
+    );
+    expect(s.classification.class).toBe('native');
+    expect(s.notes).not.toContain('a table with vertical cell text is drawn by LibreOffice (M8)');
+    expect(t.cells.map((c) => c.text)).toEqual(['1년차', '2019', '2020']);
+    expect(t.cells[0]!.rowSpan).toBe(2);
+    const vertOfCell = (i: number) => {
+      const k = t.cells[i]!.style;
+      return k === undefined ? undefined : t.styles?.[k]?.vert;
+    };
+    expect([vertOfCell(0), vertOfCell(1), vertOfCell(2)]).toEqual(['eaVert', undefined, undefined]);
+    // The vertical cell's entry: its anchor, its Hangul's fallback face and vert; its text box is a text box
+    // like any other cell's (vert is no text style field).
+    expect(t.styles![t.cells[0]!.style!]).toEqual({
+      valign: 'middle',
+      fallbackFonts: ['Carlito', 'Noto Sans KR'],
+      vert: 'eaVert',
+    });
+    expect(cellRich(t, 0)!.style).toEqual({
+      ...cellRich(t, 1)!.style,
+      valign: 'middle',
+      fallbackFonts: ['Carlito', 'Noto Sans KR'],
+    });
+    // TableData parses it back as stored (CellStyle.vert, schema 0.8.0).
+    expect(TableData.parse(t)).toEqual(t);
+    expect(o.shadow).toBeUndefined();
+  });
+
   it("writes each cell's style as the domain reads it back (cellRich is the converter's cell box)", () => {
     const { t } = one(
       table({

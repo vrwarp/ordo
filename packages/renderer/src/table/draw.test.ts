@@ -228,6 +228,28 @@ describe('drawing a table', () => {
     ]);
   });
 
+  it('draws an East Asian vertical cell (eaVert) exactly as a horizontal one (a pin: no vertical text engine)', () => {
+    // Sub-wave 1c stores the Korean bulletin's eaVert cells in the table object (rule V: LibreOffice 24.2 draws
+    // them horizontally, probe deck A); the renderer is unchanged and draws them as horz (`cellIsVertical`).
+    const narrow = (vert?: 'eaVert' | 'horz') =>
+      gridTable(2, 2, {
+        cols: [30, 100],
+        cells: [{ text: '1년차', rowSpan: 2, style: 0 }, { text: '2019' }, { text: '2020' }],
+        styles: [{ valign: 'middle', ...(vert ? { vert } : {}) }],
+      });
+    const drawn = (t: ReturnType<typeof gridTable>) => {
+      clearTableCache();
+      const r = recordingCtx();
+      drawTable(r, tableShape(t), 2);
+      return r.ops;
+    };
+    const plain = drawn(narrow());
+    // The narrow column wraps the cell a glyph or two a line, as LibreOffice's page of the bulletin shows.
+    expect(texts(plain).length).toBeGreaterThan(3);
+    expect(drawn(narrow('eaVert'))).toEqual(plain);
+    expect(drawn(narrow('horz'))).toEqual(plain);
+  });
+
   it('the M6 group it is compared with draws the same fills, lines and texts as objects', () => {
     const t = gridTable(2, 2, { fills: [{ color: navy }], background: 0 });
     const o = tableShape(t);

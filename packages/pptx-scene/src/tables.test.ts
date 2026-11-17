@@ -1232,6 +1232,64 @@ describe('tables: what stays residual', () => {
     expect(s.notes).toContain('a table with vertical cell text is drawn by LibreOffice (M8)');
   });
 
+  // Rule V (sub-wave 1c): LibreOffice 24.2 draws `eaVert` table cells exactly as `horz` ones (probe deck A:
+  // the same glyph positions within 0.1 pt, none turned), so such a table is the table object, the cell's
+  // `vert` kept for a later vertical text engine. The other kinds stay LibreOffice's art (owner question
+  // Q1c-5): vert and vert270 are LibreOffice's vertical writing; wordArtVert, wordArtVertRtl and mongolianVert,
+  // drawn horizontally too, are in no measured deck.
+  /** The Korean bulletin's vertical cells: a narrow first column, '1년차' over a rowSpan of 4, centred. */
+  const eaVertTable = (vert: string) =>
+    table({
+      cols: [IN / 2, 2 * IN],
+      rows: [
+        {
+          h: IN / 4,
+          cells: [tc('1년차', { tcPr: ` vert="${vert}" anchor="ctr"`, attrs: 'rowSpan="4"' }), tc('2019')],
+        },
+        { h: IN / 4, cells: [tc('', { attrs: 'vMerge="1"' }), tc('2020')] },
+        { h: IN / 4, cells: [tc('', { attrs: 'vMerge="1"' }), tc('2021')] },
+        { h: IN / 4, cells: [tc('', { attrs: 'vMerge="1"' }), tc('2022')] },
+      ],
+    });
+
+  it('reads a table with East Asian vertical cells (eaVert) as the table object, the cell keeping its vert', () => {
+    const deck = () => buildDeck({ slides: [{ shapes: eaVertTable('eaVert') }] });
+    const scene = parseDeck(deck(), { fontFace: HALF_EM });
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.kind).toBe('table');
+    expect(t.support).toBe('native');
+    expect(t.cells.map((c) => [c.row, c.col, c.rows, c.vert])).toEqual([
+      [0, 0, 4, 'eaVert'],
+      [0, 1, 1, undefined],
+      [1, 1, 1, undefined],
+      [2, 1, 1, undefined],
+      [3, 1, 1, undefined],
+    ]);
+    expect(scene.slides[0]!.notes).not.toContain(
+      'a table with vertical cell text is drawn by LibreOffice (M8)',
+    );
+    // Stored as the table object on every hub: no art, nothing left to LibreOffice.
+    const s = convertDeck(deck(), { fontFace: HALF_EM }).slides[0]!;
+    expect(s.classification.class).toBe('native');
+    expect(s.classification.reasons.filter((r) => r.startsWith('art:'))).toEqual([]);
+    expect(s.slide.objects.filter((o) => o.type === 'shape' && o.table)).toHaveLength(1);
+    // A horz cell says nothing.
+    const horz = parseDeck(buildDeck({ slides: [{ shapes: eaVertTable('horz') }] }), { fontFace: HALF_EM });
+    expect((horz.slides[0]!.elements[0] as TableElement).cells.every((c) => c.vert === undefined)).toBe(true);
+  });
+
+  it('leaves the other vertical kinds to LibreOffice: vert, vert270, wordArtVert, wordArtVertRtl, mongolianVert', () => {
+    for (const vert of ['vert', 'vert270', 'wordArtVert', 'wordArtVertRtl', 'mongolianVert']) {
+      const scene = parseDeck(buildDeck({ slides: [{ shapes: eaVertTable(vert) }] }), { fontFace: HALF_EM });
+      const e = scene.slides[0]!.elements[0]!;
+      expect(e, vert).toMatchObject({ kind: 'residual', what: 'table', support: 'residual' });
+      expect(e.reasons, vert).toContain('vert');
+      expect(scene.slides[0]!.notes, vert).toContain(
+        'a table with vertical cell text is drawn by LibreOffice (M8)',
+      );
+    }
+  });
+
   it("without the table object (the kill switch) keeps M6's cell cap: a table of more cells than a slide may have objects is LibreOffice's", () => {
     expect(MAX_TABLE_CELLS).toBe(MAX_SLIDE_OBJECTS);
     const rows = Array.from({ length: 12 }, () => ({

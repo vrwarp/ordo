@@ -198,7 +198,7 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
     decision: 'residual',
     missing: 'element',
     by: 'classify',
-    note: 'vertical text (version 1 draws it in the turned box); a table cell too',
+    note: "vertical text (version 1 draws it in the turned box); a table's vert, vert270, wordArtVert, wordArtVertRtl or mongolianVert cell too (eaVert cells are the table object: LibreOffice draws them horizontally)",
   },
   {
     reason: 'numCol',
