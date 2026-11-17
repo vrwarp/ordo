@@ -19,8 +19,8 @@
  *   Gelasio and the Noto CJK families (Google Fonts, on demand; goLive ships CJK faces only with text that
  *   needs them, `isOnDemandFontFamily`).
  * - Installed but not listed here, so never registered or served: fonts-noto-cjk's Sans collections, for
- *   LibreOffice and the hub's measuring of CJK table cells (`pptx/systemFaces.ts`; a TrueType collection cannot
- *   be a library font, `store.ts` `sniff`), and DejaVu. LICENSES.md records them too.
+ *   LibreOffice and the hub's measuring of CJK table cells (`pptx/systemFaces.ts`; a font collection (.ttc)
+ *   cannot be a library font, `store.ts` `sniff`), and DejaVu. LICENSES.md records them too.
  */
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';

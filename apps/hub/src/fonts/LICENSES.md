@@ -5,7 +5,7 @@ registers them as library fonts with `source: 'bundled'` (design/27 §10). The h
 output, and LibreOffice draws art and picture slides with the same files. No font file is kept in this
 repository.
 
-Every face is licensed under the SIL Open Font License, Version 1.1. The licence text is in
+Every bundled face is licensed under the SIL Open Font License, Version 1.1. The licence text is in
 [OFL-1.1.txt](OFL-1.1.txt), and the image keeps each package's copyright file under
 `/usr/share/doc/<package>/copyright`.
 
@@ -34,26 +34,30 @@ above, and check that its licence allows redistribution with software (OFL or Ap
 ## Installed for LibreOffice and the hub's measuring, not served
 
 The image also installs these packages. `bundled.ts` never registers them: it registers only the faces listed in
-`BUNDLED_FACES`, and a TrueType collection (`.ttc`, such as `NotoSansCJK-Regular.ttc`) cannot be a library font.
+`BUNDLED_FACES`, and a font collection (`.ttc`, such as `NotoSansCJK-Regular.ttc`) cannot be a library font.
 So no output ever receives them. LibreOffice draws with them where a deck's font names fall back to them, and the
 hub measures table cells in Chinese, Japanese and Korean with Noto Sans CJK where the font library has no face for
 the script (`pptx/systemFaces.ts`, design/27 §10). The image keeps their copyright files under
 `/usr/share/doc/<package>/copyright`.
 
-| Family                                                                        | Faces                                    | Package (bookworm)                  | Copyright                                                                                            | Licence                                                                      | Reserved Font Names                                                                  |
-| ----------------------------------------------------------------------------- | ---------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Noto Sans CJK JP, KR, SC, TC and HK; Noto Sans Mono CJK JP, KR, SC, TC and HK | Regular, Bold (two TrueType collections) | fonts-noto-cjk 1:20220127+repack1-1 | 2014-2021 Adobe (the fonts' own notice; Debian's copyright file says 2010-2012 Google Corporation)   | SIL OFL 1.1                                                                  | none                                                                                 |
-| DejaVu Sans, DejaVu Serif, DejaVu Sans Mono, DejaVu Math TeX Gyre             | all styles, Condensed, ExtraLight        | fonts-dejavu 2.37-6                 | (c) 2003 Bitstream, Inc.; Arev glyphs (c) 2006 Tavmjong Bah; DejaVu changes are in the public domain | Bitstream Vera licence (the Arev glyphs: the Arev licence, of the same form) | a changed face may not use "Bitstream", "Vera", "Arev" or "Tavmjong Bah" in its name |
+| Family                                                                        | Faces                                      | Package (bookworm)                  | Copyright                                                                                            | Licence                                                                      | Reserved Font Names                                                                  |
+| ----------------------------------------------------------------------------- | ------------------------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Noto Sans CJK JP, KR, SC, TC and HK; Noto Sans Mono CJK JP, KR, SC, TC and HK | Regular, Bold (two font collections, .ttc) | fonts-noto-cjk 1:20220127+repack1-1 | 2014-2021 Adobe (the fonts' own notice; Debian's copyright file says 2010-2012 Google Corporation)   | SIL OFL 1.1                                                                  | none                                                                                 |
+| DejaVu Sans, DejaVu Serif, DejaVu Sans Mono, DejaVu Math TeX Gyre             | all styles, Condensed, ExtraLight          | fonts-dejavu 2.37-6                 | (c) 2003 Bitstream, Inc.; Arev glyphs (c) 2006 Tavmjong Bah; DejaVu changes are in the public domain | Bitstream Vera licence (the Arev glyphs: the Arev licence, of the same form) | a changed face may not use "Bitstream", "Vera", "Arev" or "Tavmjong Bah" in its name |
 
 - fonts-noto-cjk: the image keeps only its two Sans collections, `NotoSansCJK-Regular.ttc` and
   `NotoSansCJK-Bold.ttc` (a dpkg rule in the `Dockerfile` leaves out the Serif collections). The fonts are not
   modified. The upstream licence file (noto-cjk, Sans 2.004) names no Reserved Font Name; "Noto is a trademark of
-  Google Inc." (the fonts' own notice). The OFL text is in [OFL-1.1.txt](OFL-1.1.txt).
+  Google Inc." (the fonts' own notice). The OFL text is in [OFL-1.1.txt](OFL-1.1.txt). Without the Serif collections
+  LibreOffice draws text in a serif Chinese, Japanese or Korean font with the Sans faces; where fontconfig's rule asks
+  for a Serif family by language (SimSun, or a serif with Chinese or Korean text) it takes the collections' first
+  face, Japanese, so some characters show their Japanese forms.
 - fonts-dejavu installs fonts-dejavu-core and fonts-dejavu-extra. DejaVu has been in the image since its first
   `Dockerfile`, before this file recorded installed fonts. Its licence allows redistribution with software but is
-  neither OFL nor Apache-2.0: it is the one exception to the rule above.
+  neither OFL nor Apache-2.0: it is the one exception to the rule above among the packages the `Dockerfile` names.
 - LibreOffice brings its own symbol font, OpenSymbol (fonts-opensymbol, a dependency of LibreOffice, MPL-2.0 as
-  part of LibreOffice). ordo neither names nor serves it.
+  part of LibreOffice): the second exception, which comes with LibreOffice rather than by name. ordo neither names
+  nor serves it.
 
 A font package installed only for LibreOffice or the hub's measuring goes in this second table, after the same
 licence check. `apps/hub/test/fonts-licences.test.ts` checks that the `Dockerfile`, both tables and

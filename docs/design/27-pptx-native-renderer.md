@@ -1422,7 +1422,7 @@ _As built (M2, `packages/renderer/src/text/fonts.ts`):_
 
 **As built in M3** (`apps/hub/src/fonts/bundled.ts`, licences in `apps/hub/src/fonts/LICENSES.md`):
 - The image installs `fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter` (bookworm, all SIL OFL 1.1) and keeps their copyright files. `ORDO_FONTS_DIR` (the image sets `/usr/share/fonts`) is where the hub looks; unset, nothing is registered.
-- Since sub-wave 1c (owner answer to Q1c-2, 2026-11-17) the image also installs `fonts-noto-cjk`'s Sans collections (Noto Sans CJK JP, KR, SC, TC and HK, SIL OFL 1.1, about 40 MB; a dpkg rule leaves out its Serif collections) for LibreOffice and the hub's measuring of CJK table cells ("The hub's computer's script faces" below). A TrueType collection is never registered, so the CJK families stay on demand and the screens receive nothing new. `apps/hub/src/fonts/LICENSES.md` records it and DejaVu as installed but not served; `apps/hub/test/fonts-licences.test.ts` keeps the `Dockerfile`'s font packages, LICENSES.md and `BUNDLED_FACES` in step.
+- Since sub-wave 1c (owner answer to Q1c-2, 2026-11-17) the image also installs `fonts-noto-cjk`'s Sans collections (Noto Sans CJK JP, KR, SC, TC and HK, SIL OFL 1.1, about 40 MB; a dpkg rule leaves out its Serif collections, so LibreOffice draws serif CJK font names with the Sans faces, some Chinese and Korean characters in their Japanese forms where fontconfig asks for a Serif family by language) for LibreOffice and the hub's measuring of CJK table cells ("The hub's computer's script faces" below). A font collection (`.ttc`) is never registered, so the CJK families stay on demand and the screens receive nothing new. `apps/hub/src/fonts/LICENSES.md` records it and DejaVu as installed but not served; `apps/hub/test/fonts-licences.test.ts` keeps the `Dockerfile`'s font packages, LICENSES.md and `BUNDLED_FACES` in step.
 - Faces: Inter, Carlito, Caladea, Liberation Sans, Serif and Mono and Noto Sans in regular, italic, bold and bold italic; the Noto script faces in regular and bold.
 - Registration runs at every start. An unchanged file changes nothing. A changed file (a newer image) replaces the row's file. A face the library already has from an upload or Google Fonts (same family, weight, style and range) is left alone. Bundled rows no longer listed are removed. Bundled rows cannot be deleted (409).
 - The Hebrew, Arabic, Devanagari, Tamil, Thai and Myanmar faces carry their script's `unicodeRange`, so a script fallback listed before a deck's own family never draws its Latin text. Noto Sans has no range, because people also pick it for Latin text.
@@ -3255,16 +3255,22 @@ Two rules, both for measuring only, and the browser's parse kept equal to the hu
   (`regroup/r2b/1c/cjk-image/`: bookworm's font packages under private fontconfig files; real hubs of this code,
   with and without LibreOffice, identical on both; this machine's LibreOffice 24.2, not the image's 7.4.7), the
   Korean slides 2, 18, 19 and 20, before -> after the font:
-  - **(B) against LibreOffice's page drawn with the image's fonts** (what a venue on the image compares, its screens
-    drawing with Noto Sans CJK): 0.410 -> 0.751, 0.554 -> **0.5925**, 0.449 -> 0.719, 0.457 -> 0.700. Slide 18 stays
-    0.0075 under 0.60. Its rows line up with LibreOffice's and both sides draw Noto Sans CJK; what differs is how
-    the text is drawn (LibreOffice's quarter em between Korean and Latin punctuation, which rule G measures and ordo
-    does not draw; its small circled digits; a third line it clips in row 1; the header row's weight). It goes to
-    the owner; nothing was tuned.
+  - **(B) against LibreOffice's page drawn with the image's fonts** (what a venue on the image compares, assuming
+    its screens draw Korean with Noto Sans CJK, as the measuring tool's screen did; Google's Noto Sans KR, the same
+    design, once the venue adds it): 0.410 -> 0.751, 0.554 -> **0.5925**, 0.449 -> 0.719, 0.457 -> 0.700. Slide 18 stays
+    0.0075 under 0.60. Its rows line up with LibreOffice's, and both sides draw the Hangul with Noto Sans CJK. The
+    rest differs: the cells ask for "Noto Sans KR", which the library lacks, so ordo measures and draws their
+    circled digits (①-⑤) and Latin punctuation in its default face, Inter (① 1.39 em wide against Noto Sans CJK's
+    1.00), where LibreOffice draws the digits with the run's East Asian face (Noto Sans CJK) and the punctuation with
+    Noto Sans (the weak characters' face, `ko-weak` in §13's follow-ups); LibreOffice's quarter em between Korean
+    and Latin text, which rule G measures and ordo does not draw; row 2's first cell breaks inside the Korean word in
+    ordo and after the circled digit in LibreOffice; LibreOffice clips a third line in row 1; the header row's
+    weight. It goes to the owner; nothing was tuned.
   - **(A) against this machine's page** (WenQuanYi Zen Hei, the standard, continuing the numbers above): 0.421 ->
     0.391, 0.593 -> 0.518, 0.535 -> 0.488, 0.521 -> 0.454. No slide reaches 0.60 either way, and the font lowers all
-    four: rows sized for Noto Sans CJK's 1.448 em lines against a page drawn with Zen Hei's 1.260 em. LibreOffice's
-    own page with the image's fonts scores 0.394, 0.506, 0.478 and 0.448 against this machine's page.
+    four: rows sized for Noto Sans CJK's 1.448 em lines and 0.92 em Hangul against a page drawn with Zen Hei's
+    1.260 em lines and 1.0 em Hangul. LibreOffice's own page with the image's fonts scores 0.394, 0.506, 0.478 and
+    0.448 against this machine's page.
   - The deck's 16 other slides score the same in (A) before and after. Sub-wave 1c's extension set (10 table slides
     of public decks, outside the 0.60 rule): all at or above 0.60 in (B) after; in (A) two stay under it (0.584 and
     0.427 after). Five drops of 0.005 or more go to the owner with slide 18 (three in (A), up to 0.100; two in (B),
@@ -3326,16 +3332,16 @@ on a hub with it (0.947), nothing on one without (0.490, the table listed missin
   cells), each kind asked for every slide: slide 2 **0.697 on both kinds of hub** (0.697480 asked of a hub with
   LibreOffice and of one without; the plan's prediction 0.6975), class native. On a hub without LibreOffice that is
   +0.208 (the table was missing); **on a hub with LibreOffice it is 0.250 below LibreOffice's picture (0.947), a drop
-  the no-regression rule blocks unless the owner accepts it (owner question Q1c-1, no default: the merge waits)**.
+  the no-regression rule blocks unless the owner accepts it: accepted by the owner on 2026-11-17 (Q1c-1)**.
   The track's probe deck shows the same kind of drop on its eaVert slides (0.998, 0.950, 0.999 as LibreOffice's art
   -> 0.979, 0.907, 0.995 as the table object, each equal to its horz twin). Every other slide of the tables set and
   shards 0-2 (463 slides of the 62 table decks, 111 table rows on both kinds of hub) and every held-out slide is
   identical; the census moves slide 2 from hybrid to native and nothing else. On a hub without a Korean face (the
   project's hub image before the owner's answer to Q1c-2), the table measures 0.421 against this machine's page (the
   planner's run without rule H's face), and that image's LibreOffice drew the Korean letters as empty boxes (Q1c-1,
-  Q1c-2). The image now installs Noto Sans CJK (§10), with which its LibreOffice draws them: there slide 2 measures
-  0.751 against that LibreOffice's page (0.410 before the font) and 0.391 against this machine's (ko-cells above,
-  `regroup/r2b/1c/cjk-image/`). Details: `regroup/r2b/1c/vert-cells/notes.md`, `probe/probe-a.md`.
+  Q1c-2). The image now installs Noto Sans CJK (§10), with which its LibreOffice draws them: slide 2 measures 0.751
+  against LibreOffice's page drawn with the image's fonts (0.410 before the font; this machine's LibreOffice 24.2,
+  not the image's 7.4.7) and 0.391 against this machine's (ko-cells above, `regroup/r2b/1c/cjk-image/`). Details: `regroup/r2b/1c/vert-cells/notes.md`, `probe/probe-a.md`.
 <!-- /r2b:vert-cells -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
