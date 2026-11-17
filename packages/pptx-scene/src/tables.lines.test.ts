@@ -78,12 +78,16 @@ describe("the converter's table measure breaks office text where LibreOffice doe
     expect(measure().layout(u, 12.5 * 18).baselines).toHaveLength(4);
   });
 
-  it('keeps the break after a slash whose nearest whitespace before it is a tab, as LibreOffice (probe F)', () => {
-    // editeng holds a tab as a feature character, not whitespace to the i#17155 rule (review 1b probe F, a
-    // 1x1 table): 'ab\t' + 'xxxx/' fit 9.5 characters ('ab\txxxx/' / 'yyyyyyy', two lines); were the tab
-    // whitespace, the slash break would move back to it: 'ab\t' / 'xxxx/yyyyyyy' cut by width, three lines.
-    const t = body(paraOf(['ab\txxxx/yyyyyyy', 18]));
-    expect(measure().layout(t, 9.5 * 18).baselines).toHaveLength(2);
+  it('reads a tab before a slash as the space the drawer draws it as, so its rows hold the drawn lines', () => {
+    // The converter writes a tab as a space (richtext.ts `clean`: tabs are drawn as spaces), so the drawer's
+    // slash rule finds whitespace there and glues the slash ('ab ' / 'xxxx/yyyyyyy' cut by width: three lines).
+    // The measure reads the run's raw text, tab and all: it must break it the same way, or a cell's fixed row
+    // would hold other lines than it draws (review 1b; LibreOffice keeps that slash break, but taking a tab for
+    // a feature character needs the converter to keep it apart from a space first: the follow-up list).
+    const tab = measure().layout(body(paraOf(['ab\txxxx/yyyyyyy', 18])), 9.5 * 18).baselines;
+    const space = measure().layout(body(paraOf(['ab xxxx/yyyyyyy', 18])), 9.5 * 18).baselines;
+    expect(tab).toEqual(space);
+    expect(space).toHaveLength(3);
   });
 });
 

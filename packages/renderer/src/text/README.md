@@ -158,7 +158,7 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
   initial quote too), and after a letter before '%' (text-falls probe C). A break after a slash follows
   LibreOffice's i#17155 rule (its 24.2 source, probe C): it is dropped when whitespace comes at most 64 units
   before the slash in the PowerPoint paragraph (the seventh argument, `hardStart`, is where that paragraph
-  starts; an a:br's '\n' and a tab are not whitespace there: editeng holds both as feature characters), so a web address in a citation stays whole, and kept in an
+  starts; an a:br's '\n' is not whitespace there), so a web address in a citation stays whole, and kept in an
   address or path that starts its paragraph or runs longer; the eighth argument, `glued`, receives each
   dropped break with where LibreOffice moves it (just after the whitespace): lines.ts ends a line there when
   such a break is the line's last before its width, or cuts the line at its width when that is at or before

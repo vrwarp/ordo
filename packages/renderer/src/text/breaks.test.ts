@@ -269,22 +269,6 @@ describe('office break opportunities (LibreOffice 24.2, the text-lines probe dec
     expect(lines('Coptic%20 a/b')).toEqual(['Coptic%20 ', 'a/', 'b']);
   });
 
-  it('takes a tab before a slash for a feature character, as an a:br, not for whitespace (review 1b, probe E)', () => {
-    // editeng holds a tab as a feature character, as it holds an a:br, so ICU's look-back never sees it: a slash
-    // after a label and a tab keeps its break. LibreOffice 24.2 draws 'ab\txxx/' | 'yyy' and keeps
-    // 'Link:\thttps://archive.org/...' on line 1 up to a slash (probe E, Carlito 18 pt; the current point
-    // 8e8a294 matched it; a cell does the same, probe F). A space still glues the slash to its word.
-    expect(office('ab\txxxx/yyyy')).toEqual(['ab\t', 'xxxx/', 'yyyy']);
-    expect(office('Link:\thttps://archive.org/details')).toEqual([
-      'Link:\t',
-      'https://',
-      'archive.org/',
-      'details',
-    ]);
-    expect(office('ab xxxx/yyyy')).toEqual(['ab ', 'xxxx/yyyy']);
-    expect(office('ab\txx yy/zz')).toEqual(['ab\t', 'xx ', 'yy/zz']);
-  });
-
   it('takes the spaces between a quotation mark and a bracket to be exactly the breaking spaces', () => {
     // The office rule's space class is `isBreakSpace`'s, for every UTF-16 unit but the surrogates.
     const wrong: string[] = [];
