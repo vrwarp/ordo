@@ -1439,6 +1439,14 @@ _As built (M2, `packages/renderer/src/text/fonts.ts`):_
 - Until then, a shrunk box in such a family is drawn with another face's widths, so PowerPoint's stored autofit scale is not used: the box is fitted again from full size, as LibreOffice fits it (§6 step 10). The resolver's `metricMatch(family, fallbacks)` decides: true when the family's own faces have loaded and are not a stand-in (`FontFile.substitute`: another family's face registered under its name, as the fidelity harness registers fontconfig's choice), or when the first loaded `fallbackFonts` entry is a metric clone of the family (`METRIC_FAMILIES`: fontconfig's metric aliases and the bundled substitutes above; Calibri Light has none). Once the real font is uploaded, the stored scale is used again.
 - Rejected: dropping `fitScale` in the converter for the non-metric families. The hub cannot know which faces an output will have, and PowerPoint's scale would be lost even after the real font is uploaded.
 
+**The hub's computer's script faces (wave r2b sub-wave 1c).** A hub measures a table cell in Han, Hiragana, Katakana
+or Hangul that its library has no face for with the face its own computer's fontconfig gives for a letter of the
+script (`apps/hub/src/pptx/systemFaces.ts`: `fc-match` by absolute path, once at start, awaited by every import job;
+a TrueType collection read at its index): the face LibreOffice and a browser on that computer fall back to. It is
+for measuring only: never registered in the library, stored or shipped; the outputs draw with their own faces, and
+the library's face always wins. The project's hub image has no CJK face, so there the cells are measured by estimate
+as before (owner question Q1c-2). Details: §15, M9, "Built for wave r2b sub-wave 1c".
+
 **Embedded fonts (M8).** They are EOT, 88% MTX-compressed.
 - Decoded on the pool by a bounded TypeScript MTX/LZCOMP+CTF decoder written from the W3C MTX submission. `eot2ttf` via `tools.run` (timeout, SIGKILL, address-space cap, ≤32 MB in, ≤64 MB out) is the stop-gap.
 - Validated with `fonts/sfnt.ts`.
@@ -3040,7 +3048,8 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
   "Depression" (white text on black cells, a list defining Medium Style 2 - Accent 1 as default) light blue:
   0.86 -> 0.05. Brutalism's slide 14 differs from LibreOffice for another reason: the picture under its table is
   an SVG (`asvg:svgBlip`, white where the table is) with a PNG stand-in, and ordo draws the stand-in.
-- **Korean and other scripts' cells** (tables-object.md §3): the measure breaks where the renderer breaks
+- **Korean and other scripts' cells** (tables-object.md §3; since sub-wave 1c a hub measures them with its computer's
+  face and LibreOffice's 1/4 em: "Built for wave r2b sub-wave 1c", below): the measure breaks where the renderer breaks
   (`@ordo/renderer` text/breaks.ts `breakOpportunities`: UAX#14 with Korean words kept whole, never before
   `)` `」` `,` `?` `・` or after `(` `「`) and spaces a paragraph by the face that draws its script
   (`FaceSource.script`, asked for Han, Kana and Hangul only, `GLYPH_SCRIPTS`: a shaped script such as Arabic,
@@ -3200,6 +3209,47 @@ sizes, read from LibreOffice's PDF), all to the 1/100 mm (`pptx-scene` README "L
   (Colossians 58,715 B stored, the largest). The question-3 target is still met by 0 of 8 (mean 0.767 against
   0.939; text-lines follows). Details: `regroup/r2b/tables-cells/notes.md`.
 <!-- /r2b:tables-cells -->
+
+<!-- r2b:ko-cells -->
+**Built for wave r2b sub-wave 1c: Korean and other scripts' cells (ko-cells track).** The owner's minimum (every
+table slide at least 0.60 on both kinds of hub, 2026-11-17) left the Korean bulletin's slides 18, 19 and 20 under it
+on both kinds of hub (0.593, 0.538 and 0.439): a hub measured their Hangul cells by estimate, its library having no
+Hangul face, where LibreOffice and the screens on its computer draw them in the face fontconfig gives (WenQuanYi Zen
+Hei here, lines 1.2598 em apart), and LibreOffice puts a quarter em between Hangul and Latin text that no model had.
+Two rules, both for measuring only, and the browser's parse kept equal to the hub's:
+- **The hub's script face from its computer (rule H, `apps/hub/src/pptx/systemFaces.ts`).** For a script drawn glyph
+  by glyph (Han, Hiragana, Katakana, Hangul: `GLYPH_SCRIPTS`) that the library has no face for, a table cell is
+  measured with the face this computer's fontconfig gives for a letter of the script (`fc-match -f
+  '%{file}\t%{index}' :charset=<hex>`, run by absolute path, never through PATH; a face is kept only when it maps the
+  letter, read with `sfntMetrics(bytes, index)`, which reads a TrueType collection at its index, and fits
+  `FACE_LIMITS.fileBytes`). It is resolved once, when the hub starts, as a promise that every job building a
+  `pptx-scene` input (imports, re-imports, Reset slide) and the client-scene check await (10 s at most; then no
+  system face, logged), so a deck imported during start-up is stored as one imported later. The library's face
+  always wins; nothing is stored or drawn with the system face; the job log names it ("table cells in Hangul
+  measured with this computer's face wqy-zenhei.ttc"). **The project's hub image has no CJK face**
+  (`fonts-noto-core`): there nothing is found and the cells are measured by estimate, as before (owner question
+  Q1c-2: nothing changes there in 1c; a follow-up is recommended).
+- **The browser's scene is refused for such a deck** (`clientScene.ts` `SCRIPT_FACE_REFUSAL`, in the
+  `pptx-client-scene` task): a browser cannot measure with the hub's computer's faces, so a scene whose table cells
+  hold a script the hub measures with a system face (`systemOnlyScripts`) is refused and the hub parses the deck
+  itself, one stored form whichever side parses. `hub-import --equivalence` lists such decks as "parsed on the hub
+  (script face)".
+- **LibreOffice's 1/4 em (rule G, `packages/pptx-scene/src/asian-gaps.ts`).** LibreOffice 24.2 puts a quarter of the
+  size of the character before it at every boundary between an East Asian portion of a paragraph and another: a weak
+  character joins the portion before it, a leading weak character or space is a portion of its own, never across a
+  line break (probed: every gap within 0.37 pt of the quarter; the spread under it is LibreOffice's and unexplained).
+  It is applied only in the converter's model of LibreOffice's cell layout (`tables.ts`, the `measured` bodies that
+  give LibreOffice's rows and baselines), never in the stored text or in ordo's own model of its drawing (owner
+  question Q1c-3: the 1/4 em for row heights only): ordo draws no such gap.
+- **Measured** on real hubs of this code, with and without LibreOffice, each asked for every slide of the deck: the
+  Korean slides 18, 19 and 20 at 0.634, 0.759 and 0.665 on both; slide 2 unchanged (LibreOffice's art, 0.947, with
+  LibreOffice; 0.490 without: `vert-cells`); every other table slide of the tables set and shards 0-2, the held-out
+  set included, identical. Probe cells outside LibreOffice's lines or rows, named with their cause and left as
+  follow-ups: LibreOffice breaks between a Latin character and the Hangul after it inside a word, where ordo keeps
+  the word; a leading weak character, put in a run of its own by rule G, is measured in the chain's face instead of
+  its portion's (0.9 pt on one probe row); the weak characters' faces in line heights. Details:
+  `regroup/r2b/1c/ko-cells/notes.md`, `probe/probe.md`.
+<!-- /r2b:ko-cells -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 
