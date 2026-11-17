@@ -1800,9 +1800,10 @@ budget only decides that it is drawn so.
   holds a decoration to at most its shapes drawn one by one + 10 % (checked).
 
 <!-- r2b:open-items -->
-**Open items of §12-13 after wave r2b sub-waves 1 and 1b** (one list: sub-wave 1's effect-units, units-live and
-tables-conv, then sub-wave 1b's tables-flip, tables-form, tables-cells and text-lines; the wave's integrations
-measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`).
+**Open items of §12-13 after wave r2b sub-waves 1, 1b and 1c** (one list: sub-wave 1's effect-units, units-live
+and tables-conv, sub-wave 1b's tables-flip, tables-form, tables-cells and text-lines, then sub-wave 1c's ko-cells and
+vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`,
+`regroup/r2b/integrate-1c.md`).
 - _Closed in sub-wave 1:_ r2a must a (a decoration at its caps drawn at once on the outputs): a `whole` effect unit
   made in slices, left out of an output raster until made (`SlideDrawOptions.late`, C2b, on every asset-worker
   raster) and faded in. r2a must b (a GO waits for units): a jump is drawn at once, a GO hurries an armed or warm
@@ -1844,20 +1845,42 @@ measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`).
   asked for every one (review 1b; the four others, all in the Korean deck, are 1c's, below). Live safety: a jump while another cue of the layer stays armed
   no longer waits for that arm to make its units (up to `UNIT_WAIT_MS`, a GO 1.3 s late at 3840 here): the live
   job rushes it (design/14 "Late units", Rush).
-- _Left to sub-wave 1c (the owner, 2026-11-17: every table slide ≥ 0.60 on both kinds of hub, then the wave's
-  pull request merges):_
-  - The Korean deck's slide 2, the one table with vertical cells, is still LibreOffice's art on a hub with
-    LibreOffice (owner question T4's default) and 0.490 without it: `vert-cells` makes it the table object (and
-    reads that table's outer shadow).
-  - The Korean deck's slide 20 (0.543 on a hub without LibreOffice, 0.439 on a hub with it) and, on a hub with
-    LibreOffice only, its slides 18 (0.593; 0.634 without) and 19 (0.538; 0.759 without): `ko-weak`'s measured
-    LibreOffice behaviour in table cells (below), with a probe deck; T2 makes in-cell spacing as LibreOffice's
-    product behaviour there. A hub with LibreOffice draws these three lower than the stored form scores because it
-    lays the Korean cells out with its library's faces (the 1b plan's "the hub's library faces"; review 1b asked
-    that hub for every table slide, where 1b's report had inferred these three from the stored form). Slide 19 was
-    0.557 on that hub before 1b (all-tables' asked run at 8ee17c9) and 0.539 at 8e8a294.
-  - Each with the table slides 1b never tuned on (the held-out set of the 1b report) measured before and after,
-    and no regression; a slide that cannot reach 0.60 goes to the owner with the options, nothing lowered.
+- _Closed in sub-wave 1c (the owner, 2026-11-17: every table slide ≥ 0.60 on both kinds of hub, then the wave's
+  pull request merges):_ the four Korean bulletin slides left to 1c (18, 19 and 20 under the minimum on both kinds
+  of hub at the 1b head, 9a7b6a5; slide 2 on a hub without LibreOffice) are above it on both kinds of hub, each asked
+  of a real hub with LibreOffice and of one without (`--ask-hub`, `--ask-hub-nolo`, which 1c added to the harness),
+  on this machine: slide 2 **0.697** on both (0.947, LibreOffice's art, with
+  LibreOffice and 0.490, the table missing, without it, at the 1b head and at 8e8a294), slide 18 **0.634** (0.593),
+  slide 19 **0.759** (0.538), slide 20 **0.665** (0.439). All 63 table slides of shards 0-2 and the tables set (111
+  rows, both kinds of hub asked for each) and golden-pptx's 16 are at least 0.60 on both kinds of hub; the others did
+  not move, the lowest of them John 5 vs 18 slide 1 (0.633; golden-pptx's lowest, w65_00H's first table slide,
+  0.635). How (§15 M9, "Built for wave r2b sub-wave 1c"): a hub measures Han, Kana and Hangul table cells that its
+  library has no face for with its own computer's face (rule H, `ko-cells`); the converter's model of
+  LibreOffice's cell layout adds LibreOffice's 1/4 em at East Asian/other boundaries, for row heights only (rule G,
+  owner question Q1c-3); a table whose vertical cells are all `eaVert` is the table object, drawn horizontally as
+  LibreOffice 24.2 draws it (rule V, `vert-cells`).
+  - **T4 answered by the work:** the bulletin's slide 2 is the editable table object on every kind of hub (its cells
+    keep `vert` 'eaVert' for a later vertical text engine). On a hub with LibreOffice that is **0.250 below
+    LibreOffice's picture (0.947 -> 0.697), a drop the no-regression rule blocks unless the owner accepts it: owner
+    question Q1c-1, no default; the wave's pull request waits for the answer.** Tables with `vert`, `vert270`,
+    `wordArtVert`, `wordArtVertRtl` or `mongolianVert` cells stay LibreOffice's art (Q1c-5).
+  - **Corrected:** this entry said the Korean slides 18 and 19 were under the minimum "on a hub with LibreOffice
+    only" (0.634 and 0.759 without). Both kinds of hub drew them as low (0.593, 0.538 and 0.439 at 9a7b6a5; 0.596,
+    0.539 and 0.438 at 8e8a294, each asked of both): the 0.634 and 0.759 "without" were the measuring tool's own
+    drawing (its `noLoSsim`), which lays the cells out with its host's faces (`fc-match`), not a hub's. Both kinds of
+    hub measured the Hangul cells by estimate, their library having no Hangul face.
+  - **The shipped hub image has no Korean face** (`fonts-noto-core`): there rule H finds nothing, the four slides
+    stay as at the 1b head (0.421, 0.593, 0.535 and 0.521 against this machine's LibreOffice page) and that image's
+    LibreOffice draws Korean as empty boxes (probed). Owner question Q1c-2: as built for 1c; a CJK face for the image
+    (fonts-wqy-zenhei) is recommended for the follow-up pull request.
+  - **The table's outer shadow is read, not drawn** (rule 4): slide 2's table casts one; LibreOffice draws it, ordo
+    notes it on the slide (0.697 without it; about 0.717 with it, measured in the planner's prototype).
+  - Held out (`regroup/r2b/integrate-1c.md`): the 59 other table slides of the frozen list (tiers A and B, 38 that 1b
+    never tuned on; tier C, 21 that 1b tuned on) and golden-pptx's 16 are identical at the 1b head and the 1c head on
+    both kinds of hub. None of them has CJK cells, vertical cells or a table shadow, so they show that 1c changed
+    nothing else; they do not test the new rules. Ten public table slides with CJK cells that no 1c track saw (owner
+    question Q1c-4) rose on both kinds of hub and none fell (two from under 0.60: 0.584 -> 0.696 and 0.375 -> 0.726);
+    a probe hold-out deck was written after the rules were frozen. `CONVERTER_VERSION` stays 2 (§15, tables-form).
 - _Left to a follow-up pull request (the owner, 2026-11-17: once the minimum is met, table and text fidelity work
   stops chasing LibreOffice; with sub-waves 2-4):_
   - LibreOffice's glyph-advance model and one row measure (`tables-widths`): with the harness's faces, 148 of
@@ -1870,12 +1893,23 @@ measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`).
     heights as exact spacing would remove it and changes what the editor shows of a cell's spacing.
     Bottom-anchored cells that overflow are not probed (`loBlockTop` keeps them on the inner bottom, never above
     the top).
-  - The Korean bulletin's slide 20 (1c, above) is still under blank: LibreOffice 24.2 draws the Latin punctuation inside its
-    Korean text in the Latin face (not the Korean one, as this entry said before; probe decks, tables/gaps-flip
-    B.1); the extra lines come from the 1/4 em spacing LibreOffice adds at every boundary between East Asian and
-    other text, and from the weak characters (circled digits, corner brackets) taking the face of the script
-    around them (`ko-weak`; slides 18 and 19 are 1c's on a hub with LibreOffice, above). The other script table slides (Coptic and
-    Arabic cells) are `script-cells`'; the picture under a table (Brutalism 14) is `svg-under`'s.
+  - Korean, Chinese and Japanese cells after sub-wave 1c (rule G took LibreOffice's 1/4 em for the rows, above):
+    the weak characters (circled digits, corner brackets) take the face of the script around them in LibreOffice
+    (`ko-weak` beyond 1c: their face in cells and in line heights); LibreOffice breaks between a Latin character
+    and the Hangul after it inside a word, where ordo keeps the word; rule G puts a leading weak character in a run of
+    its own, measured in the chain's face instead of its portion's (the gap per character inside `Measure.lines`
+    would keep it); the 1/4 em stored in the cells' text too (option F, 0.699 on slide 20) only if owner question
+    Q1c-3 is answered no. A CJK face for the shipped hub image (fonts-wqy-zenhei) or the library (Noto Sans KR and
+    the other CJK faces) so rule H holds there (Q1c-2). The bulletin's non-table slides under 0.60 (5, 12, 14, 11
+    and 4, unchanged by 1c) are not table slides. The other script table slides (Coptic and Arabic cells) are
+    `script-cells`'; the picture under a table (Brutalism 14) is `svg-under`'s.
+  - Vertical cells and the table's shadow after sub-wave 1c: drawing a table's outer shadow (the emission, a
+    renderer rule for a table's shadow in `drawShapeObject`'s fallback and the effect budget, `table/reach.ts`, the
+    draw off the GO path, bench rows; about +0.02 on the bulletin's slide 2); `wordArtVert`, `wordArtVertRtl` and
+    `mongolianVert` cells as the table object (LibreOffice draws them horizontally, probe A) and a vertical-writing
+    engine for `vert`/`vert270` cells and boxes (Q1c-5), and whether `eaVert` then follows PowerPoint or LibreOffice;
+    classify's static census feature 'vert' still counts an `eaVert` cell (its tier only); LibreOffice's garbled wrap
+    of a pure-Hangul paragraph inside an `eaVert` cell is not copied.
   - Text: LibreOffice's break after a slash before a digit and its exact-width rule for a slash are not modelled
     (text-falls probe C; §6 step 3); own-run
     line heights in a box that shrinks its text wait for LibreOffice's autofit model (its spacing scale on single
@@ -3105,8 +3139,9 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
 
   The target column is question 3's gate. The owner replaced it on 2026-11-16 (no slide below its score at 8e8a294,
   tables-cells merged, by 0.005 or more) and on 2026-11-17 (every table slide ≥ 0.60 on both kinds of hub): all 8
-  meet it at the 1b head, each above its 8e8a294 score; the Korean deck's slides 2 and 20, and on a hub with
-  LibreOffice its slides 18 and 19, are sub-wave 1c's (§13).
+  meet it at the 1b head, each above its 8e8a294 score; the Korean deck's slides 18, 19 and 20 (under it on both
+  kinds of hub at the 1b head) and slide 2 (missing on a hub without LibreOffice, LibreOffice's art on one with
+  it) were sub-wave 1c's (§13, closed: "Built for wave r2b sub-wave 1c", below).
 
   The stored form is what churches see on either kind of hub (since sub-wave 1b LibreOffice's form, "The stored
   form" below; before it the deck's row heights grown by the drawer's lines); the harness scores a table slide
