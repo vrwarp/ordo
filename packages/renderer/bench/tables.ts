@@ -9,7 +9,8 @@ import type { TableTiming } from '../src/table/table.page.test-util.ts';
  * Table task bench (design/27 M9 tables, §13: no asset-worker task over 50 ms). Runs the page of
  * table.browser.test.ts (`src/table/table.page.test-util.ts`) in headless Chromium with DejaVu Sans: the
  * corpus's largest table kinds (the 13,782-character chart, the 96-cell bulletin, the 640-cell master grid)
- * and two tables at `TABLE_LIMITS` (60,000 characters in 4,096 cells, or in 6 cells of 10,000) are prepared
+ * two tables at `TABLE_LIMITS` (60,000 characters in 4,096 cells, or in 6 cells of 10,000) and one of hostile
+ * imported text (a slash in every word, one word a line: LibreOffice's slash rule at every line end) are prepared
  * as the asset worker prepares them, in 8 ms slices, then drawn at 3840.
  *
  *   pnpm --filter @ordo/renderer bench:tables [--runs 5]

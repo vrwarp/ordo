@@ -1,5 +1,5 @@
 import type { ShapeObject } from '@ordo/domain';
-import { bulletin, chart, limitTable, masterGrid } from '../../bench/cases/table.ts';
+import { bulletin, chart, limitTable, masterGrid, slashTable } from '../../bench/cases/table.ts';
 import { clampShapeObject } from '../shape.ts';
 import { currentFontEnv } from '../text/fonts.ts';
 import { measurerFor } from '../text/measure.ts';
@@ -9,7 +9,8 @@ import { clearTableCache, layoutTable, prepareTableLayout } from './layout.ts';
 /**
  * Browser side of table.browser.test.ts (design/27 M9 tables, §13's 50 ms task): in headless Chromium with a
  * real face, each of the bench's large tables (the 13,782-character chart, the 96-cell bulletin, the 640-cell
- * master grid; the bench adds two at `TABLE_LIMITS`: 4,096 cells, or 6 cells of 10,000 characters) is prepared as the asset worker prepares it, in slices of 8 ms (`prepareTableLayout`), then
+ * master grid; the bench adds two at `TABLE_LIMITS`: 4,096 cells, or 6 cells of 10,000 characters, and one of
+ * hostile imported text, a slash in every word) is prepared as the asset worker prepares it, in slices of 8 ms (`prepareTableLayout`), then
  * drawn at 3840: every slice and the draw must stay within the 50 ms task. The chart is drawn in words its
  * page has not measured before (as an output's first draw of a slide).
  */
@@ -49,6 +50,10 @@ async function run(face: ArrayBuffer, limits: boolean): Promise<TableTiming[]> {
     tables.push(
       ['table at TABLE_LIMITS (4,096 cells, 60,000 characters)', (v: number) => limitTable(v, 'grid')],
       ['table at TABLE_LIMITS (6 cells of 10,000 characters)', (v: number) => limitTable(v, 'cells')],
+      [
+        "imported text, a slash in every word ('a/b ', one word a line; 6 cells of 10,000)",
+        (v: number) => slashTable(v),
+      ],
     );
   for (const [name, make] of tables) {
     // Warm the code: a layout of a copy in a vocabulary of its own.

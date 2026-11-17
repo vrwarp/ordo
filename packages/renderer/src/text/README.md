@@ -162,7 +162,9 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
   address or path that starts its paragraph or runs longer; the eighth argument, `glued`, receives each
   dropped break with where LibreOffice moves it (just after the whitespace): lines.ts ends a line there when
   such a break is the line's last before its width, or cuts the line at its width when that is at or before
-  the line's start (`slashBreak`). Ordo's own text (no `lineModel`, or 'ordo') keeps UAX#14 (owner question
+  the line's start (`slashBreak`, which reads only the glued breaks inside the word that does not fit:
+  `PreparedPara.glued` keeps them ascending, so a line end costs the few a word holds, not the paragraph's; a
+  scan of them all made long text quadratic, review 1b). Ordo's own text (no `lineModel`, or 'ordo') keeps UAX#14 (owner question
   T1's default). Not modelled: LibreOffice breaks after a slash before a digit, and never ends a line after a
   slash exactly at its width.
 - `graphemeBoundaries(text, start, end)`: clusters, i.e. `Intl.Segmenter` graphemes joined across a

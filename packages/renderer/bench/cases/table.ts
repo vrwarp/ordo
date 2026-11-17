@@ -250,6 +250,31 @@ export function limitTable(vocab = 0, shapeOf: 'grid' | 'cells' = 'grid'): Shape
   );
 }
 
+/**
+ * Hostile imported text at the clamp's limits: 6 cells of 10,000 characters in one row of 26 px columns, a
+ * slash in every word ('a/b '), so each word takes a line of its own and every line end asks LibreOffice's
+ * i#17155 slash rule (text/lines.ts `slashBreak`) for a glued break inside the next word (review 1b: a scan of
+ * the paragraph's every glued break there made a cell's layout quadratic in its length). Another `vocab` gives
+ * words no other has.
+ */
+export function slashTable(vocab = 0): ShapeObject {
+  const cells: TableCell[] = [...Array(6)].map((_, i) => ({
+    text: `a${vocab}x${i}/b `.repeat(Math.ceil(10_000 / `a${vocab}x${i}/b `.length)).slice(0, 10_000),
+  }));
+  return shape(
+    'slashes',
+    { x: 0, y: 0, w: 156, h: 1080, rotation: 0 },
+    {
+      cols: Array(6).fill(26),
+      rows: [1080],
+      cells,
+      base: { ...base(8), insets: { l: 1, t: 1, r: 1, b: 1 } },
+      lineStyles: [{ width: 1, color: GREY }],
+      ...grid(1, 6),
+    },
+  );
+}
+
 /** The M6 group of a table: its grid shapes and text boxes, laid out with a fixed-width measurer. */
 function group(o: ShapeObject): SlideObject[] {
   const c = clampShapeObject(o);

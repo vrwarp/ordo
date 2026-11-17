@@ -677,13 +677,24 @@ function flowParas(
       if (!glued) return null;
       const ws = queue[i]!.piece.start;
       const we = queue[j]!.piece.end;
+      // Only the glued breaks inside the word (ascending: the first after its start by a binary search), so a
+      // line end costs the few the word holds (the rule looks back 64 units), not the paragraph's every one:
+      // a scan of them all made long text quadratic (review 1b).
+      const { at, to: back } = glued;
+      let k = 0;
+      let hi = at.length;
+      while (k < hi) {
+        const mid = (k + hi) >> 1;
+        if (at[mid]! <= ws) k = mid + 1;
+        else hi = mid;
+      }
       let best = -1;
       let to = -1;
-      for (const [g, t] of glued) {
-        if (g <= ws || g >= we || g <= best) continue;
+      for (; k < at.length && at[k]! < we; k++) {
+        const g = at[k]!;
         if (fitsTo(g + ((text.codePointAt(g) ?? 0) > 0xffff ? 2 : 1), room - adv)) {
           best = g;
-          to = t;
+          to = back[k]!;
         }
       }
       if (best < 0) return null;

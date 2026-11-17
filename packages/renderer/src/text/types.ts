@@ -258,10 +258,11 @@ export type PreparedPara = {
   /** Style cuts that fell inside a cluster and moved to its end (§6 step 4), for the drawers to report. */
   movedCuts?: number;
   /**
-   * Office text: the breaks after a slash LibreOffice's i#17155 rule drops (breaks.ts `glued`), each with
-   * the offset it moves back to; lines.ts follows them where one is a line's last break before its width.
+   * Office text: the breaks after a slash LibreOffice's i#17155 rule drops (breaks.ts `glued`), ascending
+   * (`at`), each with the offset it moves back to (`to`, the same index); lines.ts follows them where one is a
+   * line's last break before its width, reading only those inside the word that does not fit.
    */
-  glued?: ReadonlyMap<number, number>;
+  glued?: { readonly at: readonly number[]; readonly to: readonly number[] };
 };
 
 /** A paragraph's bullet or number before layout (bullets.ts); lines.ts sizes and places it. */

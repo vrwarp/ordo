@@ -117,7 +117,8 @@ function cutPieces(
   }
   const out: PreparedPara = { para, bidi, pieces };
   if (moved) out.movedCuts = moved;
-  if (glued?.size) out.glued = glued;
+  // breakOpportunities sets them in the order it finds them: ascending.
+  if (glued?.size) out.glued = { at: [...glued.keys()], to: [...glued.values()] };
   return out;
 }
 

@@ -333,6 +333,37 @@ describe("PowerPoint's stored autofit scale and the face drawing the box", () =>
   });
 });
 
+describe("the office slash rule's cost (LibreOffice's i#17155, lines.ts `slashBreak`)", () => {
+  it('lays a paragraph of slashes out about as fast as one without: linear in its length', () => {
+    // One office paragraph at the render clamp's 10,000 characters, one 'a/b' word a line: every line end asks
+    // the slash rule for a glued break inside the next word. Looking through the paragraph's every glued break
+    // there made it quadratic (review 1b: 39-44 ms against 4-5 ms without slashes, x3.4-3.7 a doubling), on
+    // the GO path (a jump behind an arm preparing such a table was 200-300 ms late at 3840).
+    const time = (c: string) => {
+      const o = obj(
+        `a${c}b `.repeat(2500),
+        { lineModel: 'office' },
+        { box: { x: 0, y: 0, w: 45, h: 100, rotation: 0 } },
+      );
+      const t = performance.now();
+      const l = layoutRich(m(), o, LEGACY_FONT_ENV);
+      const ms = performance.now() - t;
+      expect(l.lines).toHaveLength(2500);
+      return ms;
+    };
+    time('/');
+    time('x');
+    let slash = Number.POSITIVE_INFINITY;
+    let plain = Number.POSITIVE_INFINITY;
+    // Interleaved, the fastest of five each: what the work costs, not the machine's load.
+    for (let k = 0; k < 5; k++) {
+      slash = Math.min(slash, time('/'));
+      plain = Math.min(plain, time('x'));
+    }
+    expect(slash).toBeLessThan(3 * plain + 1);
+  });
+});
+
 describe('bidi L2', () => {
   it('reverses runs from the highest level down to the lowest odd one', () => {
     expect(visualOrder([0, 0, 0])).toEqual([0, 1, 2]);
