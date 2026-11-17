@@ -5,7 +5,9 @@
  * an edit of a cell (`editCell`, typing), Find & Replace in cells (`findInCells`), a column added
  * (`rowCol`), the box resized (`updateObject`, `transformGroup`). The synthetic table has the condition the
  * absolute shortfall gets wrong (all-tables' P1): a cell whose drawn need is 3 px over its fixed row before
- * any edit, so a one-letter fix and a Find & Replace that wraps nothing must move no row.
+ * any edit, so a one-letter fix and a Find & Replace that wraps nothing must move no row. A shorter box
+ * gives a row back the room it took, down to its text (review 1b: fixed rows squashed with the box spilled
+ * every cell over the row below), and a row or column op pairs each cell with itself by its place.
  */
 import { cellRich, Presentation, type ShapeObject, type SlideObject, type TableData } from '@ordo/domain';
 import { clampShapeObject } from '@ordo/renderer/shape.ts';
@@ -17,6 +19,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { editCell, findAndReplace, rowCol, typeText } from '../src/views/editor/actions.ts';
 import { change, openPresentation, undo, useEditor } from '../src/views/editor/editorStore.ts';
 import { updateObject } from '../src/views/editor/ops.ts';
+import { tableBoxAfterTransform } from '../src/views/editor/SlideCanvas.tsx';
 import { transformGroup } from '../src/views/editor/ops/group.ts';
 import { editText } from '../src/views/editor/ops/index.ts';
 import { findInCells } from '../src/views/editor/ops/slides.ts';
@@ -70,6 +73,11 @@ function imported(): ShapeObject {
 }
 
 const rows = (o: SlideObject) => (o as ShapeObject).table!.rows;
+/** Each laid cell's need past its drawn row(s), in px (> 0: its text draws over the row below). */
+const spill = (o: SlideObject) => {
+  const l = layout(o as ShapeObject)!;
+  return l.cells.map((c) => c.need - (l.rowY[c.row + c.rows]! - l.rowY[c.row]!));
+};
 const type = (o: SlideObject, i: number, text: string) =>
   editCell(o, i, (v) => editText(v, text, text.length)) as ShapeObject;
 
@@ -209,5 +217,125 @@ describe('the ops that commit a table change grow its fixed rows, one undo step 
     expect(rows(table())[1]).toBeCloseTo(TWO, 6);
     undo();
     expect(table()).toEqual(before);
+  });
+});
+
+describe('a shorter box gives each fixed row back the room it took, down to its text', () => {
+  /** A 3 × 2 imported table, every row exactly its one-line cells' need: nothing spills before the edit. */
+  const fitted = () => shape(gridTable(3, 2, { rows: [ONE, ONE, ONE], rowRule: 'fixed' }));
+  const deckOf = (o: ShapeObject) =>
+    Presentation.parse({
+      id: 'deck',
+      title: 'Order of service',
+      kind: 'slides',
+      sections: [{ id: 'sec', label: 'Main', short: 'M', slides: [{ id: 'sl', objects: [o] }] }],
+    });
+  const table = () => useEditor.getState().draft!.sections[0]!.slides[0]!.objects[0] as ShapeObject;
+  const open = (o: ShapeObject) => {
+    openPresentation(deckOf(o));
+    useEditor.setState({ slideId: 'sl' });
+  };
+  const resize = (box: ShapeObject['box']) =>
+    change((p) => updateObject(p, 'sl', 'table', (o) => ({ ...o, box })));
+
+  it('the canvas height drag to 60 %: every row back at its text, the box as tall as before', () => {
+    const o = fitted();
+    expect(Math.max(...spill(o))).toBeLessThanOrEqual(1e-9);
+    open(o);
+    resize(tableBoxAfterTransform(o, o.box.h, { x: 150, y: 130, scaleX: 1, scaleY: 0.6 }));
+    expect(Math.max(...spill(table()))).toBeLessThanOrEqual(1e-6);
+    expect(layout(table())!.height).toBeCloseTo(3 * ONE, 6);
+    expect(table().box.h).toBeCloseTo(3 * ONE, 6);
+    undo();
+    expect(table()).toEqual(o);
+  });
+
+  it('a corner drag to 80 % (the usual resize) and the Object panel H field at half: no cell spills', () => {
+    const o = fitted();
+    open(o);
+    resize(tableBoxAfterTransform(o, o.box.h, { x: 140, y: 140, scaleX: 0.8, scaleY: 0.8 }));
+    expect(Math.max(...spill(table()))).toBeLessThanOrEqual(1e-6);
+    open(o);
+    resize({ ...o.box, h: o.box.h / 2 });
+    expect(Math.max(...spill(table()))).toBeLessThanOrEqual(1e-6);
+    expect(table().box.h).toBeCloseTo(3 * ONE, 6);
+  });
+
+  it('a row already short of its text before the squash keeps that shortfall, no more and no less', () => {
+    const o = imported(); // row 0 three px short; rows 1 and 2 with room (40)
+    open(o);
+    resize({ ...o.box, h: o.box.h / 2 });
+    const s = spill(table());
+    const l = layout(table())!;
+    const rowOf = l.cells.map((c) => c.row);
+    for (const [i, d] of s.entries()) expect(d).toBeCloseTo(rowOf[i] === 0 ? 3 : 0, 6);
+    // Rows 1 and 2 had room: they give back only what their text needs (ONE < 40), not all of it.
+    expect(l.rowY[3]! - l.rowY[1]!).toBeCloseTo(2 * ONE, 6);
+  });
+
+  it('a taller box grows nothing and shrinks nothing (the room stays)', () => {
+    const o = imported();
+    const tall = { ...o, box: { ...o.box, h: o.box.h * 2 } };
+    expect(fitRows(o, tall, layout)).toEqual(tall);
+  });
+});
+
+describe('a row or column op pairs each cell with itself, by its place', () => {
+  const deckOf = (o: ShapeObject) =>
+    Presentation.parse({
+      id: 'deck',
+      title: 'Order of service',
+      kind: 'slides',
+      sections: [{ id: 'sec', label: 'Main', short: 'M', slides: [{ id: 'sl', objects: [o] }] }],
+    });
+  const table = () => useEditor.getState().draft!.sections[0]!.slides[0]!.objects[0] as ShapeObject;
+
+  /**
+   * Fixed rows [ONE, TWO - 3, ONE]: row 1's 'aaa bbb' sits in the narrow column (two lines, 3 px short of
+   * its row before any edit), row 0's 'aaa bbb' in the wide one (one line).
+   */
+  function repeated(): ShapeObject {
+    const t = gridTable(3, 2, { cols: [200, 60], rows: [ONE, TWO - 3, ONE], rowRule: 'fixed' });
+    t.cells[0] = { text: 'aaa bbb' };
+    t.cells[3] = { text: 'aaa bbb' };
+    return shape(t);
+  }
+
+  it("deleting a row whose cell repeats a later cell's text grows no row", () => {
+    const o = repeated();
+    expect(needOf(o, 3) - rows(o)[1]!).toBeCloseTo(3, 9);
+    openPresentation(deckOf(o));
+    useEditor.setState({ slideId: 'sl' });
+    rowCol('table', 'deleteRow', 0);
+    expect(rows(table())).toEqual([TWO - 3, ONE]);
+    expect(table().box.h).toBeCloseTo(o.box.h - ONE, 9);
+  });
+
+  it('a row added above grows no row, and a row deleted under a merged cell grows its last row', () => {
+    const o = repeated();
+    openPresentation(deckOf(o));
+    useEditor.setState({ slideId: 'sl' });
+    rowCol('table', 'rowAbove', 0);
+    expect(rows(table())).toEqual([ONE, ONE, TWO - 3, ONE]);
+    // A merged cell over rows 0-1 whose text needs both rows: deleting row 1 leaves it one row short.
+    const t = gridTable(3, 2, { rows: [40, 40, 40], rowRule: 'fixed' });
+    t.cells = [
+      { text: 'a' },
+      { text: 'x x x x x x x', rowSpan: 2 },
+      { text: 'b' },
+      { text: 'c' },
+      { text: 'd' },
+    ];
+    const m = shape(t);
+    const need = needOf(m, 1);
+    expect(need).toBeGreaterThan(40);
+    expect(need).toBeLessThanOrEqual(80);
+    openPresentation(deckOf(m));
+    useEditor.setState({ slideId: 'sl' });
+    rowCol('table', 'deleteRow', 2); // cell 2 ('b') is row 1's: the merge now spans row 0 alone
+    expect(rows(table())).toHaveLength(2);
+    expect(rows(table())[0]).toBeCloseTo(need, 9);
+    expect(rows(table())[1]).toBe(40);
+    expect(Math.max(...spill(table()))).toBeLessThanOrEqual(1e-6);
   });
 });

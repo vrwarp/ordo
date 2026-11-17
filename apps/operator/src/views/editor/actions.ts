@@ -87,7 +87,7 @@ import {
 import type { SlideRect } from './CanvasGuides.tsx';
 import { addObject, getSlide, type ZOrder } from './ops.ts';
 import { type AlignTo, alignedBox, placeObjects, placementArea } from './placement.ts';
-import { fitTable } from './tableFit.ts';
+import { cellsByPlace, fitTable } from './tableFit.ts';
 // F: the PowerPoint card's slide ops (pure, beside the card's other readers).
 import { showObjects, showPicture } from '../../lib/pptxImport.ts';
 import { toast } from '../../state/toasts.ts';
@@ -469,20 +469,28 @@ export function rowCol(objectId: string, drawnOp: RowColOp, cell?: number): numb
     if (x.type !== 'shape' || !x.table) return x;
     let y = x;
     let at: { row: number; col: number } | undefined = a && { row: a.row, col: a.col };
+    // The line added or deleted, for the cells' places across it (tableFit.ts `cellsByPlace`).
+    let line: [axis: 'row' | 'col', at: number, added: boolean] = ['row', 0, true];
     if (op === 'rowAbove') {
+      line = ['row', a ? a.row : 0, true];
       y = a ? insertRow(x, a.row, a.row) : insertRow(x, 0, 0);
       if (at) at.row++;
-    } else if (op === 'rowBelow')
+    } else if (op === 'rowBelow') {
+      line = ['row', a ? a.row + a.rows : R, true];
       y = a ? insertRow(x, a.row + a.rows, a.row + a.rows - 1) : insertRow(x, R, R - 1);
-    else if (op === 'colLeft') {
+    } else if (op === 'colLeft') {
+      line = ['col', a ? a.col : 0, true];
       y = a ? insertCol(x, a.col, a.col) : insertCol(x, 0, 0);
       if (at) at.col++;
-    } else if (op === 'colRight')
+    } else if (op === 'colRight') {
+      line = ['col', a ? a.col + a.cols : C, true];
       y = a ? insertCol(x, a.col + a.cols, a.col + a.cols - 1) : insertCol(x, C, C - 1);
-    else if (op === 'deleteRow' && a) {
+    } else if (op === 'deleteRow' && a) {
+      line = ['row', a.row, false];
       y = deleteRow(x, a.row);
       at = { row: Math.min(a.row, R - 2), col: a.col };
     } else if (op === 'deleteCol' && a) {
+      line = ['col', a.col, false];
       y = deleteCol(x, a.col);
       at = { row: a.row, col: Math.min(a.col, C - 2) };
     }
@@ -492,9 +500,10 @@ export function rowCol(objectId: string, drawnOp: RowColOp, cell?: number): numb
       const k = p.slots[at.row * p.C + at.col];
       next = k !== undefined && k >= 0 ? k : undefined;
     }
-    // Columns rescaled to the table's width (keepWidth) wrap text more: a fixed-row table's rows grow by
-    // what its text needs more (tableFit.ts; the cells keep their places).
-    return fitTable(x, y);
+    // Columns rescaled to the table's width (keepWidth) wrap text more, and a merged cell over a deleted row
+    // loses that row: a fixed-row table's rows grow by what its text falls short more (tableFit.ts), each
+    // cell paired with itself by its place.
+    return fitTable(x, y, cellsByPlace(x.table, y.table, ...line));
   });
   return next;
 }

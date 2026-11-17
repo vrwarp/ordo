@@ -1044,7 +1044,8 @@ export function SlideCanvas(props: {
       if (inGroup(o.id)) return;
       const n = e.target;
       if (isTable(o)) {
-        // A height drag sets box.h from the drawn height (rows grown by their text); tables do not turn.
+        // A height drag sets box.h from the drawn height (rows a table made in ordo grows by its text); a
+        // fixed row it squashes gets back what its text needs (updateObject -> tableFit.ts). Tables do not turn.
         const box = tableBoxAfterTransform(o, drawnHeight(o), {
           x: n.x(),
           y: n.y(),

@@ -839,8 +839,8 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
   baseline lift folded into each cell's insets (`asLibreOffice`). Until 1b the object stored the deck's
   `a:tr h` (`TableElement.storedRows`, still read) and let the drawer grow them with its own lines; rows grown
   that way passed LibreOffice's wherever the drawer's lines disagree with the converter's model (r2b-diag
-  all-tables P1: 7 of 63 table slides fell by 0.01-0.49), so they are fixed at import and an edit grows a
-  row by what its text needs more (the operator's `fitRows`, design/15 "Table editing"). The layout reads
+  all-tables P1: 7 of 63 table slides fell by 0.01-0.49), so they are fixed at import and a change grows a
+  row by how much more its text falls short of it (the operator's `fitRows`, design/15 "Table editing"). The layout reads
   nothing of `loCompat`: with and without it the table object is the same (`emit-table.test.ts` "stores LibreOffice's form on every hub",
   `e2e/table-form.test.ts` on the e2e table deck); `loCompat` reaches only the cells' run-text policies (run
   shadows, outlines on filled text, `baseline="0"`), as a text box's, and the M6 group's layout (`cellRows`).

@@ -3118,8 +3118,9 @@ be measured):
   harness's faces (most by 1.5-2.7 px: 2 Corinthians 3 vs 7, Churchcraft, Ten Commandments, the seal and 666
   charts; one Arabic slide by 18 px); with every width 3 % wider, 198 cells on 26 slides (up to 89 px, a
   wrapped line).
-- **An edit grows a row by what its text needs more** (design/15 "Table editing", the operator's `fitRows`,
-  domain `growRow`): never by the absolute shortfall, which would make a one-letter fix move the rows of a cell
+- **A change grows a row by how much more its text falls short of it** (design/15 "Table editing", the
+  operator's `fitRows`, domain `growRow`; an edit: what its text needs more; a shorter box: what the text needs
+  back, review 1b): never by the absolute shortfall, which would make a one-letter fix move the rows of a cell
   that already needs more than its fixed row in the drawer (all-tables' P1, rows grown to the drawer's need:
   2 Corinthians 3 vs 7 0.683 -> 0.191, Churchcraft 0.655 -> 0.260).
 - **Cell text in the master's otherStyle** (`inherit.ts` `paraChainParts`, `Chain.cell` set by `tables.ts`

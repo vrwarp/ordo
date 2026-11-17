@@ -110,7 +110,10 @@ export function TextFloatingControls({
     setStyle(() => choice.style, 'contrast', choice.overrides);
   };
 
-  // A cell's row grows with its text: it never overflows its box.
+  // No fit message on a cell: a table made in ordo grows its rows with their text, and an imported table's
+  // fixed rows get back what every change leaves their text short of more (tableFit.ts: an edit, a column
+  // op, a shorter box). The few px some imported cells start over their row are LibreOffice's layout as the
+  // drawer's faces measure it (design/27 §15), nothing a volunteer could fix from this bar.
   const overflowMsg = cell ? undefined : fitMessage(o);
 
   const setAutofitShrink = (on: boolean) => {

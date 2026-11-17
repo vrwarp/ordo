@@ -610,8 +610,9 @@ _A table (`ShapeObject.table`, design/27 M9) is edited cell by cell (`SlideCanva
   caret within 0.5 px: `table/edit.test.ts`); the selected cell is outlined on the editing layer. Typing a
   character lays out that one cell again (the cell layout cache is keyed by each cell's content: in a
   160-cell table one layout changes). The table's hit area, node cache rect and Transformer frame are its
-  drawn height (`drawnHeight`: rows grow with their text past `box.h`); a height drag sets `box.h` from it
-  (a drag of the width alone keeps it, `tableBoxAfterTransform`); tables do not turn in the editor (no
+  drawn height (`drawnHeight`: a table made in ordo grows its rows with their text past `box.h`); a height drag
+  sets `box.h` from it (a drag of the width alone keeps it, `tableBoxAfterTransform`), and an imported table's
+  fixed rows it squashes get back what their text needs (below); tables do not turn in the editor (no
   rotate handle; a stored turn is kept and drawn).
 - **The table bar and the Table section** (`TableTools.tsx`; the bar is `OBJECT_BARS`' table line, the section
   `OBJECT_SECTIONS`' one, in place of the shape section). With a cell selected the bar is the text bar on the
@@ -638,15 +639,21 @@ _A table (`ShapeObject.table`, design/27 M9) is edited cell by cell (`SlideCanva
   (`editCell`: typing, a format, paragraph styles, a paste), Find & Replace in cells (`findInCells`), a row or
   column added or deleted (`rowCol`: `keepWidth` narrows the columns), and the box resized (`updateObject`: the
   canvas's Transformer and the Object panel's size fields; `transformGroup`; a single object's screen placement).
-  `fitRows(before, after, layout)` (pure) lays both out with the drawer's layout (renderer `layoutTable`; a
-  cell's `need` is its text height plus its insets) and grows a single-row cell's row by
-  max(0, needAfter - max(rowHeight, needBefore)), the largest per row, then a merged cell's last row by what it
-  needs past its rows; rows never shrink, the others stay, `box.h` follows (domain `growRow`). By the increase
-  only: where the drawer's lines are taller than the converter's model of LibreOffice's (2 Corinthians 3 vs 7,
-  Churchcraft), cells need a few px more than their fixed row before any edit, so a one-letter fix or a Find &
-  Replace that wraps nothing moves no row, and a long line grows its row by what it added. A cell is the same
-  cell before and after by its index (an edit, a resize) or by its content (a row or column added or deleted); a
-  new cell grows nothing. A table made in ordo grows its rows itself (`rowRule` 'grow'). The layout is the
+  `fitRows(before, after, layout, cellOf)` (pure) lays both out with the drawer's layout (renderer
+  `layoutTable`; a cell's `need` is its text height plus its insets) and grows a single-row cell's row by how
+  much more its text falls short of the row than before, max(0, (needAfter - rowAfter) - max(0, needBefore -
+  rowBefore)), the largest per row, then a merged cell's last row the same way over its rows' sum; rows never
+  shrink, the others stay, `box.h` follows (domain `growRow`). While a row keeps its height (every content edit)
+  that is max(0, needAfter - max(row, needBefore)): by the increase only, since where the drawer's lines are
+  taller than the converter's model of LibreOffice's (2 Corinthians 3 vs 7, Churchcraft), cells need a few px
+  more than their fixed row before any edit, so a one-letter fix or a Find & Replace that wraps nothing moves no
+  row, and a long line grows its row by what it added. A shorter box (a height or corner drag, the Object
+  panel's H) takes room from every row; each gets back what its text needs, down to its text and no further (a
+  row with room keeps only what its text needs; a row already short keeps that shortfall), so no cell's text
+  spills over the row below, as in PowerPoint (review 1b). A cell is the same cell before and after by its
+  index (an edit, a resize) or by its place across the row or column added or deleted (`cellsByPlace`, from the
+  op; a merged cell over a deleted row keeps itself and grows its last row if its text no longer fits); a new
+  cell grows nothing. A table made in ordo grows its rows itself (`rowRule` 'grow'). The layout is the
   canvas's table kit (the renderer's table module, a chunk of its own), measured as the canvas measures; the
   editor's ops ask for it when they load, so Find & Replace in a table on a slide not yet shown grows its rows
   too; until it is here, an op changes no row.
