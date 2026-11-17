@@ -3247,10 +3247,28 @@ Two rules, both for measuring only, and the browser's parse kept equal to the hu
   answer to Q1c-2, 2026-11-17, "add a cjk font": `fonts-noto-cjk`'s Sans collections, not WenQuanYi Zen Hei, whose
   GPL-with-font-exception licence the font rules leave out): there fc-match gives `NotoSansCJK-Regular.ttc` face 0
   (the image sets no language), rule H measures the cells with it, and LibreOffice draws the letters. Before it the
-  image had no CJK face: nothing was found, the cells were measured by estimate, and its LibreOffice drew Korean as
-  empty boxes. Noto Sans CJK's Hangul is narrower and its lines taller than WenQuanYi Zen Hei's (this measuring
-  computer's face), so the image's hubs store other rows than this computer's; the image is measured on its own
-  (`regroup/r2b/1c/cjk-image/`).
+  image had no CJK face: rule H found none for Hangul or Kana (those cells were measured by estimate), and for Han
+  fontconfig gave `fonts-noto-core`'s `NotoTraditionalNushu-Regular.ttf`, which maps U+4E00 and no other ideograph;
+  rule H kept it because it checks that one letter (a follow-up). Its LibreOffice drew Korean as empty boxes. Noto
+  Sans CJK's Hangul is narrower and its lines taller than WenQuanYi Zen Hei's (this measuring computer's face), so
+  the image's hubs store other rows than this computer's. **Measured on the image's fonts**
+  (`regroup/r2b/1c/cjk-image/`: bookworm's font packages under private fontconfig files; real hubs of this code,
+  with and without LibreOffice, identical on both; this machine's LibreOffice 24.2, not the image's 7.4.7), the
+  Korean slides 2, 18, 19 and 20, before -> after the font:
+  - **(B) against LibreOffice's page drawn with the image's fonts** (what a venue on the image compares, its screens
+    drawing with Noto Sans CJK): 0.410 -> 0.751, 0.554 -> **0.5925**, 0.449 -> 0.719, 0.457 -> 0.700. Slide 18 stays
+    0.0075 under 0.60. Its rows line up with LibreOffice's and both sides draw Noto Sans CJK; what differs is how
+    the text is drawn (LibreOffice's quarter em between Korean and Latin punctuation, which rule G measures and ordo
+    does not draw; its small circled digits; a third line it clips in row 1; the header row's weight). It goes to
+    the owner; nothing was tuned.
+  - **(A) against this machine's page** (WenQuanYi Zen Hei, the standard, continuing the numbers above): 0.421 ->
+    0.391, 0.593 -> 0.518, 0.535 -> 0.488, 0.521 -> 0.454. No slide reaches 0.60 either way, and the font lowers all
+    four: rows sized for Noto Sans CJK's 1.448 em lines against a page drawn with Zen Hei's 1.260 em. LibreOffice's
+    own page with the image's fonts scores 0.394, 0.506, 0.478 and 0.448 against this machine's page.
+  - The deck's 16 other slides score the same in (A) before and after. Sub-wave 1c's extension set (10 table slides
+    of public decks, outside the 0.60 rule): all at or above 0.60 in (B) after; in (A) two stay under it (0.584 and
+    0.427 after). Five drops of 0.005 or more go to the owner with slide 18 (three in (A), up to 0.100; two in (B),
+    up to 0.028).
 - **The browser's scene is refused for such a deck** (`clientScene.ts` `SCRIPT_FACE_REFUSAL`, in the
   `pptx-client-scene` task): a browser cannot measure with the hub's computer's faces, so a scene whose table cells
   hold a script the hub measures with a system face (`systemOnlyScripts`) is refused and the hub parses the deck
@@ -3315,8 +3333,9 @@ on a hub with it (0.947), nothing on one without (0.490, the table listed missin
   identical; the census moves slide 2 from hybrid to native and nothing else. On a hub without a Korean face (the
   project's hub image before the owner's answer to Q1c-2), the table measures 0.421 against this machine's page (the
   planner's run without rule H's face), and that image's LibreOffice drew the Korean letters as empty boxes (Q1c-1,
-  Q1c-2). The image now installs Noto Sans CJK (§10), with which its LibreOffice draws them; it is measured on its
-  own (`regroup/r2b/1c/cjk-image/`). Details: `regroup/r2b/1c/vert-cells/notes.md`, `probe/probe-a.md`.
+  Q1c-2). The image now installs Noto Sans CJK (§10), with which its LibreOffice draws them: there slide 2 measures
+  0.751 against that LibreOffice's page (0.410 before the font) and 0.391 against this machine's (ko-cells above,
+  `regroup/r2b/1c/cjk-image/`). Details: `regroup/r2b/1c/vert-cells/notes.md`, `probe/probe-a.md`.
 <!-- /r2b:vert-cells -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
