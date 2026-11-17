@@ -7,7 +7,7 @@
  *   node tools/bundle-report.mjs --json out.json    also write them as JSON (for a PR body or a CI artifact)
  *   node tools/bundle-report.mjs --check            fail when an app's initial JavaScript, or the operator's
  *                                                   regular total (what the venue PC loads before its Shell),
- *                                                   grew more than the baseline's budget (2 %) over
+ *                                                   grew more than the baseline's budget (4 %) over
  *                                                   tools/bundle-baseline.json, or the operator's compact first
  *                                                   load is over its budget (300 KB gzip) or holds code a phone
  *                                                   must never load

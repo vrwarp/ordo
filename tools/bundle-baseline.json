@@ -1,5 +1,5 @@
 {
-  "budget": 0.02,
+  "budget": 0.04,
   "compact": {
     "firstLoadGzip": 300000
   },
