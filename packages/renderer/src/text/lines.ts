@@ -71,7 +71,8 @@ import type {
  * Line models (F = the line's main size after autofit: the paragraph's main run, its first without a
  * baseline shift, else its first, else its end mark; a larger unshifted run on the line raises it, as
  * LibreOffice sizes each line by its own portions, so lines never overlap; in the office model a line with
- * text is as tall as its own largest unshifted run, smaller than F too, as LibreOffice's editeng sizes it):
+ * text is as tall as its own largest unshifted run, smaller than F too, as LibreOffice's editeng sizes it,
+ * except in a box that shrinks its text, whose lines keep F as their floor):
  * - 'ordo': drawText's vertical model, pitch `lineHeight × F` with the baseline `(pitch - F)/2 + 0.8F`
  *   below the line's top (text2d.ts). A paragraph's `lineSpacing` p is a multiple of single spacing,
  *   pitch `p × 1.2F` (the same meaning as in the office model), `lineSpacingPx` the exact pitch.
@@ -355,6 +356,7 @@ function flowParas(
   const text = o.text;
   const style = o.style;
   const office = style.lineModel === 'office';
+  const shrink = style.autofit === 'shrink';
   const wrap = style.wrap !== false;
   const k = office ? fit.spacing : 1;
   // At PowerPoint's stored scale its lnSpcReduction is subtracted from proportional spacing (office.ts).
@@ -713,8 +715,12 @@ function flowParas(
       // In the office model a line with text is as tall as its own largest unshifted run, not the
       // paragraph's main size (LibreOffice's editeng sizes each line by the portions on it): a citation in a
       // smaller size than the paragraph's first run that wraps onto lines of its own makes short lines
-      // (dense-b B, Matthew 16v18's right column). Ordo's own model keeps F as every line's floor.
-      let lineF = office && items.length ? 0 : !items.length && para.soft ? 0 : F;
+      // (dense-b B, Matthew 16v18's right column; text-falls probe B: plain boxes and table cells). Ordo's own
+      // model keeps F as every line's floor, and so does a box that shrinks its text (autofit 'shrink'): there
+      // LibreOffice's lines are its own runs' too, but its autofit search is not ordo's model of it yet (its
+      // spacing scale applies to single spacing; some boxes take the face's metrics: text-falls notes), and the
+      // own-run lines alone moved eight shrinking slides below the owner's current point (8e8a294).
+      let lineF = office && items.length && !shrink ? 0 : !items.length && para.soft ? 0 : F;
       for (const c of items) if (!c.style.baseline && c.size > lineF) lineF = c.size;
       if (!items.length)
         for (const r of runs) if (!r.style.baseline) lineF = Math.max(lineF, size(r.style.sizePx, fit));

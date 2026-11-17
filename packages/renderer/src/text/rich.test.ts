@@ -195,9 +195,10 @@ describe('office line model', () => {
     expect(layoutRich(m(), big, LEGACY_FONT_ENV).lines[0]!.height).toBe(36);
   });
 
-  it('still fits a mixed-size paragraph when shrinking (own-run lines in the autofit search)', () => {
-    // Eight 40 px words then eight 20 px ones in a 400 x 100 box: three lines, too tall at full size. The
-    // search lays lines out by their own runs as the final layout does, so what it finds fits.
+  it('still fits a mixed-size paragraph when shrinking (the main size as every line floor in the search)', () => {
+    // Eight 40 px words then eight 20 px ones in a 400 x 100 box: three lines, too tall at full size. A box that
+    // shrinks keeps the paragraph's main size as every line's floor, in the search and in the final layout
+    // alike, so what the search finds fits.
     const words = 'aaaa bbbb cccc dddd eeee ffff gggg hhhh';
     const o = obj(
       `${words} ${words}`,
@@ -207,9 +208,39 @@ describe('office line model', () => {
     const l = layoutRich(m(), o, LEGACY_FONT_ENV);
     expect(l.fontScale).toBeLessThan(1);
     expect(l.overflow).toBe(false);
-    // The small run's line is shorter than the large run's: the search and the layout sized it alike.
+    // The small run's line is as tall as the large run's: the search and the layout sized it alike.
     const last = l.lines[l.lines.length - 1]!;
-    expect(last.height).toBeLessThan(l.lines[0]!.height);
+    expect(last.height).toBe(l.lines[0]!.height);
+  });
+
+  it('sizes lines by their own runs in a box that does not shrink, by the main size in one that does', () => {
+    // LibreOffice's lines in a plain box (text-falls probe B, LibreOffice 24.2): 'Big ' at 40 pt then 24 pt text
+    // wrapping onto three more lines: baselines 63.61, 95.61, 124.41, 153.21 pt in a box at y 20 pt with a
+    // 3.6 pt inset, so pitches of 32.0 pt (the 40 pt line's 8 pt descent and a 24 pt ascent) then 28.8 (1.2 x
+    // 24): as tall as each line's own runs. Here at 2 px a point: 'Big ' 80 px, the rest 48 px.
+    const office = { lineModel: 'office' as const, lineHeight: 1.2, fontSizePx: 48, valign: 'top' as const };
+    const text = 'Big aaaa bbbb cccc dddd eeee ffff gggg';
+    const runs = [{ start: 0, end: 4, sizeScale: 80 / 48 }];
+    // 'Big aaaa ' fills a line (4 x 40 + 5 x 24 = 280 px of 300), then two 24 px words a line.
+    const plain = obj(text, office, { box: { x: 0, y: 0, w: 300, h: 600, rotation: 0 }, runs });
+    const lp = layoutRich(m(), plain, LEGACY_FONT_ENV);
+    const lines = ['Big aaaa ', 'bbbb cccc ', 'dddd eeee ', 'ffff gggg'];
+    expect(lineTexts(plain, lp)).toEqual(lines);
+    const pitch = [0, 80 + 16 + 48 - 80, 57.6, 57.6]; // the first baseline 80 px; then 64 px, 57.6, 57.6
+    let at = 80;
+    lp.lines.forEach((line, i) => {
+      at += pitch[i]!;
+      expect(line.baseline).toBeCloseTo(at, 9);
+    });
+    // The same paragraph in a box that shrinks its text (it fits at full size, so it is not shrunk): every line
+    // keeps the paragraph's main size (the 80 px run) as its floor, as at the current point (8e8a294): ordo's
+    // autofit search is not LibreOffice's yet (its spacing scale on single spacing, its metrics: text-falls
+    // notes), and the own-run lines moved eight shrinking slides below the owner's current point.
+    const shrink = obj(text, { ...office, autofit: 'shrink' }, { box: plain.box, runs });
+    const ls = layoutRich(m(), shrink, LEGACY_FONT_ENV);
+    expect(ls.fontScale).toBe(1);
+    expect(lineTexts(shrink, ls)).toEqual(lines);
+    expect(ls.lines.map((line) => line.height)).toEqual([96, 96, 96, 96]);
   });
 
   it('has single spacing 1.2F with the baseline F below the top', () => {

@@ -214,8 +214,12 @@ Decisions the other items rely on:
   line, as LibreOffice sizes each line by its own portions (and page.ts's CSS strut did); never by a raised
   or lowered run. In the office model a line with text is as tall as its own largest unshifted run, smaller
   than F too (a citation in a smaller size that wraps onto lines of its own makes short lines, as LibreOffice's
-  editeng sizes them; text-lines); a line of shifted runs only keeps F. The 'ordo' model keeps F as every
-  line's floor. An empty line takes the larger of F and its end mark.
+  editeng sizes them; text-lines; LibreOffice 24.2 does so in plain boxes, table cells and shrinking boxes
+  alike, text-falls probe B); a line of shifted runs only keeps F. The 'ordo' model keeps F as every line's
+  floor, and so does an office box that shrinks its text (autofit 'shrink'): its search is not
+  LibreOffice's yet (LibreOffice's spacing scale applies to single spacing, some boxes take the face's own
+  metrics), and own-run lines there moved eight shrinking slides below the owner's current point (8e8a294).
+  An empty line takes the larger of F and its end mark.
 - **Soft paragraphs continue the paragraph before them**: its alignment, indents, spacing, line spacing,
   main size and direction; no bullet, no space between them. The converter may write `{ soft: true }` only;
   the editor's paragraph strip edits the paragraph a soft one continues. `prepare` (A) gives a soft
