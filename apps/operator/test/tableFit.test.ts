@@ -10,6 +10,8 @@
  * every cell over the row below), and a row or column op pairs each cell with itself by its place.
  */
 import { cellRich, Presentation, type ShapeObject, type SlideObject, type TableData } from '@ordo/domain';
+import { cellStyleEntry } from '@ordo/domain/table.ts';
+import { verticalTable } from '@ordo/domain/vertical-table.test-util.ts';
 import { clampShapeObject } from '@ordo/renderer/shape.ts';
 import { layoutTable } from '@ordo/renderer/table/layout.ts';
 import { gridTable } from '@ordo/renderer/table/test-util.ts';
@@ -156,6 +158,24 @@ describe('fitRows: rows grow by the increase in need only', () => {
     expect(rows(out)).toEqual([10]);
     const text = { id: 'x', type: 'text', text: 'a' } as SlideObject;
     expect(fitRows(text, text, layout)).toBe(text);
+  });
+});
+
+describe("an East Asian vertical cell's rows grow as a horizontal cell's (eaVert, sub-wave 1c)", () => {
+  it("typing into the narrow eaVert cell grows its merge's last row by need, as the same cell without vert", () => {
+    // The renderer draws eaVert cells horizontally (as LibreOffice 24.2 does): the need is a horizontal cell's.
+    const vertical = shape(verticalTable());
+    const t = verticalTable();
+    const plain = shape({ ...t, styles: undefined, cells: t.cells.map(({ style: _, ...c }) => c) });
+    expect(rows(vertical)).toEqual(rows(plain));
+    const long = '1년차 첫해 둘째 셋째 넷째 다섯째 여섯째';
+    const a = type(vertical, 0, long);
+    const b = type(plain, 0, long);
+    expect(needOf(a, 0)).toBeGreaterThan(160);
+    expect(rows(a)).toEqual(rows(b));
+    expect(rows(a).slice(0, 3)).toEqual([40, 40, 40]);
+    expect(rows(a)[3]).toBeCloseTo(needOf(a, 0) - 120, 9);
+    expect(cellStyleEntry(a.table!, a.table!.cells[0])?.vert).toBe('eaVert');
   });
 });
 

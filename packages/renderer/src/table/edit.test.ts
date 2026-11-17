@@ -1,4 +1,6 @@
-import { cellRich, setCell, type TextObject } from '@ordo/domain';
+import { cellRich, setCell, type ShapeObject, type TextObject } from '@ordo/domain';
+import { cellStyleEntry } from '@ordo/domain/table.ts';
+import { verticalTable } from '@ordo/domain/vertical-table.test-util.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { LEGACY_FONT_ENV } from '../text/fonts.ts';
 import { caretPosition, hitTestText, moveCaretVertically, selectionRects } from '../text/cursor.ts';
@@ -84,6 +86,43 @@ describe('cellEditView', () => {
     );
     const down = moveCaretVertically(ctx, wrapped, 1, 1, undefined, env);
     expect(caretPosition(ctx, wrapped, down.offset, false, env).line).toBe(1);
+  });
+
+  it('edits an East Asian vertical cell (eaVert) as it is drawn, horizontally: caret, selection, clicks as horz', () => {
+    // Sub-wave 1c stores the Korean bulletin's eaVert cells in the table object; the renderer draws them as
+    // horizontal cells (`cellIsVertical`, no vertical text engine), so its edit view is a horizontal cell's.
+    const long = (o: ShapeObject) => setCell(o, 0, { ...cellRich(o.table!, 0)!, text: '1년차 첫해 둘째' });
+    const vt = verticalTable();
+    const o = long(tableShape(vt, { x: 200, y: 100 }));
+    const p = long(
+      tableShape(
+        { ...vt, styles: undefined, cells: vt.cells.map(({ style: _, ...c }) => c) },
+        { x: 200, y: 100 },
+      ),
+    );
+    expect(cellStyleEntry(o.table!, o.table!.cells[0])?.vert).toBe('eaVert');
+    expect(cellStyleEntry(p.table!, p.table!.cells[0])).toBeUndefined();
+    const ctx = recordingCtx(0.5);
+    const lo = tableEditLayout(ctx, o, env)!;
+    const lp = tableEditLayout(ctx, p, env)!;
+    // Over its four rows, the narrow column: the same rect and the same drawn lines (it wraps).
+    expect(cellRect(o, lo, 0)).toEqual(cellRect(p, lp, 0));
+    expect(cellRect(o, lo, 0)!.h).toBe(160);
+    const drawn = drawnLines(lo, lo.cellAt[0]!, o.box.x, o.box.y);
+    expect(drawn.length).toBeGreaterThan(1);
+    expect(drawn).toEqual(drawnLines(lp, lp.cellAt[0]!, p.box.x, p.box.y));
+    const v = cellEditView(o, lo, 0)!;
+    const w = cellEditView(p, lp, 0)!;
+    expect(v.box).toEqual(w.box);
+    for (let off = 0; off <= v.text.length; off++)
+      expect(caretPosition(ctx, v, off, false, env)).toEqual(caretPosition(ctx, w, off, false, env));
+    expect(selectionRects(ctx, v, 0, v.text.length, env)).toEqual(
+      selectionRects(ctx, w, 0, w.text.length, env),
+    );
+    expect(selectionRects(ctx, v, 0, v.text.length, env)).toHaveLength(drawn.length);
+    const at = caretPosition(ctx, v, 2, false, env);
+    expect(hitTestText(ctx, v, at.x + 1, at.y + 2, env)).toBe(2);
+    expect(cellAtPoint(o, lo, o.box.x + 10, o.box.y + 150)).toBe(0);
   });
 
   it('is the same object while the cell and the box are, and goes through the rich engine', () => {

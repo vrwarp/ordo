@@ -898,3 +898,26 @@ Korean bulletin's slides 18-20: 0.593 / 0.538 / 0.439 on both kinds of hub). Rul
   face, and with Hangul in a box only; the same decision when the import starts before the faces settle; the
   deck is away while the scene is checked).
 <!-- /r2b:ko-cells -->
+
+## Wave r2b sub-wave 1c: East Asian vertical cells (vert-cells)
+
+<!-- r2b:vert-cells -->
+A table whose vertical cells are all East Asian vertical (`eaVert`) is the table object on every kind of hub since
+1c (`@ordo/pptx-scene` rule V: LibreOffice 24.2 draws such cells horizontally, probe deck A; the cell keeps its
+`vert`). Nothing in this folder changed for it; what a hub does differently:
+- **With LibreOffice**: such a slide is native, so no `pptx-lo` follow-up is queued for it and no art is stored (the
+  Korean bulletin's slide 2 was LibreOffice's picture, class 'hybrid'). Tables with `vert`, `vert270`, `wordArtVert`,
+  `wordArtVertRtl` or `mongolianVert` cells are still LibreOffice's art (owner question Q1c-5).
+- **Without LibreOffice**: the table is stored, where it was listed `missing: ['element']` before.
+- **Re-import and Reset slide** (`reimport.ts`) of such a slide stored before 1c (hybrid, LibreOffice's art and its
+  note) give the table object, its cells' vert kept, nothing pending.
+- **The table's outer shadow** is read by the converter but not stored or drawn: the slide's notes say "a table's
+  shadow is not drawn" (a follow-up draws it).
+- **Rule H applies**: the cells are Hangul, so on a computer with a Hangul face (this one: WenQuanYi Zen Hei) the hub
+  measures them with it and refuses the browser's scene of such a deck (ko-cells, above).
+- Tests: `apps/hub/test/pptx-reimport.test.ts` (a 1b-era hybrid slide: re-import and Reset slide give the table
+  object); end to end `e2e/pptx-tables.spec.ts` ('a table with East Asian vertical cells is the table object on both
+  kinds of hub, whoever parsed it': the upload route on a hub with LibreOffice, no `pptx-lo` job; the upload route and
+  the Import tab on a hub without it; where the hub names a Hangul face, the browser's scene refused) and
+  `e2e/ipad/table-targets.spec.ts` (a tap and typing in the narrow vertical cell, its vert kept).
+<!-- /r2b:vert-cells -->

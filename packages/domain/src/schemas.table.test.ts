@@ -3,6 +3,8 @@ import { DEFAULT_LYRIC_STYLE } from './defaults.ts';
 import { m9Table } from './m9.test-util.ts';
 import { type ShapeObject, Slide, TABLE_LIMITS, TableData } from './schemas.ts';
 import * as prev from './schemas.prev05.test-util.ts';
+import * as prev08 from './schemas.prev.test-util.ts';
+import { VERTICAL_CELLS, verticalTable } from './vertical-table.test-util.ts';
 import { slideBytes } from './size.ts';
 import { placeCells } from './table.ts';
 
@@ -89,6 +91,23 @@ describe('the table object (stored)', () => {
     expect(o).toMatchObject({ type: 'shape', shape: 'rect', fill: white, box: { w: 1320, h: 410 } });
     // What it saves back still parses today (a rect, without the table).
     expect(Slide.safeParse(r.data).success).toBe(true);
+  });
+
+  it('a table with East Asian vertical cells (eaVert, sub-wave 1c) parses here and in the 0.8.0 build as stored', () => {
+    // The converter stores the Korean bulletin's eaVert cells in the table object since sub-wave 1c (CellStyle.vert,
+    // in the schema since 0.8.0): the older build keeps the table and its vert, and its renderer draws the cells
+    // horizontally, as today's does (renderer table/draw.test.ts: eaVert draws as horz).
+    const s = slide([tableShape(verticalTable())]);
+    const now = Slide.parse(s).objects[0] as ShapeObject;
+    expect(now.table).toEqual(verticalTable());
+    const old = prev08.Slide.parse(s).objects[0] as { table?: TableData };
+    expect(old.table).toEqual(verticalTable());
+    const t = old.table!;
+    expect(VERTICAL_CELLS.map((i) => t.styles?.[t.cells[i]!.style!]?.vert)).toEqual(['eaVert', 'eaVert']);
+    // What the older build saves back parses here unchanged.
+    expect(Slide.parse(prev08.Slide.parse(s))).toEqual(Slide.parse(s));
+    // 0.5.0 (before M9) strips the table and draws the legacy rect, as for every table.
+    expect((prev.Slide.parse(s).objects[0] as { table?: unknown }).table).toBeUndefined();
   });
 
   it('the 640-cell master grid parses within the limits', () => {

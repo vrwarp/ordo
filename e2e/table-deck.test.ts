@@ -9,7 +9,7 @@ import { extractZip } from '../packages/importers/src/zip-stream.ts';
 import { storedSlideBytes } from '../packages/pptx-scene/src/emit-budget.ts';
 import { convertDeck, M9_WRITES, PPTX_SHEETS } from '../packages/pptx-scene/src/index.ts';
 import { describe, expect, it } from 'vitest';
-import { PLAN, TABLE, tableDeck } from './pptxdecks.ts';
+import { PLAN, TABLE, tableDeck, VERTICAL_TABLE, verticalTableDeck } from './pptxdecks.ts';
 
 const tableOf = (s: Slide) =>
   (s.objects as ShapeObject[]).find((o) => o.type === 'shape' && o.table !== undefined)?.table;
@@ -56,6 +56,45 @@ describe('the table deck of the end-to-end spec', () => {
         const kill = convertDeck(zip.files, { m9Writes: KILL, sheets: PPTX_SHEETS, libreoffice: lo });
         expect(tableOf(kill.slides[1]!.slide)).toBeUndefined();
         expect(storedSlideBytes(kill.slides[1]!.slide, kill.slides[1]!.notes)).toBeGreaterThan(64 * 1024);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * The vertical-cell deck `pptx-tables.spec.ts` imports (`verticalTableDeck`): one table with East Asian vertical
+ * cells and a table outer shadow, which since sub-wave 1c (rule V) is one table object on both kinds of hub, the
+ * cells' vert kept, the shadow noted and not stored (before: LibreOffice's art with it, missing without it).
+ */
+describe('the vertical-cell deck of the end-to-end spec', () => {
+  it('is one table object on both kinds of hub, its eaVert cells kept, no stored shadow, the shadow noted', async () => {
+    const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), 'ordo-vertical-deck-'));
+    try {
+      const zip = await extractZip(verticalTableDeck(dir), { dir: join(dir, 'x'), spill: () => false });
+      for (const lo of [true, false]) {
+        const r = convertDeck(zip.files, { m9Writes: M9_WRITES, sheets: PPTX_SHEETS, libreoffice: lo });
+        expect(r.slides).toHaveLength(1);
+        const s = r.slides[0]!;
+        expect(s.classification.class).toBe('native');
+        expect(s.classification.reasons.filter((x) => x.startsWith('art:'))).toEqual([]);
+        expect(s.notes).toContain("a table's shadow is not drawn");
+        expect(s.notes).not.toContain('a table with vertical cell text is drawn by LibreOffice (M8)');
+        const objects = s.slide.objects as ShapeObject[];
+        const tables = objects.filter((o) => o.type === 'shape' && o.table !== undefined);
+        expect(tables).toHaveLength(1);
+        expect(tables[0]!.shadow).toBeUndefined();
+        const t = tables[0]!.table!;
+        expect(t.cells).toHaveLength(VERTICAL_TABLE.rows * 2 + 2);
+        for (const [text, i] of VERTICAL_TABLE.vertical) {
+          expect(t.cells[i]!.text).toBe(text);
+          expect(t.cells[i]!.rowSpan).toBe(4);
+          expect(t.styles?.[t.cells[i]!.style!]?.vert).toBe('eaVert');
+        }
+        // The other cells are horizontal.
+        const verts = t.cells.map((c) => (c.style === undefined ? undefined : t.styles?.[c.style]?.vert));
+        expect(verts.filter((v) => v !== undefined)).toHaveLength(2);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

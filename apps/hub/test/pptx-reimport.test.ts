@@ -35,6 +35,8 @@ import {
   run,
   solid,
   sp,
+  tableFrame,
+  tc,
 } from '@ordo/pptx-scene/test-util.ts';
 import type { Job, PptxReimportPlan, PptxReimportResult } from '@ordo/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -1284,4 +1286,122 @@ describe("'Make editable' on LibreOffice's page a native import stored (version 
     // Nothing is waiting for LibreOffice: the page it drew is kept.
     expect(one!.pptx!.pending).toBeUndefined();
   }, 180_000);
+});
+
+describe("a table with East Asian vertical cells an older import stored as LibreOffice's art (sub-wave 1c: rule V)", () => {
+  /**
+   * The Korean bulletin's slide 2 in small: a narrow first column whose '1년차' and '２년차' cells are eaVert,
+   * centred over four rows each, beside the years, under a table-level outer shadow. Until sub-wave 1c every
+   * table with a vertical cell was LibreOffice's art (hybrid): LibreOffice 24.2 draws eaVert cells as horizontal
+   * ones (probe deck A), so the converter now writes the table object for it, on every kind of hub.
+   */
+  let deck: string;
+  beforeAll(async () => {
+    const ea = (t: string) => tc(t, { tcPr: ' vert="eaVert" anchor="ctr"', attrs: 'rowSpan="4"' });
+    const merged = () => tc('', { attrs: 'vMerge="1"' });
+    const rows = [
+      { h: EMU / 3, cells: [ea('1년차'), tc('2019'), tc('3일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2020'), tc('4일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2021'), tc('4일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2022'), tc('4일간')] },
+      { h: EMU / 3, cells: [ea('２년차'), tc('2023'), tc('3일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2024'), tc('4일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2025'), tc('4일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2026'), tc('4일간')] },
+    ];
+    const shadow =
+      '<a:tblPr firstRow="1" bandRow="1"><a:effectLst><a:outerShdw blurRad="50800" dist="38100" dir="16200000" rotWithShape="0"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst></a:tblPr>';
+    const shapes = tableFrame({
+      id: 5,
+      x: EMU / 4,
+      y: EMU / 2,
+      cols: [EMU / 2, EMU, 2 * EMU],
+      rows,
+      tblPr: shadow,
+    });
+    deck = await storeDeck(hub, await zipDeck(buildDeck({ slides: [{ shapes }] }), dir, 'years.pptx'));
+  }, 60_000);
+
+  /**
+   * A presentation as a 1b-era hub with LibreOffice stored the deck: its one slide hybrid, the table LibreOffice's
+   * art (a locked picture, `origin.role` 'art'), the converter's note, unedited (its digest over its objects).
+   */
+  async function storedHybrid(): Promise<Presentation> {
+    const sid = newId();
+    const art = image(newId(), await pagePicture(1), {
+      box: { x: 30, y: 70, w: 560, h: 380, rotation: 0 },
+      fit: 'stretch',
+      locked: true,
+      origin: { src: 'pptx', role: 'art' },
+    });
+    const slide = Slide.parse({
+      id: newId(),
+      objects: [art],
+      notes: 'Two years, year by year.',
+      pptx: {
+        fileId: deck,
+        index: 0,
+        shown: 0,
+        class: 'hybrid',
+        version: CONVERTER_VERSION,
+        digest: '',
+        notes: ['a table with vertical cell text is drawn by LibreOffice (M8)'],
+      },
+    });
+    // Unedited: the digest over the objects as stored (after the schema's parse), as the import writes it.
+    slide.pptx!.digest = importDigest(slide.objects);
+    return hub.lib.savePresentation(
+      {
+        id: newId(),
+        rev: 1,
+        title: 'Years',
+        kind: 'slides',
+        meta: { tags: [] },
+        sections: [{ id: sid, label: 'Slides', short: 'S', slides: [slide] }],
+        arrangements: [{ id: newId(), name: 'Default', sectionIds: [sid] }],
+        source: { kind: 'pptx', fileId: deck },
+        archived: false,
+      },
+      { create: true, by: 'pptx-import' },
+    );
+  }
+
+  for (const req of ['all', 'reset'] as const)
+    it(`${req === 'all' ? 'a re-import' : 'Reset slide'} gives the table object, its vertical cells kept, no art and no stored shadow`, async () => {
+      const before = await storedHybrid();
+      const [hybrid] = slidesOf(before);
+      expect(unedited(hybrid!)).toBe(true);
+      const job = await reimport(
+        before.id,
+        req === 'all' ? {} : { slideIds: [hybrid!.id], reset: [hybrid!.id] },
+      );
+      expect(job.result).toMatchObject({ regenerated: 1, keptEdited: 0, rev: before.rev + 1 });
+      const [one] = slidesOf(hub.lib.presentations.must(before.id));
+      expect(one!.id).toBe(hybrid!.id);
+      expect(one!.notes).toBe('Two years, year by year.');
+      expect(one!.pptx).toMatchObject({ fileId: deck, index: 0, class: 'native' });
+      // Nothing waits for LibreOffice, and its art is gone with the class.
+      expect(one!.pptx!.pending).toBeUndefined();
+      expect(one!.objects.some((o) => o.origin?.role === 'art')).toBe(false);
+      expect(one!.pptx!.notes ?? []).not.toContain(
+        'a table with vertical cell text is drawn by LibreOffice (M8)',
+      );
+      expect(one!.pptx!.notes ?? []).toContain("a table's shadow is not drawn");
+      const tables = one!.objects.filter(
+        (o): o is ShapeObject => o.type === 'shape' && o.table !== undefined,
+      );
+      expect(tables).toHaveLength(1);
+      const t = tables[0]!.table!;
+      expect(tables[0]!.shadow).toBeUndefined();
+      // The two vertical cells, each over four rows, keep the deck's eaVert; the others have none.
+      const vertical = t.cells.flatMap((c, i) => {
+        const v = c.style === undefined ? undefined : t.styles?.[c.style]?.vert;
+        return v ? [[i, c.text, c.rowSpan, v]] : [];
+      });
+      expect(vertical).toEqual([
+        [0, '1년차', 4, 'eaVert'],
+        [9, '２년차', 4, 'eaVert'],
+      ]);
+      expect(unedited(one!)).toBe(true);
+    }, 180_000);
 });

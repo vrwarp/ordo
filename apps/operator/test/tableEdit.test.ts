@@ -7,6 +7,8 @@
  */
 import { cellRich, Presentation, type ShapeObject, type SlideObject } from '@ordo/domain';
 import { m9Table } from '@ordo/domain/m9.test-util.ts';
+import { cellStyleEntry } from '@ordo/domain/table.ts';
+import { VERTICAL_CELLS, verticalTable } from '@ordo/domain/vertical-table.test-util.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   formatSelection,
@@ -294,5 +296,61 @@ describe("the canvas's keys on a selected table (tableKey)", () => {
     selectCell('table', undefined);
     expect(useEditor.getState()).toMatchObject({ objectId: 'table', cell: undefined });
     expect(key('ArrowLeft')).toBe(false);
+  });
+});
+
+describe('an East Asian vertical cell (eaVert: a PowerPoint table the converter stores since sub-wave 1c)', () => {
+  // Drawn horizontally (as LibreOffice 24.2 draws it); every edit keeps the deck's vert for a later vertical
+  // text engine, as it keeps a cell's fill and spans.
+  const VERTICAL = {
+    id: 'years',
+    type: 'shape',
+    box: { x: 100, y: 100, w: 520, h: 320, rotation: 0 },
+    shape: 'rect',
+    opacity: 1,
+    radius: 0,
+    table: verticalTable(),
+    origin: { src: 'pptx', role: 'table' },
+  } as SlideObject;
+  const years = () =>
+    useEditor.getState().draft!.sections[0]!.slides[0]!.objects.find((o) => o.id === 'years') as ShapeObject;
+  const vertOf = (i: number) => cellStyleEntry(years().table!, years().table!.cells[i])?.vert;
+
+  beforeEach(() => {
+    openPresentation(
+      Presentation.parse({
+        id: 'years-deck',
+        title: 'Two years',
+        kind: 'slides',
+        sections: [{ id: 'sec', label: 'Main', short: 'M', slides: [{ id: 'sl', objects: [VERTICAL] }] }],
+      }),
+    );
+    useEditor.setState({ slideId: 'sl' });
+  });
+
+  it('typing and formatting in it keep its vert; one undo step each takes them back', () => {
+    const before = years();
+    const at = { objectId: 'years', cell: VERTICAL_CELLS[0] };
+    typeText(at, '1년차 첫해', 6);
+    expect(cellRich(years().table!, 0)!.text).toBe('1년차 첫해');
+    expect([vertOf(0), vertOf(9)]).toEqual(['eaVert', 'eaVert']);
+    formatSelection(at, 0, 3, { fontWeight: 700 });
+    expect(cellRich(years().table!, 0)!.runs).toEqual([
+      expect.objectContaining({ start: 0, end: 3, fontWeight: 700 }),
+    ]);
+    expect(vertOf(0)).toBe('eaVert');
+    // Its neighbours have none.
+    expect([vertOf(1), vertOf(2), vertOf(10)]).toEqual([undefined, undefined, undefined]);
+    undo();
+    expect(vertOf(0)).toBe('eaVert');
+    undo();
+    expect(years()).toEqual(before);
+  });
+
+  it('Tab moves through it in reading order like any cell', () => {
+    const t = years().table!;
+    expect(nextCell(t, 0, false)).toBe(1);
+    expect(nextCell(t, 8, false)).toBe(9);
+    expect(nextCell(t, 9, true)).toBe(8);
   });
 });

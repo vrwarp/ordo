@@ -99,7 +99,7 @@ import { clean, type Log } from './log.ts';
 import type { FaceMetrics, FaceSource } from './metrics.ts';
 import type { RichText } from './richtext.ts';
 import { predefinedTableStyle } from './tablestyles.ts';
-import { readTextBody } from './text.ts';
+import { readShadow, readTextBody } from './text.ts';
 import { styleLine, typefaceName } from './theme.ts';
 import { child, num, path, textOf, type XNode } from './xml.ts';
 
@@ -249,12 +249,16 @@ export function readTable(
   for (const row of cover) for (let c = 0; c < N; c++) row[c] = renumber[row[c]!];
 
   const tcPrOf = (a: Anchor) => child(a.tc, 'a:tcPr');
-  // Vertical cell text: LibreOffice's art draws the table until the vertical text engine lays cells out
-  // (`writing-engine`, renderer table/layout.ts), which then flips this rule; drawn horizontally it would
-  // replace LibreOffice's art on a hub with it by text turned the wrong way.
+  // Vertical cell text (rule V, sub-wave 1c): LibreOffice 24.2 draws `eaVert` cells exactly as `horz` ones
+  // (probe deck A: the same glyph positions within 0.1 pt, none turned), so a table with them is the table
+  // object, each such cell keeping its `vert` (`TableCell.vert`) for a later vertical text engine; today's
+  // renderer draws it horizontally (`cellIsVertical`). Every other kind keeps LibreOffice's art until that
+  // engine (owner question Q1c-5): `vert` and `vert270` are LibreOffice's vertical writing (drawn
+  // horizontally they would replace its art on a hub with it by text turned the wrong way); `wordArtVert`,
+  // `wordArtVertRtl` and `mongolianVert` are drawn horizontally by LibreOffice too but are in no measured deck.
   for (const a of anchors) {
     const vert = tcPrOf(a)?.attrs.vert;
-    if (vert !== undefined && vert !== 'horz')
+    if (vert !== undefined && vert !== 'horz' && vert !== 'eaVert')
       return residual('a table with vertical cell text is drawn by LibreOffice (M8)', 'vert');
   }
 
@@ -339,6 +343,8 @@ export function readTable(
       fill = { kind: 'none' };
     }
     const diag = diagonals(a, ps);
+    // Only `eaVert` reaches here (rule V, above); the stored cell keeps it (`emit-table.ts` `vertOf`).
+    const vert = pr?.attrs.vert === 'eaVert' ? 'eaVert' : undefined;
     cells.push({
       row: a.row,
       col: a.col,
@@ -347,6 +353,7 @@ export function readTable(
       fill: fill ?? { kind: 'none' },
       text: cellText(ctx, base, a.tc, pr, textStyleOf(ctx, ps), rtl),
       ...(diag ? { diag } : {}),
+      ...(vert ? { vert } : {}),
     });
   }
 
@@ -430,6 +437,9 @@ export function readTable(
   const gridded = gridObjects(cells, tableLines);
   const objects =
     (background && paints(background) ? 1 : 0) + gridded.fills.length + gridded.lines.length + cells.length;
+  // The table's own outer shadow (sub-wave 1c): read, noted, not emitted or drawn (`TableElement.shadow`).
+  const shadow = readShadow(child(child(tblPr, 'a:effectLst'), 'a:outerShdw'), ctx.color);
+  if (shadow) ctx.log("a table's shadow is not drawn");
   return {
     ...base,
     kind: 'table',
@@ -442,6 +452,7 @@ export function readTable(
     objects,
     ...(rtl ? { rtl: true } : {}),
     storedRows: stored,
+    ...(shadow ? { shadow } : {}),
     ...(loRows.some((h, r) => h !== rows[r]) ||
     loCols.some((w, c) => w !== cols[c]) ||
     spill.some((v) => v > 0) ||

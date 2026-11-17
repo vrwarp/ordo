@@ -637,6 +637,13 @@ export interface TableElement extends ElementBase {
    * table object stored them until 1b (`tables-form`), which stores LibreOffice's rows (`lo`) instead.
    */
   storedRows?: Emu[];
+  /**
+   * Sub-wave 1c: the table's outer shadow (`a:tblPr/a:effectLst/a:outerShdw`), which LibreOffice 24.2 draws as the
+   * shadow of the table's cell fills and lines (probe deck B). Read and noted ("a table's shadow is not drawn"),
+   * never emitted: a shadow on the table object would make the renderer's fallbacks draw it and the slide's effect
+   * budget charge it (`hasShapeExtras`), so drawing it is one follow-up item.
+   */
+  shadow?: Shadow;
 }
 
 /** One drawn cell of a table: a merge counts once. */

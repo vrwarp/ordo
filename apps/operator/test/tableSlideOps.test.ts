@@ -6,6 +6,8 @@
  */
 import { cellRich, Presentation, type ShapeObject, type SlideObject } from '@ordo/domain';
 import { m9Table } from '@ordo/domain/m9.test-util.ts';
+import { cellStyleEntry } from '@ordo/domain/table.ts';
+import { VERTICAL_CELLS, verticalTable } from '@ordo/domain/vertical-table.test-util.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { findRows, goToMatch } from '../src/views/editor/FindReplaceDialog.tsx';
 import { inlineTarget, openPresentation, useEditor } from '../src/views/editor/editorStore.ts';
@@ -99,6 +101,31 @@ describe('Find & Replace over table cells', () => {
     expect(useEditor.getState().textRange).toMatchObject({ start: 0, end: 5 });
     // Read-only: the match is selected, not edited.
     expect(goToMatch(rows[0]!, true)).toBe(false);
+  });
+});
+
+describe('Find & Replace in East Asian vertical cells (eaVert, sub-wave 1c)', () => {
+  it('finds and replaces in them as in any cell, keeping their vert', () => {
+    const p = Presentation.parse({
+      id: 'deck',
+      title: 'Two years',
+      kind: 'slides',
+      sections: [
+        {
+          id: 'sec',
+          label: 'Main',
+          short: 'M',
+          slides: [{ id: 's1', objects: [table('v1', { table: verticalTable() })] }],
+        },
+      ],
+    });
+    expect(findText(p, '년차').map((m) => m.cell)).toEqual([...VERTICAL_CELLS]);
+    const r = findReplace(p, '년차', '년 차');
+    expect(r.replaced).toBe(2);
+    const t = cells(r.p, 's1', 'v1');
+    expect(VERTICAL_CELLS.map((i) => cellRich(t, i)!.text)).toEqual(['1년 차', '２년 차']);
+    expect(VERTICAL_CELLS.map((i) => cellStyleEntry(t, t.cells[i])?.vert)).toEqual(['eaVert', 'eaVert']);
+    expect(VERTICAL_CELLS.map((i) => t.cells[i]!.rowSpan)).toEqual([4, 4]);
   });
 });
 

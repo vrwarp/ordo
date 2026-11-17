@@ -1232,6 +1232,64 @@ describe('tables: what stays residual', () => {
     expect(s.notes).toContain('a table with vertical cell text is drawn by LibreOffice (M8)');
   });
 
+  // Rule V (sub-wave 1c): LibreOffice 24.2 draws `eaVert` table cells exactly as `horz` ones (probe deck A:
+  // the same glyph positions within 0.1 pt, none turned), so such a table is the table object, the cell's
+  // `vert` kept for a later vertical text engine. The other kinds stay LibreOffice's art (owner question
+  // Q1c-5): vert and vert270 are LibreOffice's vertical writing; wordArtVert, wordArtVertRtl and mongolianVert,
+  // drawn horizontally too, are in no measured deck.
+  /** The Korean bulletin's vertical cells: a narrow first column, '1년차' over a rowSpan of 4, centred. */
+  const eaVertTable = (vert: string) =>
+    table({
+      cols: [IN / 2, 2 * IN],
+      rows: [
+        {
+          h: IN / 4,
+          cells: [tc('1년차', { tcPr: ` vert="${vert}" anchor="ctr"`, attrs: 'rowSpan="4"' }), tc('2019')],
+        },
+        { h: IN / 4, cells: [tc('', { attrs: 'vMerge="1"' }), tc('2020')] },
+        { h: IN / 4, cells: [tc('', { attrs: 'vMerge="1"' }), tc('2021')] },
+        { h: IN / 4, cells: [tc('', { attrs: 'vMerge="1"' }), tc('2022')] },
+      ],
+    });
+
+  it('reads a table with East Asian vertical cells (eaVert) as the table object, the cell keeping its vert', () => {
+    const deck = () => buildDeck({ slides: [{ shapes: eaVertTable('eaVert') }] });
+    const scene = parseDeck(deck(), { fontFace: HALF_EM });
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.kind).toBe('table');
+    expect(t.support).toBe('native');
+    expect(t.cells.map((c) => [c.row, c.col, c.rows, c.vert])).toEqual([
+      [0, 0, 4, 'eaVert'],
+      [0, 1, 1, undefined],
+      [1, 1, 1, undefined],
+      [2, 1, 1, undefined],
+      [3, 1, 1, undefined],
+    ]);
+    expect(scene.slides[0]!.notes).not.toContain(
+      'a table with vertical cell text is drawn by LibreOffice (M8)',
+    );
+    // Stored as the table object on every hub: no art, nothing left to LibreOffice.
+    const s = convertDeck(deck(), { fontFace: HALF_EM }).slides[0]!;
+    expect(s.classification.class).toBe('native');
+    expect(s.classification.reasons.filter((r) => r.startsWith('art:'))).toEqual([]);
+    expect(s.slide.objects.filter((o) => o.type === 'shape' && o.table)).toHaveLength(1);
+    // A horz cell says nothing.
+    const horz = parseDeck(buildDeck({ slides: [{ shapes: eaVertTable('horz') }] }), { fontFace: HALF_EM });
+    expect((horz.slides[0]!.elements[0] as TableElement).cells.every((c) => c.vert === undefined)).toBe(true);
+  });
+
+  it('leaves the other vertical kinds to LibreOffice: vert, vert270, wordArtVert, wordArtVertRtl, mongolianVert', () => {
+    for (const vert of ['vert', 'vert270', 'wordArtVert', 'wordArtVertRtl', 'mongolianVert']) {
+      const scene = parseDeck(buildDeck({ slides: [{ shapes: eaVertTable(vert) }] }), { fontFace: HALF_EM });
+      const e = scene.slides[0]!.elements[0]!;
+      expect(e, vert).toMatchObject({ kind: 'residual', what: 'table', support: 'residual' });
+      expect(e.reasons, vert).toContain('vert');
+      expect(scene.slides[0]!.notes, vert).toContain(
+        'a table with vertical cell text is drawn by LibreOffice (M8)',
+      );
+    }
+  });
+
   it("without the table object (the kill switch) keeps M6's cell cap: a table of more cells than a slide may have objects is LibreOffice's", () => {
     expect(MAX_TABLE_CELLS).toBe(MAX_SLIDE_OBJECTS);
     const rows = Array.from({ length: 12 }, () => ({
@@ -1271,6 +1329,59 @@ describe('tables: what stays residual', () => {
     expect(s.notes).toContain("a table of 120 objects passes the slide's budget: LibreOffice draws it");
     // The art's text holds the table's cells (search and labels).
     expect(s.art?.text).toContain('x');
+  });
+});
+
+describe("tables: the table's outer shadow (read, not stored or drawn: sub-wave 1c)", () => {
+  // The Korean bulletin's slide 2: a table-level outer shadow, 4 pt blur, 3 pt up, black at 40 %. LibreOffice
+  // draws it as the shadow of the table's cell fills and lines (probe deck B); ordo reads it and notes that it is
+  // not drawn (owner rule 4: the 0.60 minimum does not need it; storing it would change what the renderer draws).
+  const SHADOW =
+    '<a:effectLst><a:outerShdw blurRad="50800" dist="38100" dir="16200000" rotWithShape="0"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst>';
+  const shadowed = (tblPr: string, cell = tc('2019')) =>
+    table({ cols: [2 * IN], rows: [{ h: IN / 2, cells: [cell] }], tblPr });
+
+  it('reads a table-level outer shadow into the table element and notes that it is not drawn', () => {
+    const shapes = shadowed(`<a:tblPr firstRow="1" bandRow="1">${SHADOW}</a:tblPr>`);
+    const scene = parseDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: HALF_EM });
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.kind).toBe('table');
+    expect(t.shadow).toEqual({ dist: 38_100, blur: 50_800, dir: 270, color: { r: 0, g: 0, b: 0, a: 0.4 } });
+    // At the deck's frame (1920 px across 12,192,000 EMU: 6,350 EMU a px): 6 px up, 8 px of blur, as the
+    // diagnosis's prototype hub stored it ({ dx 0, dy -6, blur 8, black 40 % }).
+    const px = (emu: number) => (emu * 1920) / 12_192_000;
+    const dir = (t.shadow!.dir * Math.PI) / 180;
+    expect(px(t.shadow!.dist * Math.cos(dir))).toBeCloseTo(0, 9);
+    expect(px(t.shadow!.dist * Math.sin(dir))).toBeCloseTo(-6, 9);
+    expect(px(t.shadow!.blur)).toBe(8);
+    expect(scene.slides[0]!.notes).toContain("a table's shadow is not drawn");
+  });
+
+  it('stores no shadow on the table object (nor on the M6 group), so nothing draws or charges it', () => {
+    const shapes = shadowed(`<a:tblPr>${SHADOW}</a:tblPr>`);
+    const out = convertDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: HALF_EM });
+    const s = out.slides[0]!;
+    const tables = s.slide.objects.filter(
+      (o): o is ShapeObject => o.type === 'shape' && o.table !== undefined,
+    );
+    expect(tables).toHaveLength(1);
+    expect(tables[0]!.shadow).toBeUndefined();
+    expect(s.notes).toContain("a table's shadow is not drawn");
+    expect(s.classification.class).toBe('native');
+    // The M6 group (the kill switch) draws none either: no object of it has a shadow.
+    const group = convert(shapes);
+    expect(group.objects.some((o) => (o as ShapeObject).shadow !== undefined)).toBe(false);
+  });
+
+  it('reads no table shadow from shadows inside its cells, and none from a table without one', () => {
+    const runShadow = tc('2019', { rPrChildren: SHADOW });
+    for (const shapes of [shadowed('<a:tblPr/>', runShadow), shadowed('<a:tblPr><a:effectLst/></a:tblPr>')]) {
+      const scene = parseDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: HALF_EM });
+      const t = scene.slides[0]!.elements[0] as TableElement;
+      expect(t.kind).toBe('table');
+      expect(t.shadow).toBeUndefined();
+      expect(scene.slides[0]!.notes).not.toContain("a table's shadow is not drawn");
+    }
   });
 });
 

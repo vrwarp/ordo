@@ -15,7 +15,7 @@ import {
 } from './editorhelpers.ts';
 import { hubApi, login } from './linkhelpers.ts';
 import type { Pixels } from './png.ts';
-import { PLAN, TABLE, tableCellCentre, tableDeck } from './pptxdecks.ts';
+import { PLAN, TABLE, tableCellCentre, tableDeck, VERTICAL_TABLE, verticalTableDeck } from './pptxdecks.ts';
 import { portOf } from './ports.ts';
 import {
   apiJson,
@@ -379,5 +379,130 @@ test('on a hub with LibreOffice both tables are table objects, nothing waits, an
     await liveAsATable(a, context, LO_PORT, p, 'lo');
   } finally {
     hub.kill();
+  }
+});
+
+/**
+ * A table with East Asian vertical cells (sub-wave 1c, rule V; `pptxdecks.ts` `verticalTableDeck`): LibreOffice 24.2
+ * draws eaVert cells as horizontal ones (probe deck A), so the table is one table object on every kind of hub, its
+ * cells' vert kept for a later vertical text engine, its outer shadow read and noted, never stored. Until 1c it was
+ * LibreOffice's art on a hub with LibreOffice and missing on one without.
+ */
+type VerticalTable = {
+  cells: { text?: string; rowSpan?: number; style?: number }[];
+  styles?: { vert?: string }[];
+};
+type VerticalObj = { type: string; table?: VerticalTable; shadow?: unknown; origin?: { role?: string } };
+/** The converter's notes: the table's shadow is read, not drawn; no vertical cell is LibreOffice's any more. */
+const SHADOW_NOTE = "a table's shadow is not drawn";
+const VERT_NOTE = 'a table with vertical cell text is drawn by LibreOffice (M8)';
+/** The hub used the browser's scene. */
+const BROWSER_USED = /parsed in the browser: the hub checked its scene/;
+/**
+ * Rule H (ko-cells, sub-wave 1c): a hub that measures Hangul table cells with a face only its computer has names it
+ * in the job's log, and refuses a browser's scene of such a table (the browser cannot measure with that face).
+ */
+const HANGUL_FACE = /table cells in Hangul measured with this computer's face/;
+const SCENE_REFUSED = /its tables need a script face only this computer has/;
+
+/** The vertical-cell slide as the rule says, whoever parsed it: one native table object, its eaVert cells kept. */
+async function verticalStored(a: APIRequestContext, id: string, hub: string): Promise<void> {
+  const p = await apiJson<Presentation>(a, `presentations/${id}`);
+  const slides = p.sections.flatMap((s) => s.slides);
+  expect(slides, hub).toHaveLength(1);
+  const s = slides[0]!;
+  expect(s.pptx?.class, `${hub}: the table object, not LibreOffice's art`).toBe('native');
+  expect(s.pptx?.missing ?? [], `${hub}: nothing missing`).toEqual([]);
+  expect(s.pptx?.pending, `${hub}: nothing waits for LibreOffice`).toBeUndefined();
+  expect(s.imported, hub).toBeUndefined();
+  const objects = s.objects as unknown as VerticalObj[];
+  expect(
+    objects.some((o) => o.origin?.role === 'art'),
+    `${hub}: no art`,
+  ).toBe(false);
+  expect(s.pptx?.notes ?? [], hub).toContain(SHADOW_NOTE);
+  expect(s.pptx?.notes ?? [], hub).not.toContain(VERT_NOTE);
+  const tables = objects.filter((o) => o.type === 'shape' && o.table);
+  expect(tables, `${hub}: one table object`).toHaveLength(1);
+  expect(tables[0]!.shadow, `${hub}: the shadow is not stored`).toBeUndefined();
+  const t = tables[0]!.table!;
+  for (const [text, i] of VERTICAL_TABLE.vertical) {
+    const c = t.cells[i]!;
+    expect([c.text, c.rowSpan], hub).toEqual([text, 4]);
+    expect(
+      c.style === undefined ? undefined : t.styles?.[c.style]?.vert,
+      `${hub}: ${text} keeps eaVert`,
+    ).toBe('eaVert');
+  }
+}
+
+test('a table with East Asian vertical cells is the table object on both kinds of hub, whoever parsed it', async ({
+  page,
+}) => {
+  test.setTimeout(360_000);
+  rmSync(join(OUT, 'vertical'), { recursive: true, force: true });
+  mkdirSync(OUT, { recursive: true });
+  const deck = verticalTableDeck(join(OUT, 'vertical'));
+  // A hub with LibreOffice (the upload route): the table object; no follow-up, no art.
+  {
+    const hub = await pptxHub(LO_PORT);
+    try {
+      const a = await hubApi(LO_PORT);
+      const caps = await apiJson<{ libreoffice: { state: string } }>(a, 'capabilities');
+      expect(caps.libreoffice.state, 'this hub has LibreOffice').not.toBe('off');
+      const job = await importPptx(a, deck);
+      const jobs = await settled(a);
+      expect(
+        jobs.filter((j) => j.kind === 'pptx-lo'),
+        'no LibreOffice follow-up',
+      ).toHaveLength(0);
+      await verticalStored(a, job.result!.presentationId, 'with LibreOffice');
+    } finally {
+      hub.kill();
+    }
+  }
+  // A hub without LibreOffice, parsed by the hub (the upload route).
+  {
+    const hub = await liteHub(UPLOAD_PORT);
+    try {
+      const a = await hubApi(UPLOAD_PORT);
+      const job = await importPptx(a, deck);
+      await settled(a);
+      expect(job.log.join('\n')).not.toMatch(BROWSER_USED);
+      await verticalStored(a, job.result!.presentationId, 'without LibreOffice, parsed by the hub');
+    } finally {
+      hub.kill();
+    }
+  }
+  // A hub without LibreOffice, the deck dropped on the Import tab: the browser parses it, unless the hub measures
+  // its Hangul cells with a face only its computer has (rule H): then the hub refuses the browser's scene and
+  // parses the deck itself. Either way the same stored form.
+  {
+    const hub = await liteHub(TAB_PORT);
+    try {
+      const a = await hubApi(TAB_PORT);
+      await login(page, opOrigin(TAB_PORT));
+      await page.evaluate(() => {
+        location.hash = '#/library/import';
+      });
+      await expect(page.getByText(/anything it cannot draw is listed on the import card/)).toBeVisible({
+        timeout: 30_000,
+      });
+      await page.locator('input[name="pptx-import-mode"][value="native"]').check();
+      await page.locator('input[type=file][accept*=".pptx"]').setInputFiles(deck);
+      const card = page.locator('[data-pptx-import]').first();
+      await expect(card.getByText(/^done$/)).toBeVisible({ timeout: 120_000 });
+      const jobs = await settled(a);
+      const native = jobs.find((j) => j.kind === 'pptx-native')!;
+      const full = await apiJson<Job>(a, `jobs/${native.id}`);
+      const log = full.log.join('\n');
+      if (HANGUL_FACE.test(log)) {
+        expect(log, "rule H: the hub refused the browser's scene").toMatch(SCENE_REFUSED);
+        expect(log).not.toMatch(BROWSER_USED);
+      } else expect(log).toMatch(BROWSER_USED);
+      await verticalStored(a, full.result!.presentationId, 'without LibreOffice, parsed in the browser');
+    } finally {
+      hub.kill();
+    }
   }
 });

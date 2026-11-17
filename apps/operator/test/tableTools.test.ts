@@ -15,6 +15,8 @@ import {
   type TextStyle,
 } from '@ordo/domain';
 import { m9Table } from '@ordo/domain/m9.test-util.ts';
+import { cellStyleEntry } from '@ordo/domain/table.ts';
+import { verticalTable } from '@ordo/domain/vertical-table.test-util.ts';
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -387,5 +389,60 @@ describe('fills, rows and columns', () => {
     useEditor.setState({ slideId: 'sl' });
     expect(rowCol('table', 'rowBelow', 9)).toBeUndefined();
     expect(table().table!.rows).toHaveLength(m9Table().rows.length);
+  });
+});
+
+describe('rows and columns beside an East Asian vertical cell (eaVert, sub-wave 1c)', () => {
+  /** The vertical cells' texts, row spans and verts, in reading order. */
+  const verticals = () => {
+    const t = table().table!;
+    return t.cells.flatMap((c) => {
+      const v = cellStyleEntry(t, c)?.vert;
+      return v ? [[c.text, c.rowSpan ?? 1, v]] : [];
+    });
+  };
+
+  it('insert and delete rows and columns around it, keeping its vert; undo restores the table', () => {
+    openPresentation(
+      Presentation.parse({
+        id: 'deck',
+        title: 'Two years',
+        kind: 'slides',
+        sections: [
+          {
+            id: 'sec',
+            label: 'Main',
+            short: 'M',
+            slides: [{ id: 'sl', objects: [{ ...TABLE, table: verticalTable() }] }],
+          },
+        ],
+      }),
+    );
+    useEditor.setState({ slideId: 'sl' });
+    const start = table();
+    // Cell 1 ('2019') sits in row 0, column 1, beside '1년차' (rowSpan 4).
+    expect(rowCol('table', 'rowBelow', 1)).toBeDefined();
+    expect(verticals()).toEqual([
+      ['1년차', 5, 'eaVert'],
+      ['２년차', 4, 'eaVert'],
+    ]);
+    expect(rowCol('table', 'deleteRow', 1)).toBeDefined();
+    expect(verticals()).toEqual([
+      ['1년차', 4, 'eaVert'],
+      ['２년차', 4, 'eaVert'],
+    ]);
+    expect(rowCol('table', 'colRight', 1)).toBeDefined();
+    expect(table().table!.cols).toHaveLength(4);
+    expect(verticals()).toEqual([
+      ['1년차', 4, 'eaVert'],
+      ['２년차', 4, 'eaVert'],
+    ]);
+    expect(rowCol('table', 'deleteCol', 1)).toBeDefined();
+    expect(verticals()).toEqual([
+      ['1년차', 4, 'eaVert'],
+      ['２년차', 4, 'eaVert'],
+    ]);
+    for (let k = 0; k < 4; k++) undo();
+    expect(table()).toEqual(start);
   });
 });
