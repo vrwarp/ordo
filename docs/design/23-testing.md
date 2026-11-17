@@ -485,7 +485,8 @@ The end-to-end, goldens and fidelity jobs install the image's bundled font packa
 Liberation 2, Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them, not its CJK
 package, which only LibreOffice and the hub's measuring use (design/27 §10); the goldens and fidelity jobs add the
 golden faces (DejaVu, FreeSerif, IPAGothic). The image's own fonts are checked by `docker-pr.yml`'s smoke step and
-`apps/hub/test/fonts-licences.test.ts` (every font package the `Dockerfile` installs has its licence recorded).
+`apps/hub/test/fonts-licences.test.ts` (every font package the `Dockerfile` installs has its licence recorded,
+and no dpkg rule the `Dockerfile` writes stays in the image).
 Docker images are built by `docker-pr.yml` and published by `docker-publish.yml`; tags build and push the image.
 Not run in CI: the benches (`bench:*`, whose 50 ms and frame gates need a known machine) and the PowerPoint
 fidelity harness against LibreOffice (design/27 §14 item 2).

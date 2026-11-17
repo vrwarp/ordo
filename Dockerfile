@@ -41,12 +41,16 @@ RUN apt-get update \
 # Chinese, Japanese and Korean (design/27 §10): the Sans collections of fonts-noto-cjk (Noto Sans CJK, SIL OFL
 # 1.1, apps/hub/src/fonts/LICENSES.md), for LibreOffice and for the hub's measuring of table cells in those
 # scripts (apps/hub/src/pptx/systemFaces.ts). Never a library font and never sent to a screen. The dpkg rule
-# leaves out its Serif collections (54 MB): LibreOffice then draws serif CJK font names with the Sans face.
-# Its copyright file stays in /usr/share/doc/fonts-noto-cjk.
+# leaves out its Serif collections (54 MB): LibreOffice then draws serif CJK font names with the Sans face, and
+# where fontconfig asks for a Serif family that is not there (SimSun, or a serif with Chinese or Korean text) it
+# takes the collection's first face, so some Chinese and Korean characters show their Japanese forms. The rule is
+# removed at the end of the same RUN, so the published image keeps no dpkg rule of ours (a later install of the
+# package gets the Serif collections). Its copyright file stays in /usr/share/doc/fonts-noto-cjk.
 RUN echo 'path-exclude=/usr/share/fonts/opentype/noto/NotoSerifCJK-*' > /etc/dpkg/dpkg.cfg.d/ordo-noto-cjk-sans \
  && apt-get update \
  && apt-get install -y --no-install-recommends fonts-noto-cjk \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && rm /etc/dpkg/dpkg.cfg.d/ordo-noto-cjk-sans
 WORKDIR /app
 COPY --from=build --chown=node:node /out/hub/node_modules /app/apps/hub/node_modules
 COPY --from=build --chown=node:node /src/apps/hub/package.json /app/apps/hub/package.json

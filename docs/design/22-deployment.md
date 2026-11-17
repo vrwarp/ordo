@@ -92,13 +92,14 @@ renderer; `ORDO_CHROMIUM=/usr/bin/chromium`), `fonts-dejavu`, the bundled fonts 
 (`fonts-liberation2 fonts-crosextra-carlito fonts-crosextra-caladea fonts-noto-core fonts-inter`, about 55 MB,
 registered from `ORDO_FONTS_DIR=/usr/share/fonts`, their copyright files kept in `/usr/share/doc`), in a second
 layer `fonts-noto-cjk`'s Sans collections (Noto Sans CJK, about 40 MB, a dpkg rule leaving out its Serif
-collections; for LibreOffice and the hub's measuring of Chinese, Japanese and Korean table cells, never registered
-as library fonts), and copies `apps/hub/dist` and the built browser apps. Runs as a non-root user under tini,
-entrypoint the supervisor. Health check `GET /api/v1/health` (answered by the live process; it reports the library
+collections and removed again after the install; for LibreOffice and the hub's measuring of Chinese, Japanese and
+Korean table cells, never registered as library fonts), and copies `apps/hub/dist` and the built browser apps.
+Runs as a non-root user under tini, entrypoint the supervisor. Health check `GET /api/v1/health` (answered by the live process; it reports the library
 process state too).
-Image size target under 1.5 GB (LibreOffice dominates; Chromium adds about 250 MB). The pull-request
-smoke test starts both renderers inside the image and checks its CJK face (fontconfig's face for Hangul, the hub's
-`system faces` start-log line).
+Image size target under 1.5 GB (LibreOffice dominates; Chromium adds about 250 MB). The built image's size has
+not been measured against it; the pull-request job prints the amd64 image's size and warns above the target. The
+pull-request smoke test starts both renderers inside the image and checks its CJK face (fontconfig's face for
+Hangul, the hub's `system faces` start-log line).
 
 ## CI and release
 
