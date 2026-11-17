@@ -343,4 +343,65 @@ describe('a dense table slide (M9: every table is the table object, on every hub
       .result.slides[0]!;
     expect(own).not.toHaveProperty('tableGroupBytes');
   });
+
+  /** The import core's steps 3-5 on a checked scene, as the hub's job runs them (`nativeJob.ts`). */
+  async function storedOn(scene: PptxClientScene, lo: boolean) {
+    const taken = checkClientScene(scene, { libreoffice: lo });
+    if (!('scene' in taken)) throw new Error(`refused: ${taken.refused}`);
+    const slide = taken.scene.slides[0]!;
+    const core = new ImportCore({ lo, log: new ImportLog(), warn: () => {}, geomFileBytes: 1 << 20 });
+    const converted = new Map<number, Converted>([[slide.index, { s: slide, media: new Map() }]]);
+    const drafts = core.drafts(taken.scene.listed, converted, taken.scene.scan);
+    core.budget(drafts);
+    const cls = drafts[0]!.cls;
+    const { p } = core.assemble(drafts, new Map(), {
+      id: 'p',
+      title: 'Plan',
+      hash: 'h'.repeat(64),
+      sections: [],
+      slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
+      scan: { loop: false },
+      hasAlpha: () => false,
+      clipIds: new Set(),
+      libraryFamilies: [],
+    });
+    return { cls, slide: p.sections[0]!.slides[0]! };
+  }
+  const tableIn = (objects: readonly unknown[]) =>
+    (objects as ShapeObject[]).find((o) => o.type === 'shape' && !!o.table)!;
+  async function denseScene(lo: boolean): Promise<PptxClientScene> {
+    const z = new JSZip();
+    for (const [k, v] of denseTableDeck(12)) z.file(k, v);
+    return (await parsePptxScene(await z.generateAsync({ type: 'uint8array' }), { libreoffice: lo })).scene;
+  }
+
+  for (const lo of [false, true])
+    it(`an r2b-sw1m operator's scene with tables in the grow form is stored as sent, on a hub ${lo ? 'with' : 'without'} LibreOffice`, async () => {
+      // CONVERTER_VERSION stays 2 through sub-wave 1b (plan section 11), so a hub of 1b takes the scene of an
+      // operator of sub-wave 1: its table objects carry the deck's a:tr rows and no rowRule (the drawer grows
+      // them). Nothing re-lays them out: the rows and the grow rule stay as sent (review 1b, lens 4).
+      const grow = structuredClone(await denseScene(lo));
+      const t = tableIn(grow.slides[0]!.slide.objects);
+      expect(t.table!.rowRule).toBe('fixed');
+      const { rowRule: _, ...table } = t.table!;
+      t.table = { ...table, rows: table.rows.map((h) => +((h * 2) / 3).toFixed(3)) };
+      t.box = { ...t.box, h: t.table.rows.reduce((s, h) => s + h, 0) };
+      const { cls, slide } = await storedOn(grow, lo);
+      expect(cls).toBe('native');
+      const st = tableIn(slide.objects);
+      expect(st.table!.rowRule ?? 'grow').toBe('grow');
+      expect(st.table!.rows).toEqual(t.table.rows);
+      // The box as the schema rounds it (0.01 px).
+      expect(Math.abs(st.box.h - t.box.h)).toBeLessThan(0.01);
+      expect(slide.pptx!.version).toBe(2);
+    });
+
+  it("an older operator's scene with tableGroupBytes is accepted on a hub without LibreOffice too: the table object", async () => {
+    const older = structuredClone(await denseScene(false));
+    (older.slides[0] as unknown as Record<string, unknown>).tableGroupBytes = 90_000;
+    const { cls, slide } = await storedOn(older, false);
+    expect(cls).toBe('native');
+    expect(tableIn(slide.objects).table!.cells).toHaveLength(60);
+    expect(slide).not.toHaveProperty('tableGroupBytes');
+  });
 });
