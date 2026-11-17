@@ -239,6 +239,12 @@ export type Piece = {
   level: number;
   /** A line may break after this piece. False inside a word (a style or level cut): only an emergency break. */
   breakAfter: boolean;
+  /**
+   * The break after it is one only the office rules make ('3:16-' / '17', breaks.ts `officeOnly`), inside a
+   * word UAX#14 keeps whole: on one line the next piece of the run follows at the whole string's advance
+   * (lines.ts), so the kerning across it is kept as the whole string is shaped.
+   */
+  officeBreak?: true;
   /** ISO 15924 code when the piece needs a script fallback face (FaceRequest.script), else ''. */
   script: string;
 };

@@ -53,6 +53,10 @@ import type {
  *   word in a narrow box costs about as much as the lines it makes, in every drawer and in every step of
  *   the autofit search. The cut search measures a cut in the trailing whitespace without it, so that
  *   whitespace hangs on the word's last line as on any other and is never cut off onto the next one.
+ * - A break only the office rules make (breaks.ts: '3:16-' / '17') cuts a word UAX#14 keeps whole into
+ *   pieces measured apart: where the line goes on, the next piece of the run follows at the whole string's
+ *   advance (`kernAfter`: the pair kerning across the cut, as Canvas and LibreOffice shape the whole string),
+ *   both for whether it fits and where it is drawn; where the line ends there, the piece keeps its own width.
  * - `wrap: false` never breaks a line.
  * - Right-to-left paragraphs (bidi level 1) mirror the start: indents and the bullet are on the right, the
  *   pieces run from the right (UAX#9 L2 between pieces, `visualOrder`), and the hanging whitespace is on
@@ -439,6 +443,25 @@ function flowParas(
     };
   };
 
+  /**
+   * The pair kerning between piece `c` and the next one `n` across a break only the office rules make
+   * (`Piece.officeBreak`, inside one left-to-right run): the joined string's width less both pieces', as
+   * Canvas shapes the whole string. It is added to `c`'s advance, so on one line `n` follows where the
+   * whole string draws it and a line that ends after `c` keeps `c`'s own width ('Hebreos 9:23-' / '28').
+   */
+  const kernAfter = (c: Measured, n: Measured | undefined): number => {
+    const p = c.piece;
+    const q = n?.piece;
+    if (!p.officeBreak || !q || q.start !== p.end || q.sr !== p.sr || q.level !== p.level || p.level % 2)
+      return 0;
+    if (q.script !== p.script) return 0;
+    const st = c.style;
+    const f = base ?? fit;
+    const w = (s: number, e: number) => measureAt(st, p.script, 'ltr', segText(text, s, e, st.caps), f);
+    const k = w(p.start, q.end) - w(p.start, p.end) - w(q.start, q.end) - st.letterSpacing;
+    return base ? k * (c.sizePx / drawnPx(size(st.sizePx, base), st.baseline)) : k;
+  };
+
   const lines: LaidLine[] = [];
   const bulletWs: number[] = [];
   let y = 0;
@@ -466,6 +489,7 @@ function flowParas(
     if (!cont) hard = { style: ps, F, rtl };
 
     const queue = pp.pieces.map((p) => measure(p, runs[p.sr]!));
+    for (const [q, c] of queue.entries()) if (c.piece.officeBreak) c.a += kernAfter(c, queue[q + 1]);
     const spec = !para.soft && chainText[pi] ? (bullets[para.index] ?? null) : null;
     const other = Math.max(0, ps.indentPx);
     const x0 = para.soft ? other : Math.max(0, ps.indentPx + ps.firstLinePx);
@@ -642,9 +666,11 @@ function flowParas(
         // off it, or measure it once all of it may fit.
         const sr = runs[head.piece.sr]!;
         const cut = splitPiece(head, room, true);
-        if (!cut || cut === 'whole' || cut.all)
-          replace(i, { ...measure(head.piece, sr, false), cuts: head.cuts });
-        else {
+        if (!cut || cut === 'whole' || cut.all) {
+          const c = { ...measure(head.piece, sr, false), cuts: head.cuts };
+          c.a += kernAfter(c, queue[i + 1]);
+          replace(i, c);
+        } else {
           const h = measure(cut.head, sr, false);
           push(h);
           replace(i, rest(head, h, cut.tail, cut.cuts));

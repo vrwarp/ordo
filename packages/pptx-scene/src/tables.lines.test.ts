@@ -83,3 +83,25 @@ describe("the converter's table measure sizes each line by its own runs", () => 
     }
   });
 });
+
+describe("the converter's table measure keeps the kerning across an office-only break", () => {
+  // A face whose '-' is a quarter em and kerns with a following '4' by a quarter em (9 px at 36 px), as Inter's
+  // '-2' does: the renderer places '3-' and '4…' on one line as the whole string is shaped (text-falls A).
+  const KERNED: FaceSource = () => ({
+    advance: (cp: number) => (cp === 0x2d ? 0.25 : 0.5),
+    kern: (a: number, b: number) => (a === 0x2d && b === 0x34 ? -0.25 : 0),
+  });
+  const kerned = () => new Measure(frameOf(12_192_000, 6_858_000), KERNED);
+
+  it("fits 'aa 3-4bbbb' kerned on one line, and measures the line after the break without the pair", () => {
+    // 'aa 3-' is 81 px, '4bbbb' 90 px, the pair -9 px: 162 px kerned, 171 apart.
+    const b = body(paraOf(['aa 3-4bbbb', 18]));
+    for (const w of [165, 162.5]) {
+      expect(kerned().layout(b, w).baselines).toHaveLength(1);
+      expect(kerned().height(b, w)).toBeCloseTo(1.2 * 36, 6);
+      expect(kerned().loLayout(b, w, 'font').drawn.baselines).toHaveLength(1);
+    }
+    // 85 px: 'aa 3-' / then '4bbbb' alone is 90 px (the pair is across the line end), cut once more: 3 lines.
+    expect(kerned().layout(b, 85).baselines).toHaveLength(3);
+  });
+});

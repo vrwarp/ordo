@@ -19,7 +19,9 @@ import type { BidiPara, ItemPara, Itemized, Piece, PreparedPara, RunStyle } from
  * - 'auto' paragraphs take the direction of the first strong character of their whole soft-break chain
  *   (one PowerPoint paragraph), so a soft line continues its paragraph's direction.
  * - Break opportunities: UAX#14, or for a box in the office line model (`Itemized.office`) the office rules
- *   (breaks.ts), so imported text breaks where LibreOffice breaks it and ordo's own text as before.
+ *   (breaks.ts), so imported text breaks where LibreOffice breaks it and ordo's own text as before. A piece
+ *   cut at a break only the office rules make is marked (`Piece.officeBreak`): lines.ts keeps the kerning
+ *   across it where the line goes on.
  */
 
 /** Each paragraph's bidi levels, break opportunities and pieces. */
@@ -61,7 +63,8 @@ function cutPieces(text: string, para: ItemPara, bidi: BidiPara, office: boolean
   const { spans, moved } = styleSpans(text, para);
   // Office text (imported PowerPoint text, table cells) breaks where LibreOffice breaks it; ordo's own text
   // keeps UAX#14 (breaks.ts).
-  const breaks = breakOpportunities(text, para.start, para.end, para.runs[0]?.style.lang ?? '', office);
+  const only = office ? new Set<number>() : undefined;
+  const breaks = breakOpportunities(text, para.start, para.end, para.runs[0]?.style.lang ?? '', office, only);
   const levels = bidi.levels;
   const ps = para.start;
   let b = 0;
@@ -86,7 +89,17 @@ function cutPieces(text: string, para: ItemPara, bidi: BidiPara, office: boolean
       end = sc.end;
       let trail = end;
       while (trail > at && isBreakSpace(text.charCodeAt(trail - 1))) trail--;
-      pieces.push({ start: at, end, trail, sr: sp.sr, level, breakAfter: end === brk, script: sc.script });
+      const piece: Piece = {
+        start: at,
+        end,
+        trail,
+        sr: sp.sr,
+        level,
+        breakAfter: end === brk,
+        script: sc.script,
+      };
+      if (end === brk && only?.has(brk)) piece.officeBreak = true;
+      pieces.push(piece);
       at = end;
     }
   }

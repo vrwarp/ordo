@@ -1207,7 +1207,8 @@ export function loLineHeight(pt: number, face: FaceMetrics | undefined, lines: L
  * that does not fit goes to the next line, cut between characters only when it is wider than a whole line.
  * A word is measured as the renderer measures one piece of it: advances plus the face's pair kerning
  * between characters of one run (so a word that fits once kerned is not cut; kerning across a space or a
- * style change is lost on both sides alike).
+ * style change is lost on both sides alike; across a break only the office rules make, inside a word, it is
+ * kept unless the line ends there, as the renderer places the pieces).
  *
  * Faces (M9): a character is drawn by the first face of its run's chain that has it (the family, its metric
  * substitute, the script fallbacks, ordo's default face), else by the face the caller's fallback draws its
@@ -1500,6 +1501,8 @@ export class Measure {
     // The characters with their widths, sizes, whether they raise the line, and their offset in `text`.
     const chars: {
       w: number;
+      /** The pair kerning in `w` across an office-only break before this character (0 elsewhere). */
+      kern: number;
       size: number;
       pt: number;
       face: FaceMetrics | undefined;
@@ -1517,12 +1520,17 @@ export class Measure {
     const fallbacks = scriptFallbacks(text, lang);
     // Where a line may end (the renderer's rule for office text: table cells are in the office line model,
     // so they break where LibreOffice breaks them): before `text[b]` for each b.
-    const breaks = new Set(breakOpportunities(text, 0, text.length, cleanLang(lang), true));
+    // `officeOnly`: the breaks only the office rules make ('3:16-' / '17'), inside a word UAX#14 keeps whole:
+    // the pair kerning across one is kept, as the renderer places the next piece on the same line, and is
+    // taken off again when the line ends there (`kern`).
+    const officeOnly = new Set<number>();
+    const breaks = new Set(breakOpportunities(text, 0, text.length, cleanLang(lang), true, officeOnly));
     let at = 0;
     for (const r of runs) {
       if (r.kind === 'break') {
         chars.push({
           w: 0,
+          kern: 0,
           size: px(r.style.sizePt),
           pt: r.style.sizePt,
           face: undefined,
@@ -1558,12 +1566,15 @@ export class Measure {
         // Capitals measured as drawn (one character may become two: 'ß' is 'SS'), at this offset.
         const shown = s.caps === 'none' ? [cp] : codePoints(String.fromCodePoint(cp).toUpperCase());
         let w = 0;
+        let pairKern = 0;
         let face: FaceMetrics | undefined;
         for (const [k, c] of shown.entries()) {
           const g = this.glyph(c, family, s.bold, s.italic, fallbacks, first);
           w += g.w * size + spacing;
           face ??= g.face;
-          // Pair kerning inside one piece of one run: not across a break opportunity, not between faces.
+          // Pair kerning inside one piece of one run: not across a break opportunity (but across one only
+          // the office rules make), not between faces.
+          const cut = breaks.has(at + i);
           if (
             k === 0 &&
             prev?.face &&
@@ -1571,15 +1582,19 @@ export class Measure {
             !(prev.space && !space) &&
             !prev.wide &&
             !wide &&
-            !breaks.has(at + i)
+            (!cut || officeOnly.has(at + i))
           ) {
             const kern = g.face.kern?.(prev.cp, c) ?? 0;
-            if (Number.isFinite(kern)) w += kern * size;
+            if (Number.isFinite(kern)) {
+              w += kern * size;
+              if (cut) pairKern = kern * size;
+            }
           }
           prev = { cp: c, face: g.face, space, wide };
         }
         chars.push({
           w,
+          kern: pairKern,
           size: px(s.sizePt),
           pt: s.sizePt,
           face: face ?? first ?? this.faceOf(s, cls, r.text),
@@ -1638,7 +1653,8 @@ export class Measure {
       if (!ch.space && width + ch.w > room + 0.01 && k > start) {
         if (bp > start) {
           close(bp);
-          width -= widthAtBp;
+          // The line after the break starts with chars[bp] alone: without the pair kerning across the break.
+          width -= widthAtBp + chars[bp]!.kern;
           start = bp;
         } else {
           close(k);

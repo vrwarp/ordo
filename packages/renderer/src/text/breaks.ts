@@ -55,7 +55,9 @@ export function isBreakSpace(c: number): boolean {
  * Offsets b with start < b < end where a line may end before `text[b]`, ascending. The paragraph's end
  * is always a (mandatory) break and is not listed. A mandatory break inside the paragraph (U+2028, a lone
  * CR) is listed as an ordinary opportunity: paragraphs are the '\n' pieces of the text. `office`: the office
- * rules of imported text (header), else UAX#14 as it is.
+ * rules of imported text (header), else UAX#14 as it is. `officeOnly` receives the offsets only the office
+ * rules add (UAX#14 has none there): a line ending there keeps the kerning across it when it does not end
+ * there (lines.ts, the converter's table measure).
  */
 export function breakOpportunities(
   text: string,
@@ -63,6 +65,7 @@ export function breakOpportunities(
   end: number,
   lang: string,
   office = false,
+  officeOnly?: Set<number>,
 ): number[] {
   const out: number[] = [];
   if (end - start < 2) return out;
@@ -77,7 +80,7 @@ export function breakOpportunities(
     if (p > 0 && !isGlue(before) && (!isGlue(s.charCodeAt(p)) || isBreakSpace(before))) out.push(start + p);
   }
   const extra = office ? officeBreaks(s) : NONE;
-  const merged = extra.length ? mergeSorted(out, extra, start) : out;
+  const merged = extra.length ? mergeSorted(out, extra, start, officeOnly) : out;
   if (!SA_BLOCK.test(s)) return merged;
   const sa = saBreaks(s, lang);
   if (!sa.length) return merged;
@@ -86,8 +89,16 @@ export function breakOpportunities(
 
 const NONE: readonly number[] = [];
 
-/** `a` (offsets of the whole text) and `b` (offsets into the paragraph, `start` added), merged, ascending. */
-function mergeSorted(a: readonly number[], b: readonly number[], start: number): number[] {
+/**
+ * `a` (offsets of the whole text) and `b` (offsets into the paragraph, `start` added), merged, ascending;
+ * `onlyB` receives the offsets of `b` that `a` lacks.
+ */
+function mergeSorted(
+  a: readonly number[],
+  b: readonly number[],
+  start: number,
+  onlyB?: Set<number>,
+): number[] {
   const merged: number[] = [];
   let i = 0;
   let j = 0;
@@ -100,6 +111,7 @@ function mergeSorted(a: readonly number[], b: readonly number[], start: number):
       if (x === y) j++;
     } else {
       merged.push(y);
+      onlyB?.add(y);
       j++;
     }
   }

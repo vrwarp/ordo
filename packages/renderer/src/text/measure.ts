@@ -17,7 +17,8 @@ import type { Ink, Measurer } from './types.ts';
  * - Advances scale exactly with the size (20 → 40 px: × 2.000), which the autofit search relies on
  *   (`linearWidth`).
  * - Kerning applies within a measured string ('AV' 52.17 px against 54.73 apart): pieces are measured and
- *   drawn apart, so kerning across a piece boundary (a space, a style change) is lost on both sides alike.
+ *   drawn apart, so kerning across a piece boundary (a space, a style change) is lost on both sides alike;
+ *   across a break only the office rules make ('3:16-' / '17'), inside a word, lines.ts keeps it.
  */
 
 /** Entries of the width cache (design/27 §6). */
