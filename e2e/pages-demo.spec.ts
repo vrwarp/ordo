@@ -115,6 +115,11 @@ test('the Pages demo runs with no hub: sample service, ProPresenter import, go l
       ),
     });
   await expect(page.getByText('Visitor wave.svg')).toBeVisible({ timeout: 20_000 });
+  // The name shows as the upload starts (0 %): read it back only once it is stored, or the reload below aborts
+  // it (under load the upload outlasts the moment the name appears; review 1b's trace: reloaded at 0 %).
+  await expect(
+    page.locator('.row.small', { hasText: 'Visitor wave.svg' }).getByText('uploaded', { exact: true }),
+  ).toBeVisible({ timeout: 20_000 });
   // Read back from the demo hub (the search index follows the stored library).
   await page.reload();
   await page.evaluate(() => {
