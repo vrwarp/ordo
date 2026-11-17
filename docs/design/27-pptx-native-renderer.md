@@ -1873,9 +1873,13 @@ vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, 
     0.539 and 0.438 at 8e8a294, each asked of both): the 0.634 and 0.759 "without" were the measuring tool's own
     drawing (its `noLoSsim`), which lays the cells out with its host's faces (`fc-match`), not a hub's. Both kinds of
     hub measured the Hangul cells by estimate, their library having no Hangul face.
-  - **The shipped hub image has no Korean face** (`fonts-noto-core`): there rule H finds nothing, the four slides
-    stay as at the 1b head (0.421, 0.593, 0.535 and 0.521 against this machine's LibreOffice page) and that image's
-    LibreOffice draws Korean as empty boxes (probed). Owner question Q1c-2: as built for 1c; a CJK face for the image
+  - **The shipped hub image has no Korean face** (`fonts-noto-core`): there rule H keeps no face (since integrate-1c
+    repair 1: fontconfig names a face with only 一 for Han, which is no Han face), and the four slides measure 0.421,
+    0.593, 0.535 and 0.521 against this machine's LibreOffice page on both kinds of hub. At the 1b head the image's
+    hubs stored 0.444 (slide 2, LibreOffice's picture drawn with the image's fonts) or 0.490 (slide 2 without
+    LibreOffice, the table left out), 0.593, 0.538 and 0.439: slide 2 is 0.023 / 0.069 lower there, the image's form of
+    Q1c-1's drop, slide 19 0.003 lower, slide 20 0.083 higher. That image's LibreOffice draws Korean as empty boxes
+    (probed). Owner question Q1c-2: as built for 1c; a CJK face for the image
     (fonts-wqy-zenhei) is recommended for the follow-up pull request.
   - **The table's outer shadow is read, not drawn** (rule 4): slide 2's table casts one; LibreOffice draws it, ordo
     notes it on the slide (0.697 without it; about 0.717 with it, measured in the planner's prototype).
@@ -1883,8 +1887,10 @@ vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, 
     never tuned on; tier C, 21 that 1b tuned on) and golden-pptx's 16 are identical at the 1b head and the 1c head on
     both kinds of hub. None of them has CJK cells, vertical cells or a table shadow, so they show that 1c changed
     nothing else; they do not test the new rules. Ten public table slides with CJK cells that no 1c track saw (owner
-    question Q1c-4) rose on both kinds of hub and none fell (two from under 0.60: 0.584 -> 0.696 and 0.375 -> 0.726);
-    a probe hold-out deck was written after the rules were frozen. `CONVERTER_VERSION` stays 2 (§15, tables-form).
+    question Q1c-4) are all at or above 0.60 on both kinds of hub (two from under it: 0.584 -> 0.683 and 0.375 ->
+    0.726) and none fell by 0.005 or more (one 0.002 lower, noise); a probe hold-out deck written after the rules were
+    frozen rose on 13 of its 14 slides on both kinds of hub, the 14th (the scope check) identical (integrate-1c repair
+    1, after rule G's gap moved into its character's run). `CONVERTER_VERSION` stays 2 (§15, tables-form).
 - _Left to a follow-up pull request (the owner, 2026-11-17: once the minimum is met, table and text fidelity work
   stops chasing LibreOffice; with sub-waves 2-4):_
   - LibreOffice's glyph-advance model and one row measure (`tables-widths`): with the harness's faces, 148 of
@@ -3214,9 +3220,13 @@ be measured):
   LibreOffice's as measured with the hub's computer's face and LibreOffice's 1/4 em (§15 M9, "Built for wave r2b
   sub-wave 1c"). The cost is of the same kind: an operator tab of an earlier build sends a version-2 scene parsed as
   that build parsed it, and the hub stores it unless its table cells need a script face only the hub's computer has
-  (then the hub refuses the scene and parses the deck itself, `SCRIPT_FACE_REFUSAL`). So a deck whose only East
-  Asian cells are in an `eaVert` table can still be stored as before 1c (LibreOffice's art, or the table missing
-  without LibreOffice), and on a hub with no CJK face Korean rows arrive without the 1/4 em; Re-import and Reset
+  (then the hub refuses the scene and parses the deck itself, `SCRIPT_FACE_REFUSAL`). So an older build's scene
+  keeps its `eaVert` tables as before 1c (LibreOffice's art on a hub with LibreOffice, the table missing without)
+  wherever the hub does not refuse it: on every hub for a deck whose only East Asian cells are in an `eaVert` table,
+  and on a hub with no CJK face for any deck, whose `systemOnlyScripts` is empty so nothing is refused (the Korean
+  bulletin's slide 2 is such a table; its Korean rows there also arrive without the 1/4 em). The hub's
+  `APP_VERSION` check bounds this to builds that share one `APP_VERSION` (`ws.ts`: an operator of another version
+  is sent away, 'bye version'), so after the wave's 0.9.0 bump it reaches no earlier build. Re-import and Reset
   slide give 1c's form. The wave-end decision (owner question N1) is unchanged.
 <!-- /r2b:tables-form -->
 
@@ -3286,7 +3296,8 @@ Two rules, both for measuring only, and the browser's parse kept equal to the hu
   ideograph is U+4E00) for Han and faces without Kana or Hangul for the others, the check keeps none, and the cells
   are measured by estimate, as before (owner question Q1c-2). Until integrate-1c repair 1 the check asked for the one
   letter and kept the Nushu face for Han: Chinese and Japanese cells on that image were measured with it (a 1.172 em
-  line), lower than at the 1b head on two extension slides (integrate-1c.md, "Repair 1").
+  line), lower than at the 1b head on three extension slides (ext06 slides 6 and 7, ext07 slide 19: -0.020, -0.005,
+  -0.028; integrate-1c.md, "Repair 1").
 - **The browser's scene is refused for such a deck** (`clientScene.ts` `SCRIPT_FACE_REFUSAL`, in the
   `pptx-client-scene` task): a browser cannot measure with the hub's computer's faces, so a scene whose table cells
   hold a script the hub measures with a system face (`systemOnlyScripts`) is refused and the hub parses the deck
