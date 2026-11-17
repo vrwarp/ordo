@@ -7,6 +7,7 @@ import WebSocket from 'ws';
 import type { HubConfig } from '../src/config.ts';
 import { afterAll } from 'vitest';
 import { createHub, type Hub } from '../src/hub.ts';
+import { noSystemFaces } from '../src/pptx/systemFaces.ts';
 import type { ToolProbe } from '../src/tools.ts';
 
 export const OPERATE_PIN = '111111';
@@ -57,6 +58,8 @@ export async function startHub(overrides: Partial<HubConfig> = {}): Promise<Test
     host: '127.0.0.1',
     healthIntervalMs: 100,
     toolProbe: TEST_TOOLS,
+    // No script face of this computer (rule H) unless a test injects one: a hub test means the same anywhere.
+    systemFaces: noSystemFaces,
     ...overrides,
   });
   const url = await hub.listen(0);

@@ -6,6 +6,7 @@
  */
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { noSystemFaces } from '../src/pptx/systemFaces.ts';
 import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { importPro7, pro7Type } from '@ordo/importers';
@@ -415,6 +416,7 @@ describe('H4: an output token the live process cannot check yet gets bye retry',
     // No real LibreOffice probe: one started by the library outlives its close and writes a profile into the
     // data folder after the test removed it (a run would leave its folder behind).
     toolProbe: TEST_TOOLS,
+    systemFaces: noSystemFaces,
   });
 
   it('answers retry without a context, unauthorized with one', async () => {

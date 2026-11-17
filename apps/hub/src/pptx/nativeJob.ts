@@ -91,6 +91,7 @@ import type { ClientSceneTaskOutput } from './clientScene.ts';
 import { type ClipFile, ClipImport, spillClips } from './clips.ts';
 import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
 import { sceneFontFiles } from './faces.ts';
+import { SCRIPT_NAMES, type SystemScriptFace } from './systemFaces.ts';
 import { isShapeFilePlaceholder, nameGeoms, storeGeomFiles } from './geoms.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { importResult, logSafe } from './report.ts';
@@ -401,6 +402,8 @@ class NativeImport {
   private clipsCreated: string[] = [];
   /** Baked pictures by their key in the drafts' part maps (M6, `bakes.ts`): source part and recipe. */
   private readonly bakes = new Map<string, { part: string; bake: PictureBake }>();
+  /** Rule H: the system faces a batch measured a table with, each logged once (`systemFacesUsed`). */
+  private readonly systemFacesLogged = new Set<string>();
 
   constructor(
     deps: PptxDeps,
@@ -454,6 +457,20 @@ class NativeImport {
 
   private checkCancelled(): void {
     if (this.ctx.signal.aborted) throw new Cancelled();
+  }
+
+  /**
+   * Rule H: the job's log names each system face a table was measured with, once ('table cells in Hangul
+   * measured with this computer's face wqy-zenhei.ttc').
+   */
+  private systemFacesUsed(used: readonly string[] | undefined): void {
+    for (const u of used ?? []) {
+      if (this.systemFacesLogged.has(u) || this.systemFacesLogged.size >= 8) continue;
+      this.systemFacesLogged.add(u);
+      const [script = '', ...file] = u.split(' ');
+      const msg = `table cells in ${SCRIPT_NAMES[script] ?? 'a script'} measured with this computer's face ${logSafe(file.join(' '), 120)} (the font library has none for it)`;
+      this.ctx.log(msg);
+    }
   }
 
   /** A `pptx-scene` pool call; `timeoutMs` stops its worker sooner than the pool's own timeout. */
@@ -868,7 +885,7 @@ class NativeImport {
     const out = new Map<number, Converted>();
     const n = listed.length;
     const step = this.limits.batchSlides;
-    const call = this.batchCall(parts, listed, pictureSizes, mediaKinds, out);
+    const call = await this.batchCall(parts, listed, pictureSizes, mediaKinds, out);
     /** Slides for the rescue, each with its own parts (kept until then). */
     const failed = new Map<number, SlideParts>();
     for (let from = 0; from < n; from += step) {
@@ -918,15 +935,17 @@ class NativeImport {
 
   /**
    * What every `pptx-scene` call of one import shares (`BatchCall`): the deck's parts but the slides' own and
-   * their notes, and the options; the converted slides go to `out`.
+   * their notes, and the options; the converted slides go to `out`. It awaits this computer's script faces
+   * (rule H, `systemFaces.ts`: resolved once at the hub's start, within 10 s), so a deck imported during
+   * start-up is measured as one imported later.
    */
-  private batchCall(
+  private async batchCall(
     parts: Map<string, Uint8Array>,
     listed: readonly SlideRef[],
     pictureSizes: [string, PictureHeader][],
     mediaKinds: [string, 'video' | 'audio'][],
     out: Map<number, Converted>,
-  ): BatchCall {
+  ): Promise<BatchCall> {
     const own = new Set<string>();
     for (const r of listed) {
       own.add(r.part);
@@ -934,13 +953,17 @@ class NativeImport {
     }
     const shared = new Map<string, Uint8Array>();
     for (const [k, v] of parts) if (!own.has(k) && !NOTES_PART.test(k)) shared.set(k, v);
-    // Table rows grow to their text, measured with the library's faces (read by the worker as needed).
+    // Table rows grow to their text, measured with the library's faces (read by the worker as needed), and a
+    // script the library has no face for with this computer's (rule H).
     const fonts = sceneFontFiles(this.deps.lib.listFonts(), (p) => this.deps.store.abs(p));
+    const system = (await this.deps.systemFaces?.ready) ?? [];
+    this.checkCancelled();
     const base = {
       pictureSizes,
       options: this.options,
       mediaKinds,
       fonts,
+      ...(system.length ? { systemScriptFaces: system.map((f) => [...f] as SystemScriptFace) } : {}),
       geomBytes: this.limits.batchGeomBytes,
       ...(this.lo ? {} : { libreoffice: false }),
     };
@@ -973,7 +996,7 @@ class NativeImport {
       );
       return;
     }
-    const call = this.batchCall(xml.parts, listed, pictureSizes, mediaKinds, out);
+    const call = await this.batchCall(xml.parts, listed, pictureSizes, mediaKinds, out);
     const mine = new Map<number, SlideParts>();
     for (const i of failed) mine.set(i, takeParts(xml.parts, listed, i, i + 1).get(i)!);
     xml.parts.clear();
@@ -1094,6 +1117,7 @@ class NativeImport {
       transferables(sent),
       timeoutMs,
     );
+    this.systemFacesUsed(r.systemFaces);
     // Every batch must list the deck as the scan did, or its indexes would name other slides.
     const same =
       r.result.listed.length === n &&
