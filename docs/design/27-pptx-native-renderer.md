@@ -1101,7 +1101,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
    - A right-to-left paragraph mirrors its start: indents and the bullet are on the right and its trailing space hangs on the left. `align` stays visual.
    - Then UAX#9 L2 visual reordering between segments. The browser orders glyphs within a segment.
 7. **Line model `'office'`** (LibreOffice, measured in the pptx-render commits; `page.ts:202-353`).
-   - F = the size of the paragraph's main run: its first run without a baseline shift, else its first run, else the end mark, after autofit. Each line with text is as tall as its own largest unshifted run (LibreOffice's editeng sizes each line by its portions): a larger run raises its line, so lines never overlap, and a smaller citation that wraps onto lines of its own makes short lines (sub-wave 1b, text-lines; Matthew 16v18's 5 pt references after 7 pt text). A line of shifted runs only keeps F. The `'ordo'` model keeps F as every line's floor, and so does an office box that shrinks its text (autofit `'shrink'`): LibreOffice sizes those lines by their own runs too (text-falls probe B), but ordo's autofit search is not LibreOffice's yet (LibreOffice applies its spacing scale to single spacing, h = 1.2F·k with the baseline min(F, h); a one-run paragraph in a normAutofit box takes the face's own metrics), and own-run lines there moved eight shrinking slides below the owner's current point (8e8a294); 1c. The converter's table measure sizes lines the same way.
+   - F = the size of the paragraph's main run: its first run without a baseline shift, else its first run, else the end mark, after autofit. Each line with text is as tall as its own largest unshifted run (LibreOffice's editeng sizes each line by its portions): a larger run raises its line, so lines never overlap, and a smaller citation that wraps onto lines of its own makes short lines (sub-wave 1b, text-lines; Matthew 16v18's 5 pt references after 7 pt text). A line of shifted runs only keeps F. The `'ordo'` model keeps F as every line's floor, and so does an office box that shrinks its text (autofit `'shrink'`): LibreOffice sizes those lines by their own runs too (text-falls probe B), but ordo's autofit search is not LibreOffice's yet (LibreOffice applies its spacing scale to single spacing, h = 1.2F·k with the baseline min(F, h); in some normAutofit boxes it spaces lines by the face's own metrics instead, on a condition not yet known: review 1b's probe G found it with one run, two runs of one size and a 40 pt run before 24 pt text in 500 pt boxes, at fontScale 90 % and 100 % and lnSpcReduction 10 %, where text-falls' B4 had two runs at 90 % in a 300 pt box at 1.2F·k), and own-run lines there moved eight shrinking slides below the owner's current point (8e8a294); the follow-up pull request. The converter's table measure sizes lines the same way.
    - Single spacing: pitch 1.2F, first baseline F below the line top.
    - Proportional p ≠ 1: h = 1.2F·p·k, where k is the autofit spacing scale. The baseline is F + (h − 1.2F) when p > 1, else min(F, 0.8h).
    - At PowerPoint's stored `fitScale` (step 10) its spacing is drawn the PowerPoint way: OOXML subtracts `lnSpcReduction` (1 − `fitScale.spacing`) from every paragraph's proportional spacing, single spacing included, so p becomes max(0, p − r) and k does not apply to it (100 % less 20 % is 80 %, 90 % is 70 %, where LibreOffice's k gives 72 % and leaves 100 % alone). Exact spacing and spcBef/spcAft are scaled by 1 − r. LibreOffice's k stays for the search and for `--lo-compat`.
@@ -1832,8 +1832,8 @@ measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`).
   (tables-cells merged) by 0.005 or more", and on 2026-11-17 by a 0.60 minimum for every table slide on both kinds
   of hub, after which table fidelity work stops chasing LibreOffice. At the 1b head no slide of the measured sets is
   0.005 or more below its 8e8a294 score; the 8 are 0.508 at tables-flip, 0.849 at the head (0.633-0.927, each above
-  its 8e8a294 score); 61 of the 63 table slides are ≥ 0.60 on both kinds of hub (the two others are 1c's,
-  below). Live safety: a jump while another cue of the layer stays armed
+  its 8e8a294 score); 59 of the 63 table slides are ≥ 0.60 on both kinds of hub, the hub with LibreOffice
+  asked for every one (review 1b; the four others, all in the Korean deck, are 1c's, below). Live safety: a jump while another cue of the layer stays armed
   no longer waits for that arm to make its units (up to `UNIT_WAIT_MS`, a GO 1.3 s late at 3840 here): the live
   job rushes it (design/14 "Late units", Rush).
 - _Left to sub-wave 1c (the owner, 2026-11-17: every table slide ≥ 0.60 on both kinds of hub, then the wave's
@@ -1841,8 +1841,13 @@ measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`).
   - The Korean deck's slide 2, the one table with vertical cells, is still LibreOffice's art on a hub with
     LibreOffice (owner question T4's default) and 0.490 without it: `vert-cells` makes it the table object (and
     reads that table's outer shadow).
-  - The Korean deck's slide 20 (0.543 on both kinds of hub): `ko-weak`'s measured LibreOffice behaviour in table
-    cells (below), with a probe deck; T2 makes in-cell spacing as LibreOffice's product behaviour there.
+  - The Korean deck's slide 20 (0.543 on a hub without LibreOffice, 0.439 on a hub with it) and, on a hub with
+    LibreOffice only, its slides 18 (0.593; 0.634 without) and 19 (0.538; 0.759 without): `ko-weak`'s measured
+    LibreOffice behaviour in table cells (below), with a probe deck; T2 makes in-cell spacing as LibreOffice's
+    product behaviour there. A hub with LibreOffice draws these three lower than the stored form scores because it
+    lays the Korean cells out with its library's faces (the 1b plan's "the hub's library faces"; review 1b asked
+    that hub for every table slide, where 1b's report had inferred these three from the stored form). Slide 19 was
+    0.557 on that hub before 1b (all-tables' asked run at 8ee17c9) and 0.539 at 8e8a294.
   - Each with the table slides 1b never tuned on (the held-out set of the 1b report) measured before and after,
     and no regression; a slide that cannot reach 0.60 goes to the owner with the options, nothing lowered.
 - _Left to a follow-up pull request (the owner, 2026-11-17: once the minimum is met, table and text fidelity work
@@ -1861,12 +1866,13 @@ measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`).
     Korean text in the Latin face (not the Korean one, as this entry said before; probe decks, tables/gaps-flip
     B.1); the extra lines come from the 1/4 em spacing LibreOffice adds at every boundary between East Asian and
     other text, and from the weak characters (circled digits, corner brackets) taking the face of the script
-    around them (`ko-weak`; slide 18, 0.634, and slide 19 stay here). The other script table slides (Coptic and
+    around them (`ko-weak`; slides 18 and 19 are 1c's on a hub with LibreOffice, above). The other script table slides (Coptic and
     Arabic cells) are `script-cells`'; the picture under a table (Brutalism 14) is `svg-under`'s.
   - Text: LibreOffice's break after a slash before a digit and its exact-width rule for a slash are not modelled
     (text-falls probe C; §6 step 3); own-run
     line heights in a box that shrinks its text wait for LibreOffice's autofit model (its spacing scale on single
-    spacing, a one-run paragraph on the face's own metrics: text-falls probe B); owner questions T1 (ordo's own text breaks as today) and T5 (imported text
+    spacing, and in some normAutofit boxes the face's own metrics, on a condition not yet known: text-falls probe B
+    and review 1b's probe G; one run is not it), in the follow-up pull request; owner questions T1 (ordo's own text breaks as today) and T5 (imported text
     boxes on whole pixels: not done; the 8 would go 0.848 → 0.869, numbers in the 1b report) stay open. What
     the 8 still miss is mostly outside the table objects (John 5 vs 18's and Colossians' text boxes, the
     Boletims' dashed outlines: LibreOffice-only habits kept in the measuring tool, owner question T3).
@@ -3076,7 +3082,8 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
 
   The target column is question 3's gate. The owner replaced it on 2026-11-16 (no slide below its score at 8e8a294,
   tables-cells merged, by 0.005 or more) and on 2026-11-17 (every table slide ≥ 0.60 on both kinds of hub): all 8
-  meet it at the 1b head, each above its 8e8a294 score; the Korean deck's slides 2 and 20 are sub-wave 1c's (§13).
+  meet it at the 1b head, each above its 8e8a294 score; the Korean deck's slides 2 and 20, and on a hub with
+  LibreOffice its slides 18 and 19, are sub-wave 1c's (§13).
 
   The stored form is what churches see on either kind of hub (since sub-wave 1b LibreOffice's form, "The stored
   form" below; before it the deck's row heights grown by the drawer's lines); the harness scores a table slide
