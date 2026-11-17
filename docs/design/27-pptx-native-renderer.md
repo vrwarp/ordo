@@ -1422,6 +1422,7 @@ _As built (M2, `packages/renderer/src/text/fonts.ts`):_
 
 **As built in M3** (`apps/hub/src/fonts/bundled.ts`, licences in `apps/hub/src/fonts/LICENSES.md`):
 - The image installs `fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter` (bookworm, all SIL OFL 1.1) and keeps their copyright files. `ORDO_FONTS_DIR` (the image sets `/usr/share/fonts`) is where the hub looks; unset, nothing is registered.
+- Since sub-wave 1c (owner answer to Q1c-2, 2026-11-17) the image also installs `fonts-noto-cjk`'s Sans collections (Noto Sans CJK JP, KR, SC, TC and HK, SIL OFL 1.1, about 40 MB; a dpkg rule leaves out its Serif collections) for LibreOffice and the hub's measuring of CJK table cells ("The hub's computer's script faces" below). A TrueType collection is never registered, so the CJK families stay on demand and the screens receive nothing new. `apps/hub/src/fonts/LICENSES.md` records it and DejaVu as installed but not served; `apps/hub/test/fonts-licences.test.ts` keeps the `Dockerfile`'s font packages, LICENSES.md and `BUNDLED_FACES` in step.
 - Faces: Inter, Carlito, Caladea, Liberation Sans, Serif and Mono and Noto Sans in regular, italic, bold and bold italic; the Noto script faces in regular and bold.
 - Registration runs at every start. An unchanged file changes nothing. A changed file (a newer image) replaces the row's file. A face the library already has from an upload or Google Fonts (same family, weight, style and range) is left alone. Bundled rows no longer listed are removed. Bundled rows cannot be deleted (409).
 - The Hebrew, Arabic, Devanagari, Tamil, Thai and Myanmar faces carry their script's `unicodeRange`, so a script fallback listed before a deck's own family never draws its Latin text. Noto Sans has no range, because people also pick it for Latin text.
@@ -1444,8 +1445,9 @@ or Hangul that its library has no face for with the face its own computer's font
 script (`apps/hub/src/pptx/systemFaces.ts`: `fc-match` by absolute path, once at start, awaited by every import job;
 a TrueType collection read at its index): the face LibreOffice and a browser on that computer fall back to. It is
 for measuring only: never registered in the library, stored or shipped; the outputs draw with their own faces, and
-the library's face always wins. The project's hub image has no CJK face, so there the cells are measured by estimate
-as before (owner question Q1c-2). Details: §15, M9, "Built for wave r2b sub-wave 1c".
+the library's face always wins. The project's hub image installs Noto Sans CJK for this (owner answer to Q1c-2,
+2026-11-17), so there the cells are measured with `NotoSansCJK-Regular.ttc` face 0, whose Hangul and Han advances and
+line height equal the Korean face's. Details: §15, M9, "Built for wave r2b sub-wave 1c".
 
 **Embedded fonts (M8).** They are EOT, 88% MTX-compressed.
 - Decoded on the pool by a bounded TypeScript MTX/LZCOMP+CTF decoder written from the W3C MTX submission. `eot2ttf` via `tools.run` (timeout, SIGKILL, address-space cap, ≤32 MB in, ≤64 MB out) is the stop-gap.
@@ -3241,9 +3243,14 @@ Two rules, both for measuring only, and the browser's parse kept equal to the hu
   `pptx-scene` input (imports, re-imports, Reset slide) and the client-scene check await (10 s at most; then no
   system face, logged), so a deck imported during start-up is stored as one imported later. The library's face
   always wins; nothing is stored or drawn with the system face; the job log names it ("table cells in Hangul
-  measured with this computer's face wqy-zenhei.ttc"). **The project's hub image has no CJK face**
-  (`fonts-noto-core`): there nothing is found and the cells are measured by estimate, as before (owner question
-  Q1c-2: nothing changes there in 1c; a follow-up is recommended).
+  measured with this computer's face wqy-zenhei.ttc"). **The project's hub image installs Noto Sans CJK** (owner
+  answer to Q1c-2, 2026-11-17, "add a cjk font": `fonts-noto-cjk`'s Sans collections, not WenQuanYi Zen Hei, whose
+  GPL-with-font-exception licence the font rules leave out): there fc-match gives `NotoSansCJK-Regular.ttc` face 0
+  (the image sets no language), rule H measures the cells with it, and LibreOffice draws the letters. Before it the
+  image had no CJK face: nothing was found, the cells were measured by estimate, and its LibreOffice drew Korean as
+  empty boxes. Noto Sans CJK's Hangul is narrower and its lines taller than WenQuanYi Zen Hei's (this measuring
+  computer's face), so the image's hubs store other rows than this computer's; the image is measured on its own
+  (`regroup/r2b/1c/cjk-image/`).
 - **The browser's scene is refused for such a deck** (`clientScene.ts` `SCRIPT_FACE_REFUSAL`, in the
   `pptx-client-scene` task): a browser cannot measure with the hub's computer's faces, so a scene whose table cells
   hold a script the hub measures with a system face (`systemOnlyScripts`) is refused and the hub parses the deck
@@ -3305,9 +3312,11 @@ on a hub with it (0.947), nothing on one without (0.490, the table listed missin
   The track's probe deck shows the same kind of drop on its eaVert slides (0.998, 0.950, 0.999 as LibreOffice's art
   -> 0.979, 0.907, 0.995 as the table object, each equal to its horz twin). Every other slide of the tables set and
   shards 0-2 (463 slides of the 62 table decks, 111 table rows on both kinds of hub) and every held-out slide is
-  identical; the census moves slide 2 from hybrid to native and nothing else. On the project's hub image, which has
-  no Korean face, the table measures 0.421 against this machine's page (the planner's run without rule H's face), where that image's LibreOffice draws the
-  Korean letters as empty boxes (Q1c-1, Q1c-2). Details: `regroup/r2b/1c/vert-cells/notes.md`, `probe/probe-a.md`.
+  identical; the census moves slide 2 from hybrid to native and nothing else. On a hub without a Korean face (the
+  project's hub image before the owner's answer to Q1c-2), the table measures 0.421 against this machine's page (the
+  planner's run without rule H's face), and that image's LibreOffice drew the Korean letters as empty boxes (Q1c-1,
+  Q1c-2). The image now installs Noto Sans CJK (§10), with which its LibreOffice draws them; it is measured on its
+  own (`regroup/r2b/1c/cjk-image/`). Details: `regroup/r2b/1c/vert-cells/notes.md`, `probe/probe-a.md`.
 <!-- /r2b:vert-cells -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)

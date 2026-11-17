@@ -481,12 +481,14 @@ jobs that run side by side so none takes more than about 35 minutes (one job too
 | Goldens (pinned container)            | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                                                                                                    | 20 min |
 | Fidelity ratchets                     | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                                                                                              | 20 min |
 
-The end-to-end, goldens and fidelity jobs install the image's font packages (Carlito, Caladea, Liberation 2,
-Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them; the goldens and
-fidelity jobs add the golden faces (DejaVu, FreeSerif, IPAGothic). Docker images are built by
-`docker-pr.yml` and published by `docker-publish.yml`; tags build and push the image. Not run in CI: the
-benches (`bench:*`, whose 50 ms and frame gates need a known machine) and the PowerPoint fidelity harness
-against LibreOffice (design/27 §14 item 2).
+The end-to-end, goldens and fidelity jobs install the image's bundled font packages (Carlito, Caladea,
+Liberation 2, Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them, not its CJK
+package, which only LibreOffice and the hub's measuring use (design/27 §10); the goldens and fidelity jobs add the
+golden faces (DejaVu, FreeSerif, IPAGothic). The image's own fonts are checked by `docker-pr.yml`'s smoke step and
+`apps/hub/test/fonts-licences.test.ts` (every font package the `Dockerfile` installs has its licence recorded).
+Docker images are built by `docker-pr.yml` and published by `docker-publish.yml`; tags build and push the image.
+Not run in CI: the benches (`bench:*`, whose 50 ms and frame gates need a known machine) and the PowerPoint
+fidelity harness against LibreOffice (design/27 §14 item 2).
 
 Browser unit tests (the `*.browser.test.ts` files, the harness's `NativeRenderer`, the hub's pptx-preview
 import, `packages/pptx-render`) find their browser with one helper, `tools/find-chromium.ts`: Playwright's

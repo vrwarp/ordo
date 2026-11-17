@@ -90,11 +90,15 @@ Multi-stage Dockerfile: `node:22-bookworm-slim` build stage running `pnpm instal
 `libreoffice-impress` (no GUI packages), `chromium` (headless, for the pptx-preview PowerPoint
 renderer; `ORDO_CHROMIUM=/usr/bin/chromium`), `fonts-dejavu`, the bundled fonts of design/27 §10
 (`fonts-liberation2 fonts-crosextra-carlito fonts-crosextra-caladea fonts-noto-core fonts-inter`, about 55 MB,
-registered from `ORDO_FONTS_DIR=/usr/share/fonts`, their copyright files kept in `/usr/share/doc`), and copies
-`apps/hub/dist` and the built browser apps. Runs as a non-root user under tini, entrypoint the supervisor. Health check
-`GET /api/v1/health` (answered by the live process; it reports the library process state too).
+registered from `ORDO_FONTS_DIR=/usr/share/fonts`, their copyright files kept in `/usr/share/doc`), in a second
+layer `fonts-noto-cjk`'s Sans collections (Noto Sans CJK, about 40 MB, a dpkg rule leaving out its Serif
+collections; for LibreOffice and the hub's measuring of Chinese, Japanese and Korean table cells, never registered
+as library fonts), and copies `apps/hub/dist` and the built browser apps. Runs as a non-root user under tini,
+entrypoint the supervisor. Health check `GET /api/v1/health` (answered by the live process; it reports the library
+process state too).
 Image size target under 1.5 GB (LibreOffice dominates; Chromium adds about 250 MB). The pull-request
-smoke test starts both renderers inside the image.
+smoke test starts both renderers inside the image and checks its CJK face (fontconfig's face for Hangul, the hub's
+`system faces` start-log line).
 
 ## CI and release
 
