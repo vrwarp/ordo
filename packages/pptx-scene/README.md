@@ -212,7 +212,8 @@ Fills are solid (a gradient's first stop) and lines solid (dashes noted). Since 
 and lines are one geometry object per fill and per line look (below); the background is one rect. IR:
 `TableElement` (`ir.ts`); the walk reads it through `readTable`, `emit.ts` writes it through `emitTable`.
 - **Residual.** A table with vertical cell text stays a `ResidualElement` ('table'): LibreOffice draws it
-  into the art; one of more than `MAX_TABLE_GRID` (4,096) grid cells is not read at all. No count of cells
+  into the art (since sub-wave 1c only `vert`, `vert270`, `wordArtVert`, `wordArtVertRtl` and `mongolianVert`
+  cells: a table with East Asian vertical cells, `eaVert`, is the table object, rule V below); one of more than `MAX_TABLE_GRID` (4,096) grid cells is not read at all. No count of cells
   decides otherwise but the slide's object budget: a table of more drawn cells (a merge counts once, the
   cells it covers not at all; R1) than a slide may have objects (`MAX_TABLE_CELLS` = `MAX_SLIDE_OBJECTS`,
   150: each cell is an object, so it could never be drawn natively) stays residual unmeasured, reason
@@ -866,8 +867,8 @@ table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of
   spaces a paragraph by the face that draws its script (`FaceSource.script`: `@ordo/importers` `faceSourceOf` on
   the hub and in the browser, `fc-match :charset` in the harness), asked for Han, Kana and Hangul only
   (`GLYPH_SCRIPTS`: a shaped script's unshaped advances do not measure its line).
-- **Not written**: a table with vertical cell text stays residual ('vert') until the writing engine lays cells
-  out; no legacy group (M9 decision 4).
+- **Not written**: a table with vertical cell text other than `eaVert` stays residual ('vert') until the writing
+  engine lays cells out (sub-wave 1c, rule V below); no legacy group (M9 decision 4).
 - **The kill switch** (`m9Writes` without 'table'): the M6 group, counted as its objects by the budgets
   (`BudgetOptions.tables` false: `budgetCost`, the guard's text objects one per cell), and M6's cell cap
   (`budget.ts` `m6TableCap`, `MAX_TABLE_CELLS` 150, 'budget:table') before the support is refined.
@@ -938,6 +939,48 @@ cell layout only:
   LibreOffice's model and 2 in ordo's), `tables.lines.test.ts` (the stored table's row holds LibreOffice's three
   lines; the stored text has no run or letter spacing of its own).
 <!-- /r2b:ko-cells -->
+
+## Wave r2b sub-wave 1c: East Asian vertical cells and the table's shadow (`tables.ts`; `vert-cells`)
+
+<!-- r2b:vert-cells -->
+The Korean bulletin's slide 2 holds the one measured table with vertical cells: two East Asian vertical (`eaVert`)
+cells, '1년차' and '２년차', 24 pt in a 46.6 pt column, each over 4 rows, and the table casts an outer shadow. Until
+1c every table with a vertical cell was residual ('vert'): LibreOffice's art on a hub with it, nothing on one without.
+- **Rule V** (`readTable`, the residual test): LibreOffice 24.2 draws `eaVert` cells exactly as `horz` ones (probe deck
+  A, `regroup/r2b/1c/vert-cells/probe/probe-a.md`: every glyph of an eaVert cell where the horizontal cell has it,
+  within 0.001 pt on LibreOffice's 1/100 mm column grid, none turned; eaVert slides and their horz twins give
+  byte-identical pages). Slide 2's cells stack one character a line only because the column is narrow. So a table
+  whose vertical cells are all `eaVert` is read as the table object, each such cell keeping `TableCell.vert`
+  'eaVert' (emitted by `emit-table.ts` `vertOf` into `CellStyle.vert`, in the schema since 0.8.0: no schema change),
+  and drawn horizontally by today's renderer (`table/model.ts` `cellIsVertical`), as LibreOffice draws it. A table
+  with any `vert`, `vert270`, `wordArtVert`, `wordArtVertRtl` or `mongolianVert` cell stays residual (owner question
+  Q1c-5): `vert` and `vert270` are LibreOffice's vertical writing (drawn horizontally they would replace its art by
+  text turned the wrong way); the last three LibreOffice draws horizontally too (probe A), but no measured deck has
+  one and the schema has no value of their own, so they wait for the vertical text engine with the others.
+- **Not copied**: LibreOffice garbles a pure-Hangul paragraph that wraps inside an eaVert cell (probe A slide 2);
+  ordo draws it plainly; no measured cell is one. PowerPoint draws eaVert as upright stacked characters; a later
+  vertical text engine would depart from LibreOffice 24.2 there, and the stored `vert` keeps the deck's intent for it.
+- **The table's outer shadow** (`a:tblPr/a:effectLst/a:outerShdw`, read by `text.ts` `readShadow`) goes into
+  `TableElement.shadow` (slide 2: dx 0, dy -6, blur 8 px at 1920, black at 40 %) and the slide gets the note "a
+  table's shadow is not drawn". It is not emitted: a `shadow` on the table object would make the renderer's
+  `hasShapeExtras` true, so a table whose drawer is not loaded yet, or whose `table` the clamp drops, would be drawn
+  by `drawGeomShape` with the shadow, and the slide's effect budget would charge it. LibreOffice draws it as the
+  shadow of the table's cell fills and lines (the diagnosis' probe B); drawing it (+0.02 on slide 2) is a
+  follow-up: the emission, a renderer rule for a table's shadow in those fallbacks and in the effect budget, the
+  table's sprite reach, the draw off the GO path, bench rows.
+- **Census**: classify's static census still records the feature 'vert' for an eaVert cell (the tier); the slide's
+  class is native.
+- Tests: `tables.test.ts` (an eaVert table is a table element with the cells' vert; each of the five other kinds
+  stays residual 'vert'; a table-level outer shadow read into `TableElement.shadow` with the note; run shadows in
+  cells give none), `emit-table.test.ts` (the cell style's vert 'eaVert'; no `shadow` on the table object; the
+  note), `renderer/src/table/draw.test.ts` (a pin: an eaVert cell draws the same operations as horz) and
+  `table/edit.test.ts` (caret, selection, click and the cell's rect over 4 rows as a horizontal cell's), the
+  operator's table tests and `packages/domain` (`vertical-table.test-util.ts`: typing, formatting, Find & Replace,
+  row and column operations, Tab, undo and `fitRows` keep the cell's vert; the 0.8.0 build parses it as stored),
+  `apps/hub/test/pptx-reimport.test.ts` (re-import and Reset slide of a slide stored before 1c, LibreOffice's art,
+  give the table object); end to end `e2e/table-deck.test.ts`, `e2e/pptx-tables.spec.ts` and
+  `e2e/ipad/table-targets.spec.ts` (`verticalTableDeck`).
+<!-- /r2b:vert-cells -->
 
 ## Module map
 

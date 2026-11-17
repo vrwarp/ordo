@@ -685,7 +685,7 @@ As built in M3 (`packages/domain/src/size.ts`):
   - sp3d with a non-zero bevel or extrusion (a no-op scene3d/sp3d is ignored);
   - a real `prstTxWarp` (not textNoShape);
   - vertical text (until M9);
-  - tables (until M6; since M6 only those with vertical cell text or past the slide's object budget, a table of more drawn cells than a slide may have objects among them);
+  - tables (until M6; since M6 only those with vertical cell text or past the slide's object budget, a table of more drawn cells than a slide may have objects among them; since sub-wave 1c not those whose vertical cells are all East Asian vertical, `eaVert`: §15 M9, rule V);
   - a metafile that fails conversion.
 - **Approx** (drawn natively, logged): reflection, inner shadow, soft edge on pictures before M8 (the renderer draws a picture's `softEdge` since PR #23, §7.1; the converter does not write it yet), kerning differences, unknown transitions, picture-filled text (`textFill:picture`, drawn in the text colour, §4).
 - Everything else is native.
@@ -2427,7 +2427,8 @@ Also:
     property by property and the wider of two neighbours' wins (LibreOffice's rules). The 74 built-in styles
     draw every line 1 pt and bold heads, as PowerPoint defines them (LibreOffice's table leaves most widths
     at 0 and makes only Light Style 1 bold). Diagonal lines are not drawn (noted). A table with vertical cell
-    text stays residual (until M8), and so does a table that would take its slide past 150 objects
+    text stays residual (until M8; since sub-wave 1c not one whose vertical cells are all `eaVert`: M9, rule V),
+    and so does a table that would take its slide past 150 objects
     (`budget:table`, the slide hybrid). Rows grow to their text measured with the faces' advances
     (`ParseOptions.fontFace`: the hub's library files, `apps/hub/src/pptx/faces.ts`; fontconfig's in the
     harness), estimated widths when a family has none (noted). A cell's lines are spaced by its face's line
@@ -3060,9 +3061,13 @@ reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvag
   master as well: the summer-vibes template's grid, measured estimated in the browser until then, made the
   only deck of `hub-import --equivalence` whose scenes differed); the harness asks fontconfig for a letter of the script
   (`fc-match :charset=<hex>`, the face Chromium falls back to on its host: WenQuanYi Zen Hei for Hangul).
-- **Vertical cells stay residual** (`'vert'`, LibreOffice's art) until the writing engine lays them out: drawn
-  horizontally they would replace LibreOffice's art on a hub with it by text turned the wrong way (the WIP's
-  "approx, drawn horizontally" was not taken).
+- **Vertical cells** (since sub-wave 1c, rule V: "Built for wave r2b sub-wave 1c: vertical cells", below): a table
+  whose vertical cells are all East Asian vertical (`eaVert`) is the table object, each such cell keeping its `vert`,
+  because LibreOffice 24.2 draws them exactly as horizontal cells (probe deck A). Tables with `vert`, `vert270`,
+  `wordArtVert`, `wordArtVertRtl` or `mongolianVert` cells stay residual (`'vert'`, LibreOffice's art) until the
+  writing engine lays them out (owner question Q1c-5): drawn horizontally, `vert` and `vert270` would replace
+  LibreOffice's art on a hub with it by text turned the wrong way (the WIP's "approx, drawn horizontally" was not
+  taken for them).
 - **The kill switch is honest.** Without 'table' in `m9Writes` (`version.ts` `M9_HELD_BACK`) the M6 group is
   written, and the budgets count it as the objects it emits (`BudgetOptions.tables`,
   `TableElement.objects`, the guard's text objects one per cell) and keep M6's cell cap (`m6TableCap`,
@@ -3250,6 +3255,50 @@ Two rules, both for measuring only, and the browser's parse kept equal to the hu
   its portion's (0.9 pt on one probe row); the weak characters' faces in line heights. Details:
   `regroup/r2b/1c/ko-cells/notes.md`, `probe/probe.md`.
 <!-- /r2b:ko-cells -->
+
+<!-- r2b:vert-cells -->
+**Built for wave r2b sub-wave 1c: vertical cells (vert-cells track).** The Korean bulletin's slide 2 holds the one
+measured table with vertical cells: a 10-row table (Medium Style 2 - Accent 1) whose narrow first column (46.6 pt) has
+two East Asian vertical (`eaVert`) cells, '1년차' and '２년차', 24 pt, each over 4 rows, and the table casts an outer
+shadow (blur 4 pt, 3 pt up, black at 40 %). Every table with a vertical cell was residual ('vert'): LibreOffice's art
+on a hub with it (0.947), nothing on one without (0.490, the table listed missing).
+- **Rule V: LibreOffice 24.2 draws `eaVert` cells horizontally** (`tables.ts` `readTable`; probe deck A, remade by the
+  track: every glyph of an eaVert cell where the horizontal cell has it, within 0.001 pt on LibreOffice's 1/100 mm
+  column grid, none turned; three eaVert slides and their horz twins give byte-identical pages; the bulletin's cells
+  stack one character a line only because the column is narrow). So a table whose vertical cells are all `eaVert` is
+  the table object, each such cell keeping its `vert` (`TableCell.vert`, emitted as `CellStyle.vert` 'eaVert', in the
+  schema since 0.8.0: no SHARED change, APP_VERSION and its digest stand), drawn horizontally by today's renderer
+  (`cellIsVertical`; no renderer change) as LibreOffice draws it; a 0.8.0 build parses it as stored. The
+  cell keeps its vert through typing, formatting, Find & Replace, row and column operations, Tab, undo and the
+  rows' growth; its caret, selection and taps are a horizontal cell's (ordo's editor has no merge or split).
+  Re-import and Reset slide of a slide stored before 1c (LibreOffice's art) give the table object.
+- **Tables with `vert`, `vert270`, `wordArtVert`, `wordArtVertRtl` or `mongolianVert` cells stay LibreOffice's art**
+  (owner question Q1c-5, default yes): `vert`/`vert270` are LibreOffice's vertical writing (upright CJK, turned Latin);
+  the other three LibreOffice draws horizontally too (probe A), so they could follow eaVert later, but no measured
+  deck has one (rule 4).
+- **Not copied:** LibreOffice garbles a pure-Hangul paragraph that wraps inside an eaVert cell (the diagnosis' probe A
+  slide 2); ordo draws it plainly; no measured cell is one. PowerPoint draws eaVert as upright stacked characters; a
+  later vertical text engine would depart from LibreOffice 24.2 there (an owner decision then); the stored `vert`
+  keeps the deck's intent for it.
+- **The table's outer shadow is read, not stored or drawn** (rule 4): `a:tblPr/a:effectLst/a:outerShdw` goes into the
+  converter's `TableElement.shadow` and the slide's notes say "a table's shadow is not drawn". LibreOffice draws it as
+  the shadow of the table's cell fills and lines (the diagnosis' probe B); drawing it would add about 0.02 on slide 2.
+  A `shadow` on the stored table object is not neutral (`hasShapeExtras`: the drawer-not-loaded and clamp fallbacks
+  would draw it with `drawGeomShape`, and the slide's effect budget would charge it), so drawing it is one follow-up
+  item: the emission, a renderer rule for a table's shadow in those fallbacks and the effect budget, the table's
+  sprite reach (`table/reach.ts`), the draw off the GO path (the prototype took 87 ms cold at 3840), bench rows.
+- **Measured** on real hubs of this code (the track's head rebased on ko-cells' merge, so rule H measures the Hangul
+  cells), each kind asked for every slide: slide 2 **0.697 on both kinds of hub** (0.697480 asked of a hub with
+  LibreOffice and of one without; the plan's prediction 0.6975), class native. On a hub without LibreOffice that is
+  +0.208 (the table was missing); **on a hub with LibreOffice it is 0.250 below LibreOffice's picture (0.947), a drop
+  the no-regression rule blocks unless the owner accepts it (owner question Q1c-1, no default: the merge waits)**.
+  The track's probe deck shows the same kind of drop on its eaVert slides (0.998, 0.950, 0.999 as LibreOffice's art
+  -> 0.979, 0.907, 0.995 as the table object, each equal to its horz twin). Every other slide of the tables set and
+  shards 0-2 (463 slides of the 62 table decks, 111 table rows on both kinds of hub) and every held-out slide is
+  identical; the census moves slide 2 from hybrid to native and nothing else. On the project's hub image, which has
+  no Korean face, the table measures 0.421 against this machine's page (the planner's run without rule H's face), where that image's LibreOffice draws the
+  Korean letters as empty boxes (Q1c-1, Q1c-2). Details: `regroup/r2b/1c/vert-cells/notes.md`, `probe/probe-a.md`.
+<!-- /r2b:vert-cells -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 
