@@ -23,6 +23,8 @@ import {
   solid,
   solidBg,
   sp,
+  tableFrame,
+  tc,
   timingXml,
   type MediaTimingSpec,
   xfrm,
@@ -916,6 +918,67 @@ export async function tableDeck(dir: string): Promise<string> {
   const file = join(dir, 'Bulletin.pptx');
   writeFileSync(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
   return file;
+}
+
+// ---- the vertical-cell table deck (raw XML: East Asian vertical cells, sub-wave 1c rule V) -------------------
+
+/**
+ * The vertical-cell table (`verticalTableDeck`), in inches on the 13.33 x 7.5 in slide: the Korean bulletin's
+ * slide 2 in small. A narrow first column whose two cells are East Asian vertical text (`vert="eaVert"`), each
+ * centred over four rows ('1년차', '２년차': Hangul with a digit, as the bulletin's), beside the years and the days;
+ * a table-level outer shadow (4 pt blur, 3 pt up, black at 40 %). Logical px are 144 an inch (1920 x 1080).
+ */
+export const VERTICAL_TABLE = {
+  x: 1,
+  y: 1,
+  cols: [0.65, 1.4, 2.8],
+  rowH: 0.45,
+  rows: 8,
+  /** The vertical cells' text and their index in the stored table's cells (row by row). */
+  vertical: [
+    ['1년차', 0],
+    ['２년차', 9],
+  ] as [string, number][],
+  title: 'Two years',
+} as const;
+
+/** The centre of the narrow vertical cell over rows `r` to `r + 3` (r = 0 or 4), in logical px. */
+export function verticalCellCentre(r: 0 | 4): [number, number] {
+  const T = VERTICAL_TABLE;
+  return [(T.x + T.cols[0] / 2) * 144, (T.y + (r + 2) * T.rowH) * 144];
+}
+
+/**
+ * One slide: the vertical-cell table (`VERTICAL_TABLE`), its own deck so `tableDeck`'s counts stay. LibreOffice
+ * 24.2 draws eaVert cells as horizontal ones (probe deck A), so since sub-wave 1c the table is one table object on
+ * every hub, the cells' vert kept and its shadow read, noted and not stored; before, it was LibreOffice's art.
+ */
+export function verticalTableDeck(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  const T = VERTICAL_TABLE;
+  const emu = (inch: number) => Math.round(inch * IN);
+  const ea = (t: string) =>
+    tc(t, {
+      tcPr: ' vert="eaVert" anchor="ctr"',
+      attrs: 'rowSpan="4"',
+      pPr: 'algn="ctr"',
+      rPr: 'lang="ko-KR" sz="2000"',
+    });
+  const plain = (t: string) =>
+    tc(t, { tcPr: ' anchor="ctr"', pPr: 'algn="ctr"', rPr: 'lang="ko-KR" sz="1600"' });
+  const merged = () => tc('', { attrs: 'vMerge="1"' });
+  const rows = Array.from({ length: T.rows }, (_, r) => ({
+    h: emu(T.rowH),
+    cells: [
+      ...(r % 4 === 0 ? [ea(r === 0 ? '1년차' : '２년차')] : [merged()]),
+      plain(`${2019 + r}년`),
+      plain(r % 4 === 0 ? '3일간 수련회' : '4일간 수련회'),
+    ],
+  }));
+  const tblPr =
+    '<a:tblPr firstRow="1" bandRow="1"><a:effectLst><a:outerShdw blurRad="50800" dist="38100" dir="16200000" rotWithShape="0"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst></a:tblPr>';
+  const shapes = tableFrame({ id: 4, x: emu(T.x), y: emu(T.y), cols: T.cols.map(emu), rows, tblPr });
+  return zip(buildDeck({ slides: [{ shapes, bg: solidBg('FFFFFF') }] }), join(dir, `${T.title}.pptx`));
 }
 
 // ---- the lone line-art deck (raw XML: one thin chain past the slide's drawing budget alone, r2b effect units) --
