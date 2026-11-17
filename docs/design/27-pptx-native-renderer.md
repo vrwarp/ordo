@@ -3168,6 +3168,16 @@ be measured):
   hub can still send a version-2 scene whose tables are in the grown-row form, which a 1b hub stores as sent
   (it draws as sub-wave 1's did; Re-import gives LibreOffice's form). Whether `CONVERTER_VERSION` moves with
   the wave's one `APP_VERSION` bump is decided at the wave's end (owner question N1).
+- **`CONVERTER_VERSION` stays 2 through sub-wave 1c too** (integrate-1c), for the same reason, although 1c changes
+  the stored form again: a table whose vertical cells are all `eaVert` is the table object (it was LibreOffice's art
+  on a hub with LibreOffice and missing on one without), and the rows of table cells in Han, Kana or Hangul are
+  LibreOffice's as measured with the hub's computer's face and LibreOffice's 1/4 em (§15 M9, "Built for wave r2b
+  sub-wave 1c"). The cost is of the same kind: an operator tab of an earlier build sends a version-2 scene parsed as
+  that build parsed it, and the hub stores it unless its table cells need a script face only the hub's computer has
+  (then the hub refuses the scene and parses the deck itself, `SCRIPT_FACE_REFUSAL`). So a deck whose only East
+  Asian cells are in an `eaVert` table can still be stored as before 1c (LibreOffice's art, or the table missing
+  without LibreOffice), and on a hub with no CJK face Korean rows arrive without the 1/4 em; Re-import and Reset
+  slide give 1c's form. The wave-end decision (owner question N1) is unchanged.
 <!-- /r2b:tables-form -->
 
 <!-- r2b:tables-cells -->
