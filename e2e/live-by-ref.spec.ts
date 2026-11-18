@@ -14,9 +14,9 @@ import { resolve } from 'node:path';
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
 import { lyricSlide, newId } from '../packages/domain/src/index.ts';
 import { APP_VERSION } from '../packages/protocol/src/index.ts';
-import { shownSlideCue, waitCacheReady } from './helpers.ts';
+import { shownSlideCue } from './helpers.ts';
 import { HubProcess } from './hubproc.ts';
-import { hubApi } from './linkhelpers.ts';
+import { hubApi, launchOutputs, login } from './linkhelpers.ts';
 import { portOf } from './ports.ts';
 
 const hubRequire = createRequire(resolve('apps/hub/package.json'));
@@ -159,15 +159,9 @@ test('the service by reference: small records per GO, a restart that sends it by
     await expect.poll(async () => (await hubLive(a)).resolved?.playlist.id, { timeout: 60_000 }).toBe(first);
 
     // the Audience window on it
-    await page.goto(`http://op.localhost:${port}/?test=1`);
-    await page.locator('input.pin').fill('246810');
-    await page.getByRole('button', { name: 'OK' }).click();
-    await page.getByRole('button', { name: 'Launch outputs' }).click();
-    const outputs = () =>
-      context.pages().filter((p) => !p.isClosed() && /\/\/out\d\.localhost/.test(p.url()));
-    await expect.poll(() => outputs().length, { timeout: 30_000 }).toBe(1);
-    const out = outputs()[0]!;
-    await waitCacheReady(out);
+    await login(page, `http://op.localhost:${port}`);
+    const [out] = await launchOutputs(page, context, 1);
+    if (!out) throw new Error('no Audience window');
     const cueOn = async () => {
       await out.bringToFront();
       return shownSlideCue(out);
