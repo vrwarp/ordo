@@ -6,7 +6,7 @@
  */
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { type Media, type LiveState } from '@ordo/domain';
+import type { Media, LiveState } from '@ordo/domain';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import pino from 'pino';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -51,15 +51,19 @@ const logo = (live: LiveService) => live.submit({ k: 'logo', at: Date.now() }, O
 type Row = { resolved_id: string; copy: number; bytes: number; json: Buffer };
 function rows(db: DB): Row[] {
   try {
-    return db.prepare(`SELECT resolved_id, copy, bytes, json FROM live_resolved ORDER BY resolved_id, copy`).all() as Row[];
+    return db
+      .prepare(`SELECT resolved_id, copy, bytes, json FROM live_resolved ORDER BY resolved_id, copy`)
+      .all() as Row[];
   } catch {
     return [];
   }
 }
 const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
-const snapshotText = (db: DB) => (db.prepare(`SELECT json FROM live_snapshot WHERE id = 1`).get() as { json: string }).json;
+const snapshotText = (db: DB) =>
+  (db.prepare(`SELECT json FROM live_snapshot WHERE id = 1`).get() as { json: string }).json;
 const journalRow = (db: DB, seq: number) =>
-  (db.prepare(`SELECT event_json FROM live_journal WHERE seq = ?`).get(seq) as { event_json: string }).event_json;
+  (db.prepare(`SELECT event_json FROM live_journal WHERE seq = ?`).get(seq) as { event_json: string })
+    .event_json;
 /** A restore of the same db by a second service (what a restart does). */
 function restarted(s: Svc, byRef?: boolean): LiveService {
   const again = new LiveService(s.db, bundleSource(s.bundles), quiet, {
@@ -196,7 +200,8 @@ describe('legacy forms (step 4)', () => {
         `INSERT INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, NULL, 'event', ?)`,
       );
       if (!withSnapshot) ins.run(1, Date.now(), JSON.stringify({ k: 'goLive', resolved }));
-      if (!withSnapshot) for (let i = 2; i <= state.seq; i++) ins.run(i, Date.now(), JSON.stringify({ k: 'next', at: 1 }));
+      if (!withSnapshot)
+        for (let i = 2; i <= state.seq; i++) ins.run(i, Date.now(), JSON.stringify({ k: 'next', at: 1 }));
       return f;
     };
     for (const withSnapshot of [true, false]) {

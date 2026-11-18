@@ -1142,7 +1142,8 @@ export class CoreEngine {
   private slim(snap: CoreSnapshot): CoreSnapshot {
     const st = snap.state;
     const held = this.hub.copies;
-    if (st.mode !== 'live' || !st.resolved || held.id === undefined || st.resolved !== held.value) return snap;
+    if (st.mode !== 'live' || !st.resolved || held.id === undefined || st.resolved !== held.value)
+      return snap;
     if (this.copySavedId !== held.id && this.copyWanted?.id !== held.id) {
       this.copyCtl?.abort();
       this.copyWanted = { id: held.id, resolved: st.resolved, cues: st.cues };

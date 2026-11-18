@@ -36,7 +36,14 @@ const presentation = (i: number, kb = 1): Presentation =>
     title: `Song ${i}`,
     kind: 'song',
     meta: { tags: [] },
-    sections: [{ id: `s${i}`, label: 'V', short: 'V', slides: [{ id: `sl${i}`, objects: [], pad: 'x'.repeat(kb * 1024) }] }],
+    sections: [
+      {
+        id: `s${i}`,
+        label: 'V',
+        short: 'V',
+        slides: [{ id: `sl${i}`, objects: [], pad: 'x'.repeat(kb * 1024) }],
+      },
+    ],
     arrangements: [],
     archived: false,
   }) as unknown as Presentation;
@@ -60,7 +67,17 @@ function service(n = 20, kb = 1) {
 describe('slimState and joinSaved', () => {
   it('the slim state has neither the copy nor the cue list, and the three join back', () => {
     const { resolved, cues } = service(2);
-    const state = { seq: 7, mode: 'live', resolved, cues, layers: {}, props: {}, timers: {}, messages: [], black: false } as unknown as LiveState;
+    const state = {
+      seq: 7,
+      mode: 'live',
+      resolved,
+      cues,
+      layers: {},
+      props: {},
+      timers: {},
+      messages: [],
+      black: false,
+    } as unknown as LiveState;
     const slim = slimState(state);
     expect(slim).not.toHaveProperty('resolved');
     expect(slim).not.toHaveProperty('cues');
@@ -77,7 +94,9 @@ describe('splitResolved / joinResolved', () => {
     const { head, parts } = splitResolved(resolved);
     expect(parts.size).toBe(20);
     expect(head.presentations).toEqual({});
-    expect(Object.keys(head)).toEqual(expect.arrayContaining(['media', 'files', 'fonts', 'geoms', 'manifestId']));
+    expect(Object.keys(head)).toEqual(
+      expect.arrayContaining(['media', 'files', 'fonts', 'geoms', 'manifestId']),
+    );
     expect(joinResolved(head, parts)).toEqual(resolved);
     expect(joinResolved(head, parts).presentations.p3).toBe(resolved.presentations.p3);
   });
@@ -143,7 +162,7 @@ describe('saveCopy and loadCopy', () => {
     expect(await loadCopy(kv, 's')).toBeUndefined();
   });
 
-  it('a newer id removes the first id\'s records after the marker moved', async () => {
+  it("a newer id removes the first id's records after the marker moved", async () => {
     const a = service(4);
     const b = service(6);
     const { kv, data } = fakeKv();

@@ -119,7 +119,10 @@ export function liveByRefConfig(v: string | undefined): { on: boolean; warning?:
   const t = (v ?? '').trim();
   if (!t || /^(1|on|true|yes)$/i.test(t)) return { on: true };
   if (/^(0|off|false|no)$/i.test(t)) return { on: false };
-  return { on: true, warning: `ORDO_LIVE_BYREF is neither on nor off (${JSON.stringify(t.slice(0, 100))}): on` };
+  return {
+    on: true,
+    warning: `ORDO_LIVE_BYREF is neither on nor off (${JSON.stringify(t.slice(0, 100))}): on`,
+  };
 }
 
 /** apps/ of this repo: src/ and dist/ both sit two levels below it. */

@@ -117,7 +117,9 @@ export async function waitFor(check: () => boolean, ms = 10_000, what = 'conditi
 export function stringifySpy(pred: (a: any) => boolean) {
   const real = JSON.stringify;
   let n = 0;
-  const spy = vi.spyOn(JSON, 'stringify').mockImplementation(((...args: Parameters<typeof JSON.stringify>) => {
+  const spy = vi.spyOn(JSON, 'stringify').mockImplementation(((
+    ...args: Parameters<typeof JSON.stringify>
+  ) => {
     try {
       if (args[0] && typeof args[0] === 'object' && pred(args[0])) n++;
     } catch {

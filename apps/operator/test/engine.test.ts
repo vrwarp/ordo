@@ -785,7 +785,9 @@ describe('CoreEngine saves by reference (live-by-ref)', () => {
 
   it('a held service and a fallback-authority snapshot are saved whole and restored whole; the older whole form is read', async () => {
     const st = live();
-    const rs = recStore({ [CORE_KEY]: { state: st, authority: 'fallback', pending: [], aids: [], at: Date.now() } });
+    const rs = recStore({
+      [CORE_KEY]: { state: st, authority: 'fallback', pending: [], aids: [], at: Date.now() },
+    });
     const { e } = await boot(rs);
     e.handle({ t: 'action', aid: 'g1', action: { id: 'next' }, source: 'keyboard' });
     await settle();
@@ -799,4 +801,3 @@ describe('CoreEngine saves by reference (live-by-ref)', () => {
     expect(again.e.core.view.resolved).toBeTruthy();
   });
 });
-

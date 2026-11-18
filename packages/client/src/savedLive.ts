@@ -110,7 +110,8 @@ export async function saveCopy(
     const marker: CopyMarker = { id, presentations: [...parts.keys()], cues: true, at: Date.now() };
     if (!(await put(markerKey(scope), marker))) return 'aborted';
     if (prev) {
-      for (const pid of prev.presentations) await kv.set(partKey(scope, prev.id, pid), null).catch(() => undefined);
+      for (const pid of prev.presentations)
+        await kv.set(partKey(scope, prev.id, pid), null).catch(() => undefined);
       await kv.set(cuesKey(scope, prev.id), null).catch(() => undefined);
       await kv.set(headKey(scope, prev.id), null).catch(() => undefined);
     }

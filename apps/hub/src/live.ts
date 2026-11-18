@@ -31,7 +31,8 @@ import type { Library } from './library.ts';
 
 export class LiveRejection extends Error {}
 
-const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
+const isRecord = (x: unknown): x is Record<string, unknown> =>
+  typeof x === 'object' && x !== null && !Array.isArray(x);
 
 export type Origin =
   | { role: 'operate'; id?: string }
@@ -443,7 +444,8 @@ export class LiveService {
     const put = this.db.prepare(
       `INSERT OR IGNORE INTO live_resolved (resolved_id, copy, bytes, json, saved_at) VALUES (?, ?, ?, ?, ?)`,
     );
-    for (const copy of [0, 1]) if (!have.some((h) => h.copy === copy)) put.run(c.id, copy, bytes.length, bytes, Date.now());
+    for (const copy of [0, 1])
+      if (!have.some((h) => h.copy === copy)) put.run(c.id, copy, bytes.length, bytes, Date.now());
   }
 
   /**
@@ -461,9 +463,9 @@ export class LiveService {
     for (const copy of [0, 1]) {
       let row: { bytes: number; json: Buffer } | undefined;
       try {
-        row = this.db.prepare(`SELECT bytes, json FROM live_resolved WHERE resolved_id = ? AND copy = ?`).get(id, copy) as
-          | { bytes: number; json: Buffer }
-          | undefined;
+        row = this.db
+          .prepare(`SELECT bytes, json FROM live_resolved WHERE resolved_id = ? AND copy = ?`)
+          .get(id, copy) as { bytes: number; json: Buffer } | undefined;
       } catch (e) {
         warnings.push(`copy ${copy} of ${id.slice(0, 12)} is unreadable: ${(e as Error).message}`);
         continue;
@@ -497,7 +499,8 @@ export class LiveService {
    */
   resolvedIdsInUse(): Set<string> {
     const used = new Set<string>();
-    if (this.state.mode === 'live' && this.copy?.object === this.state.resolved && this.copy) used.add(this.copy.id);
+    if (this.state.mode === 'live' && this.copy?.object === this.state.resolved && this.copy)
+      used.add(this.copy.id);
     let oldest = Infinity;
     try {
       // The id is the last 64 characters of a by-name snapshot, after SNAPSHOT_TAIL: read as bytes, no parse.
@@ -528,9 +531,9 @@ export class LiveService {
 
   private allRowIds(): string[] {
     try {
-      return (this.db.prepare(`SELECT DISTINCT resolved_id AS id FROM live_resolved`).all() as { id: string }[]).map(
-        (r) => r.id,
-      );
+      return (
+        this.db.prepare(`SELECT DISTINCT resolved_id AS id FROM live_resolved`).all() as { id: string }[]
+      ).map((r) => r.id);
     } catch {
       return [];
     }
@@ -953,7 +956,12 @@ export class LiveService {
         .prepare(
           `INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'event', ?)`,
         )
-        .run(seq, this.now(), id ?? null, copy ? `${JOURNAL_GOLIVE_HEAD}${copy.id}"}` : JSON.stringify(event));
+        .run(
+          seq,
+          this.now(),
+          id ?? null,
+          copy ? `${JOURNAL_GOLIVE_HEAD}${copy.id}"}` : JSON.stringify(event),
+        );
       if (seq % 500 === 0) this.db.prepare(`DELETE FROM live_journal WHERE seq < ?`).run(seq - JOURNAL_KEEP);
       this.dirty = true;
       if (event.k === 'goLive' || event.k === 'endService') this.snapshot(true);

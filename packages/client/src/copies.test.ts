@@ -3,7 +3,8 @@ import type { LiveStateMsg } from '@ordo/protocol';
 import { describe, expect, it } from 'vitest';
 import { HeldCopy, joinState } from './copies.ts';
 
-const copy = (name = 'a') => ({ playlist: { id: 'pl', name }, presentations: {} }) as unknown as ResolvedPlaylist;
+const copy = (name = 'a') =>
+  ({ playlist: { id: 'pl', name }, presentations: {} }) as unknown as ResolvedPlaylist;
 const msg = (state: Partial<LiveState>, resolvedId?: string): LiveStateMsg => ({
   t: 'live.state',
   v: 1,

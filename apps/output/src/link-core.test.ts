@@ -1712,7 +1712,6 @@ describe('link worker core: a GO never waits for drawing (r2b units-live, design
   });
 });
 
-
 // ---- the service by reference: a small record per GO, the copy once in pieces (live-by-ref) ----
 
 type Set = { key: string; bytes: number };
@@ -1765,7 +1764,8 @@ async function started(kv = recordingKv(), state?: LiveState) {
     t.hub.copies.hold(ID, state.resolved!);
     t.hub.emit('state', stateMsg(state));
   }
-  const present = (n: number) => c.onRender({ t: 'telemetry', tel: { ...EMPTY_TELEMETRY, presented: n, compositor: '2d' } });
+  const present = (n: number) =>
+    c.onRender({ t: 'telemetry', tel: { ...EMPTY_TELEMETRY, presented: n, compositor: '2d' } });
   const ticks = async (n: number) => {
     for (let i = 0; i < n; i++) {
       vi.advanceTimersByTime(250);
@@ -1876,7 +1876,13 @@ describe('the saved record of a window (live-by-ref)', () => {
     expect(second.c.cachedState?.cues).toEqual(s.cues);
     expect(second.c.cachedState?.resolved).toBe(held.value);
     // the hub then sends the state by name: the join keeps the object
-    const byName = { t: 'live.state' as const, v: 1 as const, seq: s.seq + 5, resolvedId: ID, state: { ...s, seq: s.seq + 5, resolved: undefined } };
+    const byName = {
+      t: 'live.state' as const,
+      v: 1 as const,
+      seq: s.seq + 5,
+      resolvedId: ID,
+      state: { ...s, seq: s.seq + 5, resolved: undefined },
+    };
     const joined = joinState(byName as never, held);
     expect(joined).not.toBe('need');
     second.t.hub.emit('state', { ...byName, state: (joined as { state: LiveState }).state });
@@ -1929,7 +1935,7 @@ describe('the saved record of a window (live-by-ref)', () => {
     t.close();
   });
 
-  it('a copy that is not the hub\'s (the fallback bus\'s, an offline resolve) is saved whole as before and writes no pieces', async () => {
+  it("a copy that is not the hub's (the fallback bus's, an offline resolve) is saved whole as before and writes no pieces", async () => {
     const kv = recordingKv();
     const s = padded(1);
     const t = setup({ json: kv.kv });

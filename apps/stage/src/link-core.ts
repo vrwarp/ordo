@@ -385,7 +385,8 @@ export class StageLinkCore {
       // id; the copy and the cue list are saved once, in pieces, off the GO (`runCopySave`). A copy the hub did
       // not give this window (the fallback bus's) is saved whole, as before.
       const held = this.link.hub.copies;
-      const named = state.mode === 'live' && !!state.resolved && held.id !== undefined && state.resolved === held.value;
+      const named =
+        state.mode === 'live' && !!state.resolved && held.id !== undefined && state.resolved === held.value;
       if (named) this.wantCopy(held.id as string, state.resolved as ResolvedPlaylist, state.cues);
       const record = named
         ? { state: slimState(state), copy: held.id, savedAt: this.now() }
@@ -415,13 +416,15 @@ export class StageLinkCore {
     const ctl = new AbortController();
     this.copyCtl = ctl;
     const t0 = this.now();
-    void saveCopy(this.deps.json, this.outputId, w.id, w.resolved, w.cues, { signal: ctl.signal }).then((r) => {
-      if (this.copyCtl === ctl) this.copyCtl = undefined;
-      if (r === 'saved' || r === 'present') {
-        this.copySavedId = w.id;
-        this.diagLog(`service copy saved (${r}, ${this.now() - t0} ms)`);
-      } else if (r === 'failed') this.diagLog('the service copy could not be saved on this computer');
-    });
+    void saveCopy(this.deps.json, this.outputId, w.id, w.resolved, w.cues, { signal: ctl.signal }).then(
+      (r) => {
+        if (this.copyCtl === ctl) this.copyCtl = undefined;
+        if (r === 'saved' || r === 'present') {
+          this.copySavedId = w.id;
+          this.diagLog(`service copy saved (${r}, ${this.now() - t0} ms)`);
+        } else if (r === 'failed') this.diagLog('the service copy could not be saved on this computer');
+      },
+    );
   }
 
   // ---- view ----

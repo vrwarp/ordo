@@ -48,10 +48,16 @@ describe('one encoded live state a seq (step 2)', () => {
     // a second service goes live beside the first (the take-over): its delta is the one broadcast
     const seqBefore = hub.live.state.seq;
     svc.op.send({ t: 'live.event', id: 'again', event: { k: 'goLive', playlistId: 'pl' } });
-    await waitFor(() => watcher.of('live.delta').some((d) => d.event?.k === 'goLive'), 30_000, 'the goLive delta');
+    await waitFor(
+      () => watcher.of('live.delta').some((d) => d.event?.k === 'goLive'),
+      30_000,
+      'the goLive delta',
+    );
     spy.restore();
     expect(spy.count()).toBe(0);
-    const frame = watcher.frames.find((f) => f.text.includes('"t":"live.delta"') && f.text.includes('"k":"goLive"'))!;
+    const frame = watcher.frames.find(
+      (f) => f.text.includes('"t":"live.delta"') && f.text.includes('"k":"goLive"'),
+    )!;
     const got = JSON.parse(frame.text);
     delete got.resolvedId;
     const want = JSON.parse(
@@ -172,7 +178,9 @@ describe('the state by name (step 5)', () => {
     await waitFor(() => stateFrames(s).length > 2);
     expect(lastState(s).msg.state.resolved).toBeTruthy();
     // it was sent the copy, so the hub counts it as holding it: a recovery state is by name
-    const client = [...(hub.sockets as unknown as { clients: Set<{ holds?: string }> }).clients].find((c) => c.holds);
+    const client = [...(hub.sockets as unknown as { clients: Set<{ holds?: string }> }).clients].find(
+      (c) => c.holds,
+    );
     expect(client?.holds).toBe(id);
     s.close();
   });

@@ -414,7 +414,13 @@ export class LinkCore {
   private saveAgain = false;
   /** The copy of the service saved on this window (or loaded from it) and the save wanted next. */
   private copySavedId?: string;
-  private copyWanted?: { id: string; resolved: ResolvedPlaylist; cues: Cue[]; since: number; presented: number };
+  private copyWanted?: {
+    id: string;
+    resolved: ResolvedPlaylist;
+    cues: Cue[];
+    since: number;
+    presented: number;
+  };
   private copyCtl?: AbortController;
   private viewQueued = false;
   private started = false;
@@ -985,13 +991,15 @@ export class LinkCore {
     const ctl = new AbortController();
     this.copyCtl = ctl;
     const t0 = Date.now();
-    void saveCopy(this.json, this.link.outputId, w.id, w.resolved, w.cues, { signal: ctl.signal }).then((r) => {
-      if (this.copyCtl === ctl) this.copyCtl = undefined;
-      if (r === 'saved' || r === 'present') {
-        this.copySavedId = w.id;
-        this.diagLog(`service copy saved (${r}, ${Date.now() - t0} ms)`);
-      } else if (r === 'failed') this.diagLog('the service copy could not be saved on this computer');
-    });
+    void saveCopy(this.json, this.link.outputId, w.id, w.resolved, w.cues, { signal: ctl.signal }).then(
+      (r) => {
+        if (this.copyCtl === ctl) this.copyCtl = undefined;
+        if (r === 'saved' || r === 'present') {
+          this.copySavedId = w.id;
+          this.diagLog(`service copy saved (${r}, ${Date.now() - t0} ms)`);
+        } else if (r === 'failed') this.diagLog('the service copy could not be saved on this computer');
+      },
+    );
   }
 
   private requestSync(): void {

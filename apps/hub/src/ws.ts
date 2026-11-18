@@ -606,7 +606,14 @@ export class SocketHub {
   }): Buffer {
     if (!d.copy)
       return Buffer.from(
-        JSON.stringify({ t: 'live.delta', v: PROTOCOL_VERSION, seq: d.seq, fromSeq: d.fromSeq, event: d.event, id: d.id }),
+        JSON.stringify({
+          t: 'live.delta',
+          v: PROTOCOL_VERSION,
+          seq: d.seq,
+          fromSeq: d.fromSeq,
+          event: d.event,
+          id: d.id,
+        }),
       );
     const idPart = d.id === undefined ? '' : `"id":${JSON.stringify(d.id)},`;
     const copyId = this.byRef ? `"resolvedId":"${d.copy.id}",` : '';

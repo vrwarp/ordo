@@ -399,7 +399,6 @@ describe('StageLinkCore', () => {
   });
 });
 
-
 // ---- the service by reference: a small record per GO, the copy once in pieces (live-by-ref) ----
 
 const COPY_ID = 'c'.repeat(64);
@@ -478,7 +477,13 @@ describe('StageLinkCore saves by reference (live-by-ref)', () => {
     expect(second.hub.copies.value).toEqual(s.resolved);
     expect(second.last().ready).toBe(true);
     expect(second.last().current?.text).toBe('First line\nSecond line');
-    const byName = { t: 'live.state' as const, v: 1 as const, seq: 99, resolvedId: COPY_ID, state: { ...s, seq: 99, resolved: undefined } };
+    const byName = {
+      t: 'live.state' as const,
+      v: 1 as const,
+      seq: 99,
+      resolvedId: COPY_ID,
+      state: { ...s, seq: 99, resolved: undefined },
+    };
     const joined = joinState(byName as never, second.hub.copies) as { state: LiveState };
     expect(joined.state.resolved).toBe(second.hub.copies.value);
     second.core.stop();
