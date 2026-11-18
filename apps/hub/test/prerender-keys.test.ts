@@ -48,14 +48,18 @@ const keyTasks = () => {
   return () => spy.mock.calls.filter((c) => c[0] === 'prerender-keys').length;
 };
 
-const font = (family: string, hash: string) =>
-  hub!.lib.upsertFont({
+/** A library font, announced as FontService does (the hub follows its change events). */
+const font = (family: string, hash: string) => {
+  const f = hub!.lib.upsertFont({
     family,
     weight: 400,
     style: 'normal',
     file: { hash, bytes: 10, mime: 'font/ttf', path: `fonts/${hash}.ttf` },
     source: 'upload',
   });
+  hub!.lib.emit([{ kind: 'font', id: f.id, entity: f }]);
+  return f;
+};
 
 async function until(fn: () => boolean, ms = 8000, what = 'condition') {
   const end = Date.now() + ms;
@@ -207,21 +211,37 @@ describe('keys at save (PK1-PK5, PK8)', () => {
     expect(tasks()).toBe(0);
     const r = rows(p.id);
     expect(r.filter((x) => x.rev === again.rev)).toMatchObject([{ key: r[0]!.key, sig: r[0]!.sig }]);
-    // the slide's record changed (its live set): computed again, a new key
+    // the slide's record changed (its live set: the lyric box is drawn into the picture): computed again, a new key
     const stand = again.sections[0]!.slides[0]!;
-    const live = { ...stand, prerender: { ...stand.prerender!, live: [...stand.prerender!.live, 'title'] } };
+    const live = { ...stand, prerender: { ...stand.prerender!, live: [] } };
     const withLive = { ...again, sections: [{ ...again.sections[0]!, slides: [live] }] };
     const third = await ed.json<Presentation>(`/presentations/${p.id}`, { method: 'PUT', json: withLive });
     expect(tasks()).toBe(1);
     const k3 = rows(p.id).filter((x) => x.rev === third.rev);
     expect(k3).toHaveLength(1);
     expect(k3[0]!.key).not.toBe(r[0]!.key);
-    // a font upload (the default face is in every chain) changes the sig: the next save computes again
-    font('Inter', 'd'.repeat(64));
-    await sleep(100);
+    // a font upload (the default face is in every chain) changes the sig: the recompute job computes the slide
+    // again once, beside the old key; the next save copies that row
     const before = tasks();
-    await ed.json(`/presentations/${p.id}`, { method: 'PUT', json: { ...third, title: 'After the font' } });
+    const old = rows(p.id).filter((x) => x.rev === third.rev);
+    font('Inter', 'd'.repeat(64));
+    await hub!.prerenderKeys.idle();
+    await until(
+      () => rows(p.id).filter((x) => x.rev === third.rev).length === old.length + 1,
+      8000,
+      'the recompute',
+    );
     expect(tasks()).toBe(before + 1);
+    const fresh = rows(p.id).filter((x) => x.rev === third.rev && x.sig !== old[0]!.sig);
+    expect(fresh).toHaveLength(1);
+    const fourth = await ed.json<Presentation>(`/presentations/${p.id}`, {
+      method: 'PUT',
+      json: { ...third, title: 'After the font' },
+    });
+    expect(tasks()).toBe(before + 1);
+    expect(rows(p.id).filter((x) => x.rev === fourth.rev)).toMatchObject([
+      { sig: fresh[0]!.sig, key: fresh[0]!.key },
+    ]);
   });
 
   it('computes the rows of a restored body (PK8)', async () => {
@@ -260,8 +280,7 @@ describe('the jobs (PK6, PK7, PK9)', () => {
   it('adds a row beside the old one, for the current revision, when a font the head names is uploaded (PK6)', async () => {
     const { p, f: made } = await pre();
     const old = rows(p.id)[0]!;
-    const f = font('Inter', 'e'.repeat(64));
-    hub!.lib.emit([{ kind: 'font', id: f.id, entity: f }]);
+    font('Inter', 'e'.repeat(64));
     await hub!.prerenderKeys.idle();
     await until(() => rows(p.id).filter((r) => r.rev === current(p.id)).length === 2, 8000, 'the new row');
     const at = rows(p.id).filter((r) => r.rev === current(p.id));
@@ -273,8 +292,7 @@ describe('the jobs (PK6, PK7, PK9)', () => {
 
   it('adds nothing for a font no head names, and for a media item no head draws (PK6)', async () => {
     const { p } = await pre();
-    const f = font('Zzz Unrelated', 'f'.repeat(64));
-    hub!.lib.emit([{ kind: 'font', id: f.id, entity: f }]);
+    font('Zzz Unrelated', 'f'.repeat(64));
     await hub!.prerenderKeys.idle();
     await sleep(200);
     expect(rows(p.id)).toHaveLength(1);
@@ -293,8 +311,7 @@ describe('the jobs (PK6, PK7, PK9)', () => {
     const op = await login(hub!.url, OPERATE_PIN);
     await op.json('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: pl.id } });
     const tasks = keyTasks();
-    const f = font('Inter', '1'.repeat(64));
-    hub!.lib.emit([{ kind: 'font', id: f.id, entity: f }]);
+    font('Inter', '1'.repeat(64));
     await sleep(600);
     expect(tasks()).toBe(0);
     expect(rows(p.id)).toHaveLength(1);
@@ -340,8 +357,7 @@ describe('the jobs (PK6, PK7, PK9)', () => {
       const cur = hub!.lib.presentations.get(p.id) as Presentation;
       await ed.json(`/presentations/${p.id}`, { method: 'PUT', json: { ...cur, title: `T${i}` } });
     }
-    const fnt = font('Inter', '2'.repeat(64));
-    hub!.lib.emit([{ kind: 'font', id: fnt.id, entity: fnt }]);
+    font('Inter', '2'.repeat(64));
     await hub!.prerenderKeys.idle();
     expect(spy).not.toHaveBeenCalled();
     void f;

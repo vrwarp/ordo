@@ -131,8 +131,8 @@ export type PrerenderKeysTaskInput = {
     slideId: string;
     /** The stand-in as stored. */
     standIn: Slide;
-    /** The slide file's head (parsed JSON) and its pages' bytes in order; absent for a slide stored inline. */
-    head?: unknown;
+    /** The slide file's head and its pages' bytes in order (JSON as stored); absent for a slide stored inline. */
+    head?: Uint8Array;
     pages?: Uint8Array[];
     /** The file each drawn picture decodes, by media id; null when the library lacks it. */
     media: Record<string, string | null>;
@@ -152,7 +152,7 @@ export function prerenderKeysTask(input: PrerenderKeysTaskInput): PrerenderKeysT
     try {
       let full: Slide = s.standIn;
       if (s.head !== undefined) {
-        const head = SlideFileHead.parse(s.head);
+        const head = SlideFileHead.parse(JSON.parse(dec.decode(s.head)));
         const pages = (s.pages ?? []).map((b) => SlideFilePage.parse(JSON.parse(dec.decode(b))));
         full = slideFromFile(s.standIn, head, pages);
       }
