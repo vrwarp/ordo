@@ -29,6 +29,12 @@ export type LibraryStats = {
   collectedFiles?: number;
   collectedBytes?: number;
   lastCollectAt?: number;
+  /**
+   * The picture budget (prerenders.ts, design/29 A24, W29): the limit of unique bytes per presentation and the
+   * largest presentation's, so a venue sees one nearing it before a picture is refused.
+   */
+  budgetLimitBytes?: number;
+  budgetUsedBytes?: number;
 };
 
 /**

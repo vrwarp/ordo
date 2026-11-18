@@ -25,6 +25,8 @@ export const PICTURE_SIZES: Readonly<Record<number, readonly [number, number]>> 
 export const PICTURE_MAX_BYTES = 32 * 1024 * 1024;
 /** What `Retry-After` says to a baker refused during a service (design/29: End service plus 2 minutes). */
 export const PAUSED_RETRY_S = 120;
+/** How long the budget numbers of hub health are reused. */
+const HEALTH_BUDGET_MS = 5000;
 /** The per-presentation file budget (design/29 A24, W29; the owner's 1 GiB of 2026-11-13). */
 export const PRERENDER_BUDGET_BYTES = 1024 ** 3;
 
@@ -446,6 +448,43 @@ export class PrerenderIndex {
     );
   }
 
+  /**
+   * The pictures of a presentation the budget may drop, oldest version first (design/29 A24): a key of no current
+   * revision, and no current slide's stand-by. `freed` is what dropping the row gives back to the presentation's
+   * unique bytes: its bytes when no other picture row and no content name the same file, else nothing.
+   */
+  droppable(presentationId: string): { key: string; size: number; hash: string; freed: number }[] {
+    const current = `SELECT 1 FROM prerender_keys k JOIN presentations c ON c.id = k.presentation_id AND c.rev = k.rev
+                     WHERE k.presentation_id = p.presentation_id`;
+    return this.db
+      .prepare(
+        `SELECT p.key, p.size, p.hash,
+           CASE WHEN NOT EXISTS (SELECT 1 FROM prerenders q WHERE q.hash = p.hash
+                                  AND NOT (q.presentation_id = p.presentation_id AND q.key = p.key AND q.size = p.size))
+                 AND NOT EXISTS (SELECT 1 FROM file_refs r WHERE r.hash = p.hash) THEN p.bytes ELSE 0 END AS freed
+         FROM prerenders p
+         WHERE p.presentation_id = ?
+           AND NOT EXISTS (${current} AND k.key = p.key)
+           AND NOT EXISTS (${current} AND k.standby_id = p.standby_id)
+         ORDER BY (SELECT MAX(k.rev) FROM prerender_keys k WHERE k.presentation_id = p.presentation_id AND k.key = p.key),
+                  p.created_at, p.key, p.size`,
+      )
+      .all(presentationId) as { key: string; size: number; hash: string; freed: number }[];
+  }
+
+  /** What replacing the picture of this key and size gives back (its bytes when it is the only name of its file). */
+  freedByReplacing(presentationId: string, key: string, size: number): number {
+    const r = this.db
+      .prepare(
+        `SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM prerenders q WHERE q.hash = p.hash
+                                       AND NOT (q.presentation_id = p.presentation_id AND q.key = p.key AND q.size = p.size))
+                      AND NOT EXISTS (SELECT 1 FROM file_refs r WHERE r.hash = p.hash) THEN p.bytes ELSE 0 END AS freed
+         FROM prerenders p WHERE p.presentation_id = ? AND p.key = ? AND p.size = ?`,
+      )
+      .get(presentationId, key, size) as { freed: number } | undefined;
+    return r?.freed ?? 0;
+  }
+
   /** How many picture rows name this file. */
   rowsNaming(hash: string): number {
     return (this.db.prepare(`SELECT COUNT(*) AS n FROM prerenders WHERE hash = ?`).get(hash) as { n: number })
@@ -496,6 +535,8 @@ export class PrerenderStore {
   private live: LiveView;
   private log: Logger;
   private accepted: ((e: Accepted) => void)[] = [];
+  private health?: { budgetLimitBytes: number; budgetUsedBytes: number };
+  private healthAt = 0;
   /** The limit of unique bytes per presentation; a constructor argument, lowered by the tests. */
   budgetBytes: number;
 
@@ -512,8 +553,46 @@ export class PrerenderStore {
     this.accepted.push(fn);
   }
 
-  /** The budget's check before a picture is stored (step 10 counts unique bytes and drops the oldest pictures). */
-  checkBudget(_presentationId: string, _incomingBytes: number): BudgetCheck {
+  /**
+   * The budget's check before a picture is stored (design/29 A24, W29): the unique bytes of the presentation (the
+   * files only its saved versions name: slide pages and heads, shape files and pictures; a file two presentations
+   * name counts for neither) plus the incoming picture must stay within the limit. Past it the pictures of the
+   * oldest versions' keys go first (never a current version's key, never a current slide's stand-by); when that frees
+   * too little nothing is dropped and the picture is refused, so the screens draw the slide. Slide pages, heads and
+   * shape files are never refused for the budget (the only copy of a big slide, the rule "never drop an element"):
+   * they count, and the picture routes feel it.
+   */
+  async checkBudget(
+    presentationId: string,
+    incoming: { hash: string; bytes: number },
+    replacing?: { key: string; size: number },
+  ): Promise<BudgetCheck> {
+    const idx = this.lib.prerenderIndex;
+    const used = this.lib.refs.uniqueBytes(presentationId);
+    // the incoming file counts unless a name already holds it (then it is counted already, or shared)
+    const adds = this.lib.refs.referenced(incoming.hash) ? 0 : incoming.bytes;
+    const leaves = replacing ? idx.freedByReplacing(presentationId, replacing.key, replacing.size) : 0;
+    const need = used + adds - leaves - this.budgetBytes;
+    if (need <= 0) return { ok: true };
+    const chosen: { key: string; size: number }[] = [];
+    let freed = 0;
+    for (const c of idx.droppable(presentationId)) {
+      if (freed >= need) break;
+      if (replacing && c.key === replacing.key && c.size === replacing.size) continue;
+      chosen.push(c);
+      freed += c.freed;
+    }
+    if (freed < need) {
+      this.log.warn(
+        { presentationId, usedBytes: used, limitBytes: this.budgetBytes },
+        'a presentation is at its picture budget: the screens draw its newest slides',
+      );
+      return { ok: false, usedBytes: used, limitBytes: this.budgetBytes };
+    }
+    for (const c of chosen) {
+      for (const h of new Set(idx.deletePictures(presentationId, c.key, c.size))) await this.release(h);
+    }
+    this.healthAt = 0;
     return { ok: true };
   }
 
@@ -574,7 +653,7 @@ export class PrerenderStore {
         await discard();
         return { status: 200, body: { dropped: true, hash: existing.hash } };
       }
-      const budget = this.checkBudget(presentationId, r.bytes);
+      const budget = await this.checkBudget(presentationId, { hash: r.hash, bytes: r.bytes }, existing);
       if (!budget.ok)
         throw new HttpError(
           507,
@@ -614,6 +693,7 @@ export class PrerenderStore {
         await this.release(r.hash);
         return { status: 200, body: { dropped: true } };
       }
+      this.healthAt = 0;
       if (live && (size === 3840 || size === 1920))
         for (const fn of this.accepted) {
           try {
@@ -636,6 +716,7 @@ export class PrerenderStore {
   async remove(presentationId: string, key: string, size?: number): Promise<void> {
     for (const h of new Set(this.lib.prerenderIndex.deletePictures(presentationId, key, size)))
       await this.release(h);
+    this.healthAt = 0;
   }
 
   fail(presentationId: string, key: string, reason: string, madeBy: string | undefined): void {
@@ -653,19 +734,34 @@ export class PrerenderStore {
     return {
       keys: l.keys,
       failures: l.failures,
-      budget: { usedBytes: l.usedBytes, limitBytes: this.budgetBytes },
+      budget: { usedBytes: this.lib.refs.uniqueBytes(presentationId), limitBytes: this.budgetBytes },
     };
   }
 
-  /** The limit and the largest presentation's unique bytes, for hub health (STUB in the red commit). */
-  healthFields(): { budgetLimitBytes?: number; budgetUsedBytes?: number } {
-    return {};
+  /**
+   * The limit and the largest presentation's unique bytes, for hub health: asked every few seconds, so measured at
+   * most every HEALTH_BUDGET_MS and after pictures go.
+   */
+  healthFields(): { budgetLimitBytes: number; budgetUsedBytes: number } {
+    const now = Date.now();
+    if (
+      !this.health ||
+      now - this.healthAt > HEALTH_BUDGET_MS ||
+      this.health.budgetLimitBytes !== this.budgetBytes
+    ) {
+      let max = 0;
+      for (const id of this.lib.refs.budgeted()) max = Math.max(max, this.lib.refs.uniqueBytes(id));
+      this.health = { budgetLimitBytes: this.budgetBytes, budgetUsedBytes: max };
+      this.healthAt = now;
+    }
+    return this.health;
   }
 
   /** A deleted presentation's pictures, failures and key rows; its picture files go with no other row. */
   async forget(presentationId: string): Promise<void> {
     for (const h of new Set(this.lib.prerenderIndex.forgetPresentation(presentationId)))
       await this.release(h);
+    this.healthAt = 0;
   }
 
   /** A picture file goes when no picture row names it (a cache: no thirty days). */

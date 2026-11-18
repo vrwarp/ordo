@@ -34,8 +34,22 @@ export function refsIn(json: string): Set<string> {
   return out;
 }
 
-/** The unique-bytes query (STUB in the red commit: it asks for nothing). */
-export const UNIQUE_BYTES_SQL = 'SELECT 0 AS n WHERE :pid IS NOT NULL';
+/**
+ * The bytes of the files only one presentation's saved versions name (design/29 A24, W29), from the indexes alone:
+ * the files its kept revisions name (`file_refs`), the pages of its heads and its picture rows, less any file a
+ * second presentation names the same way. Each file once, whatever the number of revisions that name it.
+ */
+export const UNIQUE_BYTES_SQL = `
+WITH mine(hash) AS (
+  SELECT hash FROM file_refs WHERE presentation_id = :pid
+  UNION SELECT p.page FROM slide_head_pages p JOIN file_refs r ON r.hash = p.head WHERE r.presentation_id = :pid
+  UNION SELECT hash FROM prerenders WHERE presentation_id = :pid
+)
+SELECT COALESCE(SUM(f.bytes), 0) AS n FROM mine m JOIN files f ON f.hash = m.hash
+WHERE NOT EXISTS (SELECT 1 FROM file_refs o WHERE o.hash = m.hash AND o.presentation_id <> :pid)
+  AND NOT EXISTS (SELECT 1 FROM slide_head_pages q JOIN file_refs r2 ON r2.hash = q.head
+                  WHERE q.page = m.hash AND r2.presentation_id <> :pid)
+  AND NOT EXISTS (SELECT 1 FROM prerenders x WHERE x.hash = m.hash AND x.presentation_id <> :pid)`;
 
 /** The newest revision of a presentation a kept-revision interval must reach to name a file. */
 const OLDEST_KEPT =
@@ -152,11 +166,23 @@ export class RefIndex {
   }
 
   /**
-   * The bytes of the files only this presentation's saved versions name (STUB in the red commit): a file two
-   * presentations name counts for neither, a file several revisions name counts once.
+   * The bytes of the files only this presentation's saved versions name: a file two presentations name counts for
+   * neither, a file several revisions name counts once (`UNIQUE_BYTES_SQL`).
    */
-  uniqueBytes(_presentationId: string): number {
-    return 0;
+  uniqueBytes(presentationId: string): number {
+    return (this.db.prepare(UNIQUE_BYTES_SQL).get({ pid: presentationId }) as { n: number }).n;
+  }
+
+  /** The presentations that have a pre-rendered slide's file or a picture: the ones the budget can concern. */
+  budgeted(): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT presentation_id AS id FROM prerenders
+           UNION SELECT r.presentation_id FROM file_refs r JOIN slide_heads h ON h.hash = r.hash`,
+        )
+        .all() as { id: string }[]
+    ).map((r) => r.id);
   }
 
   /** A file is named (again): its collection clock stops, and starts from nothing the next time it is unnamed. */

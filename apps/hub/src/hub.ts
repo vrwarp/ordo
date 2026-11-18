@@ -276,6 +276,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
       librarySnapshotBytes: libStats.get().snapshotBytes,
       ...disk.healthFields(),
       ...collector.healthFields(),
+      ...prerenders.healthFields(),
     }),
     outputConfig: (outputId) => {
       const s = lib.getSettings();

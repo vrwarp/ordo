@@ -325,7 +325,12 @@ export async function createLibraryProcess(
   const reportStats = () => {
     statsTimer = undefined;
     try {
-      opts.onStats?.({ ...libStats.get(), ...disk.healthFields(), ...collector.healthFields() });
+      opts.onStats?.({
+        ...libStats.get(),
+        ...disk.healthFields(),
+        ...collector.healthFields(),
+        ...prerenders.healthFields(),
+      });
     } catch (e) {
       log.warn({ err: errorMessage(e) }, 'library size measurement failed');
     }

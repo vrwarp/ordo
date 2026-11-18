@@ -481,7 +481,7 @@ describe('the budget (BU2-BU4)', () => {
         .all(id) as { key: string; size: number }[]
     ).map((r) => `${r.key.slice(0, 4)}:${r.size}`);
 
-  /** A slide of the given id and title (a new key for a new title) with its slide file uploaded. */
+  /** A slide of the given id and title (the title makes the key: a new title, a new key) with its slide file uploaded. */
   const made = async (ed: Api, id: string, tag: string) => {
     const f = fullOf(bigSlide(id, 260, tag));
     await uploadSlideFile(ed, f.pages);
@@ -491,7 +491,7 @@ describe('the budget (BU2-BU4)', () => {
   it("drops the pictures of the oldest versions' keys first, never a current key or a current stand-by, and answers 507 when that is not enough (BU2)", async () => {
     hub = await startHub();
     const ed = await login(hub.url, EDIT_PIN);
-    const [a1, b1] = [await made(ed, 'sa', '1'), await made(ed, 'sb', '1')];
+    const [a1, b1] = [await made(ed, 'sa', 'a1'), await made(ed, 'sb', 'b1')];
     let p = await ed.json<Presentation>('/presentations', {
       method: 'POST',
       json: presentationOf([a1.standIn, b1.standIn]),
@@ -502,9 +502,9 @@ describe('the budget (BU2-BU4)', () => {
         json: { ...p, sections: [{ ...p.sections[0]!, slides: fs.map((f) => f.standIn) }] },
       });
     };
-    const [a2, c] = [await made(ed, 'sa', '2'), await made(ed, 'sc', '1')];
+    const [a2, c] = [await made(ed, 'sa', 'a2'), await made(ed, 'sc', 'c1')];
     await next(a2, c);
-    const a3 = await made(ed, 'sa', '3');
+    const a3 = await made(ed, 'sa', 'a3');
     await next(a3);
     const pic = (f: { key: string }, size: 3840 | 1920 | 640, seed: number) =>
       put(
@@ -531,18 +531,29 @@ describe('the budget (BU2-BU4)', () => {
       .run(a3.standbyId, p.id, a2.key);
     const used4 = (await listing(ed, p.id)).budget.usedBytes;
     expect(used4).toBeGreaterThan(4 * S3840); // the slide files count too
-    hub.prerenders.budgetBytes = used4;
+    // a little room: pictures of different bytes differ by a byte or two, and one drop must be enough
+    const limit = used4 + 100;
+    hub.prerenders.budgetBytes = limit;
 
+    const hashOf = (f: { key: string }, size: number) =>
+      (
+        hub!.db
+          .prepare(`SELECT hash FROM prerenders WHERE presentation_id = ? AND key = ? AND size = ?`)
+          .get(p.id, f.key, size) as { hash: string }
+      ).hash;
+    const dropped = [hashOf(a1, 3840), hashOf(b1, 3840)];
     // one more 3840 picture: the oldest version's picture goes (a1's key, then b1's)
     expect((await pic(a3, 3840, 5)).status).toBe(201);
     expect(keyRows(p.id).map((r) => r.slice(0, 4))).not.toContain(a1.key.slice(0, 4));
     expect(keyRows(p.id)).toContain(`${b1.key.slice(0, 4)}:3840`);
-    expect((await listing(ed, p.id)).budget).toEqual({ usedBytes: used4, limitBytes: used4 });
+    const after = (await listing(ed, p.id)).budget;
+    expect(after.limitBytes).toBe(limit);
+    expect(after.usedBytes).toBeLessThanOrEqual(limit);
     expect((await pic(a3, 1920, 6)).status).toBe(201);
     expect(keyRows(p.id)).not.toContain(`${b1.key.slice(0, 4)}:3840`);
     expect((await pic(a3, 640, 7)).status).toBe(201);
     // never a current version's key, never a current slide's stand-by, and the dropped pictures' files are gone
-    expect(keyRows(p.id)).toEqual(
+    expect(keyRows(p.id).sort()).toEqual(
       [
         `${a2.key.slice(0, 4)}:3840`,
         `${c.key.slice(0, 4)}:3840`,
@@ -551,6 +562,7 @@ describe('the budget (BU2-BU4)', () => {
         `${a3.key.slice(0, 4)}:3840`,
       ].sort(),
     );
+    for (const h of dropped) expect(hub.lib.getFile(h), h).toBeUndefined();
     // not enough: the limit under what is used by more than the one droppable picture frees
     const before = (await listing(ed, p.id)).budget.usedBytes;
     hub.prerenders.budgetBytes = before - S3840 + 1000;
