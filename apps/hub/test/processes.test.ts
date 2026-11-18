@@ -100,6 +100,36 @@ describe('supervisor', () => {
     expect(s.status().find((p) => p.name === 'live')!.restarts).toBe(1);
   });
 
+  it('relays an announced picture to the live process once, and replays it to no restarted child (PA3)', async () => {
+    const marker = join(tempDir(), 'announced');
+    const { cap, sup: s } = make({ FIXTURE_PREADD: marker });
+    await s.start();
+    const seen = () => cap.lines.filter((l) => /"child":"live".*"msg":"prerender.add k1"/.test(l)).length;
+    await until(() => seen() === 1, 15_000, 'the announcement relayed to live');
+    // an event, unlike stats: a restarted live process is not given the old one
+    process.kill(s.status().find((p) => p.name === 'live')!.pid!, 'SIGKILL');
+    await until(
+      () =>
+        s.status().find((p) => p.name === 'live')!.restarts === 1 &&
+        s.status().every((p) => p.state === 'up'),
+      15_000,
+      'live restarted',
+    );
+    await sleep(500);
+    expect(seen()).toBe(1);
+    // and a restarted library announces nothing
+    process.kill(s.status().find((p) => p.name === 'library')!.pid!, 'SIGKILL');
+    await until(
+      () =>
+        s.status().find((p) => p.name === 'library')!.restarts === 1 &&
+        s.status().every((p) => p.state === 'up'),
+      15_000,
+      'library restarted',
+    );
+    await sleep(500);
+    expect(seen()).toBe(1);
+  });
+
   it('restarts a crashing child within its budget, then leaves it down and reports', async () => {
     const gaveUp: string[] = [];
     const { cap, sup: s } = make(
@@ -577,6 +607,106 @@ describe('two-process hub serving the files of a pre-rendered slide', () => {
     // a file the service does not list is the library's, which is down
     const other = await op.fetch(`/files/${'9'.repeat(64)}`);
     expect(other.status).toBe(503);
+    proc.kill('SIGTERM');
+    await new Promise((r) => proc!.once('exit', r));
+  }, 120_000);
+});
+
+/**
+ * A picture accepted for a key of the running service is announced by the library process and applied by the live
+ * process (design/29 §1.7, `prerender.add`): the whole path with real processes.
+ */
+describe('two-process hub announcing a picture to the live loop', () => {
+  let proc: ChildProcess | undefined;
+  afterAll(async () => {
+    if (proc && proc.exitCode === null) {
+      proc.kill('SIGTERM');
+      await new Promise((r) => proc!.once('exit', r));
+    }
+  });
+
+  it('shows the picture in the live state, and the End service clears it (PA3, PA4)', async () => {
+    const dir = tempDir();
+    const port = await new Promise<number>((resolve) => {
+      const srv = createServer();
+      srv.listen(0, '127.0.0.1', () => {
+        const p = (srv.address() as AddressInfo).port;
+        srv.close(() => resolve(p));
+      });
+    });
+    const base = `http://localhost:${port}`;
+    const tsx = pathToFileURL(
+      join(dirname(createRequire(import.meta.url).resolve('tsx/package.json')), 'dist', 'loader.mjs'),
+    ).href;
+    proc = spawn(process.execPath, ['--import', tsx, join(here, '../src/main.ts')], {
+      env: {
+        ...process.env,
+        ORDO_DATA: dir,
+        ORDO_DOMAIN: 'localhost',
+        ORDO_PORT: String(port),
+        ORDO_HOST: '127.0.0.1',
+        ORDO_DEV_PIN: '111111:222222',
+        ORDO_LOG_LEVEL: 'warn',
+        ORDO_SINGLE_PROCESS: '',
+        ORDO_MIN_FREE_GB: '0',
+      },
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+    const health = async () => {
+      try {
+        const r = await fetch(`${base}/api/v1/health`);
+        return r.ok ? ((await r.json()) as Record<string, unknown>) : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    await until(async () => (await health())?.library === 'up', 30_000, 'hub up');
+    const op = await login(base, '111111');
+    const f = fullOf();
+    await uploadSlideFile(op, f.pages);
+    const p = await op.json<{ id: string }>('/presentations', {
+      method: 'POST',
+      json: presentationOf([f.standIn]),
+    });
+    const pl = await op.json<{ id: string }>('/playlists', {
+      method: 'POST',
+      json: { name: 'Sunday', items: [{ id: newId(), kind: 'presentation', presentationId: p.id }] },
+    });
+    await op.json('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: pl.id } });
+    await until(async () => (await health())?.mode === 'live', 20_000, 'service live');
+    const put = await op.fetch(`/presentations/${p.id}/prerenders/${f.key}?size=1920`, {
+      method: 'PUT',
+      headers: { 'content-type': 'image/png' },
+      body: new Uint8Array(makePng(1920, 1080)),
+    });
+    expect(put.status).toBe(201);
+    const file = ((await put.json()) as { hash: string }).hash;
+    await until(
+      async () => {
+        const st = await op.json<{ state: { prerendered?: unknown[] } }>('/live');
+        return (st.state.prerendered?.length ?? 0) === 1;
+      },
+      15_000,
+      'the picture in the live state',
+    );
+    const st = await op.json<{ seq: number; state: { prerendered: unknown[] } }>('/live');
+    expect(st.state.prerendered).toEqual([
+      { presentationId: p.id, slideId: f.standIn.id, key: f.key, size: 1920, file },
+    ]);
+    // End service clears it (the reducer's own); a later picture is the ordinary rule and is not announced
+    await op.json('/live/events', { method: 'POST', json: { k: 'endService', at: Date.now() } });
+    const after = await op.json<{ seq: number; state: { prerendered?: unknown[] } }>('/live');
+    expect(after.state.prerendered).toBeUndefined();
+    const again = await op.fetch(`/presentations/${p.id}/prerenders/${f.key}?size=3840`, {
+      method: 'PUT',
+      headers: { 'content-type': 'image/png' },
+      body: new Uint8Array(makePng(3840, 2160)),
+    });
+    expect(again.status).toBe(201);
+    await sleep(500);
+    const last = await op.json<{ seq: number; state: { prerendered?: unknown[] } }>('/live');
+    expect(last.state.prerendered).toBeUndefined();
+    expect(last.seq).toBe(after.seq);
     proc.kill('SIGTERM');
     await new Promise((r) => proc!.once('exit', r));
   }, 120_000);

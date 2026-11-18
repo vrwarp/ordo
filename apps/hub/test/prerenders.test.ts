@@ -8,7 +8,17 @@ import { join } from 'node:path';
 import { newId, type Presentation } from '@ordo/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 import { GIB } from '../src/diskfloor.ts';
-import { client, EDIT_PIN, login, OPERATE_PIN, sleep, startHub, type TestHub } from './helpers.ts';
+import {
+  byType,
+  client,
+  connectWs,
+  EDIT_PIN,
+  login,
+  OPERATE_PIN,
+  sleep,
+  startHub,
+  type TestHub,
+} from './helpers.ts';
 import { phone, refusal } from './phones-helpers.ts';
 import { bigSlide, fullOf, makePng, makeWebp, presentationOf, uploadSlideFile } from './prerender-helpers.ts';
 
@@ -371,5 +381,89 @@ describe('while a service is live (PP4)', () => {
     await op.json('/live/events', { method: 'POST', json: { k: 'endService', at: Date.now() } });
     expect((await put(ed, q.id, keyQ, small())).status).toBe(201);
     expect(seen).toHaveLength(1);
+  });
+});
+
+describe('announcing a picture to the live loop (PA1, PA2, PA4)', () => {
+  async function live() {
+    const s = await setup();
+    const pl = await s.ed.json<{ id: string }>('/playlists', {
+      method: 'POST',
+      json: { name: 'S', items: [{ id: newId(), kind: 'presentation', presentationId: s.p.id }] },
+    });
+    await s.op.json('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: pl.id } });
+    return s;
+  }
+  const state = async (op: Client) =>
+    await op.json<{ seq: number; state: { prerendered?: unknown[]; mode: string } }>('/live');
+
+  it('applies a picture accepted for a key of the service: live.state.prerendered holds it (PA1)', async () => {
+    const { ed, op, p, key } = await live();
+    const before = await state(op);
+    const r = await put(ed, p.id, key, makePng(1920, 1080), 1920);
+    expect(r.status).toBe(201);
+    const file = ((await r.json()) as { hash: string }).hash;
+    const after = await state(op);
+    expect(after.seq).toBe(before.seq + 1);
+    expect(after.state.prerendered).toEqual([
+      { presentationId: p.id, slideId: 'big', key, size: 1920, file },
+    ]);
+  });
+
+  it('applies nothing and moves no seq for a key or a slide the service does not have (PA1)', async () => {
+    const { op } = await live();
+    const { applyHubEvent } = await import('../src/hubevents.ts');
+    const before = await state(op);
+    const ev = (over: Record<string, unknown>) => ({
+      k: 'prerender.add',
+      presentationId: 'x',
+      slideId: 'big',
+      key: 'a'.repeat(64),
+      size: 1920,
+      file: 'b'.repeat(64),
+      ...over,
+    });
+    expect(applyHubEvent(hub!.live, ev({}))).toBeUndefined();
+    expect(applyHubEvent(hub!.live, { k: 'next', at: 1 })).toBeUndefined();
+    expect(applyHubEvent(hub!.live, 'junk')).toBeUndefined();
+    const after = await state(op);
+    expect(after.seq).toBe(before.seq);
+    expect(after.state.prerendered).toBeUndefined();
+  });
+
+  it("still refuses a client's own prerender.add on POST /live/events and a socket (PA2)", async () => {
+    const { op, p, key } = await live();
+    const before = await state(op);
+    const event = {
+      k: 'prerender.add',
+      presentationId: p.id,
+      slideId: 'big',
+      key,
+      size: 1920,
+      file: 'b'.repeat(64),
+    };
+    const r = await op.fetch('/live/events', { method: 'POST', json: event });
+    expect(r.status).toBe(400);
+    const ws = await connectWs(hub!.url, { cookie: op.cookie, hello: { role: 'operate' } });
+    await ws.next(byType('welcome'));
+    ws.send({ t: 'live.event', id: newId(), event });
+    await sleep(300);
+    ws.ws.close();
+    const after = await state(op);
+    expect(after.seq).toBe(before.seq);
+    expect(after.state.prerendered).toBeUndefined();
+  });
+
+  it('clears at End service, and a later picture for a key of that service follows the ordinary rule (PA4)', async () => {
+    const { ed, op, p, key } = await live();
+    await put(ed, p.id, key, makePng(1920, 1080), 1920);
+    expect((await state(op)).state.prerendered).toHaveLength(1);
+    await op.json('/live/events', { method: 'POST', json: { k: 'endService', at: Date.now() } });
+    const ended = await state(op);
+    expect(ended.state.prerendered).toBeUndefined();
+    const again = await put(ed, p.id, key, makePng(3840, 2160), 3840);
+    expect(again.status).toBe(201);
+    expect((await state(op)).seq).toBe(ended.seq);
+    expect((await state(op)).state.prerendered).toBeUndefined();
   });
 });

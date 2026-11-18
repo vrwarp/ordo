@@ -233,6 +233,11 @@ export class Supervisor {
         this.stats = m;
         this.send('live', m);
         return;
+      case 'prerender.add':
+        // An event: relayed to the live process now, remembered by nobody.
+        if (c.name !== 'library') return;
+        this.send('live', m);
+        return;
     }
   }
 

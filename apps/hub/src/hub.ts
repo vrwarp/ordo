@@ -7,6 +7,7 @@ import { Backups } from './backup.ts';
 import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openDb } from './db.ts';
 import { DISK_MEASURE_MS, DiskFloor } from './diskfloor.ts';
+import { applyHubEvent } from './hubevents.ts';
 import { errorMessage } from './errors.ts';
 import { outputFonts } from './fonts/bundled.ts';
 import { FontService } from './fonts/service.ts';
@@ -172,6 +173,17 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   });
   const liveView = { locks: () => live.locks(), mode: () => live.state.mode };
   const prerenders = new PrerenderStore(lib, store, liveView, { log });
+  // A picture accepted for a key of the running service goes straight to the live loop (one process).
+  prerenders.onAccepted((e) =>
+    applyHubEvent(live, {
+      k: 'prerender.add',
+      presentationId: e.presentationId,
+      slideId: e.slideId,
+      key: e.key,
+      size: e.size,
+      file: e.file.hash,
+    }),
+  );
   const hub: Hub = {
     app,
     prerenderKeys,

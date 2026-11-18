@@ -24,6 +24,7 @@ import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openLiveDb, openSharedDb } from './db.ts';
 import { forbidden, notFound } from './errors.ts';
 import { liveDiagOf } from './hub.ts';
+import { applyHubEvent as applyHubEventTo } from './hubevents.ts';
 import { createHttpApp, HEADER_INTERNAL, type RouteInfo, withTimeout } from './http.ts';
 import type { ChildState, LocksMsg, ProcessStatus } from './ipc.ts';
 import type { Change } from './library.ts';
@@ -168,6 +169,8 @@ export type LiveProcess = {
   onLibraryChanges(changes: Change[], seq?: number): void;
   /** The library's size, relayed by the supervisor for `GET /health` (design/27 §3.4). */
   setLibraryStats(s: LibraryStats): void;
+  /** An event only the hub makes (`prerender.add`, relayed from the library process): applied if the service has it. */
+  applyHubEvent(raw: unknown): void;
   /** Resolves once changes up to `seq` were applied (context refreshed, delta broadcast), or after a bound. */
   libraryApplied(seq: number): Promise<void>;
   locks(): LocksMsg;
@@ -480,6 +483,7 @@ export async function createLiveProcess(
     setLibraryStats(s) {
       libraryStats = s;
     },
+    applyHubEvent: (raw) => void applyHubEventTo(live, raw),
     setStatus(p) {
       status = p;
     },

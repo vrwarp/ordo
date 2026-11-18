@@ -80,6 +80,7 @@ async function runChild(name: string): Promise<void> {
         secret,
         onChanges: (changes, seq) => sendToParent({ t: 'changes', changes, seq }),
         onStats: (library) => sendToParent({ t: 'stats', library }),
+        onPrerenderAdd: (event) => sendToParent({ t: 'prerender.add', event }),
         initialLocks: parseLocks(process.env.ORDO_LIVE_LOCKS),
       },
     );
@@ -114,6 +115,7 @@ async function runChild(name: string): Promise<void> {
     else if (m.t === 'changes') p.onLibraryChanges(m.changes, m.seq);
     else if (m.t === 'status') p.setStatus(m.processes);
     else if (m.t === 'stats') p.setLibraryStats(m.library);
+    else if (m.t === 'prerender.add') p.applyHubEvent(m.event);
   });
   onSignals(
     () => p.close(),

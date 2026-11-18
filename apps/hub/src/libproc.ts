@@ -106,6 +106,8 @@ export async function createLibraryProcess(
     onChanges?: (changes: Change[], seq: number) => void;
     /** The library's size for hub health (design/27 §3.4): at start, then after changes, every few seconds. */
     onStats?: (s: LibraryStats) => void;
+    /** A picture accepted for a key of the running service, as the `prerender.add` event the live loop applies (step 7). */
+    onPrerenderAdd?: (event: unknown) => void;
     /**
      * The live service's locks as last reported (ORDO_LIVE_LOCKS, set by the supervisor for a restarted
      * library): applied before the job queue starts, so a library restarted during a service holds the
@@ -222,6 +224,16 @@ export async function createLibraryProcess(
     },
     diagExtra: () => ({ processes: status, cpuPool: cpuPool().stats(), library: libStats.get() }),
   };
+  prerenders.onAccepted((e) =>
+    opts.onPrerenderAdd?.({
+      k: 'prerender.add',
+      presentationId: e.presentationId,
+      slideId: e.slideId,
+      key: e.key,
+      size: e.size,
+      file: e.file.hash,
+    }),
+  );
   registerLibraryApi(app, ctx);
   // Read-your-writes through the live process: every answer to a write carries the library sequence after
   // it, and the live proxy holds that answer until the live process has applied the changes up to it
