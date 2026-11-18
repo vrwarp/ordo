@@ -51,6 +51,7 @@ import type { DiskFloor } from './diskfloor.ts';
 import { badRequest, conflict, HttpError, locked, notFound, unauthorized } from './errors.ts';
 import type { FontService } from './fonts/service.ts';
 import type { ImportService } from './imports.ts';
+import type { PrerenderKeys } from './prerenderkeys.ts';
 import type { SlideFiles } from './slidefiles.ts';
 import type { JobQueue } from './jobs.ts';
 import { FolderSchema, type Library, newToken, SETTINGS_KEYS, stripTokens } from './library.ts';
@@ -258,6 +259,8 @@ export type LibraryApiCtx = {
   disk: DiskFloor;
   /** Slide files: the heads and pages of pre-rendered slides (slidefiles.ts). */
   slideFiles: SlideFiles;
+  /** The keys of pre-rendered slides, computed before a save (prerenderkeys.ts). */
+  prerenderKeys: PrerenderKeys;
   live: LiveView;
   /** Close the sockets of an output whose token changed (the live process also notices on its own). */
   disconnectOutput(outputId: string, reason: string): void;
@@ -686,7 +689,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const p = validate(PresentationBody, { ...body, id: body.id || newId(), rev: 1 });
     if (lib.presentations.get(p.id)) throw conflict(`Presentation ${p.id} already exists`);
     refuseFields(req, () => presentationRefusal(undefined, p));
-    const saved = lib.savePresentation(p, { create: true, by: by(req) });
+    const keys = await hub.prerenderKeys.keysFor(p);
+    const saved = lib.savePresentation(p, { create: true, by: by(req), keys });
     lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
     return reply.code(201).send(saved);
   });
@@ -702,7 +706,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       const stored = lib.presentations.get(id);
       return !stored || stored.rev === body.rev ? presentationRefusal(stored, p) : undefined;
     });
-    const saved = lib.savePresentation(p, { expectedRev: body.rev, by: by(req) });
+    const keys = await hub.prerenderKeys.keysFor(p);
+    const saved = lib.savePresentation(p, { expectedRev: body.rev, by: by(req), keys });
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);
     // Slides of a native PowerPoint import still waiting for LibreOffice get their follow-up back.
     hub.imports.pptx.followUp(saved);
@@ -729,7 +734,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     refuseFields(req, () =>
       presentationRefusal(lib.presentations.must(id), lib.revision(id, Number(params(req).rev))),
     );
-    const saved = lib.restoreRevision(id, Number(params(req).rev), by(req));
+    const keys = await hub.prerenderKeys.keysFor({ ...lib.revision(id, Number(params(req).rev)), id });
+    const saved = lib.restoreRevision(id, Number(params(req).rev), by(req), keys);
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);
     hub.imports.pptx.followUp(saved);
     return saved;

@@ -34,6 +34,7 @@ import { type LibraryStats, LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
 import { cpuPool } from './pool.ts';
+import { PrerenderKeys } from './prerenderkeys.ts';
 import { SlideFiles } from './slidefiles.ts';
 import {
   cleanupStaleUploads,
@@ -170,6 +171,7 @@ export async function createLibraryProcess(
     mode: () => locks.mode,
   };
   let liveUrl: string | undefined;
+  const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, { live: () => locks.mode, log });
   const libStats = new LibraryStatsCache(lib, log, { minIntervalMs: 0 });
   let status: ProcessStatus[] = [];
 
@@ -195,6 +197,7 @@ export async function createLibraryProcess(
     ring,
     disk,
     slideFiles: new SlideFiles(lib, store, cpuPool),
+    prerenderKeys,
     live: liveView,
     // The live process notices token changes in its settings copy and closes those sockets itself.
     disconnectOutput: () => undefined,
@@ -318,6 +321,7 @@ export async function createLibraryProcess(
   );
   jobs.onLiveMode(locks.mode);
   jobs.start();
+  prerenderKeys.start();
   if (cfg.scheduleBackups) backups.schedule();
   // Loopback only, on a port of the OS's choosing: the live process is the only way in.
   await app.listen({ port: 0, host: '127.0.0.1' });
@@ -340,6 +344,7 @@ export async function createLibraryProcess(
       locks = m;
       lockSets = setsOf(m);
       jobs.onLiveMode(m.mode);
+      prerenderKeys.onLiveMode(m.mode);
     },
     setLiveUrl(u) {
       liveUrl = u;
@@ -350,6 +355,7 @@ export async function createLibraryProcess(
     async close() {
       if (statsTimer) clearTimeout(statsTimer);
       clearInterval(diskTimer);
+      prerenderKeys.stop();
       backups.stop();
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       await withTimeout(app.close(), 1000, () => log.warn('http server did not close in time'));

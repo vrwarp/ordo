@@ -15,6 +15,7 @@ import { ImportService } from './imports.ts';
 import { JobQueue } from './jobs.ts';
 import { JobPacing } from './pacing.ts';
 import { cpuPool } from './pool.ts';
+import { PrerenderKeys } from './prerenderkeys.ts';
 import { SlideFiles } from './slidefiles.ts';
 import { Library, phonesSwitch } from './library.ts';
 import { LiveService, librarySource } from './live.ts';
@@ -55,6 +56,8 @@ export type Hub = {
   backups: Backups;
   log: Logger;
   ring: LogRing;
+  /** The keys of pre-rendered slides (computed at save; the recompute and safety-net jobs). */
+  prerenderKeys: PrerenderKeys;
   /** The venue time zone: settings.general.timeZone, falling back to ORDO_TZ. Backups and countdowns share it. */
   timeZone(): string;
   /** Listen on cfg.host:cfg.port (or the given port); returns the base URL. */
@@ -160,8 +163,13 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     sockets.broadcastLibrary(changes, (ch) => forOutputs(ch, ids));
   });
 
+  const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, {
+    live: () => live.state.mode,
+    log,
+  });
   const hub: Hub = {
     app,
+    prerenderKeys,
     routes: http.routes,
     cfg,
     db,
@@ -190,6 +198,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
       // die with the abort signal), snapshot the live state, and only then drop the sockets: the clients
       // get a `bye` and are terminated without waiting for a close handshake a stuck client never sends.
       backups.stop();
+      prerenderKeys.stop();
       clearInterval(diskTimer);
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       live.stop();
@@ -216,6 +225,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     ring,
     disk,
     slideFiles: new SlideFiles(lib, store, cpuPool),
+    prerenderKeys,
     live: { locks: () => live.locks(), mode: () => live.state.mode },
     disconnectOutput: (id, reason) => sockets.disconnectOutput(id, reason),
     liveDiag: async () => liveDiagOf(live, sockets),
@@ -274,9 +284,16 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   // Jobs paced while live (design/28 §5.3): the mode at start first, so a restart during a service never
   // relaunches a held job; then every goLive and End service.
   jobs.onLiveMode(live.state.mode);
-  live.onDelta(() => jobs.onLiveMode(live.state.mode));
-  live.onState((s) => jobs.onLiveMode(s.mode));
+  live.onDelta(() => {
+    jobs.onLiveMode(live.state.mode);
+    prerenderKeys.onLiveMode(live.state.mode);
+  });
+  live.onState((s) => {
+    jobs.onLiveMode(s.mode);
+    prerenderKeys.onLiveMode(s.mode);
+  });
   jobs.start();
+  prerenderKeys.start();
   sockets.start();
   if (cfg.scheduleBackups) backups.schedule();
   return hub;

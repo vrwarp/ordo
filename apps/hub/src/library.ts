@@ -521,10 +521,10 @@ export class Library {
     return JSON.parse(r.json) as Presentation;
   }
 
-  restoreRevision(id: string, rev: number, by?: string): Presentation {
+  restoreRevision(id: string, rev: number, by?: string, keys?: readonly PrerenderKeyRow[]): Presentation {
     const old = this.revision(id, rev);
     const cur = this.presentations.must(id);
-    return this.savePresentation({ ...old, id, rev: cur.rev }, { expectedRev: cur.rev, by });
+    return this.savePresentation({ ...old, id, rev: cur.rev }, { expectedRev: cur.rev, by, keys });
   }
 
   // ---- themes with revisions ----
