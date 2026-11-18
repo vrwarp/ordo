@@ -55,15 +55,16 @@ import {
   rememberManifest,
   resolveLook,
 } from '@ordo/renderer';
-import type {
-  AudioRoute,
-  HostStatus,
-  LinkToMain,
-  LinkView,
-  MediaCommand,
-  MediaEvent,
-  Transport,
-  WorkerName,
+import {
+  type AudioRoute,
+  type HostStatus,
+  type LinkToMain,
+  type LinkView,
+  type MediaCommand,
+  type MediaEvent,
+  RENDER_DEAD_AFTER_MS,
+  type Transport,
+  type WorkerName,
 } from './host-protocol.ts';
 import { LaneStats } from './lane-stats.ts';
 import { LATE_HOLD_MS, LATE_REDRAW_MAX_MS, LATE_RESTARTS, REFRESH_FADE_MS } from './late.ts';
@@ -91,6 +92,13 @@ const NO_FRAME_MS = 3000;
 const RENDER_GRACE_MS = 10_000;
 /** A second renderer stall within this window reloads the window instead of restarting the renderer. */
 const STALL_RELOAD_WINDOW_MS = 120_000;
+/** A render worker that posted no telemetry (every 250 ms) for this long has stopped talking: died or blocked. */
+const RENDER_SILENT_MS = 1000;
+/**
+ * A silent render worker is its supervisor's to restart (RENDER_DEAD_AFTER_MS after its last heartbeat); the
+ * no-frame check acts on it only once that restart is this late, as for a worker the supervisor gave up on.
+ */
+const RENDER_RESTART_DUE_MS = 2 * RENDER_DEAD_AFTER_MS;
 /** A persisted operator hold is honoured after a reload for at most this long (one long service day). */
 const HELD_MAX_AGE_MS = 8 * 60 * 60 * 1000;
 /** Cached files are checked against the manifest this often while live. */
@@ -375,6 +383,8 @@ export class LinkCore {
   // Crash-only checks
   private renderStartedAt = Date.now();
   private presentedSeen = { count: -1, at: Date.now(), raf: -1, rafAt: Date.now() };
+  /** When the render worker last posted its telemetry (0 never). */
+  private renderTelAt = 0;
   private stallRestarts: number[] = [];
   /** A GPU device rebuild in progress since (0 none): the no-frame check waits for it. */
   private rebuildingSince = 0;
@@ -2179,6 +2189,7 @@ export class LinkCore {
       case 'telemetry':
         this.tel = m.tel;
         this.compositor = m.tel.compositor;
+        this.renderTelAt = Date.now();
         return;
       case 'frames':
         this.frames = m.frames;
@@ -2540,7 +2551,8 @@ export class LinkCore {
   /**
    * While live, a renderer that presented nothing for 3 s while the page is being painted is stuck: the
    * first time its worker is restarted (the hold covers the rebuild); a second time within two minutes
-   * the window reloads (crash-only restart).
+   * the window reloads (crash-only restart). A render worker that stopped posting its telemetry is dead or
+   * blocked, its supervisor's to restart: the check waits for that restart and acts only once it is overdue.
    */
   private checkRenderer(): void {
     const now = Date.now();
@@ -2562,6 +2574,12 @@ export class LinkCore {
     }
     if (!painting || now - this.renderStartedAt < RENDER_GRACE_MS || this.compositor === 'none') return;
     if (now - this.presentedSeen.at < NO_FRAME_MS) return;
+    // A worker that stopped talking died or is blocked: its supervisor restarts it RENDER_DEAD_AFTER_MS after
+    // its last heartbeat, about when this check would. A restart from here raced that one and counted a crash
+    // as a stall, so a second crash within STALL_RELOAD_WINDOW_MS reloaded the window (chaos-output e2e under
+    // load). Wait for the supervisor; act only once its restart is overdue.
+    const silent = now - this.renderTelAt;
+    if (silent >= RENDER_SILENT_MS && silent < RENDER_RESTART_DUE_MS) return;
     this.presentedSeen.at = now;
     this.stallRestarts = this.stallRestarts.filter((t) => now - t < STALL_RELOAD_WINDOW_MS);
     if (this.stallRestarts.length) {

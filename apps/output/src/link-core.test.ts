@@ -1,7 +1,7 @@
 import { HubConnection, OutputLink } from '@ordo/client';
 import { type LiveState, type Media, expandCues, slideContent } from '@ordo/domain';
 import { CONTENT_CASES } from '@ordo/domain/content.test-util.ts';
-import type { FromAsset, ToAsset, ToRender } from '@ordo/renderer';
+import { EMPTY_TELEMETRY, type FromAsset, type ToAsset, type ToRender } from '@ordo/renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { liveState, slideLive } from '../../../packages/renderer/src/fixtures.test-util.ts';
 import type { OutputConfigRes } from '@ordo/protocol';
@@ -368,6 +368,90 @@ describe('link worker core', () => {
     c.checkRenderer();
     expect(t.posts.find((p) => p.t === 'reload')).toMatchObject({ fallback: 'render' });
     t.close();
+  });
+
+  it('a render worker that died is left to its supervisor: no stall restart or reload while that restart is due', async () => {
+    // The chaos e2e (chaos-output.spec.ts, a killed render worker, three kills within a minute) under load:
+    // the host's supervisor restarts a render worker 3 s after its last heartbeat (host.ts deadAfterMs), and
+    // this watchdog's 3 s without a presented frame came first, so a crash counted as a stall and the second
+    // within two minutes reloaded the whole window. A worker that stopped talking (telemetry every 250 ms)
+    // is waited for; one that talks but presents nothing is still a stuck renderer.
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    const c = t.core as unknown as {
+      renderStartedAt: number;
+      presentedSeen: { at: number; rafAt: number; count: number };
+      compositor: string;
+      checkRenderer(): void;
+      onRender(m: unknown): void;
+      host?: HostStatus;
+    };
+    c.host = hostStatus();
+    c.compositor = '2d';
+    const t0 = Date.now();
+    const clock = vi.spyOn(Date, 'now');
+    const at = (ms: number) => {
+      clock.mockReturnValue(t0 + ms);
+      c.presentedSeen.rafAt = t0 + ms; // the page keeps painting (the hold, the last frame)
+    };
+    const telemetry = (presented: number) =>
+      c.onRender({ t: 'telemetry', tel: { ...EMPTY_TELEMETRY, presented, compositor: '2d' } });
+    const acted = () => t.posts.filter((p) => p.t === 'restartWorker' || p.t === 'reload');
+    try {
+      // Started long ago, presenting and talking until t0, then killed: nothing more from it.
+      c.renderStartedAt = t0 - 60_000;
+      at(0);
+      telemetry(500);
+      c.checkRenderer();
+      for (const ms of [1000, 2000, 3000, 3500, 4000, 5000]) {
+        at(ms);
+        c.checkRenderer();
+      }
+      expect(acted()).toEqual([]);
+      // Killed again within two minutes after the supervisor's restart (a new renderer, its grace over).
+      t.core.onPorts(new MessageChannel().port1, t.asset.port1, { link: 0, render: 1, asset: 0 });
+      at(30_000);
+      c.renderStartedAt = t0 + 15_000;
+      telemetry(80);
+      c.checkRenderer();
+      for (const ms of [31_000, 32_000, 33_000, 33_500, 34_000, 35_000]) {
+        at(ms);
+        c.checkRenderer();
+      }
+      expect(acted()).toEqual([]);
+      // A supervisor that never restarts it (it gave the worker up): the watchdog still acts, later.
+      for (const ms of [36_000, 37_000, 38_000, 39_000, 40_000]) {
+        at(ms);
+        c.checkRenderer();
+      }
+      expect(acted().map((p) => p.t)).toEqual(['restartWorker', 'reload']);
+      // A renderer that talks but presents nothing is stuck at once, as before (3 s).
+      const u = setup();
+      await u.core.start();
+      u.hub.emit('state', stateMsg(slideLive(0)));
+      const d = u.core as unknown as typeof c;
+      d.host = hostStatus();
+      d.compositor = '2d';
+      d.renderStartedAt = t0 - 60_000;
+      const atU = (ms: number) => {
+        clock.mockReturnValue(t0 + ms);
+        d.presentedSeen.rafAt = t0 + ms;
+      };
+      atU(0);
+      d.onRender({ t: 'telemetry', tel: { ...EMPTY_TELEMETRY, presented: 7, compositor: '2d' } });
+      d.checkRenderer();
+      for (const ms of [1000, 2000, 3000]) {
+        atU(ms);
+        d.onRender({ t: 'telemetry', tel: { ...EMPTY_TELEMETRY, presented: 7, compositor: '2d' } });
+        d.checkRenderer();
+      }
+      expect(u.posts.filter((p) => p.t === 'restartWorker')).toHaveLength(1);
+      u.close();
+    } finally {
+      clock.mockRestore();
+      t.close();
+    }
   });
 
   it('refetches its config on every hub welcome and settings change; a stale answer never wins', async () => {

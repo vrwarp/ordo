@@ -15,17 +15,18 @@ import { API_PREFIX } from '@ordo/protocol';
 import type { AssetToMain, DrawingSwitches, FromRender, ToAsset, ToRender } from '@ordo/renderer';
 import { vframeClock } from '@ordo/renderer/frame-ring.ts';
 import { Diagnostics } from './diagnostics.ts';
-import type {
-  AudioCommand,
-  ChaosHooks,
-  HostStatus,
-  LinkToMain,
-  LinkView,
-  MainToLink,
-  MediaCommand,
-  MediaEvent,
-  WorkerName,
-  WorkerStat,
+import {
+  type AudioCommand,
+  type ChaosHooks,
+  type HostStatus,
+  type LinkToMain,
+  type LinkView,
+  type MainToLink,
+  type MediaCommand,
+  type MediaEvent,
+  RENDER_DEAD_AFTER_MS,
+  type WorkerName,
+  type WorkerStat,
 } from './host-protocol.ts';
 import { MediaSlot } from './media.ts';
 import { ProgramSender } from './program.ts';
@@ -238,7 +239,7 @@ export class OutputHost {
     });
     this.sup.add({
       name: 'render',
-      deadAfterMs: 3000,
+      deadAfterMs: RENDER_DEAD_AFTER_MS,
       create: () =>
         new Worker(new URL('./render.worker.ts', import.meta.url), { type: 'module', name: 'ordo-render' }),
       start: (w, gen) => this.startRender(w, gen),

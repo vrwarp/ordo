@@ -89,7 +89,11 @@ Crash-only restart. The link worker checks `checkInvariants` after every applied
 asks for a full state, and a full state that still violates reloads the window. While live, no frame
 presented for 3 s while the page is painting restarts the render worker; a second time within two
 minutes reloads the window. A GPU device rebuild is not a stall: `lost` resets the renderer's grace and
-the check waits until `restored` (at most 15 s). Repeated non-quota OPFS failures reload the window.
+the check waits until `restored` (at most 15 s). Nor is a dead render worker: one that has posted no
+telemetry for 1 s is its supervisor's to restart (`RENDER_DEAD_AFTER_MS`, 3 s after its last heartbeat), and
+the check acts on it only once that restart is 6 s overdue (a supervisor that gave the worker up). Before,
+the two 3 s timers raced and a killed worker could count as a stall, so a second crash within two minutes
+reloaded the window (the chaos-output e2e under load). Repeated non-quota OPFS failures reload the window.
 The host allows 3 reloads in 10 minutes (sessionStorage, `reload.ts`), so a deterministic failure cannot
 become a reload loop; a refused reload for a stuck renderer restarts the render worker instead, and the
 refusal is in `health.error` for the rest of the window (review 2026-11-04 item 9).
