@@ -3228,8 +3228,10 @@ be measured):
   own version) and is written to every stored slide, so a bump mid-wave would refuse every older operator's
   scene and change what re-import and 'Make editable' see. The cost: an operator tab loaded from a sub-wave 1
   hub can still send a version-2 scene whose tables are in the grown-row form, which a 1b hub stores as sent
-  (it draws as sub-wave 1's did; Re-import gives LibreOffice's form). Whether `CONVERTER_VERSION` moves with
-  the wave's one `APP_VERSION` bump is decided at the wave's end (owner question N1).
+  (it draws as sub-wave 1's did; Re-import gives LibreOffice's form). It stays 2 in PR #29 as well (parts 1, 1b
+  and 1c; its last commit raises `APP_VERSION` to 0.9.0). Whether it moves is decided at the end of wave r2b,
+  which owner question N1's answer put in the follow-up pull request with parts 2, 3 and 4 (design/29 §1.11 plans
+  `CONVERTER_VERSION` 3 with pre-rendering, part 4).
 - **`CONVERTER_VERSION` stays 2 through sub-wave 1c too** (integrate-1c), for the same reason, although 1c changes
   the stored form again: a table whose vertical cells are all `eaVert` is the table object (it was LibreOffice's art
   on a hub with LibreOffice and missing on one without), and the rows of table cells in Han, Kana or Hangul are
@@ -3243,7 +3245,8 @@ be measured):
   bulletin's slide 2 is such a table; its Korean rows there also arrive without the 1/4 em). The hub's
   `APP_VERSION` check bounds this to builds that share one `APP_VERSION` (`ws.ts`: an operator of another version
   is sent away, 'bye version'), so after the wave's 0.9.0 bump it reaches no earlier build. Re-import and Reset
-  slide give 1c's form. The wave-end decision (owner question N1) is unchanged.
+  slide give 1c's form. Whether `CONVERTER_VERSION` moves is the wave-end decision above (the follow-up pull
+  request).
 <!-- /r2b:tables-form -->
 
 <!-- r2b:tables-cells -->
