@@ -55,6 +55,7 @@ import {
   currentSlide,
   redo,
   selectCell,
+  selectCellRange,
   selectObject,
   selectObjects,
   setTextRange,
@@ -73,12 +74,14 @@ import {
   dragSelection,
   formatSelection,
   handleTextPaste,
+  pasteTableFromClipboard,
   tabCell,
   transformSelection,
   typeText,
 } from './actions.ts';
 import { updateObject } from './ops.ts';
 import { boxFromCorner, clickSelection, groupBox, groupMembers, isLocked, keepsAspect } from './ops/group.ts';
+import { rangeOfCells } from './ops/table.ts';
 import { selectionStyle } from './ops/text.ts';
 import { useOriginalOver } from './original.ts';
 import { snapBox } from './snapping.ts';
@@ -188,13 +191,20 @@ export { tableKitLoaded };
  * has loaded, the press is kept and its cell selected when the kit arrives (the press is never lost). Returns
  * the kit's load (resolved at once when it is there).
  */
-export function pressTable(o: SlideObject, x: number, y: number): Promise<void> {
+export function pressTable(o: SlideObject, x: number, y: number, shift = false): Promise<void> {
   if (!tableKit) {
     pressBeforeKit = { objectId: o.id, x, y };
     return loadTableKit();
   }
   const st = useEditor.getState();
   const cell = cellAt(o, x, y);
+  if (cell >= 0 && shift && isTable(o) && st.objectId === o.id && st.cell !== undefined) {
+    const r = rangeOfCells(o.table, st.cell, cell);
+    if (r) {
+      selectCellRange(o.id, st.cell, r);
+      return Promise.resolve();
+    }
+  }
   if (cell >= 0 && !(st.inlineEditingId === o.id && st.inlineEditingCell === cell)) selectCell(o.id, cell);
   return Promise.resolve();
 }
@@ -691,6 +701,7 @@ function TextEditingOverlay(props: {
   const inlineEditingCell = useEditor((s) => s.inlineEditingCell);
   const selectedId = useEditor((s) => s.objectId);
   const selectedCell = useEditor((s) => s.cell);
+  const selectedCellRange = useEditor((s) => s.cellRange);
   const selectedCount = useEditor((s) => s.objectIds.length);
   const range = useEditor((s) => s.textRange);
   const targetId = inlineEditingId ?? (selectedCount === 1 ? selectedId : undefined);
@@ -700,6 +711,7 @@ function TextEditingOverlay(props: {
   const o = target?.view;
   const host = target ? props.objects.find((x) => x.id === target.target.objectId) : undefined;
   const editing = !!target && inlineEditingId === target.target.objectId;
+  const activeCellRange = !editing && targetId === selectedId ? selectedCellRange : undefined;
   const [visible, setVisible] = useState(true);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new caret, selection or text restarts the blink
   useEffect(() => {
@@ -748,7 +760,28 @@ function TextEditingOverlay(props: {
               showCaret: editing && visible,
             };
             if (target.target.cell !== undefined) {
-              // The selected cell's outline, in the table's frame.
+              // The selected cell or multi-cell range outline, in the table's frame.
+              const layout = activeCellRange && isTable(host) ? tableLayoutOf(host) : undefined;
+              if (
+                activeCellRange &&
+                layout &&
+                activeCellRange.r1 < layout.rowY.length - 1 &&
+                activeCellRange.c1 < layout.colX.length - 1
+              ) {
+                const x0 = Math.min(layout.colX[activeCellRange.c0]!, layout.colX[activeCellRange.c1 + 1]!);
+                const x1 = Math.max(layout.colX[activeCellRange.c0]!, layout.colX[activeCellRange.c1 + 1]!);
+                const y0 = layout.rowY[activeCellRange.r0]!;
+                const y1 = layout.rowY[activeCellRange.r1 + 1]!;
+                ctx.save();
+                ctx.fillStyle = 'rgba(59, 130, 246, 0.16)';
+                ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+                ctx.strokeStyle = '#3b82f6';
+                ctx.lineWidth = 2 / props.scale;
+                ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+                ctx.restore();
+                ctx.restore();
+                return;
+              }
               const f = target.frame;
               ctx.save();
               ctx.strokeStyle = '#3b82f6';
@@ -924,17 +957,17 @@ export function SlideCanvas(props: {
       // Shift toggles, so it acts once per press: on its pointer event (a mouse press fires mousedown too).
       if (mods.shift && kind !== 'pointer') return;
       const st = useEditor.getState();
-      // A press on the table already selected alone selects the cell under it (design/15 "Table editing").
+      // A press on the table already selected alone selects the cell under it (or Shift+Click extends cellRange).
       if (
         kind === 'pointer' &&
-        !mods.shift &&
         !mods.alt &&
+        (!mods.shift || st.cell !== undefined) &&
         isTable(o) &&
         st.objectId === o.id &&
         st.objectIds.length === 1
       ) {
         const pos = e.target.getStage()?.getPointerPosition();
-        if (pos) void pressTable(o, pos.x / scale, pos.y / scale);
+        if (pos) void pressTable(o, pos.x / scale, pos.y / scale, mods.shift);
         return;
       }
       const sel = clickSelection(
@@ -1105,6 +1138,17 @@ export function SlideCanvas(props: {
   const selectedCount = useEditor((s) => s.objectIds.length);
   const inlineEditingCell = useEditor((s) => s.inlineEditingCell);
   const selectedCell = useEditor((s) => s.cell);
+  const _selectedCellRange = useEditor((s) => s.cellRange);
+  const selectedTable =
+    !coarse &&
+    !props.readOnly &&
+    !inlineEditingId &&
+    selected.length === 1 &&
+    isTable(selected[0]) &&
+    !isLocked(selected[0])
+      ? selected[0]
+      : undefined;
+  const _selectedTableLayout = selectedTable ? tableLayoutOf(selectedTable) : undefined;
   // What is edited inline: a text box, or a table's cell as its edit view (design/15 "Table editing").
   const editing = inlineEditingId
     ? editTargetOf(drawn.objects, inlineEditingId, inlineEditingCell)
@@ -1516,6 +1560,15 @@ export function CanvasBackingTextEditor({
       }}
       onPaste={(e) => {
         if (off) return;
+        if (target.cell !== undefined) {
+          const html = e.clipboardData?.getData('text/html') ?? '';
+          const plain = e.clipboardData?.getData('text/plain') ?? '';
+          if (pasteTableFromClipboard(target.objectId, target.cell, html, plain)) {
+            e.preventDefault();
+            stopInlineEditing();
+            return;
+          }
+        }
         const el = e.currentTarget;
         const caret = handleTextPaste(obj, el.selectionStart, el.selectionEnd, e.clipboardData, target);
         if (caret !== null) {

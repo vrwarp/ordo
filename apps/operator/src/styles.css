@@ -1156,8 +1156,8 @@ table.list th {
   gap: 8px;
 }
 .signin-overlay.nonmodal .card {
-  padding: 16px !important;
-  gap: 10px !important;
+  padding: 16px;
+  gap: 10px;
 }
 .pin {
   font-size: 28px;
@@ -1218,7 +1218,7 @@ table.list th {
     background: #fff;
   }
   .no-print {
-    display: none !important;
+    display: none;
   }
   .app {
     display: block;
@@ -1269,7 +1269,7 @@ table.list th {
 }
 body.sorting,
 body.sorting * {
-  cursor: grabbing !important;
+  cursor: grabbing;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -1426,7 +1426,7 @@ button.arr-chip-label {
     display: inline-flex;
   }
   .touch-hide {
-    display: none !important;
+    display: none;
   }
   button,
   .btn,
@@ -1495,7 +1495,7 @@ button.arr-chip-label {
     width: 30px;
   }
   .ed-sec-head input {
-    min-height: 44px !important;
+    min-height: 44px;
     min-width: 64px;
   }
   .ed-sec-head button.small {
@@ -1503,7 +1503,7 @@ button.arr-chip-label {
   }
   .arr-chip {
     min-height: 44px;
-    padding: 0 10px 0 0 !important;
+    padding: 0 10px 0 0;
   }
   button.arr-chip-label {
     min-height: 44px;
@@ -1624,7 +1624,7 @@ button.arr-chip-label {
 /* iPad portrait (834 x 1194): side lists narrow, the right-hand panels move under the main one. */
 @media (pointer: coarse) and (max-width: 1000px) {
   .split {
-    grid-template-columns: 180px minmax(0, 1fr) !important;
+    grid-template-columns: 180px minmax(0, 1fr);
   }
   .pl-editor {
     grid-template-columns: minmax(0, 1fr);
@@ -1640,7 +1640,7 @@ button.arr-chip-label {
   }
   /* The add panel scrolls as a whole so its search results keep a usable height above the timers. */
   .add-items {
-    grid-template-rows: auto minmax(220px, 1fr) auto !important;
+    grid-template-rows: auto minmax(220px, 1fr) auto;
     overflow: auto;
   }
   .editor {
@@ -3463,6 +3463,298 @@ tr.rev-row-selected td {
   .ed-cell-format .row select,
   .ed-cell-format .stepper-box button {
     min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* ── Native Table Editor (Insert Picker, Borders Matrix, Canvas Direct Manipulation) ───────────────── */
+.tbl-insert-pop,
+.tbl-borders-pop {
+  position: fixed;
+  z-index: 90;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.62);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--fg);
+}
+.tbl-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tbl-pop-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg);
+}
+.tbl-dim-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.22);
+  border: 1px solid rgba(59, 130, 246, 0.55);
+  color: #bfdbfe;
+}
+.tbl-grid-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.tbl-grid-row {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+}
+.tbl-grid-cell {
+  min-width: 0;
+  min-height: 0;
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: var(--bg3);
+  cursor: pointer;
+}
+.tbl-grid-cell.active {
+  background: rgba(59, 130, 246, 0.36);
+  border-color: #60a5fa;
+}
+.tbl-pop-options {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.tbl-check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--fg2);
+  cursor: pointer;
+  user-select: none;
+}
+.tbl-check-row input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #3b82f6;
+}
+.tbl-pop-footer {
+  border-top: 1px solid var(--line);
+  padding-top: 7px;
+  display: flex;
+}
+.tbl-paste-btn {
+  width: 100%;
+  justify-content: center;
+}
+.tbl-border-matrix {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.tbl-border-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.tbl-border-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Canvas-native table rails & divider handles (fine pointer only) */
+.tbl-canvas-overlay {
+  position: absolute;
+  pointer-events: none;
+  z-index: 15;
+}
+.tbl-grip-rail {
+  position: absolute;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(20, 22, 28, 0.88);
+  color: var(--fg2);
+  border-radius: 4px;
+  cursor: grab;
+  opacity: 0.78;
+  transition:
+    opacity 0.12s,
+    background 0.12s,
+    border-color 0.12s;
+}
+.tbl-grip-rail:hover,
+.tbl-grip-rail.active {
+  opacity: 1;
+  background: rgba(59, 130, 246, 0.28);
+  border-color: #60a5fa;
+  color: #fff;
+}
+.tbl-grip-rail:active {
+  cursor: grabbing;
+}
+.tbl-grip-col {
+  top: -16px;
+  height: 12px;
+}
+.tbl-grip-row {
+  left: -16px;
+  width: 12px;
+}
+.tbl-grip-dots {
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: -1px;
+}
+.tbl-divider {
+  position: absolute;
+  pointer-events: auto;
+  z-index: 16;
+}
+.tbl-divider-col {
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: col-resize;
+}
+.tbl-divider-row {
+  left: 0;
+  right: 0;
+  height: 10px;
+  cursor: row-resize;
+}
+.tbl-divider::after {
+  content: "";
+  position: absolute;
+  opacity: 0;
+  background: #3b82f6;
+  transition: opacity 0.1s;
+}
+.tbl-divider-col::after {
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+}
+.tbl-divider-row::after {
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 2px;
+}
+.tbl-divider:hover::after,
+.tbl-divider.dragging::after {
+  opacity: 1;
+}
+.tbl-divider-badge {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: #1d4ed8;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+.tbl-drop-guide {
+  position: absolute;
+  background: #3b82f6;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.4);
+  pointer-events: none;
+  z-index: 18;
+}
+.tbl-drop-guide.col {
+  top: -16px;
+  bottom: 0;
+  width: 3px;
+  transform: translateX(-1.5px);
+}
+.tbl-drop-guide.row {
+  left: -16px;
+  right: 0;
+  height: 3px;
+  transform: translateY(-1.5px);
+}
+.tbl-append-col,
+.tbl-append-row {
+  position: absolute;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(255, 255, 255, 0.24);
+  background: rgba(20, 22, 28, 0.85);
+  color: var(--fg2);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+.tbl-append-col:hover,
+.tbl-append-row:hover {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: #60a5fa;
+  color: #fff;
+}
+.tbl-append-col {
+  top: 0;
+  bottom: 0;
+  right: -24px;
+  width: 18px;
+  font-size: 14px;
+}
+.tbl-append-row {
+  left: 0;
+  right: 0;
+  bottom: -26px;
+  height: 20px;
+}
+
+@media (pointer: coarse) {
+  .tbl-borders-pop button,
+  .tbl-insert-pop button:not(.tbl-grid-cell) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .tbl-check-row {
     min-height: 44px;
   }
 }
