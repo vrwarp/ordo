@@ -58,6 +58,12 @@ type Client = {
    * does, but it is not the output's window (no superseding either way, no health, not counted as connected).
    */
   view?: 'lectern';
+  /**
+   * The id of the resolved copy this socket holds, as far as the hub knows (live-by-ref): what it said in its
+   * hello or last resync, or the copy the hub wrote to it (a whole state, a goLive delta). A state for a socket
+   * that holds the live copy is sent without it.
+   */
+  holds?: string;
   inflight: number;
   needsState: boolean;
   alive: boolean;
@@ -108,14 +114,15 @@ export class SocketHub {
   private recentCmds = new Map<string, number>();
   /** Commands accepted for submission but not yet applied (queued behind a goLive). */
   private pendingCmds = new Map<string, Promise<number>>();
-  /** The encoded `live.state` message of the state object last sent (see `stateFrame`). */
-  private framed?: { state: LiveState; whole: Buffer };
+  /** The encoded `live.state` messages of the state object last sent, by variant (see `stateFrame`). */
+  private framed?: { state: LiveState; whole?: Buffer; byName?: Buffer };
 
   /** Sockets closed for breaking a limit, by reason (diagnostics). */
   readonly limitClosures: Record<string, number> = {};
 
   private auth: Auth;
   private live: LiveService;
+  private byRef: boolean;
   /** The configured outputs (for the health table); the Library's or the live process's cached copy. */
   private outputs: () => Output[];
   private log: Logger;
@@ -129,6 +136,8 @@ export class SocketHub {
      * a revoked one until it has it. Default: always.
      */
     contextReady?: () => boolean;
+    /** ORDO_LIVE_BYREF (default on): states go by name to sockets that hold the copy. */
+    byRef?: boolean;
   };
   constructor(
     auth: Auth,
@@ -145,10 +154,12 @@ export class SocketHub {
        * a revoked one until it has it. Default: always.
        */
       contextReady?: () => boolean;
+      byRef?: boolean;
     },
   ) {
     this.auth = auth;
     this.live = live;
+    this.byRef = opts.byRef ?? true;
     this.outputs = outputs;
     this.log = log;
     this.opts = opts;
@@ -380,28 +391,48 @@ export class SocketHub {
   }
 
   /**
-   * The live state as the bytes of one `live.state` message, encoded once for the state object it was built
-   * from (the reducer makes a new object at every event, so the cache is dropped with it): the state without
-   * its copy and cue list is stringified (small), the cue list's JSON comes from the live service's cache and
-   * the copy's bytes are spliced in. Nothing here stringifies the copy or the cue list.
+   * The live state as the bytes of one `live.state` message, encoded once per variant for the state object it
+   * was built from (the reducer makes a new object at every event, so the cache is dropped with it): the state
+   * without its copy and cue list is stringified (small), the cue list's JSON comes from the live service's
+   * cache and, for the whole variant, the copy's bytes are spliced in. Nothing here stringifies the copy or the
+   * cue list. While a service is live (and ORDO_LIVE_BYREF is on) the message carries the copy's id; the by-name
+   * variant leaves the copy out (live-by-ref).
    */
-  private stateFrame(): Buffer {
+  private stateFrame(byName: boolean): Buffer {
     const s = this.live.state;
-    if (this.framed?.state === s) return this.framed.whole;
+    if (this.framed?.state !== s) this.framed = { state: s };
+    const cached = byName ? this.framed.byName : this.framed.whole;
+    if (cached) return cached;
     const { resolved: _r, cues: _c, ...rest } = s;
     const head = JSON.stringify(rest);
     const copy = s.mode === 'live' && s.resolved ? this.live.resolvedCopy() : undefined;
     const open = head.length > 2 ? `${head.slice(0, -1)},` : '{';
     const lead = `{"t":"live.state","v":${PROTOCOL_VERSION},"seq":${s.seq},"state":${open}"cues":${this.live.cuesJson(s.cues)}`;
-    const whole = copy
-      ? Buffer.concat([Buffer.from(`${lead},"resolved":`), copy.json, Buffer.from('}}')])
-      : Buffer.from(`${lead}}}`);
-    this.framed = { state: s, whole };
-    return whole;
+    const idPart = copy && this.byRef ? `,"resolvedId":"${copy.id}"` : '';
+    const frame =
+      copy && !byName
+        ? Buffer.concat([Buffer.from(`${lead},"resolved":`), copy.json, Buffer.from(`}${idPart}}`)])
+        : Buffer.from(`${lead}}${idPart}}`);
+    if (byName) this.framed.byName = frame;
+    else this.framed.whole = frame;
+    return frame;
+  }
+
+  /**
+   * The state for one socket: by name when it holds the live copy, else whole (and then it holds it). Idle, or
+   * with ORDO_LIVE_BYREF off, every state is whole and no socket is ever recorded as holding a copy.
+   */
+  private frameFor(c: Client): Buffer {
+    const s = this.live.state;
+    if (!this.byRef || s.mode !== 'live' || !s.resolved) return this.stateFrame(false);
+    const id = this.live.resolvedCopy()!.id;
+    if (c.holds === id) return this.stateFrame(true);
+    c.holds = id;
+    return this.stateFrame(false);
   }
 
   private sendState(c: Client): void {
-    this.send(c, this.stateFrame());
+    this.send(c, this.frameFor(c));
   }
 
   private receivesLive(c: Client): boolean {
@@ -444,6 +475,7 @@ export class SocketHub {
           else return this.bye(c, 'forbidden');
         }
         c.role = role;
+        c.holds = this.byRef ? m.resolvedId : undefined;
         // Only the stage output has a lectern; any other window that says so is the output's own window.
         if (role === 'stage' && m.view === 'lectern') c.view = 'lectern';
         if (c.outputId && !c.view) {
@@ -476,6 +508,8 @@ export class SocketHub {
       case 'time.ping':
         return this.send(c, { t: 'time.pong', v: 1, c: m.c, s: Date.now() });
       case 'live.resync':
+        // A resync says what the socket holds now: nothing, when it does not say.
+        c.holds = this.byRef ? m.resolvedId : undefined;
         if (this.receivesLive(c)) this.sendState(c);
         return;
       case 'live.event': {
@@ -575,7 +609,8 @@ export class SocketHub {
         JSON.stringify({ t: 'live.delta', v: PROTOCOL_VERSION, seq: d.seq, fromSeq: d.fromSeq, event: d.event, id: d.id }),
       );
     const idPart = d.id === undefined ? '' : `"id":${JSON.stringify(d.id)},`;
-    const lead = `{"t":"live.delta","v":${PROTOCOL_VERSION},"seq":${d.seq},"fromSeq":${d.fromSeq},${idPart}"event":{"k":"goLive","resolved":`;
+    const copyId = this.byRef ? `"resolvedId":"${d.copy.id}",` : '';
+    const lead = `{"t":"live.delta","v":${PROTOCOL_VERSION},"seq":${d.seq},"fromSeq":${d.fromSeq},${idPart}${copyId}"event":{"k":"goLive","resolved":`;
     return Buffer.concat([Buffer.from(lead), d.copy.json, Buffer.from('}}')]);
   }
 
@@ -595,13 +630,15 @@ export class SocketHub {
         c.needsState = true;
         continue;
       }
+      // A goLive delta carries the copy: the socket holds it from here. End service: nothing is held any more.
+      if (this.byRef && d.copy) c.holds = d.copy.id;
+      else if ((d.event as { k?: string }).k === 'endService') c.holds = undefined;
       this.send(c, raw);
     }
   }
 
   private broadcastState(_s: LiveState): void {
-    const raw = this.stateFrame();
-    for (const c of this.clients) if (this.receivesLive(c)) this.send(c, raw);
+    for (const c of this.clients) if (this.receivesLive(c)) this.send(c, this.frameFor(c));
   }
 
   /**

@@ -328,6 +328,7 @@ export async function createLiveProcess(
     healthIntervalMs: cfg.healthIntervalMs,
     clientIp: http.clientIp,
     contextReady: () => link.context !== undefined,
+    byRef: cfg.liveByRef,
   });
   // A context refresh that is not part of applying a library delta (the library came back, or this process
   // restarted and fetched it for the first time) may hold settings the outputs have not seen: tell them to

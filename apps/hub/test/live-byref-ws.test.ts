@@ -250,7 +250,9 @@ describe('the state by name (step 5)', () => {
   });
 
   it('a slow socket that holds the live id gets the small state when its queue drains; one that missed a goLive delta gets the new copy', async () => {
-    svc = await liveHub(1);
+    // no health summaries (an operate socket gets one every interval, and each send drains the queue): the only
+    // message that does is the ping this test sends
+    svc = await liveHub(1, { healthIntervalMs: 600_000 });
     const { hub, cookie } = svc;
     const id = liveId(svc);
     const serverSide = () => [...(hub.sockets as unknown as { clients: Set<Record<string, any>> }).clients];

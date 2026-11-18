@@ -141,6 +141,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     domain: cfg.domain,
     healthIntervalMs: cfg.healthIntervalMs,
     clientIp: http.clientIp,
+    byRef: cfg.liveByRef,
   });
   // Outputs hear of what their config holds: settings, fonts and the logo media.
   lib.onChange((changes) => {

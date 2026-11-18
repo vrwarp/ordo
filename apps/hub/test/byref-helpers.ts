@@ -148,11 +148,12 @@ export type ServiceHub = { hub: TestHub; cookie: string; bytes: Uint8Array; op: 
  */
 export async function liveHub(
   mib: number,
-  opts: { dataDir?: string; liveByRef?: boolean } = {},
+  opts: { dataDir?: string; liveByRef?: boolean; healthIntervalMs?: number } = {},
 ): Promise<ServiceHub> {
   const hub = await startHub({
     ...(opts.dataDir ? { dataDir: opts.dataDir } : {}),
     ...(opts.liveByRef === undefined ? {} : { liveByRef: opts.liveByRef }),
+    ...(opts.healthIntervalMs === undefined ? {} : { healthIntervalMs: opts.healthIntervalMs }),
   } as Parameters<typeof startHub>[0]);
   const bytes = bundleBytes(bigBundle(mib));
   const src = (hub.live as unknown as { source: LiveSource }).source;
