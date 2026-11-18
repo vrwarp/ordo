@@ -248,7 +248,8 @@ part a prepared picture was made from, design/20 "Pictures of the native import"
 simple numbered-SQL runner; every migration is idempotent and tested.
 
 `/data/live.db` (live process only): `live_journal (seq, at, cmd_id, kind, event_json)`,
-`live_snapshot (singleton)`, `live_snapshot_prev` (the two snapshots before it) and `live_kv` (the cached
+`live_snapshot (singleton)`, `live_snapshot_prev` (the two snapshots before it), `live_resolved` (the running
+service's resolved copy, once, in two verified rows: "The running service by reference") and `live_kv` (the cached
 library context and goLive bundles). On its first start the live process copies the journal and snapshot
 over from ordo.db, where the one-process hub kept them. In one-process mode the same tables live in
 ordo.db.
@@ -494,6 +495,38 @@ Design/25's table, as implemented in the hub:
   enabled audio master, unique `out<k>` host indices, unique look ids, and that every output's look exists.
 - **Journal and snapshots**: validated restore (Storage).
 
+## The running service by reference
+
+Design/29 §2.3 M2 (live-by-ref). The resolved copy of the running service (`state.resolved`, up to 32 MiB) is
+named by its SHA-256 (`resolvedId`, the id golive-prepare's worker computes over the bytes it serialised) and kept
+ONCE in two rows of `live.db`: `live_resolved (resolved_id, copy, bytes, json, saved_at)`, copy 0 and 1 holding the
+same bytes, each verified against the id and its length on every read. Everything else names the copy:
+
+- **The goLive's apply** (the take-over) writes the two rows, the journal row `{"k":"goLive","resolvedId":...}` and
+  the snapshot in one transaction, then calls its listeners; the copy is parsed once from the prepared bytes, which
+  the live service keeps as the copy's bytes. Nothing on the live loop serialises the copy again.
+- **The snapshot** (at every goLive, End service and adopt, and every 5 s while the service changes) is the state
+  without its copy, the cue list from a cache keyed by the array's identity (built once per goLive: about 300 bytes a
+  cue) and the id last. An idle state, or any state with `ORDO_LIVE_BYREF=off`, is written whole as before.
+- **Restore** reads both forms: a snapshot or goLive journal row that names a copy joins it from the rows (copy 0,
+  else copy 1; a torn row is a warning, a copy neither row can give skips that snapshot for the previous one, and
+  with none usable the service starts idle as before); a whole (older) snapshot or row is read as it is and named at
+  its first snapshot. The verified bytes are kept, so the first state sent after a restart serialises nothing.
+- **Collection**: a copy's rows are deleted when the running service, a retained snapshot (the current and the two
+  before it) and a goLive journal row newer than the oldest of those no longer name it, after each snapshot that
+  rotated, each goLive, End service and adopt, and once at start: at most three ids, two rows each.
+- **On the wire** (design/13): every socket is sent the same encoded state message per variant; a socket that said
+  in its hello or resync which copy it holds, or was written the copy, is sent the state without it (as big as the
+  cue list); every other gets it whole once. The goLive delta stays whole (the copy is encoded once, from the
+  prepared text). A resync that names nothing is always answered whole.
+- **Roll-back**: a hub from before this reads a snapshot without its copy as invalid and starts idle, so rolling the
+  hub back while a service runs does not bring that service back; update and roll back between services (the older
+  hub opens the folder cleanly, it ignores the new table). `ORDO_LIVE_BYREF=off` writes and sends the whole forms for
+  as long as a venue wants; a data folder written either way restores either way.
+
+The one-process hub (tests, development) keeps its live tables in `ordo.db`; the live service creates
+`live_resolved` itself there (`LIVE_RESOLVED_SQL`, no migration).
+
 ## Sizes
 
 Imported PowerPoint slides are about ten times larger than picture slides, so every path that carries a
@@ -524,6 +557,9 @@ whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`)
 - `GET /health` reports the library snapshot's size (Logging and diagnostics).
 
 ## Configuration
+
+`ORDO_LIVE_BYREF` (`on` by default and when unset; `off`; any other value is on with a start-up warning): the
+running service is kept and sent by reference ("The running service by reference" above). Read once at start.
 
 Environment variables: `ORDO_DOMAIN` (`<venue>.synology.me`), `ORDO_DATA=/data`,
 `ORDO_TRUSTED_PROXY` (DSM's address), `ORDO_TZ`, `ORDO_PORT=8080`,

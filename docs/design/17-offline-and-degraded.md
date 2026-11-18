@@ -124,6 +124,18 @@ else).
 All are reducer state and work unchanged. Media `ended` events flow over the fallback bus
 from the audio master output.
 
+### What a screen keeps of the running service
+
+Design/29 §2.3 M2, A22 (live-by-ref). An output, the stage and the operator's core no longer clone the whole
+state on every GO. A GO writes a small record: the state without its copy and cue list and the copy's id. The copy
+and the cue list are saved ONCE per service, in pieces (one record per presentation, the cue list, the head, and
+last a marker that names them), a task of their own after the window presented a frame (at the latest 5 s after the
+copy arrived), never inside the task that applies a message; a newer service aborts an older save and removes its
+records. A restart joins what the marker names and paints only a complete copy whose id is the small record's; it
+then tells the hub which copy it holds, so the hub sends the state by name. A copy that did not come from the hub
+(the bus, the operator's own resolve) is saved whole as before and never held. A save that fails (a full disk) is
+one diagnostic line; a restart then waits for the hub, as a window with no cache does.
+
 ### Hub returns
 
 1. The operator reconnects and receives `welcome { seq }`.
@@ -147,6 +159,9 @@ from the audio master output.
    operator shows a conflict dialog: keep local (adopt with `force`) or take the hub's.
 
 ## Going live beside the running service
+
+The take-over's own apply holds the hub's live loop only for the parse of the prepared copy and two small writes (the
+copy is written by name, once: design/12 "The running service by reference").
 
 Design/29 §2.3 M8. Pressing Go live while a service runs (to pick up a fixed slide, or the next service)
 never holds the running one: the hub prepares the new playlist beside it (design/13 "Prepare before goLive",
