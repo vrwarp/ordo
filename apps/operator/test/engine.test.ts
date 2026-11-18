@@ -660,3 +660,143 @@ describe('Go live prepared beside the running service (design/29 M8, W41)', () =
     expect(errors()).toEqual(['Playlist pl2 not found']);
   });
 });
+
+// ---- the service by reference: the core snapshot names the copy (live-by-ref) ----
+
+const BY_ID = 'd'.repeat(64);
+
+/** The fixture service padded with unreferenced presentations of 100 KB each, to about `mib` MiB. */
+function padded(mib: number): ResolvedPlaylist {
+  const r = resolved();
+  const presentations = { ...r.presentations };
+  const first = Object.values(presentations)[0]!;
+  for (let i = 0; i < Math.ceil((mib * 1024) / 100); i++)
+    presentations[`pad${i}`] = { ...first, id: `pad${i}`, pad: 'x'.repeat(100 * 1024) } as never;
+  return { ...r, presentations };
+}
+
+function recStore(init: Record<string, unknown> = {}) {
+  const map = new Map<string, unknown>(Object.entries(init));
+  const sets: { key: string; bytes: number }[] = [];
+  const store = {
+    get: async <T>(k: string) => structuredClone(map.get(k)) as T | undefined,
+    set: async (k: string, v: unknown) => {
+      sets.push({ key: k, bytes: JSON.stringify(v ?? null).length });
+      map.set(k, structuredClone(v));
+    },
+  };
+  return { store: store as unknown as JsonStore, map, sets };
+}
+
+describe('CoreEngine saves by reference (live-by-ref)', () => {
+  let engine: CoreEngine | undefined;
+  afterEach(() => engine?.dispose());
+
+  const boot = async (rs = recStore()) => {
+    const posts: CoreToMain[] = [];
+    engine = new CoreEngine((m) => posts.push(m), rs.store);
+    await engine.init({ t: 'init', role: 'operate', appVersion: 't', generation: 1, test: true });
+    await flush();
+    const onMessage = (m: unknown) =>
+      (engine!.hub as unknown as { onMessage(raw: string): void }).onMessage(JSON.stringify(m));
+    return { e: engine, posts, rs, onMessage };
+  };
+  const wholeState = (r: ResolvedPlaylist, seq = 1) => {
+    const s = { ...reduce(initialState(), { k: 'goLive', resolved: r }), seq };
+    return { t: 'live.state', v: 1, seq, resolvedId: BY_ID, state: s };
+  };
+  const byName = (r: ResolvedPlaylist, seq: number) => {
+    const m = wholeState(r, seq);
+    const { resolved: _r, ...state } = m.state;
+    return { ...m, state };
+  };
+  const settle = async () => {
+    for (let i = 0; i < 4; i++) await flush();
+    await new Promise((r) => setTimeout(r, 1100));
+  };
+
+  it('the persisted record is small and the same at 4 and 13 MiB, and the copy is written once', async () => {
+    const sizes: number[] = [];
+    for (const mib of [4, 13]) {
+      const { e, rs, onMessage } = await boot();
+      const r = padded(mib);
+      onMessage(wholeState(r));
+      e.handle({ t: 'action', aid: `a-${mib}`, action: { id: 'next' }, source: 'keyboard' });
+      await settle();
+      e.handle({ t: 'action', aid: `b-${mib}`, action: { id: 'next' }, source: 'keyboard' });
+      await settle();
+      const core = rs.sets.filter((x) => x.key === CORE_KEY);
+      expect(core.length).toBeGreaterThan(1);
+      sizes.push(core.at(-1)!.bytes);
+      expect(core.at(-1)!.bytes).toBeLessThan(40_000);
+      const saved = rs.map.get(CORE_KEY) as CoreSnapshot;
+      expect(saved.copy).toBe(BY_ID);
+      expect(saved.state.resolved).toBeUndefined();
+      const pieces = rs.sets.filter((x) => x.key.startsWith('copy:'));
+      expect(pieces.length).toBe(Object.keys(r.presentations).length + 3);
+      e.dispose();
+    }
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(1.1 * Math.min(...sizes));
+  });
+
+  it('a restart restores the joined state of a live service and the first hello carries its id', async () => {
+    const first = await boot();
+    const r = padded(1);
+    first.onMessage(wholeState(r));
+    first.e.handle({ t: 'action', aid: 'x1', action: { id: 'next' }, source: 'keyboard' });
+    await settle();
+    first.e.dispose();
+    const second = await boot(recStore(Object.fromEntries(first.rs.map)));
+    expect(second.e.hub.copies.id).toBe(BY_ID);
+    expect(second.e.hub.copies.value).toEqual(r);
+    expect(second.e.core.view.mode).toBe('live');
+    expect(second.e.core.view.resolved).toEqual(r);
+  });
+
+  it('a snapshot whose copy is incomplete is dropped like an invalid one: the hub state is used', async () => {
+    const first = await boot();
+    first.onMessage(wholeState(padded(1)));
+    first.e.handle({ t: 'action', aid: 'x1', action: { id: 'next' }, source: 'keyboard' });
+    await settle();
+    first.e.dispose();
+    const kept = Object.fromEntries(first.rs.map);
+    const part = Object.keys(kept).find((k) => k.includes(':p:'))!;
+    delete kept[part];
+    const second = await boot(recStore(kept));
+    expect(second.e.hub.copies.id).toBeUndefined();
+    expect(second.e.core.view.mode).toBe('idle');
+  });
+
+  it('20 reconnects that send the state by name post the copy to the UI once', async () => {
+    const { e, posts, onMessage } = await boot();
+    const r = padded(1);
+    onMessage(wholeState(r));
+    await flush();
+    const posted = () => posts.filter((p): p is ViewModelMsg => p.t === 'vm' && !!p.resolved).length;
+    const first = posted();
+    expect(first).toBeGreaterThanOrEqual(1);
+    for (let i = 0; i < 20; i++) {
+      onMessage(byName(r, 2 + i));
+      await flush();
+    }
+    expect(posted()).toBe(first);
+    expect(e.core.view.resolved).toBe(e.hub.copies.value);
+  });
+
+  it('a held service and a fallback-authority snapshot are saved whole and restored whole; the older whole form is read', async () => {
+    const st = live();
+    const rs = recStore({ [CORE_KEY]: { state: st, authority: 'fallback', pending: [], aids: [], at: Date.now() } });
+    const { e } = await boot(rs);
+    e.handle({ t: 'action', aid: 'g1', action: { id: 'next' }, source: 'keyboard' });
+    await settle();
+    const saved = rs.map.get(CORE_KEY) as CoreSnapshot;
+    expect(saved.copy).toBeUndefined();
+    expect(saved.state.resolved).toBeTruthy();
+    expect(rs.sets.filter((x) => x.key.startsWith('copy:'))).toEqual([]);
+    e.dispose();
+    const again = await boot(recStore(Object.fromEntries(rs.map)));
+    expect(again.e.core.authority).toBe('fallback');
+    expect(again.e.core.view.resolved).toBeTruthy();
+  });
+});
+
