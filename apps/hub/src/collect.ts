@@ -419,6 +419,8 @@ const BACKFILL_RETRY_MS = 10 * 60_000;
 /** The scheduler never arms a timer shorter than this. */
 const MIN_ARM_MS = 1000;
 const PAGE = 200;
+/** A slice of a pass: at most this long between yields (the loop's delay is this plus a step; 20 ms is the rule). */
+const COLLECT_SLICE_MS = 10;
 
 export type CollectResult =
   | { ran: false; reason: 'off' | 'live' | 'unknown' | 'backfill' | 'busy' }
@@ -594,7 +596,7 @@ export class Collector {
   /** One step of a run: counted, and a slice of at most `sliceMs` ends with a yield. False when a service went live. */
   private async step(what: 'mark' | 'sweep' | 'picture'): Promise<boolean> {
     this.opts.onStep?.(what);
-    if (this.now() - this.sliceStart < (this.opts.sliceMs ?? 20)) return true;
+    if (this.now() - this.sliceStart < (this.opts.sliceMs ?? COLLECT_SLICE_MS)) return true;
     await (this.opts.yield ?? (() => new Promise<void>((r) => setImmediate(r))))();
     this.sliceStart = this.now();
     return this.opts.live() !== 'live' && !this.stopped;
