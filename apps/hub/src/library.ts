@@ -34,6 +34,7 @@ import type {
 import { z } from 'zod';
 import { type DB, nowIso } from './db.ts';
 import { badRequest, conflict, HttpError, notFound } from './errors.ts';
+import { RefIndex } from './collect.ts';
 import { PrerenderIndex } from './prerenders.ts';
 import { NAMED_MAX, SlideFileIndex } from './slidefiles.ts';
 import { validate } from './validate.ts';
@@ -234,6 +235,8 @@ export class Library {
   readonly slideFiles: SlideFileIndex;
   /** The keys and pictures of pre-rendered slides (DB only). */
   readonly prerenderIndex: PrerenderIndex;
+  /** What each presentation's saved versions name (intervals of revisions), for collection and `fileReferenced`. */
+  readonly refs: RefIndex;
   private listeners: ((changes: Change[], seq: number) => void)[] = [];
 
   private timeZone: string;
@@ -254,6 +257,7 @@ export class Library {
     this.folders = new EntityTable(db, 'folders', FolderSchema.extend({ rev: z.number().int().optional() }));
     this.slideFiles = new SlideFileIndex(db);
     this.prerenderIndex = new PrerenderIndex(db);
+    this.refs = new RefIndex(db);
     this.seed(opts.timeZone);
   }
 
@@ -429,11 +433,14 @@ export class Library {
         opts.create || !this.presentations.get(p.id)
           ? this.presentations.insert(body)
           : this.presentations.update(p.id, body, opts.expectedRev);
+      // The revision's JSON is built once: the same string is scanned for the files it names (no parse).
+      const json = JSON.stringify(saved);
       this.db
         .prepare(
           `INSERT OR REPLACE INTO presentation_revisions (presentation_id, rev, json, saved_by, saved_at) VALUES (?, ?, ?, ?, ?)`,
         )
-        .run(saved.id, saved.rev, JSON.stringify(saved), opts.by ?? null, saved.updatedAt ?? nowIso());
+        .run(saved.id, saved.rev, json, opts.by ?? null, saved.updatedAt ?? nowIso());
+      this.refs.recordSave(saved.id, saved.rev, json);
       if (opts.keys?.length) this.writeKeys(saved.id, saved.rev, opts.keys);
       this.pruneRevisions(saved.id);
       return saved;
@@ -497,6 +504,7 @@ export class Library {
          (SELECT rev FROM presentation_revisions WHERE presentation_id = ? ORDER BY rev DESC LIMIT 50)`,
       )
       .run(id, cutoff, id);
+    this.refs.prune(id);
   }
 
   revisions(id: string): RevisionInfo[] {
@@ -621,7 +629,8 @@ export class Library {
     const f = this.db.prepare(`SELECT 1 FROM fonts WHERE json LIKE ? LIMIT 1`).get(like);
     const p = this.db.prepare(`SELECT 1 FROM presentations WHERE json LIKE ? LIMIT 1`).get(like);
     // A picture of a pre-rendered slide is named by its row, whatever else holds the same bytes.
-    return !!(m || f || p) || this.prerenderIndex.hashNamed(hash);
+    // A kept revision or a head a presentation names, a picture row: the references index.
+    return !!(m || f || p) || this.refs.referenced(hash);
   }
   deleteFileRow(hash: string): void {
     this.db.prepare(`DELETE FROM files WHERE hash = ?`).run(hash);

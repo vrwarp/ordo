@@ -722,6 +722,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     if (!lib.presentations.delete(id)) throw notFound();
     lib.db.prepare(`DELETE FROM presentation_revisions WHERE presentation_id = ?`).run(id);
     await hub.prerenders.forget(id);
+    lib.refs.forget(id);
     lib.emit([{ kind: 'presentation', id, deleted: true }]);
     return reply.code(204).send();
   });

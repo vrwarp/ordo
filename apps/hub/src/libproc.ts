@@ -35,6 +35,7 @@ import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
 import { cpuPool } from './pool.ts';
 import { PrerenderKeys } from './prerenderkeys.ts';
+import { RefBackfill } from './collect.ts';
 import { goLiveExtras, PrerenderStore } from './prerenders.ts';
 import { SlideFiles } from './slidefiles.ts';
 import {
@@ -176,6 +177,7 @@ export async function createLibraryProcess(
   let liveUrl: string | undefined;
   const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, { live: () => locks.mode, log });
   const prerenders = new PrerenderStore(lib, store, liveView, { log });
+  const backfill = new RefBackfill(lib, { live: () => locks.mode, log });
   const libStats = new LibraryStatsCache(lib, log, { minIntervalMs: 0 });
   let status: ProcessStatus[] = [];
 
@@ -344,6 +346,7 @@ export async function createLibraryProcess(
   jobs.onLiveMode(locks.mode);
   jobs.start();
   prerenderKeys.start();
+  backfill.start();
   if (cfg.scheduleBackups) backups.schedule();
   // Loopback only, on a port of the OS's choosing: the live process is the only way in.
   await app.listen({ port: 0, host: '127.0.0.1' });
@@ -367,6 +370,7 @@ export async function createLibraryProcess(
       lockSets = setsOf(m);
       jobs.onLiveMode(m.mode);
       prerenderKeys.onLiveMode(m.mode);
+      backfill.onLiveMode(m.mode);
     },
     setLiveUrl(u) {
       liveUrl = u;
@@ -378,6 +382,7 @@ export async function createLibraryProcess(
       if (statsTimer) clearTimeout(statsTimer);
       clearInterval(diskTimer);
       prerenderKeys.stop();
+      backfill.stop();
       backups.stop();
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       await withTimeout(app.close(), 1000, () => log.warn('http server did not close in time'));

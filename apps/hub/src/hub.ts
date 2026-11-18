@@ -7,6 +7,7 @@ import { Backups } from './backup.ts';
 import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openDb } from './db.ts';
 import { DISK_MEASURE_MS, DiskFloor } from './diskfloor.ts';
+import { RefBackfill } from './collect.ts';
 import { applyHubEvent } from './hubevents.ts';
 import { errorMessage } from './errors.ts';
 import { outputFonts } from './fonts/bundled.ts';
@@ -184,6 +185,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
       file: e.file.hash,
     }),
   );
+  const backfill = new RefBackfill(lib, { live: () => live.state.mode, log });
   const hub: Hub = {
     app,
     prerenderKeys,
@@ -217,6 +219,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
       // get a `bye` and are terminated without waiting for a close handshake a stuck client never sends.
       backups.stop();
       prerenderKeys.stop();
+      backfill.stop();
       clearInterval(diskTimer);
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       live.stop();
@@ -306,13 +309,16 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   live.onDelta(() => {
     jobs.onLiveMode(live.state.mode);
     prerenderKeys.onLiveMode(live.state.mode);
+    backfill.onLiveMode(live.state.mode);
   });
   live.onState((s) => {
     jobs.onLiveMode(s.mode);
     prerenderKeys.onLiveMode(s.mode);
+    backfill.onLiveMode(s.mode);
   });
   jobs.start();
   prerenderKeys.start();
+  backfill.start();
   sockets.start();
   if (cfg.scheduleBackups) backups.schedule();
   return hub;
