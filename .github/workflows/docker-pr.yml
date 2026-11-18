@@ -56,6 +56,19 @@ jobs:
           if [ "$size" -gt 1500000000 ]; then
             echo "::warning::The image is larger than design/22's target of 1.5 GB ($size bytes)."
           fi
+      - name: What the image is made of
+        if: always()
+        run: |
+          # Printed, never enforced (design/22 'Image'): the size above, then where it comes from. Every command may
+          # fail without failing the build; the numbers go to the pull request by hand.
+          echo "== layers (size, command)"
+          docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' ordo-hub:smoke | cut -c1-200 || true
+          echo "== the 40 largest packages (KiB, package)"
+          docker run --rm --entrypoint sh ordo-hub:smoke -c "dpkg-query -W -f='\${Installed-Size}\t\${Package}\n' | sort -rn | head -40" || true
+          echo "== the largest folders (KiB)"
+          docker run --rm --entrypoint sh ordo-hub:smoke -c 'du -xk -d 2 /usr /opt /app /var 2>/dev/null | sort -rn | head -40' || true
+          echo "== /usr/share/doc (KiB: the notices the Dockerfile keeps)"
+          docker run --rm --entrypoint sh ordo-hub:smoke -c 'du -sk /usr/share/doc' || true
       - name: Start the image and wait for its health check
         run: |
           docker run -d --name ordo-smoke -e ORDO_DEV_PIN=246810 -p 8080:8080 ordo-hub:smoke
