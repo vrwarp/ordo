@@ -224,13 +224,9 @@ export function documentImportForm(fields: Readonly<Record<string, string>>): Do
   return { renderer: renderer.data, options };
 }
 
-/** The live service as the library side sees it: edit locks and the mode (from IPC in the library process). */
-export type LiveView = {
-  locks(): { playlistId?: string; presentations: Set<string>; media: Set<string>; fonts: Set<string> };
-  mode(): 'idle' | 'live';
-  /** Whether the service's state has been told yet: false in a library process until the supervisor's first word. */
-  known(): boolean;
-};
+import type { LiveView } from './liveview.ts';
+
+export type { LiveView };
 
 /** What the diagnostics export collects from the live side. */
 export type LiveDiag = {

@@ -12,7 +12,7 @@ import type { DB } from './db.ts';
 import { badRequest, HttpError, notFound } from './errors.ts';
 import type { Library } from './library.ts';
 import { readPictureHeader } from './pptx/pictures.ts';
-import type { LiveView } from './routes.ts';
+import type { LiveView } from './liveview.ts';
 import type { Store } from './store.ts';
 
 /** The sizes a picture is made at (design/29 §1.3): the two goLive lists and the 640 preview phones and grids use. */
