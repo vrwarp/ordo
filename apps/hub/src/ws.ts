@@ -108,6 +108,8 @@ export class SocketHub {
   private recentCmds = new Map<string, number>();
   /** Commands accepted for submission but not yet applied (queued behind a goLive). */
   private pendingCmds = new Map<string, Promise<number>>();
+  /** The encoded `live.state` message of the state object last sent (see `stateFrame`). */
+  private framed?: { state: LiveState; whole: Buffer };
 
   /** Sockets closed for breaking a limit, by reason (diagnostics). */
   readonly limitClosures: Record<string, number> = {};
@@ -354,23 +356,52 @@ export class SocketHub {
     setTimeout(() => c.ws.close(4000, reason), 20).unref();
   }
 
-  private send(c: Client, m: ServerMessage | string): void {
+  /**
+   * A message is an object (stringified here), a string, or a Buffer that already holds the encoded message:
+   * the live state and a goLive delta are encoded once and the same bytes go to every socket, as a text frame
+   * (`binary: false`: a browser receives a string). A string would be encoded again for every socket.
+   */
+  private send(c: Client, m: ServerMessage | string | Buffer): void {
     if (c.ws.readyState !== WebSocket.OPEN) return;
     // A capped socket never receives what its cap does not reach (the broadcasts that build a string already
     // skip edit sockets for live state, health and signalling).
-    if (c.cap !== 'full' && typeof m !== 'string' && !capAtLeast(c.cap, SERVER_MESSAGE_CAP[m.t])) return;
+    const typed = typeof m !== 'string' && !Buffer.isBuffer(m);
+    if (c.cap !== 'full' && typed && !capAtLeast(c.cap, SERVER_MESSAGE_CAP[m.t])) return;
     c.inflight++;
-    c.ws.send(typeof m === 'string' ? m : JSON.stringify(m), () => {
+    const done = () => {
       c.inflight--;
       if (c.needsState && c.inflight < QUEUE_LIMIT / 4) {
         c.needsState = false;
         this.sendState(c);
       }
-    });
+    };
+    if (typed) c.ws.send(JSON.stringify(m), done);
+    else c.ws.send(m, { binary: false }, done);
+  }
+
+  /**
+   * The live state as the bytes of one `live.state` message, encoded once for the state object it was built
+   * from (the reducer makes a new object at every event, so the cache is dropped with it): the state without
+   * its copy and cue list is stringified (small), the cue list's JSON comes from the live service's cache and
+   * the copy's bytes are spliced in. Nothing here stringifies the copy or the cue list.
+   */
+  private stateFrame(): Buffer {
+    const s = this.live.state;
+    if (this.framed?.state === s) return this.framed.whole;
+    const { resolved: _r, cues: _c, ...rest } = s;
+    const head = JSON.stringify(rest);
+    const copy = s.mode === 'live' && s.resolved ? this.live.resolvedCopy() : undefined;
+    const open = head.length > 2 ? `${head.slice(0, -1)},` : '{';
+    const lead = `{"t":"live.state","v":${PROTOCOL_VERSION},"seq":${s.seq},"state":${open}"cues":${this.live.cuesJson(s.cues)}`;
+    const whole = copy
+      ? Buffer.concat([Buffer.from(`${lead},"resolved":`), copy.json, Buffer.from('}}')])
+      : Buffer.from(`${lead}}}`);
+    this.framed = { state: s, whole };
+    return whole;
   }
 
   private sendState(c: Client): void {
-    this.send(c, { t: 'live.state', v: 1, seq: this.live.state.seq, state: this.live.state });
+    this.send(c, this.stateFrame());
   }
 
   private receivesLive(c: Client): boolean {
@@ -528,8 +559,34 @@ export class SocketHub {
     }
   }
 
-  private broadcastDelta(d: { seq: number; fromSeq: number; event: unknown; id?: string }): void {
-    const raw = JSON.stringify({ t: 'live.delta', v: PROTOCOL_VERSION, ...d });
+  /**
+   * One delta message for every socket: a goLive's is assembled from the copy's bytes (the live service has
+   * them: the prepared text), any other is small.
+   */
+  private deltaFrame(d: {
+    seq: number;
+    fromSeq: number;
+    event: unknown;
+    id?: string;
+    copy?: { id: string; json: Uint8Array };
+  }): Buffer {
+    if (!d.copy)
+      return Buffer.from(
+        JSON.stringify({ t: 'live.delta', v: PROTOCOL_VERSION, seq: d.seq, fromSeq: d.fromSeq, event: d.event, id: d.id }),
+      );
+    const idPart = d.id === undefined ? '' : `"id":${JSON.stringify(d.id)},`;
+    const lead = `{"t":"live.delta","v":${PROTOCOL_VERSION},"seq":${d.seq},"fromSeq":${d.fromSeq},${idPart}"event":{"k":"goLive","resolved":`;
+    return Buffer.concat([Buffer.from(lead), d.copy.json, Buffer.from('}}')]);
+  }
+
+  private broadcastDelta(d: {
+    seq: number;
+    fromSeq: number;
+    event: unknown;
+    id?: string;
+    copy?: { id: string; json: Uint8Array };
+  }): void {
+    const raw = this.deltaFrame(d);
     for (const c of this.clients) {
       if (!this.receivesLive(c)) continue;
       if (c.needsState) continue;
@@ -542,8 +599,8 @@ export class SocketHub {
     }
   }
 
-  private broadcastState(s: LiveState): void {
-    const raw = JSON.stringify({ t: 'live.state', v: PROTOCOL_VERSION, seq: s.seq, state: s });
+  private broadcastState(_s: LiveState): void {
+    const raw = this.stateFrame();
     for (const c of this.clients) if (this.receivesLive(c)) this.send(c, raw);
   }
 

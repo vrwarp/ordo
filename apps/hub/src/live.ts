@@ -12,6 +12,7 @@ import {
   quarantinePresentation,
   type ResolvedPlaylist,
   resolvePlaylist,
+  type Cue,
   type SurfaceSettings,
   validatePlaylist,
 } from '@ordo/domain';
@@ -35,7 +36,17 @@ export type Origin =
   | { role: 'output' | 'stage'; outputId: string; id?: string }
   | { role: 'system'; id?: string };
 
-export type DeltaListener = (d: { seq: number; fromSeq: number; event: LiveEvent; id?: string }) => void;
+/**
+ * A goLive's delta also names its copy: the bytes of `event.resolved` as the live service holds them (UTF-8
+ * JSON) and their SHA-256, so a listener that sends the delta never serialises the copy (design/29 §2.3 M2).
+ */
+export type DeltaListener = (d: {
+  seq: number;
+  fromSeq: number;
+  event: LiveEvent;
+  id?: string;
+  copy?: { id: string; json: Uint8Array };
+}) => void;
 export type StateListener = (state: LiveState) => void;
 
 /** What the live service needs from the library for one goLive (see @ordo/domain goLive.ts). */
@@ -177,6 +188,14 @@ export class LiveService {
    * service by it). Undefined after a goLive resolved on the loop (the in-process source).
    */
   resolvedId?: string;
+  /**
+   * The bytes of `state.resolved` and their SHA-256 (live-by-ref): the prepared bytes of the goLive that applied
+   * it, or one serialisation of a copy that came without bytes (`resolvedCopy`). `object` is the copy they
+   * were made from: they are used only while `state.resolved` is that object.
+   */
+  private copy?: { id: string; json: Uint8Array; object: ResolvedPlaylist };
+  /** The cue list's JSON, kept while `state.cues` is the same array (the reducer builds it once, at the goLive). */
+  private cueCache?: { cues: Cue[]; json: string };
 
   private db: DB;
   private source: LiveSource;
@@ -512,7 +531,9 @@ export class LiveService {
     if (!r.ok) throw new LiveRejection(r.reason);
     const text = Buffer.from(r.buffer.buffer, r.buffer.byteOffset, r.buffer.byteLength).toString('utf8');
     const resolved = JSON.parse(text) as ResolvedPlaylist;
-    const seq = this.apply({ k: 'goLive', resolved }, origin.id);
+    // The prepared bytes stay as the copy's bytes (named by the id the worker hashed them with): nothing that
+    // follows serialises the copy again (live-by-ref).
+    const seq = this.apply({ k: 'goLive', resolved }, origin.id, { id: r.resolvedId, json: r.buffer });
     this.resolvedId = r.resolvedId;
     this.source.applied?.(playlistId);
     return seq;
@@ -719,10 +740,34 @@ export class LiveService {
     return follow(prep);
   }
 
-  apply(event: LiveEvent, id?: string): number {
+  /**
+   * The bytes of the running service's resolved copy and their SHA-256 (hex): what a socket that does not hold
+   * the copy is sent, and the name a snapshot, a journal row and a window give it. A copy that came without bytes
+   * (an in-process goLive, an adopted or restored state) is serialised once here and the result kept.
+   */
+  resolvedCopy(): { id: string; json: Uint8Array } | undefined {
+    const r = this.state.mode === 'live' ? this.state.resolved : undefined;
+    if (!r) return undefined;
+    if (this.copy?.object !== r) {
+      const json = Buffer.from(JSON.stringify(r));
+      this.copy = { id: createHash('sha256').update(json).digest('hex'), json, object: r };
+    }
+    return this.copy;
+  }
+
+  /** The JSON of `state.cues`, made once per cue list (it is built at the goLive and never changes after). */
+  cuesJson(cues: Cue[] = this.state.cues): string {
+    if (this.cueCache?.cues !== cues) this.cueCache = { cues, json: JSON.stringify(cues) };
+    return this.cueCache.json;
+  }
+
+  apply(event: LiveEvent, id?: string, prepared?: { id: string; json: Uint8Array }): number {
     const fromSeq = this.state.seq;
     this.state = reduce(this.state, event);
     const seq = this.state.seq;
+    if (event.k === 'goLive')
+      this.copy = prepared && this.state.resolved ? { ...prepared, object: this.state.resolved } : undefined;
+    else if (event.k === 'endService') this.copy = undefined;
     this.db
       .prepare(
         `INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'event', ?)`,
@@ -731,7 +776,8 @@ export class LiveService {
     if (seq % 500 === 0) this.db.prepare(`DELETE FROM live_journal WHERE seq < ?`).run(seq - JOURNAL_KEEP);
     this.dirty = true;
     if (event.k === 'goLive' || event.k === 'endService') this.snapshot(true);
-    for (const l of this.deltaListeners) l({ seq, fromSeq, event, id });
+    const copy = event.k === 'goLive' ? this.resolvedCopy() : undefined;
+    for (const l of this.deltaListeners) l({ seq, fromSeq, event, id, ...(copy ? { copy } : {}) });
     this.scheduleAdvance();
     return seq;
   }
