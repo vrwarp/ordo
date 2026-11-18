@@ -19,6 +19,7 @@ import { CpuPool, WorkerStartError } from '../src/pool.ts';
 import { createProxy, forwardHeaders } from '../src/proxy.ts';
 import { Supervisor } from '../src/supervisor.ts';
 import { client, login, sleep, song, tempDir } from './helpers.ts';
+import { fullOf, makePng, presentationOf, uploadSlideFile } from './prerender-helpers.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -481,6 +482,101 @@ describe('two-process hub with the disk floor above any volume', () => {
     expect(
       (await op.fetch('/live/events', { method: 'POST', json: { k: 'next', at: Date.now() } })).status,
     ).toBe(200);
+    proc.kill('SIGTERM');
+    await new Promise((r) => proc!.once('exit', r));
+  }, 120_000);
+});
+
+/**
+ * Slide files and pictures of the running service while the library is down (design/29 §1.3, §1.7): the live
+ * process serves every file its resolved copy lists (`liveFiles` reads `resolved.geoms`), the head, its pages
+ * and the pictures included; a file the service does not list waits for the library.
+ */
+describe('two-process hub serving the files of a pre-rendered slide', () => {
+  let proc: ChildProcess | undefined;
+  afterAll(async () => {
+    if (proc && proc.exitCode === null) {
+      proc.kill('SIGTERM');
+      await new Promise((r) => proc!.once('exit', r));
+    }
+  });
+
+  it('serves the head, a page and a picture from the live process with the library killed (GL6)', async () => {
+    const dir = tempDir();
+    const port = await new Promise<number>((resolve) => {
+      const srv = createServer();
+      srv.listen(0, '127.0.0.1', () => {
+        const p = (srv.address() as AddressInfo).port;
+        srv.close(() => resolve(p));
+      });
+    });
+    const base = `http://localhost:${port}`;
+    const tsx = pathToFileURL(
+      join(dirname(createRequire(import.meta.url).resolve('tsx/package.json')), 'dist', 'loader.mjs'),
+    ).href;
+    proc = spawn(process.execPath, ['--import', tsx, join(here, '../src/main.ts')], {
+      env: {
+        ...process.env,
+        ORDO_DATA: dir,
+        ORDO_DOMAIN: 'localhost',
+        ORDO_PORT: String(port),
+        ORDO_HOST: '127.0.0.1',
+        ORDO_DEV_PIN: '111111:222222',
+        ORDO_LOG_LEVEL: 'warn',
+        ORDO_SINGLE_PROCESS: '',
+        ORDO_MIN_FREE_GB: '0',
+      },
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+    const health = async () => {
+      try {
+        const r = await fetch(`${base}/api/v1/health`);
+        return r.ok ? ((await r.json()) as Record<string, unknown>) : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    await until(async () => (await health())?.library === 'up', 30_000, 'hub up');
+    const op = await login(base, '111111');
+    const f = fullOf();
+    await uploadSlideFile(op, f.pages);
+    const p = await op.json<{ id: string }>('/presentations', {
+      method: 'POST',
+      json: presentationOf([f.standIn]),
+    });
+    const png = makePng(1920, 1080);
+    const put = await op.fetch(`/presentations/${p.id}/prerenders/${f.key}?size=1920`, {
+      method: 'PUT',
+      headers: { 'content-type': 'image/png' },
+      body: new Uint8Array(png),
+    });
+    expect(put.status).toBe(201);
+    const pic = ((await put.json()) as { hash: string }).hash;
+    const pl = await op.json<{ id: string }>('/playlists', {
+      method: 'POST',
+      json: { name: 'Sunday', items: [{ id: newId(), kind: 'presentation', presentationId: p.id }] },
+    });
+    await op.json('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: pl.id } });
+    await until(async () => (await health())?.mode === 'live', 20_000, 'service live');
+    const wanted = [f.name, f.pages.head.pages[0]!, pic];
+    // while the library is up the live process already answers for the files its service lists
+    process.kill(
+      (
+        JSON.parse(readFileSync(join(dir, 'supervisor.json'), 'utf8')).processes as {
+          name: string;
+          pid: number;
+        }[]
+      ).find((x) => x.name === 'library')!.pid,
+      'SIGKILL',
+    );
+    await until(async () => (await health())?.library !== 'up', 10_000, 'library down');
+    for (const h of wanted) {
+      const r = await op.fetch(`/files/${h}`);
+      expect(r.status, h).toBe(200);
+    }
+    // a file the service does not list is the library's, which is down
+    const other = await op.fetch(`/files/${'9'.repeat(64)}`);
+    expect(other.status).toBe(503);
     proc.kill('SIGTERM');
     await new Promise((r) => proc!.once('exit', r));
   }, 120_000);

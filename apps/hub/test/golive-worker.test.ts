@@ -150,4 +150,24 @@ describe('golive-worker (design/29 M8)', () => {
     });
     expect(out.ok).toBe(true);
   });
+  it('prepares and goes live from a cached bundle saved before pre-rendered slides had fields (GL4)', () => {
+    const b = bundle();
+    const a = Object.values(b.presentations)[0]!;
+    const head = 'b'.repeat(64);
+    // a pre-rendered stand-in whose bundle carries none of slideHeads, prerenders or prerenderKeys
+    a.sections[0]!.slides[0]!.prerender = { why: ['count'], file: { ref: head, bytes: 10 }, live: [] };
+    const files = {
+      [head]: { hash: head, bytes: 10, mime: 'application/json', path: `media/bb/${head}.json` },
+    };
+    const out = prepareGoLive({
+      playlistId: 'pl',
+      bundle: enc.encode(JSON.stringify({ ...b, files })),
+      takenAt: 1,
+    });
+    if (!out.ok) throw new Error(out.reason);
+    const r = JSON.parse(dec.decode(out.buffer)) as ResolvedPlaylist;
+    expect(r.geoms?.map((g) => g.hash)).toContain(head);
+    expect(r.prerenders ?? []).toEqual([]);
+    expect(r.prerenderKeys ?? []).toEqual([]);
+  });
 });
