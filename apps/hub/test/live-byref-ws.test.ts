@@ -8,6 +8,7 @@ import {
   carriesCopy,
   isLiveStateMsg,
   liveHub,
+  type Raw,
   rawSocket,
   type ServiceHub,
   stringifySpy,
@@ -27,7 +28,7 @@ describe('one encoded live state a seq (step 2)', () => {
     svc = await liveHub(2);
     const { hub, cookie } = svc;
     const spy = stringifySpy(isLiveStateMsg);
-    const socks = [];
+    const socks: Raw[] = [];
     for (let i = 0; i < 20; i++) socks.push(await rawSocket(hub, cookie));
     await waitFor(() => socks.every((s) => s.of('live.state').length >= 1), 20_000, '20 states');
     spy.restore();
@@ -191,7 +192,7 @@ describe('the state by name (step 5)', () => {
     const id = liveId(svc);
     const run = async (hello: Record<string, unknown>) => {
       const spy = stringifySpy((a) => isLiveStateMsg(a) || carriesCopy(a));
-      const socks = [];
+      const socks: Raw[] = [];
       for (let i = 0; i < 20; i++) socks.push(await rawSocket(hub, cookie, hello));
       await waitFor(() => socks.every((x) => stateFrames(x).length >= 1), 20_000, '20 states');
       spy.restore();

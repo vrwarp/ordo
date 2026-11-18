@@ -56,7 +56,7 @@ export function bundleBytes(b: Record<string, unknown>): Uint8Array {
 /** A live source that has only goLive bundles (a remote source: the goLive is prepared in the worker). */
 export function bundleSource(
   bundles: Record<string, Uint8Array>,
-  settings: LiveSource['settings'] = () => ({ outputs: [], surfaces: {} }),
+  settings: LiveSource['settings'] = () => ({ outputs: [], surfaces: { messagePresets: [] } }),
 ): LiveSource {
   return {
     goLiveInputs: () => undefined,
