@@ -395,9 +395,11 @@ describe('HubConnection holds the resolved copy (live-by-ref)', () => {
     hub.on('state', (m) => emitted.push({ resolved: m.state.resolved, seq: m.state.seq }));
     let ws = lastSocket();
     welcome(ws);
-    const held = copy();
-    ws.receive(whole('a'.repeat(64), held));
-    expect(emitted[0]!.resolved).toBe(held);
+    // the fake socket delivers a parsed message, so the copy the connection holds is the one the whole state carried
+    ws.receive(whole('a'.repeat(64), copy()));
+    const held = emitted[0]!.resolved;
+    expect(held).toBeTruthy();
+    expect(hub.copies.value).toBe(held);
     for (let i = 0; i < 3; i++) {
       ws = reconnect(hub);
       ws.receive(byName('a'.repeat(64), 10 + i));
