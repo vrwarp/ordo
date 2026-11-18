@@ -817,6 +817,25 @@ describe('collection: the 30 days (CO3, CO4)', () => {
   });
 });
 
+describe('collection: the cost of a sweep (CO4)', () => {
+  it('asks the index and one read of the rows for a whole sweep, never every presentation per file (CO4)', async () => {
+    hub = await startHub();
+    ready();
+    const names: string[] = [];
+    for (let i = 0; i < 30; i++) names.push(await json(`sweep ${i}`));
+    save('keeps', [names[0]!]);
+    const { c, t } = rig();
+    await c.run();
+    t.now = T0 + COLLECT_DELAY_DAYS * DAY;
+    // fileReferenced reads the JSON of every presentation, media row and font: once a file, a library of 500 decks
+    // of 24 KB is 20 ms a file
+    const asked = vi.spyOn(hub.lib, 'fileReferenced');
+    expect(await c.run()).toMatchObject({ ran: true, files: 29 });
+    expect(asked).not.toHaveBeenCalled();
+    expect(has(names[0]!)).toBe(true);
+  });
+});
+
 describe('collection: gates, modes and the report (CO5, CO12)', () => {
   it('runs nothing while a service is live, before the backfill is done, with the variable off, or before the state is known (CO5)', async () => {
     hub = await startHub();

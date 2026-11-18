@@ -600,12 +600,29 @@ export class Collector {
     return this.opts.live() !== 'live' && !this.stopped;
   }
 
-  private jobNames(hash: string): boolean {
-    return this.lib.jobNamesFile(hash);
+  /**
+   * Every content name in what the current rows hold as text, read once and in slices (a page of rows a step):
+   * media, fonts and unfinished jobs, and for a sweep the presentations too. The references index answers for the
+   * saved revisions, this is the net under it for what the index is not made from.
+   */
+  private async gather(withPresentations: boolean): Promise<Set<string> | undefined> {
+    const names = new Set<string>();
+    const sources: ('media' | 'fonts' | 'jobs' | 'presentations')[] = ['media', 'fonts', 'jobs'];
+    if (withPresentations) sources.push('presentations');
+    for (const source of sources) {
+      let after = 0;
+      for (;;) {
+        const page = this.lib.sourcePage(source, after, 20);
+        if (!page.length) break;
+        if (!(await this.step('mark'))) return undefined;
+        for (const r of page) {
+          for (const m of r.text.matchAll(HEX64)) names.add(m[1]!);
+          after = r.rowid;
+        }
+      }
+    }
+    return names;
   }
-
-  /** Everything that names a file, as the sweep asks it a last time: the library's check and the unfinished jobs. */
-  private named = (hash: string): boolean => this.lib.fileReferenced(hash) || this.jobNames(hash);
 
   private async doRun(): Promise<CollectResult> {
     const at = this.now();
@@ -613,9 +630,9 @@ export class Collector {
     this.sliceStart = at;
     const aborted: CollectResult = { ran: false, reason: 'live' };
 
-    // What media, fonts and unfinished jobs name, read once (small tables); the index answers for everything else.
-    const outside = new Set<string>();
-    for (const t of this.lib.collectSources()) for (const m of t.matchAll(HEX64)) outside.add(m[1]!);
+    // What media, fonts and unfinished jobs name, read once; the index answers for everything else.
+    const outside = await this.gather(false);
+    if (!outside) return aborted;
 
     // 1. mark and clear: every candidate is named or it is marked
     let marked = 0;
@@ -637,13 +654,21 @@ export class Collector {
     await this.opts.afterScan?.();
     let files = 0;
     let bytes = 0;
+    // The last check of a sweep is the index (a save names a file in its own transaction) and one read of the rows
+    // that hold names as text, never every presentation's JSON for every file.
+    let guard: Set<string> | undefined;
+    if (!report) {
+      guard = await this.gather(true);
+      if (!guard) return aborted;
+    }
+    const named = (hash: string): boolean => this.lib.refs.referenced(hash) || !!guard?.has(hash);
     if (report) {
       files = due.length;
       bytes = due.reduce((n, f) => n + f.bytes, 0);
     } else {
       for (const f of due) {
         if (!(await this.step('sweep'))) return aborted;
-        const row = this.lib.sweepFile(f.hash, this.named);
+        const row = this.lib.sweepFile(f.hash, named);
         if (!row) continue;
         files++;
         bytes += row.bytes;
@@ -678,9 +703,18 @@ export class Collector {
       }
       if (!this.lib.prerenderIndex.dropUnclaimed(r)) continue;
       pictures++;
-      if (!this.lib.fileReferenced(r.hash)) {
-        pictureBytes += r.bytes;
-        await this.store.release(r.hash);
+      // its file goes with it when no other row names it: the same check, in the one transaction that deletes the row
+      const file = this.lib.sweepFile(r.hash, named, '*');
+      if (file) {
+        pictureBytes += file.bytes;
+        try {
+          await rm(this.store.abs(file.path), { force: true });
+        } catch (e) {
+          this.opts.log.warn(
+            { hash: file.hash, err: errorMessage(e) },
+            'collection could not remove a picture',
+          );
+        }
       }
     }
 

@@ -639,37 +639,34 @@ export class Library {
       if (this.db.prepare(`SELECT 1 FROM ${table} WHERE json LIKE ? LIMIT 1`).get(like)) return true;
     return this.refs.referenced(hash, { pictures: false });
   }
-  /** Whether a job that has not finished names this file in its payload (a client scene is named by its job). */
-  jobNamesFile(hash: string): boolean {
-    return !!this.db
-      .prepare(`SELECT 1 FROM jobs WHERE state IN ('queued','running') AND payload LIKE ? LIMIT 1`)
-      .get(`%"${hash}"%`);
-  }
-  /** The JSON of media and fonts and the payloads of unfinished jobs: what collection reads once per run. */
-  collectSources(): string[] {
-    const out: string[] = [];
-    for (const [table, col, where] of [
-      ['media', 'json', ''],
-      ['fonts', 'json', ''],
-      ['jobs', 'payload', `WHERE state IN ('queued','running')`],
-    ] as const)
-      for (const r of this.db.prepare(`SELECT ${col} AS v FROM ${table} ${where}`).iterate() as Iterable<{
-        v: string;
-      }>)
-        out.push(r.v);
-    return out;
+  /**
+   * A page of what the current rows name, as text, for collection's one read per run (it matches the content names in
+   * it): the JSON of media, fonts and presentations and the payloads of unfinished jobs, `limit` rows after `after`.
+   */
+  sourcePage(
+    source: 'media' | 'fonts' | 'presentations' | 'jobs',
+    after: number,
+    limit: number,
+  ): { rowid: number; text: string }[] {
+    const col = source === 'jobs' ? 'payload' : 'json';
+    const where = source === 'jobs' ? `AND state IN ('queued','running')` : '';
+    return this.db
+      .prepare(
+        `SELECT rowid AS rowid, ${col} AS text FROM ${source} WHERE rowid > ? ${where} ORDER BY rowid LIMIT ?`,
+      )
+      .all(after, limit) as { rowid: number; text: string }[];
   }
   /**
    * Collection's one step on a file, in one synchronous transaction: `named` is asked a last time and a file that is
    * named now keeps its row and loses its mark (a save between the scan and this call wins); otherwise its row goes,
    * with a head's index rows. Returns the row when it went: the caller removes the blob after.
    */
-  sweepFile(hash: string, named: (hash: string) => boolean): FileRow | undefined {
+  sweepFile(hash: string, named: (hash: string) => boolean, mime = 'application/json'): FileRow | undefined {
     return this.db.transaction(() => {
       let row: FileRow | undefined;
       if (named(hash)) {
         // kept
-      } else if ((row = this.getFile(hash)) && row.mime === 'application/json') {
+      } else if ((row = this.getFile(hash)) && (mime === '*' || row.mime === mime)) {
         this.slideFiles.remove(hash);
         this.deleteFileRow(hash);
       } else row = undefined;
