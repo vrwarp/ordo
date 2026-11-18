@@ -49,6 +49,8 @@ export type HubConfig = {
    * §5.3): a second service on the same morning, the venue PC's offline download after the first.
    */
   paceGraceMs: number;
+  /** ORDO_COLLECT: what the nightly collection of unnamed content files does (see `collectMode`). */
+  collect: CollectMode;
   /**
    * The free-space floor (ORDO_MIN_FREE_GB, whole GB; design/29 §1.3 A25): replaces the computed one
    * (5 % of the volume, from 5 GiB to 25 GiB); 0 turns it off. Unset: computed. `minFreeWarning`: why a
@@ -154,6 +156,7 @@ export function loadConfig(
     snapshotIntervalMs: 5000,
     healthIntervalMs: 1000,
     paceGraceMs: paceGrace(env.ORDO_PACE_GRACE_MS),
+    collect: collectMode(env.ORDO_COLLECT),
     minFreeBytes: minFree.bytes,
     minFreeWarning: minFree.warning,
     timeouts: { probe: 30_000, transcode: 4 * 3600_000, soffice: 180_000, pdf: 300_000, light: 600_000 },
@@ -169,4 +172,11 @@ export function loadConfig(
 export function paceGrace(v: string | undefined): number {
   const n = Number(v);
   return v !== undefined && v !== '' && Number.isInteger(n) && n >= 0 && n <= 86_400_000 ? n : 120_000;
+}
+
+export type CollectMode = 'off' | 'report' | 'on';
+
+/** STUB (red commit). */
+export function collectMode(_v: string | undefined): CollectMode {
+  return 'off';
 }

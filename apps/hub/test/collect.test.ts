@@ -1,14 +1,21 @@
 /**
  * What stored presentations and their saved versions name, and when the hub may let a file go (design/29 §1.3
- * "Collection with revisions", A37, M7): RC1-RC5 here (the references index and its backfill), CO1-CO12 and BU in
- * the steps that follow. Time is injected, nothing waits.
+ * "Collection with revisions", A37, M7): RC1-RC5 (the references index and its backfill), CO1-CO12 (collection:
+ * mark and sweep, the 30-day rule, report mode) and BU (the picture budget) in the steps that follow. Time is
+ * injected, nothing waits.
  */
+import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Presentation } from '@ordo/domain';
+import type { Logger } from 'pino';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { RefBackfill, refsIn } from '../src/collect.ts';
-import { EDIT_PIN, login, startHub, type TestHub } from './helpers.ts';
-import { bigSlide, rect } from './prerender-helpers.ts';
-import { song } from './helpers.ts';
+import { RETENTION_DAYS } from '../src/backup.ts';
+import { COLLECT_DELAY_DAYS, Collector, type CollectorOptions, RefBackfill, refsIn } from '../src/collect.ts';
+import { collectMode, loadConfig } from '../src/config.ts';
+import { createLibraryProcess } from '../src/libproc.ts';
+import { noSystemFaces } from '../src/pptx/systemFaces.ts';
+import { EDIT_PIN, login, song, startHub, TEST_TOOLS, tempDir, type TestHub } from './helpers.ts';
+import { bigSlide, fullOf, makePng, presentationOf, rect, uploadSlideFile } from './prerender-helpers.ts';
 
 let hub: TestHub | undefined;
 afterEach(async () => {
@@ -460,5 +467,629 @@ describe('the backfill (RC4)', () => {
         }
       ).n,
     ).toBe(11);
+  });
+});
+
+// ── collection (CO1-CO12) ────────────────────────────────────────────────────────────────────────────────────
+
+const DAY = 86_400_000;
+const T0 = Date.UTC(2031, 0, 1);
+const enc = new TextEncoder();
+const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
+type Line = { level: string; obj: Record<string, unknown>; msg: string };
+function recorder() {
+  const lines: Line[] = [];
+  const at = (level: string) => (obj: unknown, msg?: string) => {
+    lines.push({
+      level,
+      obj: typeof obj === 'object' && obj ? (obj as Record<string, unknown>) : {},
+      msg: msg ?? (typeof obj === 'string' ? obj : ''),
+    });
+  };
+  const log = {
+    info: at('info'),
+    warn: at('warn'),
+    error: at('error'),
+    debug: at('debug'),
+    trace: at('trace'),
+    fatal: at('fatal'),
+  } as unknown as Logger;
+  Object.assign(log, { child: () => log });
+  return { log, lines };
+}
+
+/** The paths of the files this test stored, so a blob can be checked after its row is gone. */
+const paths = new Map<string, string>();
+const onDisk = (h: string) => existsSync(join(hub!.dir, paths.get(h) ?? 'missing'));
+const has = (h: string) => !!hub!.lib.getFile(h);
+const marks = () =>
+  (hub!.db.prepare(`SELECT hash FROM collect_marks ORDER BY hash`).all() as { hash: string }[]).map(
+    (r) => r.hash,
+  );
+const sizeOf = (h: string) => hub!.lib.getFile(h)!.bytes;
+
+async function store(name: string, mime: string, ext: string, dir?: 'media' | 'fonts'): Promise<string> {
+  const f = await hub!.store.putBytes(enc.encode(`collect ${name}`), { ext, mime, dir });
+  paths.set(f.hash, f.path);
+  return f.hash;
+}
+/** A content file (a shape, a mask, a decoration, a scene, a page, a head: application/json). */
+const json = (name: string | number) => store(`json ${name}`, 'application/json', 'json');
+
+/** The collection tests need a database whose references are complete. */
+const ready = () => hub!.lib.refs.setBackfillDone(true);
+
+function rig(over: Partial<CollectorOptions> = {}) {
+  const t = {
+    now: T0,
+    steps: 0,
+    stepMs: 0,
+    slices: [] as number[],
+    mode: 'idle' as 'idle' | 'live',
+    known: true,
+  };
+  const rec = recorder();
+  const c = new Collector(hub!.lib, hub!.store, {
+    mode: 'on',
+    live: () => t.mode,
+    known: () => t.known,
+    timeZone: () => 'UTC',
+    log: rec.log,
+    now: () => t.now,
+    yield: async () => {
+      t.slices.push(t.steps);
+      t.now += t.stepMs;
+    },
+    onStep: () => {
+      t.steps++;
+      t.now += t.stepMs;
+    },
+    ...over,
+  });
+  return { c, t, ...rec };
+}
+
+const save = (id: string, refs: readonly string[], rev?: number) =>
+  rev === undefined
+    ? hub!.lib.savePresentation({ ...naming(id, refs), rev: 1 }, { create: true })
+    : hub!.lib.savePresentation({ ...naming(id, refs), rev }, { expectedRev: rev });
+
+/** A synthetic head naming `pages` and `shapes`, recorded as an upload would, and a presentation that names it. */
+function headRow(head: string, pages: string[], shapes: string[] = []) {
+  hub!.lib.slideFiles.record({
+    hash: head,
+    bytes: 1,
+    objects: 0,
+    uses: { media: [], files: shapes, fonts: [] },
+    pages,
+  });
+}
+function namingHead(id: string, head: string): Presentation {
+  const slide = bigSlide('s', 0, '');
+  slide.prerender = { why: ['count'], file: { ref: head, bytes: 1 }, live: [] };
+  const base = song('H');
+  return { ...base, id, sections: [{ ...base.sections[0]!, slides: [slide] }] };
+}
+
+describe('collection: candidates and what names a file (CO1, CO2)', () => {
+  it('only ever touches application/json files: originals, deliveries, posters, fonts, decks and pdfs stay (CO1)', async () => {
+    hub = await startHub();
+    ready();
+    const others = [
+      await store('original', 'video/mp4', 'mp4'),
+      await store('delivery', 'video/mp4', 'mp4'),
+      await store('poster', 'image/jpeg', 'jpg'),
+      await store('font', 'font/woff2', 'woff2', 'fonts'),
+      await store('deck', PPTX_MIME, 'pptx'),
+      await store('pdf', 'application/pdf', 'pdf'),
+    ];
+    const unnamed = await json('unnamed');
+    const { c, t } = rig();
+    expect(await c.run()).toMatchObject({ ran: true, marked: 1, files: 0 });
+    expect(marks()).toEqual([unnamed]);
+    t.now = T0 + 31 * DAY;
+    expect(await c.run()).toMatchObject({ ran: true, files: 1, bytes: sizeOf(unnamed) });
+    expect(has(unnamed)).toBe(false);
+    expect(onDisk(unnamed)).toBe(false);
+    for (const h of others) {
+      expect(has(h), h).toBe(true);
+      expect(onDisk(h), h).toBe(true);
+    }
+    expect(marks()).toEqual([]);
+  });
+
+  it('keeps a file every way of being named: the current version, a kept version, a head page, a head use, a picture row, an unfinished job (CO2)', async () => {
+    hub = await startHub();
+    ready();
+    const lib = hub.lib;
+    const [current, kept, dropped] = [await json('current'), await json('kept'), await json('dropped')];
+    const [head, page, shape] = [await json('head'), await json('page'), await json('shape')];
+    const [pictureOwner, queued, running, finished, unnamed] = [
+      await json('picture'),
+      await json('queued job'),
+      await json('running job'),
+      await json('finished job'),
+      await json('unnamed'),
+    ];
+    save('cur', [current]);
+    // a kept version: the second save no longer names it, the first is still kept
+    const k1 = save('kept', [kept, dropped]);
+    save('kept', [dropped], k1.rev);
+    headRow(head, [page], [shape]);
+    lib.savePresentation({ ...namingHead('hp', head), rev: 1 }, { create: true });
+    hub.db
+      .prepare(
+        `INSERT INTO prerender_keys (presentation_id, rev, slide_id, key, standby_id, sig, created_at) VALUES ('gone', 1, 's', ?, 'sb', 'x', 1)`,
+      )
+      .run('9'.repeat(64));
+    hub.db
+      .prepare(
+        `INSERT INTO prerenders (presentation_id, key, size, slide_id, standby_id, version, kind, hash, mime, bytes, w, h, opaque, made_by, made_role, last_rev, created_at)
+         VALUES ('gone', ?, 3840, 's', 'sb', 1, 'slide', ?, 'image/png', 9, 3840, 2160, 1, NULL, 'edit', 1, 1)`,
+      )
+      .run('9'.repeat(64), pictureOwner);
+    const job = (id: string, state: string, h: string) =>
+      hub!.db
+        .prepare(
+          `INSERT INTO jobs (id, kind, class, state, progress, payload, log, created_at, updated_at) VALUES (?, 'pptx.client', 'light', ?, 0, ?, '[]', 'a', 'a')`,
+        )
+        .run(id, state, JSON.stringify({ scene: h }));
+    job('j1', 'queued', queued);
+    job('j2', 'running', running);
+    job('j3', 'done', finished);
+
+    const { c, t } = rig();
+    expect(await c.run()).toMatchObject({ ran: true, marked: 2 });
+    expect(marks().sort()).toEqual([finished, unnamed].sort());
+    t.now = T0 + 31 * DAY;
+    expect(await c.run()).toMatchObject({ ran: true, files: 2 });
+    for (const h of [current, kept, dropped, head, page, shape, pictureOwner, queued, running]) {
+      expect(has(h), h).toBe(true);
+      expect(onDisk(h), h).toBe(true);
+    }
+    for (const h of [finished, unnamed]) {
+      expect(has(h), h).toBe(false);
+      expect(onDisk(h), h).toBe(false);
+    }
+  });
+});
+
+describe('collection: the 30 days (CO3, CO4)', () => {
+  it('is never shorter than the backups are kept, and deletes at 30 days after the mark, not at 29 (CO3)', async () => {
+    expect(COLLECT_DELAY_DAYS).toBeGreaterThanOrEqual(RETENTION_DAYS);
+    hub = await startHub();
+    ready();
+    const u = await json('u');
+    const { c, t } = rig();
+    await c.run();
+    expect(marks()).toEqual([u]);
+    t.now = T0 + (COLLECT_DELAY_DAYS - 1) * DAY;
+    expect(await c.run()).toMatchObject({ ran: true, files: 0 });
+    expect(has(u)).toBe(true);
+    expect(marks()).toEqual([u]);
+    t.now = T0 + COLLECT_DELAY_DAYS * DAY;
+    expect(await c.run()).toMatchObject({ ran: true, files: 1 });
+    expect(has(u)).toBe(false);
+  });
+
+  it('a save, a head upload or a run that finds the file named clears the mark and the 30 days start again (CO3)', async () => {
+    hub = await startHub();
+    ready();
+    const ed = await login(hub.url, EDIT_PIN);
+    const { c, t } = rig();
+    // a save that names it
+    const u = await json('saved');
+    await c.run();
+    expect(marks()).toEqual([u]);
+    const p = save('p1', [u]);
+    expect(marks()).toEqual([]);
+    // gone again (the presentation is deleted through the route); the clock restarts at the next run
+    t.now = T0 + 12 * DAY;
+    expect((await ed.fetch(`/presentations/${p.id}`, { method: 'DELETE' })).status).toBe(204);
+    await c.run();
+    expect(marks()).toEqual([u]);
+    t.now = T0 + (12 + COLLECT_DELAY_DAYS - 1) * DAY;
+    await c.run();
+    expect(has(u)).toBe(true);
+    t.now = T0 + (12 + COLLECT_DELAY_DAYS) * DAY;
+    await c.run();
+    expect(has(u)).toBe(false);
+
+    // a head upload (record) clears the marks of the head and its pages
+    t.now = T0;
+    const [h, pg] = [await json('head'), await json('page')];
+    await c.run();
+    expect(marks().sort()).toEqual([h, pg].sort());
+    headRow(h, [pg]);
+    expect(marks()).toEqual([]);
+
+    // a run that finds it named clears a mark that was left (written directly)
+    const n = await json('named');
+    save('p2', [n]);
+    hub.db.prepare(`INSERT INTO collect_marks (hash, since) VALUES (?, ?)`).run(n, T0 - 90 * DAY);
+    t.now = T0 + 5 * DAY;
+    await c.run();
+    expect(marks().includes(n)).toBe(false);
+    expect(has(n)).toBe(true);
+  });
+
+  it('keeps a file a save names between the scan and the delete, and does not mind a missing blob (CO4)', async () => {
+    hub = await startHub();
+    ready();
+    const [raced, plain, noBlob] = [await json('raced'), await json('plain'), await json('noblob')];
+    const { c, t } = rig({
+      afterScan: () => {
+        save('late', [raced]);
+      },
+    });
+    await c.run();
+    expect(marks().sort()).toEqual([noBlob, plain, raced].sort());
+    rmSync(join(hub.dir, paths.get(noBlob)!));
+    t.now = T0 + COLLECT_DELAY_DAYS * DAY;
+    const r = await c.run();
+    expect(r).toMatchObject({ ran: true, files: 2 });
+    expect(has(raced)).toBe(true);
+    expect(onDisk(raced)).toBe(true);
+    expect(marks().includes(raced)).toBe(false);
+    expect(has(plain)).toBe(false);
+    expect(onDisk(plain)).toBe(false);
+    expect(has(noBlob)).toBe(false);
+  });
+});
+
+describe('collection: gates, modes and the report (CO5, CO12)', () => {
+  it('runs nothing while a service is live, before the backfill is done, with the variable off, or before the state is known (CO5)', async () => {
+    hub = await startHub();
+    const u = await json('u');
+    const { c, t } = rig();
+    // the backfill has not finished
+    expect(await c.run()).toEqual({ ran: false, reason: 'backfill' });
+    expect(marks()).toEqual([]);
+    ready();
+    t.mode = 'live';
+    expect(await c.run()).toEqual({ ran: false, reason: 'live' });
+    t.mode = 'idle';
+    t.known = false;
+    expect(await c.run()).toEqual({ ran: false, reason: 'unknown' });
+    t.known = true;
+    expect(await rig({ mode: 'off' }).c.run()).toEqual({ ran: false, reason: 'off' });
+    expect(marks()).toEqual([]);
+    expect(await c.run()).toMatchObject({ ran: true, marked: 1 });
+    expect(marks()).toEqual([u]);
+  });
+
+  it('a library process waits for the first word on the service; the one-process hub always knows it (CO5)', async () => {
+    const dir = tempDir();
+    const lp = await createLibraryProcess(
+      {
+        dataDir: dir,
+        domain: 'localhost',
+        logToStdout: false,
+        logLevel: 'warn',
+        scheduleBackups: false,
+        appsDir: join(dir, 'no-apps'),
+        importRoots: [join(dir, 'import')],
+        host: '127.0.0.1',
+        port: 0,
+        toolProbe: TEST_TOOLS,
+        systemFaces: noSystemFaces,
+      },
+      { secret: 'test-secret' },
+    );
+    try {
+      expect(await lp.collector.run()).toEqual({ ran: false, reason: 'unknown' });
+      lp.setLocks({ t: 'locks', mode: 'idle', presentations: [], media: [], fonts: [] });
+      // known now: the next gate is the backfill, which this fresh database has not run
+      expect(await lp.collector.run()).toEqual({ ran: false, reason: 'backfill' });
+      lp.setLocks({ t: 'locks', mode: 'live', playlistId: 'x', presentations: [], media: [], fonts: [] });
+      lp.lib.refs.setBackfillDone(true);
+      expect(await lp.collector.run()).toEqual({ ran: false, reason: 'live' });
+    } finally {
+      await lp.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+    hub = await startHub();
+    ready();
+    expect(await hub.collector.run()).toMatchObject({ ran: true });
+  });
+
+  it('is in report mode when the variable is absent, and a day-31 run in report mode deletes nothing (CO12)', async () => {
+    expect(collectMode(undefined)).toBe('report');
+    expect(collectMode('')).toBe('report');
+    expect(collectMode('maybe')).toBe('report');
+    expect(collectMode('on')).toBe('on');
+    expect(collectMode('off')).toBe('off');
+    expect(loadConfig({}).collect).toBe('report');
+    expect(loadConfig({ ORDO_COLLECT: 'on' }).collect).toBe('on');
+    expect(loadConfig({ ORDO_COLLECT: 'off' }).collect).toBe('off');
+
+    hub = await startHub();
+    ready();
+    const [a, b] = [await json('a'), await json('b')];
+    const named = await json('named');
+    save('p', [named]);
+    const report = rig({ mode: 'report' });
+    await report.c.run();
+    expect(marks().sort()).toEqual([a, b].sort());
+    report.t.now = T0 + 31 * DAY;
+    const r = await report.c.run();
+    expect(r).toMatchObject({ ran: true, mode: 'report', files: 2, bytes: sizeOf(a) + sizeOf(b) });
+    for (const h of [a, b, named]) expect(has(h) && onDisk(h)).toBe(true);
+    const lines = report.lines.filter((l) => l.msg === 'collection run');
+    expect(lines).toHaveLength(2);
+    expect(lines[1]!.obj).toMatchObject({ mode: 'report', files: 2, bytes: sizeOf(a) + sizeOf(b) });
+    expect(marks().sort()).toEqual([a, b].sort());
+    // the same database in on mode: the marks survived the mode, exactly those files go
+    const on = rig({ mode: 'on' });
+    on.t.now = T0 + 31 * DAY;
+    expect(await on.c.run()).toMatchObject({ ran: true, mode: 'on', files: 2 });
+    expect(has(a) || has(b)).toBe(false);
+    expect(has(named)).toBe(true);
+  });
+});
+
+describe('collection: manifests and presentations that are deleted (CO6, CO7)', () => {
+  it('a collected file is gone from the next nightly manifest and still in the older ones (CO6)', async () => {
+    hub = await startHub();
+    ready();
+    const u = await json('u');
+    const real = Date.now();
+    await hub.backups.run({ now: real });
+    const { c, t } = rig();
+    await c.run();
+    t.now = T0 + COLLECT_DELAY_DAYS * DAY;
+    await c.run();
+    await hub.backups.run({ now: real + 5000 });
+    const dir = join(hub.dir, 'backups');
+    const manifests = readdirSync(dir)
+      .filter((f) => /^media-manifest-.*\.json$/.test(f))
+      .map(
+        (f) =>
+          JSON.parse(readFileSync(join(dir, f), 'utf8')) as {
+            createdAt: string;
+            files: { hash: string }[];
+          },
+      )
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    expect(manifests).toHaveLength(2);
+    expect(manifests[0]!.files.map((f) => f.hash)).toContain(u);
+    expect(manifests[1]!.files.map((f) => f.hash)).not.toContain(u);
+  });
+
+  it('a geometry file of a deleted presentation goes 30 days after the first run that saw it unnamed, and a re-import clears the mark (CO7)', async () => {
+    hub = await startHub();
+    ready();
+    const ed = await login(hub.url, EDIT_PIN);
+    const [g, other] = [await json('geom'), await json('other')];
+    const p = save('deck', [g, other]);
+    const { c, t } = rig();
+    expect(await c.run()).toMatchObject({ ran: true, marked: 0 });
+    expect((await ed.fetch(`/presentations/${p.id}`, { method: 'DELETE' })).status).toBe(204);
+    t.now = T0 + 2 * DAY;
+    await c.run();
+    expect(marks().sort()).toEqual([g, other].sort());
+    t.now = T0 + (2 + COLLECT_DELAY_DAYS - 1) * DAY;
+    await c.run();
+    expect(has(g)).toBe(true);
+    // the same deck imported again (the same hashes) names them: the marks go
+    save('deck-again', [g, other]);
+    expect(marks()).toEqual([]);
+    // deleted for good: the first run that sees them unnamed starts the clock again
+    await ed.fetch('/presentations/deck-again', { method: 'DELETE' });
+    t.now = T0 + 60 * DAY;
+    await c.run();
+    t.now = T0 + (60 + COLLECT_DELAY_DAYS) * DAY;
+    expect(await c.run()).toMatchObject({ ran: true, files: 2 });
+    expect(has(g) || has(other)).toBe(false);
+  });
+});
+
+describe('collection: pictures (CO8)', () => {
+  it('deletes a picture of a key no kept version has and no current stand-by claims, at the run, and releases its blob when no other row names it (CO8)', async () => {
+    hub = await startHub();
+    ready();
+    const lib = hub.lib;
+    const png = async (seed: number) => {
+      const f = await hub!.store.putBytes(new Uint8Array(makePng(8, 8, { seed })), {
+        ext: 'png',
+        mime: 'image/png',
+      });
+      paths.set(f.hash, f.path);
+      return f.hash;
+    };
+    const p = save('pic', []);
+    const keys = (rev: number, slide: string, key: string, standby: string) =>
+      hub!.db
+        .prepare(
+          `INSERT INTO prerender_keys (presentation_id, rev, slide_id, key, standby_id, sig, created_at) VALUES ('pic', ?, ?, ?, ?, 'x', 1)`,
+        )
+        .run(rev, slide, key, standby);
+    const row = (pid: string, key: string, standby: string, hash: string, size = 3840) =>
+      hub!.db
+        .prepare(
+          `INSERT INTO prerenders (presentation_id, key, size, slide_id, standby_id, version, kind, hash, mime, bytes, w, h, opaque, made_by, made_role, last_rev, created_at)
+           VALUES (?, ?, ?, 's', ?, 1, 'slide', ?, 'image/png', 9, 3840, 2160, 1, NULL, 'edit', 1, 1)`,
+        )
+        .run(pid, key, size, standby, hash);
+    const K = (n: number) => String(n).repeat(64);
+    keys(p.rev, 's', K(1), 'SB1'); // the current version's key
+    const [shared, own, mine, standby] = [await png(1), await png(2), await png(3), await png(4)];
+    row('pic', K(1), 'SB1', mine); // kept: its key is in the current rows
+    row('pic', K(2), 'SB1', standby); // kept: the stand-by of a current slide
+    row('pic', K(3), 'SBX', shared); // deleted: no row names the key, no current slide is its stand-by
+    row('pic', K(4), 'SBX', own); // deleted, and its blob goes with it
+    row('gone', K(5), 'SBY', shared); // a presentation that is not there: deleted
+    row('pic', K(6), 'SB1', shared, 1920); // kept (stand-by) and it names `shared`: the blob stays
+    const { c } = rig();
+    const r = await c.run();
+    expect(r).toMatchObject({ ran: true, pictures: 3 });
+    const left = (hub.db.prepare(`SELECT key FROM prerenders ORDER BY key`).all() as { key: string }[]).map(
+      (x) => x.key,
+    );
+    expect(left).toEqual([K(1), K(2), K(6)]);
+    expect(has(own)).toBe(false);
+    expect(onDisk(own)).toBe(false);
+    expect(has(shared)).toBe(true);
+    expect(onDisk(shared)).toBe(true);
+    expect(lib.fileReferenced(shared)).toBe(true);
+    for (const h of [mine, standby]) expect(has(h) && onDisk(h)).toBe(true);
+    // report mode deletes none of it and says what would go
+    const again = rig({ mode: 'report' });
+    row('pic', K(7), 'SBX', await png(5));
+    expect(await again.c.run()).toMatchObject({ ran: true, mode: 'report', pictures: 1 });
+    expect((hub.db.prepare(`SELECT COUNT(*) AS n FROM prerenders`).get() as { n: number }).n).toBe(4);
+  });
+});
+
+describe('collection: slices and timers (CO9)', () => {
+  it('holds the event loop for no more than a slice and a presentation PUT answers normally during a run (CO9)', async () => {
+    hub = await startHub();
+    ready();
+    for (let i = 0; i < 1500; i++)
+      hub.lib.addFile({
+        hash: i.toString(16).padStart(64, 'a'),
+        bytes: 10,
+        mime: 'application/json',
+        path: `media/aa/${i}.json`,
+      });
+    const { c, t } = rig();
+    t.stepMs = 1; // every file costs 1 ms on the fake clock
+    await c.run();
+    t.now = T0 + COLLECT_DELAY_DAYS * DAY;
+    t.slices.length = 0;
+    t.steps = 0;
+    const r = await c.run();
+    expect(r).toMatchObject({ ran: true, files: 1500 });
+    const sizes = t.slices.map((s, i) => s - (t.slices[i - 1] ?? 0));
+    expect(sizes.length).toBeGreaterThan(50);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(20);
+
+    // with the real clock and yields, a save in the middle of a run is answered
+    for (let i = 0; i < 1500; i++)
+      hub.lib.addFile({
+        hash: i.toString(16).padStart(64, 'b'),
+        bytes: 10,
+        mime: 'application/json',
+        path: `media/bb/${i}.json`,
+      });
+    const live = rig({ now: undefined, yield: undefined, onStep: undefined });
+    await live.c.run();
+    hub.db.prepare(`UPDATE collect_marks SET since = 0`).run();
+    const ed = await login(hub.url, EDIT_PIN);
+    const p = await ed.json<Presentation>('/presentations', {
+      method: 'POST',
+      json: presentationOf([bigSlide('x', 3)]),
+    });
+    const [done, put] = await Promise.all([
+      live.c.run(),
+      ed.fetch(`/presentations/${p.id}`, { method: 'PUT', json: { ...p, title: 'during a run' } }),
+    ]);
+    expect(put.status).toBe(200);
+    expect(done).toMatchObject({ ran: true, files: 1500 });
+  });
+
+  it('arms one run a day at 04:00 venue time, after the 03:00 backup, and once 10 minutes after the start (CO9)', async () => {
+    hub = await startHub();
+    const { c } = rig();
+    expect(c.nextRunAt(Date.UTC(2031, 0, 1, 0, 0))).toBe(Date.UTC(2031, 0, 1, 4, 0));
+    expect(c.nextRunAt(Date.UTC(2031, 0, 1, 4, 0))).toBe(Date.UTC(2031, 0, 2, 4, 0));
+    const la = rig({ timeZone: () => 'America/Los_Angeles' });
+    expect(la.c.nextRunAt(Date.UTC(2031, 0, 1, 10, 0))).toBe(Date.UTC(2031, 0, 1, 12, 0));
+    vi.useFakeTimers({ now: T0 });
+    try {
+      const t = rig({ now: undefined, schedule: true });
+      const run = vi.spyOn(t.c, 'run').mockResolvedValue({ ran: false, reason: 'live' });
+      t.c.start();
+      await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+      expect(run).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(run).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(4 * 3600_000);
+      expect(run).toHaveBeenCalledTimes(2);
+      t.c.stop();
+      await vi.advanceTimersByTimeAsync(2 * DAY);
+      expect(run).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('collection: heads, health (CO10, CO11)', () => {
+  it('a swept head takes its index rows with it, its pages go, a page a surviving head names stays, and a gone head answers 409 (CO11)', async () => {
+    hub = await startHub();
+    ready();
+    const ed = await login(hub.url, EDIT_PIN);
+    // a real slide file nobody names, and one a presentation names
+    const unnamed = fullOf(bigSlide('u', 260, 'u'));
+    const named = fullOf(bigSlide('n', 270, 'n'));
+    await uploadSlideFile(ed, unnamed.pages);
+    await uploadSlideFile(ed, named.pages);
+    await ed.json<Presentation>('/presentations', { method: 'POST', json: presentationOf([named.standIn]) });
+    // a synthetic pair of heads sharing a page: one named, one not
+    const [hA, hB, shared, onlyB] = [
+      await json('hA'),
+      await json('hB'),
+      await json('shared'),
+      await json('onlyB'),
+    ];
+    headRow(hA, [shared]);
+    headRow(hB, [shared, onlyB]);
+    save('uses-a', []);
+    hub.lib.savePresentation({ ...namingHead('uses-a', hA), rev: 1 }, { expectedRev: 1 });
+    const { c, t } = rig();
+    await c.run();
+    t.now = T0 + COLLECT_DELAY_DAYS * DAY;
+    const r = await c.run();
+    const count = (sql: string, ...a: unknown[]) => (hub!.db.prepare(sql).get(...a) as { n: number }).n;
+    for (const h of [unnamed.name, ...unnamed.pages.head.pages, hB, onlyB]) {
+      expect(has(h), h).toBe(false);
+      expect(onDisk(h) || existsSync(join(hub.dir, 'media', h.slice(0, 2), `${h}.json`)), h).toBe(false);
+    }
+    expect(r).toMatchObject({ ran: true });
+    expect(count(`SELECT COUNT(*) AS n FROM slide_heads WHERE hash IN (?, ?)`, unnamed.name, hB)).toBe(0);
+    expect(count(`SELECT COUNT(*) AS n FROM slide_head_pages WHERE head IN (?, ?)`, unnamed.name, hB)).toBe(
+      0,
+    );
+    for (const h of [named.name, ...named.pages.head.pages, hA, shared]) expect(has(h), h).toBe(true);
+    expect(count(`SELECT COUNT(*) AS n FROM slide_heads WHERE hash IN (?, ?)`, named.name, hA)).toBe(2);
+    // a head whose file is gone answers like an unknown one
+    const again = await ed.fetch('/presentations', {
+      method: 'POST',
+      json: presentationOf([unnamed.standIn]),
+    });
+    expect(again.status).toBe(409);
+  });
+
+  it('carries the last run in the stats, in meta and in one log line per run (CO10)', async () => {
+    hub = await startHub({ collect: 'on' });
+    ready();
+    expect(hub.collector.healthFields()).toEqual({});
+    const [a, b] = [await json('a'), await json('b')];
+    const BYTES = sizeOf(a) + sizeOf(b);
+    const { c, t, lines } = rig();
+    await c.run();
+    t.now = T0 + COLLECT_DELAY_DAYS * DAY;
+    await c.run();
+    expect(lines.filter((l) => l.msg === 'collection run').map((l) => l.obj)).toMatchObject([
+      { mode: 'on', marked: 2, files: 0 },
+      { mode: 'on', marked: 0, files: 2, bytes: BYTES, pictures: 0 },
+    ]);
+    const meta = JSON.parse(
+      (hub.db.prepare(`SELECT value FROM meta WHERE key = 'collect_last_run'`).get() as { value: string })
+        .value,
+    ) as { at: number; files: number };
+    expect(meta).toMatchObject({ at: T0 + COLLECT_DELAY_DAYS * DAY, files: 2 });
+    expect(c.healthFields()).toEqual({
+      collectedFiles: 2,
+      collectedBytes: BYTES,
+      lastCollectAt: T0 + COLLECT_DELAY_DAYS * DAY,
+    });
+    // the hub's own collector reports on /health once it has run
+    await hub.collector.run();
+    const h = (await (await fetch(`${hub.url}/api/v1/health`)).json()) as Record<string, unknown>;
+    expect(typeof h.lastCollectAt).toBe('number');
+    expect(h.collectedFiles).toBe(0);
   });
 });

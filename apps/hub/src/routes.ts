@@ -228,6 +228,8 @@ export function documentImportForm(fields: Readonly<Record<string, string>>): Do
 export type LiveView = {
   locks(): { playlistId?: string; presentations: Set<string>; media: Set<string>; fonts: Set<string> };
   mode(): 'idle' | 'live';
+  /** Whether the service's state has been told yet: false in a library process until the supervisor's first word. */
+  known(): boolean;
 };
 
 /** What the diagnostics export collects from the live side. */

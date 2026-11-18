@@ -9,8 +9,10 @@
  * keeps of that presentation (the current one always does). Pruning and deleting remove what they remove.
  */
 import type { Logger } from 'pino';
+import type { CollectMode } from './config.ts';
 import type { DB } from './db.ts';
 import type { Library } from './library.ts';
+import type { Store } from './store.ts';
 
 const REF_RE = /"ref":"([0-9a-f]{64})"/g;
 const FILES_RE = /"files":\[((?:"[0-9a-f]{64}",?)+)\]/g;
@@ -274,4 +276,55 @@ export class RefBackfill {
     }
   }
   private scanned = 0;
+}
+
+/**
+ * STUB (red commit): the collector names nothing and deletes nothing; the tests of the next commit fail on it.
+ */
+export const COLLECT_DELAY_DAYS = 0;
+
+export type CollectResult =
+  | { ran: false; reason: 'off' | 'live' | 'unknown' | 'backfill' | 'busy' }
+  | {
+      ran: true;
+      mode: 'report' | 'on';
+      marked: number;
+      files: number;
+      bytes: number;
+      pictures: number;
+      pictureBytes: number;
+    };
+
+export type CollectorOptions = {
+  mode: CollectMode;
+  live: () => 'idle' | 'live';
+  known: () => boolean;
+  timeZone: () => string;
+  log: Logger;
+  now?: () => number;
+  yield?: () => Promise<void>;
+  sliceMs?: number;
+  onStep?: (what: 'mark' | 'sweep' | 'picture') => void;
+  afterScan?: () => void | Promise<void>;
+  schedule?: boolean;
+  startDelayMs?: number;
+};
+
+export class Collector {
+  readonly mode: CollectMode;
+  constructor(_lib: Library, _store: Store, opts: CollectorOptions) {
+    this.mode = opts.mode;
+  }
+  start(): void {}
+  stop(): void {}
+  onLiveMode(_mode: 'idle' | 'live'): void {}
+  nextRunAt(_now = Date.now()): number {
+    return 0;
+  }
+  healthFields(): { collectedFiles?: number; collectedBytes?: number; lastCollectAt?: number } {
+    return {};
+  }
+  async run(): Promise<CollectResult> {
+    return { ran: false, reason: 'off' };
+  }
 }

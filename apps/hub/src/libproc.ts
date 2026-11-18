@@ -35,7 +35,7 @@ import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
 import { cpuPool } from './pool.ts';
 import { PrerenderKeys } from './prerenderkeys.ts';
-import { RefBackfill } from './collect.ts';
+import { Collector, RefBackfill } from './collect.ts';
 import { goLiveExtras, PrerenderStore } from './prerenders.ts';
 import { SlideFiles } from './slidefiles.ts';
 import {
@@ -93,6 +93,8 @@ export type LibraryProcess = {
   jobs: JobQueue;
   log: Logger;
   url: string;
+  /** The collection of content files nothing names. */
+  collector: Collector;
   /** Apply the live process's locks (relayed by the supervisor). */
   setLocks(m: LocksMsg): void;
   setLiveUrl(url: string | undefined): void;
@@ -170,14 +172,25 @@ export async function createLibraryProcess(
     fonts: new Set(Array.isArray(m.fonts) ? m.fonts : []),
   });
   let lockSets = setsOf(locks);
+  // Known once the supervisor has said so (a restarted library is told with ORDO_LIVE_LOCKS), not before.
+  let known = !!opts.initialLocks;
   const liveView: LiveView = {
     locks: () => ({ playlistId: locks.playlistId, ...lockSets }),
     mode: () => locks.mode,
+    known: () => known,
   };
   let liveUrl: string | undefined;
   const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, { live: () => locks.mode, log });
   const prerenders = new PrerenderStore(lib, store, liveView, { log });
   const backfill = new RefBackfill(lib, { live: () => locks.mode, log });
+  const collector = new Collector(lib, store, {
+    mode: cfg.collect,
+    live: () => locks.mode,
+    known: () => known,
+    timeZone,
+    log,
+    schedule: cfg.scheduleBackups,
+  });
   const libStats = new LibraryStatsCache(lib, log, { minIntervalMs: 0 });
   let status: ProcessStatus[] = [];
 
@@ -365,8 +378,10 @@ export async function createLibraryProcess(
     jobs,
     log,
     url,
+    collector,
     setLocks(m) {
       locks = m;
+      known = true;
       lockSets = setsOf(m);
       jobs.onLiveMode(m.mode);
       prerenderKeys.onLiveMode(m.mode);

@@ -7,7 +7,7 @@ import { Backups } from './backup.ts';
 import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openDb } from './db.ts';
 import { DISK_MEASURE_MS, DiskFloor } from './diskfloor.ts';
-import { RefBackfill } from './collect.ts';
+import { Collector, RefBackfill } from './collect.ts';
 import { applyHubEvent } from './hubevents.ts';
 import { errorMessage } from './errors.ts';
 import { outputFonts } from './fonts/bundled.ts';
@@ -63,6 +63,8 @@ export type Hub = {
   prerenderKeys: PrerenderKeys;
   /** The pictures of pre-rendered slides. */
   prerenders: PrerenderStore;
+  /** The collection of content files nothing names (design/29: mark and sweep, 30 days, report mode by default). */
+  collector: Collector;
   /** The venue time zone: settings.general.timeZone, falling back to ORDO_TZ. Backups and countdowns share it. */
   timeZone(): string;
   /** Listen on cfg.host:cfg.port (or the given port); returns the base URL. */
@@ -172,7 +174,8 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     live: () => live.state.mode,
     log,
   });
-  const liveView = { locks: () => live.locks(), mode: () => live.state.mode };
+  // One process: the service's state is always known.
+  const liveView = { locks: () => live.locks(), mode: () => live.state.mode, known: () => true };
   const prerenders = new PrerenderStore(lib, store, liveView, { log });
   // A picture accepted for a key of the running service goes straight to the live loop (one process).
   prerenders.onAccepted((e) =>
@@ -186,10 +189,19 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     }),
   );
   const backfill = new RefBackfill(lib, { live: () => live.state.mode, log });
+  const collector = new Collector(lib, store, {
+    mode: cfg.collect,
+    live: () => live.state.mode,
+    known: () => true,
+    timeZone,
+    log,
+    schedule: cfg.scheduleBackups,
+  });
   const hub: Hub = {
     app,
     prerenderKeys,
     prerenders,
+    collector,
     routes: http.routes,
     cfg,
     db,
