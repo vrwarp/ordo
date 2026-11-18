@@ -203,6 +203,19 @@ CREATE TABLE IF NOT EXISTS job_paced (job_id TEXT PRIMARY KEY);
 ];
 
 /**
+ * The running service's resolved copy, once per id (live-by-ref, design/29 §2.3 M2): the id is the SHA-256 (hex)
+ * of the exact UTF-8 bytes in `json`, kept twice (copy 0 and 1) and verified on every read; snapshots and journal
+ * rows name the copy instead of holding it. Part of LIVE_SCHEMA, and created by the live service itself when it
+ * runs on another database (the one-process hub keeps its live tables in ordo.db, which has a migration list this
+ * table is not in: it has no version, and a hub from before this ignores it).
+ */
+export const LIVE_RESOLVED_SQL = `
+CREATE TABLE IF NOT EXISTS live_resolved (
+  resolved_id TEXT NOT NULL, copy INTEGER NOT NULL, bytes INTEGER NOT NULL, json BLOB NOT NULL, saved_at INTEGER NOT NULL,
+  PRIMARY KEY (resolved_id, copy));
+`;
+
+/**
  * The live process's own database (design/25): journal, snapshots and the cached copies of library data it
  * needs to run a service while the library process is down. Separate from ordo.db so a library failure (a
  * long write lock, a corrupt page) cannot stall or break the live service.
@@ -215,7 +228,7 @@ CREATE TABLE IF NOT EXISTS live_snapshot (
 CREATE TABLE IF NOT EXISTS live_snapshot_prev (
   rowid INTEGER PRIMARY KEY AUTOINCREMENT, seq INTEGER NOT NULL, json TEXT NOT NULL, saved_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS live_kv (key TEXT PRIMARY KEY, json TEXT NOT NULL, saved_at INTEGER NOT NULL);
-`;
+${LIVE_RESOLVED_SQL}`;
 
 export function openLiveDb(file: string): DB {
   const db = new Database(file);

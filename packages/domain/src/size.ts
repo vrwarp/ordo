@@ -50,8 +50,10 @@ export const SIZE_BUDGETS = {
    */
   goLiveMax: 32 * MiB,
   /**
-   * The size whose first save on a screen passes the 33 ms GO lead (D13; structuredClone 9-12 ms/MiB on this
-   * class of PC): past it the goLive carries W59's critical line. A default until a venue PC confirms it.
+   * The size past which the goLive carries W59's critical line: what a service of this size costs a screen is the
+   * download and parse of its copy at the goLive and its one-time save in pieces (a GO writes a small record whatever
+   * the size: live-by-ref; before it every GO cloned the whole copy, structuredClone 9-12 ms/MiB on this class of PC,
+   * past the 33 ms GO lead from about 3 MiB). A default until a venue PC confirms it.
    */
   goLiveSlow: 3 * MiB,
   /**

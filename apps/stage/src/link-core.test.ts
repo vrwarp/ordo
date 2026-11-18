@@ -1,5 +1,5 @@
 import { MemoryStore } from '@ordo/cache';
-import { Emitter, HubClock, type HubConnection, OutputLink } from '@ordo/client';
+import { Emitter, HeldCopy, HubClock, type HubConnection, joinState, OutputLink } from '@ordo/client';
 import {
   type LiveEvent,
   type LiveState,
@@ -15,6 +15,8 @@ import { type KV, StageLinkCore } from './link-core.ts';
 import type { LinkToMain, StageView } from './protocol.ts';
 
 class FakeHub extends Emitter<Record<string, unknown>> {
+  /** What a real connection holds of the running service (live-by-ref). */
+  copies = new HeldCopy();
   sent: { t: string; [k: string]: unknown }[] = [];
   connected = false;
   start() {}
@@ -394,5 +396,145 @@ describe('StageLinkCore', () => {
     await core.start();
     hub.emit('bye', { t: 'bye', v: 1, reason: 'superseded' });
     expect(posted.at(-1)).toEqual({ t: 'close', reason: 'superseded' });
+  });
+});
+
+// ---- the service by reference: a small record per GO, the copy once in pieces (live-by-ref) ----
+
+const COPY_ID = 'c'.repeat(64);
+
+/** The fixture service padded with unreferenced presentations of `kb` KB each, to about `mib` MiB. */
+function bigLive(mib: number, kb = 100, huge = 0): LiveState {
+  const base = liveAt(0);
+  const presentations: Record<string, Presentation> = { ...resolved.presentations };
+  const add = (id: string, bytes: number) => {
+    presentations[id] = { ...song, id, title: id, pad: 'x'.repeat(bytes) } as unknown as Presentation;
+  };
+  for (let i = 0; i < Math.ceil((mib * 1024) / kb); i++) add(`pad${i}`, kb * 1024);
+  if (huge) add('huge', huge);
+  return { ...base, resolved: { ...resolved, presentations } };
+}
+
+class RecKV extends MemKV {
+  sets: { key: string; bytes: number }[] = [];
+  override async set(k: string, v: unknown) {
+    this.sets.push({ key: k, bytes: JSON.stringify(v ?? null).length });
+    await super.set(k, v);
+  }
+  records() {
+    return this.sets.filter((x) => x.key === 'state:stage');
+  }
+  pieces() {
+    return this.sets.filter((x) => x.key.startsWith('copy:'));
+  }
+}
+
+async function runGos(core: StageLinkCore, hub: FakeHub, s: LiveState, n: number) {
+  hub.connect();
+  hub.copies.hold(COPY_ID, s.resolved!);
+  for (let i = 0; i < n; i++) {
+    hub.emit('state', { t: 'live.state', v: 1, seq: s.seq + i, state: { ...s, seq: s.seq + i } });
+    await vi.advanceTimersByTimeAsync(600);
+  }
+  await vi.advanceTimersByTimeAsync(6000);
+  void core;
+}
+
+describe('StageLinkCore saves by reference (live-by-ref)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('the per-GO record is small and the same at 1.5 and 13 MiB; the copy is written once', async () => {
+    const sizes: number[] = [];
+    for (const mib of [1.5, 13]) {
+      const kv = new RecKV();
+      const { core, hub } = setup(kv);
+      await core.start();
+      const s = bigLive(mib);
+      await runGos(core, hub, s, 5);
+      const rec = kv.records().at(-1)!;
+      sizes.push(rec.bytes);
+      expect(rec.bytes).toBeLessThan(30_000);
+      expect(kv.records().length).toBeGreaterThanOrEqual(5);
+      const n = Object.keys(s.resolved!.presentations).length;
+      expect(kv.pieces().length).toBe(n + 3);
+      expect(kv.pieces().at(-1)!.key).toBe('copy:stage');
+      core.stop();
+    }
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(1.1 * Math.min(...sizes));
+  });
+
+  it('a restart paints the joined state and seeds the copy; a by-name state keeps the object', async () => {
+    const kv = new RecKV();
+    const first = setup(kv);
+    await first.core.start();
+    const s = bigLive(1);
+    await runGos(first.core, first.hub, s, 3);
+    first.core.stop();
+    const second = setup(kv);
+    await second.core.start();
+    expect(second.hub.copies.id).toBe(COPY_ID);
+    expect(second.hub.copies.value).toEqual(s.resolved);
+    expect(second.last().ready).toBe(true);
+    expect(second.last().current?.text).toBe('First line\nSecond line');
+    const byName = {
+      t: 'live.state' as const,
+      v: 1 as const,
+      seq: 99,
+      resolvedId: COPY_ID,
+      state: { ...s, seq: 99, resolved: undefined },
+    };
+    const joined = joinState(byName as never, second.hub.copies) as { state: LiveState };
+    expect(joined.state.resolved).toBe(second.hub.copies.value);
+    second.core.stop();
+  });
+
+  it('a missing part paints nothing; a record in the older whole form is still read', async () => {
+    const kv = new RecKV();
+    const first = setup(kv);
+    await first.core.start();
+    await runGos(first.core, first.hub, bigLive(1), 2);
+    first.core.stop();
+    const part = [...kv.map.keys()].find((k) => k.includes(':p:'))!;
+    kv.map.delete(part);
+    const second = setup(kv);
+    await second.core.start();
+    expect(second.last().ready).toBe(false);
+    expect(second.hub.copies.id).toBeUndefined();
+    second.core.stop();
+    const old = new MemKV();
+    await old.set('state:stage', { state: liveAt(1) });
+    const third = setup(old);
+    await third.core.start();
+    expect(third.last().ready).toBe(true);
+    third.core.stop();
+  });
+
+  it('a lectern and a display sharing one store do not corrupt each other', async () => {
+    const kv = new RecKV();
+    const display = setup(kv);
+    const lectern = setup(kv);
+    await display.core.start();
+    await lectern.core.start();
+    const s = bigLive(1);
+    display.hub.connect();
+    lectern.hub.connect();
+    display.hub.copies.hold(COPY_ID, s.resolved!);
+    lectern.hub.copies.hold(COPY_ID, s.resolved!);
+    // interleave their GOs and their copy saves for one id
+    for (let i = 0; i < 4; i++) {
+      for (const w of [display, lectern]) {
+        w.hub.emit('state', { t: 'live.state', v: 1, seq: s.seq + i, state: { ...s, seq: s.seq + i } });
+        await vi.advanceTimersByTimeAsync(300);
+      }
+    }
+    await vi.advanceTimersByTimeAsync(7000);
+    display.core.stop();
+    lectern.core.stop();
+    const again = setup(kv);
+    await again.core.start();
+    expect(again.hub.copies.id).toBe(COPY_ID);
+    expect(again.hub.copies.value).toEqual(s.resolved);
+    again.core.stop();
   });
 });

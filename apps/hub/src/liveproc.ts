@@ -222,7 +222,11 @@ export async function createLiveProcess(
   };
   const auth = new Auth(lazyDb, authStore, log, { shared: true });
 
-  const live = new LiveService(liveDb, link, log, { snapshotIntervalMs: cfg.snapshotIntervalMs });
+  const live = new LiveService(liveDb, link, log, {
+    snapshotIntervalMs: cfg.snapshotIntervalMs,
+    byRef: cfg.liveByRef,
+  });
+  if (cfg.liveByRefWarning) log.warn({}, cfg.liveByRefWarning);
   const statics = new StaticApps(cfg.appsDir, cfg.domain);
   let status: ProcessStatus[] = [];
   let libraryStats: LibraryStats | undefined;
@@ -324,6 +328,7 @@ export async function createLiveProcess(
     healthIntervalMs: cfg.healthIntervalMs,
     clientIp: http.clientIp,
     contextReady: () => link.context !== undefined,
+    byRef: cfg.liveByRef,
   });
   // A context refresh that is not part of applying a library delta (the library came back, or this process
   // restarted and fetched it for the first time) may hold settings the outputs have not seen: tell them to

@@ -226,6 +226,13 @@ export const PORT_TABLE = {
     spec: 'golive-prepare.spec.ts',
     what: '0 hub with a slowed library (Go live again during a service), 1 hub (size ceiling)',
   },
+  // live-by-ref (design/29 §2.3 M2): a hub killed and restarted during a 6 MiB service kept by reference.
+  'live-by-ref': {
+    offset: 480,
+    count: 1,
+    spec: 'live-by-ref.spec.ts',
+    what: 'hub (restarted)',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;

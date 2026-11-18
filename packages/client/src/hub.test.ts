@@ -332,3 +332,140 @@ describe('HubConnection liveness', () => {
     expect(ws2.sent[0]).toMatchObject({ t: 'hello', role: 'output', lastSeq: 9 });
   });
 });
+
+describe('HubConnection holds the resolved copy (live-by-ref)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    installFakeWebSocket();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const copy = (name = 'a') => ({ playlist: { id: 'pl', name }, presentations: {} });
+  const whole = (resolvedId: string, resolved: unknown, seq = 3) => ({
+    t: 'live.state',
+    v: 1,
+    seq,
+    resolvedId,
+    state: { seq, mode: 'live', cues: [], resolved },
+  });
+  const byName = (resolvedId: string, seq = 4) => ({
+    t: 'live.state',
+    v: 1,
+    seq,
+    resolvedId,
+    state: { seq, mode: 'live', cues: [] },
+  });
+  const reconnect = (hub: HubConnection) => {
+    hub.kick();
+    vi.advanceTimersByTime(600);
+    const ws = lastSocket();
+    ws.open();
+    welcome(ws);
+    return ws;
+  };
+
+  it('the hello carries no id before a copy was given, and carries it after a whole state or a goLive delta', () => {
+    const { hub } = connect();
+    const ws = lastSocket();
+    ws.open();
+    expect(ws.sent[0]).toMatchObject({ t: 'hello' });
+    expect(ws.sent[0]).not.toHaveProperty('resolvedId');
+    welcome(ws);
+    ws.receive(whole('a'.repeat(64), copy()));
+    const ws2 = reconnect(hub);
+    expect(ws2.sent[0]).toMatchObject({ t: 'hello', resolvedId: 'a'.repeat(64) });
+    // a goLive delta holds its copy under its id
+    ws2.receive({
+      t: 'live.delta',
+      v: 1,
+      seq: 5,
+      fromSeq: 4,
+      resolvedId: 'b'.repeat(64),
+      event: { k: 'goLive', resolved: copy('b') },
+    });
+    const ws3 = reconnect(hub);
+    expect(ws3.sent[0]).toMatchObject({ resolvedId: 'b'.repeat(64) });
+  });
+
+  it('a by-name state is emitted joined, and its resolved is the held object itself across three reconnects', () => {
+    const { hub } = connect();
+    const emitted: { resolved?: unknown; seq: number }[] = [];
+    hub.on('state', (m) => emitted.push({ resolved: m.state.resolved, seq: m.state.seq }));
+    let ws = lastSocket();
+    welcome(ws);
+    // the fake socket delivers a parsed message, so the copy the connection holds is the one the whole state carried
+    ws.receive(whole('a'.repeat(64), copy()));
+    const held = emitted[0]!.resolved;
+    expect(held).toBeTruthy();
+    expect(hub.copies.value).toBe(held);
+    for (let i = 0; i < 3; i++) {
+      ws = reconnect(hub);
+      ws.receive(byName('a'.repeat(64), 10 + i));
+    }
+    expect(emitted.length).toBe(4);
+    for (const e of emitted) expect(e.resolved).toBe(held);
+  });
+
+  it('a by-name state whose id is not held emits nothing and asks once, without an id, per two seconds', () => {
+    const { hub } = connect();
+    const emitted: unknown[] = [];
+    hub.on('state', (m) => emitted.push(m));
+    const ws = lastSocket();
+    welcome(ws);
+    ws.sent.length = 0;
+    ws.receive(byName('c'.repeat(64)));
+    const resyncs = () => ws.sent.filter((m) => m.t === 'live.resync');
+    expect(emitted).toEqual([]);
+    expect(resyncs().length).toBe(1);
+    expect(resyncs()[0]).not.toHaveProperty('resolvedId');
+    ws.receive(byName('c'.repeat(64), 5));
+    expect(resyncs().length).toBe(1);
+    vi.advanceTimersByTime(2100);
+    ws.receive(byName('c'.repeat(64), 6));
+    expect(resyncs().length).toBe(2);
+    hub.stop();
+  });
+
+  it('a resync carries the held id, and resolvedId: undefined says nothing', () => {
+    const { hub } = connect();
+    const ws = lastSocket();
+    welcome(ws);
+    ws.receive(whole('a'.repeat(64), copy()));
+    ws.sent.length = 0;
+    hub.send({ t: 'live.resync' });
+    hub.send({ t: 'live.resync', resolvedId: undefined });
+    expect(ws.sent[0]).toMatchObject({ t: 'live.resync', resolvedId: 'a'.repeat(64) });
+    expect(ws.sent[1]).toMatchObject({ t: 'live.resync' });
+    expect(ws.sent[1]).not.toHaveProperty('resolvedId');
+  });
+
+  it('an idle state and endService clear the copy', () => {
+    const { hub } = connect();
+    let ws = lastSocket();
+    welcome(ws);
+    ws.receive(whole('a'.repeat(64), copy()));
+    ws.receive(idleState(8));
+    ws = reconnect(hub);
+    expect(ws.sent[0]).not.toHaveProperty('resolvedId');
+    ws.receive(whole('a'.repeat(64), copy()));
+    ws.receive({ t: 'live.delta', v: 1, seq: 9, fromSeq: 8, event: { k: 'endService', at: 1 } });
+    ws = reconnect(hub);
+    expect(ws.sent[0]).not.toHaveProperty('resolvedId');
+  });
+
+  it('a state with no resolvedId leaves the held copy alone and is emitted as it came', () => {
+    const { hub } = connect();
+    const emitted: { state: unknown }[] = [];
+    hub.on('state', (m) => emitted.push(m));
+    let ws = lastSocket();
+    welcome(ws);
+    ws.receive(whole('a'.repeat(64), copy()));
+    const plain = { t: 'live.state', v: 1, seq: 12, state: { seq: 12, mode: 'live', resolved: copy('z') } };
+    ws.receive(plain);
+    expect(emitted.at(-1)!.state).toEqual(plain.state);
+    ws = reconnect(hub);
+    expect(ws.sent[0]).toMatchObject({ resolvedId: 'a'.repeat(64) });
+  });
+});

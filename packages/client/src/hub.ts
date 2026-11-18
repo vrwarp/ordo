@@ -15,6 +15,7 @@ import {
 } from '@ordo/protocol';
 import { Emitter } from './emitter.ts';
 import { clock as defaultClock, type HubClock } from './clock.ts';
+import { HeldCopy, joinState } from './copies.ts';
 
 /** A client message without the protocol version field (added on send). */
 export type ClientMessageBody = ClientMessage extends infer T
@@ -72,11 +73,18 @@ export type HubConnectionOptions = {
   livePingIntervalMs?: number;
   /** Declare the connection lost after this long without a pong (default 9 s live, 3 × idle period idle). */
   lostAfterMs?: number;
+  /**
+   * The resolved copy of the running service this window holds (live-by-ref): the hello and the resyncs name
+   * it, and a live state the hub sends without it is joined to it. Default: the connection's own (`hub.copies`).
+   */
+  copies?: HeldCopy;
 };
 
 export const IDLE_PING_MS = 10_000;
 export const LIVE_PING_MS = 3000;
 export const LIVE_LOST_MS = 9000;
+/** A by-name state whose copy is not held asks the hub for the whole state at most this often. */
+export const NEED_COPY_RETRY_MS = 2000;
 /** First reconnect delay after the hub refused the credentials (doubles up to AUTH_RETRY_MAX_MS). */
 export const AUTH_RETRY_MS = 30_000;
 export const AUTH_RETRY_MAX_MS = 120_000;
@@ -121,12 +129,17 @@ export class HubConnection extends Emitter<HubEvents> {
   authBlocked = false;
   readonly clock: HubClock;
   connected = false;
+  /** The resolved copy this connection holds (see `HubConnectionOptions.copies`). */
+  readonly copies: HeldCopy;
+  /** When this connection last asked for the whole state because a state named a copy it does not hold. */
+  private lastNeedAt = -Infinity;
 
   private opts: HubConnectionOptions;
   constructor(opts: HubConnectionOptions) {
     super();
     this.opts = opts;
     this.clock = opts.clock ?? defaultClock;
+    this.copies = opts.copies ?? new HeldCopy();
   }
 
   start(): void {
@@ -208,7 +221,12 @@ export class HubConnection extends Emitter<HubEvents> {
   send(m: ClientMessageBody): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.connected) return false;
     try {
-      this.ws.send(JSON.stringify({ ...m, v: PROTOCOL_VERSION }));
+      // A resync says which copy the window holds unless the caller said otherwise (`resolvedId: undefined`: none).
+      const body =
+        m.t === 'live.resync' && !('resolvedId' in m) && this.copies.id !== undefined
+          ? { ...m, resolvedId: this.copies.id }
+          : m;
+      this.ws.send(JSON.stringify({ ...body, v: PROTOCOL_VERSION }));
     } catch {
       return false;
     }
@@ -243,6 +261,7 @@ export class HubConnection extends Emitter<HubEvents> {
           ...(this.opts.view ? { view: this.opts.view } : {}),
           appVersion: this.opts.appVersion,
           lastSeq: this.lastSeq,
+          ...(this.copies.id !== undefined ? { resolvedId: this.copies.id } : {}),
         }),
       );
     };
@@ -375,15 +394,35 @@ export class HubConnection extends Emitter<HubEvents> {
         this.clock.addSample(p.c, p.s, Date.now());
         return;
       }
-      case 'live.state':
+      case 'live.state': {
+        // A state that came whole with its id is the copy this connection now holds (the same object from here on).
+        if (m.state.resolved && m.resolvedId !== undefined) this.copies.hold(m.resolvedId, m.state.resolved);
+        const joined = joinState(m, this.copies);
+        if (joined === 'need') {
+          // By name, but the copy is not held (a stale hello, a cleared store): nothing is applied, the window
+          // keeps its last good state and asks for the whole one (without an id, so the hub sends it whole).
+          const now = Date.now();
+          if (now - this.lastNeedAt >= NEED_COPY_RETRY_MS) {
+            this.lastNeedAt = now;
+            this.send({ t: 'live.resync', resolvedId: undefined });
+          }
+          return;
+        }
+        if (m.state.mode !== 'live') this.copies.clear();
         this.lastSeq = m.seq;
         this.setLive(m.state.mode === 'live');
-        this.emit('state', m);
+        this.emit('state', joined.state === m.state ? m : { ...m, state: joined.state });
         return;
+      }
       case 'live.delta':
         this.lastSeq = m.seq;
-        if (m.event.k === 'goLive') this.setLive(true);
-        else if (m.event.k === 'endService') this.setLive(false);
+        if (m.event.k === 'goLive') {
+          this.setLive(true);
+          if (m.resolvedId !== undefined) this.copies.hold(m.resolvedId, m.event.resolved);
+        } else if (m.event.k === 'endService') {
+          this.setLive(false);
+          this.copies.clear();
+        }
         this.emit('delta', m);
         return;
       case 'live.ack':

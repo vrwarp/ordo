@@ -49,9 +49,13 @@ import { APP_VERSION } from './index.ts';
 // than go on without them: without sub-wave 1's shared changes above, or sending the hub PowerPoint scenes
 // parsed as 0.8.1 parsed them (design/27, "CONVERTER_VERSION stays 2 through sub-wave 1c too"). The digest is
 // unchanged (it leaves the APP_VERSION line out).
+// The follow-up pull request's live-by-ref track adds four optional `resolvedId` fields to the protocol (hello,
+// live.resync, live.state, live.delta): older and newer builds read each other's messages as before (a missing
+// field is what they sent before), so the version stays 0.9.0 (the pull request's one bump to 0.10.0 is its last
+// commit) and only the digest is recorded again.
 const RECORDED = {
   version: '0.9.0',
-  digest: '7077a1437610daeacb64027cc37a534a758d091ad298af39f1b1e1f3c7c20511',
+  digest: 'b0ee5d00697210888485d78aeb92f0018b2e78d20f69f9150f33c9c88bb55c9a',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */
