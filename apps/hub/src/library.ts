@@ -34,6 +34,8 @@ import type {
 import { z } from 'zod';
 import { type DB, nowIso } from './db.ts';
 import { badRequest, conflict, notFound } from './errors.ts';
+import { PrerenderIndex } from './prerenders.ts';
+import { SlideFileIndex } from './slidefiles.ts';
 import { validate } from './validate.ts';
 
 export type Change = { kind: LibraryKind; id: string; rev?: number; entity?: unknown; deleted?: boolean };
@@ -219,12 +221,19 @@ class EntityTable<T extends { id: string; rev?: number }> {
 
 export type FileRow = { hash: string; bytes: number; mime: string; path: string };
 
+/** One row of `prerender_keys` as a save writes it (design/29 §1.3): the slide, its key and stand-by id, and `sig`. */
+export type PrerenderKeyRow = { slideId: string; key: string; standbyId: string; sig: string };
+
 export class Library {
   readonly presentations: EntityTable<Presentation>;
   readonly playlists: EntityTable<Playlist>;
   readonly media: EntityTable<Media>;
   readonly themes: EntityTable<Theme & { rev?: number }>;
   readonly folders: EntityTable<Folder & { rev?: number }>;
+  /** The heads and pages of pre-rendered slides' full forms (DB only: the save check, goLive and collection read it). */
+  readonly slideFiles: SlideFileIndex;
+  /** The keys and pictures of pre-rendered slides (DB only). */
+  readonly prerenderIndex: PrerenderIndex;
   private listeners: ((changes: Change[], seq: number) => void)[] = [];
 
   private timeZone: string;
@@ -243,6 +252,8 @@ export class Library {
     this.media = new EntityTable(db, 'media', Media, (m) => ({ name: m.name, kind: m.kind, state: m.state }));
     this.themes = new EntityTable(db, 'themes', Theme.extend({ rev: z.number().int().optional() }));
     this.folders = new EntityTable(db, 'folders', FolderSchema.extend({ rev: z.number().int().optional() }));
+    this.slideFiles = new SlideFileIndex(db);
+    this.prerenderIndex = new PrerenderIndex(db);
     this.seed(opts.timeZone);
   }
 
