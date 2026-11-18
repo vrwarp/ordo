@@ -42,7 +42,13 @@ afterEach(() => {
   for (const l of open.splice(0)) l.stop();
 });
 
-const goLive = (live: LiveService, playlistId = 'pl') => live.submitQueued({ k: 'goLive', playlistId }, OP);
+const turn = () => new Promise((r) => setImmediate(r));
+/** The goLive applied, and the turn of the loop in which its second copy is written (design/29 M2's measured decision). */
+const goLive = async (live: LiveService, playlistId = 'pl') => {
+  const seq = await live.submitQueued({ k: 'goLive', playlistId }, OP);
+  await turn();
+  return seq;
+};
 const next = (live: LiveService, n = 1) => {
   for (let i = 0; i < n; i++) live.submit({ k: 'next', at: Date.now() }, OP);
 };
@@ -212,6 +218,7 @@ describe('legacy forms (step 4)', () => {
       expect(again.state.resolved?.playlist.id).toBe(resolved.playlist.id);
       expect(rows(f.db).length).toBe(0);
       again.snapshot(true);
+      await turn();
       expect(rows(f.db).length).toBe(2);
       expect(snapshotText(f.db)).toContain('"resolvedId"');
       expect(snapshotText(f.db)).not.toContain('"resolved":');
@@ -227,6 +234,7 @@ describe('adopt (step 4)', () => {
     const incoming = JSON.parse(JSON.stringify(donor.live.state)) as LiveState;
     const hubSide = service({ bundles: {} });
     expect(hubSide.live.adopt(incoming)).toMatchObject({ ok: true });
+    await turn();
     expect(rows(hubSide.db).length).toBe(2);
     same(restarted(hubSide).state, hubSide.live.state);
     expect(snapshotText(hubSide.db)).not.toContain('"resolved":');

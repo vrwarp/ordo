@@ -429,23 +429,56 @@ export class LiveService {
     const s = this.state;
     if (!this.byRef || s.mode !== 'live' || !s.resolved) return JSON.stringify(s);
     const c = this.resolvedCopy()!;
-    this.writeRows(c);
+    this.writeRows(c, true);
     const { resolved: _r, cues: _c, ...rest } = s;
     const head = JSON.stringify(rest);
     return `${head.slice(0, -1)},"cues":${this.cuesJson(s.cues)}${SNAPSHOT_TAIL}${c.id}"}`;
   }
 
-  /** The copy's two rows (copy 0 and 1, the same bytes): written if either is missing; never rewritten. */
-  private writeRows(c: { id: string; json: Uint8Array }): void {
+  /** Ids whose second row is wanted in a transaction of its own right after the one that wrote the first. */
+  private secondRowDue = new Set<string>();
+
+  /**
+   * The copy's two rows (copy 0 and 1, the same bytes): written if either is missing; never rewritten. With
+   * `deferSecond` the second goes in a transaction of its own in the next turn of the loop (setImmediate): a goLive's
+   * apply holds the live loop for one 20 MiB write instead of two (design/29 M2: 213 ms against 385 ms for the whole
+   * apply at 20 MiB, measured; the keys pressed meanwhile are applied in the microtask that follows the apply, before
+   * the second write). The snapshot that names the id is written once copy 0 is there; a crash between the two writes
+   * leaves one verified copy, and the next snapshot writes the other.
+   */
+  private writeRows(c: { id: string; json: Uint8Array }, deferSecond = false): void {
     const have = this.db.prepare(`SELECT copy FROM live_resolved WHERE resolved_id = ?`).all(c.id) as {
       copy: number;
     }[];
+    const missing = [0, 1].filter((copy) => !have.some((h) => h.copy === copy));
+    if (!missing.length) return;
     const bytes = Buffer.from(c.json.buffer, c.json.byteOffset, c.json.byteLength);
     const put = this.db.prepare(
       `INSERT OR IGNORE INTO live_resolved (resolved_id, copy, bytes, json, saved_at) VALUES (?, ?, ?, ?, ?)`,
     );
-    for (const copy of [0, 1])
-      if (!have.some((h) => h.copy === copy)) put.run(c.id, copy, bytes.length, bytes, Date.now());
+    for (const copy of missing) {
+      if (copy === 1 && deferSecond && missing.includes(0)) continue;
+      if (copy === 1 && deferSecond) {
+        // copy 0 is there: the second follows in a turn of its own (once per id)
+        if (!this.secondRowDue.has(c.id)) {
+          this.secondRowDue.add(c.id);
+          setImmediate(() => {
+            this.secondRowDue.delete(c.id);
+            // only for the service still running (an ended one's rows are the collection's)
+            if (this.copy?.id !== c.id) return;
+            try {
+              this.db.transaction(() => this.writeRows(c))();
+            } catch (e) {
+              this.log.warn({ err: (e as Error).message }, 'could not write the second copy of the service');
+            }
+          });
+        }
+        continue;
+      }
+      put.run(c.id, copy, bytes.length, bytes, Date.now());
+    }
+    // both missing and deferring: copy 0 is written now, copy 1 is scheduled by the call below
+    if (deferSecond && missing.includes(0) && missing.includes(1)) this.writeRows(c, true);
   }
 
   /**
@@ -951,7 +984,7 @@ export class LiveService {
     // and the snapshot: a snapshot never names a copy that is not there); every other event is its small self.
     const copy = event.k === 'goLive' && this.byRef ? this.resolvedCopy() : undefined;
     const write = () => {
-      if (copy) this.writeRows(copy);
+      if (copy) this.writeRows(copy, true);
       this.db
         .prepare(
           `INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'event', ?)`,
