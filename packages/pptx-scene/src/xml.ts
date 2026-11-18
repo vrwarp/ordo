@@ -22,12 +22,78 @@ export interface XNode {
   children: XNode[];
   /** Character data of a `#text` node; '' for elements. */
   text: string;
+  /**
+   * An `a:path` read in the packed form (`parseXml` with `ParseOptions.pack`): its commands and points as two typed
+   * arrays, and `children` empty. Read it only through `pathCommands`.
+   */
+  packed?: PackedPath;
+}
+
+/**
+ * A path's commands and points as numbers. `ops` holds one byte per command (0 close, 1 moveTo, 2 lnTo, 3 quadBezTo,
+ * 4 cubicBezTo, 5 arcTo); `nums` holds, in document order, the x and y of every point of a command, or the four numbers
+ * wR, hR, stAng, swAng of an arcTo.
+ */
+export interface PackedPath {
+  ops: Uint8Array;
+  nums: Float64Array;
+}
+
+/** What `parseXml` is asked for besides the part's text. */
+export interface ParseOptions {
+  /** Read the commands of every `a:path` of an `a:pathLst` as numbers, within these bounds (see `XmlBoundError`). */
+  pack?: { maxElements: number; maxPathItems: number };
+}
+
+/** A part past one of the packed reader's bounds: `kind` says which (`elements`, `points`, or `bytes` for the part's size). */
+export class XmlBoundError extends Error {
+  kind: 'elements' | 'points' | 'bytes';
+  constructor(kind: 'elements' | 'points' | 'bytes', message: string) {
+    super(message);
+    this.name = 'XmlBoundError';
+    this.kind = kind;
+  }
+}
+
+/** One child of an `a:path` as the converter's readers see it (`pathCommands`). */
+export interface PathCommand {
+  name: string;
+  /** How many children the command has (text nodes included, as the node form counts them). */
+  kids: number;
+  /** The `a:pt` children, in order, as the strings of their x and y attributes (undefined: the attribute is missing). */
+  pts: [x: string | undefined, y: string | undefined][];
+  attrs: Record<string, string>;
+}
+
+/** The children of an `a:path` in order, for either form of the path (the only way a reader reads them). */
+export function pathCommands(p: XNode): Iterable<PathCommand> {
+  return nodeCommands(p);
+}
+
+function* nodeCommands(p: XNode): Generator<PathCommand> {
+  for (const c of p.children) {
+    const pts: PathCommand['pts'] = [];
+    for (const k of c.children) if (k.name === 'a:pt') pts.push([k.attrs.x, k.attrs.y]);
+    yield { name: c.name, kids: c.children.length, pts, attrs: c.attrs };
+  }
+}
+
+/** The trees `parseXml` makes without packing: every packed path becomes the nodes the node reader would have made. */
+export function unpackPaths(nodes: XNode[]): XNode[] {
+  return nodes;
 }
 
 /** Element nesting kept; deeper content is dropped (real slides nest a few dozen levels). */
 export const XML_MAX_DEPTH = 256;
 /** Markup tags (`<`) one part may hold before it is refused (a dense real slide has a few thousand). */
 export const MAX_TAGS_PER_PART = 250_000;
+/**
+ * Nodes (elements and the text between them) one part may hold when it is read with packing: the packed reader counts
+ * what it builds, not the `<` it meets (`parseXml`'s `pack` option), and a path read as numbers builds nothing per command.
+ */
+export const MAX_PACKED_ELEMENTS_PER_PART = 500_000;
+/** Commands and points of one packed part in all (an arcTo counts as two points); never reached inside the part-size bound. */
+export const MAX_PACKED_PATH_ITEMS_PER_PART = 4_000_000;
 
 /** Occurrences of `ch` (a character or a string) in `s`, counted up to `limit + 1`. */
 export function countUpTo(s: string, ch: string, limit: number): number {
@@ -162,7 +228,7 @@ function readTag(inner: string, part: string): XNode {
 const EMPTY_ATTRS: Record<string, string> = Object.freeze(Object.create(null));
 
 /** Parse one XML part; throws on a part too large to be a real slide, on a declaration and on cut markup. */
-export function parseXml(xml: string, part: string): XNode[] {
+export function parseXml(xml: string, part: string, _opts?: ParseOptions): XNode[] {
   if (countUpTo(xml, '<', MAX_TAGS_PER_PART) > MAX_TAGS_PER_PART)
     throw new Error(`${part} has more than ${MAX_TAGS_PER_PART} XML tags`);
   const top: XNode[] = [];
