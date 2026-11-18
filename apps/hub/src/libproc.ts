@@ -35,6 +35,7 @@ import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
 import { cpuPool } from './pool.ts';
 import { PrerenderKeys } from './prerenderkeys.ts';
+import { PrerenderStore } from './prerenders.ts';
 import { SlideFiles } from './slidefiles.ts';
 import {
   cleanupStaleUploads,
@@ -172,6 +173,7 @@ export async function createLibraryProcess(
   };
   let liveUrl: string | undefined;
   const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, { live: () => locks.mode, log });
+  const prerenders = new PrerenderStore(lib, store, liveView, { log });
   const libStats = new LibraryStatsCache(lib, log, { minIntervalMs: 0 });
   let status: ProcessStatus[] = [];
 
@@ -198,6 +200,7 @@ export async function createLibraryProcess(
     disk,
     slideFiles: new SlideFiles(lib, store, cpuPool),
     prerenderKeys,
+    prerenders,
     live: liveView,
     // The live process notices token changes in its settings copy and closes those sockets itself.
     disconnectOutput: () => undefined,

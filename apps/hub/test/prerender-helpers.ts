@@ -163,17 +163,24 @@ export function makePng(
   return Buffer.concat(parts);
 }
 
-/** A valid lossless-ish WebP header of `w` x `h` (a VP8X container, so the size is in the header). */
+/**
+ * A WebP of `w` x `h` the hub's header reader accepts: a lossless image chunk whose header says the size (the
+ * bytes after it are not pixels), or, animated, an extended file whose header announces the frames.
+ */
 export function makeWebp(w: number, h: number, opts: { alpha?: boolean; animated?: boolean } = {}): Buffer {
-  const vp8x = Buffer.alloc(10);
-  vp8x[0] = (opts.alpha ? 0x10 : 0) | (opts.animated ? 0x02 : 0);
-  vp8x.writeUIntLE(w - 1, 4, 3);
-  vp8x.writeUIntLE(h - 1, 7, 3);
-  const body = Buffer.concat([
-    Buffer.from('WEBP', 'ascii'),
-    riff('VP8X', vp8x),
-    riff('VP8 ', Buffer.alloc(20)),
-  ]);
+  let body: Buffer;
+  if (opts.animated) {
+    const vp8x = Buffer.alloc(10);
+    vp8x[0] = 0x02 | (opts.alpha ? 0x10 : 0);
+    vp8x.writeUIntLE(w - 1, 4, 3);
+    vp8x.writeUIntLE(h - 1, 7, 3);
+    body = Buffer.concat([Buffer.from('WEBP', 'ascii'), riff('VP8X', vp8x), riff('ANIM', Buffer.alloc(6))]);
+  } else {
+    const vp8l = Buffer.alloc(13);
+    vp8l[0] = 0x2f;
+    vp8l.writeUInt32LE(((w - 1) | ((h - 1) << 14) | ((opts.alpha ? 1 : 0) << 28)) >>> 0, 1);
+    body = Buffer.concat([Buffer.from('WEBP', 'ascii'), riff('VP8L', vp8l)]);
+  }
   const head = Buffer.alloc(8);
   head.write('RIFF', 0, 'ascii');
   head.writeUInt32LE(body.length, 4);

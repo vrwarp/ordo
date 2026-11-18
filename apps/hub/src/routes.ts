@@ -52,6 +52,7 @@ import { badRequest, conflict, HttpError, locked, notFound, unauthorized } from 
 import type { FontService } from './fonts/service.ts';
 import type { ImportService } from './imports.ts';
 import type { PrerenderKeys } from './prerenderkeys.ts';
+import type { PrerenderStore } from './prerenders.ts';
 import type { SlideFiles } from './slidefiles.ts';
 import type { JobQueue } from './jobs.ts';
 import { FolderSchema, type Library, newToken, SETTINGS_KEYS, stripTokens } from './library.ts';
@@ -261,6 +262,8 @@ export type LibraryApiCtx = {
   slideFiles: SlideFiles;
   /** The keys of pre-rendered slides, computed before a save (prerenderkeys.ts). */
   prerenderKeys: PrerenderKeys;
+  /** The pictures of pre-rendered slides (prerenders.ts). */
+  prerenders: PrerenderStore;
   live: LiveView;
   /** Close the sockets of an output whose token changed (the live process also notices on its own). */
   disconnectOutput(outputId: string, reason: string): void;
@@ -718,6 +721,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     assertPresentationUnlocked(id);
     if (!lib.presentations.delete(id)) throw notFound();
     lib.db.prepare(`DELETE FROM presentation_revisions WHERE presentation_id = ?`).run(id);
+    await hub.prerenders.forget(id);
     lib.emit([{ kind: 'presentation', id, deleted: true }]);
     return reply.code(204).send();
   });
@@ -1358,6 +1362,50 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     },
     { bodyLimit: SLIDE_PART_BODY_LIMIT },
   );
+
+  // The pictures of pre-rendered slides (design/29 §1.3): a cache the screens can do without, so never an edit:
+  // accepted for a locked presentation too, paused for the others while a service is live.
+  const KEY_RE = /^[0-9a-f]{64}$/;
+  route('PUT', '/presentations/:id/prerenders/:key', 'edit', 'full', async (req, reply) => {
+    await room(req);
+    const { id, key } = params(req);
+    const q = req.query as Record<string, unknown>;
+    const body = req.body as Readable | undefined;
+    if (!body || typeof body.pipe !== 'function')
+      throw badRequest('Send the picture as image/png or image/webp', 'bad_picture');
+    const madeBy = typeof q.madeBy === 'string' && q.madeBy ? q.madeBy.slice(0, 120) : undefined;
+    try {
+      const out = await hub.prerenders.put(id!, KEY_RE.test(key!) ? key! : '', Number(q.size), body, {
+        role: sessionRole(req.principal) ?? 'edit',
+        madeBy,
+      });
+      return reply.code(out.status).send(out.body);
+    } catch (e) {
+      // A body refused part-way (past 32 MiB) leaves unread bytes on the connection: close it with the answer, or
+      // the next request on it is read as the rest of the body.
+      if (e instanceof HttpError && e.status === 413) reply.header('Connection', 'close');
+      throw e;
+    }
+  });
+  route('GET', '/presentations/:id/prerenders', 'edit', 'full', async (req) =>
+    hub.prerenders.list(params(req).id!),
+  );
+  route('DELETE', '/presentations/:id/prerenders/:key', 'edit', 'full', async (req, reply) => {
+    const { id, key } = params(req);
+    assertPresentationUnlocked(id!);
+    const size = (req.query as Record<string, unknown>).size;
+    await hub.prerenders.remove(id!, key!, size === undefined ? undefined : Number(size));
+    return reply.code(204).send();
+  });
+  route('POST', '/presentations/:id/prerenders/:key/failed', 'edit', 'full', async (req) => {
+    const b = validate(
+      z.object({ reason: z.string().min(1).max(200), madeBy: z.string().max(120).optional() }).strict(),
+      req.body,
+    );
+    const { id, key } = params(req);
+    hub.prerenders.fail(id!, key!, b.reason, b.madeBy);
+    return { ok: true };
+  });
 
   // ---------------- diagnostics, backups ----------------
   route('GET', '/diagnostics/export', 'operate', 'full', async (_req, reply) => {

@@ -129,6 +129,8 @@ export async function createHttpApp(opts: {
   });
   // Raw chunk bodies for resumable uploads stream straight to disk.
   app.addContentTypeParser('application/offset+octet-stream', (_req, payload, done) => done(null, payload));
+  // A pre-rendered slide's picture (design/29 §1.3): the stream goes straight to the content store, never buffered.
+  app.addContentTypeParser(['image/png', 'image/webp'], (_req, payload, done) => done(null, payload));
 
   // Every route must declare who may call it (design/21): fail at startup otherwise.
   const routes: RouteInfo[] = [];

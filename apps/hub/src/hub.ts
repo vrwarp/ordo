@@ -16,6 +16,7 @@ import { JobQueue } from './jobs.ts';
 import { JobPacing } from './pacing.ts';
 import { cpuPool } from './pool.ts';
 import { PrerenderKeys } from './prerenderkeys.ts';
+import { PrerenderStore } from './prerenders.ts';
 import { SlideFiles } from './slidefiles.ts';
 import { Library, phonesSwitch } from './library.ts';
 import { LiveService, librarySource } from './live.ts';
@@ -58,6 +59,8 @@ export type Hub = {
   ring: LogRing;
   /** The keys of pre-rendered slides (computed at save; the recompute and safety-net jobs). */
   prerenderKeys: PrerenderKeys;
+  /** The pictures of pre-rendered slides. */
+  prerenders: PrerenderStore;
   /** The venue time zone: settings.general.timeZone, falling back to ORDO_TZ. Backups and countdowns share it. */
   timeZone(): string;
   /** Listen on cfg.host:cfg.port (or the given port); returns the base URL. */
@@ -167,9 +170,12 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     live: () => live.state.mode,
     log,
   });
+  const liveView = { locks: () => live.locks(), mode: () => live.state.mode };
+  const prerenders = new PrerenderStore(lib, store, liveView, { log });
   const hub: Hub = {
     app,
     prerenderKeys,
+    prerenders,
     routes: http.routes,
     cfg,
     db,
@@ -226,7 +232,8 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     disk,
     slideFiles: new SlideFiles(lib, store, cpuPool),
     prerenderKeys,
-    live: { locks: () => live.locks(), mode: () => live.state.mode },
+    prerenders,
+    live: liveView,
     disconnectOutput: (id, reason) => sockets.disconnectOutput(id, reason),
     liveDiag: async () => liveDiagOf(live, sockets),
   };

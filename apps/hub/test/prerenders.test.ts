@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { newId, type Presentation } from '@ordo/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 import { GIB } from '../src/diskfloor.ts';
-import { client, EDIT_PIN, login, OPERATE_PIN, startHub, type TestHub } from './helpers.ts';
+import { client, EDIT_PIN, login, OPERATE_PIN, sleep, startHub, type TestHub } from './helpers.ts';
 import { phone, refusal } from './phones-helpers.ts';
 import { bigSlide, fullOf, makePng, makeWebp, presentationOf, uploadSlideFile } from './prerender-helpers.ts';
 
@@ -53,7 +53,7 @@ const put = (c: Client, id: string, key: string, body: Buffer, size = 640, type 
   c.fetch(`/presentations/${id}/prerenders/${key}?size=${size}${query}`, {
     method: 'PUT',
     headers: { 'content-type': type },
-    body,
+    body: new Uint8Array(body),
   });
 const small = () => makePng(640, 360, { seed: 1 });
 
@@ -172,6 +172,7 @@ describe('the picture route (PP1-PP3, PP9)', () => {
     });
     const ed = await login(hub.url, EDIT_PIN);
     free.n = GIB;
+    await sleep(2100); // the measurement is reused for 2 s
     const r = await put(ed, 'p1', 'a'.repeat(64), small());
     expect(r.status).toBe(507);
     expect((await refusal(r)).reason).toBe('disk');
@@ -355,9 +356,12 @@ describe('while a service is live (PP4)', () => {
     });
     await op.json('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: pl.id } });
     // the live presentation is locked, and a picture for its current key is still accepted: a cache, not an edit
-    const ok = await put(ed, p.id, key, small());
+    // (only the two sizes a goLive lists are announced: the 640 preview is not a goLive file)
+    expect((await put(ed, p.id, key, small(), 640)).status).toBe(201);
+    expect(seen).toEqual([]);
+    const ok = await put(ed, p.id, key, makePng(1920, 1080), 1920);
     expect(ok.status).toBe(201);
-    expect(seen).toMatchObject([{ presentationId: p.id, key, size: 640 }]);
+    expect(seen).toMatchObject([{ presentationId: p.id, key, size: 1920 }]);
     // another presentation's key waits for End service
     const paused = await put(ed, q.id, keyQ, small());
     expect(paused.status).toBe(503);

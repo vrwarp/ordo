@@ -620,7 +620,8 @@ export class Library {
     const m = this.db.prepare(`SELECT 1 FROM media WHERE json LIKE ? LIMIT 1`).get(like);
     const f = this.db.prepare(`SELECT 1 FROM fonts WHERE json LIKE ? LIMIT 1`).get(like);
     const p = this.db.prepare(`SELECT 1 FROM presentations WHERE json LIKE ? LIMIT 1`).get(like);
-    return !!(m || f || p);
+    // A picture of a pre-rendered slide is named by its row, whatever else holds the same bytes.
+    return !!(m || f || p) || this.prerenderIndex.hashNamed(hash);
   }
   deleteFileRow(hash: string): void {
     this.db.prepare(`DELETE FROM files WHERE hash = ?`).run(hash);
