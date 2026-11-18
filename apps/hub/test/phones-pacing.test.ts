@@ -5,8 +5,18 @@
  * With Phones off nothing changes for the venue PC, except that a heavy job queued during a capped (phone)
  * request waits all the same. Before P0 a video uploaded while live started transcoding at once (measured).
  */
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { getPriority } from 'node:os';
+import { delimiter, join } from 'node:path';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import { newId, type Media, type Playlist, type Presentation } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
@@ -322,13 +332,68 @@ describe('jobs paced while live', () => {
 });
 
 describe('light tools while live', () => {
+  /**
+   * What a plain run() (no `nice`) must read: it adds no niceness, so the runner's own. Where the runner is below
+   * 19 (CI: 0) the original assertion holds as well, word for word. Run under `nice -n 19` (every run on the build
+   * machine) the runner is at 19 and so is the child, so the original alone cannot hold there.
+   */
+  const assertPlainNice = (plain: number, own: number): void => {
+    if (own < 19) expect(plain).toBeLessThan(19);
+    expect(plain).toBe(own);
+  };
+  /** Field 19 of /proc/<pid>/stat is the niceness; the slice starts at field 3. */
+  const niceOf = (stat: string): number => Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19 - 3]);
+
   it.skipIf(process.platform !== 'linux')('run() with nice 19 starts the tool at niceness 19', async () => {
+    const own = getPriority();
     const r = await run('cat', ['/proc/self/stat'], { timeoutMs: budgetMs(5000), nice: 19 });
-    const fields = r.stdout.slice(r.stdout.lastIndexOf(')') + 2).split(' ');
-    // Field 19 of /proc/<pid>/stat is the niceness; the slice starts at field 3.
-    expect(Number(fields[19 - 3])).toBe(19);
+    expect(niceOf(r.stdout)).toBe(19);
     const plain = await run('cat', ['/proc/self/stat'], { timeoutMs: budgetMs(5000) });
-    expect(Number(plain.stdout.slice(plain.stdout.lastIndexOf(')') + 2).split(' ')[16])).toBeLessThan(19);
+    assertPlainNice(niceOf(plain.stdout), own);
+  });
+
+  it('the plain-run assertion reads the runner’s own niceness, and below 19 wherever the runner is', () => {
+    expect(() => assertPlainNice(0, 0)).not.toThrow();
+    expect(() => assertPlainNice(19, 19)).not.toThrow();
+    // The original assertion, failing as it should where the runner is below 19 (CI).
+    expect(() => assertPlainNice(19, 0)).toThrow(/to be less than 19/);
+    // The stronger one: a plain run() that reads another niceness than the runner's own.
+    expect(() => assertPlainNice(5, 0)).toThrow(/to be \+?0 /);
+    expect(() => assertPlainNice(0, 19)).toThrow(/to be 19/);
+  });
+
+  it('run() with nice 19 spawns the tool through nice -n 19, whatever the runner’s niceness', async () => {
+    // The runner's own niceness decides what a started process reads, so this reads the argv instead: a `nice`
+    // stub first on PATH records its arguments and starts the real one.
+    const real = (process.env.PATH ?? '')
+      .split(delimiter)
+      .map((d) => join(d, 'nice'))
+      .find((f) => {
+        try {
+          accessSync(f, constants.X_OK);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+    expect(real).toBeTruthy();
+    const dir = tempDir('ordo-nice-');
+    const bin = join(dir, 'bin');
+    const record = join(dir, 'argv');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'nice'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${record}'\nexec '${real}' "$@"\n`);
+    chmodSync(join(bin, 'nice'), 0o755);
+    const env = {
+      PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`,
+      HOME: process.env.HOME,
+      LANG: 'C.UTF-8',
+    };
+    await run('true', [], { timeoutMs: budgetMs(5000), nice: 19, env });
+    expect(readFileSync(record, 'utf8')).toBe('-n 19 true\n');
+    // A run without `nice` does not go through it.
+    rmSync(record);
+    await run('true', [], { timeoutMs: budgetMs(5000), env });
+    expect(existsSync(record)).toBe(false);
   });
 
   it('a light job’s ffmpeg gets one thread and niceness 19 only while live with Phones on', () => {
