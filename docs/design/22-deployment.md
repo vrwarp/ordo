@@ -96,7 +96,7 @@ collections and removed again after the install; for LibreOffice and the hub's m
 Korean table cells, never registered as library fonts), and copies `apps/hub/dist` and the built browser apps.
 The copyright file of every package the image installs stays in `/usr/share/doc/<package>/copyright` (the
 licence notices of ffmpeg, Chromium, LibreOffice and the rest, as Debian ships them, not only the fonts'; every
-other file of that folder is removed); the pull-request job lists the packages without one and fails for the
+other file of that folder is removed, but the fonts' folders, which stay as they were); the pull-request job lists the packages without one and fails for the
 product's own.
 Runs as a non-root user under tini, entrypoint the supervisor. Health check `GET /api/v1/health` (answered by the live process; it reports the library
 process state too).

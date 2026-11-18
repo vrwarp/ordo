@@ -24,7 +24,8 @@
  *   says it has) and posted with its scene (`clientScene`), so the run measures the path operators take;
  *   each record says whether the hub used the scene (its job log) and the parse's time. The first parse waits
  *   until the hub has registered its bundled fonts (`waitForBundledFonts`): before that its library lists only
- *   some of its faces.
+ *   some of its faces. A hub of this version listens only once they are registered (at most
+ *   `ORDO_FONTS_WAIT_MS`, design/12), so the wait is a guard for an older hub and for one with the wait off.
  * - **`--equivalence`** (implies `--client-scene`): each deck is imported twice, with its scene and parsed by
  *   the hub itself, and the two stored presentations are compared modulo ids, media ids (by file), times and
  *   the import log (`equivalence.ts`); every difference is listed per deck in `equivalence.json`. A deck whose

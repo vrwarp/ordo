@@ -545,8 +545,9 @@ exist.
 `ORDO_FONTS_DIR` (the image sets `/usr/share/fonts`) is where the hub finds its bundled fonts, and
 `ORDO_FONTS_WAIT_MS` (a whole number from 0 to 30000, default 2000; 0 = do not wait) is how long the hub waits for
 them to be registered as library fonts before it listens (the library process before it says it is ready): on a
-fresh data folder, or after an image with new fonts, that takes a fraction of a second, and a hub that already has
-them finds every row unchanged. Past the bound the hub listens anyway and logs `bundled fonts not registered in
+fresh data folder, or after an image with new fonts, that takes a fraction of a second (about 70 ms for the 24 faces
+of a development machine's `/usr/share/fonts`), and a hub that already has them finds every row unchanged and still
+reads and hashes the files (about 50 ms there). Past the bound the hub listens anyway and logs `bundled fonts not registered in
 time`.
 
 The hub answers only for hosts it knows: `ORDO_DOMAIN` and any label under it, `localhost`
