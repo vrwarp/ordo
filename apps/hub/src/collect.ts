@@ -244,10 +244,11 @@ export class RefIndex {
     );
   }
 
-  /** Marks of files that are not content files any more (their row went another way). */
+  /** Marks of files that are not content files any more (their row went another way): one probe a mark, no list. */
   dropOrphanMarks(): void {
     this.q(
-      `DELETE FROM collect_marks WHERE hash NOT IN (SELECT hash FROM files WHERE mime = 'application/json')`,
+      `DELETE FROM collect_marks WHERE NOT EXISTS
+         (SELECT 1 FROM files f WHERE f.hash = collect_marks.hash AND f.mime = 'application/json')`,
     ).run();
   }
 
