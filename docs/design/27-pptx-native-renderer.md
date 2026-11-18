@@ -1885,11 +1885,11 @@ vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, 
     both kinds of hub. At the 1b head those hubs stored 0.444 (slide 2, LibreOffice's picture drawn with that font
     set) or 0.490 (slide 2 without LibreOffice, the table left out), 0.593, 0.538 and 0.439: slide 2 is 0.023 / 0.069
     lower there, that font set's form of Q1c-1's drop, slide 19 0.003 lower, slide 20 0.083 higher; its LibreOffice
-    drew Korean as empty boxes (probed). With Noto Sans CJK, measured with 1c as first reviewed (f9bfa52's code,
-    before repair 1; not yet measured again with this code): against LibreOffice's page drawn with the image's fonts
+    drew Korean as empty boxes (probed). With Noto Sans CJK, measured with this code (the merged 1c head; the same
+    four numbers as with 1c as first reviewed): against LibreOffice's page drawn with the image's fonts
     (this machine's LibreOffice 24.2) 0.751, 0.5925, 0.719 and 0.700 (0.410, 0.554, 0.449 and 0.457 before), slide 18
     0.0075 under 0.60; against this machine's page 0.391, 0.518, 0.488 and 0.454, none at 0.60. Both go to the owner,
-    with five drops of 0.005 or more on the extension set (§15, ko-cells).
+    with six drops of 0.005 or more on the extension set (§15, ko-cells).
   - **The table's outer shadow is read, not drawn** (rule 4): slide 2's table casts one; LibreOffice draws it, ordo
     notes it on the slide (0.697 without it; about 0.717 with it, measured in the planner's prototype).
   - Held out (`regroup/r2b/integrate-1c.md`): the 59 other table slides of the frozen list (tiers A and B, 38 that 1b
@@ -3319,12 +3319,12 @@ Two rules, both for measuring only, and the browser's parse kept equal to the hu
   were measured with it (a 1.172 em line), lower than at the 1b head on three extension slides (ext06 slides 6 and 7,
   ext07 slide 19: -0.020, -0.005, -0.028; integrate-1c.md, "Repair 1"). Noto Sans CJK's Hangul is narrower and its
   lines taller than WenQuanYi Zen Hei's (this measuring computer's face), so the image's hubs store other rows than
-  this computer's. **Measured on the image's fonts with 1c as first reviewed** (`regroup/r2b/1c/cjk-image/`:
-  f9bfa52's code, before integrate-1c repair 1 put rule G's gap inside its character's run and made rule H check a
-  dozen letters; the numbers with the font are not yet measured again with this code, while (A)'s Korean numbers
-  without it were and are identical, integrate-1c.md "Repair 1"; bookworm's font packages under private fontconfig
-  files; real hubs of that code, with and without LibreOffice, identical on both; this machine's LibreOffice 24.2,
-  not the image's 7.4.7), the Korean slides 2, 18, 19 and 20, before -> after the font:
+  this computer's. **Measured on the image's fonts with this code** (`regroup/r2b/land-1c/image/`: the merged 1c
+  head, after integrate-1c repair 1 put rule G's gap inside its character's run and made rule H check a dozen
+  letters; the Korean deck's 20 slides score exactly as with 1c as first reviewed, `regroup/r2b/1c/cjk-image/`;
+  bookworm's font packages under private fontconfig files; real hubs of this code, with and without LibreOffice,
+  identical on both; this machine's LibreOffice 24.2, not the image's 7.4.7), the Korean slides 2, 18, 19 and 20,
+  before -> after the font:
   - **(B) against LibreOffice's page drawn with the image's fonts** (what a venue on the image compares, assuming
     its screens draw Korean with Noto Sans CJK, as the measuring tool's screen did; Google's Noto Sans KR, the same
     design, once the venue adds it): 0.410 -> 0.751, 0.554 -> **0.5925**, 0.449 -> 0.719, 0.457 -> 0.700. Slide 18 stays
@@ -3342,9 +3342,12 @@ Two rules, both for measuring only, and the browser's parse kept equal to the hu
     1.260 em lines and 1.0 em Hangul. LibreOffice's own page with the image's fonts scores 0.394, 0.506, 0.478 and
     0.448 against this machine's page.
   - The deck's 16 other slides score the same in (A) before and after. Sub-wave 1c's extension set (10 table slides
-    of public decks, outside the 0.60 rule): all at or above 0.60 in (B) after; in (A) two stay under it (0.584 and
-    0.427 after). Five drops of 0.005 or more go to the owner with slide 18 (three in (A), up to 0.100; two in (B),
-    up to 0.028).
+    of public decks, outside the 0.60 rule): all at or above 0.60 in (B) after; in (A) two stay under it (0.586 and
+    0.427 after). Six drops of 0.005 or more go to the owner with slide 18 (five in (A), up to 0.063; one in (B),
+    0.028). With 1c as first reviewed there were five (three in (A), up to 0.100; two in (B), up to 0.028): repair 1
+    raises two of the slides with the font (in (B) by 0.078 and 0.010), and, keeping no face for Han on the font set
+    before it, raises two slides' "before" in (A) (by 0.020 and 0.028), which makes them drops there, and lowers the
+    largest drop's (0.100 -> 0.063).
 - **The browser's scene is refused for such a deck** (`clientScene.ts` `SCRIPT_FACE_REFUSAL`, in the
   `pptx-client-scene` task): a browser cannot measure with the hub's computer's faces, so a scene whose table cells
   hold a script the hub measures with a system face (`systemOnlyScripts`) is refused and the hub parses the deck
@@ -3420,8 +3423,9 @@ on a hub with it (0.947), nothing on one without (0.490, the table listed missin
   planner's run without rule H's face), and that image's LibreOffice drew the Korean letters as empty boxes (Q1c-1,
   Q1c-2). The image now installs Noto Sans CJK (§10), with which its LibreOffice draws them: slide 2 measures 0.751
   against LibreOffice's page drawn with the image's fonts (0.410 before the font; this machine's LibreOffice 24.2,
-  not the image's 7.4.7) and 0.391 against this machine's, both with 1c as first reviewed (ko-cells above,
-  `regroup/r2b/1c/cjk-image/`). Details: `regroup/r2b/1c/vert-cells/notes.md`, `probe/probe-a.md`.
+  not the image's 7.4.7) and 0.391 against this machine's, both measured with this code (the same as with 1c as first
+  reviewed; ko-cells above, `regroup/r2b/land-1c/image/`). Details: `regroup/r2b/1c/vert-cells/notes.md`,
+  `probe/probe-a.md`.
 <!-- /r2b:vert-cells -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
