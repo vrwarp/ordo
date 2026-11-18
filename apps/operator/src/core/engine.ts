@@ -208,6 +208,8 @@ export class CoreEngine {
   private copySavedId?: string;
   private copyWanted?: { id: string; resolved: ResolvedPlaylist; cues: Cue[] };
   private copyCtl?: AbortController;
+  /** The id whose save is under way: a GO that names it again must not restart (abort) it. */
+  private copySavingId?: string;
 
   private post: Post;
   private store: JsonStore;
@@ -1141,7 +1143,7 @@ export class CoreEngine {
     const held = this.hub.copies;
     if (st.mode !== 'live' || !st.resolved || held.id === undefined || st.resolved !== held.value)
       return snap;
-    if (this.copySavedId !== held.id && this.copyWanted?.id !== held.id) {
+    if (this.copySavedId !== held.id && this.copyWanted?.id !== held.id && this.copySavingId !== held.id) {
       this.copyCtl?.abort();
       this.copyWanted = { id: held.id, resolved: st.resolved, cues: st.cues };
       setTimeout(() => this.runCopySave(), COPY_SAVE_AFTER_MS);
@@ -1156,8 +1158,12 @@ export class CoreEngine {
     this.copyWanted = undefined;
     const ctl = new AbortController();
     this.copyCtl = ctl;
+    this.copySavingId = w.id;
     void saveCopy(this.store, COPY_SCOPE, w.id, w.resolved, w.cues, { signal: ctl.signal }).then((r) => {
-      if (this.copyCtl === ctl) this.copyCtl = undefined;
+      if (this.copyCtl === ctl) {
+        this.copyCtl = undefined;
+        this.copySavingId = undefined;
+      }
       if (r === 'saved' || r === 'present') this.copySavedId = w.id;
       else if (r === 'failed') this.persistFailures++;
     });

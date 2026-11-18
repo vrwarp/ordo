@@ -413,6 +413,8 @@ export class LinkCore {
     presented: number;
   };
   private copyCtl?: AbortController;
+  /** The id whose save is under way: a GO that names it again must not restart (abort) it. */
+  private copySavingId?: string;
   private viewQueued = false;
   private started = false;
   /** The persisted state has been read (or timed out): planning may start. */
@@ -956,7 +958,7 @@ export class LinkCore {
 
   /** The copy of this service is to be saved (once per id): at the next tick after a frame was presented. */
   private wantCopy(id: string, resolved: ResolvedPlaylist, cues: Cue[]): void {
-    if (this.copySavedId === id || this.copyWanted?.id === id) return;
+    if (this.copySavedId === id || this.copyWanted?.id === id || this.copySavingId === id) return;
     this.copyCtl?.abort();
     this.copyWanted = {
       id,
@@ -981,10 +983,14 @@ export class LinkCore {
     this.copyWanted = undefined;
     const ctl = new AbortController();
     this.copyCtl = ctl;
+    this.copySavingId = w.id;
     const t0 = Date.now();
     void saveCopy(this.json, this.link.outputId, w.id, w.resolved, w.cues, { signal: ctl.signal }).then(
       (r) => {
-        if (this.copyCtl === ctl) this.copyCtl = undefined;
+        if (this.copyCtl === ctl) {
+          this.copyCtl = undefined;
+          this.copySavingId = undefined;
+        }
         if (r === 'saved' || r === 'present') {
           this.copySavedId = w.id;
           this.diagLog(`service copy saved (${r}, ${Date.now() - t0} ms)`);

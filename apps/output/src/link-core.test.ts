@@ -1720,15 +1720,23 @@ function recordingKv() {
   const sets: Set[] = [];
   let failAt: number | undefined;
   let copyPuts = 0;
+  let slowMs = 0;
   const kv = {
     get: async (k: string) => structuredClone(map.get(k)) as never,
     set: async (k: string, v: unknown) => {
+      if (k.startsWith('copy:') && slowMs) await new Promise((r) => setTimeout(r, slowMs));
       if (k.startsWith('copy:') && failAt !== undefined && ++copyPuts === failAt) throw new Error('quota');
       sets.push({ key: k, bytes: JSON.stringify(v ?? null).length });
       map.set(k, structuredClone(v));
     },
   };
-  return { map, sets, kv, failCopyPutAt: (n: number) => (failAt = n) };
+  return {
+    map,
+    sets,
+    kv,
+    failCopyPutAt: (n: number) => (failAt = n),
+    slowCopyPuts: (ms: number) => (slowMs = ms),
+  };
 }
 
 /** The fixture service padded to about `mib` MiB with unreferenced presentations of `kb` KB each. */
@@ -1772,7 +1780,14 @@ async function started(kv = recordingKv(), state?: LiveState) {
       await tick(1);
     }
   };
-  return { t, c, kv, present, ticks };
+  /** Until the copy's marker is written (the pieces are saved a task at a time: under load, a few real milliseconds). */
+  const saved = async () => {
+    for (let i = 0; i < 200 && !kv.map.has('copy:o1'); i++) {
+      vi.advanceTimersByTime(250);
+      await tick(10);
+    }
+  };
+  return { t, c, kv, present, ticks, saved };
 }
 const records = (kv: ReturnType<typeof recordingKv>) => kv.sets.filter((x) => x.key === 'state:o1');
 const copySets = (kv: ReturnType<typeof recordingKv>) => kv.sets.filter((x) => x.key.startsWith('copy:'));
@@ -1808,12 +1823,13 @@ describe('the saved record of a window (live-by-ref)', () => {
   it('across 10 GOs the copy is written once (parts, cue list, head, marker) and later GOs write only the small record', async () => {
     const kv = recordingKv();
     const s = padded(2);
-    const { t, present, ticks } = await started(kv, s);
+    const { t, present, ticks, saved } = await started(kv, s);
     for (let i = 1; i <= 10; i++) {
       t.hub.emit('state', stateMsg({ ...s, seq: s.seq + i }));
       present(i);
       await ticks(2);
     }
+    await saved();
     await ticks(4);
     const n = Object.keys(s.resolved!.presentations).length;
     expect(copySets(kv).length).toBe(n + 3);
@@ -1823,12 +1839,32 @@ describe('the saved record of a window (live-by-ref)', () => {
     t.close();
   });
 
+  it('a GO while the copy is still being saved does not restart that save', async () => {
+    // a slow store (each piece a few real milliseconds): the 10 GOs below all arrive while the save is under way
+    const kv = recordingKv();
+    kv.slowCopyPuts(4);
+    const s = padded(1);
+    const { t, present, ticks, saved } = await started(kv, s);
+    present(1);
+    await ticks(2);
+    for (let i = 1; i <= 10; i++) {
+      t.hub.emit('state', stateMsg({ ...s, seq: s.seq + i }));
+      await ticks(1);
+    }
+    await saved();
+    await ticks(4);
+    const n = Object.keys(s.resolved!.presentations).length;
+    expect(copySets(kv).length).toBe(n + 3);
+    t.close();
+  });
+
   it('no single put is larger than the biggest presentation plus the head', async () => {
     const kv = recordingKv();
     const s = padded(1, 100, { huge: 1024 * 1024 });
-    const { t, present, ticks } = await started(kv, s);
+    const { t, present, ticks, saved } = await started(kv, s);
     present(1);
-    await ticks(4);
+    await ticks(2);
+    await saved();
     expect(copySets(kv).length).toBeGreaterThan(5);
     expect(Math.max(...copySets(kv).map((x) => x.bytes))).toBeLessThan(1.1 * 1024 * 1024);
     t.close();

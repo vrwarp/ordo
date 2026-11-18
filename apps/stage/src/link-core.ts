@@ -96,6 +96,8 @@ export class StageLinkCore {
   private copySavedId?: string;
   private copyWanted?: { id: string; resolved: ResolvedPlaylist; cues: Cue[] };
   private copyCtl?: AbortController;
+  /** The id whose save is under way: a GO that names it again must not restart (abort) it. */
+  private copySavingId?: string;
   private copyTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly clock: HubClock;
   private readonly now: () => number;
@@ -391,7 +393,7 @@ export class StageLinkCore {
 
   /** The copy of this service is to be saved (once per id): after the next view this stage publishes, or in 5 s. */
   private wantCopy(id: string, resolved: ResolvedPlaylist, cues: Cue[]): void {
-    if (this.copySavedId === id || this.copyWanted?.id === id) return;
+    if (this.copySavedId === id || this.copyWanted?.id === id || this.copySavingId === id) return;
     this.copyCtl?.abort();
     if (this.copyTimer) clearTimeout(this.copyTimer);
     this.copyWanted = { id, resolved, cues };
@@ -407,10 +409,14 @@ export class StageLinkCore {
     this.copyWanted = undefined;
     const ctl = new AbortController();
     this.copyCtl = ctl;
+    this.copySavingId = w.id;
     const t0 = this.now();
     void saveCopy(this.deps.json, this.outputId, w.id, w.resolved, w.cues, { signal: ctl.signal }).then(
       (r) => {
-        if (this.copyCtl === ctl) this.copyCtl = undefined;
+        if (this.copyCtl === ctl) {
+          this.copyCtl = undefined;
+          this.copySavingId = undefined;
+        }
         if (r === 'saved' || r === 'present') {
           this.copySavedId = w.id;
           this.diagLog(`service copy saved (${r}, ${this.now() - t0} ms)`);
