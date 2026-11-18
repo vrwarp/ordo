@@ -1890,7 +1890,12 @@ vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, 
     question Q1c-4) are all at or above 0.60 on both kinds of hub (two from under it: 0.584 -> 0.683 and 0.375 ->
     0.726) and none fell by 0.005 or more (one 0.002 lower, noise); a probe hold-out deck written after the rules were
     frozen rose on 13 of its 14 slides on both kinds of hub, the 14th (the scope check) identical (integrate-1c repair
-    1, after rule G's gap moved into its character's run). `CONVERTER_VERSION` stays 2 (§15, tables-form).
+    1, after rule G's gap moved into its character's run). Repair 1's fix of rule G was tested on that deck's slides
+    2, 8 and 10 (`tables.lines.test.ts`, LibreOffice's PDF rows as the expected values) and checked on all 114 of its
+    cells, so the deck's rise after the repair is not held-out evidence for the repaired rule G: the ten public slides
+    are the only unseen check of it (all ten at or above 0.60, none 0.005 or more under the 1b head; two of them
+    0.013 and 0.015 below 1c as first reviewed, the cause not known yet: not the gap's size, LibreOffice's own height
+    / 5 giving the same scores; integrate-1c repair 2). `CONVERTER_VERSION` stays 2 (§15, tables-form).
 - _Left to a follow-up pull request (the owner, 2026-11-17: once the minimum is met, table and text fidelity work
   stops chasing LibreOffice; with sub-waves 2-4):_
   - LibreOffice's glyph-advance model and one row measure (`tables-widths`): with the harness's faces, 148 of
@@ -1909,7 +1914,9 @@ vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, 
     and the Hangul after it inside a word, where ordo keeps the word; rule G's gap as LibreOffice sizes it, the
     height of the face of the portion before the boundary divided by 5 (`trunc(loLineHeight / 5)`, with a probe row
     after Arial and Carlito: the quarter is about 0.64 pt wide after Liberation Sans at 24 pt, and still gives
-    LibreOffice's line count on every probe cell); the 1/4 em stored in the cells' text too (option F, 0.699 on
+    LibreOffice's line count on every probe cell); why two of the ten public slides with CJK cells fell 0.013 and
+    0.015 with repair 1's fix of rule G (LibreOffice's rows of those cells, read inside the measuring tool, against
+    the model's); the 1/4 em stored in the cells' text too (option F, 0.699 on
     slide 20) only if owner question Q1c-3 is answered no. A CJK face for the shipped hub image (fonts-wqy-zenhei) or the library (Noto Sans KR and
     the other CJK faces) so rule H holds there (Q1c-2). The bulletin's non-table slides under 0.60 (5, 12, 14, 11
     and 4, unchanged by 1c) are not table slides. The other script table slides (Coptic and Arabic cells) are
