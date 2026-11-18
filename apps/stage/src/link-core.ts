@@ -4,13 +4,24 @@
  * IndexedDB persistence, invariant checks and health.
  */
 import { type FileStore, fillCache } from '@ordo/cache';
-import { clock as defaultClock, fileUrl, type HubClock, type OutputLink } from '@ordo/client';
 import {
+  clock as defaultClock,
+  fileUrl,
+  type HubClock,
+  joinSaved,
+  loadCopy,
+  type OutputLink,
+  saveCopy,
+  slimState,
+} from '@ordo/client';
+import {
+  type Cue,
   DEFAULT_GENERAL,
   type Font,
   type LiveState,
   type Look,
   type ManifestFile,
+  type ResolvedPlaylist,
   type SlideContent,
 } from '@ordo/domain';
 import { checkInvariants, isLiveStateShape } from '@ordo/live-state';
@@ -42,6 +53,8 @@ export type CoreDeps = {
 
 /** The state is saved at most this often while it changes. */
 const SAVE_DEBOUNCE_MS = 500;
+/** The service's copy is saved after the stage published a view, and at the latest this long after it arrived. */
+const COPY_SAVE_LATEST_MS = 5000;
 const LOG_MAX = 50;
 /** Fonts that failed to download are tried again after this long. */
 const FONT_RETRY_MS = 10_000;
@@ -87,6 +100,11 @@ export class StageLinkCore {
   /** The last state that passed the invariant checks: what the stage draws. */
   private good: LiveState;
   private hasGood = false;
+  /** The copy of the service saved on this window (or loaded from it) and the save wanted next. */
+  private copySavedId?: string;
+  private copyWanted?: { id: string; resolved: ResolvedPlaylist; cues: Cue[] };
+  private copyCtl?: AbortController;
+  private copyTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly clock: HubClock;
   private readonly now: () => number;
   private stopped = false;
@@ -159,7 +177,9 @@ export class StageLinkCore {
     // Offline start: the last config and state from IndexedDB, before any connection.
     const [cfg, saved, held] = await Promise.all([
       this.deps.json.get<OutputConfigRes>(`config:${this.outputId}`).catch(() => undefined),
-      this.deps.json.get<{ state: LiveState }>(`state:${this.outputId}`).catch(() => undefined),
+      this.deps.json
+        .get<{ state: LiveState; copy?: string }>(`state:${this.outputId}`)
+        .catch(() => undefined),
       this.deps.json.get<{ at: number }>(`held:${this.outputId}`).catch(() => undefined),
     ]);
     if (this.stopped) return;
@@ -174,13 +194,27 @@ export class StageLinkCore {
       void this.deps.json.set(`held:${this.outputId}`, on ? { at: this.now() } : null).catch(() => undefined);
     });
     if (cfg && !this.config) this.applyConfig(cfg);
-    if (saved?.state && !link.mirror.ready && isLiveStateShape(saved.state)) {
-      const bad = checkInvariants(saved.state);
+    let cached: LiveState | undefined = saved?.state;
+    if (saved && typeof saved.copy === 'string') {
+      // The record names a copy (live-by-ref): only a complete saved copy with that id paints, joined to the
+      // record; anything else waits for the hub. The joined copy is the one the first hello says it holds.
+      const copy = await loadCopy(this.deps.json, this.outputId).catch(() => undefined);
+      if (copy && copy.id === saved.copy) {
+        cached = joinSaved(saved.state as never, copy);
+        link.hub.copies.seed(copy.id, copy.resolved);
+        this.copySavedId = copy.id;
+      } else {
+        cached = undefined;
+        this.diagLog('the saved service copy is not complete; waiting for the hub');
+      }
+    }
+    if (cached && !link.mirror.ready && isLiveStateShape(cached)) {
+      const bad = checkInvariants(cached);
       if (bad.length) this.diagLog(`cached state violates invariants (${bad[0]}); not painted`);
       else {
         this.offlineStart = true;
-        link.mirror.applyState(saved.state);
-        this.diagLog(`painted cached state seq ${saved.state.seq}`);
+        link.mirror.applyState(cached);
+        this.diagLog(`painted cached state seq ${cached.seq}`);
       }
     }
     link.start();
@@ -347,10 +381,47 @@ export class StageLinkCore {
       this.saveTimer = null;
       const state = this.good;
       if (!this.hasGood) return;
-      this.deps.json.set(`state:${this.outputId}`, { state, savedAt: this.now() }).catch((e: Error) => {
+      // What a GO writes is small whatever the service: the state without its copy and cue list and the copy's
+      // id; the copy and the cue list are saved once, in pieces, off the GO (`runCopySave`). A copy the hub did
+      // not give this window (the fallback bus's) is saved whole, as before.
+      const held = this.link.hub.copies;
+      const named = state.mode === 'live' && !!state.resolved && held.id !== undefined && state.resolved === held.value;
+      if (named) this.wantCopy(held.id as string, state.resolved as ResolvedPlaylist, state.cues);
+      const record = named
+        ? { state: slimState(state), copy: held.id, savedAt: this.now() }
+        : { state, savedAt: this.now() };
+      this.deps.json.set(`state:${this.outputId}`, record).catch((e: Error) => {
         this.diagLog(`state not saved: ${e.message}`);
       });
     }, SAVE_DEBOUNCE_MS);
+  }
+
+  /** The copy of this service is to be saved (once per id): after the next view this stage publishes, or in 5 s. */
+  private wantCopy(id: string, resolved: ResolvedPlaylist, cues: Cue[]): void {
+    if (this.copySavedId === id || this.copyWanted?.id === id) return;
+    this.copyCtl?.abort();
+    if (this.copyTimer) clearTimeout(this.copyTimer);
+    this.copyWanted = { id, resolved, cues };
+    this.copyTimer = setTimeout(() => this.runCopySave(), COPY_SAVE_LATEST_MS);
+  }
+
+  /** Save the wanted copy in pieces, a task of its own; a failure is one diagnostic line (see the output's). */
+  private runCopySave(): void {
+    const w = this.copyWanted;
+    if (this.copyTimer) clearTimeout(this.copyTimer);
+    this.copyTimer = null;
+    if (!w || this.stopped) return;
+    this.copyWanted = undefined;
+    const ctl = new AbortController();
+    this.copyCtl = ctl;
+    const t0 = this.now();
+    void saveCopy(this.deps.json, this.outputId, w.id, w.resolved, w.cues, { signal: ctl.signal }).then((r) => {
+      if (this.copyCtl === ctl) this.copyCtl = undefined;
+      if (r === 'saved' || r === 'present') {
+        this.copySavedId = w.id;
+        this.diagLog(`service copy saved (${r}, ${this.now() - t0} ms)`);
+      } else if (r === 'failed') this.diagLog('the service copy could not be saved on this computer');
+    });
   }
 
   // ---- view ----
@@ -358,6 +429,11 @@ export class StageLinkCore {
   /** Post the view when it changed. */
   publish(): void {
     if (this.stopped) return;
+    // A view is going out: the copy wanted is saved in a task of its own right after it.
+    if (this.copyWanted) {
+      if (this.copyTimer) clearTimeout(this.copyTimer);
+      this.copyTimer = setTimeout(() => this.runCopySave(), 0);
+    }
     const g = this.config?.general ?? DEFAULT_GENERAL;
     const look = this.look();
     const view = buildView({
