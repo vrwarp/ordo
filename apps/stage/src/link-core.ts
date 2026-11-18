@@ -4,16 +4,8 @@
  * IndexedDB persistence, invariant checks and health.
  */
 import { type FileStore, fillCache } from '@ordo/cache';
-import {
-  clock as defaultClock,
-  fileUrl,
-  type HubClock,
-  joinSaved,
-  loadCopy,
-  type OutputLink,
-  saveCopy,
-  slimState,
-} from '@ordo/client';
+import { clock as defaultClock, fileUrl, type HubClock, type OutputLink } from '@ordo/client';
+import { joinSaved, loadCopy, saveCopy, slimState } from '@ordo/client/savedLive.ts';
 import {
   type Cue,
   DEFAULT_GENERAL,

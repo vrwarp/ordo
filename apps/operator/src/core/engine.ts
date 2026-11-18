@@ -8,11 +8,8 @@ import {
   portEndpoint,
   api,
   type ClientMessageBody,
-  joinSaved,
-  loadCopy,
-  saveCopy,
-  slimState,
 } from '@ordo/client';
+import { joinSaved, loadCopy, saveCopy, slimState } from '@ordo/client/savedLive.ts';
 import {
   type Cue,
   formatBytes,
