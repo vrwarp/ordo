@@ -91,6 +91,7 @@ const LIBRARY_API: Row[] = [
   ['PUT', '/api/v1/settings/:key', 'operate', 'full'],
   ['POST', '/api/v1/outputs/:id/token/rotate', 'operate', 'full'],
   ['GET', '/api/v1/files/:hash', 'any', 'view'],
+  ['PUT', '/api/v1/files/slide/:hash', 'edit', 'full'],
   ['GET', '/api/v1/diagnostics/export', 'operate', 'full'],
   ['POST', '/api/v1/backup/run', 'operate', 'full'],
   ['GET', '/api/v1/backup/list', 'operate', 'full'],
