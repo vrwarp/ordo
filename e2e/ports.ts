@@ -191,6 +191,19 @@ export const PORT_TABLE = {
     spec: 'units-live.spec.ts',
     what: '0 hub (a jump to a slide not prepared; a GO 50 ms after its arm), 1 hub (the playlist warmed ahead)',
   },
+  // leaf-editor (sub-wave 2): the editor draws line art, shadows and glows whole, in idle time, never while live.
+  'editor-whole': {
+    offset: 410,
+    count: 1,
+    spec: 'editor-whole.spec.ts',
+    what: 'hub without LibreOffice (a line art deck, two effects slides, a live service)',
+  },
+  'ipad-editor-whole': {
+    offset: 412,
+    count: 3,
+    spec: 'ipad/editor-whole.spec.ts',
+    what: '0 webkit-ipad, 1 webkit-ipad-portrait, 2 chromium-tablet',
+  },
   'editor-table': { offset: 420, count: 1, spec: 'editor-table.spec.ts', what: 'hub' },
   'ipad-table-targets': {
     offset: 421,
