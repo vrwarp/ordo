@@ -70,7 +70,7 @@ function restarted(s: Svc, byRef?: boolean): LiveService {
   again.restore();
   return again;
 }
-const same = (a: LiveState, b: LiveState) => expect(JSON.stringify(a) === JSON.stringify(b)).toBe(true);
+const same = (a: LiveState, b: LiveState) => expect(a).toEqual(b);
 
 describe('rows (step 4)', () => {
   it('a goLive writes the copy twice, names it in the snapshot and the journal, and keeps the snapshot small', async () => {
@@ -321,14 +321,18 @@ describe('naming (steps 4 and 5)', () => {
         name: 'Sunday',
         items: [{ id: 'i1', kind: 'presentation', presentationId: p.id }],
       } as never);
-      const spy = stringifySpy((a) => !!a.presentations && !!a.playlist && !!a.manifestId);
       hub.live.submit({ k: 'goLive', playlistId: pl.id }, OP);
+      // the goLive named the copy (the apply's one serialisation, with its journal row, snapshot and delta by
+      // name): nothing after it serialises the copy again, however many sockets ask for it
+      const spy = stringifySpy((a) => !!a.presentations && !!a.playlist && !!a.manifestId);
       const first = hub.live.resolvedCopy();
       const second = hub.live.resolvedCopy();
+      hub.live.snapshot(true);
       spy.restore();
       expect(first?.id).toMatch(/^[0-9a-f]{64}$/);
+      expect(sha(first!.json)).toBe(first!.id);
       expect(second).toBe(first);
-      expect(spy.count()).toBeLessThanOrEqual(1);
+      expect(spy.count()).toBe(0);
     } finally {
       await hub.cleanup();
     }

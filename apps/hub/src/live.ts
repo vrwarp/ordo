@@ -25,11 +25,13 @@ import {
   reduce,
 } from '@ordo/live-state';
 import type { Logger } from 'pino';
-import type { DB } from './db.ts';
+import { type DB, LIVE_RESOLVED_SQL } from './db.ts';
 import { GoLiveWorker, type PrepareOutput } from './golive-worker.ts';
 import type { Library } from './library.ts';
 
 export class LiveRejection extends Error {}
+
+const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
 export type Origin =
   | { role: 'operate'; id?: string }
@@ -154,6 +156,11 @@ export function librarySource(lib: Library): LiveSource {
 }
 
 const JOURNAL_KEEP = 5000;
+/** A copy's id: the SHA-256 of its bytes, hex. */
+const RESOLVED_ID = /^[0-9a-f]{64}$/;
+/** What the by-name forms look like (see `snapshotText` and `apply`): the id is at a fixed place, never parsed for. */
+const SNAPSHOT_TAIL = ',"resolvedId":"';
+const JOURNAL_GOLIVE_HEAD = '{"k":"goLive","resolvedId":"';
 /** Snapshots kept besides the current one; restore falls back through them (design/25). */
 export const SNAPSHOTS_PREV_KEEP = 2;
 /** Operator `at` values outside [now - AT_PAST_MS, now + AT_FUTURE_MS] are replaced by now + AT_REPLACE_MS. */
@@ -200,17 +207,22 @@ export class LiveService {
   private db: DB;
   private source: LiveSource;
   private log: Logger;
-  private opts: { snapshotIntervalMs: number; now?: () => number };
+  private opts: { snapshotIntervalMs: number; now?: () => number; byRef?: boolean };
+  /** ORDO_LIVE_BYREF: the snapshot and the journal name the copy instead of holding it (default on). */
+  readonly byRef: boolean;
   constructor(
     db: DB,
     source: LiveSource,
     log: Logger,
-    opts: { snapshotIntervalMs: number; now?: () => number },
+    opts: { snapshotIntervalMs: number; now?: () => number; byRef?: boolean },
   ) {
     this.db = db;
     this.source = source;
     this.log = log;
     this.opts = opts;
+    this.byRef = opts.byRef ?? true;
+    // The table of the copies is the live service's own (see LIVE_RESOLVED_SQL): there on any database it runs on.
+    db.exec(LIVE_RESOLVED_SQL);
   }
 
   now(): number {
@@ -226,6 +238,8 @@ export class LiveService {
 
   start(): void {
     this.restore();
+    // Copies nothing names any more (an older run's, a torn write's) go once at start.
+    if (this.byRef) this.collect();
     this.snapshotTimer = setInterval(() => this.snapshot(), this.opts.snapshotIntervalMs);
     this.snapshotTimer.unref();
     this.scheduleAdvance();
@@ -272,6 +286,7 @@ export class LiveService {
     }
     let s: LiveState | undefined;
     let from = 'empty';
+    let restoredCopy: { id: string; json: Uint8Array; object: ResolvedPlaylist } | undefined;
     for (const c of candidates) {
       let parsed: unknown;
       try {
@@ -280,12 +295,25 @@ export class LiveService {
         warnings.push(`${c.where} (seq ${c.seq}) is not valid JSON`);
         continue;
       }
+      // A snapshot written by name holds the copy's id, not the copy: join it from the rows (both forms are read).
+      let named: { id: string; json: Uint8Array; object: ResolvedPlaylist } | undefined;
+      if (isRecord(parsed) && typeof parsed.resolvedId === 'string' && !('resolved' in parsed)) {
+        const id = parsed.resolvedId;
+        delete parsed.resolvedId;
+        named = this.readCopy(id, warnings);
+        if (!named) {
+          warnings.push(`${c.where} (seq ${c.seq}) names a copy that cannot be read`);
+          continue;
+        }
+        parsed.resolved = named.object;
+      }
       const why = LiveService.unsound(parsed);
       if (why) {
         warnings.push(`${c.where} (seq ${c.seq}) failed validation: ${why}`);
         continue;
       }
       s = parsed as LiveState;
+      restoredCopy = named;
       from = c.where;
       break;
     }
@@ -304,6 +332,15 @@ export class LiveService {
           warnings.push(`journal row ${r.seq} is not valid JSON; replay stopped`);
           break;
         }
+        let rowCopy: { id: string; json: Uint8Array; object: ResolvedPlaylist } | undefined;
+        if (isRecord(ev) && ev.k === 'goLive' && typeof ev.resolvedId === 'string' && !('resolved' in ev)) {
+          rowCopy = this.readCopy(ev.resolvedId, warnings);
+          if (!rowCopy) {
+            warnings.push(`journal row ${r.seq} names a copy that cannot be read; replay stopped`);
+            break;
+          }
+          ev = { k: 'goLive', resolved: rowCopy.object };
+        }
         if (!isLiveEventShape(ev)) {
           warnings.push(`journal row ${r.seq} is not a live event; replay stopped`);
           break;
@@ -321,12 +358,16 @@ export class LiveService {
           break;
         }
         s = next;
+        if (ev.k === 'goLive') restoredCopy = rowCopy;
+        else if (ev.k === 'endService') restoredCopy = undefined;
         replayed++;
       }
     } catch (e) {
       warnings.push(`journal unreadable: ${(e as Error).message}`);
     }
     this.state = s;
+    // The verified bytes of the joined copy are kept: the first state sent after a restart serialises nothing.
+    this.copy = restoredCopy && restoredCopy.object === s.resolved ? restoredCopy : undefined;
     this.restoreWarnings = warnings;
     for (const w of warnings) this.log.warn({ warning: w }, 'live restore');
     if (candidates.length || replayed)
@@ -348,9 +389,11 @@ export class LiveService {
     }
     try {
       this.db.transaction(() => {
+        const text = this.snapshotText();
         const cur = this.db.prepare(`SELECT seq FROM live_snapshot WHERE id = 1`).get() as
           | { seq: number }
           | undefined;
+        const rotated = !!cur && cur.seq !== this.state.seq;
         if (cur && cur.seq !== this.state.seq) {
           this.db
             .prepare(
@@ -365,11 +408,144 @@ export class LiveService {
         }
         this.db
           .prepare(`INSERT OR REPLACE INTO live_snapshot (id, seq, json, saved_at) VALUES (1, ?, ?, ?)`)
-          .run(this.state.seq, JSON.stringify(this.state), Date.now());
+          .run(this.state.seq, text, Date.now());
+        if (rotated || this.byRef) this.collect();
       })();
       this.dirty = false;
     } catch (e) {
       this.log.error({ err: (e as Error).message }, 'live snapshot failed');
+    }
+  }
+
+  /**
+   * The snapshot's text. A live state with a copy is written by name when ORDO_LIVE_BYREF is on: the state without
+   * its copy and cue list (small), the cue list's cached JSON (built once per goLive) and the copy's id LAST, so
+   * `resolvedIdsInUse` reads it from a fixed place of the row; the copy's two rows are written first if they are
+   * not there (a state restored whole is named here, once). An idle state, or any state with the switch off, is
+   * written whole as before this existed.
+   */
+  private snapshotText(): string {
+    const s = this.state;
+    if (!this.byRef || s.mode !== 'live' || !s.resolved) return JSON.stringify(s);
+    const c = this.resolvedCopy()!;
+    this.writeRows(c);
+    const { resolved: _r, cues: _c, ...rest } = s;
+    const head = JSON.stringify(rest);
+    return `${head.slice(0, -1)},"cues":${this.cuesJson(s.cues)}${SNAPSHOT_TAIL}${c.id}"}`;
+  }
+
+  /** The copy's two rows (copy 0 and 1, the same bytes): written if either is missing; never rewritten. */
+  private writeRows(c: { id: string; json: Uint8Array }): void {
+    const have = this.db.prepare(`SELECT copy FROM live_resolved WHERE resolved_id = ?`).all(c.id) as {
+      copy: number;
+    }[];
+    const bytes = Buffer.from(c.json.buffer, c.json.byteOffset, c.json.byteLength);
+    const put = this.db.prepare(
+      `INSERT OR IGNORE INTO live_resolved (resolved_id, copy, bytes, json, saved_at) VALUES (?, ?, ?, ?, ?)`,
+    );
+    for (const copy of [0, 1]) if (!have.some((h) => h.copy === copy)) put.run(c.id, copy, bytes.length, bytes, Date.now());
+  }
+
+  /**
+   * The copy named `id`, from the first of its two rows whose SHA-256 is the id and whose length is its `bytes`
+   * (a torn or flipped row is a warning, the other is tried). Undefined: neither can be read.
+   */
+  private readCopy(
+    id: string,
+    warnings: string[],
+  ): { id: string; json: Uint8Array; object: ResolvedPlaylist } | undefined {
+    if (!RESOLVED_ID.test(id)) {
+      warnings.push(`a copy is named by something that is not an id`);
+      return undefined;
+    }
+    for (const copy of [0, 1]) {
+      let row: { bytes: number; json: Buffer } | undefined;
+      try {
+        row = this.db.prepare(`SELECT bytes, json FROM live_resolved WHERE resolved_id = ? AND copy = ?`).get(id, copy) as
+          | { bytes: number; json: Buffer }
+          | undefined;
+      } catch (e) {
+        warnings.push(`copy ${copy} of ${id.slice(0, 12)} is unreadable: ${(e as Error).message}`);
+        continue;
+      }
+      if (!row) {
+        warnings.push(`copy ${copy} of ${id.slice(0, 12)} is missing`);
+        continue;
+      }
+      if (row.json.length !== row.bytes || createHash('sha256').update(row.json).digest('hex') !== id) {
+        warnings.push(`copy ${copy} of ${id.slice(0, 12)} failed its hash`);
+        continue;
+      }
+      try {
+        return { id, json: row.json, object: JSON.parse(row.json.toString('utf8')) as ResolvedPlaylist };
+      } catch {
+        warnings.push(`copy ${copy} of ${id.slice(0, 12)} is not valid JSON`);
+      }
+    }
+    return undefined;
+  }
+
+  /** A copy read from the rows and verified against its id (the hub's hand-back by name builds on it). */
+  readResolved(id: string): Uint8Array | undefined {
+    return this.readCopy(id, [])?.json;
+  }
+
+  /**
+   * The ids a restore may need: the in-memory service's, those the retained snapshots name (the current and the
+   * previous ones), and those a goLive journal row newer than the oldest retained snapshot names (a restore from
+   * a retained snapshot replays it).
+   */
+  resolvedIdsInUse(): Set<string> {
+    const used = new Set<string>();
+    if (this.state.mode === 'live' && this.copy?.object === this.state.resolved && this.copy) used.add(this.copy.id);
+    let oldest = Infinity;
+    try {
+      // The id is the last 64 characters of a by-name snapshot, after SNAPSHOT_TAIL: read as bytes, no parse.
+      const rows = this.db
+        .prepare(
+          `SELECT seq, CASE WHEN CAST(substr(CAST(json AS BLOB), -${SNAPSHOT_TAIL.length + 66}, ${SNAPSHOT_TAIL.length}) AS TEXT) = ?
+                THEN CAST(substr(CAST(json AS BLOB), -66, 64) AS TEXT) END AS rid
+             FROM (SELECT seq, json FROM live_snapshot UNION ALL SELECT seq, json FROM live_snapshot_prev)`,
+        )
+        .all(SNAPSHOT_TAIL) as { seq: number; rid: string | null }[];
+      for (const r of rows) {
+        oldest = Math.min(oldest, r.seq);
+        if (r.rid && RESOLVED_ID.test(r.rid)) used.add(r.rid);
+      }
+      const journal = this.db
+        .prepare(
+          `SELECT substr(event_json, ${JOURNAL_GOLIVE_HEAD.length + 1}, 64) AS rid FROM live_journal
+            WHERE kind = 'event' AND seq > ? AND substr(event_json, 1, ${JOURNAL_GOLIVE_HEAD.length}) = ?`,
+        )
+        .all(Number.isFinite(oldest) ? oldest : -1, JOURNAL_GOLIVE_HEAD) as { rid: string }[];
+      for (const r of journal) if (RESOLVED_ID.test(r.rid)) used.add(r.rid);
+    } catch (e) {
+      this.log.warn({ err: (e as Error).message }, 'could not read which copies are in use');
+      return new Set([...used, ...this.allRowIds()]);
+    }
+    return used;
+  }
+
+  private allRowIds(): string[] {
+    try {
+      return (this.db.prepare(`SELECT DISTINCT resolved_id AS id FROM live_resolved`).all() as { id: string }[]).map(
+        (r) => r.id,
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  /** Delete the rows of copies nothing names (after a snapshot rotated, a goLive, an End service, an adopt). */
+  private collect(): void {
+    try {
+      const all = this.allRowIds();
+      if (!all.length) return;
+      const used = this.resolvedIdsInUse();
+      const del = this.db.prepare(`DELETE FROM live_resolved WHERE resolved_id = ?`);
+      for (const id of all) if (!used.has(id)) del.run(id);
+    } catch (e) {
+      this.log.warn({ err: (e as Error).message }, 'could not collect unused copies');
     }
   }
 
@@ -768,15 +944,22 @@ export class LiveService {
     if (event.k === 'goLive')
       this.copy = prepared && this.state.resolved ? { ...prepared, object: this.state.resolved } : undefined;
     else if (event.k === 'endService') this.copy = undefined;
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'event', ?)`,
-      )
-      .run(seq, this.now(), id ?? null, JSON.stringify(event));
-    if (seq % 500 === 0) this.db.prepare(`DELETE FROM live_journal WHERE seq < ?`).run(seq - JOURNAL_KEEP);
-    this.dirty = true;
-    if (event.k === 'goLive' || event.k === 'endService') this.snapshot(true);
-    const copy = event.k === 'goLive' ? this.resolvedCopy() : undefined;
+    // A goLive is journalled by name (its copy is in the rows, written in the same transaction as the journal row
+    // and the snapshot: a snapshot never names a copy that is not there); every other event is its small self.
+    const copy = event.k === 'goLive' && this.byRef ? this.resolvedCopy() : undefined;
+    const write = () => {
+      if (copy) this.writeRows(copy);
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'event', ?)`,
+        )
+        .run(seq, this.now(), id ?? null, copy ? `${JOURNAL_GOLIVE_HEAD}${copy.id}"}` : JSON.stringify(event));
+      if (seq % 500 === 0) this.db.prepare(`DELETE FROM live_journal WHERE seq < ?`).run(seq - JOURNAL_KEEP);
+      this.dirty = true;
+      if (event.k === 'goLive' || event.k === 'endService') this.snapshot(true);
+    };
+    if (copy) this.db.transaction(write)();
+    else write();
     for (const l of this.deltaListeners) l({ seq, fromSeq, event, id, ...(copy ? { copy } : {}) });
     this.scheduleAdvance();
     return seq;
@@ -802,12 +985,17 @@ export class LiveService {
     }
     const seq = Math.max(st.seq, hub.seq + 1);
     this.state = { ...st, seq };
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'adopt', ?)`,
-      )
-      .run(seq, this.now(), null, JSON.stringify({ k: 'adopt', fromSeq: hub.seq, force }));
-    this.snapshot(true);
+    this.copy = undefined;
+    // The adopted copy is named (one serialisation), its rows, the journal row and the snapshot in one transaction.
+    this.db.transaction(() => {
+      if (this.byRef && this.state.mode === 'live') this.resolvedCopy();
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'adopt', ?)`,
+        )
+        .run(seq, this.now(), null, JSON.stringify({ k: 'adopt', fromSeq: hub.seq, force }));
+      this.snapshot(true);
+    })();
     this.log.info({ fromSeq: hub.seq, seq, force }, 'adopted operator state');
     for (const l of this.stateListeners) l(this.state);
     this.scheduleAdvance();
@@ -844,12 +1032,16 @@ export class LiveService {
         } catch {
           ev = { corrupt: true };
         }
-        // The goLive payload is large; keep only its identity in exports.
+        // The goLive payload is large; keep only its identity in exports (a row by name has the id and no payload).
         if (ev.k === 'goLive' && ev.resolved)
           ev.resolved = {
             manifestId: (ev.resolved as ResolvedPlaylist).manifestId,
             playlistId: (ev.resolved as ResolvedPlaylist).playlist?.id,
           };
+        else if (ev.k === 'goLive' && typeof ev.resolvedId === 'string') {
+          const r = this.copy?.id === ev.resolvedId ? this.state.resolved : undefined;
+          ev.resolved = { resolvedId: ev.resolvedId, manifestId: r?.manifestId, playlistId: r?.playlist?.id };
+        }
         return { seq: r.seq, at: r.at, id: r.cmd_id ?? undefined, kind: r.kind, event: ev };
       });
   }
