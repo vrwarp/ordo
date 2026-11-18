@@ -1,5 +1,6 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { StatFsFn } from './diskfloor.ts';
 import type { SystemFaceLookup } from './pptx/systemFaces.ts';
 import type { ToolProbe } from './tools.ts';
 
@@ -48,6 +49,14 @@ export type HubConfig = {
    * §5.3): a second service on the same morning, the venue PC's offline download after the first.
    */
   paceGraceMs: number;
+  /**
+   * The free-space floor (ORDO_MIN_FREE_GB, whole GB; design/29 §1.3 A25): replaces the computed one
+   * (5 % of the volume, from 5 GiB to 25 GiB); 0 turns it off. Unset: computed. `minFreeWarning`: why a
+   * value given was not understood (logged once at start). `statfs`: tests only.
+   */
+  minFreeBytes?: number;
+  minFreeWarning?: string;
+  statfs?: StatFsFn;
   /** Optional override for the importers module (tests). */
   importers?: unknown;
   /** Tool timeouts (ms). */

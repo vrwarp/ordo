@@ -399,3 +399,90 @@ describe('two-process hub', () => {
     for (const pid of [live, library]) expect(() => process.kill(pid, 0)).toThrow();
   }, 90_000);
 });
+
+
+/**
+ * The free-space floor in the real two-process hub (design/29 A25, W44): ORDO_MIN_FREE_GB=10000 is a floor no
+ * volume satisfies, so the library refuses every upload while the live process applies a GO.
+ */
+describe('two-process hub with the disk floor above any volume', () => {
+  let proc: ChildProcess | undefined;
+  afterAll(async () => {
+    if (proc && proc.exitCode === null) {
+      proc.kill('SIGTERM');
+      await new Promise((r) => proc!.once('exit', r));
+    }
+  });
+
+  it('refuses an upload in the library process and applies a GO in the live process', async () => {
+    const dir = tempDir();
+    // A free port of the OS's choosing: this case never meets another run's hub.
+    const port = await new Promise<number>((resolve) => {
+      const srv = createServer();
+      srv.listen(0, '127.0.0.1', () => {
+        const p = (srv.address() as AddressInfo).port;
+        srv.close(() => resolve(p));
+      });
+    });
+    const base = `http://localhost:${port}`;
+    const tsx = pathToFileURL(
+      join(dirname(createRequire(import.meta.url).resolve('tsx/package.json')), 'dist', 'loader.mjs'),
+    ).href;
+    proc = spawn(process.execPath, ['--import', tsx, join(here, '../src/main.ts')], {
+      env: {
+        ...process.env,
+        ORDO_DATA: dir,
+        ORDO_DOMAIN: 'localhost',
+        ORDO_PORT: String(port),
+        ORDO_HOST: '127.0.0.1',
+        ORDO_DEV_PIN: '111111:222222',
+        ORDO_LOG_LEVEL: 'warn',
+        ORDO_SINGLE_PROCESS: '',
+        ORDO_MIN_FREE_GB: '10000',
+      },
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+    const health = async () => {
+      try {
+        const r = await fetch(`${base}/api/v1/health`);
+        return r.ok ? ((await r.json()) as Record<string, unknown>) : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    await until(async () => (await health())?.library === 'up', 30_000, 'hub up');
+    const op = await login(base, '111111');
+    // The library refuses an upload with W44's words and both numbers.
+    const fd = new FormData();
+    fd.append('file', new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])]), 'a.png');
+    const refused = await op.fetch('/media', { method: 'POST', body: fd });
+    expect(refused.status).toBe(507);
+    const err = ((await refused.json()) as { error: Record<string, unknown> }).error;
+    expect(err).toMatchObject({ code: 'disk', reason: 'disk' });
+    expect(err.floorBytes).toBe(10_000 * 1024 ** 3);
+    expect(err.message).toMatch(/almost full/);
+    // The numbers reach GET /health through the stats message (measured after the refusal).
+    await until(
+      async () => typeof (await health())?.diskFloorBytes === 'number',
+      15_000,
+      'disk numbers in health',
+    );
+    expect((await health())?.diskFloorBytes).toBe(10_000 * 1024 ** 3);
+    // The live process applies a GO and a save is not refused.
+    const p = await op.json<{ id: string }>('/presentations', { method: 'POST', json: song() });
+    const pl = await op.json<{ id: string }>('/playlists', {
+      method: 'POST',
+      json: { name: 'Sunday', items: [{ id: newId(), kind: 'presentation', presentationId: p.id }] },
+    });
+    const go = await op.json<{ seq: number }>('/live/events', {
+      method: 'POST',
+      json: { k: 'goLive', playlistId: pl.id },
+    });
+    expect(go.seq).toBe(1);
+    expect((await op.fetch('/live/events', { method: 'POST', json: { k: 'next', at: Date.now() } })).status).toBe(
+      200,
+    );
+    proc.kill('SIGTERM');
+    await new Promise((r) => proc!.once('exit', r));
+  }, 120_000);
+});
