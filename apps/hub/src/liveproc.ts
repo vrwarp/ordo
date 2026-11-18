@@ -383,6 +383,8 @@ export async function createLiveProcess(
       library: link.state,
       processes: status.map((p) => ({ name: p.name, state: p.state, restarts: p.restarts })),
       librarySnapshotBytes: libraryStats?.snapshotBytes,
+      diskFreeBytes: libraryStats?.diskFreeBytes,
+      diskFloorBytes: libraryStats?.diskFloorBytes,
     }),
   });
   app.route({

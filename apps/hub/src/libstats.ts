@@ -15,6 +15,13 @@ export type LibraryStats = {
   /** The library sequence it was measured at, and when. */
   seq: number;
   at: number;
+  /**
+   * The data volume's free space and the floor under which uploads are refused (diskfloor.ts, design/29 A25, W44):
+   * measured by the library process on its own clock (30 s and after a refusal), absent while it cannot read the
+   * volume. Not part of the library sequence's measurement.
+   */
+  diskFreeBytes?: number;
+  diskFloorBytes?: number;
 };
 
 /**

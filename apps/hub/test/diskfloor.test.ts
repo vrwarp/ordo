@@ -16,7 +16,7 @@ import {
   type StatFsFn,
 } from '../src/diskfloor.ts';
 import { loadConfig } from '../src/config.ts';
-import { client, EDIT_PIN, login, OPERATE_PIN, sleep, song, startHub } from './helpers.ts';
+import { type client, EDIT_PIN, login, OPERATE_PIN, sleep, song, startHub } from './helpers.ts';
 import { phone, refusal, twoProcesses } from './phones-helpers.ts';
 
 /** A volume of `total` bytes with `free` bytes free, changeable by the test. */
@@ -134,6 +134,7 @@ describe('DiskFloor', () => {
     // and it measures again later: a volume that answers again is judged again
     v.fail = false;
     v.free = GIB;
+    now += 5000;
     await f.assertRoom(0).then(
       () => expect.unreachable('the floor applies again'),
       (e) => expect(e).toMatchObject({ status: 507 }),
@@ -231,7 +232,10 @@ describe('the routes (FL1, FL2, FL6)', () => {
       });
     expect((await patch()).status).toBe(507);
     expect(existsSync(part)).toBe(true);
-    expect((hub.db.prepare(`SELECT offset FROM uploads WHERE id = ?`).get(created.id) as { offset: number }).offset).toBe(0);
+    expect(
+      (hub.db.prepare(`SELECT offset FROM uploads WHERE id = ?`).get(created.id) as { offset: number })
+        .offset,
+    ).toBe(0);
     v.free = 50 * GIB;
     await sleep(2100);
     const ok = await patch();
@@ -242,7 +246,10 @@ describe('the routes (FL1, FL2, FL6)', () => {
     const v = volume(8 * GIB); // 3 GiB over the floor
     const hub = await startHub({ statfs: v.statfs });
     const ed = await login(hub.url, EDIT_PIN);
-    const small = await ed.fetch('/media/uploads', { method: 'POST', json: { name: 'a.mp4', size: 2 * GIB } });
+    const small = await ed.fetch('/media/uploads', {
+      method: 'POST',
+      json: { name: 'a.mp4', size: 2 * GIB },
+    });
     expect(small.status).toBe(201);
     const big = await ed.fetch('/media/uploads', { method: 'POST', json: { name: 'b.mp4', size: 4 * GIB } });
     expect(big.status).toBe(507);
@@ -275,8 +282,10 @@ describe('the routes (FL1, FL2, FL6)', () => {
       json: { k: 'goLive', playlistId: pl.id },
     });
     expect(live.seq).toBe(1);
-    expect((await op.fetch('/live/events', { method: 'POST', json: { k: 'next', at: Date.now() } })).status).toBe(200);
-    await op.fetch('/live/events', { method: 'POST', json: { k: 'endService' } });
+    expect(
+      (await op.fetch('/live/events', { method: 'POST', json: { k: 'next', at: Date.now() } })).status,
+    ).toBe(200);
+    await op.fetch('/live/events', { method: 'POST', json: { k: 'endService', at: Date.now() } });
     expect((await op.fetch(`/presentations/${p.id}`, { method: 'DELETE' })).status).toBe(204);
     // and the one upload route is still refused
     expect((await op.fetch('/media', { method: 'POST', body: form() })).status).toBe(507);
@@ -284,7 +293,8 @@ describe('the routes (FL1, FL2, FL6)', () => {
 
   it('carries both numbers in GET /health of a one-process hub, and the floor 0 when it is off (FL6)', async () => {
     const hub = await startHub({ statfs: volume(40 * GIB).statfs });
-    const health = async () => (await (await fetch(`${hub.url}/api/v1/health`)).json()) as Record<string, number>;
+    const health = async () =>
+      (await (await fetch(`${hub.url}/api/v1/health`)).json()) as Record<string, number>;
     const end = Date.now() + 5000;
     let h = await health();
     while (h.diskFreeBytes === undefined && Date.now() < end) {
@@ -308,12 +318,16 @@ describe('the routes (FL1, FL2, FL6)', () => {
     const v = volume(GIB);
     let stats: Record<string, unknown> | undefined;
     let liveRef: { setLibraryStats(s: never): void } | undefined;
-    const tp = await twoProcesses(0, { statfs: v.statfs }, {
-      onStats: (s) => {
-        stats = s as unknown as Record<string, unknown>;
-        liveRef?.setLibraryStats(s as never);
+    const tp = await twoProcesses(
+      0,
+      { statfs: v.statfs },
+      {
+        onStats: (s) => {
+          stats = s as unknown as Record<string, unknown>;
+          liveRef?.setLibraryStats(s as never);
+        },
       },
-    });
+    );
     try {
       liveRef = tp.live as unknown as typeof liveRef;
       if (stats) liveRef?.setLibraryStats(stats as never);
@@ -334,7 +348,10 @@ describe('the routes (FL1, FL2, FL6)', () => {
         method: 'POST',
         json: { name: 'S', items: [{ id: 'i1', kind: 'presentation', presentationId: p.id }] },
       });
-      const go = await op.json<{ seq: number }>('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: pl.id } });
+      const go = await op.json<{ seq: number }>('/live/events', {
+        method: 'POST',
+        json: { k: 'goLive', playlistId: pl.id },
+      });
       expect(go.seq).toBe(1);
     } finally {
       await tp.close();

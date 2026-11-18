@@ -47,6 +47,7 @@ import {
   presentationRefusal,
 } from './capfields.ts';
 import type { HubConfig } from './config.ts';
+import type { DiskFloor } from './diskfloor.ts';
 import { badRequest, conflict, HttpError, locked, notFound, unauthorized } from './errors.ts';
 import type { FontService } from './fonts/service.ts';
 import type { ImportService } from './imports.ts';
@@ -252,6 +253,8 @@ export type LibraryApiCtx = {
   backups: Backups;
   log: Logger;
   ring: LogRing;
+  /** The free-space floor of the data volume (diskfloor.ts): the routes that store a file ask it first. */
+  disk: DiskFloor;
   live: LiveView;
   /** Close the sockets of an output whose token changed (the live process also notices on its own). */
   disconnectOutput(outputId: string, reason: string): void;
@@ -592,6 +595,12 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       throw locked('This playlist is live and is locked until the service ends');
   };
   const params = (req: FastifyRequest) => req.params as Record<string, string>;
+  /**
+   * The first statement of every route that stores a user's file (design/29 A25, W44): 507 while the data volume
+   * has less room than the floor, before anything is streamed to uploads/. The request's Content-Length is the
+   * size it declares (0 when unknown).
+   */
+  const room = (req: FastifyRequest) => hub.disk.assertRoom(Number(req.headers['content-length']) || 0);
   /** Heavy imports (zip inflate, LibreOffice, ffmpeg) are refused while a playlist is live. */
   const assertNotLive = () => {
     if (live.mode() === 'live')
@@ -728,6 +737,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   // 'Show PowerPoint picture' (design/27 §5 "Operator fallback"): LibreOffice pictures of every shown slide,
   // or (M9, multipart with one PDF) the pages of PowerPoint's own PDF export, which needs no LibreOffice.
   route('POST', '/presentations/:id/pptx-reference', 'edit', 'full', async (req, reply) => {
+    await room(req);
     const id = params(req).id!;
     assertPresentationUnlocked(id);
     const p = lib.presentations.must(id);
@@ -794,6 +804,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     return planReimport(p, {}, tags);
   });
   route('POST', '/presentations/:id/pptx-reimport', 'edit', 'full', async (req, reply) => {
+    await room(req);
     const id = params(req).id!;
     assertPresentationUnlocked(id);
     const { fileId } = storedDeck(id);
@@ -908,6 +919,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   route('GET', '/media', 'edit', 'view', async () => lib.media.list());
   route('GET', '/media/:id', 'edit', 'view', async (req) => lib.media.must(params(req).id!));
   route('POST', '/media', 'edit', 'light', async (req, reply) => {
+    await room(req);
     const { files: parts, fields } = await readMultipart(hub, req);
     // An SVG may come with its still (field "raster"): a PNG the uploading client drew, kept as the file
     // outputs draw (design/12 "Media pipeline"). One SVG per upload then.
@@ -990,6 +1002,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   // An SVG's still sent after the SVG (field "raster"): the resumable upload carries the SVG alone, then the
   // uploading client draws its still and sends it here (design/12 "Media pipeline", MediaService.attachStill).
   route('PUT', '/media/:id/still', 'edit', 'light', async (req) => {
+    await room(req);
     const id = params(req).id!;
     const { files } = await readMultipart(hub, req, { maxFiles: 1, limit: MAX_SVG_RASTER_BYTES });
     try {
@@ -1005,6 +1018,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   // Resumable uploads: create, then PATCH chunks with Upload-Offset; the last chunk returns the Media.
   route('POST', '/media/uploads', 'edit', 'light', async (req, reply) => {
     const b = validate(UploadCreate, req.body);
+    await hub.disk.assertRoom(b.size);
     const id = newId();
     const now = Date.now();
     lib.db
@@ -1029,6 +1043,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     return { id: row.id, offset: row.offset, size: row.size };
   });
   route('PATCH', '/media/uploads/:id', 'edit', 'light', async (req, reply) => {
+    // The .part and its row stay when this is refused: the upload resumes when room is made.
+    await room(req);
     const row = uploadRow(params(req).id!);
     const offset = Number(req.headers['upload-offset']);
     if (!Number.isInteger(offset) || offset !== row.offset) {
@@ -1065,6 +1081,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   // ---------------- fonts ----------------
   route('GET', '/fonts', 'edit', 'view', async () => lib.listFonts());
   route('POST', '/fonts/upload', 'edit', 'full', async (req, reply) => {
+    await room(req);
     const { files, fields } = await readMultipart(hub, req, { limit: 50 * 1024 * 1024 });
     if (!files.length) throw badRequest('No font file in the upload');
     const out = [];
@@ -1088,12 +1105,14 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     searchGoogleFonts(String((req.query as Record<string, unknown>).q ?? '').slice(0, 100)),
   );
   route('POST', '/fonts/google', 'edit', 'full', async (req, reply) => {
+    await room(req);
     const b = validate(z.object({ family: z.string().min(1).max(100) }).strict(), req.body);
     return reply.code(202).send(hub.fonts.queueGoogle(b.family));
   });
 
   // ---------------- imports ----------------
   route('POST', '/import/songselect', 'edit', 'full', async (req, reply) => {
+    await room(req);
     let text: string;
     let title: string | undefined;
     if (req.isMultipart()) {
@@ -1118,6 +1137,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     return reply.code(201).send(hub.imports.songselect(text, { title, by: by(req) }));
   });
   route('POST', '/import/pro7', 'edit', 'full', async (req, reply) => {
+    await room(req);
     assertNotLive();
     if (req.isMultipart()) {
       const { files } = await readMultipart(hub, req, { maxFiles: 1 });
@@ -1149,6 +1169,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     return reply.code(202).send(await hub.imports.queuePro7FromPath(b.path));
   });
   route('POST', '/import/document', 'edit', 'full', async (req, reply) => {
+    await room(req);
     assertNotLive();
     // A scene parsed in the browser (`clientScene`) is optional: past `CLIENT_SCENE_LIMITS.bytes` it is dropped
     // before it is stored, and the hub parses the deck itself (design/27 §12).

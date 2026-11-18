@@ -19,6 +19,7 @@ import { Auth } from './auth.ts';
 import { Backups } from './backup.ts';
 import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openDb } from './db.ts';
+import { DISK_MEASURE_MS, DiskFloor } from './diskfloor.ts';
 import { errorMessage, notFound } from './errors.ts';
 import { outputFonts } from './fonts/bundled.ts';
 import { FontService } from './fonts/service.ts';
@@ -119,6 +120,13 @@ export async function createLibraryProcess(
   const lib = new Library(db, { timeZone: cfg.timeZone });
   const store = new Store(cfg.dataDir, lib);
   await store.init();
+  // The free-space floor (design/29 A25, W44): only this process stores files, so only this process asks it.
+  if (cfg.minFreeWarning) log.warn(cfg.minFreeWarning);
+  const disk = new DiskFloor(cfg.dataDir, {
+    statfs: cfg.statfs,
+    minFreeBytes: cfg.minFreeBytes,
+    warn: (m) => log.warn(m),
+  });
   const auth = new Auth(db, lib, log);
   if (cfg.devPin) await auth.devSetup(cfg.devPin);
   const phones = phonesSwitch(lib);
@@ -184,6 +192,7 @@ export async function createLibraryProcess(
     backups,
     log,
     ring,
+    disk,
     live: liveView,
     // The live process notices token changes in its settings copy and closes those sockets itself.
     disconnectOutput: () => undefined,
@@ -273,7 +282,7 @@ export async function createLibraryProcess(
   const reportStats = () => {
     statsTimer = undefined;
     try {
-      opts.onStats?.(libStats.get());
+      opts.onStats?.({ ...libStats.get(), ...disk.healthFields() });
     } catch (e) {
       log.warn({ err: errorMessage(e) }, 'library size measurement failed');
     }
@@ -288,6 +297,19 @@ export async function createLibraryProcess(
       backups.schedule();
   });
 
+  // The volume's numbers ride the stats message on their own clock: every DISK_MEASURE_MS and after a refusal
+  // (at most one report every 2 s), never on the library sequence's.
+  let diskReportedAt = 0;
+  const reportDisk = async () => {
+    await disk.state();
+    diskReportedAt = Date.now();
+    reportStats();
+  };
+  disk.onRefused(() => {
+    if (Date.now() - diskReportedAt > 2000) void reportDisk();
+  });
+  const diskTimer = setInterval(() => void reportDisk(), DISK_MEASURE_MS);
+  diskTimer.unref();
   await app.ready();
   await cleanupStaleUploads({ lib, store, cfg }).catch((e) =>
     log.warn({ err: errorMessage(e) }, 'upload cleanup failed'),
@@ -301,6 +323,7 @@ export async function createLibraryProcess(
   const url = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
   log.info({ url, data: cfg.dataDir }, 'library process listening');
   reportStats();
+  void reportDisk();
 
   return {
     app,
@@ -324,6 +347,7 @@ export async function createLibraryProcess(
     },
     async close() {
       if (statsTimer) clearTimeout(statsTimer);
+      clearInterval(diskTimer);
       backups.stop();
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       await withTimeout(app.close(), 1000, () => log.warn('http server did not close in time'));

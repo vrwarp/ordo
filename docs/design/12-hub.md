@@ -542,6 +542,21 @@ settings delta. First run with no PINs serves a setup
 page on the operator origin that sets both PINs; the setup page is disabled once PINs
 exist.
 
+<!-- prerender-store:floor -->
+`ORDO_MIN_FREE_GB` (r2b sub-wave 2, design/29 §1.3 A25, W44): the free-space floor of the data volume, a whole
+number of GB from 0 to 10,000; unset, it is 5 % of the volume, never less than 5 GiB and never more than 25 GiB
+(a shared NAS volume of 4 TB would otherwise refuse every upload under 200 GB free). Below it every route that
+stores a user's file (media upload, resumable create and chunks, an SVG's still, font upload and download, the
+PowerPoint, PDF, ProPresenter and SongSelect imports, the PDF of reference pictures, a re-import from a stored
+deck, and the slide-file and picture routes) answers `507` with the reason `disk`, `freeBytes` and `floorBytes`
+and W44's sentence; saving a presentation or a playlist, settings, deleting, GO and everything on the live
+process go on. 0 turns the floor off (one start-up line says so; the value tests that start a hub use); anything
+else is the computed floor with one start-up warning. The volume is read with `statfs` at most once per 2 s,
+every 30 s by the library process, and the floor fails open: a volume that does not answer is one warning and
+no refusal. `GET /health` carries `diskFreeBytes` and `diskFloorBytes` (numbers only), relayed from the library
+process on its stats message.
+<!-- /prerender-store:floor -->
+
 The hub answers only for hosts it knows: `ORDO_DOMAIN` and any label under it, `localhost`
 and its labels, `127.0.0.1`/`::1`, and `ORDO_ALLOWED_HOSTS`; anything else gets `421` on
 HTTP and on the WebSocket upgrade. Behind the trusted proxy the browser's host arrives in

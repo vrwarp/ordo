@@ -6,6 +6,7 @@ import { Auth } from './auth.ts';
 import { Backups } from './backup.ts';
 import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openDb } from './db.ts';
+import { DISK_MEASURE_MS, DiskFloor } from './diskfloor.ts';
 import { errorMessage } from './errors.ts';
 import { outputFonts } from './fonts/bundled.ts';
 import { FontService } from './fonts/service.ts';
@@ -105,6 +106,16 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const lib = new Library(db, { timeZone: cfg.timeZone });
   const store = new Store(cfg.dataDir, lib);
   await store.init();
+  // The free-space floor (design/29 A25, W44): the routes that store a file ask it; measured now and every 30 s.
+  if (cfg.minFreeWarning) log.warn(cfg.minFreeWarning);
+  const disk = new DiskFloor(cfg.dataDir, {
+    statfs: cfg.statfs,
+    minFreeBytes: cfg.minFreeBytes,
+    warn: (m) => log.warn(m),
+  });
+  void disk.state();
+  const diskTimer = setInterval(() => void disk.state(), DISK_MEASURE_MS);
+  diskTimer.unref();
   const auth = new Auth(db, lib, log);
   if (cfg.devPin) await auth.devSetup(cfg.devPin);
   // Phones (design/24 "Feature flags are settings"): cached here, followed on the settings change.
@@ -177,6 +188,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
       // die with the abort signal), snapshot the live state, and only then drop the sockets: the clients
       // get a `bye` and are terminated without waiting for a close handshake a stuck client never sends.
       backups.stop();
+      clearInterval(diskTimer);
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       live.stop();
       const closing = sockets.close().catch((e) => log.warn({ err: errorMessage(e) }, 'socket close failed'));
@@ -200,6 +212,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     backups,
     log,
     ring,
+    disk,
     live: { locks: () => live.locks(), mode: () => live.state.mode },
     disconnectOutput: (id, reason) => sockets.disconnectOutput(id, reason),
     liveDiag: async () => liveDiagOf(live, sockets),
@@ -211,7 +224,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     auth,
     live,
     log,
-    healthExtra: () => ({ librarySnapshotBytes: libStats.get().snapshotBytes }),
+    healthExtra: () => ({ librarySnapshotBytes: libStats.get().snapshotBytes, ...disk.healthFields() }),
     outputConfig: (outputId) => {
       const s = lib.getSettings();
       const output = s.outputs.find((o) => o.id === outputId);

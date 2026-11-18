@@ -400,7 +400,6 @@ describe('two-process hub', () => {
   }, 90_000);
 });
 
-
 /**
  * The free-space floor in the real two-process hub (design/29 A25, W44): ORDO_MIN_FREE_GB=10000 is a floor no
  * volume satisfies, so the library refuses every upload while the live process applies a GO.
@@ -479,9 +478,9 @@ describe('two-process hub with the disk floor above any volume', () => {
       json: { k: 'goLive', playlistId: pl.id },
     });
     expect(go.seq).toBe(1);
-    expect((await op.fetch('/live/events', { method: 'POST', json: { k: 'next', at: Date.now() } })).status).toBe(
-      200,
-    );
+    expect(
+      (await op.fetch('/live/events', { method: 'POST', json: { k: 'next', at: Date.now() } })).status,
+    ).toBe(200);
     proc.kill('SIGTERM');
     await new Promise((r) => proc!.once('exit', r));
   }, 120_000);

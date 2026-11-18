@@ -1,6 +1,6 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { StatFsFn } from './diskfloor.ts';
+import { minFreeConfig, type StatFsFn } from './diskfloor.ts';
 import type { SystemFaceLookup } from './pptx/systemFaces.ts';
 import type { ToolProbe } from './tools.ts';
 
@@ -132,6 +132,7 @@ export function loadConfig(
   overrides: Partial<HubConfig> = {},
 ): HubConfig {
   const dataDir = resolve(env.ORDO_DATA ?? './.data');
+  const minFree = minFreeConfig(env.ORDO_MIN_FREE_GB);
   return {
     domain: (env.ORDO_DOMAIN ?? 'localhost').toLowerCase(),
     dataDir,
@@ -153,6 +154,8 @@ export function loadConfig(
     snapshotIntervalMs: 5000,
     healthIntervalMs: 1000,
     paceGraceMs: paceGrace(env.ORDO_PACE_GRACE_MS),
+    minFreeBytes: minFree.bytes,
+    minFreeWarning: minFree.warning,
     timeouts: { probe: 30_000, transcode: 4 * 3600_000, soffice: 180_000, pdf: 300_000, light: 600_000 },
     jobs: { heavy: 1, light: 2 },
     chromium: { path: env.ORDO_CHROMIUM || 'chromium', sandbox: env.ORDO_CHROMIUM_SANDBOX === '1' },
