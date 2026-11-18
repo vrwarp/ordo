@@ -35,7 +35,7 @@ import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
 import { cpuPool } from './pool.ts';
 import { PrerenderKeys } from './prerenderkeys.ts';
-import { PrerenderStore } from './prerenders.ts';
+import { goLiveExtras, PrerenderStore } from './prerenders.ts';
 import { SlideFiles } from './slidefiles.ts';
 import {
   cleanupStaleUploads,
@@ -271,11 +271,18 @@ export async function createLibraryProcess(
       const f = lib.getFile(hash);
       if (f) files[hash] = f;
     }
+    // Pre-rendered slides (design/29 §1.7): their heads, pages, shape files and pictures, the heads' pages, and the
+    // keys and picture rows of each presentation: DB-only reads, present only when there is something.
+    const extras = goLiveExtras(lib, presentations);
+    Object.assign(files, extras.files);
     return {
       playlist,
       presentations,
       media,
       files,
+      ...(extras.slideHeads ? { slideHeads: extras.slideHeads } : {}),
+      ...(extras.prerenders ? { prerenders: extras.prerenders } : {}),
+      ...(extras.prerenderKeys ? { prerenderKeys: extras.prerenderKeys } : {}),
       fonts: lib.listFonts(),
       looks: settings.looks,
       general: settings.general,

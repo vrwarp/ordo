@@ -5,7 +5,7 @@
  */
 import { rm } from 'node:fs/promises';
 import type { Readable } from 'node:stream';
-import type { FileRef } from '@ordo/domain';
+import type { FileRef, PrerenderRow } from '@ordo/domain';
 import { PRERENDER_VERSION } from '@ordo/domain/prerender.ts';
 import type { Logger } from 'pino';
 import type { DB } from './db.ts';
@@ -353,6 +353,57 @@ export class PrerenderIndex {
     };
   }
 
+  /**
+   * What a goLive lists of a presentation's pictures (design/29 §1.3, §1.7): the keys of its current revision and,
+   * per slide and size (3840 and 1920: the 640 preview is no goLive file), the picture of the slide's own key
+   * (the newest), else a stand-by (a picture of the same slide, live set, backdrops and media files made before a
+   * font upload or by an older renderer, W39), marked `standby`. A picture whose file the library lacks is left out.
+   */
+  goLive(
+    presentationId: string,
+    file: (hash: string) => FileRef | undefined,
+  ): { keys: string[]; rows: PrerenderRow[] } {
+    const cur = this.db
+      .prepare(
+        `SELECT k.slide_id, k.key, k.standby_id FROM prerender_keys k JOIN presentations p ON p.id = k.presentation_id AND p.rev = k.rev WHERE k.presentation_id = ? ORDER BY k.slide_id, k.key`,
+      )
+      .all(presentationId) as { slide_id: string; key: string; standby_id: string }[];
+    if (!cur.length) return { keys: [], rows: [] };
+    const keys = [...new Set(cur.map((r) => r.key))];
+    const pics = this.db
+      .prepare(
+        `SELECT key, size, standby_id, hash, created_at FROM prerenders WHERE presentation_id = ? AND size IN (3840, 1920) ORDER BY created_at DESC`,
+      )
+      .all(presentationId) as {
+      key: string;
+      size: number;
+      standby_id: string;
+      hash: string;
+      created_at: number;
+    }[];
+    if (!pics.length) return { keys, rows: [] };
+    const bySlide = new Map<string, { keys: Set<string>; standbys: Set<string> }>();
+    for (const r of cur) {
+      const s = bySlide.get(r.slide_id) ?? { keys: new Set<string>(), standbys: new Set<string>() };
+      s.keys.add(r.key);
+      s.standbys.add(r.standby_id);
+      bySlide.set(r.slide_id, s);
+    }
+    const currentKeys = new Set(keys);
+    const rows: PrerenderRow[] = [];
+    for (const [slideId, s] of bySlide)
+      for (const size of [3840, 1920] as const) {
+        // `pics` is newest first
+        const own = pics.find((p) => p.size === size && s.keys.has(p.key));
+        const pick =
+          own ?? pics.find((p) => p.size === size && !currentKeys.has(p.key) && s.standbys.has(p.standby_id));
+        const f = pick && file(pick.hash);
+        if (pick && f)
+          rows.push({ slideId, key: pick.key, size, file: f, ...(own ? {} : { standby: true }) });
+      }
+    return { keys, rows };
+  }
+
   /** A deleted presentation's pictures, failures and key rows; the hashes the pictures named. */
   forgetPresentation(presentationId: string): string[] {
     return this.db.transaction(() => {
@@ -567,4 +618,59 @@ export class PrerenderStore {
   private async release(hash: string): Promise<void> {
     if (!this.lib.prerenderIndex.hashNamed(hash)) await this.store.release(hash);
   }
+}
+
+/**
+ * The files and fields a goLive bundle adds for pre-rendered slides (design/29 §1.7), from the DB-only indexes:
+ * each slide's head, its pages and the shape files it uses (`files`), the head to its pages (`slideHeads`, read from
+ * `slide_head_pages`, never from the file), and per presentation the keys of its current revision and its picture
+ * rows. A field is present only when something is in it: a library with no pre-rendered slide sends the bundle it
+ * always sent. The presentations are as stored (unvalidated), so every read is guarded.
+ */
+export function goLiveExtras(
+  lib: Library,
+  presentations: Record<string, unknown>,
+): {
+  files: Record<string, FileRef>;
+  slideHeads?: Record<string, { pages: string[] }>;
+  prerenders?: Record<string, PrerenderRow[]>;
+  prerenderKeys?: Record<string, string[]>;
+} {
+  const files: Record<string, FileRef> = {};
+  const slideHeads: Record<string, { pages: string[] }> = {};
+  const prerenders: Record<string, PrerenderRow[]> = {};
+  const prerenderKeys: Record<string, string[]> = {};
+  const add = (hash: string) => {
+    const f = lib.getFile(hash);
+    if (f) files[hash] = f;
+  };
+  const sha = /^[0-9a-f]{64}$/;
+  for (const [id, p] of Object.entries(presentations)) {
+    const sections = (p as { sections?: unknown } | undefined)?.sections;
+    for (const sec of Array.isArray(sections) ? sections : []) {
+      const slides = (sec as { slides?: unknown } | undefined)?.slides;
+      for (const s of Array.isArray(slides) ? slides : []) {
+        const ref = (s as { prerender?: { file?: { ref?: unknown } } } | undefined)?.prerender?.file?.ref;
+        if (typeof ref !== 'string' || !sha.test(ref) || slideHeads[ref]) continue;
+        const head = lib.slideFiles.head(ref);
+        if (!head) continue;
+        slideHeads[ref] = { pages: head.pages };
+        add(ref);
+        for (const page of head.pages) add(page);
+        for (const used of head.uses.files) add(used);
+      }
+    }
+    const g = lib.prerenderIndex.goLive(id, (h) => lib.getFile(h));
+    if (g.keys.length) prerenderKeys[id] = g.keys;
+    if (g.rows.length) {
+      prerenders[id] = g.rows;
+      for (const r of g.rows) files[r.file.hash] = r.file;
+    }
+  }
+  return {
+    files,
+    ...(Object.keys(slideHeads).length ? { slideHeads } : {}),
+    ...(Object.keys(prerenders).length ? { prerenders } : {}),
+    ...(Object.keys(prerenderKeys).length ? { prerenderKeys } : {}),
+  };
 }

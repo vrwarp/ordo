@@ -114,8 +114,8 @@ describe('the library process bundle (GL1, GL2, GL3)', () => {
     expect(b.prerenderKeys).toEqual({ [s.p.id]: [s.key] });
     expect(b.prerenders![s.p.id]!.map((r) => [r.slideId, r.key, r.size, r.file.hash]).sort()).toEqual(
       [
-        ['big', s.key, 1920, s.pictures[1920]],
-        ['big', s.key, 3840, s.pictures[3840]],
+        ['geo', s.key, 1920, s.pictures[1920]],
+        ['geo', s.key, 3840, s.pictures[3840]],
       ].sort(),
     );
     // a presentation with no record adds nothing: the bundle has none of the new fields
@@ -157,8 +157,8 @@ describe('the library process bundle (GL1, GL2, GL3)', () => {
     expect(r.prerenderKeys).toEqual([s.key]);
     expect(r.prerenders?.map((p) => [p.slideId, p.key, p.size, p.file]).sort()).toEqual(
       [
-        ['big', s.key, 1920, s.pictures[1920]],
-        ['big', s.key, 3840, s.pictures[3840]],
+        ['geo', s.key, 1920, s.pictures[1920]],
+        ['geo', s.key, 3840, s.pictures[3840]],
       ].sort(),
     );
     expect((r.degraded ?? []).filter((d) => degradedKind(d.reason) === 'slideFile')).toEqual([]);
@@ -198,14 +198,14 @@ describe('the library process bundle (GL1, GL2, GL3)', () => {
     };
     const ins = db.prepare(
       `INSERT INTO prerenders (presentation_id, key, size, slide_id, standby_id, version, kind, hash, mime, bytes, w, h, opaque, made_by, made_role, last_rev, created_at)
-       VALUES (?, ?, ?, 'big', ?, 1, 'slide', ?, 'image/png', 9, 3840, 2160, 1, NULL, 'edit', 1, ?)`,
+       VALUES (?, ?, ?, 'geo', ?, 1, 'slide', ?, 'image/png', 9, 3840, 2160, 1, NULL, 'edit', 1, ?)`,
     );
     ins.run(s.p.id, '1'.repeat(64), 3840, cur.standby_id, file('1'), 100);
     ins.run(s.p.id, '2'.repeat(64), 3840, cur.standby_id, file('2'), 200); // newer stand-by of the same slide and size
     ins.run(s.p.id, '3'.repeat(64), 3840, 'f'.repeat(64), file('3'), 300); // neither current nor a stand-by
     const b = await bundleOf(tp, s.playlistId);
     expect(b.prerenders![s.p.id]).toMatchObject([
-      { slideId: 'big', key: '2'.repeat(64), size: 3840, standby: true },
+      { slideId: 'geo', key: '2'.repeat(64), size: 3840, standby: true },
     ]);
     expect(Object.keys(b.files!)).toContain(file('2'));
     expect(Object.keys(b.files!)).not.toContain(file('3'));

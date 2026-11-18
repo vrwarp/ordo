@@ -133,6 +133,13 @@ export function librarySource(lib: Library): LiveSource {
         presentation: (id) => lib.presentations.get(id),
         media: (id) => lib.media.get(id),
         file: (hash) => lib.getFile(hash),
+        // Pre-rendered slides, from the library's DB-only indexes, as the bundle route sends them to the live process.
+        slideHead: (ref) => {
+          const h = lib.slideFiles.head(ref);
+          return h ? { pages: h.pages } : undefined;
+        },
+        prerenders: (id) => lib.prerenderIndex.goLive(id, (h) => lib.getFile(h)).rows,
+        prerenderKeys: (id) => lib.prerenderIndex.keySet(id),
         fonts: () => lib.listFonts(),
         looks: s.looks,
         general: s.general,
