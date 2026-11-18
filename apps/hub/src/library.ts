@@ -613,6 +613,7 @@ export class Library {
     this.db
       .prepare(`INSERT OR IGNORE INTO files (hash, bytes, mime, path, created_at) VALUES (?, ?, ?, ?, ?)`)
       .run(f.hash, f.bytes, f.mime, f.path, nowIso());
+    this.refs.unmark([f.hash]);
   }
   getFile(hash: string): FileRow | undefined {
     return this.db.prepare(`SELECT hash, bytes, mime, path FROM files WHERE hash = ?`).get(hash) as
@@ -628,9 +629,53 @@ export class Library {
     const m = this.db.prepare(`SELECT 1 FROM media WHERE json LIKE ? LIMIT 1`).get(like);
     const f = this.db.prepare(`SELECT 1 FROM fonts WHERE json LIKE ? LIMIT 1`).get(like);
     const p = this.db.prepare(`SELECT 1 FROM presentations WHERE json LIKE ? LIMIT 1`).get(like);
-    // A picture of a pre-rendered slide is named by its row, whatever else holds the same bytes.
     // A kept revision or a head a presentation names, a picture row: the references index.
     return !!(m || f || p) || this.refs.referenced(hash);
+  }
+  /** Whether anything but a picture row names this file (collection asks it of a picture it is about to drop). */
+  namedBesidePictures(hash: string): boolean {
+    const like = `%"${hash}"%`;
+    for (const table of ['media', 'fonts', 'presentations'])
+      if (this.db.prepare(`SELECT 1 FROM ${table} WHERE json LIKE ? LIMIT 1`).get(like)) return true;
+    return this.refs.referenced(hash, { pictures: false });
+  }
+  /** Whether a job that has not finished names this file in its payload (a client scene is named by its job). */
+  jobNamesFile(hash: string): boolean {
+    return !!this.db
+      .prepare(`SELECT 1 FROM jobs WHERE state IN ('queued','running') AND payload LIKE ? LIMIT 1`)
+      .get(`%"${hash}"%`);
+  }
+  /** The JSON of media and fonts and the payloads of unfinished jobs: what collection reads once per run. */
+  collectSources(): string[] {
+    const out: string[] = [];
+    for (const [table, col, where] of [
+      ['media', 'json', ''],
+      ['fonts', 'json', ''],
+      ['jobs', 'payload', `WHERE state IN ('queued','running')`],
+    ] as const)
+      for (const r of this.db.prepare(`SELECT ${col} AS v FROM ${table} ${where}`).iterate() as Iterable<{
+        v: string;
+      }>)
+        out.push(r.v);
+    return out;
+  }
+  /**
+   * Collection's one step on a file, in one synchronous transaction: `named` is asked a last time and a file that is
+   * named now keeps its row and loses its mark (a save between the scan and this call wins); otherwise its row goes,
+   * with a head's index rows. Returns the row when it went: the caller removes the blob after.
+   */
+  sweepFile(hash: string, named: (hash: string) => boolean): FileRow | undefined {
+    return this.db.transaction(() => {
+      let row: FileRow | undefined;
+      if (named(hash)) {
+        // kept
+      } else if ((row = this.getFile(hash)) && row.mime === 'application/json') {
+        this.slideFiles.remove(hash);
+        this.deleteFileRow(hash);
+      } else row = undefined;
+      this.db.prepare(`DELETE FROM collect_marks WHERE hash = ?`).run(hash);
+      return row;
+    })();
   }
   deleteFileRow(hash: string): void {
     this.db.prepare(`DELETE FROM files WHERE hash = ?`).run(hash);

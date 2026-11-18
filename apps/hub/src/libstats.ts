@@ -22,6 +22,13 @@ export type LibraryStats = {
    */
   diskFreeBytes?: number;
   diskFloorBytes?: number;
+  /**
+   * The last collection run (collect.ts): the files and bytes it deleted (0 in report mode, which deletes none) and
+   * when it ran. Absent until a run has run. Not part of the library sequence's measurement either.
+   */
+  collectedFiles?: number;
+  collectedBytes?: number;
+  lastCollectAt?: number;
 };
 
 /**

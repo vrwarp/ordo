@@ -87,6 +87,11 @@ const pictureOf = (r: PictureDb): PictureRow => ({
   createdAt: r.created_at,
 });
 
+const UNCLAIMED = `NOT EXISTS (SELECT 1 FROM prerender_keys k WHERE k.presentation_id = p.presentation_id AND k.key = p.key)
+  AND NOT EXISTS (SELECT 1 FROM prerender_keys k JOIN presentations c ON c.id = k.presentation_id AND c.rev = k.rev
+                  WHERE k.presentation_id = p.presentation_id AND k.standby_id = p.standby_id)`;
+const UNCLAIMED_ROW = UNCLAIMED.replaceAll('p.', 'prerenders.');
+
 /** One row of `prerender_keys`. */
 export type KeyRow = { slideId: string; key: string; standbyId: string; sig: string };
 
@@ -402,6 +407,49 @@ export class PrerenderIndex {
           rows.push({ slideId, key: pick.key, size, file: f, ...(own ? {} : { standby: true }) });
       }
     return { keys, rows };
+  }
+
+  /**
+   * Pictures nothing claims (collection, a cache with no delay): the key is in no kept revision's key rows of the
+   * presentation, and the slide's stand-by id is no current slide's. A deleted presentation claims none.
+   */
+  unclaimed(): { presentationId: string; key: string; size: number; hash: string; bytes: number }[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT p.presentation_id, p.key, p.size, p.hash, p.bytes FROM prerenders p WHERE ${UNCLAIMED}`,
+        )
+        .all() as {
+        presentation_id: string;
+        key: string;
+        size: number;
+        hash: string;
+        bytes: number;
+      }[]
+    ).map((r) => ({
+      presentationId: r.presentation_id,
+      key: r.key,
+      size: r.size,
+      hash: r.hash,
+      bytes: r.bytes,
+    }));
+  }
+
+  /** Delete one such row unless a save has claimed it since (the condition is the statement's own); true when it went. */
+  dropUnclaimed(r: { presentationId: string; key: string; size: number }): boolean {
+    return (
+      this.db
+        .prepare(
+          `DELETE FROM prerenders WHERE presentation_id = ? AND key = ? AND size = ? AND ${UNCLAIMED_ROW}`,
+        )
+        .run(r.presentationId, r.key, r.size).changes > 0
+    );
+  }
+
+  /** How many picture rows name this file. */
+  rowsNaming(hash: string): number {
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM prerenders WHERE hash = ?`).get(hash) as { n: number })
+      .n;
   }
 
   /** A deleted presentation's pictures, failures and key rows; the hashes the pictures named. */

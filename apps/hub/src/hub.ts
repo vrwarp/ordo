@@ -232,6 +232,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
       backups.stop();
       prerenderKeys.stop();
       backfill.stop();
+      collector.stop();
       clearInterval(diskTimer);
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       live.stop();
@@ -271,7 +272,11 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     auth,
     live,
     log,
-    healthExtra: () => ({ librarySnapshotBytes: libStats.get().snapshotBytes, ...disk.healthFields() }),
+    healthExtra: () => ({
+      librarySnapshotBytes: libStats.get().snapshotBytes,
+      ...disk.healthFields(),
+      ...collector.healthFields(),
+    }),
     outputConfig: (outputId) => {
       const s = lib.getSettings();
       const output = s.outputs.find((o) => o.id === outputId);
@@ -322,15 +327,18 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     jobs.onLiveMode(live.state.mode);
     prerenderKeys.onLiveMode(live.state.mode);
     backfill.onLiveMode(live.state.mode);
+    collector.onLiveMode(live.state.mode);
   });
   live.onState((s) => {
     jobs.onLiveMode(s.mode);
     prerenderKeys.onLiveMode(s.mode);
     backfill.onLiveMode(s.mode);
+    collector.onLiveMode(s.mode);
   });
   jobs.start();
   prerenderKeys.start();
   backfill.start();
+  collector.start();
   sockets.start();
   if (cfg.scheduleBackups) backups.schedule();
   return hub;

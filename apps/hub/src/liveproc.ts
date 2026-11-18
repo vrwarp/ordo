@@ -388,6 +388,9 @@ export async function createLiveProcess(
       librarySnapshotBytes: libraryStats?.snapshotBytes,
       diskFreeBytes: libraryStats?.diskFreeBytes,
       diskFloorBytes: libraryStats?.diskFloorBytes,
+      collectedFiles: libraryStats?.collectedFiles,
+      collectedBytes: libraryStats?.collectedBytes,
+      lastCollectAt: libraryStats?.lastCollectAt,
     }),
   });
   app.route({

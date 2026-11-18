@@ -190,6 +190,7 @@ export async function createLibraryProcess(
     timeZone,
     log,
     schedule: cfg.scheduleBackups,
+    onRun: () => reportStats(),
   });
   const libStats = new LibraryStatsCache(lib, log, { minIntervalMs: 0 });
   let status: ProcessStatus[] = [];
@@ -324,7 +325,7 @@ export async function createLibraryProcess(
   const reportStats = () => {
     statsTimer = undefined;
     try {
-      opts.onStats?.({ ...libStats.get(), ...disk.healthFields() });
+      opts.onStats?.({ ...libStats.get(), ...disk.healthFields(), ...collector.healthFields() });
     } catch (e) {
       log.warn({ err: errorMessage(e) }, 'library size measurement failed');
     }
@@ -360,6 +361,7 @@ export async function createLibraryProcess(
   jobs.start();
   prerenderKeys.start();
   backfill.start();
+  collector.start();
   if (cfg.scheduleBackups) backups.schedule();
   // Loopback only, on a port of the OS's choosing: the live process is the only way in.
   await app.listen({ port: 0, host: '127.0.0.1' });
@@ -386,6 +388,7 @@ export async function createLibraryProcess(
       jobs.onLiveMode(m.mode);
       prerenderKeys.onLiveMode(m.mode);
       backfill.onLiveMode(m.mode);
+      collector.onLiveMode(m.mode);
     },
     setLiveUrl(u) {
       liveUrl = u;
@@ -398,6 +401,7 @@ export async function createLibraryProcess(
       clearInterval(diskTimer);
       prerenderKeys.stop();
       backfill.stop();
+      collector.stop();
       backups.stop();
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       await withTimeout(app.close(), 1000, () => log.warn('http server did not close in time'));

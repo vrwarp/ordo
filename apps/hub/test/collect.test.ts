@@ -452,6 +452,35 @@ describe('the backfill (RC4)', () => {
     expect(again.t.reads).toBe(0);
   });
 
+  it('starts two minutes after its start whatever the service reports meanwhile, and resumes when a service that held it ends (RC4)', async () => {
+    hub = await startHub();
+    legacy(1, 10);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const early = job();
+      early.j.start();
+      early.j.onLiveMode('idle'); // a state change before the delay is no start
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(early.t.reads).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(early.t.reads).toBe(10);
+
+      hub.db.prepare(`DELETE FROM refs_scanned`).run();
+      const held = job();
+      held.setMode('live');
+      held.j.start();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(held.t.reads).toBe(0); // live: nothing read, and it waits for the end of the service
+      held.setMode('idle');
+      held.j.onLiveMode('idle');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(held.t.reads).toBe(10);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not read a revision whose save recorded it', async () => {
     hub = await startHub();
     legacy(1, 10);
@@ -589,7 +618,8 @@ describe('collection: candidates and what names a file (CO1, CO2)', () => {
     expect(await c.run()).toMatchObject({ ran: true, marked: 1, files: 0 });
     expect(marks()).toEqual([unnamed]);
     t.now = T0 + 31 * DAY;
-    expect(await c.run()).toMatchObject({ ran: true, files: 1, bytes: sizeOf(unnamed) });
+    const size = sizeOf(unnamed);
+    expect(await c.run()).toMatchObject({ ran: true, files: 1, bytes: size });
     expect(has(unnamed)).toBe(false);
     expect(onDisk(unnamed)).toBe(false);
     for (const h of others) {
@@ -718,13 +748,15 @@ describe('collection: the 30 days (CO3, CO4)', () => {
     hub = await startHub();
     ready();
     const [raced, plain, noBlob] = [await json('raced'), await json('plain'), await json('noblob')];
+    let race = false;
     const { c, t } = rig({
       afterScan: () => {
-        save('late', [raced]);
+        if (race) save('late', [raced]);
       },
     });
     await c.run();
     expect(marks().sort()).toEqual([noBlob, plain, raced].sort());
+    race = true;
     rmSync(join(hub.dir, paths.get(noBlob)!));
     t.now = T0 + COLLECT_DELAY_DAYS * DAY;
     const r = await c.run();
@@ -948,7 +980,7 @@ describe('collection: slices and timers (CO9)', () => {
     ready();
     for (let i = 0; i < 1500; i++)
       hub.lib.addFile({
-        hash: i.toString(16).padStart(64, 'a'),
+        hash: hash(10_000 + i),
         bytes: 10,
         mime: 'application/json',
         path: `media/aa/${i}.json`,
@@ -968,7 +1000,7 @@ describe('collection: slices and timers (CO9)', () => {
     // with the real clock and yields, a save in the middle of a run is answered
     for (let i = 0; i < 1500; i++)
       hub.lib.addFile({
-        hash: i.toString(16).padStart(64, 'b'),
+        hash: hash(20_000 + i),
         bytes: 10,
         mime: 'application/json',
         path: `media/bb/${i}.json`,

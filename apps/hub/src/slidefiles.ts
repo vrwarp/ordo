@@ -83,6 +83,9 @@ export class SlideFileIndex {
       this.db.prepare(`DELETE FROM slide_head_pages WHERE head = ?`).run(row.hash);
       const ins = this.db.prepare(`INSERT INTO slide_head_pages (head, pos, page) VALUES (?, ?, ?)`);
       for (let i = 0; i < row.pages.length; i++) ins.run(row.hash, i, row.pages[i]);
+      // uploaded again: the clocks of the head and its pages stop (collection)
+      for (const h of [row.hash, ...row.pages])
+        this.db.prepare(`DELETE FROM collect_marks WHERE hash = ?`).run(h);
     })();
   }
 
