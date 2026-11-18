@@ -379,7 +379,9 @@ copy stays.
   first draw (r2b base, median of three under the bench lock), which is now late making, not a GO's wait.
 - **Thumbnails.** The operator's thumbnail worker runs the same step, only when its page says the pointer is
   fine (`init`, `lib/capabilities.ts` `coarsePointer`): a desktop's thumbnails draw the shapes whole, a phone or
-  tablet keeps the legacy copies and makes nothing. The editor canvas keeps the legacy copies (leaf-editor).
+  tablet keeps the legacy copies and makes nothing. The editor canvas draws them whole too, in idle time, on a
+  fine pointer while no service is live (design/15 "Canvas drawing", `wholeDraw.ts`: leaf-editor), and keeps the
+  legacy copies on a coarse pointer, while a service is live and with `?editor=light`.
 <!-- /m9:geometry-units -->
 
 <!-- r2b:effect-units -->
@@ -438,7 +440,8 @@ drawing budget (`geombudget.ts`) would draw as a lesser legacy copy on the outpu
   (`decorCost`: estimate, points, shadow layers), through the decoration's hooks once its drawer is loaded, so the
   budget, health's raster alarm and `heavySlide` count them (r2a rated them about 0). A decoration is never drawn
   as a lesser copy (it has no legacy part): rating it can only send later objects past the budget, to units on the
-  outputs and to legacy copies on the editor and coarse-pointer thumbnails. Where units are planned (the asset
+  outputs and a desktop's thumbnails, and to legacy copies on a tablet's or phone's editor, on an editor while a
+  service is live and on coarse-pointer thumbnails. Where units are planned (the asset
   worker) `slideJobCost` rates an object drawn from a unit at its 1:1 copy (`pictures`), its making at arm apart
   (`slideUnitsCost`): a warm copied unit is never rated at its making cost.
 - **Switch** (`setEffectUnits(false)`, an output's `?effects=base`: the asset worker sets it at each `init`, C6): 62a1c3a's

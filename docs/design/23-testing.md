@@ -79,7 +79,9 @@ between 16000 and 32767.
   `chromium-tablet`). `e2e/layout-class.spec.ts` (the venue PC never compact) uses the shared server.
 - M9 wave r2b holds offsets 400-659, in offset order: `effect-units` (400-401: effects past the budget, and the
   hostile lone line art through the upload route), `units-live` (405-406: a jump to a slide not prepared and a GO
-  50 ms after its arm, and the playlist warmed ahead), `editor-table` (420) and `ipad-table-targets` (421-423, one
+  50 ms after its arm, and the playlist warmed ahead), `editor-whole` (410: the desktop editor draws line art and shadows past the budget whole, not while a service is
+  live, not with `?editor=light`) and `ipad-editor-whole` (412-414, one per tablet project: a tablet keeps the
+  lighter drawing), `editor-table` (420) and `ipad-table-targets` (421-423, one
   per tablet project) are the table editing's; `pptx-table-edit` (425, sub-wave 1's integration: the table deck
   imported on a hub without LibreOffice, a cell edited on the canvas, live); `pptx-tables` (430-432, tables-conv
   and tables-flip: the table deck on a hub without LibreOffice through the Import tab and through the upload
