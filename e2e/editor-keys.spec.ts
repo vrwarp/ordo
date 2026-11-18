@@ -7,6 +7,7 @@ import {
   churchDeck,
   clickObject,
   editorHub,
+  editorReady,
   editorState,
   frames,
   importDeck,
@@ -505,6 +506,39 @@ test('in the Presenter Notes Studio no key acts on the text box or picture selec
   await expect.poll(async () => (await editorState(page)).slideId).toBe('welcome');
   expect(await objectsOf(page, 'welcome')).toEqual(before);
   await expect(studio).toHaveCount(1);
+});
+
+test('the first Alt+N closes a Speaker Notes Dock that opened by itself, and opens one that did not', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const a = await hubApi(PORT);
+  // The church deck has notes on every slide.
+  const church = await importDeck(a, deck);
+  const dock = page.locator('[data-notes-dock]');
+  const altN = async () => {
+    await focusPage(page);
+    await page.keyboard.press('Alt+KeyN');
+    await frames(page);
+  };
+  // A tall window and a deck with notes: the dock opens by itself (PR #28), so the first Alt+N closes it and the
+  // next opens it again.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openEditor(page, PORT, church.id);
+  await expect(dock).toHaveAttribute('data-notes-dock', 'expanded');
+  await altN();
+  await expect(dock).toHaveAttribute('data-notes-dock', 'collapsed');
+  await altN();
+  await expect(dock).toHaveAttribute('data-notes-dock', 'expanded');
+  // A short window: the dock does not open by itself, so the first Alt+N opens it and the next closes it.
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.reload();
+  await editorReady(page, church.id);
+  await expect(dock).toHaveAttribute('data-notes-dock', 'collapsed');
+  await altN();
+  await expect(dock).toHaveAttribute('data-notes-dock', 'expanded');
+  await altN();
+  await expect(dock).toHaveAttribute('data-notes-dock', 'collapsed');
 });
 
 test('in the Lyric Script no key acts on the lyric box selected on the hidden canvas', async ({ page }) => {
