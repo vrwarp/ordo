@@ -260,6 +260,16 @@ describe('pruning and deleting (RC3, RC5)', () => {
     ).toBe(0);
   });
 
+  it("forgets a deleted presentation's references whichever way it is deleted (RC3)", async () => {
+    hub = await startHub();
+    const g = hash(77);
+    hub.lib.savePresentation({ ...naming('gone', [g]), rev: 1 }, { create: true });
+    expect(hub.lib.fileReferenced(g)).toBe(true);
+    hub.lib.presentations.delete('gone'); // the library's own delete, not the route
+    expect(intervals('gone')).toEqual([]);
+    expect(hub.lib.fileReferenced(g)).toBe(false);
+  });
+
   it('answers fileReferenced for a hash a kept revision or a head names, and Store.release keeps such a file (RC5)', async () => {
     hub = await startHub();
     const [old, page, shape] = [hash(20), hash(21), hash(22)];

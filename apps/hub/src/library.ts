@@ -150,16 +150,19 @@ class EntityTable<T extends { id: string; rev?: number }> {
   private table: string;
   private schema: z.ZodType<T>;
   private columns: (e: T) => Record<string, string | number | null>;
+  private afterDelete?: (id: string) => void;
   constructor(
     db: DB,
     table: string,
     schema: z.ZodType<T>,
     columns: (e: T) => Record<string, string | number | null> = () => ({}),
+    afterDelete?: (id: string) => void,
   ) {
     this.db = db;
     this.table = table;
     this.schema = schema;
     this.columns = columns;
+    this.afterDelete = afterDelete;
   }
 
   private parse(r: Row): T {
@@ -216,7 +219,9 @@ class EntityTable<T extends { id: string; rev?: number }> {
   }
 
   delete(id: string): boolean {
-    return this.db.prepare(`DELETE FROM ${this.table} WHERE id = ?`).run(id).changes > 0;
+    const gone = this.db.prepare(`DELETE FROM ${this.table} WHERE id = ?`).run(id).changes > 0;
+    if (gone) this.afterDelete?.(id);
+    return gone;
   }
 }
 
@@ -245,12 +250,19 @@ export class Library {
   constructor(db: DB, opts: { timeZone: string }) {
     this.db = db;
     this.timeZone = opts.timeZone;
-    this.presentations = new EntityTable(db, 'presentations', Presentation, (p) => ({
-      title: p.title,
-      kind: p.kind,
-      folder_id: p.folderId ?? null,
-      archived: p.archived ? 1 : 0,
-    }));
+    this.presentations = new EntityTable(
+      db,
+      'presentations',
+      Presentation,
+      (p) => ({
+        title: p.title,
+        kind: p.kind,
+        folder_id: p.folderId ?? null,
+        archived: p.archived ? 1 : 0,
+      }),
+      // what a deleted presentation's versions named goes with it, whichever way it was deleted
+      (id) => this.refs.forget(id),
+    );
     this.playlists = new EntityTable(db, 'playlists', Playlist, (p) => ({ name: p.name }));
     this.media = new EntityTable(db, 'media', Media, (m) => ({ name: m.name, kind: m.kind, state: m.state }));
     this.themes = new EntityTable(db, 'themes', Theme.extend({ rev: z.number().int().optional() }));
