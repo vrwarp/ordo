@@ -93,9 +93,9 @@ describe('the table object (stored)', () => {
     expect(Slide.safeParse(r.data).success).toBe(true);
   });
 
-  it('a table with East Asian vertical cells (eaVert, sub-wave 1c) parses here and in the 0.8.0 build as stored', () => {
+  it('a table with East Asian vertical cells (eaVert, sub-wave 1c) parses here and in the older build (0.8.0 and 0.8.1) as stored', () => {
     // The converter stores the Korean bulletin's eaVert cells in the table object since sub-wave 1c (CellStyle.vert,
-    // in the schema since 0.8.0): the older build keeps the table and its vert, and its renderer draws the cells
+    // in the schema since 0.6.0): the older build keeps the table and its vert, and its renderer draws the cells
     // horizontally, as today's does (renderer table/draw.test.ts: eaVert draws as horz).
     const s = slide([tableShape(verticalTable())]);
     const now = Slide.parse(s).objects[0] as ShapeObject;

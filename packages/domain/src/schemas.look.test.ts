@@ -89,8 +89,9 @@ describe("a stage look's notes region (design/27 §3.1 PropsRule.notes, §11 ite
 
 /*
  * design/27 §3.2 "Older builds", design/29 §1.6: a stage look this build saves, as the older builds read it. The
- * build a venue runs before wave r2b is main's 0.8.0 (PR #28, `schemas.prev.test-util.ts`), which added the
- * adaptive stage preset and the notes size; 0.5.0 (`schemas.prev05.test-util.ts`) predates them.
+ * build a venue runs before wave r2b is main's 0.8.1 (PR #30), whose schema is 0.8.0's (PR #28,
+ * `schemas.prev.test-util.ts`), which added the adaptive stage preset and the notes size; 0.5.0
+ * (`schemas.prev05.test-util.ts`) predates them.
  */
 describe('a stage look this build saves, read by the older builds', () => {
   const look = () =>
@@ -102,7 +103,7 @@ describe('a stage look this build saves, read by the older builds', () => {
       },
     });
 
-  it('the older build (0.8.0) keeps its stage preset, notes size and notes switch, and saves back the same look', () => {
+  it('the older build (0.8.0 and 0.8.1) keeps its stage preset, notes size and notes switch, and saves back the same look', () => {
     const old = prev.Look.parse(look());
     expect(old.layers.props.stagePreset).toBe('prompter');
     expect(old.layers.props.notesScale).toBe('sm');

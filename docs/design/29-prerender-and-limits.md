@@ -184,8 +184,8 @@ cut?: string[];                                      // what a kept bound left o
   then pictures by area) so any drawer draws it whole. Text past one box's 20,000 characters (`schemas.ts:13`,
   :527) is split across plain boxes of at most 20,000 characters each within the 200-object cap; only past that
   is it cut, with W5.
-- That one form is what an older build (0.8.0, main's PR #28, the release before wave r2b, or 0.5.0) draws after a rollback
-  (today's simplified result, never a blank), what
+- That one form is what an older build (0.8.1, main's PR #30, the release before wave r2b, with 0.8.0's schema, or
+  0.5.0) draws after a rollback (today's simplified result, never a blank), what
   every reader reads (search, cue labels, Stage, lyric-only looks, Bottom-Third Stream, live translation) and what a
   screen draws when it has neither file nor picture.
 - Everything not drawn stays in the stand-in, never in the file: notes, timing, transition, MIDI cues, sound,
@@ -198,7 +198,7 @@ cut?: string[];                                      // what a kept bound left o
 
 **The presentation default** goes in `Presentation.meta.draw?: 'picture' | 'live'`, not at the top level:
 `PresentationBody = Presentation.strict()` (`apps/hub/src/routes.ts:117` at `62a1c3a`) would make an older hub
-(0.8.0, 0.5.0) refuse a save with a new top-level key, while `meta` strips unknown keys (`schemas.ts:1018-1026`). Resolved as
+(0.8.1, 0.5.0) refuse a save with a new top-level key, while `meta` strips unknown keys (`schemas.ts:1018-1026`). Resolved as
 `slide.draw ?? meta.draw ?? 'picture'` on a slide with `prerender`, except that a `tail` slide without its own
 switch draws live from its file unless its estimate passes 0.3 s (owner question 10); a slide without `prerender`
 is live unless set to Pre-rendered.
@@ -459,7 +459,7 @@ stand-in; never a 1920 copy decoded small (`thumb.worker.ts:96` decodes at 640 f
 budgets a song open at 300 KB, `28-mobile.md:1096`, the phone cache at 150 MB, :866, and the heap at 300 MB, :1098).
 The preview is on design/28 P1's view whitelist for `GET /files` (:709); slide pages are never served to view
 sessions. A pre-rendered slide is read-only on a phone (W57; owner question 6).
-**Older build (0.8.0 or 0.5.0 after a rollback)**: strips `prerender`, `draw`, `cut` and `meta.draw`, draws the
+**Older build (0.8.1 or 0.5.0 after a rollback)**: strips `prerender`, `draw`, `cut` and `meta.draw`, draws the
 stand-in.
 **Hub without its library process**: the live process serves the live service's slide pages and pictures from its
 index (`apps/hub/src/liveproc.ts:227-237`).
@@ -607,7 +607,7 @@ imports keep today's ladder. `CONVERTER_VERSION` becomes 3 with the plan change 
   slide file, not the stand-in, so re-import, Reset slide (`PptxSlideCard.tsx:91-96`) and `patchSlide` read and
   write slide files in the pool. The merged presentation is planned again (a merge can pass 3 MiB; today
   `reimport.ts:932-934` only logs), and the requesting app bakes the changed slides when the job ends.
-- Rollback to 0.8.0 or 0.5.0: the stand-in draws; a save there drops the link to the file, which collection keeps while a
+- Rollback to 0.8.1 or 0.5.0: the stand-in draws; a save there drops the link to the file, which collection keeps while a
   revision names it, so restoring the version from before the rollback brings it back (design/27 §3.2 rule).
 
 ### 1.13 Tests and measures
@@ -618,7 +618,8 @@ Tests (each fails before its change):
   3840 reference, `standInOf` (live objects whole, caps, notes untouched, 70 KB of text split into boxes of at most
   20,000 characters), slide pages (a 2,000-object slide is 4 pages; one changed object changes one page and the
   head), `withFullSlide` (an operation on a big slide changes its pages and key, never only its stand-in),
-  `schemas.prev` (0.8.0 and 0.5.0 strip the fields and draw the stand-in; `meta.draw` does not make a save refuse);
+  `schemas.prev` (0.8.1, as 0.8.0, and 0.5.0 strip the fields and draw the stand-in; `meta.draw` does not make a
+  save refuse);
 - hub: a key not in `prerender_keys` is refused; wrong size, animation or over 32 MiB refused; first upload wins
   and an operate-session upload with different pixels replaces an edit-session one; during a service an upload for
   another presentation answers 503 and one for the live service is announced with `prerender.add`; a failed key is
@@ -1236,7 +1237,7 @@ no; 12 no; 13 yes, after measuring on a venue-class PC; 14 yes.
 - **Transport at Go live**: every pre-rendered slide adds a picture to every screen's download; cue-order fill, the
   1920-only fetch for 1080p screens and slide pages last for slides with a picture keep the first slides first;
   measured (§1.13 measure 6).
-- **Rollback**: a save in an older build (0.8.0, 0.5.0) drops `prerender`; restoring the earlier version brings it
+- **Rollback**: a save in an older build (0.8.1, 0.5.0) drops `prerender`; restoring the earlier version brings it
   back.
 - **Volunteers may pick Live without reading**: every detailed slide has a picture anyway; the playlist page shows
   W22 and W35 before Go live with a one-press save, and during the service W35 and W48 offer "Use the pictures
@@ -1328,8 +1329,9 @@ The r2b plan (two critics against `62a1c3a`) changed this design where it is bui
   origins and locks are in the pages but never change a pixel, so they never change a key; the head still names
   the file.
 - **r2b.5 `sha256.ts`** is prerender-model's alone (§4).
-- **r2b.6 Older builds.** The fixture of the older build is 0.8.0 (`2a11dc9`, main's PR #28, the release before r2b;
-  it replaced 0.7.0's `62a1c3a` when main published 0.8.0 during sub-wave 1), with 0.5.0 kept as a second
-  (`schemas.prev05.test-util.ts`); both strip `prerender`, `draw`, `cut` and `meta.draw`, and 0.8.0 keeps a stage
-  look's `stagePreset` and `notesScale` (`schemas.look.test.ts`).
+- **r2b.6 Older builds.** The fixture of the older build is 0.8.0's schema (`2a11dc9`, main's PR #28; it replaced
+  0.7.0's `62a1c3a` when main published 0.8.0 during sub-wave 1), unchanged in 0.8.1 (`14f45b1`, main's PR #30, the
+  release before r2b), with 0.5.0 kept as a second (`schemas.prev05.test-util.ts`); both strip `prerender`, `draw`,
+  `cut` and `meta.draw`, and 0.8.0 and 0.8.1 keep a stage look's `stagePreset` and `notesScale`
+  (`schemas.look.test.ts`).
 - **r2b.7 Owner defaults** applied as §5 lists them.

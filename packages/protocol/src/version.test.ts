@@ -43,8 +43,14 @@ import { APP_VERSION } from './index.ts';
 // and plan.ts slideVisible's stage-preview notes, the same code as main's 0.8.1 above). With PR #30 merged in,
 // the shared sources are the wave's as they were (the digest leaves the APP_VERSION line out), so the merged
 // digest is the wave's, recorded at 0.8.1.
+// 0.9.0 for PR #29 (wave r2b's parts 1, 1b and 1c: editable PowerPoint tables, Go live during a service, a GO
+// never waits for drawing), the wave's one bump, its last commit. Main published 0.8.1 without them, so an
+// operator, output or stage tab still running 0.8.1 from its cache must reload (the hub's bye version) rather
+// than go on without them: without sub-wave 1's shared changes above, or sending the hub PowerPoint scenes
+// parsed as 0.8.1 parsed them (design/27, "CONVERTER_VERSION stays 2 through sub-wave 1c too"). The digest is
+// unchanged (it leaves the APP_VERSION line out).
 const RECORDED = {
-  version: '0.8.1',
+  version: '0.9.0',
   digest: '7077a1437610daeacb64027cc37a534a758d091ad298af39f1b1e1f3c7c20511',
 };
 

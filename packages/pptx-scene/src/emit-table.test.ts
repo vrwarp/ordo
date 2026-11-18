@@ -235,7 +235,7 @@ describe('the table object (M9, ShapeObject.table)', () => {
       valign: 'middle',
       fallbackFonts: ['Carlito', 'Noto Sans KR'],
     });
-    // TableData parses it back as stored (CellStyle.vert, schema 0.8.0).
+    // TableData parses it back as stored (CellStyle.vert, in the schema since 0.6.0).
     expect(TableData.parse(t)).toEqual(t);
     // No shadow on the table object: `hasShapeExtras` stays false, so no fallback drawer draws one and the
     // slide's effect budget charges none; the slide says it is not drawn.

@@ -962,7 +962,7 @@ cells, '1년차' and '２년차', 24 pt in a 46.6 pt column, each over 4 rows, a
   within 0.001 pt on LibreOffice's 1/100 mm column grid, none turned; eaVert slides and their horz twins give
   byte-identical pages). Slide 2's cells stack one character a line only because the column is narrow. So a table
   whose vertical cells are all `eaVert` is read as the table object, each such cell keeping `TableCell.vert`
-  'eaVert' (emitted by `emit-table.ts` `vertOf` into `CellStyle.vert`, in the schema since 0.8.0: no schema change),
+  'eaVert' (emitted by `emit-table.ts` `vertOf` into `CellStyle.vert`, in the schema since 0.6.0: no schema change),
   and drawn horizontally by today's renderer (`table/model.ts` `cellIsVertical`), as LibreOffice draws it. A table
   with any `vert`, `vert270`, `wordArtVert`, `wordArtVertRtl` or `mongolianVert` cell stays residual (owner question
   Q1c-5): `vert` and `vert270` are LibreOffice's vertical writing (drawn horizontally they would replace its art by
@@ -987,7 +987,8 @@ cells, '1년차' and '２년차', 24 pt in a 46.6 pt column, each over 4 rows, a
   note), `renderer/src/table/draw.test.ts` (a pin: an eaVert cell draws the same operations as horz) and
   `table/edit.test.ts` (caret, selection, click and the cell's rect over 4 rows as a horizontal cell's), the
   operator's table tests and `packages/domain` (`vertical-table.test-util.ts`: typing, formatting, Find & Replace,
-  row and column operations, Tab, undo and `fitRows` keep the cell's vert; the 0.8.0 build parses it as stored),
+  row and column operations, Tab, undo and `fitRows` keep the cell's vert; the older build, 0.8.1 with 0.8.0's
+  schema, parses it as stored),
   `apps/hub/test/pptx-reimport.test.ts` (re-import and Reset slide of a slide stored before 1c, LibreOffice's art,
   give the table object); end to end `e2e/table-deck.test.ts`, `e2e/pptx-tables.spec.ts` and
   `e2e/ipad/table-targets.spec.ts` (`verticalTableDeck`).

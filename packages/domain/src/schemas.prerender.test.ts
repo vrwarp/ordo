@@ -7,8 +7,8 @@ import * as prev05 from './schemas.prev05.test-util.ts';
 /*
  * design/29 §1.2, §1.6: the stand-in's new fields (`Slide.prerender`, `Slide.draw`, `Slide.cut`) and the
  * presentation default (`Presentation.meta.draw`), as this build keeps them and as the older builds read them:
- * 0.8.0 (2a11dc9, main's PR #28, the release before wave r2b) and 0.5.0 strip them and draw the stand-in; a save
- * from them is valid here.
+ * 0.8.1 (14f45b1, main's PR #30, the release before wave r2b, with 0.8.0's schema: 2a11dc9, PR #28) and 0.5.0
+ * strip them and draw the stand-in; a save from them is valid here.
  */
 
 const HEAD = 'a'.repeat(64);
@@ -137,7 +137,7 @@ describe('Slide.prerender, Slide.draw, Slide.cut and meta.draw (design/29 §1.2)
   });
 
   for (const [name, old] of [
-    ['0.8.0', prev],
+    ['0.8.0 and 0.8.1', prev],
     ['0.5.0', prev05],
   ] as const) {
     it(`the older build (${name}) strips them and draws the stand-in`, () => {
@@ -155,7 +155,8 @@ describe('Slide.prerender, Slide.draw, Slide.cut and meta.draw (design/29 §1.2)
     });
 
     it(`an older hub (${name}) accepts a PUT body with meta.draw, and would refuse a top-level key`, () => {
-      // apps/hub/src/routes.ts:117 (62a1c3a, unchanged at 2a11dc9): PresentationBody = Presentation.strict().
+      // apps/hub/src/routes.ts:117 (62a1c3a, unchanged at 2a11dc9 and 14f45b1):
+      // PresentationBody = Presentation.strict().
       const body = old.Presentation.strict();
       const r = body.safeParse(presentation({ draw: 'picture' }));
       expect(r.success).toBe(true);

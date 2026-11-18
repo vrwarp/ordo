@@ -406,7 +406,7 @@ describe('standInOf (design/29 §1.2)', () => {
     expect(new Set(out2.objects.map((o) => o.id)).size).toBe(out2.objects.length);
   });
 
-  it('parses and draws as the stand-in in the older build (0.8.0)', () => {
+  it('parses and draws as the stand-in in the older build (0.8.0 and 0.8.1)', () => {
     const s = detailed();
     const out = standInOf(s, liveSet(s));
     const old = prev.Slide.safeParse({ ...out, prerender: { why: ['bytes'], live: out.prerender?.live } });

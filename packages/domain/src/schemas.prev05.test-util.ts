@@ -7,8 +7,8 @@
  * chart, decor, adjWide, SlidePptx.missing). The compatibility tests check that this schema still parses
  * slides written by the current one, stripping the new fields as an older build would, and that the
  * stripped slides still draw a sensible legacy shape. Wave r2b keeps it as the second fixture beside
- * `schemas.prev.test-util.ts` (0.8.0, main's PR #28, the release before r2b): the older build a venue may still
- * run, and the one its M9 cases (geometry kept, M9 stripped) were written against.
+ * `schemas.prev.test-util.ts` (0.8.0's, PR #28, unchanged in 0.8.1, PR #30, the release before r2b): the older
+ * build a venue may still run, and the one its M9 cases (geometry kept, M9 stripped) were written against.
  */
 import { z } from 'zod';
 

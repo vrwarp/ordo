@@ -441,8 +441,9 @@ SlidePptx  += { missing: string[] ≤ 16 of ≤ 40 }                   // '<kind
   kind 'drawing'); a slide waiting for LibreOffice is reported as waiting instead.
 - **Older builds**: `schemas.prev05.test-util.ts` is main's 0.5.0 schema, as published (M9 is 0.6.0; every push
   to main publishes the edge image and the Pages demo, so 0.5.0 is what a venue rolls back to; since wave r2b
-  `schemas.prev.test-util.ts` is 0.8.0, main's PR #28, the release before it, design/29 §1.2, and these cases keep 0.5.0). It strips every
-  M9 field (`table`, `chart`, `decor`, `look3d`, `warp`, `writing`, `centerBlock`, `vectorFonts`, `adjWide`,
+  `schemas.prev.test-util.ts` is 0.8.0's schema, main's PR #28, unchanged in 0.8.1, PR #30, the release before it,
+  design/29 §1.2, and these cases keep 0.5.0). It strips every M9 field (`table`, `chart`, `decor`, `look3d`,
+  `warp`, `writing`, `centerBlock`, `vectorFonts`, `adjWide`,
   `SlidePptx.missing`) and keeps what 0.5.0 already had: geometry and its files, rich text, provenance,
   `midiCues`, `bottomThirdText`, a playlist item's `keepBackground`, `audioMediaId` and `countdownTimer`, a
   text box's `lineMask` and a picture's `shadow` and `softEdge` (`schemas.compat.test.ts`). The M9 fixture slide
@@ -3393,9 +3394,10 @@ on a hub with it (0.947), nothing on one without (0.490, the table listed missin
   column grid, none turned; three eaVert slides and their horz twins give byte-identical pages; the bulletin's cells
   stack one character a line only because the column is narrow). So a table whose vertical cells are all `eaVert` is
   the table object, each such cell keeping its `vert` (`TableCell.vert`, emitted as `CellStyle.vert` 'eaVert', in the
-  schema since 0.8.0: no SHARED change, APP_VERSION and its digest stand), drawn horizontally by today's renderer
-  (`cellIsVertical`; no renderer change) as LibreOffice draws it; a 0.8.0 build parses it as stored. The
-  cell keeps its vert through typing, formatting, Find & Replace, row and column operations, Tab, undo and the
+  schema since 0.6.0: no SHARED change, so 1c moves neither APP_VERSION nor its digest), drawn horizontally by
+  today's renderer (`cellIsVertical`; no renderer change) as LibreOffice draws it; the older build (0.8.1, with
+  0.8.0's schema) parses it as stored. The cell keeps its vert through typing, formatting, Find & Replace, row and
+  column operations, Tab, undo and the
   rows' growth; its caret, selection and taps are a horizontal cell's (ordo's editor has no merge or split).
   Re-import and Reset slide of a slide stored before 1c (LibreOffice's art) give the table object.
 - **Tables with `vert`, `vert270`, `wordArtVert`, `wordArtVertRtl` or `mongolianVert` cells stay LibreOffice's art**
