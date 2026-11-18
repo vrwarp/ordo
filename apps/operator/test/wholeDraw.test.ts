@@ -124,7 +124,7 @@ describe('what is a candidate and what goes whole (W1, W6)', () => {
       expect(state.committed.has(o.id)).toBe(false);
       expect(drawWhole(o, budget, env(), state)).toBeUndefined();
     }
-    expect([...state.committed.keys()].sort()).toEqual(LATE);
+    expect([...state.committed.keys()]).toEqual(LATE);
   });
 });
 
