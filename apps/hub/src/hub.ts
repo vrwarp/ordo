@@ -14,6 +14,8 @@ import { createHttpApp, type RouteInfo, withTimeout } from './http.ts';
 import { ImportService } from './imports.ts';
 import { JobQueue } from './jobs.ts';
 import { JobPacing } from './pacing.ts';
+import { cpuPool } from './pool.ts';
+import { SlideFiles } from './slidefiles.ts';
 import { Library, phonesSwitch } from './library.ts';
 import { LiveService, librarySource } from './live.ts';
 import { contextMediaIds, forOutputs } from './librarylink.ts';
@@ -213,6 +215,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     log,
     ring,
     disk,
+    slideFiles: new SlideFiles(lib, store, cpuPool),
     live: { locks: () => live.locks(), mode: () => live.state.mode },
     disconnectOutput: (id, reason) => sockets.disconnectOutput(id, reason),
     liveDiag: async () => liveDiagOf(live, sockets),

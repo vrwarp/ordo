@@ -51,6 +51,7 @@ import type { DiskFloor } from './diskfloor.ts';
 import { badRequest, conflict, HttpError, locked, notFound, unauthorized } from './errors.ts';
 import type { FontService } from './fonts/service.ts';
 import type { ImportService } from './imports.ts';
+import type { SlideFiles } from './slidefiles.ts';
 import type { JobQueue } from './jobs.ts';
 import { FolderSchema, type Library, newToken, SETTINGS_KEYS, stripTokens } from './library.ts';
 import { LiveRejection, type LiveService } from './live.ts';
@@ -255,6 +256,8 @@ export type LibraryApiCtx = {
   ring: LogRing;
   /** The free-space floor of the data volume (diskfloor.ts): the routes that store a file ask it first. */
   disk: DiskFloor;
+  /** Slide files: the heads and pages of pre-rendered slides (slidefiles.ts). */
+  slideFiles: SlideFiles;
   live: LiveView;
   /** Close the sockets of an output whose token changed (the live process also notices on its own). */
   disconnectOutput(outputId: string, reason: string): void;
@@ -278,6 +281,9 @@ export type LiveApiCtx = {
 type Ctx = LibraryApiCtx;
 
 type Received = { path: string; hash: string; bytes: number; filename: string; fieldname: string };
+
+/** A slide file part's body: 256 KiB of canonical JSON (`SLIDE_FILE_LIMITS.pageBytes`) and slack for whitespace. */
+const SLIDE_PART_BODY_LIMIT = 256 * 1024 + 8 * 1024;
 
 /** The wait a 503 asks for while LibreOffice is still being checked (`Retry-After`, s). */
 const LIBREOFFICE_CHECKING_RETRY_S = 30;
@@ -436,11 +442,13 @@ function routeFn(app: FastifyInstance, opts: { paced: boolean }) {
     access: Access,
     cap: SessionCap,
     handler: RouteHandlerMethod,
+    extra: { bodyLimit?: number } = {},
   ) =>
     app.route({
       method,
       url: API_PREFIX + url,
       config: { access, cap },
+      ...(extra.bodyLimit !== undefined ? { bodyLimit: extra.bodyLimit } : {}),
       handler: opts.paced
         ? function (req, reply) {
             const p = req.principal;
@@ -1317,6 +1325,33 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       download: isActiveMime(f.mime),
     });
   });
+
+  // A slide file's page or head (design/29 §1.3): canonical JSON, at most 256 KiB a page, checked in the CPU pool.
+  // Pages first, then the head; the hub names a part by what it stores and refuses a name that differs.
+  route(
+    'PUT',
+    '/files/slide/:hash',
+    'edit',
+    'full',
+    async (req, reply) => {
+      await room(req);
+      const hash = params(req).hash!;
+      if (!/^[0-9a-f]{64}$/.test(hash)) throw badRequest('The name is the SHA-256 of the part', 'bad_name');
+      const body = req.body;
+      if (!body || typeof body !== 'object' || Array.isArray(body))
+        throw badRequest('Send a slide page or head as JSON', 'bad_page');
+      const isHead = Array.isArray((body as { pages?: unknown }).pages);
+      const out = isHead
+        ? await hub.slideFiles.putHead(hash, body)
+        : await hub.slideFiles.putPage(hash, body);
+      return reply.code(out.status).send({
+        hash: out.hash,
+        bytes: out.bytes,
+        ...(out.count !== undefined ? { count: out.count } : {}),
+      });
+    },
+    { bodyLimit: SLIDE_PART_BODY_LIMIT },
+  );
 
   // ---------------- diagnostics, backups ----------------
   route('GET', '/diagnostics/export', 'operate', 'full', async (_req, reply) => {

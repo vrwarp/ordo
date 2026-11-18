@@ -5,7 +5,7 @@
  */
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Presentation } from '@ordo/domain';
+import { DEFAULT_LYRIC_STYLE, type Presentation } from '@ordo/domain';
 import { slideUses } from '@ordo/domain/prerender.ts';
 import { SLIDE_FILE_LIMITS, slideFileName } from '@ordo/domain/slidefile.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -46,10 +46,11 @@ describe('PUT /files/slide/:hash, a page (S1, S2, S5)', () => {
       v: 1,
       objects: [{ id: 'x', type: 'nope', box: { x: 0, y: 0, w: 1, h: 1, rotation: 0 } }],
     };
-    const fat = {
-      v: 1,
-      objects: Array.from({ length: 400 }, (_, i) => textObject(`t${i}`, 'x'.repeat(700))),
-    };
+    // a page just over 256 KiB of canonical JSON that still fits the route's body limit
+    const fat = { v: 1, objects: [] as unknown[] };
+    while (Buffer.byteLength(JSON.stringify(fat)) < 263_000)
+      fat.objects.push(textObject(`t${fat.objects.length}`, 'x'.repeat(700)));
+    expect(Buffer.byteLength(JSON.stringify(fat))).toBeLessThan(268_000);
     for (const [what, body] of [
       ['501 objects', many],
       ['an unknown type', unknown],
@@ -116,17 +117,23 @@ describe('PUT /files/slide/:hash, a head (S3, S4)', () => {
     expect(err.missing).toEqual(head.pages.slice(0, 20));
   });
 
-  it('refuses pages out of order, a count that does not add up, and 16 MiB of pages (S3)', async () => {
+  it('refuses a count that does not add up, a name that is no page, and 16 MiB of pages (S3)', async () => {
     hub = await startHub();
     const ed = await login(hub.url, EDIT_PIN);
     const f = fullOf(bigSlide('two', 600));
     expect(f.pages.pages.length).toBeGreaterThanOrEqual(2);
     for (const p of f.pages.pages) await ed.fetch(`/files/slide/${p.name}`, { method: 'PUT', json: p.page });
-    const swapped = { ...f.pages.head, pages: [...f.pages.head.pages].reverse() };
+    // The hub reads each page by the head's own names, so an order cannot disagree with the pages: what can is the
+    // count (the objects the pages hold) and a name whose file is some other JSON.
+    const notAPage = await hub.store.putBytes(Buffer.from('{"geometry":true}'), {
+      ext: 'json',
+      mime: 'application/json',
+    });
     const off = { ...f.pages.head, count: f.pages.head.count + 1 };
+    const other = { ...f.pages.head, pages: [notAPage.hash] };
     for (const [what, head] of [
-      ['out of order', swapped],
       ['count', off],
+      ['not a page', other],
     ] as const) {
       const r = await ed.fetch(`/files/slide/${slideFileName(head as never)}`, { method: 'PUT', json: head });
       expect(r.status, what).toBe(400);
@@ -162,7 +169,7 @@ describe('PUT /files/slide/:hash, a head (S3, S4)', () => {
         opacity: 1,
         radius: 0,
       } as never,
-      textObject('serif', 'Hi', undefined, { style: { fontFamily: 'Carlito' } as never }),
+      textObject('serif', 'Hi', undefined, { style: { ...DEFAULT_LYRIC_STYLE, fontFamily: 'Carlito' } }),
     );
     const f = fullOf(slide);
     for (const p of f.pages.pages) await ed.fetch(`/files/slide/${p.name}`, { method: 'PUT', json: p.page });

@@ -626,8 +626,11 @@ export type FullSlideResult = {
   refused?: string;
 };
 
-/** What the file draws (`Slide.prerender.uses`), within its bounds; the hub rewrites it from its own record. */
-function usesOf(full: Slide): NonNullable<SlidePrerender['uses']> {
+/**
+ * What the file draws (`Slide.prerender.uses`), within its bounds; the hub rewrites it from its own record, which its
+ * pool computes with this same function (apps/hub slidetasks.ts), so a head's `uses` is what `withFullSlide` writes.
+ */
+export function slideUses(full: Slide): NonNullable<SlidePrerender['uses']> {
   const media = new Set<string>([...drawnMediaIds(full), ...slideMediaIds(full)]);
   const files = drawnShapeFileRefs(full).filter(isGeomFileRef);
   const fonts = new Set<string>();
@@ -691,7 +694,7 @@ export function withFullSlide(
     why,
     file: { ref: pages.name, bytes: pages.bytes },
     live,
-    uses: usesOf(next),
+    uses: slideUses(next),
   };
   const standIn = standInOf({ ...next, prerender: record }, live);
   return { full: next, standIn, pages, ...key() };

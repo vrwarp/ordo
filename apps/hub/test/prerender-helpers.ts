@@ -64,14 +64,14 @@ export function pictureInputs(
   return { mediaFile: (id) => files[id], fonts };
 }
 
-/** `withFullSlide` of a big slide: the stand-in, the slide file (head and pages) and the key. */
+/** `withFullSlide` of a big slide: the stand-in, the slide file (head and pages), its head's name and the key. */
 export function fullOf(
   slide: Slide = bigSlide(),
   inputs: PictureInputs = pictureInputs(),
-): Required<Pick<FullSlideResult, 'standIn' | 'pages' | 'key' | 'standbyId'>> & FullSlideResult {
+): FullSlideResult & { standIn: Slide; pages: SlideFile; key: string; standbyId: string; name: string } {
   const r = withFullSlide(slide, (s) => s, inputs);
   if (!r.pages || !r.key || !r.standbyId) throw new Error('the slide did not get a file');
-  return r as never;
+  return { ...r, standIn: r.standIn, pages: r.pages, key: r.key, standbyId: r.standbyId, name: r.pages.name };
 }
 
 /** PUT the pages of a slide file, then its head, as a writer of the editor does. Returns the head's name. */

@@ -33,9 +33,9 @@ import type {
 } from '@ordo/protocol';
 import { z } from 'zod';
 import { type DB, nowIso } from './db.ts';
-import { badRequest, conflict, notFound } from './errors.ts';
+import { badRequest, conflict, HttpError, notFound } from './errors.ts';
 import { PrerenderIndex } from './prerenders.ts';
-import { SlideFileIndex } from './slidefiles.ts';
+import { NAMED_MAX, SlideFileIndex } from './slidefiles.ts';
 import { validate } from './validate.ts';
 
 export type Change = { kind: LibraryKind; id: string; rev?: number; entity?: unknown; deleted?: boolean };
@@ -419,21 +419,73 @@ export class Library {
   // ---- presentations with revisions ----
   savePresentation(
     p: Presentation,
-    opts: { expectedRev?: number; by?: string; create?: boolean },
+    opts: { expectedRev?: number; by?: string; create?: boolean; keys?: readonly PrerenderKeyRow[] },
   ): Presentation {
     return this.db.transaction(() => {
+      // The slide files a pre-rendered slide names must be the hub's (409 otherwise), and its `uses` and file
+      // bytes are the hub's record, inside this transaction so a head cannot vanish between check and write.
+      const body = this.withSlideFiles(p);
       const saved =
         opts.create || !this.presentations.get(p.id)
-          ? this.presentations.insert(p)
-          : this.presentations.update(p.id, p, opts.expectedRev);
+          ? this.presentations.insert(body)
+          : this.presentations.update(p.id, body, opts.expectedRev);
       this.db
         .prepare(
           `INSERT OR REPLACE INTO presentation_revisions (presentation_id, rev, json, saved_by, saved_at) VALUES (?, ?, ?, ?, ?)`,
         )
         .run(saved.id, saved.rev, JSON.stringify(saved), opts.by ?? null, saved.updatedAt ?? nowIso());
+      if (opts.keys?.length) this.writeKeys(saved.id, saved.rev, opts.keys);
       this.pruneRevisions(saved.id);
       return saved;
     })();
+  }
+
+  /** The keys of a saved revision (`prerender_keys`): additive per revision, a row that exists is replaced. */
+  private writeKeys(id: string, rev: number, keys: readonly PrerenderKeyRow[]): void {
+    const ins = this.db.prepare(
+      `INSERT OR REPLACE INTO prerender_keys (presentation_id, rev, slide_id, key, standby_id, sig, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const at = Date.now();
+    for (const k of keys) ins.run(id, rev, k.slideId, k.key, k.standbyId, k.sig, at);
+  }
+
+  /**
+   * design/29 §1.3: every `prerender.file.ref` of the presentation must have its head row and its file (409
+   * `slide_files_missing`, the first 20 refs); the slide's `uses` and `file.bytes` are rewritten from the hub's
+   * record. A presentation with no such slide costs one pass over its slides and no lookup.
+   */
+  private withSlideFiles(p: Presentation): Presentation {
+    const refs: string[] = [];
+    for (const sec of p.sections ?? [])
+      for (const s of sec.slides) if (s.prerender?.file) refs.push(s.prerender.file.ref);
+    if (!refs.length) return p;
+    const have = this.slideFiles.have(refs);
+    const missing = [...new Set(refs.filter((r) => !have.has(r)))];
+    if (missing.length)
+      throw new HttpError(409, 'slide_files_missing', 'Upload the slides’ full copies first', {
+        refs: missing.slice(0, NAMED_MAX),
+      });
+    const rows = new Map<string, NonNullable<ReturnType<SlideFileIndex['head']>>>();
+    const rowOf = (ref: string) => {
+      let r = rows.get(ref);
+      if (!r) rows.set(ref, (r = this.slideFiles.head(ref)!));
+      return r;
+    };
+    return {
+      ...p,
+      sections: p.sections.map((sec) => ({
+        ...sec,
+        slides: sec.slides.map((s) => {
+          const pre = s.prerender;
+          if (!pre?.file) return s;
+          const row = rowOf(pre.file.ref);
+          return {
+            ...s,
+            prerender: { ...pre, file: { ref: pre.file.ref, bytes: row.bytes }, uses: row.uses },
+          };
+        }),
+      })),
+    };
   }
 
   /** Keep the newest 50 revisions or everything from the last 30 days, whichever is more. */

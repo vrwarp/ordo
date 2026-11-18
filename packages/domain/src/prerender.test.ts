@@ -18,6 +18,7 @@ import {
   pictureUnits,
   prerenderKey,
   resolveDraw,
+  slideUses,
   STAND_IN_TEXT_MAX,
   standbyId,
   standInOf,
@@ -459,6 +460,18 @@ describe('withFullSlide (design/29 §1.8: every writer through the full slide)',
     expect(r.key).toBe(prerenderKey(pictureSource(r.full, ['lyric'], inputs())));
     expect(r.standbyId).toBe(standbyId(pictureSource(r.full, ['lyric'], inputs())));
     expect(Slide.safeParse(r.standIn).success).toBe(true);
+  });
+
+  it('exports the uses it writes: slideUses of the full slide is the record withFullSlide stores (the hub checks heads with it)', () => {
+    const slide = big();
+    slide.objects.push(
+      picture('photo', 'photo-media', box(0, 0, 100, 100)),
+      text('serif', 'Hi', box(0, 0, 50, 50), { style: { ...DEFAULT_LYRIC_STYLE, fontFamily: 'Carlito' } }),
+    );
+    const r = withFullSlide(slide, (s) => s, inputs());
+    expect(r.standIn.prerender?.uses).toEqual(slideUses(r.full));
+    expect(slideUses(r.full).media).toContain('photo-media');
+    expect(slideUses(r.full).fonts).toContain('Carlito');
   });
 
   it('changes the pages and the key and rebuilds the stand-in when an operation changes the slide', () => {

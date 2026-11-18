@@ -34,6 +34,7 @@ import { type LibraryStats, LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
 import { cpuPool } from './pool.ts';
+import { SlideFiles } from './slidefiles.ts';
 import {
   cleanupStaleUploads,
   type LibraryApiCtx,
@@ -193,6 +194,7 @@ export async function createLibraryProcess(
     log,
     ring,
     disk,
+    slideFiles: new SlideFiles(lib, store, cpuPool),
     live: liveView,
     // The live process notices token changes in its settings copy and closes those sockets itself.
     disconnectOutput: () => undefined,

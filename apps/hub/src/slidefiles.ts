@@ -7,14 +7,20 @@
  * The hub is the authority: a head's `uses` and bytes are its own record (`slide_heads`), written when the head
  * is checked; a presentation save rewrites the slide's `uses` and `file.bytes` from it (`Library.savePresentation`).
  */
-import type { slideUses } from '@ordo/domain/prerender.ts';
+import { readFile } from 'node:fs/promises';
+import { canonicalJson } from '@ordo/domain/palette.ts';
+import { slideUses } from '@ordo/domain/prerender.ts';
+import { type SlideFile, SLIDE_FILE_LIMITS } from '@ordo/domain/slidefile.ts';
 import type { DB } from './db.ts';
+import { HttpError } from './errors.ts';
+import type { Library } from './library.ts';
+import { type CpuPool, transferables } from './pool.ts';
+import type { SlideUses } from './slidetasks.ts';
+import type { Store } from './store.ts';
 
+const JSON_MIME = 'application/json';
 /** The most refs or pages a refusal names. */
 export const NAMED_MAX = 20;
-
-/** What a slide file draws (`Slide.prerender.uses`): media ids, shape files, font families. */
-export type SlideUses = ReturnType<typeof slideUses>;
 
 export type HeadRow = { hash: string; bytes: number; objects: number; uses: SlideUses; pages: string[] };
 
@@ -87,4 +93,118 @@ export class SlideFileIndex {
       this.db.prepare(`DELETE FROM slide_heads WHERE hash = ?`).run(hash);
     })();
   }
+}
+
+type Pool = Pick<CpuPool, 'run'>;
+
+export type Stored = { status: 200 | 201; hash: string; bytes: number; count?: number };
+
+/** The service: the two PUTs and the writers inside the hub. */
+export class SlideFiles {
+  private lib: Library;
+  private store: Store;
+  private pool: () => Pool;
+  constructor(lib: Library, store: Store, pool: () => Pool) {
+    this.lib = lib;
+    this.store = store;
+    this.pool = pool;
+  }
+
+  private refuse(out: { status: number; code: string; message: string }): never {
+    throw new HttpError(out.status, out.code, out.message);
+  }
+
+  /** PUT a page: checked in the pool, stored as canonical JSON; 200 when the hub already has it. */
+  async putPage(name: string, body: unknown): Promise<Stored> {
+    const out = await this.pool().run('slide-file', { kind: 'page', name, body });
+    if (!out.ok) this.refuse(out);
+    if (out.kind !== 'page') throw new Error('unexpected slide-file answer');
+    const had = this.lib.getFile(name);
+    if (had) return { status: 200, hash: name, bytes: out.bytes.length };
+    await this.store.putBytes(out.bytes, { ext: 'json', mime: JSON_MIME });
+    return { status: 201, hash: name, bytes: out.bytes.length };
+  }
+
+  /**
+   * PUT a head: its pages must be the hub's (409 `pages_missing` names the first 20 it lacks), at most 16 MiB
+   * of them (413), and assemble (400 `bad_head`); the hub then records bytes, objects, `uses` and the pages.
+   */
+  async putHead(name: string, body: unknown): Promise<Stored> {
+    const pageNames = headPages(body);
+    if (!pageNames)
+      throw new HttpError(400, 'bad_head', 'not a slide file head (pages must be a list of names)');
+    if (pageNames.length > SLIDE_FILE_LIMITS.pages)
+      throw new HttpError(400, 'bad_head', `a slide file has at most ${SLIDE_FILE_LIMITS.pages} pages`);
+    const rows = pageNames.map((p) => this.lib.getFile(p));
+    const missing = [...new Set(pageNames.filter((_, i) => !rows[i] || rows[i]!.mime !== JSON_MIME))];
+    if (missing.length)
+      throw new HttpError(409, 'pages_missing', 'Upload the slide’s pages before its head', {
+        missing: missing.slice(0, NAMED_MAX),
+      });
+    const sum = rows.reduce((n, r) => n + (r?.bytes ?? 0), 0);
+    if (sum > SLIDE_FILE_LIMITS.bytes)
+      throw new HttpError(413, 'slide_too_large', 'A slide’s file is at most 16 MiB of pages');
+    const bufs = await Promise.all(rows.map((r) => readFile(this.store.abs(r!.path))));
+    const pages = bufs.map((b) => new Uint8Array(b.buffer, b.byteOffset, b.byteLength));
+    const out = await this.pool().run(
+      'slide-file',
+      { kind: 'head', name, body, pages },
+      { transfer: transferables(pages) },
+    );
+    if (!out.ok) this.refuse(out);
+    if (out.kind !== 'head') throw new Error('unexpected slide-file answer');
+    const had = this.lib.getFile(name);
+    const known = !!had && !!this.lib.slideFiles.head(name);
+    if (!had) await this.store.putBytes(out.bytes, { ext: 'json', mime: JSON_MIME });
+    if (!known)
+      this.lib.slideFiles.record({
+        hash: name,
+        bytes: out.total,
+        objects: out.objects,
+        uses: out.uses,
+        pages: pageNames,
+      });
+    return { status: known ? 200 : 201, hash: name, bytes: out.total, count: out.objects };
+  }
+
+  /**
+   * A writer inside the hub (an import, hub-writers; C-PS1): the pages first, then the head, no HTTP, the pool
+   * is not asked (the file was just made by the domain's own `slideFileOf`). Returns what the slide records.
+   */
+  async storeFile(file: SlideFile): Promise<{ ref: string; bytes: number }> {
+    for (const p of file.pages)
+      if (!this.lib.getFile(p.name))
+        await this.store.putBytes(Buffer.from(canonicalJson(p.page), 'utf8'), {
+          ext: 'json',
+          mime: JSON_MIME,
+        });
+    if (!this.lib.getFile(file.name))
+      await this.store.putBytes(Buffer.from(canonicalJson(file.head), 'utf8'), {
+        ext: 'json',
+        mime: JSON_MIME,
+      });
+    const objects = file.pages.flatMap((p) => p.page.objects);
+    const uses = slideUses({
+      id: 'file',
+      objects,
+      ...(file.head.imported ? { imported: file.head.imported } : {}),
+    } as never);
+    this.lib.slideFiles.record({
+      hash: file.name,
+      bytes: file.bytes,
+      objects: file.head.count,
+      uses,
+      pages: file.head.pages,
+    });
+    return { ref: file.name, bytes: file.bytes };
+  }
+}
+
+/** The page names of a head body, or undefined when it is not a list of 64-hex names. */
+function headPages(body: unknown): string[] | undefined {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return undefined;
+  const pages = (body as { pages?: unknown }).pages;
+  if (!Array.isArray(pages) || !pages.every((p) => typeof p === 'string' && /^[0-9a-f]{64}$/.test(p)))
+    return undefined;
+  return pages as string[];
 }
