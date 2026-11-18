@@ -126,7 +126,11 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const imports = new ImportService(lib, store, jobs, media, cfg, log, (id) =>
     live.locks().presentations.has(id),
   );
-  const live = new LiveService(db, librarySource(lib), log, { snapshotIntervalMs: cfg.snapshotIntervalMs });
+  const live = new LiveService(db, librarySource(lib), log, {
+    snapshotIntervalMs: cfg.snapshotIntervalMs,
+    byRef: cfg.liveByRef,
+  });
+  if (cfg.liveByRefWarning) log.warn({}, cfg.liveByRefWarning);
   const timeZone = () => venueTimeZone(lib.getSetting('general').timeZone, cfg.timeZone);
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
   const statics = new StaticApps(cfg.appsDir, cfg.domain);

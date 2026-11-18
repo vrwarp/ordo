@@ -64,6 +64,14 @@ export type HubConfig = {
    */
   libreoffice: LibreOfficeConfig;
   /**
+   * ORDO_LIVE_BYREF (live-by-ref): the running service is kept and sent by reference (snapshots and the journal
+   * name the resolved copy, a socket that holds it is sent the state without it). `off` writes and sends the
+   * whole forms as before this existed; a data folder written either way restores either way. Read once.
+   */
+  liveByRef: boolean;
+  /** Why the value given was not understood (logged once at start; on applies). */
+  liveByRefWarning?: string;
+  /**
    * Tests only: decides each server tool's state instead of looking for it on the PATH and running its version
    * command (`tools.ts` `HubTools`). `libreoffice.mode: 'off'` still wins.
    */
@@ -104,6 +112,14 @@ export function libreofficeConfig(v: string | undefined): LibreOfficeConfig {
     exe: 'soffice',
     warning: `ORDO_LIBREOFFICE is neither auto, off nor an absolute path (${JSON.stringify(t.slice(0, 100))}): auto`,
   };
+}
+
+/** `ORDO_LIVE_BYREF` read: `on` (default and anything unset), `off`; any other value is on with a warning. */
+export function liveByRefConfig(v: string | undefined): { on: boolean; warning?: string } {
+  const t = (v ?? '').trim();
+  if (!t || /^(1|on|true|yes)$/i.test(t)) return { on: true };
+  if (/^(0|off|false|no)$/i.test(t)) return { on: false };
+  return { on: true, warning: `ORDO_LIVE_BYREF is neither on nor off (${JSON.stringify(t.slice(0, 100))}): on` };
 }
 
 /** apps/ of this repo: src/ and dist/ both sit two levels below it. */
@@ -148,6 +164,8 @@ export function loadConfig(
     jobs: { heavy: 1, light: 2 },
     chromium: { path: env.ORDO_CHROMIUM || 'chromium', sandbox: env.ORDO_CHROMIUM_SANDBOX === '1' },
     libreoffice: libreofficeConfig(env.ORDO_LIBREOFFICE),
+    liveByRef: liveByRefConfig(env.ORDO_LIVE_BYREF).on,
+    liveByRefWarning: liveByRefConfig(env.ORDO_LIVE_BYREF).warning,
     fontsDir: env.ORDO_FONTS_DIR ? resolve(env.ORDO_FONTS_DIR) : undefined,
     ...overrides,
   };
