@@ -295,6 +295,9 @@ export async function createLibraryProcess(
   jobs.onLiveMode(locks.mode);
   jobs.start();
   if (cfg.scheduleBackups) backups.schedule();
+  // The library lists its fonts to the live process and the editor: it says ready once the bundled fonts are
+  // registered, at most `fontsWaitMs` (a restart finds every row unchanged and waits for nothing).
+  await fonts.settled(cfg.fontsWaitMs);
   // Loopback only, on a port of the OS's choosing: the live process is the only way in.
   await app.listen({ port: 0, host: '127.0.0.1' });
   const addr = app.server.address();

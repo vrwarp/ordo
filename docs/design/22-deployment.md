@@ -90,16 +90,27 @@ Multi-stage Dockerfile: `node:22-bookworm-slim` build stage running `pnpm instal
 `libreoffice-impress` (no GUI packages), `chromium` (headless, for the pptx-preview PowerPoint
 renderer; `ORDO_CHROMIUM=/usr/bin/chromium`), `fonts-dejavu`, the bundled fonts of design/27 §10
 (`fonts-liberation2 fonts-crosextra-carlito fonts-crosextra-caladea fonts-noto-core fonts-inter`, about 55 MB,
-registered from `ORDO_FONTS_DIR=/usr/share/fonts`, their copyright files kept in `/usr/share/doc`), in a second
+registered from `ORDO_FONTS_DIR=/usr/share/fonts`), in a second
 layer `fonts-noto-cjk`'s Sans collections (Noto Sans CJK, about 40 MB, a dpkg rule leaving out its Serif
 collections and removed again after the install; for LibreOffice and the hub's measuring of Chinese, Japanese and
 Korean table cells, never registered as library fonts), and copies `apps/hub/dist` and the built browser apps.
+The copyright file of every package the image installs stays in `/usr/share/doc/<package>/copyright` (the
+licence notices of ffmpeg, Chromium, LibreOffice and the rest, as Debian ships them, not only the fonts'; every
+other file of that folder is removed, but the fonts' folders, which stay as they were); the pull-request job lists the packages without one and fails for the
+product's own.
 Runs as a non-root user under tini, entrypoint the supervisor. Health check `GET /api/v1/health` (answered by the live process; it reports the library
 process state too).
-Image size target under 1.5 GB (LibreOffice dominates; Chromium adds about 250 MB). The built image's size has
-not been measured against it; the pull-request job prints the amd64 image's size and warns above the target. The
-pull-request smoke test starts both renderers inside the image and checks its CJK face (fontconfig's face for
-Hangul, and the hub's `system faces` start-log line naming it for Han, Hiragana, Katakana and Hangul).
+Image size target under 1.5 GB. The first real build (the Docker dry run of PR #29) was 1,687,519,174 bytes (about
+1.69 GB), 188 MB over the target. By Debian's package sizes (an estimate: the pull-request job prints the real
+numbers) Chromium for the pptx-preview renderer is about 440 MB of it, LibreOffice about 320 MB, ffmpeg about
+200 MB and the fonts about 100 MB. Chromium serves only `renderer=pptx-preview`, which the import screen no
+longer offers (design/20, 'Two renderers') and design/27 M8 retires; without it the image would be near 1.25 GB.
+The target number is the owner's to keep or restate, and nothing is removed from the image for it. The pull-request
+job prints the amd64 image's size and warns above the target, never failing on it, and then prints what the
+image is made of (its layers, its 40 largest packages, its largest folders and what `/usr/share/doc` keeps). The
+pull-request smoke test starts both renderers inside the image, checks its CJK face (fontconfig's face for
+Hangul, and the hub's `system faces` start-log line naming it for Han, Hiragana, Katakana and Hangul) and checks
+that the product's own packages kept their copyright files.
 
 ## CI and release
 

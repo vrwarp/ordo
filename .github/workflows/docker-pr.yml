@@ -56,6 +56,19 @@ jobs:
           if [ "$size" -gt 1500000000 ]; then
             echo "::warning::The image is larger than design/22's target of 1.5 GB ($size bytes)."
           fi
+      - name: What the image is made of
+        if: always()
+        run: |
+          # Printed, never enforced (design/22 'Image'): the size above, then where it comes from. Every command may
+          # fail without failing the build; the numbers go to the pull request by hand.
+          echo "== layers (size, command)"
+          docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' ordo-hub:smoke | cut -c1-200 || true
+          echo "== the 40 largest packages (KiB, package)"
+          docker run --rm --entrypoint sh ordo-hub:smoke -c "dpkg-query -W -f='\${Installed-Size}\t\${Package}\n' | sort -rn | head -40" || true
+          echo "== the largest folders (KiB)"
+          docker run --rm --entrypoint sh ordo-hub:smoke -c 'du -xk -d 2 /usr /opt /app /var 2>/dev/null | sort -rn | head -40' || true
+          echo "== /usr/share/doc (KiB: the notices the Dockerfile keeps)"
+          docker run --rm --entrypoint sh ordo-hub:smoke -c 'du -sk /usr/share/doc' || true
       - name: Start the image and wait for its health check
         run: |
           docker run -d --name ordo-smoke -e ORDO_DEV_PIN=246810 -p 8080:8080 ordo-hub:smoke
@@ -110,6 +123,23 @@ jobs:
             fi
           done
           echo "the hub measures CJK table cells in Han, Hiragana, Katakana and Hangul with Noto Sans CJK"
+      - name: The packages' copyright notices are in the image
+        run: |
+          # Dockerfile: the runtime stage keeps every package's copyright file under /usr/share/doc (a link to another
+          # package's folder counts). Lists the packages without one and fails only when one of the product's own
+          # packages is among them (ffmpeg, LibreOffice, Chromium, poppler and tini): the base image's packages and
+          # their dependencies are listed, not enforced.
+          missing=$(docker exec ordo-smoke sh -c 'dpkg-query -W -f="\${Package}\n" | while read -r p; do [ -e "/usr/share/doc/$p/copyright" ] || echo "$p"; done')
+          echo "packages without a copyright file: $(printf '%s\n' "$missing" | grep -c . || true)"
+          printf '%s\n' "$missing" | head -50
+          fail=0
+          for p in ffmpeg libavcodec59 libreoffice-core libreoffice-common chromium chromium-common poppler-utils tini; do
+            if printf '%s\n' "$missing" | grep -qx "$p"; then
+              echo "::error::$p has no copyright file in the image (Dockerfile keeps every package's)."
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ]
       - name: Container log
         if: always()
         run: docker logs ordo-smoke 2>&1 | tail -50 || true

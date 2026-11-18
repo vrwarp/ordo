@@ -163,6 +163,9 @@ export function EditorView({ id }: { id: string }) {
   // The window key handler reads it without re-binding (its effect depends on readOnly only).
   const findingRef = useRef(false);
   findingRef.current = finding;
+  // Whether the Speaker Notes Dock is shown (`effectiveNotesDockOpen`, below): Alt+N flips what is on screen, which
+  // is not `notesDockOpen` while the dock opened by itself.
+  const notesDockShownRef = useRef(false);
   // The Presenter Notes Studio or the Lyric Script is shown instead of the slide canvas (set where the render
   // decides it, below): the window's handlers then leave the canvas's selection alone.
   const studioRef = useRef(false);
@@ -251,7 +254,7 @@ export function EditorView({ id }: { id: string }) {
       }
       if (e.altKey && !ctrl && e.code === 'KeyN' && place !== 'dialog') {
         e.preventDefault();
-        setNotesDockOpen((prev) => !(prev ?? false));
+        setNotesDockOpen((prev) => (prev === null ? !notesDockShownRef.current : !prev));
         return;
       }
       if (place === 'field' || place === 'dialog') return;
@@ -588,6 +591,7 @@ export function EditorView({ id }: { id: string }) {
   const showProps = coarse || drawerOpen;
   const effectiveNotesDockOpen =
     notesDockOpen !== null ? notesDockOpen : deckHasNotes && !showProps && !coarse && tallViewport;
+  notesDockShownRef.current = effectiveNotesDockOpen;
   const stageLookId = shownLooks.find((l) => l.kind === 'stage')?.id;
 
   const page = (

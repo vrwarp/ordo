@@ -24,7 +24,8 @@
  *   says it has) and posted with its scene (`clientScene`), so the run measures the path operators take;
  *   each record says whether the hub used the scene (its job log) and the parse's time. The first parse waits
  *   until the hub has registered its bundled fonts (`waitForBundledFonts`): before that its library lists only
- *   some of its faces.
+ *   some of its faces. A hub of this version listens only once they are registered (at most
+ *   `ORDO_FONTS_WAIT_MS`, design/12), so the wait is a guard for an older hub and for one with the wait off.
  * - **`--equivalence`** (implies `--client-scene`): each deck is imported twice, with its scene and parsed by
  *   the hub itself, and the two stored presentations are compared modulo ids, media ids (by file), times and
  *   the import log (`equivalence.ts`); every difference is listed per deck in `equivalence.json`. A deck whose
@@ -256,6 +257,35 @@ export class HubClient {
   }
 }
 
+/**
+ * The environment of a hub the tool starts: the PATH (`o.path`, else the tool's own), HOME, a UTF-8 locale and
+ * the `ORDO_*` settings of a hub on `port`, then `o.env`, which wins over every default. Never the whole
+ * environment of the tool: a hub measured here sees the same variables on every computer. TMPDIR is the one
+ * exception, when the tool has it: the hub runs through tsx, which keeps its compile cache under
+ * `$TMPDIR/tsx-<uid>` (`/tmp/tsx-<uid>` without it, hundreds of MB on a disk that has little room), and a run
+ * that keeps its temporary files on a RAM disk means the hub's to go there too.
+ */
+export function hubEnv(
+  o: { dataDir: string; path?: string; env?: Record<string, string> },
+  port: number,
+  parent: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  return {
+    PATH: o.path ?? parent.PATH ?? '',
+    HOME: parent.HOME ?? o.dataDir,
+    LANG: 'C.UTF-8',
+    ORDO_DATA: o.dataDir,
+    ORDO_DOMAIN: 'localhost',
+    ORDO_PORT: String(port),
+    ORDO_HOST: '127.0.0.1',
+    ORDO_DEV_PIN: PIN,
+    ORDO_TZ: 'UTC',
+    ORDO_FONTS_DIR: '/usr/share/fonts',
+    ...(parent.TMPDIR ? { TMPDIR: parent.TMPDIR } : {}),
+    ...o.env,
+  };
+}
+
 /** The hub process a session started (`__hub`): its log lines and its largest resident size seen. */
 export class HubSession {
   readonly lines: string[] = [];
@@ -292,19 +322,7 @@ export class HubSession {
       ['--import', tsxLoaderUrl(), fileURLToPath(import.meta.url), '__hub', o.entry ?? hubEntry(undefined)],
       {
         cwd: root,
-        env: {
-          PATH: o.path ?? process.env.PATH ?? '',
-          HOME: process.env.HOME ?? o.dataDir,
-          LANG: 'C.UTF-8',
-          ORDO_DATA: o.dataDir,
-          ORDO_DOMAIN: 'localhost',
-          ORDO_PORT: String(port),
-          ORDO_HOST: '127.0.0.1',
-          ORDO_DEV_PIN: PIN,
-          ORDO_TZ: 'UTC',
-          ORDO_FONTS_DIR: '/usr/share/fonts',
-          ...o.env,
-        },
+        env: hubEnv(o, port),
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
