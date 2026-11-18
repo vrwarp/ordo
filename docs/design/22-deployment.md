@@ -99,7 +99,7 @@ process state too).
 Image size target under 1.5 GB (LibreOffice dominates; Chromium adds about 250 MB). The built image's size has
 not been measured against it; the pull-request job prints the amd64 image's size and warns above the target. The
 pull-request smoke test starts both renderers inside the image and checks its CJK face (fontconfig's face for
-Hangul, the hub's `system faces` start-log line).
+Hangul, and the hub's `system faces` start-log line naming it for Han, Hiragana, Katakana and Hangul).
 
 ## CI and release
 

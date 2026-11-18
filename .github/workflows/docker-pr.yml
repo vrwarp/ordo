@@ -80,7 +80,8 @@ jobs:
         run: |
           # fonts-noto-cjk's Sans collection (Dockerfile): fontconfig gives it for Hangul, its Serif collections are
           # left out and the dpkg rule that left them out is gone, its copyright file is kept, and the hub's start log
-          # names it as the face it measures table cells in those scripts with (design/27 §10).
+          # names it as the face it measures table cells with (design/27 §10) for each of the four scripts the hub
+          # looks a face up for (apps/hub/src/pptx/systemFaces.ts): Han, Hiragana, Katakana and Hangul, not Han alone.
           face=$(docker exec ordo-smoke fc-match -f '%{file}' ':charset=ac00')
           echo "fontconfig's face for Hangul: $face"
           if [ "$face" != /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc ]; then
@@ -95,15 +96,20 @@ jobs:
           if ! docker exec ordo-smoke test -f /usr/share/doc/fonts-noto-cjk/copyright; then
             echo "::error::fonts-noto-cjk's copyright file is missing from the image."; exit 1
           fi
+          line=""
           for i in $(seq 1 30); do
-            if docker logs ordo-smoke 2>&1 | grep -q 'system faces: Han NotoSansCJK-Regular.ttc'; then
-              echo "the hub measures CJK table cells with Noto Sans CJK"; exit 0
-            fi
+            line=$(docker logs ordo-smoke 2>&1 | grep 'system faces: ' || true)
+            if [ -n "$line" ]; then break; fi
             sleep 2
           done
-          echo "::error::The hub's start log does not name the image's CJK face (its 'system faces' line)."
-          docker logs ordo-smoke 2>&1 | grep 'system faces' || true
-          exit 1
+          echo "the hub's 'system faces' line: ${line:-none logged}"
+          for script in Han Hiragana Katakana Hangul; do
+            if ! printf '%s\n' "$line" | grep -q "[:,] $script NotoSansCJK-Regular.ttc"; then
+              echo "::error::The hub's start log does not name the image's CJK face for $script (its 'system faces' line)."
+              exit 1
+            fi
+          done
+          echo "the hub measures CJK table cells in Han, Hiragana, Katakana and Hangul with Noto Sans CJK"
       - name: Container log
         if: always()
         run: docker logs ordo-smoke 2>&1 | tail -50 || true
