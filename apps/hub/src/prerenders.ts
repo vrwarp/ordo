@@ -496,7 +496,8 @@ export class PrerenderStore {
   private live: LiveView;
   private log: Logger;
   private accepted: ((e: Accepted) => void)[] = [];
-  readonly budgetBytes: number;
+  /** The limit of unique bytes per presentation; a constructor argument, lowered by the tests. */
+  budgetBytes: number;
 
   constructor(lib: Library, store: Store, live: LiveView, opts: { log: Logger; budgetBytes?: number }) {
     this.lib = lib;
@@ -654,6 +655,11 @@ export class PrerenderStore {
       failures: l.failures,
       budget: { usedBytes: l.usedBytes, limitBytes: this.budgetBytes },
     };
+  }
+
+  /** The limit and the largest presentation's unique bytes, for hub health (STUB in the red commit). */
+  healthFields(): { budgetLimitBytes?: number; budgetUsedBytes?: number } {
+    return {};
   }
 
   /** A deleted presentation's pictures, failures and key rows; its picture files go with no other row. */

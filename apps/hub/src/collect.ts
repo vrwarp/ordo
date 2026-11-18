@@ -34,6 +34,9 @@ export function refsIn(json: string): Set<string> {
   return out;
 }
 
+/** The unique-bytes query (STUB in the red commit: it asks for nothing). */
+export const UNIQUE_BYTES_SQL = 'SELECT 0 AS n WHERE :pid IS NOT NULL';
+
 /** The newest revision of a presentation a kept-revision interval must reach to name a file. */
 const OLDEST_KEPT =
   'COALESCE((SELECT MIN(v.rev) FROM presentation_revisions v WHERE v.presentation_id = r.presentation_id), 9007199254740991)';
@@ -146,6 +149,14 @@ export class RefIndex {
     if (uses) return true;
     if (opts.pictures === false) return false;
     return !!this.db.prepare(`SELECT 1 FROM prerenders WHERE hash = ? LIMIT 1`).get(hash);
+  }
+
+  /**
+   * The bytes of the files only this presentation's saved versions name (STUB in the red commit): a file two
+   * presentations name counts for neither, a file several revisions name counts once.
+   */
+  uniqueBytes(_presentationId: string): number {
+    return 0;
   }
 
   /** A file is named (again): its collection clock stops, and starts from nothing the next time it is unnamed. */

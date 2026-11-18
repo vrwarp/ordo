@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { newId, type Presentation } from '@ordo/domain';
 import { afterEach, describe, expect, it } from 'vitest';
+import { COLLECT_DELAY_DAYS, Collector } from '../src/collect.ts';
 import { GIB } from '../src/diskfloor.ts';
 import {
   byType,
@@ -465,5 +466,194 @@ describe('announcing a picture to the live loop (PA1, PA2, PA4)', () => {
     expect(again.status).toBe(201);
     expect((await state(op)).seq).toBe(ended.seq);
     expect((await state(op)).state.prerendered).toBeUndefined();
+  });
+});
+
+describe('the budget (BU2-BU4)', () => {
+  const S3840 = makePng(3840, 2160, { seed: 1 }).length;
+  type Api = Awaited<ReturnType<typeof login>>;
+  const listing = (c: Api, id: string) =>
+    c.json<{ budget: { usedBytes: number; limitBytes: number } }>(`/presentations/${id}/prerenders`);
+  const keyRows = (id: string) =>
+    (
+      hub!.db
+        .prepare(`SELECT key, size FROM prerenders WHERE presentation_id = ? ORDER BY key, size`)
+        .all(id) as { key: string; size: number }[]
+    ).map((r) => `${r.key.slice(0, 4)}:${r.size}`);
+
+  /** A slide of the given id and title (a new key for a new title) with its slide file uploaded. */
+  const made = async (ed: Api, id: string, tag: string) => {
+    const f = fullOf(bigSlide(id, 260, tag));
+    await uploadSlideFile(ed, f.pages);
+    return f;
+  };
+
+  it("drops the pictures of the oldest versions' keys first, never a current key or a current stand-by, and answers 507 when that is not enough (BU2)", async () => {
+    hub = await startHub();
+    const ed = await login(hub.url, EDIT_PIN);
+    const [a1, b1] = [await made(ed, 'sa', '1'), await made(ed, 'sb', '1')];
+    let p = await ed.json<Presentation>('/presentations', {
+      method: 'POST',
+      json: presentationOf([a1.standIn, b1.standIn]),
+    });
+    const next = async (...fs: ReturnType<typeof fullOf>[]) => {
+      p = await ed.json<Presentation>(`/presentations/${p.id}`, {
+        method: 'PUT',
+        json: { ...p, sections: [{ ...p.sections[0]!, slides: fs.map((f) => f.standIn) }] },
+      });
+    };
+    const [a2, c] = [await made(ed, 'sa', '2'), await made(ed, 'sc', '1')];
+    await next(a2, c);
+    const a3 = await made(ed, 'sa', '3');
+    await next(a3);
+    const pic = (f: { key: string }, size: 3840 | 1920 | 640, seed: number) =>
+      put(
+        ed,
+        p.id,
+        f.key,
+        size === 3840
+          ? makePng(3840, 2160, { seed })
+          : size === 1920
+            ? makePng(1920, 1080, { seed })
+            : makePng(640, 360, { seed }),
+        size,
+      );
+    for (const [f, seed] of [
+      [a1, 1],
+      [b1, 2],
+      [a2, 3],
+      [c, 4],
+    ] as const)
+      expect((await pic(f, 3840, seed)).status).toBe(201);
+    // the picture of a2's key is an older drawing of the slide the current version has: its stand-by
+    hub.db
+      .prepare(`UPDATE prerenders SET standby_id = ? WHERE presentation_id = ? AND key = ?`)
+      .run(a3.standbyId, p.id, a2.key);
+    const used4 = (await listing(ed, p.id)).budget.usedBytes;
+    expect(used4).toBeGreaterThan(4 * S3840); // the slide files count too
+    hub.prerenders.budgetBytes = used4;
+
+    // one more 3840 picture: the oldest version's picture goes (a1's key, then b1's)
+    expect((await pic(a3, 3840, 5)).status).toBe(201);
+    expect(keyRows(p.id).map((r) => r.slice(0, 4))).not.toContain(a1.key.slice(0, 4));
+    expect(keyRows(p.id)).toContain(`${b1.key.slice(0, 4)}:3840`);
+    expect((await listing(ed, p.id)).budget).toEqual({ usedBytes: used4, limitBytes: used4 });
+    expect((await pic(a3, 1920, 6)).status).toBe(201);
+    expect(keyRows(p.id)).not.toContain(`${b1.key.slice(0, 4)}:3840`);
+    expect((await pic(a3, 640, 7)).status).toBe(201);
+    // never a current version's key, never a current slide's stand-by, and the dropped pictures' files are gone
+    expect(keyRows(p.id)).toEqual(
+      [
+        `${a2.key.slice(0, 4)}:3840`,
+        `${c.key.slice(0, 4)}:3840`,
+        `${a3.key.slice(0, 4)}:640`,
+        `${a3.key.slice(0, 4)}:1920`,
+        `${a3.key.slice(0, 4)}:3840`,
+      ].sort(),
+    );
+    // not enough: the limit under what is used by more than the one droppable picture frees
+    const before = (await listing(ed, p.id)).budget.usedBytes;
+    hub.prerenders.budgetBytes = before - S3840 + 1000;
+    const refused = await pic(c, 640, 8);
+    expect(refused.status).toBe(507);
+    expect(await refusal(refused)).toMatchObject({
+      code: 'budget',
+      reason: 'budget',
+      usedBytes: before,
+      limitBytes: before - S3840 + 1000,
+    });
+    expect(keyRows(p.id)).toContain(`${c.key.slice(0, 4)}:3840`); // nothing was dropped for nothing
+    expect(keyRows(p.id)).not.toContain(`${c.key.slice(0, 4)}:640`);
+  });
+
+  it('carries the limit and the largest presentation in the stats and on /health (BU2)', async () => {
+    hub = await startHub();
+    const ed = await login(hub.url, EDIT_PIN);
+    const f = await made(ed, 'sa', 'h');
+    const p = await ed.json<Presentation>('/presentations', {
+      method: 'POST',
+      json: presentationOf([f.standIn]),
+    });
+    expect((await put(ed, p.id, f.key, makePng(3840, 2160), 3840)).status).toBe(201);
+    const used = (await listing(ed, p.id)).budget.usedBytes;
+    expect(hub.prerenders.healthFields()).toEqual({ budgetLimitBytes: GIB, budgetUsedBytes: used });
+    const h = (await (await fetch(`${hub.url}/api/v1/health`)).json()) as Record<string, unknown>;
+    expect(h).toMatchObject({ budgetLimitBytes: GIB, budgetUsedBytes: used });
+  });
+
+  it('never refuses a slide page, a head or a shape file for the budget, counts them, and the picture routes feel it (BU3)', async () => {
+    hub = await startHub();
+    hub.prerenders.budgetBytes = 1000;
+    const ed = await login(hub.url, EDIT_PIN);
+    const f = fullOf(bigSlide('big', 300, 'x'));
+    await uploadSlideFile(ed, f.pages); // throws on any refusal
+    const p = await ed.json<Presentation>('/presentations', {
+      method: 'POST',
+      json: presentationOf([f.standIn]),
+    });
+    const names = [f.name, ...f.pages.head.pages];
+    const stored = (
+      hub.db
+        .prepare(
+          `SELECT COALESCE(SUM(bytes), 0) AS n FROM files WHERE hash IN (${names.map(() => '?').join(',')})`,
+        )
+        .get(...names) as { n: number }
+    ).n;
+    const { budget } = await listing(ed, p.id);
+    expect(budget.limitBytes).toBe(1000);
+    expect(budget.usedBytes).toBe(stored);
+    expect(stored).toBeGreaterThan(1000);
+    const r = await put(ed, p.id, f.key, makePng(640, 360), 640);
+    expect(r.status).toBe(507);
+    expect(await refusal(r)).toMatchObject({ reason: 'budget', usedBytes: stored, limitBytes: 1000 });
+    expect(picRows(p.id)).toEqual([]);
+    for (const h of names) expect(hub.lib.getFile(h), h).toBeDefined();
+  });
+
+  it('leaves both of two presentations with the same pictures under the limit, and frees pictures at once and files after the days (BU4)', async () => {
+    hub = await startHub();
+    hub.lib.refs.setBackfillDone(true);
+    const ed = await login(hub.url, EDIT_PIN);
+    const f = await made(ed, 'sa', 'dup');
+    const a = await ed.json<Presentation>('/presentations', {
+      method: 'POST',
+      json: presentationOf([f.standIn], 'A'),
+    });
+    const png = makePng(3840, 2160, { seed: 9 });
+    expect((await put(ed, a.id, f.key, png, 3840)).status).toBe(201);
+    const alone = (await listing(ed, a.id)).budget.usedBytes;
+    expect(alone).toBeGreaterThan(S3840);
+    hub.prerenders.budgetBytes = alone; // exactly what the first one uses
+    const b = await ed.json<Presentation>('/presentations', {
+      method: 'POST',
+      json: presentationOf([f.standIn], 'B'),
+    });
+    expect((await put(ed, b.id, f.key, png, 3840)).status).toBe(201);
+    // everything is shared: neither counts any of it
+    expect((await listing(ed, a.id)).budget.usedBytes).toBe(0);
+    expect((await listing(ed, b.id)).budget.usedBytes).toBe(0);
+    // B goes: A has them alone again
+    expect((await ed.fetch(`/presentations/${b.id}`, { method: 'DELETE' })).status).toBe(204);
+    expect((await listing(ed, a.id)).budget.usedBytes).toBe(alone);
+    // A goes: its picture at once, its slide files only after the days
+    const pictureHash = (
+      hub.db.prepare(`SELECT hash FROM prerenders WHERE presentation_id = ?`).get(a.id) as { hash: string }
+    ).hash;
+    expect((await ed.fetch(`/presentations/${a.id}`, { method: 'DELETE' })).status).toBe(204);
+    expect(hub.lib.getFile(pictureHash)).toBeUndefined();
+    for (const h of [f.name, ...f.pages.head.pages]) expect(hub.lib.getFile(h), h).toBeDefined();
+    const t = { now: Date.UTC(2031, 0, 1) };
+    const c = new Collector(hub.lib, hub.store, {
+      mode: 'on',
+      live: () => 'idle',
+      known: () => true,
+      timeZone: () => 'UTC',
+      log: hub.log,
+      now: () => t.now,
+    });
+    await c.run();
+    t.now += COLLECT_DELAY_DAYS * 86_400_000;
+    await c.run();
+    for (const h of [f.name, ...f.pages.head.pages]) expect(hub.lib.getFile(h), h).toBeUndefined();
   });
 });

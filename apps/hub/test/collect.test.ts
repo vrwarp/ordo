@@ -10,7 +10,14 @@ import type { Presentation } from '@ordo/domain';
 import type { Logger } from 'pino';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RETENTION_DAYS } from '../src/backup.ts';
-import { COLLECT_DELAY_DAYS, Collector, type CollectorOptions, RefBackfill, refsIn } from '../src/collect.ts';
+import {
+  COLLECT_DELAY_DAYS,
+  Collector,
+  type CollectorOptions,
+  RefBackfill,
+  refsIn,
+  UNIQUE_BYTES_SQL,
+} from '../src/collect.ts';
 import { collectMode, loadConfig } from '../src/config.ts';
 import { createLibraryProcess } from '../src/libproc.ts';
 import { noSystemFaces } from '../src/pptx/systemFaces.ts';
@@ -1123,5 +1130,72 @@ describe('collection: heads, health (CO10, CO11)', () => {
     const h = (await (await fetch(`${hub.url}/api/v1/health`)).json()) as Record<string, unknown>;
     expect(typeof h.lastCollectAt).toBe('number');
     expect(h.collectedFiles).toBe(0);
+  });
+});
+
+describe('the budget: unique bytes (BU1)', () => {
+  /** A presentation of `refs` plus one slide that names `head`. */
+  const plusHead = (p: Presentation, head: string): Presentation => {
+    const slide = bigSlide('hs', 0, '');
+    slide.prerender = { why: ['count'], file: { ref: head, bytes: 1 }, live: [] };
+    return { ...p, sections: [{ ...p.sections[0]!, slides: [...p.sections[0]!.slides, slide] }] };
+  };
+
+  it("counts the bytes of the files only a presentation's saved versions name, each file once, and asks the indexes (BU1)", async () => {
+    hub = await startHub();
+    const lib = hub.lib;
+    const file = (n: number, bytes: number) => {
+      lib.addFile({ hash: hash(n), bytes, mime: 'application/json', path: `media/zz/${n}.json` });
+      return hash(n);
+    };
+    const [x, y, z, hA, pA, w1, w2, unnamed] = [
+      file(1, 100),
+      file(2, 1000),
+      file(3, 200),
+      file(4, 50),
+      file(5, 500),
+      file(6, 300),
+      file(7, 700),
+      file(8, 5000),
+    ];
+    // A: version 1 names x, y, z; version 2 names y, z and a head with a page: x is only in a kept version
+    const a1 = save('A', [x, y, z]);
+    headRow(hA, [pA]);
+    lib.savePresentation({ ...plusHead(naming('A', [y, z]), hA), rev: a1.rev }, { expectedRev: a1.rev });
+    save('B', [y]);
+    const row = (pid: string, key: string, h: string, bytes: number) =>
+      hub!.db
+        .prepare(
+          `INSERT INTO prerenders (presentation_id, key, size, slide_id, standby_id, version, kind, hash, mime, bytes, w, h, opaque, made_by, made_role, last_rev, created_at)
+           VALUES (?, ?, 3840, 's', 'sb', 1, 'slide', ?, 'image/png', ?, 3840, 2160, 1, NULL, 'edit', 1, 1)`,
+        )
+        .run(pid, key, h, bytes);
+    row('A', '1'.repeat(64), w1, 300);
+    row('A', '2'.repeat(64), w2, 700);
+    row('B', '3'.repeat(64), w2, 700);
+    lib.addFile({ hash: w1, bytes: 300, mime: 'image/png', path: 'media/zz/w1.png' });
+    // x, z, the head, its page and w1 are only A's; y (also B's) and w2 (also B's picture) count for neither
+    expect(lib.refs.uniqueBytes('A')).toBe(100 + 200 + 50 + 500 + 300);
+    expect(lib.refs.uniqueBytes('B')).toBe(0);
+    expect(lib.refs.uniqueBytes('nobody')).toBe(0);
+    expect(unnamed).toBeTruthy();
+    // B goes (through the route): what it shared is A's alone now
+    const ed = await login(hub.url, EDIT_PIN);
+    expect((await ed.fetch('/presentations/B', { method: 'DELETE' })).status).toBe(204);
+    expect(lib.refs.uniqueBytes('A')).toBe(100 + 200 + 50 + 500 + 300 + 1000 + 700);
+
+    // the query reads the indexes: no scan of presentations or of their revisions, of the references, the pictures
+    // or the files
+    const plan = (
+      hub.db.prepare(`EXPLAIN QUERY PLAN ${UNIQUE_BYTES_SQL}`).all({ pid: 'A' }) as { detail: string }[]
+    ).map((r) => r.detail);
+    expect(
+      plan.filter((d) => /^SCAN /.test(d) && !/^SCAN m\b/.test(d)),
+      plan.join('\n'),
+    ).toEqual([]);
+    expect(
+      plan.some((d) => /SEARCH/.test(d)),
+      plan.join('\n'),
+    ).toBe(true);
   });
 });
