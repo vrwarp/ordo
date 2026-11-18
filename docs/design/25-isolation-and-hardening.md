@@ -116,6 +116,13 @@ supervisor (tini + a small Node parent)
   library or parses a PPTX on the event loop, and no import job parses the scene a browser sent with a deck
   there (`pptx-client-scene`, design/27 §12). The operator parses a PowerPoint it imports in a Web Worker of
   its own with a deadline, never on the thread that runs GO, and not at all while a playlist is live.
+- **Slide files and pictures** (design/29 §1.3, r2b sub-wave 2): a slide page or head a client uploads is input
+  like a deck. The `slide-file` pool task parses it, clamps it with the domain's schema (500 objects and 256 KiB a
+  page, 129 pages and 16 MiB a slide), re-serialises it canonically and names it by the hash of what it stores, and
+  the `prerender-keys` pool task computes a slide's keys at save: both run on the worker pool (60 s each, 512 MB
+  heap), never on an event loop, and a refusal is an answer, not a crash. A picture is checked by its header (PNG or
+  WebP, exactly the size asked, at most 32 MiB) before it is stored. The free-space floor and collection run only in
+  the library process: the live process is never asked for either.
 - **Untrusted output of a client**: a scene parsed in the browser is input like the deck itself: bounded
   (32 MB), checked on the pool (schema, part names, shape files re-hashed) and refused, never trusted, so the
   hub parses the deck itself when in doubt (design/21).
