@@ -110,6 +110,23 @@ jobs:
             fi
           done
           echo "the hub measures CJK table cells in Han, Hiragana, Katakana and Hangul with Noto Sans CJK"
+      - name: The packages' copyright notices are in the image
+        run: |
+          # Dockerfile: the runtime stage keeps every package's copyright file under /usr/share/doc (a link to another
+          # package's folder counts). Lists the packages without one and fails only when one of the product's own
+          # packages is among them (ffmpeg, LibreOffice, Chromium, poppler and tini): the base image's packages and
+          # their dependencies are listed, not enforced.
+          missing=$(docker exec ordo-smoke sh -c 'dpkg-query -W -f="\${Package}\n" | while read -r p; do [ -e "/usr/share/doc/$p/copyright" ] || echo "$p"; done')
+          echo "packages without a copyright file: $(printf '%s\n' "$missing" | grep -c . || true)"
+          printf '%s\n' "$missing" | head -50
+          fail=0
+          for p in ffmpeg libavcodec59 libreoffice-core libreoffice-common chromium chromium-common poppler-utils tini; do
+            if printf '%s\n' "$missing" | grep -qx "$p"; then
+              echo "::error::$p has no copyright file in the image (Dockerfile keeps every package's)."
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ]
       - name: Container log
         if: always()
         run: docker logs ordo-smoke 2>&1 | tail -50 || true
