@@ -65,6 +65,8 @@ export type Hub = {
   prerenders: PrerenderStore;
   /** The collection of content files nothing names (design/29: mark and sweep, 30 days, report mode by default). */
   collector: Collector;
+  /** The one-off scan of revisions saved before the references index (two minutes after the start). */
+  backfill: RefBackfill;
   /** The venue time zone: settings.general.timeZone, falling back to ORDO_TZ. Backups and countdowns share it. */
   timeZone(): string;
   /** Listen on cfg.host:cfg.port (or the given port); returns the base URL. */
@@ -202,6 +204,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     prerenderKeys,
     prerenders,
     collector,
+    backfill,
     routes: http.routes,
     cfg,
     db,

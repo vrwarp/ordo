@@ -10,6 +10,7 @@
  */
 import { rm } from 'node:fs/promises';
 import { nextTimeOfDay } from '@ordo/domain';
+import type Database from 'better-sqlite3';
 import type { Logger } from 'pino';
 import { RETENTION_DAYS } from './backup.ts';
 import type { CollectMode } from './config.ts';
@@ -51,21 +52,39 @@ WHERE NOT EXISTS (SELECT 1 FROM file_refs o WHERE o.hash = m.hash AND o.presenta
                   WHERE q.page = m.hash AND r2.presentation_id <> :pid)
   AND NOT EXISTS (SELECT 1 FROM prerenders x WHERE x.hash = m.hash AND x.presentation_id <> :pid)`;
 
+/**
+ * The backfill's next revision: the first one after the cursor that no save or scan has recorded. A plain index
+ * range on the revisions' key, read in key order: no sort and no scan, so a library of 25,000 revisions costs 25,000
+ * short reads, not 25,000 sorts of what is left (each of which would carry every remaining body).
+ */
+export const NEXT_UNSCANNED_SQL = `SELECT v.presentation_id AS id, v.rev AS rev, v.json AS json FROM presentation_revisions v
+  WHERE (v.presentation_id > :id OR (v.presentation_id = :id AND v.rev > :rev))
+    AND NOT EXISTS (SELECT 1 FROM refs_scanned s WHERE s.presentation_id = v.presentation_id AND s.rev = v.rev)
+  ORDER BY v.presentation_id, v.rev LIMIT 1`;
+
 /** The newest revision of a presentation a kept-revision interval must reach to name a file. */
 const OLDEST_KEPT =
   'COALESCE((SELECT MIN(v.rev) FROM presentation_revisions v WHERE v.presentation_id = r.presentation_id), 9007199254740991)';
 
-const chunks = <T>(xs: readonly T[], n = 500): T[][] => {
-  const out: T[][] = [];
-  for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
-  return out;
-};
+type Statement = Database.Statement<unknown[], unknown>;
 
 /** DB-only: intervals of revisions that name a content file (`file_refs`), the backfill's markers, and what is named. */
 export class RefIndex {
   private db: DB;
+  /** Statements are parsed once: a backfill of 25,000 revisions asks the same few thousands of times. */
+  private stmts = new Map<string, Statement>();
+  private recordTx?: (presentationId: string, rev: number, names: string[]) => void;
   constructor(db: DB) {
     this.db = db;
+  }
+
+  private q(sql: string): Statement {
+    let s = this.stmts.get(sql);
+    if (!s) {
+      s = this.db.prepare(sql);
+      this.stmts.set(sql, s);
+    }
+    return s;
   }
 
   /** A save: record the files its JSON names, mark the revision scanned and clear the marks of what it names. */
@@ -74,45 +93,56 @@ export class RefIndex {
     this.markScanned(presentationId, rev);
   }
 
-  /** `refs` are named by revision `rev`: extend the intervals open at `rev - 1`, open new ones, clear their marks. */
-  record(presentationId: string, rev: number, refs: ReadonlySet<string>): void {
+  /**
+   * `refs` are named by revision `rev`: extend the intervals open at `rev - 1`, open one for every name that has none
+   * at `rev`, clear their marks. Two statements over the names as a JSON list, no read of the open intervals. One
+   * transaction, unless the caller already holds one (`inBatch`, a slice of the backfill).
+   */
+  record(presentationId: string, rev: number, refs: ReadonlySet<string>, inBatch = false): void {
     if (!refs.size) return;
     const names = [...refs];
-    this.db.transaction(() => {
-      const open = new Set(
-        (
-          this.db
-            .prepare(`SELECT hash FROM file_refs WHERE presentation_id = ? AND last_rev = ?`)
-            .all(presentationId, rev - 1) as { hash: string }[]
-        ).map((r) => r.hash),
-      );
-      const extend = names.filter((h) => open.has(h));
-      for (const c of chunks(extend))
-        this.db
-          .prepare(
-            `UPDATE file_refs SET last_rev = ? WHERE presentation_id = ? AND last_rev = ? AND hash IN (${c.map(() => '?').join(',')})`,
-          )
-          .run(rev, presentationId, rev - 1, ...c);
-      const ins = this.db.prepare(
-        `INSERT OR IGNORE INTO file_refs (presentation_id, hash, first_rev, last_rev) VALUES (?, ?, ?, ?)`,
-      );
-      for (const h of names) if (!open.has(h)) ins.run(presentationId, h, rev, rev);
-      this.unmark(names);
-    })();
+    if (inBatch) {
+      this.recordBody(presentationId, rev, names);
+      return;
+    }
+    this.recordTx ??= this.db.transaction((pid: string, r: number, n: string[]) =>
+      this.recordBody(pid, r, n),
+    );
+    this.recordTx(presentationId, rev, names);
+  }
+
+  private recordBody(pid: string, r: number, names: string[]): void {
+    const list = JSON.stringify(names);
+    this.q(
+      `UPDATE file_refs SET last_rev = :rev WHERE presentation_id = :pid AND last_rev = :prev
+       AND hash IN (SELECT value FROM json_each(:list))`,
+    ).run({ rev: r, pid, prev: r - 1, list });
+    this.q(
+      `INSERT OR IGNORE INTO file_refs (presentation_id, hash, first_rev, last_rev)
+       SELECT :pid, value, :rev, :rev FROM json_each(:list)
+       WHERE NOT EXISTS (SELECT 1 FROM file_refs o WHERE o.presentation_id = :pid AND o.hash = value AND o.last_rev = :rev)`,
+    ).run({ pid, rev: r, list });
+    this.unmark(names, list);
+  }
+
+  /** Run `fn` as one transaction: a slice of the backfill is one commit, not one per revision. */
+  batch<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
   }
 
   markScanned(presentationId: string, rev: number): void {
-    this.db
-      .prepare(`INSERT OR IGNORE INTO refs_scanned (presentation_id, rev) VALUES (?, ?)`)
-      .run(presentationId, rev);
+    this.q(`INSERT OR IGNORE INTO refs_scanned (presentation_id, rev) VALUES (?, ?)`).run(
+      presentationId,
+      rev,
+    );
   }
 
   /** After `pruneRevisions`: what only the pruned revisions held goes (intervals, key rows, markers). */
   prune(presentationId: string): void {
     const lo = (
-      this.db
-        .prepare(`SELECT MIN(rev) AS lo FROM presentation_revisions WHERE presentation_id = ?`)
-        .get(presentationId) as {
+      this.q(`SELECT MIN(rev) AS lo FROM presentation_revisions WHERE presentation_id = ?`).get(
+        presentationId,
+      ) as {
         lo: number | null;
       }
     ).lo;
@@ -120,20 +150,16 @@ export class RefIndex {
       this.forget(presentationId);
       return;
     }
-    this.db
-      .prepare(`DELETE FROM file_refs WHERE presentation_id = ? AND last_rev < ?`)
-      .run(presentationId, lo);
-    this.db
-      .prepare(`DELETE FROM prerender_keys WHERE presentation_id = ? AND rev < ?`)
-      .run(presentationId, lo);
-    this.db.prepare(`DELETE FROM refs_scanned WHERE presentation_id = ? AND rev < ?`).run(presentationId, lo);
+    this.q(`DELETE FROM file_refs WHERE presentation_id = ? AND last_rev < ?`).run(presentationId, lo);
+    this.q(`DELETE FROM prerender_keys WHERE presentation_id = ? AND rev < ?`).run(presentationId, lo);
+    this.q(`DELETE FROM refs_scanned WHERE presentation_id = ? AND rev < ?`).run(presentationId, lo);
   }
 
   /** A deleted presentation: every interval and marker of it (its files wait out their days in the collector). */
   forget(presentationId: string): void {
-    this.db.prepare(`DELETE FROM file_refs WHERE presentation_id = ?`).run(presentationId);
-    this.db.prepare(`DELETE FROM refs_scanned WHERE presentation_id = ?`).run(presentationId);
-    this.db.prepare(`DELETE FROM prerender_keys WHERE presentation_id = ?`).run(presentationId);
+    this.q(`DELETE FROM file_refs WHERE presentation_id = ?`).run(presentationId);
+    this.q(`DELETE FROM refs_scanned WHERE presentation_id = ?`).run(presentationId);
+    this.q(`DELETE FROM prerender_keys WHERE presentation_id = ?`).run(presentationId);
   }
 
   /**
@@ -144,25 +170,19 @@ export class RefIndex {
    */
   referenced(hash: string, opts: { pictures?: boolean } = {}): boolean {
     const alive = `r.last_rev >= ${OLDEST_KEPT}`;
-    const direct = this.db
-      .prepare(`SELECT 1 FROM file_refs r WHERE r.hash = ? AND ${alive} LIMIT 1`)
-      .get(hash);
+    const direct = this.q(`SELECT 1 FROM file_refs r WHERE r.hash = ? AND ${alive} LIMIT 1`).get(hash);
     if (direct) return true;
-    const page = this.db
-      .prepare(
-        `SELECT 1 FROM slide_head_pages p WHERE p.page = ? AND EXISTS (SELECT 1 FROM file_refs r WHERE r.hash = p.head AND ${alive}) LIMIT 1`,
-      )
-      .get(hash);
+    const page = this.q(
+      `SELECT 1 FROM slide_head_pages p WHERE p.page = ? AND EXISTS (SELECT 1 FROM file_refs r WHERE r.hash = p.head AND ${alive}) LIMIT 1`,
+    ).get(hash);
     if (page) return true;
     const like = `%"${hash}"%`;
-    const uses = this.db
-      .prepare(
-        `SELECT 1 FROM slide_heads h WHERE h.uses LIKE ? AND EXISTS (SELECT 1 FROM file_refs r WHERE r.hash = h.hash AND ${alive}) LIMIT 1`,
-      )
-      .get(like);
+    const uses = this.q(
+      `SELECT 1 FROM slide_heads h WHERE h.uses LIKE ? AND EXISTS (SELECT 1 FROM file_refs r WHERE r.hash = h.hash AND ${alive}) LIMIT 1`,
+    ).get(like);
     if (uses) return true;
     if (opts.pictures === false) return false;
-    return !!this.db.prepare(`SELECT 1 FROM prerenders WHERE hash = ? LIMIT 1`).get(hash);
+    return !!this.q(`SELECT 1 FROM prerenders WHERE hash = ? LIMIT 1`).get(hash);
   }
 
   /**
@@ -170,108 +190,92 @@ export class RefIndex {
    * neither, a file several revisions name counts once (`UNIQUE_BYTES_SQL`).
    */
   uniqueBytes(presentationId: string): number {
-    return (this.db.prepare(UNIQUE_BYTES_SQL).get({ pid: presentationId }) as { n: number }).n;
+    return (this.q(UNIQUE_BYTES_SQL).get({ pid: presentationId }) as { n: number }).n;
   }
 
   /** The presentations that have a pre-rendered slide's file or a picture: the ones the budget can concern. */
   budgeted(): string[] {
     return (
-      this.db
-        .prepare(
-          `SELECT presentation_id AS id FROM prerenders
+      this.q(
+        `SELECT presentation_id AS id FROM prerenders
            UNION SELECT r.presentation_id FROM file_refs r JOIN slide_heads h ON h.hash = r.hash`,
-        )
-        .all() as { id: string }[]
+      ).all() as { id: string }[]
     ).map((r) => r.id);
   }
 
-  /** A file is named (again): its collection clock stops, and starts from nothing the next time it is unnamed. */
-  unmark(hashes: readonly string[]): void {
-    for (const c of chunks(hashes))
-      this.db.prepare(`DELETE FROM collect_marks WHERE hash IN (${c.map(() => '?').join(',')})`).run(...c);
+  /**
+   * A file is named (again): its collection clock stops, and starts from nothing the next time it is unnamed. Nothing
+   * to do (and nothing asked of the names) while no file has a mark, which is every save before the first collection.
+   */
+  unmark(hashes: readonly string[], list?: string): void {
+    if (!hashes.length || !this.q(`SELECT 1 FROM collect_marks LIMIT 1`).get()) return;
+    this.q(`DELETE FROM collect_marks WHERE hash IN (SELECT value FROM json_each(?))`).run(
+      list ?? JSON.stringify(hashes),
+    );
   }
 
   /** Whether the backfill has scanned every revision (collection waits for it: until then the index is partial). */
   backfillDone(): boolean {
-    const r = this.db.prepare(`SELECT value FROM meta WHERE key = 'refs_backfill_done'`).get() as
+    const r = this.q(`SELECT value FROM meta WHERE key = 'refs_backfill_done'`).get() as
       | { value: string }
       | undefined;
     return r?.value === '1';
   }
 
   meta(key: string): string | undefined {
-    return (this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key) as { value: string } | undefined)
-      ?.value;
+    return (this.q(`SELECT value FROM meta WHERE key = ?`).get(key) as { value: string } | undefined)?.value;
   }
 
   setMeta(key: string, value: string): void {
-    this.db.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`).run(key, value);
+    this.q(`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`).run(key, value);
   }
 
   /** The next `limit` content files (`application/json`) after `after`, by hash: the candidates of collection. */
   jsonFiles(after: string, limit: number): { hash: string; bytes: number }[] {
-    return this.db
-      .prepare(
-        `SELECT hash, bytes FROM files WHERE mime = 'application/json' AND hash > ? ORDER BY hash LIMIT ?`,
-      )
-      .all(after, limit) as { hash: string; bytes: number }[];
+    return this.q(
+      `SELECT hash, bytes FROM files WHERE mime = 'application/json' AND hash > ? ORDER BY hash LIMIT ?`,
+    ).all(after, limit) as { hash: string; bytes: number }[];
   }
 
   /** Start a file's clock at `at` unless it already runs; true when this call started it. */
   markUnnamed(hash: string, at: number): boolean {
     return (
-      this.db.prepare(`INSERT OR IGNORE INTO collect_marks (hash, since) VALUES (?, ?)`).run(hash, at)
-        .changes > 0
+      this.q(`INSERT OR IGNORE INTO collect_marks (hash, since) VALUES (?, ?)`).run(hash, at).changes > 0
     );
   }
 
   /** Marks of files that are not content files any more (their row went another way). */
   dropOrphanMarks(): void {
-    this.db
-      .prepare(
-        `DELETE FROM collect_marks WHERE hash NOT IN (SELECT hash FROM files WHERE mime = 'application/json')`,
-      )
-      .run();
+    this.q(
+      `DELETE FROM collect_marks WHERE hash NOT IN (SELECT hash FROM files WHERE mime = 'application/json')`,
+    ).run();
   }
 
   /** The files whose mark is `before` or older: heads first, so their pages are named by nothing when they come. */
   dueFiles(before: number): { hash: string; bytes: number }[] {
-    return this.db
-      .prepare(
-        `SELECT m.hash AS hash, f.bytes AS bytes FROM collect_marks m JOIN files f ON f.hash = m.hash
+    return this.q(
+      `SELECT m.hash AS hash, f.bytes AS bytes FROM collect_marks m JOIN files f ON f.hash = m.hash
          WHERE f.mime = 'application/json' AND m.since <= ?
          ORDER BY EXISTS (SELECT 1 FROM slide_heads h WHERE h.hash = m.hash) DESC, m.hash`,
-      )
-      .all(before) as { hash: string; bytes: number }[];
+    ).all(before) as { hash: string; bytes: number }[];
   }
 
   /** The next revision after `after` (presentation, rev) that no save or scan has recorded, with its raw JSON. */
   nextUnscanned(after?: { id: string; rev: number }): { id: string; rev: number; json: string } | undefined {
-    const id = after?.id ?? '';
-    const rev = after?.rev ?? 0;
-    return this.db
-      .prepare(
-        `SELECT v.presentation_id AS id, v.rev AS rev, v.json AS json FROM presentation_revisions v
-         WHERE (v.presentation_id > ? OR (v.presentation_id = ? AND v.rev > ?))
-           AND NOT EXISTS (SELECT 1 FROM refs_scanned s WHERE s.presentation_id = v.presentation_id AND s.rev = v.rev)
-         ORDER BY v.presentation_id, v.rev LIMIT 1`,
-      )
-      .get(id, id, rev) as { id: string; rev: number; json: string } | undefined;
+    return this.q(NEXT_UNSCANNED_SQL).get({ id: after?.id ?? '', rev: after?.rev ?? 0 }) as
+      | { id: string; rev: number; json: string }
+      | undefined;
   }
 
   unscannedCount(): number {
-    const r = this.db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM presentation_revisions v WHERE NOT EXISTS (SELECT 1 FROM refs_scanned s WHERE s.presentation_id = v.presentation_id AND s.rev = v.rev)`,
-      )
-      .get() as { n: number };
+    const r = this.q(
+      `SELECT COUNT(*) AS n FROM presentation_revisions v WHERE NOT EXISTS (SELECT 1 FROM refs_scanned s WHERE s.presentation_id = v.presentation_id AND s.rev = v.rev)`,
+    ).get() as { n: number };
     return r.n;
   }
 
   setBackfillDone(done: boolean): void {
-    this.db
-      .prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('refs_backfill_done', ?)`)
-      .run(done ? '1' : '0');
+    this.q(`INSERT OR REPLACE INTO meta (key, value) VALUES ('refs_backfill_done', ?)`).run(done ? '1' : '0');
   }
 }
 
@@ -352,32 +356,45 @@ export class RefBackfill {
           return;
         }
         const t0 = now();
-        let pause = false;
-        while (now() - t0 < sliceMs && !pause) {
-          const next = refs.nextUnscanned(cursor);
-          if (!next) {
-            refs.setBackfillDone(true);
-            if (started) this.opts.log.info({ revisions: this.scanned }, 'references backfill finished');
-            return;
+        // set inside the batch below: a union the compiler does not narrow to its first value
+        let outcome = 'time' as 'time' | 'pause' | 'done' | 'stopped';
+        // a slice is one transaction: the commits of 10 revisions are 10 times the cost of one
+        refs.batch(() => {
+          while (now() - t0 < sliceMs) {
+            const next = refs.nextUnscanned(cursor);
+            if (!next) {
+              outcome = 'done';
+              return;
+            }
+            if (!started) {
+              started = true;
+              refs.setBackfillDone(false);
+              this.opts.log.info({ revisions: refs.unscannedCount() }, 'references backfill started');
+            }
+            refs.record(next.id, next.rev, refsIn(next.json), true);
+            refs.markScanned(next.id, next.rev);
+            cursor = { id: next.id, rev: next.rev };
+            this.scanned++;
+            this.opts.onRead?.(next.id, next.rev);
+            if (this.stopped) {
+              outcome = 'stopped';
+              return;
+            }
+            if (++sinceSleep >= PAUSE_EVERY) {
+              sinceSleep = 0;
+              outcome = 'pause';
+              return;
+            }
           }
-          if (!started) {
-            started = true;
-            refs.setBackfillDone(false);
-            this.opts.log.info({ revisions: refs.unscannedCount() }, 'references backfill started');
-          }
-          refs.record(next.id, next.rev, refsIn(next.json));
-          refs.markScanned(next.id, next.rev);
-          cursor = { id: next.id, rev: next.rev };
-          this.scanned++;
-          this.opts.onRead?.(next.id, next.rev);
-          if (this.stopped) return;
-          if (++sinceSleep >= PAUSE_EVERY) {
-            sinceSleep = 0;
-            pause = true;
-          }
+        });
+        if (outcome === 'stopped') return;
+        if (outcome === 'done') {
+          refs.setBackfillDone(true);
+          if (started) this.opts.log.info({ revisions: this.scanned }, 'references backfill finished');
+          return;
         }
         await yieldNow();
-        if (pause) await sleep(PAUSE_MS);
+        if (outcome === 'pause') await sleep(PAUSE_MS);
       }
     } finally {
       this.running = false;

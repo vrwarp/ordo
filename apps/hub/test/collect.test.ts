@@ -488,6 +488,46 @@ describe('the backfill (RC4)', () => {
     }
   });
 
+  it('prepares no statement per revision: a save and a scan reuse the ones they have (RC4)', async () => {
+    hub = await startHub();
+    legacy(1, 6);
+    const refs = hub.lib.refs;
+    // the first of each kind prepares its statements: opening, extending, a scan, the unmark, every kind of name
+    refs.record('old0', 1, new Set([hash(1), hash(2)]));
+    refs.record('old0', 2, new Set([hash(1), hash(3)]));
+    refs.markScanned('old0', 1);
+    refs.nextUnscanned({ id: 'old0', rev: 1 });
+    refs.unmark([hash(9)]);
+    refs.referenced(hash(999));
+    const prepare = vi.spyOn(hub.db, 'prepare');
+    for (let rev = 3; rev <= 5; rev++) {
+      refs.record('old0', rev, new Set([hash(1), hash(rev + 10)]));
+      refs.markScanned('old0', rev);
+      refs.nextUnscanned({ id: 'old0', rev });
+      refs.unmark([hash(rev)]);
+      refs.referenced(hash(rev));
+    }
+    // parsing a statement a revision, a thousand times for a library of 25,000, is a quarter of the scan's time
+    expect(prepare.mock.calls.map((c) => String(c[0]).slice(0, 90))).toEqual([]);
+    expect(intervals('old0').find((i) => i.hash === hash(1))).toEqual({
+      hash: hash(1),
+      first_rev: 1,
+      last_rev: 5,
+    });
+  });
+
+  it('reads a slice of revisions in one transaction, not one commit a revision (RC4)', async () => {
+    hub = await startHub();
+    legacy(1, 25);
+    const inTx: boolean[] = [];
+    const { j } = job({ onRead: () => inTx.push(hub!.db.inTransaction) });
+    await j.run();
+    expect(inTx).toHaveLength(25);
+    expect(inTx.every(Boolean)).toBe(true);
+    expect(hub.db.inTransaction).toBe(false);
+    expect(stored()).toEqual(fullScan());
+  });
+
   it('does not read a revision whose save recorded it', async () => {
     hub = await startHub();
     legacy(1, 10);
