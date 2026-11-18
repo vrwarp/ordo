@@ -542,6 +542,13 @@ settings delta. First run with no PINs serves a setup
 page on the operator origin that sets both PINs; the setup page is disabled once PINs
 exist.
 
+`ORDO_FONTS_DIR` (the image sets `/usr/share/fonts`) is where the hub finds its bundled fonts, and
+`ORDO_FONTS_WAIT_MS` (a whole number from 0 to 30000, default 2000; 0 = do not wait) is how long the hub waits for
+them to be registered as library fonts before it listens (the library process before it says it is ready): on a
+fresh data folder, or after an image with new fonts, that takes a fraction of a second, and a hub that already has
+them finds every row unchanged. Past the bound the hub listens anyway and logs `bundled fonts not registered in
+time`.
+
 The hub answers only for hosts it knows: `ORDO_DOMAIN` and any label under it, `localhost`
 and its labels, `127.0.0.1`/`::1`, and `ORDO_ALLOWED_HOSTS`; anything else gets `421` on
 HTTP and on the WebSocket upgrade. Behind the trusted proxy the browser's host arrives in

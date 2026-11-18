@@ -83,6 +83,12 @@ export type HubConfig = {
    * library fonts at start (fonts/bundled.ts, design/27 §10). Unset: none are registered.
    */
   fontsDir?: string;
+  /**
+   * How long the hub waits for its bundled fonts to be registered before it listens (ORDO_FONTS_WAIT_MS; default
+   * 2,000, 0 = do not wait): until then the font list is partial (fresh data folder, or an image with new fonts).
+   * After the bound it listens anyway and says so in its log.
+   */
+  fontsWaitMs: number;
 };
 
 export type LibreOfficeConfig = {
@@ -149,8 +155,15 @@ export function loadConfig(
     chromium: { path: env.ORDO_CHROMIUM || 'chromium', sandbox: env.ORDO_CHROMIUM_SANDBOX === '1' },
     libreoffice: libreofficeConfig(env.ORDO_LIBREOFFICE),
     fontsDir: env.ORDO_FONTS_DIR ? resolve(env.ORDO_FONTS_DIR) : undefined,
+    fontsWaitMs: fontsWait(env.ORDO_FONTS_WAIT_MS),
     ...overrides,
   };
+}
+
+/** ORDO_FONTS_WAIT_MS: a whole number of milliseconds from 0 to 30,000; anything else is the default (2 s). */
+export function fontsWait(v: string | undefined): number {
+  const n = Number(v);
+  return v !== undefined && v !== '' && Number.isInteger(n) && n >= 0 && n <= 30_000 ? n : 2000;
 }
 
 /** ORDO_PACE_GRACE_MS: a whole number of milliseconds from 0 to a day; anything else is the default (2 min). */

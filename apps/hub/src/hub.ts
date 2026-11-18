@@ -166,6 +166,9 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     ring,
     timeZone,
     async listen(port?: number) {
+      // Every reader of the font list (the route, the live process's context, goLive) answers from the finished
+      // list: the bundled fonts are registered before the first request, at most `fontsWaitMs`.
+      await fonts.settled(cfg.fontsWaitMs);
       await app.listen({ port: port ?? cfg.port, host: cfg.host });
       const addr = app.server.address();
       const p = typeof addr === 'object' && addr ? addr.port : (port ?? cfg.port);

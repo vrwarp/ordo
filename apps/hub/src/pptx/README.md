@@ -325,7 +325,9 @@ Done (`apps/hub/test/fonts-bundled.test.ts`, `fonts-google.test.ts`, domain `res
 - `fonts/bundled.ts`: `BUNDLED_FACES` (40 faces; family names as `SCRIPT_FALLBACK_FONTS` and the converter's
   substitutes name them), `SCRIPT_RANGES`, `bundledSubstitute(family)` (for the import card's missing-font
   note), `outputFonts(fonts, looks)`, `registerBundledFonts`. `FontService.bundled` is the start-up
-  registration (`HubConfig.fontsDir`, `ORDO_FONTS_DIR`); bundled rows answer 409 to DELETE.
+  registration (`HubConfig.fontsDir`, `ORDO_FONTS_DIR`); bundled rows answer 409 to DELETE. `FontService.settled(ms)`
+  waits for it, at most `HubConfig.fontsWaitMs` (`ORDO_FONTS_WAIT_MS`, default 2,000 ms): `listen` of the
+  single-process hub and of the library process call it first, so no reader sees a partial list.
 - `@ordo/domain`: `SCRIPT_FALLBACK_FONTS` (identical to M2's, so the merge is clean), `fallbackFontScripts`,
   `scriptFontFamilies` (added to `referencedFontFamilies`), `ON_DEMAND_FONT_SCRIPTS`, `isOnDemandFontFamily`.
   After M2 merges, `fallbackFontScripts` can become `textScripts`.

@@ -3,6 +3,7 @@ import type { Font } from '@ordo/domain';
 import type { Logger } from 'pino';
 import type { HubConfig } from '../config.ts';
 import { badRequest, HttpError } from '../errors.ts';
+import { withTimeout } from '../http.ts';
 import type { JobCtx, JobQueue } from '../jobs.ts';
 import type { Library } from '../library.ts';
 import { cpuPool, WorkerStartError } from '../pool.ts';
@@ -49,6 +50,18 @@ export class FontService {
     this.log = log;
     jobs.register<{ family: string }>('font-google', (ctx) => this.googleJob(ctx));
     this.bundled = cfg.fontsDir ? this.registerBundled(cfg.fontsDir) : Promise.resolve(undefined);
+  }
+
+  /**
+   * Wait for the registration of the bundled fonts (`bundled`), at most `ms` (0 or less: do not wait). Past the
+   * bound it returns anyway and says so: the hub then answers with the list it has, which is only partial on a
+   * fresh data folder or after an image with new fonts. Never rejects.
+   */
+  async settled(ms: number): Promise<void> {
+    if (!(ms > 0)) return;
+    await withTimeout(this.bundled, ms, () =>
+      this.log.warn({ ms }, 'bundled fonts not registered in time; the hub answers anyway'),
+    );
   }
 
   /** Register the bundled faces installed below `dir` (idempotent; see fonts/bundled.ts). Never rejects. */
