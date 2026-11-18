@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { type APIRequestContext, type BrowserContext, expect, type Page } from '@playwright/test';
 import type { HarnessFont } from '../tools/pptx-fidelity/src/fonts.ts';
 import { shownSlideCue } from './helpers.ts';
@@ -148,12 +148,14 @@ export async function settledOn(p: Page, cue: number): Promise<void> {
 /**
  * A screenshot of an output window, without its "Enter full screen" prompt (`.fs-prompt`, shown while the
  * window is not full screen, which a test window never is): the capture is the slide the audience sees on a
- * full-screen output, the comparisons are about the slide, not the prompt.
+ * full-screen output, the comparisons are about the slide, not the prompt. `file`'s folder is made if it is
+ * missing: callers name files under test-results/, which only Playwright's own output (when it is there) makes.
  */
 export async function capture(p: Page, file: string): Promise<Pixels> {
   await p.bringToFront();
   await p.waitForTimeout(300);
   const png = await p.screenshot({ style: '.fs-prompt { display: none !important; }' });
+  mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, png);
   return decodePng(png);
 }

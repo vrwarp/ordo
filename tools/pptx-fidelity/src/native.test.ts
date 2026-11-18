@@ -3,13 +3,16 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Slide, TextObject } from '@ordo/domain';
 import { blankFont } from '@ordo/renderer/text/blankface.ts';
 import { sfntMetrics } from '@ordo/pptx-scene';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { familiesOf, fcFamily, fcMatch, isStandIn } from './fonts.ts';
+import { findOnPath } from './hub-import.ts';
 import {
   caseless,
   convertDeck,
@@ -417,6 +420,9 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
         for (const s of drawn.slides) {
           expect(s.rasterMs!['1920']).toBeGreaterThan(0);
           expect(s.rasterMs!['3840']).toBeGreaterThan(0);
+          // The slowest warm draw beside the median (r2a must a4: a median hides one slow draw a cue).
+          for (const w of ['1920', '3840'] as const)
+            expect(s.rasterMaxMs![w]).toBeGreaterThanOrEqual(s.rasterMs![w]);
           // Each object drawn cold on its own: the largest, and which object it was.
           expect(s.maxObjectMs!['1920']).toBeGreaterThan(0);
           expect(s.maxObjectMs!['3840']).toBeGreaterThan(0);
@@ -789,4 +795,78 @@ describe('report numbers', () => {
     expect(beatsBlack({ n: 1, nativeSsim: 0.61, blackSsim: 0.6 })).toBe(true);
     expect(beatsBlack({ n: 1, blackSsim: 0.6 })).toBe(false);
   });
+});
+
+/** The harness's own command line (`main.ts`) through tsx, in this checkout. */
+function harness(args: string[]): void {
+  const tsx = createRequire(import.meta.url).resolve('tsx/package.json');
+  const loader = pathToFileURL(join(dirname(tsx), 'dist', 'loader.mjs')).href;
+  const main = fileURLToPath(new URL('./main.ts', import.meta.url));
+  execFileSync(process.execPath, ['--import', loader, main, ...args], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 240_000,
+  });
+}
+
+/**
+ * One slide holding a table and nothing else (pptxgenjs, Calibri). Its head row's runs carry an outline on filled
+ * text (`a:ln`), which LibreOffice does not draw: the harness's `textOutline` policy removes it from the compat
+ * drawing only, so the two drawings of the table differ (its rows do not: every hub stores LibreOffice's).
+ */
+async function tableOnlyDeck(): Promise<string> {
+  const p = new pptxgen();
+  p.layout = 'LAYOUT_16x9';
+  const head = ['Day', 'Reading', 'Hymn', 'Prayer'];
+  const body = [1, 2, 3, 4].map((d) => [
+    `Day ${d}`,
+    `Psalm ${d * 3}, verses 1-9`,
+    `Hymn ${100 + d}`,
+    'For the church',
+  ]);
+  p.addSlide().addTable(
+    [head, ...body].map((r, i) =>
+      r.map((text) => ({
+        text,
+        options: i === 0 ? { bold: true, outline: { size: 1.5, color: 'C00000' } } : { bold: false },
+      })),
+    ),
+    {
+      x: 0.5,
+      y: 0.5,
+      w: 9,
+      colW: [1.5, 3, 2, 2.5],
+      fontFace: 'Calibri',
+      fontSize: 18,
+      border: { type: 'solid', pt: 1, color: '666666' },
+    },
+  );
+  const dir = await work();
+  const file = join(dir, 'table.pptx');
+  await writeFile(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+  return file;
+}
+
+describe.skipIf(!chromium || !(await findOnPath('soffice')))("main.ts: a table slide's hub columns", () => {
+  it('score the slide as both kinds of hub store it (the table object as stored), not the compat drawing', async () => {
+    const out = await work();
+    harness([
+      ...['--engine', 'native', '--no-ppv', '--lo-compat', '--no-libreoffice', '--before', 'hub'],
+      ...['--chromium', chromium!, '--out', out, await tableOnlyDeck()],
+    ]);
+    const summary = JSON.parse(await readFile(join(out, 'summary.json'), 'utf8')) as { decks: DeckScore[] };
+    const [s] = summary.decks[0]!.perSlide;
+    // The converter's drawing under the LibreOffice policies (its head row without the outlines) is not what a
+    // hub stores. Its rows are the same in both: every hub stores LibreOffice's.
+    expect(s!.compat).toContain('textOutline');
+    expect(s!.policySsim).toBeDefined();
+    expect(s!.policySsim).not.toBe(s!.nativeSsim);
+    // Neither hub was asked (the table object is stored native on both): both columns score the stored slide.
+    expect(s!.beforeHubFrom).toBeUndefined();
+    expect({ noLo: s!.noLoSsim, beforeHub: s!.beforeHubSsim }).toEqual({
+      noLo: s!.policySsim,
+      beforeHub: s!.policySsim,
+    });
+    // The slide is marked as one that holds a table object (what `--stored-tables` selects in older runs).
+    expect((s as { table?: boolean }).table).toBe(true);
+  }, 300_000);
 });

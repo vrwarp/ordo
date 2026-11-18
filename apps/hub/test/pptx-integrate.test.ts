@@ -22,7 +22,7 @@ import {
   type Slide,
   type SlideObject,
 } from '@ordo/domain';
-import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import * as prev from '@ordo/domain/schemas.prev05.test-util.ts';
 import type { Job } from '@ordo/protocol';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
 import {

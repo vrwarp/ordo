@@ -1,21 +1,26 @@
 /**
- * Tables (design/27 §15 M6 "Tables", §11 "Mapping"; design/20 "Tables"): an `a:tbl` in a `p:graphicFrame`
- * becomes one editable `TextObject` per cell over locked grid shapes, all in one group.
+ * Tables (design/27 §15 M6 "Tables", §15 M9 "Table object", §11 "Mapping"; design/20 "Tables"): an `a:tbl`
+ * in a `p:graphicFrame` is read into a `TableElement`, which the emitter writes as one `ShapeObject.table`
+ * (M9 `tables-conv`, `emit-table.ts` `emitTableObject`), or, without the table object (`EmitOptions.m9Writes`
+ * without 'table', the kill switch, and the harness's A/B), as the M6 group this module emits: one editable
+ * `TextObject` per cell over locked grid shapes, all in one group (`emitTable`).
  *
  * Reading (`readTable`):
  * - **Grid.** Column widths from `a:tblGrid`, rows from `a:tr h`. One `a:tc` per grid column; `gridSpan`
- *   and `rowSpan` merge, the cells they cover (`hMerge`, `vMerge`) are not drawn. Spans are cut at the
- *   grid. A table with vertical cell text stays residual (until M8, as other vertical text; LibreOffice
- *   draws it into the art), and so does one of more drawn cells (a merge once) than a slide may have
- *   objects (`MAX_TABLE_CELLS`: each cell is one, so it could never be drawn natively; 'budget:table'). One
- *   of more than `MAX_TABLE_GRID` grid cells is not read. Below that, the slide's budgets decide
- *   (`classify.ts` `fitTables`, the 64 KB of text formatting).
+ *   and `rowSpan` merge, the cells they cover (`hMerge`, `vMerge`) are not drawn. Spans are cut at the grid
+ *   and where they would reach a slot an earlier cell covers, as the stored table places its cells
+ *   (`@ordo/domain` `placeCells`), and cells are kept row-major. Within `TABLE_LIMITS` (the table object's
+ *   bounds: 256 rows, 64 columns, 4,096 slots): a larger table keeps its first rows and columns, noted. No
+ *   cell cap: a table is one object of the slide's budget (M6's `MAX_TABLE_CELLS`, `budget.ts`, holds only
+ *   without the table object). A table with vertical cell text stays residual (LibreOffice draws it into the
+ *   art) until the vertical text engine lays cells out (`writing-engine`).
  * - **Style.** `a:tableStyleId` names a style of `ppt/tableStyles.xml`, else one of PowerPoint's built-in
- *   styles (`tablestyles.ts`, LibreOffice's table); `a:tblPr/a:tableStyle` is an inline one. Its parts apply
- *   to a cell in `CT_TableStyle` order, a later part overriding what an earlier one set: whole table, row
- *   bands (`bandRow`: band1H for the first body row, then alternating; not the first or last row when those
- *   are on), column bands (`bandCol`, likewise), last column, first column, last row, first row (each when
- *   its `a:tblPr` flag is on), then the corner cells. A part's fill (`a:fill`, `a:fillRef`) colours the
+ *   styles (`tablestyles.ts`, LibreOffice's table); `a:tblPr/a:tableStyle` is an inline one; a table that
+ *   names none has no style, whatever the deck's default (`a:tblStyleLst def`), as LibreOffice draws it. Its parts
+ *   apply to a cell in `CT_TableStyle` order, a later part overriding what an earlier one set: whole table,
+ *   row bands (`bandRow`: band1H for the first body row, then alternating; not the first or last row when
+ *   those are on), column bands (`bandCol`, likewise), last column, first column, last row, first row (each
+ *   when its `a:tblPr` flag is on), then the corner cells. A part's fill (`a:fill`, `a:fillRef`) colours the
  *   cell; its text style (`a:tcTxStyle`: `b`, `i`, a colour, `a:font` or `a:fontRef` typefaces) sits in the
  *   cell text's chain after the cell's own list style and before the presentation's `defaultTextStyle`.
  * - **Lines.** Each part's lines apply to the edges of its region (`left`, `right`, `top`, `bottom`: the
@@ -23,44 +28,54 @@
  *   A cell's own `a:lnL`/`a:lnR`/`a:lnT`/`a:lnB` override them property by property (width, fill, dash, as
  *   LibreOffice merges them). Where two cells give a shared edge different lines the wider wins, the upper
  *   or left one on a tie, and a line beats none (LibreOffice's `TableLayouter` rule). Edges inside a merge
- *   have no line. Diagonal lines (`a:lnTlToBr`, `a:lnBlToTr`, `tl2br`, `tr2bl`) are not drawn (noted;
- *   the table is approx).
+ *   have no line. Diagonals (`a:lnTlToBr`, `a:lnBlToTr`, a part's `tl2br`, `tr2bl`) are kept per cell
+ *   (`TableCell.diag`): the table object draws them, the M6 group does not (noted).
  * - **Cells.** The fill is the style's, else the cell's own (`a:tcPr` fill, `a:noFill` included); the
  *   table's own fill (`a:tblPr`), else the style's `a:tblBg`, is behind every cell. Text through the usual
  *   chain (`text.ts`), with the cell's margins as insets (`marL`, `marR` 91,440 and `marT`, `marB` 45,720
- *   EMU by default), its `anchor`, wrapped, and shrinking to fit when the drawing finds it overflows.
+ *   EMU by default), its `anchor`, wrapped (the M6 group's cells shrink to fit; the table object's never do:
+ *   their rows grow).
  * - **Rows grow** (design/27 §15 M6): a row is as tall as its stored `h` or as its tallest cell's text plus
  *   the cell's margins, as LibreOffice and PowerPoint draw it, whichever is more; a merge's extra height
- *   goes to its last row, and an empty cell is one line of its end mark. Text is measured in the office
- *   line model (design/27 §6 step 7) with the advances and pair kerning of the faces the fonts would draw
- *   it with (`ParseOptions.fontFace`: the run's family, its metric substitute, the script fallbacks, ordo's
- *   default face), breaking as the renderer does (`Measure`). A family with no face is measured with
- *   conservative estimated widths (noted). For the fidelity harness's LibreOffice policy the rows are also
- *   sized as LibreOffice 24.2 sizes them (`TableElement.lo`, `LoLines`, `loSizePt`), and its layouter's
- *   column minimums and merge rules apply (`loColumns`, `loGrowRows`).
+ *   goes to its last row, and an empty cell is one line of its end mark. The deck's rows are kept too
+ *   (`TableElement.storedRows`). Text is
+ *   measured in the office line model (design/27 §6 step 7) with the advances and pair kerning of the faces
+ *   the fonts would draw it with (`ParseOptions.fontFace`: the run's family, its metric substitute, the
+ *   script fallbacks, ordo's default face, then the caller's face for the character's script,
+ *   `FaceSource.script`), breaking where the renderer breaks (`@ordo/renderer` text/breaks.ts
+ *   `breakOpportunities` with the office rules: UAX#14 with Korean words kept whole, and LibreOffice's breaks
+ *   after a hyphen before a digit, before a bracket after a quote and before a '%' after a letter, and
+ *   LibreOffice's i#17155 slash rule: a slash glued to its word by whitespace up to 64 units before it),
+ *   each paragraph spaced by the face that draws its script (`Measure`). A family with no face is measured with conservative estimated widths (noted).
+ *   The rows are also sized as LibreOffice 24.2 sizes them (`TableElement.lo`, `LoLines`, `loSizePt`), and
+ *   its layouter's column minimums and merge rules apply (`loColumns`, `loGrowRows`): the table object stores
+ *   that form on every hub (`emit-table.ts`), the M6 group draws it under the harness's LibreOffice policy.
  *
- * Emission (`emitTable`): locked `ShapeObject`s with role 'grid' (the background as one rect; the cell
- * fills, neighbouring cells of a row with the same fill as one rect, one object per fill; the lines, joined
- * while they look the same and each stretched over the lines it meets so corners close, one object per look,
- * by direction too when there are several: `gridObjects`), then each cell as a `TextObject` with role
- * 'cell' (an empty cell as an empty one, to type into). All of them share the table's `origin.group`. The
- * fills and lines are geometries of sub-paths (`ShapeGeom.paths`: a fill's rects, a look's open lines,
- * stroked with flat caps as separate line objects were), so a chart table of 60 cells costs the slide's
- * object budget its cells and a few grid objects, not one per run. Fills are solid (a gradient's first
- * stop), lines solid (dashes noted). An older build, which strips `geom`, draws a fill's object as the
- * bounding box of its runs and a line look as the table's outline in that line, the cells' text over them.
- * With `TableEmitCtx.lo` (the harness only) the columns, the rows, the cells' sizes and the text's
- * placement are LibreOffice's (`TableElement.lo`).
+ * Emission of the M6 group (`emitTable`): locked `ShapeObject`s with role 'grid' (the background as one
+ * rect; the cell fills, neighbouring cells of a row with the same fill as one rect, one object per fill; the
+ * lines, joined while they look the same and each stretched over the lines it meets so corners close, one
+ * object per look, by direction too when there are several: `gridObjects`), then each cell as a `TextObject`
+ * with role 'cell' (an empty cell as an empty one, to type into). All of them share the table's
+ * `origin.group`. The fills and lines are geometries of sub-paths (`ShapeGeom.paths`: a fill's rects, a
+ * look's open lines, stroked with flat caps as separate line objects were), so a chart table of 60 cells
+ * costs the slide's object budget its cells and a few grid objects, not one per run. Fills are solid (a
+ * gradient's first stop), lines solid (dashes noted). An older build, which strips `geom`, draws a fill's
+ * object as the bounding box of its runs and a line look as the table's outline in that line, the cells'
+ * text over them. With `TableEmitCtx.lo` (the harness only) the columns, the rows, the cells' sizes and the
+ * text's placement are LibreOffice's (`TableElement.lo`).
  *
- * Bounded: at most `MAX_TABLE_GRID` grid cells are read and `MAX_TABLE_CELLS` cells measured (the
- * measure is linear in the cells), `MAX_GRID_SCAN` children of the grid and the table are looked at,
- * `MAX_STYLE_SCAN` styles of `ppt/tableStyles.xml`; deck strings only reach notes cleaned.
+ * Bounded: `TABLE_LIMITS` rows, columns and slots are read and their text measured within its character
+ * bounds (`measuredBodies`: the measure is linear in the text), `MAX_GRID_SCAN` children of the grid and
+ * the table are looked at, `MAX_STYLE_SCAN` styles of `ppt/tableStyles.xml`; deck strings only reach notes
+ * cleaned.
  */
 import type { Rgba as OrdoRgba, ShapeGeom, ShapeObject, SlideObject, TextObject } from '@ordo/domain';
 import { DEFAULT_FONT } from '@ordo/domain/defaults.ts';
+import { FALLBACK_SCRIPTS } from '@ordo/domain/readable.ts';
 import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
+import { breakOpportunities } from '@ordo/renderer/text/breaks.ts';
+import { asianGapsOf } from './asian-gaps.ts';
 import { type ColorCtx, colorIn, readFill, styleFill } from './color.ts';
-import { MAX_SLIDE_OBJECTS } from './classify.ts';
 import type { SlideCtx } from './context.ts';
 import { scriptClasses, scriptFallbacks, substituteOf } from './fontmap.ts';
 import { apply, boxPx, lenPx, multiply, ptPx } from './frame.ts';
@@ -84,23 +99,24 @@ import { clean, type Log } from './log.ts';
 import type { FaceMetrics, FaceSource } from './metrics.ts';
 import type { RichText } from './richtext.ts';
 import { predefinedTableStyle } from './tablestyles.ts';
-import { readTextBody } from './text.ts';
+import { readShadow, readTextBody } from './text.ts';
 import { styleLine, typefaceName } from './theme.ts';
 import { child, num, path, textOf, type XNode } from './xml.ts';
 
 /**
- * Cells a table drawn natively may have (design/27 §15 M6), counted as drawn: a merge is one cell, the
- * cells it covers none. Each drawn cell is one object, so a table with more passes the slide's object
- * budget on its own: it stays residual ('budget:table') and is never measured. Below it the slide's
- * object and text budgets decide (`classify.ts` `fitTables`, which weighs the table against the slide's
- * other objects, and `emit.ts` `MAX_SLIDE_BYTES`).
+ * What a table is read with at most (M9, `tables-conv`): the stored table object's bounds (`@ordo/domain`
+ * `TABLE_LIMITS`, which `tables.test.ts` checks these against; the domain's zod schemas are not imported at
+ * run time here). A table past `rows` or `cols` keeps its first rows or columns, one past `grid` slots its
+ * first rows that fit, each noted; nothing else caps a table (M6's `MAX_TABLE_CELLS` is gone: a table is one
+ * object of the slide's budget). `cellText` and `tableText` bound the characters the measure lays out.
  */
-export const MAX_TABLE_CELLS = MAX_SLIDE_OBJECTS;
-/**
- * Grid cells (rows × columns, covered ones included) a table is read with at most; a larger one stays
- * residual.
- */
-export const MAX_TABLE_GRID = 4_096;
+export const TABLE_LIMITS = {
+  rows: 256,
+  cols: 64,
+  grid: 4_096,
+  cellText: 10_000,
+  tableText: 60_000,
+} as const;
 /** Children of `a:tblGrid` and of `a:tbl` (and of one `a:tr`) looked at. */
 const MAX_GRID_SCAN = 1_000;
 /** `a:tblStyle` elements of `ppt/tableStyles.xml` indexed. */
@@ -171,13 +187,22 @@ export function readTable(
   const trs: XNode[] = [];
   for (let i = 0; i < tbl.children.length && i < MAX_GRID_SCAN; i++)
     if (tbl.children[i]!.name === 'a:tr') trs.push(tbl.children[i]!);
+  if (!cols.length || !trs.length) return residual('a table without rows or columns is drawn by LibreOffice');
+  // TABLE_LIMITS (M9): the first 64 columns, the first 256 rows, and of those the rows within 4,096 slots.
+  const readCols = cols.length;
+  const readRows = trs.length;
+  if (cols.length > TABLE_LIMITS.cols) cols.length = TABLE_LIMITS.cols;
+  const fit = Math.min(TABLE_LIMITS.rows, Math.floor(TABLE_LIMITS.grid / cols.length));
+  if (trs.length > fit) trs.length = fit;
+  if (cols.length < readCols || trs.length < readRows)
+    ctx.log(
+      `a table of ${readRows} rows and ${readCols} columns is cut to its first ${trs.length} rows and ${cols.length} columns`,
+    );
   const N = cols.length;
   const M = trs.length;
-  if (!N || !M) return residual('a table without rows or columns is drawn by LibreOffice');
-  if (N * M > MAX_TABLE_GRID)
-    return residual(`a table of ${N * M} grid cells (more than ${MAX_TABLE_GRID}) is drawn by LibreOffice`);
 
-  // Cells: one a:tc per grid column; a merge covers the cells its spans reach.
+  // Cells: one a:tc per grid column; a merge covers the cells its spans reach. As the stored table places
+  // them (`@ordo/domain` `placeCells`): a span is cut where it would reach a slot an earlier cell covers.
   const cover: (number | undefined)[][] = Array.from({ length: M }, () => new Array(N).fill(undefined));
   const anchors: Anchor[] = [];
   for (let r = 0; r < M; r++) {
@@ -188,30 +213,52 @@ export function readTable(
       if (tc.name !== 'a:tc') continue;
       const col = c++;
       if (on(tc.attrs.hMerge) || on(tc.attrs.vMerge) || cover[r]![col] !== undefined) continue;
-      const cs = clamp(Math.floor(num(tc.attrs.gridSpan) ?? 1), 1, N - col);
-      const rs = clamp(Math.floor(num(tc.attrs.rowSpan) ?? 1), 1, M - r);
+      let cs = clamp(Math.floor(num(tc.attrs.gridSpan) ?? 1), 1, N - col);
+      for (let x = 1; x < cs; x++)
+        if (cover[r]![col + x] !== undefined) {
+          cs = x;
+          break;
+        }
+      let rs = clamp(Math.floor(num(tc.attrs.rowSpan) ?? 1), 1, M - r);
+      for (let y = 1; y < rs; y++)
+        if (cover[r + y]!.slice(col, col + cs).some((v) => v !== undefined)) {
+          rs = y;
+          break;
+        }
       const k = anchors.length;
       anchors.push({ row: r, col, rows: rs, cols: cs, tc });
-      for (let y = r; y < r + rs; y++) for (let x = col; x < col + cs; x++) cover[y]![x] ??= k;
+      for (let y = r; y < r + rs; y++) for (let x = col; x < col + cs; x++) cover[y]![x] = k;
     }
   }
-  // Grid cells no a:tc names (a short row) are empty cells of their own.
+  // Grid cells no a:tc names (a short row, a merge's covered slot never claimed) are empty cells of their
+  // own. Cells are kept row-major (top-left corner order), the order the stored table places them in.
   for (let r = 0; r < M; r++)
     for (let c = 0; c < N; c++)
       if (cover[r]![c] === undefined) {
         cover[r]![c] = anchors.length;
         anchors.push({ row: r, col: c, rows: 1, cols: 1, tc: undefined });
       }
-  if (anchors.length > MAX_TABLE_CELLS)
-    return residual(
-      `a table of ${anchors.length} cells passes the slide's budget of ${MAX_SLIDE_OBJECTS} objects: LibreOffice draws it`,
-      'budget:table',
-    );
+  const order = anchors
+    .map((_, k) => k)
+    .sort((p, q) => anchors[p]!.row - anchors[q]!.row || anchors[p]!.col - anchors[q]!.col);
+  const renumber = new Array<number>(anchors.length);
+  order.forEach((k, at) => {
+    renumber[k] = at;
+  });
+  anchors.splice(0, anchors.length, ...order.map((k) => anchors[k]!));
+  for (const row of cover) for (let c = 0; c < N; c++) row[c] = renumber[row[c]!];
 
   const tcPrOf = (a: Anchor) => child(a.tc, 'a:tcPr');
+  // Vertical cell text (rule V, sub-wave 1c): LibreOffice 24.2 draws `eaVert` cells exactly as `horz` ones
+  // (probe deck A: the same glyph positions within 0.1 pt, none turned), so a table with them is the table
+  // object, each such cell keeping its `vert` (`TableCell.vert`) for a later vertical text engine; today's
+  // renderer draws it horizontally (`cellIsVertical`). Every other kind keeps LibreOffice's art until that
+  // engine (owner question Q1c-5): `vert` and `vert270` are LibreOffice's vertical writing (drawn
+  // horizontally they would replace its art on a hub with it by text turned the wrong way); `wordArtVert`,
+  // `wordArtVertRtl` and `mongolianVert` are drawn horizontally by LibreOffice too but are in no measured deck.
   for (const a of anchors) {
     const vert = tcPrOf(a)?.attrs.vert;
-    if (vert !== undefined && vert !== 'horz')
+    if (vert !== undefined && vert !== 'horz' && vert !== 'eaVert')
       return residual('a table with vertical cell text is drawn by LibreOffice (M8)', 'vert');
   }
 
@@ -228,20 +275,19 @@ export function readTable(
   const part = (name: string) => child(style, `a:${name}`);
   const parts = (a: Anchor) => partsOf(a, M, N, flags).map(part);
 
-  // Lines: the style's parts by region, then the cells' own.
+  // Lines: the style's parts by region, then the cells' own. Diagonals (`tl2br`, `tr2bl` of a part, a cell's
+  // `a:lnTlToBr`, `a:lnBlToTr`) are kept per cell, merged as the sides are (M9: the table object draws them).
   const lines = new EdgeLines(M, N);
-  let diagonal = false;
   const regions = partRegions(M, N, flags);
   for (const [name, r0, r1, c0, c1] of regions) {
     const p = part(name);
     const bdr = path(p, 'a:tcStyle', 'a:tcBdr');
     if (!bdr) continue;
     for (const side of bdr.children) {
-      const s = strokeOf(ctx, side);
-      if (!s) continue;
       const kind = side.name.slice(2);
-      if (kind === 'tl2br' || kind === 'tr2bl') diagonal ||= visible(s);
-      else lines.region(kind, s, r0, r1, c0, c1);
+      if (kind === 'tl2br' || kind === 'tr2bl') continue; // per cell, below
+      const s = strokeOf(ctx, side);
+      if (s) lines.region(kind, s, r0, r1, c0, c1);
     }
   }
   for (const a of anchors) {
@@ -256,17 +302,35 @@ export function readTable(
       const ln = child(pr, name);
       if (ln) lines.cell(a, side, readStroke(ln, ctx.color));
     }
-    for (const d of ['a:lnTlToBr', 'a:lnBlToTr']) {
-      const ln = child(pr, d);
-      if (ln) diagonal ||= visible(readStroke(ln, ctx.color));
-    }
   }
   const tableLines = lines.resolve(cover);
-  if (diagonal) ctx.log('diagonal lines of table cells are not drawn');
+  /** A cell's diagonals: its parts' (in order), then its own, merged property by property. */
+  const diagonals = (a: Anchor, ps: (XNode | undefined)[]): TableCell['diag'] => {
+    let down: Stroke | undefined;
+    let up: Stroke | undefined;
+    for (const p of ps) {
+      const bdr = path(p, 'a:tcStyle', 'a:tcBdr');
+      const tl = child(bdr, 'a:tl2br');
+      const tr = child(bdr, 'a:tr2bl');
+      if (tl) down = merge(down, strokeOf(ctx, tl));
+      if (tr) up = merge(up, strokeOf(ctx, tr));
+    }
+    const pr = tcPrOf(a);
+    const own = (name: string) => {
+      const ln = child(pr, name);
+      return ln ? readStroke(ln, ctx.color) : undefined;
+    };
+    down = merge(down, own('a:lnTlToBr'));
+    up = merge(up, own('a:lnBlToTr'));
+    const d = lineOf(down);
+    const u = lineOf(up);
+    return d || u ? { ...(d ? { down: d } : {}), ...(u ? { up: u } : {}) } : undefined;
+  };
 
   // Fills and text.
   const background = readFill(tblPr, ctx.color) ?? styleBackground(ctx, child(style, 'a:tblBg'));
   const measure = new Measure(ctx.frame, ctx.fontFace);
+  const rtl = on(tblPr?.attrs.rtl);
   const cells: TableCell[] = [];
   for (const a of anchors) {
     const ps = parts(a);
@@ -278,13 +342,18 @@ export function readTable(
       ctx.log('a table cell filled with a picture is drawn without it');
       fill = { kind: 'none' };
     }
+    const diag = diagonals(a, ps);
+    // Only `eaVert` reaches here (rule V, above); the stored cell keeps it (`emit-table.ts` `vertOf`).
+    const vert = pr?.attrs.vert === 'eaVert' ? 'eaVert' : undefined;
     cells.push({
       row: a.row,
       col: a.col,
       rows: a.rows,
       cols: a.cols,
       fill: fill ?? { kind: 'none' },
-      text: cellText(ctx, base, a.tc, pr, textStyleOf(ctx, ps), on(tblPr?.attrs.rtl)),
+      text: cellText(ctx, base, a.tc, pr, textStyleOf(ctx, ps), rtl),
+      ...(diag ? { diag } : {}),
+      ...(vert ? { vert } : {}),
     });
   }
 
@@ -292,29 +361,39 @@ export function readTable(
   // LibreOffice's columns), then ordo's, the lines spaced by their font's line height as LibreOffice draws
   // them and PowerPoint sizes rows. An empty cell is one line of its end mark.
   const stored = trs.map((tr) => emu(tr.attrs.h, 0));
-  const loCols = loColumns(cols, cells);
+  // LibreOffice's columns from the deck's widths in its whole 1/100 mm (400 px, 7055.56, is 7055), widened.
+  const loCols = loColumns(cols.map(loImported), cells);
   const textWidth = (c: TableCell, widths: readonly Emu[] = cols) => {
     let w = 0;
     for (let x = c.col; x < c.col + c.cols; x++) w += widths[x]!;
     return lenPx(ctx.frame, Math.max(0, w - c.text.insets.l - c.text.insets.r));
   };
   const loLines: LoLines = opts.afterAutogrow ? 'independent' : 'font';
-  const lo = cells.map((c) => measure.loLayout(c.text, textWidth(c, loCols), loLines));
+  // The text measured: each cell's within `TABLE_LIMITS.cellText`, the table's within `tableText` (later
+  // cells as their empty end mark, as the stored table's bounds empty them). LibreOffice's model only: with
+  // its 1/4 em at each East Asian/other boundary (`asian-gaps.ts`, rule G, `gaps`), never in the stored text
+  // or ordo's own model of its drawing (`spaced`).
+  const measured = measuredBodies(cells.map((c) => c.text));
+  const lo = cells.map((c, i) =>
+    measure.loLayout(measured[i]!, textWidth(c, loCols), loLines, { gaps: true }),
+  );
   // LibreOffice's row: the text and its extra 1/100 mm (`Cell::getMinimumHeight`), then the margins.
   const loTall = lo.map(
     (l, i) =>
       (l.height + 1 + mm100Emu(cells[i]!.text.insets.t) + mm100Emu(cells[i]!.text.insets.b)) * EMU_PER_MM100,
   );
   for (const c of cells) measure.spaceByFont(c.text);
-  const drawn = cells.map((c) => measure.layout(c.text, textWidth(c)));
+  const spaced = measuredBodies(cells.map((c) => c.text));
+  const drawn = cells.map((c, i) => measure.layout(spaced[i]!, textWidth(c)));
   const withInsets = (b: Block, i: number) =>
     b.height / ctx.frame.s + cells[i]!.text.insets.t + cells[i]!.text.insets.b;
   const tall = drawn.map(withInsets);
   // As the harness's LibreOffice policy draws the cells: at LibreOffice's sizes (`loSizePt`).
-  const loDrawn = cells.map((c) => measure.layout(c.text, textWidth(c, loCols), loSizePt));
+  const loDrawn = cells.map((c, i) => measure.layout(spaced[i]!, textWidth(c, loCols), loSizePt));
   const loTallDrawn = loDrawn.map(withInsets);
   const rows = growRows(stored, cells, tall);
-  const loRows = loGrowRows(stored, cells, loTall);
+  // LibreOffice's rows from the deck's heights in its whole 1/100 mm (a:tr h 635000 EMU, 1763.89, is 1763).
+  const loRows = loGrowRows(stored.map(loImported), cells, loTall);
   if (measure.missing.size)
     ctx.log(
       `table text measured with estimated widths (no font for ${[...measure.missing]
@@ -329,6 +408,11 @@ export function readTable(
   const loH = loRows.reduce((s, h) => s + h, 0);
   // Where LibreOffice's row is shorter than the text as drawn, the text runs into the cell's margins; and
   // its lines sit at the face's ascent, where ordo's office model puts them a size below the line's top.
+  // LibreOffice anchors the drawn block (`drawn`) in the cell's inner height, but never centred above its top
+  // margin: a block taller than the cell starts at the margin and runs out at the bottom (`loBlockTop`). Under
+  // font-independent spacing a 16 pt Carlito line is 677/100 mm measured and 690 drawn: the Moral Character
+  // deck's 120 centred lines sit at the margin plus the face's ascent (the floor of that, every line), not
+  // 6/100 mm above it; the Depression deck's 145 lines fit this on 140 (centring the measured height: 58).
   const spill = cells.map((c, i) => {
     let h = 0;
     for (let y = c.row; y < c.row + c.rows; y++) h += loRows[y]!;
@@ -340,16 +424,24 @@ export function readTable(
     const n = Math.min(ours.baselines.length, theirs.baselines.length);
     if (!n) return 0;
     const at = (h: number) => (c.text.anchor === 'top' ? 0 : c.text.anchor === 'bottom' ? h : h / 2);
+    // LibreOffice's block from the inner top (1/100 mm): anchored, at least 0.
+    let rowsH = 0;
+    for (let y = c.row; y < c.row + c.rows; y++) rowsH += loRows[y]!;
+    const inner = rowsH / EMU_PER_MM100 - mm100Emu(c.text.insets.t) - mm100Emu(c.text.insets.b);
+    const top = loBlockTop(inner, theirs.height, c.text.anchor);
     let d = 0;
     for (let k = 0; k < n; k++)
       d +=
         (ours.baselines[k]! - at(ours.height)) / ctx.frame.s -
-        (theirs.baselines[k]! - at(theirs.height)) * EMU_PER_MM100;
+        (theirs.baselines[k]! + top - at(inner)) * EMU_PER_MM100;
     return Math.round(d / n);
   });
   const gridded = gridObjects(cells, tableLines);
   const objects =
     (background && paints(background) ? 1 : 0) + gridded.fills.length + gridded.lines.length + cells.length;
+  // The table's own outer shadow (sub-wave 1c): read, noted, not emitted or drawn (`TableElement.shadow`).
+  const shadow = readShadow(child(child(tblPr, 'a:effectLst'), 'a:outerShdw'), ctx.color);
+  if (shadow) ctx.log("a table's shadow is not drawn");
   return {
     ...base,
     kind: 'table',
@@ -360,7 +452,9 @@ export function readTable(
     cells,
     lines: tableLines,
     objects,
-    ...(diagonal ? { support: 'approx' as const, reasons: ['tableDiagonal'] } : {}),
+    ...(rtl ? { rtl: true } : {}),
+    storedRows: stored,
+    ...(shadow ? { shadow } : {}),
     ...(loRows.some((h, r) => h !== rows[r]) ||
     loCols.some((w, c) => w !== cols[c]) ||
     spill.some((v) => v > 0) ||
@@ -371,6 +465,47 @@ export function readTable(
       ? { lo: { cols: loCols, rows: loRows, xf: place(loW, loH), spill, lift, lines: loLines } }
       : {}),
   };
+}
+
+/**
+ * The cells' bodies as the measure lays them out (`TABLE_LIMITS`): each cell's text cut at `cellText`
+ * characters, the table's at `tableText` (a cell past it measured as its empty end mark), so the measure,
+ * linear in the text, stays bounded however many cells a table has. Paragraphs within the bounds are shared.
+ */
+function measuredBodies(bodies: readonly TextBody[]): TextBody[] {
+  let left = TABLE_LIMITS.tableText;
+  return bodies.map((b) => {
+    let room = Math.min(left, TABLE_LIMITS.cellText);
+    const paras: Para[] = [];
+    for (const p of b.paras) {
+      if (room <= 0) break;
+      let n = 0;
+      for (const r of p.runs) n += r.kind === 'break' ? 1 : r.text.length;
+      if (n <= room) {
+        paras.push(p);
+        room -= n;
+        continue;
+      }
+      const runs: Para['runs'] = [];
+      for (const r of p.runs) {
+        if (room <= 0) break;
+        if (r.kind === 'break') {
+          runs.push(r);
+          room -= 1;
+        } else {
+          runs.push(r.text.length <= room ? r : { ...r, text: r.text.slice(0, room) });
+          room -= r.text.length;
+        }
+      }
+      paras.push({ ...p, runs });
+      room = 0;
+    }
+    const used = Math.min(left, TABLE_LIMITS.cellText) - Math.max(0, room);
+    left -= used;
+    if (paras.length === b.paras.length && paras.every((p, i) => p === b.paras[i])) return b;
+    const first = b.paras[0];
+    return { ...b, paras: paras.length ? paras : first ? [{ ...first, runs: [] }] : [] };
+  });
 }
 
 /**
@@ -608,7 +743,12 @@ export function gridObjects(
 /** The `a:tblStyle` elements of a `ppt/tableStyles.xml` by id (upper case), indexed once per deck. */
 const styleLists = new WeakMap<XNode, Map<string, XNode>>();
 
-/** The table's style: inline, else by id from the deck's style list, else a built-in one. */
+/**
+ * The table's style: inline, else by id from the deck's style list, else a built-in one. A table that names
+ * none has none: LibreOffice 24.2 leaves its cells unfilled whatever `a:tblStyleLst def` says (probed with the
+ * default named and undefined, and defined in the list; the worship deck "Depression" draws white text on
+ * black cells that the default would fill light blue).
+ */
 function tableStyleOf(ctx: SlideCtx, tblPr: XNode | undefined): XNode | undefined {
   const inline = child(tblPr, 'a:tableStyle');
   if (inline) return inline;
@@ -775,9 +915,10 @@ function cellText(
   rtl = false,
 ): TextBody {
   const own = child(tc, 'a:txBody');
-  // The cell's body as a shape's, so the text chain reads its list style and paragraphs.
+  // The cell's body as a shape's, so the text chain reads its list style and paragraphs; as a cell's
+  // (`Chain.cell`), the master's otherStyle before the presentation's defaultTextStyle, as LibreOffice reads it.
   const txBody = el('p:txBody', {}, own?.children.length ? own.children : [el('a:p', {})]);
-  const body = readTextBody(ctx, { own: el('p:sp', {}, [txBody]), from: base.from }, styled) ?? {
+  const body = readTextBody(ctx, { own: el('p:sp', {}, [txBody]), from: base.from, cell: true }, styled) ?? {
     paras: [],
     insets: { ...CELL_MARGINS },
     anchor: 'top',
@@ -844,8 +985,6 @@ function lineOf(s: Stroke | undefined): Line | undefined {
   if (!(width > 0)) return undefined;
   return { width, fill: s.fill, ...(s.dash && s.dash !== 'solid' ? { dash: s.dash } : {}) };
 }
-
-const visible = (s: Stroke) => lineOf(s) !== undefined;
 
 /** The strokes of a grid's edges: `h[i][c]` along row edge i under column c, `v[j][r]` along column edge j. */
 class EdgeLines {
@@ -964,27 +1103,34 @@ class EdgeLines {
  * How LibreOffice 24.2 spaces a cell's lines when it sizes a table's rows (`Cell::getMinimumHeight`, the
  * draw outliner's `GetTextHeight`; measured with the table probe deck,
  * `tools/pptx-fidelity/src/table-probe.ts`):
- * - 'independent': font-independent line spacing, 1.2 × the font height in 1/100 mm, truncated
- *   (`ImplCalculateFontIndependentLineSpacing`). The draw outliner is left in this mode by a text shape
+ * - 'independent': font-independent line spacing, 1.2 × the font height in 1/100 mm, rounded
+ *   (`ImplCalculateFontIndependentLineSpacing`; the probe's 9 and 14 pt rows, 1, 3 and 7 lines, are 382 and
+ *   593 a line, where truncating gives 381 and 592). The draw outliner is left in this mode by a text shape
  *   that grew to its text (its own `a:spAutoFit`, with text) earlier on the same slide, and the table's
  *   rows are measured in it: any face, any size.
  * - 'font': the face's ascent and descent at the reference device (600 dpi: the font's pixel height
- *   rounded, then each of ascent and descent rounded, and each back to 1/100 mm rounded): Carlito
- *   1.215-1.229 × the size, Liberation Sans 1.11-1.13. Otherwise.
+ *   rounded, then each of ascent and descent rounded), back in 1/100 mm as the larger of the two
+ *   conversions VCL makes: each converted and added, or their sum converted (its font metric's line
+ *   height). The table probe's rows need both: 9 pt Carlito is 71 + 20 px, 301 + 85 = 386 (the sum
+ *   converted, 385); 10 pt is 79 + 22 px, 101 px = 428 (converted apart, 334 + 93 = 427: the 1000 Years
+ *   chart's eleven row rules need 428), 18 pt 775 (not 774), 8 pt Liberation Sans 318 (not 317), 6 pt 238
+ *   (not 237). Carlito 1.215-1.229 × the size, Liberation Sans 1.11-1.13. Otherwise.
  * Either way the cell's text is drawn with the face's own line height (the second), so text in a row
  * measured 'independent' runs into the cell's margins.
  */
 export type LoLines = 'independent' | 'font';
 
 /**
- * One laid-out line: its largest unshifted size (px and pt), the face that size draws in, and whether it
- * draws anything.
+ * One laid-out line: its largest unshifted size (px and pt), the face that size draws in, whether it draws
+ * anything, and the faces its characters of that size draw in with their size (`parts`: LibreOffice's line
+ * is as tall as its tallest portion's ascent and descent, `loLayout`).
  */
 interface LaidLine {
   px: number;
   pt: number;
   face: FaceMetrics | undefined;
   glyphs: boolean;
+  parts: { pt: number; face: FaceMetrics | undefined }[];
 }
 
 /** A text block: its height and its lines' baselines from its top (lines with text only). */
@@ -1024,7 +1170,10 @@ export function loSizePt(pt: number): number {
   return (Math.round((mm100(pt) * LO_REF_DPI) / 2540) * 72) / LO_REF_DPI;
 }
 
-/** A line's ascent (its baseline below its top) of a face at a size, LibreOffice's way (1/100 mm). */
+/**
+ * A line's ascent (its baseline below its top) of a face at a size, LibreOffice's way (1/100 mm): the ascent in
+ * whole pixels at 600 dpi, back to 1/100 mm once (`loLineHeight` converts the ascent and descent together).
+ */
 export function loAscent(pt: number, face: FaceMetrics | undefined, lines: LoLines): number {
   const h = mm100(pt);
   if (lines === 'independent' || face?.ascent === undefined || face.descent === undefined) return h;
@@ -1032,29 +1181,74 @@ export function loAscent(pt: number, face: FaceMetrics | undefined, lines: LoLin
   return Math.round((Math.round(px * face.ascent) * 2540) / LO_REF_DPI);
 }
 
+/**
+ * Where LibreOffice 24.2 starts a cell's drawn text block below the cell's inner top, in 1/100 mm (its logic
+ * unit; `inner` and `drawn` whole 1/100 mm), as the cell probe measured it (`tools/pptx-fidelity/src/
+ * cell-probe.ts`: 272 baselines of 80 centred cells, full, overflowing and with room, to the 1/100 mm):
+ * centred text half the room down, truncated, and a block taller than the inner height (the font-independent
+ * rows) 1/100 mm above the inner top, never centred above it (Moral Character's 690 drawn in 678, the
+ * Depression deck: dense-c C2). Bottom-anchored text sits on the inner bottom, never above the top; top-anchored
+ * text at the top (neither probed further).
+ */
+export function loBlockTop(inner: number, drawn: number, anchor: 'top' | 'middle' | 'bottom'): number {
+  const room = inner - drawn;
+  if (anchor === 'top') return 0;
+  if (anchor === 'bottom') return Math.max(0, room);
+  return room < 0 ? -1 : Math.trunc(room / 2);
+}
+
+/** A length LibreOffice imports from the deck (EMU), in its whole 1/100 mm: truncated (the probes' rows and columns). */
+const loImported = (v: Emu): Emu => Math.trunc(v / EMU_PER_MM100) * EMU_PER_MM100;
+
 /** A line of a face at a size, LibreOffice's way (1/100 mm). */
 export function loLineHeight(pt: number, face: FaceMetrics | undefined, lines: LoLines): number {
   const h = mm100(pt);
   if (lines === 'independent' || face?.ascent === undefined || face.descent === undefined)
-    return Math.trunc((h * 120) / 100);
+    return Math.round((h * 120) / 100);
   const px = Math.round((h * LO_REF_DPI) / 2540);
   const back = (v: number) => Math.round((v * 2540) / LO_REF_DPI);
-  return back(Math.round(px * face.ascent)) + back(Math.round(px * face.descent));
+  const a = Math.round(px * face.ascent);
+  const d = Math.round(px * face.descent);
+  // The larger of the two conversions (see `LoLines`): apart and added, or summed and converted.
+  return Math.max(back(a) + back(d), back(a + d));
 }
 
 /**
  * Text heights in logical px, in the office line model (design/27 §6 step 7), from the faces' advances and
  * pair kerning. `missing` collects the families measured with estimated widths.
  *
- * Lines break as the renderer breaks them (`@ordo/renderer` text/lines.ts): greedily after spaces, around
- * East Asian characters and at hard breaks, a word that does not fit going to the next line, cut between
- * characters only when it is wider than a whole line. A word is measured as the renderer measures one piece
- * of it: advances plus the face's pair kerning between characters of one run (so a word that fits once
- * kerned is not cut; kerning across a space or a style change is lost on both sides alike).
+ * Lines break as the renderer breaks office text (M9: at `@ordo/renderer` text/breaks.ts
+ * `breakOpportunities` with `office`, UAX#14 with Korean words kept whole, never before `)` `」` `,` `?` `・`
+ * or after `(` `「`, plus LibreOffice's breaks UAX#14 forbids: after a hyphen before a digit, after the spaces
+ * between a quotation mark and an opening bracket and before a '%' after a letter; a slash glued to its word
+ * by whitespace up to 64 units before it, the a:br's '\n' not counted as whitespace), greedily: a word
+ * that does not fit goes to the next line, cut between characters only when it is wider than a whole line.
+ * A word is measured as the renderer measures one piece of it: advances plus the face's pair kerning
+ * between characters of one run (so a word that fits once kerned is not cut; kerning across a space or a
+ * style change is lost on both sides alike; across a break only the office rules make, inside a word, it is
+ * kept unless the line ends there, as the renderer places the pieces).
+ *
+ * Faces (M9): a character is drawn by the first face of its run's chain that has it (the family, its metric
+ * substitute, the script fallbacks, ordo's default face), else by the face the caller's fallback draws its
+ * script in (`FaceSource.script`), as a browser falls back per glyph. LibreOffice instead draws a run's East
+ * Asian or complex-script portion in one face, the first of the chain that has the portion's script, else
+ * the script's fallback face (its font substitution asks for the language), weak characters (`③`, spaces)
+ * included (`lines` with `lo`). A paragraph's lines are spaced by the face that draws its main run's script
+ * (`spaceByFont`), not by a family that lacks it (fontconfig gives one for any name).
  */
+/**
+ * The scripts whose fallback face `Measure` asks for (`FaceSource.script`): Han, Kana and Hangul, drawn glyph
+ * by glyph (no joining, no reordering), so their advances measure a line. A shaped script (Arabic's joining
+ * letters, Indic clusters) keeps the chain's faces or the estimate and the office model's spacing: measured
+ * by its unshaped advances it wrapped a line early and took its face's line (the cec bible readings' Arabic
+ * cells, 0.805 -> 0.741 against LibreOffice's rows).
+ */
+const GLYPH_SCRIPTS: ReadonlySet<string> = new Set(['Hani', 'Hira', 'Kana', 'Hang']);
+
 export class Measure {
   readonly missing = new Set<string>();
   private readonly chains = new Map<string, FaceMetrics[]>();
+  private readonly scripts = new Map<string, FaceMetrics | undefined>();
 
   private readonly frame: Frame;
   private readonly faces: FaceSource | undefined;
@@ -1084,18 +1278,57 @@ export class Measure {
     return c;
   }
 
-  /** The face a style's main script draws in (the first of its chain), for line heights. */
-  private faceOf(s: RunStyle, cls: 'latin' | 'ea' | 'cs' = 'latin'): FaceMetrics | undefined {
-    return this.chain(familyOf(s, cls), s.bold, s.italic, [])[0];
+  /**
+   * The face the caller's fallback draws a script in (`FaceSource.script`), asked once per script, and only
+   * for the scripts drawn glyph by glyph (`GLYPH_SCRIPTS`): a shaped script's advances do not measure its line.
+   */
+  private scriptFace(code: string | undefined): FaceMetrics | undefined {
+    if (!code || !GLYPH_SCRIPTS.has(code) || !this.faces?.script) return undefined;
+    if (this.scripts.has(code)) return this.scripts.get(code);
+    let f: FaceMetrics | undefined;
+    try {
+      f = this.faces.script(code);
+    } catch {
+      f = undefined; // a source that throws has no face for it
+    }
+    const ok = f && typeof f.advance === 'function' ? f : undefined;
+    this.scripts.set(code, ok);
+    return ok;
   }
 
   /**
-   * Space each paragraph's lines by the line height of its main run's face (`FaceMetrics.lineHeight`:
-   * Carlito's is 1.22 of the size where the office model's single spacing is 1.2): a proportional spacing
-   * (single included) is scaled by it, so the drawing spaces the cell's lines as LibreOffice draws them and
-   * PowerPoint sizes them (measured: LibreOffice 24.2 draws a cell's lines of Liberation Sans 1.115 apart
-   * and Carlito's 1.22; PowerPoint's new rows of 18 pt Calibri are 29.2 pt tall, 22 pt and the margins).
-   * Exact spacing stays.
+   * The face that draws text of a script (`code`, `sample` one of its characters) in a family: the first face
+   * of the chain with `sample`, else the script's fallback face; the chain's first face when the text has no
+   * fallback script (Latin) or no face has it.
+   */
+  private scriptFaceOf(
+    family: string,
+    bold: boolean,
+    italic: boolean,
+    extra: readonly string[],
+    code: string | undefined,
+    sample: number | undefined,
+  ): FaceMetrics | undefined {
+    const chain = this.chain(family, bold, italic, extra);
+    if (code === undefined || sample === undefined) return chain[0];
+    for (const f of chain) if (has(f, sample)) return f;
+    return this.scriptFace(code) ?? chain[0];
+  }
+
+  /** The face a style's main script draws in, for line heights: of `text`'s first fallback script, if any. */
+  private faceOf(s: RunStyle, cls: 'latin' | 'ea' | 'cs' = 'latin', text = ''): FaceMetrics | undefined {
+    const [code, sample] = firstScript(text);
+    return this.scriptFaceOf(familyOf(s, cls), s.bold, s.italic, [], code, sample);
+  }
+
+  /**
+   * Space each paragraph's lines by the line height of the face that draws its main run's script
+   * (`FaceMetrics.lineHeight`: Carlito's is 1.22 of the size where the office model's single spacing is 1.2;
+   * Hangul by WenQuanYi Zen Hei 1.26 where the family a deck names is missing): a proportional spacing (single
+   * included) is scaled by it, so the drawing spaces the cell's lines as LibreOffice draws them and
+   * PowerPoint sizes them (measured: LibreOffice 24.2 draws a cell's lines of Liberation Sans 1.115 apart and
+   * Carlito's 1.22; PowerPoint's new rows of 18 pt Calibri are 29.2 pt tall, 22 pt and the margins). Exact
+   * spacing stays.
    */
   spaceByFont(body: TextBody): void {
     body.paras = body.paras.map((p) => {
@@ -1104,29 +1337,46 @@ export class Measure {
       const main = p.runs.find((r) => r.kind !== 'break' && r.text.length && r.style.baseline === 0);
       const s = main?.style ?? p.end;
       const cls = main ? (scriptClasses(main.text).find((c) => c !== 'latin') ?? 'latin') : 'latin';
+      const [code, sample] = firstScript(main?.text ?? '');
       let line: number | undefined;
-      for (const f of this.chain(familyOf(s, cls), s.bold, s.italic, []))
-        if (f.lineHeight !== undefined) {
-          line = f.lineHeight;
-          break;
-        }
+      const face = this.scriptFaceOf(familyOf(s, cls), s.bold, s.italic, [], code, sample);
+      if (code !== undefined && face?.lineHeight !== undefined) line = face.lineHeight;
+      else
+        for (const f of this.chain(familyOf(s, cls), s.bold, s.italic, []))
+          if (f.lineHeight !== undefined) {
+            line = f.lineHeight;
+            break;
+          }
       if (line === undefined || Math.abs(line - SINGLE_LINE) < 1e-6) return p;
       return { ...p, lineSpacing: { pct: clamp((ls?.pct ?? 1) * (line / SINGLE_LINE), 0, 13.2) } };
     });
   }
 
-  /** A code point's advance in em and the face it comes from (none: estimated) through the chain. */
+  /**
+   * A code point's advance in em and the face it comes from (none: estimated): `first` (LibreOffice's portion
+   * face) when it has it, then the chain, then the fallback face of the character's own script.
+   */
   private glyph(
     cp: number,
     family: string,
     bold: boolean,
     italic: boolean,
     extra: readonly string[],
+    first: FaceMetrics | undefined,
   ): { w: number; face: FaceMetrics | undefined } {
+    const at = (f: FaceMetrics | undefined) => {
+      const a = f?.advance(cp);
+      return a !== undefined && Number.isFinite(a) && a >= 0 ? a : undefined;
+    };
+    const a0 = at(first);
+    if (a0 !== undefined) return { w: a0, face: first };
     for (const f of this.chain(family, bold, italic, extra)) {
-      const a = f.advance(cp);
-      if (a !== undefined && Number.isFinite(a) && a >= 0) return { w: a, face: f };
+      const a = at(f);
+      if (a !== undefined) return { w: a, face: f };
     }
+    const sf = this.scriptFace(scriptOf(cp));
+    const a1 = at(sf);
+    if (a1 !== undefined) return { w: a1, face: sf };
     return { w: estimate(cp) * (bold ? 1.07 : 1), face: undefined };
   }
 
@@ -1145,22 +1395,35 @@ export class Measure {
    * mm; the lines break as `height` breaks them): `height` the row's text height in `mode`, without the
    * insets and LibreOffice's extra 1/100 mm; `drawn` the block as drawn, with the face's own line heights
    * whatever `mode` (see `LoLines`), and its baselines (lines with text only, from the block's top). Call
-   * it before `spaceByFont`, with the deck's own spacing.
+   * it before `spaceByFont`, with the deck's own spacing. `gaps`: with LibreOffice's 1/4 em at each East
+   * Asian/other boundary (`asian-gaps.ts`, rule G), added to the boundary character's advance in its own run.
    */
-  loLayout(body: TextBody, widthPx: number, mode: LoLines): { height: number; drawn: Block } {
+  loLayout(
+    body: TextBody,
+    widthPx: number,
+    mode: LoLines,
+    o: { gaps?: boolean } = {},
+  ): { height: number; drawn: Block } {
     let h = 0;
     const drawn: Block = { height: 0, baselines: [] };
     const last = body.paras.length - 1;
     body.paras.forEach((p, i) => {
-      const laid = this.lines(p, widthPx, loSizePt);
+      const laid = this.lines(p, widthPx, loSizePt, true, o.gaps === true);
       const ls = p.lineSpacing;
       const pct = ls && 'pct' in ls ? Math.trunc(ls.pct * 100 + 1e-6) : 100;
-      // A line's height and ascent: exact spacing sets the height, a proportion scales it (truncated);
-      // what is added goes above the baseline, and a proportion under 100 % keeps the ascent within 80 % of
-      // the line (editeng `ImpEditEngine::CreateLines`).
-      const line = (pt: number, face: FaceMetrics | undefined, m: LoLines) => {
-        const natural = loLineHeight(pt, face, m);
-        const asc = loAscent(pt, face, m);
+      // A line's height and ascent: its tallest portion's ascent and descent (editeng's line metrics, each
+      // portion in its own face), exact spacing sets the height, a proportion scales it (truncated); what is
+      // added goes above the baseline, and a proportion under 100 % keeps the ascent within 80 % of the line
+      // (editeng `ImpEditEngine::CreateLines`).
+      const line = (parts: LaidLine['parts'], m: LoLines) => {
+        let asc = 0;
+        let desc = 0;
+        for (const q of parts) {
+          const a = loAscent(q.pt, q.face, m);
+          asc = Math.max(asc, a);
+          desc = Math.max(desc, loLineHeight(q.pt, q.face, m) - a);
+        }
+        const natural = asc + desc;
         if (ls && 'pts' in ls) {
           const height = mm100(ls.pts);
           return { height, ascent: Math.max(0, asc + height - natural) };
@@ -1177,15 +1440,20 @@ export class Measure {
         drawn.height += gap(p.spaceBefore);
       }
       for (const l of laid.lines) {
-        const [pt, face] = l.pt > laid.Fpt ? [l.pt, l.face] : [laid.Fpt, laid.mainFace];
-        h += line(pt, face, mode).height;
-        const d = line(pt, face, 'font');
+        // A line is as tall as its own largest portions (editeng sizes each line by the portions on it, so a
+        // smaller citation on a line of its own makes a short line); a line without one (spaces of a
+        // shifted run only) as the paragraph's main size in its main face.
+        const own = l.pt > 0 ? l.parts.filter((q) => q.pt === l.pt) : [];
+        const parts = own.length ? own : [{ pt: laid.Fpt, face: laid.mainFace }];
+        h += line(parts, mode).height;
+        const d = line(parts, 'font');
         if (l.glyphs) drawn.baselines.push(drawn.height + d.ascent);
         drawn.height += d.height;
       }
       if (laid.trailingBreak) {
-        h += line(p.end.sizePt, laid.endFace, mode).height;
-        drawn.height += line(p.end.sizePt, laid.endFace, 'font').height;
+        const end = [{ pt: p.end.sizePt, face: laid.endFace }];
+        h += line(end, mode).height;
+        drawn.height += line(end, 'font').height;
       }
       if (i < last) {
         h += gap(p.spaceAfter);
@@ -1220,7 +1488,8 @@ export class Measure {
         s === undefined ? 0 : 'pts' in s ? raw(s.pts) : s.pct * px(largestPt(p));
       if (i > 0) out.height += gap(p.spaceBefore);
       for (const l of laid.lines) {
-        const d = line(Math.max(laid.F, l.px));
+        // As tall as the line's own largest unshifted run (the renderer's office model, lines.ts).
+        const d = line(l.px > 0 ? l.px : laid.F);
         if (l.glyphs) out.baselines.push(out.height + d.ascent);
         out.height += d.height;
       }
@@ -1236,7 +1505,7 @@ export class Measure {
     const ls = p.lineSpacing;
     const pitch = (size: number) => (ls && 'pts' in ls ? px(ls.pts) : SINGLE_LINE * size * (ls?.pct ?? 1));
     let h = 0;
-    for (const l of laid.lines) h += pitch(Math.max(laid.F, l.px));
+    for (const l of laid.lines) h += pitch(l.px > 0 ? l.px : laid.F);
     // A trailing a:br adds a line as tall as the end mark, single spaced (exact spacing applies).
     if (laid.trailingBreak) h += ls && 'pts' in ls ? px(ls.pts) : SINGLE_LINE * px(p.end.sizePt);
     const gap = (s: Para['spaceBefore']) =>
@@ -1249,13 +1518,23 @@ export class Measure {
   /**
    * A paragraph's lines laid out `widthPx` wide (see the class comment). `drawn` maps a run's size to the
    * size it is drawn at (`loSizePt` for LibreOffice's layout): widths and `px` sizes follow it, `pt` stays
-   * the deck's size.
+   * the deck's size. `lo`: each run's East Asian or complex-script portion in one face (LibreOffice's).
+   * `gaps` (with `lo`): rule G's 1/4 em (`asianGapsOf`) added to the advance of the character before each East
+   * Asian/other boundary, inside its run, so the character keeps the face its run's portion gives it.
    */
-  private lines(p: Para, widthPx: number, drawn: (pt: number) => number = (pt) => pt): LaidPara {
+  private lines(
+    p: Para,
+    widthPx: number,
+    drawn: (pt: number) => number = (pt) => pt,
+    lo = false,
+    gaps = false,
+  ): LaidPara {
     const px = (pt: number) => ptPx(this.frame, drawn(pt));
-    // The characters with their widths, sizes and whether they raise the line.
+    // The characters with their widths, sizes, whether they raise the line, and their offset in `text`.
     const chars: {
       w: number;
+      /** The pair kerning in `w` across an office-only break before this character (0 elsewhere). */
+      kern: number;
       size: number;
       pt: number;
       face: FaceMetrics | undefined;
@@ -1263,17 +1542,33 @@ export class Measure {
       space: boolean;
       wide: boolean;
       hard: boolean;
+      at: number;
     }[] = [];
     const runs = p.runs;
     let text = '';
     for (const r of runs) text += r.kind === 'break' ? '\n' : r.text;
     const classes = scriptClasses(text);
-    const fallbacks = scriptFallbacks(text, runs.find((r) => r.style.lang)?.style.lang);
+    const lang = runs.find((r) => r.style.lang)?.style.lang;
+    const fallbacks = scriptFallbacks(text, lang);
+    // Rule G: the gap (pt) after each character before an East Asian/other boundary, by its last unit's offset.
+    const gapPt = lo && gaps ? asianGapsOf(p) : undefined;
+    // Where a line may end (the renderer's rule for office text: table cells are in the office line model,
+    // so they break where LibreOffice breaks them): before `text[b]` for each b.
+    // `officeOnly`: the breaks only the office rules make ('3:16-' / '17'), inside a word UAX#14 keeps whole:
+    // the pair kerning across one is kept, as the renderer places the next piece on the same line, and is
+    // taken off again when the line ends there (`kern`).
+    const officeOnly = new Set<number>();
+    // `glued`: the breaks after a slash LibreOffice's i#17155 rule drops, with where it moves them (breaks.ts).
+    const glued = new Map<number, number>();
+    const breaks = new Set(
+      breakOpportunities(text, 0, text.length, cleanLang(lang), true, officeOnly, 0, glued),
+    );
     let at = 0;
     for (const r of runs) {
       if (r.kind === 'break') {
         chars.push({
           w: 0,
+          kern: 0,
           size: px(r.style.sizePt),
           pt: r.style.sizePt,
           face: undefined,
@@ -1281,6 +1576,7 @@ export class Measure {
           space: false,
           wide: false,
           hard: true,
+          at,
         });
         at += 1;
         continue;
@@ -1289,34 +1585,66 @@ export class Measure {
       const shifted = s.baseline !== 0;
       const size = px(s.sizePt) * (shifted ? SHIFTED_SIZE : 1);
       const spacing = px(s.spacingPt);
-      const t = s.caps === 'none' ? r.text : r.text.toUpperCase();
+      // LibreOffice's portion faces: per script class, the face of the run's first fallback script.
+      const [code, sample] = lo ? firstScript(r.text) : [undefined, undefined];
+      const portion = (cls: 'latin' | 'ea' | 'cs') =>
+        lo && cls !== 'latin' && code !== undefined
+          ? this.scriptFaceOf(familyOf(s, cls), s.bold, s.italic, fallbacks, code, sample)
+          : undefined;
       let prev: { cp: number; face: FaceMetrics | undefined; space: boolean; wide: boolean } | undefined;
-      for (let i = 0; i < t.length; i++) {
-        const code = t.codePointAt(i)!;
-        const unit = code > 0xffff ? 2 : 1;
+      for (let i = 0; i < r.text.length; i++) {
+        const code0 = r.text.codePointAt(i)!;
+        const unit = code0 > 0xffff ? 2 : 1;
         const cls = classes[Math.min(at + i, classes.length - 1)] ?? 'latin';
         const family = familyOf(s, cls);
-        const cp = code === 0x09 ? 0x20 : code;
-        const g = this.glyph(cp, family, s.bold, s.italic, fallbacks);
+        const cp = code0 === 0x09 ? 0x20 : code0;
         const space = cp === 0x20;
         const wide = cls === 'ea';
-        let w = g.w * size + spacing;
-        // Pair kerning inside one piece of one run: not across a break opportunity, not between faces.
-        if (prev?.face && prev.face === g.face && !(prev.space && !space) && !prev.wide && !wide) {
-          const k = g.face.kern?.(prev.cp, cp) ?? 0;
-          if (Number.isFinite(k)) w += k * size;
+        const first = portion(cls);
+        // Capitals measured as drawn (one character may become two: 'ß' is 'SS'), at this offset.
+        const shown = s.caps === 'none' ? [cp] : codePoints(String.fromCodePoint(cp).toUpperCase());
+        let w = 0;
+        let pairKern = 0;
+        let face: FaceMetrics | undefined;
+        for (const [k, c] of shown.entries()) {
+          const g = this.glyph(c, family, s.bold, s.italic, fallbacks, first);
+          w += g.w * size + spacing;
+          face ??= g.face;
+          // Pair kerning inside one piece of one run: not across a break opportunity (but across one only
+          // the office rules make), not between faces.
+          const cut = breaks.has(at + i);
+          if (
+            k === 0 &&
+            prev?.face &&
+            prev.face === g.face &&
+            !(prev.space && !space) &&
+            !prev.wide &&
+            !wide &&
+            (!cut || officeOnly.has(at + i))
+          ) {
+            const kern = g.face.kern?.(prev.cp, c) ?? 0;
+            if (Number.isFinite(kern)) {
+              w += kern * size;
+              if (cut) pairKern = kern * size;
+            }
+          }
+          prev = { cp: c, face: g.face, space, wide };
         }
+        // Rule G's gap, as letter spacing on this character (once, after its last shown glyph).
+        const gap = gapPt?.get(at + i + unit - 1);
+        if (gap) w += px(s.spacingPt + gap) - spacing;
         chars.push({
           w,
+          kern: pairKern,
           size: px(s.sizePt),
           pt: s.sizePt,
-          face: g.face ?? this.faceOf(s, cls),
+          face: face ?? first ?? this.faceOf(s, cls, r.text),
           grow: !shifted,
           space,
           wide,
           hard: false,
+          at: at + i,
         });
-        prev = { cp, face: g.face, space, wide };
         if (unit === 2) i++;
       }
       at += r.text.length;
@@ -1326,7 +1654,8 @@ export class Measure {
     const mainStyle = main ? main.style : p.end;
     const mainCls = main ? (scriptClasses(main.text).find((c) => c !== 'latin') ?? 'latin') : 'latin';
 
-    // Greedy lines: break after spaces, around East Asian characters, at a hard break.
+    // Greedy lines: break at the renderer's break opportunities, at a hard break, and cut a word wider
+    // than a whole line between characters.
     const lines: LaidLine[] = [];
     const firstAvail = widthPx - lenPx(this.frame, p.marL + p.indent);
     const avail = widthPx - lenPx(this.frame, p.marL);
@@ -1334,15 +1663,23 @@ export class Measure {
     let width = 0;
     let bp = -1; // a break opportunity: the line may end before chars[bp]
     let widthAtBp = 0;
+    // A break before chars[gp] that LibreOffice's slash rule moves (`glued`), chars[gp] on the line: when it is
+    // the line's last break before its width, the line ends at its whitespace, or is cut at the width when that
+    // is at or before the line's start (the renderer's `slashBreak`).
+    let gp = -1;
     const close = (end: number) => {
-      let best: LaidLine = { px: 0, pt: 0, face: undefined, glyphs: false };
+      let best = { px: 0, pt: 0, face: undefined as FaceMetrics | undefined };
       let glyphs = false;
+      const parts: LaidLine['parts'] = [];
       for (let k = start; k < end; k++) {
         const c = chars[k]!;
         if (!c.space && !c.hard) glyphs = true;
-        if (c.grow && c.size > best.px) best = { px: c.size, pt: c.pt, face: c.face, glyphs: false };
+        if (!c.grow) continue;
+        if (c.size > best.px) best = { px: c.size, pt: c.pt, face: c.face };
+        if (!c.hard && !parts.some((q) => q.pt === c.pt && q.face === c.face) && parts.length < 16)
+          parts.push({ pt: c.pt, face: c.face });
       }
-      lines.push({ ...best, glyphs });
+      lines.push({ ...best, glyphs, parts });
     };
     for (let k = 0; k < chars.length; k++) {
       const ch = chars[k]!;
@@ -1351,20 +1688,32 @@ export class Measure {
         start = k + 1;
         width = 0;
         bp = -1;
+        gp = -1;
         continue;
       }
       const room = lines.length ? avail : firstAvail;
-      if (!ch.space && k > start) {
-        const prev = chars[k - 1]!;
-        if (prev.space || prev.wide || ch.wide) {
-          bp = k;
-          widthAtBp = width;
-        }
+      if (!ch.space && k > start && breaks.has(ch.at)) {
+        bp = k;
+        widthAtBp = width;
       }
       if (!ch.space && width + ch.w > room + 0.01 && k > start) {
-        if (bp > start) {
+        const to = gp > bp ? glued.get(chars[gp]!.at)! : -1;
+        let wi = k;
+        if (to >= 0) while (wi > start && chars[wi - 1]!.at >= to) wi--;
+        if (to >= 0 && (wi <= start || chars[wi]!.at !== to)) {
+          close(k); // cut at the width: the moved break is at or before the line's start
+          width = 0;
+          start = k;
+        } else if (to >= 0) {
+          close(wi);
+          width = 0;
+          for (let q = wi; q < k; q++) width += chars[q]!.w;
+          width -= chars[wi]!.kern;
+          start = wi;
+        } else if (bp > start) {
           close(bp);
-          width -= widthAtBp;
+          // The line after the break starts with chars[bp] alone: without the pair kerning across the break.
+          width -= widthAtBp + chars[bp]!.kern;
           start = bp;
         } else {
           close(k);
@@ -1372,7 +1721,9 @@ export class Measure {
           start = k;
         }
         bp = -1;
+        gp = -1;
       }
+      if (!ch.space && k > start && glued.has(ch.at)) gp = k;
       width += ch.w;
     }
     const empty = !textRuns.length;
@@ -1382,7 +1733,7 @@ export class Measure {
       lines,
       F: px(mainStyle.sizePt),
       Fpt: mainStyle.sizePt,
-      mainFace: this.faceOf(mainStyle, mainCls),
+      mainFace: this.faceOf(mainStyle, mainCls, main?.text ?? ''),
       trailingBreak: !empty && runs[runs.length - 1]?.kind === 'break',
       endFace: this.faceOf(p.end),
     };
@@ -1392,6 +1743,54 @@ export class Measure {
 /** The family a run draws a character of a script class in (its Latin one when it names none other). */
 function familyOf(s: RunStyle, cls: 'latin' | 'ea' | 'cs'): string {
   return (cls === 'ea' ? s.ea : cls === 'cs' ? s.cs : undefined) ?? s.latin ?? 'Calibri';
+}
+
+/** Whether a face has a glyph for a code point. */
+function has(f: FaceMetrics, cp: number): boolean {
+  const a = f.advance(cp);
+  return a !== undefined && Number.isFinite(a) && a >= 0;
+}
+
+/** The code points of a string. */
+function codePoints(t: string): number[] {
+  const out: number[] = [];
+  for (const ch of t) out.push(ch.codePointAt(0)!);
+  return out;
+}
+
+/** Code points whose script was looked up (`scriptOf`), at most `SCRIPT_CACHE` of them kept. */
+const scriptCache = new Map<number, string | undefined>();
+const SCRIPT_CACHE = 8_192;
+
+/** The fallback script of a code point (`@ordo/domain` `FALLBACK_SCRIPTS`, ISO 15924), or undefined. */
+function scriptOf(cp: number): string | undefined {
+  if (cp < 0x370) return undefined; // Latin, digits, ASCII punctuation
+  if (scriptCache.has(cp)) return scriptCache.get(cp);
+  const ch = String.fromCodePoint(cp);
+  let code: string | undefined;
+  for (const [c, re] of FALLBACK_SCRIPTS)
+    if (re.test(ch)) {
+      code = c;
+      break;
+    }
+  if (scriptCache.size >= SCRIPT_CACHE) scriptCache.clear();
+  scriptCache.set(cp, code);
+  return code;
+}
+
+/** The first fallback script of a text and its first character of that script (`[undefined, undefined]`: none). */
+function firstScript(text: string): [string | undefined, number | undefined] {
+  for (const ch of text) {
+    const cp = ch.codePointAt(0)!;
+    const code = scriptOf(cp);
+    if (code !== undefined) return [code, cp];
+  }
+  return [undefined, undefined];
+}
+
+/** A language tag fit for `breakOpportunities` (letters, digits and hyphens, at most 35 characters). */
+function cleanLang(lang: string | undefined): string {
+  return lang && /^[A-Za-z0-9-]{1,35}$/.test(lang) ? lang : '';
 }
 
 /** A paragraph's largest run size in points (its end mark's when empty), for a percentage gap. */
@@ -1647,7 +2046,7 @@ export function emitTable(ctx: TableEmitCtx, e: TableElement, out: SlideObject[]
 }
 
 /** A cell's text at the sizes LibreOffice lays it out at (`loSizePt`), end marks included. */
-function atLoSizes(body: TextBody): TextBody {
+export function atLoSizes(body: TextBody): TextBody {
   const at = (s: RunStyle): RunStyle => ({ ...s, sizePt: loSizePt(s.sizePt) });
   return {
     ...body,
@@ -1664,16 +2063,24 @@ function atLoSizes(body: TextBody): TextBody {
  * margins where the row is shorter than the text (centred text into both alike, top-anchored text into the
  * bottom one, bottom-anchored into the top one), then moved `lift` px up (down when negative). The box is
  * unchanged; margins stay at least 0, and what does not fit shrinks.
+ *
+ * Centred text sits at the middle of its margins, so it moves by half of what its margins' difference moves:
+ * where a margin would go below 0 (a cell with no top margin, `marT="0"`, lifted), the other one takes the
+ * whole difference, so the text still moves the full `lift` and stays centred under the spill (the inner
+ * height shrinks below the text, which then overflows both ways alike, as LibreOffice draws it).
  */
-function asLibreOffice(style: TextObject['style'], spill: number, lift: number): TextObject['style'] {
+export function asLibreOffice(style: TextObject['style'], spill: number, lift: number): TextObject['style'] {
   const ins = style.insets;
   if (!ins || (!(spill > 0) && !lift)) return style;
   let { t, b } = ins;
+  if (style.valign === 'middle') {
+    // The text's top is (h + t - b - text) / 2: keep b - t at its lifted value, the sum as small as allowed.
+    const d = b - t + 2 * lift;
+    const sum = Math.max(t + b - Math.max(0, spill), Math.abs(d));
+    return { ...style, insets: { ...ins, t: (sum - d) / 2, b: (sum + d) / 2 } };
+  }
   if (spill > 0) {
-    if (style.valign === 'middle') {
-      t -= spill / 2;
-      b -= spill / 2;
-    } else if (style.valign === 'bottom') t -= spill;
+    if (style.valign === 'bottom') t -= spill;
     else b -= spill;
   }
   t -= lift;

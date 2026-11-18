@@ -1,4 +1,4 @@
-import { compatRule, shapeText, visibleRuns } from './rule.ts';
+import { compatRule, drawnRuns } from './rule.ts';
 
 /**
  * An outline on filled text is not drawn. LibreOffice would hollow the letters; the harness's pictures are
@@ -9,7 +9,6 @@ export const textOutline = compatRule({
   key: 'textOutline',
   text: 'no outline on filled text (removed before LibreOffice draws; it would hollow the letters)',
   hits(e) {
-    const t = shapeText(e);
-    return !!t && visibleRuns(t).some((r) => r.style.outline !== undefined && r.style.fill.kind !== 'none');
+    return drawnRuns(e).some((r) => r.style.outline !== undefined && r.style.fill.kind !== 'none');
   },
 });

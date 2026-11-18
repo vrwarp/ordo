@@ -202,6 +202,62 @@ describe('line breaking through layoutRich', () => {
     // The accent (10 px in the test measurer) never parts from its letter.
     expect(lineTexts(obj('ab\u{0301}cd'), 20)).toEqual(['a', 'b\u{0301}', 'cd']);
   });
+
+  it('breaks imported (office-model) text where LibreOffice does, and ordo text by UAX#14', () => {
+    // 1000 Years p1: 'Isa. 2:6-10, 24:21-' / '22'; Colossians: '“every month”' / '[offerings]'; Matthew: the
+    // address stays whole. 10 px a character: 160 px holds 'Read John 3:16-' (150) but not '...3:16-17'.
+    const office = { lineModel: 'office' as const, lineHeight: 1.2 };
+    const verse = 'Read John 3:16-17 today';
+    expect(lineTexts(obj(verse, {}, office), 160)).toEqual(['Read John 3:16-', '17 today']);
+    expect(lineTexts(obj(verse), 160)).toEqual(['Read John ', '3:16-17 today']);
+    const quote = 'the “every month” [offerings] given';
+    expect(lineTexts(obj(quote, {}, office), 190)).toEqual(['the “every month” ', '[offerings] given']);
+    expect(lineTexts(obj(quote), 190)).toEqual(['the “every ', 'month” [offerings] ', 'given']);
+    const url = 'see https://books.google.as/books?id=x';
+    expect(lineTexts(obj(url, {}, office), 300)).toEqual(['see ', 'https://books.google.as/books?', 'id=x']);
+    expect(lineTexts(obj(url), 300)).toEqual(['see https://books.google.as/', 'books?id=x']);
+    // An address that starts its paragraph keeps the breaks after its slashes (LibreOffice's i#17155 rule:
+    // no whitespace in the 64 units before the slash; text-falls probe C, 150 pt), and a letter before '%'
+    // breaks; after an a:br in the same paragraph the space of 'Lead words.' glues the slashes within 64 units
+    // of it, so the address is cut by width up to its '%' (probe C 'url-after-br', 150 pt).
+    const addr = 'https://archive.org/details/copticlanguage/Coptic%20Language/mode/2up';
+    expect(lineTexts(obj(addr, {}, office), 150)).toEqual([
+      'https://',
+      'archive.org/',
+      'details/',
+      'copticlanguage/',
+      'Coptic',
+      '%20Language/',
+      'mode/2up',
+    ]);
+    const afterBr = obj(`Lead words.\n${addr}`, { paras: [null, { soft: true }] }, office);
+    expect(lineTexts(afterBr, 150)).toEqual([
+      'Lead words.',
+      'https://archive',
+      '.org/details/co',
+      'pticlanguage/Co',
+      'ptic',
+      '%20Language/',
+      'mode/2up',
+    ]);
+    // Where a dropped break after a slash is the line's last break before its width, LibreOffice moves it to
+    // just after its whitespace (i#17155): the line ends there when that is after the line's start ('ab ' /
+    // 'cd-ef/gh ', not 'ab cd-' at the hyphen), else the line is cut at its width ('.bb/cccc%2/e', not '.bb/cccc'
+    // at the '%': probe C 'url-after-words', 190 pt and 270 pt).
+    expect(lineTexts(obj('ab cd-ef/gh ij', {}, office), 100)).toEqual(['ab ', 'cd-ef/gh ', 'ij']);
+    expect(lineTexts(obj('see https://aaaa.bb/cccc%2/eeeeee end', {}, office), 120)).toEqual([
+      'see ',
+      'https://aaaa',
+      '.bb/cccc%2/e',
+      'eeeee end',
+    ]);
+    // The same address as a paragraph of its own after 'Lead words.' breaks at its slashes again.
+    const ownPara = obj(`Lead words.\n${addr}`, {}, office);
+    expect(lineTexts(ownPara, 150).slice(1, 3)).toEqual(['https://', 'archive.org/']);
+    // A box's line model decides, whatever its paragraphs (prepare reads it from itemize).
+    expect(itemize(obj(verse, {}, office)).office).toBe(true);
+    expect(itemize(obj(verse)).office).toBeUndefined();
+  });
 });
 
 describe('style cuts inside clusters', () => {

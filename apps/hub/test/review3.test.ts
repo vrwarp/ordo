@@ -6,6 +6,7 @@
  */
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { noSystemFaces } from '../src/pptx/systemFaces.ts';
 import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { importPro7, pro7Type } from '@ordo/importers';
@@ -25,7 +26,7 @@ import { createLibraryProcess, type LibraryProcess } from '../src/libproc.ts';
 import { createLiveProcess, type LiveProcess } from '../src/liveproc.ts';
 import { WORKER_LIMITS } from '../src/pool.ts';
 import { MAX_SILENT_STARTS, Supervisor } from '../src/supervisor.ts';
-import { byType, connectWs, EDIT_PIN, OPERATE_PIN, sleep, tempDir } from './helpers.ts';
+import { byType, connectWs, EDIT_PIN, OPERATE_PIN, sleep, TEST_TOOLS, tempDir } from './helpers.ts';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -412,6 +413,10 @@ describe('H4: an output token the live process cannot check yet gets bye retry',
     host: '127.0.0.1',
     port: 0,
     healthIntervalMs: 100,
+    // No real LibreOffice probe: one started by the library outlives its close and writes a profile into the
+    // data folder after the test removed it (a run would leave its folder behind).
+    toolProbe: TEST_TOOLS,
+    systemFaces: noSystemFaces,
   });
 
   it('answers retry without a context, unauthorized with one', async () => {

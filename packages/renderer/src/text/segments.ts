@@ -18,6 +18,10 @@ import type { BidiPara, ItemPara, Itemized, Piece, PreparedPara, RunStyle } from
  *   and final forms. The joiners exist only in the drawn string, never in offsets.
  * - 'auto' paragraphs take the direction of the first strong character of their whole soft-break chain
  *   (one PowerPoint paragraph), so a soft line continues its paragraph's direction.
+ * - Break opportunities: UAX#14, or for a box in the office line model (`Itemized.office`) the office rules
+ *   (breaks.ts), so imported text breaks where LibreOffice breaks it and ordo's own text as before. A piece
+ *   cut at a break only the office rules make is marked (`Piece.officeBreak`): lines.ts keeps the kerning
+ *   across it where the line goes on.
  */
 
 /** Each paragraph's bidi levels, break opportunities and pieces. */
@@ -25,16 +29,20 @@ export function prepare(it: Itemized): PreparedPara[] {
   const { text, paras } = it;
   const out: PreparedPara[] = [];
   let chain: 'ltr' | 'rtl' | null = null; // the 'auto' direction of the current soft-break chain
+  let hardStart = 0; // where the PowerPoint paragraph of the current soft-break chain starts
   for (let i = 0; i < paras.length; i++) {
     const para = paras[i]!;
-    if (!para.soft) chain = null;
+    if (!para.soft) {
+      chain = null;
+      hardStart = para.start;
+    }
     let dir = para.style.dir;
     if (dir === 'auto') {
       chain ??= chainDirection(it, i);
       dir = chain;
     }
     const bidi = bidiParagraph(text, para.start, para.end, dir);
-    out.push(cutPieces(text, para, bidi));
+    out.push(cutPieces(text, para, bidi, it.office === true, hardStart));
   }
   return out;
 }
@@ -53,11 +61,22 @@ function chainDirection(it: Itemized, i: number): 'ltr' | 'rtl' {
 
 type Span = { start: number; end: number; sr: number };
 
-function cutPieces(text: string, para: ItemPara, bidi: BidiPara): PreparedPara {
+function cutPieces(
+  text: string,
+  para: ItemPara,
+  bidi: BidiPara,
+  office: boolean,
+  hardStart: number,
+): PreparedPara {
   const pieces: Piece[] = [];
   if (para.end <= para.start) return { para, bidi, pieces };
   const { spans, moved } = styleSpans(text, para);
-  const breaks = breakOpportunities(text, para.start, para.end, para.runs[0]?.style.lang ?? '');
+  // Office text (imported PowerPoint text, table cells) breaks where LibreOffice breaks it; ordo's own text
+  // keeps UAX#14 (breaks.ts).
+  const only = office ? new Set<number>() : undefined;
+  const lang = para.runs[0]?.style.lang ?? '';
+  const glued = office ? new Map<number, number>() : undefined;
+  const breaks = breakOpportunities(text, para.start, para.end, lang, office, only, hardStart, glued);
   const levels = bidi.levels;
   const ps = para.start;
   let b = 0;
@@ -82,12 +101,24 @@ function cutPieces(text: string, para: ItemPara, bidi: BidiPara): PreparedPara {
       end = sc.end;
       let trail = end;
       while (trail > at && isBreakSpace(text.charCodeAt(trail - 1))) trail--;
-      pieces.push({ start: at, end, trail, sr: sp.sr, level, breakAfter: end === brk, script: sc.script });
+      const piece: Piece = {
+        start: at,
+        end,
+        trail,
+        sr: sp.sr,
+        level,
+        breakAfter: end === brk,
+        script: sc.script,
+      };
+      if (end === brk && only?.has(brk)) piece.officeBreak = true;
+      pieces.push(piece);
       at = end;
     }
   }
   const out: PreparedPara = { para, bidi, pieces };
   if (moved) out.movedCuts = moved;
+  // breakOpportunities sets them in the order it finds them: ascending.
+  if (glued?.size) out.glued = { at: [...glued.keys()], to: [...glued.values()] };
   return out;
 }
 

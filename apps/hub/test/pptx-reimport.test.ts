@@ -21,9 +21,11 @@ import {
   type TextObject,
 } from '@ordo/domain';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
+import { importDigest } from '@ordo/importers/pptx-core.ts';
 import {
   body,
   buildDeck,
+  denseTableDeck,
   imageRel,
   NS_A,
   NS_P,
@@ -33,6 +35,8 @@ import {
   run,
   solid,
   sp,
+  tableFrame,
+  tc,
 } from '@ordo/pptx-scene/test-util.ts';
 import type { Job, PptxReimportPlan, PptxReimportResult } from '@ordo/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -47,6 +51,7 @@ import {
   pageFromName,
   planReimport,
   queueReimport,
+  rebuildsFromDeck,
   REIMPORT_BY,
   reimportKinds,
   samePlace,
@@ -639,6 +644,20 @@ describe('the merge', () => {
 });
 
 describe('reimport.ts helpers', () => {
+  it("tells the pages 'Make editable' rebuilds from the deck by their class, never their note", () => {
+    const imported = { fileId: DECK, page: 1, imageMediaId: 'm' };
+    const v2 = (cls: 'native' | 'hybrid' | 'picture', fileId = DECK) =>
+      native(0, [], { imported }, { class: cls, fileId, version: 2, notes: ['anything'] });
+    // LibreOffice's page a native import stored (version 2), and a legacy page, of the stored deck.
+    expect(rebuildsFromDeck(v2('picture'), DECK)).toBe(true);
+    expect(rebuildsFromDeck(Slide.parse({ id: newId(), objects: [], imported }), DECK)).toBe(true);
+    // Not a native or hybrid slide, nor a page of another deck.
+    expect(rebuildsFromDeck(v2('native'), DECK)).toBe(false);
+    expect(rebuildsFromDeck(v2('hybrid'), DECK)).toBe(false);
+    expect(rebuildsFromDeck(v2('picture', 'other-deck'), DECK)).toBe(false);
+    expect(rebuildsFromDeck(Slide.parse({ id: newId(), objects: [], imported }), 'other-deck')).toBe(false);
+  });
+
   it('queueReimport puts only the fields asked for in the payload', () => {
     const queued: unknown[] = [];
     const jobs = {
@@ -1061,4 +1080,328 @@ describe("'Re-import from PowerPoint' through the hub", () => {
       hub.lib.db.prepare(`DELETE FROM jobs WHERE id = ?`).run(lo);
     }
   }, 60_000);
+});
+
+describe("a table slide an older import stored as LibreOffice's page (M9: every table is the table object)", () => {
+  /** The reading plan of 28 rows (`denseTableDeck`): its M6 group passes 64 KB, the table object does not. */
+  let plan: string;
+  beforeAll(async () => {
+    plan = await storeDeck(hub, await zipDeck(denseTableDeck(28), dir, 'plan.pptx'));
+  }, 60_000);
+
+  /**
+   * A presentation as a hub with LibreOffice stored the deck: its one slide LibreOffice's page (version 2: no
+   * objects, the page picture in `imported`), with the note of the build that made it the page.
+   */
+  async function storedAsPage(note: string): Promise<Presentation> {
+    const sid = newId();
+    const slide = Slide.parse({
+      id: newId(),
+      objects: [],
+      notes: 'Read one psalm a day.',
+      imported: { fileId: plan, page: 1, imageMediaId: await pagePicture(1), textAligned: true },
+      pptx: {
+        fileId: plan,
+        index: 0,
+        shown: 0,
+        class: 'picture',
+        version: CONVERTER_VERSION,
+        digest: importDigest([]),
+        notes: [note],
+        artText: 'Day 1: Psalm 1, verses 1-9',
+      },
+    });
+    return hub.lib.savePresentation(
+      {
+        id: newId(),
+        rev: 1,
+        title: 'Reading plan',
+        kind: 'slides',
+        meta: { tags: [] },
+        sections: [{ id: sid, label: 'Slides', short: 'S', slides: [slide] }],
+        arrangements: [{ id: newId(), name: 'Default', sectionIds: [sid] }],
+        source: { kind: 'pptx', fileId: plan },
+        archived: false,
+      },
+      { create: true, by: 'pptx-import' },
+    );
+  }
+
+  const tablesOf = (s: Slide) => s.objects.filter((o) => o.type === 'shape' && (o as ShapeObject).table);
+
+  for (const [label, note, req] of [
+    // r2b's interim rule (tables-conv's TABLE_PAGE_NOTE; no released build carries it), by a whole re-import.
+    ['the interim rule', 'its tables as shapes would be over 64 KB: LibreOffice draws its page', 'all'],
+    // main's 64 KB rule (62a1c3a: the M6 group stored plain or minimal kept LibreOffice's page), by Reset slide.
+    ["main's 64 KB rule", 'over 64 KB: LibreOffice draws its page', 'reset'],
+  ] as const)
+    it(`turns a page kept by ${label} into the table object (${req === 'all' ? 're-import' : 'Reset slide'})`, async () => {
+      const before = await storedAsPage(note);
+      const [page] = slidesOf(before);
+      const job = await reimport(before.id, req === 'all' ? {} : { slideIds: [page!.id], reset: [page!.id] });
+      expect(job.result).toMatchObject({ regenerated: 1, keptEdited: 0, rev: before.rev + 1 });
+      const [one] = slidesOf(hub.lib.presentations.must(before.id));
+      expect(one!.id).toBe(page!.id);
+      expect(one!.pptx).toMatchObject({ fileId: plan, index: 0, class: 'native' });
+      expect(one!.imported).toBeUndefined();
+      expect(one!.pptx!.notes ?? []).not.toContain(note);
+      expect((one!.pptx!.notes ?? []).some((n) => /LibreOffice draws its page/.test(n))).toBe(false);
+      const tables = tablesOf(one!);
+      expect(tables).toHaveLength(1);
+      expect((tables[0] as ShapeObject).table!.cells).toHaveLength(140);
+      expect(one!.notes).toBe('Read one psalm a day.');
+      expect(unedited(one!)).toBe(true);
+    }, 180_000);
+});
+
+describe("'Make editable' on LibreOffice's page a native import stored (version 2): the table, else its text boxes", () => {
+  /** The reading plan of 28 rows (`denseTableDeck`): the table object fits 64 KB, its M6 group did not. */
+  let plan: string;
+  /**
+   * Eight boxes of 400 differently coloured runs: over 64 KB with their formatting, so a hub with LibreOffice
+   * keeps LibreOffice's page for it (pptx-native.test.ts): a page that is no table.
+   */
+  let big: string;
+  beforeAll(async () => {
+    plan = await storeDeck(hub, await zipDeck(denseTableDeck(28), dir, 'plan-me.pptx'));
+    const runs = Array.from({ length: 400 }, (_, i) =>
+      run(`w${i} `, '', solid(i % 2 ? 'FF0000' : '00FF00')),
+    ).join('');
+    const shapes = Array.from({ length: 8 }, (_, i) =>
+      sp({ id: 2 + i, x: EMU, y: i * 0.6 * EMU, cx: 6 * EMU, cy: EMU / 2, txBody: body(para(runs)) }),
+    ).join('');
+    big = await storeDeck(hub, await zipDeck(buildDeck({ slides: [{ shapes }] }), dir, 'big-me.pptx'));
+  }, 60_000);
+
+  const PAGE_TEXT = {
+    text: 'Day 1: Psalm 1',
+    box: { x: 120, y: 90, w: 600, h: 60, rotation: 0 },
+    fontSizePx: 40,
+  };
+
+  /**
+   * A presentation whose one slide is LibreOffice's page of `deck`'s first slide as a hub with LibreOffice
+   * stored it (version 2: no objects, the page and its extracted text in `imported`), with `note`.
+   */
+  async function storedPage(deck: string, note: string, title: string): Promise<Presentation> {
+    const sid = newId();
+    const slide = Slide.parse({
+      id: newId(),
+      objects: [],
+      notes: 'Read one psalm a day.',
+      imported: {
+        fileId: deck,
+        page: 1,
+        imageMediaId: await pagePicture(1),
+        textBoxes: [PAGE_TEXT],
+        textAligned: true,
+      },
+      pptx: {
+        fileId: deck,
+        index: 0,
+        shown: 0,
+        class: 'picture',
+        version: CONVERTER_VERSION,
+        digest: importDigest([]),
+        notes: [note],
+      },
+    });
+    return hub.lib.savePresentation(
+      {
+        id: newId(),
+        rev: 1,
+        title,
+        kind: 'slides',
+        meta: { tags: [] },
+        sections: [{ id: sid, label: 'Slides', short: 'S', slides: [slide] }],
+        arrangements: [{ id: newId(), name: 'Default', sectionIds: [sid] }],
+        source: { kind: 'pptx', fileId: deck },
+        archived: false,
+      },
+      { create: true, by: 'pptx-import' },
+    );
+  }
+
+  /** 'Make editable' as the operator asks for it: 202 and the re-import job, followed to its end. */
+  async function makeEditable(p: Presentation): Promise<Job> {
+    const [page] = slidesOf(p);
+    const res = await ed.fetch(`/presentations/${p.id}/slides/${page!.id}/make-editable`, { method: 'POST' });
+    expect(res.status, 'the route answers 202 and the job').toBe(202);
+    const queued = (await res.json()) as Job;
+    expect(queued.kind).toBe('pptx-reimport');
+    const job = await waitJob(hub, queued.id, 120_000);
+    expect(job.state, `${job.error}\n${job.log.join('\n')}`).toBe('done');
+    return job;
+  }
+
+  const tablesOf = (s: Slide) => s.objects.filter((o) => o.type === 'shape' && (o as ShapeObject).table);
+
+  for (const [label, note] of [
+    // main's 64 KB rule (62a1c3a: the M6 group stored plain or minimal kept LibreOffice's page): the pages
+    // churches' libraries hold.
+    ["main's 64 KB rule", 'over 64 KB: LibreOffice draws its page'],
+    // r2b's interim rule (tables-conv's TABLE_PAGE_NOTE; no released build carries it).
+    ['the interim rule', 'its tables as shapes would be over 64 KB: LibreOffice draws its page'],
+  ] as const)
+    it(`rebuilds a table page kept by ${label} as the table object`, async () => {
+      const before = await storedPage(plan, note, 'Reading plan');
+      const [page] = slidesOf(before);
+      const job = await makeEditable(before);
+      // A page made editable, as a legacy page is (the editor's message reads `replaced`).
+      expect(job.result).toMatchObject({ replaced: 1, regenerated: 0, keptEdited: 0, rev: before.rev + 1 });
+      const [one] = slidesOf(hub.lib.presentations.must(before.id));
+      expect(one!.id).toBe(page!.id);
+      expect(one!.pptx).toMatchObject({ fileId: plan, index: 0, class: 'native' });
+      expect(one!.imported).toBeUndefined();
+      const tables = tablesOf(one!);
+      expect(tables).toHaveLength(1);
+      expect((tables[0] as ShapeObject).table!.cells).toHaveLength(140);
+      // No text box over a page: the page is gone with its picture.
+      expect(one!.objects.some((o) => o.type === 'image' && o.origin?.role === 'bg')).toBe(false);
+      expect(one!.notes).toBe('Read one psalm a day.');
+      expect(unedited(one!)).toBe(true);
+    }, 180_000);
+
+  it("lays a page's text boxes over it, as before, when its deck slide is LibreOffice's page again (no table)", async () => {
+    const before = await storedPage(big, 'over 64 KB: LibreOffice draws its page', 'Announcements');
+    const [page] = slidesOf(before);
+    const job = await makeEditable(before);
+    // Not rebuilt (still a page past 64 KB), made editable the way 'Make editable' did before: one revision.
+    expect(job.result).toMatchObject({ replaced: 0, regenerated: 0, keptEdited: 0, rev: before.rev + 1 });
+    expect(job.log.join('\n')).toMatch(/LibreOffice's page again/);
+    const [one] = slidesOf(hub.lib.presentations.must(before.id));
+    expect(one!.id).toBe(page!.id);
+    expect(one!.imported).toBeUndefined();
+    expect(one!.pptx).toMatchObject({ fileId: big, index: 0, class: 'picture' });
+    // The page picture at the bottom, its text over it: the import's (Show PowerPoint picture leaves them out).
+    expect(one!.objects.map((o) => [o.type, o.origin?.role])).toEqual([
+      ['image', 'bg'],
+      ['text', 'text'],
+    ]);
+    expect((one!.objects[0] as ImageObject).mediaId).toBe(page!.imported!.imageMediaId);
+    const t = one!.objects[1] as TextObject;
+    expect(t).toMatchObject({ text: PAGE_TEXT.text, box: PAGE_TEXT.box });
+    expect(t.style.fontSizePx).toBe(PAGE_TEXT.fontSizePx);
+    expect(one!.notes).toBe('Read one psalm a day.');
+    // Nothing is waiting for LibreOffice: the page it drew is kept.
+    expect(one!.pptx!.pending).toBeUndefined();
+  }, 180_000);
+});
+
+describe("a table with East Asian vertical cells an older import stored as LibreOffice's art (sub-wave 1c: rule V)", () => {
+  /**
+   * The Korean bulletin's slide 2 in small: a narrow first column whose '1년차' and '２년차' cells are eaVert,
+   * centred over four rows each, beside the years, under a table-level outer shadow. Until sub-wave 1c every
+   * table with a vertical cell was LibreOffice's art (hybrid): LibreOffice 24.2 draws eaVert cells as horizontal
+   * ones (probe deck A), so the converter now writes the table object for it, on every kind of hub.
+   */
+  let deck: string;
+  beforeAll(async () => {
+    const ea = (t: string) => tc(t, { tcPr: ' vert="eaVert" anchor="ctr"', attrs: 'rowSpan="4"' });
+    const merged = () => tc('', { attrs: 'vMerge="1"' });
+    const rows = [
+      { h: EMU / 3, cells: [ea('1년차'), tc('2019'), tc('3일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2020'), tc('4일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2021'), tc('4일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2022'), tc('4일간')] },
+      { h: EMU / 3, cells: [ea('２년차'), tc('2023'), tc('3일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2024'), tc('4일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2025'), tc('4일간')] },
+      { h: EMU / 3, cells: [merged(), tc('2026'), tc('4일간')] },
+    ];
+    const shadow =
+      '<a:tblPr firstRow="1" bandRow="1"><a:effectLst><a:outerShdw blurRad="50800" dist="38100" dir="16200000" rotWithShape="0"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst></a:tblPr>';
+    const shapes = tableFrame({
+      id: 5,
+      x: EMU / 4,
+      y: EMU / 2,
+      cols: [EMU / 2, EMU, 2 * EMU],
+      rows,
+      tblPr: shadow,
+    });
+    deck = await storeDeck(hub, await zipDeck(buildDeck({ slides: [{ shapes }] }), dir, 'years.pptx'));
+  }, 60_000);
+
+  /**
+   * A presentation as a 1b-era hub with LibreOffice stored the deck: its one slide hybrid, the table LibreOffice's
+   * art (a locked picture, `origin.role` 'art'), the converter's note, unedited (its digest over its objects).
+   */
+  async function storedHybrid(): Promise<Presentation> {
+    const sid = newId();
+    const art = image(newId(), await pagePicture(1), {
+      box: { x: 30, y: 70, w: 560, h: 380, rotation: 0 },
+      fit: 'stretch',
+      locked: true,
+      origin: { src: 'pptx', role: 'art' },
+    });
+    const slide = Slide.parse({
+      id: newId(),
+      objects: [art],
+      notes: 'Two years, year by year.',
+      pptx: {
+        fileId: deck,
+        index: 0,
+        shown: 0,
+        class: 'hybrid',
+        version: CONVERTER_VERSION,
+        digest: '',
+        notes: ['a table with vertical cell text is drawn by LibreOffice (M8)'],
+      },
+    });
+    // Unedited: the digest over the objects as stored (after the schema's parse), as the import writes it.
+    slide.pptx!.digest = importDigest(slide.objects);
+    return hub.lib.savePresentation(
+      {
+        id: newId(),
+        rev: 1,
+        title: 'Years',
+        kind: 'slides',
+        meta: { tags: [] },
+        sections: [{ id: sid, label: 'Slides', short: 'S', slides: [slide] }],
+        arrangements: [{ id: newId(), name: 'Default', sectionIds: [sid] }],
+        source: { kind: 'pptx', fileId: deck },
+        archived: false,
+      },
+      { create: true, by: 'pptx-import' },
+    );
+  }
+
+  for (const req of ['all', 'reset'] as const)
+    it(`${req === 'all' ? 'a re-import' : 'Reset slide'} gives the table object, its vertical cells kept, no art and no stored shadow`, async () => {
+      const before = await storedHybrid();
+      const [hybrid] = slidesOf(before);
+      expect(unedited(hybrid!)).toBe(true);
+      const job = await reimport(
+        before.id,
+        req === 'all' ? {} : { slideIds: [hybrid!.id], reset: [hybrid!.id] },
+      );
+      expect(job.result).toMatchObject({ regenerated: 1, keptEdited: 0, rev: before.rev + 1 });
+      const [one] = slidesOf(hub.lib.presentations.must(before.id));
+      expect(one!.id).toBe(hybrid!.id);
+      expect(one!.notes).toBe('Two years, year by year.');
+      expect(one!.pptx).toMatchObject({ fileId: deck, index: 0, class: 'native' });
+      // Nothing waits for LibreOffice, and its art is gone with the class.
+      expect(one!.pptx!.pending).toBeUndefined();
+      expect(one!.objects.some((o) => o.origin?.role === 'art')).toBe(false);
+      expect(one!.pptx!.notes ?? []).not.toContain(
+        'a table with vertical cell text is drawn by LibreOffice (M8)',
+      );
+      expect(one!.pptx!.notes ?? []).toContain("a table's shadow is not drawn");
+      const tables = one!.objects.filter(
+        (o): o is ShapeObject => o.type === 'shape' && o.table !== undefined,
+      );
+      expect(tables).toHaveLength(1);
+      const t = tables[0]!.table!;
+      expect(tables[0]!.shadow).toBeUndefined();
+      // The two vertical cells, each over four rows, keep the deck's eaVert; the others have none.
+      const vertical = t.cells.flatMap((c, i) => {
+        const v = c.style === undefined ? undefined : t.styles?.[c.style]?.vert;
+        return v ? [[i, c.text, c.rowSpan, v]] : [];
+      });
+      expect(vertical).toEqual([
+        [0, '1년차', 4, 'eaVert'],
+        [9, '２년차', 4, 'eaVert'],
+      ]);
+      expect(unedited(one!)).toBe(true);
+    }, 180_000);
 });

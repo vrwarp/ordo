@@ -1,8 +1,8 @@
-import type { DecorData, DecorPart, Rgba, ShapeObject, Slide } from '@ordo/domain';
+import type { Rgba, ShapeObject, Slide } from '@ordo/domain';
 // Registers the decoration drawer with the shape dispatch.
 import '../../src/decor/index.ts';
 import { putDecorFile } from '../../src/decor/files.ts';
-import { decorOf, showcaseSlide } from '../../src/decor/test-util.ts';
+import { cappedSlide, decorOf, showcaseSlide } from '../../src/decor/test-util.ts';
 import type { BenchCase } from './index.ts';
 
 /*
@@ -25,68 +25,15 @@ import type { BenchCase } from './index.ts';
  *   one by one + 10 % (a pair; the shapes are reported, not checked against the task). With the cache of
  *   77fcdad (one fixed 64 MiB LRU) it took p50 214 ms at 3840 against its shapes' 32 ms: every draw evicted
  *   the sprites the rest of the draw needed, then made them again (measured, r2a repair).
+ * - That slide and the decoration at its caps drawn in turn (`BenchRun` `alternate`, 20 rounds from a cold start:
+ *   two looks showing a slide and the next one): their decorations' sprites passed the decorations' share
+ *   together and pushed each other out on a schedule, the draw after each push making them again (r2a land
+ *   review, 3840: worst 93.5 ms, the capped one's mean 27.5 ms over rounds 3-20). Reported per slide, worst and
+ *   mean over rounds 3-20 ('(alternation').
+ * - That slide's second draw (`BenchRun` `second`): its first draw marks its decorations, its second makes their
+ *   sprites (r2a land re-review: 58-73 ms at 3840 on the wake template's slide 12 it is built like, against
+ *   25-29 ms drawn without them). Reported ('(second draw').
  */
-
-/** A ring of `n` points about (cx, cy) as a path string. */
-function ring(cx: number, cy: number, r: number, n: number): string {
-  const p: string[] = [];
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2;
-    const k = i % 2 ? 0.55 : 1;
-    p.push(
-      `${i ? 'L' : 'M'} ${(cx + r * k * Math.cos(a)).toFixed(2)} ${(cy + r * k * Math.sin(a)).toFixed(2)}`,
-    );
-  }
-  return `${p.join(' ')} Z`;
-}
-
-/**
- * 256 stars of 64 points over the slide (16,384 points), the first 24 shadowed: a traced ornament layer as the
- * Slidesmania templates hold them (one-colour pieces, some outlined).
- */
-function capped(): Slide {
-  const parts: DecorPart[] = [];
-  for (let i = 0; i < 256; i++) {
-    const col = i % 16;
-    const row = Math.floor(i / 16);
-    parts.push({
-      d: ring(60 + col * 120, 34 + row * 67, 22 + (i % 5) * 3, 63),
-      p: i < 24 ? 4 + (i % 2) : i % 4,
-      s: 1,
-    });
-  }
-  const shadow = { dx: 3, dy: 4, blur: 6, color: { r: 0, g: 0, b: 0, a: 0.5 } };
-  const decor: DecorData = {
-    w: 1920,
-    h: 1080,
-    paints: [
-      { fill: { r: 240, g: 190, b: 40, a: 1 } },
-      {
-        fill: { r: 30, g: 150, b: 140, a: 0.8 },
-        stroke: { width: 1, color: { r: 255, g: 255, b: 255, a: 1 } },
-      },
-      { fill: { r: 210, g: 60, b: 50, a: 1 } },
-      {
-        fill: { r: 255, g: 255, b: 255, a: 0.85 },
-        stroke: { width: 0.75, color: { r: 20, g: 40, b: 90, a: 1 } },
-      },
-      { fill: { r: 255, g: 255, b: 255, a: 1 }, shadow },
-      { fill: { r: 20, g: 40, b: 90, a: 1 }, shadow },
-    ],
-    parts,
-  };
-  const o: ShapeObject = {
-    id: 'decor',
-    type: 'shape',
-    box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
-    shape: 'line',
-    opacity: 1,
-    radius: 0,
-    decor,
-    locked: true,
-  };
-  return { id: 'decor-capped', objects: [o] };
-}
 
 const rgba = (r: number, g: number, b: number, a = 1): Rgba => ({ r, g, b, a });
 const PRESETS = ['star5', 'roundRect', 'ellipse', 'heart', 'cloud', 'moon'];
@@ -163,8 +110,18 @@ function fourLarge(as: 'decor' | 'shapes'): Slide {
 }
 
 export const DECOR_BENCH_CASES: readonly BenchCase[] = [
-  ['a decoration at its caps: 16,384 points, 24 shadows in one task, cold (M9 decor-render)', capped()],
-  ['a decoration at its caps: 16,384 points, 24 shadows, warm (M9 decor-render)', capped()],
+  [
+    'four large decorations and one at its caps drawn in turn, 20 rounds (alternation, r2a land review)',
+    fourLarge('decor'),
+    { alternate: cappedSlide(), rounds: 20 },
+  ],
+  [
+    'four large decorations among 124 shadowed shapes, the draw that makes their sprites (second draw, r2a land re-review)',
+    fourLarge('decor'),
+    { second: true, rounds: 12 },
+  ],
+  ['a decoration at its caps: 16,384 points, 24 shadows in one task, cold (M9 decor-render)', cappedSlide()],
+  ['a decoration at its caps: 16,384 points, 24 shadows, warm (M9 decor-render)', cappedSlide()],
   [
     '60 shapes with 12 shadows as one decoration (decoration vs shapes: showcase, M9 decor-render)',
     showcaseSlide('decor'),

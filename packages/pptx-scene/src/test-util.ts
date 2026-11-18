@@ -721,8 +721,11 @@ export function tableFrame(o: {
   );
 }
 
-/** Add `ppt/tableStyles.xml` (`a:tblStyleLst` holding `styles`) with the presentation's relationship to it. */
-export function withTableStyles(parts: PartSource, styles: string): PartSource {
+/**
+ * Add `ppt/tableStyles.xml` (`a:tblStyleLst` holding `styles`, its default style `def` when given) with the
+ * presentation's relationship to it.
+ */
+export function withTableStyles(parts: PartSource, styles: string, def?: string): PartSource {
   const relsName = 'ppt/_rels/presentation.xml.rels';
   parts.set(
     relsName,
@@ -736,9 +739,38 @@ export function withTableStyles(parts: PartSource, styles: string): PartSource {
   return withPart(
     parts,
     'ppt/tableStyles.xml',
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<a:tblStyleLst xmlns:a="${NS_A}" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}">${styles}</a:tblStyleLst>`,
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<a:tblStyleLst xmlns:a="${NS_A}"${def ? ` def="${def}"` : ''}>${styles}</a:tblStyleLst>`,
     'application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml',
   );
+}
+
+/** The table style of `denseTableDeck`: white inner rules over a light fill, a dark header band. */
+export const BANDED_TABLE_STYLE_ID = '{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}';
+const BANDED_TABLE_STYLE = `<a:tblStyle styleId="${BANDED_TABLE_STYLE_ID}" styleName="Banded"><a:wholeTbl><a:tcTxStyle><a:fontRef idx="minor"/><a:schemeClr val="dk1"/></a:tcTxStyle><a:tcStyle><a:tcBdr><a:insideH><a:ln w="12700"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></a:insideH></a:tcBdr><a:fill><a:solidFill><a:srgbClr val="DDEEFF"/></a:solidFill></a:fill></a:tcStyle></a:wholeTbl><a:firstRow><a:tcTxStyle b="on"><a:schemeClr val="lt1"/></a:tcTxStyle><a:tcStyle><a:fill><a:solidFill><a:srgbClr val="224488"/></a:solidFill></a:fill></a:tcStyle></a:firstRow></a:tblStyle>`;
+
+/**
+ * M9 (`tables-conv`): a one-slide deck of a dense table, `rows` × 5 cells of a reading plan (a few words in
+ * 10 pt each, a header band, every inner rule drawn), as E's dense table slides are: within 64 KB as the
+ * table object up to about 230 rows, past it as its M6 group (what the kill switch, `m9Writes` without
+ * 'table', writes) from 20 rows; past M6's cell cap (150) from 31.
+ */
+export function denseTableDeck(rows: number): PartSource {
+  const IN = 914_400;
+  const body = Array.from({ length: rows }, (_, r) => ({
+    h: IN / 6,
+    cells: Array.from({ length: 5 }, (_, c) =>
+      tc(`Day ${r + 1}: Psalm ${r * 5 + c + 1}, verses ${c + 1}-${c + 9}`, { rPr: 'sz="1000"' }),
+    ),
+  }));
+  const frame = tableFrame({
+    id: 7,
+    x: IN / 2,
+    y: IN / 4,
+    cols: [1.8 * IN, 1.8 * IN, 1.8 * IN, 1.8 * IN, 1.8 * IN],
+    rows: body,
+    tblPr: `<a:tblPr firstRow="1" bandRow="1"><a:tableStyleId>${BANDED_TABLE_STYLE_ID}</a:tableStyleId></a:tblPr>`,
+  });
+  return withTableStyles(buildDeck({ slides: [{ shapes: frame }] }), BANDED_TABLE_STYLE);
 }
 
 /** Pair kerning for `sfntFont` (R1): `[left, right, x advance in font units]` per pair. */

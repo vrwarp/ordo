@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { breakOpportunities, graphemeBoundaries, isBreakSpace, isGlue } from './breaks.ts';
+import { breakOpportunities, graphemeBoundaries, isBreakSpace, isGlue, officeBreaks } from './breaks.ts';
 
-/** `text` cut at its break opportunities (the whole text is one paragraph). */
-function lines(text: string, lang = ''): string[] {
+/** `text` cut at its break opportunities (the whole text is one paragraph); `office`: the office rules. */
+function lines(text: string, lang = '', office = false): string[] {
   const out: string[] = [];
   let at = 0;
-  for (const b of breakOpportunities(text, 0, text.length, lang)) {
+  for (const b of breakOpportunities(text, 0, text.length, lang, office)) {
     out.push(text.slice(at, b));
     at = b;
   }
@@ -31,6 +31,19 @@ describe('UAX#14 break opportunities', () => {
     expect(lines('well-known fact')).toEqual(['well-', 'known ', 'fact']);
     expect(lines('John 3:16-17 says')).toEqual(['John ', '3:16-17 ', 'says']);
     expect(lines('a\tb')).toEqual(['a\t', 'b']);
+  });
+
+  it('keeps UAX#14 for ordo text: no office rule unless asked', () => {
+    // Songs, scripture and slides made in ordo break as before (owner question T1's default).
+    expect(lines('Isa. 2:6-10, 24:21-22')).toEqual(['Isa. ', '2:6-10, ', '24:21-22']);
+    expect(lines('“every month” [offerings]')).toEqual(['“every ', 'month” [offerings]']);
+    expect(lines('and/or https://books.google.as/books')).toEqual([
+      'and/',
+      'or ',
+      'https://',
+      'books.google.as/',
+      'books',
+    ]);
   });
 
   it('lists offsets inside [start, end) of the whole text, not the paragraph end', () => {
@@ -161,5 +174,136 @@ describe('without Intl.Segmenter', () => {
       Object.defineProperty(Intl, 'Segmenter', saved);
       vi.resetModules();
     }
+  });
+});
+
+/** `text` cut at the office break opportunities (imported PowerPoint text, table cells, the converter's measure). */
+const office = (text: string) => lines(text, '', true);
+
+describe('office break opportunities (LibreOffice 24.2, the text-lines probe deck)', () => {
+  it('breaks after a hyphen-minus before a digit (1000 Years: Isa. 2:6-10, 24:21- / 22)', () => {
+    expect(office('Isa. 2:6-10, 24:21-22')).toEqual(['Isa. ', '2:6-', '10, ', '24:21-', '22']);
+    expect(office('John 3:16-17 says')).toEqual(['John ', '3:16-', '17 ', 'says']);
+    // Whatever is before the hyphen: a letter, a space (a minus), a bracket.
+    expect(office('Psalm A-1')).toEqual(['Psalm ', 'A-', '1']);
+    expect(office('x -5 (-6)')).toEqual(['x ', '-', '5 ', '(-', '6)']);
+    // Not after a hyphen that starts the paragraph, not after U+2212 MINUS SIGN, not before a letter
+    // beyond UAX#14's own break ('well-known').
+    expect(office('-5 x')).toEqual(['-5 ', 'x']);
+    expect(office('x \u22125')).toEqual(['x ', '\u22125']);
+    expect(office('well-known')).toEqual(['well-', 'known']);
+  });
+
+  it('breaks after the spaces between any quotation mark and an opening bracket (Colossians, Matthew)', () => {
+    expect(office('“every month” [offerings]')).toEqual(['“every ', 'month” ', '[offerings]']);
+    expect(office('this rock?” (Num. 20:10)')).toEqual(['this ', 'rock?” ', '(Num. ', '20:10)']);
+    expect(office('earth” [“made new”')).toEqual(['earth” ', '[“made ', 'new”']);
+    expect(office('"so"  (see')).toEqual(['"so"  ', '(see']);
+    expect(office("'so' (see")).toEqual(["'so' ", '(see']);
+    // An initial quote too: LibreOffice breaks 'he said “ (aside)' and 'x“ (y)'.
+    expect(office('said “ (aside)')).toEqual(['said ', '“ ', '(aside)']);
+    expect(office('x“ (y)')).toEqual(['x“ ', '(y)']);
+    // Never without a space, never at a no-break space, never inside the brackets.
+    expect(office('word”(Gen.')).toEqual(['word”(Gen.']);
+    expect(office('so”\u00A0(see')).toEqual(['so”\u00A0(see']);
+    expect(office('[“made”]')).toEqual(['[“made”]']);
+  });
+
+  it('glues a slash to its word when whitespace comes at most 64 units before it (Matthew: books.google stays whole)', () => {
+    expect(office('see https://books.google.as/books?id=wRY&pg=RA19-PA24')).toEqual([
+      'see ',
+      'https://books.google.as/books?',
+      'id=wRY&pg=RA19-',
+      'PA24',
+    ]);
+    // 'and/or' starts its paragraph: no whitespace before its slash, so the break after it stays (LibreOffice
+    // breaks 'www.x.com/|books' at a paragraph start, 18/18: text-lines' probe, round 2); 'AND/OR' after a
+    // space is glued.
+    expect(office('and/or 1/2 a/ b AND/OR')).toEqual(['and/', 'or ', '1/2 ', 'a/ ', 'b ', 'AND/OR']);
+    expect(office('this and/or that')).toEqual(['this ', 'and/or ', 'that']);
+  });
+
+  it("keeps the break after a slash with no whitespace in the 64 units before it (LibreOffice's i#17155 rule)", () => {
+    // LibreOffice 24.2 (i18npool BreakIterator_Unicode::getLineBreak): a break after a '/' moves back to just
+    // after the nearest whitespace at most 66 units before the break (64 before the slash); with none there,
+    // in an address that starts its paragraph or a path longer than that, the break after the slash stays.
+    // Probe C (text-falls; 18 pt Carlito in a 150 pt box): each of these pieces on a line of its own, the
+    // address of 03-Plural en-ar p4; and a letter before '%' breaks, in every case of the probe.
+    const url = 'https://archive.org/details/copticlanguage/Coptic%20Language/mode/2up';
+    expect(office(url)).toEqual([
+      'https://',
+      'archive.org/',
+      'details/',
+      'copticlanguage/',
+      'Coptic',
+      '%20Language/',
+      'mode/2up',
+    ]);
+    // After words in its paragraph, every slash within 64 units of the space is glued (probe C: such an
+    // address is cut by width, or at its '%').
+    expect(office(`See the book at ${url} today`)).toEqual([
+      'See ',
+      'the ',
+      'book ',
+      'at ',
+      'https://archive.org/details/copticlanguage/Coptic',
+      '%20Language/mode/2up ',
+      'today',
+    ]);
+    // After an a:br (the converter's '\n', a line break inside the paragraph, which LibreOffice does not take
+    // for whitespace): the slash after 'Language' is 68 units after the space of 'Lead words.' and breaks
+    // (probe C, 150 pt: '%20Language/' / 'mode/2up').
+    expect(office(`Lead words.\n${url}`)).toEqual([
+      'Lead ',
+      'words.\n',
+      'https://archive.org/details/copticlanguage/Coptic',
+      '%20Language/',
+      'mode/2up',
+    ]);
+    // The limit: whitespace 64 units before the slash glues it, 65 does not.
+    const path = (n: number) => `a ${'x'.repeat(n)}/y`;
+    expect(office(path(64))).toEqual(['a ', `${'x'.repeat(64)}/y`]);
+    expect(office(path(65))).toEqual(['a ', `${'x'.repeat(65)}/`, 'y']);
+    // A letter before '%' only; a number keeps its '%' (UAX#14), and ordo's own text keeps UAX#14 (T1).
+    expect(office('Coptic%20 20% x')).toEqual(['Coptic', '%20 ', '20% ', 'x']);
+    expect(lines('Coptic%20 a/b')).toEqual(['Coptic%20 ', 'a/', 'b']);
+  });
+
+  it('takes the spaces between a quotation mark and a bracket to be exactly the breaking spaces', () => {
+    // The office rule's space class is `isBreakSpace`'s, for every UTF-16 unit but the surrogates.
+    const wrong: string[] = [];
+    let spaces = 0;
+    for (let c = 0; c <= 0xffff; c++) {
+      if (c >= 0xd800 && c <= 0xdfff) continue;
+      const got = officeBreaks(`x”${String.fromCharCode(c)}(y`);
+      if (got.length !== (isBreakSpace(c) ? 1 : 0) || (got.length && got[0] !== 3))
+        wrong.push(c.toString(16));
+      if (got.length) spaces++;
+    }
+    expect(wrong).toEqual([]);
+    expect(spaces).toBe(15); // tab, space, U+1680, U+2000-U+2006, U+2008-U+200A, U+205F, U+3000
+    expect(officeBreaks('x” \t\u3000(y')).toEqual([5]);
+    // Never a hyphen that starts the paragraph; a quote that does is a quote.
+    expect(officeBreaks('-5 x-5')).toEqual([5]);
+    expect(officeBreaks('” (y')).toEqual([2]);
+  });
+
+  it('reads the units before a slash across surrogate pairs, and glues every break after a slash', () => {
+    expect(lines('a/\u{1D400}b')).toEqual(['a/', '\u{1D400}b']);
+    // The first slash starts its paragraph (no whitespace before it): its break stays; the second is glued
+    // by the space before 'c', whatever follows it (LibreOffice reads only the character before the break).
+    expect(office('a/\u{1D400}b c/\u{1F600}')).toEqual(['a/', '\u{1D400}b ', 'c/\u{1F600}']);
+    expect(office('\u{1D400}/\u{1D400}')).toEqual(['\u{1D400}/', '\u{1D400}']);
+    expect(office('x \u{1D400}/\u{1D400}')).toEqual(['x ', '\u{1D400}/\u{1D400}']);
+  });
+
+  it('lists offsets of the whole text and merges with the SA breaks', () => {
+    const text = 'one\nIsa. 24:21-22';
+    expect(breakOpportunities(text, 4, text.length, '', true)).toEqual([9, 15]);
+    expect(breakOpportunities(text, 4, text.length, '', false)).toEqual([9]);
+    const th = 'ข้อ 3:16-17 สวัสดีครับ';
+    const plain = breakOpportunities(th, 0, th.length, 'th');
+    const withOffice = breakOpportunities(th, 0, th.length, 'th', true);
+    expect(withOffice).toEqual([...new Set([...plain, th.indexOf('17')])].sort((a, b) => a - b));
   });
 });

@@ -102,7 +102,10 @@ Public surface (`index.ts`, re-exported by `@ordo/renderer`): `Measurer`, `Seg`,
 
 `Measurer.width(font, dir, lang, spacingPx, text)` is the advance of `text` drawn in that state **without**
 the letter spacing after its last character. A piece followed by another on the same line therefore
-advances by `w + letterSpacing` (lines.ts `Measured.a`).
+advances by `w + letterSpacing` (lines.ts `Measured.a`); a piece cut at a break only the office rules make
+(`Piece.officeBreak`, '3:16-' / '17') adds the pair kerning across the cut (`kernAfter`: the joined
+string's width less both pieces'), so on one line the next piece follows where the whole string draws it,
+and a line that ends there keeps the piece's own width.
 
 `FontEnv.font(req)` returns the CSS font string for `ctx.font` at `req.sizePx` (logical). `generation`
 changes whenever the face set changes; layouts memoised under another generation are recomputed.
@@ -148,6 +151,22 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
   boundaries, never before a mark, ๆ or ฯ; CJK by UAX#14's classes.
   `isBreakSpace` (the trailing whitespace that hangs) is space, tab and the breaking space separators
   (U+1680, U+2000-U+200A except U+2007, U+205F, U+3000).
+  With `office` (the fifth argument: an office-model box, `Itemized.office`, and the converter's table measure
+  always), LibreOffice 24.2's breaks where UAX#14 differs, as the text-lines probe deck measured them: after a
+  hyphen-minus before an ASCII digit ('John 3:16-' / '17', whatever precedes the hyphen; not U+2212), after the
+  breaking spaces between any quotation mark and an opening bracket ('“every month” ' / '[offerings]', an
+  initial quote too), and after a letter before '%' (text-falls probe C). A break after a slash follows
+  LibreOffice's i#17155 rule (its 24.2 source, probe C): it is dropped when whitespace comes at most 64 units
+  before the slash in the PowerPoint paragraph (the seventh argument, `hardStart`, is where that paragraph
+  starts; an a:br's '\n' is not whitespace there), so a web address in a citation stays whole, and kept in an
+  address or path that starts its paragraph or runs longer; the eighth argument, `glued`, receives each
+  dropped break with where LibreOffice moves it (just after the whitespace): lines.ts ends a line there when
+  such a break is the line's last before its width, or cuts the line at its width when that is at or before
+  the line's start (`slashBreak`, which reads only the glued breaks inside the word that does not fit:
+  `PreparedPara.glued` keeps them ascending, so a line end costs the few a word holds, not the paragraph's; a
+  scan of them all made long text quadratic, review 1b). Ordo's own text (no `lineModel`, or 'ordo') keeps UAX#14 (owner question
+  T1's default). Not modelled: LibreOffice breaks after a slash before a digit, and never ends a line after a
+  slash exactly at its width.
 - `graphemeBoundaries(text, start, end)`: clusters, i.e. `Intl.Segmenter` graphemes joined across a
   conjunct-forming virama. Graphemes alone split Tamil 'க்ஷி' (UAX#29 GB9c covers six Indic scripts only);
   Tamil's pulli joins only in க்ஷ and ஸ்ர, Sinhala's al-lakuna only before a ZWJ. Without `Intl.Segmenter`:
@@ -162,7 +181,8 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
   style runs, levels, break opportunities, and between two fallback scripts (Han and kana count as one);
   `Piece.script` is the first fallback script in the piece, as `textScripts` names it (`scriptOf` reads the
   domain's `FALLBACK_SCRIPTS`). A style cut inside a
-  cluster moves to the cluster's end; `PreparedPara.movedCuts` counts them.
+  cluster moves to the cluster's end; `PreparedPara.movedCuts` counts them. A piece that ends at a break
+  only the office rules make (`breakOpportunities`' `officeOnly`) is marked `Piece.officeBreak`.
 - `segText(text, start, end, caps)`: U+200D on a side where the cut splits two joining letters (Arabic,
   Syriac, N'Ko, Mongolian, Adlam, by ArabicShaping joining types: none after alef, dal or waw). It applies at
   any cut, an emergency break included, so a measured and a drawn string always agree.
@@ -204,7 +224,14 @@ Decisions the other items rely on:
   single. The converter writes a paragraph's spacing whenever it differs from the box's `lineHeight`.
 - **F is per line**: the paragraph's main run (§6 step 7), raised by a larger unshifted run on the same
   line, as LibreOffice sizes each line by its own portions (and page.ts's CSS strut did); never by a raised
-  or lowered run. An empty line takes the larger of F and its end mark.
+  or lowered run. In the office model a line with text is as tall as its own largest unshifted run, smaller
+  than F too (a citation in a smaller size that wraps onto lines of its own makes short lines, as LibreOffice's
+  editeng sizes them; text-lines; LibreOffice 24.2 does so in plain boxes, table cells and shrinking boxes
+  alike, text-falls probe B); a line of shifted runs only keeps F. The 'ordo' model keeps F as every line's
+  floor, and so does an office box that shrinks its text (autofit 'shrink'): its search is not
+  LibreOffice's yet (LibreOffice's spacing scale applies to single spacing, some boxes take the face's own
+  metrics), and own-run lines there moved eight shrinking slides below the owner's current point (8e8a294).
+  An empty line takes the larger of F and its end mark.
 - **Soft paragraphs continue the paragraph before them**: its alignment, indents, spacing, line spacing,
   main size and direction; no bullet, no space between them. The converter may write `{ soft: true }` only;
   the editor's paragraph strip edits the paragraph a soft one continues. `prepare` (A) gives a soft
@@ -262,6 +289,13 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   blur are multiplied by `scale`: `scale` is the whole device density, never folded into the context.
 - Cache: `paintPlan(o, l)` (drawn strings, resolved styles, CSS colours, merged rectangles) memoised by
   layout identity; context state is assigned only when it changes.
+- Device pixels (text-lines, sub-wave 1b): `paintRich(..., { devicePixels: true })` paints with
+  `DEVICE_PIXEL_PAINTER` when the object's painter is the plain one: each run's baseline on the device row it
+  falls in (floor), its start on the quarter of the device column it falls in (floor of 4 x), underlines and
+  strikes (and their shadows) on whole rows (both edges rounded, at least one row), under an axis-aligned
+  transform with positive scales only; layout stays scale-free. That is where the reference rasterizer
+  (pdftoppm) puts LibreOffice's text at 144 and 288 dpi. Only the table drawer asks for it (its cells' text);
+  `PLAIN_PAINTER` and every other caller paint as before (paint.gate.test.ts holds it).
 - The legacy `ctx.direction` rule in `drawText` (`paragraphDirections`): only paragraphs with a strong RTL
   character are measured and drawn in their first strong direction, with `textAlign 'left'` for the whole
   block; LTR-only text assigns neither, and the goldens stay at max delta 0.

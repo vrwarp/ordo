@@ -54,6 +54,12 @@ import type { FontEnv, RichLayout, RunStyle } from './types.ts';
  * (`registerGlyphPainter`, `registerFaceTarget`), independently, so a bevelled warped title gets its rim on
  * the warped glyphs. With nothing registered it is the plain painter on the direct target: the calls above,
  * exactly as before the seam (paint.hooks.test.ts).
+ *
+ * Device pixels (text-lines, sub-wave 1b): a caller may ask for the plain painter on whole device pixels
+ * (`PaintHooks.devicePixels`, `DEVICE_PIXEL_PAINTER`): baselines on the device row, run starts on the quarter
+ * of a device column, underlines and strikes on whole rows, under an axis-aligned transform only. The table
+ * drawer asks for it (table text sits on the pixels LibreOffice's page uses); every other caller paints as
+ * before.
  */
 
 /** Underline and strike thickness, × the segment's drawn size (LibreOffice's F/18). */
@@ -170,6 +176,52 @@ export const PLAIN_PAINTER: GlyphPainter = {
   },
 };
 
+/**
+ * The context's transform when it is axis-aligned with positive scales (no rotation, skew or flip) and
+ * finite, else null: device-pixel placement applies only then (`DEVICE_PIXEL_PAINTER`).
+ */
+function axisAligned(ctx: Ctx2D): DOMMatrix | null {
+  const m = ctx.getTransform?.();
+  return m && !m.b && !m.c && m.a > 0 && m.d > 0 && Number.isFinite(m.a + m.b + m.c + m.d + m.e + m.f)
+    ? m
+    : null;
+}
+
+/**
+ * The plain painter on device pixels (table-cell text, `PaintHooks.devicePixels`), under an axis-aligned
+ * transform; under any other it paints as the plain painter does. Where LibreOffice's page puts table text
+ * (its PDF drawn by pdftoppm, the hub's and the measuring tool's rasterizer, at 144 and 288 dpi, text-lines
+ * probe):
+ * - a run's baseline on the device row its position falls in (floor(y × scale)), where Chromium's canvas
+ *   rounds to the nearest row;
+ * - a run's start on the quarter of the device column it falls in (floor(x × scale × 4) / 4), where
+ *   Chromium's canvas draws it at its exact position;
+ * - underlines and strikes (and their shadows) on whole rows: both edges rounded to the nearest row boundary,
+ *   at least one row tall (stroke adjustment, no partial row).
+ * Positions already on a pixel stay there (a tolerance of 1e-6 device px for float noise). Layout stays
+ * scale-free: only the painted positions move, to the pixels of the output being drawn (1920, 3840, a
+ * preview). Imported text boxes and ordo's own text paint as the plain painter does (owner question T5).
+ */
+export const DEVICE_PIXEL_PAINTER: GlyphPainter = {
+  kind: 'plain',
+  glyphs(ctx, g, pass) {
+    const m = axisAligned(ctx);
+    const x = m ? (Math.floor((m.a * g.x + m.e) * 4 + 1e-6) / 4 - m.e) / m.a : g.x;
+    const y = m ? (Math.floor(m.d * g.y + m.f + 1e-6) - m.f) / m.d : g.y;
+    if (pass === 'outline') ctx.strokeText(g.text, x, y);
+    else ctx.fillText(g.text, x, y);
+  },
+  rect(ctx, r, pass) {
+    const m = (pass === 'decoration' || pass === 'shadow') && axisAligned(ctx);
+    if (!m) ctx.fillRect(r.x, r.y, r.w, r.h);
+    else {
+      const top = Math.round(m.d * r.y + m.f);
+      const bottom = Math.max(top + 1, Math.round(m.d * (r.y + r.h) + m.f));
+      ctx.fillRect(r.x, (top - m.f) / m.d, r.w, (bottom - top) / m.d);
+    }
+  },
+};
+
 /** The passes after the fill box and highlights, for a face target to draw where it needs them. */
 export interface PaintPasses {
   /** Passes 2 and 3 (shadows, glow) on `c`, which the target has set up as `ctx` (transform and alpha). */
@@ -240,8 +292,12 @@ export function faceTargetFor(o: TextObject): FaceTarget {
   return spriteTarget?.applies(o) ? spriteTarget.hook : DIRECT_TARGET;
 }
 
-/** A painter and target chosen by the caller instead of the registered ones. */
-export type PaintHooks = { painter?: GlyphPainter; target?: FaceTarget };
+/**
+ * A painter and target chosen by the caller instead of the registered ones. `devicePixels`: the plain
+ * painter (when it is the one the object gets) paints on whole device pixels (`DEVICE_PIXEL_PAINTER`), as the
+ * table drawer asks for its cells' text.
+ */
+export type PaintHooks = { painter?: GlyphPainter; target?: FaceTarget; devicePixels?: boolean };
 
 /** Paint a layout of `o` (made by `layoutRich` for the same object) at `scale` device px per logical px. */
 export function paintRich(
@@ -252,7 +308,8 @@ export function paintRich(
   _env: FontEnv,
   hooks?: PaintHooks,
 ): void {
-  const painter = hooks?.painter ?? glyphPainterFor(o);
+  const chosen = hooks?.painter ?? glyphPainterFor(o);
+  const painter = hooks?.devicePixels && chosen === PLAIN_PAINTER ? DEVICE_PIXEL_PAINTER : chosen;
   const target = hooks?.target ?? faceTargetFor(o);
   const plan = painter.plan?.(o, l) ?? paintPlan(o, l);
   ctx.save();

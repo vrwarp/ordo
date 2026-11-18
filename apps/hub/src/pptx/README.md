@@ -44,6 +44,7 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
  light job 'pptx-text-repair' (legacy imported.textBoxes, once)                                                [G]
  light job 'pptx-reimport' ('Re-import from PowerPoint', reimport.ts): steps 1-5 again (buildNative), merged
      into the stored presentation, one revision, then 'pptx-lo' as above; 'Make editable' on a legacy page  [M4 F]
+     or a native import's LibreOffice page (`pageBoxes`: a page again gets its text boxes)                    [1b]
  goLive ─► resolvePlaylist: bundled and script-fallback fonts, CJK faces by text scan [E]; > 12 MiB warning [F];
            the geometry files the slides draw in the manifest and `geoms` (the bundle's `files`)             [M6 r2]
  operator: ImportTab and import card [H]; previewSlice and the adopt check [F]; MediaTab and gated text [G]
@@ -65,7 +66,7 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `index.ts`          | `PptxImports`: registers the jobs, `queueNative`, `queueReference` (`imports.pptx`)        | shared |
 | `nativeJob.ts`      | The light `pptx-native` job, steps 1-6                                                     | B      |
 | `sceneTask.ts`      | Worker side of `pptx-scene`: one batch through `convertDeck` (working pass-through)        | B      |
-| `faces.ts`          | The library's faces for `pptx-scene` (M6 tables: rows grow to their text), read on demand  | M6     |
+| `faces.ts`          | The library's faces for `pptx-scene`: table cells measured and spaced, scripts' faces      | M6     |
 | `report.ts`         | `PptxNativeResult` for the import card, `source.log`, `logSafe`                            | B      |
 | `mediaParts.ts`     | `mediaForFile`: the generalised `mediaFor`, through the media hash index; `clipForFile`    | C      |
 | `clips.ts`          | `spillClips` (spill and sniff), `ClipImport` (store clips, replace their placeholders)     | w2 A   |
@@ -80,6 +81,7 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `reimport.ts`       | 'Re-import from PowerPoint': plan, merge and the `pptx-reimport` job (M4; editor/M4.md)    | M4 F   |
 | `digest.ts`         | `importDigest`, `digestMatches`: "unedited" over the objects with an origin, everywhere    | M4     |
 | `clientScene.ts`    | Pool task `pptx-client-scene`: a browser's scene parsed and checked off the event loop     | core   |
+| `systemFaces.ts`    | This computer's script faces (rule H): resolved once at start, awaited by every import     | 1c     |
 
 The import core (`@ordo/importers`: `pptx-scan.ts`, `pptx-geoms.ts`, `pptx-pictures.ts`, `pptx-ladder.ts`,
 `pptx-core.ts`, `pptx-report.ts`, `pptx-faces.ts`) holds the pure steps the browser's parse shares;
@@ -311,7 +313,8 @@ scan, additive).
   `Font{source:'bundled'}`: Carlito (Calibri, Calibri Light), Caladea (Cambria), Liberation Sans/Serif/Mono,
   Noto Sans (Latin, Greek, Cyrillic), Noto Sans Hebrew, Noto Naskh Arabic, Noto Sans Devanagari, Tamil,
   Thai, Myanmar, Inter. The Dockerfile adds `fonts-crosextra-carlito fonts-crosextra-caladea fonts-noto-core`
-  so LibreOffice's art uses the same metrics.
+  so LibreOffice's art uses the same metrics. (Since sub-wave 1c it also installs `fonts-noto-cjk`'s Sans
+  collections, for LibreOffice and rule H's measuring only: never registered, see "Korean and other scripts' cells".)
 - Inter and the script fallbacks go to every output through the output-config fonts (`outputConfig` in
   `hub.ts`/`libproc.ts`), whatever the playlist; CJK faces only when `textScripts` finds Han, Kana or Hangul.
 - Google Fonts: `parseFontCss` keeps every `unicode-range` subset; each subset is a Font row with
@@ -334,7 +337,7 @@ Done (`apps/hub/test/fonts-bundled.test.ts`, `fonts-google.test.ts`, domain `res
 ### F: budgets
 
 Files: `packages/domain/src/size.ts` (refine; add `previewSlice`), `goLive.ts` (a `degraded` warning above
-`SIZE_BUDGETS.resolvedWarn`, additive), `apps/operator/src/views/editor/PreviewControl.tsx` (send
+`SIZE_BUDGETS.resolvedWarn`, additive; since design/29 D13 the W58 refusal above 32 MiB and the W59 line), `apps/operator/src/views/editor/PreviewControl.tsx` (send
 `previewSlice`), `apps/operator/src/core/engine.ts` (refuse `live.adopt` locally above `adoptMax`), the
 library snapshot size in hub health.
 
@@ -755,12 +758,20 @@ instead) and, on a hub with LibreOffice, for a slide over 64 KB that the ladder 
     counts them; `compact` is 0;
   - **with LibreOffice** (the 2026-11-13 review, `ImportCore.pageForBudget`): a slide over 64 KB that the
     ladder would fit by leaving something out ('plain': formatting; 'minimal': decorations) keeps
-    LibreOffice's page instead, as every such slide did before M9: picture class, `pending`, its whole text in
+    LibreOffice's page instead, as every such slide did before M9, unless it holds a table object (every table
+    is the table object, below): picture class, `pending`, its whole text in
     `pptx.artText`, the note 'over 64 KB: LibreOffice draws its page' and one warning for the import. Only when
     the page form (`compactSlideBytes`) is within 64 KB and the presentation's plan still holds; the tail stays
     minimal. A hub with LibreOffice so never shows less of a slide than one without it, nor less than before
     M9 (22 worship slides of E stored plain or minimal scored 0.13-0.94 against LibreOffice; their page
-    0.90-0.999).
+    0.90-0.999). No table keeps the page: the owner decided question 3 of the LibreOffice inventory on
+    2026-11-15 (every table is the table object on every kind of hub), and sub-wave 1b (tables-flip) removed
+    sub-wave 1's interim rule, which kept LibreOffice's page for a slide whose tables as their M6 group passed
+    64 KB (E's 8 dense table slides). `clientScene.ts` drops the `tableGroupBytes` an older operator's scene
+    still carries (the schema keeps known fields only); a re-import or Reset slide makes the table object of a
+    slide an older import stored as LibreOffice's page (`reimport.ts`: the fresh conversion is native).
+- **Step 5 text**: a table object's cells are the slide's text bodies as the M6 group's text objects were
+  (`bodyTexts`, `bodyBoxes`, `toPicture`'s search text, the rescue's text boxes).
 - **Step 3b**: an object naming a file the store could not take is left out the same way (was: the slide a
   compact picture).
 - **Step 5**: a slide the schema refuses is stored minimal, else with its text objects rebuilt from their text
@@ -820,3 +831,111 @@ sheets) gets LibreOffice's art again, for those objects only; without LibreOffic
   of hub, the Audience screen's colour).
 <!-- /m9:lo-forms -->
 
+## Wave r2b sub-wave 1b: 'Make editable' on a stored page (tables-cells)
+
+<!-- r2b:tables-cells -->
+Every hub stores a PowerPoint table as the table object since sub-wave 1b (tables-flip), but churches' libraries
+hold table slides an older import kept as LibreOffice's page (main's "over 64 KB: LibreOffice draws its page", r2b's
+interim note): version-2 slides, class 'picture', the page and its extracted text in `imported`. 'Make editable'
+laid text boxes over such a page (`makeEditableNative` refused any slide with `pptx`). Now:
+- **`reimport.ts` `rebuildsFromDeck`** decides which pages 'Make editable' rebuilds from the stored deck: a legacy
+  page of the deck, or a version-2 page of it (`pptx.class` 'picture' and `pptx.fileId` the deck), whatever its
+  note; the one helper hub-writers' other 64 KB pages build on. `imports.ts` `makeEditableNative` queues the
+  per-slide re-import for them (`PptxImports.queueReimport(..., pageBoxes)`: a request of its own, joined only by
+  the same request), so the route keeps answering 202 and the job.
+- **The job** (`pageBoxes` on `PptxReimportPayload`, `madeEditable`): pages whose deck slide converts to anything
+  but LibreOffice's page are merged as a re-import merges them (a table page becomes the table object; counted
+  `replaced`, as a legacy page, so the editor says the slide was rebuilt); a page the conversion makes
+  LibreOffice's page again (`pagesAgain`: a slide still past 64 KB as anything else) gets its text boxes over the
+  page (`boxesOverPage`, the transform `makeEditable` uses), logged, in the same revision, nothing queued for
+  LibreOffice. A request with no slide to convert (a page whose digest no longer matches) still lays its boxes.
+- Tests: `apps/hub/test/pptx-reimport.test.ts` (through the route: a table page kept by main's rule and one kept
+  by the interim rule become the table object, a 64 KB page with no table gets its text boxes, each 202 and the
+  job; `rebuildsFromDeck` by class and deck); end to end `e2e/editor-reimport-lo.spec.ts` (row 'editor-reimport-lo',
+  a hub with LibreOffice: a 64 KB page drawn by the follow-up, 'Make editable', 202, its text boxes over it).
+<!-- /r2b:tables-cells -->
+
+## Wave r2b sub-wave 1c: Korean and other scripts' cells (ko-cells)
+
+<!-- r2b:ko-cells -->
+A hub measures a table's cells with its font library's faces (`faces.ts`); for Han, Kana and Hangul the library
+has a face only when Noto Sans SC/TC/JP/KR was downloaded, so a Korean cell was measured by estimate and spaced by
+ordo's default face, its rows about 4 % shorter than LibreOffice draws them with the computer's Korean face (the
+Korean bulletin's slides 18-20: 0.593 / 0.538 / 0.439 on both kinds of hub). Rule H:
+- **`systemFaces.ts`**: at the hub's start (`ImportService`) one `fc-match -f '%{file}\t%{index}' :charset=<letter>`
+  per script (`SYSTEM_FACE_SCRIPTS`: 一 あ ア 가), in parallel, fc-match run by absolute path (`FC_MATCH_PATHS`: never
+  through PATH, which on a hub without LibreOffice may hold only the lite tools); a face is kept for a script only
+  when its file fits `FACE_LIMITS.fileBytes` and it maps the script's common letters (`SYSTEM_FACE_LETTERS`, a
+  dozen each, `mapsScript`: fontconfig names the face that best covers the ONE letter asked, which on a computer
+  without a CJK face can be a face with that letter only, such as fonts-noto-core's Nushu face for 一). Each
+  distinct face (file and index) is read and parsed once, with `@ordo/pptx-scene`'s `sfntMetrics(bytes, index)`,
+  which reads a TrueType collection at its index (WenQuanYi Zen Hei is one, 16.8 MB, named for all four scripts
+  here; the hub's own `metricTables` refuses collections). The check reads and parses the face on the process that
+  starts the imports (`ImportService`: the library process in production, never the live process): one read and
+  one parse per distinct face on its event loop at start (the collection's parse took 2.6-13 ms in review). `SystemFaces.ready` settles within 10 s whatever happens
+  (then: none, logged); the start log says what was found (`system faces: Hangul wqy-zenhei.ttc, ...`, or none).
+- **Awaited by every job that measures a table** (`nativeJob.ts` `batchCall`: imports, re-imports, Reset slide):
+  the faces ride in the `pptx-scene` input (`systemScriptFaces`), so a deck imported during the hub's start is
+  stored as one imported later. In the worker `faces.ts` answers `script(code)` with the library's face, else the
+  system face (read once per worker, counted in the task's `FACE_LIMITS`, used only when it maps the script's
+  common letters, as at start); the
+  converter asks only for the glyph scripts (`tables.ts` `GLYPH_SCRIPTS`), only for table cells. The job's log
+  names a face it used: `table cells in Hangul measured with this computer's face wqy-zenhei.ttc (the font library
+  has none for it)`.
+- **An explicit dependency** (`HubConfig.systemFaces`): production asks fontconfig (`fontconfigLookup`); the test
+  helpers give none (`noSystemFaces`), so a hub test means the same on every computer; a test injects a lookup.
+- **Measuring only**: nothing is stored or drawn with the system face; the outputs draw with their own faces. The
+  project's hub image installs `fonts-noto-cjk`'s Sans collections for this (owner answer to Q1c-2, 2026-11-17;
+  `Dockerfile`, licence in `fonts/LICENSES.md`): there fc-match gives `NotoSansCJK-Regular.ttc` face 0 for Han,
+  Kana and Hangul (the image sets no language), which the check keeps (it maps each script's common letters) and
+  whose advances and line height equal the Korean face's, and its LibreOffice draws the letters. The collection is
+  never a library font, so the screens receive nothing new. `docker-pr.yml` checks the built image's face and start
+  log. On a Debian computer with fonts-noto-core and no CJK face (the font set the image had before it installed
+  Noto Sans CJK), fc-match names fonts-noto-core's Nushu face (NotoTraditionalNushu: U+4E00 is its only ideograph)
+  for Han and faces without Kana or Hangul for the others, the check keeps none, and those cells are measured by
+  estimate as before; that image's LibreOffice drew Korean as empty boxes. Until integrate-1c repair 1 the check
+  asked for the one letter and kept the Nushu face for Han, so Chinese and Japanese cells there were measured with it.
+- **The browser's scene** (`clientScene.ts`): a browser cannot ask the hub's computer for its fonts, so where the
+  hub measures a script with a face only its computer has (`systemOnlyScripts`: the faces resolved at start, less
+  the scripts whose fallback family the library has; computed on the main thread from those lists, no deck read),
+  the `pptx-client-scene` pool task refuses a scene whose TABLE cells hold a character of such a script, after it
+  parsed (`tablesNeedScripts`; groups included, text boxes never): `the scene parsed in the browser was not used
+  (its tables need a script face only this computer has): parsed here`. The decision awaits the faces as the
+  import does, so it is the same during start-up. Exact: a deck with CJK only in boxes keeps the browser's scene,
+  and a hub without such a face uses every scene as before. The project's hub image has one (Noto Sans CJK), so there
+  the browser's scene of such a deck is refused unless the library has the script's family. The fidelity harness's
+  `hub-import --equivalence` applies the same rule (`tools/pptx-fidelity` `sceneNeedsScripts`, the hub's start
+  log for its faces) and lists such a deck as 'parsed on the hub (script face)'.
+- Tests: `apps/hub/test/pptx-system-faces.test.ts` (the task with an injected face, none, a face without the
+  letter, the library's face winning, a collection read at index 1; `SystemFaces` checks and its 10 s bound; a
+  face with 一 only (the Nushu face) or a few Hangul letters is kept for no script, a CJK face for all four;
+  `pptx-system-faces-once.test.ts`: a face named for four scripts is read once;
+  fc-match found by absolute path with a PATH of the lite tools; an import started before the resolution settles
+  stores the system-face rows, the same as a later one); `apps/hub/test/pptx-client-scene.test.ts` (the pool
+  task refuses a Korean-table scene with `systemOnlyScripts` ['Hang'], uses it with none, with another script's
+  face, and with Hangul in a box only; the same decision when the import starts before the faces settle; the
+  deck is away while the scene is checked).
+<!-- /r2b:ko-cells -->
+
+## Wave r2b sub-wave 1c: East Asian vertical cells (vert-cells)
+
+<!-- r2b:vert-cells -->
+A table whose vertical cells are all East Asian vertical (`eaVert`) is the table object on every kind of hub since
+1c (`@ordo/pptx-scene` rule V: LibreOffice 24.2 draws such cells horizontally, probe deck A; the cell keeps its
+`vert`). Nothing in this folder changed for it; what a hub does differently:
+- **With LibreOffice**: such a slide is native, so no `pptx-lo` follow-up is queued for it and no art is stored (the
+  Korean bulletin's slide 2 was LibreOffice's picture, class 'hybrid'). Tables with `vert`, `vert270`, `wordArtVert`,
+  `wordArtVertRtl` or `mongolianVert` cells are still LibreOffice's art (owner question Q1c-5).
+- **Without LibreOffice**: the table is stored, where it was listed `missing: ['element']` before.
+- **Re-import and Reset slide** (`reimport.ts`) of such a slide stored before 1c (hybrid, LibreOffice's art and its
+  note) give the table object, its cells' vert kept, nothing pending.
+- **The table's outer shadow** is read by the converter but not stored or drawn: the slide's notes say "a table's
+  shadow is not drawn" (a follow-up draws it).
+- **Rule H applies**: the cells are Hangul, so on a computer with a Hangul face (this one: WenQuanYi Zen Hei) the hub
+  measures them with it and refuses the browser's scene of such a deck (ko-cells, above).
+- Tests: `apps/hub/test/pptx-reimport.test.ts` (a 1b-era hybrid slide: re-import and Reset slide give the table
+  object); end to end `e2e/pptx-tables.spec.ts` ('a table with East Asian vertical cells is the table object on both
+  kinds of hub, whoever parsed it': the upload route on a hub with LibreOffice, no `pptx-lo` job; the upload route and
+  the Import tab on a hub without it; where the hub names a Hangul face, the browser's scene refused) and
+  `e2e/ipad/table-targets.spec.ts` (a tap and typing in the narrow vertical cell, its vert kept).
+<!-- /r2b:vert-cells -->

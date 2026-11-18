@@ -21,6 +21,7 @@ import { createLibraryProcess, type LibraryProcess } from '../src/libproc.ts';
 import { LibraryLink, UP_WAIT_MS } from '../src/librarylink.ts';
 import { LiveRejection, LiveService } from '../src/live.ts';
 import { createLiveProcess, type LiveProcess } from '../src/liveproc.ts';
+import { noSystemFaces } from '../src/pptx/systemFaces.ts';
 import { CpuPool, WorkerStartError } from '../src/pool.ts';
 import { Supervisor } from '../src/supervisor.ts';
 import {
@@ -212,6 +213,7 @@ describe('items 4 and 21: the live process applies settings before outputs hear 
       host: '127.0.0.1',
       port: 0,
       healthIntervalMs: 100,
+      systemFaces: noSystemFaces,
     };
     let relay: (changes: never[], seq: number) => void = () => undefined;
     libp = await createLibraryProcess(cfg, {
@@ -424,6 +426,8 @@ describe('items 22 and 23: backups and restore', () => {
     const ins = live.prepare(`INSERT OR REPLACE INTO live_kv (key, json, saved_at) VALUES (?, ?, ?)`);
     ins.run('context', '{"settings":{"outputs":[]}}', 1);
     ins.run('bundles', '[]', 1);
+    // A cached goLive copy, one row each since design/29 M8.
+    ins.run('bundle:pl', Buffer.from('{}'), 1);
     live.close();
     await restoreBackup(dir, file, { print: () => undefined });
     const after = new Database(join(dir, 'live.db'), { readonly: true });

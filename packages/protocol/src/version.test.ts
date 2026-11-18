@@ -27,9 +27,31 @@ import { APP_VERSION } from './index.ts';
 // tab never sends, so the hub would still take its lectern for a newer Stage Display; stale stage and lectern
 // tabs reload on the hub's bye version. Re-recorded at 0.8.1 for plan.ts slideVisible's stage-preview notes (the
 // planner's own slides carry no notes, so no plan changes).
+// Main's version kept through wave r2b's sub-waves (main published 0.8.0 with PR #28, merged into sub-wave 1
+// before the wave PR opened, and 0.8.1 with PR #30, merged into the wave PR; the wave's one bump, 0.9.0, is the
+// wave PR's last commit), with the merged digest recorded at main's version.
+// Sub-wave 1: golive-prepare (design/29 M8) adds the POST /live/prepare request and answer types, which no older
+// client sends or reads; units-live adds OutputHealth's optional unitsMade, unitsLate and unitCacheBytes, which an
+// older hub's parse strips; prerender-model (design/29) adds schemas.ts Slide.prerender, draw, cut and meta.draw,
+// optional fields nothing writes yet (an older client strips them), content.ts slideContent's picture form (used
+// only when a caller passes a picture file: none does yet), live.ts ResolvedPlaylist.prerenders and prerenderKeys
+// (listed only from the hub's picture rows: none yet), and in live.ts, live-state and protocol index.ts the
+// prerender.add (hub only) and prerender.use events, state.prerendered and state.drawOverride, which no client
+// sends before the sub-waves that use them. Each track re-recorded on its branch; the sub-wave's integrator
+// recorded the merged digest once, after its last merge, and again after main's PR #28 was merged in.
+// The main merge's repair made PR #30's two shared changes on the wave while it was still at 0.8.0 (Hello.view
+// and plan.ts slideVisible's stage-preview notes, the same code as main's 0.8.1 above). With PR #30 merged in,
+// the shared sources are the wave's as they were (the digest leaves the APP_VERSION line out), so the merged
+// digest is the wave's, recorded at 0.8.1.
+// 0.9.0 for PR #29 (wave r2b's parts 1, 1b and 1c: editable PowerPoint tables, Go live during a service, a GO
+// never waits for drawing), the wave's one bump, its last commit. Main published 0.8.1 without them, so an
+// operator, output or stage tab still running 0.8.1 from its cache must reload (the hub's bye version) rather
+// than go on without them: without sub-wave 1's shared changes above, or sending the hub PowerPoint scenes
+// parsed as 0.8.1 parsed them (design/27, "CONVERTER_VERSION stays 2 through sub-wave 1c too"). The digest is
+// unchanged (it leaves the APP_VERSION line out).
 const RECORDED = {
-  version: '0.8.1',
-  digest: '9c2657d1851325ea4adce6a3a4ec60a6eb63de00d12620e8323375f0926fec19',
+  version: '0.9.0',
+  digest: '7077a1437610daeacb64027cc37a534a758d091ad298af39f1b1e1f3c7c20511',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

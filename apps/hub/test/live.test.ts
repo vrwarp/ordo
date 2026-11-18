@@ -5,10 +5,17 @@ import {
   newId,
   type Playlist,
   type Presentation,
+  GOLIVE_ENDED_REASON,
   type ResolvedPlaylist,
 } from '@ordo/domain';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import { APP_VERSION, LiveSummaryRes } from '@ordo/protocol';
+import { join } from 'node:path';
+import pino from 'pino';
 import { afterEach, describe, expect, it } from 'vitest';
+import { openLiveDb } from '../src/db.ts';
+import { LibraryLink } from '../src/librarylink.ts';
+import { LiveService } from '../src/live.ts';
 import { liveSummary } from '../src/routes.ts';
 import {
   byType,
@@ -21,6 +28,7 @@ import {
   song,
   startHub,
   type TestHub,
+  tempDir,
 } from './helpers.ts';
 
 let hub: TestHub | undefined;
@@ -375,5 +383,156 @@ describe('WebSocket live flow', () => {
     hub.live.restore();
     expect(hub.live.state.seq).toBe(4);
     expect(hub.live.journalTail(10).map((j) => j.seq)).toEqual([1, 2, 3, 4]);
+  });
+});
+
+// --- Going live beside the running service (design/29 §2.3 M8) -------------------------------------------
+
+/** A goLive bundle of one song for playlist `id`. */
+function bundleOf(id: string) {
+  const p = song(`Song of ${id}`);
+  return {
+    playlist: {
+      id,
+      rev: 1,
+      name: id,
+      items: [{ id: `${id}-i1`, kind: 'presentation', presentationId: p.id }],
+    },
+    presentations: { [p.id]: p },
+    media: {},
+    fonts: [],
+    looks: [],
+    general: {},
+  };
+}
+
+/**
+ * A library whose goLive answer for `slow` streams over `slowMs` (its headers at once, then a chunk every
+ * 100 ms), and whose other answers come at once. Aborting the request errors the stream, as fetch does.
+ */
+function slowLibrary(slow: string, slowMs: number) {
+  const fetcher = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes('/internal/context'))
+      return Response.json({
+        settings: { outputs: [], looks: [], general: {}, audio: {}, surfaces: {} },
+        fonts: [],
+      });
+    const m = /\/internal\/golive\/([^/?]+)/.exec(u);
+    if (!m) return new Response('{}', { status: 404 });
+    const id = decodeURIComponent(m[1]!);
+    const bytes = new TextEncoder().encode(JSON.stringify(bundleOf(id)));
+    if (id !== slow) return new Response(bytes, { headers: { 'content-type': 'application/json' } });
+    const steps = Math.max(1, Math.round(slowMs / 100));
+    const stream = new ReadableStream<Uint8Array>({
+      async start(ctrl) {
+        let aborted = false;
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true;
+          ctrl.error(new Error('This operation was aborted'));
+        });
+        for (let i = 0; i < steps; i++) {
+          await sleep(slowMs / steps);
+          if (aborted) return;
+          ctrl.enqueue(
+            bytes.slice(Math.floor((i * bytes.length) / steps), Math.floor(((i + 1) * bytes.length) / steps)),
+          );
+        }
+        ctrl.close();
+      },
+    });
+    return new Response(stream, {
+      headers: { 'content-type': 'application/json', 'content-length': String(bytes.length) },
+    });
+  }) as unknown as typeof fetch;
+  return fetcher;
+}
+
+describe('going live beside the running service (design/29 M8)', () => {
+  it('GO, Next and Clear during a slow prepare apply to the running service at once; the goLive applies when prepared', async () => {
+    const db = openLiveDb(join(tempDir(), 'live.db'));
+    const link = new LibraryLink(db, pino({ level: 'silent' }), 'secret', slowLibrary('later', 1200));
+    link.setLibrary('http://library', 'up');
+    const live = new LiveService(db, link, pino({ level: 'silent' }), { snapshotIntervalMs: 60_000 });
+    await live.submitQueued({ k: 'goLive', playlistId: 'now' }, { role: 'operate' });
+    expect(live.state.resolved?.playlist.id).toBe('now');
+    const t0 = Date.now();
+    const goLive = live.submitQueued({ k: 'goLive', playlistId: 'later' }, { role: 'operate' });
+    await sleep(50);
+    const waits: number[] = [];
+    for (const cmd of [
+      { k: 'go' as const, cueIndex: 0, at: Date.now() + 33 },
+      { k: 'next' as const, at: Date.now() + 33 },
+      { k: 'clear' as const, layer: 'slide' as const, at: Date.now() + 33 },
+    ]) {
+      const t = Date.now();
+      await live.submitQueued(cmd, { role: 'operate' });
+      waits.push(Date.now() - t);
+      // Each applied to the running service, not to the one being prepared.
+      expect(live.state.resolved?.playlist.id).toBe('now');
+    }
+    expect(live.state.live).toBe(1);
+    expect(live.state.layers.slide.content).toBeNull();
+    // Not queued behind the 1.2 s fetch: each within one turn of the loop.
+    expect(Math.max(...waits)).toBeLessThan(budgetMs(150));
+    await goLive;
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1100);
+    expect(live.state.resolved?.playlist.id).toBe('later');
+    expect(live.state.resolved?.degraded).toBeUndefined();
+    db.close();
+  });
+
+  it('End service sent while a goLive is being prepared ends the service: the goLive is cancelled, not applied after it', async () => {
+    const db = openLiveDb(join(tempDir(), 'live.db'));
+    const link = new LibraryLink(db, pino({ level: 'silent' }), 'secret', slowLibrary('later', 1500));
+    link.setLibrary('http://library', 'up');
+    const live = new LiveService(db, link, pino({ level: 'silent' }), { snapshotIntervalMs: 60_000 });
+    await live.submitQueued({ k: 'goLive', playlistId: 'now' }, { role: 'operate' });
+    const goLive = live.submitQueued({ k: 'goLive', playlistId: 'later' }, { role: 'operate' });
+    const settled = goLive.then(
+      () => 'applied',
+      (e: unknown) => (e as Error).message,
+    );
+    await sleep(300);
+    const t = Date.now();
+    await live.submitQueued({ k: 'endService', at: Date.now() + 33 }, { role: 'operate' });
+    // End service applies at once, not after the fetch.
+    expect(Date.now() - t).toBeLessThan(budgetMs(150));
+    expect(live.state.mode).toBe('idle');
+    // The goLive sent before it settles soon (its fetch abandoned) and quietly: the operator ended the service.
+    expect(await settled).toBe(GOLIVE_ENDED_REASON);
+    expect(Date.now() - t).toBeLessThan(budgetMs(1000));
+    await sleep(1500);
+    expect(live.state.mode).toBe('idle');
+    expect(live.state.resolved).toBeUndefined();
+    // A goLive sent after End service still goes live.
+    await live.submitQueued({ k: 'goLive', playlistId: 'later' }, { role: 'operate' });
+    expect(live.state.resolved?.playlist.id).toBe('later');
+    live.stop();
+    db.close();
+  });
+
+  it('a goLive sent right after End service prepares afresh and goes live; the one before it is cancelled', async () => {
+    const db = openLiveDb(join(tempDir(), 'live.db'));
+    const link = new LibraryLink(db, pino({ level: 'silent' }), 'secret', slowLibrary('later', 600));
+    link.setLibrary('http://library', 'up');
+    const live = new LiveService(db, link, pino({ level: 'silent' }), { snapshotIntervalMs: 60_000 });
+    await live.submitQueued({ k: 'goLive', playlistId: 'now' }, { role: 'operate' });
+    const before = live.submitQueued({ k: 'goLive', playlistId: 'later' }, { role: 'operate' }).then(
+      () => 'applied',
+      (e: unknown) => (e as Error).message,
+    );
+    await sleep(200);
+    const end = live.submitQueued({ k: 'endService', at: Date.now() + 33 }, { role: 'operate' });
+    const after = live.submitQueued({ k: 'goLive', playlistId: 'later' }, { role: 'operate' });
+    await end;
+    expect(live.state.mode).toBe('idle');
+    await after;
+    expect(await before).toBe(GOLIVE_ENDED_REASON);
+    expect(live.state.mode).toBe('live');
+    expect(live.state.resolved?.playlist.id).toBe('later');
+    expect(live.state.resolved?.degraded).toBeUndefined();
+    live.stop();
+    db.close();
   });
 });

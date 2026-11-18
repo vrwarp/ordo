@@ -40,7 +40,21 @@ export type CallName =
   | 'offlineCheck'
   /** Download a playlist's media and fonts to this PC so it can go live without the hub. */
   | 'offlineDownload'
-  | 'offlineCancel';
+  | 'offlineCancel'
+  /** W41's button: go live from the hub's saved copy instead of waiting for the library (design/29 M8). */
+  | 'goLiveSaved';
+
+/** A Go live being prepared on the hub (design/29 M8): W41's toast. */
+export type GoLivePrepare = {
+  playlistId: string;
+  /** The playlist's name, as W41 quotes it. */
+  title: string;
+  pct: number;
+  /** A service is live: the screens keep showing it until the new one is ready. */
+  live: boolean;
+  /** Set once the saved copy is offered (after 5 s, while live): "3 days ago". */
+  savedAgo?: string;
+};
 
 export type LibKey = 'presentations' | 'playlists' | 'media' | 'fonts' | 'themes' | 'folders';
 export const LIB_KEYS: readonly LibKey[] = [
@@ -191,6 +205,8 @@ export type UiEvent =
   /** A hand-back conflict to decide; without `open` the dialog is closed (nothing left to decide). */
   | { k: 'conflict'; open?: true; hubPlaylist?: string; localPlaylist?: string }
   | { k: 'goLiveError'; reason: string }
+  /** W41's progress toast; without `p` it is closed (the goLive was sent, or given up). */
+  | { k: 'goLivePrepare'; p?: GoLivePrepare }
   | { k: 'offlineCheck'; result: OfflineCheck };
 
 export type CoreToMain =

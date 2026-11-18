@@ -11,10 +11,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 rmSync(join(here, 'dist'), { recursive: true, force: true });
 mkdirSync(join(here, 'dist'), { recursive: true });
 
-// Two entries: the hub (supervisor and both of its child processes run main.js), and the CPU pool's
-// worker thread (pool.ts resolves `./cpu.worker.js` next to itself).
+// Three entries: the hub (supervisor and both of its child processes run main.js), the CPU pool's worker
+// thread (pool.ts resolves `./cpu.worker.js` next to itself) and the live process's goLive check
+// (golive-worker.ts resolves `./golive-worker.js`, design/29 M8).
 await build({
-  entryPoints: [join(here, 'src/main.ts'), join(here, 'src/cpu.worker.ts')],
+  entryPoints: [
+    join(here, 'src/main.ts'),
+    join(here, 'src/cpu.worker.ts'),
+    join(here, 'src/golive-worker.ts'),
+  ],
   outdir: join(here, 'dist'),
   entryNames: '[name]',
   bundle: true,

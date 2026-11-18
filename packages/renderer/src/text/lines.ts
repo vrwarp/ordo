@@ -53,6 +53,14 @@ import type {
  *   word in a narrow box costs about as much as the lines it makes, in every drawer and in every step of
  *   the autofit search. The cut search measures a cut in the trailing whitespace without it, so that
  *   whitespace hangs on the word's last line as on any other and is never cut off onto the next one.
+ * - A break only the office rules make (breaks.ts: '3:16-' / '17') cuts a word UAX#14 keeps whole into
+ *   pieces measured apart: where the line goes on, the next piece of the run follows at the whole string's
+ *   advance (`kernAfter`: the pair kerning across the cut, as Canvas and LibreOffice shape the whole string),
+ *   both for whether it fits and where it is drawn; where the line ends there, the piece keeps its own width.
+ * - Office text follows LibreOffice's i#17155 rule for a break after a slash (breaks.ts): a break it drops
+ *   (`PreparedPara.glued`) that is the line's last before its width moves the line's end back to just after
+ *   its whitespace, or, when that is at or before the line's start, cuts the line at its width (`slashBreak`),
+ *   even where a break before '%' or a hyphen comes earlier in the word.
  * - `wrap: false` never breaks a line.
  * - Right-to-left paragraphs (bidi level 1) mirror the start: indents and the bullet are on the right, the
  *   pieces run from the right (UAX#9 L2 between pieces, `visualOrder`), and the hanging whitespace is on
@@ -66,7 +74,9 @@ import type {
  *
  * Line models (F = the line's main size after autofit: the paragraph's main run, its first without a
  * baseline shift, else its first, else its end mark; a larger unshifted run on the line raises it, as
- * LibreOffice sizes each line by its own portions, so lines never overlap):
+ * LibreOffice sizes each line by its own portions, so lines never overlap; in the office model a line with
+ * text is as tall as its own largest unshifted run, smaller than F too, as LibreOffice's editeng sizes it,
+ * except in a box that shrinks its text, whose lines keep F as their floor):
  * - 'ordo': drawText's vertical model, pitch `lineHeight × F` with the baseline `(pitch - F)/2 + 0.8F`
  *   below the line's top (text2d.ts). A paragraph's `lineSpacing` p is a multiple of single spacing,
  *   pitch `p × 1.2F` (the same meaning as in the office model), `lineSpacingPx` the exact pitch.
@@ -350,6 +360,7 @@ function flowParas(
   const text = o.text;
   const style = o.style;
   const office = style.lineModel === 'office';
+  const shrink = style.autofit === 'shrink';
   const wrap = style.wrap !== false;
   const k = office ? fit.spacing : 1;
   // At PowerPoint's stored scale its lnSpcReduction is subtracted from proportional spacing (office.ts).
@@ -438,6 +449,25 @@ function flowParas(
     };
   };
 
+  /**
+   * The pair kerning between piece `c` and the next one `n` across a break only the office rules make
+   * (`Piece.officeBreak`, inside one left-to-right run): the joined string's width less both pieces', as
+   * Canvas shapes the whole string. It is added to `c`'s advance, so on one line `n` follows where the
+   * whole string draws it and a line that ends after `c` keeps `c`'s own width ('Hebreos 9:23-' / '28').
+   */
+  const kernAfter = (c: Measured, n: Measured | undefined): number => {
+    const p = c.piece;
+    const q = n?.piece;
+    if (!p.officeBreak || !q || q.start !== p.end || q.sr !== p.sr || q.level !== p.level || p.level % 2)
+      return 0;
+    if (q.script !== p.script) return 0;
+    const st = c.style;
+    const f = base ?? fit;
+    const w = (s: number, e: number) => measureAt(st, p.script, 'ltr', segText(text, s, e, st.caps), f);
+    const k = w(p.start, q.end) - w(p.start, p.end) - w(q.start, q.end) - st.letterSpacing;
+    return base ? k * (c.sizePx / drawnPx(size(st.sizePx, base), st.baseline)) : k;
+  };
+
   const lines: LaidLine[] = [];
   const bulletWs: number[] = [];
   let y = 0;
@@ -465,6 +495,7 @@ function flowParas(
     if (!cont) hard = { style: ps, F, rtl };
 
     const queue = pp.pieces.map((p) => measure(p, runs[p.sr]!));
+    for (const [q, c] of queue.entries()) if (c.piece.officeBreak) c.a += kernAfter(c, queue[q + 1]);
     const spec = !para.soft && chainText[pi] ? (bullets[para.index] ?? null) : null;
     const other = Math.max(0, ps.indentPx);
     const x0 = para.soft ? other : Math.max(0, ps.indentPx + ps.firstLinePx);
@@ -612,6 +643,68 @@ function flowParas(
         cuts,
       };
     };
+    /** Whether the text of the word queue[i..j] from its start to offset `e` fits `room`. */
+    const fitsTo = (e: number, room: number): boolean => {
+      let w = 0;
+      for (let q = i; q <= j; q++) {
+        const c = queue[q]!;
+        const p = c.piece;
+        if (p.end <= e) {
+          w += c.a;
+          if (w > room + EPS) return false;
+          continue;
+        }
+        if (p.start < e)
+          w += widthOf(
+            c.style,
+            p.script,
+            p.level % 2 ? 'rtl' : 'ltr',
+            segText(text, p.start, e, c.style.caps),
+          );
+        break;
+      }
+      return w <= room + EPS;
+    };
+    /**
+     * LibreOffice's i#17155 rule where the word queue[i..j] does not fit after the pieces on the line: a break
+     * after a slash the rule drops (`PreparedPara.glued`) inside the word, with the character after the slash
+     * still on the line, is the line's last break before its width, and LibreOffice moves it back to just
+     * after its whitespace: the line ends there when that is after the line's start (how many of the line's
+     * pieces go to the next line), else it is cut at its width (0). null: the line ends before the word.
+     */
+    const slashBreak = (room: number): number | null => {
+      const glued = pp.glued;
+      if (!glued) return null;
+      const ws = queue[i]!.piece.start;
+      const we = queue[j]!.piece.end;
+      // Only the glued breaks inside the word (ascending: the first after its start by a binary search), so a
+      // line end costs the few the word holds (the rule looks back 64 units), not the paragraph's every one:
+      // a scan of them all made long text quadratic (review 1b).
+      const { at, to: back } = glued;
+      let k = 0;
+      let hi = at.length;
+      while (k < hi) {
+        const mid = (k + hi) >> 1;
+        if (at[mid]! <= ws) k = mid + 1;
+        else hi = mid;
+      }
+      let best = -1;
+      let to = -1;
+      for (; k < at.length && at[k]! < we; k++) {
+        const g = at[k]!;
+        if (fitsTo(g + ((text.codePointAt(g) ?? 0) > 0xffff ? 2 : 1), room - adv)) {
+          best = g;
+          to = back[k]!;
+        }
+      }
+      if (best < 0) return null;
+      if (to <= cur[0]!.piece.start) return 0;
+      let n = 0;
+      while (n < cur.length && cur[cur.length - 1 - n]!.piece.start >= to) n++;
+      if (!n || cur[cur.length - n]!.piece.start !== to) return null;
+      for (let q = 0; q < n; q++) if (cur[cur.length - n + q] !== queue[i - n + q]) return null;
+      return n;
+    };
     let i = 0;
     // The word being placed: pieces i..j (j has a break after it, or is the last), and its width (each
     // piece's advance, the last one's without its trailing whitespace), kept in step as pieces leave it.
@@ -641,9 +734,11 @@ function flowParas(
         // off it, or measure it once all of it may fit.
         const sr = runs[head.piece.sr]!;
         const cut = splitPiece(head, room, true);
-        if (!cut || cut === 'whole' || cut.all)
-          replace(i, { ...measure(head.piece, sr, false), cuts: head.cuts });
-        else {
+        if (!cut || cut === 'whole' || cut.all) {
+          const c = { ...measure(head.piece, sr, false), cuts: head.cuts };
+          c.a += kernAfter(c, queue[i + 1]);
+          replace(i, c);
+        } else {
           const h = measure(cut.head, sr, false);
           push(h);
           replace(i, rest(head, h, cut.tail, cut.cuts));
@@ -657,10 +752,22 @@ function flowParas(
         continue;
       }
       if (cur.length) {
-        endLine();
-        continue;
+        const back = slashBreak(room);
+        if (back === null) {
+          endLine();
+          continue;
+        }
+        if (back > 0) {
+          for (let n = 0; n < back; n++) adv -= cur.pop()!.a;
+          i -= back;
+          j = -1;
+          endLine();
+          continue;
+        }
+        // LibreOffice cuts the line at its width (i#17155, `slashBreak`): the word follows the line's pieces.
       }
-      // The word alone is wider than the line: whole pieces while they fit, then an emergency break.
+      // The word is wider than the line (or LibreOffice cuts it at the line's width after the pieces on it):
+      // whole pieces while they fit, then an emergency break.
       let q = i;
       while (q <= j && adv + queue[q]!.t <= room + EPS) take(q++);
       if (q <= j) {
@@ -683,7 +790,15 @@ function flowParas(
     broken.forEach((items, n) => {
       // An empty line after an a:br (an empty soft paragraph) is as tall as its own end mark, not as the
       // paragraph it continues (LibreOffice 24.2, measured): a small endParaRPr makes a short last line.
-      let lineF = !items.length && para.soft ? 0 : F;
+      // In the office model a line with text is as tall as its own largest unshifted run, not the
+      // paragraph's main size (LibreOffice's editeng sizes each line by the portions on it): a citation in a
+      // smaller size than the paragraph's first run that wraps onto lines of its own makes short lines
+      // (dense-b B, Matthew 16v18's right column; text-falls probe B: plain boxes and table cells). Ordo's own
+      // model keeps F as every line's floor, and so does a box that shrinks its text (autofit 'shrink'): there
+      // LibreOffice's lines are its own runs' too, but its autofit search is not ordo's model of it yet (its
+      // spacing scale applies to single spacing; some boxes take the face's metrics: text-falls notes), and the
+      // own-run lines alone moved eight shrinking slides below the owner's current point (8e8a294).
+      let lineF = office && items.length && !shrink ? 0 : !items.length && para.soft ? 0 : F;
       for (const c of items) if (!c.style.baseline && c.size > lineF) lineF = c.size;
       if (!items.length)
         for (const r of runs) if (!r.style.baseline) lineF = Math.max(lineF, size(r.style.sizePx, fit));

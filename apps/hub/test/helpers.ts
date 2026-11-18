@@ -5,7 +5,9 @@ import { lyricSlide, newId, type Presentation } from '@ordo/domain';
 import { APP_VERSION } from '@ordo/protocol';
 import WebSocket from 'ws';
 import type { HubConfig } from '../src/config.ts';
+import { afterAll } from 'vitest';
 import { createHub, type Hub } from '../src/hub.ts';
+import { noSystemFaces } from '../src/pptx/systemFaces.ts';
 import type { ToolProbe } from '../src/tools.ts';
 
 export const OPERATE_PIN = '111111';
@@ -21,8 +23,25 @@ export type TestHub = Hub & { url: string; dir: string; cleanup(): Promise<void>
  */
 export const TEST_TOOLS: ToolProbe = () => ({ state: 'available' });
 
+/**
+ * The folders (`tempDir`) and hubs (`startHub`) the test file importing this module made: after its last test the
+ * hubs it did not clean up are closed and every folder removed, so a run leaves no `ordo-*` folder in TMPDIR
+ * (`tempdirs.test.ts`). This module is evaluated once per test file, as the file is collected, so the hook is the
+ * file's first `afterAll` and runs after the file's own (after-hooks run last registered first).
+ */
+const madeDirs = new Set<string>();
+const openHubs = new Set<TestHub>();
+afterAll(async () => {
+  for (const hub of [...openHubs]) await hub.cleanup();
+  for (const dir of madeDirs) rmSync(dir, { recursive: true, force: true });
+  madeDirs.clear();
+});
+
+/** A new folder under TMPDIR, removed after the test file that made it. */
 export function tempDir(prefix = 'ordo-hub-'): string {
-  return mkdtempSync(join(tmpdir(), prefix));
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  madeDirs.add(dir);
+  return dir;
 }
 
 export async function startHub(overrides: Partial<HubConfig> = {}): Promise<TestHub> {
@@ -39,20 +58,25 @@ export async function startHub(overrides: Partial<HubConfig> = {}): Promise<Test
     host: '127.0.0.1',
     healthIntervalMs: 100,
     toolProbe: TEST_TOOLS,
+    // No script face of this computer (rule H) unless a test injects one: a hub test means the same anywhere.
+    systemFaces: noSystemFaces,
     ...overrides,
   });
   const url = await hub.listen(0);
   let cleaned = false;
-  return Object.assign(hub, {
+  const test: TestHub = Object.assign(hub, {
     url,
     dir,
     async cleanup() {
       if (cleaned) return;
       cleaned = true;
+      openHubs.delete(test);
       await hub.close();
       if (!overrides.dataDir) rmSync(dir, { recursive: true, force: true });
     },
   });
+  openHubs.add(test);
+  return test;
 }
 
 export type Client = {

@@ -66,6 +66,9 @@ type RoundMask = { rx: number; ry: number; path: Path2D };
  *
  * A scene is several draws, so it is composed at full alpha before it is weighted: in the scene canvas
  * during a crossfade (then mixed like any source), or in the scratch canvas when it fades alone.
+ *
+ * An in-place fade (`LayerStack.incoming`, a slide's late parts) is mixed like a crossfade: the live copy is the
+ * outgoing side, the fresh copy the incoming one, at `refadeWeight`.
  */
 export class Canvas2DCompositor implements Compositor {
   readonly kind = '2d' as const;
@@ -170,12 +173,15 @@ export class Canvas2DCompositor implements Compositor {
 
   private drawLayer(ls: LayerStack<ImageBitmap>, f: FrameInputs): void {
     /* @hot */
-    const live = ls.liveStack;
-    const out = ls.armedStack;
+    // An in-place fade (late parts, design/14 "Late units"): the fresh copy fades in over the live one, mixed
+    // like a crossfade's two sides.
+    const inPlace = ls.refading && !ls.fading && this.hasSource(ls.incoming, f);
+    const live = inPlace ? ls.incoming : ls.liveStack;
+    const out = inPlace ? ls.liveStack : ls.armedStack;
     const liveOn = this.hasSource(live, f);
-    const outOn = ls.fading && this.hasSource(out, f);
+    const outOn = (inPlace || ls.fading) && this.hasSource(out, f);
     if (!liveOn && !outOn) return;
-    const w = ls.weight(f.now);
+    const w = inPlace ? ls.refadeWeight(f.now) : ls.weight(f.now);
     const ctx = this.ctx;
     if (liveOn && outOn) {
       // Mixed in the scratch, within the rect the two sources cover (two sprites: their union).

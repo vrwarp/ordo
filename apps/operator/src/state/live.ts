@@ -2,7 +2,7 @@ import type { LiveState } from '@ordo/domain';
 import { initialState } from '@ordo/live-state';
 import type { BudgetRow, SupervisedStats } from '@ordo/client';
 import type { OutputHealthEntry } from '@ordo/protocol';
-import type { CoreStats, OfflineCheck, OfflineEntry } from '../core/protocol.ts';
+import type { CoreStats, GoLivePrepare, OfflineCheck, OfflineEntry } from '../core/protocol.ts';
 import { create } from 'zustand';
 import type { CacheIntegrity } from '../lib/health.ts';
 import type { Authority, Reconcile } from '../lib/liveCore.ts';
@@ -24,6 +24,8 @@ export type LiveStore = {
   conflict?: { hubPlaylist?: string; localPlaylist?: string };
   /** Why the hub refused the last goLive, shown in a dialog. */
   goLiveError?: string;
+  /** A Go live the hub is preparing beside the running service (W41's toast, design/29 M8). */
+  goLivePrepare?: GoLivePrepare;
   /** This PC started the live service without the hub and holds it until End service. */
   held: boolean;
   /** Playlists downloaded for offline use, by playlist id. */

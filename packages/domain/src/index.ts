@@ -22,4 +22,5 @@ export * from './media.ts';
 export * from './m9-readers.ts';
 export * from './table.ts';
 export * from './svg.ts';
+export * from './sha256.ts';
 export * from './stageNotes.ts';

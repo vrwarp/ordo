@@ -1,3 +1,5 @@
+import type { ShapeObject, TableData } from '@ordo/domain';
+import { cellRich } from '@ordo/domain/table.ts';
 import { buildDeck, sfntFont, tableFrame, tc } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
@@ -5,6 +7,12 @@ import { parsePptxScene } from './pptx-client.ts';
 import { deckFaceNeeds, type FaceFile, FaceUnreadable, faceSourceOf, loadDeckFaces } from './pptx-faces.ts';
 
 const IN = 914_400;
+
+/** A cell's line spacing as a share of single: its paragraph's, else its box's (`lineHeight` / 1.2). */
+const cellSpacing = (t: TableData, i: number) => {
+  const c = cellRich(t, i)!;
+  return c.paras?.[0]?.lineSpacing ?? c.style.lineHeight / 1.2;
+};
 
 async function zip(parts: Map<string, Uint8Array>): Promise<Uint8Array> {
   const z = new JSZip();
@@ -28,35 +36,38 @@ const tableDeck = (typeface: string, text = 'Wide wide wide') =>
   });
 
 describe("the browser parse measures tables with the library's faces (as the hub)", () => {
-  const wide = sfntFont(Object.fromEntries([...'Wide w'].map((c) => [c, 500])));
   const library: FaceFile[] = [
     { family: 'Wide Face', weight: 400, italic: false, url: 'f/wide' },
     { family: 'Unused Face', weight: 400, italic: false, url: 'f/unused' },
   ];
 
-  it('fetches only the faces a deck with a table names, and grows the row to its text', async () => {
+  it('fetches only the faces a deck with a table names, and measures its cells with them (the line spacing they store)', async () => {
+    // "Wide" half an em wide, its line 1.4 of the size (hhea): the cell's lines are spaced by it, as the
+    // hub's pool task spaces them (apps/hub/test/pptx-faces.test.ts); without faces the widths are estimated
+    // (noted) and the office model's single spacing stays.
+    const tall = sfntFont(Object.fromEntries([...'Wide w'].map((c) => [c, 500])), {
+      vertical: { ascender: 1100, descender: -300 },
+    });
     const fetched: string[] = [];
     const get = async (url: string) => {
       fetched.push(url);
-      return url === 'f/wide' ? wide : undefined;
+      return url === 'f/wide' ? tall : undefined;
     };
     const parse = await parsePptxScene(await zip(tableDeck('Wide Face')), {
       loadFaces: (parts) => loadDeckFaces(parts, library, get),
     });
     expect(fetched).toEqual(['f/wide']);
-    const text = parse.scene.slides[0]!.slide.objects.find((o) => o.type === 'text')!;
-    // As the hub's pool task measures it (apps/hub/test/pptx-faces.test.ts): three lines plus the margins.
-    expect(text.box.h).toBeCloseTo(3 * 1.2 * 36 + 14.4, 6);
-    // A narrow face fits the text on one line; without faces the widths are estimated and it wraps.
-    const narrow = sfntFont(Object.fromEntries([...'Wide w'].map((c) => [c, 200])));
-    const lib = [{ family: 'Narrow Face', weight: 400, italic: false, url: 'f/narrow' }];
-    const one = await parsePptxScene(await zip(tableDeck('Narrow Face')), {
-      loadFaces: (parts) => loadDeckFaces(parts, lib, async () => narrow),
-    });
-    const plain = await parsePptxScene(await zip(tableDeck('Narrow Face')));
-    const h = (p: typeof one) => p.scene.slides[0]!.slide.objects.find((o) => o.type === 'text')!.box.h;
-    expect(h(one)).toBeCloseTo(1.2 * 36 + 14.4, 6);
-    expect(h(plain)).toBeGreaterThan(h(one) + 30);
+    const tableOf = (p: typeof parse) =>
+      (p.scene.slides[0]!.slide.objects.find((o) => o.type === 'shape' && o.table) as ShapeObject).table!;
+    // One table object (M9 tables-conv): its rows as the deck stores them, the drawer grows them.
+    expect(tableOf(parse).rows).toHaveLength(1);
+    expect(cellSpacing(tableOf(parse), 0)).toBeCloseTo(1.4 / 1.2, 6);
+    const estimated = (p: typeof parse) =>
+      p.scene.slides[0]!.notes.some((n) => n.includes('estimated widths') && n.includes('Wide Face'));
+    expect(estimated(parse)).toBe(false);
+    const plain = await parsePptxScene(await zip(tableDeck('Wide Face')));
+    expect(cellSpacing(tableOf(plain), 0)).toBeCloseTo(1, 6);
+    expect(estimated(plain)).toBe(true);
   });
 
   it('needs nothing for a deck without a table, and leaves a deck whose face only the hub reads to the hub', async () => {
@@ -74,6 +85,24 @@ describe("the browser parse measures tables with the library's faces (as the hub
       throw new Error('offline');
     });
     expect(none?.('Wide Face', false, false)).toBeUndefined();
+  });
+
+  it("needs the faces of a table on the master or a layout too (as the hub's task, which reads every table)", () => {
+    // The summer-vibes template's 640-cell grid is on its master: a table object since tables-conv, measured
+    // with the library's faces on the hub; the browser's parse looked for tables in slides only, loaded no face
+    // and measured the grid estimated (hub-import --equivalence: the deck's 21 slides differed).
+    const grid = (typeface: string) =>
+      tableFrame({
+        id: 9,
+        x: 0,
+        y: 0,
+        cols: [IN, IN],
+        rows: [{ h: IN / 4, cells: [tc('1', { rPrChildren: `<a:latin typeface="${typeface}"/>` }), tc('')] }],
+      });
+    const onMaster = buildDeck({ slides: [{ shapes: '' }], master: { shapes: grid('Wide Face') } });
+    expect(deckFaceNeeds(onMaster)?.has('Wide Face')).toBe(true);
+    const onLayout = buildDeck({ slides: [{ shapes: '' }], layouts: [{ shapes: grid('Wide Face') }] });
+    expect(deckFaceNeeds(onLayout)?.has('Wide Face')).toBe(true);
   });
 
   it('chooses faces as the hub does: slant first, then the nearest weight', () => {

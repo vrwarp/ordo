@@ -2,6 +2,7 @@ import { type Box, LOGICAL_HEIGHT, LOGICAL_WIDTH, type Presentation, type SlideO
 import { deckArea, type SlideRect } from './CanvasGuides.tsx';
 import { markOverride, updateSlide } from './ops.ts';
 import { groupBox, transformGroup, transformMember } from './ops/group.ts';
+import { fitTable } from './tableFit.ts';
 
 /*
  * 'Align to slide' and 'Screen placement' (the Object panel; design/15 "Object panel"): both act on the whole
@@ -109,6 +110,8 @@ function updateSlideObject(p: Presentation, slideId: string, o: SlideObject, box
   if (same) return p;
   return updateSlide(p, slideId, (s) => ({
     ...s,
-    objects: s.objects.map((x) => (x.id === o.id ? ({ ...x, box } as SlideObject) : x)),
+    // A fixed-row table grows the rows the change left its text short of by more than before (narrower
+    // columns, a shorter box; tableFit.ts).
+    objects: s.objects.map((x) => (x.id === o.id ? fitTable(x, { ...x, box } as SlideObject) : x)),
   }));
 }

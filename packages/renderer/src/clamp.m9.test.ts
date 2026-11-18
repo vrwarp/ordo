@@ -1,6 +1,6 @@
 import { LOOK_MAIN, type ShapeObject, type Slide, type TextObject } from '@ordo/domain';
 import { m9Chart, m9Decor, m9Slide, m9Table } from '@ordo/domain/m9.test-util.ts';
-import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import * as prev from '@ordo/domain/schemas.prev05.test-util.ts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { clampGeom, clampObject, clampSlide } from './clamp.ts';
 import { RecPath } from './geom/path2d.test-util.ts';

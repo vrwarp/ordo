@@ -48,6 +48,14 @@ jobs:
           cache-from: |
             type=gha,scope=docker
             type=gha,scope=docker-pr-${{ github.event.pull_request.number || 'manual' }}
+      - name: The image's size
+        run: |
+          # Printed, not enforced: design/22 sets a target under 1.5 GB for the image (uncompressed, linux/amd64).
+          size=$(docker image inspect ordo-hub:smoke --format '{{.Size}}')
+          echo "ordo-hub:smoke (linux/amd64): $size bytes, about $((size / 1000000)) MB"
+          if [ "$size" -gt 1500000000 ]; then
+            echo "::warning::The image is larger than design/22's target of 1.5 GB ($size bytes)."
+          fi
       - name: Start the image and wait for its health check
         run: |
           docker run -d --name ordo-smoke -e ORDO_DEV_PIN=246810 -p 8080:8080 ordo-hub:smoke
@@ -68,6 +76,40 @@ jobs:
           docker exec ordo-smoke soffice --version
           docker exec ordo-smoke sh -c 'chromium --headless --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null'
           echo "renderers start"
+      - name: The Chinese, Japanese and Korean face inside the image
+        run: |
+          # fonts-noto-cjk's Sans collection (Dockerfile): fontconfig gives it for Hangul, its Serif collections are
+          # left out and the dpkg rule that left them out is gone, its copyright file is kept, and the hub's start log
+          # names it as the face it measures table cells with (design/27 §10) for each of the four scripts the hub
+          # looks a face up for (apps/hub/src/pptx/systemFaces.ts): Han, Hiragana, Katakana and Hangul, not Han alone.
+          face=$(docker exec ordo-smoke fc-match -f '%{file}' ':charset=ac00')
+          echo "fontconfig's face for Hangul: $face"
+          if [ "$face" != /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc ]; then
+            echo "::error::fontconfig does not give Noto Sans CJK for Hangul inside the image."; exit 1
+          fi
+          if docker exec ordo-smoke sh -c 'ls /usr/share/fonts/opentype/noto/NotoSerifCJK-*' 2>/dev/null; then
+            echo "::error::The Serif CJK collections should be left out (Dockerfile)."; exit 1
+          fi
+          if docker exec ordo-smoke test -e /etc/dpkg/dpkg.cfg.d/ordo-noto-cjk-sans; then
+            echo "::error::The dpkg rule that leaves out the Serif CJK collections should not stay in the image."; exit 1
+          fi
+          if ! docker exec ordo-smoke test -f /usr/share/doc/fonts-noto-cjk/copyright; then
+            echo "::error::fonts-noto-cjk's copyright file is missing from the image."; exit 1
+          fi
+          line=""
+          for i in $(seq 1 30); do
+            line=$(docker logs ordo-smoke 2>&1 | grep 'system faces: ' || true)
+            if [ -n "$line" ]; then break; fi
+            sleep 2
+          done
+          echo "the hub's 'system faces' line: ${line:-none logged}"
+          for script in Han Hiragana Katakana Hangul; do
+            if ! printf '%s\n' "$line" | grep -q "[:,] $script NotoSansCJK-Regular.ttc"; then
+              echo "::error::The hub's start log does not name the image's CJK face for $script (its 'system faces' line)."
+              exit 1
+            fi
+          done
+          echo "the hub measures CJK table cells in Han, Hiragana, Katakana and Hangul with Noto Sans CJK"
       - name: Container log
         if: always()
         run: docker logs ordo-smoke 2>&1 | tail -50 || true

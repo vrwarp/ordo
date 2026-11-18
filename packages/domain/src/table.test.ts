@@ -11,12 +11,15 @@ import {
   type TextRun,
 } from './schemas.ts';
 import {
+  cellBodyOf,
   cellRich,
   cellStyleOf,
+  cellTextObject,
   cellTextStyle,
   deleteCol,
   deleteRow,
   gcTable,
+  growRow,
   insertCol,
   insertRow,
   placeCells,
@@ -152,6 +155,35 @@ describe('cell views', () => {
     expect(cellStyleOf(base, base)).toEqual({});
   });
 });
+
+describe("cellTextObject (the editor's cell target)", () => {
+  it("is the cell's rich body as a text object in the table's box, and goes back through setCell unchanged", () => {
+    const o = shape(m9Table());
+    const v = cellTextObject(o, 4)!;
+    const rich = cellRich(t$(o), 4)!;
+    expect(v).toMatchObject({ id: 't', type: 'text', box: o.box, opacity: o.opacity });
+    expect({ text: v.text, style: v.style, runs: v.runs, paras: v.paras }).toEqual(rich);
+    expect(cellBodyOf(v)).toEqual(rich);
+    // Written back as it is, the table's cells are equal (palettes compacted the same way).
+    expect(t$(setCell(o, 4, cellBodyOf(v)))).toEqual(t$(o));
+    const inCell = { x: 300, y: 260, w: 400, h: 0, rotation: 0 };
+    expect(cellTextObject(o, 4, inCell)!.box).toBe(inCell);
+    // A cell without runs or paragraph styles has none on its view.
+    expect(cellTextObject(o, 0)).not.toHaveProperty('runs');
+    expect(cellTextObject(o, 99)).toBeUndefined();
+    expect(cellTextObject({ ...o, table: undefined }, 0)).toBeUndefined();
+  });
+
+  it("a typed edit of the view is the cell's new text, its runs kept", () => {
+    const o = shape(m9Table());
+    const v = cellTextObject(o, 4)!;
+    const next = setCell(o, 4, cellBodyOf({ ...v, text: `${v.text}!` }));
+    expect(cellRich(t$(next), 4)!.text).toBe('Call to worship\nOpening hymn!');
+    expect(cellRich(t$(next), 4)!.runs).toEqual(rich4().runs);
+  });
+});
+
+const rich4 = () => cellRich(m9Table(), 4)!;
 
 describe('cell text', () => {
   it('setCell round-trips runs through the run palette', () => {
@@ -325,6 +357,32 @@ describe('rows and columns', () => {
     }
     expect(deleteRow(o, 2)).toBe(o);
     expect(deleteCol(o, Number.NaN)).toBe(o);
+  });
+
+  it("growRow grows one row to a height, never shrinks it, and the box by the table's row scale", () => {
+    const o = shape({ ...grid(3, 2), rowRule: 'fixed' }, 240); // rows of 40 drawn at 80 (row scale 2)
+    const g = growRow(o, 1, 55);
+    expect(t$(g).rows).toEqual([40, 55, 40]);
+    expect(g.box).toEqual({ ...o.box, h: 240 + 15 * 2 });
+    expect(t$(g).cells).toBe(t$(o).cells);
+    expect(t$(g).rowRule).toBe('fixed');
+    // Never shrinks: a height at or under the row's is the object itself.
+    expect(growRow(o, 1, 40)).toBe(o);
+    expect(growRow(o, 1, 12)).toBe(o);
+    // Grown twice by the same height is grown once.
+    expect(growRow(g, 1, 55)).toBe(g);
+    valid(t$(g));
+  });
+
+  it('growRow refuses rows out of range and heights that are not finite, and keeps the schema bound', () => {
+    const o = shape(grid(2, 2));
+    for (const r of [-1, 2, 0.5, Number.NaN]) expect(growRow(o, r, 60)).toBe(o);
+    for (const h of [Number.NaN, Number.POSITIVE_INFINITY]) expect(growRow(o, 0, h)).toBe(o);
+    const big = growRow(o, 0, 1e9);
+    expect(t$(big).rows[0]).toBe(100_000);
+    expect(big.box.h).toBeLessThanOrEqual(100_000);
+    const plain = { ...o, table: undefined } as ShapeObject;
+    expect(growRow(plain, 0, 60)).toBe(plain);
   });
 
   it('tableText still reads the edited table row by row', () => {

@@ -19,6 +19,12 @@ export type CanvasTextSelection = {
   caret: number;
 };
 
+/**
+ * What a text edit goes to (design/15 "Table editing"): a text object, or one cell of a table (`cell`, its
+ * index in `TableData.cells`), edited as the cell's text object view and written back through `setCell`.
+ */
+export type TextTarget = { objectId: string; cell?: number };
+
 export type EditorState = {
   id?: string;
   /** Last saved (or loaded) version. */
@@ -44,7 +50,17 @@ export type EditorState = {
   guides: Guides;
   canUndo: boolean;
   canRedo: boolean;
+  /**
+   * The selected cell of the primary object when it is a table (its index in `TableData.cells`): the cell the
+   * table bar and panel edit. Undefined: the whole table (or no table).
+   */
+  cell?: number;
   inlineEditingId?: string;
+  /**
+   * With `inlineEditingId` a table's id: the cell edited on the canvas. The inline target is
+   * `{ objectId: inlineEditingId, cell: inlineEditingCell }` (`inlineTarget`).
+   */
+  inlineEditingCell?: number;
   textRange: CanvasTextSelection;
   loadError?: string;
 };
@@ -73,22 +89,55 @@ export function setTextRange(range: { start: number; end: number; caret?: number
   useEditor.setState({ textRange: { start, end, caret } });
 }
 
+/**
+ * Start editing on the canvas: a text object, or with `cell` that cell of a table (which becomes the selected
+ * cell), with the selection `range` (else the one kept).
+ */
 export function startInlineEditing(
   objectId: string,
   range?: { start: number; end: number; caret?: number },
+  cell?: number,
 ): void {
+  const at = cell === undefined ? { inlineEditingCell: undefined } : { inlineEditingCell: cell, cell };
   if (range) {
     const start = Math.max(0, Math.min(range.start, range.end));
     const end = Math.max(start, Math.max(range.start, range.end));
     const caret = range.caret !== undefined ? Math.max(start, Math.min(end, range.caret)) : end;
-    useEditor.setState({ inlineEditingId: objectId, textRange: { start, end, caret } });
+    useEditor.setState({ inlineEditingId: objectId, ...at, textRange: { start, end, caret } });
   } else {
-    useEditor.setState({ inlineEditingId: objectId });
+    useEditor.setState({ inlineEditingId: objectId, ...at });
   }
 }
 
 export function stopInlineEditing(): void {
-  useEditor.setState({ inlineEditingId: undefined });
+  useEditor.setState({ inlineEditingId: undefined, inlineEditingCell: undefined });
+}
+
+/** What the canvas edits inline: a text object, or a table's cell; undefined when nothing is edited. */
+export function inlineTarget(s: EditorState = useEditor.getState()): TextTarget | undefined {
+  if (!s.inlineEditingId) return undefined;
+  return s.inlineEditingCell === undefined
+    ? { objectId: s.inlineEditingId }
+    : { objectId: s.inlineEditingId, cell: s.inlineEditingCell };
+}
+
+/**
+ * Select cell `cell` of table `objectId` (the table alone becomes the selection), or with `undefined` the
+ * whole table. A new cell starts with an empty text selection; editing another target on the canvas stops.
+ */
+export function selectCell(objectId: string, cell: number | undefined): void {
+  useEditor.setState((s) => {
+    const same = s.objectId === objectId && s.cell === cell;
+    const editing = s.inlineEditingId === objectId && s.inlineEditingCell === cell && cell !== undefined;
+    return {
+      objectId,
+      objectIds: [objectId],
+      cell,
+      inlineEditingId: editing ? s.inlineEditingId : undefined,
+      inlineEditingCell: editing ? s.inlineEditingCell : undefined,
+      textRange: same ? s.textRange : EMPTY_TEXT_RANGE,
+    };
+  });
 }
 
 const history = new History<Presentation>(200, 800);
@@ -117,7 +166,9 @@ export function openPresentation(p: Presentation): void {
     mergeConflicts: [],
     canUndo: false,
     canRedo: false,
+    cell: undefined,
     inlineEditingId: undefined,
+    inlineEditingCell: undefined,
     textRange: EMPTY_TEXT_RANGE,
     loadError: undefined,
   });
@@ -166,7 +217,14 @@ function fixSelection(): void {
   if (!s.draft) return;
   const slide = getSlide(s.draft, s.slideId);
   if (!slide) {
-    useEditor.setState({ slideId: firstSlideId(s.draft), objectId: undefined, objectIds: [] });
+    useEditor.setState({
+      slideId: firstSlideId(s.draft),
+      objectId: undefined,
+      objectIds: [],
+      cell: undefined,
+      inlineEditingId: undefined,
+      inlineEditingCell: undefined,
+    });
     return;
   }
   // A state set with `objectId` alone (older callers) selects that one object.
@@ -175,6 +233,15 @@ function fixSelection(): void {
   const primary = s.objectId && ids.includes(s.objectId) ? s.objectId : ids[0];
   if (primary !== s.objectId || ids.length !== s.objectIds.length)
     useEditor.setState({ objectId: primary, objectIds: ids });
+  // A cell an undo took away (a row or column inserted, then undone) is no longer selected nor edited.
+  const hasCell = (id: string | undefined, i: number | undefined) => {
+    const o = id === undefined || i === undefined ? undefined : slide.objects.find((x) => x.id === id);
+    return o?.type === 'shape' && !!o.table && i! < o.table.cells.length;
+  };
+  const st = useEditor.getState();
+  if (st.cell !== undefined && !hasCell(st.objectId, st.cell)) useEditor.setState({ cell: undefined });
+  if (st.inlineEditingCell !== undefined && !hasCell(st.inlineEditingId, st.inlineEditingCell))
+    useEditor.setState({ inlineEditingId: undefined, inlineEditingCell: undefined });
 }
 
 export function selectSlide(slideId: string | undefined): void {
@@ -182,18 +249,26 @@ export function selectSlide(slideId: string | undefined): void {
     slideId,
     objectId: undefined,
     objectIds: [],
+    cell: undefined,
     inlineEditingId: undefined,
+    inlineEditingCell: undefined,
     textRange: EMPTY_TEXT_RANGE,
   });
 }
-/** Select one object (or none): it is the whole selection. */
+/** Select one object (or none): it is the whole selection. The object already selected keeps its cell. */
 export function selectObject(objectId: string | undefined): void {
-  useEditor.setState((s) => ({
-    objectId,
-    objectIds: objectId ? [objectId] : [],
-    inlineEditingId: objectId && objectId === s.inlineEditingId ? s.inlineEditingId : undefined,
-    textRange: objectId && objectId === s.objectId ? s.textRange : EMPTY_TEXT_RANGE,
-  }));
+  useEditor.setState((s) => {
+    const same = !!objectId && objectId === s.objectId;
+    const editing = !!objectId && objectId === s.inlineEditingId;
+    return {
+      objectId,
+      objectIds: objectId ? [objectId] : [],
+      cell: same ? s.cell : undefined,
+      inlineEditingId: editing ? s.inlineEditingId : undefined,
+      inlineEditingCell: editing ? s.inlineEditingCell : undefined,
+      textRange: same ? s.textRange : EMPTY_TEXT_RANGE,
+    };
+  });
 }
 /**
  * Select several objects (a group, design/27 §11 item 5): `ids` kept in the open slide's z order, `primary`
@@ -207,7 +282,9 @@ export function selectObjects(ids: readonly string[], primary?: string): void {
   useEditor.setState((s) => ({
     objectId: first,
     objectIds: ordered,
+    cell: ordered.length === 1 && first === s.objectId ? s.cell : undefined,
     inlineEditingId: undefined,
+    inlineEditingCell: undefined,
     textRange: first && first === s.objectId ? s.textRange : EMPTY_TEXT_RANGE,
   }));
 }

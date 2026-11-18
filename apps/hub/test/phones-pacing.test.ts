@@ -18,6 +18,7 @@ import { createLibraryProcess, type LibraryProcess } from '../src/libproc.ts';
 import { withThreads } from '../src/media/ffmpeg.ts';
 import { run } from '../src/media/tools.ts';
 import { JobPacing, lightToolPace, MAX_TIMER_MS } from '../src/pacing.ts';
+import { noSystemFaces } from '../src/pptx/systemFaces.ts';
 import { pacedScope } from '../src/reqctx.ts';
 import { ffmpeg, fixtures } from './fixtures.ts';
 import {
@@ -287,6 +288,7 @@ describe('jobs paced while live', () => {
       logLevel: 'warn',
       scheduleBackups: false,
       toolProbe: TEST_TOOLS,
+      systemFaces: noSystemFaces,
       paceGraceMs: 100,
     };
     lib = await createLibraryProcess(cfg, { secret: 's' });

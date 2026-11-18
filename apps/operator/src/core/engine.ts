@@ -11,6 +11,7 @@ import {
 } from '@ordo/client';
 import {
   formatBytes,
+  GOLIVE_ENDED_REASON,
   type LiveCommand,
   type LiveEvent,
   type LiveState,
@@ -22,7 +23,14 @@ import {
   type TimerSpec,
 } from '@ordo/domain';
 import { actionToEvent, checkInvariants, isLiveEventShape, isLiveStateShape } from '@ordo/live-state';
-import { type LibrarySnapshot, type OutputHealthEntry, ROUTES, type Settings } from '@ordo/protocol';
+import {
+  LIVE_PREPARE_PATH,
+  type LibrarySnapshot,
+  type LivePrepareRes,
+  type OutputHealthEntry,
+  ROUTES,
+  type Settings,
+} from '@ordo/protocol';
 import { type Action, renderKeyPixels, renderStripPixels } from '@ordo/surfaces';
 import { CORE_BUDGETS } from '../lib/budgets.ts';
 import { DoublePressGuard } from '../lib/confirm.ts';
@@ -36,6 +44,7 @@ import type {
   CallName,
   CoreStats,
   CoreToMain,
+  GoLivePrepare,
   LiveSlice,
   MainToCore,
   SearchHit,
@@ -47,6 +56,24 @@ import type {
 
 /** GO lead: two frames at 60 Hz. */
 export const GO_LEAD_MS = 33;
+/** While a service is live, a Go live still being prepared after this offers the saved copy (W41). */
+export const SAVED_COPY_OFFER_MS = 5000;
+/** A prepare the hub still reports after this is not waited for: the goLive is sent (the hub prepares it). */
+const PREPARE_GIVE_UP_MS = 45_000;
+/** At most one prepare question this often. */
+const PREPARE_POLL_MIN_MS = 150;
+
+/** How long ago a copy was saved, as W41's button says it ("3 days ago"; librarylink.ts `ago` on the hub). */
+export function savedCopyAgo(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 90) return `${s} s ago`;
+  const m = Math.round(s / 60);
+  if (m < 90) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 36) return `${h} h ago`;
+  return `${Math.round(h / 24)} days ago`;
+}
+
 /** Persisted core state (live state, authority, unconfirmed commands, processed action ids). */
 export const CORE_KEY = 'core';
 const LEGACY_LIVE_KEY = 'live';
@@ -116,6 +143,9 @@ export class CoreEngine {
   private offline: Record<string, OfflineEntry> = {};
   private offlineAbort?: { playlistId: string; ac: AbortController };
   private offlinePosted = '';
+  /** The Go live being prepared on the hub (design/29 M8); a newer Go live or End service replaces it. */
+  private goLivePrep?: { playlistId: string; token: number; since: number; title: string; saved: boolean };
+  private goLiveToken = 0;
   private fillingManifest?: string;
   private fillAbort?: AbortController;
   /** The own-cache downloads in flight, shared across fills (a manifest change does not restart them). */
@@ -274,6 +304,7 @@ export class CoreEngine {
   }
 
   dispose(): void {
+    this.goLiveToken++;
     for (const t of this.timers) clearInterval(t);
     this.fillAbort?.abort();
     this.downloads.abortAll();
@@ -593,9 +624,13 @@ export class CoreEngine {
         return;
       }
       case 'goLive':
-        this.submit({ k: 'goLive', playlistId: String(args[0]) }, aid);
+        void this.goLive(String(args[0]), aid);
+        return;
+      case 'goLiveSaved':
+        if (this.goLivePrep?.playlistId === String(args[0])) this.goLivePrep.saved = true;
         return;
       case 'endService':
+        this.endGoLivePrep();
         this.submit({ k: 'endService', at: this.at() }, aid);
         return;
       case 'sendMessage': {
@@ -650,6 +685,79 @@ export class CoreEngine {
         if (this.offlineAbort?.playlistId === String(args[0])) this.offlineAbort.ac.abort();
         return;
     }
+  }
+
+  // ------------------------------------------------------------------ going live (design/29 M8)
+
+  /**
+   * Go live: the hub first prepares the playlist beside the running service (POST /live/prepare, fetched and
+   * checked off the GO path), while GO, Next and Clear keep applying to the running service; W41's toast shows
+   * the progress, and the goLive is sent once the hub reports it ready (or failed: its refusal reaches the
+   * Go live dialog as before). No hub connection, or a hub without the route: the goLive is sent at once.
+   */
+  private async goLive(playlistId: string, aid: string): Promise<void> {
+    const token = ++this.goLiveToken;
+    const send = () => {
+      if (token !== this.goLiveToken) return;
+      this.endGoLivePrep();
+      this.submit({ k: 'goLive', playlistId }, aid);
+    };
+    if (!this.hub.connected) return send();
+    const prep = {
+      playlistId,
+      token,
+      since: Date.now(),
+      title: this.lib.data.playlists.find((p) => p.id === playlistId)?.name ?? 'the playlist',
+      saved: false,
+    };
+    this.goLivePrep = prep;
+    let seen: number | undefined;
+    for (;;) {
+      const asked = Date.now();
+      let r: LivePrepareRes;
+      try {
+        r = await api<LivePrepareRes>(LIVE_PREPARE_PATH, {
+          method: 'POST',
+          json: {
+            playlistId,
+            ...(seen !== undefined ? { seen } : {}),
+            ...(prep.saved ? { saved: true } : {}),
+          },
+        });
+      } catch (e) {
+        if (token === this.goLiveToken)
+          this.log('warn', `Go live: the hub did not prepare it (${String(e)})`);
+        return send();
+      }
+      if (token !== this.goLiveToken) return;
+      if (r.state !== 'preparing' || Date.now() - prep.since > PREPARE_GIVE_UP_MS) return send();
+      seen = r.pct;
+      const live = this.core.view.mode === 'live';
+      const offer =
+        live && !prep.saved && r.savedAt !== undefined && Date.now() - prep.since >= SAVED_COPY_OFFER_MS;
+      const p: GoLivePrepare = {
+        playlistId,
+        title: prep.title,
+        pct: Math.max(0, Math.min(100, Math.round(r.pct))),
+        live,
+        ...(offer && r.savedAt !== undefined
+          ? { savedAgo: savedCopyAgo(this.hub.clock.now() - r.savedAt) }
+          : {}),
+      };
+      this.post({ t: 'ui', e: { k: 'goLivePrepare', p } });
+      // The hub holds each answer until the progress moves (LIVE_PREPARE_WAIT_MS); one that answers at once
+      // (an older or busy hub) is not asked again in a tight loop.
+      const gap = PREPARE_POLL_MIN_MS - (Date.now() - asked);
+      if (gap > 0) await new Promise((r) => setTimeout(r, gap));
+    }
+  }
+
+  /** Forget the Go live being prepared (sent, given up, or End service pressed): W41's toast closes. */
+  private endGoLivePrep(): void {
+    if (!this.goLivePrep) return;
+    this.goLivePrep = undefined;
+    this.goLiveToken++;
+    this.post({ t: 'ui', e: { k: 'goLivePrepare' } });
   }
 
   // ------------------------------------------------------------------ going live without the hub
@@ -1093,6 +1201,8 @@ export class CoreEngine {
       case 'rejected': {
         this.log('warn', `hub rejected ${n.command.k}: ${n.reason}`);
         this.recordBudget('rejected', `${n.command.k}: ${n.reason}`);
+        // A goLive cancelled by End service (pressed after it, design/29 M8) is what the operator asked for.
+        if (n.command.k === 'goLive' && n.reason === GOLIVE_ENDED_REASON) return;
         if (n.command.k === 'goLive') this.post({ t: 'ui', e: { k: 'goLiveError', reason: n.reason } });
         else this.toast(`Hub refused ${n.command.k}: ${n.reason}`, 'warn');
         return;

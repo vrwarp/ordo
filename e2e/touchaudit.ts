@@ -16,6 +16,27 @@ export const TARGET_SELECTOR =
 export const COMPACT_SELECTOR = `${TARGET_SELECTOR}, a[href], [role="button"], label.check`;
 
 /**
+ * The iPad audits' allowed exceptions, by CSS selector, with why (as e2e/ipad/touch-targets.spec.ts names them):
+ * the picker's 32 px swatch grid, the gradient ramp's stop pins (drag handles; the stop bar is the touch way)
+ * and a colour pill's 32 px chip (its hex field or summary is full-size).
+ */
+export const TABLET_EXCEPTIONS: readonly [selector: string, why: string][] = [
+  ['.color-swatch-btn', 'colour swatch grid (32 px quick picks beside full-size fields)'],
+  ['.grad-ramp-pin', 'gradient stop pins (drag handles; the stop bar is the touch way)'],
+  [
+    '.color-pill-chip',
+    "a colour pill's chip (the owner's 32 px touch size; its hex field or summary is full-size)",
+  ],
+];
+
+/**
+ * The table's tools in the Object panel (design/15 "Table editing": a table's cell text, format, Cell fill and
+ * Rows & columns, `TableTools.tsx`), the surface the iPad's table audit measures with every other control of
+ * the editor (e2e/ipad/table-targets.spec.ts).
+ */
+export const TABLE_TOOLS = 'fieldset[aria-label="Table"]';
+
+/**
  * Every visible control under `root` (a CSS selector; each match is a scope) smaller than 44x44, apart from
  * the `exceptions` (CSS selectors, each with its reason where the caller lists them).
  */

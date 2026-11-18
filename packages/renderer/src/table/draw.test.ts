@@ -25,12 +25,20 @@ function at(op: CtxOp, x: number, y: number): [number, number] {
   return [a * x + c * y + e, b * x + d * y + f];
 }
 
-/** The text calls of a recording as (text, device x, device y), rounded to 1e-6 px. */
-function texts(ops: CtxOp[]): string[] {
+/**
+ * The text calls of a recording as (text, device x, device y), rounded to 1e-6 px; `devicePixels`: each moved
+ * to where the table drawer paints cell text (its baseline on the device row it falls in, its start on the
+ * quarter of the device column it falls in: paint.ts `DEVICE_PIXEL_PAINTER`).
+ */
+function texts(ops: CtxOp[], devicePixels = false): string[] {
   return ops
     .filter((o) => o.op === 'fillText')
     .map((o) => {
-      const [x, y] = at(o, o.args[1] as number, o.args[2] as number);
+      let [x, y] = at(o, o.args[1] as number, o.args[2] as number);
+      if (devicePixels) {
+        x = Math.floor(x * 4 + 1e-6) / 4;
+        y = Math.floor(y + 1e-6);
+      }
       return `${o.args[0]} ${x.toFixed(6)} ${y.toFixed(6)}`;
     });
 }
@@ -100,7 +108,7 @@ describe('drawing a table', () => {
     ]);
   });
 
-  it('draws its text where the M6 group of the same table draws it, turned or not', () => {
+  it('draws its text where the M6 group of the same table draws it, on device pixels unless turned', () => {
     for (const rotation of [0, 30]) {
       const t = gridTable(3, 2, {
         cells: [
@@ -120,7 +128,9 @@ describe('drawing a table', () => {
         const group = recordingCtx();
         const l = layoutTable(measurerFor(group), o, LEGACY_FONT_ENV)!;
         for (const g of legacyGroup(o, l)) if (g.type === 'text') drawObject(group, clampObject(g)!, scale);
-        expect(texts(mine.ops)).toEqual(texts(group.ops));
+        // The group's text boxes paint as text boxes do; the table puts its cells' runs on device pixels
+        // (text-lines), which a turned table has none of.
+        expect(texts(mine.ops)).toEqual(texts(group.ops, rotation === 0));
         // One call per drawn segment (word): every cell's words are there.
         const words = texts(mine.ops).map((x) => x.split(' ')[0]);
         for (const w of ['Time', 'Order', 'service', '10:00', 'opening', 'Reading'])
@@ -216,6 +226,28 @@ describe('drawing a table', () => {
       [0, 40],
       [100, 0],
     ]);
+  });
+
+  it('draws an East Asian vertical cell (eaVert) exactly as a horizontal one (a pin: no vertical text engine)', () => {
+    // Sub-wave 1c stores the Korean bulletin's eaVert cells in the table object (rule V: LibreOffice 24.2 draws
+    // them horizontally, probe deck A); the renderer is unchanged and draws them as horz (`cellIsVertical`).
+    const narrow = (vert?: 'eaVert' | 'horz') =>
+      gridTable(2, 2, {
+        cols: [30, 100],
+        cells: [{ text: '1년차', rowSpan: 2, style: 0 }, { text: '2019' }, { text: '2020' }],
+        styles: [{ valign: 'middle', ...(vert ? { vert } : {}) }],
+      });
+    const drawn = (t: ReturnType<typeof gridTable>) => {
+      clearTableCache();
+      const r = recordingCtx();
+      drawTable(r, tableShape(t), 2);
+      return r.ops;
+    };
+    const plain = drawn(narrow());
+    // The narrow column wraps the cell a glyph or two a line, as LibreOffice's page of the bulletin shows.
+    expect(texts(plain).length).toBeGreaterThan(3);
+    expect(drawn(narrow('eaVert'))).toEqual(plain);
+    expect(drawn(narrow('horz'))).toEqual(plain);
   });
 
   it('the M6 group it is compared with draws the same fills, lines and texts as objects', () => {

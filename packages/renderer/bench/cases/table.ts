@@ -217,6 +217,64 @@ export function chart(vocab = 0): ShapeObject {
   );
 }
 
+/**
+ * A table at `TABLE_LIMITS` (a large or hostile deck's): 60,000 characters (`tableText`) at 8 px over the whole
+ * slide, either in 64 x 64 = 4,096 slots (`grid`, 14 or 15 characters a cell) or in 6 cells of 10,000
+ * (`cellText`). Tables are never units and their text stays live, so this is what a raster draws on a GO's path
+ * at 3840 (review of r2b sub-wave 1). Another `vocab` gives words no other has.
+ */
+export function limitTable(vocab = 0, shapeOf: 'grid' | 'cells' = 'grid'): ShapeObject {
+  const R = shapeOf === 'grid' ? 64 : 2;
+  const C = shapeOf === 'grid' ? 64 : 3;
+  const cells: TableCell[] = [];
+  let left = 60_000;
+  for (let i = 0; i < R * C; i++) {
+    const n = Math.floor(left / (R * C - i));
+    left -= n;
+    cells.push({ text: words(n, i + 1, vocab) });
+  }
+  return shape(
+    'limit',
+    { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+    {
+      cols: Array(C).fill(1920 / C),
+      rows: Array(R).fill(1080 / R),
+      cells,
+      base: { ...base(8), insets: { l: 1, t: 1, r: 1, b: 1 } },
+      lineStyles: [
+        { width: 1, color: GREY },
+        { width: 0.5, color: GREY },
+      ],
+      ...grid(R, C),
+    },
+  );
+}
+
+/**
+ * Hostile imported text at the clamp's limits: 6 cells of 10,000 characters in one row of 26 px columns, a
+ * slash in every word ('a/b '), so each word takes a line of its own and every line end asks LibreOffice's
+ * i#17155 slash rule (text/lines.ts `slashBreak`) for a glued break inside the next word (review 1b: a scan of
+ * the paragraph's every glued break there made a cell's layout quadratic in its length). Another `vocab` gives
+ * words no other has.
+ */
+export function slashTable(vocab = 0): ShapeObject {
+  const cells: TableCell[] = [...Array(6)].map((_, i) => ({
+    text: `a${vocab}x${i}/b `.repeat(Math.ceil(10_000 / `a${vocab}x${i}/b `.length)).slice(0, 10_000),
+  }));
+  return shape(
+    'slashes',
+    { x: 0, y: 0, w: 156, h: 1080, rotation: 0 },
+    {
+      cols: Array(6).fill(26),
+      rows: [1080],
+      cells,
+      base: { ...base(8), insets: { l: 1, t: 1, r: 1, b: 1 } },
+      lineStyles: [{ width: 1, color: GREY }],
+      ...grid(1, 6),
+    },
+  );
+}
+
 /** The M6 group of a table: its grid shapes and text boxes, laid out with a fixed-width measurer. */
 function group(o: ShapeObject): SlideObject[] {
   const c = clampShapeObject(o);

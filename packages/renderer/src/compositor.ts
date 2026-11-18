@@ -93,7 +93,8 @@ export function opaqueFrom(
 /** Whether a layer shows a full-frame opaque bitmap at full weight this frame (see `opaqueFrom`). */
 export function opaqueLive(ls: LayerStack<ImageBitmap>, width: number, height: number): boolean {
   /* @hot */
-  if (ls.fading) return false;
+  // A crossfade, or an in-place fade of late parts, blends two copies.
+  if (ls.fading || ls.refading) return false;
   const s = ls.stacks[ls.live]!;
   const b = s.bitmap;
   return (

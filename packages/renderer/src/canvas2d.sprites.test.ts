@@ -152,3 +152,77 @@ describe('Canvas 2D sprites and opaque layers', () => {
     expect(drawsOf('main').at(-1)).toEqual(['drawImage', 'scratch', 0, 0]);
   });
 });
+
+describe('Canvas 2D in-place fade of late parts (design/14 "Late units", r2b units-live)', () => {
+  it('an in-place refresh at mid-fade blends both copies, then draws the fresh one alone', () => {
+    const c = compositor();
+    const f = inputs();
+    const ls = f.layers[LAYER_INDEX.slide]!;
+    show(f, LAYER_INDEX.slide, {
+      key: 'A',
+      kind: SRC_BITMAP,
+      bitmap: bitmap('a1', 400, 100),
+      x: 100,
+      y: 800,
+    });
+    ls.offer({
+      key: 'A',
+      kind: SRC_BITMAP,
+      bitmap: bitmap('a2', 400, 120),
+      x: 100,
+      y: 780,
+      refresh: true,
+      refreshFadeMs: 300,
+    });
+    ls.tick(1000, 16);
+    f.now = 1150;
+    c.draw(f);
+    // Mixed in the scratch within both copies' rect: the old one at 1 - w, the fresh one at w (0.5).
+    expect(drawsOf('scratch')).toEqual([
+      ['clearRect', 100, 780, 400, 120],
+      ['drawImage', 'a1', 100, 800, 400, 100],
+      ['drawImage', 'a2', 100, 780, 400, 120],
+    ]);
+    const alphas = (log.scratch ?? []).filter((x) => x[0] === 'globalAlpha=').map((x) => x[1]);
+    expect(alphas).toEqual([0.5, 0.5]);
+    expect(drawsOf('main').at(-1)).toEqual(['drawImage', 'scratch', 100, 780, 400, 120, 100, 780, 400, 120]);
+    // Past its end: the fresh copy alone, at full weight.
+    ls.tick(1300, 16);
+    log.main!.length = 0;
+    f.now = 1316;
+    c.draw(f);
+    expect(drawsOf('main').at(-1)).toEqual(['drawImage', 'a2', 100, 780, 400, 120]);
+  });
+
+  it('a GO in the middle of an in-place fade ends it and flips at once, fading out the fresh copy', () => {
+    const c = compositor();
+    const f = inputs();
+    const ls = f.layers[LAYER_INDEX.slide]!;
+    show(f, LAYER_INDEX.slide, {
+      key: 'A',
+      kind: SRC_BITMAP,
+      bitmap: bitmap('a1', 400, 100),
+      x: 100,
+      y: 800,
+    });
+    ls.offer({ key: 'B', kind: SRC_BITMAP, bitmap: bitmap('b', 400, 100), x: 100, y: 100 });
+    ls.offer({
+      key: 'A',
+      kind: SRC_BITMAP,
+      bitmap: bitmap('a2', 400, 100),
+      x: 100,
+      y: 800,
+      refresh: true,
+      refreshFadeMs: 300,
+    });
+    ls.tick(1000, 16);
+    ls.requestFlip('B', 1100, 300, 1090);
+    expect(ls.tick(1100, 16)).toBe(true);
+    f.now = 1250;
+    c.draw(f);
+    const drawn = drawsOf('scratch')
+      .filter((x) => x[0] === 'drawImage')
+      .map((x) => x[1]);
+    expect(drawn).toEqual(['a2', 'b']);
+  });
+});

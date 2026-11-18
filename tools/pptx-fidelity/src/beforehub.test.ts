@@ -5,9 +5,16 @@ import { join } from 'node:path';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  type AskedSlide,
+  askedSet,
   BeforeHub,
   boundsOf,
+  hubBeforeOf,
+  hubSessionOptions,
+  keepsPage,
   needsHub,
+  noLoAskedSet,
+  noLoHubFields,
   pagePx,
   pasteLibreOffice,
   pasteRegions,
@@ -57,6 +64,85 @@ describe('which slides the hub is asked for', () => {
     expect(needsHub({ hub: 'native', budget: true })).toBe(true);
     // The converter did not emit it: the hub shows LibreOffice's picture of it.
     expect(needsHub(undefined)).toBe(true);
+  });
+
+  it("asks for a slide a hub with LibreOffice keeps as LibreOffice's page (keepsPage, ImportCore.pageForBudget)", () => {
+    const stored = { hub: 'native' as const, hubWhy: null, level: 'full', stored: 9_000 };
+    // Fitted by leaving something out: the page, as before M9.
+    expect(keepsPage({ ...stored, hubWhy: 'slide', level: 'plain' })).toBe(true);
+    expect(keepsPage({ ...stored, hubWhy: 'slide', level: 'minimal' })).toBe(true);
+    expect(keepsPage({ ...stored, hubWhy: 'slide', level: 'grid' })).toBe(false);
+    expect(keepsPage(stored)).toBe(false);
+    // A picture slide is LibreOffice's page whatever the rule says (`needsHub` asks for it by its class).
+    expect(keepsPage({ ...stored, hub: 'picture', hubWhy: 'slide', level: 'minimal' })).toBe(false);
+  });
+
+  it('builds the asked set as main.ts does: never for tables (the interim rule is gone), and the slides --ask-hub names', () => {
+    const full = { hub: 'native' as const, hubWhy: null, level: 'full', stored: 9_000 };
+    const plain = { ...full, hubWhy: 'slide', level: 'plain' };
+    // A scene from a run of the interim rule's build, read back from its slides.json: it still carries what
+    // its tables would add as their M6 group (86,079 B: past 64 KB with the slide's 9,000).
+    const older = JSON.parse('{"tableGroupBytes":86079}') as AskedSlide;
+    const models = [full, plain, full];
+    const slides: (AskedSlide | undefined)[] = [older, {}, undefined];
+    const before = (i: number) => hubBeforeOf(slides[i], models[i]);
+    const lo = ['p1.png', 'p2.png', 'p3.png', undefined];
+    // The table slide stays the table object on a hub with LibreOffice: not asked; the plain slide keeps its
+    // page; a slide the converter did not emit is LibreOffice's picture; a slide without a page is never asked.
+    expect([...askedSet({ n: 4, lo, before })]).toEqual([1, 2]);
+    expect(before(0)).toEqual({ hub: 'native' });
+    expect([...askedSet({ n: 4, lo, before, only: new Set([0, 1]) })]).toEqual([1]);
+    // A table slide the ladder fitted plain keeps the table object, never LibreOffice's page (pageForBudget).
+    expect(hubBeforeOf({ table: true }, plain)).toEqual({ hub: 'native' });
+    expect(hubBeforeOf({}, plain)).toEqual({ hub: 'native', budget: true });
+    // `--ask-hub` adds a slide the hub stores as the native column draws it (never one without a page, nor
+    // one `--slides` leaves out).
+    const extra = new Set([0, 3]);
+    expect([...askedSet({ n: 4, lo, before, extra })]).toEqual([0, 1, 2]);
+    expect([...askedSet({ n: 4, lo, before, extra, only: new Set([1, 3]) })]).toEqual([1]);
+  });
+});
+
+describe('a hub without LibreOffice asked (--ask-hub-nolo, sub-wave 1c)', () => {
+  it('starts that hub with the lite tools only on its PATH (no soffice) and LibreOffice off; the other as before', async () => {
+    const bin = join(dir, 'nolo-bin');
+    mkdirSync(bin, { recursive: true });
+    for (const t of ['ffmpeg', 'ffprobe', 'soffice', 'libreoffice', 'pdftoppm', 'pdfinfo', 'prlimit'])
+      writeFileSync(join(bin, t), '#!/bin/sh\n', { mode: 0o755 });
+    const nolo = await hubSessionOptions({ dir: join(dir, 'nolo-hub'), libreoffice: false, from: bin });
+    expect(nolo.path).toBeDefined();
+    expect(await findOnPath('soffice', nolo.path)).toBeUndefined();
+    expect(await findOnPath('libreoffice', nolo.path)).toBeUndefined();
+    expect(await findOnPath('ffmpeg', nolo.path)).toBe(join(nolo.path!, 'ffmpeg'));
+    expect(nolo.env).toEqual({ ORDO_LIBREOFFICE: 'off' });
+    // With LibreOffice: this process's PATH and the hub's own default, as before.
+    expect(await hubSessionOptions({ dir: join(dir, 'lo-hub'), libreoffice: true, from: bin })).toEqual({});
+  });
+
+  it('asks it for the slides --ask-hub-nolo names, or every table slide (all-tables), never one without a page', () => {
+    const lo = ['p1.png', 'p2.png', 'p3.png', undefined, 'p5.png'];
+    const tables = new Set([1, 3, 4]);
+    const isTable = (i: number) => tables.has(i);
+    expect([...noLoAskedSet({ n: 5, lo, isTable })]).toEqual([]);
+    expect([...noLoAskedSet({ n: 5, lo, isTable, extra: new Set([0, 3]) })]).toEqual([0]);
+    expect([...noLoAskedSet({ n: 5, lo, isTable, allTables: true })]).toEqual([1, 4]);
+    expect([...noLoAskedSet({ n: 5, lo, isTable, allTables: true, only: new Set([0, 1]) })]).toEqual([1]);
+    expect([...noLoAskedSet({ n: 5, lo, isTable, allTables: true, extra: new Set([2]) })]).toEqual([1, 2, 4]);
+  });
+
+  it("writes its score as noLoHubSsim with noLoHubFrom 'hub' (never beforeHubSsim), or why it has none", () => {
+    const got = {
+      scores: new Map([[1, 0.6337]]),
+      failed: new Set<number>(),
+      notes: [],
+      why: new Map([[2, 'pending']]),
+    };
+    const asked = new Set([1, 2, 3]);
+    expect(noLoHubFields(1, asked, got)).toEqual({ noLoHubSsim: 0.6337, noLoHubFrom: 'hub' });
+    expect(noLoHubFields(2, asked, got)).toEqual({ noLoHubFrom: 'pending' });
+    expect(noLoHubFields(3, asked, got)).toEqual({ noLoHubFrom: 'no score' });
+    expect(noLoHubFields(0, asked, got)).toEqual({});
+    for (const i of [0, 1, 2, 3]) expect(noLoHubFields(i, asked, got)).not.toHaveProperty('beforeHubSsim');
   });
 });
 
@@ -204,5 +290,59 @@ describe.skipIf(!chromium)('--before hub through a real hub', () => {
       rmSync(work, { recursive: true, force: true });
     }
     expect(existsSync(join(work, 'hub'))).toBe(false);
+  }, 300_000);
+});
+
+describe.skipIf(!chromium)('--ask-hub-nolo through a real hub without LibreOffice (sub-wave 1c)', () => {
+  it('imports through a hub that has no LibreOffice (capabilities say off), draws what it stores and scores it', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'ordo-beforehub-nolo-'));
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    p.addSlide().addText('Amazing grace', { x: 1, y: 1, w: 6, h: 1, fontFace: 'Arial', fontSize: 40 });
+    p.addSlide().addTable(
+      [
+        [{ text: 'Hymn' }, { text: 'Page' }],
+        [{ text: 'Amazing grace' }, { text: '12' }],
+      ],
+      {
+        x: 1,
+        y: 1,
+        w: 8,
+        colW: [6, 2],
+        fontFace: 'Arial',
+        fontSize: 24,
+        border: { type: 'solid', pt: 1, color: '000000' },
+      },
+    );
+    const deck = join(work, 'deck.pptx');
+    writeFileSync(deck, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    const loDir = join(work, 'lo');
+    mkdirSync(loDir);
+    const lo = await drawWithLibreOffice(deck, loDir);
+    const nd = join(work, 'native');
+    mkdirSync(nd);
+    const conv = await convertDeck(deck, nd);
+    expect(conv.slides[1]!.table).toBe(true);
+    const renderer = await NativeRenderer.start(chromium!);
+    const nolo = new BeforeHub({ dir: join(work, 'hub'), libreoffice: false });
+    try {
+      const r = await nolo.score({
+        deck,
+        shown: new Set([1]),
+        lo,
+        rect: conv.slideRect,
+        renderer,
+        work: join(work, 'v1'),
+      });
+      expect(r.notes.filter((n) => /gave no score|import failed|follow-up/.test(n))).toEqual([]);
+      expect(nolo.info()).toMatchObject({ libreoffice: false, state: 'off', entry: 'source' });
+      expect([...r.scores.keys()]).toEqual([1]);
+      expect(r.scores.get(1)!).toBeGreaterThan(0.8);
+      expect(noLoHubFields(1, new Set([1]), r)).toEqual({ noLoHubSsim: r.scores.get(1), noLoHubFrom: 'hub' });
+    } finally {
+      await nolo.close();
+      await renderer.close();
+      rmSync(work, { recursive: true, force: true });
+    }
   }, 300_000);
 });

@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { m9Slide } from './m9.test-util.ts';
 import { richSlide, richText } from './rich.test-util.ts';
 import { PlaylistItem, Slide, TextObject } from './schemas.ts';
-import * as prev from './schemas.prev.test-util.ts';
+import * as prev from './schemas.prev05.test-util.ts';
 
 /**
  * Schema growth is additive (design/27 Decision 9, §3.2, §14.7): the previous release's schema parses
  * slides with the new fields, stripping them, and enums inside new fields degrade instead of failing. The
- * previous release is main's 0.5.0 (`schemas.prev.test-util.ts`), which already has M2's rich text: it keeps
+ * previous release is main's 0.5.0 (`schemas.prev05.test-util.ts`), which already has M2's rich text: it keeps
  * every rich field, so a venue on 0.5.0 saves a rich slide back unchanged. M9's own fields are checked in
  * schemas.m9.test.ts.
  */

@@ -11,7 +11,10 @@ import { fileURLToPath } from 'node:url';
  * The base is `ORDO_E2E_PORT_BASE` when set. On CI (`CI` or `ORDO_CI`) it is fixed at 16000. Otherwise it is
  * 16000 + 1000 x (a hash of this checkout's path, mod 15): two worktrees of the repository on one machine get
  * different bases, so their suites can run side by side. Every default range ends below 32768, where Linux
- * starts handing out ephemeral ports (`ip_local_port_range`), and starts at 16000 or above.
+ * starts handing out ephemeral ports (`ip_local_port_range`), and starts at 16000 or above. An explicit base may
+ * sit below 16000 (a wave's parallel tracks each take a block outside the default bases, design/29 §4); it then
+ * keeps out of 5000-5999 (`tools/serve-demo.mjs` serves on 5173) and 8000-8999 (the shared `ORDO_E2E_PORT`s), and
+ * no row may land on a port browsers refuse to fetch (10080 is one: base 10000 puts `local-golive` there).
  *
  * The shared web server of `playwright.config.ts` (the hub most specs use, `helpers.ts` PORT) is the row
  * `shared`; `ORDO_E2E_PORT` still moves it on its own.
@@ -172,6 +175,57 @@ export const PORT_TABLE = {
   },
   'phones-live-load': { offset: 345, count: 1, spec: 'phones-live-load.spec.ts', what: 'hub' },
   'phones-writes': { offset: 346, count: 1, spec: 'phones-writes.spec.ts', what: 'hub' },
+  // M9 wave r2b's specs: offsets 400-659, in offset order (sub-wave 1: 400-459; sub-wave 1b: 440, and 445-449 kept
+  // for its integration; the integrations' 425, 630-659).
+  // effect-units: effects past the budget and lone line art drawn from units.
+  'effect-units': {
+    offset: 400,
+    count: 2,
+    spec: 'effect-units.spec.ts',
+    what: '0 hub (effects past the budget), 1 hub (hostile lone line art, upload route)',
+  },
+  // units-live: a GO never waits for drawing; late parts fade in; the playlist warmed ahead.
+  'units-live': {
+    offset: 405,
+    count: 2,
+    spec: 'units-live.spec.ts',
+    what: '0 hub (a jump to a slide not prepared; a GO 50 ms after its arm), 1 hub (the playlist warmed ahead)',
+  },
+  'editor-table': { offset: 420, count: 1, spec: 'editor-table.spec.ts', what: 'hub' },
+  'ipad-table-targets': {
+    offset: 421,
+    count: 3,
+    spec: 'ipad/table-targets.spec.ts',
+    what: '0 webkit-ipad, 1 webkit-ipad-portrait, 2 chromium-tablet',
+  },
+  // The integration of sub-wave 1: a PowerPoint table imported, a cell edited, live.
+  'pptx-table-edit': {
+    offset: 425,
+    count: 1,
+    spec: 'pptx-table-edit.spec.ts',
+    what: 'hub without LibreOffice (import tableDeck, edit a cell, Go live)',
+  },
+  // tables-conv: PowerPoint tables imported as one table object.
+  'pptx-tables': {
+    offset: 430,
+    count: 3,
+    spec: 'pptx-tables.spec.ts',
+    what: '0 hub without LibreOffice (Import tab), 1 hub without LibreOffice (upload route), 2 hub with LibreOffice',
+  },
+  // tables-cells (1b): 'Make editable' on LibreOffice's page a native import stored, on a hub with LibreOffice.
+  'editor-reimport-lo': {
+    offset: 440,
+    count: 1,
+    spec: 'editor-reimport-lo.spec.ts',
+    what: 'hub with LibreOffice (a 64 KB page made editable: 202, the job, its text boxes)',
+  },
+  // golive-prepare (design/29 §2.3 M8): Go live prepared beside the running service.
+  'golive-prepare': {
+    offset: 450,
+    count: 2,
+    spec: 'golive-prepare.spec.ts',
+    what: '0 hub with a slowed library (Go live again during a service), 1 hub (size ceiling)',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;

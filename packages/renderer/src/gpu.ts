@@ -54,6 +54,12 @@ import { flipDue } from './timing.ts';
  * offered (`prepare`), never on a flip; until then a 1x1 transparent texture is bound. A slot without a
  * frame of the stack's generation binds a 1x1 placeholder VideoFrame made at startup; the bit, not the
  * frame's alpha, decides whether it is sampled.
+ *
+ * An in-place fade (a slide's late parts, design/14 "Late units", `LayerStack.incoming`) uploads the fresh copy
+ * into a third texture of its layer (`fade`, made when the first such refresh is offered, +33 MB at 4K), in
+ * strips like armed content, and draws it over the live copy with the pair pipeline (tt) while it fades. When it
+ * ends (or a GO ends it), the live stack takes that copy with its version, and its texture gets it by a GPU copy
+ * from the fade texture (`copyTextureToTexture`), never a second upload.
  */
 
 const UNIFORM_SLOT_BYTES = 256;
@@ -385,6 +391,12 @@ export class GpuCompositor implements Compositor {
   /** Per layer, the over textures of stacks 0 and 1 (null until a scene with an over is offered). */
   private overTex: (GPUTexture[] | null)[] = [];
   private overViews: (GPUTextureView[] | null)[] = [];
+  /** Per layer, the in-place fade's texture (stack index 2), its view and the tt bind groups by live stack. */
+  private fadeTex: (GPUTexture | null)[] = [];
+  private fadeViews: (GPUTextureView | null)[] = [];
+  private bgFadeTT: (GPUBindGroup[] | null)[] = [];
+  /** Bytes of in-place fade textures allocated (GPU memory telemetry). */
+  fadeBytes = 0;
   /** 1x1 transparent texture bound for a scene without an over (or without a base). */
   private clearTex!: GPUTexture;
   private clearView!: GPUTextureView;
@@ -580,12 +592,16 @@ export class GpuCompositor implements Compositor {
             pairs[a * 3 + b] = dyn(this.pair[a * 3 + b]!, BINDINGS[a]! + BINDINGS[b]!);
       this.dynSingle.push(singles);
       this.dynPair.push(pairs);
-      this.uploaded.push(new Int32Array(2).fill(-1));
-      this.stripVersion.push(new Int32Array(2).fill(-1));
-      this.stripPart.push(new Int32Array(2));
-      this.stripRow.push(new Int32Array(2));
+      // Stack indices 0 and 1 (live and armed), and 2: an in-place fade's copy (`fadeTex`).
+      this.uploaded.push(new Int32Array(3).fill(-1));
+      this.stripVersion.push(new Int32Array(3).fill(-1));
+      this.stripPart.push(new Int32Array(3));
+      this.stripRow.push(new Int32Array(3));
       this.overTex.push(null);
       this.overViews.push(null);
+      this.fadeTex.push(null);
+      this.fadeViews.push(null);
+      this.bgFadeTT.push(null);
     }
     this.bgSolidTest = d.createBindGroup({
       layout: this.solid.getBindGroupLayout(0),
@@ -598,7 +614,45 @@ export class GpuCompositor implements Compositor {
    * at 4K), here rather than on the flip that shows it.
    */
   prepare(layer: number, c: StackContent<ImageBitmap>): void {
-    if (c.kind === SRC_SCENE && c.over && layer >= 0 && layer < this.layerCount) this.allocOver(layer);
+    if (layer < 0 || layer >= this.layerCount) return;
+    if (c.kind === SRC_SCENE && c.over) this.allocOver(layer);
+    // The first in-place fade of the layer (late parts): its fade texture, before the copy is uploaded.
+    if (c.kind === SRC_BITMAP && c.refresh && (c.refreshFadeMs ?? 0) > 0) this.allocFade(layer);
+  }
+
+  private allocFade(l: number): void {
+    if (this.fadeTex[l]) return;
+    const tex = this.device.createTexture({
+      label: `layer${l}-fade`,
+      size: [this.width, this.height],
+      format: 'rgba8unorm',
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST |
+        GPUTextureUsage.COPY_SRC |
+        GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    const view = tex.createView();
+    const views = this.textureViews[l]!;
+    const tt = this.pair[K_T * 3 + K_T]!;
+    // A = the live copy (stack `live`), B = the fresh copy fading in over it.
+    this.bgFadeTT[l] = [0, 1].map((live) =>
+      this.device.createBindGroup({
+        layout: tt.getBindGroupLayout(0),
+        entries: [
+          {
+            binding: 0,
+            resource: { buffer: this.uniformBuf, offset: l * UNIFORM_SLOT_BYTES, size: UNIFORM_SIZE },
+          },
+          { binding: 1, resource: this.sampler },
+          { binding: 2, resource: views[live]! },
+          { binding: 3, resource: view },
+        ],
+      }),
+    );
+    this.fadeTex[l] = tex;
+    this.fadeViews[l] = view;
+    this.fadeBytes += this.width * this.height * 4;
   }
 
   private allocOver(l: number): void {
@@ -620,9 +674,9 @@ export class GpuCompositor implements Compositor {
     this.overBytes += 2 * this.width * this.height * 4;
   }
 
-  /** See Compositor.gpuBytes: two layer textures per layer, plus the over textures allocated. */
+  /** See Compositor.gpuBytes: two layer textures per layer, plus the over and fade textures allocated. */
   gpuBytes(): number {
-    return this.textures.length * 2 * this.width * this.height * 4 + this.overBytes;
+    return this.textures.length * 2 * this.width * this.height * 4 + this.overBytes + this.fadeBytes;
   }
 
   /** See Compositor.uploadMs. */
@@ -691,6 +745,23 @@ export class GpuCompositor implements Compositor {
     sc[1] = this.height;
     sc[2] = 0;
     sc[3] = 0;
+    const fade = this.bgFadeTT[l];
+    if (liveOn && !outOn && ls.refading && fade && this.hasSource(ls.incoming, f)) {
+      // An in-place fade: the fresh copy (fade texture) over the live one, two bitmaps mixed in one pass.
+      const inc = ls.incoming;
+      this.writeRect(live, f, base + U_RECT_A, base + U_OVER_A);
+      this.writeRect(inc, f, base + U_RECT_B, base + U_OVER_B);
+      this.cover(live, K_T, f, l, base + U_RECT_A, base + U_OVER_A);
+      this.cover(inc, K_T, f, l, base + U_RECT_B, base + U_OVER_B);
+      if (!this.scissor(pass)) return;
+      u[base + U_P] = ls.refadeWeight(f.now);
+      u[base + U_P + 1] = 1;
+      pass.setPipeline(this.pair[K_T * 3 + K_T]!);
+      pass.setBindGroup(0, fade[liveIdx]!);
+      pass.draw(3);
+      this.layerDraws++;
+      return;
+    }
     if (liveOn && outOn) {
       const ka = this.kindOf(out, l, f);
       const kb = this.kindOf(live, l, f);
@@ -925,6 +996,7 @@ export class GpuCompositor implements Compositor {
         const liveIdx = ls.live;
         this.ensureUploaded(l, liveIdx, ls.stacks[liveIdx]!, UP_WHOLE);
         if (ls.fading) this.ensureUploaded(l, 1 - liveIdx, ls.stacks[1 - liveIdx]!, UP_WHOLE);
+        if (ls.refading) this.ensureUploaded(l, 2, ls.incoming, UP_WHOLE);
       }
       this.uploads.pause();
       return;
@@ -939,6 +1011,11 @@ export class GpuCompositor implements Compositor {
       const ls = f.layers[l]!;
       const a = ls.stacks[1 - ls.live]!;
       if (ls.flipPending && a.key === ls.flipKey) this.ensureUploaded(l, 1 - ls.live, a, UP_STRIPS);
+    }
+    // Then the fresh copy of an in-place fade (it fades in once uploaded), then the rest.
+    for (let l = 0; l < n; l++) {
+      const ls = f.layers[l]!;
+      if (ls.hasIncoming) this.ensureUploaded(l, 2, ls.incoming, UP_STRIPS);
     }
     for (let l = 0; l < n; l++) {
       const ls = f.layers[l]!;
@@ -998,6 +1075,15 @@ export class GpuCompositor implements Compositor {
       s.ready = true;
       return;
     }
+    // An in-place fade's copy that became this stack's (`LayerStack` keeps its version): copied on the GPU.
+    const fade = this.fadeTex[l];
+    if (idx < 2 && fade && up[2] === s.version && s.kind === SRC_BITMAP && s.bitmap) {
+      this.copyFade(l, idx, s);
+      up[idx] = s.version;
+      s.ready = true;
+      return;
+    }
+    if (idx === 2 && !fade) this.allocFade(l);
     const sv = this.stripVersion[l]!;
     const part = this.stripPart[l]!;
     const row = this.stripRow[l]!;
@@ -1007,7 +1093,8 @@ export class GpuCompositor implements Compositor {
       row[idx] = 0;
     }
     if (part[idx] === 0) {
-      if (s.bitmap && !this.uploadPart(this.textures[l]![idx]!, s.bitmap, s.x, s.y, row, idx, mode)) return;
+      const tex = idx === 2 ? this.fadeTex[l]! : this.textures[l]![idx]!;
+      if (s.bitmap && !this.uploadPart(tex, s.bitmap, s.x, s.y, row, idx, mode)) return;
       part[idx] = 1;
       row[idx] = 0;
     }
@@ -1021,6 +1108,22 @@ export class GpuCompositor implements Compositor {
     up[idx] = s.version;
     sv[idx] = -1;
     s.ready = true;
+  }
+
+  /** The rect of `s`'s bitmap from the layer's fade texture into its stack texture, on the GPU (one command). */
+  private copyFade(l: number, idx: number, s: Stack<ImageBitmap>): void {
+    const b = s.bitmap!;
+    const w = Math.min(b.width, this.width - s.x);
+    const h = Math.min(b.height, this.height - s.y);
+    if (!(w > 0 && h > 0)) return;
+    const enc = this.device.createCommandEncoder();
+    enc.copyTextureToTexture(
+      { texture: this.fadeTex[l]!, origin: { x: s.x, y: s.y } },
+      { texture: this.textures[l]![idx]!, origin: { x: s.x, y: s.y } },
+      [w, h],
+    );
+    this.device.queue.submit([enc.finish()]);
+    this.copies++;
   }
 
   /**
@@ -1126,6 +1229,7 @@ export class GpuCompositor implements Compositor {
     this.onDestroy?.();
     for (const l of this.textures) for (const t of l) t.destroy();
     for (const l of this.overTex) if (l) for (const t of l) t.destroy();
+    for (const t of this.fadeTex) t?.destroy();
     this.clearTex?.destroy();
     this.placeholder?.close();
     this.placeholder = null;

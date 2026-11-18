@@ -66,15 +66,17 @@ import { decorFilesVersion, decorParts, decorPending } from './files.ts';
  *   runs (a caller that cuts its work into slices, `drawDecorRange`, which a sprite made at once would not);
  *   none the cache would not keep (`SpriteCache.room`: beside the sprites the slide's raster holds already, and
  *   within `DECOR_SPRITE.share` of the budget for all decorations, other slides' oldest decoration sprites
- *   evicted to make room, `SpriteCache.fitKind`): such a decoration is drawn directly, so a
+ *   evicted to make room, `SpriteCache.fitKind`, those of the last rasters spared), nor more than one a raster
+ *   (`SpriteCache.madeInRaster`): such a decoration is drawn directly, so a
  *   slide whose sprites pass the cache (a 4K slide of four large decorations and 220 shadowed shapes) never
  *   makes, on every draw, sprites the cache then drops (r2a repair: 208 ms a warm draw at 3840, now 20-30).
  * - **Files.** `ref` names a decoration file (`DecorFile`, stored as a geometry file is; read into the store of
  *   `files.ts` before the slide is drawn); while it is read its parts are drawn and `parts` is ignored; until
  *   then the decoration draws its inline parts (the converter leaves them empty: nothing).
  * - **Time.** One decoration is drawn in one call: at its caps (16,384 points, 24 shadowed shapes) about
- *   100 ms cold at 3840 on a shared 4-CPU machine, past design/27 §13's 50 ms task, until the outputs' effect
- *   units draw it in slices of `drawDecorRange` (design/27 §13, an open must item before release).
+ *   100 ms cold at 3840 on a shared 4-CPU machine, past design/27 §13's 50 ms task. On the outputs a decoration
+ *   past `DECOR_SPRITE` (`decorCapped`) is drawn from an effect unit made in slices of `drawDecorRange` (units.ts),
+ *   and an output raster leaves it out until its unit is made (drawSlide2D's `late`), never drawing it at once.
  *
  * `index.ts` registers `drawDecor` as the 'decor' drawer of the shape dispatch (`shape.ts`).
  */
@@ -527,6 +529,9 @@ function drawDecorSprite(ctx: Ctx2D, d: DecorData, geo: DecorGeometry, opacity: 
     // The share counts this raster's decorations and evicts other slides' oldest to make room (`fitKind`): an
     // earlier slide's decorations never keep this one's from their sprites for good.
     const bytes = W * H * 4;
+    // At most one decoration sprite a raster (r2a land re-review: the draw that made the wake template slide
+    // 12's four took 58-73 ms at 3840): the others are drawn directly this time and made in the next rasters.
+    if (spriteCache.madeInRaster('decor') >= 1) return false;
     if (!spriteCache.room(bytes)) return false;
     if (!spriteCache.fitKind('decor', bytes, DECOR_SPRITE.share * spriteCache.budgetBytes)) return false;
     const c = new OffscreenCanvas(W, H);
@@ -553,6 +558,19 @@ function drawDecorSprite(ctx: Ctx2D, d: DecorData, geo: DecorGeometry, opacity: 
  */
 export function drawDecor(ctx: Ctx2D, o: ShapeObject, scale: number): boolean {
   return drawDecorShapes(ctx, o, scale, 0, Number.POSITIVE_INFINITY, true);
+}
+
+/**
+ * Whether a shape's decoration is past `DECOR_SPRITE` (more points or shadowed shapes): drawn at once it is one
+ * long call (at its caps about 100-115 ms at 3840), so the outputs draw it from an effect unit made in slices of
+ * `drawDecorRange` (units.ts) and the other drawers through its sprite from its second draw.
+ */
+export function decorCapped(raw: ShapeObject): boolean {
+  const o = clampShapeObject(raw);
+  const d = drawnDecor(o);
+  if (!d || !(num(o.opacity, 0, 1, 1) > 0)) return false;
+  const geo = decorShapes(d);
+  return !!geo.bounds && (geo.points > DECOR_SPRITE.points || geo.shadowed > DECOR_SPRITE.shadowed);
 }
 
 /** The source shapes a shape's decoration draws (`decorShapes`), 0 without one: what `drawDecorRange` counts. */
@@ -604,17 +622,19 @@ function drawDecorShapes(
 
 // ── Cost ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-const costs = new WeakMap<DecorData, { version: number; est: number; effects: number }>();
+const costs = new WeakMap<DecorData, { version: number; est: number; effects: number; points: number }>();
 
 /**
  * What a decoration costs to draw (the units of `geom/cost.ts` `drawCost` for each shape, its shadow pass
  * included) and its shadow layers' weighted area in slide areas (`effectArea`), as its shapes drawn one by one
- * would cost: the effect units' and health's estimate of it. Memoised per clamped decoration and files read.
+ * would cost, and its points (charged as stored points are): what the slide's drawing budget rates it at
+ * (geombudget.ts, through the decoration's hooks), so the budget, health's alarm and `heavySlide` count it.
+ * Memoised per clamped decoration and files read.
  */
-export function decorCost(raw: ShapeObject): { est: number; effects: number } {
+export function decorCost(raw: ShapeObject): { est: number; effects: number; points: number } {
   const o = clampShapeObject(raw);
   const d = drawnDecor(o);
-  if (!d) return { est: 0, effects: 0 };
+  if (!d) return { est: 0, effects: 0, points: 0 };
   const hit = costs.get(d);
   if (hit && hit.version === decorFilesVersion()) return hit;
   const geo = decorShapes(d);
@@ -645,7 +665,7 @@ export function decorCost(raw: ShapeObject): { est: number; effects: number } {
         s.bounds,
       );
   }
-  const out = { version: decorFilesVersion(), est, effects };
+  const out = { version: decorFilesVersion(), est, effects, points: geo.points };
   costs.set(d, out);
   return out;
 }

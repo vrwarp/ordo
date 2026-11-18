@@ -212,7 +212,8 @@ Fills are solid (a gradient's first stop) and lines solid (dashes noted). Since 
 and lines are one geometry object per fill and per line look (below); the background is one rect. IR:
 `TableElement` (`ir.ts`); the walk reads it through `readTable`, `emit.ts` writes it through `emitTable`.
 - **Residual.** A table with vertical cell text stays a `ResidualElement` ('table'): LibreOffice draws it
-  into the art; one of more than `MAX_TABLE_GRID` (4,096) grid cells is not read at all. No count of cells
+  into the art (since sub-wave 1c only `vert`, `vert270`, `wordArtVert`, `wordArtVertRtl` and `mongolianVert`
+  cells: a table with East Asian vertical cells, `eaVert`, is the table object, rule V below); one of more than `MAX_TABLE_GRID` (4,096) grid cells is not read at all. No count of cells
   decides otherwise but the slide's object budget: a table of more drawn cells (a merge counts once, the
   cells it covers not at all; R1) than a slide may have objects (`MAX_TABLE_CELLS` = `MAX_SLIDE_OBJECTS`,
   150: each cell is an object, so it could never be drawn natively) stays residual unmeasured, reason
@@ -295,7 +296,10 @@ error moved every row below it (cells are mostly centred). Three changes:
   and measured with the table probe deck (`tools/pptx-fidelity/src/table-probe.ts`, `LO_PROBE_ROWS`) that
   spacing is one of two (`LoLines`): 'font', the face's ascent and descent at the 600 dpi reference device
   (the font's pixel height rounded, then ascent and descent rounded: Carlito 1.215-1.229 × the size), or
-  'independent', 1.2 × the font height truncated (`ImplCalculateFontIndependentLineSpacing`), for any face.
+  'independent', 1.2 × the font height truncated (`ImplCalculateFontIndependentLineSpacing`), for any face
+  (since sub-wave 1b the independent line is rounded, not truncated, and a font line is the larger of two
+  conversions, both to LibreOffice's 1/100 mm: "LibreOffice's cell rules", below; the stored form since
+  tables-form, "The table object imported").
   The second holds after a text shape that grew to its text (its own `a:spAutoFit`, with text) earlier on
   the same slide: that shape leaves the shared outliner in font-independent mode (a group's child counts; a
   title without its own `a:spAutoFit`, `a:normAutofit`, a shape after the table, a layout's shape, a
@@ -693,7 +697,7 @@ the art.
 | `emit-ctx.ts`    | `EmitCtx`, `M9_FIELDS` and `writes` (the `EmitOptions.m9Writes` gate), box, colour and object helpers                                                                   | (frozen)         |
 | `emit-text.ts`   | Text bodies (`textObject`, `richTextObject`, legacy text, `marginOf`); stubs `warpOf`, `writingOf`                                                                      | `text-conv`      |
 | `emit-budget.ts` | `storedSlideBytes`, `fitBytes`, `chargeText`, `slideBudget` (was `overBudget`), `compactRuns`, `MAX_SLIDE_BYTES`, `TEXT_BUDGET_BYTES`                                   | `ladder`         |
-| `emit-table.ts`  | The M6 table group; stub `emitTableObject`                                                                                                                              | `tables-conv`    |
+| `emit-table.ts`  | The table object (`emitTableObject`, since `tables-conv`), the M6 table group without 'table'                                                                           | `tables-conv`    |
 | `chart.ts`       | Stubs `readChart`, `emitChart`                                                                                                                                          | `charts-conv`    |
 | `decor.ts`       | Stub `emitDecor` (runs of `ElementBase.decor`)                                                                                                                          | `decor-conv`     |
 | `three3d.ts`     | Stubs `read3d`, `look3dOf`                                                                                                                                              | `three-model`    |
@@ -822,6 +826,174 @@ whether.
   `hybrid.test.ts`).
 <!-- /m9:decor-conv -->
 
+<!-- m9:tables-conv -->
+## Wave r2b: the table object imported (`emit-table.ts`, `tables.ts`; `tables-conv`)
+
+Every table the reader keeps is written as one `ShapeObject.table` (`emitTableObject`; design/27 §15 M9 "The
+table object imported", `m9/design/tables-object.md` §4.4), not the M6 group of the section above:
+- **The grid as stored: LibreOffice's form, on every hub** (sub-wave 1b, `tables-form`; owner question T2's
+  default; design/27 §15 "The stored form"): `cols` and `rows` are LibreOffice's columns and grown rows as the
+  converter models LibreOffice 24.2 (`TableElement.lo`, else `TableElement.cols` and `.rows`, which then agree
+  with it), `rowRule: 'fixed'` (the renderer keeps them; cells never shrink, no autofit: text past a fixed row
+  overflows it as a text box's does), `box` the table's frame at their size (`lo.xf`); the cells' text at
+  LibreOffice's sizes (`tables.ts` `loSizePt`: 14 pt is stored 14.04 pt), the spill into the margins and the
+  baseline lift folded into each cell's insets (`asLibreOffice`). Until 1b the object stored the deck's
+  `a:tr h` (`TableElement.storedRows`, still read) and let the drawer grow them with its own lines; rows grown
+  that way passed LibreOffice's wherever the drawer's lines disagree with the converter's model (r2b-diag
+  all-tables P1: 7 of 63 table slides fell by 0.01-0.49), so they are fixed at import and a change grows a
+  row by how much more its text falls short of it (the operator's `fitRows`, design/15 "Table editing"). The layout reads
+  nothing of `loCompat`: with and without it the table object is the same (`emit-table.test.ts` "stores LibreOffice's form on every hub",
+  `e2e/table-form.test.ts` on the e2e table deck); `loCompat` reaches only the cells' run-text policies (run
+  shadows, outlines on filled text, `baseline="0"`), as a text box's, and the M6 group's layout (`cellRows`).
+- **Cells** row-major as the stored table places them (`readTable` cuts a span at a slot an earlier cell covers),
+  each its rich text (`richText`, plain past the slide's text budget), spans, fill, diagonals (read per cell
+  now, `TableCell.diag`: the M6 group notes them undrawn).
+- **Palettes** (`@ordo/domain` `Palette`): `base` the most common cell box style; each cell's entry from
+  `@ordo/domain/cellstyle.ts` `cellStyleOf` (the domain's mapping, the pure module this package may import),
+  bounded to `CellStyle` (`boundEntry`); box fields a cell style lacks folded into its runs and paragraphs
+  (`foldBox`); run styles, fills, line styles, edges.
+- **Bounds** (`TABLE_LIMITS`, the domain's, `TABLE_OBJECT_LIMITS` tested equal): the reader keeps the first 256
+  rows, 64 columns and 4,096 slots (noted) and measures at most 10,000 characters a cell and 60,000 a table
+  (`measuredBodies`); the emitter cuts the same and leaves later palette entries out (noted). No cell cap: a
+  table is one object of the slide's 150.
+- **Styles and scripts**: a table naming no style has none, whatever `a:tblStyleLst def` says (`tableStyleOf`, as
+  LibreOffice draws it); a cell's paragraphs read the master's `p:otherStyle` before `defaultTextStyle`
+  (`inherit.ts` `Chain.cell`, set by `cellText`; sub-wave 1b, as LibreOffice lays table text out);
+  the measure breaks at the renderer's break opportunities for office text (`breakOpportunities` with
+  `office`: Korean words whole, LibreOffice's breaks after a hyphen before a digit and after the spaces between
+  a quotation mark and an opening bracket and before a '%' after a letter, a slash glued to its word by
+  whitespace up to 64 units before it; text-lines, text-falls), sizes each line by
+  its own largest run (as the renderer's office model and LibreOffice's editeng do) and
+  spaces a paragraph by the face that draws its script (`FaceSource.script`: `@ordo/importers` `faceSourceOf` on
+  the hub and in the browser, `fc-match :charset` in the harness), asked for Han, Kana and Hangul only
+  (`GLYPH_SCRIPTS`: a shaped script's unshaped advances do not measure its line).
+- **Not written**: a table with vertical cell text other than `eaVert` stays residual ('vert') until the writing
+  engine lays cells out (sub-wave 1c, rule V below); no legacy group (M9 decision 4).
+- **The kill switch** (`m9Writes` without 'table'): the M6 group, counted as its objects by the budgets
+  (`BudgetOptions.tables` false: `budgetCost`, the guard's text objects one per cell), and M6's cell cap
+  (`budget.ts` `m6TableCap`, `MAX_TABLE_CELLS` 150, 'budget:table') before the support is refined.
+- **One emission, every hub**: each table is emitted once, as the table object, with LibreOffice or without
+  it (the owner decided question 3 of the LibreOffice inventory on 2026-11-15: every table is the table object
+  on every kind of hub). Sub-wave 1's second emission of each table as its M6 group, weighed for the import
+  core's interim rule (`EmittedSlide.tableGroupBytes`), is gone with the rule (sub-wave 1b, tables-flip).
+- Tests: `emit-table.test.ts` (one object with palettes, background and gradient fills, spans, diagonals, rtl,
+  the cell entries as the domain reads them, 96 and 160 cells native, the 640-cell master grid one object a
+  slide, the older build's strip, the kill switch under 150 objects, stored rows, LibreOffice's rows, the text
+  budget, the bounds, the group's bytes exactly the kill switch's slide less the table object's, none without
+  LibreOffice or past 150 cells), `tables.test.ts` (the reader's cuts, no cell cap, the kill switch's cap, vertical cells,
+  no default style for a table naming none, Korean cells measured and spaced by their script's face),
+  `domain/src/cellstyle.test.ts` (the pure mapping equals `table.ts`'s).
+<!-- /m9:tables-conv -->
+
+## Wave r2b sub-wave 1b: LibreOffice's cell rules (`tables.ts`; `tables-cells`)
+
+<!-- r2b:tables-cells -->
+Where LibreOffice 24.2 puts a cell's text, to its 1/100 mm (the model `TableElement.lo` carries: the stored form
+on every hub since tables-form, the M6 group's under `loCompat`), from the table probe (`LO_PROBE_ROWS`) and a
+cell probe of 80 rows and 272 baselines (`tools/pptx-fidelity/src/cell-probe.ts`, `LO_CELL_PROBE`):
+- **Line heights** (`loLineHeight`): font-independent, 1.2 × the font height rounded (the probe's 9 and 14 pt
+  rows: 382 and 593, truncated 381 and 592; Moral Character's 16 pt rows 932, not 931); font-spaced, the larger
+  of the two conversions VCL makes of the ascent and descent pixels at 600 dpi back to 1/100 mm, apart and
+  added or summed (9 pt Carlito 301 + 85 = 386, the sum 385; 10 pt the sum 428, apart 427: the 1000 Years
+  chart's eleven row rules; 18 pt 775; Liberation Sans 6 pt 238, 8 pt 318). `loAscent` is one conversion.
+- **Imported lengths** (`loImported`): a row's stored `a:tr h` and a column's width are LibreOffice's in whole
+  1/100 mm, truncated (635000 EMU, 1763.89, is 1763), before `loGrowRows` and `loColumns`.
+- **The lift** (`asLibreOffice`): centred text keeps its whole lift whatever its margins (a cell with
+  `marT="0"` kept half of it: the Boletims' reading plans 0.75 px of 1.49, the Flesh and Spirit chart's 84
+  cells, the seal, Churchcraft and Ten Commandments charts); top and bottom anchors as before.
+- **The anchor** (`loBlockTop`): LibreOffice centres the drawn block (the face's line heights) in the cell's
+  inner height, the offset truncated to the 1/100 mm, and starts a block taller than that (font-independent
+  rows draw lines taller than they were measured) 1/100 mm above the top margin, never centred above it
+  (Moral Character's 690 drawn in 678; the Depression deck's lines). The lift aims ordo's centred block there.
+- **Not modelled, named**: ordo spaces a cell's lines by the face's line height times the proportion,
+  unrounded, LibreOffice by whole 1/100 mm a line (Carlito 10 pt at 107 %: 26.02 against 25.91 px at 1920):
+  one lift a cell leaves the lines spread around LibreOffice's by (n - 1) / 2 × the difference (1c).
+- Tests: `tables.test.ts` (the line rules at 9, 10, 14 and 18 pt, `asLibreOffice` with both prototypes' cases,
+  the anchor on a full and a roomy row), `tools/pptx-fidelity/src/table-probe.test.ts` and `cell-probe.test.ts`
+  (every probe row and baseline to the 1/100 mm).
+<!-- /r2b:tables-cells -->
+
+## Wave r2b sub-wave 1c: LibreOffice's 1/4 em in its cell model (`asian-gaps.ts`; `ko-cells`)
+
+<!-- r2b:ko-cells -->
+LibreOffice 24.2 puts a space at every boundary between East Asian text and other text, in cells and boxes alike
+(editeng's Asian/Western script space; probed: gaps-flip B.1, ko-cells probe 1, the lead probe): about 6.0 pt at
+24 pt, 3.0 at 12, 9.1 at 36 with WenQuanYi Zen Hei. Rule G models it as a quarter of the size of the character before
+the boundary, in the converter's model of LibreOffice's cell layout only:
+- **Portions** (`asianGapsAt`, by `fontmap.ts` `charClass`): a weak character (a space, a quotation mark, ⑥, ・)
+  joins the portion before it; a leading weak character (or several, or spaces) forms its own portion; a boundary
+  is between an East Asian portion and any other; never across a line break. '가 a' has one gap (on the space,
+  before 'a'); '가⑥가', '가・가', '가“나”' none; '“가', '⑥가', ' 가' one, after the leading portion.
+- **The rule is 0.25 em** (`ASIAN_GAP_EM`, `asianGapsOf`: the gap in pt after each boundary character). LibreOffice's
+  own gap is the height of the face of the portion before the boundary (hhea ascent and descent) divided by 5: the
+  quarter for a face about 1.25 em tall. WenQuanYi Zen Hei (1.2598 em: 6.05 pt at 24 pt; measured 5.92-6.06) and
+  Inter (1.21 em: 5.81 pt; measured 5.69-5.81) are within 0.4 pt of the quarter; after a Liberation Sans (Arial)
+  portion (1.117 em: 5.36 pt at 24 pt) the quarter is about 0.64 pt too wide (the probe hold-out deck's 225 cell
+  gaps: |LibreOffice - height/5| at most 0.14 pt, |LibreOffice - 0.25 em| up to 1.04 pt, every gap over 0.4 pt after
+  an Arial portion). The quarter still gives LibreOffice's line count on all 114 cells of that deck, so the minimum
+  needs no more (the owner's rule 4); `trunc(loLineHeight / 5)` is a follow-up. Text boxes (about 5.75 pt either
+  side) are out of rule G's scope.
+- **Where**: `tables.ts` passes `gaps` to `Measure.loLayout` for the `measured` bodies only (LibreOffice's rows,
+  `loTall`, `loRows` and LibreOffice's baselines for the lift): `Measure.lines` adds each gap to its character's
+  advance inside the character's own run, as letter spacing, so the character keeps the face its run's East Asian
+  portion gives it. (1c first put the character in a run of its own; alone, a weak character such as '“', '①',
+  '「' or a space lost its portion's face and was measured in Inter: lines taller than LibreOffice's, +0.2 px rows,
+  and a cell LibreOffice keeps on one line wrapped; integrate-1c repair 1.) ordo draws no such gap: its model of
+  its own drawing (`spaced`) and the stored text and runs are untouched (owner question Q1c-3: the 1/4 em sizes the
+  rows only; storing it as letter spacing, option F, would leave stale spacing after edits). Text boxes are not
+  touched.
+- The Korean bulletin's slide 20 (column 3, row 2: '... 가능하다면 3가지 이내로 정리한다.' in 380.9 pt): its second
+  line fits without the gaps and does not with them, so LibreOffice's row holds three lines; the rows below move.
+- Tests: `asian-gaps.test.ts` (0.25 em at every boundary both ways, the lead probe's leading characters, none inside
+  a portion, 12/24/36 pt, line breaks, surrogate pairs, the paragraph never changed, slide 20's cell 2 -> 3 lines in
+  LibreOffice's model and 2 in ordo's), `tables.lines.test.ts` (the stored table's row holds LibreOffice's three
+  lines; the stored text has no run or letter spacing of its own; the probe hold-out deck's slides 2, 8 and 10 with
+  this computer's faces' metrics: every row within 0.1 px of LibreOffice's PDF, `『聖書』と“Bible”を読む` on one line).
+<!-- /r2b:ko-cells -->
+
+## Wave r2b sub-wave 1c: East Asian vertical cells and the table's shadow (`tables.ts`; `vert-cells`)
+
+<!-- r2b:vert-cells -->
+The Korean bulletin's slide 2 holds the one measured table with vertical cells: two East Asian vertical (`eaVert`)
+cells, '1년차' and '２년차', 24 pt in a 46.6 pt column, each over 4 rows, and the table casts an outer shadow. Until
+1c every table with a vertical cell was residual ('vert'): LibreOffice's art on a hub with it, nothing on one without.
+- **Rule V** (`readTable`, the residual test): LibreOffice 24.2 draws `eaVert` cells exactly as `horz` ones (probe deck
+  A, `regroup/r2b/1c/vert-cells/probe/probe-a.md`: every glyph of an eaVert cell where the horizontal cell has it,
+  within 0.001 pt on LibreOffice's 1/100 mm column grid, none turned; eaVert slides and their horz twins give
+  byte-identical pages). Slide 2's cells stack one character a line only because the column is narrow. So a table
+  whose vertical cells are all `eaVert` is read as the table object, each such cell keeping `TableCell.vert`
+  'eaVert' (emitted by `emit-table.ts` `vertOf` into `CellStyle.vert`, in the schema since 0.6.0: no schema change),
+  and drawn horizontally by today's renderer (`table/model.ts` `cellIsVertical`), as LibreOffice draws it. A table
+  with any `vert`, `vert270`, `wordArtVert`, `wordArtVertRtl` or `mongolianVert` cell stays residual (owner question
+  Q1c-5): `vert` and `vert270` are LibreOffice's vertical writing (drawn horizontally they would replace its art by
+  text turned the wrong way); the last three LibreOffice draws horizontally too (probe A), but no measured deck has
+  one and the schema has no value of their own, so they wait for the vertical text engine with the others.
+- **Not copied**: LibreOffice garbles a pure-Hangul paragraph that wraps inside an eaVert cell (probe A slide 2);
+  ordo draws it plainly; no measured cell is one. PowerPoint draws eaVert as upright stacked characters; a later
+  vertical text engine would depart from LibreOffice 24.2 there, and the stored `vert` keeps the deck's intent for it.
+- **The table's outer shadow** (`a:tblPr/a:effectLst/a:outerShdw`, read by `text.ts` `readShadow`) goes into
+  `TableElement.shadow` (slide 2: dx 0, dy -6, blur 8 px at 1920, black at 40 %) and the slide gets the note "a
+  table's shadow is not drawn". It is not emitted: a `shadow` on the table object would make the renderer's
+  `hasShapeExtras` true, so a table whose drawer is not loaded yet, or whose `table` the clamp drops, would be drawn
+  by `drawGeomShape` with the shadow, and the slide's effect budget would charge it. LibreOffice draws it as the
+  shadow of the table's cell fills and lines (the diagnosis' probe B); drawing it (+0.02 on slide 2) is a
+  follow-up: the emission, a renderer rule for a table's shadow in those fallbacks and in the effect budget, the
+  table's sprite reach, the draw off the GO path, bench rows.
+- **Census**: classify's static census still records the feature 'vert' for an eaVert cell (the tier); the slide's
+  class is native.
+- Tests: `tables.test.ts` (an eaVert table is a table element with the cells' vert; each of the five other kinds
+  stays residual 'vert'; a table-level outer shadow read into `TableElement.shadow` with the note; run shadows in
+  cells give none), `emit-table.test.ts` (the cell style's vert 'eaVert'; no `shadow` on the table object; the
+  note), `renderer/src/table/draw.test.ts` (a pin: an eaVert cell draws the same operations as horz) and
+  `table/edit.test.ts` (caret, selection, click and the cell's rect over 4 rows as a horizontal cell's), the
+  operator's table tests and `packages/domain` (`vertical-table.test-util.ts`: typing, formatting, Find & Replace,
+  row and column operations, Tab, undo and `fitRows` keep the cell's vert; the older build, 0.8.1 with 0.8.0's
+  schema, parses it as stored),
+  `apps/hub/test/pptx-reimport.test.ts` (re-import and Reset slide of a slide stored before 1c, LibreOffice's art,
+  give the table object); end to end `e2e/table-deck.test.ts`, `e2e/pptx-tables.spec.ts` and
+  `e2e/ipad/table-targets.spec.ts` (`verticalTableDeck`).
+<!-- /r2b:vert-cells -->
+
 ## Module map
 
 | File            | What                                                                                                                                 | Owner         |
@@ -841,13 +1013,14 @@ whether.
 | `emit.ts`       | IR → ordo objects, media placeholders, digest                                                                                        | C             |
 | `richtext.ts`   | A text body as rich ordo text: runs, paragraph styles, office box fields (M2)                                                        | C (M2)        |
 | `fontmap.ts`    | Script class of each character (Latin, East Asian, complex), substitutes and fallback families (M2)                                  | C (M2)        |
+| `asian-gaps.ts` | LibreOffice's 1/4 em at East Asian/other boundaries, in the converter's model of LibreOffice's cell layout only (1c rule G)          | 1c ko-cells   |
 | `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                                             | F             |
 | `geom.ts`       | Presets, custom geometry, text rectangles and sites, gradients, dashes, arrowheads, connector glue (M6)                              | M6b B         |
 | `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                                         | M3 B          |
 | `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                                         | M3 B          |
 | `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                                      | M3b A         |
 | `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`                      | M3b A         |
-| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6); `tablestyles.ts`: the built-in styles (LibreOffice's, MPL 2.0)                     | M6b C         |
+| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6; M9 reads into the table object); `tablestyles.ts`: built-in styles (MPL 2.0)        | M6b C         |
 | `metrics.ts`    | `sfntMetrics`, `metricsOfTables`, `FaceSource`: advances, pair kerning, line heights from font files, bounded                        | M6b C         |
 | `smartart.ts`   | SmartArt from its drawing cache: `readSmartArt` (the drawing's shapes through the walk), `lockDiagram`                               | M6b D         |
 | `bake.ts`       | Baked pictures: `PictureBake` recipes (`bakeOf`, `tileBakeOf`), `applyBake` (recolour and tile pixels); M9 `SheetBake`, `applySheet` | M6b D         |

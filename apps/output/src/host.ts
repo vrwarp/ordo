@@ -12,20 +12,21 @@ import {
   windowEndpoint,
 } from '@ordo/client';
 import { API_PREFIX } from '@ordo/protocol';
-import type { AssetToMain, FromRender, ToAsset, ToRender } from '@ordo/renderer';
+import type { AssetToMain, DrawingSwitches, FromRender, ToAsset, ToRender } from '@ordo/renderer';
 import { vframeClock } from '@ordo/renderer/frame-ring.ts';
 import { Diagnostics } from './diagnostics.ts';
-import type {
-  AudioCommand,
-  ChaosHooks,
-  HostStatus,
-  LinkToMain,
-  LinkView,
-  MainToLink,
-  MediaCommand,
-  MediaEvent,
-  WorkerName,
-  WorkerStat,
+import {
+  type AudioCommand,
+  type ChaosHooks,
+  type HostStatus,
+  type LinkToMain,
+  type LinkView,
+  type MainToLink,
+  type MediaCommand,
+  type MediaEvent,
+  RENDER_DEAD_AFTER_MS,
+  type WorkerName,
+  type WorkerStat,
 } from './host-protocol.ts';
 import { MediaSlot } from './media.ts';
 import { ProgramSender } from './program.ts';
@@ -44,6 +45,8 @@ export type HostOptions = {
   forceCanvas2d: boolean;
   /** WebGPU even on a software adapter (`?renderer=webgpu`, tests). */
   allowFallbackAdapter?: boolean;
+  /** The URL's drawing switches (switches.ts), for the asset worker's init. */
+  drawing?: DrawingSwitches;
 };
 
 const RELOAD_KEY = 'ordo.output.reloads';
@@ -236,7 +239,7 @@ export class OutputHost {
     });
     this.sup.add({
       name: 'render',
-      deadAfterMs: 3000,
+      deadAfterMs: RENDER_DEAD_AFTER_MS,
       create: () =>
         new Worker(new URL('./render.worker.ts', import.meta.url), { type: 'module', name: 'ordo-render' }),
       start: (w, gen) => this.startRender(w, gen),
@@ -393,6 +396,7 @@ export class OutputHost {
       height: this.opts.height,
       token: this.token,
       apiPrefix: API_PREFIX,
+      ...(this.opts.drawing ? { drawing: this.opts.drawing } : {}),
     };
     w.postMessage(init);
     if (gen > 0) this.scheduleWire();

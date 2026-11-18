@@ -175,10 +175,14 @@ describe('the M9 field gate (EmitOptions.m9Writes)', () => {
       'adjWide',
       'geomFile64',
     ]);
-    // The fixtures convert the same way with every field on and with none until the M9 areas write theirs.
+    // The fixtures convert the same way with every field on and with none until the M9 areas write theirs:
+    // only the fields written so far differ (`tables-conv`: the table, one object for its M6 group).
+    const WRITTEN: readonly string[] = ['table'];
     const [deck] = fixtures();
-    const on = convertDeck(deck!);
+    const on = convertDeck(deck!, { m9Writes: new Set(M9_FIELDS.filter((f) => !WRITTEN.includes(f))) });
     const off = convertDeck(deck!, { m9Writes: new Set() });
     expect(on.slides.map((s) => s.slide)).toEqual(off.slides.map((s) => s.slide));
+    const all = convertDeck(deck!).slides[1]!.slide.objects;
+    expect(all.filter((o) => m9FieldsOf(o).includes('table'))).toHaveLength(1);
   });
 });

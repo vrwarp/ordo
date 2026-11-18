@@ -82,8 +82,10 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
   const draft = useEditor((s) => s.draft)!;
   const slide = getSlide(draft, slideId);
   const isSong = draft?.kind === 'song';
+  // A table, a chart or a picture is never the lyric box, whatever `lyricObjectId` names.
   const isLyric =
     isSong &&
+    o.type === 'text' &&
     (slide?.lyricObjectId === o.id ||
       (!slide?.lyricObjectId && slide?.objects.find((x) => x.type === 'text')?.id === o.id));
   const themed = isLyric && !!draft?.themeId;
@@ -138,7 +140,9 @@ function HeadingSection({ o, readOnly, isLyric, slideId, draft }: ObjectSectionC
             ? o.play
               ? 'Video'
               : 'Image'
-            : `Shape (${shapeName(o)})`}
+            : o.table
+              ? 'Table'
+              : `Shape (${shapeName(o)})`}
       </b>
       {o.type === 'text' && isSong && !isLyric && (
         <button

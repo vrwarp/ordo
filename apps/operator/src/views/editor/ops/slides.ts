@@ -1,8 +1,14 @@
 import {
+  cellBodyOf,
+  cellTextObject,
+  gcTable,
   type ImageObject,
   type Media,
+  placeCells,
   type Presentation,
   replaceText,
+  type ShapeObject,
+  setCell,
   type Slide,
   type SlideObject,
   type TextObject,
@@ -13,6 +19,7 @@ import {
 } from '@ordo/domain';
 import { CLAMP } from '@ordo/renderer';
 import { cloneSlide, findSlide, getSlide, lyricObject, markOverride } from '../ops.ts';
+import { fitTable } from '../tableFit.ts';
 import { withEverySlide, withSlide } from './common.ts';
 import { type PictureSize, replacePicture } from './pictures.ts';
 
@@ -60,8 +67,11 @@ export function addRefusalText(r: AddRefusal): string {
 /** Find options: `case` matches case; `wholeWord` matches only whole words (Unicode letters and digits). */
 export type FindOptions = { case?: boolean; wholeWord?: boolean };
 
-/** One match: a text object of a slide and the offsets of the matched text in its `text`. */
-export type TextMatch = { slideId: string; objectId: string; start: number; end: number };
+/**
+ * One match: a text object of a slide (or, with `cell`, one cell of a table) and the offsets of the matched
+ * text in its `text`.
+ */
+export type TextMatch = { slideId: string; objectId: string; cell?: number; start: number; end: number };
 
 /** A character that is part of a word for 'Whole words': a letter, a combining mark or a digit. */
 const WORD = /^[\p{L}\p{M}\p{N}]/u;
@@ -122,6 +132,47 @@ export function matchesIn(text: string, find: string, opts: FindOptions = {}): [
 /** Text objects the find dialog searches: every unlocked one (a locked object's text is read-only). */
 const searchable = (o: SlideObject): o is TextObject => o.type === 'text' && !o.locked;
 
+/** A table whose cells the find dialog searches: an unlocked one. */
+const searchableTable = (o: SlideObject): o is ShapeObject => o.type === 'shape' && !!o.table && !o.locked;
+
+/** A match in a table's cell: the cell (its index in `TableData.cells`) and the offsets in its text. */
+export type CellMatch = { cell: number; start: number; end: number };
+
+/**
+ * Find & Replace over a table's cells (design/15 "Table editing"), the one place the editor's find walks them:
+ * every match of `find` in each cell's text, cells in reading order, as `TextMatch` finds them in a text
+ * object; with `repl`, each cell's matches replaced as `replaceIn` replaces a text object's (its view,
+ * `cellTextObject`, written back through `setCell`, which refuses a cell past its bounds). `o` itself and no
+ * replacement when nothing changes; a locked table is neither searched nor changed.
+ */
+export function findInCells(
+  o: SlideObject,
+  find: string,
+  opts: FindOptions = {},
+  repl?: string,
+): { o: SlideObject; matches: CellMatch[]; replaced: number } {
+  const matches: CellMatch[] = [];
+  if (!find || !searchableTable(o)) return { o, matches, replaced: 0 };
+  const { anchors } = placeCells(o.table!);
+  let out: ShapeObject = o;
+  let replaced = 0;
+  for (let i = 0; i < anchors.length; i++) {
+    if (!anchors[i]) continue;
+    const view = cellTextObject(out, i);
+    if (!view?.text) continue;
+    for (const [start, end] of matchesIn(view.text, find, opts)) matches.push({ cell: i, start, end });
+    if (repl === undefined) continue;
+    const r = replaceIn(view, find, repl, opts);
+    if (r.o === view) continue;
+    const next = setCell(out, i, cellBodyOf(r.o));
+    if (next === out) continue;
+    out = next;
+    replaced += r.n;
+  }
+  // A table whose rows are fixed (imported) grows the rows whose text now needs more (tableFit.ts).
+  return { o: out === o ? o : fitTable(o, out), matches, replaced };
+}
+
 /**
  * Every match of `find` in the presentation's text objects, in authoring order, hidden slides included
  * (the dialog's '3 matches on 2 slides'). Matches are in `TextObject.text`, what the textarea shows, so the
@@ -140,6 +191,13 @@ export function findText(
   for (const sec of p.sections)
     for (const s of sec.slides)
       for (const o of s.objects) {
+        if (searchableTable(o)) {
+          for (const m of findInCells(o, find, opts).matches) {
+            if (out.length >= limit) return out;
+            out.push({ slideId: s.id, objectId: o.id, cell: m.cell, start: m.start, end: m.end });
+          }
+          continue;
+        }
         if (!searchable(o)) continue;
         for (const [start, end] of matchesIn(o.text, find, opts)) {
           if (out.length >= limit) return out;
@@ -223,6 +281,13 @@ export function findReplace(
   const next = withEverySlide(p, (s) => {
     let changed = false;
     const objects = s.objects.map((o) => {
+      if (searchableTable(o)) {
+        const r = findInCells(o, find, opts, repl);
+        if (r.o === o) return o;
+        changed = true;
+        replaced += r.replaced;
+        return r.o;
+      }
       if (!searchable(o)) return o;
       const r = replaceIn(o, find, repl, opts);
       if (r.o === o) return o;
@@ -662,8 +727,20 @@ function typedStyle(o: TextObject): TextStyle {
   return style;
 }
 
-/** A text object of 'New slide like this': no text, its look kept for what is typed (locked ones as they are). */
+/**
+ * A text object of 'New slide like this': no text, its look kept for what is typed (locked ones as they are);
+ * a table's cells emptied (their text, runs and paragraph styles; each keeps its style, fill and span, so what
+ * is typed takes the cell's look).
+ */
 function clearedText(o: SlideObject): SlideObject {
+  if (o.type === 'shape' && o.table && !o.locked) {
+    const cells = o.table.cells.map((c) => {
+      if (c.text === undefined && c.runs === undefined && c.paras === undefined) return c;
+      const { text: _t, runs: _r, paras: _p, ...rest } = c;
+      return rest;
+    });
+    return { ...o, table: gcTable({ ...o.table, cells }) };
+  }
   if (o.type !== 'text' || o.locked) return o;
   const out: TextObject = { ...o, text: '', style: typedStyle(o) };
   if (o.runs !== undefined) out.runs = [];
@@ -677,7 +754,8 @@ function clearedText(o: SlideObject): SlideObject {
 /**
  * 'New slide like this' (design/27 §11 item 11): a copy of the slide right after it (`cloneSlide`: fresh ids,
  * no digest) with the text of its text objects cleared, keeping each box's style and its first paragraph's
- * style and first run's formatting (`typedStyle`), so a new verse or announcement is typed in the same look.
+ * style and first run's formatting (`typedStyle`), so a new verse or announcement is typed in the same look,
+ * and its tables' cells emptied (each cell keeps its style, fill and span).
  * Notes are not copied, nor what described the old text: its scripture reference, its hidden flag, and its
  * PowerPoint picture (`pptx.refMediaId`, `show`), which would show the old slide over the new one. Pictures,
  * shapes and locked objects stay. `id`: the new slide (the editor selects it). A section already holding

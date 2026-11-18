@@ -21,9 +21,17 @@
  *   their geometry beside it, else their legacy form; a decoration its inline parts, none for a filed one: it
  *   draws nothing, as an older build), as a batch's unusable file. At most `PPTX_LIMITS.geomFileBytes` of them
  *   in all.
+ * - **A script face only this computer has** (sub-wave 1c, rule H, `systemFaces.ts`): a browser cannot ask the
+ *   hub's computer for its fonts, so where the hub measures a script with a face its library lacks
+ *   (`systemOnlyScripts`, computed on the main thread from the faces resolved at start and the library's list,
+ *   no deck read), a scene whose TABLE cells hold a character of such a script is refused here, in the pool,
+ *   after it parsed ('its tables need a script face only this computer has'): the hub parses the deck itself,
+ *   so the two parses store the same (equivalence by construction). Exact: text boxes are not measured, so a
+ *   deck with such text only in boxes keeps the browser's scene.
  */
 import { readFileSync, statSync } from 'node:fs';
 import { GEOM_FILE_MAX_BYTES, ImageObject, MISSING_LIMITS, Slide } from '@ordo/domain';
+import { textScripts } from '@ordo/domain/readable.ts';
 import type { PptxClientScene } from '@ordo/importers';
 import { type NamedGeomFile, storedShapeFileOf } from '@ordo/importers/pptx-geoms.ts';
 import { z } from 'zod';
@@ -52,9 +60,49 @@ export type ClientSceneTaskInput = {
   file: string;
   /** Whether the hub has LibreOffice for this import (`nativeJob.ts` decides it first). */
   libreoffice: boolean;
+  /**
+   * Rule H (sub-wave 1c): the scripts the hub measures table cells in with a face only its computer has
+   * (`systemFaces.ts` `systemOnlyScripts`); a scene with a table cell in one of them is refused. Absent: none.
+   */
+  systemOnlyScripts?: string[];
   /** Tests set less. */
   maxBytes?: number;
 };
+
+/** Why a scene whose table cells need a script face only the hub's computer has is not used (rule H). */
+export const SCRIPT_FACE_REFUSAL = 'its tables need a script face only this computer has';
+
+/** Objects a scan looks into at most (groups included), and nesting it follows. */
+const SCAN_OBJECTS = 200_000;
+const SCAN_DEPTH = 16;
+
+/**
+ * Whether a table cell of the scene's slides holds a character of one of `scripts` (ISO 15924 codes, the
+ * domain's `FALLBACK_SCRIPTS`, as the converter's `scriptOf` reads them): the cells' text only, in groups
+ * too; text boxes never. Bounded; never throws.
+ */
+export function tablesNeedScripts(
+  slides: readonly { slide: { objects: readonly unknown[] } }[],
+  scripts: readonly string[],
+): boolean {
+  if (!scripts.length) return false;
+  const want = new Set(scripts);
+  let seen = 0;
+  const walk = (objects: readonly unknown[], depth: number): boolean => {
+    if (depth > SCAN_DEPTH || !Array.isArray(objects)) return false;
+    for (const o of objects) {
+      if (++seen > SCAN_OBJECTS) return false;
+      if (!o || typeof o !== 'object') continue;
+      const x = o as { table?: { cells?: readonly { text?: unknown }[] }; objects?: readonly unknown[] };
+      for (const c of Array.isArray(x.table?.cells) ? x.table.cells : [])
+        if (typeof c?.text === 'string' && c.text)
+          for (const code of textScripts(c.text)) if (want.has(code)) return true;
+      if (Array.isArray(x.objects) && walk(x.objects, depth + 1)) return true;
+    }
+    return false;
+  };
+  return slides.some((s) => walk(s.slide?.objects ?? [], 0));
+}
 export type ClientSceneTaskOutput = { scene: CheckedScene } | { refused: string };
 
 const L = PPTX_LIMITS;
@@ -136,6 +184,7 @@ const EmittedSlideS = z.object({
     .max(MISSING_LIMITS.entries * 4)
     .optional(),
   artText: str(20_000).optional(),
+  // M9: no `tableGroupBytes` (the interim table rule is gone): z.object drops it from an older operator's scene.
 });
 
 const RecolorS = z.discriminatedUnion('kind', [
@@ -295,5 +344,9 @@ export function clientSceneTask(input: ClientSceneTaskInput): ClientSceneTaskOut
   } catch {
     return { refused: 'not JSON' };
   }
-  return checkClientScene(raw, { libreoffice: input.libreoffice });
+  const checked = checkClientScene(raw, { libreoffice: input.libreoffice });
+  // Rule H: decided on the parsed scene, here in the pool (the deck is not read for it).
+  if ('scene' in checked && tablesNeedScripts(checked.scene.slides, input.systemOnlyScripts ?? []))
+    return { refused: SCRIPT_FACE_REFUSAL };
+  return checked;
 }

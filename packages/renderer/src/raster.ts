@@ -47,7 +47,13 @@ export function rasterSlide(
   look: Look,
   scale: number,
   images: ImageLookup,
-  opts: { nextSlide?: Slide; isSong?: boolean; presentationKind?: 'song' | 'slides' | 'loop' } = {},
+  opts: {
+    nextSlide?: Slide;
+    isSong?: boolean;
+    presentationKind?: 'song' | 'slides' | 'loop';
+    /** An output raster's report of a part left out until its unit is made (`SlideDrawOptions.late`, C2b). */
+    late?: (key: string) => void;
+  } = {},
 ): void {
   drawSlide2D(ctx, slide, {
     scale,
@@ -56,6 +62,7 @@ export function rasterSlide(
     nextSlide: opts.nextSlide,
     isSong: opts.isSong ?? true,
     presentationKind: opts.presentationKind,
+    ...(opts.late ? { late: opts.late } : {}),
   });
 }
 

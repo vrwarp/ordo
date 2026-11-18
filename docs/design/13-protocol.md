@@ -4,6 +4,9 @@ Defined in `packages/protocol` as Zod schemas. JSON text frames. Every message h
 `{ t: string, v: 1, ...payload }`. The same message types are used on the hub WebSocket
 and on the fallback bus (`postMessage`), so outputs have one receive path.
 
+The live events of pre-rendered slides (`prerender.add`, `prerender.use`) are designed in
+[design/29](29-prerender-and-limits.md) §1.7 and §1.11 and listed under "Pre-render messages" below.
+
 ## Client to hub
 
 | `t`              | From             | Payload                                            | Notes                                              |
@@ -82,6 +85,65 @@ frameMs` (33 ms at 60 Hz). Outputs flip at the first vsync whose predicted prese
 time is at or after `at`; if `at` is already past (late delivery), they flip on the next
 vsync and report the lateness in `health`.
 
+## Prepare before goLive
+
+Design/29 §2.3 M8. Going live has two steps, so a mid-service Go live never holds GO, Next or Clear:
+
+1. `POST /api/v1/live/prepare` (operate role; the live process answers it) with `LivePrepareReq`
+   `{ playlistId, saved?, seen? }`. The hub fetches the playlist's copy from its library and checks it in a
+   worker thread (design/12 "Going live prepared beside the running service"). The answer is a
+   `LivePrepareRes` `{ playlistId, state: 'preparing' | 'ready' | 'failed', pct, reason?, savedAt?, bytes? }`:
+   `pct` is 0-90 while the copy arrives (by its announced length), 90 while it is checked, 100 when done;
+   `savedAt` is when the hub's saved copy of the playlist was taken, if it has one; `reason` is the goLive's
+   refusal. The request is a long poll: it is answered when the prepare ends, or (with `seen`, the `pct` the
+   caller last saw) when the progress moves, and otherwise after `LIVE_PREPARE_WAIT_MS` (400 ms). Asking
+   again while a prepare is under way joins it. A poll that carries `seen` continues the Go live it watched:
+   a prepare that ended since the last answer (within 10 s) is answered with its result, never restarted
+   (the operator waits up to 150 ms between polls, so a prepare often ends between two of them). A first
+   request (no `seen`) after a prepare that ended starts a fresh one. At most two prepares are in flight
+   (`PREPARES_IN_FLIGHT_MAX`): a third playlist's fails at once with W67 (design/29 §3), "Another service is
+   still getting ready to go live. Try Go live again in a moment.", and only the latest prepare's ready copy
+   is kept. `saved: true` goes live from the hub's saved copy instead of waiting for the library (W41's
+   button): the fetch under way is abandoned, and the goLive carries the existing cached-copy `degraded` entry.
+2. Once `ready` (or `failed`), the operator sends the ordinary `{ k: 'goLive', playlistId }` command. It
+   uses the prepared copy (once, within 10 s), applies at once with one parse, and is refused with the
+   prepare's `reason` if it failed.
+
+A goLive sent without step 1 (an older operator, `/actions`, a script) is prepared the same way before it
+enters the command queue; commands sent after it then apply to the running service until it is ready.
+goLives keep their order among themselves. End service keeps its order with them: a goLive sent before it
+and still being prepared is cancelled (its fetch abandoned) and refused with "Go live cancelled by End
+service" (`GOLIVE_ENDED_REASON`; the operator shows no dialog for it), so the screens never go live again
+after the service was ended; a goLive sent after End service prepares afresh. No WebSocket message is added: the operator learns the progress
+from the long poll (`packages/protocol` `LIVE_PREPARE_PATH`, `LivePrepareReq`, `LivePrepareRes`).
+
+## Pre-render messages
+
+Wave r2b (design/29 §1.7, §1.11): two live events for pre-rendered slides, built in sub-wave 1 and used from
+sub-wave 3 on (nothing sends them while `PRERENDER_ON` is false).
+
+```ts
+type LiveEvent +=
+  | { k: 'prerender.add'; presentationId: Id; slideId: Id; key: ContentHash; size: 3840 | 1920; file: ContentHash }
+  | { k: 'prerender.use'; presentationId: Id; slideId: Id };
+type LiveState += {
+  prerendered?: PrerenderPicture[]; // newest last, ≤ PRERENDERED_MAX (4,096); the oldest go
+  drawOverride?: { presentationId: Id; slideId: Id }[]; // ≤ DRAW_OVERRIDE_MAX (1,000)
+};
+```
+
+- `prerender.add` is the hub's only: a picture of a key of the live service (`resolved.prerenderKeys`) accepted
+  during it (the go-live bake). The hub applies it through `LiveService.apply` and every client reduces it from
+  `live.delta`; `LiveCommand`, what a client's `live.event` and `POST /live/events` carry, leaves it out, so a
+  client sending one is refused at the parse (`HUB_ONLY_EVENTS`). The reducer keeps it in `state.prerendered`
+  (one entry per slide, key and size; a key outside the key set, a slide outside the service or an idle state is
+  a no-op) and never changes `resolved`.
+- `prerender.use` is the operator's "Use the picture for this slide during this service" (operate role, refused
+  from edit, output and Stage sockets as every command is): a slide set to Live draws from its picture until
+  End service, kept in `state.drawOverride`. It changes nothing in the presentation (locked while live), is
+  journaled like every event and travels with the hand-back state.
+- Both end with the service: `endService` and the next `goLive` start without them.
+
 ## Sequence rules
 
 - `seq` is the hub's. Clients track `appliedSeq`. A delta with `fromSeq !== appliedSeq`
@@ -98,6 +160,18 @@ The operator acts as the hub: it stamps `seq` continuing from the last hub `seq`
 `live.event { k: 'adopt', state }` which the hub accepts only if its own `mode` is `live`
 with the same playlist and its `seq` is lower; otherwise the operator resyncs from the
 hub and surfaces a warning. Details in [design/17](17-offline-and-degraded.md).
+
+## Output health: units
+
+`OutputHealth` (`health`, and the hub's `health.summary` to the operator) carries three counters of an output's
+units, the slow parts of a slide drawn ahead in slices (design/14 "Late units"; wave r2b), all optional so an older
+hub's parse strips them:
+
+| Field            | Meaning                                                                                                                                                                                                                                   |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unitsMade`      | units the window's asset worker has made since it started                                                                                                                                                                                 |
+| `unitsLate`      | slides the window showed before all their units were ready, whose late parts faded in a moment later (counted once a showing); the operator shows W49 "Parts of 2 slides appeared a moment late on this screen." (design 29 §3) as a note |
+| `unitCacheBytes` | bytes the asset worker's unit cache holds now (at most 192 MiB; warm-up stops at two thirds)                                                                                                                                              |
 
 ## Versioning
 

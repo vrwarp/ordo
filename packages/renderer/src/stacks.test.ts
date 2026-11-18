@@ -128,6 +128,108 @@ describe('LayerStack', () => {
   });
 });
 
+describe('LayerStack: an in-place refresh that fades in (design/14 "Late units", r2b units-live)', () => {
+  /** A live 'A' (its first copy a1) and an armed 'B'. */
+  function live() {
+    const t = setup();
+    const bmp = (id: string): B => ({ id, closed: false });
+    t.ls.offer({ key: 'A', kind: SRC_BITMAP, bitmap: bmp('a1') });
+    t.ls.requestFlip('A', 0, 0, 0);
+    t.ls.tick(0, F);
+    t.offer('B');
+    const refresh = (id: string, fadeMs = 300) =>
+      t.ls.offer({ key: 'A', kind: SRC_BITMAP, bitmap: bmp(id), refresh: true, refreshFadeMs: fadeMs });
+    return { ...t, refresh };
+  }
+
+  it('an in-place refresh at mid-fade blends both copies, keeping the old one until the fade ends', () => {
+    const { ls, released, refresh } = live();
+    refresh('a2');
+    // Nothing flips; the held keys stay; the old copy is kept and the new one fades in over it.
+    expect(ls.heldKeys()).toEqual({ live: 'A', armed: 'B', queued: '' });
+    expect(ls.tick(1000, F)).toBe(false);
+    expect(ls.refading).toBe(true);
+    expect((ls.liveStack.bitmap as B).id).toBe('a1');
+    expect((ls.incoming.bitmap as B).id).toBe('a2');
+    expect(ls.refadeWeight(1150)).toBe(0.5);
+    expect(released).toEqual([]);
+    // At its end the new copy is the live one and the old one is let go.
+    ls.tick(1300, F);
+    expect(ls.refading).toBe(false);
+    expect((ls.liveStack.bitmap as B).id).toBe('a2');
+    expect(ls.hasIncoming).toBe(false);
+    expect(released).toEqual(['a1']);
+    expect(ls.flips).toBe(1);
+  });
+
+  it('a GO in the middle of an in-place fade ends it and flips at once', () => {
+    const { ls, released, refresh } = live();
+    refresh('a2');
+    ls.tick(1000, F);
+    expect(ls.refading).toBe(true);
+    ls.requestFlip('B', 1100, 300, 1090);
+    expect(ls.tick(1100, F)).toBe(true);
+    expect(ls.liveStack.key).toBe('B');
+    expect(ls.refading).toBe(false);
+    expect(ls.hasIncoming).toBe(false);
+    // The slide that leaves fades out as its new copy.
+    expect((ls.armedStack.bitmap as B).id).toBe('a2');
+    expect(released).toEqual(['a1']);
+    expect(ls.lateFlips).toBe(0);
+  });
+
+  it('waits for the new copy to be uploaded before fading; a GO before then flips at once and drops it', () => {
+    const { ls, released, refresh } = live();
+    ls.gated = true;
+    refresh('a2');
+    expect(ls.incoming.ready).toBe(false);
+    ls.tick(1000, F);
+    expect(ls.refading).toBe(false);
+    ls.incoming.ready = true;
+    ls.tick(1016, F);
+    expect(ls.refading).toBe(true);
+    expect(ls.refadeWeight(1016)).toBe(0);
+    // A second copy before the first one was uploaded replaces it.
+    const t = live();
+    t.ls.gated = true;
+    t.refresh('a2');
+    t.refresh('a3');
+    expect((t.ls.incoming.bitmap as B).id).toBe('a3');
+    expect(t.released).toEqual(['a2']);
+    t.ls.requestFlip('B', 1100, 300, 1090);
+    expect(t.ls.tick(1100, F)).toBe(true);
+    expect(t.ls.hasIncoming).toBe(false);
+    expect(t.released).toEqual(['a2', 'a3']);
+    expect((t.ls.armedStack.bitmap as B).id).toBe('a1');
+    void released;
+  });
+
+  it('a refresh without a fade, during a flip fade, or of the armed cue swaps in place as before', () => {
+    const { ls, released, refresh } = live();
+    refresh('a2', 0);
+    expect(ls.hasIncoming).toBe(false);
+    expect((ls.liveStack.bitmap as B).id).toBe('a2');
+    expect(released).toEqual(['a1']);
+    // The armed cue's late parts: its copy is replaced, silently.
+    ls.offer({ key: 'B', kind: SRC_BITMAP, bitmap: { id: 'b2', closed: false }, refresh: true });
+    expect((ls.armedStack.bitmap as B).id).toBe('b2');
+    expect(ls.hasIncoming).toBe(false);
+    // While a GO's crossfade runs, a refresh of the incoming live content swaps in place.
+    ls.requestFlip('B', 2000, 300, 1990);
+    ls.tick(2000, F);
+    expect(ls.fading).toBe(true);
+    ls.offer({
+      key: 'B',
+      kind: SRC_BITMAP,
+      bitmap: { id: 'b3', closed: false },
+      refresh: true,
+      refreshFadeMs: 300,
+    });
+    expect(ls.hasIncoming).toBe(false);
+    expect((ls.liveStack.bitmap as B).id).toBe('b3');
+  });
+});
+
 describe('fitRect', () => {
   it('covers and contains', () => {
     const out = new Float32Array(4);

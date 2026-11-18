@@ -11,7 +11,7 @@ import {
   RESIDUAL_ROWS,
   rowOf,
 } from './residual.ts';
-import { body, buildDeck, para, run, solid, sp } from './test-util.ts';
+import { body, buildDeck, para, run, solid, sp, tableFrame, tc } from './test-util.ts';
 
 /** What the converter did with each reason before M9 (the base, 0d1c081): the table must keep it but for 3-D. */
 const BASE: Readonly<Record<string, Decision>> = {
@@ -159,6 +159,17 @@ describe('the residual decision table (M9)', () => {
       ['innerShdw', box('<a:effectLst><a:innerShdw/></a:effectLst>')],
       ['warp', text('', '<a:prstTxWarp prst="textWave1"><a:avLst/></a:prstTxWarp>')],
       ['vert', text('vert="vert"')],
+      // A table's vertical cells: vert, vert270 and the WordArt and Mongolian kinds (rule V, sub-wave 1c).
+      [
+        'vert',
+        tableFrame({
+          id: 3,
+          x: 0,
+          y: 0,
+          cols: [914_400],
+          rows: [{ h: 914_400, cells: [tc('v', { tcPr: ' vert="vert270"' })] }],
+        }),
+      ],
       ['numCol', text('numCol="2"')],
       ['anchorCtr', text('anchorCtr="1"')],
       ['textFill:picture', text('', '', para(run('AMOR', '', '<a:blipFill><a:blip/></a:blipFill>')))],
@@ -168,5 +179,16 @@ describe('the residual decision table (M9)', () => {
       expect(e.reasons, reason).toContain(reason);
       expect(e.support, reason).toBe(decisionOf(reason));
     }
+    // An East Asian vertical cell (eaVert) is no 'vert' reason: LibreOffice 24.2 draws it horizontally (probe
+    // deck A), so its table is the table object (rule V, sub-wave 1c).
+    const ea = tableFrame({
+      id: 3,
+      x: 0,
+      y: 0,
+      cols: [914_400],
+      rows: [{ h: 914_400, cells: [tc('v', { tcPr: ' vert="eaVert"' })] }],
+    });
+    const t = parseDeck(buildDeck({ slides: [{ shapes: ea }] })).slides[0]!.elements[0]!;
+    expect([t.kind, t.support, t.reasons ?? []]).toEqual(['table', 'native', []]);
   });
 });

@@ -1,21 +1,25 @@
 import { parsePathData, type Rgba, type ShapeObject, Slide, type TextObject } from '@ordo/domain';
-import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import * as prev from '@ordo/domain/schemas.prev05.test-util.ts';
+import { cellRich } from '@ordo/domain/table.ts';
+import { TABLE_LIMITS as DOMAIN_LIMITS } from '@ordo/domain';
 import { CMD_MOVE, GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
 import { storedGeometry } from '@ordo/renderer/geom/stored.ts';
 import { describe, expect, it } from 'vitest';
+import { MAX_TABLE_CELLS } from './budget.ts';
 import { MAX_SLIDE_OBJECTS } from './classify.ts';
 import { MAX_PATH_CHARS } from './geom.ts';
+import { M9_FIELDS } from './emit-ctx.ts';
 import { convertDeck, parseDeck } from './index.ts';
 import type { Line, TableCell, TableElement, TableLine } from './ir.ts';
 import type { FaceSource } from './metrics.ts';
 import {
+  asLibreOffice,
   GRID_LINES_PER_PATH,
   GRID_RECTS_PER_PATH,
   gridObjects,
   loAscent,
   loLineHeight,
-  MAX_TABLE_CELLS,
-  MAX_TABLE_GRID,
+  TABLE_LIMITS,
 } from './tables.ts';
 import { PREDEFINED_TABLE_STYLE_IDS, predefinedTableStyle } from './tablestyles.ts';
 import {
@@ -111,11 +115,19 @@ const rectsOf = (o: ShapeObject): Rect[] =>
       })
     : [{ x: o.box.x, y: o.box.y, w: o.box.w, h: o.box.h, fill: o.fill! }];
 
+/**
+ * M9: the stored fields but the table object (`M9_WRITES` without 'table'): tables as their M6 group of
+ * shapes and text boxes, which these tests read (the table object: `emit-table.test.ts`).
+ */
+const M6_GROUP = new Set(M9_FIELDS.filter((f) => f !== 'table'));
+
 /** Convert one slide; it must be an ordinary ordo slide. */
 function convert(
   shapes: string,
   opts: {
     styles?: string;
+    /** The style list's default (`a:tblStyleLst def`), with `styles`. */
+    def?: string;
     fontFace?: FaceSource;
     deck?: Partial<DeckSpec>;
     loCompat?: boolean;
@@ -123,9 +135,10 @@ function convert(
   } = {},
 ) {
   let parts = buildDeck({ slides: [{ shapes }], ...opts.deck });
-  if (opts.styles !== undefined) parts = withTableStyles(parts, opts.styles);
+  if (opts.styles !== undefined) parts = withTableStyles(parts, opts.styles, opts.def);
   const out = convertDeck(parts, {
     fontFace: opts.fontFace ?? HALF_EM,
+    m9Writes: M6_GROUP,
     ...(opts.loCompat ? { loCompat: true } : {}),
     ...(opts.budgetArt ? { budgetArt: true } : {}),
   });
@@ -197,6 +210,33 @@ describe('tables: grid, cells and objects', () => {
     expect(texts[1]!.text).toBe('');
     expect(texts[1]!.style.fontSizePx).toBe(36); // the default 18 pt: an empty a:p has no end mark size here
     expect(texts[1]!.runs).toBeUndefined();
+  });
+
+  it("lays a cell's text out in the master's otherStyle before defaultTextStyle, as LibreOffice does", () => {
+    // The deck's defaultTextStyle centres its text at 120 % lines; the master's otherStyle sets it left at 100 %
+    // (CbcKk Dedication Service and golden w65_00H differ so, both ways): a cell takes otherStyle's, as
+    // LibreOffice lays table text out; a text box, which is no placeholder, keeps defaultTextStyle's.
+    const deck: Partial<DeckSpec> = {
+      defaultTextStyle:
+        '<a:lvl1pPr algn="ctr"><a:lnSpc><a:spcPct val="120000"/></a:lnSpc><a:defRPr sz="2000"/></a:lvl1pPr>',
+      master: {
+        txStyles:
+          '<p:titleStyle/><p:bodyStyle/><p:otherStyle><a:lvl1pPr algn="l"><a:lnSpc><a:spcPct val="100000"/></a:lnSpc><a:defRPr sz="1600"/></a:lvl1pPr></p:otherStyle>',
+      },
+    };
+    const box = sp({ id: 9, x: 0, y: 5 * IN, cx: 2 * IN, cy: IN / 2, txBody: body(para(run('box'))) });
+    const shapes = table({ cols: [2 * IN], rows: [{ h: IN / 2, cells: [tc('cell')] }] }) + box;
+    // The M6 group: a text object per cell.
+    const { texts } = convert(shapes, { deck });
+    const cell = texts.find((t) => t.text === 'cell')!;
+    // 100 % of the office model's single line (1.2 x the size), where defaultTextStyle's 120 % gives 1.44.
+    expect(cell.style).toMatchObject({ align: 'left', fontSizePx: 32, lineHeight: 1.2 });
+    expect(texts.find((t) => t.text === 'box')!.style).toMatchObject({ align: 'center', fontSizePx: 40 });
+    // The table object: the same cell.
+    const out = convertDeck(buildDeck({ slides: [{ shapes }], ...deck }), { fontFace: HALF_EM });
+    const o = out.slides[0]!.slide.objects.find((x): x is ShapeObject => x.type === 'shape' && !!x.table)!;
+    expect(cellRich(o.table!, 0)!.style).toMatchObject({ align: 'left', lineHeight: 1.2 });
+    expect(cellRich(o.table!, 0)!.style.fontSizePx).toBeCloseTo(31.92, 6); // 16 pt at 600 dpi (133 px): 15.96 pt
   });
 
   it('runs the cells of a right-to-left table right to left, starting at the right unless set (rtl)', () => {
@@ -347,6 +387,41 @@ describe('tables: styles', () => {
     expect(texts[0]!.style).toMatchObject({ fontWeight: 700, color: { r: 255, g: 255, b: 255 } });
   });
 
+  it("gives a table that names no style none, whatever the deck's default (a:tblStyleLst def), as LibreOffice", () => {
+    // LibreOffice 24.2 draws such a table without a style (regroup/r2b/tables-conv/lodef: the default named
+    // and undefined, or defined in ppt/tableStyles.xml, both leave the cells unfilled; only a:tableStyleId
+    // fills them). The worship deck "Depression" (white text on black cells, a list defining Medium Style 2 -
+    // Accent 1 as its default) fell from 0.86 to 0.05 when the default was taken.
+    const shapes = table({
+      cols: [IN, IN],
+      rows: [
+        { h: IN / 2, cells: [tcWith('own', solid('111111')), tc('b')] },
+        { h: IN / 2, cells: [tc('c'), tc('d')] },
+      ],
+      tblPr: '<a:tblPr/>',
+    });
+    const DEF = '{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}';
+    const fills = (styles: string, def?: string) =>
+      convert(shapes, { styles, ...(def ? { def } : {}) })
+        .rects.sort((a, b) => a.y - b.y || a.x - b.x)
+        .map(rgb);
+    const deckDefault = `<a:tblStyle styleId="${DEF}" styleName="Deck"><a:wholeTbl><a:tcStyle><a:fill>${solid('DDEEFF')}</a:fill></a:tcStyle></a:wholeTbl></a:tblStyle>`;
+    // Only the cell's own fill, with the default named (built in) or defined, or no default at all.
+    expect(fills('', DEF)).toEqual([[17, 17, 17]]);
+    expect(fills(deckDefault, DEF)).toEqual([[17, 17, 17]]);
+    expect(fills(deckDefault)).toEqual([[17, 17, 17]]);
+    // Named, the same style fills every cell.
+    const named = convert(
+      table({
+        cols: [IN, IN],
+        rows: [{ h: IN / 2, cells: [tc('a'), tc('b')] }],
+        tblPr: `<a:tblPr><a:tableStyleId>${DEF}</a:tableStyleId></a:tblPr>`,
+      }),
+      { styles: deckDefault, def: DEF },
+    );
+    expect(named.rects.map(rgb)).toEqual([[221, 238, 255]]);
+  });
+
   it('puts the table background (the own fill of a:tblPr) under every cell', () => {
     const { rects } = convert(
       table({
@@ -404,18 +479,20 @@ describe('tables: lines', () => {
     expect(shared(lines).map((l) => [l.width, l.color])).toEqual([[6, { r: 0, g: 0, b: 0, a: 1 }]]);
   });
 
-  it('notes diagonal lines, which are not drawn, and rates the table approx', () => {
+  it('reads diagonal lines per cell (the table object draws them; the M6 group notes them)', () => {
     const shapes = table({
       cols: [IN],
       rows: [{ h: IN / 2, cells: [tcWith('a', ln('lnTlToBr', 'FF0000', 12_700))] }],
     });
     const { s, lines } = convert(shapes);
     expect(lines).toHaveLength(0);
-    expect(s.notes).toContain('diagonal lines of table cells are not drawn');
+    expect(s.notes).toContain('diagonal lines of table cells are not drawn (M6 group)');
     const scene = parseDeck(buildDeck({ slides: [{ shapes }] }));
     const t = scene.slides[0]!.elements[0] as TableElement;
-    expect(t.support).toBe('approx');
-    expect(t.reasons).toContain('tableDiagonal');
+    expect(t.support).toBe('native');
+    expect(t.cells[0]!.diag).toEqual({
+      down: { width: 12_700, fill: { kind: 'solid', color: { r: 255, g: 0, b: 0, a: 1 } } },
+    });
   });
 });
 
@@ -636,6 +713,75 @@ describe('tables: gridObjects within the stored path bounds', () => {
 describe('tables: rows grow to their text', () => {
   const long = 'aaaa bbbb cccc dddd';
 
+  it('measures Korean as the renderer breaks it (words kept whole) and spaces it by the face of its Hangul', () => {
+    // The deck's family has no face; ordo's default (Inter here) has no Hangul; the script's face
+    // (FaceSource.script, the library's Noto Sans KR on the hub) draws it, 1 em a syllable, its line 1.26 of the
+    // size. 20 pt (40 px) in a column of 5 syllables: "가나 다라마바 사" breaks at its spaces only (UAX#14 with
+    // Korean words whole, the renderer's breaks.ts): three lines, where breaking between syllables gave two.
+    const latin = { advance: (cp: number) => (cp === 0x20 ? 0.25 : undefined), lineHeight: 1.21 };
+    const hangul = {
+      advance: (cp: number) => (cp >= 0xac00 && cp <= 0xd7a3 ? 1 : undefined),
+      lineHeight: 1.26,
+    };
+    const faces: FaceSource = Object.assign((family: string) => (family === 'Inter' ? latin : undefined), {
+      script: (code: string) => (code === 'Hang' ? hangul : undefined),
+    });
+    const inner = 5 * 40;
+    const col = Math.round(((inner + 28.8) * 12_192_000) / 1920) + 10;
+    const shapes = table({
+      cols: [col],
+      rows: [
+        {
+          h: 0,
+          cells: [
+            tc('가나 다라마바 사', {
+              rPr: 'lang="ko-KR" sz="2000"',
+              rPrChildren: '<a:latin typeface="Malgun Gothic"/><a:ea typeface="Malgun Gothic"/>',
+            }),
+          ],
+        },
+      ],
+    });
+    const scene = parseDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: faces });
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    const px = (emu: number) => (emu * 1920) / 12_192_000;
+    expect(px(t.rows[0]!)).toBeCloseTo(3 * 1.26 * 40 + 14.4, 3);
+    // The stored cell is spaced by the Hangul face (the table object's paragraph or box line height).
+    const out = convertDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: faces });
+    const o = out.slides[0]!.slide.objects.find((x) => x.type === 'shape' && x.table) as ShapeObject;
+    const c = cellRich(o.table!, 0)!;
+    expect(c.paras?.[0]?.lineSpacing ?? c.style.lineHeight / 1.2).toBeCloseTo(1.26 / 1.2, 6);
+  });
+
+  it("asks the script's face only for scripts drawn glyph by glyph (Han, Kana, Hangul), never for Arabic", () => {
+    // Arabic is shaped (its letters join), which the measure does not do: its script's face (fontconfig's
+    // DejaVu Sans in the harness) measured the cec bible readings' Arabic cells a line too long and spaced them
+    // by its own line, and the slide's rows fell from LibreOffice's (0.805 -> 0.741). Such a cell keeps the
+    // chain's faces (or the estimate) and their spacing, as before the script's face.
+    const latin = { advance: (cp: number) => (cp === 0x20 ? 0.25 : undefined), lineHeight: 1.21 };
+    const arabic = {
+      advance: (cp: number) => (cp >= 0x600 && cp <= 0x6ff ? 2 : undefined),
+      lineHeight: 1.8,
+    };
+    const asked: string[] = [];
+    const faces: FaceSource = Object.assign((family: string) => (family === 'Inter' ? latin : undefined), {
+      script: (code: string) => {
+        asked.push(code);
+        return code === 'Arab' ? arabic : undefined;
+      },
+    });
+    const shapes = table({
+      cols: [2 * IN],
+      rows: [{ h: 0, cells: [tc('سلام عليكم', { rPr: 'lang="ar-EG" sz="2000"' })] }],
+    });
+    const out = convertDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: faces });
+    const o = out.slides[0]!.slide.objects.find((x) => x.type === 'shape' && x.table) as ShapeObject;
+    const c = cellRich(o.table!, 0)!;
+    // Spaced by the chain's face (Inter's 1.21), as before the script's face, not by the Arabic face's 1.8.
+    expect(c.paras?.[0]?.lineSpacing ?? c.style.lineHeight / 1.2).toBeCloseTo(1.21 / 1.2, 6);
+    expect(asked).not.toContain('Arab');
+  });
+
   it('measures text with the faces in the office line model and grows the row', () => {
     // 2 in = 288 px, less 28.8 px of margins: 14 characters of 18 px fit, so "dddd" wraps: two lines of
     // 1.2 × 36 px, plus 14.4 px of margins.
@@ -785,16 +931,26 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
     });
 
   it("sizes a line at the face's ascent and descent at a 600 dpi reference device", () => {
-    // 18 pt is 635/100 mm, 150 px at 600 dpi: ascent 143 px and descent 40 px, 605 and 169/100 mm.
-    expect(loLineHeight(18, carlito('', false, false), 'font')).toBe(774);
+    // 18 pt is 635/100 mm, 150 px at 600 dpi: ascent 143 px and descent 40 px, 183 px together, converted back
+    // once: 774.7, 775/100 mm, the larger (the probe's 18 pt rows; converted apart, 605 + 169 = 774).
+    expect(loLineHeight(18, carlito('', false, false), 'font')).toBe(775);
     expect(loAscent(18, carlito('', false, false), 'font')).toBe(605);
-    // Font-independent: 1.2 × 635, truncated; the ascent is the font height.
+    // 10 pt Carlito Bold (its vertical metrics are Carlito's): 83 px, 79 and 22 px, 101 px together, 427.6:
+    // 428/100 mm a line, as the 1000 Years chart's eleven row rules show (334 + 93 = 427 converted apart).
+    expect(loLineHeight(10, carlito('Calibri', true, false), 'font')).toBe(428);
+    expect(loAscent(10, carlito('Calibri', true, false), 'font')).toBe(334);
+    // 9 pt: 75 px, 71 and 20 px: 301 + 85 = 386 converted apart, the larger (their 91 px converted: 385).
+    expect(loLineHeight(9, carlito('', false, false), 'font')).toBe(386);
+    // Font-independent: 1.2 × 635, rounded (the probe's 14 pt lines: 1.2 × 494 = 592.8 is 593, and its 9 pt
+    // ones 1.2 × 318 = 381.6 is 382); the ascent is the font height.
     expect(loLineHeight(18, undefined, 'independent')).toBe(762);
+    expect(loLineHeight(14, undefined, 'independent')).toBe(593);
+    expect(loLineHeight(9, undefined, 'independent')).toBe(382);
     expect(loAscent(18, carlito('', false, false), 'independent')).toBe(635);
     const t = tableOf(one());
     expect(t.lo?.lines).toBe('font');
     // The line, LibreOffice's extra 1/100 mm, and the two margins of 127/100 mm.
-    expect(t.lo?.rows).toEqual([(774 + 1 + 254) * MM]);
+    expect(t.lo?.rows).toEqual([(775 + 1 + 254) * MM]);
     // ordo's own row: 1.2207 × 36 px and the margins.
     expect(t.rows[0]! / 6350).toBeCloseTo((2500 / 2048) * 36 + 14.4, 6);
   });
@@ -810,7 +966,7 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
 
   it('scales a line by its proportional spacing, truncated, and keeps exact spacing', () => {
     const pct = tableOf(one('<a:pPr><a:lnSpc><a:spcPct val="107000"/></a:lnSpc></a:pPr>'));
-    expect(pct.lo?.rows).toEqual([(Math.trunc(774 * 1.07) + 255) * MM]);
+    expect(pct.lo?.rows).toEqual([(Math.trunc(775 * 1.07) + 255) * MM]);
     const pts = tableOf(one('<a:pPr><a:lnSpc><a:spcPts val="2000"/></a:lnSpc></a:pPr>'));
     expect(pts.lo?.rows).toEqual([(706 + 255) * MM]); // 20 pt is 705.6/100 mm
   });
@@ -839,10 +995,31 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
       expect(ours.style.insets![k as 'l']).toBeCloseTo(v, 9);
   });
 
+  it('starts a drawn block taller than its cell at the top margin, and centres one with room (dense-c C2)', () => {
+    // 16 pt Calibri after a text shape that grows to its text (font-independent rows): LibreOffice measures the
+    // line 1.2 × 564 = 677/100 mm and draws it 690 (127 + 36 px at 600 dpi), so a row grown to it holds 678 of
+    // inner height. The drawn line starts at the top margin, not centred 6/100 mm above it: Moral Character's
+    // 120 single-line cells, and the Depression deck's 145 lines (offset = max(0, (inner - drawn) / 2)). Rows
+    // stored taller give the line room, and it is centred there, as before.
+    const row = (h: number) => ({ h, cells: [tc('one line', { tcPr: ' anchor="ctr"', rPr: 'sz="1600"' })] });
+    const t = tableOf(
+      autogrow() +
+        table({ cols: [4 * IN], rows: [row(0), row((690 + 254 + 200) * MM), row((690 + 254 + 400) * MM)] }),
+    );
+    expect(t.lo?.lines).toBe('independent');
+    expect(t.lo?.rows).toEqual([(677 + 1 + 254) * MM, (690 + 254 + 200) * MM, (690 + 254 + 400) * MM]);
+    const [full, room, more] = t.lo!.lift;
+    // With room the drawn line is centred: where it sits from the cell's centre does not depend on the room.
+    expect(more).toBe(room);
+    // Full: from the top margin, less the 1/100 mm LibreOffice starts an overflowing block above it (the cell
+    // probe, `loBlockTop`): 5/100 mm lower than centred, so ordo's line (centred in its cell) is lifted 5 less.
+    expect(full).toBe(room! - 5 * MM);
+  });
+
   it('puts the whole height of a merge from the first row on its last row, as LayoutTableHeight does', () => {
     // One line of 18 pt Carlito and three, each with the extra 1/100 mm and the margins.
-    const one = 774 + 1 + 254;
-    const three = 3 * 774 + 1 + 254;
+    const one = 775 + 1 + 254;
+    const three = 3 * 775 + 1 + 254;
     const merged = (start: number) =>
       tableOf(
         table({
@@ -945,14 +1122,49 @@ describe('tables: what stays residual', () => {
     expect(texts).toHaveLength(84);
   });
 
-  it(`reads no table of more than ${MAX_TABLE_GRID} grid cells`, () => {
+  it('cuts a table past 256 rows and notes it', () => {
+    const rows = Array.from({ length: 300 }, (_, r) => ({ h: 12_700, cells: [tc(`r${r}`)] }));
+    const scene = parseDeck(buildDeck({ slides: [{ shapes: table({ cols: [IN], rows }) }] }), {
+      fontFace: HALF_EM,
+    });
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.kind).toBe('table');
+    expect(t.rows).toHaveLength(TABLE_LIMITS.rows);
+    expect(t.storedRows).toHaveLength(TABLE_LIMITS.rows);
+    expect(t.cells).toHaveLength(TABLE_LIMITS.rows);
+    expect(t.cells[255]!.text.paras[0]!.runs[0]!.text).toBe('r255');
+    expect(scene.slides[0]!.notes).toContain(
+      'a table of 300 rows and 1 columns is cut to its first 256 rows and 1 columns',
+    );
+  });
+
+  it(`cuts a table past 64 columns or ${TABLE_LIMITS.grid} slots to its first ones`, () => {
+    // 65 rows of 64 columns: 4,160 slots, so the first 64 rows (4,096) are read.
     const rows = Array.from({ length: 65 }, () => ({
       h: 12_700,
-      cells: [tc('x', { attrs: `gridSpan="64"` })],
+      cells: [tc('x', { attrs: 'gridSpan="70"' })],
     }));
-    const { s, texts } = convert(table({ cols: Array(64).fill(IN / 8), rows }));
-    expect(texts).toHaveLength(0);
-    expect(s.notes.some((n) => n.startsWith(`a table of ${65 * 64} grid cells`))).toBe(true);
+    const scene = parseDeck(
+      buildDeck({ slides: [{ shapes: table({ cols: Array(70).fill(IN / 8), rows }) }] }),
+    );
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.cols).toHaveLength(64);
+    expect(t.rows).toHaveLength(64);
+    expect(t.cells).toHaveLength(64);
+    expect(t.cells.every((c) => c.cols === 64)).toBe(true);
+    expect(scene.slides[0]!.notes).toContain(
+      'a table of 65 rows and 70 columns is cut to its first 64 rows and 64 columns',
+    );
+  });
+
+  it('keeps the bounds of the stored table (TABLE_LIMITS of @ordo/domain)', () => {
+    expect(TABLE_LIMITS).toEqual({
+      rows: DOMAIN_LIMITS.rows,
+      cols: DOMAIN_LIMITS.cols,
+      grid: DOMAIN_LIMITS.grid,
+      cellText: DOMAIN_LIMITS.cellText,
+      tableText: DOMAIN_LIMITS.tableText,
+    });
   });
 
   it('draws a dense table natively while the slide stays within its object budget', () => {
@@ -988,9 +1200,8 @@ describe('tables: what stays residual', () => {
     expect(s.art?.text).toContain('x');
   });
 
-  it('leaves a table of more cells than a slide may have objects to LibreOffice, unmeasured', () => {
-    expect(MAX_TABLE_CELLS).toBe(MAX_SLIDE_OBJECTS);
-    // 12 × 13 = 156 drawn cells: each is an object, so the table could never be drawn natively.
+  it('reads and measures a table of more cells than a slide may have objects (M9: no cell cap)', () => {
+    // 12 × 13 = 156 drawn cells: M6 left it to LibreOffice unmeasured; the table object is one object.
     const rows = Array.from({ length: 12 }, () => ({
       h: IN / 16,
       cells: Array.from({ length: 13 }, () => tc('x')),
@@ -1000,14 +1211,17 @@ describe('tables: what stays residual', () => {
       faces++;
       return HALF_EM(...args);
     };
-    const { s, texts } = convert(table({ cols: Array(13).fill(IN / 2), rows }), { fontFace: counting });
-    expect(texts).toHaveLength(0);
-    expect(faces).toBe(0);
-    expect(s.classification.class).toBe('hybrid');
-    expect(s.classification.reasons).toContain('art:budget:table');
-    expect(s.notes).toContain(
-      `a table of 156 cells passes the slide's budget of ${MAX_SLIDE_OBJECTS} objects: LibreOffice draws it`,
+    const scene = parseDeck(
+      buildDeck({ slides: [{ shapes: table({ cols: Array(13).fill(IN / 2), rows }) }] }),
+      {
+        fontFace: counting,
+      },
     );
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.kind).toBe('table');
+    expect(t.cells).toHaveLength(156);
+    expect(t.cells.every((c) => c.text.paras[0]!.runs[0]!.text === 'x')).toBe(true);
+    expect(faces).toBeGreaterThan(0);
   });
 
   it('leaves a table with vertical cell text to LibreOffice', () => {
@@ -1016,6 +1230,79 @@ describe('tables: what stays residual', () => {
     );
     expect(s.classification.reasons).toContain('art:table');
     expect(s.notes).toContain('a table with vertical cell text is drawn by LibreOffice (M8)');
+  });
+
+  // Rule V (sub-wave 1c): LibreOffice 24.2 draws `eaVert` table cells exactly as `horz` ones (probe deck A:
+  // the same glyph positions within 0.1 pt, none turned), so such a table is the table object, the cell's
+  // `vert` kept for a later vertical text engine. The other kinds stay LibreOffice's art (owner question
+  // Q1c-5): vert and vert270 are LibreOffice's vertical writing; wordArtVert, wordArtVertRtl and mongolianVert,
+  // drawn horizontally too, are in no measured deck.
+  /** The Korean bulletin's vertical cells: a narrow first column, '1년차' over a rowSpan of 4, centred. */
+  const eaVertTable = (vert: string) =>
+    table({
+      cols: [IN / 2, 2 * IN],
+      rows: [
+        {
+          h: IN / 4,
+          cells: [tc('1년차', { tcPr: ` vert="${vert}" anchor="ctr"`, attrs: 'rowSpan="4"' }), tc('2019')],
+        },
+        { h: IN / 4, cells: [tc('', { attrs: 'vMerge="1"' }), tc('2020')] },
+        { h: IN / 4, cells: [tc('', { attrs: 'vMerge="1"' }), tc('2021')] },
+        { h: IN / 4, cells: [tc('', { attrs: 'vMerge="1"' }), tc('2022')] },
+      ],
+    });
+
+  it('reads a table with East Asian vertical cells (eaVert) as the table object, the cell keeping its vert', () => {
+    const deck = () => buildDeck({ slides: [{ shapes: eaVertTable('eaVert') }] });
+    const scene = parseDeck(deck(), { fontFace: HALF_EM });
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.kind).toBe('table');
+    expect(t.support).toBe('native');
+    expect(t.cells.map((c) => [c.row, c.col, c.rows, c.vert])).toEqual([
+      [0, 0, 4, 'eaVert'],
+      [0, 1, 1, undefined],
+      [1, 1, 1, undefined],
+      [2, 1, 1, undefined],
+      [3, 1, 1, undefined],
+    ]);
+    expect(scene.slides[0]!.notes).not.toContain(
+      'a table with vertical cell text is drawn by LibreOffice (M8)',
+    );
+    // Stored as the table object on every hub: no art, nothing left to LibreOffice.
+    const s = convertDeck(deck(), { fontFace: HALF_EM }).slides[0]!;
+    expect(s.classification.class).toBe('native');
+    expect(s.classification.reasons.filter((r) => r.startsWith('art:'))).toEqual([]);
+    expect(s.slide.objects.filter((o) => o.type === 'shape' && o.table)).toHaveLength(1);
+    // A horz cell says nothing.
+    const horz = parseDeck(buildDeck({ slides: [{ shapes: eaVertTable('horz') }] }), { fontFace: HALF_EM });
+    expect((horz.slides[0]!.elements[0] as TableElement).cells.every((c) => c.vert === undefined)).toBe(true);
+  });
+
+  it('leaves the other vertical kinds to LibreOffice: vert, vert270, wordArtVert, wordArtVertRtl, mongolianVert', () => {
+    for (const vert of ['vert', 'vert270', 'wordArtVert', 'wordArtVertRtl', 'mongolianVert']) {
+      const scene = parseDeck(buildDeck({ slides: [{ shapes: eaVertTable(vert) }] }), { fontFace: HALF_EM });
+      const e = scene.slides[0]!.elements[0]!;
+      expect(e, vert).toMatchObject({ kind: 'residual', what: 'table', support: 'residual' });
+      expect(e.reasons, vert).toContain('vert');
+      expect(scene.slides[0]!.notes, vert).toContain(
+        'a table with vertical cell text is drawn by LibreOffice (M8)',
+      );
+    }
+  });
+
+  it("without the table object (the kill switch) keeps M6's cell cap: a table of more cells than a slide may have objects is LibreOffice's", () => {
+    expect(MAX_TABLE_CELLS).toBe(MAX_SLIDE_OBJECTS);
+    const rows = Array.from({ length: 12 }, () => ({
+      h: IN / 16,
+      cells: Array.from({ length: 13 }, () => tc('x')),
+    }));
+    const { s, texts } = convert(table({ cols: Array(13).fill(IN / 2), rows }));
+    expect(texts).toHaveLength(0);
+    expect(s.classification.class).toBe('hybrid');
+    expect(s.classification.reasons).toContain('art:budget:table');
+    expect(s.notes).toContain(
+      `a table of 156 cells passes the slide's budget of ${MAX_SLIDE_OBJECTS} objects: LibreOffice draws it`,
+    );
   });
 
   it('sends the largest tables to the art when the slide would pass its object budget behind budgetArt', () => {
@@ -1042,6 +1329,59 @@ describe('tables: what stays residual', () => {
     expect(s.notes).toContain("a table of 120 objects passes the slide's budget: LibreOffice draws it");
     // The art's text holds the table's cells (search and labels).
     expect(s.art?.text).toContain('x');
+  });
+});
+
+describe("tables: the table's outer shadow (read, not stored or drawn: sub-wave 1c)", () => {
+  // The Korean bulletin's slide 2: a table-level outer shadow, 4 pt blur, 3 pt up, black at 40 %. LibreOffice
+  // draws it as the shadow of the table's cell fills and lines (probe deck B); ordo reads it and notes that it is
+  // not drawn (owner rule 4: the 0.60 minimum does not need it; storing it would change what the renderer draws).
+  const SHADOW =
+    '<a:effectLst><a:outerShdw blurRad="50800" dist="38100" dir="16200000" rotWithShape="0"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst>';
+  const shadowed = (tblPr: string, cell = tc('2019')) =>
+    table({ cols: [2 * IN], rows: [{ h: IN / 2, cells: [cell] }], tblPr });
+
+  it('reads a table-level outer shadow into the table element and notes that it is not drawn', () => {
+    const shapes = shadowed(`<a:tblPr firstRow="1" bandRow="1">${SHADOW}</a:tblPr>`);
+    const scene = parseDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: HALF_EM });
+    const t = scene.slides[0]!.elements[0] as TableElement;
+    expect(t.kind).toBe('table');
+    expect(t.shadow).toEqual({ dist: 38_100, blur: 50_800, dir: 270, color: { r: 0, g: 0, b: 0, a: 0.4 } });
+    // At the deck's frame (1920 px across 12,192,000 EMU: 6,350 EMU a px): 6 px up, 8 px of blur, as the
+    // diagnosis's prototype hub stored it ({ dx 0, dy -6, blur 8, black 40 % }).
+    const px = (emu: number) => (emu * 1920) / 12_192_000;
+    const dir = (t.shadow!.dir * Math.PI) / 180;
+    expect(px(t.shadow!.dist * Math.cos(dir))).toBeCloseTo(0, 9);
+    expect(px(t.shadow!.dist * Math.sin(dir))).toBeCloseTo(-6, 9);
+    expect(px(t.shadow!.blur)).toBe(8);
+    expect(scene.slides[0]!.notes).toContain("a table's shadow is not drawn");
+  });
+
+  it('stores no shadow on the table object (nor on the M6 group), so nothing draws or charges it', () => {
+    const shapes = shadowed(`<a:tblPr>${SHADOW}</a:tblPr>`);
+    const out = convertDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: HALF_EM });
+    const s = out.slides[0]!;
+    const tables = s.slide.objects.filter(
+      (o): o is ShapeObject => o.type === 'shape' && o.table !== undefined,
+    );
+    expect(tables).toHaveLength(1);
+    expect(tables[0]!.shadow).toBeUndefined();
+    expect(s.notes).toContain("a table's shadow is not drawn");
+    expect(s.classification.class).toBe('native');
+    // The M6 group (the kill switch) draws none either: no object of it has a shadow.
+    const group = convert(shapes);
+    expect(group.objects.some((o) => (o as ShapeObject).shadow !== undefined)).toBe(false);
+  });
+
+  it('reads no table shadow from shadows inside its cells, and none from a table without one', () => {
+    const runShadow = tc('2019', { rPrChildren: SHADOW });
+    for (const shapes of [shadowed('<a:tblPr/>', runShadow), shadowed('<a:tblPr><a:effectLst/></a:tblPr>')]) {
+      const scene = parseDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: HALF_EM });
+      const t = scene.slides[0]!.elements[0] as TableElement;
+      expect(t.kind).toBe('table');
+      expect(t.shadow).toBeUndefined();
+      expect(scene.slides[0]!.notes).not.toContain("a table's shadow is not drawn");
+    }
   });
 });
 
@@ -1080,5 +1420,40 @@ describe('tables: shape text is unchanged', () => {
     expect(texts.map((t) => t.text)).toEqual(['hi']);
     // A shape's own text (M4's origin), not a table cell's.
     expect(texts[0]!.origin).toEqual({ src: 'pptx', role: 'text', shapeId: 2 });
+  });
+});
+
+describe('asLibreOffice', () => {
+  const style = (valign: 'top' | 'middle' | 'bottom', t: number, b: number) =>
+    ({ valign, insets: { l: 0, t, r: 0, b } }) as unknown as TextObject['style'];
+  // A centred text's top is (h + t - b - text) / 2: it moves by half the change of t - b.
+  const top = (s: TextObject['style']) => (s.insets!.t - s.insets!.b) / 2;
+
+  it('lifts centred text by the whole lift in a cell with no top margin (marT="0")', () => {
+    const lifted = asLibreOffice(style('middle', 0, 0), 0, 1.5);
+    expect(top(lifted) - top(style('middle', 0, 0))).toBeCloseTo(-1.5, 9);
+    expect(lifted.insets!.t).toBeGreaterThanOrEqual(0);
+    expect(lifted.insets!.b).toBeGreaterThanOrEqual(0);
+  });
+
+  it('keeps centred text centred under a spill wider than one margin', () => {
+    const s = asLibreOffice(style('middle', 0, 4), 6, 0);
+    expect(top(s)).toBeCloseTo(top(style('middle', 0, 4)), 9);
+  });
+
+  it('moves centred text with margins as before', () => {
+    expect(asLibreOffice(style('middle', 7.2, 7.2), 2, 1).insets).toEqual({ l: 0, t: 5.2, r: 0, b: 7.2 });
+  });
+
+  // r2b-diag/dense-c 910492b, the same rule found on the Flesh and Spirit chart (its 84 cells with marT="0").
+  it('lifts centred text by its whole lift when the top margin is smaller than it, either way', () => {
+    const lr = (valign: 'top' | 'middle' | 'bottom', t: number, b: number) =>
+      ({ valign, insets: { l: 1, t, r: 1, b } }) as unknown as TextObject['style'];
+    // No top or bottom margin: a 1 px lift moves the centre 1 px up (margins 0 and 2), not 0.5 px (0 and 1).
+    expect(asLibreOffice(lr('middle', 0, 0), 0, 1).insets).toEqual({ l: 1, t: 0, r: 1, b: 2 });
+    expect(asLibreOffice(lr('middle', 0, 0), 0, -1).insets).toEqual({ l: 1, t: 2, r: 1, b: 0 });
+    // Within the margins as before: the spill shared, the lift from top to bottom.
+    expect(asLibreOffice(lr('middle', 5, 5), 2, 1).insets).toEqual({ l: 1, t: 3, r: 1, b: 5 });
+    expect(asLibreOffice(lr('top', 5, 5), 2, 1).insets).toEqual({ l: 1, t: 4, r: 1, b: 4 });
   });
 });

@@ -4,7 +4,7 @@ import { LiveCommand, LiveEvent, type LiveState, type ResolvedPlaylist, Id } fro
 export const PROTOCOL_VERSION = 1;
 
 /** Version of the hub and the browser apps, deployed together from one image. A mismatch on hello means a stale tab. */
-export const APP_VERSION = '0.8.1';
+export const APP_VERSION = '0.9.0';
 
 export const Role = z.enum(['operate', 'edit', 'output', 'stage']);
 export type Role = z.infer<typeof Role>;
@@ -96,6 +96,16 @@ export const OutputHealth = z.object({
   cacheRepairs: z.number().optional(),
   /** What carries the window's fallback bus: a handed-over MessagePort, or the window.postMessage relay. */
   busTransport: z.enum(['port', 'window']).optional(),
+  // ---- units (design/13 "Output health: units"; design/14 "Late units", wave r2b) ----
+  /** Units (slow parts drawn ahead in slices) the window's asset worker has made since it started. */
+  unitsMade: z.number().int().min(0).max(1e9).optional(),
+  /**
+   * Slides this window showed before all their units were ready, whose late parts came in a moment later
+   * (faded in; W49 "Parts of 2 slides appeared a moment late on this screen.").
+   */
+  unitsLate: z.number().int().min(0).max(1e9).optional(),
+  /** Bytes the asset worker's unit cache holds now (at most 192 MiB). */
+  unitCacheBytes: z.number().min(0).max(1e12).optional(),
 });
 export type OutputHealth = z.infer<typeof OutputHealth>;
 export type OutputHealthEntry = OutputHealth & {
@@ -179,6 +189,21 @@ export const ClientMessage = z.discriminatedUnion('t', [
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
+// ---- pre-rendered slides' live events (design/29 §1.7, §1.11) ----
+/**
+ * `prerender.add`: a picture of a key of the live service the hub accepted during the service (the go-live
+ * bake), kept in `state.prerendered`. The hub applies it (`LiveService.apply`) and every client reduces it from
+ * `live.delta`; a client's `live.event` carrying it is refused at its parse (`LiveCommand` leaves it out).
+ */
+export type PrerenderAddEvent = Extract<LiveEvent, { k: 'prerender.add' }>;
+/**
+ * `prerender.use`: the operator's "Use the picture for this slide during this service" (operate role, an
+ * ordinary `live.event`), kept in `state.drawOverride` until End service.
+ */
+export type PrerenderUseEvent = Extract<LiveEvent, { k: 'prerender.use' }>;
+/** Live events only the hub applies: no client message may carry one. */
+export const HUB_ONLY_EVENTS: readonly LiveEvent['k'][] = ['prerender.add'];
+
 // ---- hub -> client (trusted, typed only) ----
 export type Welcome = { t: 'welcome'; v: 1; hubMs: number; seq: number; role: Role; appVersion: string };
 export type TimePong = { t: 'time.pong'; v: 1; c: number; s: number };
@@ -220,6 +245,38 @@ export type ServerMessage =
   | Bye
   | (z.infer<typeof RtcSignal> & { from: string })
   | (z.infer<typeof PreviewMsg> & { from: string });
+
+// ---- going live prepared beside the running service (design/29 §2.3 M8) ----
+/** The route the operator calls before goLive (operate role; the live process answers it). */
+export const LIVE_PREPARE_PATH = '/live/prepare';
+/** How long POST /live/prepare holds its answer for the prepare to end or its progress to move. */
+export const LIVE_PREPARE_WAIT_MS = 400;
+/**
+ * POST /live/prepare: get a playlist ready to go live beside the running service. `saved`: go live from the
+ * hub's saved copy (W41's button). `seen`: the progress the caller last saw (the answer waits until it moves,
+ * or until the prepare ends; without it, until the prepare ends), at most LIVE_PREPARE_WAIT_MS.
+ */
+export const LivePrepareReq = z
+  .object({
+    playlistId: Id,
+    saved: z.boolean().optional(),
+    seen: z.number().int().min(0).max(100).optional(),
+  })
+  .strict();
+export type LivePrepareReq = z.infer<typeof LivePrepareReq>;
+/** The prepare's progress: once `ready` (or `failed`), the operator sends goLive, which applies at once. */
+export type LivePrepareRes = {
+  playlistId: string;
+  state: 'preparing' | 'ready' | 'failed';
+  /** 0-90 while the copy arrives, 90 while it is checked, 100 when done. */
+  pct: number;
+  /** Why it failed (the goLive's refusal). */
+  reason?: string;
+  /** When the hub's saved copy of the playlist was taken (ms since the epoch, hub clock), if it has one. */
+  savedAt?: number;
+  /** The prepared copy's size in bytes. */
+  bytes?: number;
+};
 
 // ---- fallback bus (operator <-> outputs via postMessage) ----
 /**

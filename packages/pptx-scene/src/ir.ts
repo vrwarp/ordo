@@ -615,8 +615,9 @@ export interface TableElement extends ElementBase {
   objects: number;
   /**
    * The columns and rows as LibreOffice 24.2 sizes them, when they differ from `cols` and `rows` (R1, R2:
-   * `tables.ts` `LoLines`, `loColumns`, `loGrowRows`): for the fidelity harness's LibreOffice policy only
-   * (`EmitOptions.loCompat`, compat rule `cellRows`). `xf` is the table's affine at their width and height
+   * `tables.ts` `LoLines`, `loColumns`, `loGrowRows`): what the table object stores on every hub (1b
+   * `tables-form`, `emit-table.ts`), and what the M6 group draws under the fidelity harness's LibreOffice
+   * policy (`EmitOptions.loCompat`, compat rule `cellRows`). `xf` is the table's affine at their width and height
    * (it grows to the right and down); per cell (in `cells` order) `spill`, how much taller than its box the
    * text is drawn (it then runs into the cell's margins, as LibreOffice draws it), and `lift`, how far above
    * ordo's office line model LibreOffice draws its lines (at the face's ascent).
@@ -631,8 +632,18 @@ export interface TableElement extends ElementBase {
   };
   /** M9 (`tables-conv`): `a:tblPr rtl="1"`: column 0 on the right. */
   rtl?: boolean;
-  /** M9 (`tables-conv`): the row heights the deck stores (`a:tr h`, EMU), before rows grow to their text. */
+  /**
+   * M9 (`tables-conv`): the row heights the deck stores (`a:tr h`, EMU), before rows grow to their text. The
+   * table object stored them until 1b (`tables-form`), which stores LibreOffice's rows (`lo`) instead.
+   */
   storedRows?: Emu[];
+  /**
+   * Sub-wave 1c: the table's outer shadow (`a:tblPr/a:effectLst/a:outerShdw`), which LibreOffice 24.2 draws as the
+   * shadow of the table's cell fills and lines (probe deck B). Read and noted ("a table's shadow is not drawn"),
+   * never emitted: a shadow on the table object would make the renderer's fallbacks draw it and the slide's effect
+   * budget charge it (`hasShapeExtras`), so drawing it is one follow-up item.
+   */
+  shadow?: Shadow;
 }
 
 /** One drawn cell of a table: a merge counts once. */

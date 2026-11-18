@@ -82,6 +82,11 @@ export type AssetToRender = {
   cueIndex?: number;
   /** A fresh copy of content the renderer may already show (a slide re-drawn with an image that arrived). */
   refresh?: boolean;
+  /**
+   * A `refresh` of the live copy fades in over this long (ms) instead of replacing it at once: a slide re-drawn
+   * with the parts it was shown without (design/14 "Late units", `refreshFadeMs` 300). Absent or 0: swapped.
+   */
+  refreshFadeMs?: number;
   /** SRC_SCENE: objects above the video that overlap it, if any (full-frame, or tight at overX, overY). */
   over?: ImageBitmap | null;
   overX?: number;
@@ -137,6 +142,8 @@ export type AssetJob =
       images: Record<string, string>;
       /** Re-draw of a key the renderer holds: it replaces the held copy in place (no flip). */
       refresh?: boolean;
+      /** A `refresh` of the live slide fades in over this long, ms (`AssetToRender.refreshFadeMs`). */
+      refreshFadeMs?: number;
       /**
        * The slide's video plays in the box of ImageObject `objectId` from media slot `slot`, loaded under
        * slot generation `gen` (design/27 §7.2): the worker answers SRC_SCENE. `w` x `h` is the clip's own
@@ -158,9 +165,38 @@ export type AssetJob =
 
 /**
  * Which cue a job draws for (design/27 §7.5 raster lanes): the live cue's layers go ahead of the armed
- * cue's. Props always go first. Absent: armed.
+ * cue's. Props always go first. Absent: armed. 'late': a re-draw of a slide the renderer holds with the parts
+ * it was shown without (design/14 "Late units"), below the live and armed cues.
  */
-export type JobRole = 'live' | 'armed';
+export type JobRole = 'live' | 'armed' | 'late';
+
+/**
+ * How an output draws, from its URL (apps/output `switches.ts`, beside `?renderer=2d`; venue troubleshooting
+ * switches, design/14 "Late units"), carried to the asset worker in its `init`.
+ */
+export type DrawingSwitches = {
+  /**
+   * A part made after its slide was shown: 'fade' (`LATE_UNIT`, the owner's choice of 2026-11-13) fades it in
+   * on the screen; 'next' (`?late=next`) leaves it to the slide's next draw.
+   */
+  late?: 'fade' | 'next';
+  /** False (`?warm=off`): the live playlist's units are not made ahead. */
+  warm?: boolean;
+  /** 'base' (`?effects=base`): effects and decorations drawn as 62a1c3a drew them (wired by C6). */
+  effects?: 'units' | 'base';
+  /** Test mode only (`?unitTurnMs=`): each turn of unit making is followed by this long a wait, ms. */
+  unitTurnMs?: number;
+};
+
+/**
+ * The live playlist's slides an output draws as authored, in cue order from the live cue (design/14 "Late
+ * units", warm-up): their units are made ahead in bulk work, unpinned, until two thirds of the unit cache.
+ */
+export type WarmUnitsJob = {
+  key: string;
+  slides: { cueIndex: number; slide: Slide }[];
+  look: Look;
+};
 
 /**
  * Bulk work for later (design/27 §7.5): the pictures of the cue after the armed one, prepared into the
@@ -178,12 +214,35 @@ export type WarmJob = {
 };
 
 export type ToAsset =
-  | { t: 'init'; port?: MessagePort; width: number; height: number; token: string; apiPrefix: string }
+  | {
+      t: 'init';
+      port?: MessagePort;
+      width: number;
+      height: number;
+      token: string;
+      apiPrefix: string;
+      /** The output's drawing switches (`DrawingSwitches`). */
+      drawing?: DrawingSwitches;
+    }
   /** (main → asset) New channel ends after a (re)start: bitmaps go to `render`, jobs arrive on `link`. */
   | { t: 'ports'; render: MessagePort; link: MessagePort }
   | { t: 'fonts'; fonts: FontLoad[] }
   | { t: 'job'; job: AssetJob; role?: JobRole }
   | { t: 'warm'; warm: WarmJob }
+  /** The live playlist's units, made ahead (`WarmUnitsJob`); a newer one replaces it. */
+  | { t: 'warmUnits'; warm: WarmUnitsJob }
+  /**
+   * A GO to a cue whose armed or warm job (these keys) is still running: it stops waiting for units at once,
+   * draws with what is ready and leaves the rest to a late job (design/14 "Late units").
+   */
+  | { t: 'hurry'; keys: string[] }
+  /**
+   * After an asset worker restart (design/14 "Late units"): the renderer holds this slide (live or armed) with
+   * parts left late, or made by the worker that went away and not drawn in yet. This worker makes the units its
+   * draw copies in a late job and reports them (`unitsReady`) without drawing it: a re-draw now would draw the
+   * parts made before as their stand-ins, the decorations not at all.
+   */
+  | { t: 'units'; job: Extract<AssetJob, { kind: 'slide' }>; role: 'live' | 'armed' }
   /**
    * Jobs (and warm jobs) that were superseded: a queued one is dropped, a running one stops at its next step
    * and sends nothing. The link has already forgotten them (no answer comes).
@@ -245,6 +304,47 @@ export type FromAsset =
       waitMs?: number;
       busyMs?: number;
       longestMs?: number;
+      /**
+       * Units of the slide's plan the job drew as legacy copies because it did not wait (a live or hurried
+       * job): a late job makes them and `unitsReady` says when (design/14 "Late units").
+       */
+      unitsLeft?: number;
+      /** Units this worker has made so far, and the bytes its unit cache holds now (health). */
+      unitsMade?: number;
+      unitCacheBytes?: number;
+    }
+  /**
+   * Units a slide was drawn without are made (`keys`; `left` still to make): the link draws the slide again,
+   * fading them in while it is on screen (`refreshFadeMs`). Once all are made, or at most once per
+   * `refreshFadeMs` while some remain; never with `?late=next`. `keys` also names a part found unmakeable (its
+   * unit could not be drawn: a decoration is then drawn directly, renderer units.ts `unitUnmade`). `ended`: the
+   * late job's last report (a late job that is not cancelled ends with one; a later draw that leaves parts
+   * queues another), `left` then the parts it did not make; the link no longer waits for them (repair 3).
+   * `stopped` (with `ended` and `left`): the job stopped before making them, its hold taken by another slide's
+   * draw on the layer's live chain (that slide is on screen now, as far as the worker knows); a draw of this
+   * slide makes them in a new late job, which the link sends if this slide is on screen all the same (repair 4).
+   */
+  | {
+      t: 'unitsReady';
+      layer: number;
+      slideKey: string;
+      keys: string[];
+      left: number;
+      ended?: true;
+      stopped?: true;
+    }
+  /** The drawing switches the worker applied from its `init` (diagnostics). */
+  | { t: 'drawing'; switches: DrawingSwitches }
+  /** Warm-up made (or found) the units of the playlist's cue `cueIndex` (`ready` of the plan's `units`). */
+  | {
+      t: 'unitsWarmed';
+      key: string;
+      cueIndex: number;
+      units: number;
+      ready: number;
+      /** Warm-up stopped: at two thirds of the unit cache (`full`), or past the last slide. */
+      stopped?: 'full' | 'done';
+      unitCacheBytes: number;
     }
   /** A warm job is done (its pictures are in the cache): its lane timing and the decodes it made. */
   | {

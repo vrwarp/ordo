@@ -15,6 +15,8 @@ import {
   addToSlide,
   copySelection,
   copyTextSelection,
+  inlineText,
+  tableKey,
   cutSelection,
   cutTextSelection,
   deleteSelection,
@@ -273,9 +275,10 @@ export function EditorView({ id }: { id: string }) {
       const st = useEditor.getState();
       // In the Presenter Notes Studio or the Lyric Script the canvas is not shown, and the focus is often on the
       // page, which reads as the canvas (`keyPlace`): the button that opened the studio is gone, and a click
-      // outside the Lyric Script's text leaves the focus there. What the canvas had selected (an object, or a
-      // text box being typed in) is hidden there: no key acts on it (no nudge, Delete, Enter, Escape,
-      // duplicate, copy or cut), and Up and Down move between slides, which the studio shows.
+      // outside the Lyric Script's text leaves the focus there. What the canvas had selected (an object, a
+      // table's cell, or a text box or cell being typed in) is hidden there: no key acts on it (no nudge,
+      // Delete, Enter, Tab, Escape, table key, duplicate, copy or cut), and Up and Down move between slides,
+      // which the studio shows.
       const studio = studioRef.current;
       const o = studio ? undefined : currentObject();
 
@@ -317,6 +320,11 @@ export function EditorView({ id }: { id: string }) {
         }
       }
       if (place !== 'canvas' || ctrl || e.altKey) return;
+      // A selected table's cells: Enter, Tab, Escape and Delete (design/15 "Table editing").
+      if (tableKey(e, o, readOnly)) {
+        e.preventDefault();
+        return;
+      }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
         deleteSelection();
@@ -353,15 +361,13 @@ export function EditorView({ id }: { id: string }) {
       // The studio's own fields copy as fields do; the hidden canvas's selection is not copied (onKey).
       if (studioRef.current) return;
       const st = useEditor.getState();
-      if (st.inlineEditingId && st.draft && st.slideId) {
-        const s = getSlide(st.draft, st.slideId);
-        const inlineObj = s?.objects.find((x) => x.id === st.inlineEditingId);
-        if (inlineObj?.type === 'text') {
-          if (copyTextSelection(inlineObj, st.textRange.start, st.textRange.end, e.clipboardData)) {
-            e.preventDefault();
-          }
-          return;
+      // A text box or a table's cell edited on the canvas (`inlineText`).
+      const inline = st.inlineEditingId && st.draft && st.slideId ? inlineText() : undefined;
+      if (inline) {
+        if (copyTextSelection(inline.view, st.textRange.start, st.textRange.end, e.clipboardData)) {
+          e.preventDefault();
         }
+        return;
       }
       if (place === 'canvas') {
         if (copySelection(e.clipboardData) || writeLastObjectClip(e.clipboardData)) {
@@ -376,18 +382,16 @@ export function EditorView({ id }: { id: string }) {
       if (place === 'field' || place === 'dialog') return;
       if (studioRef.current) return;
       const st = useEditor.getState();
-      if (st.inlineEditingId && st.draft && st.slideId) {
-        const s = getSlide(st.draft, st.slideId);
-        const inlineObj = s?.objects.find((x) => x.id === st.inlineEditingId);
-        if (inlineObj?.type === 'text') {
-          const caret = cutTextSelection(inlineObj, st.textRange.start, st.textRange.end, e.clipboardData);
-          if (caret !== null) {
-            e.preventDefault();
-            setTextRange({ start: caret, end: caret, caret });
-            syncInlineTextarea(caret);
-          }
-          return;
+      const inline = st.inlineEditingId && st.draft && st.slideId ? inlineText() : undefined;
+      if (inline) {
+        const { view, target } = inline;
+        const caret = cutTextSelection(view, st.textRange.start, st.textRange.end, e.clipboardData, target);
+        if (caret !== null) {
+          e.preventDefault();
+          setTextRange({ start: caret, end: caret, caret });
+          syncInlineTextarea(caret);
         }
+        return;
       }
       if (place === 'canvas') {
         if (cutSelection(e.clipboardData) || writeLastObjectClip(e.clipboardData)) {
@@ -400,24 +404,22 @@ export function EditorView({ id }: { id: string }) {
       if (e.defaultPrevented || readOnly) return;
       const place = keyPlace(e.target);
       if (place === 'field' || place === 'dialog') return;
-      // Nothing is pasted onto the hidden canvas (a picture, objects or a new text box) or into its text box.
+      // Nothing is pasted onto the hidden canvas (a picture, objects or a new text box) or into its box or cell.
       if (studioRef.current) return;
       const st = useEditor.getState();
       if (!st.draft || !st.slideId) return;
 
       // 1. If inline editing a text box on the canvas, paste into that text box at `textRange`.
-      if (st.inlineEditingId) {
-        const s = getSlide(st.draft, st.slideId);
-        const inlineObj = s?.objects.find((x) => x.id === st.inlineEditingId);
-        if (inlineObj?.type === 'text') {
-          const caret = handleTextPaste(inlineObj, st.textRange.start, st.textRange.end, e.clipboardData);
-          if (caret !== null) {
-            e.preventDefault();
-            setTextRange({ start: caret, end: caret, caret });
-            syncInlineTextarea(caret);
-          }
-          return;
+      const inline = st.inlineEditingId ? inlineText() : undefined;
+      if (inline) {
+        const { view, target } = inline;
+        const caret = handleTextPaste(view, st.textRange.start, st.textRange.end, e.clipboardData, target);
+        if (caret !== null) {
+          e.preventDefault();
+          setTextRange({ start: caret, end: caret, caret });
+          syncInlineTextarea(caret);
         }
+        return;
       }
 
       if (place !== 'canvas') return;

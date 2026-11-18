@@ -23,6 +23,8 @@ import {
   solid,
   solidBg,
   sp,
+  tableFrame,
+  tc,
   timingXml,
   type MediaTimingSpec,
   xfrm,
@@ -610,8 +612,13 @@ export const LINE_ART_BLACK_BOX = { x: 120, y: 90, w: 1680, h: 900 } as const;
  * drawer without geometry units draws the black one as its legacy copy (a black rect at b50d486, nothing once
  * the legacy kind is a line), and with them draws it whole. No text: the comparison is about the art.
  */
-export function lineArtDeck(dir: string): string {
+export function lineArtDeck(dir: string, variant = 0): string {
   mkdirSync(dir, { recursive: true });
+  // A variant moves the art a few px and a sixteenth of a px (`variant` x 6 1/16): the same geometry, units of
+  // its own. Units are keyed by what they draw and its sub-pixel phase on the output, not where (r2b effect
+  // units), so a whole-pixel move alone would share the first variant's units; a sixteenth gives each of
+  // variants 0-7 a phase of its own at 1920 and at 3840.
+  const dx = variant * 6 + variant / 16;
   const EMU = 6_350; // EMU per logical px (12,192,000 / 1,920)
   const art = (
     id: number,
@@ -623,7 +630,7 @@ export function lineArtDeck(dir: string): string {
     sp({
       id,
       name,
-      x: box.x * EMU,
+      x: Math.round((box.x + dx) * EMU),
       y: box.y * EMU,
       cx: box.w * EMU,
       cy: box.h * EMU,
@@ -634,7 +641,10 @@ export function lineArtDeck(dir: string): string {
     art(2, 'White line art', { x: 860, y: 380, w: 1000, h: 650 }, 'FFFFFF', 1) +
     art(3, 'Navy line art', { x: 60, y: 160, w: 1000, h: 650 }, '1F3864', 2) +
     art(4, 'Black line art', LINE_ART_BLACK_BOX, '000000', 0);
-  return zip(buildDeck({ slides: [{ bg: solidBg('C9D9EE'), shapes }] }), join(dir, 'Line art.pptx'));
+  return zip(
+    buildDeck({ slides: [{ bg: solidBg('C9D9EE'), shapes }] }),
+    join(dir, variant ? `Line art ${variant}.pptx` : 'Line art.pptx'),
+  );
 }
 
 // ---- the crowded deck (M9 decorations, decor-render) ----------------------------------------------------
@@ -813,4 +823,224 @@ export function pictureTextDeck(dir: string): string {
     buildDeck({ slides, media: { 'ppt/media/pattern.png': readFileSync(pattern) } }),
     join(dir, 'Picture text.pptx'),
   );
+}
+
+// ---- the table deck (M9, tables-conv) -------------------------------------------------------------------
+
+/**
+ * The table deck's bulletin (slide 1), in inches on the 13.33 x 7.5 in slide: a header row on a navy fill
+ * and 31 rows of a week's services, five columns, the first service row's day and time merged into one cell:
+ * 160 slots, 159 cells, past M6's 150-cell cap. Logical px are 144 an inch (1920 x 1080).
+ */
+export const TABLE = {
+  x: 0.4,
+  y: 0.4,
+  cols: [1.6, 1.4, 4.5, 2.5, 2.5],
+  rowH: 0.2,
+  rows: 32,
+  header: [31, 56, 100] as [number, number, number],
+  headerText: ['Day', 'Time', 'Service', 'Room', 'Leader'],
+  title: 'Week bulletin',
+} as const;
+
+/** The bulletin's body text of row `r` (1-based, under the header) and column `c`. */
+export function tableCellText(r: number, c: number): string {
+  const day = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][r % 7]!;
+  return [day, `${7 + (r % 12)}:30`, `Hymn ${100 + r} and prayer`, `Hall ${1 + (r % 4)}`, `Team ${r}`][c]!;
+}
+
+/** The centre of the bulletin's cell (row `r` from 0, the header; column `c`), in logical px. */
+export function tableCellCentre(r: number, c: number): [number, number] {
+  const x = TABLE.x + TABLE.cols.slice(0, c).reduce((s, w) => s + w, 0) + TABLE.cols[c]! / 2;
+  return [x * 144, (TABLE.y + (r + 0.5) * TABLE.rowH) * 144];
+}
+
+/** The reading plan (slide 2): 28 rows of 5 cells, each a few words in 9 pt with its four borders. */
+export const PLAN = { rows: 28, cols: 5 } as const;
+
+/**
+ * Two table slides on white, written by pptxgenjs (as a church's bulletin is), fonts Calibri (an output draws
+ * it with the bundled Carlito):
+ * 1. **The bulletin** (`TABLE`): past M6's cell cap, so before the table object LibreOffice's art drew it on a
+ *    hub with LibreOffice and a hub without it listed it missing; now one table object on every hub.
+ * 2. **The reading plan** (`PLAN`): 140 cells, within the cap, but its M6 group (a text object a cell, its
+ *    rules as shapes: what the kill switch, `m9Writes` without 'table', writes) passes 64 KB where the table
+ *    object is under 16 KB (`table-deck.test.ts` measures both): sub-wave 1's interim rule kept LibreOffice's
+ *    page for it on a hub with LibreOffice; now the table object on every hub (the owner: every table).
+ * Neither slide has text outside its table: no Bottom-Third strap, and the Stage shows the deck's title.
+ */
+export async function tableDeck(dir: string): Promise<string> {
+  mkdirSync(dir, { recursive: true });
+  const p = new pptxgen();
+  p.layout = 'LAYOUT_WIDE';
+  p.title = TABLE.title;
+  const border = { type: 'solid' as const, pt: 0.75, color: 'A6A6A6' };
+  const cell = {
+    fontFace: 'Calibri',
+    fontSize: 9,
+    color: '1A1A1A',
+    border,
+    margin: [0.02, 0.05, 0.02, 0.05],
+  };
+  const head = TABLE.headerText.map((text) => ({
+    text,
+    options: { ...cell, bold: true, color: 'FFFFFF', fill: { color: '1F3864' } },
+  }));
+  const rows: { text: string; options?: Record<string, unknown> }[][] = [head];
+  for (let r = 1; r < TABLE.rows; r++) {
+    const row: { text: string; options?: Record<string, unknown> }[] = TABLE.headerText.map((_, c) => ({
+      text: tableCellText(r, c),
+      options: { ...cell },
+    }));
+    // The first service: its day and time are one cell (a merge across two columns).
+    if (r === 1) row.splice(0, 2, { text: 'Sunday 7:30', options: { ...cell, colspan: 2 } });
+    rows.push(row);
+  }
+  const s1 = p.addSlide();
+  s1.background = { color: 'FFFFFF' };
+  s1.addTable(rows as never, {
+    x: TABLE.x,
+    y: TABLE.y,
+    colW: [...TABLE.cols],
+    rowH: TABLE.rowH,
+  });
+  const plan: { text: string; options?: Record<string, unknown> }[][] = [];
+  for (let r = 0; r < PLAN.rows; r++)
+    plan.push(
+      Array.from({ length: PLAN.cols }, (_, c) => ({
+        text: `Day ${r + 1}: Psalm ${r * PLAN.cols + c + 1}, verses ${c + 1}-${c + 9}`,
+        options: { ...cell },
+      })),
+    );
+  const s2 = p.addSlide();
+  s2.background = { color: 'FFFFFF' };
+  s2.addTable(plan as never, { x: 0.4, y: 0.4, colW: [2.5, 2.5, 2.5, 2.5, 2.5], rowH: 0.24 });
+  const file = join(dir, 'Bulletin.pptx');
+  writeFileSync(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+  return file;
+}
+
+// ---- the vertical-cell table deck (raw XML: East Asian vertical cells, sub-wave 1c rule V) -------------------
+
+/**
+ * The vertical-cell table (`verticalTableDeck`), in inches on the 13.33 x 7.5 in slide: the Korean bulletin's
+ * slide 2 in small. A narrow first column whose two cells are East Asian vertical text (`vert="eaVert"`), each
+ * centred over four rows ('1년차', '２년차': Hangul with a digit, as the bulletin's), beside the years and the days;
+ * a table-level outer shadow (4 pt blur, 3 pt up, black at 40 %). Logical px are 144 an inch (1920 x 1080).
+ */
+export const VERTICAL_TABLE = {
+  x: 1,
+  y: 1,
+  cols: [0.65, 1.4, 2.8],
+  rowH: 0.45,
+  rows: 8,
+  /** The vertical cells' text and their index in the stored table's cells (row by row). */
+  vertical: [
+    ['1년차', 0],
+    ['２년차', 9],
+  ] as [string, number][],
+  title: 'Two years',
+} as const;
+
+/** The centre of the narrow vertical cell over rows `r` to `r + 3` (r = 0 or 4), in logical px. */
+export function verticalCellCentre(r: 0 | 4): [number, number] {
+  const T = VERTICAL_TABLE;
+  return [(T.x + T.cols[0] / 2) * 144, (T.y + (r + 2) * T.rowH) * 144];
+}
+
+/**
+ * One slide: the vertical-cell table (`VERTICAL_TABLE`), its own deck so `tableDeck`'s counts stay. LibreOffice
+ * 24.2 draws eaVert cells as horizontal ones (probe deck A), so since sub-wave 1c the table is one table object on
+ * every hub, the cells' vert kept and its shadow read, noted and not stored; before, it was LibreOffice's art.
+ */
+export function verticalTableDeck(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  const T = VERTICAL_TABLE;
+  const emu = (inch: number) => Math.round(inch * IN);
+  const ea = (t: string) =>
+    tc(t, {
+      tcPr: ' vert="eaVert" anchor="ctr"',
+      attrs: 'rowSpan="4"',
+      pPr: 'algn="ctr"',
+      rPr: 'lang="ko-KR" sz="2000"',
+    });
+  const plain = (t: string) =>
+    tc(t, { tcPr: ' anchor="ctr"', pPr: 'algn="ctr"', rPr: 'lang="ko-KR" sz="1600"' });
+  const merged = () => tc('', { attrs: 'vMerge="1"' });
+  const rows = Array.from({ length: T.rows }, (_, r) => ({
+    h: emu(T.rowH),
+    cells: [
+      ...(r % 4 === 0 ? [ea(r === 0 ? '1년차' : '２년차')] : [merged()]),
+      plain(`${2019 + r}년`),
+      plain(r % 4 === 0 ? '3일간 수련회' : '4일간 수련회'),
+    ],
+  }));
+  const tblPr =
+    '<a:tblPr firstRow="1" bandRow="1"><a:effectLst><a:outerShdw blurRad="50800" dist="38100" dir="16200000" rotWithShape="0"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst></a:tblPr>';
+  const shapes = tableFrame({ id: 4, x: emu(T.x), y: emu(T.y), cols: T.cols.map(emu), rows, tblPr });
+  return zip(buildDeck({ slides: [{ shapes, bg: solidBg('FFFFFF') }] }), join(dir, `${T.title}.pptx`));
+}
+
+// ---- the lone line-art deck (raw XML: one thin chain past the slide's drawing budget alone, r2b effect units) --
+
+/**
+ * The lone chain's links (`loneChainPath`): `links` closed rings of `sides` corners each (a moveTo, `sides - 1`
+ * lines and a close: `sides + 1` points as the converter counts them), 900 x 24 = 21,600 points in all.
+ */
+export const LONE_CHAIN = { links: 900, sides: 23 } as const;
+
+/** Where the lone chain is on the slide, in logical px (16:9 at 1920 px wide). */
+export const LONE_CHAIN_BOX = { x: 120, y: 90, w: 1680, h: 900 } as const;
+
+/**
+ * An `a:path` of one thin chain (`w` x `h` path space): `links` small rings strung along three turns of a
+ * sine across the box, each its own closed sub-path, none touching the next. Stroked thin and not filled, it is
+ * cheap to fill (nothing) but its outline's legs, joins and stored points together pass the slide's drawing
+ * budget on their own (`GEOM_COST.slide`), so no single draw call within a task draws it: the legacy copy of a
+ * stored geometry is a line, which draws nothing here, until a unit sliced by sub-path groups draws it.
+ */
+export function loneChainPath(o: { w?: number; h?: number; links?: number; sides?: number } = {}): string {
+  const w = o.w ?? 168_000;
+  const h = o.h ?? 90_000;
+  const links = o.links ?? LONE_CHAIN.links;
+  const sides = o.sides ?? LONE_CHAIN.sides;
+  const r = Math.min(w, h) * 0.004;
+  const p = (x: number, y: number) => `<a:pt x="${Math.round(x)}" y="${Math.round(y)}"/>`;
+  let d = '';
+  for (let i = 0; i < links; i++) {
+    const t = (i + 0.5) / links;
+    const cx = r * 2 + t * (w - r * 4);
+    const cy = h / 2 + (h / 2 - r * 3) * Math.sin(t * Math.PI * 6);
+    for (let k = 0; k < sides; k++) {
+      const a = (k / sides) * Math.PI * 2;
+      const pt = p(cx + r * Math.cos(a), cy + r * Math.sin(a));
+      d += k ? `<a:lnTo>${pt}</a:lnTo>` : `<a:moveTo>${pt}</a:moveTo>`;
+    }
+    d += '<a:close/>';
+  }
+  return `<a:path w="${w}" h="${h}" fill="none">${d}</a:path>`;
+}
+
+/**
+ * A one-slide deck of one thin chain past the slide's drawing budget on its own (r2b effect units, design/27
+ * §13 "Effect units"): on a pale background, a black chain of `LONE_CHAIN` links stroked 2 px wide
+ * (`loneChainPath`), nothing else. Before effect units its legacy copy (a line) drew nothing on the outputs;
+ * a sliced unit draws it, one sub-path group a step.
+ */
+export function loneLineArtDeck(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  const EMU = 6_350; // EMU per logical px (12,192,000 / 1,920)
+  const b = LONE_CHAIN_BOX;
+  const shapes = sp({
+    id: 2,
+    name: 'Lone chain',
+    x: b.x * EMU,
+    y: b.y * EMU,
+    cx: b.w * EMU,
+    cy: b.h * EMU,
+    geom: 'none',
+    fill: `${custGeom({ paths: loneChainPath() })}<a:noFill/>`,
+    ln: `<a:ln w="12700">${solid('000000')}</a:ln>`,
+  });
+  return zip(buildDeck({ slides: [{ bg: solidBg('F4EFE6'), shapes }] }), join(dir, 'Lone chain.pptx'));
 }

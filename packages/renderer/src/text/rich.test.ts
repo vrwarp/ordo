@@ -153,6 +153,14 @@ describe("the 'ordo' line model", () => {
     const raised = obj('17 For', {}, { runs: [{ start: 0, end: 2, baseline: 0.3, sizeScale: 3 }] });
     expect(layoutRich(m(), raised, LEGACY_FONT_ENV).lines[0]!.height).toBe(20);
   });
+
+  it("keeps the paragraph's main size as every line's floor (ordo's own text is unchanged)", () => {
+    // 'aaaa ' at 20 px, then 'bbbb cccc' at 10 px: 'cccc' wraps onto a line of its own, still 20 px tall.
+    const o = obj('aaaa bbbb cccc', {}, { box: box(90), runs: [{ start: 5, end: 14, sizeScale: 0.5 }] });
+    const l = layoutRich(m(), o, LEGACY_FONT_ENV);
+    expect(lineTexts(o, l)).toEqual(['aaaa bbbb ', 'cccc']);
+    expect(l.lines.map((line) => line.height)).toEqual([20, 20]);
+  });
 });
 
 describe('office line model', () => {
@@ -170,6 +178,71 @@ describe('office line model', () => {
     hidden: false,
     ...p,
   });
+  it('sizes a wrapped line of smaller runs by its own runs, not the paragraph main size', () => {
+    // A 20 px paragraph whose 10 px citation wraps onto a line of its own (Matthew 16v18's right column:
+    // 5 pt references after 7 pt text): LibreOffice's editeng sizes each line by the portions on it.
+    const office = { lineModel: 'office' as const, lineHeight: 1.2 };
+    const o = obj('aaaa bbbb cccc', office, { box: box(90), runs: [{ start: 5, end: 14, sizeScale: 0.5 }] });
+    const l = layoutRich(m(), o, LEGACY_FONT_ENV);
+    expect(lineTexts(o, l)).toEqual(['aaaa bbbb ', 'cccc']);
+    expect(l.lines.map((line) => line.height)).toEqual([24, 12]);
+    // Its baseline is its own size below its top.
+    expect(l.lines[1]!.baseline - l.lines[1]!.top).toBe(10);
+    // A line of shifted runs only keeps the paragraph's main size; a larger run still raises its line.
+    const raised = obj('aaaa 17', office, { box: box(60), runs: [{ start: 5, end: 7, baseline: 0.3 }] });
+    expect(layoutRich(m(), raised, LEGACY_FONT_ENV).lines.map((line) => line.height)).toEqual([24, 24]);
+    const big = obj('aa bb', office, { runs: [{ start: 3, end: 5, sizeScale: 1.5 }] });
+    expect(layoutRich(m(), big, LEGACY_FONT_ENV).lines[0]!.height).toBe(36);
+  });
+
+  it('still fits a mixed-size paragraph when shrinking (the main size as every line floor in the search)', () => {
+    // Eight 40 px words then eight 20 px ones in a 400 x 100 box: three lines, too tall at full size. A box that
+    // shrinks keeps the paragraph's main size as every line's floor, in the search and in the final layout
+    // alike, so what the search finds fits.
+    const words = 'aaaa bbbb cccc dddd eeee ffff gggg hhhh';
+    const o = obj(
+      `${words} ${words}`,
+      { lineModel: 'office', lineHeight: 1.2, fontSizePx: 40, autofit: 'shrink' },
+      { box: { x: 0, y: 0, w: 400, h: 100, rotation: 0 }, runs: [{ start: 40, end: 79, sizeScale: 0.5 }] },
+    );
+    const l = layoutRich(m(), o, LEGACY_FONT_ENV);
+    expect(l.fontScale).toBeLessThan(1);
+    expect(l.overflow).toBe(false);
+    // The small run's line is as tall as the large run's: the search and the layout sized it alike.
+    const last = l.lines[l.lines.length - 1]!;
+    expect(last.height).toBe(l.lines[0]!.height);
+  });
+
+  it('sizes lines by their own runs in a box that does not shrink, by the main size in one that does', () => {
+    // LibreOffice's lines in a plain box (text-falls probe B, LibreOffice 24.2): 'Big ' at 40 pt then 24 pt text
+    // wrapping onto three more lines: baselines 63.61, 95.61, 124.41, 153.21 pt in a box at y 20 pt with a
+    // 3.6 pt inset, so pitches of 32.0 pt (the 40 pt line's 8 pt descent and a 24 pt ascent) then 28.8 (1.2 x
+    // 24): as tall as each line's own runs. Here at 2 px a point: 'Big ' 80 px, the rest 48 px.
+    const office = { lineModel: 'office' as const, lineHeight: 1.2, fontSizePx: 48, valign: 'top' as const };
+    const text = 'Big aaaa bbbb cccc dddd eeee ffff gggg';
+    const runs = [{ start: 0, end: 4, sizeScale: 80 / 48 }];
+    // 'Big aaaa ' fills a line (4 x 40 + 5 x 24 = 280 px of 300), then two 24 px words a line.
+    const plain = obj(text, office, { box: { x: 0, y: 0, w: 300, h: 600, rotation: 0 }, runs });
+    const lp = layoutRich(m(), plain, LEGACY_FONT_ENV);
+    const lines = ['Big aaaa ', 'bbbb cccc ', 'dddd eeee ', 'ffff gggg'];
+    expect(lineTexts(plain, lp)).toEqual(lines);
+    const pitch = [0, 80 + 16 + 48 - 80, 57.6, 57.6]; // the first baseline 80 px; then 64 px, 57.6, 57.6
+    let at = 80;
+    lp.lines.forEach((line, i) => {
+      at += pitch[i]!;
+      expect(line.baseline).toBeCloseTo(at, 9);
+    });
+    // The same paragraph in a box that shrinks its text (it fits at full size, so it is not shrunk): every line
+    // keeps the paragraph's main size (the 80 px run) as its floor, as at the current point (8e8a294): ordo's
+    // autofit search is not LibreOffice's yet (its spacing scale on single spacing, its metrics: text-falls
+    // notes), and the own-run lines moved eight shrinking slides below the owner's current point.
+    const shrink = obj(text, { ...office, autofit: 'shrink' }, { box: plain.box, runs });
+    const ls = layoutRich(m(), shrink, LEGACY_FONT_ENV);
+    expect(ls.fontScale).toBe(1);
+    expect(lineTexts(shrink, ls)).toEqual(lines);
+    expect(ls.lines.map((line) => line.height)).toEqual([96, 96, 96, 96]);
+  });
+
   it('has single spacing 1.2F with the baseline F below the top', () => {
     expect(officeLine(40, para(), 1)).toEqual({ height: 48, ascent: 40 });
     expect(officeLine(40, para({ lineSpacing: 1.5 }), 1)).toEqual({ height: 72, ascent: 64 });
@@ -257,6 +330,37 @@ describe("PowerPoint's stored autofit scale and the face drawing the box", () =>
     const fonts = ctx.ops.filter((op) => op.op === 'fillText').map((op) => op.font);
     expect(fonts.length).toBeGreaterThan(0);
     for (const f of fonts) expect(f).toContain(' 20px ');
+  });
+});
+
+describe("the office slash rule's cost (LibreOffice's i#17155, lines.ts `slashBreak`)", () => {
+  it('lays a paragraph of slashes out about as fast as one without: linear in its length', () => {
+    // One office paragraph at the render clamp's 10,000 characters, one 'a/b' word a line: every line end asks
+    // the slash rule for a glued break inside the next word. Looking through the paragraph's every glued break
+    // there made it quadratic (review 1b: 39-44 ms against 4-5 ms without slashes, x3.4-3.7 a doubling), on
+    // the GO path (a jump behind an arm preparing such a table was 200-300 ms late at 3840).
+    const time = (c: string) => {
+      const o = obj(
+        `a${c}b `.repeat(2500),
+        { lineModel: 'office' },
+        { box: { x: 0, y: 0, w: 45, h: 100, rotation: 0 } },
+      );
+      const t = performance.now();
+      const l = layoutRich(m(), o, LEGACY_FONT_ENV);
+      const ms = performance.now() - t;
+      expect(l.lines).toHaveLength(2500);
+      return ms;
+    };
+    time('/');
+    time('x');
+    let slash = Number.POSITIVE_INFINITY;
+    let plain = Number.POSITIVE_INFINITY;
+    // Interleaved, the fastest of five each: what the work costs, not the machine's load.
+    for (let k = 0; k < 5; k++) {
+      slash = Math.min(slash, time('/'));
+      plain = Math.min(plain, time('x'));
+    }
+    expect(slash).toBeLessThan(3 * plain + 1);
   });
 });
 

@@ -1,5 +1,6 @@
 import { type Box, newId, type Presentation, type Slide, type SlideObject } from '@ordo/domain';
 import type { ZOrder } from '../ops.ts';
+import { fitTable } from '../tableFit.ts';
 import { withSlide } from './common.ts';
 
 /*
@@ -263,7 +264,9 @@ export function transformGroup(
   return withSlide(p, slideId, (s) =>
     mapMembers(s, ids, (o) => {
       const box = transformMember(o, from, to);
-      return sameBox(box, o.box) ? o : { ...o, box };
+      // A fixed-row table grows the rows the change left its text short of by more than before (narrower
+      // columns, a shorter box; tableFit.ts).
+      return sameBox(box, o.box) ? o : fitTable(o, { ...o, box });
     }),
   );
 }

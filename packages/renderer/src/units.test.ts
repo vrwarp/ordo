@@ -2,6 +2,7 @@ import { LOOK_MAIN, type ShapeObject, type Slide, type SlideObject } from '@ordo
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { clampSlide } from './clamp.ts';
 import { drawableContent } from './content.ts';
+import { EFFECT_STEP_PIXELS } from './effects.ts';
 import { RecPath } from './geom/path2d.test-util.ts';
 import { clearGeomFiles, putGeomFile } from './geom/stored.ts';
 import { legacyOf, overGeomBudget, slideBudget, withinDrawBudget } from './geombudget.ts';
@@ -15,15 +16,15 @@ import {
   makeUnit,
   prepareSlideUnits,
   putUnit,
+  setEffectUnits,
   slideUnits,
   slideUnitsLeft,
   UNIT_SLIDE_AREAS,
-  UNIT_VERSION,
   unitCache,
-  unitKey,
   unitOf,
   unitReady,
   unitsOfSlide,
+  unitUnmade,
   unitWork,
 } from './units.ts';
 
@@ -71,6 +72,9 @@ function busySlide(extra: Partial<ShapeObject> = {}): Slide {
     objects: Array.from({ length: 12 }, (_, i) =>
       shape(`z${i}`, {
         box: { x: 50 + (i % 4) * 400 + i, y: 50 + Math.floor(i / 4) * 250, w: 700, h: 500, rotation: 0 },
+        // Each its own colour: units are keyed by what they draw, not where (units.key.test.ts), so twelve
+        // identical shapes inside the frame would share one.
+        fill: { r: i, g: 0, b: 0, a: 1 },
         ...extra,
       }),
     ),
@@ -195,29 +199,7 @@ describe('geometry units (M9 Slow-to-draw, Runtime)', () => {
     expect(images(sprite)).toHaveLength(1);
   });
 
-  it('keys a unit by what it draws: not its id, its effects or editor fields; its geometry by file hash', () => {
-    const a = shape('a');
-    const rect = { x: 0, y: 0, w: 10, h: 10 };
-    const key = unitKey(a, 1, rect);
-    expect(key.startsWith(`u${UNIT_VERSION}:`)).toBe(true);
-    expect(unitKey({ ...a, id: 'b', origin: { src: 'pptx' }, locked: true }, 1, rect)).toBe(key);
-    expect(unitKey({ ...a, fill: { r: 9, g: 0, b: 0, a: 1 } }, 1, rect)).not.toBe(key);
-    expect(unitKey({ ...a, box: { ...a.box, rotation: 10 } }, 1, rect)).not.toBe(key);
-    expect(unitKey({ ...a, flipH: true }, 1, rect)).not.toBe(key);
-    expect(unitKey(a, 2, rect)).not.toBe(key);
-    expect(unitKey(a, 1, { ...rect, x: 1 })).not.toBe(key);
-    expect(unitKey(a, 1, { ...rect, w: 11 })).not.toBe(key);
-    const f1 = unitKey({ ...a, geom: { ref: 'f'.repeat(64) } } as SlideObject, 1, rect);
-    expect(f1).not.toBe(unitKey({ ...a, geom: { ref: 'e'.repeat(64) } } as SlideObject, 1, rect));
-    // Effects are not drawn on a unit: a shadowed copy of a shape asks for the same unit.
-    const plain = objectsOf(busySlide());
-    const shadowed = objectsOf(
-      busySlide({ shadow: { dx: 4, dy: 4, blur: 8, color: { r: 0, g: 0, b: 0, a: 0.5 } } }),
-    );
-    const u = unitOf(shadowed.at(-1)!, 1)!;
-    expect(u.key).toBe(unitOf(plain.at(-1)!, 1)!.key);
-    expect((u.drawn as ShapeObject).shadow).toBeUndefined();
-  });
+  // Unit keys: units.key.test.ts (effect units key what a unit draws, its effects and kind included).
 
   it("a geometry file not read yet makes no unit; once read, the slide's units are worked out again", () => {
     const hash = 'a'.repeat(64);
@@ -341,7 +323,8 @@ class FakeOffscreenCanvas {
     const t = traceCtx(w, h);
     // The trace has no pixels: a read gives a transparent one.
     (t as unknown as { getImageData: unknown }).getImageData = () => ({ data: new Uint8ClampedArray(4) });
-    this.ctx = t;
+    // Its `canvas` is this canvas, as an OffscreenCanvas's context's is (a unit may be the canvas it was drawn on).
+    this.ctx = new Proxy(t, { get: (target, k) => (k === 'canvas' ? this : Reflect.get(target, k)) });
     FakeOffscreenCanvas.made.push(this);
   }
   getContext() {
@@ -398,16 +381,20 @@ describe('making geometry units in slices', () => {
     expect(drawn.filter((e) => e[1] === 'clip')).toEqual([]);
     expect(drawn.filter((e) => e[1] === 'fill')).toHaveLength(2);
     expect(drawn.filter((e) => e[1] === 'stroke')).toHaveLength(2);
-    // Its rect copied 1:1 into the unit's own picture.
+    // Its rect copied 1:1 into the unit's own picture, a band of whole rows (EFFECT_STEP_PIXELS) a step.
     expect([unit!.width, unit!.height]).toEqual([u!.rect.w, u!.rect.h]);
     const { x, y, w, h } = u!.rect;
-    expect(unit!.ctx.trace.filter((e) => e[1] === 'drawImage')).toEqual([
-      ['call', 'drawImage', { image: [3840, 2160, ''] }, x, y, w, h, 0, 0, w, h],
-    ]);
+    const rows = Math.floor(EFFECT_STEP_PIXELS / w);
+    const bands: unknown[] = [];
+    for (let y0 = 0; y0 < h; y0 += rows) {
+      const n = Math.min(rows, h - y0);
+      bands.push(['call', 'drawImage', { image: [3840, 2160, ''] }, x, y + y0, w, n, 0, y0, w, n]);
+    }
+    expect(unit!.ctx.trace.filter((e) => e[1] === 'drawImage')).toEqual(bands);
     const work = unitWork();
     expect(work.made - before.made).toBe(1);
-    // The scratch, four calls and the copy.
-    expect(work.steps - before.steps).toBe(6);
+    // The scratch, four calls and the copy's bands.
+    expect(work.steps - before.steps).toBe(1 + 4 + bands.length);
     expect(log.slices).toBe(work.turns - before.turns);
     expect(log.slices).toBeGreaterThan(1);
     expect(log.checks).toBeGreaterThanOrEqual(log.slices);
@@ -462,6 +449,85 @@ describe('making geometry units in slices', () => {
     expect(unitCache.bytes('unit')).toBe(units.reduce((n, u) => n + u.bytes, 0));
   });
 
+  it('a stop() that is true makes no unit, even at t = 0 (an output job that must not wait, r2b units-live)', async () => {
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+    const slide = busySlide();
+    const units = unitsOfSlide(slide, 1);
+    expect(units.length).toBeGreaterThanOrEqual(2);
+    const before = unitWork();
+    const pins: string[] = [];
+    // The clock never moves: `now() - t0 > waitMs` is false for the first unit, so waitMs 0 alone makes one.
+    const clockless = { ...run({ slices: 0, checks: 0 }), now: () => 0 };
+    const stopped = await prepareSlideUnits(slide, 1, undefined, clockless, {
+      waitMs: 0,
+      stop: () => true,
+      pin: (k) => pins.push(k),
+    });
+    expect(stopped).toMatchObject({ units: units.length, made: 0, ready: 0, left: units.length });
+    expect(unitWork().made).toBe(before.made);
+    expect(pins).toEqual([]);
+    // A stop that turns true after the first unit: the rest are left.
+    let n = 0;
+    const one = await prepareSlideUnits(slide, 1, undefined, clockless, {
+      stop: () => n > 0,
+      onUnit: () => n++,
+    });
+    expect(one).toMatchObject({ made: 1, left: units.length - 1 });
+  });
+
+  it('a unit whose making failed is remembered until made; `skip` leaves it untried, so it cannot use up a job’s wait (repair 3)', async () => {
+    const slide = busySlide();
+    const units = unitsOfSlide(slide, 1);
+    expect(units.length).toBeGreaterThanOrEqual(2);
+    // No canvas: every unit's making fails, and each is remembered.
+    await prepareSlideUnits(slide, 1, undefined, run({ slices: 0, checks: 0 }));
+    expect(units.map((u) => unitUnmade(u.key))).toEqual(units.map(() => true));
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+    // A late job skips the first (it failed: drawn as its legacy copy, or a decoration directly): within a wait
+    // of one unit, the next one is made, not the failed one again.
+    let clock = 0;
+    const late = await prepareSlideUnits(
+      slide,
+      1,
+      undefined,
+      { ...run({ slices: 0, checks: 0 }), now: () => (clock += 100) },
+      { waitMs: 150, skip: (k: string) => k === units[0]!.key },
+    );
+    expect(late).toMatchObject({ made: 1, left: units.length - 1 });
+    expect(unitReady(units[0]!)).toBeUndefined();
+    expect(unitReady(units[1]!)).toBeDefined();
+    expect(unitUnmade(units[1]!.key)).toBe(false);
+    // A job that waits still tries it (a canvas refused once may be had later), and made, it is forgotten.
+    expect(await makeUnit(units[0]!, run({ slices: 0, checks: 0 }))).toBeDefined();
+    expect(unitUnmade(units[0]!.key)).toBe(false);
+  });
+
+  it('calls onUnit once for each unit it makes, never for one ready already; without stop it waits as before', async () => {
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+    const slide = busySlide();
+    const units = unitsOfSlide(slide, 1);
+    // The first unit made beforehand (ready): the call makes the others, each reported once, in z-order.
+    expect(await makeUnit(units[0]!, run({ slices: 0, checks: 0 }))).toBeDefined();
+    const made: string[] = [];
+    const r = await prepareSlideUnits(slide, 1, undefined, run({ slices: 0, checks: 0 }), {
+      onUnit: (k) => made.push(k),
+    });
+    expect(r).toMatchObject({ units: units.length, made: units.length - 1, ready: 1, left: 0 });
+    expect(made).toEqual(units.slice(1).map((u) => u.key));
+    // Without a stop the wait bounds it as before: past waitMs after the first unit, nothing more is started.
+    clearUnits();
+    let clock = 0;
+    const waited = await prepareSlideUnits(
+      slide,
+      1,
+      undefined,
+      { ...run({ slices: 0, checks: 0 }), now: () => (clock += 100) },
+      { waitMs: 150, onUnit: (k) => made.push(k) },
+    );
+    expect(waited).toMatchObject({ made: 1, left: units.length - 1 });
+    expect(made.at(-1)).toBe(units[0]!.key);
+  });
+
   it("keeps the shadow the budget kept: a 'geom' legacy copy's unit draws the shape with it (r2a repair)", async () => {
     // Twelve shadowed zigzags: the shadows fit the effect budget, the geometry does not, so the later ones go
     // to legacy copies that keep their shadows ('geom'), which their units draw too, in one call.
@@ -474,26 +540,28 @@ describe('making geometry units in slices', () => {
     const units = slideUnits(objects, 2);
     expect(units.length).toBeGreaterThan(0);
     for (const u of units) expect(u.drawn.type === 'shape' && u.drawn.shadow).toEqual(shadow);
-    // The unit reaches over the shadow (its rect is the reach of what it draws), and its key differs from the
-    // unit of the shape without its effects.
-    const bare = unitOf(units[0]!.object, 2, false)!;
+    // The unit reaches over the shadow (its rect is the composite of the shape and its layers), and its key
+    // differs from the unit 62a1c3a made of the shape without its effects (`setEffectUnits(false)`, 'both').
+    setEffectUnits(false);
+    const bare = unitOf(units[0]!.object, 2, 'both')!;
+    setEffectUnits(true);
     expect(bare.drawn.type === 'shape' && bare.drawn.shadow).toBeFalsy();
     expect(units[0]!.key).not.toBe(bare.key);
     expect(units[0]!.rect.x + units[0]!.rect.w).toBeGreaterThan(bare.rect.x + bare.rect.w);
-    // Made in one call through the effects path: the shadow's layer is drawn on the scratch, then the copy.
+    // Made in steps through the effects path (`effectSteps`): the shadow's reduced layer painted call by call
+    // and blurred, enlarged into the composite in bands, the shape over it call by call, then the composite's
+    // part on the frame copied into the unit in bands: more than one step, none of a full frame's scratch.
     vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
     FakeOffscreenCanvas.made = [];
     const before = unitWork();
     expect(await makeUnit(units[0]!, { slice: async (fn) => fn(), check: () => {} })).toBeDefined();
-    expect(unitWork().steps - before.steps).toBe(3);
-    const scratch = FakeOffscreenCanvas.made.find((c) => c.width === 3840 && c.height === 2160)!;
-    const calls = scratch.ctx.trace.filter((e) => e[0] === 'call').map((e) => e[1]);
-    // The composite of the shape and its shadow, copied onto the frame's scratch.
-    expect(calls).toContain('drawImage');
-    const layers = FakeOffscreenCanvas.made.filter(
-      (c) => c !== scratch && c.ctx.trace.some((e) => e[1] === 'fill'),
-    );
-    expect(layers.length).toBeGreaterThan(0);
+    expect(unitWork().steps - before.steps).toBeGreaterThan(3);
+    expect(FakeOffscreenCanvas.made.find((c) => c.width === 3840 && c.height === 2160)).toBeUndefined();
+    const layers = FakeOffscreenCanvas.made.filter((c) => c.ctx.trace.some((e) => e[1] === 'fill'));
+    expect(layers.length).toBeGreaterThan(1);
+    expect(
+      FakeOffscreenCanvas.made.some((c) => c.width === units[0]!.rect.w && c.height === units[0]!.rect.h),
+    ).toBe(true);
     // The same slide past the effect budget as well ('both'): its units draw the shape without its shadow.
     const objectsBoth = objectsOf(busySlide({ shadow: { ...shadow, blur: 400, dx: 0, dy: 0 } }));
     const copiesBoth = slideBudget(objectsBoth);
@@ -501,8 +569,18 @@ describe('making geometry units in slices', () => {
       (o) => legacyOf(copiesBoth.get(o)!)?.part === 'both',
     );
     expect(both.length).toBeGreaterThan(0);
+    // Effect units draw them with their shadows all the same (never a legacy copy); off (`setEffectUnits`), as
+    // 62a1c3a did, without.
     for (const u of slideUnits(objectsBoth, 2))
-      if (both.includes(u.object)) expect(u.drawn.type === 'shape' && u.drawn.shadow).toBeFalsy();
+      if (both.includes(u.object)) expect(u.drawn.type === 'shape' && u.drawn.shadow).toBeTruthy();
+    setEffectUnits(false);
+    try {
+      expect(slideUnits(objectsBoth, 2).length).toBeGreaterThan(0);
+      for (const u of slideUnits(objectsBoth, 2))
+        if (both.includes(u.object)) expect(u.drawn.type === 'shape' && u.drawn.shadow).toBeFalsy();
+    } finally {
+      setEffectUnits(true);
+    }
   });
 
   it('says which objects past the budget get no unit, and why', () => {
@@ -534,8 +612,17 @@ describe('making geometry units in slices', () => {
         }),
       ),
     });
-    const plainLeft = slideUnitsLeft(plain, 2);
-    if (overGeomBudget(plain).size) expect(new Set(plainLeft)).toEqual(new Set(['kind']));
+    // Effect units draw it (its gradient kept) within the slide's frame of units, the rest past it ('area');
+    // off (`setEffectUnits`), as 62a1c3a did, none ('kind').
+    expect(overGeomBudget(plain).size).toBeGreaterThan(0);
+    expect(slideUnits(plain, 2).length).toBeGreaterThan(0);
+    expect(new Set(slideUnitsLeft(plain, 2))).toEqual(new Set(['area']));
+    setEffectUnits(false);
+    try {
+      expect(new Set(slideUnitsLeft(plain, 2))).toEqual(new Set(['kind']));
+    } finally {
+      setEffectUnits(true);
+    }
   });
 
   it('makes no unit for an object no task could draw: it keeps its legacy copy', () => {

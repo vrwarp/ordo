@@ -44,6 +44,7 @@ export const LIVE_API_PATHS = new Set([
   '/live',
   '/live/summary',
   '/live/events',
+  '/live/prepare',
   '/cache/manifest',
   '/actions',
   '/health',

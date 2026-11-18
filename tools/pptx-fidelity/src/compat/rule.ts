@@ -38,3 +38,15 @@ export const hasVisibleText = (t: TextBody): boolean => t.paras.some(visiblePara
 export function shapeText(e: SceneElement): TextBody | undefined {
   return e.kind === 'shape' && e.text && hasVisibleText(e.text) ? e.text : undefined;
 }
+
+/**
+ * The runs that draw something in an element's text: a shape's, or every cell's of a table the converter
+ * writes (not residual). A rule on how runs are drawn (a run's shadow, an outline on filled text, baseline 0)
+ * applies to a table's cells as to a text box: the converter writes their runs alike (`richText`'s `lo`).
+ */
+export function drawnRuns(e: SceneElement): TextBody['paras'][number]['runs'] {
+  const t = shapeText(e);
+  if (t) return visibleRuns(t);
+  if (e.kind !== 'table' || e.support === 'residual') return [];
+  return e.cells.flatMap((c) => (hasVisibleText(c.text) ? visibleRuns(c.text) : []));
+}

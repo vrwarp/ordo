@@ -22,19 +22,24 @@
  * - **`--client-scene`**: each deck is parsed first as the operator's import worker parses it
  *   (`parsePptxScene` in Node, the hub's library faces fetched from the hub, for the LibreOffice the hub
  *   says it has) and posted with its scene (`clientScene`), so the run measures the path operators take;
- *   each record says whether the hub used the scene (its job log) and the parse's time.
+ *   each record says whether the hub used the scene (its job log) and the parse's time. The first parse waits
+ *   until the hub has registered its bundled fonts (`waitForBundledFonts`): before that its library lists only
+ *   some of its faces.
  * - **`--equivalence`** (implies `--client-scene`): each deck is imported twice, with its scene and parsed by
  *   the hub itself, and the two stored presentations are compared modulo ids, media ids (by file), times and
- *   the import log (`equivalence.ts`); every difference is listed per deck in `equivalence.json`.
+ *   the import log (`equivalence.ts`); every difference is listed per deck in `equivalence.json`. A deck whose
+ *   table cells hold a script the hub measures with a face only its computer has (sub-wave 1c rule H: the
+ *   hub's start log names its system faces, `systemOnlyScriptsOf`; the cells read with `sceneNeedsScripts`) is
+ *   one the hub must refuse the scene of and parse itself: it is listed as 'parsed on the hub (script face)'
+ *   when it did, and counted as a difference when it did not (or refused one without such a cell).
  *
  * Options: `--out DIR` (default tmp/hub-import: `hub-import.json`, `hub-import.md`, the hub's data and log),
- * `--hub dist|source` (the built `apps/hub/dist/main.js`, the default when it exists, or the sources through
- * tsx), `--libreoffice`, `--dry-run`, `--sermons FOLDER` (repeatable; its decks are also posted),
+ * `--hub dist|source` (the sources through tsx, the default, or the built `apps/hub/dist/main.js`), `--libreoffice`, `--dry-run`, `--sermons FOLDER` (repeatable; its decks are also posted),
  * `--timeout-s N` per job (default 600), `--mem-limit-mb N` (the compose file's `mem_limit`, default 4096),
  * `--keep-data` (leave the hub's data folder), `--client-scene`, `--equivalence`.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
-import { constants, existsSync, openAsBlob, readFileSync } from 'node:fs';
+import { constants, openAsBlob, readFileSync } from 'node:fs';
 import { access, mkdir, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
@@ -46,7 +51,9 @@ import {
   type Media,
   type Presentation,
   resolvePlaylist,
+  SCRIPT_FALLBACK_FONTS,
   type Slide,
+  textScripts,
   utf8Bytes,
 } from '@ordo/domain';
 import { type FaceFile, loadDeckFaces, parsePptxScene } from '@ordo/importers';
@@ -125,11 +132,13 @@ function tsxLoaderUrl(): string {
   return pathToFileURL(join(dirname(pkg), 'dist', 'loader.mjs')).href;
 }
 
-/** The hub module a session starts: the built bundle, or the sources. */
-export function hubEntry(kind: 'dist' | 'source' | undefined): string {
-  const dist = join(root, 'apps/hub/dist/main.js');
-  if (kind === 'dist' || (kind === undefined && existsSync(dist))) return dist;
-  return join(root, 'apps/hub/src/main.ts');
+/**
+ * The hub module a session starts (of the checkout at `at`): its built bundle only when asked for (`dist`),
+ * else its sources, even where a bundle exists (a bundle built before the last edit would be a stale hub).
+ */
+export function hubEntry(kind: 'dist' | 'source' | undefined, at = root): string {
+  if (kind === 'dist') return join(at, 'apps/hub/dist/main.js');
+  return join(at, 'apps/hub/src/main.ts');
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -577,6 +586,13 @@ export type DeckRecord = {
    * the parse failed and the deck was posted without one), the parse's time and its error.
    */
   scene?: 'used' | 'refused' | 'none';
+  /** Why the hub did not use the scene (its job log's reason), when it said. */
+  sceneWhy?: string;
+  /**
+   * Sub-wave 1c (rule H): the scene's table cells hold a script the hub measures with a face only its computer
+   * has: the hub must refuse the scene ('parsed on the hub (script face)').
+   */
+  scriptFace?: true;
   clientMs?: number;
   clientError?: string;
   /** `--equivalence`: the differences between the hub's own parse and the scene's (at most 50 listed). */
@@ -748,11 +764,15 @@ export function hubImportMarkdown(r: HubImportReport): string {
     );
   }
   const eq = r.decks.filter((d) => d.differences !== undefined);
-  if (eq.length)
+  if (eq.length) {
+    const kinds = eq.map((d) => [d, equivalenceOf(d)] as const);
+    const onHub = kinds.filter(([, k]) => k === 'parsed on the hub (script face)').map(([d]) => d.name);
+    const differs = kinds.filter(([, k]) => k === 'differs').length;
     lines.push(
-      `equivalence: ${eq.filter((d) => d.differences === 0).length} of ${eq.length} deck(s) equal; ${eq.reduce((x, d) => x + (d.differences ?? 0), 0)} difference(s) in all (equivalence.json)`,
+      `equivalence: ${kinds.filter(([, k]) => k === 'equal').length} of ${eq.length} deck(s) equal; ${onHub.length} parsed on the hub (script face)${onHub.length ? `: ${onHub.filter((n) => !/^sermon-/.test(n)).join(', ')}` : ''}; ${differs} differ; ${eq.reduce((x, d) => x + (d.differences ?? 0), 0)} difference(s) in all (equivalence.json)`,
       '',
     );
+  }
   if (!r.dryRun) {
     const done = r.decks.filter((d) => d.classes);
     const c = { native: 0, hybrid: 0, picture: 0 };
@@ -771,6 +791,132 @@ export function hubImportMarkdown(r: HubImportReport): string {
     );
   }
   return lines.join('\n');
+}
+
+/** The hub's script-face refusal (`apps/hub` `clientScene.ts` `SCRIPT_FACE_REFUSAL`), as its job log says it. */
+export const SCRIPT_FACE_REASON = 'its tables need a script face only this computer has';
+
+/** Why the hub did not use a scene, from its job log ('the scene parsed in the browser was not used (...)'). */
+export function sceneRefusalOf(log: readonly string[]): string | undefined {
+  for (const l of log) {
+    const m = /the scene parsed in the browser was not used \((.{1,300})\): parsed here/.exec(l);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
+/**
+ * Sub-wave 1c (rule H): the scripts a hub measures table cells in with a face only its computer has: those its
+ * start log names a system face for (`system faces: ...`, pino's `faces` field) whose fallback families
+ * (`SCRIPT_FALLBACK_FONTS`) its library has none of. Never throws.
+ */
+export function systemOnlyScriptsOf(lines: readonly string[], families: readonly string[]): string[] {
+  const lib = new Set(families.map((f) => f.trim().toLowerCase()));
+  for (const line of lines) {
+    if (!line.includes('system faces')) continue;
+    try {
+      const faces = (JSON.parse(line) as { faces?: unknown }).faces;
+      if (!Array.isArray(faces)) continue;
+      const out: string[] = [];
+      for (const f of faces) {
+        const script = typeof f === 'string' ? f.split(' ')[0]! : '';
+        if (!script || out.includes(script)) continue;
+        if (!(SCRIPT_FALLBACK_FONTS[script] ?? []).some((x) => lib.has(x.toLowerCase()))) out.push(script);
+      }
+      return out;
+    } catch {
+      /* not the JSON line */
+    }
+  }
+  return [];
+}
+
+/**
+ * Whether a parsed scene's table cells (in groups too; never text boxes) hold a character of `scripts`, as the
+ * hub's pool task decides it (`clientScene.ts` `tablesNeedScripts`). Bounded; never throws.
+ */
+export function sceneNeedsScripts(scene: unknown, scripts: readonly string[]): boolean {
+  if (!scripts.length) return false;
+  const want = new Set(scripts);
+  let seen = 0;
+  const walk = (objects: unknown, depth: number): boolean => {
+    if (depth > 16 || !Array.isArray(objects)) return false;
+    for (const o of objects) {
+      if (++seen > 200_000) return false;
+      if (!o || typeof o !== 'object') continue;
+      const x = o as { table?: { cells?: unknown }; objects?: unknown };
+      const cells = x.table?.cells;
+      if (Array.isArray(cells))
+        for (const c of cells) {
+          const text = (c as { text?: unknown } | null)?.text;
+          if (typeof text === 'string' && [...textScripts(text)].some((k) => want.has(k))) return true;
+        }
+      if (walk(x.objects, depth + 1)) return true;
+    }
+    return false;
+  };
+  const slides = (scene as { slides?: unknown } | null)?.slides;
+  return (
+    Array.isArray(slides) &&
+    slides.some((s) => walk((s as { slide?: { objects?: unknown } })?.slide?.objects, 0))
+  );
+}
+
+/**
+ * A deck's equivalence (`--equivalence`): 'equal' (the scene stored as the hub's own parse), 'parsed on the hub
+ * (script face)' (rule H: the hub refused a scene whose tables need its computer's face, as it must), or
+ * 'differs' (a difference, a refusal rule H does not explain, or a scene rule H should have refused).
+ */
+export function equivalenceOf(
+  d: Pick<DeckRecord, 'differences' | 'scene' | 'sceneWhy' | 'scriptFace'>,
+): 'equal' | 'parsed on the hub (script face)' | 'differs' {
+  const refusedForFace = d.scene === 'refused' && d.sceneWhy === SCRIPT_FACE_REASON;
+  if ((d.differences ?? 0) > 0) return 'differs';
+  if (d.scriptFace) return refusedForFace ? 'parsed on the hub (script face)' : 'differs';
+  return refusedForFace ? 'differs' : 'equal';
+}
+
+/**
+ * Whether the hub's start-up registration of its bundled fonts has settled, read from its log: `fonts/bundled.ts`
+ * logs 'bundled fonts' when it is done, `fonts/service.ts` 'bundled fonts not registered' when it failed. Until
+ * then the hub's library lists only some of its faces. Never throws.
+ */
+export function bundledFontsSettled(lines: readonly string[]): boolean {
+  for (const line of lines) {
+    if (!line.includes('bundled fonts')) continue;
+    try {
+      const msg = (JSON.parse(line) as { msg?: unknown }).msg;
+      if (msg === 'bundled fonts' || msg === 'bundled fonts not registered') return true;
+    } catch {
+      /* not a JSON line */
+    }
+  }
+  return false;
+}
+
+/**
+ * Wait (at most `timeoutMs`) until the hub's bundled fonts are registered (`bundledFontsSettled` over its log as
+ * `lines()` gives it). A scene parsed in the browser before that measures text with fewer faces than the hub's
+ * own parse a moment later, so the first deck of a `--client-scene` or `--equivalence` run could differ for
+ * that reason alone (sub-wave 1c integration: the hub's start-up font work made it frequent). True when settled.
+ */
+export async function waitForBundledFonts(
+  lines: () => readonly string[],
+  timeoutMs = 60_000,
+  pollMs = 100,
+): Promise<boolean> {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    if (bundledFontsSettled(lines())) return true;
+    if (Date.now() >= until) return false;
+    await sleep(pollMs);
+  }
+}
+
+/** The library's families (`GET /fonts`). */
+async function libraryFamilies(client: HubClient): Promise<string[]> {
+  const fonts = await client.json<{ family: string }[]>('fonts');
+  return fonts.map((f) => f.family);
 }
 
 /** Whether the hub has LibreOffice for an import, as the operator reads its capabilities (`hubHasLibreOffice`). */
@@ -830,6 +976,8 @@ export async function runHubImport(argv: readonly string[]): Promise<HubImportRe
           report.decks.map((d) => ({
             name: d.name,
             scene: d.scene,
+            ...(d.sceneWhy ? { sceneWhy: d.sceneWhy } : {}),
+            ...(d.differences !== undefined ? { equivalence: equivalenceOf(d) } : {}),
             differences: d.differences,
             diff: d.diff,
           })),
@@ -864,6 +1012,11 @@ export async function runHubImport(argv: readonly string[]): Promise<HubImportRe
   });
   try {
     report.capabilities = await session.client.maybe('capabilities');
+    // A browser's parse reads the library's faces: wait until the hub has registered its bundled ones.
+    if (a.clientScene && !(await waitForBundledFonts(() => session.lines)))
+      session.lines.push(
+        '{"level":40,"msg":"hub-import: the hub did not say its bundled fonts were registered"}',
+      );
     for (const d of readable) {
       const rec: DeckRecord = {
         name: d.label,
@@ -892,10 +1045,16 @@ export async function runHubImport(argv: readonly string[]): Promise<HubImportRe
           followUp: false,
           ...(scene ? { scene } : {}),
         });
-        if (scene)
+        if (scene) {
           rec.scene = imp.job.log.some((l) => /parsed in the browser: the hub checked/.test(l))
             ? 'used'
             : 'refused';
+          const why = sceneRefusalOf(imp.job.log);
+          if (why) rec.sceneWhy = why;
+          // Rule H, as the hub applies it: its system faces (start log) less its library's scripts.
+          const only = systemOnlyScriptsOf(session.lines, await libraryFamilies(session.client));
+          if (sceneNeedsScripts(JSON.parse(new TextDecoder().decode(scene)), only)) rec.scriptFace = true;
+        }
         if (a.equivalence && scene && imp.presentationId) {
           const own = await importDeck(session.client, d.file, {
             uploadName: `deck-${report.decks.length}-hub.${rec.ext}`,

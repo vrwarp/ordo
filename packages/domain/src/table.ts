@@ -1,5 +1,7 @@
-import { canonicalJson, Palette, paletteIndex } from './palette.ts';
+import { cellStyleOf, cellTextStyle } from './cellstyle.ts';
+import { Palette, paletteIndex } from './palette.ts';
 import {
+  type Box,
   type CellStyle,
   type Rgba,
   type ShapeObject,
@@ -11,6 +13,7 @@ import {
   type TableRunStyle,
   type TextPara,
   type TextRun,
+  type TextObject,
   type TextStyle,
 } from './schemas.ts';
 
@@ -34,7 +37,8 @@ import {
  * row or column grow or shrink; no edge is kept inside a merged cell; the result is written back row-major,
  * which places each cell where it was. A table keeps its width (columns are rescaled to their old sum, which
  * the renderer maps to `box.w`); a row adds or removes its height to `box.h`. An op past `TABLE_LIMITS`, at the
- * last row or column, or with an index out of range returns the object unchanged.
+ * last row or column, or with an index out of range returns the object unchanged. `growRow` grows one row of a
+ * table whose rows are fixed (`rowRule: 'fixed'`, an imported table) when an edit makes its text need more.
  *
  * Not built here (M9 decision 4): the legacy table group and its digest (`tableShadows`), so neither is
  * 'Rebuild table from cells'.
@@ -94,51 +98,12 @@ export function placeCells(t: Pick<TableData, 'rows' | 'cols' | 'cells'>): Table
 
 // ── Cell views ──────────────────────────────────────────────────────────────────────────────────────────
 
-/** The text style keys a cell style sets over `base` as they are (the others are mapped: `align`). */
-const PLAIN_KEYS = [
-  'fontFamily',
-  'fontWeight',
-  'fontSizePx',
-  'color',
-  'insets',
-  'lang',
-  'fallbackFonts',
-  'fontStyle',
-  'valign',
-  'direction',
-] as const satisfies readonly (keyof CellStyle & keyof TextStyle)[];
-
-/**
- * The text box style a cell is drawn in: `base` with the cell style's fields over it. A cell never shrinks
- * its text (its row grows instead), so the style has no autofit; a cell aligned 'justify' is left aligned and
- * justified, one aligned otherwise is not justified.
+/*
+ * A cell's text box style and its style entry: the one mapping lives in the pure `cellstyle.ts` (the PowerPoint
+ * converter writes each cell's entry with it, `@ordo/pptx-scene` admitting only such domain modules); the
+ * table model reads it back with the same functions.
  */
-export function cellTextStyle(base: TextStyle, s: CellStyle | undefined): TextStyle {
-  const out: TextStyle = { ...base };
-  delete out.autofit;
-  delete out.fitScale;
-  if (!s) return out;
-  const w = out as Record<string, unknown>;
-  for (const k of PLAIN_KEYS) if (s[k] !== undefined) w[k] = s[k];
-  if (s.align !== undefined) {
-    out.align = s.align === 'justify' ? 'left' : s.align;
-    if (s.align === 'justify') out.justify = true;
-    else delete out.justify;
-  }
-  return out;
-}
-
-/** The cell style that makes `style` over `base` (`cellTextStyle`'s inverse), keeping `vert` as given. */
-export function cellStyleOf(base: TextStyle, style: TextStyle, vert?: CellStyle['vert']): CellStyle {
-  const out: CellStyle = {};
-  const w = out as Record<string, unknown>;
-  for (const k of PLAIN_KEYS)
-    if (style[k] !== undefined && canonicalJson(style[k]) !== canonicalJson(base[k])) w[k] = style[k];
-  const align = (s: TextStyle) => (s.justify ? 'justify' : s.align);
-  if (align(style) !== align(base)) out.align = align(style);
-  if (vert !== undefined && vert !== 'horz') out.vert = vert;
-  return out;
-}
+export { CELL_TEXT_KEYS, cellStyleOf, cellTextStyle } from './cellstyle.ts';
 
 /** A cell's text as a rich text body: its text, its style, its runs and its paragraph styles. */
 export type CellRich = {
@@ -182,6 +147,38 @@ export function cellRich(t: TableData, i: number): CellRich | undefined {
   };
   if (Array.isArray(c.runs)) out.runs = cellRuns(t, c);
   if (Array.isArray(c.paras)) out.paras = c.paras;
+  return out;
+}
+
+/**
+ * Cell `i` of a table shape as the text object the editor's text ops work on (design/11 "Table object: cell
+ * target and cellTextObject"): `cellRich`'s body (its text, style, runs and paragraph styles) in `box` (default
+ * the table's box: the text ops never read it), with the table's id and opacity. Every text op (`editText`,
+ * `formatRange`, `setParas`, a paste) then edits a cell unchanged, and its result goes back through `setCell`
+ * (`cellBodyOf`). Undefined when the shape has no table or no such cell. Pure.
+ */
+export function cellTextObject(o: ShapeObject, i: number, box: Box = o.box): TextObject | undefined {
+  const t = tableOf(o);
+  const rich = t ? cellRich(t, i) : undefined;
+  if (!rich) return undefined;
+  const out: TextObject = {
+    id: o.id,
+    type: 'text',
+    box,
+    text: rich.text,
+    style: rich.style,
+    opacity: o.opacity,
+  };
+  if (rich.runs) out.runs = rich.runs;
+  if (rich.paras) out.paras = rich.paras;
+  return out;
+}
+
+/** The rich text body of an edited cell view (`cellTextObject`) for `setCell`. */
+export function cellBodyOf(v: Pick<TextObject, 'text' | 'style' | 'runs' | 'paras'>): CellRich {
+  const out: CellRich = { text: v.text, style: v.style };
+  if (v.runs) out.runs = v.runs;
+  if (v.paras) out.paras = v.paras;
   return out;
 }
 
@@ -642,6 +639,27 @@ export function insertRow(o: ShapeObject, at: number, from: number): ShapeObject
   rows.splice(at, 0, h);
   const table = gcTable({ ...encode(g, t), rows, cols: t.cols.slice(0, C) });
   return { ...o, box: { ...o.box, h: o.box.h + rowPx(o, t, h) }, table };
+}
+
+/** The schema's bound on a length (a row's stored height, `box.h`). */
+const MAX_LENGTH = 100_000;
+
+/**
+ * Row `row` grown to the stored height `h` (never shrunk): `rows[row] = max(rows[row], h)` and the box by the
+ * height added at the table's row scale, as `insertRow` adds a row (the editor's `fitRows` after an edit whose
+ * text needs more room than its fixed row; design/15 "Table editing"). Within the schema's length bound; the
+ * object itself for a row out of range, a height that is not finite or not taller than the row, or no table.
+ */
+export function growRow(o: ShapeObject, row: number, h: number): ShapeObject {
+  const t = tableOf(o);
+  // A row out of range reads undefined (its height NaN): no comparison holds.
+  const old = t && row < TABLE_LIMITS.rows ? Number(t.rows[row]) : Number.NaN;
+  const next = Math.min(MAX_LENGTH, h);
+  if (!t || !Number.isFinite(h) || !(next > old)) return o;
+  const rows = t.rows.slice();
+  rows[row] = next;
+  const box = { ...o.box, h: Math.min(MAX_LENGTH, o.box.h + rowPx(o, t, next - old)) };
+  return { ...o, box, table: { ...t, rows } };
 }
 
 /**

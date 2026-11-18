@@ -268,6 +268,19 @@ The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
   each node's text in PowerPoint's text rectangle (`dsp:txXfrm`) and in the colours part's node text colour
   (as LibreOffice takes it); a drawing with a residual shape (3D, vertical text) goes to the art whole, and
   SmartArt without a drawing stays for LibreOffice;
+- writes each table as one table object (`ShapeObject.table`, M9 tables-conv; design/27 §15 M9 "The table
+  object imported"), edited cell by cell in the editor: LibreOffice's columns and rows in whole 1/100 mm, fixed
+  at import (`rowRule: 'fixed'`; since sub-wave 1b, design/27 §15 "The stored form"; an edit grows a row by what
+  its text needs more), each cell's rich text at LibreOffice's sizes, spans, fill and diagonals, the palettes of
+  styles, fills and lines; one object of the slide's budget however many cells it has (the 640-cell master
+  grid of a template is one object a slide). A table that names no style has none, whatever the deck's
+  default (`a:tblStyleLst def`), as LibreOffice draws it; a cell whose family lacks its script (Hangul in a
+  Latin face) is measured and spaced by the library face of its script (`FaceSource.script`, the same on the hub
+  and in the browser; Han, Kana and Hangul, which are drawn glyph by glyph). A table with vertical cell text stays for LibreOffice. Every other
+  table is the table object on every kind of hub, the 8 dense study-chart and bulletin slides of E on a hub with
+  LibreOffice included: the owner decided question 3 of the LibreOffice inventory on 2026-11-15 ("prioritize
+  native tables"), and sub-wave 1b (tables-flip) removed sub-wave 1's interim rule (a slide whose tables as their
+  M6 group would pass 64 KB kept LibreOffice's page there) and its second emission of each table;
 - bakes recoloured pictures (duotone, colour change, grayscale, black and white, brightness and contrast:
   PowerPoint's recolour presets) and tiled picture fills (shapes and backgrounds, tiles sized by the
   picture's stated resolution, else 96 per inch) into new prepared pictures, so they are drawn as PowerPoint

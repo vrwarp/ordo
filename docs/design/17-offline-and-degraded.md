@@ -139,10 +139,31 @@ from the audio master output.
    and holds it to End service, exactly like a service it started without the hub (below),
    and says so. At End service it ends the hub's older copy of the same playlist by adopting
    its own idle state (a few hundred bytes); a hub that went on to another playlist is
-   followed. A goLive above 12 MiB carries a `degraded` warning so the operator knows
-   before the service.
+   followed. Since design/29 D13 no goLive carries a takeover warning any more (A10): above
+   32 MiB it is refused (W58), and past the GO-lead size it carries W59's line ("Going live
+   beside the running service" below); a service between 15 and 32 MiB is held after an
+   outage as described here until handback-ref (design/29 M3) removes the limit.
 4. If the hub has a different live playlist (another operator went live meanwhile), the
    operator shows a conflict dialog: keep local (adopt with `force`) or take the hub's.
+
+## Going live beside the running service
+
+Design/29 §2.3 M8. Pressing Go live while a service runs (to pick up a fixed slide, or the next service)
+never holds the running one: the hub prepares the new playlist beside it (design/13 "Prepare before goLive",
+design/12), and until it is ready the screens keep showing the current service and GO, Next and Clear keep
+applying to it on time. The operator's toast (W41, design/29 §3) shows the progress: "Getting 'Sunday
+service' ready to go live (40 %). The screens keep showing the current service until then." (the second
+sentence only while a service is live). While a service is live and the prepare has taken 5 s, the toast
+offers the hub's saved copy, if it has one: "Go live from the copy saved 3 days ago". Pressing it goes live
+from that copy at once, and the goLive carries the existing note ("Went live from the copy of this playlist
+saved 3 days ago …"). The library's copy may take up to 30 s while it keeps arriving (no bytes for 1.5 s ends
+it, and then the saved copy is used as before). End service pressed while a Go live is prepared cancels
+that Go live. With the hub unreachable, Go live is sent at once and follows "Going live without the hub".
+
+A service too large is refused before anything changes on the screens (W58, above 32 MiB); one past the
+size whose first save on a screen passes the GO lead goes live with W59's critical line in the degraded
+list ("Going live with this service takes a few seconds on the screens. Go live before the service
+starts."). Both sizes are defaults until a venue PC confirms them (design/29 D13, owner question 14).
 
 ## Going live without the hub
 
@@ -156,7 +177,8 @@ The playlist editor on the venue PC (operate PIN, full profile) has **Download f
 resolves the playlist from the operator's copy of the library (the same `resolvePlaylist` the hub runs,
 `packages/domain/src/goLive.ts`) and fills the operator's file cache (Cache API; the operator app asks the
 browser for persistent storage on every profile, so the files are not evicted under pressure) with every
-media file and font the service uses. The operator chooses when: the evening before, a week before, or on
+media file and font the service uses, and the shape files and pre-rendered slides' files the slides draw (listed
+by name: the PC has no file index, design/29 §1.7). The operator chooses when: the evening before, a week before, or on
 arrival. The status line says whether every file is on this PC; it re-checks when the playlist changes.
 The library itself (playlists, presentations, settings) is already kept on the PC by the core worker.
 
@@ -194,6 +216,28 @@ authority returns to the hub with nothing transferred, and the windows are told 
 still away the PC stays the authority (and may go live locally again) until the hub returns.
 
 Services the hub started keep the existing behaviour below (_Hub returns_).
+
+## A GO never waits for drawing
+
+<!-- r2b:units-live -->
+Owner decision 2026-11-13 ("fill in when ready with a fade"). An output flips a GO on its scheduled frame with
+what it has: a slide whose slow parts (geometry units now; effect units and decorations from effect-units) are
+not ready is shown at once without them, their simple stand-ins drawn this time, and they fade in over 0.3 s as
+soon as they are made (design/14 "Late units"). Nothing that can take more than one task runs on a GO's path:
+- a jump to a slide that was not prepared draws it in its own live job without waiting for units; a GO while the
+  slide's arm or warm job is still preparing it hurries that job (it stops waiting at its next turn);
+- the late parts are made below the live and armed cues' work, and drawn again in place with a cross-fade at
+  most once per 0.3 s a slide, never ahead of a GO's raster; a GO during that fade ends it and flips at once;
+- the live playlist's slides are prepared ahead, in cue order, up to two thirds of the unit cache, and every GO
+  pauses that work for its own.
+
+Health counts the slides shown with late parts (`unitsLate`; the operator's note W49 "Parts of 2 slides appeared
+a moment late on this screen."). For a venue that wants the earlier behaviour, the output URL switches
+`?late=next` (late parts at the slide's next draw, no fade), `?warm=off` (no warm-up) and `?effects=base`
+(62a1c3a's drawing of effects and decorations) sit beside `?renderer=2d` (`apps/output/src/switches.ts`). Tests:
+`e2e/units-live.spec.ts` (a GO to a slide not prepared, a GO 50 ms after its arm, the warm-up ahead), the asset
+worker, link-core, stacks and compositor tests.
+<!-- /r2b:units-live -->
 
 ## Outputs on other machines
 

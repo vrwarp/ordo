@@ -13,6 +13,12 @@ import type { ClientMessageBody } from '@ordo/client';
 
 export type WorkerName = 'link' | 'render' | 'asset';
 
+/**
+ * The host's supervisor restarts the render worker after this long without its heartbeat (host.ts). The link's
+ * no-frame check (link-core.ts `checkRenderer`) leaves a render worker that stopped talking to that restart.
+ */
+export const RENDER_DEAD_AFTER_MS = 3000;
+
 export type WorkerStat = {
   name: WorkerName;
   generation: number;

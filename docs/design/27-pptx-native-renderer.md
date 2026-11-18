@@ -439,9 +439,11 @@ SlidePptx  += { missing: string[] ≤ 16 of ≤ 40 }                   // '<kind
 - **goLive**: a slide with `pptx.missing` goes live with a `degraded` entry naming what is left out
   (`missingSlideReason`: 'PowerPoint slide with something ordo cannot draw (a chart, …): it is left out',
   kind 'drawing'); a slide waiting for LibreOffice is reported as waiting instead.
-- **Older builds**: `schemas.prev.test-util.ts` is main's 0.5.0 schema, as published (M9 is 0.6.0; every push
-  to main publishes the edge image and the Pages demo, so 0.5.0 is what a venue rolls back to). It strips every
-  M9 field (`table`, `chart`, `decor`, `look3d`, `warp`, `writing`, `centerBlock`, `vectorFonts`, `adjWide`,
+- **Older builds**: `schemas.prev05.test-util.ts` is main's 0.5.0 schema, as published (M9 is 0.6.0; every push
+  to main publishes the edge image and the Pages demo, so 0.5.0 is what a venue rolls back to; since wave r2b
+  `schemas.prev.test-util.ts` is 0.8.0's schema, main's PR #28, unchanged in 0.8.1, PR #30, the release before it,
+  design/29 §1.2, and these cases keep 0.5.0). It strips every M9 field (`table`, `chart`, `decor`, `look3d`,
+  `warp`, `writing`, `centerBlock`, `vectorFonts`, `adjWide`,
   `SlidePptx.missing`) and keeps what 0.5.0 already had: geometry and its files, rich text, provenance,
   `midiCues`, `bottomThirdText`, a playlist item's `keepBackground`, `audioMediaId` and `countdownTimer`, a
   text box's `lineMask` and a picture's `shadow` and `softEdge` (`schemas.compat.test.ts`). The M9 fixture slide
@@ -539,7 +541,7 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
 | Geometry files    | ≤ 400 KB each (8 paths of 40,000 characters); ≤ 32 MB per import, else the slide that needs more is compact                                                                                                                   | `geoms.ts` (hub), `PPTX_LIMITS.geomFileBytes`; readers refuse a larger file                                                                                                                                                                                                                                                                                                                                                                    |
 | Presentation JSON | ≤ 4 MiB at import. Once the running total passes 3 MiB, the remaining slides use the compact picture class; the import card says so. The editor warns above 4 MiB but saves (PUT allows 32 MiB).                              | importer, editor                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Preview           | only the previewed slide's section is sent, with the presentation-level fields (`previewSlice`), so it stays far below 16 MiB                                                                                                 | `PreviewControl.tsx`                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Resolved playlist | `resolvePlaylist` adds a `degraded` warning above 12 MiB ("too large for an operator takeover"). The operator checks the size before `live.adopt` and refuses locally above 15 MiB instead of tripping the cap.               | `goLive.ts`, operator engine                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Resolved playlist | Since design/29 D13: refused above 32 MiB (W58), a `degraded` critical line above 3 MiB (W59); the 12 MiB takeover warning is gone. The operator refuses `live.adopt` locally above 15 MiB.                                   | `goLive.ts`, operator engine                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Library snapshot  | its size is reported in hub health; a test keeps a year of weekly 17-slide sermon decks under 6 MB. A summary-only snapshot (bodies fetched on open) is the follow-up if a venue passes 32 MB; it is not part of this design. | health, test                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Revisions         | unchanged policy (50 or 30 days); a 1 MB presentation edited often costs ≤ 50 MB, noted in design/12                                                                                                                          | docs                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
@@ -684,7 +686,7 @@ As built in M3 (`packages/domain/src/size.ts`):
   - sp3d with a non-zero bevel or extrusion (a no-op scene3d/sp3d is ignored);
   - a real `prstTxWarp` (not textNoShape);
   - vertical text (until M9);
-  - tables (until M6; since M6 only those with vertical cell text or past the slide's object budget, a table of more drawn cells than a slide may have objects among them);
+  - tables (until M6; since M6 only those with vertical cell text or past the slide's object budget, a table of more drawn cells than a slide may have objects among them; since sub-wave 1c not those whose vertical cells are all East Asian vertical, `eaVert`: §15 M9, rule V);
   - a metafile that fails conversion.
 - **Approx** (drawn natively, logged): reflection, inner shadow, soft edge on pictures before M8 (the renderer draws a picture's `softEdge` since PR #23, §7.1; the converter does not write it yet), kerning differences, unknown transitions, picture-filled text (`textFill:picture`, drawn in the text colour, §4).
 - Everything else is native.
@@ -840,7 +842,8 @@ the fidelity harness's A/B.
   hybrid 104 → 74, picture 37 → 17 (all 17 for 64 KB, the ladder's: 10 of text formatting, 7 as stored);
   `art:budget:shapes` 30 → 0, `budget:pictures` 13 → 0, `art:custGeom:complex` 16 → 0, `art:budget:3d` 1 → 0;
   BannerStyle 225 → 41 objects (culled 205 elements off the slide; its 3-D shapes merge); one slide over 150
-  objects, a 96-cell table counted as one object and emitted as its M6 group until `tables-conv`'s table object.
+  objects, a 96-cell table counted as one object and emitted as its M6 group until `tables-conv`'s table object
+  (written since: one object, below).
   Sermons: 73 of 73 native, unchanged.
 <!-- /m9:decor-conv -->
 
@@ -849,7 +852,7 @@ _The M9 rollout (regroup 2026-11-13; PR #23 lands M9 waves 0-1 and wave 2a)._ Ev
 edge Docker image and the Pages demo, so each M9 PR ships on its own:
 - **Version.** M9 is `APP_VERSION` 0.6.0 for the whole PR (one bump; a later PR bumps again at its merge).
   The build a venue rolls back to is main's 0.5.0, whose schema is the older-build fixture
-  (`schemas.prev.test-util.ts`, §3.2 "Older builds"): it strips every M9 field and draws the legacy shapes and
+  (`schemas.prev05.test-util.ts` since wave r2b, §3.2 "Older builds"): it strips every M9 field and draws the legacy shapes and
   text written beside them.
 - **The client path.** A PowerPoint is parsed in the operator (`@ordo/importers` `importPptxClient`, sent as
   the upload's `clientScene`) with the hub's pool as the fallback; both run the same converter
@@ -873,7 +876,8 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   listed (`EmittedSlide.missing`; the import core's `ImportCore.budgetLeft` lists what a scene names), as the ladder's are
   (`Slide.pptx.missing`), so goLive's degraded list
   names them; a slide hybrid only for them waits for nothing. On a hub with LibreOffice a slide over 64 KB
-  that the ladder would simplify keeps LibreOffice's page instead (`ImportCore.pageForBudget`, above).
+  that the ladder would simplify keeps LibreOffice's page instead (`ImportCore.pageForBudget`, above), unless it
+  holds a table object (every table is the table object, §15 M9 "The table object imported").
 - **What came back with decorations** (`decor-render`, wave r2; E's worship slides): while decorations were
   held back the guard left out topmost objects that main sent to LibreOffice's art, and LibreOffice draws no
   budget's art: an emoji game slide (0.956 at wave 1, 0.795 as stored: its connector lines and emojis listed
@@ -895,8 +899,8 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   longer in it (2.6 kB: only the asset and thumbnail workers make them, importing `@ordo/renderer/units.ts`
   themselves; the renderer's index exports their types only); the import worker is 666.7 kB, the output's
   initial 182.1 kB and the stage's 383.9 kB.
-  CI fails a PR whose initial JavaScript grows more than 2 % over `tools/bundle-baseline.json` (design/24
-  "Bundle budget"), recorded from wave r2a's build.
+  CI fails a PR whose initial JavaScript grows more than 4 % (2 % until wave r2b) over
+  `tools/bundle-baseline.json` (design/24 "Bundle budget"), recorded from wave r2a's build.
 - **The tail keeps its page.** The presentation's tail (§3.4) stores each slide minimal with its page, the
   background drawn as a shape, as a plain rect in its colour (`minimalSlide`), so its dark text is never drawn
   on the output's black; a deck that does not fit 4 MiB even so (about 2,000 slides) leaves the pages out
@@ -1076,6 +1080,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 - Painting applies `ctx.scale(scale, scale)` on top of the caller's transform (thumbnails translate first, the editor adds devicePixelRatio) and draws each segment at its reference x.
 - Line breaks, autofit results and positions are therefore identical at 960, 1920 and 3840 wide, in the editor and in thumbnails. Today they are not: `text2d.ts:84-101` measures at device scale.
 - Advances at device size can differ from the reference × scale by a fraction of a pixel. That residue stays inside a segment and never moves a break.
+- One exception, in painting only (sub-wave 1b, text-lines): table-cell text is painted on the device pixels of the output being drawn (Paint passes below), so a cell's runs may sit up to one device pixel (a quarter, across) apart from `scale × position`; its layout is the same at every scale.
 
 **Pipeline**
 1. **Itemize.** Paragraphs are the `\n` pieces; `soft` continues the previous paragraph: it takes its style, spacing and direction, overriding only what its own `paras[i]` sets, and has no bullet and no space between them. Style runs are runs ∩ paragraphs. An empty paragraph's end mark is the run covering its `\n`; the last paragraph, which has none, takes the run covering the `\n` before it.
@@ -1083,6 +1088,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 3. **Breaks.**
    - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 (also U+2007, U+2011 and U+FEFF) never break on either side, which fixes the verified 'Dieu !' split. After a breaking space a line may still end before one (UAX#14 LB18), as LibreOffice breaks the ". \u00A0" that text pasted with two spaces after a full stop stores.
    - SA scripts (Thai, Lao, Khmer, Myanmar) break at `Intl.Segmenter` word boundaries; CJK follows the ID/CL/NS classes.
+   - **Office text** (`lineModel: 'office'`: imported PowerPoint text and table cells; the converter's table measure always) breaks where LibreOffice 24.2 breaks it and UAX#14 does not (sub-wave 1b, text-lines; measured on a probe deck through soffice, every case in text boxes and table cells at 10, 12 and 18 pt): after a hyphen-minus before a digit, whatever precedes it ('John 3:16-' / '17'; UAX#14 LB25 keeps 'HY × NU'; not after U+2212); after the breaking spaces between any quotation mark and an opening bracket ('“every month” ' / '[offerings]'; UAX#14 15.0's LB15 keeps 'QU SP* × OP'), never without a space or at a no-break space; after a letter before '%' ('…/Coptic' / '%20Language/'; UAX#14's LB24 keeps 'AL × PO'; text-falls probe C, every case). A break after a slash follows LibreOffice's i#17155 rule (i18npool `BreakIterator_Unicode::getLineBreak`, read in its 24.2 source and checked on probe C's 58 slides): it moves back to just after the nearest whitespace at most 64 units before the slash in the paragraph (an a:br is not whitespace there), so a web address in a citation stays whole; with no whitespace there (an address or path that starts its paragraph, as 03-Plural en-ar p4's, or one longer than that) the breaks after its slashes stay. Where a dropped break is a line's last break before its width, the line ends at that whitespace instead, or, when it is at or before the line's start, is cut at its width even where a break before '%' or a hyphen comes earlier (the cut before '-Sunday' in Moral Character's text box; lines.ts `slashBreak`, the converter's measure the same). Not modelled (text-falls, probe C: 51 of 58 slides break as LibreOffice, 20 at text-lines' rule; the rest are a character of width in a cut): a break after a slash before a digit ('mode/' / '2up'; UAX#14 LB25 keeps 'SY × NU'), and LibreOffice's refusal to end a line after a slash exactly at the line's width (it takes the break before). Ordo's own text (songs, scripture, slides made in ordo) keeps UAX#14 (owner question T1's default).
    - Emergency breaks fall only between clusters: `Intl.Segmenter` graphemes joined across a conjunct-forming virama, so Tamil 'க்ஷி' stays whole. Graphemes alone do not keep it whole: UAX#29 GB9c joins conjuncts in six Indic scripts only, not Tamil, Kannada or Sinhala.
    - An emergency break costs what its line holds, never what is left of the word: the cut is found by galloping from the piece's start (1, 2, 4, ... clusters, then a bisection), cluster boundaries are found only that far (one list per piece serves every line and autofit step), and the rest of the word is carried unmeasured until it may fit. A 10,000-letter word in a narrow box is laid out in linear time (`rich.fuzz.test.ts`).
 4. **Segments.** A segment is a maximal substring with one style run, one bidi level and no break opportunity inside. It is also cut between two scripts that need different fallback faces (Han and kana count as one), so each segment asks for one.
@@ -1096,7 +1102,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
    - A right-to-left paragraph mirrors its start: indents and the bullet are on the right and its trailing space hangs on the left. `align` stays visual.
    - Then UAX#9 L2 visual reordering between segments. The browser orders glyphs within a segment.
 7. **Line model `'office'`** (LibreOffice, measured in the pptx-render commits; `page.ts:202-353`).
-   - F = the size of the paragraph's main run: its first run without a baseline shift, else its first run, else the end mark, after autofit. A larger unshifted run raises F for its own line (LibreOffice sizes each line by its portions), so lines never overlap.
+   - F = the size of the paragraph's main run: its first run without a baseline shift, else its first run, else the end mark, after autofit. Each line with text is as tall as its own largest unshifted run (LibreOffice's editeng sizes each line by its portions): a larger run raises its line, so lines never overlap, and a smaller citation that wraps onto lines of its own makes short lines (sub-wave 1b, text-lines; Matthew 16v18's 5 pt references after 7 pt text). A line of shifted runs only keeps F. The `'ordo'` model keeps F as every line's floor, and so does an office box that shrinks its text (autofit `'shrink'`): LibreOffice sizes those lines by their own runs too (text-falls probe B), but ordo's autofit search is not LibreOffice's yet (LibreOffice applies its spacing scale to single spacing, h = 1.2F·k with the baseline min(F, h); in some normAutofit boxes it spaces lines by the face's own metrics instead, on a condition not yet known: review 1b's probe G found it with one run, two runs of one size and a 40 pt run before 24 pt text in 500 pt boxes, at fontScale 90 % and 100 % and lnSpcReduction 10 %, where text-falls' B4 had two runs at 90 % in a 300 pt box at 1.2F·k), and own-run lines there moved eight shrinking slides below the owner's current point (8e8a294); the follow-up pull request. The converter's table measure sizes lines the same way.
    - Single spacing: pitch 1.2F, first baseline F below the line top.
    - Proportional p ≠ 1: h = 1.2F·p·k, where k is the autofit spacing scale. The baseline is F + (h − 1.2F) when p > 1, else min(F, 0.8h).
    - At PowerPoint's stored `fitScale` (step 10) its spacing is drawn the PowerPoint way: OOXML subtracts `lnSpcReduction` (1 − `fitScale.spacing`) from every paragraph's proportional spacing, single spacing included, so p becomes max(0, p − r) and k does not apply to it (100 % less 20 % is 80 %, 90 % is 70 %, where LibreOffice's k gives 72 % and leaves 100 % alone). Exact spacing and spcBef/spcAft are scaled by 1 − r. LibreOffice's k stays for the search and for `--lo-compat`.
@@ -1135,6 +1141,8 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 7. bullets.
 
 Hidden paragraphs (M8) are laid out but not painted, so revealed lines never move.
+
+**Device pixels for table-cell text** (sub-wave 1b, text-lines). The table drawer paints its cells' text with `PaintHooks.devicePixels`: each run's baseline on the device row its position falls in (floor), its start on the quarter of the device column it falls in (floor of 4×), underlines and strikes on whole device rows, under an axis-aligned transform with positive scales (a turned table paints as before), at every output scale; layout stays scale-free. That is where LibreOffice's pages put text as the hub and the measuring tool draw them (pdftoppm: 162 of 162 probe lines on floor(position × scale) at 144 and 288 dpi, glyph origins on quarter pixels, underlines on whole rows), while Chromium's canvas rounds a baseline to the nearest row and draws a run at its exact x. Before tables-cells merged (2fb4499), the cell painter alone took the table decks' 43 table slides from 0.859 to 0.877 in the stored form and the 8 dense slides from 0.807 to 0.829; the whole column instead of the quarter (the diagnosis' prototype) gave 0.877 / 0.826 with a slide down 0.016. On tables-cells' head (8e8a294) the track's three changes together (office breaks, own-run lines, cell pixels) take the 8 dense slides' stored form from 0.767 to 0.848, the same on a hub with LibreOffice when asked (1000 Years 0.620 → 0.923, Matthew 16v18 0.785 → 0.907, Colossians 0.627 → 0.747, Flesh and Spirit 0.864 → 0.927, the first of the 8 to reach its question-3 target; Moral Character 0.838 → 0.847, John 0.618 → 0.633, the Boletims +0.010 and +0.013), and the tables set's 154 slides from 0.869 to 0.881 in what a hub draws, none down by more than 0.01. Imported text boxes and ordo's own text paint as before: owner question T5 (whole pixels for imported text boxes too) is open, with its numbers in the 1b report (measured on tables-cells' head with this track: the 8 dense slides 0.848 → 0.869, both Boletims then at their targets, John +0.061, Colossians +0.026; on the other 66 slides of those decks what a hub draws goes up on 39 and down on none, and one test deck's text box loses 0.06 in the compat drawing).
 
 **Not supported:** vertical text (residual until M9 emulates it), kashida, OpenType feature settings per call. harfbuzzjs (MIT) stays the escape hatch if browser-measured fitting proves non-deterministic across operating systems.
 
@@ -1415,6 +1423,7 @@ _As built (M2, `packages/renderer/src/text/fonts.ts`):_
 
 **As built in M3** (`apps/hub/src/fonts/bundled.ts`, licences in `apps/hub/src/fonts/LICENSES.md`):
 - The image installs `fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter` (bookworm, all SIL OFL 1.1) and keeps their copyright files. `ORDO_FONTS_DIR` (the image sets `/usr/share/fonts`) is where the hub looks; unset, nothing is registered.
+- Since sub-wave 1c (owner answer to Q1c-2, 2026-11-17) the image also installs `fonts-noto-cjk`'s Sans collections (Noto Sans CJK JP, KR, SC, TC and HK, SIL OFL 1.1, about 40 MB; a dpkg rule leaves out its Serif collections, so LibreOffice draws serif CJK font names with the Sans faces, some Chinese and Korean characters in their Japanese forms where fontconfig asks for a Serif family by language) for LibreOffice and the hub's measuring of CJK table cells ("The hub's computer's script faces" below). A font collection (`.ttc`) is never registered, so the CJK families stay on demand and the screens receive nothing new. `apps/hub/src/fonts/LICENSES.md` records it and DejaVu as installed but not served; `apps/hub/test/fonts-licences.test.ts` keeps the `Dockerfile`'s font packages, LICENSES.md and `BUNDLED_FACES` in step.
 - Faces: Inter, Carlito, Caladea, Liberation Sans, Serif and Mono and Noto Sans in regular, italic, bold and bold italic; the Noto script faces in regular and bold.
 - Registration runs at every start. An unchanged file changes nothing. A changed file (a newer image) replaces the row's file. A face the library already has from an upload or Google Fonts (same family, weight, style and range) is left alone. Bundled rows no longer listed are removed. Bundled rows cannot be deleted (409).
 - The Hebrew, Arabic, Devanagari, Tamil, Thai and Myanmar faces carry their script's `unicodeRange`, so a script fallback listed before a deck's own family never draws its Latin text. Noto Sans has no range, because people also pick it for Latin text.
@@ -1431,6 +1440,20 @@ _As built (M2, `packages/renderer/src/text/fonts.ts`):_
 **Non-metric families.** Century Gothic, Tahoma, Aptos, Gill Sans and Trebuchet are named in the import card: "Upload Century Gothic for exact line breaks". Uploading the real font fixes it automatically, because the family stays first in the stack.
 - Until then, a shrunk box in such a family is drawn with another face's widths, so PowerPoint's stored autofit scale is not used: the box is fitted again from full size, as LibreOffice fits it (§6 step 10). The resolver's `metricMatch(family, fallbacks)` decides: true when the family's own faces have loaded and are not a stand-in (`FontFile.substitute`: another family's face registered under its name, as the fidelity harness registers fontconfig's choice), or when the first loaded `fallbackFonts` entry is a metric clone of the family (`METRIC_FAMILIES`: fontconfig's metric aliases and the bundled substitutes above; Calibri Light has none). Once the real font is uploaded, the stored scale is used again.
 - Rejected: dropping `fitScale` in the converter for the non-metric families. The hub cannot know which faces an output will have, and PowerPoint's scale would be lost even after the real font is uploaded.
+
+**The hub's computer's script faces (wave r2b sub-wave 1c).** A hub measures a table cell in Han, Hiragana, Katakana
+or Hangul that its library has no face for with the face its own computer's fontconfig gives for a letter of the
+script (`apps/hub/src/pptx/systemFaces.ts`: `fc-match` by absolute path, once at start, awaited by every import job;
+a TrueType collection read at its index): the face LibreOffice and a browser on that computer fall back to. It is
+for measuring only: never registered in the library, stored or shipped; the outputs draw with their own faces, and
+the library's face always wins. A face is kept for a script only when it maps a dozen of the script's common letters:
+fontconfig names the face that best covers the one letter it is asked for, which on a computer without a CJK face can
+be a face with that letter only. The project's hub image installs Noto Sans CJK for this (owner answer to Q1c-2,
+2026-11-17), so there the cells are measured with `NotoSansCJK-Regular.ttc` face 0, whose Hangul and Han advances and
+line height equal the Korean face's. On the font set the image had before it (`fonts-noto-core`, no CJK face)
+fontconfig names fonts-noto-core's Nushu face for 一, which has no other ideograph, so there the check keeps none and
+the cells are measured by estimate as before (until integrate-1c repair 1 the Nushu face was kept for Han). Details:
+§15, M9, "Built for wave r2b sub-wave 1c".
 
 **Embedded fonts (M8).** They are EOT, 88% MTX-compressed.
 - Decoded on the pool by a bounded TypeScript MTX/LZCOMP+CTF decoder written from the W3C MTX submission. `eot2ttf` via `tools.run` (timeout, SIGKILL, address-space cap, ≤32 MB in, ≤64 MB out) is the stop-gap.
@@ -1544,7 +1567,7 @@ The extensions, in priority order (M4 unless noted):
   - **any other slide:** kept as it is.
 
   Slide ids, sections, arrangements, notes (unless empty), durations and per-slide backgrounds are kept. The result is one new revision.
-- **'Make editable'** on a single legacy slide runs the native converter for that page, which removes the doubled text.
+- **'Make editable'** on a single legacy slide runs the native converter for that page, which removes the doubled text. Since sub-wave 1b (tables-cells) it does the same on LibreOffice's page that a native import stored (version 2, class 'picture', whatever its note: a table page an older import kept becomes the table object), and a page whose deck slide converts to LibreOffice's page again (a slide still past 64 KB as anything else) gets its extracted text boxes over the page, as 'Make editable' did before, so the request always ends editable (§15 M9 "LibreOffice's cell rules and 'Make editable'").
 - **Fix-now items for legacy slides (M3):**
   - the gated text fallback and the repair job (above);
   - `previewMedia` includes the imported picture;
@@ -1749,23 +1772,26 @@ budget only decides that it is drawn so.
   thumbnail worker; never on a phone, never in the editor (it keeps the legacy copies; leaf-editor), never stored.
 - **Bounded**: a job makes units for at most `UNIT_WAIT_MS` (1 s) and a slide's units cover at most
   `UNIT_SLIDE_AREAS` (one frame; a unit at most half of `UNIT_CACHE_BYTES`); the rest draw as their legacy
-  copies this time. An armed or warmed cue's GO does no unit work; a jump waits for its units (as
-  for its table layouts) until effect units make a late unit fade in instead. _That wait is a GO waiting (the
-  owner's call of 2026-11-13: a GO never waits), so effect units item 5 is a must item before the follow-up PR
-  merges (r2a repair)._
+  copies this time. An armed or warmed cue's GO does no unit work. _A GO never waits for units_ (the owner's
+  call of 2026-11-13; r2a must b, closed by wave r2b units-live): a jump is drawn at once with the units not
+  ready as their legacy copies, a GO while the cue's arm or warm job is still making them hurries it, and the
+  units are made in a late job and fade in over 300 ms (design/14 "Late units"); only an armed job, a warm job,
+  the harness, thumbnails and bakes wait for complete drawing within these bounds.
 - **With its effects** (r2a repair): a shape whose legacy copy keeps its effects ('geom': the budget held back
   its geometry, not its shadow, glow or soft edge) is drawn from a unit with them, in one call through the effects
   path, when the shape and its effects are within `GEOM_COST.slide` together (`unitDrawn`); a 'both' copy's
   unit draws it without them, as the budget does. Before, every unit drew the shape without its effects, which
   dropped a 'geom' shape's shadow that the legacy copy had drawn.
-- **Open must items for effect units** (r2a repair; `units.ts` `slideUnitsLeft`, counted by the census as
-  `unitsLeft`, and `unitsAlone`, which the ratchet fails): until effect units, outputs draw as their legacy shapes
-  (1) a geometry past `GEOM_COST.slide` alone (no single call fits a task: for thin line art its legacy line draws
-  nothing, a drop; a unit sliced by sub-path groups or `cont` pieces must draw it), (2) objects past the slide's
-  `UNIT_SLIDE_AREAS`, (3) plain shapes past the budget for their gradient or dash (their first colour) and masked
-  pictures (without their masks), and (4) a 'geom' shape whose effects would put its one call past a task is drawn
-  without them. None occurs in E, golden-pptx or the sermons today (21 objects past the budget there, every one
-  with a unit at 1920 and 3840, none with an effect).
+- **Effect units** (r2b, closing the r2a repair's open must items; design/14 "Effect units"): on the outputs an
+  object past the budget gets a unit, never a lesser legacy copy, within one frame of units a slide. Closed: (1)
+  a geometry past `GEOM_COST.slide` alone is a `sliced` unit, one group of sub-paths a step (one sub-path past
+  `GEOM_COST.geometry` keeps its legacy copy, `unitsAlone`, which the census fails); (3) plain shapes past the
+  budget for their gradient or dash are `whole` units with them, and masked pictures are drawn from their
+  prepared bitmap with their mask; (4) a geometry whose effects would put its one call past a task is a `whole`
+  unit with its effects, made in steps; shapes past `EFFECT_COST.slide` are `layers` (shadow and glow; the body
+  live) or `whole` (soft-edged, translucent) units. Left to live-frame (sub-wave 2): (2) objects past the slide's
+  `UNIT_SLIDE_AREAS` keep their legacy copies, counted `unitsLeft` 'area' (a census note), as do effects past
+  one frame of units; a picture's effects past the budget keep theirs (`kind`).
 <!-- /m9:geometry-units -->
 
 **Named exception to the editor's 15 ms thumbnail at 640 px** (M6 merge review): _the first thumbnail of a heavy traced-outline slide_, which builds its geometry paths and its effect layers: 22.6 ms for a slide of 136 shadowed geometry-file shapes, 19.2 ms and 13.9 ms for two others; later draws take 1 to 8 ms. The thumbnail worker draws in a worker of its own, so the editor's main thread does not wait for it.
@@ -1773,12 +1799,169 @@ budget only decides that it is drawn so.
 **Named exceptions to the 50 ms asset-worker task** (M6 finish review; a slide's draw is one task, §7.5 "Two raster lanes"):
 - _A slide at its effect budget, drawn cold_ (no layer cached): on the CPU-backed canvases of the asset worker, enlarging a reduced blur layer costs about 20 ms a slide area at 4K and a composite's allocation about 14 ms more, so 10 slide areas of layers take a few hundred ms the first time (the review's twenty custGeoms past their boxes with shadows, nine kept: 379 ms p95 at 3840, 300 ms at 1920; the corpus's most effected slides, 6.4 to 9.1 slide areas, 120 to 225 ms cold and 15 to 94 ms warm at 3840, 32 to 87 ms cold at 1920). Rasters after the first reuse the cached composites and layers. The raster bench checks these slides at 400 / 500 ms (1920 / 3840) cold. Bounding them at 50 ms would cut the effect budget to about one slide area, which 102 of the corpus's 2,927 slides pass (12 decks); the way out is a slide draw that yields between objects, or effect layers composed by the GPU compositor (M7).
 - _A full-slide soft edge, drawn cold_: its first raster makes the eroded, blurred mask and a full-resolution body cut by it, 97 to 118 ms at 3840 (134 ms before the body was cut in place, without a copy), 15 ms warm.
-- **Open must item before release, not a relaxed bound** (M9 decorations, `decor-render`): _a decoration at its
-  caps_ (16,384 points, 24 shadowed shapes) is one draw of about 100 ms cold at 3840 on the shared 4-CPU bench
-  machine (its sprite, made on its second draw, is then a 1:1 copy). The M9 exit stays at 50 ms: the outputs'
-  effect units (wave r2b, items 1-4, must before merge) make it in slices of `drawDecorRange` (32 shapes a
-  turn). Until they land the raster bench reports it (`bench/cases/decor.ts`, cold and warm at 3840) and holds
-  a decoration to at most its shapes drawn one by one + 10 % (checked).
+- **Decorations past `DECOR_SPRITE` on the outputs, closed** (r2b effect units; was the M9 decorations' open must
+  item): _a decoration at its caps_ (16,384 points, 24 shadowed shapes) is one draw of about 100-115 ms cold at
+  3840 on the shared 4-CPU bench machine when drawn at once. On the outputs it is a `whole` effect unit made in
+  slices of `drawDecorRange` (one shape a step, at most 32 a turn, each turn within `SLICE_MS`), and an output
+  raster with `late` leaves it out until its unit is made (it fades in), never drawing it at once. Drawn at once
+  it stays where a caller waits (the harness, thumbnails, the editor); the raster bench reports that draw and
+  holds a decoration to at most its shapes drawn one by one + 10 % (checked).
+
+<!-- r2b:open-items -->
+**Open items of §12-13 after wave r2b sub-waves 1, 1b and 1c** (one list: sub-wave 1's effect-units, units-live
+and tables-conv, sub-wave 1b's tables-flip, tables-form, tables-cells and text-lines, then sub-wave 1c's ko-cells and
+vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`,
+`regroup/r2b/integrate-1c.md`).
+- _Closed in sub-wave 1:_ r2a must a (a decoration at its caps drawn at once on the outputs): a `whole` effect unit
+  made in slices, left out of an output raster until made (`SlideDrawOptions.late`, C2b, on every asset-worker
+  raster) and faded in. r2a must b (a GO waits for units): a jump is drawn at once, a GO hurries an armed or warm
+  job, the units come in a late job and fade in over 300 ms (design/14 "Late units"). c(1) a geometry past
+  `GEOM_COST.slide` alone (`sliced`, the hostile lone line art drawn on the Audience screens); c(3) gradient and
+  dashed shapes and masked pictures past the budget (`whole` units, prepared bitmaps); c(4) a geometry whose
+  effects would pass a task (`whole` with its effects, in steps); decorations rated in the drawing budget
+  (`DecorHooks`). `?effects=base` (C6) gives a venue 62a1c3a's drawing of effects and decorations back.
+- _Left to live-frame (sub-wave 2):_ c(2), objects past one frame of units a slide (`UNIT_SLIDE_AREAS`) keep their
+  legacy copies, counted `unitsLeft` 'area'; effects past one frame of units likewise (the wake template's slide
+  12 has two, the suite's prisma slide nine). The emoji game slide's warm draw (325 pictures) and crowded slides
+  past 200 shapes or 16 pictures are live-frame's too.
+- _Left to render-bounds (sub-wave 3):_ one draw call of a hostile fill at 4K can take up to about 50 ms with
+  nothing past the budget (holo-gradients 16, whose estimate underrates its gradients, and the wake template's
+  slides 11 and 20, one 41-58 ms object each).
+- _Still open, named:_ a picture's effects past the budget keep their legacy copy (a picture unit needs the
+  decoded picture at the prepare step); the editor and coarse-pointer thumbnails keep legacy copies (leaf-editor,
+  sub-wave 2). (A unit an armed job did not finish within `UNIT_WAIT_MS` is no longer seen only at a later draw:
+  the job leaves it to the late job, which fades it in.)
+- _Closed in sub-wave 1b (native tables first; the owner, 2026-11-15, "prioritize native tables"):_ every table
+  is the table object on every kind of hub, the 8 dense table slides on a hub with LibreOffice included
+  (question 3 decided): tables-flip removed sub-wave 1's interim rule, its note and its second emission, and a
+  slide holding a table object is never LibreOffice's page for its size (§15 M9 "The table object imported").
+  The table object stores LibreOffice's layout on every hub (tables-form, owner question T2's default: its
+  columns, its rows fixed, its sizes, the master's `otherStyle` for cell text; an edit grows a row by what its
+  text needs more), LibreOffice's cell rules (tables-cells: line heights, lengths in whole 1/100 mm, the lift,
+  the anchor), and 'Make editable' on a stored table page gives the table. Imported text breaks where LibreOffice
+  breaks it (a hyphen before a digit, spaces between a quote and a bracket, a letter before '%', a slash
+  glued to its word by whitespace up to 64 units before it) and sizes each line by its own runs (in boxes that
+  do not shrink their text and in cells; text-falls); table-cell text is painted on the device row and quarter column
+  LibreOffice's page uses (text-lines, §6; Moral Character's cell floor, measured with tables-cells' anchor in,
+  is a gain: stored form 0.838 → 0.847, −0.008 before the anchor). The fidelity target is the owner's, measured
+  on the stored form (what both kinds of hub show), never a rule that picks LibreOffice: question 3's gate (each of
+  the 8 ≥ its LibreOffice page − 0.04) was replaced on 2026-11-16 by "no slide below its score at 8e8a294
+  (tables-cells merged) by 0.005 or more", and on 2026-11-17 by a 0.60 minimum for every table slide on both kinds
+  of hub, after which table fidelity work stops chasing LibreOffice. At the 1b head no slide of the measured sets is
+  0.005 or more below its 8e8a294 score; the 8 are 0.508 at tables-flip, 0.849 at the head (0.633-0.927, each above
+  its 8e8a294 score); 59 of the 63 table slides are ≥ 0.60 on both kinds of hub, the hub with LibreOffice
+  asked for every one (review 1b; the four others, all in the Korean deck, are 1c's, below). Live safety: a jump while another cue of the layer stays armed
+  no longer waits for that arm to make its units (up to `UNIT_WAIT_MS`, a GO 1.3 s late at 3840 here): the live
+  job rushes it (design/14 "Late units", Rush).
+- _Closed in sub-wave 1c (the owner, 2026-11-17: every table slide ≥ 0.60 on both kinds of hub, then the wave's
+  pull request merges):_ the four Korean bulletin slides left to 1c (18, 19 and 20 under the minimum on both kinds
+  of hub at the 1b head, 9a7b6a5; slide 2 on a hub without LibreOffice) are above it on both kinds of hub, each asked
+  of a real hub with LibreOffice and of one without (`--ask-hub`, `--ask-hub-nolo`, which 1c added to the harness),
+  on this machine: slide 2 **0.697** on both (0.947, LibreOffice's art, with
+  LibreOffice and 0.490, the table missing, without it, at the 1b head and at 8e8a294), slide 18 **0.634** (0.593),
+  slide 19 **0.759** (0.538), slide 20 **0.665** (0.439). All 63 table slides of shards 0-2 and the tables set (111
+  rows, both kinds of hub asked for each) and golden-pptx's 16 are at least 0.60 on both kinds of hub; the others did
+  not move, the lowest of them John 5 vs 18 slide 1 (0.633; golden-pptx's lowest, w65_00H's first table slide,
+  0.635). How (§15 M9, "Built for wave r2b sub-wave 1c"): a hub measures Han, Kana and Hangul table cells that its
+  library has no face for with its own computer's face (rule H, `ko-cells`); the converter's model of
+  LibreOffice's cell layout adds LibreOffice's 1/4 em at East Asian/other boundaries, for row heights only (rule G,
+  owner question Q1c-3); a table whose vertical cells are all `eaVert` is the table object, drawn horizontally as
+  LibreOffice 24.2 draws it (rule V, `vert-cells`).
+  - **T4 answered by the work:** the bulletin's slide 2 is the editable table object on every kind of hub (its cells
+    keep `vert` 'eaVert' for a later vertical text engine). On a hub with LibreOffice that is **0.250 below
+    LibreOffice's picture (0.947 -> 0.697), a drop the no-regression rule blocks unless the owner accepts it:
+    accepted by the owner on 2026-11-17 (Q1c-1).** Tables with `vert`, `vert270`,
+    `wordArtVert`, `wordArtVertRtl` or `mongolianVert` cells stay LibreOffice's art (Q1c-5).
+  - **Corrected:** this entry said the Korean slides 18 and 19 were under the minimum "on a hub with LibreOffice
+    only" (0.634 and 0.759 without). Both kinds of hub drew them as low (0.593, 0.538 and 0.439 at 9a7b6a5; 0.596,
+    0.539 and 0.438 at 8e8a294, each asked of both): the 0.634 and 0.759 "without" were the measuring tool's own
+    drawing (its `noLoSsim`), which lays the cells out with its host's faces (`fc-match`), not a hub's. Both kinds of
+    hub measured the Hangul cells by estimate, their library having no Hangul face.
+  - **The shipped hub image gains a CJK face** (owner answer to Q1c-2, 2026-11-17, "add a cjk font"):
+    `fonts-noto-cjk`'s Sans collections (Noto Sans CJK, SIL OFL 1.1; not WenQuanYi Zen Hei, whose
+    GPL-with-font-exception licence the font rules leave out), which rule H keeps for all four scripts and with which
+    the image's LibreOffice draws the letters. On the font set the image had before it (`fonts-noto-core`, no CJK
+    face) rule H keeps no face (since integrate-1c repair 1: fontconfig names a face with only 一 for Han, which is no
+    Han face), and the four slides measure 0.421, 0.593, 0.535 and 0.521 against this machine's LibreOffice page on
+    both kinds of hub. At the 1b head those hubs stored 0.444 (slide 2, LibreOffice's picture drawn with that font
+    set) or 0.490 (slide 2 without LibreOffice, the table left out), 0.593, 0.538 and 0.439: slide 2 is 0.023 / 0.069
+    lower there, that font set's form of Q1c-1's drop, slide 19 0.003 lower, slide 20 0.083 higher; its LibreOffice
+    drew Korean as empty boxes (probed). With Noto Sans CJK, measured with this code (the merged 1c head; the same
+    four numbers as with 1c as first reviewed): against LibreOffice's page drawn with the image's fonts
+    (this machine's LibreOffice 24.2) 0.751, 0.5925, 0.719 and 0.700 (0.410, 0.554, 0.449 and 0.457 before), slide 18
+    0.0075 under 0.60; against this machine's page 0.391, 0.518, 0.488 and 0.454, none at 0.60. Both go to the owner,
+    with six drops of 0.005 or more on the extension set (§15, ko-cells).
+  - **The table's outer shadow is read, not drawn** (rule 4): slide 2's table casts one; LibreOffice draws it, ordo
+    notes it on the slide (0.697 without it; about 0.717 with it, measured in the planner's prototype).
+  - Held out (`regroup/r2b/integrate-1c.md`): the 59 other table slides of the frozen list (tiers A and B, 38 that 1b
+    never tuned on; tier C, 21 that 1b tuned on) and golden-pptx's 16 are identical at the 1b head and the 1c head on
+    both kinds of hub. None of them has CJK cells, vertical cells or a table shadow, so they show that 1c changed
+    nothing else; they do not test the new rules. Ten public table slides with CJK cells that no 1c track saw (owner
+    question Q1c-4) are all at or above 0.60 on both kinds of hub (two from under it: 0.584 -> 0.683 and 0.375 ->
+    0.726) and none fell by 0.005 or more (one 0.002 lower, noise); a probe hold-out deck written after the rules were
+    frozen rose on 13 of its 14 slides on both kinds of hub, the 14th (the scope check) identical (integrate-1c repair
+    1, after rule G's gap moved into its character's run). Repair 1's fix of rule G was tested on that deck's slides
+    2, 8 and 10 (`tables.lines.test.ts`, LibreOffice's PDF rows as the expected values) and checked on all 114 of its
+    cells, so the deck's rise after the repair is not held-out evidence for the repaired rule G: the ten public slides
+    are the only unseen check of it (all ten at or above 0.60, none 0.005 or more under the 1b head; two of them
+    0.013 and 0.015 below 1c as first reviewed, the cause not known yet: not the gap's size, LibreOffice's own height
+    / 5 giving the same scores; integrate-1c repair 2). `CONVERTER_VERSION` stays 2 (§15, tables-form).
+- _Left to a follow-up pull request (the owner, 2026-11-17: once the minimum is met, table and text fidelity work
+  stops chasing LibreOffice; with sub-waves 2-4):_
+  - LibreOffice's glyph-advance model and one row measure (`tables-widths`): with the harness's faces, 148 of
+    15,163 cells on 11 of E's 66 table slides need more than their fixed row by over 1 px (§15 "The stored
+    form"); Flesh and Spirit, 1000 Years and Colossians gain there.
+  - ordo draws a cell's lines a whole cell lift from LibreOffice's, but spaces them by the face's line height
+    times the proportion, unrounded, where LibreOffice spaces each line in whole 1/100 mm (Carlito 10 pt at
+    107 %: 26.02 against 25.91 px at 1920): the lines spread around LibreOffice's by (n - 1) / 2 × the
+    difference (the 666 chart's tall cells, Colossians −0.007 at tables-cells); storing LibreOffice's line
+    heights as exact spacing would remove it and changes what the editor shows of a cell's spacing.
+    Bottom-anchored cells that overflow are not probed (`loBlockTop` keeps them on the inner bottom, never above
+    the top).
+  - Korean, Chinese and Japanese cells after sub-wave 1c (rule G took LibreOffice's 1/4 em for the rows, above):
+    the weak characters (circled digits, corner brackets) take the face of the script around them in LibreOffice
+    (`ko-weak` beyond 1c: their face in cells and in line heights); LibreOffice breaks between a Latin character
+    and the Hangul after it inside a word, where ordo keeps the word; rule G's gap as LibreOffice sizes it, the
+    height of the face of the portion before the boundary divided by 5 (`trunc(loLineHeight / 5)`, with a probe row
+    after Arial and Carlito: the quarter is about 0.64 pt wide after Liberation Sans at 24 pt, and still gives
+    LibreOffice's line count on every probe cell); why two of the ten public slides with CJK cells fell 0.013 and
+    0.015 with repair 1's fix of rule G (LibreOffice's rows of those cells, read inside the measuring tool, against
+    the model's); the 1/4 em stored in the cells' text too (option F, 0.699 on
+    slide 20) only if owner question Q1c-3 is answered no. The library route for CJK faces (Q1c-2's option b) is not
+    taken: the image's Noto Sans CJK serves rule H and LibreOffice only and is never sent to a screen. The bulletin's non-table slides under 0.60 (5, 12, 14, 11
+    and 4, unchanged by 1c) are not table slides. The other script table slides (Coptic and Arabic cells) are
+    `script-cells`'; the picture under a table (Brutalism 14) is `svg-under`'s.
+  - Vertical cells and the table's shadow after sub-wave 1c: drawing a table's outer shadow (the emission, a
+    renderer rule for a table's shadow in `drawShapeObject`'s fallback and the effect budget, `table/reach.ts`, the
+    draw off the GO path, bench rows; about +0.02 on the bulletin's slide 2); `wordArtVert`, `wordArtVertRtl` and
+    `mongolianVert` cells as the table object (LibreOffice draws them horizontally, probe A) and a vertical-writing
+    engine for `vert`/`vert270` cells and boxes (Q1c-5), and whether `eaVert` then follows PowerPoint or LibreOffice;
+    classify's static census feature 'vert' still counts an `eaVert` cell (its tier only); LibreOffice's garbled wrap
+    of a pure-Hangul paragraph inside an `eaVert` cell is not copied.
+  - Text: LibreOffice's break after a slash before a digit and its exact-width rule for a slash are not modelled
+    (text-falls probe C; §6 step 3); own-run
+    line heights in a box that shrinks its text wait for LibreOffice's autofit model (its spacing scale on single
+    spacing, and in some normAutofit boxes the face's own metrics, on a condition not yet known: text-falls probe B
+    and review 1b's probe G; one run is not it), in the follow-up pull request; owner questions T1 (ordo's own text breaks as today) and T5 (imported text
+    boxes on whole pixels: not done; the 8 would go 0.848 → 0.869, numbers in the 1b report) stay open. What
+    the 8 still miss is mostly outside the table objects (John 5 vs 18's and Colossians' text boxes, the
+    Boletims' dashed outlines: LibreOffice-only habits kept in the measuring tool, owner question T3).
+  - No e2e opens a version-2 table page through 'Make editable' (no build stores one; the hub's tests cover
+    main's and the interim rule's table pages).
+  - Found by review 1b: the converter writes a tab in imported text as a space (`richtext.ts` `clean`), so ordo
+    breaks a line after a tab and lets a tab end the slash rule's look-back, where LibreOffice never breaks after
+    a tab and keeps the slash break after one (review probes E and F); keeping a tab apart from a space in the
+    converter's text, its table measure and the drawer together is the fix (a rule in the drawer alone cannot
+    see the tab, and one in the measure alone makes a cell's fixed rows hold other lines than it draws:
+    `tables.lines.test.ts`). 'Shrink text to fit' turned on or off on an imported box with mixed sizes moves
+    its lines even when nothing shrinks (own-run line heights depend on the flag), with LibreOffice's autofit
+    model above. `kernAfter` (lines.ts) is measured again at every step of the autofit search: once per piece
+    and reference scale would do (verse-heavy text lays out about twice as slowly as before 1b, still linear).
+- _Left to render-bounds (sub-wave 3), tables:_ a hostile table at `TABLE_LIMITS` (60,000 characters in 6 cells
+  of 10,000) draws in 61-63 ms at 3840 (`bench:tables`, named there; 4,096 cells of 60,000 characters: 35-39 ms;
+  the corpus's table slides at most 43.5 ms): render-bounds' 20,000-character bound and pre-rendered big slides
+  take it off the GO path.
+<!-- /r2b:open-items -->
 
 ## 14. Testing and fidelity measurement
 
@@ -2132,7 +2315,8 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   converted whole gets its one background back as the presentation's; the presentation becomes a native
   import (`source.native` counted over its slides, the fresh `source.log` on a whole re-import). The job
   defers while live and while a `pptx-lo` of the presentation is queued or running. 'Make editable' on a
-  legacy page with a stored deck is that job (`imports.ts` `makeEditableNative`, 202). Editors take the
+  legacy page with a stored deck is that job (`imports.ts` `makeEditableNative`, 202; since 1b also on a native
+  import's LibreOffice page, `reimport.ts` `rebuildsFromDeck`, `madeEditable`). Editors take the
   revision over (`PPTX_JOB_SAVERS`). Operator: `PptxSlideCard.tsx` (edited state, fonts to upload, 'Show the
   PowerPoint picture on the screens' with the digest warning, 'Reset slide from PowerPoint'),
   `PptxReport.tsx` (the import report and the re-import dialog), `pptxJobs.ts` (follow and take over).
@@ -2305,7 +2489,8 @@ Also:
     property by property and the wider of two neighbours' wins (LibreOffice's rules). The 74 built-in styles
     draw every line 1 pt and bold heads, as PowerPoint defines them (LibreOffice's table leaves most widths
     at 0 and makes only Light Style 1 bold). Diagonal lines are not drawn (noted). A table with vertical cell
-    text stays residual (until M8), and so does a table that would take its slide past 150 objects
+    text stays residual (until M8; since sub-wave 1c not one whose vertical cells are all `eaVert`: M9, rule V),
+    and so does a table that would take its slide past 150 objects
     (`budget:table`, the slide hybrid). Rows grow to their text measured with the faces' advances
     (`ParseOptions.fontFace`: the hub's library files, `apps/hub/src/pptx/faces.ts`; fontconfig's in the
     harness), estimated widths when a family has none (noted). A cell's lines are spaced by its face's line
@@ -2472,7 +2657,7 @@ _Round 2 (M6 wave 2, geometry files: the slide JSON budget):_
 - **Mechanism.** A geometry's paths are written in its own space, so the traced decorations of Google-Slides-made worship templates (one outline of 4,200-8,300 points, 100-150 KB of path text in 3-4 chained pieces) were repeated in full on every object of a slide that draws them, at whatever size, and on every slide of the layout: slides of 140 KB to 1 MB, 60-98 % path text (one slide 1,022 KB with 11 distinct path strings). The converter counted only text formatting toward 64 KB, so the census called 70 such T1-T3 slides native while the hub's `planImportSizes`, which measures the whole slide, made them compact LibreOffice pictures. Integer coordinates, deduplication within a slide and simplification still left the worst at 72-78 KB: the path text has to leave the slide.
 - **Geometry files** (`ShapeGeom.ref`, `GeomFile`; design/11). The converter (`emit.ts`) writes a geometry whose paths take more than 2,048 characters of its slide (its JSON times the times the slide draws it), then the largest others while the slide as stored passes 60 KB (room for what the hub adds), once as a geometry file (placeholder `pptxgeom:<n>`, `EmitResult.geoms`), and classes a slide still over 64 KB as stored (`storedSlideBytes`, never under the hub's own measure) picture, as the hub would. The hub (`apps/hub/src/pptx/geoms.ts`) names each file by the SHA-256 of its re-tokenised JSON before the budgets, stores the kept slides' files in the content store once (`application/json`; at most 32 MB an import, a slide needing more is compact), and goLive lists them in the manifest (outputs cache them with the pictures) and in `ResolvedPlaylist.geoms` (the live process serves them while the library is down); a slide whose file the library lacks is a `degraded` note. Drawers read the files a slide names (`drawnGeomRefs`) before they draw it, as they decode its pictures: the output's asset worker (a file not cached yet is reported with the missing images and the slide drawn again once it is), the operator's thumbnail worker and editor canvas, the harness's page; the renderer (`geom/stored.ts`) builds a file's paths once per file and box size, and nothing drawn from the fallback is cached under the file's key. An older build strips `ref` and draws the legacy shape, as a pre-M6 build draws every custom geometry; a coarse inline outline beside the ref was not kept, since at 2 px it would still cost the templates' slides 10-30 KB. One outline in two decks or two imports is one file; a presentation's JSON, its library snapshot and its revisions no longer carry the path text.
 - **Measured** (census over worship shards 0-2 and the sermon decks; hub terms: `planImportSizes` over `storedSlideBytes`): native T1-T3 slides 2,187 in the converter and 2,113 in the hub's terms before (2,117 counting the slides' raw JSON), 2,186 in both after (98.5 %; the one slide fewer is a text-heavy slide the hub made a picture already). In the hub's terms 73 T3 slides go from compact picture to native, and 10 T3 and 26 fallback slides from compact picture to hybrid. 1,702 geometry files, 2.75 MB, in 25 decks (at most 409 files and 549 KB a deck); none in the sermon decks. The drawing does not change (`--engine native --lo-compat`, LibreOffice 24.2 pictures, slide by slide): shard 0's 924 slides 0.906 before and after, the sermon decks 0.955, the evidence decks of shard 2 (54 slides) 0.926; no slide moved.
-- **Not in this round.** The operator PC resolving a goLive itself (design/17) has no file index and lists no geometry files (outputs draw what they cached); previews read them through the hub. A geometry file outlives the presentations that named it until the store's cleanup learns to look for it (the library keeps it, as it keeps pictures). 'Re-import from PowerPoint' (M4, on its own branch) must name and store the files of the slides it builds, as the native job's step 2b and 3b do.
+- **Not in this round.** The operator PC resolving a goLive itself (design/17) has no file index; since wave r2b it lists the geometry files by name (design/29 §1.7), so its offline download fetches them and outputs get them over the direct link; previews read them through the hub. A geometry file outlives the presentations that named it until the store's cleanup learns to look for it (the library keeps it, as it keeps pictures). 'Re-import from PowerPoint' (M4, on its own branch) must name and store the files of the slides it builds, as the native job's step 2b and 3b do.
 
 _As merged after round 2 (LibreOffice's table layouter, the cell cap, grid objects and geometry files on one branch):_
 - **Between the items** (`pptx-scene` README "Fidelity round 2, as merged"). With the cell cap and grid objects together a table costs its cells, its background and a few grid objects, and no count of cells applies below the 150 objects: Boletim's 87-cell reading plan (146 objects) and Matthew 16v18's tables (0.348 → 0.737; 0.462 with the cap alone) are native now; the 96-cell Boletim table (153) stays in the art. Under loCompat the grid objects sit on LibreOffice's columns like the cells. A table's grid geometry over 2,048 characters goes to a geometry file like any other (5 files in shards 0-2). The cap's test of a table past the budget by its own objects gives every cell its own fill, since one object per fill makes a two-fill checkerboard 92 objects.
@@ -2841,7 +3026,7 @@ worker, the Pages demo and the fidelity harness:
 <!-- m9:tables-render -->
 **Built for M9 wave 2: the table object drawn and edited by ordo (tables-render track).** `ShapeObject.table`
 (the schema track's `TableData`) is laid out and drawn by the renderer, its cells edited by pure ops in the
-domain; the converter writes it from the tables-conv track on (until then nothing writes one).
+domain; the converter writes it since the tables-conv track ("The table object imported", below).
 - **Model** (`domain/src/table.ts`): placement is implicit (row-major, each cell at the next slot no earlier
   cell covers, a span cut at a covered slot or the grid's edge, cells past the grid dropped: `placeCells`,
   O(grid)); a cell is drawn and edited as a rich text body (`cellRich`: `base` with its style entry over it,
@@ -2893,6 +3078,360 @@ domain; the converter writes it from the tables-conv track on (until then nothin
   to 11 ms; the prepared chart draws at 3840 in 24 to 32 ms: no task over 50 ms. The fuzz test of hostile
   tables runs in about 1.2 s.
 <!-- /m9:tables-render -->
+
+<!-- m9:tables-conv -->
+**Built for wave r2b: the table object imported (tables-conv track).** Every PowerPoint table the converter
+reads becomes one `ShapeObject.table` (`emit-table.ts` `emitTableObject`, salvaged from the m9r WIP):
+- **What is written.** The grid as the deck stores it: `cols` its column widths, `rows` its `a:tr h` heights
+  (`TableElement.storedRows`), `box.h` their sum, so the drawer grows the rows to their text (its layout, never
+  the converter's measure: cells never shrink, which removes the "row one line short" squeeze of the M6 group
+  and the Korean cells' second breaker); since sub-wave 1b LibreOffice's grid instead ("The stored form",
+  below). Cells row-major as `placeCells` reads them back (the reader cuts spans
+  at a covered slot as the stored table places them), each with its rich text from `richText` without autofit
+  (runs, paragraph styles, fallback fonts; plain once the slide passes its text budget), spans, fill (a
+  gradient with its first stop as colour, a pattern as its blended colour) and per-cell diagonals (the M6 group
+  never drew them). Palettes by canonical JSON: `base` the cells' most common box style, each cell's entry what
+  its box differs from it in (the domain's `cellStyleOf`, `@ordo/domain/cellstyle.ts`, the pure module the
+  converter may import; `table.ts` keeps the same functions, tested equal, until it re-exports them), a box's
+  letter spacing, underline, outline, shadow and caps folded into its runs and its line height into its
+  paragraphs where they differ from `base`, partial formatting to `runStyles`, fills, line styles, the
+  resolved edges. Bounds are the schema's `TABLE_LIMITS` (a table past them keeps its first rows and columns, a
+  cell's text 10,000 characters and a table's 60,000, a palette past its size gives later entries none, each
+  noted). Origin role `'table'`, not locked; legacy fields a rect of the background (decision 4: no legacy
+  group). Under the harness's LibreOffice policy (`loCompat`, rule `cellRows`) `rowRule: 'fixed'` with
+  LibreOffice's columns and rows, its sizes and its spill and lift folded into each cell's insets (since
+  sub-wave 1b, on every hub: "The stored form", below).
+- **No cell cap.** A table is one object of the slide's budget (`budget.ts` `ownObjects`), its cells' JSON
+  counted against the slide's text budget as it is written. The 640-cell master grid of the summer-vibes
+  template is one object a slide, a 160-cell bulletin native.
+- **No default table style.** A table whose `a:tblPr` names no style has none, whatever `a:tblStyleLst def`
+  says: LibreOffice 24.2 leaves its cells unfilled (probe decks `regroup/r2b/tables-conv/lodef`: the default
+  named and undefined, or defined in the list, both unfilled; only `a:tableStyleId` fills them; it does draw a
+  cell fill's alpha). Taking the default (as a548707 did for the suite's brutalism deck) turned the worship deck
+  "Depression" (white text on black cells, a list defining Medium Style 2 - Accent 1 as default) light blue:
+  0.86 -> 0.05. Brutalism's slide 14 differs from LibreOffice for another reason: the picture under its table is
+  an SVG (`asvg:svgBlip`, white where the table is) with a PNG stand-in, and ordo draws the stand-in.
+- **Korean and other scripts' cells** (tables-object.md §3; since sub-wave 1c a hub measures them with its computer's
+  face and LibreOffice's 1/4 em: "Built for wave r2b sub-wave 1c", below): the measure breaks where the renderer breaks
+  (`@ordo/renderer` text/breaks.ts `breakOpportunities`: UAX#14 with Korean words kept whole, never before
+  `)` `」` `,` `?` `・` or after `(` `「`) and spaces a paragraph by the face that draws its script
+  (`FaceSource.script`, asked for Han, Kana and Hangul only, `GLYPH_SCRIPTS`: a shaped script such as Arabic,
+  measured by its unshaped advances, wrapped a line early and took its face's line, the cec bible readings'
+  slide 6 0.805 -> 0.741): one rule for the hub's pool task and the browser's parse (`@ordo/importers`
+  `faceSourceOf`: the first of the script's fallback families the library has, Noto Sans KR for Hangul), so
+  both write the same line spacing (the browser's parse loads the library's faces for a table on a layout or a
+  master as well: the summer-vibes template's grid, measured estimated in the browser until then, made the
+  only deck of `hub-import --equivalence` whose scenes differed); the harness asks fontconfig for a letter of the script
+  (`fc-match :charset=<hex>`, the face Chromium falls back to on its host: WenQuanYi Zen Hei for Hangul).
+- **Vertical cells** (since sub-wave 1c, rule V: "Built for wave r2b sub-wave 1c: vertical cells", below): a table
+  whose vertical cells are all East Asian vertical (`eaVert`) is the table object, each such cell keeping its `vert`,
+  because LibreOffice 24.2 draws them exactly as horizontal cells (probe deck A). Tables with `vert`, `vert270`,
+  `wordArtVert`, `wordArtVertRtl` or `mongolianVert` cells stay residual (`'vert'`, LibreOffice's art) until the
+  writing engine lays them out (owner question Q1c-5): drawn horizontally, `vert` and `vert270` would replace
+  LibreOffice's art on a hub with it by text turned the wrong way (the WIP's "approx, drawn horizontally" was not
+  taken for them).
+- **The kill switch is honest.** Without 'table' in `m9Writes` (`version.ts` `M9_HELD_BACK`) the M6 group is
+  written, and the budgets count it as the objects it emits (`BudgetOptions.tables`,
+  `TableElement.objects`, the guard's text objects one per cell) and keep M6's cell cap (`m6TableCap`,
+  `MAX_TABLE_CELLS` 150, 'budget:table'), so no slide passes the 150 objects either way.
+- **Question 3 of the LibreOffice inventory: every table is the table object (the owner, 2026-11-15).** At
+  62a1c3a a hub with LibreOffice showed E's 8 dense table slides as LibreOffice's page (their tables as M6 groups
+  passed 64 KB, so the ladder would have fitted them, `pageForBudget`). Question 3's gate for giving them the
+  table object there was each slide ≥ its LibreOffice page − 0.04 and the mean ≥ − 0.02; measured at a548707
+  (`fid.sh --both`, shards 0-2) it missed on every slide, and sub-wave 1 kept LibreOffice's page for a slide whose
+  tables as their M6 group passed 64 KB (an interim rule: the converter emitted each table a second time as its
+  M6 group to weigh it, `EmittedSlide.tableGroupBytes`, and the slide carried the note "its tables as shapes would
+  be over 64 KB: LibreOffice draws its page"). The owner answered "prioritize native tables": the table object on
+  every kind of hub, these 8 included, even where LibreOffice's page scores higher, and the gate becomes the
+  fidelity target, measured and reported, never a rule that picks LibreOffice. Sub-wave 1b (tables-flip) removed
+  the rule, its note and the second emission; a slide holding a table object is never LibreOffice's page for its
+  size either (`pageForBudget`: one guarded line; a table object past 64 KB keeps the ladder's level, 0 slides in
+  E and golden-pptx, the largest 55,631 B); a table page an older import stored (the interim note, or main's
+  "over 64 KB: LibreOffice draws its page") becomes the table object on a re-import or Reset slide. The numbers, kept as the target (the table
+  object as the converter draws it under the harness's LibreOffice policies, `nativeSsim` at tables-flip, and as
+  both kinds of hub store and show it, the stored form, at tables-flip and after sub-wave 1b's four tracks, the
+  hub with LibreOffice asked and within 0.001 of it; the hub without LibreOffice before, where the M6 group was
+  stored minimal):
+
+  | Slide (deck, page)        | LibreOffice's page | Target | Table object (nativeSsim) | Stored form at tables-flip | Stored form after 1b | Without LibreOffice before |
+  | ------------------------- | -----------------: | -----: | ------------------------: | -------------------------: | -------------------: | -------------------------: |
+  | 1000 Years, 1             |              0.972 |  0.932 |                     0.622 |                      0.477 |                0.923 |                      0.399 |
+  | John 5 vs 18, 1           |              0.949 |  0.909 |                     0.619 |                      0.511 |                0.633 |                      0.351 |
+  | Colossians 2-14-16, 1     |              0.931 |  0.891 |                     0.634 |                      0.458 |                0.747 |                      0.340 |
+  | Matthew 16v18, 1          |              0.963 |  0.923 |                     0.783 |                      0.418 |                0.907 |                      0.477 |
+  | Flesh and Spirit chart, 1 |              0.956 |  0.916 |                     0.817 |                      0.161 |                0.927 |                      0.514 |
+  | Boletim Fev-17, 2         |              0.976 |  0.936 |                     0.866 |                      0.840 |                0.899 |                      0.577 |
+  | Boletim Mai-17, 2         |              0.975 |  0.935 |                     0.877 |                      0.852 |                0.904 |                      0.586 |
+  | Moral Character, 1        |              0.946 |  0.906 |                     0.872 |                      0.344 |                0.853 |                      0.606 |
+  | Mean                      |              0.959 |  0.939 |                     0.761 |                      0.508 |                0.849 |                      0.481 |
+
+  The target column is question 3's gate. The owner replaced it on 2026-11-16 (no slide below its score at 8e8a294,
+  tables-cells merged, by 0.005 or more) and on 2026-11-17 (every table slide ≥ 0.60 on both kinds of hub): all 8
+  meet it at the 1b head, each above its 8e8a294 score; the Korean deck's slides 18, 19 and 20 (under it on both
+  kinds of hub at the 1b head) and slide 2 (missing on a hub without LibreOffice, LibreOffice's art on one with
+  it) were sub-wave 1c's (§13, closed: "Built for wave r2b sub-wave 1c", below).
+
+  The stored form is what churches see on either kind of hub (since sub-wave 1b LibreOffice's form, "The stored
+  form" below; before it the deck's row heights grown by the drawer's lines); the harness scores a table slide
+  that way in both hub columns (`perSlide.table`, `tools/pptx-fidelity/README.md`). 'Make editable' on a stored
+  table page rebuilds the table natively there since tables-cells (1b, below). A table object's cells count as
+  the slide's text bodies (`bodyTexts`, a picture slide's search text), as the group's cells did.
+<!-- /m9:tables-conv -->
+
+<!-- r2b:tables-form -->
+**Built for wave r2b sub-wave 1b: the stored form (tables-form track).** The owner's "prioritize native tables"
+(2026-11-15) and owner question T2's default (imported tables in LibreOffice's layout, their text in the
+master's style for other text, on every hub; PowerPoint's rule not verified, look again when its exports can
+be measured):
+- **The stored form is LibreOffice's, on every hub** (`emit-table.ts` `emitTableObject`, from r2b-diag
+  all-tables' P1b). The table object stores the converter's model of how LibreOffice 24.2 lays the table out
+  (`TableElement.lo`; when absent the converter's own grid, which then agrees with it): its columns (widened
+  to their cells' minimums, `loColumns`), its grown rows (`loGrowRows`, a merge's height on its last row) with
+  `rowRule: 'fixed'`, `box` the table's frame at that size (`lo.xf`), the cells' text at LibreOffice's sizes
+  (`loSizePt`: whole pixels at 600 dpi, so 14 pt is stored 14.04 pt), and where LibreOffice's row is shorter than
+  the text or draws its lines higher, the spill into the margins and the baseline lift folded into each cell's
+  insets (`asLibreOffice`). Until 1b every hub stored the deck's `a:tr h` and let the drawer grow the rows with
+  its own lines, which no harness column scored (`nativeSsim` drew this form under `loCompat` only). Measured
+  at the track's head on both kinds of hub (the harness's `table: true` slides, against r2b-sw1m): E's 66 table
+  slides as hubs draw them 0.756 -> 0.863 (the 8 dense slides 0.508 -> 0.752, the hub with LibreOffice asked
+  for them within 0.0014 of the stored form; the 58 others 0.790 -> 0.878), 36 up by more than 0.02, none down
+  by more than 0.01 on either kind of hub or in `nativeSsim`; golden-pptx's 16 table slides (cut copies)
+  0.642 -> 0.923. Rows are fixed because rows left to grow
+  (all-tables' P1) dropped 7 of the 63 by 0.01-0.49 (2 Corinthians 3 vs 7 0.683 -> 0.191, Churchcraft 0.655 ->
+  0.260): the drawer's lines are taller than the converter's model of LibreOffice's there. Nothing in the
+  layout reads `loCompat`: the grid, rows, sizes and insets are the same with and without it
+  (`emit-table.test.ts`, `e2e/table-form.test.ts` on the e2e table deck); the harness's `cellRows` stays for the
+  M6 group (the kill switch) only, and `loCompat` still reaches the cells' run-text policies (run shadows,
+  outlines on filled text, `baseline="0"`, as a text box's: harness-only, §17).
+- **Text past a fixed row** overflows it, upwards and downwards as its anchor says, as a text box's overflows
+  its box (the layout's rule for `rowRule: 'fixed'`, above): an output whose faces lay a cell out taller than
+  the converter measured draws the text past the row, never clipped and never moving the rows below
+  (`renderer/src/table/fixed.test.ts`). Counted on E's table slides with the drawer's layout in the harness's
+  page: 148 of 15,163 cells, on 11 of the 66 slides, need more than their fixed row by over 1 px with the
+  harness's faces (most by 1.5-2.7 px: 2 Corinthians 3 vs 7, Churchcraft, Ten Commandments, the seal and 666
+  charts; one Arabic slide by 18 px); with every width 3 % wider, 198 cells on 26 slides (up to 89 px, a
+  wrapped line).
+- **A change grows a row by how much more its text falls short of it** (design/15 "Table editing", the
+  operator's `fitRows`, domain `growRow`; an edit: what its text needs more; a shorter box: what the text needs
+  back, review 1b): never by the absolute shortfall, which would make a one-letter fix move the rows of a cell
+  that already needs more than its fixed row in the drawer (all-tables' P1, rows grown to the drawer's need:
+  2 Corinthians 3 vs 7 0.683 -> 0.191, Churchcraft 0.655 -> 0.260).
+- **Cell text in the master's otherStyle** (`inherit.ts` `paraChainParts`, `Chain.cell` set by `tables.ts`
+  `cellText`; from r2b-diag all-tables 022b990): a cell's paragraphs read the master's `p:otherStyle` before
+  the presentation's `defaultTextStyle`, as LibreOffice lays table text out (a non-placeholder text box still
+  reads `defaultTextStyle` only). Measured where the two differ: CbcKk Dedication Service (defaultTextStyle
+  centred, otherStyle left; LibreOffice left) slide 22 0.650 -> 0.954, Dec 15 2019 slide 3 0.928 -> 0.977,
+  golden-pptx w65_00H's 12 table slides (defaultTextStyle left at 120 % with 65 pt before, otherStyle centred
+  at 100 %) 0.367-0.768 -> 0.784-0.981, w65_THREE 16 0.614 -> 0.963 (with the stored form under it); no other
+  table slide of E moved. Both cell forms take it (the table object and the M6 group).
+- **`CONVERTER_VERSION` stays 2 through sub-wave 1b** (`version.ts`), although the stored form changed: it
+  marks the converter generation that writes the M9 fields, gates client scenes (a hub uses one only from its
+  own version) and is written to every stored slide, so a bump mid-wave would refuse every older operator's
+  scene and change what re-import and 'Make editable' see. The cost: an operator tab loaded from a sub-wave 1
+  hub can still send a version-2 scene whose tables are in the grown-row form, which a 1b hub stores as sent
+  (it draws as sub-wave 1's did; Re-import gives LibreOffice's form). It stays 2 in PR #29 as well (parts 1, 1b
+  and 1c; its last commit raises `APP_VERSION` to 0.9.0). Whether it moves is decided at the end of wave r2b,
+  which owner question N1's answer put in the follow-up pull request with parts 2, 3 and 4 (design/29 §1.11 plans
+  `CONVERTER_VERSION` 3 with pre-rendering, part 4).
+- **`CONVERTER_VERSION` stays 2 through sub-wave 1c too** (integrate-1c), for the same reason, although 1c changes
+  the stored form again: a table whose vertical cells are all `eaVert` is the table object (it was LibreOffice's art
+  on a hub with LibreOffice and missing on one without), and the rows of table cells in Han, Kana or Hangul are
+  LibreOffice's as measured with the hub's computer's face and LibreOffice's 1/4 em (§15 M9, "Built for wave r2b
+  sub-wave 1c"). The cost is of the same kind: an operator tab of an earlier build sends a version-2 scene parsed as
+  that build parsed it, and the hub stores it unless its table cells need a script face only the hub's computer has
+  (then the hub refuses the scene and parses the deck itself, `SCRIPT_FACE_REFUSAL`). So an older build's scene
+  keeps its `eaVert` tables as before 1c (LibreOffice's art on a hub with LibreOffice, the table missing without)
+  wherever the hub does not refuse it: on every hub for a deck whose only East Asian cells are in an `eaVert` table,
+  and on a hub with no CJK face for any deck, whose `systemOnlyScripts` is empty so nothing is refused (the Korean
+  bulletin's slide 2 is such a table; its Korean rows there also arrive without the 1/4 em). The hub's
+  `APP_VERSION` check bounds this to builds that share one `APP_VERSION` (`ws.ts`: an operator of another version
+  is sent away, 'bye version'), so after the wave's 0.9.0 bump it reaches no earlier build. Re-import and Reset
+  slide give 1c's form. Whether `CONVERTER_VERSION` moves is the wave-end decision above (the follow-up pull
+  request).
+<!-- /r2b:tables-form -->
+
+<!-- r2b:tables-cells -->
+**Built for wave r2b sub-wave 1b: LibreOffice's cell rules and 'Make editable' (tables-cells track).** Where
+LibreOffice 24.2 puts a cell's text, to its 1/100 mm, in the converter's model of its layout (`TableElement.lo`:
+what the table object stores on every hub, "The stored form" above; the M6 group's under `loCompat`), checked
+against the table probe's 324 rows and a cell probe's 80 rows and 272 baselines (`tools/pptx-fidelity/src/
+cell-probe.ts`: centred cells full, overflowing and with room, with and without margins, 107 %, spacers, mixed
+sizes, read from LibreOffice's PDF), all to the 1/100 mm (`pptx-scene` README "LibreOffice's cell rules"):
+- **Line heights** (`loLineHeight`): font-independent rows 1.2 × the font height rounded (truncated before:
+  Moral Character's 16 pt rows were 931, LibreOffice's 932; r2b-diag/dense-c 22644b3); a font-spaced line the
+  larger of the two conversions VCL makes of the ascent and descent pixels at 600 dpi back to 1/100 mm, apart
+  and added or summed (10 pt Carlito 428, not 427: the 1000 Years chart's row rules, dense-a C6; 9 pt 386, where
+  the sum alone gives 385).
+- **Imported lengths**: a stored row height or column width is LibreOffice's in whole 1/100 mm, truncated.
+- **The lift** (`asLibreOffice`, r2b-diag/dense-d d5c32ec, dense-c 910492b the same rule): centred text keeps
+  its whole lift whatever its margins; a cell with `marT="0"` kept half of it (the Boletims' reading plans, the
+  Flesh and Spirit chart, the seal, Churchcraft, Ten Commandments and 2 Corinthians 3 vs 7 charts).
+- **The anchor** (`loBlockTop`, dense-c 245ac4b and 9424bc0, refined by the cell probe): LibreOffice centres
+  the drawn block in the inner height, truncated to the 1/100 mm, and starts a block taller than that
+  (font-independent rows draw lines taller than they were measured) 1/100 mm above the top margin, never
+  centred above it (Moral Character's 690 drawn in 678; the Depression deck).
+- **The 666 chart** (rows 6-9 moved up by the full lift): LibreOffice anchors full and overflowing cells as the
+  model does (the lift is not too large there, dense-d's hypothesis); the rows above them were short in the
+  model by its 10 pt line, 1/100 mm a line (dense-c's per-line heights), which the conversion rule gives back.
+  What is left is ordo's own line pitch in a cell (§13 open items).
+- **'Make editable' on a stored page** (`imports.ts` `makeEditableNative`, `reimport.ts` `rebuildsFromDeck`,
+  `madeEditable`; gaps-flip A.3): LibreOffice's page that a native import stored (version 2, class 'picture', in
+  churches' libraries for tables since main's "over 64 KB: LibreOffice draws its page") is re-imported natively
+  like a legacy page, keyed on the page class and the stored deck, never the note: a table page becomes the
+  table object; a page whose deck slide is LibreOffice's page again gets its extracted text boxes over the page
+  (`boxesOverPage`, as 'Make editable' did), in one revision. The route answers 202 and the `pptx-reimport` job
+  (`pageBoxes` set) either way; a page rebuilt counts as made editable (`replaced`). Hub-writers (sub-wave 4)
+  extends it to other 64 KB pages on the same helper.
+- Measured at the track's head on both kinds of hub, against the merged stored form (tables-form, the hub with
+  LibreOffice asked for the 8, equal to the stored form within 0.001): E's 66 table slides 0.863 -> 0.872 (the 8
+  0.752 -> 0.767, the 58 others 0.878 -> 0.886), the table decks' 43 0.840 -> 0.853. Up: the charts with no top
+  margin (the seal 0.839 -> 0.932, Churchcraft 0.802 -> 0.894, Ten Commandments 0.800 -> 0.887, 2 Corinthians 3
+  vs 7 0.811 -> 0.872), the 666 chart 0.756 -> 0.805, Flesh and Spirit 0.817 -> 0.864, Moral Character 0.799 ->
+  0.838 (`nativeSsim` 0.872 -> 0.899; the rest is the harness's outline policy on its cells), the Boletims'
+  reading plans +0.016 and +0.020, Depression 0.859 -> 0.877, the Korean slide 18 0.611 -> 0.637; Jesus and
+  Stephen unchanged. None down by more than 0.01 on either kind of hub or in `nativeSsim` (Colossians and the
+  Coptic Peace verses' slide 4 -0.007), no slide without a table moved, no class changed, the 8 stay 'full'
+  (Colossians 58,715 B stored, the largest). The question-3 target is still met by 0 of 8 (mean 0.767 against
+  0.939; text-lines follows). Details: `regroup/r2b/tables-cells/notes.md`.
+<!-- /r2b:tables-cells -->
+
+<!-- r2b:ko-cells -->
+**Built for wave r2b sub-wave 1c: Korean and other scripts' cells (ko-cells track).** The owner's minimum (every
+table slide at least 0.60 on both kinds of hub, 2026-11-17) left the Korean bulletin's slides 18, 19 and 20 under it
+on both kinds of hub (0.593, 0.538 and 0.439): a hub measured their Hangul cells by estimate, its library having no
+Hangul face, where LibreOffice and the screens on its computer draw them in the face fontconfig gives (WenQuanYi Zen
+Hei here, lines 1.2598 em apart), and LibreOffice puts a quarter em between Hangul and Latin text that no model had.
+Two rules, both for measuring only, and the browser's parse kept equal to the hub's:
+- **The hub's script face from its computer (rule H, `apps/hub/src/pptx/systemFaces.ts`).** For a script drawn glyph
+  by glyph (Han, Hiragana, Katakana, Hangul: `GLYPH_SCRIPTS`) that the library has no face for, a table cell is
+  measured with the face this computer's fontconfig gives for a letter of the script (`fc-match -f
+  '%{file}\t%{index}' :charset=<hex>`, run by absolute path, never through PATH; a face is kept for a script only
+  when it maps a dozen of the script's common letters (`SYSTEM_FACE_LETTERS`), read once per distinct face with
+  `sfntMetrics(bytes, index)`, which reads a TrueType collection at its index, and fits `FACE_LIMITS.fileBytes`). It is resolved once, when the hub starts, as a promise that every job building a
+  `pptx-scene` input (imports, re-imports, Reset slide) and the client-scene check await (10 s at most; then no
+  system face, logged), so a deck imported during start-up is stored as one imported later. The library's face
+  always wins; nothing is stored or drawn with the system face; the job log names it ("table cells in Hangul
+  measured with this computer's face wqy-zenhei.ttc"). **The project's hub image installs Noto Sans CJK** (owner
+  answer to Q1c-2, 2026-11-17, "add a cjk font": `fonts-noto-cjk`'s Sans collections, not WenQuanYi Zen Hei, whose
+  GPL-with-font-exception licence the font rules leave out): there fc-match gives `NotoSansCJK-Regular.ttc` face 0
+  for all four scripts (the image sets no language), the check keeps it (it maps every script's common letters), rule
+  H measures the cells with it, and LibreOffice draws the letters. Before it the image had no CJK face
+  (`fonts-noto-core`): on that font set fontconfig names fonts-noto-core's Nushu face (NotoTraditionalNushu, whose
+  only ideograph is U+4E00) for Han and faces without Kana or Hangul for the others, the check keeps none, and the
+  cells are measured by estimate, as before; its LibreOffice drew Korean as empty boxes. Until integrate-1c repair 1
+  the check asked for the one letter and kept the Nushu face for Han: Chinese and Japanese cells on that font set
+  were measured with it (a 1.172 em line), lower than at the 1b head on three extension slides (ext06 slides 6 and 7,
+  ext07 slide 19: -0.020, -0.005, -0.028; integrate-1c.md, "Repair 1"). Noto Sans CJK's Hangul is narrower and its
+  lines taller than WenQuanYi Zen Hei's (this measuring computer's face), so the image's hubs store other rows than
+  this computer's. **Measured on the image's fonts with this code** (`regroup/r2b/land-1c/image/`: the merged 1c
+  head, after integrate-1c repair 1 put rule G's gap inside its character's run and made rule H check a dozen
+  letters; the Korean deck's 20 slides score exactly as with 1c as first reviewed, `regroup/r2b/1c/cjk-image/`;
+  bookworm's font packages under private fontconfig files; real hubs of this code, with and without LibreOffice,
+  identical on both; this machine's LibreOffice 24.2, not the image's 7.4.7), the Korean slides 2, 18, 19 and 20,
+  before -> after the font:
+  - **(B) against LibreOffice's page drawn with the image's fonts** (what a venue on the image compares, assuming
+    its screens draw Korean with Noto Sans CJK, as the measuring tool's screen did; Google's Noto Sans KR, the same
+    design, once the venue adds it): 0.410 -> 0.751, 0.554 -> **0.5925**, 0.449 -> 0.719, 0.457 -> 0.700. Slide 18 stays
+    0.0075 under 0.60. Its rows line up with LibreOffice's, and both sides draw the Hangul with Noto Sans CJK. The
+    rest differs: the cells ask for "Noto Sans KR", which the library lacks, so ordo measures and draws their
+    circled digits (①-⑤) and Latin punctuation in its default face, Inter (① 1.39 em wide against Noto Sans CJK's
+    1.00), where LibreOffice draws the digits with the run's East Asian face (Noto Sans CJK, the weak characters'
+    face: `ko-weak` in §13's follow-ups) and the punctuation with Noto Sans; LibreOffice's quarter em between
+    Korean and Latin text, which rule G measures and ordo does not draw; row 2's first cell breaks inside the
+    Korean word in ordo and after the circled digit in LibreOffice; LibreOffice clips a third line in row 1; the
+    header row's weight. It goes to the owner; nothing was tuned.
+  - **(A) against this machine's page** (WenQuanYi Zen Hei, the standard, continuing the numbers above): 0.421 ->
+    0.391, 0.593 -> 0.518, 0.535 -> 0.488, 0.521 -> 0.454. No slide reaches 0.60 either way, and the font lowers all
+    four: rows sized for Noto Sans CJK's 1.448 em lines and 0.92 em Hangul against a page drawn with Zen Hei's
+    1.260 em lines and 1.0 em Hangul. LibreOffice's own page with the image's fonts scores 0.394, 0.506, 0.478 and
+    0.448 against this machine's page.
+  - The deck's 16 other slides score the same in (A) before and after. Sub-wave 1c's extension set (10 table slides
+    of public decks, outside the 0.60 rule): all at or above 0.60 in (B) after; in (A) two stay under it (0.586 and
+    0.427 after). Six drops of 0.005 or more go to the owner with slide 18 (five in (A), up to 0.063; one in (B),
+    0.028). With 1c as first reviewed there were five (three in (A), up to 0.100; two in (B), up to 0.028): repair 1
+    raises two of the slides with the font (in (B) by 0.078 and 0.010), and, keeping no face for Han on the font set
+    before it, raises two slides' "before" in (A) (by 0.020 and 0.028), which makes them drops there, and lowers the
+    largest drop's (0.100 -> 0.063).
+- **The browser's scene is refused for such a deck** (`clientScene.ts` `SCRIPT_FACE_REFUSAL`, in the
+  `pptx-client-scene` task): a browser cannot measure with the hub's computer's faces, so a scene whose table cells
+  hold a script the hub measures with a system face (`systemOnlyScripts`) is refused and the hub parses the deck
+  itself, one stored form whichever side parses. `hub-import --equivalence` lists such decks as "parsed on the hub
+  (script face)".
+- **LibreOffice's 1/4 em (rule G, `packages/pptx-scene/src/asian-gaps.ts`).** LibreOffice 24.2 puts a space at every
+  boundary between an East Asian portion of a paragraph and another: a weak character joins the portion before it, a
+  leading weak character or space is a portion of its own, never across a line break. Rule G makes it a quarter of
+  the size of the character before the boundary. LibreOffice's own gap is the height (hhea ascent and descent) of the
+  face of the portion before the boundary divided by 5 (editeng's script space): the quarter for a face about
+  1.25 em tall, within 0.4 pt of it after WenQuanYi Zen Hei (1.2598 em) and Inter (1.21 em), the faces of the
+  diagnosis probes, and about 0.64 pt wider after Liberation Sans (Arial, 1.117 em) at 24 pt (the probe hold-out
+  deck's 225 cell gaps: |LibreOffice - height/5| at most 0.14 pt). The quarter gives LibreOffice's line count on all
+  114 cells of that deck, so the minimum needs no more (rule 4; height/5 is a follow-up). It is applied only in the
+  converter's model of LibreOffice's cell layout (`tables.ts`: `Measure.loLayout` with `gaps` for the `measured`
+  bodies that give LibreOffice's rows and baselines), as extra advance on the boundary character inside its own run,
+  so the character keeps its portion's face (1c first put it in a run of its own, where a weak character alone was
+  measured in Inter: rows 0.2 px taller than LibreOffice's and one probe cell wrapped; integrate-1c repair 1), never
+  in the stored text or in ordo's own model of its drawing (owner question Q1c-3: the 1/4 em for row heights only):
+  ordo draws no such gap.
+- **Measured** on real hubs of this code, with and without LibreOffice, each asked for every slide of the deck: the
+  Korean slides 18, 19 and 20 at 0.634, 0.759 and 0.665 on both; slide 2 unchanged (LibreOffice's art, 0.947, with
+  LibreOffice; 0.490 without: `vert-cells`); every other table slide of the tables set and shards 0-2, the held-out
+  set included, identical. Probe cells outside LibreOffice's lines or rows, named with their cause and left as
+  follow-ups: LibreOffice breaks between a Latin character and the Hangul after it inside a word, where ordo keeps
+  the word; the weak characters' faces in line heights. (A leading weak character that rule G put in a run of its
+  own was measured in the chain's face instead of its portion's, 0.9 pt on one probe row: fixed in integrate-1c
+  repair 1, the gap now inside the character's run.) Details:
+  `regroup/r2b/1c/ko-cells/notes.md`, `probe/probe.md`.
+<!-- /r2b:ko-cells -->
+
+<!-- r2b:vert-cells -->
+**Built for wave r2b sub-wave 1c: vertical cells (vert-cells track).** The Korean bulletin's slide 2 holds the one
+measured table with vertical cells: a 10-row table (Medium Style 2 - Accent 1) whose narrow first column (46.6 pt) has
+two East Asian vertical (`eaVert`) cells, '1년차' and '２년차', 24 pt, each over 4 rows, and the table casts an outer
+shadow (blur 4 pt, 3 pt up, black at 40 %). Every table with a vertical cell was residual ('vert'): LibreOffice's art
+on a hub with it (0.947), nothing on one without (0.490, the table listed missing).
+- **Rule V: LibreOffice 24.2 draws `eaVert` cells horizontally** (`tables.ts` `readTable`; probe deck A, remade by the
+  track: every glyph of an eaVert cell where the horizontal cell has it, within 0.001 pt on LibreOffice's 1/100 mm
+  column grid, none turned; three eaVert slides and their horz twins give byte-identical pages; the bulletin's cells
+  stack one character a line only because the column is narrow). So a table whose vertical cells are all `eaVert` is
+  the table object, each such cell keeping its `vert` (`TableCell.vert`, emitted as `CellStyle.vert` 'eaVert', in the
+  schema since 0.6.0: no SHARED change, so 1c moves neither APP_VERSION nor its digest), drawn horizontally by
+  today's renderer (`cellIsVertical`; no renderer change) as LibreOffice draws it; the older build (0.8.1, with
+  0.8.0's schema) parses it as stored. The cell keeps its vert through typing, formatting, Find & Replace, row and
+  column operations, Tab, undo and the
+  rows' growth; its caret, selection and taps are a horizontal cell's (ordo's editor has no merge or split).
+  Re-import and Reset slide of a slide stored before 1c (LibreOffice's art) give the table object.
+- **Tables with `vert`, `vert270`, `wordArtVert`, `wordArtVertRtl` or `mongolianVert` cells stay LibreOffice's art**
+  (owner question Q1c-5, default yes): `vert`/`vert270` are LibreOffice's vertical writing (upright CJK, turned Latin);
+  the other three LibreOffice draws horizontally too (probe A), so they could follow eaVert later, but no measured
+  deck has one (rule 4).
+- **Not copied:** LibreOffice garbles a pure-Hangul paragraph that wraps inside an eaVert cell (the diagnosis' probe A
+  slide 2); ordo draws it plainly; no measured cell is one. PowerPoint draws eaVert as upright stacked characters; a
+  later vertical text engine would depart from LibreOffice 24.2 there (an owner decision then); the stored `vert`
+  keeps the deck's intent for it.
+- **The table's outer shadow is read, not stored or drawn** (rule 4): `a:tblPr/a:effectLst/a:outerShdw` goes into the
+  converter's `TableElement.shadow` and the slide's notes say "a table's shadow is not drawn". LibreOffice draws it as
+  the shadow of the table's cell fills and lines (the diagnosis' probe B); drawing it would add about 0.02 on slide 2.
+  A `shadow` on the stored table object is not neutral (`hasShapeExtras`: the drawer-not-loaded and clamp fallbacks
+  would draw it with `drawGeomShape`, and the slide's effect budget would charge it), so drawing it is one follow-up
+  item: the emission, a renderer rule for a table's shadow in those fallbacks and the effect budget, the table's
+  sprite reach (`table/reach.ts`), the draw off the GO path (the prototype took 87 ms cold at 3840), bench rows.
+- **Measured** on real hubs of this code (the track's head rebased on ko-cells' merge, so rule H measures the Hangul
+  cells), each kind asked for every slide: slide 2 **0.697 on both kinds of hub** (0.697480 asked of a hub with
+  LibreOffice and of one without; the plan's prediction 0.6975), class native. On a hub without LibreOffice that is
+  +0.208 (the table was missing); **on a hub with LibreOffice it is 0.250 below LibreOffice's picture (0.947), a drop
+  the no-regression rule blocks unless the owner accepts it: accepted by the owner on 2026-11-17 (Q1c-1)**.
+  The track's probe deck shows the same kind of drop on its eaVert slides (0.998, 0.950, 0.999 as LibreOffice's art
+  -> 0.979, 0.907, 0.995 as the table object, each equal to its horz twin). Every other slide of the tables set and
+  shards 0-2 (463 slides of the 62 table decks, 111 table rows on both kinds of hub) and every held-out slide is
+  identical; the census moves slide 2 from hybrid to native and nothing else. On a hub without a Korean face (the
+  project's hub image before the owner's answer to Q1c-2), the table measures 0.421 against this machine's page (the
+  planner's run without rule H's face), and that image's LibreOffice drew the Korean letters as empty boxes (Q1c-1,
+  Q1c-2). The image now installs Noto Sans CJK (§10), with which its LibreOffice draws them: slide 2 measures 0.751
+  against LibreOffice's page drawn with the image's fonts (0.410 before the font; this machine's LibreOffice 24.2,
+  not the image's 7.4.7) and 0.391 against this machine's, both measured with this code (the same as with 1c as first
+  reviewed; ko-cells above, `regroup/r2b/land-1c/image/`). Details: `regroup/r2b/1c/vert-cells/notes.md`,
+  `probe/probe-a.md`.
+<!-- /r2b:vert-cells -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 

@@ -1,10 +1,12 @@
 import {
   type AudioContent,
   type Cue,
+  DRAW_OVERRIDE_MAX,
   type LayerState,
   type LiveEvent,
   type LiveState,
   type MediaContent,
+  PRERENDERED_MAX,
   type ActionId,
   expandCues,
   isHiddenCue,
@@ -195,6 +197,27 @@ export function reduce(prev: LiveState, e: LiveEvent): LiveState {
       return { ...s, messages: s.messages.filter((m) => m.id !== e.id) };
     case 'message.clear':
       return { ...s, messages: [] };
+    case 'prerender.add': {
+      // The hub's, for a picture of a key of the live service (design/29 §1.7); `resolved` is never changed.
+      if (s.mode !== 'live' || !s.resolved?.prerenderKeys?.includes(e.key)) return s;
+      if (!slideFor(s, e.presentationId, e.slideId)) return s;
+      const { k: _, ...pic } = e;
+      const same = (p: typeof pic) =>
+        p.presentationId === pic.presentationId &&
+        p.slideId === pic.slideId &&
+        p.key === pic.key &&
+        p.size === pic.size;
+      const prerendered = [...(s.prerendered ?? []).filter((p) => !same(p)), pic].slice(-PRERENDERED_MAX);
+      return { ...s, prerendered };
+    }
+    case 'prerender.use': {
+      // The operator's "Use the picture for this slide during this service" (design/29 §1.7), until End service.
+      if (s.mode !== 'live' || !slideFor(s, e.presentationId, e.slideId)) return s;
+      const list = s.drawOverride ?? [];
+      if (list.length >= DRAW_OVERRIDE_MAX) return s;
+      if (list.some((d) => d.presentationId === e.presentationId && d.slideId === e.slideId)) return s;
+      return { ...s, drawOverride: [...list, { presentationId: e.presentationId, slideId: e.slideId }] };
+    }
   }
 }
 
@@ -653,6 +676,8 @@ export function isLiveStateShape(x: unknown): x is LiveState {
   if (!isObj(props) || typeof props.logo !== 'boolean' || !isNum(props.at) || !isNum(props.seq)) return false;
   if (!isLayer(x.audio)) return false;
   if (!isObj(x.timers) || !Array.isArray(x.messages) || typeof x.black !== 'boolean') return false;
+  if (x.prerendered !== undefined && !Array.isArray(x.prerendered)) return false;
+  if (x.drawOverride !== undefined && !Array.isArray(x.drawOverride)) return false;
   if (x.resolved !== undefined) {
     const r = x.resolved;
     if (!isObj(r) || !isObj(r.playlist) || !Array.isArray(r.playlist.items)) return false;
@@ -665,7 +690,12 @@ export function isLiveStateShape(x: unknown): x is LiveState {
 export function isLiveEventShape(x: unknown): x is LiveEvent {
   if (!isObj(x) || typeof x.k !== 'string') return false;
   const needsAt =
-    x.k !== 'goLive' && x.k !== 'select' && x.k !== 'message.dismiss' && x.k !== 'message.clear';
+    x.k !== 'goLive' &&
+    x.k !== 'select' &&
+    x.k !== 'message.dismiss' &&
+    x.k !== 'message.clear' &&
+    x.k !== 'prerender.add' &&
+    x.k !== 'prerender.use';
   if (needsAt && !isNum(x.at)) return false;
   switch (x.k) {
     case 'goLive': {
@@ -697,6 +727,16 @@ export function isLiveEventShape(x: unknown): x is LiveEvent {
       return typeof x.id === 'string' && typeof x.text === 'string';
     case 'message.dismiss':
       return typeof x.id === 'string';
+    case 'prerender.add':
+      return (
+        typeof x.presentationId === 'string' &&
+        typeof x.slideId === 'string' &&
+        typeof x.key === 'string' &&
+        typeof x.file === 'string' &&
+        isNum(x.size)
+      );
+    case 'prerender.use':
+      return typeof x.presentationId === 'string' && typeof x.slideId === 'string';
     case 'endService':
     case 'next':
     case 'prev':

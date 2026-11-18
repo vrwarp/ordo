@@ -11,6 +11,7 @@ import {
   nativeTables,
   policyRows,
   type SlideScore,
+  slideTimings,
   textFeatureRows,
   writeReport,
 } from './report.ts';
@@ -255,5 +256,24 @@ describe('cause groups of F', () => {
     expect(all.noLo).toBeCloseTo(0.5, 9);
     // The tables summary.json keeps carry the groups.
     expect(nativeTables(f).causes).toEqual(rows);
+  });
+});
+
+describe('slide timings in the summary', () => {
+  it("carries the slowest warm draw beside the median into a slide's score (rasterMaxMs, r2a must a4)", () => {
+    const r = {
+      rasterMs: { '1920': 4.5, '3840': 33.4 },
+      rasterMaxMs: { '1920': 9.1, '3840': 58.2 },
+      coldMs: { '1920': 40, '3840': 120 },
+      maxObjectMs: { '1920': 1, '3840': 3 },
+      maxObjectId: 'pptx-7',
+    } as const;
+    const score: SlideScore = { n: 1, ...slideTimings(r) };
+    expect(score).toEqual({ n: 1, ...r });
+    // Written as summary.json writes it, the field is there for rasternewly.py to read.
+    expect(JSON.parse(JSON.stringify(score)).rasterMaxMs).toEqual({ '1920': 9.1, '3840': 58.2 });
+    // Nothing measured, nothing written.
+    expect(slideTimings(undefined)).toEqual({});
+    expect(slideTimings({ rasterMs: r.rasterMs })).toEqual({ rasterMs: r.rasterMs });
   });
 });

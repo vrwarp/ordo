@@ -2,14 +2,14 @@
 
 ## Layers
 
-| Layer       | Tool                                                                                              | Scope                                                                                                                                                                                                                                                                                                                                |
-| ----------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Unit        | Vitest                                                                                            | `packages/domain` (parsers, arrangement expansion, layout maths), `packages/live-state` (reducer determinism, property tests with fast-check), `packages/protocol` (schema round-trips), `packages/importers` (fixtures), hub services with an in-memory SQLite                                                                      |
-| Integration | Vitest + a real hub                                                                               | HTTP API with auth and roles, WebSocket sequencing, media jobs with tiny fixture files: `apps/hub/test` starts the hub in the test process on an ephemeral `127.0.0.1` port with a temporary data directory; `processes.test.ts` runs the real two-process hub (supervisor, live and library children) from source                   |
-| End to end  | Playwright, headless Chromium with SwiftShader (`--use-angle=swiftshader --enable-unsafe-webgpu`) | Operator, two outputs and the stage on their own origins served by a real hub over HTTP (below); GO and flip timing, clears, looks, degraded mode, relaunch, and the chaos specs                                                                                                                                                     |
-| Soak        | `tools/soak` (Playwright, real GPU on the venue PC or a dev machine)                              | 60+ minutes of the live playlist with motion backgrounds, GO every 10 s; asserts zero missed frames and zero long tasks from telemetry                                                                                                                                                                                               |
-| Visual      | Playwright screenshots of outputs vs golden PNGs                                                  | Text rasterizer and looks; per-pixel tolerance for anti-aliasing                                                                                                                                                                                                                                                                     |
-| Fidelity    | `tools/pro7-fidelity` (Playwright, headless Chromium `@ordo/renderer`)                            | ProPresenter 7 visual fidelity: scores imported `.pro` slides against reference PNGs using dual-plate RGBA SSIM (`--export-compat`), generates diagnostic strips and clusters, and enforces CI non-regression ratchet against baseline; the golden-pptx census ratchet holds every public deck's slide classes (`census-ratchet.ts`) |
+| Layer       | Tool                                                                                              | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Unit        | Vitest                                                                                            | `packages/domain` (parsers, arrangement expansion, layout maths), `packages/live-state` (reducer determinism, property tests with fast-check), `packages/protocol` (schema round-trips), `packages/importers` (fixtures), hub services with an in-memory SQLite                                                                                                                                                                                                                                  |
+| Integration | Vitest + a real hub                                                                               | HTTP API with auth and roles, WebSocket sequencing, media jobs with tiny fixture files: `apps/hub/test` starts the hub in the test process on an ephemeral `127.0.0.1` port with a temporary data directory (the helpers' `tempDir` and `startHub`: folders removed and hubs closed after the test file that made them, so a run leaves no `ordo-*` folder in TMPDIR, `tempdirs.test.ts`); `processes.test.ts` runs the real two-process hub (supervisor, live and library children) from source |
+| End to end  | Playwright, headless Chromium with SwiftShader (`--use-angle=swiftshader --enable-unsafe-webgpu`) | Operator, two outputs and the stage on their own origins served by a real hub over HTTP (below); GO and flip timing, clears, looks, degraded mode, relaunch, and the chaos specs                                                                                                                                                                                                                                                                                                                 |
+| Soak        | `tools/soak` (Playwright, real GPU on the venue PC or a dev machine)                              | 60+ minutes of the live playlist with motion backgrounds, GO every 10 s; asserts zero missed frames and zero long tasks from telemetry                                                                                                                                                                                                                                                                                                                                                           |
+| Visual      | Playwright screenshots of outputs vs golden PNGs                                                  | Text rasterizer and looks; per-pixel tolerance for anti-aliasing                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Fidelity    | `tools/pro7-fidelity` (Playwright, headless Chromium `@ordo/renderer`)                            | ProPresenter 7 visual fidelity: scores imported `.pro` slides against reference PNGs using dual-plate RGBA SSIM (`--export-compat`), generates diagnostic strips and clusters, and enforces CI non-regression ratchet against baseline; the golden-pptx census ratchet holds every public deck's slide classes (`census-ratchet.ts`)                                                                                                                                                             |
 
 ## The compositor under test
 
@@ -77,6 +77,21 @@ between 16000 and 32767.
   and `phone-demo` (336-337: the Pages build's static server per phone project), the hub's 340-349 and the
   integration's 350-359. `ipad-group` and `ipad-touch-targets` have three ports (slot 2 is
   `chromium-tablet`). `e2e/layout-class.spec.ts` (the venue PC never compact) uses the shared server.
+- M9 wave r2b holds offsets 400-659, in offset order: `effect-units` (400-401: effects past the budget, and the
+  hostile lone line art through the upload route), `units-live` (405-406: a jump to a slide not prepared and a GO
+  50 ms after its arm, and the playlist warmed ahead), `editor-table` (420) and `ipad-table-targets` (421-423, one
+  per tablet project) are the table editing's; `pptx-table-edit` (425, sub-wave 1's integration: the table deck
+  imported on a hub without LibreOffice, a cell edited on the canvas, live); `pptx-tables` (430-432, tables-conv
+  and tables-flip: the table deck on a hub without LibreOffice through the Import tab and through the upload
+  route, and on a hub with LibreOffice, where both slides are table objects too, nothing waits for LibreOffice and
+  a reading-plan cell is edited on the canvas); `editor-reimport-lo` (440, sub-wave 1b's tables-cells: 'Make
+  editable' on LibreOffice's 64 KB page a native import stored, on a hub with LibreOffice; 445-449 are kept for
+  sub-wave 1b's integration); `golive-prepare` (450-451: Go live again during a service on a hub with a slowed library, and
+  the size ceiling). The integrations of sub-waves 2-4 hold 630-659. An explicit `ORDO_E2E_PORT_BASE` may sit below
+  16000 (design/29 §4; `e2e/ports.ts` says what it must avoid).
+  `e2e/table-deck.test.ts` checks the deck still tests what the spec is about (the bulletin past M6's cell cap,
+  the reading plan's M6 group past 64 KB, measured with the kill switch, and both table objects through the import
+  core on both kinds of hub), as `e2e/lineart-deck.test.ts` does for the line-art deck.
 
 ### Projects
 
@@ -155,7 +170,16 @@ is held to the 50 ms task, and the line-art case (`line art past the slide budge
 to 16 ms at 3840; its slide's draw is reported, not checked (what it draws live is the drawing budget's, whose
 estimate rates hole-dense line art at about half its time: design/27 §13 "Geometry units"). On the bench machine
 its unit (17.4 MiB at 3840) is made in 73 to 78 ms over 6 slices, the longest 15.3 to 15.4 ms, and the slide
-draws in 65 to 66 ms (p95) at 3840. The cold arm of a slide with units, the wait of a jump to it until effect
+draws in 65 to 66 ms (p95) at 3840. Effect units (design/14 "Effect units": shadows, soft edges and translucent
+shapes past the effect budget, a decoration at its caps) print the same `units` row and are held to the same
+50 ms slice. Three kinds of decoration row gate the draws themselves (`bench/cases/decor.ts`, r2b): a
+`(warm task` row (a slide drawn warm, one raster a job) by its p95 and by its slowest draw, both within 50 ms at
+1920 and 3840; the `(alternation` row (the four-large-decorations slide and the capped decoration's drawn in
+turn for 20 rounds, the asset worker's two lanes showing two slides of one look) by its worst draw from round 3
+on (50 ms) and by each slide's mean (28 ms); the `(second draw` row (the draw after the one that marked a
+slide's decorations, which makes their sprites, at most one a raster) by its slowest draw (50 ms, target 35).
+The fidelity harness writes each slide's slowest warm draw (`rasterMaxMs`, at 1920 and 3840) beside its median
+(`rasterMs`), and its report shows the slowest. The cold arm of a slide with units, the wait of a jump to it until effect
 units, is the fidelity harness's `coldMs` (its pictures, its geometry units and the first draw,
 `tools/pptx-fidelity/README.md`): the leaf template's first slide is held to 500 ms at 3840 (245 ms, the median
 of five runs under the bench lock).
@@ -457,12 +481,15 @@ jobs that run side by side so none takes more than about 35 minutes (one job too
 | Goldens (pinned container)            | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                                                                                                    | 20 min |
 | Fidelity ratchets                     | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                                                                                              | 20 min |
 
-The end-to-end, goldens and fidelity jobs install the image's font packages (Carlito, Caladea, Liberation 2,
-Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them; the goldens and
-fidelity jobs add the golden faces (DejaVu, FreeSerif, IPAGothic). Docker images are built by
-`docker-pr.yml` and published by `docker-publish.yml`; tags build and push the image. Not run in CI: the
-benches (`bench:*`, whose 50 ms and frame gates need a known machine) and the PowerPoint fidelity harness
-against LibreOffice (design/27 §14 item 2).
+The end-to-end, goldens and fidelity jobs install the image's bundled font packages (Carlito, Caladea,
+Liberation 2, Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them, not its CJK
+package, which only LibreOffice and the hub's measuring use (design/27 §10); the goldens and fidelity jobs add the
+golden faces (DejaVu, FreeSerif, IPAGothic). The image's own fonts are checked by `docker-pr.yml`'s smoke step and
+`apps/hub/test/fonts-licences.test.ts` (every font package the `Dockerfile` installs has its licence recorded,
+and no dpkg rule the `Dockerfile` writes stays in the image).
+Docker images are built by `docker-pr.yml` and published by `docker-publish.yml`; tags build and push the image.
+Not run in CI: the benches (`bench:*`, whose 50 ms and frame gates need a known machine) and the PowerPoint
+fidelity harness against LibreOffice (design/27 §14 item 2).
 
 Browser unit tests (the `*.browser.test.ts` files, the harness's `NativeRenderer`, the hub's pptx-preview
 import, `packages/pptx-render`) find their browser with one helper, `tools/find-chromium.ts`: Playwright's

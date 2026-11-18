@@ -1,5 +1,6 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { SystemFaceLookup } from './pptx/systemFaces.ts';
 import type { ToolProbe } from './tools.ts';
 
 export type FetchLike = (
@@ -67,6 +68,14 @@ export type HubConfig = {
    * command (`tools.ts` `HubTools`). `libreoffice.mode: 'off'` still wins.
    */
   toolProbe?: ToolProbe;
+  /**
+   * Where the hub finds this computer's script faces (sub-wave 1c rule H, `pptx/systemFaces.ts`): a table cell
+   * in a script drawn glyph by glyph that the font library has no face for is measured with the face this
+   * computer's font configuration gives (the face its LibreOffice and its browsers fall back to). Unset:
+   * fontconfig (`fontconfigLookup`, fc-match by absolute path), resolved once at start. The hub's test helpers
+   * set `noSystemFaces`, so a hub test means the same on every computer; a test injects its own lookup.
+   */
+  systemFaces?: SystemFaceLookup;
   /** Number of concurrent heavy and light jobs. */
   jobs: { heavy: number; light: number };
   /**

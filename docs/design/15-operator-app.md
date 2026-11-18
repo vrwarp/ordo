@@ -433,11 +433,11 @@ cells in place of the shape fields).
   splitting a slide, and the arrows choose a candidate. In the Presenter Notes Studio and the Lyric Script the
   canvas is not shown, and the focus is often on the page, which reads as the canvas (the button that opened
   the studio is gone; a click outside the Lyric Script's text leaves the focus on the page): what the canvas
-  had selected stays selected but no key acts on it there, neither the arrows' nudge, Delete, Backspace, Enter
-  or Escape, nor duplicate, copy, cut or paste onto the slide (`studioRef` in EditorView.tsx;
-  e2e/editor-keys.spec.ts). Ctrl+S, undo and redo, Find and Alt+N still apply; Up and Down (and Page Up and
-  Page Down) move between slides there even while the hidden canvas has something selected; and the
-  studio's own fields keep their keys.
+  had selected stays selected but no key acts on it there, neither the arrows' nudge, Delete, Backspace, Enter,
+  Tab or Escape (a table's cell keys included), nor duplicate, copy, cut or paste onto the slide (`studioRef`
+  in EditorView.tsx; e2e/editor-keys.spec.ts, and e2e/editor-table.spec.ts over a selected cell). Ctrl+S, undo
+  and redo, Find and Alt+N still apply; Up and Down (and Page Up and Page Down) move between slides there even
+  while the hidden canvas has something selected; and the studio's own fields keep their keys.
 - Groups and locked objects (design/27 §11 item 5 and "Locked objects"; pure ops in `views/editor/ops/group.ts`,
   the panel's parts in `GroupPanel.tsx`). The selection is a set of objects with a primary one, which the
   Object panel edits. A click on an object of a group (`origin.group`: a flattened PowerPoint group, or a
@@ -562,6 +562,114 @@ cells in place of the shape fields).
   keeps its legacy drawing. Shadow on adds PowerPoint's 'Offset: Bottom Right' outer shadow, or keeps an
   imported one. A locked shape's style fields are read-only; its box stays editable.
 
+### Object bars
+
+_The floating bar's registry (`views/editor/objectBars.ts`, `FloatingContextBar.tsx`)._ Like the Object panel's
+sections, the floating bar is a list of bars, each a component given one context (the object; `off` for the
+live lock or a locked object, `readOnly` for the live lock alone; `setObj`, the one way a bar changes the object
+as an undo step; the tail actions; the text selection; the slide, the draft and how many objects are selected).
+The bar shown is the first by `order` among those that apply to the primary object (for a selection of
+several objects, among the multi-selection bars) and that no applying bar replaces. The built-ins
+(`BUILTIN_BARS`, `OBJECT_BAR_ORDER`): the multi-selection bar (Align), a text box's, a plain shape's (geometry,
+fill, stroke), a picture's (Crop, Replace, Use as BG, loop) and the neutral bar, last: what the object is
+('Chart', 'Decoration', 'Rect (locked)'), then the tail actions. The shape bar applies to unlocked shapes
+without a table, a chart or a decoration only: its geometry select and fill pill write the legacy fields
+(`shape`, `fill`, `gradient`) that only an older build draws for those, and a locked shape's fields are
+read-only, so those objects get the neutral bar (`test/objectBars.test.ts`). M9's editor tracks add their bars
+with one line in `OBJECT_BARS` (or `registerObjectBar` at run time), as the panel's sections are added: the
+table's is there (see "Table editing"); a chart and a decoration keep the neutral bar until their tracks add
+theirs.
+
+### Table editing
+
+_A table (`ShapeObject.table`, design/27 M9) is edited cell by cell (`SlideCanvas.tsx`, `actions.ts`,
+`editorStore.ts`; renderer `table/edit.ts`)._
+
+- **Cells as text.** The store's selection has the table's selected cell (`cell`, its index in
+  `TableData.cells`) and the inline target `{ objectId, cell }` (`inlineEditingId`, `inlineEditingCell`;
+  `inlineTarget()`). The text actions take a target (`typeText`, `formatSelection`, `resizeSelection`,
+  `setParagraphs`, `pasteRichSelection`, and cut and paste with the cell's view): a cell is edited as its text
+  object view (domain `cellTextObject`) and written back through `setCell`, so every text op works on cells
+  unchanged; typing coalesces into one undo step per cell (`cell:<id>:<i>`), as per text box.
+- **Canvas.** The canvas loads the renderer's table module with the first table on a slide (the editor's chunk
+  holds no table code). A press on the table already selected alone selects the cell under it
+  (`cellAtPoint`: `tablePoint` and `tableHit`); a double-click, or Enter, edits it, the caret where the click
+  landed (Enter: at its end); while a cell is edited, Tab and Shift+Tab go to the next or previous cell in
+  reading order (its text selected), and Tab in the last cell adds a row (`insertRow`, the last row's look, one
+  undo step), as PowerPoint does. With a cell only selected (not edited), Tab and Shift+Tab select the next or
+  previous cell and add no row, and the arrow keys select the cell beside it as drawn (`cellBeside`: past a
+  merged cell's span; a right-to-left table's left is its next column; at an edge the cell stays selected);
+  Tab past the last or first cell, and Tab with the whole table selected, are not the table's, so focus
+  leaves the canvas (review of r2b sub-wave 1). A press on the selected table before the table module has
+  loaded is kept and selects its cell when it arrives (`pressTable`); the editor's inspect hook reports
+  `tableKit` once it has. Escape goes from the cell back to the whole table, a second Escape drops the selection;
+  Delete and Backspace with a cell selected empty that cell (with the whole table selected they delete the
+  table). The cell is edited as its edit view (`cellEditView`): the drawn cell text in slide coordinates (the
+  table's corner plus the cell's, moved by its vertical anchor), memoised per laid cell and box, so the caret,
+  the selection, a click and the arrow keys (`text/cursor.ts`) land on the drawn glyphs (same line breaks,
+  caret within 0.5 px: `table/edit.test.ts`); the selected cell is outlined on the editing layer. Typing a
+  character lays out that one cell again (the cell layout cache is keyed by each cell's content: in a
+  160-cell table one layout changes). The table's hit area, node cache rect and Transformer frame are its
+  drawn height (`drawnHeight`: a table made in ordo grows its rows with their text past `box.h`); a height drag
+  sets `box.h` from it (a drag of the width alone keeps it, `tableBoxAfterTransform`), and an imported table's
+  fixed rows it squashes get back what their text needs (below); tables do not turn in the editor (no
+  rotate handle; a stored turn is kept and drawn).
+- **The table bar and the Table section** (`TableTools.tsx`; the bar is `OBJECT_BARS`' table line, the section
+  `OBJECT_SECTIONS`' one, in place of the shape section). With a cell selected the bar is the text bar on the
+  cell's view (font, size, bold, italic, underline and superscript over a selection, colour, highlight,
+  alignment; `TextControls.tsx`), without uppercase, the contrast menu or shrink-to-fit (a cell style holds
+  none of them, domain `cellStyleOf`; a cell's row grows instead of its text shrinking), led by the cell's place
+  ('Row 2, column 3'); with the whole table selected it says 'Table'. Both have 'Cell fill' (solid or none,
+  `setCellFill`: the selected cell, or every cell with none selected; a fill they already have is no step) and 'Rows & columns' (Row above, Row below,
+  Column left, Column right, Delete row, Delete column: around the selected cell, at the table's edges with none;
+  left and right as drawn, so in a right-to-left table 'Column left' adds the column after the cell's last;
+  each one undo step; disabled past `TABLE_LIMITS`, at the last row or column, and for a delete with no cell;
+  the selection follows its cell). The alignment button cycles left, centre, right and drops a justified cell's
+  or box's justification (`nextAlign`; a justified paragraph keeps `align` beside `justify`). The panel's section has the cell's text field (`#ordo-text-editor`, which
+  the canvas's inline editing types through while the panel is open; Ctrl+B, I and U format the selected
+  words; a paste or cut in it goes through as typing, plain), the bar's text controls in a plain row, and the
+  six row and column ops as buttons, all 44 px under a finger (`.ed-cell-format`;
+  `e2e/ipad/table-targets.spec.ts`). On a tablet a tap on the selected table selects the cell, and a
+  double-tap opens the panel on its text; the section's hint then reads 'Tap a cell, then double-tap to
+  type.' ('Click a cell to edit its text (double-click on the slide).' with a mouse). Not built: merging and splitting cells, borders, column widths,
+  table styles.
+- **Rows follow the text on an edit** (sub-wave 1b, tables-form; `tableFit.ts`). An imported table stores
+  LibreOffice's rows, fixed (`rowRule: 'fixed'`, design/27 §15 "The stored form"), so the drawer does not grow
+  them; every op that commits a table change grows them instead, in the same undo step: an edit of a cell
+  (`editCell`: typing, a format, paragraph styles, a paste), Find & Replace in cells (`findInCells`), a row or
+  column added or deleted (`rowCol`: `keepWidth` narrows the columns), and the box resized (`updateObject`: the
+  canvas's Transformer and the Object panel's size fields; `transformGroup`; a single object's screen placement).
+  `fitRows(before, after, layout, cellOf)` (pure) lays both out with the drawer's layout (renderer
+  `layoutTable`; a cell's `need` is its text height plus its insets) and grows a single-row cell's row by how
+  much more its text falls short of the row than before, max(0, (needAfter - rowAfter) - max(0, needBefore -
+  rowBefore)), the largest per row, then a merged cell's last row the same way over its rows' sum; rows never
+  shrink, the others stay, `box.h` follows (domain `growRow`). While a row keeps its height (every content edit)
+  that is max(0, needAfter - max(row, needBefore)): by the increase only, since where the drawer's lines are
+  taller than the converter's model of LibreOffice's (2 Corinthians 3 vs 7, Churchcraft), cells need a few px
+  more than their fixed row before any edit, so a one-letter fix or a Find & Replace that wraps nothing moves no
+  row, and a long line grows its row by what it added. A shorter box (a height or corner drag, the Object
+  panel's H) takes room from every row; each gets back what its text needs, down to its text and no further (a
+  row with room keeps only what its text needs; a row already short keeps that shortfall), so no cell's text
+  spills over the row below, as in PowerPoint (review 1b). A cell is the same cell before and after by its
+  index (an edit, a resize) or by its place across the row or column added or deleted (`cellsByPlace`, from the
+  op; a merged cell over a deleted row keeps itself and grows its last row if its text no longer fits); a new
+  cell grows nothing. A table made in ordo grows its rows itself (`rowRule` 'grow'). The layout is the
+  canvas's table kit (the renderer's table module, a chunk of its own), measured as the canvas measures; the
+  editor's ops ask for it when they load, so Find & Replace in a table on a slide not yet shown grows its rows
+  too; until it is here, an op changes no row.
+- **What the editor shows of the stored form** (sub-wave 1b). The size field shows whole px as a typed size
+  shows (`TextControls.tsx`): an imported cell stored at LibreOffice's 600 dpi size (14 pt is 14.04 pt, 28.08 px)
+  shows 28, the stored size unchanged (Size − and + step from the stored one). A cell has no margin fields: its
+  insets as stored (LibreOffice's lift moved into the top and bottom, its spill shrinking them) are drawn, not
+  shown or edited. A cell's text copied and pasted into a text box takes the box's size, its runs keeping their
+  ratio to the cell's size (a slice carries run formatting, never the cell's box): no 600 dpi size travels.
+- **Find & Replace and New slide like this.** Find & Replace searches and replaces in the cells of every
+  unlocked table as in text boxes (`findInCells` in `ops/slides.ts`, the one place the find walks cells; a
+  match carries its `cell`); the Find card lists a cell's match and opens it for editing on the canvas. 'New
+  slide like this' empties a table's cells (text, runs and paragraph styles; each cell keeps its style, fill
+  and span). A table is never the lyric box, whatever `lyricObjectId` names, and 'Make lyric box' is not offered
+  for it.
+
 ### Canvas-first layout
 
 The desktop editor (a fine pointer; #24) puts the slide first. A touch device keeps the docked panel
@@ -582,8 +690,8 @@ under a finger.
   clicked at 1024x768 and 1280x720, and the editor clips rather than scrolls (`overflow: clip`), so
   focusing a control by keyboard never shifts the slide list off screen (`e2e/editor-fit.spec.ts`).
 - **Floating bar** (`FloatingContextBar.tsx`, placed by `floatingBarSpot` in `touchGeometry.ts`). It shows
-  while an object is selected, unless the drawer is open on Object; text, shape, picture and multi-selection
-  bars end with Layer, Duplicate, Delete and More…. Its tiers: above the box and its rotate handle; below a
+  while an object is selected, unless the drawer is open on Object; the bar is the registry's (see "Object
+  bars"), and every bar ends with Layer, Duplicate, Delete and More…. Its tiers: above the box and its rotate handle; below a
   box near the top of the slide; docked inside the top edge of a tall box (the top bezel while its text is
   edited inline); clear of an open Find card. It fits its pane (`e2e/editor-fit.spec.ts`): its width is its one-row width,
   at most the pane's less 16 px whatever its offset, and a wider row wraps to a second row instead of
@@ -647,7 +755,10 @@ Controls are 44 px with 16 px inputs (no focus zoom), the canvas-first editor's 
 list, and the Lyric Script's arrangement pills get 44 px back under a coarse pointer);
 `e2e/ipad/touch-targets.spec.ts` audits every visible control of the editor, the docked panel, the slides
 list, the paint picker and the Lyric Script in both orientations, the picker's 32 px swatch grid and the
-ramp's stop pins its named exceptions. The audit itself is `e2e/touchaudit.ts` (`auditTargets`); a phone's
+ramp's stop pins its named exceptions; `e2e/ipad/table-targets.spec.ts` does the same with a table's cell
+selected (its Table section: the cell's text, its format row, Cell fill, Rows & columns; `TABLE_TOOLS`, with
+the same exceptions, `TABLET_EXCEPTIONS`) in the three tablet projects. The audit itself is
+`e2e/touchaudit.ts` (`auditTargets`); a phone's
 compact layout runs it on every compact route and sheet with links, `role="button"` and checkbox labels added
 and no exceptions (`layoutChecks` in `e2e/phone/phonehelpers.ts`, design/28 §8 "Layout"). In portrait the editor's property panel and the
 playlist's add panel move under the main pane. File pickers are a plain button to the native picker
@@ -760,7 +871,10 @@ of the box, such as Carlito for Calibri, is a library font) with 'Upload font' (
 'Make editable' on a legacy PowerPoint page (a picture import from before M3) rebuilds the page from the
 stored deck: the hub reroutes it to the re-import of that slide (202 and the job), the editor follows the
 job and takes it over, and the page becomes the native slide with the objects added over it on top and its
-notes. A PDF page, or a deck no longer stored, keeps today's text boxes over the page picture.
+notes. Since sub-wave 1b the same holds for LibreOffice's page that a native import stored (an older
+library's table page becomes the table object to edit); a slide the deck still gives as LibreOffice's page
+(too large as objects) gets its text boxes over the page from the same job, and the editor says it could not
+rebuild the slide. A PDF page, or a deck no longer stored, keeps today's text boxes over the page picture.
 
 The Presentation panel of a PowerPoint presentation ends with its import report (`PptxReport.tsx`): the
 slides per class (`source.native`) or, for a legacy import, that its slides are pictures; legacy pages

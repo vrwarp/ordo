@@ -20,6 +20,10 @@ import {
   APP_VERSION,
   type AuthMeRes,
   COOKIE_SESSION,
+  LIVE_PREPARE_PATH,
+  LIVE_PREPARE_WAIT_MS,
+  LivePrepareReq,
+  type LivePrepareRes,
   LiveSummaryRes,
   type ManifestRes,
   type OutputConfigRes,
@@ -495,6 +499,11 @@ export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
       throw e;
     }
   };
+  // Going live prepared beside the running service (design/29 M8): fetched and checked off the GO path.
+  route('POST', LIVE_PREPARE_PATH, 'operate', 'full', async (req): Promise<LivePrepareRes> => {
+    const b = validate(LivePrepareReq, req.body);
+    return live.prepareWait(b.playlistId, { saved: b.saved, seen: b.seen, waitMs: LIVE_PREPARE_WAIT_MS });
+  });
   route('POST', '/live/events', 'operate', 'full', async (req) => {
     const body = (req.body ?? {}) as { event?: unknown };
     if (body && typeof body === 'object' && 'event' in body) {

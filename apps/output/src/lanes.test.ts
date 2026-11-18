@@ -76,6 +76,23 @@ describe('raster lanes: order', () => {
     expect(laneOf(RANK.bulk)).toBe('bulk');
   });
 
+  it('runs a late job (late units, a refresh) below the live and armed cues and above bulk work', async () => {
+    const h = harness();
+    // A late job of two slices: a GO's live job and an arm that arrive meanwhile go ahead of its second slice,
+    // and the bulk job (warm-up) waits until it is done.
+    h.lanes.push(h.job('late', { chain: 'late', rank: RANK.late, slices: 2 }));
+    h.lanes.push(h.job('bulk', { chain: 'warm', rank: RANK.bulk }));
+    await h.step();
+    expect(h.log).toEqual(['late0']);
+    h.lanes.push(h.job('armed', { chain: 'slide', rank: RANK.armed }));
+    h.lanes.push(h.job('live', { chain: 'bg', rank: RANK.live }));
+    await h.drain();
+    expect(h.log).toEqual(['late0', 'live0', 'armed0', 'late1', 'bulk0']);
+    expect(RANK.armed).toBeLessThan(RANK.late);
+    expect(RANK.late).toBeLessThan(RANK.bulk);
+    expect(laneOf(RANK.late)).toBe('interactive');
+  });
+
   it('runs the jobs of one chain one at a time, queued in rank then arrival order', async () => {
     const h = harness();
     h.lanes.push(h.job('a1', { chain: 'slide', rank: RANK.armed, slices: 2 }));
@@ -84,6 +101,21 @@ describe('raster lanes: order', () => {
     await h.drain();
     // a1 had started: it finishes first; then the live job overtakes the armed one queued before it.
     expect(h.log).toEqual(['a10', 'a11', 'l10', 'a20']);
+  });
+
+  it('names the jobs a job of a rank pushed now would start after: the running one and the queued of no greater rank', async () => {
+    const h = harness();
+    h.lanes.push(h.job('a1', { chain: 'slide', rank: RANK.armed, slices: 2 }));
+    h.lanes.push(h.job('p1', { chain: 'slide', rank: RANK.props }));
+    h.lanes.push(h.job('a2', { chain: 'slide', rank: RANK.armed }));
+    await h.step();
+    expect(h.lanes.keys()).toEqual({ slide: ['a1', 'p1', 'a2'] });
+    // A live job waits behind the running arm and the props job, not behind the arm queued after them.
+    expect(h.lanes.ahead('slide', RANK.live)).toEqual(['a1', 'p1']);
+    expect(h.lanes.ahead('slide', RANK.armed)).toEqual(['a1', 'p1', 'a2']);
+    expect(h.lanes.ahead('other', RANK.live)).toEqual([]);
+    await h.drain();
+    expect(h.lanes.ahead('slide', RANK.live)).toEqual([]);
   });
 
   it('lets another chain run while a job awaits a decode off this thread', async () => {

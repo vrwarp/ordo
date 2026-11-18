@@ -1,8 +1,9 @@
 import { expandCues } from './cues.ts';
 import { newId } from './ids.ts';
-import type { ManifestFile, ResolvedPlaylist } from './live.ts';
+import { type ManifestFile, PRERENDERS_MAX, type PrerenderSize, type ResolvedPlaylist } from './live.ts';
 import { drawnShapeFileRefs } from './m9-readers.ts';
 import { type MissingKind, missingKinds, missingLabel } from './missing.ts';
+import { PRERENDER_ON, resolveDraw } from './prerender.ts';
 import {
   type SlidePlay,
   manifestFiles,
@@ -14,6 +15,7 @@ import {
   type FileRef,
   type Font,
   type GeneralSettings,
+  isGeomFileRef,
   type Look,
   type Media,
   Playlist,
@@ -22,7 +24,7 @@ import {
   Section,
   Slide,
 } from './schemas.ts';
-import { resolvedBytes, resolvedSizeWarning } from './size.ts';
+import { resolvedBytes, resolvedSizeRefusal, resolvedSizeWarning } from './size.ts';
 
 /**
  * Turning a playlist into the frozen copy a goLive carries (design/25 "quarantine"). Shared by the hub
@@ -48,6 +50,19 @@ export type GoLiveInputs = {
    * draw what they cached.
    */
   file?(hash: string): FileRef | undefined;
+  /**
+   * design/29 §1.7: a pre-rendered slide's file head by its name (`Slide.prerender.file.ref`), so its pages are
+   * listed (`SlideFileHead`, slidefile.ts): the hub reads it from its store, the operator PC from its file cache.
+   * Absent: only the head is.
+   */
+  slideHead?(ref: string): { readonly pages: readonly string[] } | undefined;
+  /**
+   * design/29 §1.3, §1.7: the pictures the hub keeps of a presentation's pre-rendered slides (the newest per
+   * slide, variant and size, a stand-by marked) and the keys of its current revision (`prerender_keys`).
+   * Absent (no picture store, or the operator PC): none are listed.
+   */
+  prerenders?(presentationId: string): readonly PrerenderRow[];
+  prerenderKeys?(presentationId: string): readonly string[];
   /** When the copy was taken (remote sources serve a cached copy while the library is down). */
   takenAt?: number;
   /**
@@ -58,6 +73,16 @@ export type GoLiveInputs = {
 };
 
 export type Degraded = NonNullable<ResolvedPlaylist['degraded']>[number];
+
+/** A picture the hub keeps of a pre-rendered slide (design/29 §1.3 `prerenders`), as goLive reads it. */
+export type PrerenderRow = {
+  slideId: string;
+  key: string;
+  size: PrerenderSize;
+  file: FileRef;
+  /** Found by its stand-by id: made by an older renderer or before a font upload (W39). */
+  standby?: boolean;
+};
 
 /** A playlist entry whose content failed validation and was replaced (before cue indices are known). */
 export type GoLiveProblem = { presentationId?: string; slideId?: string; reason: string };
@@ -206,6 +231,11 @@ export type ResolveOptions = {
   digest: (parts: string[]) => string;
   /** Told about a cached copy and about quarantined content (logging only). */
   warn?: (message: string, detail?: Record<string, unknown>) => void;
+  /**
+   * Whether the screens draw pre-rendered slides from their pictures (`PRERENDER_ON`, the default): only then
+   * does a slide without its picture get a line (design/29 §1.7). Tests set it.
+   */
+  prerenderOn?: boolean;
 };
 
 /**
@@ -256,15 +286,20 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
     media[id] = m;
   }
   if (missing.length) throw new GoLiveRejection(`Cannot go live: ${missing.slice(0, 5).join('; ')}`);
+  // What pre-rendered slides' files draw (design/29 §1.7): their media optional, like a reference picture.
+  problems.push(...usedMedia(presentations, inputs, media));
   // Family names match case-insensitively, as in CSS and the drawers' font resolver.
   const families = new Set(
-    [...referencedFontFamilies(Object.values(presentations), looks)].map((f) => f.trim().toLowerCase()),
+    [...referencedFontFamilies(Object.values(presentations), looks), ...usedFonts(presentations)].map((f) =>
+      f.trim().toLowerCase(),
+    ),
   );
   const fonts: Font[] = inputs.fonts().filter((f) => families.has(f.family.trim().toLowerCase()));
   const files = manifestFiles(Object.values(media), fonts);
-  const geoms = geomFiles(presentations, inputs.file);
+  const geoms = geomFiles({ playlist, presentations, media }, inputs, opts.prerenderOn ?? PRERENDER_ON);
   for (const f of geoms.files)
     files.push({ hash: f.hash, bytes: f.bytes, mime: f.mime } satisfies ManifestFile);
+  files.push(...geoms.unindexed);
   problems.push(...geoms.problems);
   const parts = [`${playlist.id}:${playlist.rev}`];
   for (const p of Object.values(presentations)) parts.push(`${p.id}:${p.rev}`);
@@ -276,13 +311,19 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
     media,
     fonts,
     looks,
+    ...(geoms.prerenders.length ? { prerenders: geoms.prerenders } : {}),
+    ...(geoms.keys.length ? { prerenderKeys: geoms.keys } : {}),
     logoMediaId: logoId && media[logoId] ? logoId : undefined,
     files,
     ...(geoms.files.length ? { geoms: geoms.files } : {}),
     manifestId: opts.digest(parts),
   };
-  // Too large for an operator takeover's hand-back (design/27 §3.4): live with a warning.
-  const sizeWarning = resolvedSizeWarning(resolvedBytes(resolved));
+  // The running service's size (design/29 D13): refused past the ceiling (W58), a critical line past the
+  // size whose first save on a screen passes the GO lead (W59).
+  const bytes = resolvedBytes(resolved);
+  const refusal = resolvedSizeRefusal(bytes);
+  if (refusal) throw new GoLiveRejection(refusal);
+  const sizeWarning = resolvedSizeWarning(bytes);
   if (sizeWarning) problems.push({ reason: sizeWarning });
   // Slides whose LibreOffice art or page picture is still being made go live as they are (design/27 §5).
   problems.push(...pendingSlides(resolved));
@@ -365,21 +406,32 @@ export function localDigest(parts: string[]): string {
  * What a `degraded` entry's slide shows, from its reason, for the operator's banner (design/25, design/27 §5,
  * §8): 'empty' a slide quarantined and replaced by an empty one; 'media' a slide that goes live without a
  * clip, sound, background or PowerPoint picture that is not ready (its poster shows); 'drawing' a PowerPoint
- * slide LibreOffice is still drawing or could not draw; 'other' anything else (a damaged presentation).
- * The reasons are written in this file, so the kinds stay in step with them.
+ * slide LibreOffice is still drawing or could not draw; 'picture' pre-rendered slides without their picture
+ * yet (design/29 §1.7, W33); 'slideFile' pre-rendered slides whose full copy the hub lacks (W40); 'other'
+ * anything else (a damaged presentation, a slide's cut lines, the file cap, W60). The reasons are written in
+ * this file, so the kinds stay in step with them. (The operator's banner groups 'picture' and 'slideFile' from
+ * golive-warnings on; nothing writes a pre-rendered slide before then, `PRERENDER_ON`.)
  */
-export type DegradedKind = 'empty' | 'media' | 'drawing' | 'other';
+export type DegradedKind = 'empty' | 'media' | 'drawing' | 'picture' | 'slideFile' | 'other';
 
 const MEDIA_REASON =
   /; (?:showing its poster|the slide shows without it|the slide shows only the objects added in ordo|the item plays without music)(?:; Go live again once it is ready)?$/;
 
 export function degradedKind(reason: string): DegradedKind {
+  if (reason.includes(PICTURE_MARK)) return 'picture';
+  if (reason.includes(SLIDE_FILE_MARK)) return 'slideFile';
   if (reason === PENDING_SLIDE_REASON || reason === FAILED_SLIDE_REASON) return 'drawing';
   if (reason.startsWith(MISSING_SLIDE_REASON)) return 'drawing';
   if (MEDIA_REASON.test(reason)) return 'media';
   if (/ slide \d+ is invalid \(.*\); shown empty$/s.test(reason)) return 'empty';
   return 'other';
 }
+
+/**
+ * Why a goLive the hub was still preparing is not applied: End service was pressed after it (design/29 M8).
+ * The operator who ended the service shows no refusal for it.
+ */
+export const GOLIVE_ENDED_REASON = 'Go live cancelled by End service';
 
 /** The reason a slide waiting for the LibreOffice follow-up of a PowerPoint import is listed in `degraded`. */
 export const PENDING_SLIDE_REASON =
@@ -404,50 +456,257 @@ export function missingSlideReason(kinds: readonly MissingKind[]): string {
   return `${MISSING_SLIDE_REASON}${what}: it is left out`;
 }
 
-/** At most this many geometry files a goLive lists (each is one file the outputs cache). */
+/**
+ * At most this many content-store files a goLive lists besides media and fonts (geometry and decoration files,
+ * pre-rendered slides' pictures, heads and pages; each is one file the outputs cache).
+ */
 export const GOLIVE_GEOM_FILES_MAX = 20_000;
 
+/** The line a goLive carries when its listing reaches `GOLIVE_GEOM_FILES_MAX` (design/29 §3, W60; critical). */
+export const FILES_CUT_REASON =
+  'Some slides near the end of this service are shown without their full detail: it has more files than ordo sends at once. Split the playlist into two services.';
+
+/** The degraded line of pre-rendered slides of one presentation whose full copy the hub lacks (W40; critical). */
+function slideFileMissing(title: string, slides: number[]): string {
+  return slides.length === 1
+    ? `Slide ${slides[0]} of '${title}' is missing its full copy on the hub, so the screens show a simplified version (its text and pictures only).`
+    : `${slides.length} slides of '${title}' are missing their full copy on the hub, so the screens show a simplified version (their text and pictures only).`;
+}
+const SLIDE_FILE_MARK = ' full copy on the hub, ';
+
+/** The degraded line of pre-rendered slides of one presentation without a picture yet (W33; critical). */
+function pictureMissing(title: string, n: number): string {
+  const which = n === 1 ? `1 slide of "${title}" has` : `${n} slides of "${title}" have`;
+  return `${which} no picture yet. Until a picture is ready, the screens draw the slide themselves, so it may appear a moment late.`;
+}
+const PICTURE_MARK = ' no picture yet. ';
+
+/** What a goLive lists besides media and fonts: `geomFiles`' result. */
+type Listed = {
+  /** Files the library's index knows: into `files` and `geoms`. */
+  files: FileRef[];
+  /** Files listed without an index (the operator PC resolving offline): into `files` only. */
+  unindexed: ManifestFile[];
+  prerenders: NonNullable<ResolvedPlaylist['prerenders']>;
+  keys: string[];
+  problems: GoLiveProblem[];
+};
+
 /**
- * The shape files the presentations' slides draw (`drawnShapeFileRefs`: geometry files, design/27 §3.1
- * `ShapeGeom.ref`, and decoration files, M9 `DecorData.ref`), once each, from the library's file index, and
- * one problem per slide that draws one the library does not have (its shapes are drawn as their plain
- * outlines or inline parts). Nothing without a file index.
+ * The content-store files the service's slides draw besides media and fonts, once each, in cue order from the
+ * first cue (design/29 §1.7): geometry and decoration files (`drawnShapeFileRefs`), and for a pre-rendered slide
+ * its pictures (the hub's rows of the key set, or stand-bys), its head, its pages (`slideHead`) and the shape
+ * files it uses; then the slides no cue shows. Past `GOLIVE_GEOM_FILES_MAX` the rest are not listed, with W60
+ * when a cue's slide lost files. With the library's file index: one line a slide whose shape files it lacks, one
+ * a presentation whose slides' full copies it lacks (W40), and, while the screens draw pictures, one a
+ * presentation whose slides have no picture yet (W33). Without one (the operator PC from its cache) they are
+ * listed by name for the outputs to fetch over the direct link, and nothing is judged missing.
  */
 function geomFiles(
-  presentations: Record<string, Presentation>,
-  file: ((hash: string) => FileRef | undefined) | undefined,
-): { files: FileRef[]; problems: GoLiveProblem[] } {
-  const files = new Map<string, FileRef>();
-  const problems: GoLiveProblem[] = [];
-  if (!file) return { files: [], problems };
-  const missing = new Set<string>();
-  for (const p of Object.values(presentations))
-    for (const sec of p.sections)
-      for (const s of sec.slides) {
-        let lost = 0;
-        for (const ref of drawnShapeFileRefs(s)) {
-          if (files.has(ref) || files.size >= GOLIVE_GEOM_FILES_MAX) continue;
-          const f = missing.has(ref) ? undefined : file(ref);
-          if (f?.hash === ref) files.set(ref, f);
-          else {
-            missing.add(ref);
-            lost++;
+  resolved: Pick<ResolvedPlaylist, 'playlist' | 'presentations' | 'media'>,
+  inputs: GoLiveInputs,
+  prerenderOn: boolean,
+): Listed {
+  const out: Listed = { files: [], unindexed: [], prerenders: [], keys: [], problems: [] };
+  const presentations = resolved.presentations;
+  const index = inputs.file;
+  const seen = new Set<string>();
+  const missingRefs = new Set<string>();
+  let cut = false;
+  // Lists one file; false once the cap is reached.
+  const list = (hash: string, ref?: FileRef): boolean => {
+    if (seen.has(hash)) return true;
+    if (seen.size >= GOLIVE_GEOM_FILES_MAX) return false;
+    seen.add(hash);
+    if (ref) out.files.push(ref);
+    else out.unindexed.push({ hash, bytes: 0, mime: 'application/json' });
+    return true;
+  };
+  // Looks a file up in the index; without one, a name is all there is.
+  const find = (hash: string): { ref?: FileRef; ok: boolean } => {
+    if (!index) return { ok: true };
+    if (missingRefs.has(hash)) return { ok: false };
+    const f = index(hash);
+    if (f?.hash === hash) return { ref: f, ok: true };
+    missingRefs.add(hash);
+    return { ok: false };
+  };
+  // The service's key set and each presentation's picture rows (the hub's; none offline).
+  const keys = new Set<string>();
+  const rows = new Map<string, Map<string, PrerenderRow[]>>();
+  for (const p of Object.values(presentations)) {
+    for (const k of inputs.prerenderKeys?.(p.id) ?? [])
+      if (keys.size < PRERENDERS_MAX && typeof k === 'string' && isGeomFileRef(k)) keys.add(k);
+    const bySlide = new Map<string, PrerenderRow[]>();
+    for (const r of inputs.prerenders?.(p.id) ?? []) {
+      const list = bySlide.get(r.slideId) ?? [];
+      list.push(r);
+      bySlide.set(r.slideId, list);
+    }
+    rows.set(p.id, bySlide);
+  }
+  out.keys = [...keys];
+  type Missing = { slides: number[]; ids: string[] };
+  const fileMissing = new Map<string, Missing>();
+  const pictureLess = new Map<string, number>();
+  const shown = new Set<string>();
+  const slideFiles = (p: Presentation, s: Slide, at: number, inCue: boolean) => {
+    let lost = 0;
+    let complete = true;
+    const add = (hash: string, ref?: FileRef) => {
+      if (!list(hash, ref)) complete = false;
+    };
+    const pre = s.prerender;
+    if (pre) {
+      let pictured = false;
+      for (const r of rows.get(p.id)?.get(s.id) ?? []) {
+        if (!isGeomFileRef(r.key) || !isGeomFileRef(r.file?.hash)) continue;
+        if (!keys.has(r.key) && !r.standby) continue;
+        if (out.prerenders.length >= PRERENDERS_MAX) break;
+        const before = seen.size;
+        add(r.file.hash, r.file);
+        if (seen.size === before && !seen.has(r.file.hash)) continue;
+        pictured = true;
+        out.prerenders.push({
+          presentationId: p.id,
+          slideId: s.id,
+          key: r.key,
+          size: r.size,
+          file: r.file.hash,
+          ...(r.standby ? { standby: true } : {}),
+        });
+      }
+      if (pre.file) {
+        const head = find(pre.file.ref);
+        if (!head.ok) {
+          const m = fileMissing.get(p.id) ?? { slides: [], ids: [] };
+          m.slides.push(at);
+          m.ids.push(s.id);
+          fileMissing.set(p.id, m);
+        } else {
+          add(pre.file.ref, head.ref);
+          for (const page of inputs.slideHead?.(pre.file.ref)?.pages ?? []) {
+            const f = find(page);
+            if (f.ok) add(page, f.ref);
+            else if (!fileMissing.get(p.id)?.ids.includes(s.id)) {
+              const m = fileMissing.get(p.id) ?? { slides: [], ids: [] };
+              m.slides.push(at);
+              m.ids.push(s.id);
+              fileMissing.set(p.id, m);
+            }
           }
         }
-        if (lost && problems.length < DEGRADED_MAX)
+      }
+      if (!pictured && inCue && resolveDraw(s, p.meta) === 'picture')
+        pictureLess.set(p.id, (pictureLess.get(p.id) ?? 0) + 1);
+    }
+    for (const ref of new Set([...drawnShapeFileRefs(s), ...(pre?.uses?.files ?? [])])) {
+      if (!index && !isGeomFileRef(ref)) continue;
+      const f = find(ref);
+      if (f.ok) add(ref, f.ref);
+      else lost++;
+    }
+    if (!complete && inCue) cut = true;
+    if (lost && out.problems.length < DEGRADED_MAX)
+      out.problems.push({
+        presentationId: p.id,
+        slideId: s.id,
+        reason: `${lost} shape outline(s) of this slide are missing from the library: drawn as plain shapes`,
+      });
+  };
+  // Each slide's position in its presentation (1-based, every section in stored order), for the lines.
+  const where = new Map<string, Map<string, { s: Slide; at: number }>>();
+  for (const p of Object.values(presentations)) {
+    const m = new Map<string, { s: Slide; at: number }>();
+    let at = 0;
+    for (const sec of p.sections) for (const s of sec.slides) if (!m.has(s.id)) m.set(s.id, { s, at: ++at });
+    where.set(p.id, m);
+  }
+  let cues: ReturnType<typeof expandCues> = [];
+  try {
+    cues = expandCues(resolved);
+  } catch {
+    /* no cue order: the presentations' order below */
+  }
+  for (const c of cues) {
+    if (c.kind !== 'slide' || !c.presentationId || !c.slideId) continue;
+    const id = `${c.presentationId}\u0000${c.slideId}`;
+    if (shown.has(id)) continue;
+    shown.add(id);
+    const p = presentations[c.presentationId];
+    const hit = where.get(c.presentationId)?.get(c.slideId);
+    if (p && hit) slideFiles(p, hit.s, hit.at, true);
+  }
+  for (const p of Object.values(presentations))
+    for (const [slideId, hit] of where.get(p.id) ?? [])
+      if (!shown.has(`${p.id}\u0000${slideId}`)) slideFiles(p, hit.s, hit.at, false);
+  for (const [pid, m] of fileMissing) {
+    const title = (presentations[pid]?.title ?? '').slice(0, 200);
+    out.problems.push({
+      presentationId: pid,
+      ...(m.ids.length === 1 ? { slideId: m.ids[0] } : {}),
+      reason: slideFileMissing(title, m.slides),
+    });
+  }
+  if (prerenderOn)
+    for (const [pid, n] of pictureLess)
+      out.problems.push({
+        presentationId: pid,
+        reason: pictureMissing((presentations[pid]?.title ?? '').slice(0, 200), n),
+      });
+  // W60: a service-wide line, ahead of the per-slide ones, so the degraded list's cap never hides it.
+  if (cut) out.problems.unshift({ reason: FILES_CUT_REASON });
+  return out;
+}
+
+/**
+ * The media pre-rendered slides' files draw (`Slide.prerender.uses.media`, design/29 §1.7), optional like a
+ * reference picture: what is ready joins `media`, what is not is a line for its slide, never a refusal.
+ */
+function usedMedia(
+  presentations: Record<string, Presentation>,
+  inputs: GoLiveInputs,
+  media: Record<string, Media>,
+): GoLiveProblem[] {
+  const problems: GoLiveProblem[] = [];
+  for (const p of Object.values(presentations))
+    for (const sec of p.sections)
+      for (const s of sec.slides)
+        for (const id of s.prerender?.uses?.media ?? []) {
+          if (media[id]) continue;
+          const m = inputs.media(id);
+          if (m?.state === 'ready') {
+            media[id] = m;
+            continue;
+          }
+          if (problems.length >= DEGRADED_MAX) continue;
+          const name = m
+            ? `"${m.name.slice(0, 200)}" (a picture of the slide's full copy)`
+            : `picture ${id.slice(0, 200)}`;
+          const state = !m ? 'is missing' : m.state === 'failed' ? 'failed' : 'is still processing';
           problems.push({
             presentationId: p.id,
             slideId: s.id,
-            reason: `${lost} shape outline(s) of this slide are missing from the library: drawn as plain shapes`,
+            reason: `${name} ${state}; the slide shows without it`,
           });
-      }
-  return { files: [...files.values()], problems };
+        }
+  return problems;
+}
+
+/** The font families pre-rendered slides' files draw in (`Slide.prerender.uses.fonts`). */
+function usedFonts(presentations: Record<string, Presentation>): string[] {
+  const out: string[] = [];
+  for (const p of Object.values(presentations))
+    for (const sec of p.sections)
+      for (const s of sec.slides) for (const f of s.prerender?.uses?.fonts ?? []) out.push(f);
+  return out;
 }
 
 /**
  * Slides of a native PowerPoint import that still wait for LibreOffice (`Slide.pptx.pending`), that it could
- * not draw (`Slide.pptx.failed`), or with elements nothing draws (`Slide.pptx.missing`, M9, named by kind).
- * One entry a slide: waiting or failed first, since LibreOffice's drawing would bring the missing elements.
+ * not draw (`Slide.pptx.failed`), or with elements nothing draws (`Slide.pptx.missing`, M9, named by kind),
+ * and slides not from PowerPoint that a kept bound cut (`Slide.cut`, design/29 §1.2). One entry a slide:
+ * waiting or failed first, since LibreOffice's drawing would bring the missing elements.
  */
 function pendingSlides(resolved: ResolvedPlaylist): GoLiveProblem[] {
   const out: GoLiveProblem[] = [];
@@ -456,6 +715,8 @@ function pendingSlides(resolved: ResolvedPlaylist): GoLiveProblem[] {
     if (s.pptx?.pending) return PENDING_SLIDE_REASON;
     if (s.pptx?.failed) return FAILED_SLIDE_REASON;
     if (s.pptx?.missing?.length) return missingSlideReason(missingKinds(s.pptx.missing));
+    // What a kept bound left out of a slide not from PowerPoint (design/29 §1.2): the import's own lines.
+    if (s.cut?.length) return s.cut.join(' ').slice(0, 500);
     return undefined;
   };
   for (const p of Object.values(resolved.presentations))

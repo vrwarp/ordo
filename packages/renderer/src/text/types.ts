@@ -213,6 +213,11 @@ export type Itemized = {
   /** `TextObject.text`. */
   text: string;
   paras: ItemPara[];
+  /**
+   * The box lays text out in the office line model (`TextStyle.lineModel` 'office': imported PowerPoint text,
+   * table cells): its paragraphs break by the office rules (breaks.ts `breakOpportunities`).
+   */
+  office?: true;
 };
 
 /** UAX#9 result for one paragraph (bidi.ts). */
@@ -234,6 +239,12 @@ export type Piece = {
   level: number;
   /** A line may break after this piece. False inside a word (a style or level cut): only an emergency break. */
   breakAfter: boolean;
+  /**
+   * The break after it is one only the office rules make ('3:16-' / '17', breaks.ts `officeOnly`), inside a
+   * word UAX#14 keeps whole: on one line the next piece of the run follows at the whole string's advance
+   * (lines.ts), so the kerning across it is kept as the whole string is shaped.
+   */
+  officeBreak?: true;
   /** ISO 15924 code when the piece needs a script fallback face (FaceRequest.script), else ''. */
   script: string;
 };
@@ -246,6 +257,12 @@ export type PreparedPara = {
   pieces: Piece[];
   /** Style cuts that fell inside a cluster and moved to its end (§6 step 4), for the drawers to report. */
   movedCuts?: number;
+  /**
+   * Office text: the breaks after a slash LibreOffice's i#17155 rule drops (breaks.ts `glued`), ascending
+   * (`at`), each with the offset it moves back to (`to`, the same index); lines.ts follows them where one is a
+   * line's last break before its width, reading only those inside the word that does not fit.
+   */
+  glued?: { readonly at: readonly number[]; readonly to: readonly number[] };
 };
 
 /** A paragraph's bullet or number before layout (bullets.ts); lines.ts sizes and places it. */

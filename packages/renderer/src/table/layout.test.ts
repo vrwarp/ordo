@@ -121,6 +121,21 @@ describe('table layout', () => {
     expect(c.dy).toBeCloseTo((Math.max(1, 30 - 10) - c.textHeight) / 2, 9);
   });
 
+  it("gives each cell's need (its text and insets), which a fixed row keeps under or over it", () => {
+    // What the editor compares before and after an edit (fitRows): the cell's text height plus its insets,
+    // as a growing row would take it; a fixed row stays as stored whatever its cells need.
+    const long = 'aaaa bbbb cccc dddd eeee ffff gggg';
+    const t = gridTable(1, 2, { rows: [30], rowRule: 'fixed', cells: [{ text: long }, { text: 'r0c1' }] });
+    const l = layoutTable(testMeasurer(), tableShape(t), env)!;
+    expect(l.cells[0]!.need).toBeCloseTo(need(long, 100), 9);
+    expect(l.cells[1]!.need).toBeCloseTo(need('r0c1', 100), 9);
+    expect(l.cells[0]!.need).toBeGreaterThan(30);
+    expect(l.height).toBe(30);
+    // A growing row is its largest need.
+    const g = layoutTable(testMeasurer(), tableShape({ ...t, rowRule: undefined }), env)!;
+    expect(g.height).toBeCloseTo(l.cells[0]!.need, 9);
+  });
+
   it('anchors text within its grown cell as a text box anchors it', () => {
     const t = gridTable(1, 3, {
       cells: [

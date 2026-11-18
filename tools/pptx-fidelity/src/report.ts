@@ -1,4 +1,5 @@
 import { writeFile } from 'node:fs/promises';
+import type { HubInfo } from './beforehub.ts';
 import { COMPAT_RULE_TEXT, COMPAT_RULES, type CompatRule } from './compat/index.ts';
 import { M2_FEATURE_TARGETS, TEXT_FEATURES, xmlFeatureOrder } from './features/index.ts';
 import type { ScriptFace } from './fonts.ts';
@@ -34,6 +35,8 @@ export type SlideScore = {
   convertMs?: number;
   /** Median `drawSlide2D` time (draw and flush) at 1920 and 3840 px wide, in ms. */
   rasterMs?: { '1920': number; '3840': number };
+  /** The slowest warm `drawSlide2D` at 1920 and 3840 px wide, in ms (beside the median). */
+  rasterMaxMs?: { '1920': number; '3840': number };
   /** Cold: preparing the pictures the deck's cache lacks plus the first draw, in ms. */
   coldMs?: { '1920': number; '3840': number };
   /** The largest single object's cold draw and flush at 1920 and 3840 px, in ms (`native-page.ts`). */
@@ -43,9 +46,17 @@ export type SlideScore = {
   /** The slide's class in the hub when its budgets made it differ from `class` (`census.ts` `hubClasses`). */
   hub?: string;
   /**
+   * M9: the slide holds a table object (`NativeSlide.table`): its hub columns score it as stored (`noLoSsim`,
+   * and `beforeHubSsim` when the hub is not asked: `policySsim`, or `nativeSsim` where the two drawings are
+   * equal), never its drawing under the LibreOffice policies. The slides an older run's `reasons` ('table' or
+   * 'deco:table', not 'art:table') select for `--stored-tables`.
+   */
+  table?: true;
+  /**
    * `--before hub`: what a hub with LibreOffice showed, scored against LibreOffice (`beforehub.ts`): its
    * version 2 drawn (`beforeHubFrom: 'hub'`), else the pixel paste (`'paste'`); a slide the hub stores native
-   * without metafiles has its `nativeSsim` (and no `beforeHubFrom`).
+   * without metafiles has its `nativeSsim` (and no `beforeHubFrom`), a slide holding a table object its
+   * stored form (`table`).
    */
   beforeHubSsim?: number;
   beforeHubFrom?: 'hub' | 'paste';
@@ -58,6 +69,13 @@ export type SlideScore = {
   beforeHubPaste?: number;
   /** `--no-libreoffice`: what a hub without LibreOffice shows (its picture, when it differs from `native`). */
   noLoSsim?: number;
+  /**
+   * `--ask-hub-nolo` (sub-wave 1c): what a REAL hub without LibreOffice showed of this slide, its stored form
+   * drawn (`noLoHubFrom: 'hub'`); `noLoHubFrom` alone says why there is no score ('import failed', 'pending',
+   * 'not drawn', 'no hub', 'no score'). For a table slide this, not `noLoSsim` (fontconfig's faces), is the hub.
+   */
+  noLoHubSsim?: number;
+  noLoHubFrom?: string;
   nativeNoLo?: string;
   /** `--no-libreoffice`: what nothing draws without LibreOffice (`EmittedSlide.missing` kinds). */
   missing?: string[];
@@ -128,6 +146,8 @@ export type Summary = {
   noLoMean?: number;
   /** `--hub-budget`: every slide drawn as the hub stores it. */
   hubBudget?: boolean;
+  /** The real hubs the run asked (`--before hub`, `--ask-hub-nolo`): kind, hub entry, LibreOffice's state. */
+  askedHubs?: HubInfo[];
   /** The native column's tables (`nativeTables`): all decks, and worship decks when a manifest says. */
   native?: { all: NativeTables; worship?: NativeTables };
   /** How this machine served each script fallback family (`fonts.ts`). */
@@ -141,6 +161,26 @@ const esc = (s: string) =>
   s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 export const mean = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
+
+/** The timings a slide's score carries from what the native page drew (`native.ts` `RenderedSlide`). */
+export type SlideTimings = Pick<
+  SlideScore,
+  'rasterMs' | 'rasterMaxMs' | 'coldMs' | 'maxObjectMs' | 'maxObjectId'
+>;
+
+/**
+ * A slide's timings for its score (`summary.json` `perSlide`): the median and slowest warm draw, the cold arm
+ * and the largest object, each only when the page measured it.
+ */
+export function slideTimings(r: SlideTimings | undefined): SlideTimings {
+  const out: SlideTimings = {};
+  if (r?.rasterMs) out.rasterMs = r.rasterMs;
+  if (r?.rasterMaxMs) out.rasterMaxMs = r.rasterMaxMs;
+  if (r?.coldMs) out.coldMs = r.coldMs;
+  if (r?.maxObjectMs) out.maxObjectMs = r.maxObjectMs;
+  if (r?.maxObjectId) out.maxObjectId = r.maxObjectId;
+  return out;
+}
 
 export function quantile(xs: number[], q: number): number {
   if (!xs.length) return 0;
@@ -728,7 +768,9 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
             p.xmlFeatures?.length ? `features: ${p.xmlFeatures.join(', ')}` : '',
             p.compat?.length ? `LibreOffice policies: ${p.compat.join(', ')}` : '',
             p.convertMs !== undefined ? `convert ${ms(p.convertMs)} ms` : '',
-            p.rasterMs ? `raster ${ms(p.rasterMs['1920'])} / ${ms(p.rasterMs['3840'])} ms` : '',
+            p.rasterMs
+              ? `raster ${ms(p.rasterMs['1920'])} / ${ms(p.rasterMs['3840'])} ms${p.rasterMaxMs ? ` (slowest ${ms(p.rasterMaxMs['1920'])} / ${ms(p.rasterMaxMs['3840'])} ms)` : ''}`
+              : '',
             p.coldMs ? `cold ${ms(p.coldMs['1920'])} / ${ms(p.coldMs['3840'])} ms` : '',
             p.maxObjectMs
               ? `largest object ${ms(p.maxObjectMs['1920'])} / ${ms(p.maxObjectMs['3840'])} ms${p.maxObjectId ? ` (${p.maxObjectId})` : ''}`
