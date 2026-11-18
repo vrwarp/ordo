@@ -313,7 +313,8 @@ scan, additive).
   `Font{source:'bundled'}`: Carlito (Calibri, Calibri Light), Caladea (Cambria), Liberation Sans/Serif/Mono,
   Noto Sans (Latin, Greek, Cyrillic), Noto Sans Hebrew, Noto Naskh Arabic, Noto Sans Devanagari, Tamil,
   Thai, Myanmar, Inter. The Dockerfile adds `fonts-crosextra-carlito fonts-crosextra-caladea fonts-noto-core`
-  so LibreOffice's art uses the same metrics.
+  so LibreOffice's art uses the same metrics. (Since sub-wave 1c it also installs `fonts-noto-cjk`'s Sans
+  collections, for LibreOffice and rule H's measuring only: never registered, see "Korean and other scripts' cells".)
 - Inter and the script fallbacks go to every output through the output-config fonts (`outputConfig` in
   `hub.ts`/`libproc.ts`), whatever the playlist; CJK faces only when `textScripts` finds Han, Kana or Hangul.
 - Google Fonts: `parseFontCss` keeps every `unicode-range` subset; each subset is a Font row with
@@ -884,11 +885,16 @@ Korean bulletin's slides 18-20: 0.593 / 0.538 / 0.439 on both kinds of hub). Rul
 - **An explicit dependency** (`HubConfig.systemFaces`): production asks fontconfig (`fontconfigLookup`); the test
   helpers give none (`noSystemFaces`), so a hub test means the same on every computer; a test injects a lookup.
 - **Measuring only**: nothing is stored or drawn with the system face; the outputs draw with their own faces. The
-  project's hub image as built has no CJK face (fonts-noto-core): there fc-match names fonts-noto-core's Nushu face
-  (NotoTraditionalNushu: U+4E00 is its only ideograph) for Han and faces without Kana or Hangul for the others,
-  the check keeps none, and those cells are measured by estimate as before (owner question Q1c-2; its LibreOffice
-  draws Korean as empty boxes there). Until integrate-1c repair 1 the check asked for the one letter and kept the
-  Nushu face for Han, so Chinese and Japanese cells there were measured with it.
+  project's hub image installs `fonts-noto-cjk`'s Sans collections for this (owner answer to Q1c-2, 2026-11-17;
+  `Dockerfile`, licence in `fonts/LICENSES.md`): there fc-match gives `NotoSansCJK-Regular.ttc` face 0 for Han,
+  Kana and Hangul (the image sets no language), which the check keeps (it maps each script's common letters) and
+  whose advances and line height equal the Korean face's, and its LibreOffice draws the letters. The collection is
+  never a library font, so the screens receive nothing new. `docker-pr.yml` checks the built image's face and start
+  log. On a Debian computer with fonts-noto-core and no CJK face (the font set the image had before it installed
+  Noto Sans CJK), fc-match names fonts-noto-core's Nushu face (NotoTraditionalNushu: U+4E00 is its only ideograph)
+  for Han and faces without Kana or Hangul for the others, the check keeps none, and those cells are measured by
+  estimate as before; that image's LibreOffice drew Korean as empty boxes. Until integrate-1c repair 1 the check
+  asked for the one letter and kept the Nushu face for Han, so Chinese and Japanese cells there were measured with it.
 - **The browser's scene** (`clientScene.ts`): a browser cannot ask the hub's computer for its fonts, so where the
   hub measures a script with a face only its computer has (`systemOnlyScripts`: the faces resolved at start, less
   the scripts whose fallback family the library has; computed on the main thread from those lists, no deck read),
@@ -896,7 +902,8 @@ Korean bulletin's slides 18-20: 0.593 / 0.538 / 0.439 on both kinds of hub). Rul
   parsed (`tablesNeedScripts`; groups included, text boxes never): `the scene parsed in the browser was not used
   (its tables need a script face only this computer has): parsed here`. The decision awaits the faces as the
   import does, so it is the same during start-up. Exact: a deck with CJK only in boxes keeps the browser's scene,
-  and a hub without such a face (the shipped image) uses every scene as before. The fidelity harness's
+  and a hub without such a face uses every scene as before. The project's hub image has one (Noto Sans CJK), so there
+  the browser's scene of such a deck is refused unless the library has the script's family. The fidelity harness's
   `hub-import --equivalence` applies the same rule (`tools/pptx-fidelity` `sceneNeedsScripts`, the hub's start
   log for its faces) and lists such a deck as 'parsed on the hub (script face)'.
 - Tests: `apps/hub/test/pptx-system-faces.test.ts` (the task with an injected face, none, a face without the

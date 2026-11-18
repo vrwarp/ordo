@@ -409,7 +409,9 @@ registers them from `ORDO_FONTS_DIR` as `Font` rows with `source: 'bundled'`
 (`apps/hub/src/fonts/bundled.ts`). It works idempotently by SHA-256, and the venue's own faces of the same
 family, weight and style win. Every output receives every library font through `GET /output/config`
 whatever the playlist, except the CJK fallback families. The manifest adds the script fallback families
-of every script in the presentations' text, so CJK faces ship only with Han, Kana or Hangul text.
+of every script in the presentations' text, so CJK faces ship only with Han, Kana or Hangul text. The image
+also installs Noto Sans CJK (`fonts-noto-cjk`'s Sans collections) for LibreOffice and the hub's measuring of CJK
+table cells (design/27 §10); it is not a library font, and outputs never receive it.
 
 ## Auth
 

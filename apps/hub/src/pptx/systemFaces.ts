@@ -25,10 +25,14 @@
  * - **An explicit dependency** (`HubConfig.systemFaces`): production asks fontconfig; the hub's test helpers
  *   give none (`noSystemFaces`), so a hub test means the same on every computer; a test injects its own.
  *
- * The project's hub image as built has no CJK face (fonts-noto-core): there fc-match names fonts-noto-core's
- * Nushu face (NotoTraditionalNushu, whose only ideograph is U+4E00) for Han and faces without Kana or Hangul for
- * the others, the check keeps none, and the cells are measured by estimate, as before (owner question Q1c-2).
- * Until integrate-1c repair 1 the check asked for the one letter and kept the Nushu face for Han.
+ * The project's hub image installs fonts-noto-cjk's Sans collections, for this and for LibreOffice (owner answer
+ * to Q1c-2; Dockerfile): there fc-match gives `NotoSansCJK-Regular.ttc` face 0 (Noto Sans CJK JP: the image sets
+ * no language) for all four scripts, the check keeps it (it maps every script's common letters), and its Hangul
+ * and Han advances and line height equal the Korean face's (face 1). It is never a library font. On a Debian
+ * computer with fonts-noto-core and no CJK face (the font set the image had before it installed Noto Sans CJK),
+ * fc-match names fonts-noto-core's Nushu face (NotoTraditionalNushu, whose only ideograph is U+4E00) for Han and
+ * faces without Kana or Hangul for the others, the check keeps none, and the cells are measured by estimate, as
+ * before. Until integrate-1c repair 1 the check asked for the one letter and kept the Nushu face for Han.
  */
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';

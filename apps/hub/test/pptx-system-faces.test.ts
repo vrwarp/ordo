@@ -197,7 +197,8 @@ describe('SystemFaces: resolved once, checked, bounded', () => {
 
   it("keeps a face for a script only when it maps the script's common letters, not the one asked for", async () => {
     // fonts-noto-core's Nushu face (NotoTraditionalNushu): U+4E00 is its only ideograph, and fontconfig names it for
-    // `:charset=4e00` on a computer without a CJK face (the project's hub image as built).
+    // `:charset=4e00` on a computer without a CJK face (the font set the project's hub image had before it installed
+    // Noto Sans CJK).
     const nushu = file('nushu.ttf', sfntFont({ 一: 1000, a: 500, ' ': 250 }));
     expect(await new SystemFaces(lookupOf({ Hani: { file: nushu, index: 0 } }), silent).ready).toEqual([]);
     // A face with a few Hangul letters only is no Hangul face either.
