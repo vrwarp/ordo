@@ -85,6 +85,8 @@ import { snapBox } from './snapping.ts';
 import { markTableKitLoaded, tableKitLoaded } from './tableKitState.ts';
 import { TEXT_MARGIN, textDensity, textRasterKey } from './textRaster.ts';
 import { floatingBarSpot, objectToolsSpot, rotaterAngle } from './touchGeometry.ts';
+import { useWholeDraw } from './wholeDraw.ts';
+import { noteWholeDraw } from './wholeState.ts';
 
 // ---- image cache (HTMLImageElement per file hash) ----
 const images = new Map<string, HTMLImageElement>();
@@ -538,8 +540,19 @@ function ObjectNode(props: {
   density: number;
   /** Logical-to-screen scale (size.w / 1920), for converting stage pointer coordinates. */
   scale: number;
-  /** What the slide's drawing budget draws instead (`slideBudget`), as the outputs draw it. */
+  /**
+   * What the slide's drawing budget draws instead (`slideBudget`), as the outputs draw it; undefined where the
+   * object is drawn whole (`useWholeDraw`, wholeDraw.ts).
+   */
   drawAs?: SlideObject;
+  /**
+   * Device px per logical px the node is cached at: the canvas's `density`, but for a node drawn whole the
+   * one it was drawn at, until its turn comes to draw it again at a new zoom (W8), so a resize does not draw
+   * every whole object in one commit.
+   */
+  cacheDensity: number;
+  /** The node is drawn whole: its cache is timed (`noteWholeDraw`). */
+  whole: boolean;
   /** The height it is drawn at (`drawnHeight`: a table's grown rows): its hit area and Transformer frame. */
   height: number;
   readOnly: boolean;
@@ -559,18 +572,21 @@ function ObjectNode(props: {
   // A non-text object is drawn once into a cached bitmap at the canvas's density, so a redraw of the objects
   // layer (a keystroke in a text box, a drag) copies it instead of drawing it again (a gradient, a blurred
   // shadow, a table, a decoration); it is drawn again only when it, its picture or geometry file, the fonts
-  // or the density change (design/15 "Canvas drawing").
+  // or the density change (design/15 "Canvas drawing"). The density is `cacheDensity` (the scale and the badge's
+  // size are read when it is drawn: both follow the density, so one dependency stands for the three).
   // biome-ignore lint/correctness/useExhaustiveDependencies: tick and media change what sceneFunc draws
   useLayoutEffect(() => {
     const n = node.current;
     if (!n) return;
-    const rect = nodeCacheRect(o, props.drawAs, props.density, undefined, props.height);
+    const rect = nodeCacheRect(o, props.drawAs, props.cacheDensity, undefined, props.height);
     if (!rect) {
       if (n.isCached()) n.clearCache();
       return;
     }
-    n.cache({ ...rect, pixelRatio: props.density, hitCanvasPixelRatio: Math.min(1, props.scale) });
-  }, [o, props.drawAs, props.density, props.scale, props.badge, props.media, props.height, tick]);
+    const from = props.whole ? performance.now() : 0;
+    n.cache({ ...rect, pixelRatio: props.cacheDensity, hitCanvasPixelRatio: Math.min(1, props.scale) });
+    if (props.whole) noteWholeDraw(o.id, performance.now() - from);
+  }, [o, props.drawAs, props.cacheDensity, props.media, props.height, tick]);
   return (
     <Shape
       ref={(n) => {
@@ -1105,6 +1121,15 @@ export function SlideCanvas(props: {
   const selectedCount = useEditor((s) => s.objectIds.length);
   const inlineEditingCell = useEditor((s) => s.inlineEditingCell);
   const selectedCell = useEditor((s) => s.cell);
+  // What the editor draws whole where that budget would draw the lighter copy: in idle time, the selected
+  // object at once, never while a service is live (wholeDraw.ts, design/15 "Canvas drawing").
+  const whole = useWholeDraw(drawn.objects, budget, {
+    selectedId,
+    density,
+    coarse,
+    slideId: `${useEditor.getState().id ?? ''}/${slide.id}`,
+    cacheRect: (o, d) => nodeCacheRect(o, undefined, d, undefined, drawnHeight(o)),
+  });
   // What is edited inline: a text box, or a table's cell as its edit view (design/15 "Table editing").
   const editing = inlineEditingId
     ? editTargetOf(drawn.objects, inlineEditingId, inlineEditingCell)
@@ -1190,7 +1215,9 @@ export function SlideCanvas(props: {
                   tick={tick}
                   density={density}
                   scale={scale}
-                  drawAs={budget.get(o)}
+                  drawAs={whole.drawAs(o)}
+                  cacheDensity={whole.density(o)}
+                  whole={whole.isWhole(o)}
                   height={drawnHeight(o)}
                   readOnly={props.readOnly}
                   selected={isPrimarySelected}

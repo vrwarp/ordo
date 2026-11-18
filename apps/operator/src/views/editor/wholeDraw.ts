@@ -1,6 +1,8 @@
 import type { SlideObject } from '@ordo/domain';
 import { drawnCost, drawnEffectArea } from '@ordo/renderer';
 import { EFFECT_COST, GEOM_COST } from '@ordo/renderer/geom/cost.ts';
+import { useEffect, useReducer, useRef } from 'react';
+import { useLive } from '../../state/live.ts';
 import { setWholeStatus, type WholeStatus } from './wholeState.ts';
 
 /*
@@ -43,8 +45,6 @@ export interface WholeEnv {
   readonly slide: string;
   /** Device px per logical px the canvas draws at (the stage scale x devicePixelRatio). */
   readonly density: number;
-  /** What the ratings depend on besides the object (the canvas's tick: geometry files read). */
-  readonly version?: number;
   /** The device px the whole drawings' caches may hold in all; default `WHOLE_MAX_PX`. */
   readonly maxPx?: number;
   /**
@@ -70,7 +70,7 @@ interface Work extends WholeNode {
 
 type Verdict = 'ok' | 'bound' | 'cache';
 
-/** The state of the plans of one slide: what is whole now, what waits, what each candidate was rated. */
+/** The state of the plans of one slide: what is whole now and what waits. */
 export class WholeState {
   /** The key of the slide it holds (undefined: none yet). */
   slide: string | undefined;
@@ -78,16 +78,9 @@ export class WholeState {
   readonly committed = new Map<string, WholeNode>();
   /** What the last plan left waiting, in the order it is made: the selected object, then z-order. */
   work: Work[] = [];
-  /** What each candidate was rated, by id: kept while the object, the ratings and the density stay. */
-  readonly rated = new Map<
-    string,
-    { o: SlideObject; version: number; density: number; verdict: Verdict; px: number }
-  >();
-
   /** Forget everything (another slide). */
   clear(): void {
     this.committed.clear();
-    this.rated.clear();
     this.work = [];
   }
 
@@ -115,27 +108,24 @@ export interface WholePlan {
 
 /** Fields that are not what an object draws: who it is, where it came from, whether it is locked. */
 const NOT_DRAWN = new Set(['id', 'origin', 'locked']);
-/** Values of an object compared at most (a hostile object is a different drawing, not a long comparison). */
-const COMPARE_MAX = 20_000;
-
-/** Two values equal by identity, or, if they are plain data, by what they hold (bounded). */
-function sameValue(a: unknown, b: unknown, left: { n: number }, depth: number): boolean {
+/** Two values equal by identity, or, if they are plain data, by what they hold (to a depth no stored field has). */
+function sameValue(a: unknown, b: unknown, depth: number): boolean {
   if (Object.is(a, b)) return true;
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
-  if (depth > 8 || --left.n < 0) return false;
+  if (depth > 8) return false;
   const array = Array.isArray(a);
   if (array !== Array.isArray(b)) return false;
   if (array) {
     const x = a as unknown[];
     const y = b as unknown[];
     if (x.length !== y.length) return false;
-    for (let i = 0; i < x.length; i++) if (!sameValue(x[i], y[i], left, depth + 1)) return false;
+    for (let i = 0; i < x.length; i++) if (!sameValue(x[i], y[i], depth + 1)) return false;
     return true;
   }
   const x = a as Record<string, unknown>;
   const y = b as Record<string, unknown>;
   const keys = new Set([...Object.keys(x), ...Object.keys(y)]);
-  for (const k of keys) if (!sameValue(x[k], y[k], left, depth + 1)) return false;
+  for (const k of keys) if (!sameValue(x[k], y[k], depth + 1)) return false;
   return true;
 }
 
@@ -150,7 +140,6 @@ export function sameDrawn(a: SlideObject, b: SlideObject): boolean {
   if (a === b) return true;
   const x = a as unknown as Record<string, unknown>;
   const y = b as unknown as Record<string, unknown>;
-  const left = { n: COMPARE_MAX };
   for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) {
     if (NOT_DRAWN.has(k)) continue;
     if (k === 'box') {
@@ -159,7 +148,7 @@ export function sameDrawn(a: SlideObject, b: SlideObject): boolean {
       if (!p || !q || !Object.is(p.w, q.w) || !Object.is(p.h, q.h)) return false;
       continue;
     }
-    if (!sameValue(x[k], y[k], left, 0)) return false;
+    if (!sameValue(x[k], y[k], 0)) return false;
   }
   return true;
 }
@@ -187,23 +176,18 @@ function drifted(made: number, now: number): boolean {
   return !(Math.abs(now / made - 1) <= WHOLE_DENSITY_SLACK);
 }
 
-/** What an object costs to draw whole and over what it would be cached, rated once per object and density. */
-function rate(o: SlideObject, env: WholeEnv, state: WholeState): { verdict: Verdict; px: number } {
-  const version = env.version ?? 0;
-  const hit = state.rated.get(o.id);
-  if (hit && hit.o === o && hit.version === version && hit.density === env.density) return hit;
-  let verdict: Verdict = 'ok';
-  let px = 0;
+/**
+ * What an object costs to draw whole and over what it would be cached (`drawnCost` and `drawnEffectArea` are
+ * memoised per object by the renderer; the cache rectangle is a few multiplications).
+ */
+function rate(o: SlideObject, env: WholeEnv): { verdict: Verdict; px: number } {
   // The ORIGINAL object's drawing (W3): the copy is what the budget leaves of it.
-  if (drawnCost(o).est > WHOLE_BOUND.est || drawnEffectArea(o) > WHOLE_BOUND.effects) verdict = 'bound';
-  else {
-    const r = env.cacheRect(o, env.density);
-    if (!r) verdict = 'cache';
-    else px = r.width * r.height * env.density * env.density;
-  }
-  const out = { o, version, density: env.density, verdict, px };
-  state.rated.set(o.id, out);
-  return out;
+  if (drawnCost(o).est > WHOLE_BOUND.est || drawnEffectArea(o) > WHOLE_BOUND.effects)
+    return { verdict: 'bound', px: 0 };
+  const r = env.cacheRect(o, env.density);
+  return r
+    ? { verdict: 'ok', px: r.width * r.height * env.density * env.density }
+    : { verdict: 'cache', px: 0 };
 }
 
 /**
@@ -253,7 +237,6 @@ export function planWhole(
   }
   // What is no longer a candidate (the object is gone, or the budget no longer changes it) is forgotten.
   for (const id of [...state.committed.keys()]) if (!ids.has(id)) state.committed.delete(id);
-  for (const id of [...state.rated.keys()]) if (!ids.has(id)) state.rated.delete(id);
 
   // A changed drawing is the copy again (W7); the same drawing is remembered as the object now at hand.
   for (const o of cands) {
@@ -274,80 +257,63 @@ export function planWhole(
     held += c.px;
     drawnPx += c.px;
   }
-  const n = { drawn: 0, pending: 0, blocked: 0, bound: 0, cache: 0, total: 0, stale: 0 };
-  const work: Work[] = [];
-
-  for (const o of order) {
-    const c = state.committed.get(o.id);
-    if (c) {
-      if (!drifted(c.density, density)) {
-        n.drawn++;
-        continue;
-      }
-      // The canvas's density moved: the node is made again in its turn (W8), where that is allowed.
-      if (!allowed) {
-        n.drawn++;
-        n.stale++;
-        continue;
-      }
-      const r = rate(o, env, state);
-      if (r.verdict !== 'ok' || held - c.px + r.px > maxPx) {
-        // It no longer fits the cache (or the total) at this zoom: the copy, until the zoom is lower.
-        state.committed.delete(o.id);
-        held -= c.px;
-        drawnPx -= c.px;
-        if (r.verdict === 'bound') n.bound++;
-        else if (r.verdict === 'cache') n.cache++;
-        else n.total++;
-        continue;
-      }
-      held += r.px - c.px;
-      n.drawn++;
-      n.stale++;
-      work.push({ id: o.id, o, density, px: r.px });
-      continue;
-    }
-    if (!allowed) {
-      n.blocked++;
-      continue;
-    }
-    const r = rate(o, env, state);
-    if (r.verdict === 'bound') {
-      n.bound++;
-      continue;
-    }
-    if (r.verdict === 'cache') {
-      n.cache++;
-      continue;
-    }
-    if (held + r.px > maxPx) {
-      n.total++;
-      continue;
-    }
-    held += r.px;
-    if (o.id === primary) {
-      state.committed.set(o.id, { o, density, px: r.px });
-      drawnPx += r.px;
-      n.drawn++;
-    } else {
-      n.pending++;
-      work.push({ id: o.id, o, density, px: r.px });
-    }
-  }
-  state.work = work;
-
   const status = {
     wanted: cands.length,
-    drawn: n.drawn,
-    pending: n.pending,
-    blocked: n.blocked,
-    px: drawnPx,
-    skipped: { bound: n.bound, cache: n.cache, total: n.total },
-    stale: n.stale,
+    drawn: 0,
+    pending: 0,
+    blocked: 0,
+    px: 0,
+    skipped: { bound: 0, cache: 0, total: 0 },
+    stale: 0,
     live: env.live,
     coarse: env.coarse,
     light: env.light,
   };
+  const work: Work[] = [];
+
+  for (const o of order) {
+    const c = state.committed.get(o.id);
+    // Whole at about this density: nothing to do.
+    if (c && !drifted(c.density, density)) {
+      status.drawn++;
+      continue;
+    }
+    // Not allowed: a whole object keeps its cache (W9), the others are blocked; nothing is rated.
+    if (!allowed) {
+      if (c) status.stale++;
+      if (c) status.drawn++;
+      else status.blocked++;
+      continue;
+    }
+    const r = rate(o, env);
+    const was = c?.px ?? 0;
+    const why = r.verdict !== 'ok' ? r.verdict : held - was + r.px > maxPx ? 'total' : undefined;
+    if (why) {
+      // Too much for the canvas now (W3-W5): the copy, until the zoom or the slide allows more.
+      if (c) {
+        state.committed.delete(o.id);
+        held -= was;
+        drawnPx -= was;
+      }
+      status.skipped[why]++;
+      continue;
+    }
+    held += r.px - was;
+    if (!c && o.id === primary) {
+      // The selected object is whole in this plan: an edit never shows the copy for a frame (W6).
+      state.committed.set(o.id, { o, density, px: r.px });
+      drawnPx += r.px;
+      status.drawn++;
+      continue;
+    }
+    if (c) {
+      status.drawn++;
+      status.stale++;
+    } else status.pending++;
+    work.push({ id: o.id, o, density, px: r.px });
+  }
+  state.work = work;
+  status.px = drawnPx;
   setWholeStatus(status);
   return { pending: work.map((w) => w.id), status };
 }
@@ -377,30 +343,6 @@ export function wholeDensity(o: SlideObject, env: WholeEnv, state: WholeState): 
 
 // ---- the turns (W6) ------------------------------------------------------------------------------------
 
-/** Where idle moments and timers come from (the page's own, or a test's). */
-export interface TickHost {
-  readonly idle?: (cb: () => void, opts: { timeout: number }) => unknown;
-  readonly cancelIdle?: (handle: unknown) => void;
-  readonly timer: (cb: () => void, ms: number) => unknown;
-  readonly clearTimer: (handle: unknown) => void;
-}
-
-function pageHost(): TickHost {
-  const g = globalThis as {
-    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-    cancelIdleCallback?: (h: number) => void;
-  };
-  const idle = g.requestIdleCallback?.bind(globalThis);
-  const cancelIdle = g.cancelIdleCallback?.bind(globalThis);
-  return {
-    ...(idle && cancelIdle
-      ? { idle: (cb, opts) => idle(cb, opts), cancelIdle: (h) => cancelIdle(h as number) }
-      : {}),
-    timer: (cb, ms) => setTimeout(cb, ms),
-    clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-  };
-}
-
 /**
  * One turn at a time: `request()` asks for a turn at the next idle moment (`requestIdleCallback` with a
  * `WHOLE_TICK_TIMEOUT_MS` timeout, else 16 ms on a timer), once however often it is asked; the turn runs
@@ -412,12 +354,10 @@ export class WholeScheduler {
   private handle: { idle: boolean; h: unknown } | undefined;
   private readonly step: () => void;
   private readonly after: (() => void) | undefined;
-  private readonly host: TickHost;
 
-  constructor(step: () => void, after?: () => void, host: TickHost = pageHost()) {
+  constructor(step: () => void, after?: () => void) {
     this.step = step;
     this.after = after;
-    this.host = host;
   }
 
   /** A turn is waiting for its moment. */
@@ -427,6 +367,9 @@ export class WholeScheduler {
 
   request(): void {
     if (this.handle) return;
+    const g = globalThis as {
+      requestIdleCallback?: (cb: () => void, opts: { timeout: number }) => unknown;
+    };
     const run = () => {
       this.handle = undefined;
       try {
@@ -440,16 +383,91 @@ export class WholeScheduler {
         // The canvas is gone: nothing to draw.
       }
     };
-    this.handle = this.host.idle
-      ? { idle: true, h: this.host.idle(run, { timeout: WHOLE_TICK_TIMEOUT_MS }) }
-      : { idle: false, h: this.host.timer(run, WHOLE_TICK_FALLBACK_MS) };
+    this.handle = g.requestIdleCallback
+      ? { idle: true, h: g.requestIdleCallback(run, { timeout: WHOLE_TICK_TIMEOUT_MS }) }
+      : { idle: false, h: setTimeout(run, WHOLE_TICK_FALLBACK_MS) };
   }
 
   cancel(): void {
     const w = this.handle;
     this.handle = undefined;
     if (!w) return;
-    if (w.idle) this.host.cancelIdle?.(w.h);
-    else this.host.clearTimer(w.h);
+    if (w.idle) (globalThis as { cancelIdleCallback?: (h: unknown) => void }).cancelIdleCallback?.(w.h);
+    else clearTimeout(w.h as ReturnType<typeof setTimeout>);
   }
+}
+
+// ---- the canvas hook -----------------------------------------------------------------------------------
+
+/** `?editor=light`, read once when the first canvas asks (the page's URL does not change under the editor). */
+let light: boolean | undefined;
+
+/** What the canvas tells the hook; the rest (a service is live, the switch) the hook reads itself. */
+export interface WholeDrawOptions {
+  /** The primary selected object's id. */
+  readonly selectedId?: string;
+  /** Device px per logical px the canvas draws at. */
+  readonly density: number;
+  /** The primary pointer is coarse. */
+  readonly coarse: boolean;
+  /** The slide's key (the presentation's and the slide's id): the state is kept per slide. */
+  readonly slideId: string;
+  /** `nodeCacheRect` as the canvas calls it for a node (W4). */
+  readonly cacheRect: WholeEnv['cacheRect'];
+}
+
+/** What the canvas draws for each object and the density it caches it at. */
+export interface WholeDraw {
+  /** What the node draws instead of `o` (the budget's copy), undefined where it draws `o` itself. */
+  drawAs(o: SlideObject): SlideObject | undefined;
+  /** Device px per logical px the node's cache is made at. */
+  density(o: SlideObject): number;
+  /** The node is drawn whole (its cache is the whole drawing, timed by `noteWholeDraw`). */
+  isWhole(o: SlideObject): boolean;
+}
+
+/**
+ * The canvas's whole drawing (design/15 "Canvas drawing"): plans in the render (`planWhole`, idempotent),
+ * takes one waiting object's turn at each idle moment (`WholeScheduler`) and draws the canvas again once per
+ * turn, never a turn before the last one's frame (the next turn is asked for after the commit). Where a
+ * service is live (the hub's `useLive`: any service, on any computer), the pointer is coarse or
+ * `?editor=light` is on, it asks for no turn at all and adds no timer.
+ */
+export function useWholeDraw(
+  objects: readonly SlideObject[],
+  budget: ReadonlyMap<SlideObject, SlideObject>,
+  opts: WholeDrawOptions,
+): WholeDraw {
+  const live = useLive((s) => s.state.mode === 'live');
+  light ??= readSwitch();
+  const [, draw] = useReducer((n: number) => n + 1, 0);
+  const state = useRef<WholeState | undefined>(undefined);
+  state.current ??= new WholeState();
+  const turns = useRef<WholeScheduler | undefined>(undefined);
+  turns.current ??= new WholeScheduler(
+    () => state.current?.step(),
+    () => draw(),
+  );
+  const env: WholeEnv = {
+    coarse: opts.coarse,
+    live,
+    light,
+    slide: opts.slideId,
+    density: opts.density,
+    cacheRect: opts.cacheRect,
+  };
+  const plan = planWhole(objects, budget, { primary: opts.selectedId }, state.current, env);
+  const waiting = plan.pending.length > 0;
+  // After every commit: the next turn is asked for only now, once the last one's object has been drawn.
+  useEffect(() => {
+    if (waiting) turns.current?.request();
+    else turns.current?.cancel();
+  });
+  useEffect(() => () => turns.current?.cancel(), []);
+  const s = state.current;
+  return {
+    drawAs: (o) => drawWhole(o, budget, env, s),
+    density: (o) => wholeDensity(o, env, s),
+    isWhole: (o) => budget.has(o) && drawWhole(o, budget, env, s) === undefined,
+  };
 }

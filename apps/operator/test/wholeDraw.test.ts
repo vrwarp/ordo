@@ -10,14 +10,13 @@ import { drawnEffectArea, slideBudget } from '@ordo/renderer';
 import { EFFECT_COST } from '@ordo/renderer/geom/cost.ts';
 import { recordingCtx } from '@ordo/renderer/text/test-util.ts';
 import { effectsSlide, PANEL_SHADOW, softFrame } from '@ordo/renderer/units.effects.test-util.ts';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nodeCacheRect } from '../src/views/editor/SlideCanvas.tsx';
 import {
   drawWhole,
   planWhole,
   readSwitch,
   sameDrawn,
-  type TickHost,
   WHOLE_BOUND,
   WHOLE_DENSITY_SLACK,
   WHOLE_MAX_PX,
@@ -515,32 +514,39 @@ describe('?editor=light (W2)', () => {
   });
 });
 
-/** A host that runs what it is given when the test says so. */
+/**
+ * The page's idle moments, as a test drives them: `requestIdleCallback` (and its cancel) and the timers are
+ * stubbed on the global object, as the scheduler reads them when it is asked for a turn.
+ */
 function fakeHost(withIdle = true) {
   const idle: { cb: () => void; timeout: number; cancelled: boolean }[] = [];
   const timers: { cb: () => void; ms: number; cancelled: boolean }[] = [];
-  const host: TickHost = {
-    ...(withIdle
-      ? {
-          idle: (cb, opts) => {
-            const h = { cb, timeout: opts.timeout, cancelled: false };
-            idle.push(h);
-            return h;
-          },
-          cancelIdle: (h) => {
-            (h as { cancelled: boolean }).cancelled = true;
-          },
+  vi.stubGlobal(
+    'requestIdleCallback',
+    withIdle
+      ? (cb: () => void, opts: { timeout: number }) => {
+          const h = { cb, timeout: opts.timeout, cancelled: false };
+          idle.push(h);
+          return h;
         }
-      : {}),
-    timer: (cb, ms) => {
-      const h = { cb, ms, cancelled: false };
-      timers.push(h);
-      return h;
-    },
-    clearTimer: (h) => {
-      (h as { cancelled: boolean }).cancelled = true;
-    },
-  };
+      : undefined,
+  );
+  vi.stubGlobal(
+    'cancelIdleCallback',
+    withIdle
+      ? (h: { cancelled: boolean }) => {
+          h.cancelled = true;
+        }
+      : undefined,
+  );
+  vi.stubGlobal('setTimeout', (cb: () => void, ms: number) => {
+    const h = { cb, ms, cancelled: false };
+    timers.push(h);
+    return h;
+  });
+  vi.stubGlobal('clearTimeout', (h: { cancelled: boolean }) => {
+    h.cancelled = true;
+  });
   /** Run what is waiting, as the browser does at the next idle moment (or timer). */
   const run = () => {
     const h = [...idle, ...timers].find((x) => !x.cancelled);
@@ -549,15 +555,17 @@ function fakeHost(withIdle = true) {
     h.cb();
     return true;
   };
-  return { host, idle, timers, run };
+  return { idle, timers, run };
 }
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('WholeScheduler (W6)', () => {
   it('(k) takes one turn at an idle moment (with the 200 ms timeout), once however often it is asked', () => {
     const h = fakeHost();
     const step = vi.fn();
     const after = vi.fn();
-    const s = new WholeScheduler(step, after, h.host);
+    const s = new WholeScheduler(step, after);
     expect(WHOLE_TICK_TIMEOUT_MS).toBe(200);
     s.request();
     s.request();
@@ -581,7 +589,7 @@ describe('WholeScheduler (W6)', () => {
   it('(k) without requestIdleCallback it waits 16 ms on a timer', () => {
     const h = fakeHost(false);
     const step = vi.fn();
-    const s = new WholeScheduler(step, undefined, h.host);
+    const s = new WholeScheduler(step);
     s.request();
     expect(h.idle).toHaveLength(0);
     expect(h.timers).toHaveLength(1);
@@ -593,7 +601,7 @@ describe('WholeScheduler (W6)', () => {
   it('(k) is cancelled when the canvas goes away: the turn that was waiting never runs, and it can be asked again', () => {
     const h = fakeHost();
     const step = vi.fn();
-    const s = new WholeScheduler(step, undefined, h.host);
+    const s = new WholeScheduler(step);
     s.request();
     s.cancel();
     expect(s.waiting).toBe(false);
@@ -611,7 +619,7 @@ describe('WholeScheduler (W6)', () => {
       throw new Error('a draw failed');
     });
     const after = vi.fn();
-    const s = new WholeScheduler(step, after, h.host);
+    const s = new WholeScheduler(step, after);
     s.request();
     expect(() => h.run()).not.toThrow();
     expect(after).toHaveBeenCalledTimes(1);
