@@ -275,6 +275,33 @@ export const PROPRESENTER_MIDI_MAPPINGS: MidiMapping[] = [
   { id: 'pro-restart', kind: 'note', number: 30, threshold: 1, action: { id: 'mediaRestart' } },
 ];
 
+/**
+ * ChamSys QuickQ 20 starter MIDI input preset (requires QuickQ v11+ MIDI Output on Channel 1).
+ * Uses Playback 1 control notes per QuickQ manual Chapter 12 Table 1:
+ * Go = 72, Pause/Back = 84, Release (Note Off) = 60, Go to Cue (velocity = cue #) = 48.
+ */
+export const QUICKQ_MIDI_MAPPINGS: MidiMapping[] = [
+  { id: 'qq-pb1-go', kind: 'note', channel: 1, number: 72, threshold: 1, action: { id: 'next' } },
+  { id: 'qq-pb1-pause', kind: 'note', channel: 1, number: 84, threshold: 1, action: { id: 'prev' } },
+  {
+    id: 'qq-pb1-release',
+    kind: 'noteOff',
+    channel: 1,
+    number: 60,
+    threshold: 0,
+    action: { id: 'clearSlide' },
+  },
+  {
+    id: 'qq-pb1-goto',
+    kind: 'note',
+    channel: 1,
+    number: 48,
+    threshold: 1,
+    paramSource: 'velocity',
+    action: { id: 'goToSlide' },
+  },
+];
+
 export const DEFAULT_GENERAL: GeneralSettings = {
   venueName: 'ordo',
   timeZone: 'UTC',

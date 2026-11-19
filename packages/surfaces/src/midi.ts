@@ -1,4 +1,5 @@
 import { type MidiCue, type MidiCueType, type MidiMapping, newId } from '@ordo/domain';
+import { formatMidiBytesHex, formatQuickQ } from './quickq.ts';
 import type { Action, Dispatch } from './types.ts';
 
 export type MidiInputInfo = { id: string; name: string };
@@ -11,6 +12,24 @@ export type MidiMessage = {
   number: number;
   value: number;
 };
+
+/** Structured bidirectional MIDI log entry for debugging and live monitoring. */
+export type MidiActivityEvent = {
+  id: number;
+  time: number;
+  direction: 'in' | 'out';
+  device: string;
+  hex: string;
+  message: MidiMessage;
+  quickq: string | null;
+  status: 'sent' | 'dropped' | 'matched' | 'unmatched';
+  /** Matched action(s) for IN, or source/drop reason for OUT. */
+  detail?: string;
+  /** True when an incoming message echoes a message we just sent within 50 ms. */
+  loopWarning?: boolean;
+};
+
+const LOOP_WINDOW_MS = 50;
 
 export function parseMidi(data: Uint8Array): MidiMessage | null {
   if (data.length < 2) return null;
@@ -42,7 +61,7 @@ export function matchMidi(
   lastCc: Map<string, number>,
 ): Action[] {
   const msg = parseMidi(data);
-  if (!msg || msg.kind === 'noteOff') return [];
+  if (!msg) return [];
   const out: Action[] = [];
   let prev = 0;
   if (msg.kind === 'cc') {
@@ -62,6 +81,13 @@ export function matchMidi(
         if (msg.value >= 1) out.push({ id: m.action.id, arg: msg.value });
       } else {
         if (msg.value >= Math.max(1, threshold)) out.push(actionOf(m));
+      }
+    } else if (m.kind === 'noteOff' && msg.kind === 'noteOff') {
+      if (m.number !== msg.number) continue;
+      if (paramSource === 'velocity') {
+        out.push({ id: m.action.id, arg: msg.value });
+      } else {
+        out.push(actionOf(m));
       }
     } else if (m.kind === 'cc' && msg.kind === 'cc') {
       if (m.number !== msg.number) continue;
@@ -93,6 +119,7 @@ export function learnFrom(
   deviceName: string,
   data: Uint8Array,
   lastCc: Map<string, number>,
+  opts?: { acceptNoteOff?: boolean },
 ): MidiMapping | null {
   const msg = parseMidi(data);
   if (!msg) return null;
@@ -104,6 +131,17 @@ export function learnFrom(
       number: msg.number,
       channel: msg.channel,
       threshold: 1,
+      action,
+    };
+  }
+  if (msg.kind === 'noteOff' && opts?.acceptNoteOff) {
+    return {
+      id: newId(),
+      deviceName,
+      kind: 'noteOff',
+      number: msg.number,
+      channel: msg.channel,
+      threshold: 0,
       action,
     };
   }
@@ -140,6 +178,7 @@ export function learnFrom(
 
 type Learning = {
   action: Action;
+  acceptNoteOff?: boolean;
   resolve: (m: MidiMapping | null) => void;
   timer: ReturnType<typeof setTimeout>;
 };
@@ -147,15 +186,21 @@ type Learning = {
 export class MidiDriver {
   private access: MIDIAccess | null = null;
   private mappings: MidiMapping[] = [];
+  private defaultOutput: string | undefined = undefined;
   private lastCc = new Map<string, number>();
   private bound = new Map<string, MIDIInput>();
   private learning: Learning | null = null;
+  private pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+  private recentOut: { key: string; time: number }[] = [];
+  private nextActivityId = 1;
   /** Called when the input list changes. */
   onInputs?: (inputs: MidiInputInfo[]) => void;
   /** Called when the output list changes. */
   onOutputs?: (outputs: MidiOutputInfo[]) => void;
   /** Called on every parsed incoming message (live monitor). */
   onMessage?: (msg: MidiMessage, deviceName: string) => void;
+  /** Called on every incoming or outgoing MIDI event (bidirectional monitor). */
+  onActivity?: (event: MidiActivityEvent) => void;
   /** Called on access errors (error budgets). */
   onError?: (detail: string) => void;
 
@@ -209,7 +254,14 @@ export class MidiDriver {
     this.mappings = m;
   }
 
-  /** Send a MIDI message to a specific output device or all connected outputs. */
+  setDefaultOutput(deviceName?: string): void {
+    this.defaultOutput = deviceName?.trim() || undefined;
+  }
+
+  /**
+   * Send a MIDI message to a specific output device, the configured default output, or all connected outputs.
+   * Returns true if sent to at least one connected output, false if dropped.
+   */
   send(
     message: {
       type: MidiCueType;
@@ -218,8 +270,8 @@ export class MidiDriver {
       value?: number;
     },
     destinationDevice?: string,
-  ): void {
-    if (!this.access) return;
+    sourceLabel?: string,
+  ): boolean {
     const channel = Math.max(1, Math.min(16, message.channel ?? 1));
     const ch = (channel - 1) & 0x0f;
     const num = Math.max(0, Math.min(127, message.number));
@@ -239,31 +291,95 @@ export class MidiDriver {
         bytes = [0xc0 | ch, num];
         break;
       default:
-        return;
+        return false;
     }
     const data = new Uint8Array(bytes);
+    const parsed: MidiMessage =
+      message.type === 'programChange'
+        ? { kind: 'programChange', channel, number: num, value: num }
+        : message.type === 'noteOn' && val === 0
+          ? { kind: 'noteOff', channel, number: num, value: 0 }
+          : { kind: message.type, channel, number: num, value: val };
+    const hex = formatMidiBytesHex(data);
+    const quickq = formatQuickQ(parsed);
+    const target = destinationDevice?.trim() || this.defaultOutput || undefined;
+    const prefix = sourceLabel ? `${sourceLabel} — ` : '';
+
+    if (!this.access) {
+      this.emitActivity({
+        direction: 'out',
+        device: target ?? 'All outputs',
+        hex,
+        message: parsed,
+        quickq,
+        status: 'dropped',
+        detail: `${prefix}Web MIDI disabled`,
+      });
+      return false;
+    }
+
+    const now = Date.now();
+    let sentCount = 0;
     this.access.outputs.forEach((out) => {
       if (out.state !== 'connected') return;
-      if (
-        !destinationDevice ||
-        out.name?.trim().toLowerCase() === destinationDevice.trim().toLowerCase() ||
-        out.id === destinationDevice
-      ) {
+      if (!target || out.name?.trim().toLowerCase() === target.toLowerCase() || out.id === target) {
         try {
           out.send(data);
+          sentCount += 1;
+          this.recordRecentOut(parsed, now);
+          this.emitActivity({
+            direction: 'out',
+            device: out.name ?? out.id,
+            hex,
+            message: parsed,
+            quickq,
+            status: 'sent',
+            detail: sourceLabel,
+          });
         } catch (e) {
-          this.onError?.(`send error: ${String(e)}`);
+          const msg = `send error: ${String(e)}`;
+          this.onError?.(msg);
+          this.emitActivity({
+            direction: 'out',
+            device: out.name ?? out.id,
+            hex,
+            message: parsed,
+            quickq,
+            status: 'dropped',
+            detail: `${prefix}${msg}`,
+          });
         }
       }
     });
+
+    if (sentCount === 0) {
+      this.emitActivity({
+        direction: 'out',
+        device: target ?? 'All outputs',
+        hex,
+        message: parsed,
+        quickq,
+        status: 'dropped',
+        detail: target ? `${prefix}output "${target}" not connected` : `${prefix}no MIDI outputs connected`,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  /** Cancel any pending delayed cues scheduled by `sendCues`. */
+  cancelPendingCues(): void {
+    for (const t of this.pendingTimers) clearTimeout(t);
+    this.pendingTimers.clear();
   }
 
   /** Send one or more slide/macro cues, observing any specified delayMs. */
-  sendCues(cues?: MidiCue[]): void {
+  sendCues(cues?: MidiCue[], sourceLabel?: string): void {
     if (!cues?.length) return;
     for (const cue of cues) {
       if (cue.delayMs && cue.delayMs > 0) {
-        setTimeout(() => {
+        const timer = setTimeout(() => {
+          this.pendingTimers.delete(timer);
           this.send(
             {
               type: cue.type,
@@ -272,8 +388,10 @@ export class MidiDriver {
               value: cue.value,
             },
             cue.deviceName,
+            sourceLabel,
           );
         }, cue.delayMs);
+        this.pendingTimers.add(timer);
       } else {
         this.send(
           {
@@ -283,20 +401,21 @@ export class MidiDriver {
             value: cue.value,
           },
           cue.deviceName,
+          sourceLabel,
         );
       }
     }
   }
 
   /** Resolve with a mapping for the next qualifying message, or null after `timeoutMs`. */
-  learn(action: Action, timeoutMs = 5000): Promise<MidiMapping | null> {
+  learn(action: Action, timeoutMs = 5000, opts?: { acceptNoteOff?: boolean }): Promise<MidiMapping | null> {
     this.cancelLearn();
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         if (this.learning?.timer === timer) this.learning = null;
         resolve(null);
       }, timeoutMs);
-      this.learning = { action, resolve, timer };
+      this.learning = { action, acceptNoteOff: opts?.acceptNoteOff, resolve, timer };
     });
   }
 
@@ -310,6 +429,8 @@ export class MidiDriver {
 
   dispose(): void {
     this.cancelLearn();
+    this.cancelPendingCues();
+    this.recentOut = [];
     for (const input of this.bound.values()) input.onmidimessage = null;
     this.bound.clear();
     if (this.access) this.access.onstatechange = null;
@@ -320,10 +441,26 @@ export class MidiDriver {
   handle(deviceName: string, data: Uint8Array): void {
     const parsed = parseMidi(data);
     if (parsed) this.onMessage?.(parsed, deviceName);
+    const hex = formatMidiBytesHex(data);
+    const loopWarning = parsed ? this.detectLoop(parsed, Date.now()) : false;
 
     const l = this.learning;
     if (l) {
-      const m = learnFrom(l.action, deviceName, data, this.lastCc);
+      const m = learnFrom(l.action, deviceName, data, this.lastCc, {
+        acceptNoteOff: l.acceptNoteOff,
+      });
+      if (parsed) {
+        this.emitActivity({
+          direction: 'in',
+          device: deviceName,
+          hex,
+          message: parsed,
+          quickq: formatQuickQ(parsed),
+          status: m ? 'matched' : 'unmatched',
+          detail: m ? `learned → ${l.action.id}` : 'learning (ignored)',
+          loopWarning: loopWarning || undefined,
+        });
+      }
       if (m) {
         this.learning = null;
         clearTimeout(l.timer);
@@ -331,11 +468,47 @@ export class MidiDriver {
       }
       return;
     }
-    for (const a of matchMidi(this.mappings, deviceName, data, this.lastCc)) this.fire(a);
+
+    const actions = matchMidi(this.mappings, deviceName, data, this.lastCc);
+    if (parsed) {
+      this.emitActivity({
+        direction: 'in',
+        device: deviceName,
+        hex,
+        message: parsed,
+        quickq: formatQuickQ(parsed),
+        status: actions.length ? 'matched' : 'unmatched',
+        detail: actions.length
+          ? actions.map((a) => (a.arg !== undefined ? `${a.id}(${a.arg})` : a.id)).join(', ')
+          : undefined,
+        loopWarning: loopWarning || undefined,
+      });
+    }
+    for (const a of actions) this.fire(a);
   }
 
   protected fire(a: Action): void {
     this.dispatch(a, 'midi');
+  }
+
+  private emitActivity(ev: Omit<MidiActivityEvent, 'id' | 'time'>): void {
+    this.onActivity?.({
+      ...ev,
+      id: this.nextActivityId++,
+      time: Date.now(),
+    });
+  }
+
+  private recordRecentOut(msg: MidiMessage, now: number): void {
+    const key = `${msg.kind}|${msg.channel}|${msg.number}`;
+    this.recentOut = this.recentOut.filter((r) => now - r.time <= LOOP_WINDOW_MS * 4);
+    this.recentOut.push({ key, time: now });
+  }
+
+  private detectLoop(msg: MidiMessage, now: number): boolean {
+    const key = `${msg.kind}|${msg.channel}|${msg.number}`;
+    this.recentOut = this.recentOut.filter((r) => now - r.time <= LOOP_WINDOW_MS * 4);
+    return this.recentOut.some((r) => r.key === key && now - r.time <= LOOP_WINDOW_MS);
   }
 
   private bindInputs() {

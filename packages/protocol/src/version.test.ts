@@ -49,9 +49,11 @@ import { APP_VERSION } from './index.ts';
 // than go on without them: without sub-wave 1's shared changes above, or sending the hub PowerPoint scenes
 // parsed as 0.8.1 parsed them (design/27, "CONVERTER_VERSION stays 2 through sub-wave 1c too"). The digest is
 // unchanged (it leaves the APP_VERSION line out).
+// 0.9.1 for QuickQ 20 MIDI support: schemas.ts adds MidiMapping.kind 'noteOff' and SurfaceSettings.midiDefaultOutput,
+// which a stale 0.9.0 operator tab would reject or strip when saving surface settings.
 const RECORDED = {
-  version: '0.9.0',
-  digest: '7077a1437610daeacb64027cc37a534a758d091ad298af39f1b1e1f3c7c20511',
+  version: '0.9.1',
+  digest: '2f804d388621932a791285793bc9f9fab3566d975d66ef72aebdaa0804fb3f48',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

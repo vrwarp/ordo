@@ -77,12 +77,15 @@ are not blocked.
   `e2e/surfaces-upgrade.spec.ts` writes such rows into a stopped hub's database and starts it: with
   mappings the settings and Setup show MIDI on and the operator starts it; without, both show it off and
   the browser is never asked.
-- Mapping entries: `{ deviceName, kind: 'note' | 'cc' | 'programChange', number, channel?, threshold, action, paramSource? }`.
-  - Static: Note-on with velocity ≥ threshold fires; CC fires when the value crosses the threshold upward (edge-triggered).
-  - Dynamic (`paramSource: 'velocity' | 'ccValue'`): incoming velocity or CC value is dynamically passed as the action's `arg`, enabling DAW show-control patterns (e.g. `goToSlideItem [vel]`, `goToItem [vel]`, `goToSection [vel]`).
-- Learn: the mapping editor sets `learning = action`; the next qualifying message (Note, CC upward edge, or Program Change) writes the entry. A 5 s timeout cancels.
-- Presets: Foot switches (notes 60/62 for `next`/`prev`) and ProPresenter 7 standard layout.
-- MIDI Output / Show Control: `MidiDriver.send` broadcasts Note On/Off, CC, or Program Change messages to target devices or all outputs. Slide definitions in `@ordo/domain` can specify `midiCues: MidiCue[]`, which are dispatched automatically when the slide cue goes live.
+- Mapping entries: `{ deviceName, kind: 'note' | 'noteOff' | 'cc' | 'programChange', number, channel?, threshold, action, paramSource? }`.
+  - Static: Note-on with velocity ≥ threshold fires; Note-off (either `0x8n` or `0x9n` with velocity 0) fires for `noteOff` mappings; CC fires when the value crosses the threshold upward (edge-triggered).
+  - Dynamic (`paramSource: 'velocity' | 'ccValue'`): incoming velocity or CC value is dynamically passed as the action's `arg`, enabling DAW and QuickQ show-control patterns (e.g. `goToSlide [vel]`, `goToSlideItem [vel]`, `goToItem [vel]`, `goToSection [vel]`).
+- Learn: the mapping editor sets `learning = action`; the next qualifying message (Note On, CC upward edge, Program Change, or Note Off when re-learning a `noteOff` row) writes the entry. A 5 s timeout cancels.
+- Presets: Foot switches (notes 60/62 for `next`/`prev`), ProPresenter 7 standard layout, and ChamSys QuickQ 20 PB 1 starter layout (`QUICKQ_MIDI_MAPPINGS`, Channel 1: Go `72`, Pause `84`, Release `noteOff` `60`, Go to Cue `48` with velocity as slide arg).
+- Default output (`SurfaceSettings.midiDefaultOutput`): optional output device name used by `MidiDriver.send` and slide cues when a cue leaves `deviceName` empty (falls back to all connected outputs when unset).
+- ChamSys QuickQ 20 codec (`packages/surfaces/src/quickq.ts`): lossless encoder/decoder/formatter/validator for QuickQ 20 Channel 1 MIDI notes (Playbacks 1–10: `48–57` Go to Cue with velocity 1–127, `60–69` Note On Activate with velocity 1–127 / Note Off Release, `72–81` Go, `84–93` Pause/Back). Surfaced in the slide MIDI cue editor (QuickQ 20 / Raw MIDI mode toggle + `delayMs`), live/editor thumbnail tooltips, and the Settings → MIDI Soundcheck strip.
+- MIDI Output / Show Control: `MidiDriver.send` sends Note On/Off, CC, or Program Change messages to the cue's target device, `midiDefaultOutput`, or all outputs. Slide definitions in `@ordo/domain` can specify `midiCues: MidiCue[]`, which are dispatched automatically when the slide cue goes live; pending delayed cues (`delayMs`) are cancelled when the live slide changes or on `dispose()`.
+- Diagnostics: `MidiDriver.onActivity` emits structured `MidiActivityEvent` records (timestamp, direction, device, hex bytes, decoded QuickQ/MIDI summary, `sent` / `dropped` / `matched` / `unmatched` status, drop reason, and 50 ms echo-loop detection), displayed in the Settings → MIDI Activity Monitor with filter/pause/copy/clear controls and rate-limited operator warnings when a live slide cue is dropped.
 
 Every driver dispatches actions through `actionToEvent` into the reducer, so hidden PowerPoint
 slides (design/27 §9) behave the same on all of them: `next`, `prev`, `nextItem`, `prevItem` and

@@ -1434,7 +1434,7 @@ export type MidiParamSource = z.infer<typeof MidiParamSource>;
 export const MidiMapping = z.object({
   id: Id,
   deviceName: z.string().max(500).optional(),
-  kind: z.enum(['note', 'cc', 'programChange']),
+  kind: z.enum(['note', 'noteOff', 'cc', 'programChange']),
   number: z.number().int().min(0).max(127),
   channel: z.number().int().min(1).max(16).optional(),
   threshold: z.number().int().min(0).max(127).default(64),
@@ -1447,6 +1447,7 @@ export const SurfaceSettings = z.object({
   streamDeckPages: z.array(StreamDeckPage).max(100).default([]),
   midi: z.array(MidiMapping).max(1000).default([]),
   midiEnabled: z.boolean().default(false),
+  midiDefaultOutput: z.string().max(500).optional(),
   messagePresets: z.array(z.string().max(500)).max(200).default([]),
 });
 export type SurfaceSettings = z.infer<typeof SurfaceSettings>;
