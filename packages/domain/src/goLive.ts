@@ -18,6 +18,7 @@ import {
   isGeomFileRef,
   type Look,
   type Media,
+  type MidiPreset,
   Playlist,
   PlaylistItem,
   Presentation,
@@ -44,6 +45,8 @@ export type GoLiveInputs = {
   fonts(): Font[];
   looks: Look[];
   general: Pick<GeneralSettings, 'logoMediaId'>;
+  /** Venue MIDI presets snapshotted into the live service (optional for backwards compatibility). */
+  midiPresets?: MidiPreset[];
   /**
    * The content-store file of a hash: the geometry files slides draw (`ShapeGeom.ref`, M6 round 2) go into
    * the manifest with it. Absent (the operator PC resolving from its cache): they are left out, and outputs
@@ -305,12 +308,15 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
   for (const p of Object.values(presentations)) parts.push(`${p.id}:${p.rev}`);
   for (const f of files) parts.push(f.hash);
   parts.push(JSON.stringify(looks));
+  const midiPresets = inputs.midiPresets?.length ? inputs.midiPresets : undefined;
+  if (midiPresets) parts.push(JSON.stringify(midiPresets));
   const resolved: ResolvedPlaylist = {
     playlist,
     presentations,
     media,
     fonts,
     looks,
+    ...(midiPresets ? { midiPresets } : {}),
     ...(geoms.prerenders.length ? { prerenders: geoms.prerenders } : {}),
     ...(geoms.keys.length ? { prerenderKeys: geoms.keys } : {}),
     logoMediaId: logoId && media[logoId] ? logoId : undefined,

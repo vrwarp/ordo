@@ -9,7 +9,11 @@ import { errorText, toast } from '../../state/toasts.ts';
 import { SlideBackgroundSection } from './BackgroundReplace.tsx';
 import { change, replaceBase, save, useEditor } from './editorStore.ts';
 import { SlideSoundPanel } from './MediaPanels.tsx';
-import { SlideMidiCues } from './SlideMidiCues.tsx';
+import {
+  MidiTriggerPicker,
+  shouldShowMidiUi,
+  slideMidiTrigger,
+} from '../../components/MidiTriggerPicker.tsx';
 import { resetSlideToTheme, themeOf, updateSlide } from './ops.ts';
 import { PptxSlideCard } from './PptxSlideCard.tsx';
 import { followReimport, isJob, rebuildsFromPptx } from './pptxJobs.ts';
@@ -145,11 +149,22 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
       )}
       <SlideBackgroundSection slide={slide} p={p} readOnly={readOnly} />
       <SlideSoundPanel slide={slide} media={(id) => media.find((m) => m.id === id)} readOnly={readOnly} />
-      <SlideMidiCues
-        cues={slide.midiCues}
-        onChange={(midiCues) => set((s) => ({ ...s, midiCues }))}
-        readOnly={readOnly}
-      />
+      {(() => {
+        const surfaces = useLibrary.getState().data.settings.surfaces;
+        const trigger = slideMidiTrigger(slide);
+        if (!shouldShowMidiUi(surfaces, Boolean(trigger))) return null;
+        return (
+          <div className="card col small" style={{ gap: 6 }}>
+            <b>Lighting / MIDI on this slide</b>
+            <MidiTriggerPicker
+              value={trigger}
+              disabled={readOnly}
+              onChange={(midi) => set((s) => ({ ...s, midi, midiCues: undefined }))}
+              hint="Fires when landing on this specific slide."
+            />
+          </div>
+        );
+      })()}
       {p.kind === 'loop' && (
         <NumberField
           label="Duration (seconds)"

@@ -2,14 +2,17 @@ import {
   type ActionId,
   type MidiMapping,
   type MidiParamSource,
+  type MidiPreset,
   newId,
   PROPRESENTER_MIDI_MAPPINGS,
   QUICKQ_MIDI_MAPPINGS,
+  QUICKQ_STARTER_MIDI_PRESETS,
 } from '@ordo/domain';
 import {
   clampQuickQCue,
   clampQuickQPlayback,
   encodeQuickQ,
+  formatMidiCueSummary,
   formatQuickQ,
   formatQuickQCommand,
   formatQuickQMapping,
@@ -22,6 +25,7 @@ import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Select } from '../../components/fields.tsx';
 import { clearMidiLog, surfaces, useSurfaces } from '../../services/surfaces.ts';
 import { toast } from '../../state/toasts.ts';
+import { SlideMidiCues } from '../editor/SlideMidiCues.tsx';
 import { ACTION_OPTIONS, ACTIONS_WITH_ARG, parseArg } from './actions.ts';
 import { SaveBar, useSettingsDraft } from './useSettingsDraft.tsx';
 
@@ -39,6 +43,17 @@ const MAPPING_KIND_OPTIONS: { value: MidiMapping['kind']; label: string }[] = [
 ];
 
 const QUICKQ_PLAYBACKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+
+const PRESET_COLORS = [
+  { value: '#f59e0b', label: 'Warm Amber' },
+  { value: '#3b82f6', label: 'Blue' },
+  { value: '#14b8a6', label: 'Teal' },
+  { value: '#a855f7', label: 'Purple' },
+  { value: '#ec4899', label: 'Magenta / Pink' },
+  { value: '#ef4444', label: 'Red' },
+  { value: '#22c55e', label: 'Green' },
+  { value: '#e5e7eb', label: 'White / Neutral' },
+] as const;
 
 type LogFilter = 'all' | 'in' | 'out' | 'dropped';
 
@@ -72,6 +87,7 @@ export function MidiPage() {
   const { midiReady, midiInputs, midiOutputs, lastMidiMessage, midiLog } = useSurfaces();
   const [learning, setLearning] = useState<string | null>(null);
   const [newAction, setNewAction] = useState<ActionId>('next');
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
 
   // Soundcheck strip state
   const [scPlayback, setScPlayback] = useState(1);
@@ -86,6 +102,11 @@ export function MidiPage() {
   const setMaps = (midi: MidiMapping[]) => setDraft({ ...draft, midi });
   const setMap = (id: string, patch: Partial<MidiMapping>) =>
     setMaps(maps.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+
+  const presets: MidiPreset[] = draft.midiPresets ?? [];
+  const setPresets = (midiPresets: MidiPreset[]) => setDraft({ ...draft, midiPresets });
+  const updatePreset = (id: string, patch: Partial<MidiPreset>) =>
+    setPresets(presets.map((p) => (p.id === id ? { ...p, ...patch } : p)));
 
   const inputNames = new Set(midiInputs.map((i) => i.name));
   const outputNames = new Set(midiOutputs.map((o) => o.name));
@@ -373,6 +394,151 @@ export function MidiPage() {
             Go to Cue {scCue}
           </button>
         </div>
+      </div>
+
+      {/* Venue Lighting / MIDI Presets */}
+      <div className="card col small" style={{ gap: 8 }}>
+        <div className="row wrap" style={{ gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
+          <b>Lighting / MIDI Presets</b>
+          <div className="row wrap" style={{ gap: 6 }}>
+            {presets.length === 0 && (
+              <button
+                type="button"
+                className="small"
+                onClick={() => {
+                  setPresets(
+                    QUICKQ_STARTER_MIDI_PRESETS.map((p) => ({
+                      ...p,
+                      id: newId(),
+                      cues: p.cues.map((c) => ({ ...c, id: newId() })),
+                    })),
+                  );
+                  toast('Loaded QuickQ starter presets (Lights: Full & Lights: Half).', 'ok');
+                }}
+              >
+                Load QuickQ Starter
+              </button>
+            )}
+            <button
+              type="button"
+              className="small primary"
+              onClick={() => {
+                const id = newId();
+                const next: MidiPreset = {
+                  id,
+                  name: `Lighting Preset ${presets.length + 1}`,
+                  color: PRESET_COLORS[presets.length % PRESET_COLORS.length]!.value,
+                  cues: [{ id: newId(), ...encodeQuickQ({ action: 'goToCue', playback: 1, cue: 1 }) }],
+                };
+                setPresets([...presets, next]);
+                setEditingPresetId(id);
+              }}
+            >
+              + Add Preset
+            </button>
+          </div>
+        </div>
+
+        {presets.length === 0 ? (
+          <span className="muted">
+            Create named lighting presets here (e.g. <b>Lights: Full</b>, <b>Lights: Half</b>,{' '}
+            <b>Stage: Blue</b>) so worship leads can pick them by name in playlists, songs, and backgrounds.
+          </span>
+        ) : (
+          <div className="col" style={{ gap: 6 }}>
+            {presets.map((p) => {
+              const isEditing = editingPresetId === p.id;
+              return (
+                <div
+                  key={p.id}
+                  className="col"
+                  style={{
+                    gap: 6,
+                    padding: 8,
+                    border: '1px solid var(--border)',
+                    borderLeft: p.color ? `4px solid ${p.color}` : undefined,
+                    borderRadius: 4,
+                    background: 'var(--panel)',
+                  }}
+                >
+                  <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      value={p.name}
+                      style={{ width: 170, fontWeight: 600 }}
+                      onChange={(e) => updatePreset(p.id, { name: e.target.value })}
+                    />
+                    <select
+                      value={p.color ?? ''}
+                      aria-label="Preset color"
+                      title="Badge color"
+                      onChange={(e) => updatePreset(p.id, { color: e.target.value || undefined })}
+                    >
+                      <option value="">No color</option>
+                      {PRESET_COLORS.map((c) => (
+                        <option key={c.value} value={c.value}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="muted grow ellipsis" style={{ fontSize: 11 }}>
+                      {p.cues.map(formatMidiCueSummary).join(' + ')}
+                    </span>
+                    <button
+                      type="button"
+                      className="small"
+                      disabled={!midiReady}
+                      onClick={() => {
+                        const s = surfaces();
+                        if (!s || !midiReady) {
+                          toast('Enable Web MIDI first.', 'warn');
+                          return;
+                        }
+                        s.midi.sendCues(p.cues, `Preset test: ${p.name}`);
+                        toast(`Sent ${p.name}`, 'ok', 2000);
+                      }}
+                    >
+                      Test
+                    </button>
+                    <button
+                      type="button"
+                      className={`small ${isEditing ? 'on' : ''}`}
+                      onClick={() => setEditingPresetId(isEditing ? null : p.id)}
+                    >
+                      {isEditing ? 'Done' : 'Edit cues'}
+                    </button>
+                    <button
+                      type="button"
+                      className="small ghost danger"
+                      title="Delete preset"
+                      onClick={() => {
+                        setPresets(presets.filter((x) => x.id !== p.id));
+                        if (isEditing) setEditingPresetId(null);
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  {isEditing && (
+                    <SlideMidiCues
+                      cues={p.cues}
+                      readOnly={false}
+                      onChange={(nextCues) => {
+                        if (nextCues?.length) updatePreset(p.id, { cues: nextCues });
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <span className="muted" style={{ fontSize: 11 }}>
+          <b>Tip (2-playback QuickQ setup):</b> Using a separate playback for stage colors (e.g. PB 2)? Add a
+          second cue to <b>Lights: Full</b> (such as Stage White or Release PB 2) so stage colors reset
+          cleanly for Announcements and the Sermon.
+        </span>
       </div>
 
       {/* Input Mappings Table */}

@@ -262,6 +262,7 @@ export async function createLibraryProcess(
       fonts: lib.listFonts(),
       looks: settings.looks,
       general: settings.general,
+      midiPresets: settings.surfaces.midiPresets,
     };
   });
   registerApiNotFound(app);

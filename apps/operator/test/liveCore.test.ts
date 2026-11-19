@@ -838,7 +838,7 @@ describe('LiveCore after a hand-back, then a silent hub (run 76, design/17)', ()
       // MIDI out (services/surfaces.ts) fed the same views: cue 1's and cue 2's cues once each, never cue 0's again.
       const sent: number[] = [];
       for (let i = 1; i < views.length; i++)
-        for (const c of midiCuesOnChange(views[i - 1]!, views[i]!)) sent.push(c.number);
+        for (const c of midiCuesOnChange(views[i - 1]!, views[i]!)) sent.push(c.cue.number);
       expect(sent).toEqual([61, 62]);
     });
   }
@@ -850,7 +850,7 @@ describe('LiveCore after a hand-back, then a silent hub (run 76, design/17)', ()
     const back = { ...at1, live: 0 };
     const sent = [at1, back, at2]
       .slice(1)
-      .flatMap((v, i) => midiCuesOnChange([at1, back, at2][i]!, v).map((c) => c.number));
+      .flatMap((v, i) => midiCuesOnChange([at1, back, at2][i]!, v).map((c) => c.cue.number));
     expect(sent).toEqual([60, 62]);
   });
 });

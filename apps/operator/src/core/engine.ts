@@ -778,6 +778,7 @@ export class CoreEngine {
             fonts: () => d.fonts,
             looks: d.settings.looks,
             general: d.settings.general,
+            midiPresets: d.settings.surfaces.midiPresets,
           }
         : undefined,
       playlistId,

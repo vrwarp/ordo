@@ -136,6 +136,7 @@ export function librarySource(lib: Library): LiveSource {
         fonts: () => lib.listFonts(),
         looks: s.looks,
         general: s.general,
+        midiPresets: s.surfaces.midiPresets,
       };
     },
     settings: () => ({ outputs: lib.getSetting('outputs'), surfaces: lib.getSetting('surfaces') }),
