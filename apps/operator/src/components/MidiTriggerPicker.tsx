@@ -7,10 +7,23 @@ import {
   type Slide,
   type SurfaceSettings,
 } from '@ordo/domain';
-import { encodeQuickQ, formatMidiCueSummary } from '@ordo/surfaces';
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useLibrary } from '../state/library.ts';
-import { SlideMidiCues } from '../views/editor/SlideMidiCues.tsx';
+
+const LazySlideMidiCues = lazy(() =>
+  import('../views/editor/SlideMidiCues.tsx').then((m) => ({ default: m.SlideMidiCues })),
+);
+
+function formatCueBrief(c: MidiCue): string {
+  const delay = c.delayMs ? ` +${c.delayMs}ms` : '';
+  if (c.channel === 1 && c.type === 'noteOn' && c.number >= 48 && c.number <= 57 && c.value >= 1) {
+    return `QuickQ PB ${c.number - 47} → Cue ${c.value}${delay}`;
+  }
+  if (c.type === 'programChange') return `Ch ${c.channel} PC ${c.number}${delay}`;
+  if (c.type === 'cc') return `Ch ${c.channel} CC ${c.number} = ${c.value}${delay}`;
+  if (c.type === 'noteOff') return `Ch ${c.channel} NoteOff ${c.number}${delay}`;
+  return `Ch ${c.channel} Note ${c.number} vel ${c.value}${delay}`;
+}
 
 export type MidiBadgeInfo = {
   label: string;
@@ -64,7 +77,7 @@ export function midiTriggerBadge(
         missing: true,
       };
     }
-    const detail = preset.cues.map(formatMidiCueSummary).join('; ');
+    const detail = preset.cues.map(formatCueBrief).join('; ');
     return {
       label: preset.name,
       color: preset.color,
@@ -72,7 +85,7 @@ export function midiTriggerBadge(
     };
   }
   if (!trigger.cues.length) return null;
-  const summary = trigger.cues.map(formatMidiCueSummary).join('; ');
+  const summary = trigger.cues.map(formatCueBrief).join('; ');
   return {
     label: trigger.cues.length === 1 ? summary : `${trigger.cues.length} MIDI cues`,
     title: `MIDI: ${summary}`,
@@ -111,7 +124,10 @@ export function MidiTriggerPicker(props: {
       if (value?.kind !== 'cues') {
         const starter: MidiCue = {
           id: newId(),
-          ...encodeQuickQ({ action: 'goToCue', playback: 1, cue: 1 }),
+          channel: 1,
+          type: 'noteOn',
+          number: 48,
+          value: 1,
         };
         onChange({ kind: 'cues', cues: [starter] });
       }
@@ -167,18 +183,20 @@ export function MidiTriggerPicker(props: {
       )}
 
       {(isCustom || showCustom) && (
-        <SlideMidiCues
-          cues={value?.kind === 'cues' ? value.cues : []}
-          readOnly={Boolean(disabled)}
-          onChange={(nextCues) => {
-            if (!nextCues?.length) {
-              setShowCustom(false);
-              onChange(undefined);
-            } else {
-              onChange({ kind: 'cues', cues: nextCues });
-            }
-          }}
-        />
+        <Suspense fallback={<span className="muted small">Loading MIDI editor…</span>}>
+          <LazySlideMidiCues
+            cues={value?.kind === 'cues' ? value.cues : []}
+            readOnly={Boolean(disabled)}
+            onChange={(nextCues) => {
+              if (!nextCues?.length) {
+                setShowCustom(false);
+                onChange(undefined);
+              } else {
+                onChange({ kind: 'cues', cues: nextCues });
+              }
+            }}
+          />
+        </Suspense>
       )}
     </div>
   );
