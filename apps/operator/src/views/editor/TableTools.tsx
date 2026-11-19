@@ -145,7 +145,9 @@ export function TableBar({ o, off, range, tailActions }: ObjectBarContext) {
   const tools = (
     <>
       <CellFill o={o} cell={cell} cellRange={cellRange} off={off} compact />
-      <TableBordersButton objectId={o.id} table={o.table} range={cellRange} disabled={off} compact />
+      {(cell === undefined || !!cellRange) && (
+        <TableBordersButton objectId={o.id} table={o.table} range={cellRange} disabled={off} compact />
+      )}
       {canMerge && cellRange && (
         <button
           type="button"

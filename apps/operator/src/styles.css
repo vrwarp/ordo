@@ -1156,8 +1156,8 @@ table.list th {
   gap: 8px;
 }
 .signin-overlay.nonmodal .card {
-  padding: 16px;
-  gap: 10px;
+  padding: 16px !important;
+  gap: 10px !important;
 }
 .pin {
   font-size: 28px;
@@ -1218,7 +1218,7 @@ table.list th {
     background: #fff;
   }
   .no-print {
-    display: none;
+    display: none !important;
   }
   .app {
     display: block;
@@ -1269,7 +1269,7 @@ table.list th {
 }
 body.sorting,
 body.sorting * {
-  cursor: grabbing;
+  cursor: grabbing !important;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -1426,7 +1426,7 @@ button.arr-chip-label {
     display: inline-flex;
   }
   .touch-hide {
-    display: none;
+    display: none !important;
   }
   button,
   .btn,
@@ -1495,7 +1495,7 @@ button.arr-chip-label {
     width: 30px;
   }
   .ed-sec-head input {
-    min-height: 44px;
+    min-height: 44px !important;
     min-width: 64px;
   }
   .ed-sec-head button.small {
@@ -1503,7 +1503,7 @@ button.arr-chip-label {
   }
   .arr-chip {
     min-height: 44px;
-    padding: 0 10px 0 0;
+    padding: 0 10px 0 0 !important;
   }
   button.arr-chip-label {
     min-height: 44px;
@@ -1624,7 +1624,7 @@ button.arr-chip-label {
 /* iPad portrait (834 x 1194): side lists narrow, the right-hand panels move under the main one. */
 @media (pointer: coarse) and (max-width: 1000px) {
   .split {
-    grid-template-columns: 180px minmax(0, 1fr);
+    grid-template-columns: 180px minmax(0, 1fr) !important;
   }
   .pl-editor {
     grid-template-columns: minmax(0, 1fr);
@@ -1640,7 +1640,7 @@ button.arr-chip-label {
   }
   /* The add panel scrolls as a whole so its search results keep a usable height above the timers. */
   .add-items {
-    grid-template-rows: auto minmax(220px, 1fr) auto;
+    grid-template-rows: auto minmax(220px, 1fr) auto !important;
     overflow: auto;
   }
   .editor {
@@ -3749,6 +3749,8 @@ tr.rev-row-selected td {
 }
 
 @media (pointer: coarse) {
+  .paint-pill-summary,
+  .stepper-box.compact button,
   .tbl-borders-pop button,
   .tbl-insert-pop button:not(.tbl-grid-cell) {
     min-width: 44px;

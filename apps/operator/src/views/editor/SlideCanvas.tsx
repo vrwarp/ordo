@@ -85,6 +85,7 @@ import { rangeOfCells } from './ops/table.ts';
 import { selectionStyle } from './ops/text.ts';
 import { useOriginalOver } from './original.ts';
 import { snapBox } from './snapping.ts';
+import { TableCanvasOverlay } from './TableCanvasOverlay.tsx';
 import { markTableKitLoaded, tableKitLoaded } from './tableKitState.ts';
 import { TEXT_MARGIN, textDensity, textRasterKey } from './textRaster.ts';
 import { floatingBarSpot, objectToolsSpot, rotaterAngle } from './touchGeometry.ts';
@@ -1138,7 +1139,7 @@ export function SlideCanvas(props: {
   const selectedCount = useEditor((s) => s.objectIds.length);
   const inlineEditingCell = useEditor((s) => s.inlineEditingCell);
   const selectedCell = useEditor((s) => s.cell);
-  const _selectedCellRange = useEditor((s) => s.cellRange);
+  const selectedCellRange = useEditor((s) => s.cellRange);
   const selectedTable =
     !coarse &&
     !props.readOnly &&
@@ -1148,7 +1149,7 @@ export function SlideCanvas(props: {
     !isLocked(selected[0])
       ? selected[0]
       : undefined;
-  const _selectedTableLayout = selectedTable ? tableLayoutOf(selectedTable) : undefined;
+  const selectedTableLayout = selectedTable ? tableLayoutOf(selectedTable) : undefined;
   // What is edited inline: a text box, or a table's cell as its edit view (design/15 "Table editing").
   const editing = inlineEditingId
     ? editTargetOf(drawn.objects, inlineEditingId, inlineEditingCell)
@@ -1346,6 +1347,14 @@ export function SlideCanvas(props: {
             </Layer>
           )}
         </Stage>
+        {selectedTable && selectedTableLayout && (
+          <TableCanvasOverlay
+            o={selectedTable}
+            layout={selectedTableLayout}
+            scale={scale}
+            cellRange={selectedCellRange}
+          />
+        )}
         {!props.hasExternalTextEditor && backing && (
           <CanvasBackingTextEditor
             obj={backing.view}

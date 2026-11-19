@@ -238,6 +238,9 @@ export function TableCanvasOverlay({
       {/* Internal column divider drag handles */}
       {Array.from({ length: Math.max(0, C - 1) }, (_, idx) => {
         const edge = idx + 1;
+        const prevW = Math.abs(layout.colX[edge]! - layout.colX[edge - 1]!) * scale;
+        const nextW = Math.abs(layout.colX[edge + 1]! - layout.colX[edge]!) * scale;
+        if (Math.min(prevW, nextW) < 16) return null;
         const x = layout.colX[edge]! * scale;
         const dragging = dividerDrag?.axis === 'col' && dividerDrag.edge === edge;
         const liveX = dragging ? x + dividerDrag.deltaSlide * scale : x;
@@ -278,6 +281,9 @@ export function TableCanvasOverlay({
       {/* Internal row divider drag handles */}
       {Array.from({ length: Math.max(0, R - 1) }, (_, idx) => {
         const edge = idx + 1;
+        const prevH = Math.abs(layout.rowY[edge]! - layout.rowY[edge - 1]!) * scale;
+        const nextH = Math.abs(layout.rowY[edge + 1]! - layout.rowY[edge]!) * scale;
+        if (Math.min(prevH, nextH) < 16) return null;
         const y = layout.rowY[edge]! * scale;
         const dragging = dividerDrag?.axis === 'row' && dividerDrag.edge === edge;
         const liveY = dragging ? y + dividerDrag.deltaSlide * scale : y;
