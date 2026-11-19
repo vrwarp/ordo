@@ -7,6 +7,7 @@ import {
   defaultDeckPages,
   dialActions,
   faceKey,
+  formatMidiAccessError,
   KeyboardDriver,
   keyFace,
   lcdText,
@@ -553,5 +554,27 @@ describe('wrapText', () => {
   it('wraps and ellipsises', () => {
     expect(wrapText(measure, 'Amazing Grace', 80, 2)).toEqual(['Amazing', 'Grace']);
     expect(wrapText(measure, 'one two three four', 80, 1)[0]!.endsWith('…')).toBe(true);
+  });
+});
+
+describe('formatMidiAccessError', () => {
+  it('distinguishes InvalidStateError platform init failure from NotAllowedError', () => {
+    const platform = formatMidiAccessError(
+      Object.assign(new Error('Platform dependent initialization failed.'), { name: 'InvalidStateError' }),
+    );
+    expect(platform.kind).toBe('platform');
+    expect(platform.hint).toContain('relaunch the browser');
+
+    const denied = formatMidiAccessError(
+      Object.assign(new Error('Permission to use Web MIDI API was not granted.'), {
+        name: 'NotAllowedError',
+      }),
+    );
+    expect(denied.kind).toBe('denied');
+
+    const unsupported = formatMidiAccessError(
+      Object.assign(new Error('Not supported'), { name: 'NotSupportedError' }),
+    );
+    expect(unsupported.kind).toBe('unsupported');
   });
 });

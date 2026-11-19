@@ -26,9 +26,11 @@ export {
 export { StreamDeckDriver, dialActions, type DeckInfo, type DeckRenderer } from './streamdeck.ts';
 export {
   MidiDriver,
+  formatMidiAccessError,
   matchMidi,
   learnFrom,
   parseMidi,
+  type MidiAccessErrorInfo,
   type MidiActivityEvent,
   type MidiInputInfo,
   type MidiOutputInfo,

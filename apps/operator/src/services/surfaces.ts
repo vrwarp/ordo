@@ -4,6 +4,7 @@ import {
   defaultDeckPages,
   isModifierOnly,
   KeyboardDriver,
+  type MidiAccessErrorInfo,
   type MidiActivityEvent,
   MidiDriver,
   type MidiInputInfo,
@@ -30,6 +31,7 @@ export type SurfacesStore = {
   deck: DeckInfo | null;
   midiEnabled: boolean;
   midiReady: boolean;
+  midiError: MidiAccessErrorInfo | null;
   midiInputs: MidiInputInfo[];
   midiOutputs: MidiOutputInfo[];
   lastMidiMessage: { kind: string; channel: number; number: number; value: number; time: number } | null;
@@ -40,6 +42,7 @@ export const useSurfaces = create<SurfacesStore>(() => ({
   deck: null,
   midiEnabled: false,
   midiReady: false,
+  midiError: null,
   midiInputs: [],
   midiOutputs: [],
   lastMidiMessage: null,
@@ -208,7 +211,13 @@ export class Surfaces {
 
   private stopMidi(): void {
     this.midi.dispose();
-    useSurfaces.setState({ midiEnabled: false, midiReady: false, midiInputs: [], midiOutputs: [] });
+    useSurfaces.setState({
+      midiEnabled: false,
+      midiReady: false,
+      midiError: null,
+      midiInputs: [],
+      midiOutputs: [],
+    });
   }
 
   private async startMidi(): Promise<boolean> {
@@ -217,13 +226,20 @@ export class Surfaces {
       useSurfaces.setState({
         midiEnabled: ok,
         midiReady: ok,
+        midiError: ok ? null : this.midi.lastError,
         midiInputs: ok ? this.midi.inputs() : [],
         midiOutputs: ok ? this.midi.outputs() : [],
       });
       return ok;
     } catch (e) {
       this.fault(`midi: ${String(e)}`);
-      useSurfaces.setState({ midiEnabled: false, midiReady: false, midiInputs: [], midiOutputs: [] });
+      useSurfaces.setState({
+        midiEnabled: false,
+        midiReady: false,
+        midiError: this.midi.lastError,
+        midiInputs: [],
+        midiOutputs: [],
+      });
       return false;
     }
   }

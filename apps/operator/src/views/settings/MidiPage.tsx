@@ -84,7 +84,7 @@ function formatLogLine(ev: MidiActivityEvent): string {
 /** MIDI inputs, outputs, QuickQ 20 soundcheck, mappings, and live activity monitor (prd/07). */
 export function MidiPage() {
   const { draft, setDraft, save, revert, saving, dirty } = useSettingsDraft('surfaces');
-  const { midiReady, midiInputs, midiOutputs, lastMidiMessage, midiLog } = useSurfaces();
+  const { midiReady, midiError, midiInputs, midiOutputs, lastMidiMessage, midiLog } = useSurfaces();
   const [learning, setLearning] = useState<string | null>(null);
   const [newAction, setNewAction] = useState<ActionId>('next');
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
@@ -212,7 +212,11 @@ export function MidiPage() {
             onClick={async () => {
               const ok = await surfaces()?.enableMidi();
               if (ok) toast('Web MIDI enabled and devices connected.', 'ok');
-              else toast('Web MIDI access was not granted by the browser.', 'warn');
+              else
+                toast(
+                  useSurfaces.getState().midiError?.message ?? 'Web MIDI could not be initialized.',
+                  'warn',
+                );
             }}
           >
             Enable Web MIDI
@@ -242,7 +246,13 @@ export function MidiPage() {
         )}
       </div>
 
-      {!midiReady && MidiDriver.supported && (
+      {!midiReady && MidiDriver.supported && midiError && (
+        <div className="banner warn" style={{ margin: 0 }}>
+          <b>{midiError.message}</b> {midiError.hint}
+        </div>
+      )}
+
+      {!midiReady && MidiDriver.supported && !midiError && (
         <div className="banner" style={{ margin: 0 }}>
           MIDI is turned off by default so ordo never requests permission unexpectedly. Click{' '}
           <b>Enable Web MIDI</b> above to connect your lighting console, pedals, or controllers.
