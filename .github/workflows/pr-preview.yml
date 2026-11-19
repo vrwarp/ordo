@@ -1,0 +1,102 @@
+name: PR Preview (Cloudflare Pages)
+
+# Builds the browser-only demo (apps/demo) for every pull request from this repository and uploads it to the
+# `ordo-preview` Cloudflare Pages project. Each PR gets its own isolated *.pages.dev origin so IndexedDB,
+# localStorage and BroadcastChannel do not collide with the main demo on GitHub Pages.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  deployments: write
+  pull-requests: write
+
+# A new push to the pull request replaces the preview build in progress.
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    # Fork PRs do not have access to repository secrets; skip them instead of failing.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      # The sample service is made by the real hub, which processes media with ffmpeg.
+      - name: System tools for the media pipeline
+        run: |
+          sudo sed -i -E 's|https?://[^/]+\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm build:pages
+      - name: Deploy preview to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        env:
+          # wrangler-action runs `pnpm add wrangler@4` at the repo root, which pnpm blocks in workspaces unless ignored.
+          npm_config_ignore_workspace_root_check: "true"
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          command: pages deploy site --project-name=ordo-preview --branch=pr-${{ github.event.pull_request.number }}
+      - name: Comment preview URL on PR
+        uses: actions/github-script@v7
+        env:
+          ALIAS_URL: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const marker = '<!-- ordo-pr-preview -->';
+            const aliasUrl = process.env.ALIAS_URL;
+            const deployUrl = process.env.DEPLOYMENT_URL;
+            const previewUrl = aliasUrl || deployUrl;
+            const shortSha = (process.env.COMMIT_SHA || '').slice(0, 7);
+
+            const lines = [
+              marker,
+              `### Demo Preview Ready`,
+              '',
+              previewUrl ? `**Preview URL:** ${previewUrl}` : '_Preview URL unavailable — check workflow logs._',
+            ];
+            if (aliasUrl && deployUrl && aliasUrl !== deployUrl) {
+              lines.push(`**Commit URL (\`${shortSha}\`):** ${deployUrl}`);
+            } else if (shortSha) {
+              lines.push(`**Commit:** \`${shortSha}\``);
+            }
+            const body = lines.join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
