@@ -2,6 +2,7 @@ import type { ActionId, StreamDeckKey, StreamDeckPage as DeckPage } from '@ordo/
 import { defaultDeckPages, PAGE_KEY_PREFIX } from '@ordo/surfaces';
 import { useState } from 'react';
 import { keyed } from '../../lib/keys.ts';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Select } from '../../components/fields.tsx';
 import { surfaces, useSurfaces } from '../../services/surfaces.ts';
 import { errorText, toast } from '../../state/toasts.ts';
@@ -80,6 +81,34 @@ export function StreamDeckPage() {
               setPi(i);
               setKi(null);
             }}
+            onContextMenu={(e) =>
+              openContextMenu(e, [
+                {
+                  label: 'Duplicate page',
+                  onSelect: () => {
+                    const copy: DeckPage = {
+                      ...structuredClone(p),
+                      name: `${p.name} copy`,
+                    };
+                    const next = [...pages];
+                    next.splice(i + 1, 0, copy);
+                    setPages(next);
+                    setPi(i + 1);
+                    setKi(null);
+                  },
+                },
+                { kind: 'separator' },
+                {
+                  label: 'Delete page',
+                  danger: true,
+                  onSelect: () => {
+                    setPages(pages.filter((_, idx) => idx !== i));
+                    setPi(0);
+                    setKi(null);
+                  },
+                },
+              ])
+            }
           >
             {p.name}
           </button>
@@ -134,6 +163,21 @@ export function StreamDeckPage() {
                     className={`deck-key ${ki === i ? 'sel' : ''}`}
                     style={{ background: k?.color ?? '#111' }}
                     onClick={() => setKi(i)}
+                    onContextMenu={(e) => {
+                      setKi(i);
+                      openContextMenu(e, [
+                        {
+                          label: 'Clear key',
+                          danger: true,
+                          disabled: !k,
+                          onSelect: () => {
+                            const keysObj = { ...page.keys };
+                            delete keysObj[String(i)];
+                            setPages(pages.map((pg, idx) => (idx === pi ? { ...pg, keys: keysObj } : pg)));
+                          },
+                        },
+                      ]);
+                    }}
                   >
                     {keyText(k)}
                   </div>

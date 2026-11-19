@@ -881,7 +881,7 @@ export function SlideCanvas(props: {
   /** The deck's area of an imported deck that is not 16:9 (`source.native.slideRect`): the 4:3 guide. */
   slideRect?: SlideRect;
   /** Desktop right-click context menu on the slide canvas or an object. */
-  onCanvasContextMenu?: (pos: { x: number; y: number }) => void;
+  onCanvasContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const coarse = useCoarsePointer();
@@ -993,6 +993,9 @@ export function SlideCanvas(props: {
       // Shift toggles, so it acts once per press: on its pointer event (a mouse press fires mousedown too).
       if (mods.shift && kind !== 'pointer') return;
       const st = useEditor.getState();
+      const isRightClick = ev.button === 2;
+      // Right-clicking an object already inside a multi-selection keeps the whole multi-selection intact.
+      if (isRightClick && st.objectIds.length > 1 && st.objectIds.includes(o.id)) return;
       // A press on the table already selected alone selects the cell under it (or Shift+Click extends cellRange).
       if (
         kind === 'pointer' &&
@@ -1002,6 +1005,8 @@ export function SlideCanvas(props: {
         st.objectId === o.id &&
         st.objectIds.length === 1
       ) {
+        // Right-clicking while a multi-cell range is selected keeps the range for Merge/Copy/Clear actions.
+        if (isRightClick && st.cellRange) return;
         const pos = e.target.getStage()?.getPointerPosition();
         if (pos) void pressTable(o, pos.x / scale, pos.y / scale, mods.shift);
         return;
@@ -1258,8 +1263,7 @@ export function SlideCanvas(props: {
       onContextMenu={(e) => {
         if (!props.onCanvasContextMenu) return;
         if (useEditor.getState().inlineEditingId) return;
-        e.preventDefault();
-        props.onCanvasContextMenu({ x: e.clientX, y: e.clientY });
+        props.onCanvasContextMenu(e);
       }}
     >
       <div ref={stageContainerRef} style={{ position: 'relative', width: size.w, height: size.h }}>

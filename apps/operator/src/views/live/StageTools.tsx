@@ -11,8 +11,10 @@ import {
   type Timer,
 } from '@ordo/domain';
 import { Fragment, useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Select } from '../../components/fields.tsx';
 import { useHubNow } from '../../hooks.ts';
+import { navigate } from '../../useRoute.ts';
 import { controller } from '../../services/controller.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
@@ -190,7 +192,26 @@ export function StageTools() {
           />
         </div>
         {active.map((m) => (
-          <div key={m.id} className="row card" style={{ padding: 6, alignItems: 'center' }}>
+          <div
+            key={m.id}
+            className="row card"
+            style={{ padding: 6, alignItems: 'center' }}
+            onContextMenu={(e) => {
+              openContextMenu(
+                e,
+                [
+                  { label: 'Dismiss message', onSelect: () => ctl?.dismissMessage(m.id) },
+                  { label: 'Re-send with current duration', onSelect: () => send(m.text) },
+                  { kind: 'separator' },
+                  {
+                    label: 'Copy message text',
+                    onSelect: () => void navigator.clipboard?.writeText?.(m.text),
+                  },
+                ],
+                { ariaLabel: 'Active stage message actions' },
+              );
+            }}
+          >
             <span className="grow small">{m.text}</span>
             {m.expiresAt && <span className="muted small">{formatDuration(m.expiresAt - now)}</span>}
             <button type="button" className="small ghost" onClick={() => ctl?.dismissMessage(m.id)}>
@@ -201,7 +222,26 @@ export function StageTools() {
         {(recentMessages.length > 0 || presets.length > 0) && (
           <div className="row wrap" style={{ gap: 4 }}>
             {[...new Set([...recentMessages, ...presets])].slice(0, 10).map((m) => (
-              <button key={m} type="button" className="small" onClick={() => send(m)} title="Send again">
+              <button
+                key={m}
+                type="button"
+                className="small"
+                onClick={() => send(m)}
+                title="Send again"
+                onContextMenu={(e) => {
+                  openContextMenu(
+                    e,
+                    [
+                      { label: 'Send now', onSelect: () => send(m) },
+                      { label: 'Edit before sending', onSelect: () => setText(m) },
+                      { kind: 'separator' },
+                      { label: 'Copy text', onSelect: () => void navigator.clipboard?.writeText?.(m) },
+                      { label: 'Manage message presets…', onSelect: () => navigate('#/settings/messages') },
+                    ],
+                    { ariaLabel: 'Message preset actions' },
+                  );
+                }}
+              >
                 {m}
               </button>
             ))}
@@ -209,7 +249,25 @@ export function StageTools() {
         )}
 
         <h4 style={{ margin: '6px 0 0' }}>Elapsed Sermon / Set Timer</h4>
-        <div className="row">
+        <div
+          className="row"
+          onContextMenu={(e) => {
+            openContextMenu(
+              e,
+              [
+                elapsed?.running
+                  ? { label: 'Stop elapsed timer', onSelect: () => ctl?.timerStop(MANUAL_ELAPSED_TIMER_ID) }
+                  : {
+                      label: 'Start elapsed timer',
+                      onSelect: () =>
+                        ctl?.timerStart(MANUAL_ELAPSED_TIMER_ID, { kind: 'elapsed', label: 'Elapsed' }),
+                    },
+                { label: 'Reset elapsed timer', onSelect: () => ctl?.timerReset(MANUAL_ELAPSED_TIMER_ID) },
+              ],
+              { ariaLabel: 'Elapsed timer actions' },
+            );
+          }}
+        >
           <span className="grow small">Elapsed</span>
           <b className="mono small">{elapsed ? timerText(elapsed, now, general.timeZone) : '00:00'}</b>
         </div>
@@ -232,7 +290,22 @@ export function StageTools() {
           </button>
         </div>
         {others.map((t) => (
-          <div key={t.id} className="row">
+          <div
+            key={t.id}
+            className="row"
+            onContextMenu={(e) => {
+              openContextMenu(
+                e,
+                [
+                  t.running
+                    ? { label: 'Stop timer', onSelect: () => ctl?.timerStop(t.id) }
+                    : { label: 'Start timer', onSelect: () => ctl?.timerStart(t.id, t.spec) },
+                  { label: 'Reset timer', onSelect: () => ctl?.timerReset(t.id) },
+                ],
+                { ariaLabel: 'Timer actions' },
+              );
+            }}
+          >
             <span className="grow ellipsis small">
               {t.spec.label ?? (t.spec.kind === 'elapsed' ? 'Elapsed' : `Countdown ${t.spec.timeOfDay}`)}
             </span>

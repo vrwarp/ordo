@@ -6,6 +6,7 @@ import {
   newId,
 } from '@ordo/domain';
 import { useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Select } from '../../components/fields.tsx';
 import { surfaces, useSurfaces } from '../../services/surfaces.ts';
 import { toast } from '../../state/toasts.ts';
@@ -141,7 +142,34 @@ export function MidiPage() {
           {maps.map((m) => {
             const isDynamic = m.paramSource === 'velocity' || m.paramSource === 'ccValue';
             return (
-              <tr key={m.id}>
+              <tr
+                key={m.id}
+                onContextMenu={(e) =>
+                  openContextMenu(e, [
+                    {
+                      label: 'Learn MIDI…',
+                      disabled: !midiReady || learning !== null,
+                      onSelect: () => void learn(m),
+                    },
+                    {
+                      label: 'Duplicate mapping',
+                      onSelect: () => {
+                        const copy: MidiMapping = { ...structuredClone(m), id: newId() };
+                        const idx = maps.findIndex((x) => x.id === m.id);
+                        const next = [...maps];
+                        next.splice(idx + 1, 0, copy);
+                        setMaps(next);
+                      },
+                    },
+                    { kind: 'separator' },
+                    {
+                      label: 'Delete mapping',
+                      danger: true,
+                      onSelect: () => setMaps(maps.filter((x) => x.id !== m.id)),
+                    },
+                  ])
+                }
+              >
                 <td>
                   <select
                     value={m.deviceName ?? ''}

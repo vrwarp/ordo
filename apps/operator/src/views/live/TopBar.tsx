@@ -2,9 +2,11 @@ import { DEMO } from '@ordo/client';
 import { formatClock } from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { cacheSummary, dotTitle, outputDot, outputIssues } from '../../lib/health.ts';
 import { hubStatus } from '../../lib/hubStatus.ts';
 import { useHubNow } from '../../hooks.ts';
+import { navigate } from '../../useRoute.ts';
 import { controller, dispatch } from '../../services/controller.ts';
 import { useLaunch } from '../../services/outputs.ts';
 import { missingHandles, reacquireMissing } from '../../services/reacquire.ts';
@@ -111,7 +113,23 @@ export function TopBar() {
             const h = live.health[o.id];
             const d = outputDot(h);
             return (
-              <span key={o.id} className="row" style={{ gap: 4 }} title={dotTitle(h, o.name)}>
+              <span
+                key={o.id}
+                className="row"
+                style={{ gap: 4 }}
+                title={dotTitle(h, o.name)}
+                onContextMenu={(e) => {
+                  openContextMenu(
+                    e,
+                    [
+                      { kind: 'label', label: o.name },
+                      { label: 'Open diagnostics…', onSelect: () => setUi({ showDiagnostics: true }) },
+                      { label: 'Configure outputs…', onSelect: () => navigate('#/settings/outputs') },
+                    ],
+                    { ariaLabel: `${o.name} status actions` },
+                  );
+                }}
+              >
                 <span className={`dot ${d}`} />
                 <span className="small">{o.name}</span>
               </span>

@@ -1,5 +1,6 @@
 import type { Box, TextStyle } from '@ordo/domain';
 import { type PointerEvent as ReactPointerEvent, useRef, useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 
 export interface ThemeCanvasProps {
   box: Box;
@@ -183,6 +184,45 @@ export function ThemeCanvas({ box, text, onChangeBox, scenario }: ThemeCanvasPro
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onContextMenu={(e) => {
+          openContextMenu(
+            e,
+            [
+              {
+                label: 'Center horizontally',
+                onSelect: () => onChangeBox({ ...box, x: Math.round((1920 - box.w) / 2) }),
+              },
+              {
+                label: 'Center vertically',
+                onSelect: () => onChangeBox({ ...box, y: Math.round((1080 - box.h) / 2) }),
+              },
+              { kind: 'separator' },
+              {
+                kind: 'submenu',
+                label: 'Screen placement preset',
+                items: [
+                  {
+                    label: 'Center Screen',
+                    onSelect: () => onChangeBox({ x: 120, y: 140, w: 1680, h: 800, rotation: 0 }),
+                  },
+                  {
+                    label: 'Lower Third',
+                    onSelect: () => onChangeBox({ x: 120, y: 720, w: 1680, h: 280, rotation: 0 }),
+                  },
+                  {
+                    label: 'Bottom Third',
+                    onSelect: () => onChangeBox({ x: 120, y: 640, w: 1680, h: 380, rotation: 0 }),
+                  },
+                  {
+                    label: 'Top Banner',
+                    onSelect: () => onChangeBox({ x: 120, y: 80, w: 1680, h: 280, rotation: 0 }),
+                  },
+                ],
+              },
+            ],
+            { ariaLabel: 'Theme canvas actions' },
+          );
+        }}
         style={{
           position: 'relative',
           width: '100%',

@@ -28,6 +28,7 @@ export const SlideThumb = memo(function SlideThumb(props: {
   hidden?: boolean;
   onClick?: () => void;
   onDoubleClick?: () => void;
+  onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
   footer?: React.ReactNode;
 }) {
   const [ref, visible] = useVisible<HTMLDivElement>();
@@ -44,6 +45,7 @@ export const SlideThumb = memo(function SlideThumb(props: {
       className={cls}
       onClick={props.onClick}
       onDoubleClick={props.onDoubleClick}
+      onContextMenu={props.onContextMenu}
       title={props.label}
     >
       {url || (!props.slide && bg && visible) ? (

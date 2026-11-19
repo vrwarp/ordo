@@ -1,7 +1,9 @@
 import { type ActionId, DEFAULT_KEYMAP } from '@ordo/domain';
 import { isModifierOnly, normalizeCombo } from '@ordo/surfaces';
 import { useEffect, useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Select } from '../../components/fields.tsx';
+import { toast } from '../../state/toasts.ts';
 import { ACTION_OPTIONS, ACTIONS_WITH_ARG, parseArg } from './actions.ts';
 import { SaveBar, useSettingsDraft } from './useSettingsDraft.tsx';
 
@@ -99,7 +101,31 @@ export function KeymapPage() {
         </thead>
         <tbody>
           {filteredEntries.map(([combo, a]) => (
-            <tr key={combo}>
+            <tr
+              key={combo}
+              onContextMenu={(e) =>
+                openContextMenu(e, [
+                  { label: 'Re-record key', onSelect: () => setRecording(combo) },
+                  {
+                    label: 'Copy shortcut',
+                    onSelect: () => {
+                      void navigator.clipboard?.writeText(combo);
+                      toast(`Copied shortcut "${combo}".`, 'info');
+                    },
+                  },
+                  { kind: 'separator' },
+                  {
+                    label: 'Remove binding',
+                    danger: true,
+                    onSelect: () => {
+                      const n = { ...draft };
+                      delete n[combo];
+                      setDraft(n);
+                    },
+                  },
+                ])
+              }
+            >
               <td>
                 <button
                   type="button"

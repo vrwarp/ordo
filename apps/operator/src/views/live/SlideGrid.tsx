@@ -1,9 +1,18 @@
-import { type Cue, type PlaylistItem, type Slide, isHiddenCue, withoutBackdrops } from '@ordo/domain';
+import {
+  type Cue,
+  firstText,
+  type PlaylistItem,
+  type Slide,
+  isHiddenCue,
+  withoutBackdrops,
+} from '@ordo/domain';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { armDot, waitingForLive } from '../../lib/health.ts';
 import { type CueGroup, groupCues, sectionGoTarget } from '../../lib/sections.ts';
 import { slideMediaTags } from '../../lib/slideMedia.ts';
-import { controller } from '../../services/controller.ts';
+import { navigate } from '../../useRoute.ts';
+import { controller, dispatch } from '../../services/controller.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import { setUi, useUi } from '../../state/ui.ts';
@@ -74,7 +83,41 @@ function PlaylistItemSection({
       {groups.map((g) => (
         <div key={g.pos}>
           {g.pos >= 0 && (
-            <div className="section-head">
+            <div
+              className="section-head"
+              onContextMenu={(e) => {
+                const target = sectionGoTarget(g);
+                openContextMenu(
+                  e,
+                  [
+                    {
+                      label: `Go to ${g.label}`,
+                      disabled: !liveHere || target === undefined,
+                      onSelect: () => {
+                        if (liveHere && target !== undefined) ctl?.go(target);
+                      },
+                    },
+                    {
+                      label: `Arm ${g.label}`,
+                      disabled: !liveHere || target === undefined,
+                      onSelect: () => {
+                        if (liveHere && target !== undefined) ctl?.select(target);
+                      },
+                    },
+                    ...(presentation
+                      ? [
+                          { kind: 'separator' as const },
+                          {
+                            label: 'Edit presentation…',
+                            onSelect: () => navigate(`#/edit/${presentation.id}`),
+                          },
+                        ]
+                      : []),
+                  ],
+                  { ariaLabel: `Section ${g.label} actions` },
+                );
+              }}
+            >
               <button
                 type="button"
                 className="small"
@@ -108,6 +151,7 @@ function PlaylistItemSection({
                 const hidden = isHiddenCue(c);
                 const notesText = slide?.notes?.trim() ?? '';
                 const hasNotes = notesText.length > 0;
+                const slideText = slide ? firstText(slide).trim() : '';
                 return (
                   <SlideThumb
                     key={c.index}
@@ -122,6 +166,52 @@ function PlaylistItemSection({
                     hidden={hidden}
                     onClick={() => onClick(c)}
                     onDoubleClick={() => onDouble(c)}
+                    onContextMenu={(e) => {
+                      openContextMenu(
+                        e,
+                        [
+                          {
+                            label: 'Go live (Take)',
+                            disabled: !liveHere,
+                            onSelect: () => ctl?.go(c.index),
+                          },
+                          {
+                            label: 'Arm (Pre-load)',
+                            disabled: !liveHere,
+                            onSelect: () => ctl?.select(c.index),
+                          },
+                          ...(marks.live
+                            ? [
+                                { kind: 'separator' as const },
+                                {
+                                  label: 'Clear slide layer',
+                                  shortcut: 'Esc',
+                                  onSelect: () => dispatch({ id: 'clearSlide' }),
+                                },
+                              ]
+                            : []),
+                          ...(slideText
+                            ? [
+                                { kind: 'separator' as const },
+                                {
+                                  label: 'Copy slide text',
+                                  onSelect: () => void navigator.clipboard?.writeText?.(slideText),
+                                },
+                              ]
+                            : []),
+                          ...(presentation
+                            ? [
+                                { kind: 'separator' as const },
+                                {
+                                  label: 'Edit presentation…',
+                                  onSelect: () => navigate(`#/edit/${presentation.id}`),
+                                },
+                              ]
+                            : []),
+                        ],
+                        { ariaLabel: `Slide ${c.label} actions` },
+                      );
+                    }}
                     footer={
                       tags.length > 0 || hidden || hasNotes ? (
                         <>
@@ -161,6 +251,33 @@ function PlaylistItemSection({
                   width={thumbSize}
                   onClick={() => onClick(c)}
                   onDoubleClick={() => onDouble(c)}
+                  onContextMenu={(e) => {
+                    openContextMenu(
+                      e,
+                      [
+                        {
+                          label: 'Go live (Take)',
+                          disabled: !liveHere,
+                          onSelect: () => ctl?.go(c.index),
+                        },
+                        {
+                          label: 'Arm (Pre-load)',
+                          disabled: !liveHere,
+                          onSelect: () => ctl?.select(c.index),
+                        },
+                        ...(marks.live && c.kind === 'media'
+                          ? [
+                              { kind: 'separator' as const },
+                              {
+                                label: c.mediaKind === 'audio' ? 'Clear audio' : 'Clear media layer',
+                                onSelect: () => ctl?.clear(c.mediaKind === 'audio' ? 'audio' : 'media'),
+                              },
+                            ]
+                          : []),
+                      ],
+                      { ariaLabel: `Cue ${c.label} actions` },
+                    );
+                  }}
                   footer={<span className="tag">{c.kind === 'media' ? c.mediaKind : c.kind}</span>}
                 />
               );

@@ -1,6 +1,7 @@
 import { parseSectionLabel, type Presentation, type Slide } from '@ordo/domain';
 import { type PointerEvent as ReactPointerEvent, useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Menu } from '../../components/Menu.tsx';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { type FlatEntry, flatSlideMove } from '../../components/sortableMath.ts';
@@ -15,6 +16,7 @@ import {
   setSlideHidden,
   tryPasteSlidesFromClipboard,
 } from './actions.ts';
+import { buildSectionHeaderContextMenu, buildSlideCardContextMenu } from './editorContextMenu.ts';
 import { toast } from '../../state/toasts.ts';
 import { change, selectSlide, useEditor } from './editorStore.ts';
 import {
@@ -22,13 +24,16 @@ import {
   addSlide,
   deleteSection,
   deleteSlide,
+  duplicateSection,
   duplicateSlide,
   mergeWithNext,
   moveSection,
   moveSlide,
   renameSection,
+  resetSlideToTheme,
   splitSlide,
   themeOf,
+  updateSlide,
 } from './ops.ts';
 
 /** How a hidden slide's number and picture are dimmed in the slide list (design/27 §11 item 9). */
@@ -47,6 +52,7 @@ function SlideItem(props: {
   onToggleHidden: (hidden: boolean) => void;
   onSplit?: () => void;
   onMerge?: () => void;
+  onResetToTheme?: () => void;
   onDelete: () => void;
   sort: {
     item: Record<string, unknown>;
@@ -80,6 +86,19 @@ function SlideItem(props: {
     }
   }, [props.selected, ref]);
 
+  const pasteSlideAfter = () => {
+    void readSystemClipboard().then((sys) => {
+      const readable = sys
+        ? {
+            getData: (type: string) =>
+              type === 'text/html' ? sys.html : type === 'text/plain' ? sys.plain : '',
+          }
+        : null;
+      const pasted = tryPasteSlidesFromClipboard(readable, props.slide.id);
+      if (!pasted) toast('No copied slide on the clipboard.', 'warn');
+    });
+  };
+
   return (
     <div
       ref={ref}
@@ -88,6 +107,32 @@ function SlideItem(props: {
       data-slide-id={props.slide.id}
       className={`ed-slide-card ${props.selected ? 'sel' : ''} ${hidden ? 'hidden-slide' : ''} ${props.sort.cls}`}
       onClick={() => selectSlide(props.slide.id)}
+      onContextMenu={(e) => {
+        selectSlide(props.slide.id);
+        openContextMenu(
+          e,
+          buildSlideCardContextMenu({
+            slide: props.slide,
+            p: props.p,
+            readOnly: props.readOnly,
+            onCopy: () => {
+              if (copySlideSelection(undefined, props.slide.id)) toast('Slide copied.', 'ok');
+            },
+            onCut: () => void cutSlideSelection(undefined, props.slide.id),
+            onPaste: pasteSlideAfter,
+            onDuplicate: props.onDuplicate,
+            onNewLike: props.onNewLike,
+            onToggleHidden: props.onToggleHidden,
+            onMoveUp: props.onMoveUp,
+            onMoveDown: props.onMoveDown,
+            onSplit: props.onSplit,
+            onMerge: props.onMerge,
+            onResetToTheme: props.onResetToTheme,
+            onDelete: props.onDelete,
+          }),
+          { ariaLabel: `Slide ${props.index + 1} actions` },
+        );
+      }}
     >
       <div className={`ed-slide ${props.selected ? 'sel' : ''} ${hidden ? 'hidden-slide' : ''}`}>
         <DragHandle label="Drag to reorder" disabled={props.readOnly} {...props.sort.handle} />
@@ -352,6 +397,40 @@ export function SlidesPanel({
               {...sections.mouseArea(si)}
               className="row ed-sec-head"
               style={{ cursor: readOnly ? undefined : 'grab' }}
+              onContextMenu={(e) => {
+                const headEl = e.currentTarget;
+                openContextMenu(
+                  e,
+                  buildSectionHeaderContextMenu({
+                    section: sec,
+                    index: si,
+                    totalSections: p.sections.length,
+                    readOnly,
+                    onAddSlide: () => edit((q) => addSlide(q, sec.id, theme)),
+                    onDuplicateSection: () => edit((q) => duplicateSection(q, sec.id)),
+                    onRename: () => {
+                      const inp = headEl.querySelector('input');
+                      inp?.focus();
+                      inp?.select();
+                    },
+                    onMoveUp: si > 0 ? () => edit((q) => moveSection(q, si, si - 1)) : undefined,
+                    onMoveDown:
+                      si < p.sections.length - 1 ? () => edit((q) => moveSection(q, si, si + 1)) : undefined,
+                    onDelete: async () => {
+                      if (
+                        await confirmDialog(
+                          'Delete section',
+                          `Delete “${sec.label}” and its ${sec.slides.length} slides? It is removed from every arrangement.`,
+                          'Delete',
+                          true,
+                        )
+                      )
+                        edit((q) => deleteSection(q, sec.id));
+                    },
+                  }),
+                  { ariaLabel: `Section ${sec.label} actions` },
+                );
+              }}
             >
               <DragHandle label="Drag the section" disabled={readOnly} {...sections.handle(si)} />
               <span className="tag">{sec.short}</span>
@@ -449,6 +528,9 @@ export function SlidesPanel({
                   onToggleHidden={(h) => setSlideHidden(sl.id, h)}
                   onSplit={p.kind === 'song' ? () => edit((q) => splitSlide(q, sl.id)) : undefined}
                   onMerge={p.kind === 'song' ? () => edit((q) => mergeWithNext(q, sl.id)) : undefined}
+                  onResetToTheme={() =>
+                    edit((q) => updateSlide(q, sl.id, (s) => resetSlideToTheme(s, theme)))
+                  }
                   onDelete={() => {
                     edit((q) => deleteSlide(q, sl.id));
                     selectSlide(undefined);

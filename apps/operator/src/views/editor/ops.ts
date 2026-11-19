@@ -313,6 +313,21 @@ export function moveSection(p: Presentation, from: number, to: number): Presenta
   return { ...p, sections: moveItem(p.sections, from, to) };
 }
 
+export function duplicateSection(p: Presentation, sectionId: string): Presentation {
+  const si = p.sections.findIndex((s) => s.id === sectionId);
+  if (si < 0) return p;
+  const orig = p.sections[si]!;
+  const copy: Section = {
+    id: newId(),
+    label: `${orig.label} (copy)`,
+    short: orig.short,
+    slides: orig.slides.map(cloneSlide),
+  };
+  const sections = [...p.sections];
+  sections.splice(si + 1, 0, copy);
+  return { ...p, sections };
+}
+
 // ---- objects ----
 
 export function newText(theme: Theme, text = 'Text'): TextObject {
