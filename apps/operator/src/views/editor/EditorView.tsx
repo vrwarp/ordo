@@ -1,5 +1,5 @@
 import { SVG_HEAD_BYTES, type SlideObject } from '@ordo/domain';
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FindReplaceDialog } from './FindReplaceDialog.tsx';
 import { ErrorBoundary, PaneError } from '../../components/ErrorBoundary.tsx';
 import { DeckSwatchesSource, type SwatchSource } from '../../components/deckSwatches.ts';
@@ -13,30 +13,43 @@ import { useSession } from '../../state/session.ts';
 import { toast } from '../../state/toasts.ts';
 import {
   addToSlide,
+  armPlainPaste,
+  type ClipboardReadable,
+  consumePlainPaste,
   copySelection,
+  copySlideSelection,
+  copyTableCellSelection,
   copyTextSelection,
   inlineText,
+  markExternalClipboard,
   tableKey,
   cutSelection,
+  cutSlideSelection,
+  cutTableCellSelection,
   cutTextSelection,
   deleteSelection,
   duplicateSelection,
   handleTextPaste,
   mayAdd,
   moveSelection,
+  pasteIntoSelectedTableCell,
   pasteTableFromClipboard,
+  readSystemClipboard,
   replaceBackgroundWith,
   reorderSelection,
   tryPasteObjectsFromClipboard,
+  tryPasteSlidesFromClipboard,
   ungroupSelection,
   writeLastObjectClip,
+  writeLastSlideClip,
+  writeLastTableCellClip,
 } from './actions.ts';
 import { previewLooks } from '../../lib/lookPreviews.ts';
 import { treatAsSlides } from '../../lib/pptxImport.ts';
 import { uploadFiles } from '../library/MediaTab.tsx';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { ConflictDialog } from './ConflictDialog.tsx';
-import { historyKey, keyPlace, slideNavKey, stepSlide } from './editorKeys.ts';
+import { canEditorClipboard, historyKey, keyPlace, slideNavKey, stepSlide } from './editorKeys.ts';
 import { FloatingContextBar } from './FloatingContextBar.tsx';
 import { LookPreviews, SingleLookStagePreview } from './LookPreviews.tsx';
 import { addVideo, newVideo } from './mediaOps.ts';
@@ -238,6 +251,112 @@ export function EditorView({ id }: { id: string }) {
   // An imported deck PowerPoint plays as a loop (`importReport` `loop`): its line on the stage.
   const loopDeck = p?.kind === 'loop' && p.source?.kind === 'pptx';
 
+  const pasteClipboardPayload = useCallback(
+    (
+      data: ClipboardReadable | null,
+      rawFile: File | null,
+      plainOnly: boolean,
+      syncInline?: (caret: number) => void,
+    ): boolean => {
+      const st = useEditor.getState();
+      if (!st.draft || !st.slideId) return false;
+
+      // 1. Inline text box or table cell editing.
+      const inline = st.inlineEditingId ? inlineText() : undefined;
+      if (inline) {
+        const { view, target } = inline;
+        if (!plainOnly && target.cell !== undefined) {
+          const html = data?.getData('text/html') ?? '';
+          const plain = data?.getData('text/plain') ?? '';
+          if (pasteTableFromClipboard(target.objectId, target.cell, html, plain)) {
+            stopInlineEditing();
+            return true;
+          }
+        }
+        const caret = handleTextPaste(
+          view,
+          st.textRange.start,
+          st.textRange.end,
+          data as DataTransfer | null,
+          target,
+          plainOnly,
+        );
+        if (caret !== null) {
+          setTextRange({ start: caret, end: caret, caret });
+          syncInline?.(caret);
+          return true;
+        }
+        return false;
+      }
+
+      // 1b. Selected table on the canvas: paste spreadsheet matrix or single-cell text directly into selected cell(s).
+      const selObj = currentObject();
+      if (selObj?.type === 'shape' && selObj.table && !selObj.locked) {
+        if (pasteIntoSelectedTableCell(selObj.id, st.cell, st.cellRange, data, plainOnly)) {
+          return true;
+        }
+      }
+
+      // 2. Copied Ordo slides (`data-ordo-slides` or in-memory slide clipboard).
+      const pastingSlides = tryPasteSlidesFromClipboard(data);
+      if (pastingSlides) return true;
+
+      // 3. Image file/blob in the clipboard (e.g. screenshot or copied image).
+      if (rawFile) {
+        const ext = rawFile.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+        const named =
+          !rawFile.name || rawFile.name === 'image.png'
+            ? new File([rawFile], `pasted-${Date.now()}.${ext}`, { type: rawFile.type })
+            : rawFile;
+        const targetSlideId = st.slideId;
+        void uploadFiles([named]).then(async (uploaded) => {
+          const m = uploaded[0];
+          if (!m) return;
+          const declared = await svgDeclared(m, () => named.slice(0, SVG_HEAD_BYTES).text());
+          const imgObj = newImage(m.id, insertBox(m, declared));
+          if (readOnlyNow.current) return;
+          addToSlide(targetSlideId, imgObj);
+        });
+        return true;
+      }
+
+      // 4. Copied Ordo slide objects (`data-ordo-objects` or in-memory object clipboard).
+      const pastingObjs = tryPasteObjectsFromClipboard(data);
+      if (pastingObjs) return true;
+
+      // 5. Tabular spreadsheet data pasted onto the slide -> create a new Table.
+      const html = data?.getData('text/html') ?? '';
+      const plain = data?.getData('text/plain') ?? '';
+      const curTheme = themeOf(st.draft, useLibrary.getState().data.themes);
+      if (!plainOnly) {
+        const pastedMatrix = parseTableClipboard(html, plain);
+        if (pastedMatrix) {
+          addToSlide(st.slideId, newTable(curTheme, { cells: pastedMatrix }));
+          toast(
+            `Inserted ${pastedMatrix.length}×${Math.max(...pastedMatrix.map((r) => r.length))} table from clipboard`,
+            'ok',
+          );
+          return true;
+        }
+      }
+
+      // 6. Rich or plain text pasted directly onto the slide canvas -> create a new TextObject.
+      const richSlice = plainOnly
+        ? plain
+          ? { text: plain }
+          : null
+        : (html && htmlToRichText(html, curTheme.textBoxDefaults)) || (plain ? { text: plain } : null);
+      if (richSlice?.text.trim()) {
+        const baseObj = newText(curTheme, '');
+        const { object } = pasteRichText(baseObj, 0, 0, richSlice);
+        addToSlide(st.slideId, object);
+        return true;
+      }
+      return false;
+    },
+    [],
+  );
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // A control that handled the key itself (a radio group's arrows, a menu's Escape) keeps it.
@@ -303,23 +422,42 @@ export function EditorView({ id }: { id: string }) {
         }
       }
 
+      // Copy/Cut/Plain-paste shortcuts apply on both canvas and UI controls (like Ctrl+D/Z/Y/F),
+      // unless the user highlighted text in UI chrome. Ctrl+C also works in read-only presentations.
+      if (!studio && !st.inlineEditingId && ctrl && !e.altKey) {
+        const k = e.key.toLowerCase();
+        if (k === 'v' && e.shiftKey && canEditorClipboard(place, 'paste')) {
+          armPlainPaste();
+          return;
+        }
+        if (k === 'c' && !e.shiftKey && canEditorClipboard(place, 'copy')) {
+          if (o?.type === 'shape' && o.table && (st.cell !== undefined || st.cellRange)) {
+            copyTableCellSelection();
+          } else if (o) {
+            copySelection();
+          } else if (st.slideId) {
+            copySlideSelection();
+          }
+          return;
+        }
+        if (k === 'x' && !e.shiftKey && !readOnly && canEditorClipboard(place, 'cut')) {
+          if (o?.type === 'shape' && o.table && (st.cell !== undefined || st.cellRange)) {
+            cutTableCellSelection();
+          } else if (o) {
+            cutSelection();
+          } else if (st.slideId) {
+            cutSlideSelection();
+          }
+          return;
+        }
+      }
+
       if (!o || !st.slideId || readOnly) return;
       // The selection acts as one block: a group, or what Shift-click gathered (design/27 §11 item 5).
       if (ctrl && e.key.toLowerCase() === 'd') {
         e.preventDefault();
         duplicateSelection();
         return;
-      }
-      if (place === 'canvas' && !st.inlineEditingId && ctrl && !e.altKey) {
-        const k = e.key.toLowerCase();
-        if (k === 'c') {
-          copySelection();
-          return;
-        }
-        if (k === 'x') {
-          cutSelection();
-          return;
-        }
       }
       if (place !== 'canvas' || ctrl || e.altKey) return;
       // A selected table's cells: Enter, Tab, Escape and Delete (design/15 "Table editing").
@@ -359,7 +497,7 @@ export function EditorView({ id }: { id: string }) {
     const onCopy = (e: ClipboardEvent) => {
       if (e.defaultPrevented) return;
       const place = keyPlace(e.target);
-      if (place === 'field' || place === 'dialog') return;
+      if (!canEditorClipboard(place, 'copy')) return;
       // The studio's own fields copy as fields do; the hidden canvas's selection is not copied (onKey).
       if (studioRef.current) return;
       const st = useEditor.getState();
@@ -371,17 +509,28 @@ export function EditorView({ id }: { id: string }) {
         }
         return;
       }
-      if (place === 'canvas') {
+      const selObj = currentObject();
+      if (selObj?.type === 'shape' && selObj.table && (st.cell !== undefined || st.cellRange)) {
+        if (copyTableCellSelection(e.clipboardData) || writeLastTableCellClip(e.clipboardData)) {
+          e.preventDefault();
+        }
+        return;
+      }
+      if (selObj) {
         if (copySelection(e.clipboardData) || writeLastObjectClip(e.clipboardData)) {
           e.preventDefault();
         }
+        return;
+      }
+      if (copySlideSelection(e.clipboardData) || writeLastSlideClip(e.clipboardData)) {
+        e.preventDefault();
       }
     };
 
     const onCut = (e: ClipboardEvent) => {
       if (e.defaultPrevented || readOnly) return;
       const place = keyPlace(e.target);
-      if (place === 'field' || place === 'dialog') return;
+      if (!canEditorClipboard(place, 'cut')) return;
       if (studioRef.current) return;
       const st = useEditor.getState();
       const inline = st.inlineEditingId && st.draft && st.slideId ? inlineText() : undefined;
@@ -395,114 +544,45 @@ export function EditorView({ id }: { id: string }) {
         }
         return;
       }
-      if (place === 'canvas') {
+      const selObj = currentObject();
+      if (selObj?.type === 'shape' && selObj.table && (st.cell !== undefined || st.cellRange)) {
+        if (cutTableCellSelection(e.clipboardData) || writeLastTableCellClip(e.clipboardData)) {
+          e.preventDefault();
+        }
+        return;
+      }
+      if (selObj) {
         if (cutSelection(e.clipboardData) || writeLastObjectClip(e.clipboardData)) {
           e.preventDefault();
         }
+        return;
+      }
+      // If `onKey` already cut the selection or slide, write the pending clip into `clipboardData`.
+      if (
+        writeLastObjectClip(e.clipboardData) ||
+        writeLastTableCellClip(e.clipboardData) ||
+        writeLastSlideClip(e.clipboardData) ||
+        cutSlideSelection(e.clipboardData)
+      ) {
+        e.preventDefault();
       }
     };
 
     const onPaste = (e: ClipboardEvent) => {
       if (e.defaultPrevented || readOnly) return;
       const place = keyPlace(e.target);
-      if (place === 'field' || place === 'dialog') return;
+      if (!canEditorClipboard(place, 'paste')) return;
       // Nothing is pasted onto the hidden canvas (a picture, objects or a new text box) or into its box or cell.
       if (studioRef.current) return;
-      const st = useEditor.getState();
-      if (!st.draft || !st.slideId) return;
-
-      // 1. If inline editing a text box on the canvas, paste into that text box at `textRange`.
-      //    If inline editing a table cell and clipboard holds multi-cell tabular data, paste into the table.
-      const inline = st.inlineEditingId ? inlineText() : undefined;
-      if (inline) {
-        const { view, target } = inline;
-        if (target.cell !== undefined) {
-          const html = e.clipboardData?.getData('text/html') ?? '';
-          const plain = e.clipboardData?.getData('text/plain') ?? '';
-          if (pasteTableFromClipboard(target.objectId, target.cell, html, plain)) {
-            e.preventDefault();
-            stopInlineEditing();
-            return;
-          }
-        }
-        const caret = handleTextPaste(view, st.textRange.start, st.textRange.end, e.clipboardData, target);
-        if (caret !== null) {
-          e.preventDefault();
-          setTextRange({ start: caret, end: caret, caret });
-          syncInlineTextarea(caret);
-        }
-        return;
-      }
-
-      if (place !== 'canvas') return;
-
-      // 1b. If a table is selected on the canvas and clipboard holds spreadsheet TSV/HTML, paste into it.
-      const selObj = currentObject();
-      if (selObj?.type === 'shape' && selObj.table && !selObj.locked) {
-        const html = e.clipboardData?.getData('text/html') ?? '';
-        const plain = e.clipboardData?.getData('text/plain') ?? '';
-        if (pasteTableFromClipboard(selObj.id, st.cell, html, plain)) {
-          e.preventDefault();
-          return;
-        }
-      }
-
-      // 2. Check for an image file/blob in the clipboard (e.g. screenshot or copied image).
+      const plainOnly = consumePlainPaste();
       const items = [...(e.clipboardData?.items ?? [])];
       const imgItem = items.find((it) => it.kind === 'file' && it.type.startsWith('image/'));
       const rawFile =
-        imgItem?.getAsFile() ?? [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
-      if (rawFile) {
+        imgItem?.getAsFile() ??
+        [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/')) ??
+        null;
+      if (pasteClipboardPayload(e.clipboardData ?? null, rawFile, plainOnly, syncInlineTextarea)) {
         e.preventDefault();
-        const ext = rawFile.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
-        const named =
-          !rawFile.name || rawFile.name === 'image.png'
-            ? new File([rawFile], `pasted-${Date.now()}.${ext}`, { type: rawFile.type })
-            : rawFile;
-        const targetSlideId = st.slideId;
-        void uploadFiles([named]).then(async (uploaded) => {
-          const m = uploaded[0];
-          if (!m) return;
-          // An SVG starts at the size it declares (its media size is its still's, `insertBox`).
-          const declared = await svgDeclared(m, () => named.slice(0, SVG_HEAD_BYTES).text());
-          const imgObj = newImage(m.id, insertBox(m, declared));
-          // The upload took a while: the editor may be locked by now (a service went live).
-          if (readOnlyNow.current) return;
-          addToSlide(targetSlideId, imgObj);
-        });
-        return;
-      }
-
-      // 3. Check for copied Ordo slide objects (`data-ordo-objects` or in-memory object clipboard).
-      const pasting = tryPasteObjectsFromClipboard(e.clipboardData);
-      if (pasting) {
-        e.preventDefault();
-        return;
-      }
-
-      // 4. Check for tabular spreadsheet data pasted onto the slide -> create a new Table.
-      const html = e.clipboardData?.getData('text/html') ?? '';
-      const plain = e.clipboardData?.getData('text/plain') ?? '';
-      const curTheme = themeOf(st.draft, useLibrary.getState().data.themes);
-      const pastedMatrix = parseTableClipboard(html, plain);
-      if (pastedMatrix) {
-        e.preventDefault();
-        addToSlide(st.slideId, newTable(curTheme, { cells: pastedMatrix }));
-        toast(
-          `Inserted ${pastedMatrix.length}×${Math.max(...pastedMatrix.map((r) => r.length))} table from clipboard`,
-          'ok',
-        );
-        return;
-      }
-
-      // 5. Check for rich or plain text pasted directly onto the slide canvas -> create a new TextObject.
-      const richSlice =
-        (html && htmlToRichText(html, curTheme.textBoxDefaults)) || (plain ? { text: plain } : null);
-      if (richSlice?.text.trim()) {
-        e.preventDefault();
-        const baseObj = newText(curTheme, '');
-        const { object } = pasteRichText(baseObj, 0, 0, richSlice);
-        addToSlide(st.slideId, object);
       }
     };
 
@@ -510,13 +590,46 @@ export function EditorView({ id }: { id: string }) {
     window.addEventListener('copy', onCopy);
     window.addEventListener('cut', onCut);
     window.addEventListener('paste', onPaste);
+    window.addEventListener('blur', markExternalClipboard);
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('copy', onCopy);
       window.removeEventListener('cut', onCut);
       window.removeEventListener('paste', onPaste);
+      window.removeEventListener('blur', markExternalClipboard);
     };
-  }, [readOnly]);
+  }, [readOnly, pasteClipboardPayload]);
+
+  const [canvasMenu, setCanvasMenu] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!canvasMenu) return;
+    const close = () => setCanvasMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('pointerdown', close);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [canvasMenu]);
+
+  const pasteFromUi = async (plainOnly = false) => {
+    if (readOnly) return;
+    const sys = await readSystemClipboard();
+    const readable: ClipboardReadable | null = sys
+      ? {
+          getData: (type: string) =>
+            type === 'text/html' ? sys.html : type === 'text/plain' ? sys.plain : '',
+        }
+      : null;
+    if (!pasteClipboardPayload(readable, sys?.imageFile ?? null, plainOnly) && !sys) {
+      toast('Use Ctrl+V (⌘V on Mac) to paste from another app.', 'warn');
+    }
+  };
 
   useEffect(() => {
     const h = (e: BeforeUnloadEvent) => {
@@ -695,15 +808,26 @@ export function EditorView({ id }: { id: string }) {
           />
           <Menu
             label="Arrange"
-            disabled={readOnly || !obj}
+            disabled={readOnly || !slide}
             items={[
-              { label: '⤒ Bring to front', name: 'Front', onSelect: () => z('front') },
-              { label: '↑ Bring forward', name: 'Forward', onSelect: () => z('forward') },
-              { label: '↓ Send backward', name: 'Backward', onSelect: () => z('backward') },
-              { label: '⤓ Send to back', name: 'Back', onSelect: () => z('back') },
-              { label: '⧉ Duplicate', name: 'Duplicate', onSelect: duplicate },
-              { label: '🗑 Delete', name: 'Delete', danger: true, onSelect: remove },
-              ...(grouped ? [{ label: 'Ungroup', onSelect: ungroupSelection }] : []),
+              ...(obj
+                ? [
+                    { label: '✂ Cut', name: 'Cut', onSelect: () => void cutSelection() },
+                    { label: '⎘ Copy', name: 'Copy', onSelect: () => void copySelection() },
+                  ]
+                : []),
+              { label: '📋 Paste', name: 'Paste', onSelect: () => void pasteFromUi(false) },
+              ...(obj
+                ? [
+                    { label: '⤒ Bring to front', name: 'Front', onSelect: () => z('front') },
+                    { label: '↑ Bring forward', name: 'Forward', onSelect: () => z('forward') },
+                    { label: '↓ Send backward', name: 'Backward', onSelect: () => z('backward') },
+                    { label: '⤓ Send to back', name: 'Back', onSelect: () => z('back') },
+                    { label: '⧉ Duplicate', name: 'Duplicate', onSelect: duplicate },
+                    { label: '🗑 Delete', name: 'Delete', danger: true, onSelect: remove },
+                    ...(grouped ? [{ label: 'Ungroup', onSelect: ungroupSelection }] : []),
+                  ]
+                : []),
             ]}
           />
           <span className="spacer" />
@@ -1190,11 +1314,162 @@ export function EditorView({ id }: { id: string }) {
                       ) : undefined
                     }
                     slideRect={p.source?.native?.slideRect}
+                    onCanvasContextMenu={(pos) => setCanvasMenu(pos)}
                   />
                 )}
               </ErrorBoundary>
             ) : (
               <div className="center muted">Add a slide to start.</div>
+            )}
+            {canvasMenu && slide && (
+              <div
+                role="menu"
+                aria-label="Canvas actions"
+                className="menu-pop"
+                style={{
+                  position: 'fixed',
+                  left: Math.min(canvasMenu.x, Math.max(8, window.innerWidth - 210)),
+                  top: Math.min(canvasMenu.y, Math.max(8, window.innerHeight - 280)),
+                  zIndex: 1200,
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                {obj ? (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={readOnly}
+                      onClick={() => {
+                        setCanvasMenu(null);
+                        if (obj.type === 'shape' && obj.table && (ed.cell !== undefined || ed.cellRange)) {
+                          cutTableCellSelection();
+                        } else {
+                          cutSelection();
+                        }
+                      }}
+                    >
+                      ✂ Cut
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setCanvasMenu(null);
+                        if (obj.type === 'shape' && obj.table && (ed.cell !== undefined || ed.cellRange)) {
+                          copyTableCellSelection();
+                        } else {
+                          copySelection();
+                        }
+                      }}
+                    >
+                      ⎘ Copy
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={readOnly}
+                      onClick={() => {
+                        setCanvasMenu(null);
+                        void pasteFromUi(false);
+                      }}
+                    >
+                      📋 Paste
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={readOnly}
+                      onClick={() => {
+                        setCanvasMenu(null);
+                        duplicateSelection();
+                      }}
+                    >
+                      ⧉ Duplicate
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={readOnly}
+                      onClick={() => {
+                        setCanvasMenu(null);
+                        reorderSelection('front');
+                      }}
+                    >
+                      ⤒ Bring to front
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={readOnly}
+                      onClick={() => {
+                        setCanvasMenu(null);
+                        reorderSelection('back');
+                      }}
+                    >
+                      ⤓ Send to back
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="danger"
+                      disabled={readOnly}
+                      onClick={() => {
+                        setCanvasMenu(null);
+                        deleteSelection();
+                      }}
+                    >
+                      🗑 Delete
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={readOnly}
+                      onClick={() => {
+                        setCanvasMenu(null);
+                        void pasteFromUi(false);
+                      }}
+                    >
+                      📋 Paste
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={readOnly}
+                      onClick={() => {
+                        setCanvasMenu(null);
+                        void pasteFromUi(true);
+                      }}
+                    >
+                      Paste as plain text
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setCanvasMenu(null);
+                        copySlideSelection();
+                      }}
+                    >
+                      ⎘ Copy slide
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={readOnly}
+                      onClick={() => {
+                        setCanvasMenu(null);
+                        cutSlideSelection();
+                      }}
+                    >
+                      ✂ Cut slide
+                    </button>
+                  </>
+                )}
+              </div>
             )}
 
             {/* Proposal A Docked Speaker Notes Bar right under the slide canvas */}

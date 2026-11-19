@@ -3,7 +3,7 @@ import {
   replaceText,
   type Presentation,
   type Rgba,
-  type Slide,
+  Slide,
   SlideObject,
   type TextObject,
   type TextPara,
@@ -11,15 +11,18 @@ import {
   type TextStyle,
 } from '@ordo/domain';
 import { clampObject } from '@ordo/renderer';
+import { cloneSlide, findSlide } from '../ops.ts';
 import { withSlide } from './common.ts';
 import { MAX_OBJECTS } from './group.ts';
+import { MAX_SECTION_SLIDES } from './slides.ts';
 import { type ParaPatch, type RunPatch, type RunStyle, RUN_FIELDS, VISUAL_RUN_FIELDS } from './text.ts';
 
 /*
- * Rich clipboard operations across three layers:
+ * Rich clipboard operations across four layers:
  * 1. Intra-Ordo lossless rich text copy/cut/paste (`sliceRichText`, `pasteRichText`, `data-ordo-rich`).
  * 2. Cross-application HTML <-> Ordo rich text conversion (`richTextToHtml`, `htmlToRichText`).
  * 3. Slide canvas object & image copy/cut/paste (`serializeObjectsToHtml`, `parseObjectsFromHtml`, `pasteObjects`).
+ * 4. Slide copy/cut/paste (`serializeSlidesToHtml`, `parseSlidesFromHtml`, `pasteSlides`).
  */
 
 export type RichTextSlice = {
@@ -40,7 +43,8 @@ const COORD = 100_000;
  * - `nodes`: elements and text nodes kept (the parser stops there);
  * - `depth`: element nesting (deeper elements stay flat in their deepest allowed parent);
  * - `text`: characters one paste makes or adds to a text object (the schema's bound on a text object);
- * - `objects`: slide objects one object paste takes (a slide draws at most 200).
+ * - `objects`: slide objects one object paste takes (a slide draws at most 200);
+ * - `slides`: slides one slide paste takes.
  */
 export const CLIPBOARD_LIMITS = {
   htmlChars: 4_000_000,
@@ -48,6 +52,7 @@ export const CLIPBOARD_LIMITS = {
   depth: 256,
   text: 20_000,
   objects: 200,
+  slides: 50,
 } as const;
 
 /**
@@ -831,8 +836,13 @@ export function htmlToRichText(html: string, targetBoxStyle?: TextStyle): RichTe
     }
   }
 
-  // If this is an Ordo object payload (not rich text), return null so canvas object paste handles it.
-  if (findElementWithAttr(tree, 'data-ordo-objects') !== undefined) return null;
+  // If this is an Ordo object or slide payload (not rich text), return null so dedicated paste handles it.
+  if (
+    findElementWithAttr(tree, 'data-ordo-objects') !== undefined ||
+    findElementWithAttr(tree, 'data-ordo-slides') !== undefined
+  ) {
+    return null;
+  }
 
   const targetIsLight = isLightColor(targetBoxStyle?.color);
   let text = '';
@@ -1213,4 +1223,148 @@ export function pasteObjects(
 
   if (next === p) return { p, ids: [], ...(full ? { full: true } : {}) };
   return { p: next, ids };
+}
+
+// ---- Layer 4: Slide Copy/Cut/Paste ----------------------------------------------------------------------
+
+export type CopiedSlidesData = {
+  slides: Slide[];
+  sourcePresentationId?: string;
+};
+
+/**
+ * Serialize one or more slides into an HTML wrapper with `data-ordo-slides` (format `CLIPBOARD_FORMAT`)
+ * + fallback plain text.
+ */
+export function serializeSlidesToHtml(
+  slides: readonly Slide[],
+  sourcePresentationId?: string,
+): { html: string; text: string } {
+  const payload: CopiedSlidesData & { v: number } = {
+    v: CLIPBOARD_FORMAT,
+    slides: structuredClone(slides) as Slide[],
+    sourcePresentationId,
+  };
+  const encoded = escapeHtml(JSON.stringify(payload));
+  const textParts: string[] = [];
+  for (const s of slides) {
+    const parts = s.objects
+      .filter((o): o is TextObject => o.type === 'text' && !!o.text.trim())
+      .map((o) => o.text);
+    if (parts.length) textParts.push(parts.join('\n'));
+  }
+  const text = textParts.join('\n\n') || `[Ordo: ${slides.length} slide(s)]`;
+  const html = `<div data-ordo-slides="${encoded}">${escapeHtml(text)}</div>`;
+  return { html, text };
+}
+
+/**
+ * Validate and sanitize a single pasted slide from the system clipboard: validates the slide schema, runs
+ * every object through `pastedObject` (schema + sanitizer + render clamp, dropping re-import origin IDs
+ * while keeping groups), and cleans PowerPoint follow-up digest/pending metadata.
+ */
+export function pastedSlide(
+  raw: unknown,
+  sanitize?: ObjectSanitizer,
+): { slide: Slide; leftObjects: number } | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const rawRec = raw as Record<string, unknown>;
+  if (!Array.isArray(rawRec.objects)) return undefined;
+  const parsed = Slide.safeParse({ ...rawRec, objects: [] });
+  if (!parsed.success) return undefined;
+  const s = parsed.data;
+  const rawObjects = rawRec.objects.slice(0, CLIPBOARD_LIMITS.objects);
+  const objects: SlideObject[] = [];
+  const keptIds = new Set<string>();
+  for (const o of rawObjects) {
+    const ok = pastedObject(o, sanitize);
+    if (ok) {
+      objects.push(ok);
+      keptIds.add(ok.id);
+    }
+  }
+  const leftObjects = rawRec.objects.length - objects.length;
+  const out: Slide = {
+    ...s,
+    objects,
+    ...(s.lyricObjectId && keptIds.has(s.lyricObjectId)
+      ? { lyricObjectId: s.lyricObjectId }
+      : { lyricObjectId: undefined }),
+  };
+  if (out.lyricObjectId === undefined) delete out.lyricObjectId;
+  if (out.pptx) {
+    const { digest: _digest, ...pptx } = out.pptx;
+    if (pptx.class !== 'picture') delete pptx.pending;
+    out.pptx = pptx;
+  }
+  return { slide: out, leftObjects };
+}
+
+/**
+ * Parse copied Ordo slides from clipboard HTML (`data-ordo-slides`), if present: at most
+ * `CLIPBOARD_LIMITS.slides` slides, each validated and sanitized via `pastedSlide`. Never throws.
+ */
+export function parseSlidesFromHtml(
+  html: string,
+  sanitize?: ObjectSanitizer,
+): (CopiedSlidesData & { left: number; leftObjects: number }) | null {
+  if (typeof html !== 'string' || !html.includes('data-ordo-slides')) return null;
+  const tree = parseHtmlTree(html);
+  const raw = findElementWithAttr(tree, 'data-ordo-slides');
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const payload = parsed as { v?: unknown; slides?: unknown; sourcePresentationId?: unknown };
+  if (!readableFormat(payload.v) || !Array.isArray(payload.slides)) return null;
+  if (!payload.slides.length) return null;
+  const slides: Slide[] = [];
+  let leftObjects = 0;
+  for (const rawSlide of payload.slides.slice(0, CLIPBOARD_LIMITS.slides)) {
+    const ok = pastedSlide(rawSlide, sanitize);
+    if (ok) {
+      slides.push(ok.slide);
+      leftObjects += ok.leftObjects;
+    }
+  }
+  const src = payload.sourcePresentationId;
+  return {
+    slides,
+    left: payload.slides.length - slides.length,
+    leftObjects,
+    ...(typeof src === 'string' && src.length <= 200 ? { sourcePresentationId: src } : {}),
+  };
+}
+
+/**
+ * Paste `slides` into `p` immediately after `afterSlideId` (or at the end of the first section if none),
+ * cloning each slide with fresh slide and object IDs.
+ */
+export function pasteSlides(
+  p: Presentation,
+  afterSlideId: string | undefined,
+  slides: readonly Slide[],
+): { p: Presentation; ids: string[]; full?: boolean } {
+  if (!slides.length || !p.sections.length) return { p, ids: [] };
+  const pos = afterSlideId ? findSlide(p, afterSlideId) : null;
+  const si = pos ? pos.si : 0;
+  const sec = p.sections[si];
+  if (!sec) return { p, ids: [] };
+  if (sec.slides.length + slides.length > MAX_SECTION_SLIDES) {
+    return { p, ids: [], full: true };
+  }
+  const copies = slides.map((s) => cloneSlide(s));
+  const ids = copies.map((s) => s.id);
+  const insertAt = pos ? pos.i + 1 : sec.slides.length;
+  const nextSections = p.sections.map((s, k) => {
+    if (k !== si) return s;
+    const nextSlides = [...s.slides];
+    nextSlides.splice(insertAt, 0, ...copies);
+    return { ...s, slides: nextSlides };
+  });
+  return { p: { ...p, sections: nextSections }, ids };
 }

@@ -13,6 +13,7 @@ import {
   type Rgba,
   setCellFill,
   TABLE_LIMITS,
+  type Slide,
   type SlideObject,
   setCell,
   type TableData,
@@ -49,6 +50,7 @@ import {
   type BackgroundMedia,
   type BackgroundScope,
   clearSlideBackground,
+  clearTableCells,
   deleteObjects,
   distributeCols,
   distributeRows,
@@ -71,10 +73,12 @@ import {
   newSlideLike,
   type ParaPatch,
   parseObjectsFromHtml,
+  parseSlidesFromHtml,
   parseTableClipboard,
   pasteMatrixIntoTable,
   pasteObjects,
   pasteRichText,
+  pasteSlides,
   type PictureFlip,
   type PictureMask,
   type PictureSize,
@@ -92,6 +96,8 @@ import {
   type RunPatch,
   runOverrides,
   serializeObjectsToHtml,
+  serializeSlidesToHtml,
+  serializeTableCellsToClipboard,
   setCellsPaint,
   setCellsStyle,
   setCrop,
@@ -113,7 +119,7 @@ import {
   withSlide,
 } from './ops/index.ts';
 import type { SlideRect } from './CanvasGuides.tsx';
-import { addObject, getSlide, type ZOrder } from './ops.ts';
+import { addObject, deleteSlide, getSlide, type ZOrder } from './ops.ts';
 import { type AlignTo, alignedBox, placeObjects, placementArea } from './placement.ts';
 import { cellsByPlace, fitTable } from './tableFit.ts';
 // F: the PowerPoint card's slide ops (pure, beside the card's other readers).
@@ -783,8 +789,11 @@ export function rowCol(objectId: string, drawnOp: RowColOp, cell?: number): numb
   return next;
 }
 
-// ---- Rich clipboard (text & slide objects) ----------------------------------------------------------
+// ---- Rich clipboard (text, table cells, slide objects & slides) -------------------------------------
 
+type ClipKind = 'text' | 'object' | 'slide' | 'cells';
+
+let lastClipKind: ClipKind | null = null;
 let lastRichTextClip: { slice: RichTextSlice; plain: string } | null = null;
 let lastObjectClip: {
   objects: SlideObject[];
@@ -793,7 +802,140 @@ let lastObjectClip: {
   pasteCount: number;
   plain: string;
   html: string;
+  wroteSystem: boolean;
+  externalPossible: boolean;
 } | null = null;
+let lastSlideClip: {
+  slides: Slide[];
+  sourcePresentationId?: string;
+  plain: string;
+  html: string;
+  wroteSystem: boolean;
+  externalPossible: boolean;
+} | null = null;
+let lastTableCellClip: {
+  plain: string;
+  html: string;
+  rows: number;
+  cols: number;
+  wroteSystem: boolean;
+  externalPossible: boolean;
+} | null = null;
+
+/**
+ * Mark in-memory clips that were not written to the OS clipboard as potentially superseded by an
+ * external copy when the user leaves the editor window (`window` `blur`).
+ */
+export function markExternalClipboard(): void {
+  if (lastObjectClip && !lastObjectClip.wroteSystem) lastObjectClip.externalPossible = true;
+  if (lastSlideClip && !lastSlideClip.wroteSystem) lastSlideClip.externalPossible = true;
+  if (lastTableCellClip && !lastTableCellClip.wroteSystem) lastTableCellClip.externalPossible = true;
+}
+
+let plainPasteUntil = 0;
+
+/** Arm plain-text paste (`Ctrl/Cmd+Shift+V`) for the immediately following `paste` event. */
+export function armPlainPaste(): void {
+  plainPasteUntil = Date.now() + 500;
+}
+
+/** Whether plain-text paste was just armed by `Ctrl/Cmd+Shift+V`; consumes the flag. */
+export function consumePlainPaste(): boolean {
+  if (!plainPasteUntil) return false;
+  const active = Date.now() <= plainPasteUntil;
+  plainPasteUntil = 0;
+  return active;
+}
+
+/**
+ * Write `html` + `plain` into `clipboardData` when available, or attempt an async `navigator.clipboard`
+ * write (so copies from `keydown` / UI buttons reach the system clipboard even when browsers like Safari
+ * suppress `copy` events on collapsed selections). Returns `true` if `clipboardData` was written synchronously.
+ */
+function writeClipboard(
+  html: string,
+  plain: string,
+  clipboardData?: DataTransfer | null,
+  onAsyncWritten?: () => void,
+): boolean {
+  if (clipboardData) {
+    try {
+      clipboardData.setData('text/plain', plain);
+      clipboardData.setData('text/html', html);
+      return true;
+    } catch {
+      // Ignore synthetic DataTransfer restrictions in tests.
+    }
+  }
+  if (typeof navigator !== 'undefined' && navigator.clipboard) {
+    if (typeof navigator.clipboard.write === 'function' && typeof ClipboardItem !== 'undefined') {
+      try {
+        const item = new ClipboardItem({
+          'text/plain': new Blob([plain], { type: 'text/plain' }),
+          'text/html': new Blob([html], { type: 'text/html' }),
+        });
+        void navigator.clipboard.write([item]).then(
+          () => onAsyncWritten?.(),
+          () => {
+            void navigator.clipboard?.writeText?.(plain).catch(() => {});
+          },
+        );
+      } catch {
+        // Ignore insecure-context or browser restrictions.
+      }
+    } else if (typeof navigator.clipboard.writeText === 'function') {
+      void navigator.clipboard.writeText(plain).catch(() => {});
+    }
+  }
+  return false;
+}
+
+/**
+ * Read HTML, plain text, and any image file from the system clipboard via the async Clipboard API
+ * (used by UI Paste buttons and context menus where no `ClipboardEvent` exists). Returns `null` when
+ * the API is unavailable or permission is denied.
+ */
+export async function readSystemClipboard(): Promise<{
+  html: string;
+  plain: string;
+  imageFile: File | null;
+} | null> {
+  if (typeof navigator === 'undefined' || !navigator.clipboard) return null;
+  if (typeof navigator.clipboard.read === 'function') {
+    try {
+      const items = await navigator.clipboard.read();
+      let html = '';
+      let plain = '';
+      let imageFile: File | null = null;
+      for (const item of items) {
+        const imgType = item.types.find((t) => t.startsWith('image/'));
+        if (imgType && !imageFile) {
+          const blob = await item.getType(imgType);
+          const ext = imgType.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+          imageFile = new File([blob], `pasted-${Date.now()}.${ext}`, { type: imgType });
+        }
+        if (item.types.includes('text/html') && !html) {
+          html = await (await item.getType('text/html')).text();
+        }
+        if (item.types.includes('text/plain') && !plain) {
+          plain = await (await item.getType('text/plain')).text();
+        }
+      }
+      return { html, plain, imageFile };
+    } catch {
+      // Fall through to readText.
+    }
+  }
+  if (typeof navigator.clipboard.readText === 'function') {
+    try {
+      const plain = await navigator.clipboard.readText();
+      return { html: '', plain, imageFile: null };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
 
 /** Paste a `RichTextSlice` into `[start, end)` of a text object or a table's cell; returns the new caret offset. */
 export function pasteRichSelection(
@@ -841,16 +983,12 @@ export function copyTextSelection(
 ): RichTextSlice | null {
   const slice = sliceRichText(o, start, end);
   if (!slice.text) return null;
+  lastClipKind = 'text';
   lastRichTextClip = { slice, plain: slice.text };
   lastObjectClip = null;
-  if (clipboardData) {
-    try {
-      clipboardData.setData('text/plain', slice.text);
-      clipboardData.setData('text/html', richTextToHtml(slice, o.style));
-    } catch {
-      // Ignore synthetic DataTransfer restrictions in tests.
-    }
-  }
+  lastSlideClip = null;
+  lastTableCellClip = null;
+  writeClipboard(richTextToHtml(slice, o.style), slice.text, clipboardData);
   return slice;
 }
 
@@ -873,7 +1011,7 @@ export function cutTextSelection(
 /**
  * Paste rich or plain text from `clipboardData` (or in-memory fallback) into `[start, end)` of `o` (a text
  * object, or a table cell's view with its `target`); returns the new caret offset, or null if nothing was
- * pasted.
+ * pasted. When `plainOnly` is true (`Ctrl/Cmd+Shift+V`), formatting is stripped so text inherits the target style.
  */
 export function handleTextPaste(
   o: TextObject,
@@ -881,9 +1019,15 @@ export function handleTextPaste(
   end: number,
   clipboardData?: DataTransfer | null,
   target: TextTargetArg = o.id,
+  plainOnly = false,
 ): number | null {
   const html = clipboardData?.getData('text/html') ?? '';
   const plain = clipboardData?.getData('text/plain') ?? '';
+  if (plainOnly) {
+    const text = plain || (lastClipKind === 'text' ? lastRichTextClip?.plain : '') || '';
+    if (text) return pasteRichSelection(target, start, end, { text });
+    return null;
+  }
   if (html) {
     const rich = htmlToRichText(html, o.style);
     if (rich) return pasteRichSelection(target, start, end, rich);
@@ -994,38 +1138,43 @@ export function alignSelection(to: AlignTo): void {
   placeSelection((from, area) => alignedBox(from, area, to));
 }
 
+export type ClipboardReadable = Pick<DataTransfer, 'getData'>;
+
 /** Copy the selected slide objects to the clipboard (in-memory + system `text/html`). */
 export function copySelection(clipboardData?: DataTransfer | null): boolean {
   const objs = currentObjects();
   const slideId = openSlide();
   if (!objs.length || !slideId) return false;
   const { html, text } = serializeObjectsToHtml(objs, slideId);
-  lastObjectClip = {
+  const clip = {
     objects: structuredClone(objs) as SlideObject[],
     sourceSlideId: slideId,
     lastSlideId: slideId,
     pasteCount: 0,
     plain: text,
     html,
+    wroteSystem: false,
+    externalPossible: false,
   };
+  lastClipKind = 'object';
+  lastObjectClip = clip;
   lastRichTextClip = null;
-  if (clipboardData) {
-    try {
-      clipboardData.setData('text/plain', text);
-      clipboardData.setData('text/html', html);
-    } catch {
-      // Ignore synthetic DataTransfer restrictions.
-    }
-  }
+  lastSlideClip = null;
+  lastTableCellClip = null;
+  clip.wroteSystem = writeClipboard(html, text, clipboardData, () => {
+    if (lastObjectClip === clip) clip.wroteSystem = true;
+  });
   return true;
 }
 
 /** Write the most recently copied/cut slide objects into `clipboardData` (used when `cut` fires after `keydown`). */
 export function writeLastObjectClip(clipboardData?: DataTransfer | null): boolean {
-  if (!lastObjectClip || !clipboardData) return false;
+  if (lastClipKind !== 'object' || !lastObjectClip || !clipboardData) return false;
   try {
     clipboardData.setData('text/plain', lastObjectClip.plain);
     clipboardData.setData('text/html', lastObjectClip.html);
+    lastObjectClip.wroteSystem = true;
+    lastObjectClip.externalPossible = false;
     return true;
   } catch {
     return false;
@@ -1102,7 +1251,9 @@ export function loadObjectSanitizer(): Promise<ObjectSanitizer> {
  * sanitizer has loaded, and only those that pass it (`parseObjectsFromHtml`); ordo's own in-memory copy at
  * once.
  */
-export function tryPasteObjectsFromClipboard(clipboardData?: DataTransfer | null): Promise<string[]> | null {
+export function tryPasteObjectsFromClipboard(
+  clipboardData?: ClipboardReadable | null,
+): Promise<string[]> | null {
   const slideId = openSlide();
   const html = clipboardData?.getData('text/html') ?? '';
   const plain = clipboardData?.getData('text/plain') ?? '';
@@ -1134,10 +1285,259 @@ export function tryPasteObjectsFromClipboard(clipboardData?: DataTransfer | null
         },
       );
     }
+    // Don't shadow an explicit Ordo slide or rich-text payload on the system clipboard.
+    if (html.includes('data-ordo-slides') || html.includes('data-ordo-rich')) return null;
   }
-  if (lastObjectClip && (!plain || plain === lastObjectClip.plain) && !html) {
+  const canUseMemory =
+    lastClipKind === 'object' &&
+    lastObjectClip &&
+    ((!plain && !html) ||
+      (plain === lastObjectClip.plain && !html) ||
+      (!lastObjectClip.wroteSystem && !lastObjectClip.externalPossible));
+  if (canUseMemory && lastObjectClip) {
     const count = nextCount(lastObjectClip.sourceSlideId);
     return Promise.resolve(pasteCopiedObjects(lastObjectClip.objects, lastObjectClip.sourceSlideId, count));
+  }
+  return null;
+}
+
+// ---- Table cell / range clipboard -------------------------------------------------------------------
+
+/**
+ * Copy the currently selected table cell or cell range (outside inline editing) as TSV + HTML `<table>`.
+ * Returns `false` if no table cell/range is selected.
+ */
+export function copyTableCellSelection(clipboardData?: DataTransfer | null): boolean {
+  const st = useEditor.getState();
+  const selObj = currentObjects().length === 1 ? currentObjects()[0] : undefined;
+  if (selObj?.type !== 'shape' || !selObj.table) return false;
+  if (st.cell === undefined && !st.cellRange) return false;
+  const ser = serializeTableCellsToClipboard(selObj, st.cell, st.cellRange);
+  if (!ser) return false;
+  const clip = {
+    plain: ser.text,
+    html: ser.html,
+    rows: ser.rows,
+    cols: ser.cols,
+    wroteSystem: false,
+    externalPossible: false,
+  };
+  lastClipKind = 'cells';
+  lastTableCellClip = clip;
+  lastObjectClip = null;
+  lastSlideClip = null;
+  lastRichTextClip = null;
+  clip.wroteSystem = writeClipboard(ser.html, ser.text, clipboardData, () => {
+    if (lastTableCellClip === clip) clip.wroteSystem = true;
+  });
+  return true;
+}
+
+/** Write the most recently copied/cut table cells into `clipboardData` when `copy`/`cut` fires after `keydown`. */
+export function writeLastTableCellClip(clipboardData?: DataTransfer | null): boolean {
+  if (lastClipKind !== 'cells' || !lastTableCellClip || !clipboardData) return false;
+  try {
+    clipboardData.setData('text/plain', lastTableCellClip.plain);
+    clipboardData.setData('text/html', lastTableCellClip.html);
+    lastTableCellClip.wroteSystem = true;
+    lastTableCellClip.externalPossible = false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Cut the currently selected table cell or cell range (copy + clear text in one undo step). */
+export function cutTableCellSelection(clipboardData?: DataTransfer | null): boolean {
+  const st = useEditor.getState();
+  const selObj = currentObjects().length === 1 ? currentObjects()[0] : undefined;
+  if (selObj?.type !== 'shape' || !selObj.table || selObj.locked) return false;
+  if (!copyTableCellSelection(clipboardData)) return false;
+  onObject(selObj.id, (o) =>
+    o.type === 'shape' && o.table ? fitTable(o, clearTableCells(o, st.cell, st.cellRange)) : o,
+  );
+  return true;
+}
+
+/**
+ * Paste clipboard content into a selected table cell or cell range (outside inline editing):
+ * - Multi-cell TSV/HTML pastes via `pasteTableFromClipboard`.
+ * - Single-cell text (or in-memory copied table cell) pastes directly into the selected cell(s) instead of
+ *   creating a stray TextObject on top of the table.
+ */
+export function pasteIntoSelectedTableCell(
+  objectId: string,
+  cell: number | undefined,
+  cellRange: TableRange | undefined,
+  clipboardData?: ClipboardReadable | null,
+  plainOnly = false,
+): boolean {
+  let html = clipboardData?.getData('text/html') ?? '';
+  let plain = clipboardData?.getData('text/plain') ?? '';
+  if (
+    lastClipKind === 'cells' &&
+    lastTableCellClip &&
+    ((!plain && !html) || (!lastTableCellClip.wroteSystem && !lastTableCellClip.externalPossible))
+  ) {
+    html = lastTableCellClip.html;
+    plain = lastTableCellClip.plain;
+  }
+  if (html && (html.includes('data-ordo-objects') || html.includes('data-ordo-slides'))) return false;
+  if (pasteTableFromClipboard(objectId, cell, plainOnly ? '' : html, plain)) return true;
+  if (cell === undefined && !cellRange) return false;
+  const st = useEditor.getState();
+  const slide = st.draft && st.slideId ? getSlide(st.draft, st.slideId) : undefined;
+  const tbl = slide?.objects.find((x) => x.id === objectId);
+  if (tbl?.type !== 'shape' || !tbl.table || tbl.locked) return false;
+  const baseView = cell !== undefined ? cellTextObject(tbl, cell) : undefined;
+  const slice = plainOnly
+    ? plain
+      ? { text: plain }
+      : null
+    : (html && htmlToRichText(html, baseView?.style)) || (plain ? { text: plain } : null);
+  if (!slice?.text) return false;
+  const targets = targetCellIndices(tbl.table, cell, cellRange);
+  if (!targets.length) return false;
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table) return o;
+    let cur: SlideObject = o;
+    for (const idx of targets) {
+      cur = editCell(cur, idx, (v) => pasteRichText(v, 0, v.text.length, slice).object);
+    }
+    return fitTable(o, cur);
+  });
+  return true;
+}
+
+// ---- Slide clipboard --------------------------------------------------------------------------------
+
+/** Copy the active slide (or `slideId`) to the clipboard (in-memory + system `data-ordo-slides`). */
+export function copySlideSelection(clipboardData?: DataTransfer | null, slideId?: string): boolean {
+  const st = useEditor.getState();
+  const id = slideId ?? openSlide();
+  const slide = st.draft && id ? getSlide(st.draft, id) : undefined;
+  if (!slide || !st.draft) return false;
+  const { html, text } = serializeSlidesToHtml([slide], st.draft.id);
+  const clip = {
+    slides: [structuredClone(slide) as Slide],
+    sourcePresentationId: st.draft.id,
+    plain: text,
+    html,
+    wroteSystem: false,
+    externalPossible: false,
+  };
+  lastClipKind = 'slide';
+  lastSlideClip = clip;
+  lastObjectClip = null;
+  lastRichTextClip = null;
+  lastTableCellClip = null;
+  clip.wroteSystem = writeClipboard(html, text, clipboardData, () => {
+    if (lastSlideClip === clip) clip.wroteSystem = true;
+  });
+  return true;
+}
+
+/** Write the most recently copied/cut slide into `clipboardData` (used when `cut` fires after `keydown`). */
+export function writeLastSlideClip(clipboardData?: DataTransfer | null): boolean {
+  if (lastClipKind !== 'slide' || !lastSlideClip || !clipboardData) return false;
+  try {
+    clipboardData.setData('text/plain', lastSlideClip.plain);
+    clipboardData.setData('text/html', lastSlideClip.html);
+    lastSlideClip.wroteSystem = true;
+    lastSlideClip.externalPossible = false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Cut the active slide (or `slideId`): copies it and removes it unless it is the only slide in the deck. */
+export function cutSlideSelection(clipboardData?: DataTransfer | null, slideId?: string): boolean {
+  const st = useEditor.getState();
+  const id = slideId ?? openSlide();
+  if (!st.draft || !id) return false;
+  const allSlides = st.draft.sections.flatMap((sec) => sec.slides);
+  if (allSlides.length <= 1) {
+    toast('Cannot cut the only slide in the presentation.', 'warn');
+    return false;
+  }
+  if (!copySlideSelection(clipboardData, id)) return false;
+  const idx = allSlides.findIndex((s) => s.id === id);
+  const nextSlide = allSlides[idx + 1] ?? allSlides[idx - 1];
+  change((p) => deleteSlide(p, id));
+  if (nextSlide) selectSlide(nextSlide.id);
+  return true;
+}
+
+/** Whether there are copied slides available in memory. */
+export function hasCopiedSlides(): boolean {
+  return !!lastSlideClip && lastSlideClip.slides.length > 0;
+}
+
+/** Paste `slides` into the open presentation after `afterSlideId`, selecting the first pasted slide. */
+export function pasteCopiedSlides(slides?: readonly Slide[], afterSlideId?: string): string[] {
+  const st = useEditor.getState();
+  if (!st.draft) return [];
+  const srcSlides = slides ?? lastSlideClip?.slides;
+  if (!srcSlides?.length) return [];
+  const targetAfter = afterSlideId ?? openSlide();
+  let ids: string[] = [];
+  let full = false;
+  change((p) => {
+    const r = pasteSlides(p, targetAfter, srcSlides);
+    ids = r.ids;
+    full = !!r.full;
+    return r.p;
+  });
+  if (ids.length) {
+    selectSlide(ids[0]);
+  } else if (full) {
+    toast(`A section holds at most ${MAX_SECTION_SLIDES} slides: the paste was not made.`, 'warn');
+  }
+  return ids;
+}
+
+/**
+ * Check `clipboardData` (or the in-memory slide clipboard) for copied Ordo slides and paste them after
+ * the active slide. Null when the clipboard holds no slides.
+ */
+export function tryPasteSlidesFromClipboard(
+  clipboardData?: ClipboardReadable | null,
+  afterSlideId?: string,
+): Promise<string[]> | null {
+  const html = clipboardData?.getData('text/html') ?? '';
+  const plain = clipboardData?.getData('text/plain') ?? '';
+  if (html) {
+    const parsed = parseSlidesFromHtml(html);
+    if (parsed) {
+      return loadObjectSanitizer().then(
+        (sanitize) => {
+          const clean = parseSlidesFromHtml(html, sanitize);
+          if (clean?.leftObjects) {
+            toast(leftOutText(clean.leftObjects, 1), 'warn', 8000);
+          }
+          if (!clean?.slides.length) {
+            toast('The pasted slides could not be read: nothing was added.', 'warn', 8000);
+            return [];
+          }
+          return pasteCopiedSlides(clean.slides, afterSlideId);
+        },
+        () => {
+          toast('The pasted slides could not be read: nothing was added.', 'warn', 8000);
+          return [];
+        },
+      );
+    }
+    if (html.includes('data-ordo-objects') || html.includes('data-ordo-rich')) return null;
+  }
+  const canUseMemory =
+    lastClipKind === 'slide' &&
+    lastSlideClip &&
+    ((!plain && !html) ||
+      (plain === lastSlideClip.plain && !html) ||
+      (!lastSlideClip.wroteSystem && !lastSlideClip.externalPossible));
+  if (canUseMemory && lastSlideClip) {
+    return Promise.resolve(pasteCopiedSlides(lastSlideClip.slides, afterSlideId));
   }
   return null;
 }

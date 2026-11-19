@@ -56,6 +56,23 @@ export function keyPlace(
 }
 
 /**
+ * Whether the editor's slide/object clipboard handlers apply at `place` for `mode`.
+ * - `'field'` and `'dialog'` keep their own copy/cut/paste.
+ * - `'canvas'` and `'control'` (e.g. after clicking a toolbar button, inspector control, slide action, or
+ *   GroupPanel) route copy/cut/paste to the editor — except `copy`/`cut` when the user has highlighted
+ *   readable text in UI chrome (`selectedText` non-empty).
+ */
+export function canEditorClipboard(
+  place: KeyPlace,
+  mode: 'copy' | 'cut' | 'paste',
+  selectedText: string = typeof window === 'undefined' ? '' : (window.getSelection?.()?.toString() ?? ''),
+): boolean {
+  if (place === 'field' || place === 'dialog') return false;
+  if ((mode === 'copy' || mode === 'cut') && selectedText.length > 0) return false;
+  return true;
+}
+
+/**
  * A key pressed while an input method composes (Chinese, Japanese or Korean candidates): `isComposing`
  * (also on a React event's `nativeEvent`), or the 229 key code browsers give such keys (Safari, Chrome on
  * Windows). Every editor key handler leaves these keys to the input method, so Escape cancels a candidate

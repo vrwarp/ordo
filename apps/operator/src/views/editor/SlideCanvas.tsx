@@ -69,6 +69,8 @@ import { BACKING_FIELD, composing, historyKey, releaseBackingField } from './edi
 import { barState, shortcutOf, togglePatch } from './FormatBar.tsx';
 import { refocusText, textField } from './formatControls.tsx';
 import {
+  armPlainPaste,
+  consumePlainPaste,
   copyTextSelection,
   cutTextSelection,
   dragSelection,
@@ -878,6 +880,8 @@ export function SlideCanvas(props: {
   hasExternalTextEditor?: boolean;
   /** The deck's area of an imported deck that is not 16:9 (`source.native.slideRect`): the 4:3 guide. */
   slideRect?: SlideRect;
+  /** Desktop right-click context menu on the slide canvas or an object. */
+  onCanvasContextMenu?: (pos: { x: number; y: number }) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const coarse = useCoarsePointer();
@@ -1247,7 +1251,17 @@ export function SlideCanvas(props: {
   );
   const stageContainerRef = useRef<HTMLDivElement>(null);
   return (
-    <div ref={box} className="canvasbox">
+    <div
+      ref={box}
+      className="canvasbox"
+      data-editor-keys=""
+      onContextMenu={(e) => {
+        if (!props.onCanvasContextMenu) return;
+        if (useEditor.getState().inlineEditingId) return;
+        e.preventDefault();
+        props.onCanvasContextMenu({ x: e.clientX, y: e.clientY });
+      }}
+    >
       <div ref={stageContainerRef} style={{ position: 'relative', width: size.w, height: size.h }}>
         <Stage
           width={size.w}
@@ -1560,6 +1574,10 @@ export function CanvasBackingTextEditor({
       }}
       onKeyDown={(e) => {
         if (composing(e)) return;
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'v') {
+          armPlainPaste();
+          return;
+        }
         // Tab and Shift+Tab in a table's cell: the next or previous cell, its text selected (a new row past
         // the last cell, as PowerPoint adds one).
         if (target.cell !== undefined && e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -1622,7 +1640,8 @@ export function CanvasBackingTextEditor({
       }}
       onPaste={(e) => {
         if (off) return;
-        if (target.cell !== undefined) {
+        const plainOnly = consumePlainPaste();
+        if (!plainOnly && target.cell !== undefined) {
           const html = e.clipboardData?.getData('text/html') ?? '';
           const plain = e.clipboardData?.getData('text/plain') ?? '';
           if (pasteTableFromClipboard(target.objectId, target.cell, html, plain)) {
@@ -1632,7 +1651,14 @@ export function CanvasBackingTextEditor({
           }
         }
         const el = e.currentTarget;
-        const caret = handleTextPaste(obj, el.selectionStart, el.selectionEnd, e.clipboardData, target);
+        const caret = handleTextPaste(
+          obj,
+          el.selectionStart,
+          el.selectionEnd,
+          e.clipboardData,
+          target,
+          plainOnly,
+        );
         if (caret !== null) {
           e.preventDefault();
           setTextRange({ start: caret, end: caret, caret });
