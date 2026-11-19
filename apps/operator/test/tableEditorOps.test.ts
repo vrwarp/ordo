@@ -35,6 +35,8 @@ import {
 } from '../src/views/editor/editorStore.ts';
 import { FloatingContextBar } from '../src/views/editor/FloatingContextBar.tsx';
 import { ObjectPanel } from '../src/views/editor/ObjectPanel.tsx';
+import { liveNodeBox } from '../src/views/editor/SlideCanvas.tsx';
+import { TableCanvasOverlay } from '../src/views/editor/TableCanvasOverlay.tsx';
 import {
   canMergeCells,
   canMoveCol,
@@ -379,5 +381,56 @@ describe('spreadsheet clipboard paste, keyboard range ops & UI rendering', () =>
     expect(panelHtml).toContain('>Merge cells</button>');
     expect(panelHtml).toContain('>Distribute cols</button>');
     expect(panelHtml).toContain('>Distribute rows</button>');
+  });
+
+  it('computes liveNodeBox during drag and Transformer resize and scales TableCanvasOverlay together', () => {
+    const tbl = newTable(DEFAULT_THEME, { rows: 2, cols: 2 });
+    tbl.box = { x: 100, y: 200, w: 400, h: 100, rotation: 0 };
+    const drawnH = 150;
+
+    // Rest state matches drawnBox.
+    expect(liveNodeBox(tbl, drawnH, { x: 300, y: 250, scaleX: 1, scaleY: 1, rotation: 0 })).toEqual({
+      x: 100,
+      y: 200,
+      w: 400,
+      h: 150,
+      rotation: 0,
+    });
+
+    // Bottom-right handle scale 2x width, 2x height (top-left anchored at 100, 200).
+    const scaled = liveNodeBox(tbl, drawnH, { x: 500, y: 300, scaleX: 2, scaleY: 2, rotation: 0 });
+    expect(scaled).toEqual({
+      x: 100,
+      y: 200,
+      w: 800,
+      h: 300,
+      rotation: 0,
+    });
+
+    // TableCanvasOverlay scales outer container, column/row grip rails, and internal dividers proportionally.
+    const layout = {
+      colX: [0, 200, 400],
+      rowY: [0, 75, 150],
+      width: 400,
+      height: 150,
+      cells: [],
+    } as unknown as Parameters<typeof TableCanvasOverlay>[0]['layout'];
+    const html = renderToStaticMarkup(
+      createElement(TableCanvasOverlay, {
+        o: tbl as ShapeObject & Required<Pick<ShapeObject, 'table'>>,
+        layout,
+        scale: 0.5,
+        liveBox: scaled,
+      }),
+    );
+    // Outer frame: left=100*0.5=50px, top=200*0.5=100px, width=800*0.5=400px, height=300*0.5=150px
+    expect(html).toContain('left:50px;top:100px;width:400px;height:150px');
+    // Column 2 grip rail starts at 200 * (0.5 * 2) + 2 = 202px, width = 200 - 4 = 196px
+    expect(html).toContain('left:202px;width:196px');
+    // Row 2 grip rail starts at 75 * (0.5 * 2) + 2 = 77px, height = 75 - 4 = 71px
+    expect(html).toContain('top:77px;height:71px');
+    // Column 1 divider at 200 * (0.5 * 2) - 5 = 195px; row 1 divider at 75 * (0.5 * 2) - 5 = 70px
+    expect(html).toContain('left:195px');
+    expect(html).toContain('top:70px');
   });
 });

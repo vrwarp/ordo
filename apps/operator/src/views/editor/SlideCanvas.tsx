@@ -290,6 +290,32 @@ export function tableBoxAfterTransform(
     rotation: b.rotation ?? 0,
   };
 }
+
+/**
+ * Live slide-space bounding box of a single Konva node during an in-progress drag or transform (before
+ * `dragEnd` / `transformEnd` commits to the store), used so DOM overlays (table rails, floating bar, touch
+ * tools) move and resize in lockstep with the Konva node.
+ */
+export function liveNodeBox(
+  o: SlideObject,
+  drawnH: number,
+  node: { x: number; y: number; scaleX: number; scaleY: number; rotation: number },
+): Box {
+  const b = o.box;
+  const sx = node.scaleX;
+  const sy = node.scaleY;
+  const x0 = node.x - (b.w / 2) * sx;
+  const x1 = node.x + (b.w / 2) * sx;
+  const y0 = node.y - (b.h / 2) * sy;
+  const y1 = node.y + (drawnH - b.h / 2) * sy;
+  return {
+    x: Math.min(x0, x1),
+    y: Math.min(y0, y1),
+    w: Math.max(8, b.w * Math.abs(sx)),
+    h: Math.max(8, drawnH * Math.abs(sy)),
+    rotation: isTable(o) ? (b.rotation ?? 0) : node.rotation,
+  };
+}
 function useImageTick(): number {
   const [n, setN] = useState(0);
   useEffect(() => {
@@ -932,7 +958,12 @@ export function SlideCanvas(props: {
     t.nodes(ns);
     t.getLayer()?.batchDraw();
   }, [objectIds, slide, props.readOnly]);
-  const selBox = selected.length > 1 ? groupBox(selected) : selected[0] && drawnBox(selected[0]);
+  const [liveBox, setLiveBox] = useState<Box | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset any in-flight live preview box when selection changes
+  useEffect(() => {
+    setLiveBox(null);
+  }, [objectIds]);
+  const selBox = liveBox ?? (selected.length > 1 ? groupBox(selected) : selected[0] && drawnBox(selected[0]));
   // A long press under a finger (Alt-click's touch equivalent) is pending.
   const press = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | undefined>(undefined);
   const endPress = () => {
@@ -1023,7 +1054,6 @@ export function SlideCanvas(props: {
       drag.current = box ? { leader: o.id, from, box } : undefined;
     },
     dragMove(o, e, others) {
-      overlayFollow();
       const n = e.target;
       if (inGroup(o.id)) {
         const d = drag.current;
@@ -1041,6 +1071,7 @@ export function SlideCanvas(props: {
           if (m && (id === o.id || m.isDragging())) m.position({ x: q.x + dx, y: q.y + dy });
         }
         useEditor.setState({ guides: snapped.guides });
+        overlayFollow();
         return;
       }
       const b = o.box;
@@ -1051,8 +1082,10 @@ export function SlideCanvas(props: {
       );
       n.position({ x: snapped.x + b.w / 2, y: snapped.y + b.h / 2 });
       useEditor.setState({ guides: snapped.guides });
+      overlayFollow();
     },
     dragEnd(o, e) {
+      setLiveBox(null);
       const n = e.target;
       if (inGroup(o.id)) {
         const d = drag.current;
@@ -1076,6 +1109,7 @@ export function SlideCanvas(props: {
     transformEnd(o, e) {
       // A multi-object selection is transformed as one by the Transformer's own end (below).
       if (inGroup(o.id)) return;
+      setLiveBox(null);
       const n = e.target;
       if (isTable(o)) {
         // A height drag sets box.h from the drawn height (rows a table made in ordo grows by its text); a
@@ -1182,9 +1216,27 @@ export function SlideCanvas(props: {
     if (was && !inlineEditingId) releaseBackingField();
   }, [inlineEditingId]);
   // The editing overlay's layer: redrawn by itself (the caret's blink, a selection), and with the objects
-  // when one of them moves under it (a drag, a transform).
+  // when one of them moves under it (a drag, a transform). Also keeps DOM overlays (table rails, floating
+  // bar, touch tools) synced in real time with the Konva node's live transform.
   const overlay = useRef<Konva.Layer>(null);
-  const overlayFollow = () => overlay.current?.batchDraw();
+  const overlayFollow = () => {
+    overlay.current?.batchDraw();
+    if (selected.length === 1) {
+      const o = selected[0]!;
+      const n = nodes.current.get(o.id);
+      if (n) {
+        setLiveBox(
+          liveNodeBox(o, drawnHeight(o), {
+            x: n.x(),
+            y: n.y(),
+            scaleX: n.scaleX(),
+            scaleY: n.scaleY(),
+            rotation: n.rotation(),
+          }),
+        );
+      }
+    }
+  };
 
   // 'Show original' (PptxSlideCard): the PowerPoint picture over the slide, to compare; it takes the pointer.
   const originalId = useOriginalOver(slide);
@@ -1353,6 +1405,7 @@ export function SlideCanvas(props: {
             layout={selectedTableLayout}
             scale={scale}
             cellRange={selectedCellRange}
+            liveBox={liveBox ?? undefined}
           />
         )}
         {!props.hasExternalTextEditor && backing && (
