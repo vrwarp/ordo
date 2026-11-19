@@ -7,7 +7,15 @@ import { type FlatEntry, flatSlideMove } from '../../components/sortableMath.ts'
 import { useMediaLookup, useVisible } from '../../hooks.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
-import { addSlideLike, setSlideHidden } from './actions.ts';
+import {
+  addSlideLike,
+  copySlideSelection,
+  cutSlideSelection,
+  readSystemClipboard,
+  setSlideHidden,
+  tryPasteSlidesFromClipboard,
+} from './actions.ts';
+import { toast } from '../../state/toasts.ts';
 import { change, selectSlide, useEditor } from './editorStore.ts';
 import {
   addSection,
@@ -163,6 +171,34 @@ function SlideItem(props: {
             label="⋯"
             align="right"
             items={[
+              {
+                label: '⎘ Copy slide',
+                name: 'Copy slide',
+                onSelect: () => {
+                  if (copySlideSelection(undefined, props.slide.id)) toast('Slide copied.', 'ok');
+                },
+              },
+              {
+                label: '✂ Cut slide',
+                name: 'Cut slide',
+                onSelect: () => void cutSlideSelection(undefined, props.slide.id),
+              },
+              {
+                label: '📋 Paste slide',
+                name: 'Paste slide',
+                onSelect: () => {
+                  void readSystemClipboard().then((sys) => {
+                    const readable = sys
+                      ? {
+                          getData: (type: string) =>
+                            type === 'text/html' ? sys.html : type === 'text/plain' ? sys.plain : '',
+                        }
+                      : null;
+                    const pasted = tryPasteSlidesFromClipboard(readable, props.slide.id);
+                    if (!pasted) toast('No copied slide on the clipboard.', 'warn');
+                  });
+                },
+              },
               ...(props.onMoveUp
                 ? [{ label: '↑ Move slide up', name: 'Slide up', onSelect: props.onMoveUp }]
                 : []),

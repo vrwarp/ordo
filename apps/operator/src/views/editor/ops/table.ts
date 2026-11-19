@@ -1016,3 +1016,82 @@ export function pasteMatrixIntoTable(
     colsAdded,
   };
 }
+
+function escapeCellHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function selectedTableRect(
+  o: ShapeObject,
+  cell?: number,
+  range?: TableRange,
+): { r0: number; r1: number; c0: number; c1: number } | null {
+  const t = tableOf(o);
+  if (!t) return null;
+  if (range) return normalizeRange(t, range);
+  if (cell === undefined) return null;
+  const p = placeCells(t);
+  const a = p.anchors[cell];
+  if (!a) return null;
+  return { r0: a.row, r1: a.row + a.rows - 1, c0: a.col, c1: a.col + a.cols - 1 };
+}
+
+/**
+ * Serialize the selected table cell or cell range to TSV (`text`) + semantic HTML `<table>` (`html`),
+ * suitable for pasting back into Ordo tables or external spreadsheets (Google Sheets, Excel).
+ */
+export function serializeTableCellsToClipboard(
+  o: ShapeObject,
+  cell?: number,
+  range?: TableRange,
+): { html: string; text: string; rows: number; cols: number } | null {
+  const t = tableOf(o);
+  const rect = selectedTableRect(o, cell, range);
+  if (!t || !rect) return null;
+  const p = placeCells(t);
+  const tsvRows: string[] = [];
+  const htmlRows: string[] = [];
+  for (let r = rect.r0; r <= rect.r1; r++) {
+    const tsvCols: string[] = [];
+    const htmlCols: string[] = [];
+    for (let c = rect.c0; c <= rect.c1; c++) {
+      const idx = p.slots[r * p.C + c]!;
+      const raw = idx >= 0 ? (t.cells[idx]?.text ?? '') : '';
+      tsvCols.push(raw.replace(/\t/g, ' ').replace(/\r?\n/g, ' '));
+      htmlCols.push(`<td>${escapeCellHtml(raw).replace(/\n/g, '<br>')}</td>`);
+    }
+    tsvRows.push(tsvCols.join('\t'));
+    htmlRows.push(`<tr>${htmlCols.join('')}</tr>`);
+  }
+  const rows = rect.r1 - rect.r0 + 1;
+  const cols = rect.c1 - rect.c0 + 1;
+  return {
+    text: tsvRows.join('\n'),
+    html: `<table><tbody>${htmlRows.join('')}</tbody></table>`,
+    rows,
+    cols,
+  };
+}
+
+/**
+ * Clear text in the selected cell or cell range of table `o` (used by Cut on table cells).
+ */
+export function clearTableCells(o: ShapeObject, cell?: number, range?: TableRange): ShapeObject {
+  const t = tableOf(o);
+  const rect = selectedTableRect(o, cell, range);
+  if (!t || !rect) return o;
+  const p = placeCells(t);
+  let cur = o;
+  const seen = new Set<number>();
+  for (let r = rect.r0; r <= rect.r1; r++) {
+    for (let c = rect.c0; c <= rect.c1; c++) {
+      const idx = p.slots[r * p.C + c]!;
+      if (idx < 0 || seen.has(idx)) continue;
+      seen.add(idx);
+      const view = cellTextObject(cur, idx);
+      if (!view?.text) continue;
+      cur = setCell(cur, idx, { text: '', style: view.style });
+    }
+  }
+  return cur;
+}

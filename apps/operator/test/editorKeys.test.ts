@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { notChoosable } from '../src/views/editor/BackgroundPicker.tsx';
 import {
+  canEditorClipboard,
   composing,
   historyKey,
   isTypingTarget,
@@ -198,5 +199,30 @@ describe('keys an input method is composing with are left to it (composing)', ()
     expect(composing({ keyCode: 229 })).toBe(true);
     expect(composing({ isComposing: false, keyCode: 27, nativeEvent: { isComposing: false } })).toBe(false);
     expect(composing({})).toBe(false);
+  });
+});
+
+describe('canEditorClipboard', () => {
+  it('allows copy, cut, and paste on both canvas and control places', () => {
+    for (const place of ['canvas', 'control'] as const) {
+      expect(canEditorClipboard(place, 'copy')).toBe(true);
+      expect(canEditorClipboard(place, 'cut')).toBe(true);
+      expect(canEditorClipboard(place, 'paste')).toBe(true);
+    }
+  });
+
+  it('blocks clipboard shortcuts inside fields and modal dialogs', () => {
+    for (const place of ['field', 'dialog'] as const) {
+      expect(canEditorClipboard(place, 'copy')).toBe(false);
+      expect(canEditorClipboard(place, 'cut')).toBe(false);
+      expect(canEditorClipboard(place, 'paste')).toBe(false);
+    }
+  });
+
+  it('lets native UI text selection handle copy/cut while still allowing editor paste', () => {
+    expect(canEditorClipboard('control', 'copy', 'Selected label')).toBe(false);
+    expect(canEditorClipboard('control', 'cut', 'Selected label')).toBe(false);
+    expect(canEditorClipboard('control', 'paste', 'Selected label')).toBe(true);
+    expect(canEditorClipboard('canvas', 'copy', '')).toBe(true);
   });
 });

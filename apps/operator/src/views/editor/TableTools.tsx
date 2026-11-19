@@ -4,12 +4,18 @@ import { PaintPill, type PaintValue } from '../../components/ColorPicker.tsx';
 import { Menu } from '../../components/Menu.tsx';
 import { useCoarsePointer } from '../../components/pointer.ts';
 import {
+  armPlainPaste,
   canRowCol,
+  consumePlainPaste,
+  copyTextSelection,
+  cutTextSelection,
   distributeTableCols,
   distributeTableRows,
   fillCells,
   formatSelection,
+  handleTextPaste,
   mergeTableCells,
+  pasteTableFromClipboard,
   ROW_COL_OPS,
   type RowColOp,
   rowCol,
@@ -300,6 +306,10 @@ export function TableSection({ o, readOnly }: ObjectSectionContext) {
             }}
             onKeyDown={(e) => {
               if (composing(e)) return;
+              if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'v') {
+                armPlainPaste();
+                return;
+              }
               const step = historyKey(e);
               if (step) {
                 e.preventDefault();
@@ -324,6 +334,54 @@ export function TableSection({ o, readOnly }: ObjectSectionContext) {
               const caret = e.target.selectionEnd;
               setTextRange({ start: e.target.selectionStart, end: caret, caret });
               if (!readOnly) typeText(target, e.target.value, caret);
+            }}
+            onCopy={(e) => {
+              const el = e.currentTarget;
+              if (copyTextSelection(view, el.selectionStart, el.selectionEnd, e.clipboardData)) {
+                e.preventDefault();
+              }
+            }}
+            onCut={(e) => {
+              if (readOnly) return;
+              const el = e.currentTarget;
+              const caret = cutTextSelection(
+                view,
+                el.selectionStart,
+                el.selectionEnd,
+                e.clipboardData,
+                target,
+              );
+              if (caret !== null) {
+                e.preventDefault();
+                setTextRange({ start: caret, end: caret, caret });
+                restoreFieldSelection({ start: caret, end: caret });
+              }
+            }}
+            onPaste={(e) => {
+              if (readOnly) return;
+              const plainOnly = consumePlainPaste();
+              if (!plainOnly) {
+                const html = e.clipboardData?.getData('text/html') ?? '';
+                const plain = e.clipboardData?.getData('text/plain') ?? '';
+                if (pasteTableFromClipboard(target.objectId, target.cell, html, plain)) {
+                  e.preventDefault();
+                  return;
+                }
+              }
+              const el = e.currentTarget;
+              const caret = handleTextPaste(
+                view,
+                el.selectionStart,
+                el.selectionEnd,
+                e.clipboardData,
+                target,
+                plainOnly,
+              );
+              if (caret !== null) {
+                e.preventDefault();
+                setTextRange({ start: caret, end: caret, caret });
+                restoreFieldSelection({ start: caret, end: caret });
+              }
             }}
           />
           <TextFloatingControls

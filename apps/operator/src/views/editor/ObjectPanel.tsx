@@ -6,6 +6,8 @@ import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { ObjectSlideOps } from './ObjectSlideOps.tsx';
 import { useLibrary } from '../../state/library.ts';
 import {
+  armPlainPaste,
+  consumePlainPaste,
   copyTextSelection,
   cutTextSelection,
   handleTextPaste,
@@ -216,6 +218,10 @@ function TextSection({ o: obj, readOnly, themed, marks, set }: ObjectSectionCont
           }}
           onKeyDown={(e) => {
             if (composing(e)) return;
+            if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'v') {
+              armPlainPaste();
+              return;
+            }
             if (e.key === 'Escape' && useEditor.getState().inlineEditingId) {
               e.preventDefault();
               stopInlineEditing();
@@ -258,8 +264,16 @@ function TextSection({ o: obj, readOnly, themed, marks, set }: ObjectSectionCont
           }}
           onPaste={(e) => {
             if (readOnly) return;
+            const plainOnly = consumePlainPaste();
             const el = e.currentTarget;
-            const caret = handleTextPaste(o, el.selectionStart, el.selectionEnd, e.clipboardData);
+            const caret = handleTextPaste(
+              o,
+              el.selectionStart,
+              el.selectionEnd,
+              e.clipboardData,
+              o.id,
+              plainOnly,
+            );
             if (caret !== null) {
               e.preventDefault();
               setRange({ start: caret, end: caret, caret });

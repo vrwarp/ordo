@@ -6,10 +6,13 @@ import {
   type TextObject,
 } from '@ordo/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { useToasts } from '../src/state/toasts.ts';
 import * as actions from '../src/views/editor/actions.ts';
 import {
   currentObjects,
   openPresentation,
+  selectCell,
+  selectCellRange,
   selectObjects,
   selectSlide,
   undo,
@@ -18,11 +21,15 @@ import {
 import { getSlide } from '../src/views/editor/ops.ts';
 import {
   htmlToRichText,
+  newTable,
   parseObjectsFromHtml,
+  parseSlidesFromHtml,
   pasteObjects,
   pasteRichText,
+  pasteSlides,
   richTextToHtml,
   serializeObjectsToHtml,
+  serializeSlidesToHtml,
   sliceRichText,
 } from '../src/views/editor/ops/index.ts';
 
@@ -364,5 +371,153 @@ describe('Layer 3: Slide canvas object copy, cut & paste', () => {
     expect(restored.type).toBe('image');
     expect(restored.box.x).toBe(600);
     expect(restored.box.y).toBe(100);
+  });
+
+  it('falls back to the in-memory object buffer when OS clipboard was not updated, and invalidates on blur', async () => {
+    selectObjects(['sh1']);
+    // Simulate a keyboard copy without a synchronous DataTransfer (e.g., Safari collapsed selection).
+    expect(actions.copySelection()).toBe(true);
+
+    // Pasting when the OS clipboard still holds stale text from earlier pastes the copied object.
+    const staleClip = mockClipboardData();
+    staleClip.data.setData('text/plain', 'stale text from another app');
+    const pasted = await actions.tryPasteObjectsFromClipboard(staleClip.data);
+    expect(pasted).toHaveLength(1);
+    expect(currentObjects()[0]!.type).toBe('shape');
+
+    // Once the user switches away (window blur), an external clipboard copy could have happened:
+    // plain text in the OS clipboard must now win over the stale in-memory buffer.
+    actions.markExternalClipboard();
+    const externalClip = mockClipboardData();
+    externalClip.data.setData('text/plain', 'fresh external text');
+    expect(actions.tryPasteObjectsFromClipboard(externalClip.data)).toBeNull();
+  });
+
+  it('supports plainOnly paste (Ctrl/Cmd+Shift+V) that strips rich HTML formatting', () => {
+    const clip = mockClipboardData();
+    const s1 = () => getSlide(useEditor.getState().draft!, 's1')!;
+    const t1 = () => s1().objects.find((x) => x.id === 't1') as TextObject;
+
+    actions.copyTextSelection(t1(), 14, 19, clip.data); // "loved" (italic + underline + gold)
+    const caret = actions.handleTextPaste(t1(), 55, 55, clip.data, undefined, true);
+    expect(caret).toBe(60);
+    expect(t1().text.endsWith('Sonloved')).toBe(true);
+    // Plain-text paste must not carry over the italic/underline/gold run from "loved".
+    const runAtEnd = t1().runs?.find((r) => r.start <= 55 && r.end >= 60);
+    expect(runAtEnd?.fontStyle).toBeUndefined();
+    expect(runAtEnd?.underline).toBeUndefined();
+  });
+});
+
+describe('Layer 4: Whole-slide copy, cut & paste', () => {
+  beforeEach(() => {
+    useToasts.setState({ list: [] });
+    openPresentation(makeDeck());
+    selectSlide('s1');
+  });
+
+  it('serializes, parses, and pastes whole slides with fresh slide/object IDs and preserved groups', () => {
+    const p = useEditor.getState().draft!;
+    const s1 = getSlide(p, 's1')!;
+    const { html, text } = serializeSlidesToHtml([s1]);
+    expect(html).toContain('data-ordo-slides=');
+    expect(text).toContain('16 For God so loved the world');
+    // htmlToRichText must not treat slide payloads as plain rich text.
+    expect(htmlToRichText(html)).toBeNull();
+
+    const parsed = parseSlidesFromHtml(html);
+    expect(parsed?.slides).toHaveLength(1);
+
+    const res = pasteSlides(p, 's1', parsed!.slides);
+    expect(res.ids).toHaveLength(1);
+    const pastedId = res.ids[0]!;
+    expect(pastedId).not.toBe('s1');
+    const sec = res.p.sections[0]!;
+    expect(sec.slides.map((s) => s.id)).toEqual(['s1', pastedId, 's2']);
+    const pastedSlide = getSlide(res.p, pastedId)!;
+    expect(pastedSlide.objects).toHaveLength(3);
+    expect(pastedSlide.objects[0]!.id).not.toBe('sh1');
+    expect(pastedSlide.lyricObjectId).toBe(pastedSlide.objects[1]!.id);
+    // Group relationship is preserved on the newly cloned slide.
+    expect(pastedSlide.objects[0]!.origin?.group).toBeDefined();
+    expect(pastedSlide.objects[0]!.origin?.group).toBe(pastedSlide.objects[1]!.origin?.group);
+  });
+
+  it('copies and pastes a slide through actions, and cuts a slide while refusing to cut the only slide', async () => {
+    const clip = mockClipboardData();
+    expect(actions.copySlideSelection(clip.data, 's1')).toBe(true);
+    expect(actions.hasCopiedSlides()).toBe(true);
+
+    selectSlide('s2');
+    const pastedIds = await actions.tryPasteSlidesFromClipboard(clip.data);
+    expect(pastedIds).toHaveLength(1);
+    expect(useEditor.getState().draft!.sections[0]!.slides).toHaveLength(3);
+    expect(useEditor.getState().slideId).toBe(pastedIds![0]);
+
+    // Cut the newly pasted slide and paste it back.
+    const cutClip = mockClipboardData();
+    expect(actions.cutSlideSelection(cutClip.data, pastedIds![0])).toBe(true);
+    expect(useEditor.getState().draft!.sections[0]!.slides).toHaveLength(2);
+
+    // Cut down to 1 slide, then refuse cutting the last remaining slide.
+    expect(actions.cutSlideSelection(null, 's2')).toBe(true);
+    expect(useEditor.getState().draft!.sections[0]!.slides).toHaveLength(1);
+    expect(actions.cutSlideSelection(null, 's1')).toBe(false);
+    expect(useToasts.getState().list.at(-1)?.text).toMatch(/Cannot cut the only slide/);
+  });
+});
+
+describe('Table cell & cell-range copy, cut & paste', () => {
+  beforeEach(() => {
+    const deck = makeDeck();
+    const tbl = newTable(DEFAULT_THEME, {
+      cells: [
+        ['A1', 'B1', ''],
+        ['A2', 'B2', ''],
+        ['', '', ''],
+      ],
+    });
+    tbl.id = 'tbl1';
+    deck.sections[0]!.slides[0]!.objects.push(tbl);
+    openPresentation(deck);
+    selectSlide('s1');
+    selectObjects(['tbl1']);
+  });
+
+  const cellsOf = () =>
+    (getSlide(useEditor.getState().draft!, 's1')!.objects.find((o) => o.id === 'tbl1') as ShapeObject).table!
+      .cells;
+
+  it('copies a 2x2 cell range as TSV + HTML table and pastes it at a new anchor cell', () => {
+    const clip = mockClipboardData();
+    selectCellRange('tbl1', 0, { r0: 0, c0: 0, r1: 1, c1: 1 });
+    expect(actions.copyTableCellSelection(clip.data)).toBe(true);
+    expect(clip.store.get('text/plain')).toBe('A1\tB1\nA2\tB2');
+    expect(clip.store.get('text/html')).toContain('<table>');
+
+    // Cell index 4 in a 3x3 table is (row 1, col 1).
+    selectCell('tbl1', 4);
+    expect(actions.pasteIntoSelectedTableCell('tbl1', 4, undefined, clip.data)).toBe(true);
+    expect(cellsOf()[4]!.text).toBe('A1');
+    expect(cellsOf()[5]!.text).toBe('B1');
+    expect(cellsOf()[7]!.text).toBe('A2');
+    expect(cellsOf()[8]!.text).toBe('B2');
+  });
+
+  it('cuts a cell range (clearing source cells) and pastes plain text directly into a selected cell', () => {
+    const clip = mockClipboardData();
+    selectCellRange('tbl1', 0, { r0: 0, c0: 0, r1: 0, c1: 1 });
+    expect(actions.cutTableCellSelection(clip.data)).toBe(true);
+    expect(cellsOf()[0]!.text ?? '').toBe('');
+    expect(cellsOf()[1]!.text ?? '').toBe('');
+
+    // Paste single plain-text value into cell 6 (row 2, col 0) without creating a stray TextObject.
+    const textClip = mockClipboardData();
+    textClip.data.setData('text/plain', 'Solo value');
+    selectCell('tbl1', 6);
+    const beforeCount = getSlide(useEditor.getState().draft!, 's1')!.objects.length;
+    expect(actions.pasteIntoSelectedTableCell('tbl1', 6, undefined, textClip.data)).toBe(true);
+    expect(cellsOf()[6]!.text).toBe('Solo value');
+    expect(getSlide(useEditor.getState().draft!, 's1')!.objects).toHaveLength(beforeCount);
   });
 });
