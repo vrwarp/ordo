@@ -179,7 +179,9 @@ jobs:
       # The runner's font list and the faces the golden images were drawn with (golden/expected/meta.json; a
       # missing one fails the run). Keep in step with tools/golden-docker.sh.
       - name: Fonts
-        run: apt-get update && apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter fonts-dejavu-core fonts-freefont-ttf fonts-ipafont-gothic
+        run: |
+          sed -i -E 's|https?://[^/]+\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          apt-get update && apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter fonts-dejavu-core fonts-freefont-ttf fonts-ipafont-gothic
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
