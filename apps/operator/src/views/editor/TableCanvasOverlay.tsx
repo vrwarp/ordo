@@ -1,4 +1,4 @@
-import { placeCells, type ShapeObject, TABLE_LIMITS } from '@ordo/domain';
+import { type Box, placeCells, type ShapeObject, TABLE_LIMITS } from '@ordo/domain';
 import type { TableLayout } from '@ordo/renderer/table/layout.ts';
 import { useEffect, useState } from 'react';
 import { canRowCol, moveTableCol, moveTableRow, resizeTableCol, resizeTableRow, rowCol } from './actions.ts';
@@ -30,11 +30,14 @@ export function TableCanvasOverlay({
   layout,
   scale,
   cellRange,
+  liveBox,
 }: {
   o: TableShape;
   layout: TableLayout;
   scale: number;
   cellRange?: TableRange;
+  /** Live slide-space box while a Konva drag or Transformer resize is in progress. */
+  liveBox?: Box;
 }) {
   const [dividerDrag, setDividerDrag] = useState<DividerDrag | null>(null);
   const [reorderDrag, setReorderDrag] = useState<ReorderDrag | null>(null);
@@ -42,10 +45,12 @@ export function TableCanvasOverlay({
   const t = o.table;
   const R = layout.rowY.length - 1;
   const C = layout.colX.length - 1;
-  const bx = o.box.x;
-  const by = o.box.y;
-  const bw = layout.width;
-  const bh = layout.height;
+  const bx = liveBox?.x ?? o.box.x;
+  const by = liveBox?.y ?? o.box.y;
+  const bw = liveBox?.w ?? layout.width;
+  const bh = liveBox?.h ?? layout.height;
+  const scaleX = scale * (layout.width > 0 ? bw / layout.width : 1);
+  const scaleY = scale * (layout.height > 0 ? bh / layout.height : 1);
 
   // Handle active divider drag on window pointermove / pointerup.
   useEffect(() => {
@@ -169,8 +174,8 @@ export function TableCanvasOverlay({
     >
       {/* Top column grip rails */}
       {colIndices.map((c) => {
-        const x0 = Math.min(layout.colX[c]!, layout.colX[c + 1]!) * scale;
-        const x1 = Math.max(layout.colX[c]!, layout.colX[c + 1]!) * scale;
+        const x0 = Math.min(layout.colX[c]!, layout.colX[c + 1]!) * scaleX;
+        const x1 = Math.max(layout.colX[c]!, layout.colX[c + 1]!) * scaleX;
         const active =
           !!cellRange &&
           cellRange.r0 === 0 &&
@@ -203,8 +208,8 @@ export function TableCanvasOverlay({
 
       {/* Left row grip rails */}
       {rowIndices.map((r) => {
-        const y0 = layout.rowY[r]! * scale;
-        const y1 = layout.rowY[r + 1]! * scale;
+        const y0 = layout.rowY[r]! * scaleY;
+        const y1 = layout.rowY[r + 1]! * scaleY;
         const active =
           !!cellRange &&
           cellRange.c0 === 0 &&
@@ -238,10 +243,10 @@ export function TableCanvasOverlay({
       {/* Internal column divider drag handles */}
       {Array.from({ length: Math.max(0, C - 1) }, (_, idx) => {
         const edge = idx + 1;
-        const prevW = Math.abs(layout.colX[edge]! - layout.colX[edge - 1]!) * scale;
-        const nextW = Math.abs(layout.colX[edge + 1]! - layout.colX[edge]!) * scale;
+        const prevW = Math.abs(layout.colX[edge]! - layout.colX[edge - 1]!) * scaleX;
+        const nextW = Math.abs(layout.colX[edge + 1]! - layout.colX[edge]!) * scaleX;
         if (Math.min(prevW, nextW) < 16) return null;
-        const x = layout.colX[edge]! * scale;
+        const x = layout.colX[edge]! * scaleX;
         const dragging = dividerDrag?.axis === 'col' && dividerDrag.edge === edge;
         const liveX = dragging ? x + dividerDrag.deltaSlide * scale : x;
         return (
@@ -281,10 +286,10 @@ export function TableCanvasOverlay({
       {/* Internal row divider drag handles */}
       {Array.from({ length: Math.max(0, R - 1) }, (_, idx) => {
         const edge = idx + 1;
-        const prevH = Math.abs(layout.rowY[edge]! - layout.rowY[edge - 1]!) * scale;
-        const nextH = Math.abs(layout.rowY[edge + 1]! - layout.rowY[edge]!) * scale;
+        const prevH = Math.abs(layout.rowY[edge]! - layout.rowY[edge - 1]!) * scaleY;
+        const nextH = Math.abs(layout.rowY[edge + 1]! - layout.rowY[edge]!) * scaleY;
         if (Math.min(prevH, nextH) < 16) return null;
-        const y = layout.rowY[edge]! * scale;
+        const y = layout.rowY[edge]! * scaleY;
         const dragging = dividerDrag?.axis === 'row' && dividerDrag.edge === edge;
         const liveY = dragging ? y + dividerDrag.deltaSlide * scale : y;
         return (
@@ -324,13 +329,13 @@ export function TableCanvasOverlay({
                   left:
                     (reorderDrag.to > reorderDrag.from
                       ? Math.max(layout.colX[reorderDrag.to]!, layout.colX[reorderDrag.to + 1]!)
-                      : Math.min(layout.colX[reorderDrag.to]!, layout.colX[reorderDrag.to + 1]!)) * scale,
+                      : Math.min(layout.colX[reorderDrag.to]!, layout.colX[reorderDrag.to + 1]!)) * scaleX,
                 }
               : {
                   top:
                     (reorderDrag.to > reorderDrag.from
                       ? layout.rowY[reorderDrag.to + 1]!
-                      : layout.rowY[reorderDrag.to]!) * scale,
+                      : layout.rowY[reorderDrag.to]!) * scaleY,
                 }
           }
         />
