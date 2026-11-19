@@ -1,6 +1,7 @@
+import { fileUrl } from '@ordo/client';
 import { type Cue, firstText, type Look, type Media, type Slide } from '@ordo/domain';
 import type { OutputHealthEntry } from '@ordo/protocol';
-import { fileUrl } from '@ordo/client';
+import { formatMidiCueSummary } from '@ordo/surfaces';
 import { memo } from 'react';
 import { useVisible } from '../../hooks.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
@@ -67,7 +68,7 @@ export const SlideThumb = memo(function SlideThumb(props: {
         {props.slide?.midiCues && props.slide.midiCues.length > 0 && (
           <span
             className="tag"
-            title={`${props.slide.midiCues.length} outgoing MIDI cue(s)`}
+            title={`MIDI: ${props.slide.midiCues.map(formatMidiCueSummary).join('; ')}`}
             style={{ fontSize: 9, padding: '1px 4px', lineHeight: '12px', background: 'var(--panel-alt)' }}
           >
             MIDI

@@ -4,6 +4,7 @@ import {
   defaultDeckPages,
   isModifierOnly,
   KeyboardDriver,
+  type MidiActivityEvent,
   MidiDriver,
   type MidiInputInfo,
   type MidiOutputInfo,
@@ -18,8 +19,12 @@ import { midiCuesOnChange } from '../lib/midiOut.ts';
 import { saveSettings } from '../state/library.ts';
 import { useLibrary } from '../state/library.ts';
 import { useLive } from '../state/live.ts';
+import { toast } from '../state/toasts.ts';
 import type { Controller } from './controller.ts';
 import { log } from './log.ts';
+
+const MIDI_LOG_LIMIT = 50;
+const MIDI_DROP_TOAST_COOLDOWN_MS = 15_000;
 
 export type SurfacesStore = {
   deck: DeckInfo | null;
@@ -28,6 +33,7 @@ export type SurfacesStore = {
   midiInputs: MidiInputInfo[];
   midiOutputs: MidiOutputInfo[];
   lastMidiMessage: { kind: string; channel: number; number: number; value: number; time: number } | null;
+  midiLog: MidiActivityEvent[];
   keyboardActive: boolean;
 };
 export const useSurfaces = create<SurfacesStore>(() => ({
@@ -37,8 +43,13 @@ export const useSurfaces = create<SurfacesStore>(() => ({
   midiInputs: [],
   midiOutputs: [],
   lastMidiMessage: null,
+  midiLog: [],
   keyboardActive: false,
 }));
+
+export function clearMidiLog(): void {
+  useSurfaces.setState({ midiLog: [] });
+}
 
 /** Hold the clear-all key this long to clear without the second press (prd/02). */
 export const CLEAR_HOLD_MS = 1000;
@@ -61,6 +72,7 @@ export class Surfaces {
   private unsub: (() => void)[] = [];
   private attached = false;
   private lastView = '';
+  private lastDropWarnAt = 0;
   private hold = new HoldGuard(CLEAR_HOLD_MS);
   /**
    * Clear all "or hold": the keydown (handled by the KeyboardDriver) arms the double-press confirm; holding
@@ -86,6 +98,7 @@ export class Surfaces {
     this.deck = new StreamDeckDriver(ctl.dispatch);
     this.midi = new MidiDriver(ctl.dispatch);
     this.midi.setMappings(s.surfaces.midi);
+    this.midi.setDefaultOutput(s.surfaces.midiDefaultOutput);
     // Key images are drawn in the core worker; HID writes stay here (WebHID needs the window).
     this.deck.renderer = ctl.core.deckRenderer;
     this.deck.onError = (d) => this.fault(`stream deck: ${d}`);
@@ -93,12 +106,29 @@ export class Surfaces {
     this.midi.onInputs = (inputs) => useSurfaces.setState({ midiInputs: inputs });
     this.midi.onOutputs = (outputs) => useSurfaces.setState({ midiOutputs: outputs });
     this.midi.onMessage = (msg) => useSurfaces.setState({ lastMidiMessage: { ...msg, time: Date.now() } });
+    this.midi.onActivity = (ev) => {
+      useSurfaces.setState((prev) => ({
+        midiLog: [ev, ...prev.midiLog].slice(0, MIDI_LOG_LIMIT),
+      }));
+      const isManualTest = ev.detail?.startsWith('Soundcheck') || ev.detail?.startsWith('Slide test');
+      if (ev.direction === 'out' && ev.status === 'dropped' && !isManualTest) {
+        this.fault(`midi out dropped (${ev.device}): ${ev.detail ?? 'unknown reason'}`);
+        const now = Date.now();
+        if (now - this.lastDropWarnAt >= MIDI_DROP_TOAST_COOLDOWN_MS) {
+          this.lastDropWarnAt = now;
+          toast(`MIDI cue not sent: ${ev.detail ?? 'no output connected'}`, 'warn');
+        }
+      }
+    };
     this.unsub.push(
       useLibrary.subscribe((st, prev) => {
         const a = st.data.settings;
         const b = prev.data.settings;
         if (a.keymap !== b.keymap) this.keyboard.setMap(a.keymap);
         if (a.surfaces.midi !== b.surfaces.midi) this.midi.setMappings(a.surfaces.midi);
+        if (a.surfaces.midiDefaultOutput !== b.surfaces.midiDefaultOutput) {
+          this.midi.setDefaultOutput(a.surfaces.midiDefaultOutput);
+        }
         if (a.surfaces.midiEnabled !== b.surfaces.midiEnabled) {
           if (a.surfaces.midiEnabled) void this.startMidi();
           else this.stopMidi();
@@ -108,8 +138,15 @@ export class Surfaces {
       }),
       useLive.subscribe((st, prev) => {
         if (st.state !== prev.state || st.hubConnected !== prev.hubConnected) this.pushView(st.state);
+        if (prev.state.live !== st.state.live) {
+          this.midi.cancelPendingCues();
+        }
         const cues = midiCuesOnChange(prev.state, st.state);
-        if (cues.length) this.midi.sendCues(cues);
+        if (cues.length) {
+          const liveCue = st.state.live !== undefined ? st.state.cues[st.state.live] : undefined;
+          const label = liveCue?.label ? `Live: ${liveCue.label}` : 'Live slide';
+          this.midi.sendCues(cues, label);
+        }
       }),
     );
   }

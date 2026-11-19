@@ -1,4 +1,5 @@
 import { parseSectionLabel, type Presentation, type Slide } from '@ordo/domain';
+import { formatMidiCueSummary } from '@ordo/surfaces';
 import { type PointerEvent as ReactPointerEvent, useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { Menu } from '../../components/Menu.tsx';
@@ -113,7 +114,10 @@ function SlideItem(props: {
                 </span>
               )}
               {hasMidi && (
-                <span className="ed-cue-badge midi" title="Slide sends MIDI cue">
+                <span
+                  className="ed-cue-badge midi"
+                  title={`MIDI: ${(props.slide.midiCues ?? []).map(formatMidiCueSummary).join('; ')}`}
+                >
                   ⚡
                 </span>
               )}
