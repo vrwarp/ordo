@@ -16,6 +16,8 @@ import {
   type SlideObject,
   setCell,
   type TableData,
+  type TableFill,
+  type TableLineStyle,
   type TextObject,
 } from '@ordo/domain';
 import {
@@ -26,6 +28,7 @@ import {
   selectObjects,
   inlineTarget,
   selectCell,
+  selectCellRange,
   selectSlide,
   setTextRange,
   startInlineEditing,
@@ -36,11 +39,19 @@ import {
 import {
   addRefusalText,
   applyStyleToSimilar,
+  type BorderTarget,
   canAdd,
+  canMergeCells,
+  canMoveCol,
+  canMoveRow,
+  canSplitCell,
+  cellsInRange,
   type BackgroundMedia,
   type BackgroundScope,
   clearSlideBackground,
   deleteObjects,
+  distributeCols,
+  distributeRows,
   duplicateObjects,
   editText,
   type FindOptions,
@@ -51,33 +62,50 @@ import {
   htmlToRichText,
   MAX_OBJECTS,
   MAX_SECTION_SLIDES,
+  mergeCells,
+  moveCol,
   moveObjects,
+  moveRow,
+  normalizeRange,
   type ObjectSanitizer,
   newSlideLike,
   type ParaPatch,
   parseObjectsFromHtml,
+  parseTableClipboard,
+  pasteMatrixIntoTable,
   pasteObjects,
   pasteRichText,
   type PictureFlip,
   type PictureMask,
   type PictureSize,
+  rangeOfCells,
   refitText,
   reorderObjects,
   replaceBackground,
   replaceBackgroundOf,
   replacePicture,
+  resizeColDivider,
   resizeRange,
+  resizeRowDivider,
   type RichTextSlice,
   richTextToHtml,
   type RunPatch,
   runOverrides,
   serializeObjectsToHtml,
+  setCellsPaint,
+  setCellsStyle,
   setCrop,
   setFlip,
   setMask,
   setParas,
+  setTableBorders,
   sliceRichText,
+  splitCell,
+  type TableRange,
+  targetCellIndices,
   textOnSlide,
+  toggleBandedRows,
+  toggleHeaderRow,
   transformGroup,
   ungroup,
   useAsBackground,
@@ -208,15 +236,30 @@ export function resizeSelection(target: TextTargetArg, start: number, end: numbe
 }
 
 /**
- * The box style of a table's cell (the table bar's font, size, bold, colour and alignment with no characters
- * selected): `fn` of the cell view's style, written to the cell's style entry. `key` coalesces repeated changes
- * of one field into one step (`style:<id>:<i>:<field>`).
+ * The box style of a table's cell (or selected cell range when `range` is given): `fn` of each cell view's
+ * style, written to the cell's style entry. `key` coalesces repeated changes of one field into one step.
  */
 export function setCellStyle(
   target: TextTarget,
   fn: (s: TextObject['style']) => TextObject['style'],
   key?: string,
+  range?: TableRange,
 ) {
+  const st = useEditor.getState();
+  const activeRange = range ?? (st.objectId === target.objectId ? st.cellRange : undefined);
+  if (activeRange) {
+    onObject(
+      target.objectId,
+      (o) => {
+        if (o.type !== 'shape' || !o.table) return o;
+        const cells = targetCellIndices(o.table, target.cell, activeRange);
+        const next = setCellsStyle(o, cells, fn);
+        return next === o ? o : fitTable(o, next);
+      },
+      key ? `style:${target.objectId}:range:${key}` : undefined,
+    );
+    return;
+  }
   if (target.cell === undefined) return;
   onText(
     target,
@@ -327,6 +370,7 @@ export function tableKey(e: { key: string; shiftKey: boolean }, o: SlideObject, 
   if (o.type !== 'shape' || !o.table) return false;
   const st = useEditor.getState();
   const cell = st.objectId === o.id ? st.cell : undefined;
+  const cellRange = st.objectId === o.id ? st.cellRange : undefined;
   const first = nextCell(o.table, -1, false) ?? 0;
   switch (e.key) {
     case 'ArrowLeft':
@@ -334,6 +378,33 @@ export function tableKey(e: { key: string; shiftKey: boolean }, o: SlideObject, 
     case 'ArrowUp':
     case 'ArrowDown': {
       if (cell === undefined) return false;
+      if (e.shiftKey) {
+        const cur = cellRange ?? rangeOfCells(o.table, cell);
+        if (!cur) return true;
+        const p = placeCells(o.table);
+        const anchor = p.anchors[cell];
+        if (!anchor) return true;
+        const drawnDc = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+        const dc = o.table.rtl ? -drawnDc : drawnDc;
+        const dr = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+        const next: TableRange = { ...cur };
+        if (dr < 0) {
+          if (next.r1 > anchor.row + anchor.rows - 1) next.r1 = Math.max(anchor.row, next.r1 - 1);
+          else next.r0 = Math.max(0, next.r0 - 1);
+        } else if (dr > 0) {
+          if (next.r0 < anchor.row) next.r0 = Math.min(anchor.row, next.r0 + 1);
+          else next.r1 = Math.min(p.R - 1, next.r1 + 1);
+        }
+        if (dc < 0) {
+          if (next.c1 > anchor.col + anchor.cols - 1) next.c1 = Math.max(anchor.col, next.c1 - 1);
+          else next.c0 = Math.max(0, next.c0 - 1);
+        } else if (dc > 0) {
+          if (next.c0 < anchor.col) next.c0 = Math.min(anchor.col, next.c0 + 1);
+          else next.c1 = Math.min(p.C - 1, next.c1 + 1);
+        }
+        selectCellRange(o.id, cell, normalizeRange(o.table, next));
+        return true;
+      }
       const next = cellBeside(o.table, cell, e.key);
       if (next !== undefined) selectCell(o.id, next);
       return true;
@@ -354,14 +425,29 @@ export function tableKey(e: { key: string; shiftKey: boolean }, o: SlideObject, 
       return true;
     }
     case 'Escape':
-      if (cell === undefined) return false;
+      if (cell === undefined && !cellRange) return false;
       stopInlineEditing();
       selectCell(o.id, undefined);
       return true;
     case 'Delete':
     case 'Backspace':
-      if (cell === undefined) return false;
-      if (!readOnly) typeText({ objectId: o.id, cell }, '', 0);
+      if (cell === undefined && !cellRange) return false;
+      if (!readOnly) {
+        if (cellRange) {
+          const targets = cellsInRange(o.table, normalizeRange(o.table, cellRange));
+          onObject(o.id, (x) => {
+            if (x.type !== 'shape' || !x.table) return x;
+            let cur = x;
+            for (const idx of targets) {
+              const view = cellTextObject(cur, idx);
+              if (view?.text) cur = setCell(cur, idx, { text: '', style: view.style });
+            }
+            return cur === x ? x : fitTable(x, cur);
+          });
+        } else if (cell !== undefined) {
+          typeText({ objectId: o.id, cell }, '', 0);
+        }
+      }
       setTextRange({ start: 0, end: 0 });
       return true;
     default:
@@ -385,24 +471,213 @@ export function inlineText(): { view: TextObject; target: TextTarget } | undefin
 
 // ---- A (tables): fills, rows and columns -----------------------------------------------------------
 
+function isTableFill(v: Rgba | TableFill): v is TableFill {
+  return 'color' in v;
+}
+
 /**
- * 'Cell fill' (the table bar and panel): cell `cell` of table `objectId` filled with `color`, or with no fill
- * (null); with no cell selected, every cell. One undo step (`setCellFill`); none when every one of the cells
- * already has that solid fill (a paint picker sends its colour again on Enter or a tab).
+ * 'Cell fill' (the table bar and panel): cell `cell` (or `range`) of table `objectId` filled with a solid
+ * colour (`Rgba`), a solid/gradient `TableFill`, or no fill (`null`); with no cell or range selected, every
+ * cell. One undo step; none when every target cell already has that fill.
  */
-export function fillCells(objectId: string, cell: number | undefined, color: Rgba | null): void {
+export function fillCells(
+  objectId: string,
+  cell: number | undefined,
+  paint: Rgba | TableFill | null,
+  range?: TableRange,
+): void {
   onObject(objectId, (o) => {
     if (o.type !== 'shape' || !o.table) return o;
     const t = o.table;
-    const which = cell === undefined ? t.cells.map((_, i) => i) : [cell];
+    const st = useEditor.getState();
+    const activeRange = range ?? (st.objectId === objectId ? st.cellRange : undefined);
+    const which = targetCellIndices(t, cell, activeRange);
+    if (!paint) return setCellsPaint(o, which, null);
+    if (isTableFill(paint)) return setCellsPaint(o, which, paint);
     const has = (i: number) => {
       const k = t.cells[i]?.fill;
       const f = k === undefined ? undefined : t.fills?.[k];
-      if (!color) return !f;
-      return !!f && !f.gradient && JSON.stringify(f.color) === JSON.stringify(color);
+      return !!f && !f.gradient && JSON.stringify(f.color) === JSON.stringify(paint);
     };
-    return which.every(has) ? o : setCellFill(o, which, color);
+    return which.every(has) ? o : setCellFill(o, which, paint);
   });
+}
+
+/** Merge the selected cell range into one spanned cell and select the resulting cell. */
+export function mergeTableCells(objectId: string, range: TableRange): number | undefined {
+  let mergedIdx: number | undefined;
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table || !canMergeCells(o.table, range)) return o;
+    const norm = normalizeRange(o.table, range);
+    const next = mergeCells(o, norm);
+    if (next === o || !next.table) return o;
+    const p = placeCells(next.table);
+    const k = p.slots[norm.r0 * p.C + norm.c0];
+    mergedIdx = k !== undefined && k >= 0 ? k : undefined;
+    return fitTable(o, next);
+  });
+  if (mergedIdx !== undefined) selectCell(objectId, mergedIdx);
+  return mergedIdx;
+}
+
+/** Split a merged cell back into 1×1 cells and select the split range. */
+export function splitTableCell(objectId: string, cell: number): TableRange | undefined {
+  let splitRange: TableRange | undefined;
+  let topLeftCell: number | undefined;
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table || !canSplitCell(o.table, cell)) return o;
+    const a = placeCells(o.table).anchors[cell]!;
+    const next = splitCell(o, cell);
+    if (next === o || !next.table) return o;
+    splitRange = { r0: a.row, c0: a.col, r1: a.row + a.rows - 1, c1: a.col + a.cols - 1 };
+    const p = placeCells(next.table);
+    const k = p.slots[a.row * p.C + a.col];
+    topLeftCell = k !== undefined && k >= 0 ? k : undefined;
+    return fitTable(o, next);
+  });
+  if (splitRange && topLeftCell !== undefined) selectCellRange(objectId, topLeftCell, splitRange);
+  return splitRange;
+}
+
+/** Apply border styling to targeted edges of `range` (or whole table). */
+export function applyTableBorders(
+  objectId: string,
+  range: TableRange | undefined,
+  target: BorderTarget,
+  style: TableLineStyle | null,
+): void {
+  onObject(objectId, (o) => (o.type === 'shape' && o.table ? setTableBorders(o, range, target, style) : o));
+}
+
+/** Resize internal column divider `edgeIndex` by `deltaPx` slide pixels. */
+export function resizeTableCol(objectId: string, edgeIndex: number, deltaPx: number): void {
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table) return o;
+    const next = resizeColDivider(o, edgeIndex, deltaPx);
+    return next === o ? o : fitTable(o, next);
+  });
+}
+
+/** Resize internal row divider `edgeIndex` by `deltaPx` slide pixels. */
+export function resizeTableRow(objectId: string, edgeIndex: number, deltaPx: number): void {
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table) return o;
+    const next = resizeRowDivider(o, edgeIndex, deltaPx);
+    return next === o ? o : fitTable(o, next);
+  });
+}
+
+/** Equalize column widths across `range` (or the whole table). */
+export function distributeTableCols(objectId: string, range?: TableRange): void {
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table) return o;
+    const next = distributeCols(o, range);
+    return next === o ? o : fitTable(o, next);
+  });
+}
+
+/** Equalize row heights across `range` (or the whole table). */
+export function distributeTableRows(objectId: string, range?: TableRange): void {
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table) return o;
+    const next = distributeRows(o, range);
+    return next === o ? o : fitTable(o, next);
+  });
+}
+
+/** Reorder row `from` to index `to` and keep the moved row selected. */
+export function moveTableRow(objectId: string, from: number, to: number): boolean {
+  let moved = false;
+  let nextRange: TableRange | undefined;
+  let anchor: number | undefined;
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table || !canMoveRow(o.table, from, to)) return o;
+    const next = moveRow(o, from, to);
+    if (next === o || !next.table) return o;
+    moved = true;
+    const p = placeCells(next.table);
+    nextRange = { r0: to, c0: 0, r1: to, c1: p.C - 1 };
+    const k = p.slots[to * p.C];
+    anchor = k !== undefined && k >= 0 ? k : 0;
+    return next;
+  });
+  if (moved && nextRange && anchor !== undefined) selectCellRange(objectId, anchor, nextRange);
+  return moved;
+}
+
+/** Reorder column `from` to index `to` and keep the moved column selected. */
+export function moveTableCol(objectId: string, from: number, to: number): boolean {
+  let moved = false;
+  let nextRange: TableRange | undefined;
+  let anchor: number | undefined;
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table || !canMoveCol(o.table, from, to)) return o;
+    const next = moveCol(o, from, to);
+    if (next === o || !next.table) return o;
+    moved = true;
+    const p = placeCells(next.table);
+    nextRange = { r0: 0, c0: to, r1: p.R - 1, c1: to };
+    const k = p.slots[to];
+    anchor = k !== undefined && k >= 0 ? k : 0;
+    return next;
+  });
+  if (moved && nextRange && anchor !== undefined) selectCellRange(objectId, anchor, nextRange);
+  return moved;
+}
+
+/** Toggle starter header row styling on row 0. */
+export function setTableHeaderRow(objectId: string, on: boolean): void {
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table) return o;
+    const next = toggleHeaderRow(o, on);
+    return next === o ? o : fitTable(o, next);
+  });
+}
+
+/** Toggle starter alternating row bands across body rows. */
+export function setTableBandedRows(objectId: string, on: boolean): void {
+  onObject(objectId, (o) => (o.type === 'shape' && o.table ? toggleBandedRows(o, on) : o));
+}
+
+/**
+ * Paste tabular clipboard data (TSV or HTML `<table>`) into table `objectId` starting at `cell`,
+ * auto-growing rows/columns as needed in a single undo step and surfacing a toast. Returns true if pasted.
+ */
+export function pasteTableFromClipboard(
+  objectId: string,
+  cell: number | undefined,
+  html: string,
+  plain: string,
+): boolean {
+  const matrix = parseTableClipboard(html, plain);
+  if (!matrix) return false;
+  const startCell = cell ?? 0;
+  let pastedRange: TableRange | undefined;
+  let rowsAdded = 0;
+  let colsAdded = 0;
+  let anchorCell: number | undefined;
+  onObject(objectId, (o) => {
+    if (o.type !== 'shape' || !o.table) return o;
+    const res = pasteMatrixIntoTable(o, startCell, matrix);
+    if (!res) return o;
+    pastedRange = res.range;
+    rowsAdded = res.rowsAdded;
+    colsAdded = res.colsAdded;
+    const p = placeCells(res.object.table!);
+    const k = p.slots[res.range.r0 * p.C + res.range.c0];
+    anchorCell = k !== undefined && k >= 0 ? k : startCell;
+    return fitTable(o, res.object);
+  });
+  if (!pastedRange || anchorCell === undefined) return false;
+  selectCellRange(objectId, anchorCell, pastedRange);
+  const rCount = matrix.length;
+  const cCount = Math.max(...matrix.map((r) => r.length));
+  const extra: string[] = [];
+  if (rowsAdded > 0) extra.push(`${rowsAdded} ${rowsAdded === 1 ? 'row' : 'rows'} added`);
+  if (colsAdded > 0) extra.push(`${colsAdded} ${colsAdded === 1 ? 'column' : 'columns'} added`);
+  const suffix = extra.length ? ` · ${extra.join(', ')}` : '';
+  toast(`Pasted ${rCount}×${cCount} from clipboard${suffix}`, 'ok');
+  return true;
 }
 
 /** The table bar's and panel's 'Rows & columns' ops. */

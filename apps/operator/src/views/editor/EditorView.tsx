@@ -24,6 +24,7 @@ import {
   handleTextPaste,
   mayAdd,
   moveSelection,
+  pasteTableFromClipboard,
   replaceBackgroundWith,
   reorderSelection,
   tryPasteObjectsFromClipboard,
@@ -59,7 +60,7 @@ import {
 import './inspect.ts';
 import { ObjectPanel } from './ObjectPanel.tsx';
 import { getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
-import { hasGroup, htmlToRichText, pasteRichText } from './ops/index.ts';
+import { hasGroup, htmlToRichText, newTable, parseTableClipboard, pasteRichText } from './ops/index.ts';
 import { SpeakerNotesDock } from './SpeakerNotesDock.tsx';
 
 const DeckNotesEditor = lazy(() => import('./DeckNotesEditor.tsx'));
@@ -71,6 +72,7 @@ import { SlideCanvas } from './SlideCanvas.tsx';
 import { makeSlideEditable, SlidePanel } from './SlidePanel.tsx';
 import { SlidesPanel } from './SlidesPanel.tsx';
 import { SongReflowEditor } from './SongReflowEditor.tsx';
+import { TableInsertPicker } from './TableInsertPicker.tsx';
 
 /** Nudge steps (px in slide units) offered by the touch toolbar; the keyboard uses 1 and Shift 10. */
 const STEPS = [1, 10, 50] as const;
@@ -410,9 +412,19 @@ export function EditorView({ id }: { id: string }) {
       if (!st.draft || !st.slideId) return;
 
       // 1. If inline editing a text box on the canvas, paste into that text box at `textRange`.
+      //    If inline editing a table cell and clipboard holds multi-cell tabular data, paste into the table.
       const inline = st.inlineEditingId ? inlineText() : undefined;
       if (inline) {
         const { view, target } = inline;
+        if (target.cell !== undefined) {
+          const html = e.clipboardData?.getData('text/html') ?? '';
+          const plain = e.clipboardData?.getData('text/plain') ?? '';
+          if (pasteTableFromClipboard(target.objectId, target.cell, html, plain)) {
+            e.preventDefault();
+            stopInlineEditing();
+            return;
+          }
+        }
         const caret = handleTextPaste(view, st.textRange.start, st.textRange.end, e.clipboardData, target);
         if (caret !== null) {
           e.preventDefault();
@@ -423,6 +435,17 @@ export function EditorView({ id }: { id: string }) {
       }
 
       if (place !== 'canvas') return;
+
+      // 1b. If a table is selected on the canvas and clipboard holds spreadsheet TSV/HTML, paste into it.
+      const selObj = currentObject();
+      if (selObj?.type === 'shape' && selObj.table && !selObj.locked) {
+        const html = e.clipboardData?.getData('text/html') ?? '';
+        const plain = e.clipboardData?.getData('text/plain') ?? '';
+        if (pasteTableFromClipboard(selObj.id, st.cell, html, plain)) {
+          e.preventDefault();
+          return;
+        }
+      }
 
       // 2. Check for an image file/blob in the clipboard (e.g. screenshot or copied image).
       const items = [...(e.clipboardData?.items ?? [])];
@@ -457,10 +480,22 @@ export function EditorView({ id }: { id: string }) {
         return;
       }
 
-      // 4. Check for rich or plain text pasted directly onto the slide canvas -> create a new TextObject.
+      // 4. Check for tabular spreadsheet data pasted onto the slide -> create a new Table.
       const html = e.clipboardData?.getData('text/html') ?? '';
       const plain = e.clipboardData?.getData('text/plain') ?? '';
       const curTheme = themeOf(st.draft, useLibrary.getState().data.themes);
+      const pastedMatrix = parseTableClipboard(html, plain);
+      if (pastedMatrix) {
+        e.preventDefault();
+        addToSlide(st.slideId, newTable(curTheme, { cells: pastedMatrix }));
+        toast(
+          `Inserted ${pastedMatrix.length}×${Math.max(...pastedMatrix.map((r) => r.length))} table from clipboard`,
+          'ok',
+        );
+        return;
+      }
+
+      // 5. Check for rich or plain text pasted directly onto the slide canvas -> create a new TextObject.
       const richSlice =
         (html && htmlToRichText(html, curTheme.textBoxDefaults)) || (plain ? { text: plain } : null);
       if (richSlice?.text.trim()) {
@@ -844,6 +879,14 @@ export function EditorView({ id }: { id: string }) {
                     },
                   },
                 ]}
+              />
+              <TableInsertPicker
+                theme={theme}
+                disabled={readOnly || !slide}
+                onInsert={(t) => {
+                  setStageLens('canvas');
+                  add(t);
+                }}
               />
               <button
                 type="button"

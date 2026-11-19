@@ -17,4 +17,5 @@ export * from './common.ts';
 export * from './group.ts';
 export * from './pictures.ts';
 export * from './slides.ts';
+export * from './table.ts';
 export * from './text.ts';

@@ -19,7 +19,7 @@ jobs:
   check:
     name: Lint, types, unit tests, build
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -28,7 +28,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: System tools for the media pipeline and bundled fonts
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
+        run: |
+          sudo sed -i -E 's|https?://[^/]+\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
@@ -68,7 +70,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: System tools for the media pipeline and bundled fonts
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
+        run: |
+          sudo sed -i -E 's|https?://[^/]+\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm build:pages
@@ -96,7 +100,7 @@ jobs:
   e2e-phones:
     name: End-to-end, phones and Android tablet
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -105,7 +109,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: System tools for the media pipeline and bundled fonts
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
+        run: |
+          sudo sed -i -E 's|https?://[^/]+\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm build:pages

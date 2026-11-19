@@ -11,6 +11,7 @@ import { errorText, toast } from '../../state/toasts.ts';
 import { History } from './history.ts';
 import { type MergeConflict, prepareMerge, same, theirsOf } from './merge.ts';
 import { getSlide } from './ops.ts';
+import type { TableRange } from './ops/table.ts';
 import type { Guides } from './snapping.ts';
 
 export type CanvasTextSelection = {
@@ -55,6 +56,11 @@ export type EditorState = {
    * table bar and panel edit. Undefined: the whole table (or no table).
    */
   cell?: number;
+  /**
+   * Optional multi-cell rectangular selection range of the primary table (`r0..r1`, `c0..c1`, inclusive).
+   * When set, formatting, cell fill, borders, merge, and Delete apply to all cells in this range.
+   */
+  cellRange?: TableRange;
   inlineEditingId?: string;
   /**
    * With `inlineEditingId` a table's id: the cell edited on the canvas. The inline target is
@@ -98,7 +104,10 @@ export function startInlineEditing(
   range?: { start: number; end: number; caret?: number },
   cell?: number,
 ): void {
-  const at = cell === undefined ? { inlineEditingCell: undefined } : { inlineEditingCell: cell, cell };
+  const at =
+    cell === undefined
+      ? { inlineEditingCell: undefined, cellRange: undefined }
+      : { inlineEditingCell: cell, cell, cellRange: undefined };
   if (range) {
     const start = Math.max(0, Math.min(range.start, range.end));
     const end = Math.max(start, Math.max(range.start, range.end));
@@ -127,16 +136,33 @@ export function inlineTarget(s: EditorState = useEditor.getState()): TextTarget 
  */
 export function selectCell(objectId: string, cell: number | undefined): void {
   useEditor.setState((s) => {
-    const same = s.objectId === objectId && s.cell === cell;
+    const same = s.objectId === objectId && s.cell === cell && !s.cellRange;
     const editing = s.inlineEditingId === objectId && s.inlineEditingCell === cell && cell !== undefined;
     return {
       objectId,
       objectIds: [objectId],
       cell,
+      cellRange: undefined,
       inlineEditingId: editing ? s.inlineEditingId : undefined,
       inlineEditingCell: editing ? s.inlineEditingCell : undefined,
       textRange: same ? s.textRange : EMPTY_TEXT_RANGE,
     };
+  });
+}
+
+/**
+ * Select a rectangular cell range of table `objectId`, keeping `anchorCell` as the primary `cell`.
+ * Stops inline editing since multi-cell operations act on the range as a whole.
+ */
+export function selectCellRange(objectId: string, anchorCell: number, range: TableRange): void {
+  useEditor.setState({
+    objectId,
+    objectIds: [objectId],
+    cell: anchorCell,
+    cellRange: range,
+    inlineEditingId: undefined,
+    inlineEditingCell: undefined,
+    textRange: EMPTY_TEXT_RANGE,
   });
 }
 
@@ -167,6 +193,7 @@ export function openPresentation(p: Presentation): void {
     canUndo: false,
     canRedo: false,
     cell: undefined,
+    cellRange: undefined,
     inlineEditingId: undefined,
     inlineEditingCell: undefined,
     textRange: EMPTY_TEXT_RANGE,
@@ -222,6 +249,7 @@ function fixSelection(): void {
       objectId: undefined,
       objectIds: [],
       cell: undefined,
+      cellRange: undefined,
       inlineEditingId: undefined,
       inlineEditingCell: undefined,
     });
@@ -239,7 +267,19 @@ function fixSelection(): void {
     return o?.type === 'shape' && !!o.table && i! < o.table.cells.length;
   };
   const st = useEditor.getState();
-  if (st.cell !== undefined && !hasCell(st.objectId, st.cell)) useEditor.setState({ cell: undefined });
+  if (st.cell !== undefined && !hasCell(st.objectId, st.cell))
+    useEditor.setState({ cell: undefined, cellRange: undefined });
+  else if (st.cellRange) {
+    const o = st.objectId ? slide.objects.find((x) => x.id === st.objectId) : undefined;
+    if (
+      o?.type !== 'shape' ||
+      !o.table ||
+      st.cellRange.r1 >= o.table.rows.length ||
+      st.cellRange.c1 >= o.table.cols.length
+    ) {
+      useEditor.setState({ cellRange: undefined });
+    }
+  }
   if (st.inlineEditingCell !== undefined && !hasCell(st.inlineEditingId, st.inlineEditingCell))
     useEditor.setState({ inlineEditingId: undefined, inlineEditingCell: undefined });
 }
@@ -250,6 +290,7 @@ export function selectSlide(slideId: string | undefined): void {
     objectId: undefined,
     objectIds: [],
     cell: undefined,
+    cellRange: undefined,
     inlineEditingId: undefined,
     inlineEditingCell: undefined,
     textRange: EMPTY_TEXT_RANGE,
@@ -264,6 +305,7 @@ export function selectObject(objectId: string | undefined): void {
       objectId,
       objectIds: objectId ? [objectId] : [],
       cell: same ? s.cell : undefined,
+      cellRange: same ? s.cellRange : undefined,
       inlineEditingId: editing ? s.inlineEditingId : undefined,
       inlineEditingCell: editing ? s.inlineEditingCell : undefined,
       textRange: same ? s.textRange : EMPTY_TEXT_RANGE,
@@ -283,6 +325,7 @@ export function selectObjects(ids: readonly string[], primary?: string): void {
     objectId: first,
     objectIds: ordered,
     cell: ordered.length === 1 && first === s.objectId ? s.cell : undefined,
+    cellRange: ordered.length === 1 && first === s.objectId ? s.cellRange : undefined,
     inlineEditingId: undefined,
     inlineEditingCell: undefined,
     textRange: first && first === s.objectId ? s.textRange : EMPTY_TEXT_RANGE,
