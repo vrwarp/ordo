@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { SaveBar, useSettingsDraft } from './useSettingsDraft.tsx';
 
 export function MessagesPage() {
@@ -13,8 +14,39 @@ export function MessagesPage() {
         One-click messages in the operator view; Stream Deck and MIDI send them by index (1 = first).
       </p>
       {list.map((m, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: positional list
-        <div key={i} className="row">
+        <div
+          // biome-ignore lint/suspicious/noArrayIndexKey: positional list
+          key={i}
+          className="row"
+          onContextMenu={(e) =>
+            openContextMenu(e, [
+              {
+                label: 'Move up',
+                disabled: i === 0,
+                onSelect: () => set(list.map((x, k) => (k === i - 1 ? m : k === i ? list[i - 1]! : x))),
+              },
+              {
+                label: 'Move down',
+                disabled: i >= list.length - 1,
+                onSelect: () => set(list.map((x, k) => (k === i + 1 ? m : k === i ? list[i + 1]! : x))),
+              },
+              {
+                label: 'Duplicate',
+                onSelect: () => {
+                  const next = [...list];
+                  next.splice(i + 1, 0, m);
+                  set(next);
+                },
+              },
+              { kind: 'separator' },
+              {
+                label: 'Remove',
+                danger: true,
+                onSelect: () => set(list.filter((_, k) => k !== i)),
+              },
+            ])
+          }
+        >
           <span className="muted" style={{ width: 20 }}>
             {i + 1}
           </span>

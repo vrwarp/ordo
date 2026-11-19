@@ -1,6 +1,7 @@
 import { SVG_HEAD_BYTES, type SlideObject } from '@ordo/domain';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FindReplaceDialog } from './FindReplaceDialog.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { ErrorBoundary, PaneError } from '../../components/ErrorBoundary.tsx';
 import { DeckSwatchesSource, type SwatchSource } from '../../components/deckSwatches.ts';
 import { installKeepVisible } from '../../components/keepVisible.ts';
@@ -36,6 +37,7 @@ import {
   pasteTableFromClipboard,
   readSystemClipboard,
   replaceBackgroundWith,
+  replacePictureWith,
   reorderSelection,
   tryPasteObjectsFromClipboard,
   tryPasteSlidesFromClipboard,
@@ -49,10 +51,11 @@ import { treatAsSlides } from '../../lib/pptxImport.ts';
 import { uploadFiles } from '../library/MediaTab.tsx';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { ConflictDialog } from './ConflictDialog.tsx';
+import { buildCanvasContextMenu } from './editorContextMenu.ts';
 import { canEditorClipboard, historyKey, keyPlace, slideNavKey, stepSlide } from './editorKeys.ts';
 import { FloatingContextBar } from './FloatingContextBar.tsx';
 import { LookPreviews, SingleLookStagePreview } from './LookPreviews.tsx';
-import { addVideo, newVideo } from './mediaOps.ts';
+import { addVideo, newVideo, replaceVideo } from './mediaOps.ts';
 import {
   adoptJobSaves,
   change,
@@ -72,7 +75,7 @@ import {
 // `window.__ordo.editor`, read by the end-to-end specs (e2e/editorhelpers.ts).
 import './inspect.ts';
 import { ObjectPanel } from './ObjectPanel.tsx';
-import { getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
+import { getSlide, newImage, newShape, newText, themeOf, updateObject, type ZOrder } from './ops.ts';
 import { hasGroup, htmlToRichText, newTable, parseTableClipboard, pasteRichText } from './ops/index.ts';
 import { SpeakerNotesDock } from './SpeakerNotesDock.tsx';
 
@@ -600,22 +603,8 @@ export function EditorView({ id }: { id: string }) {
     };
   }, [readOnly, pasteClipboardPayload]);
 
-  const [canvasMenu, setCanvasMenu] = useState<{ x: number; y: number } | null>(null);
-  useEffect(() => {
-    if (!canvasMenu) return;
-    const close = () => setCanvasMenu(null);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
-    };
-    window.addEventListener('pointerdown', close);
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', close, true);
-    return () => {
-      window.removeEventListener('pointerdown', close);
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', close, true);
-    };
-  }, [canvasMenu]);
+  const [replacePicId, setReplacePicId] = useState<string | null>(null);
+  const [replaceVidId, setReplaceVidId] = useState<string | null>(null);
 
   const pasteFromUi = async (plainOnly = false) => {
     if (readOnly) return;
@@ -1314,162 +1303,42 @@ export function EditorView({ id }: { id: string }) {
                       ) : undefined
                     }
                     slideRect={p.source?.native?.slideRect}
-                    onCanvasContextMenu={(pos) => setCanvasMenu(pos)}
+                    onCanvasContextMenu={(e) => {
+                      const st = useEditor.getState();
+                      openContextMenu(
+                        e,
+                        buildCanvasContextMenu({
+                          p,
+                          slide,
+                          theme,
+                          readOnly,
+                          objectIds: st.objectIds,
+                          primaryId: st.objectId,
+                          cell: st.cell,
+                          cellRange: st.cellRange,
+                          mediaLookup: media,
+                          onPaste: (plainOnly) => void pasteFromUi(plainOnly),
+                          onEditText: (objectId) => editText(objectId),
+                          onOpenInspector: (t) => {
+                            setTab(t);
+                            setDrawerOpen(true);
+                          },
+                          onOpenBackgroundPicker: () => setBgPick(true),
+                          onOpenImagePicker: () => setImagePick(true),
+                          onOpenVideoPicker: () => setVideoPick(true),
+                          onReplacePicture: (objectId) => setReplacePicId(objectId),
+                          onReplaceVideo: (objectId) => setReplaceVidId(objectId),
+                          onAddObject: add,
+                          onToast: (msg, tone) => toast(msg, tone),
+                        }),
+                        { ariaLabel: 'Canvas actions' },
+                      );
+                    }}
                   />
                 )}
               </ErrorBoundary>
             ) : (
               <div className="center muted">Add a slide to start.</div>
-            )}
-            {canvasMenu && slide && (
-              <div
-                role="menu"
-                aria-label="Canvas actions"
-                className="menu-pop"
-                style={{
-                  position: 'fixed',
-                  left: Math.min(canvasMenu.x, Math.max(8, window.innerWidth - 210)),
-                  top: Math.min(canvasMenu.y, Math.max(8, window.innerHeight - 280)),
-                  zIndex: 1200,
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-              >
-                {obj ? (
-                  <>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={readOnly}
-                      onClick={() => {
-                        setCanvasMenu(null);
-                        if (obj.type === 'shape' && obj.table && (ed.cell !== undefined || ed.cellRange)) {
-                          cutTableCellSelection();
-                        } else {
-                          cutSelection();
-                        }
-                      }}
-                    >
-                      ✂ Cut
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setCanvasMenu(null);
-                        if (obj.type === 'shape' && obj.table && (ed.cell !== undefined || ed.cellRange)) {
-                          copyTableCellSelection();
-                        } else {
-                          copySelection();
-                        }
-                      }}
-                    >
-                      ⎘ Copy
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={readOnly}
-                      onClick={() => {
-                        setCanvasMenu(null);
-                        void pasteFromUi(false);
-                      }}
-                    >
-                      📋 Paste
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={readOnly}
-                      onClick={() => {
-                        setCanvasMenu(null);
-                        duplicateSelection();
-                      }}
-                    >
-                      ⧉ Duplicate
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={readOnly}
-                      onClick={() => {
-                        setCanvasMenu(null);
-                        reorderSelection('front');
-                      }}
-                    >
-                      ⤒ Bring to front
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={readOnly}
-                      onClick={() => {
-                        setCanvasMenu(null);
-                        reorderSelection('back');
-                      }}
-                    >
-                      ⤓ Send to back
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="danger"
-                      disabled={readOnly}
-                      onClick={() => {
-                        setCanvasMenu(null);
-                        deleteSelection();
-                      }}
-                    >
-                      🗑 Delete
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={readOnly}
-                      onClick={() => {
-                        setCanvasMenu(null);
-                        void pasteFromUi(false);
-                      }}
-                    >
-                      📋 Paste
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={readOnly}
-                      onClick={() => {
-                        setCanvasMenu(null);
-                        void pasteFromUi(true);
-                      }}
-                    >
-                      Paste as plain text
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setCanvasMenu(null);
-                        copySlideSelection();
-                      }}
-                    >
-                      ⎘ Copy slide
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={readOnly}
-                      onClick={() => {
-                        setCanvasMenu(null);
-                        cutSlideSelection();
-                      }}
-                    >
-                      ✂ Cut slide
-                    </button>
-                  </>
-                )}
-              </div>
             )}
 
             {/* Proposal A Docked Speaker Notes Bar right under the slide canvas */}
@@ -1660,6 +1529,29 @@ export function EditorView({ id }: { id: string }) {
                 'warn',
                 10000,
               );
+          }}
+        />
+      )}
+      {replacePicId && !readOnly && (
+        <MediaPickerDialog
+          title="Replace image"
+          kinds={['image']}
+          needsSize
+          onClose={() => setReplacePicId(null)}
+          onPick={(m) => {
+            replacePictureWith(replacePicId, m);
+            setReplacePicId(null);
+          }}
+        />
+      )}
+      {replaceVidId && slide && !readOnly && (
+        <MediaPickerDialog
+          title="Replace video"
+          kinds={['video']}
+          onClose={() => setReplaceVidId(null)}
+          onPick={(m) => {
+            change((q) => updateObject(q, slide.id, replaceVidId, (x) => replaceVideo(x, m)));
+            setReplaceVidId(null);
           }}
         />
       )}

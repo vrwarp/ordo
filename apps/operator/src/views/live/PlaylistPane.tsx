@@ -1,4 +1,5 @@
 import type { PlaylistItem } from '@ordo/domain';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
 import { itemGoTarget } from '../../lib/sections.ts';
@@ -90,6 +91,51 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
         onRowDoubleClick={(_it, i) => {
           const c = firstCueOf(i);
           if (c !== undefined) controller()?.go(c);
+        }}
+        onRowContextMenu={(e, it, i) => {
+          const first = firstCueOf(i);
+          openContextMenu(
+            e,
+            [
+              {
+                label: 'Go to first cue',
+                disabled: first === undefined,
+                onSelect: () => {
+                  if (first !== undefined) controller()?.go(first);
+                },
+              },
+              {
+                label: 'Arm first cue',
+                disabled: first === undefined,
+                onSelect: () => {
+                  if (first !== undefined) controller()?.select(first);
+                },
+              },
+              {
+                label: 'Scroll to item',
+                onSelect: () => requestScrollToPlaylistItem(i),
+              },
+              ...(it.kind === 'presentation'
+                ? [
+                    { kind: 'separator' as const },
+                    {
+                      label: 'Edit presentation…',
+                      onSelect: () => navigate({ name: 'edit', id: it.presentationId }),
+                    },
+                  ]
+                : []),
+              ...(op.playlist
+                ? [
+                    { kind: 'separator' as const },
+                    {
+                      label: op.live ? 'View playlist…' : 'Edit playlist…',
+                      onSelect: () => navigate({ name: 'playlists', id: op.playlist!.id }),
+                    },
+                  ]
+                : []),
+            ],
+            { ariaLabel: `${itemTitle(it, op)} actions` },
+          );
         }}
         render={(it, i) => {
           const isItemLive = op.live && i === liveItem;

@@ -1,11 +1,12 @@
 import { api, ApiFailure } from '@ordo/client';
-import { DEFAULT_THEME, newId, type Presentation, type PresentationKind } from '@ordo/domain';
+import { DEFAULT_THEME, newId, type Playlist, type Presentation, type PresentationKind } from '@ordo/domain';
 import type { Folder } from '@ordo/protocol';
 import { useMemo, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { SlidePreviewRoll } from '../../components/SlidePreviewRoll.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
-import { useLockedIds } from '../../hooks.ts';
+import { useLivePlaylistId, useLockedIds } from '../../hooks.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
 import { useSearch } from '../../services/search.ts';
 import { errorText, toast } from '../../state/toasts.ts';
@@ -131,6 +132,18 @@ function FolderSide(props: {
           key={f.id}
           className={`link ${folderId === f.id ? 'active' : ''}`}
           onClick={() => setUi({ libraryFolderId: f.id })}
+          onContextMenu={(e) => {
+            openContextMenu(
+              e,
+              [
+                { label: 'Open folder', onSelect: () => setUi({ libraryFolderId: f.id }) },
+                { label: 'Rename folder…', onSelect: () => void rename(f) },
+                { kind: 'separator' },
+                { label: 'Delete folder…', danger: true, onSelect: () => void del(f) },
+              ],
+              { ariaLabel: `Folder ${f.name} actions` },
+            );
+          }}
         >
           <span className="grow ellipsis">📁 {f.name}</span>
           <button
@@ -230,6 +243,44 @@ export function PresentationsTab() {
     }
   };
 
+  const livePlaylistId = useLivePlaylistId();
+  const duplicatePresentation = async (p: Presentation) => {
+    try {
+      const copy: Presentation = {
+        ...structuredClone(p),
+        id: newId(),
+        rev: 1,
+        title: `${p.title} (copy)`,
+      };
+      const saved = await api<Presentation>('/presentations', { method: 'POST', json: copy });
+      upsertLocal('presentations', saved);
+      toast(`Duplicated as “${saved.title}”.`, 'ok');
+    } catch (e) {
+      toast(`Could not duplicate: ${explainSaveError(e)}`, 'error');
+    }
+  };
+  const addToPlaylist = async (p: Presentation, pl: Playlist) => {
+    try {
+      const next: Playlist = {
+        ...pl,
+        items: [
+          ...pl.items,
+          {
+            id: newId(),
+            kind: 'presentation',
+            presentationId: p.id,
+            arrangementId: p.arrangements[0]?.id,
+          },
+        ],
+      };
+      const saved = await api<Playlist>(`/playlists/${pl.id}`, { method: 'PUT', json: next });
+      upsertLocal('playlists', saved);
+      toast(`Added “${p.title}” to ${pl.name}.`, 'ok');
+    } catch (e) {
+      toast(`Could not add to playlist: ${errorText(e)}`, 'error');
+    }
+  };
+
   return (
     <div className="split">
       <FolderSide folders={folders} tags={tags} tag={tag} setTag={setTag} />
@@ -258,6 +309,71 @@ export function PresentationsTab() {
           rowHeight={(p) => (expandedId === p.id ? 420 : 52)}
           rowClass={(p) => (expandedId === p.id ? 'expanded' : '')}
           keyOf={(p) => p.id}
+          onRowContextMenu={(e, p) => {
+            const isLocked = locked.has(p.id);
+            const isExpanded = expandedId === p.id;
+            const editablePlaylists = lib.playlists.filter((pl) => pl.id !== livePlaylistId);
+            openContextMenu(
+              e,
+              [
+                { label: 'Edit presentation', onSelect: () => navigate({ name: 'edit', id: p.id }) },
+                {
+                  label: isExpanded ? 'Collapse slide preview' : 'Preview slides',
+                  onSelect: () => setExpandedId(isExpanded ? null : p.id),
+                },
+                { label: 'Duplicate', onSelect: () => void duplicatePresentation(p) },
+                { kind: 'separator' },
+                ...(folders.length > 0
+                  ? [
+                      {
+                        kind: 'submenu' as const,
+                        label: 'Move to folder',
+                        disabled: isLocked,
+                        items: [
+                          {
+                            label: 'No folder',
+                            checked: !p.folderId,
+                            disabled: isLocked,
+                            onSelect: () => move(p, ''),
+                          },
+                          ...folders.map((f) => ({
+                            label: f.name,
+                            checked: p.folderId === f.id,
+                            disabled: isLocked,
+                            onSelect: () => move(p, f.id),
+                          })),
+                        ],
+                      },
+                    ]
+                  : []),
+                ...(editablePlaylists.length > 0
+                  ? [
+                      {
+                        kind: 'submenu' as const,
+                        label: 'Add to playlist',
+                        items: editablePlaylists.map((pl) => ({
+                          label: pl.name,
+                          onSelect: () => void addToPlaylist(p, pl),
+                        })),
+                      },
+                    ]
+                  : []),
+                {
+                  label: p.archived ? 'Unarchive' : 'Archive',
+                  disabled: isLocked,
+                  onSelect: () => setArchived(p, !p.archived),
+                },
+                { kind: 'separator' },
+                {
+                  label: 'Delete…',
+                  danger: true,
+                  disabled: isLocked,
+                  onSelect: () => void del(p),
+                },
+              ],
+              { ariaLabel: `${p.title} actions` },
+            );
+          }}
           onRowDoubleClick={(p) => navigate({ name: 'edit', id: p.id })}
           render={(p) => {
             const isExpanded = expandedId === p.id;

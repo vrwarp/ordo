@@ -1,13 +1,16 @@
 import { DEMO } from '@ordo/client';
 import type { Look, Media, Presentation, Slide } from '@ordo/domain';
 import { useEffect, useRef, useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { useMediaLookup } from '../../hooks.ts';
 import { dotTitle, outputDot } from '../../lib/health.ts';
+import { navigate } from '../../useRoute.ts';
 import { lookPreviewJob } from '../editor/LookPreviews.tsx';
 import { thumbs } from '../../services/thumbs.ts';
 import { useProgram } from '../../services/programView.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
+import { setUi } from '../../state/ui.ts';
 
 function PvVideo({ stream }: { stream?: MediaStream }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -108,7 +111,24 @@ export function ProgramView() {
         const look =
           state.resolved?.looks?.find((l) => l.id === o.lookId) ?? looks.find((l) => l.id === o.lookId);
         return (
-          <div key={o.id} className="pv" title={dotTitle(h, o.name)}>
+          <div
+            key={o.id}
+            className="pv"
+            title={dotTitle(h, o.name)}
+            onContextMenu={(e) => {
+              openContextMenu(
+                e,
+                [
+                  { kind: 'label', label: `${o.name}${look ? ` · ${look.name}` : ''}` },
+                  { label: 'Open diagnostics…', onSelect: () => setUi({ showDiagnostics: true }) },
+                  { kind: 'separator' },
+                  { label: 'Configure outputs…', onSelect: () => navigate('#/settings/outputs') },
+                  { label: 'Configure looks…', onSelect: () => navigate('#/settings/looks') },
+                ],
+                { ariaLabel: `${o.name} preview actions` },
+              );
+            }}
+          >
             <PvVideo stream={p?.stream} />
             {!p?.stream &&
               (presentation && slide ? (

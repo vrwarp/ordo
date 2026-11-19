@@ -2,6 +2,7 @@ import { api, upload } from '@ordo/client';
 import type { Font } from '@ordo/domain';
 import { useMemo, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { GoogleFontsDialog } from '../../components/FontPicker.tsx';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
 import { errorText, toast } from '../../state/toasts.ts';
@@ -85,7 +86,45 @@ export function FontsTab() {
         </thead>
         <tbody>
           {families.map(([family, list]) => (
-            <tr key={family}>
+            <tr
+              key={family}
+              onContextMenu={(e) => {
+                openContextMenu(
+                  e,
+                  [
+                    {
+                      label: 'Copy font family name',
+                      onSelect: () => void navigator.clipboard?.writeText?.(family),
+                    },
+                    { kind: 'separator' },
+                    {
+                      label: `Delete all ${list.length} ${list.length === 1 ? 'style' : 'styles'}…`,
+                      danger: true,
+                      onSelect: async () => {
+                        if (
+                          !(await confirmDialog(
+                            'Delete font family',
+                            `Delete all ${list.length} styles of “${family}”? Text using it falls back to another font.`,
+                            'Delete',
+                            true,
+                          ))
+                        )
+                          return;
+                        for (const f of list) {
+                          try {
+                            await api(`/fonts/${f.id}`, { method: 'DELETE' });
+                            removeLocal('fonts', f.id);
+                          } catch (err) {
+                            toast(errorText(err), 'error');
+                          }
+                        }
+                      },
+                    },
+                  ],
+                  { ariaLabel: `${family} font family actions` },
+                );
+              }}
+            >
               <td style={{ fontFamily: family, fontSize: 18 }}>{family}</td>
               <td>
                 <div className="row wrap" style={{ gap: 4 }}>

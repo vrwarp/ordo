@@ -1,8 +1,10 @@
 import { type ActionId, newId, type PlaylistItem } from '@ordo/domain';
 import { useMemo, useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { SlidePreviewRoll } from '../../components/SlidePreviewRoll.tsx';
 import { Select } from '../../components/fields.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
+import { navigate } from '../../useRoute.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useSearch } from '../../services/search.ts';
 import { stateTag } from '../library/MediaTab.tsx';
@@ -61,6 +63,76 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
         rowHeight={(d) => (d.kind === 'presentation' && expandedId === d.id ? 390 : 46)}
         rowClass={(d) => (d.kind === 'presentation' && expandedId === d.id ? 'expanded' : '')}
         keyOf={(d) => d.id}
+        onRowContextMenu={(e, d) => {
+          if (d.kind === 'presentation') {
+            const p = pres.get(d.id);
+            if (!p) return;
+            const isExpanded = expandedId === p.id;
+            openContextMenu(
+              e,
+              [
+                {
+                  label: 'Add to playlist',
+                  onSelect: () =>
+                    onAdd([
+                      {
+                        id: newId(),
+                        kind: 'presentation',
+                        presentationId: p.id,
+                        arrangementId: p.arrangements[0]?.id,
+                      },
+                    ]),
+                },
+                ...(p.arrangements.length > 0
+                  ? [
+                      {
+                        kind: 'submenu' as const,
+                        label: 'Add with arrangement',
+                        items: p.arrangements.map((a) => ({
+                          label: a.name,
+                          onSelect: () =>
+                            onAdd([
+                              {
+                                id: newId(),
+                                kind: 'presentation',
+                                presentationId: p.id,
+                                arrangementId: a.id,
+                              },
+                            ]),
+                        })),
+                      },
+                    ]
+                  : []),
+                { kind: 'separator' },
+                {
+                  label: isExpanded ? 'Collapse slide preview' : 'Preview slides',
+                  onSelect: () => {
+                    setExpandedId(isExpanded ? null : p.id);
+                    setPreviewArrId(p.arrangements[0]?.id ?? '');
+                  },
+                },
+                {
+                  label: 'Edit presentation…',
+                  onSelect: () => navigate(`#/edit/${p.id}`),
+                },
+              ],
+              { ariaLabel: `${p.title} actions` },
+            );
+            return;
+          }
+          const m = media.get(d.id);
+          if (!m) return;
+          openContextMenu(
+            e,
+            [
+              {
+                label: 'Add to playlist',
+                onSelect: () => onAdd([{ id: newId(), kind: 'media', mediaId: m.id }]),
+              },
+            ],
+            { ariaLabel: `${m.name} actions` },
+          );
+        }}
         render={(d) => {
           if (d.kind === 'presentation') {
             const p = pres.get(d.id);

@@ -1,5 +1,6 @@
 import { type Arrangement, newId, type Presentation, type Section } from '@ordo/domain';
 import { type ReactNode, useMemo } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Menu } from '../../components/Menu.tsx';
 import { authoringArrangement } from '../../lib/arrangement.ts';
 import { useLibrary } from '../../state/library.ts';
@@ -236,7 +237,74 @@ export function SongReflowEditor(props: {
               const sec = p.sections.find((s) => s.id === secId);
               if (!sec) return null;
               return (
-                <span key={`${secId}#${occ}`} className="song-arr-pill">
+                <span
+                  key={`${secId}#${occ}`}
+                  className="song-arr-pill"
+                  onContextMenu={(e) => {
+                    openContextMenu(
+                      e,
+                      [
+                        {
+                          label: `Jump to ${sec.label}`,
+                          onSelect: () => {
+                            const targetEl = document.getElementById(`section-${secId}`);
+                            targetEl?.scrollIntoView({ behavior: 'smooth' });
+                          },
+                        },
+                        {
+                          label: 'Duplicate step in arrangement',
+                          disabled: readOnly,
+                          onSelect: () => {
+                            const next = [...activeArrangement.sectionIds];
+                            next.splice(arrIdx + 1, 0, secId);
+                            setArrangementSections(next);
+                          },
+                        },
+                        ...(arrIdx > 0
+                          ? [
+                              {
+                                label: 'Move step left',
+                                disabled: readOnly,
+                                onSelect: () => {
+                                  const next = [...activeArrangement.sectionIds];
+                                  [next[arrIdx - 1], next[arrIdx]] = [next[arrIdx]!, next[arrIdx - 1]!];
+                                  setArrangementSections(next);
+                                },
+                              },
+                            ]
+                          : []),
+                        ...(arrIdx < activeArrangement.sectionIds.length - 1
+                          ? [
+                              {
+                                label: 'Move step right',
+                                disabled: readOnly,
+                                onSelect: () => {
+                                  const next = [...activeArrangement.sectionIds];
+                                  [next[arrIdx], next[arrIdx + 1]] = [next[arrIdx + 1]!, next[arrIdx]!];
+                                  setArrangementSections(next);
+                                },
+                              },
+                            ]
+                          : []),
+                        ...(activeArrangement.sectionIds.length > 1
+                          ? [
+                              { kind: 'separator' as const },
+                              {
+                                label: 'Remove step from arrangement',
+                                danger: true,
+                                disabled: readOnly,
+                                onSelect: () =>
+                                  setArrangementSections(
+                                    activeArrangement.sectionIds.filter((_, j) => j !== arrIdx),
+                                  ),
+                              },
+                            ]
+                          : []),
+                      ],
+                      { ariaLabel: `${sec.label} arrangement step actions` },
+                    );
+                  }}
+                >
                   <button
                     type="button"
                     className="song-arr-jump"
@@ -308,7 +376,34 @@ export function SongReflowEditor(props: {
               }}
             >
               {/* Section Header */}
-              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <div
+                className="row"
+                style={{ justifyContent: 'space-between', alignItems: 'center' }}
+                onContextMenu={(e) => {
+                  openContextMenu(
+                    e,
+                    [
+                      {
+                        label: 'Add to arrangement',
+                        disabled: readOnly,
+                        onSelect: () => setArrangementSections([...activeArrangement.sectionIds, sec.id]),
+                      },
+                      ...(p.sections.length > 1
+                        ? [
+                            { kind: 'separator' as const },
+                            {
+                              label: 'Delete section',
+                              danger: true,
+                              disabled: readOnly,
+                              onSelect: () => removeSection(sec.id),
+                            },
+                          ]
+                        : []),
+                    ],
+                    { ariaLabel: `${sec.label} section actions` },
+                  );
+                }}
+              >
                 <div className="row" style={{ alignItems: 'center', gap: 8 }}>
                   <input
                     type="text"

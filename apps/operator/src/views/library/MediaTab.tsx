@@ -3,6 +3,7 @@ import { formatDuration, type Media } from '@ordo/domain';
 import { PreviewPlayer } from '@ordo/audio';
 import { useMemo, useRef, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Dialog } from '../../components/Dialog.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLockedIds } from '../../hooks.ts';
@@ -323,6 +324,56 @@ export function MediaTab() {
         items={list}
         rowHeight={coarse ? 76 : 64}
         keyOf={(m) => m.id}
+        onRowContextMenu={(e, m) => {
+          openContextMenu(
+            e,
+            [
+              { label: 'Preview', onSelect: () => setPreviewing(m) },
+              ...(m.kind !== 'image'
+                ? [
+                    {
+                      label: playing === m.id ? 'Stop audio preview' : 'Audition audio',
+                      onSelect: () => void audition(m),
+                    },
+                  ]
+                : []),
+              { kind: 'separator' },
+              ...(m.kind !== 'audio'
+                ? [
+                    {
+                      label: 'Show in background picker',
+                      checked: m.isBackground,
+                      onSelect: () => void patch(m, { isBackground: !m.isBackground }),
+                    },
+                  ]
+                : []),
+              ...(m.kind !== 'image'
+                ? [
+                    {
+                      label: 'Loop playback',
+                      checked: m.loop,
+                      onSelect: () => void patch(m, { loop: !m.loop }),
+                    },
+                  ]
+                : []),
+              ...(m.state === 'failed'
+                ? [
+                    { kind: 'separator' as const },
+                    {
+                      label: 'Retry processing',
+                      onSelect: () =>
+                        void api(`/media/${m.id}/retry`, { method: 'POST' }).catch((err) =>
+                          toast(errorText(err), 'error'),
+                        ),
+                    },
+                  ]
+                : []),
+              { kind: 'separator' },
+              { label: 'Delete…', danger: true, onSelect: () => void del(m) },
+            ],
+            { ariaLabel: `${m.name} media actions` },
+          );
+        }}
         render={(m) => {
           const still = tileHash(m);
           const note = svgNote(m);

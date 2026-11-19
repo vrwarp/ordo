@@ -1,9 +1,11 @@
 import { api, ApiFailure, DEMO } from '@ordo/client';
 import { type Arrangement, newId, type Playlist, type PlaylistItem } from '@ordo/domain';
 import { useEffect, useRef, useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { moveItem } from '../../lib/arrangement.ts';
 import { deviceProfile } from '../../lib/capabilities.ts';
+import { navigate } from '../../useRoute.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import { currentRole } from '../../state/session.ts';
@@ -229,6 +231,87 @@ export function PlaylistEditor(props: {
               data-playlist-item={it.id}
               className={`pl-item ${it.id === sel ? 'sel' : ''} ${sort.cls(i)}`}
               onClick={() => setSel(it.id)}
+              onContextMenu={(e) => {
+                setSel(it.id);
+                const locked = props.locked;
+                openContextMenu(
+                  e,
+                  [
+                    ...(it.kind === 'presentation'
+                      ? [
+                          {
+                            label: 'Edit presentation…',
+                            onSelect: () => navigate(`#/edit/${it.presentationId}`),
+                          },
+                          { kind: 'separator' as const },
+                        ]
+                      : []),
+                    {
+                      label: 'Duplicate item',
+                      disabled: locked,
+                      onSelect: () => {
+                        const copy = { ...structuredClone(it), id: newId() };
+                        update((p) => {
+                          const list = [...p.items];
+                          list.splice(i + 1, 0, copy);
+                          return { ...p, items: list };
+                        });
+                        setSel(copy.id);
+                      },
+                    },
+                    ...(it.kind === 'presentation' && it.backgroundMediaId
+                      ? [
+                          {
+                            label: 'Clear background override',
+                            disabled: locked,
+                            onSelect: () =>
+                              setItem(it.id, (x) =>
+                                x.kind === 'presentation' ? { ...x, backgroundMediaId: undefined } : x,
+                              ),
+                          },
+                        ]
+                      : []),
+                    { kind: 'separator' },
+                    ...(i > 0
+                      ? [
+                          {
+                            label: 'Move to top',
+                            disabled: locked,
+                            onSelect: () => update((p) => ({ ...p, items: moveItem(p.items, i, 0) })),
+                          },
+                          {
+                            label: 'Move up',
+                            disabled: locked,
+                            onSelect: () => update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) })),
+                          },
+                        ]
+                      : []),
+                    ...(i < draft.items.length - 1
+                      ? [
+                          {
+                            label: 'Move down',
+                            disabled: locked,
+                            onSelect: () => update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) })),
+                          },
+                          {
+                            label: 'Move to bottom',
+                            disabled: locked,
+                            onSelect: () =>
+                              update((p) => ({ ...p, items: moveItem(p.items, i, p.items.length - 1) })),
+                          },
+                        ]
+                      : []),
+                    { kind: 'separator' },
+                    {
+                      label: 'Remove from playlist',
+                      danger: true,
+                      disabled: locked,
+                      onSelect: () => update((p) => ({ ...p, items: p.items.filter((x) => x.id !== it.id) })),
+                    },
+                  ],
+                  { ariaLabel: `${itemTitle(it, op)} actions` },
+                );
+              }}
               style={{ cursor: props.locked ? 'pointer' : 'grab' }}
             >
               <DragHandle label="Drag to reorder" disabled={props.locked} {...sort.handle(i)} />

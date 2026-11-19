@@ -2,6 +2,7 @@ import { formatDuration } from '@ordo/domain';
 import { mediaPlayTarget, pendingSlideSound } from '@ordo/live-state';
 import type { OutputHealthEntry } from '@ordo/protocol';
 import { useMemo } from 'react';
+import { type ContextMenuEntry, openContextMenu } from '../../components/ContextMenu.tsx';
 import { useHubNow } from '../../hooks.ts';
 import { HoldGuard } from '../../lib/confirm.ts';
 import { mediaTimes } from '../../lib/mediaTimes.ts';
@@ -11,9 +12,34 @@ import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import type { OperatorPlaylist } from './useOperatorPlaylist.ts';
 
-function Chip(props: { label: string; value?: string; on: boolean; onClear: () => void; keyHint?: string }) {
+function Chip(props: {
+  label: string;
+  value?: string;
+  on: boolean;
+  onClear: () => void;
+  keyHint?: string;
+  extraMenu?: ContextMenuEntry[];
+}) {
   return (
-    <div className={`chip ${props.on ? 'on' : ''}`}>
+    <div
+      className={`chip ${props.on ? 'on' : ''}`}
+      onContextMenu={(e) => {
+        openContextMenu(
+          e,
+          [
+            ...(props.extraMenu ?? []),
+            ...(props.extraMenu?.length ? [{ kind: 'separator' as const }] : []),
+            {
+              label: `Clear ${props.label.toLowerCase()}`,
+              shortcut: props.keyHint,
+              disabled: !props.on,
+              onSelect: props.onClear,
+            },
+          ],
+          { ariaLabel: `${props.label} layer actions` },
+        );
+      }}
+    >
       <span className="lbl">{props.label}</span>
       <span className="val ellipsis">{props.value ?? '—'}</span>
       <button
@@ -104,6 +130,20 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
         }
         on={!!mediaC || !!audioC}
         onClear={() => (mediaC ? ctl?.clear('media') : ctl?.clear('audio'))}
+        extraMenu={[
+          {
+            label: playing ? 'Pause' : 'Play',
+            shortcut: 'F8',
+            disabled: !target,
+            onSelect: () => dispatch({ id: 'mediaPlayPause' }),
+          },
+          {
+            label: 'Restart from beginning',
+            shortcut: 'Shift+F8',
+            disabled: !mediaC && !audioC && !waiting,
+            onSelect: () => dispatch({ id: 'mediaRestart' }),
+          },
+        ]}
       />
       <Chip
         label="Props"

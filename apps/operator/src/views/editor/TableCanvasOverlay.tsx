@@ -1,7 +1,9 @@
 import { type Box, placeCells, type ShapeObject, TABLE_LIMITS } from '@ordo/domain';
 import type { TableLayout } from '@ordo/renderer/table/layout.ts';
 import { useEffect, useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { canRowCol, moveTableCol, moveTableRow, resizeTableCol, resizeTableRow, rowCol } from './actions.ts';
+import { buildTableRailContextMenu } from './editorContextMenu.ts';
 import { selectCellRange } from './editorStore.ts';
 import { canMoveCol, canMoveRow, normalizeRange, type TableRange } from './ops/table.ts';
 
@@ -198,6 +200,16 @@ export function TableCanvasOverlay({
               e.stopPropagation();
               setReorderDrag({ axis: 'col', from: c, to: c, startClient: e.clientX, moved: false });
             }}
+            onContextMenu={(e) => {
+              e.stopPropagation();
+              openContextMenu(
+                e,
+                buildTableRailContextMenu({ o, axis: 'col', index: c, readOnly: !!o.locked }),
+                {
+                  ariaLabel: `Column ${c + 1} actions`,
+                },
+              );
+            }}
           >
             <span className="tbl-grip-dots" aria-hidden="true">
               ⠿
@@ -231,6 +243,16 @@ export function TableCanvasOverlay({
               e.preventDefault();
               e.stopPropagation();
               setReorderDrag({ axis: 'row', from: r, to: r, startClient: e.clientY, moved: false });
+            }}
+            onContextMenu={(e) => {
+              e.stopPropagation();
+              openContextMenu(
+                e,
+                buildTableRailContextMenu({ o, axis: 'row', index: r, readOnly: !!o.locked }),
+                {
+                  ariaLabel: `Row ${r + 1} actions`,
+                },
+              );
             }}
           >
             <span className="tbl-grip-dots" aria-hidden="true">

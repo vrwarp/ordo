@@ -12,6 +12,7 @@ import {
 } from '@ordo/domain';
 import { useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Check } from '../../components/fields.tsx';
 import { type ScreenInfo, toScreenRef } from '../../lib/screens.ts';
 import { outputWindows, useLaunch } from '../../services/outputs.ts';
@@ -381,7 +382,43 @@ export function OutputsPage() {
             : { label: 'Audience Sanctuary', color: '#3b82f6' };
 
         return (
-          <div key={o.id} className="card col" style={{ gap: 12 }}>
+          <div
+            key={o.id}
+            className="card col"
+            style={{ gap: 12 }}
+            onContextMenu={(e) =>
+              openContextMenu(e, [
+                {
+                  label: o.enabled ? 'Disable output' : 'Enable output',
+                  onSelect: () => setOutput(o.id, { enabled: !o.enabled }),
+                },
+                o.kind !== 'stage' && {
+                  label: 'Set as audio master',
+                  checked: o.audioMaster,
+                  onSelect: () => {
+                    const on = !o.audioMaster;
+                    setDraft((list) =>
+                      ensureAudioMaster(
+                        list.map((x) =>
+                          x.id === o.id
+                            ? { ...x, enabled: on ? true : x.enabled, audioMaster: on }
+                            : on
+                              ? { ...x, audioMaster: false }
+                              : x,
+                        ),
+                      ),
+                    );
+                  },
+                },
+                { kind: 'separator' },
+                {
+                  label: 'Remove output',
+                  danger: true,
+                  onSelect: () => setDraft(ensureAudioMaster(draft.filter((x) => x.id !== o.id))),
+                },
+              ])
+            }
+          >
             <div className="row wrap" style={{ alignItems: 'center' }}>
               <input
                 value={o.name}

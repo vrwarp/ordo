@@ -2,6 +2,7 @@ import { api } from '@ordo/client';
 import { type Box, DEFAULT_THEME, newId, type Theme } from '@ordo/domain';
 import { useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { FontPicker } from '../../components/FontPicker.tsx';
 import { AlignIcon, VAlignIcon, hexToRgb, rgbToHex } from '../../components/AlignIcons.tsx';
 import { removeLocal, saveSettings, upsertLocal, useLibrary } from '../../state/library.ts';
@@ -223,6 +224,27 @@ export function ThemesTab() {
                 <div
                   key={t.id}
                   className="card col"
+                  onContextMenu={(e) => {
+                    openContextMenu(
+                      e,
+                      [
+                        { label: 'Edit theme', onSelect: () => onStartEdit(t) },
+                        ...(!isDefault
+                          ? [{ label: 'Set as Church Default', onSelect: () => void makeDefault(t.id) }]
+                          : []),
+                        { label: 'Duplicate theme', onSelect: () => void duplicateTheme(t) },
+                        { label: 'Revision history…', onSelect: () => setHistoryTheme(t) },
+                        { kind: 'separator' },
+                        {
+                          label: 'Delete theme…',
+                          danger: true,
+                          disabled: t.id === DEFAULT_THEME.id,
+                          onSelect: () => void deleteTheme(t),
+                        },
+                      ],
+                      { ariaLabel: `${t.name} theme actions` },
+                    );
+                  }}
                   style={{
                     gap: 12,
                     padding: 14,

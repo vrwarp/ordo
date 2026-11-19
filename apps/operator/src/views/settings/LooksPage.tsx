@@ -15,6 +15,7 @@ import { drawSlide2D } from '@ordo/renderer';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ColorField } from '../../components/ColorField.tsx';
 import { confirmDialog } from '../../components/Confirm.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { BoxEditor, Check, Field, Select, TextField, TransitionEditor } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { useFontGeneration } from '../../services/fonts.ts';
@@ -166,6 +167,44 @@ export function LooksPage() {
             type="button"
             className={l.id === look.id ? 'on' : ''}
             onClick={() => setSelId(l.id)}
+            onContextMenu={(e) =>
+              openContextMenu(e, [
+                { label: 'Select', disabled: l.id === look.id, onSelect: () => setSelId(l.id) },
+                {
+                  label: 'Duplicate look',
+                  onSelect: () => {
+                    const copy = {
+                      ...structuredClone(l),
+                      id: newId(),
+                      name: `${l.name} copy`,
+                      kind: 'custom' as const,
+                    };
+                    setDraft([...draft, copy]);
+                    setSelId(copy.id);
+                  },
+                },
+                { kind: 'separator' },
+                {
+                  label: 'Delete look…',
+                  danger: true,
+                  disabled: draft.length <= 1,
+                  onSelect: async () => {
+                    if (
+                      await confirmDialog(
+                        'Delete look',
+                        `Delete “${l.name}”? Outputs using it must be given another look.`,
+                        'Delete',
+                        true,
+                      )
+                    ) {
+                      const next = draft.filter((x) => x.id !== l.id);
+                      setDraft(next);
+                      if (selId === l.id) setSelId(next[0]?.id);
+                    }
+                  },
+                },
+              ])
+            }
           >
             {l.name}
           </button>
