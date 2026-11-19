@@ -1,10 +1,11 @@
 import { ApiFailure, api, fileUrl } from '@ordo/client';
-import { formatDuration, type Media } from '@ordo/domain';
+import { formatDuration, type Media, type MidiTrigger } from '@ordo/domain';
 import { PreviewPlayer } from '@ordo/audio';
 import { useMemo, useRef, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Dialog } from '../../components/Dialog.tsx';
+import { midiTriggerBadge, shouldShowMidiUi } from '../../components/MidiTriggerPicker.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLockedIds } from '../../hooks.ts';
 import {
@@ -396,8 +397,27 @@ export function MediaTab() {
                 {!still && (m.kind === 'audio' ? '♫' : '▶')}
               </div>
               <span className="col grow" style={{ gap: 2 }}>
-                <span className="row" style={{ gap: 6 }}>
+                <span className="row" style={{ gap: 6, alignItems: 'center' }}>
                   <b className="ellipsis">{m.name}</b> {stateTag(m)} {locked.size > 0 && null}
+                  {m.midi &&
+                    (() => {
+                      const b = midiTriggerBadge(m.midi, lib.settings.surfaces.midiPresets);
+                      if (!b) return null;
+                      return (
+                        <span
+                          className="tag"
+                          title={`Linked lighting (when used as background): ${b.title}`}
+                          style={{
+                            fontSize: 10,
+                            padding: '1px 5px',
+                            borderLeft: b.color ? `3px solid ${b.color}` : undefined,
+                            color: b.missing ? 'var(--warn, #d97706)' : undefined,
+                          }}
+                        >
+                          ● {b.label}
+                        </span>
+                      );
+                    })()}
                 </span>
                 <span className="muted small">
                   {m.kind}
@@ -422,6 +442,37 @@ export function MediaTab() {
                   Background
                 </label>
               )}
+              {m.kind !== 'audio' &&
+                shouldShowMidiUi(lib.settings.surfaces, Boolean(m.midi)) &&
+                (() => {
+                  const midiPresets = lib.settings.surfaces.midiPresets ?? [];
+                  const selectedId = m.midi?.kind === 'preset' ? m.midi.presetId : '';
+                  const isCustom = m.midi?.kind === 'cues';
+                  const missing = Boolean(selectedId && !midiPresets.some((p) => p.id === selectedId));
+                  return (
+                    <select
+                      value={isCustom ? '__custom' : selectedId}
+                      title="Linked lighting (when used as background)"
+                      aria-label="Linked lighting (when used as background)"
+                      style={{ maxWidth: 150 }}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === '__custom') return;
+                        const nextMidi: MidiTrigger | null = v ? { kind: 'preset', presetId: v } : null;
+                        void patch(m, { midi: nextMidi });
+                      }}
+                    >
+                      <option value="">💡 Bg lighting: None</option>
+                      {midiPresets.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          💡 {p.name}
+                        </option>
+                      ))}
+                      {missing && <option value={selectedId}>(missing preset)</option>}
+                      {isCustom && <option value="__custom">Custom MIDI</option>}
+                    </select>
+                  );
+                })()}
               {m.kind !== 'image' && (
                 <label className="check small">
                   <input

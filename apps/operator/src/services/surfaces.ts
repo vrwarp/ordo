@@ -138,17 +138,36 @@ export class Surfaces {
       }),
       useLive.subscribe((st, prev) => {
         if (st.state !== prev.state || st.hubConnected !== prev.hubConnected) this.pushView(st.state);
-        if (prev.state.live !== st.state.live) {
+        // Suppress MIDI firing during initial hydration or WebSocket reconnect resync.
+        const fromSnapshot =
+          (!prev.everConnected && st.everConnected) ||
+          (!prev.hubConnected && st.hubConnected) ||
+          (prev.recovering && !st.recovering);
+        if (prev.state.live !== st.state.live && !fromSnapshot) {
           this.midi.cancelPendingCues();
         }
-        const cues = midiCuesOnChange(prev.state, st.state);
-        if (cues.length) {
-          const liveCue = st.state.live !== undefined ? st.state.cues[st.state.live] : undefined;
-          const label = liveCue?.label ? `Live: ${liveCue.label}` : 'Live slide';
-          this.midi.sendCues(cues, label);
+        const dispatches = midiCuesOnChange(prev.state, st.state, { fromSnapshot });
+        for (const d of dispatches) {
+          this.midi.sendCues([d.cue], d.source);
         }
       }),
     );
+  }
+
+  /** Fire a named venue MIDI preset immediately (reads live settings so emergency edits take effect mid-service). */
+  firePreset(presetId: string, origin = 'Live override'): boolean {
+    const presets = useLibrary.getState().data.settings.surfaces.midiPresets ?? [];
+    const preset = presets.find((p) => p.id === presetId || p.name.toLowerCase() === presetId.toLowerCase());
+    if (!preset) {
+      toast(`Lighting preset "${presetId}" not found.`, 'warn');
+      return false;
+    }
+    if (!useSurfaces.getState().midiReady) {
+      toast('Enable Web MIDI in Settings → MIDI first.', 'warn');
+      return false;
+    }
+    this.midi.sendCues(preset.cues, `${origin}: ${preset.name}`);
+    return true;
   }
 
   async start(): Promise<void> {

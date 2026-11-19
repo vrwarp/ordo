@@ -3,11 +3,12 @@ import { mediaPlayTarget, pendingSlideSound } from '@ordo/live-state';
 import type { OutputHealthEntry } from '@ordo/protocol';
 import { useMemo } from 'react';
 import { type ContextMenuEntry, openContextMenu } from '../../components/ContextMenu.tsx';
+import { Menu } from '../../components/Menu.tsx';
 import { useHubNow } from '../../hooks.ts';
 import { HoldGuard } from '../../lib/confirm.ts';
 import { mediaTimes } from '../../lib/mediaTimes.ts';
 import { controller, dispatch, MUTE_DB } from '../../services/controller.ts';
-import { CLEAR_HOLD_MS } from '../../services/surfaces.ts';
+import { CLEAR_HOLD_MS, useSurfaces } from '../../services/surfaces.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import type { OperatorPlaylist } from './useOperatorPlaylist.ts';
@@ -70,6 +71,8 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
   const clearUntil = useLive((x) => x.clearAllUntil);
   const audio = useLibrary((x) => x.data.settings.audio);
   const outputs = useLibrary((x) => x.data.settings.outputs);
+  const midiPresets = useLibrary((x) => x.data.settings.surfaces.midiPresets ?? []);
+  const midiReady = useSurfaces((x) => x.midiReady);
   const ctl = controller();
   const L = s.layers;
   const slideCue = L.slide.content ? s.cues[L.slide.content.cueIndex] : undefined;
@@ -221,6 +224,37 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
           </div>
         </div>
       </div>
+      {midiReady && midiPresets.length > 0 && (
+        <div className="chip" style={{ alignItems: 'center', gap: 6 }}>
+          <span className="lbl">Lights</span>
+          {midiPresets.length <= 4 ? (
+            <div className="row wrap" style={{ gap: 4 }}>
+              {midiPresets.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="small"
+                  title={`Fire lighting preset: ${p.name}`}
+                  style={{
+                    borderLeft: p.color ? `3px solid ${p.color}` : undefined,
+                  }}
+                  onClick={() => dispatch({ id: 'midiPreset', arg: p.id })}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <Menu
+              label="💡 Lights"
+              items={midiPresets.map((p) => ({
+                label: p.name,
+                onSelect: () => dispatch({ id: 'midiPreset', arg: p.id }),
+              }))}
+            />
+          )}
+        </div>
+      )}
       <button
         type="button"
         className={`big danger clear-all ${pending ? 'pending' : ''}`}

@@ -32,6 +32,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   audioFadeOut: 'Stop audio cue',
   launchOutputs: 'Launch outputs',
   relaunchOutputs: 'Relaunch outputs',
+  midiPreset: 'Fire MIDI / lighting preset',
 };
 
 export const ACTION_OPTIONS = (Object.keys(ACTION_LABELS) as ActionId[]).map((value) => ({
@@ -48,11 +49,12 @@ export const ACTIONS_WITH_ARG = new Set<ActionId>([
   'timerStart',
   'timerStop',
   'timerReset',
+  'midiPreset',
 ]);
 
 export function parseArg(id: ActionId, raw: string): number | string | undefined {
   if (!ACTIONS_WITH_ARG.has(id) || raw.trim() === '') return undefined;
-  if (id.startsWith('timer')) return raw.trim();
+  if (id.startsWith('timer') || id === 'midiPreset') return raw.trim();
   const n = Number(raw);
   return Number.isFinite(n) ? n : undefined;
 }

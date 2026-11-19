@@ -253,6 +253,9 @@ export class Controller {
       case 'audioMasterDown':
         void this.adjustMaster(-3);
         return;
+      case 'midiPreset':
+        void import('./surfaces.ts').then((m) => m.surfaces()?.firePreset(String(a.arg ?? ''), source));
+        return;
     }
     this.core.action(a, source);
   };

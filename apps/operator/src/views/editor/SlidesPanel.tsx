@@ -1,9 +1,9 @@
 import { parseSectionLabel, type Presentation, type Slide } from '@ordo/domain';
-import { formatMidiCueSummary } from '@ordo/surfaces';
 import { type PointerEvent as ReactPointerEvent, useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Menu } from '../../components/Menu.tsx';
+import { midiTriggerBadge, slideMidiTrigger } from '../../components/MidiTriggerPicker.tsx';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { type FlatEntry, flatSlideMove } from '../../components/sortableMath.ts';
 import { useMediaLookup, useVisible } from '../../hooks.ts';
@@ -63,6 +63,7 @@ function SlideItem(props: {
   };
 }) {
   const media = useMediaLookup();
+  const midiPresets = useLibrary((s) => s.data.settings.surfaces.midiPresets);
   const [ref, visible] = useVisible<HTMLDivElement>();
   const bgId = props.slide.backgroundMediaId ?? props.p.backgroundMediaId;
   const url = useThumb(
@@ -73,7 +74,8 @@ function SlideItem(props: {
   const hidden = !!props.slide.hidden;
   const dim = hidden ? HIDDEN_DIM : undefined;
   const hasAudio = !!props.slide.audio;
-  const hasMidi = (props.slide.midiCues?.length ?? 0) > 0;
+  const midiBadge = midiTriggerBadge(slideMidiTrigger(props.slide), midiPresets);
+  const hasMidi = !!midiBadge;
   const notesPreview = props.slide.notes?.trim() ?? '';
   const hasNotes = notesPreview.length > 0;
   const loopSec =
@@ -158,11 +160,8 @@ function SlideItem(props: {
                   ♪
                 </span>
               )}
-              {hasMidi && (
-                <span
-                  className="ed-cue-badge midi"
-                  title={`MIDI: ${(props.slide.midiCues ?? []).map(formatMidiCueSummary).join('; ')}`}
-                >
+              {midiBadge && (
+                <span className="ed-cue-badge midi" title={midiBadge.title}>
                   ⚡
                 </span>
               )}

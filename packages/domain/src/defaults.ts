@@ -216,8 +216,25 @@ export const DEFAULT_SURFACES: SurfaceSettings = {
     { id: 'midi-prev', kind: 'note', number: 62, threshold: 1, action: { id: 'prev' } },
   ],
   midiEnabled: false,
+  midiPresets: [],
   messagePresets: ['Wrap up', 'Repeat chorus', 'One more time', 'Watch the leader', 'Mic check'],
 };
+
+/** Starter ChamSys QuickQ 20 lighting presets matching a typical Sunday run sheet (PB 1 Cue 1 & 2). */
+export const QUICKQ_STARTER_MIDI_PRESETS = [
+  {
+    id: 'qq-lights-full',
+    name: 'Lights: Full',
+    color: '#f59e0b',
+    cues: [{ id: 'qq-full-1', channel: 1, type: 'noteOn' as const, number: 48, value: 1 }],
+  },
+  {
+    id: 'qq-lights-half',
+    name: 'Lights: Half',
+    color: '#3b82f6',
+    cues: [{ id: 'qq-half-1', channel: 1, type: 'noteOn' as const, number: 48, value: 2 }],
+  },
+];
 
 /** Phones are not used during services until Settings → PINs says so (design/28 §9, owner question 5). */
 export const DEFAULT_PHONES: PhoneSettings = { enabled: false };

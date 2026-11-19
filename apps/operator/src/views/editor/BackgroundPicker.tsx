@@ -2,6 +2,7 @@ import { fileUrl } from '@ordo/client';
 import type { Media } from '@ordo/domain';
 import { useMemo, useState } from 'react';
 import { Dialog } from '../../components/Dialog.tsx';
+import { midiTriggerBadge } from '../../components/MidiTriggerPicker.tsx';
 import { filesForKinds, kindsText, mediaAccept } from '../../lib/mediaKinds.ts';
 import { svgNote, tileHash } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
@@ -39,6 +40,7 @@ export function MediaPickerDialog(props: {
   needsSize?: boolean;
 }) {
   const media = useLibrary((s) => s.data.media);
+  const midiPresets = useLibrary((s) => s.data.settings.surfaces.midiPresets);
   const [q, setQ] = useState('');
   const [all, setAll] = useState(!props.backgroundsFirst);
   const [kindFilter, setKindFilter] = useState<'all' | 'image' | 'video'>('all');
@@ -155,6 +157,24 @@ export function MediaPickerDialog(props: {
                 </div>
                 <div className="cap">
                   <span className="ellipsis grow">{m.name}</span>
+                  {m.midi &&
+                    (() => {
+                      const b = midiTriggerBadge(m.midi, midiPresets);
+                      if (!b) return null;
+                      return (
+                        <span
+                          className="tag"
+                          title={`Linked lighting: ${b.title}`}
+                          style={{
+                            fontSize: 9.5,
+                            padding: '1px 4px',
+                            borderLeft: b.color ? `3px solid ${b.color}` : undefined,
+                          }}
+                        >
+                          ● {b.label}
+                        </span>
+                      );
+                    })()}
                   {m.state !== 'ready' && <span className="tag amber">{m.state}</span>}
                 </div>
               </button>
@@ -184,9 +204,11 @@ export function BackgroundPicker(props: {
   disabled?: boolean;
 }) {
   const media = useLibrary((s) => s.data.media);
+  const midiPresets = useLibrary((s) => s.data.settings.surfaces.midiPresets);
   const [open, setOpen] = useState(false);
   const m = props.value ? media.find((x) => x.id === props.value) : undefined;
   const h = tileHash(m);
+  const midiBadge = m?.midi ? midiTriggerBadge(m.midi, midiPresets) : null;
   return (
     <div className="row">
       <div
@@ -198,7 +220,23 @@ export function BackgroundPicker(props: {
           background: h ? `#000 center/cover url(${fileUrl(h)})` : '#000',
         }}
       />
-      <span className="grow ellipsis small">{m ? m.name : props.value ? 'Missing media' : 'None'}</span>
+      <span className="grow col" style={{ gap: 2, minWidth: 0 }}>
+        <span className="ellipsis small">{m ? m.name : props.value ? 'Missing media' : 'None'}</span>
+        {midiBadge && (
+          <span
+            className="tag"
+            title={`Linked lighting: ${midiBadge.title}`}
+            style={{
+              alignSelf: 'flex-start',
+              fontSize: 10,
+              padding: '1px 5px',
+              borderLeft: midiBadge.color ? `3px solid ${midiBadge.color}` : undefined,
+            }}
+          >
+            ● {midiBadge.label}
+          </span>
+        )}
+      </span>
       <button type="button" className="small" disabled={props.disabled} onClick={() => setOpen(true)}>
         Choose
       </button>

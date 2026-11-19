@@ -2,6 +2,7 @@ import { api, ApiFailure, DEMO } from '@ordo/client';
 import { type Arrangement, newId, type Playlist, type PlaylistItem } from '@ordo/domain';
 import { useEffect, useRef, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { midiTriggerBadge } from '../../components/MidiTriggerPicker.tsx';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { moveItem } from '../../lib/arrangement.ts';
 import { deviceProfile } from '../../lib/capabilities.ts';
@@ -328,7 +329,53 @@ export function PlaylistEditor(props: {
                       : '⚡'}
               </span>
               <span className="col grow" style={{ gap: 0 }}>
-                <span className="ellipsis">{itemTitle(it, op)}</span>
+                <span className="ellipsis row" style={{ gap: 6, alignItems: 'center' }}>
+                  <span className="ellipsis">{itemTitle(it, op)}</span>
+                  {it.kind === 'presentation' &&
+                    (() => {
+                      const p = op.presentation(it.presentationId);
+                      const effBgId = it.backgroundMediaId ?? p?.backgroundMediaId;
+                      const effBg = effBgId ? op.media(effBgId) : undefined;
+                      const bgb = effBg?.midi
+                        ? midiTriggerBadge(effBg.midi, lib.settings.surfaces.midiPresets)
+                        : null;
+                      if (!bgb) return null;
+                      return (
+                        <span
+                          className="tag"
+                          title={`From background (${effBg!.name}): ${bgb.title}`}
+                          style={{
+                            fontSize: 10,
+                            padding: '1px 5px',
+                            borderLeft: bgb.color ? `3px solid ${bgb.color}` : undefined,
+                            opacity: 0.85,
+                          }}
+                        >
+                          ● {bgb.label}
+                        </span>
+                      );
+                    })()}
+                  {it.kind !== 'action' &&
+                    it.midi &&
+                    (() => {
+                      const b = midiTriggerBadge(it.midi, lib.settings.surfaces.midiPresets);
+                      if (!b) return null;
+                      return (
+                        <span
+                          className="tag"
+                          title={b.title}
+                          style={{
+                            fontSize: 10,
+                            padding: '1px 5px',
+                            borderLeft: b.color ? `3px solid ${b.color}` : undefined,
+                            color: b.missing ? 'var(--warn, #d97706)' : undefined,
+                          }}
+                        >
+                          💡 {b.label}
+                        </span>
+                      );
+                    })()}
+                </span>
                 <span className="muted small ellipsis">{itemSubtitle(it, op)}</span>
               </span>
               {!props.locked && (

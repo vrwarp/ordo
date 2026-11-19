@@ -51,9 +51,12 @@ import { APP_VERSION } from './index.ts';
 // unchanged (it leaves the APP_VERSION line out).
 // 0.9.1 for QuickQ 20 MIDI support: schemas.ts adds MidiMapping.kind 'noteOff' and SurfaceSettings.midiDefaultOutput,
 // which a stale 0.9.0 operator tab would reject or strip when saving surface settings.
+// 0.9.2 for Lighting & MIDI triggers: schemas.ts adds MidiPreset, MidiTrigger, Media.midi, PlaylistItem.midi,
+// Section.midi, Slide.midi, ActionId 'midiPreset', and SurfaceSettings.midiPresets; live.ts and cues.ts resolve
+// 4-scope background/item/section/slide MIDI cues onto Cue.
 const RECORDED = {
-  version: '0.9.1',
-  digest: '2f804d388621932a791285793bc9f9fab3566d975d66ef72aebdaa0804fb3f48',
+  version: '0.9.2',
+  digest: 'b2b17deb305ca319f04ab37404e16106c6a18c44a2698bbf66a7bdd45223da09',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

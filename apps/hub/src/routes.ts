@@ -8,6 +8,7 @@ import {
   LiveCommand,
   type LiveState,
   type Media,
+  MidiTrigger,
   newId,
   type Output,
   Playlist,
@@ -98,6 +99,7 @@ const MediaPatch = z
     tags: z.array(z.string().max(50)).max(50).optional(),
     loop: z.boolean().optional(),
     isBackground: z.boolean().optional(),
+    midi: MidiTrigger.nullable().optional(),
     audio: z
       .object({ pairId: z.string().max(200).optional(), gainDb: z.number().min(-60).max(24).optional() })
       .strict()
@@ -952,6 +954,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
       ...(patch.loop !== undefined ? { loop: patch.loop } : {}),
       ...(patch.isBackground !== undefined ? { isBackground: patch.isBackground } : {}),
+      ...(patch.midi !== undefined ? { midi: patch.midi ?? undefined } : {}),
       ...(patch.audio !== undefined
         ? {
             audio: {

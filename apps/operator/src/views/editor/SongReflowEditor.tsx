@@ -1,7 +1,13 @@
-import { type Arrangement, newId, type Presentation, type Section } from '@ordo/domain';
-import { type ReactNode, useMemo } from 'react';
+import { type Arrangement, type MidiTrigger, newId, type Presentation, type Section } from '@ordo/domain';
+import { type ReactNode, useMemo, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Menu } from '../../components/Menu.tsx';
+import {
+  midiTriggerBadge,
+  MidiTriggerPicker,
+  shouldShowMidiUi,
+  slideMidiTrigger,
+} from '../../components/MidiTriggerPicker.tsx';
 import { authoringArrangement } from '../../lib/arrangement.ts';
 import { useLibrary } from '../../state/library.ts';
 import { BackgroundPicker } from './BackgroundPicker.tsx';
@@ -28,8 +34,31 @@ export function SongReflowEditor(props: {
 }) {
   const { presentation: p, readOnly, selectedSlideId, onSwitchToCanvas, banners } = props;
   const themes = useLibrary((s) => s.data.themes);
+  const surfacesSettings = useLibrary((s) => s.data.settings.surfaces);
+  const midiPresets = surfacesSettings.midiPresets ?? [];
   const theme = themeOf(p, themes);
   const ed = useEditor();
+  const [openMidiKey, setOpenMidiKey] = useState<string | null>(null);
+
+  const hasAnyMidi = useMemo(
+    () =>
+      p.sections.some((sec) => Boolean(sec.midi) || sec.slides.some((sl) => Boolean(slideMidiTrigger(sl)))),
+    [p.sections],
+  );
+  const showMidi = shouldShowMidiUi(surfacesSettings, hasAnyMidi);
+
+  const setSectionMidi = (sectionId: string, midi: MidiTrigger | undefined) => {
+    if (readOnly) return;
+    change((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => (s.id === sectionId ? { ...s, midi } : s)),
+    }));
+  };
+
+  const setSlideMidi = (slideId: string, midi: MidiTrigger | undefined) => {
+    if (readOnly) return;
+    change((prev) => updateSlide(prev, slideId, (sl) => ({ ...sl, midi, midiCues: undefined })));
+  };
 
   const activeArrangement: Arrangement = useMemo(() => {
     return p.arrangements[0] ?? authoringArrangement(p);
@@ -441,6 +470,29 @@ export function SongReflowEditor(props: {
                   </span>
                 </div>
                 <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                  {showMidi &&
+                    (() => {
+                      const badge = midiTriggerBadge(sec.midi, midiPresets);
+                      const key = `sec:${sec.id}`;
+                      const isOpen = openMidiKey === key;
+                      return (
+                        <button
+                          type="button"
+                          className={`small ${isOpen ? 'on' : badge ? '' : 'ghost'}`}
+                          title={
+                            badge
+                              ? `Section lighting (on entering ${sec.label}): ${badge.title}`
+                              : `Set lighting / MIDI on entering ${sec.label}`
+                          }
+                          style={{
+                            borderLeft: badge?.color ? `3px solid ${badge.color}` : undefined,
+                          }}
+                          onClick={() => setOpenMidiKey(isOpen ? null : key)}
+                        >
+                          💡 {badge ? badge.label : 'Lights'}
+                        </button>
+                      );
+                    })()}
                   <button
                     type="button"
                     className="small"
@@ -462,6 +514,24 @@ export function SongReflowEditor(props: {
                 </div>
               </div>
 
+              {openMidiKey === `sec:${sec.id}` && (
+                <div className="card col small" style={{ gap: 6, background: 'var(--bg)', padding: 10 }}>
+                  <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                    <b>Lighting / MIDI when entering “{sec.label}”</b>
+                    <button type="button" className="small ghost" onClick={() => setOpenMidiKey(null)}>
+                      Done
+                    </button>
+                  </div>
+                  <MidiTriggerPicker
+                    value={sec.midi}
+                    disabled={readOnly}
+                    compact
+                    onChange={(midi) => setSectionMidi(sec.id, midi)}
+                    hint="Saved on this song — applies to all services (fires on every repeat in the arrangement)."
+                  />
+                </div>
+              )}
+
               {/* Slide Text Blocks */}
               <div className="col" style={{ gap: 10 }}>
                 {sec.slides.map((slide, sIdx) => {
@@ -474,11 +544,43 @@ export function SongReflowEditor(props: {
                     slide.objects.length > 1 ||
                     slide.objects.some((o) => o.type !== 'text') ||
                     (slide.overrides?.length ?? 0) > 0;
+                  const slideTrigger = slideMidiTrigger(slide);
+                  const slideMidiBadge = midiTriggerBadge(slideTrigger, midiPresets);
+                  const slideMidiKey = `sl:${slide.id}`;
+                  const slideMidiOpen = openMidiKey === slideMidiKey;
 
                   return (
                     <div
                       key={slide.id}
                       onClick={() => selectSlide(slide.id)}
+                      onContextMenu={(e) => {
+                        if (!showMidi || readOnly) return;
+                        selectSlide(slide.id);
+                        openContextMenu(
+                          e,
+                          [
+                            {
+                              label: slideMidiBadge
+                                ? 'Edit slide lighting / MIDI…'
+                                : 'Add slide lighting / MIDI…',
+                              onSelect: () => setOpenMidiKey(slideMidiKey),
+                            },
+                            ...(slideTrigger
+                              ? [
+                                  {
+                                    label: 'Remove slide lighting / MIDI',
+                                    danger: true,
+                                    onSelect: () => {
+                                      setSlideMidi(slide.id, undefined);
+                                      if (slideMidiOpen) setOpenMidiKey(null);
+                                    },
+                                  },
+                                ]
+                              : []),
+                          ],
+                          { ariaLabel: `Slide ${sIdx + 1} actions` },
+                        );
+                      }}
                       style={{
                         padding: 10,
                         borderRadius: 6,
@@ -509,9 +611,42 @@ export function SongReflowEditor(props: {
                               ✓ {nonEmptyLines} line{nonEmptyLines === 1 ? '' : 's'}
                             </span>
                           ) : null}
+                          {slideMidiBadge && (
+                            <button
+                              type="button"
+                              className={`small ${slideMidiOpen ? 'on' : ''}`}
+                              title={`Slide MIDI: ${slideMidiBadge.title}`}
+                              style={{
+                                padding: '1px 6px',
+                                fontSize: 11,
+                                borderLeft: slideMidiBadge.color
+                                  ? `3px solid ${slideMidiBadge.color}`
+                                  : undefined,
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenMidiKey(slideMidiOpen ? null : slideMidiKey);
+                              }}
+                            >
+                              ⚡ {slideMidiBadge.label}
+                            </button>
+                          )}
                         </div>
 
                         <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                          {showMidi && !slideMidiBadge && isSelected && !readOnly && (
+                            <button
+                              type="button"
+                              className={`small ghost ${slideMidiOpen ? 'on' : ''}`}
+                              title="Add a lighting / MIDI cue on this specific slide"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenMidiKey(slideMidiOpen ? null : slideMidiKey);
+                              }}
+                            >
+                              ⚡ Lighting
+                            </button>
+                          )}
                           {overflowsStream && !readOnly && (
                             <button
                               type="button"
@@ -579,6 +714,35 @@ export function SongReflowEditor(props: {
                           )}
                         </div>
                       </div>
+
+                      {slideMidiOpen && (
+                        <div
+                          className="card col small"
+                          style={{ gap: 6, background: 'var(--panel)', padding: 8 }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div
+                            className="row"
+                            style={{ justifyContent: 'space-between', alignItems: 'center' }}
+                          >
+                            <b>Lighting / MIDI on Slide {sIdx + 1}</b>
+                            <button
+                              type="button"
+                              className="small ghost"
+                              onClick={() => setOpenMidiKey(null)}
+                            >
+                              Done
+                            </button>
+                          </div>
+                          <MidiTriggerPicker
+                            value={slideTrigger}
+                            disabled={readOnly}
+                            compact
+                            onChange={(midi) => setSlideMidi(slide.id, midi)}
+                            hint="Fires when landing on this specific slide."
+                          />
+                        </div>
+                      )}
 
                       {/* Lyric Textarea */}
                       <textarea
