@@ -42,7 +42,7 @@ jobs:
         uses: cloudflare/wrangler-action@v4
         env:
           # wrangler-action runs `pnpm add wrangler@4` at the repo root, which pnpm blocks in workspaces unless ignored.
-          npm_config_ignore_workspace_root_check: 'true'
+          npm_config_ignore_workspace_root_check: "true"
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
