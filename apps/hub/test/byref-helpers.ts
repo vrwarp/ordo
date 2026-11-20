@@ -71,6 +71,12 @@ export function bundleSource(
 export type Frame = { text: string; binary: boolean };
 
 /** A parsed frame of the live wire, with the fields these tests read (anything else it carries is not asserted on). */
+export type WireState = {
+  seq: number;
+  cues: unknown[];
+  resolved?: { playlist?: { id?: string; name?: string }; [k: string]: unknown };
+  [k: string]: unknown;
+};
 export type WireMsg = {
   t: string;
   seq?: number;
@@ -79,10 +85,12 @@ export type WireMsg = {
   /** The id of an ack. */
   id?: string;
   rejected?: boolean;
-  state?: { resolved?: unknown; cues?: unknown[]; [k: string]: unknown };
+  state?: WireState;
   event?: { k?: string; resolved?: unknown; [k: string]: unknown };
   [k: string]: unknown;
 };
+/** A live.state message: its state is there. */
+export type StateMsg = WireMsg & { state: WireState };
 
 /** The fields of a socket's record on the server side that the slow-socket test reads and sets. */
 export type ServerSocket = { holds?: string; needsState?: boolean };

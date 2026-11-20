@@ -12,8 +12,8 @@ import {
   rawSocket,
   type ServerSocket,
   type ServiceHub,
+  type StateMsg,
   stringifySpy,
-  type WireMsg,
   waitFor,
 } from './byref-helpers.ts';
 import { startHub, tempDir } from './helpers.ts';
@@ -122,10 +122,9 @@ describe('one encoded live state a seq (step 2)', () => {
 
 // ---- step 5: the wire by name ----
 
-type Wire = WireMsg;
 const stateFrames = (s: { frames: { text: string }[] }) =>
   s.frames.filter((f) => f.text.includes('"t":"live.state"'));
-const lastState = (s: { frames: { text: string }[] }): { msg: Wire; bytes: number } => {
+const lastState = (s: { frames: { text: string }[] }): { msg: StateMsg; bytes: number } => {
   const f = stateFrames(s).at(-1)!;
   return { msg: JSON.parse(f.text), bytes: Buffer.byteLength(f.text) };
 };
@@ -252,7 +251,7 @@ describe('the state by name (step 5)', () => {
     const idNew = liveId(svc);
     expect(idNew).not.toBe(idOld);
     expect(m.resolvedId).toBe(idNew);
-    expect(m.state.resolved?.playlist.name).toBe('Adopted from the operator');
+    expect(m.state.resolved?.playlist?.name).toBe('Adopted from the operator');
     const again = await rawSocket(hub, cookie, { resolvedId: idNew });
     await waitFor(() => stateFrames(again).length > 0);
     expect(lastState(again).msg.state.resolved).toBeUndefined();
