@@ -1,5 +1,6 @@
 import { Slide } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
+import { MAX_OBJECTS } from './emit.ts';
 import { convertDeck, emitSlides, MEDIA_PREFIX, parseDeck } from './index.ts';
 import { MAX_SHAPES_PER_SLIDE } from './walk.ts';
 import { MAX_PACKED_ELEMENTS_PER_PART } from './xml.ts';
@@ -227,6 +228,26 @@ describe('convertDeck (the hub pool task entry, M3)', () => {
     // The walk's shape cap and the emitter's object cap list what they cut (element:shapes).
     const capped = convertDeck(buildDeck({ slides: [{ shapes: leanShapes(MAX_SHAPES_PER_SLIDE + 1) }] }));
     expect(capped.slides[0]!.missing).toContain('element:shapes');
+  });
+
+  it('lists the objects cut at 1,000 for a slide of traced artwork, on both kinds of hub (W10)', () => {
+    // 2,500 discs of 50 points: the converter's path-point bound (65,536 a slide, `MAX_SLIDE_PATH_POINTS`) ends the
+    // geometry it draws at about 1,300 of them; the others are the art's (LibreOffice's on a hub that has it) and
+    // stand in as the rectangles they are (`custGeom drawn as rect`): more objects than a slide keeps, which the
+    // emitter cuts from the top and lists. (Slide 89 of a real template reaches the cut the same way.)
+    const parts = denseDeckParts({ shapes: 2_500, points: 50 });
+    for (const libreoffice of [true, false]) {
+      const s = convertDeck(parts, { libreoffice }).slides[0]!;
+      expect(s.slide.objects).toHaveLength(MAX_OBJECTS);
+      expect(s.missing).toContain('element:shapes');
+      expect(s.notes.join(' ')).toMatch(/more than 1000 objects: the top ones are not drawn/);
+      expect(s.classification.class).toBe('hybrid');
+    }
+    // A slide short of the cut, from the same generator, lists nothing of the kind.
+    const fewer = convertDeck(denseDeckParts({ shapes: 1_700, points: 50 })).slides[0]!;
+    expect(fewer.slide.objects.length).toBeLessThan(MAX_OBJECTS);
+    expect(fewer.missing ?? []).not.toContain('element:shapes');
+    expect(fewer.notes.join(' ')).not.toMatch(/more than 1000 objects/);
   });
 
   it('converts the whole deck like parseDeck and emitSlides, with the slide list', () => {

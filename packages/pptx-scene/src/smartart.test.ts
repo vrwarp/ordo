@@ -26,7 +26,7 @@ import {
   sp,
   withPart,
 } from './test-util.ts';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 import { MAX_SHAPES_PER_SLIDE } from './walk.ts';
 
 const IN = 914_400;
@@ -393,14 +393,14 @@ describe('SmartArt from its drawing cache (M6)', () => {
   });
 
   it('reads at most MAX_SHAPES_PER_SLIDE shapes of a hostile drawing on a slide (the walk\u2019s one constant)', () => {
-    // 51,000 drawing shapes of eight elements each: 408,000 elements, within the reader's bound, so the cap stops them.
+    // 51,000 drawing shapes of seven elements each: 357,000 elements, within the reader's bound, so the cap stops them.
     const many = leanDspShapes(MAX_SHAPES_PER_SLIDE + 1_000);
-    const t0 = performance.now();
+    const t0 = cpuMs();
     const s = parseDeck(deckWith(drawingXml(many))).slides[0]!;
     expect(s.elements.length).toBeLessThanOrEqual(MAX_SHAPES_PER_SLIDE);
     expect(s.elements.length).toBeGreaterThan(MAX_SHAPES_PER_SLIDE - 100);
     expect(s.notes.join(' ')).toMatch(new RegExp(`more than ${MAX_SHAPES_PER_SLIDE} shapes`));
-    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
+    expect(cpuMs() - t0).toBeLessThan(budgetMs(5_000));
   });
 
   it('reads groups of a drawing to a depth of 32 and no further', () => {

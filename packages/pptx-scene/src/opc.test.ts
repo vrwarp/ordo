@@ -19,18 +19,21 @@ import {
 } from './opc.ts';
 import { body, buildDeck, grpSp, imageRel, para, pic, run, scheme, solid, solidBg, sp } from './test-util.ts';
 import { MAX_PACKED_ELEMENTS_PER_PART, type XNode } from './xml.ts';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
 const IN = 914_400;
 const REL = 'http://schemas.openxmlformats.org/package/2006/relationships';
 const rels = (list: string) => `<Relationships xmlns="${REL}">${list}</Relationships>`;
 
-/** Run `f`, failing when it takes longer than `ms` (design/27 §14: each limit test under 5 s). */
+/**
+ * Run `f`, failing when it uses more than `ms` of CPU time (design/27 §14: each limit test under 5 s). CPU time, not the wall
+ * clock (`cpuMs`): a loaded or niced machine makes a run longer, never the work.
+ */
 function within<T>(ms: number, f: () => T): T {
-  const t0 = performance.now();
+  const t0 = cpuMs();
   const v = f();
-  expect(performance.now() - t0).toBeLessThan(budgetMs(ms));
+  expect(cpuMs() - t0).toBeLessThan(budgetMs(ms));
   return v;
 }
 

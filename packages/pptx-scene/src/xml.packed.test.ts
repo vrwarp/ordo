@@ -1,6 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 import {
   MAX_PACKED_ELEMENTS_PER_PART,
   MAX_PACKED_PATH_ITEMS_PER_PART,
@@ -294,9 +294,9 @@ describe('packed paths: the bounds (T5)', () => {
     const lnTo = `<a:lnTo>${pt(1, 2)}</a:lnTo>`;
     const xml = geom(`<a:path w="1" h="1">${M1}${lnTo.repeat(1_199_999)}</a:path>`);
     expect(() => plain(xml)).toThrow(/more than 250000 XML tags/);
-    const t0 = performance.now();
+    const t0 = cpuMs();
     const p = packed(xml);
-    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
+    expect(cpuMs() - t0).toBeLessThan(budgetMs(5_000));
     const path = packedPaths(p);
     expect(path).toHaveLength(1);
     expect(path[0]!.packed!.ops.length).toBe(1_200_000);
@@ -357,11 +357,28 @@ describe('packed paths: the bounds (T5)', () => {
   });
 });
 
+describe('the CPU-time bounds of this file', () => {
+  it('cpuMs counts the work done, not the time spent waiting for a core', () => {
+    // A bound read from it does not grow with the machine's load: a thread that sleeps uses no CPU, however long it waits.
+    const w0 = performance.now();
+    const c0 = cpuMs();
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+    expect(performance.now() - w0).toBeGreaterThanOrEqual(140);
+    expect(cpuMs() - c0).toBeLessThan(100);
+    // And it does count work.
+    const c1 = cpuMs();
+    let sum = 0;
+    for (let i = 0; i < 3e7; i++) sum += i % 7;
+    expect(sum).toBeGreaterThan(0);
+    expect(cpuMs() - c1).toBeGreaterThan(5);
+  });
+});
+
 describe('packed paths: a failed pack stays linear (T6)', () => {
   const time = (fn: () => void) => {
-    const t0 = performance.now();
+    const t0 = cpuMs();
     fn();
-    return performance.now() - t0;
+    return cpuMs() - t0;
   };
 
   it('a path of 300,000 commands that fails at its last byte is read once packed and once as nodes', () => {
@@ -596,10 +613,10 @@ describe('packed paths: fuzz parity with the node reader (T9)', () => {
     let slowest = 0;
     let accepted = 0;
     let refused = 0;
-    const t0 = performance.now();
+    const t0 = cpuMs();
     fc.assert(
       fc.property(partArb, (xml) => {
-        const t = performance.now();
+        const t = cpuMs();
         let raw: XNode[] | undefined;
         const a = outcome(() => (raw = packed(xml)));
         const b = outcome(() => plain(xml));
@@ -607,14 +624,14 @@ describe('packed paths: fuzz parity with the node reader (T9)', () => {
         if ('tree' in b) accepted++;
         else refused++;
         if (raw) packedTotal += packedPaths(raw as XNode[]).length;
-        slowest = Math.max(slowest, performance.now() - t);
+        slowest = Math.max(slowest, cpuMs() - t);
       }),
       { numRuns: RUNS, seed: SEED },
     );
     console.info(
       `xml.packed fuzz: ${RUNS} parts, seed ${SEED}: ${accepted} read, ${refused} refused, ${packedTotal} packed paths, slowest part ${slowest.toFixed(1)} ms (both readers)`,
     );
-    if (RUNS === 3000) expect(performance.now() - t0).toBeLessThan(budgetMs(20_000));
+    if (RUNS === 3000) expect(cpuMs() - t0).toBeLessThan(budgetMs(20_000));
     // A generated part is a few KB: the readers stay linear (T6 proves it at 300,000 commands inside budgetMs(5_000)).
     expect(slowest).toBeLessThan(budgetMs(5_000));
     // The generator exercises both sides: parts that parse, parts that are refused, and paths that pack.

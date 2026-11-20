@@ -38,6 +38,11 @@ const PORT_TAB = portOf('pptx-dense', 1);
 const OUT = 'test-results/pptx-dense';
 const OUT_TAB = 'test-results/pptx-dense-tab';
 
+// Both tests may run for minutes (an 80 MB deck) on a machine other jobs keep busy, at niceness 19. The timeout is set for the whole
+// file, not inside the test bodies: a timeout set in a body does not cover the fixtures (the browser context), which start under the
+// config's 120 s ('Test timeout of 120000ms exceeded while setting up "context"', seen under a load of 11 on 4 cores).
+test.describe.configure({ timeout: 900_000 });
+
 type Job = {
   id: string;
   kind?: string;
@@ -122,7 +127,6 @@ async function hubWithoutLibreOffice(port: number) {
 test('dense decks import through the upload route, each as much of itself as ordo can read, and the rest is said', async ({
   context,
 }) => {
-  test.setTimeout(900_000);
   rmSync(OUT, { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
   const decks = join(OUT, 'decks');
@@ -211,7 +215,6 @@ test('dense decks import through the upload route, each as much of itself as ord
 test('a dense deck on the Import tab: the browser parses 12 MB and declines 80 MB, and the hub stores what it would have', async ({
   page,
 }) => {
-  test.setTimeout(900_000);
   rmSync(OUT_TAB, { recursive: true, force: true });
   mkdirSync(OUT_TAB, { recursive: true });
   const traced = denseDeck(join(OUT_TAB, 'decks'), 'traced');

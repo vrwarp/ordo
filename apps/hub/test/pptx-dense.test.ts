@@ -24,7 +24,9 @@ const W17 = `ordo could not read this file: it holds more slide data than ordo r
 let hub: TestHub;
 let dir: string;
 beforeAll(async () => {
-  hub = await startHub();
+  // No LibreOffice: the follow-up of a hybrid slide (its art, for a deck of 80 MB of XML) is a job of minutes that would outlive
+  // the test and replace the slides it reads; what is measured here is the native import.
+  hub = await startHub({ libreoffice: { mode: 'off', exe: '' } });
   dir = tempDir('ordo-pptx-dense-');
 }, 60_000);
 afterAll(async () => {

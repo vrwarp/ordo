@@ -25,7 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PptxNativeResult } from '../src/pptx/shared.ts';
 import { startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
 const enc = new TextEncoder();
@@ -48,15 +48,17 @@ const deck = (n = 3) =>
   buildDeck({ slides: Array.from({ length: n }, (_, i) => ({ shapes: textBox(2, `Slide ${i + 1}`) })) });
 
 /** Run the import of a deck file; the finished job. */
-async function importFile(file: string, name = 'Deck.pptx'): Promise<Job> {
-  const hash = await storeDeck(hub, file);
-  const t0 = Date.now();
-  const job = await waitJob(hub, hub.imports.pptx.queueNative(hash, name).id, 20_000);
-  expect(Date.now() - t0).toBeLessThan(budgetMs(5_000));
+async function importFile(file: string, name = 'Deck.pptx', on: TestHub = hub): Promise<Job> {
+  const hash = await storeDeck(on, file);
+  // CPU time (every thread: the pool's worker is one), not the wall clock: waiting for a core is not the import's work
+  // (`cpuMs`, design/23 "Timing bounds"). The wait for the job itself (20 s) only guards against a hang.
+  const t0 = cpuMs();
+  const job = await waitJob(on, on.imports.pptx.queueNative(hash, name).id, 20_000);
+  expect(cpuMs() - t0).toBeLessThan(budgetMs(5_000));
   return job;
 }
-const importParts = async (parts: Map<string, Uint8Array>, name?: string) =>
-  importFile(await zipDeck(parts, dir, `${Math.random().toString(36).slice(2)}.pptx`), name);
+const importParts = async (parts: Map<string, Uint8Array>, name?: string, on?: TestHub) =>
+  importFile(await zipDeck(parts, dir, `${Math.random().toString(36).slice(2)}.pptx`), name, on);
 
 /** Whether a string holds a C0 control character or a line or paragraph separator. */
 function hasControl(s: string): boolean {
@@ -68,7 +70,7 @@ function hasControl(s: string): boolean {
 }
 
 /** A job is clean: done with a valid presentation, or failed with one sanitised line. */
-function expectClean(job: Job): Presentation | undefined {
+function expectClean(job: Job, on: TestHub = hub): Presentation | undefined {
   for (const l of job.log) expect(hasControl(l)).toBe(false);
   if (job.state === 'failed') {
     expect(job.error).toBeTruthy();
@@ -76,7 +78,7 @@ function expectClean(job: Job): Presentation | undefined {
     return undefined;
   }
   expect(job.state).toBe('done');
-  const p = hub.lib.presentations.must((job.result as PptxNativeResult).presentationId);
+  const p = on.lib.presentations.must((job.result as PptxNativeResult).presentationId);
   expect(Presentation.safeParse(p).success).toBe(true);
   for (const l of (p.source?.log ?? '').split('\n')) expect(l).not.toMatch(/^\d\d:\d\d:\d\d /);
   return p;
@@ -158,39 +160,6 @@ describe('pptx-native: hostile slides are quarantined, never the deck', () => {
     expect(slidesOf(p)[1]!.objects.filter((o) => o.type === 'text')).toEqual([]);
     expect(slidesOf(p).map((s) => s.pptx!.index)).toEqual([0, 1, 2, 3, 4]);
     expect(job.log.join('\n')).toMatch(/\[warn\] ppt\/slides\/slide4\.xml is over 32 MB: not read/);
-  });
-
-  it('reads a slide part of 12 MB of traced artwork (past the 8 MB the part cap was), as native or hybrid with objects', async () => {
-    // 150 custom shapes of 1,800 points in about 12 MB of compact path XML: the base refuses the part ("is over 8 MB").
-    const parts = denseDeckParts({ shapes: 150, points: 1800 });
-    const size = parts.get('ppt/slides/slide1.xml')!.length;
-    expect(size).toBeGreaterThan(9 * 1024 * 1024);
-    expect(size).toBeLessThan(32 * 1024 * 1024);
-    const job = await importParts(parts);
-    const p = expectClean(job)!;
-    const slide = slidesOf(p)[0]!;
-    expect(['native', 'hybrid']).toContain(slide.pptx!.class);
-    expect(slide.objects.length).toBeGreaterThan(100);
-    expect(slide.pptx!.missing ?? []).not.toContain('slide');
-    expect(job.log.join('\n')).not.toMatch(/is over \d+ MB: not read/);
-  });
-
-  it('a slide part past the reader\u2019s element bound ends done: hybrid, slide:detail, and the W9 sentence once in the job log', async () => {
-    const parts = deck(3);
-    parts.set(
-      'ppt/slides/slide2.xml',
-      enc.encode(
-        `<p:sld ${NS}><p:cSld><p:spTree>${textBox(2, 'Heavy')}${'<a:b/>'.repeat(500_001)}</p:spTree></p:cSld></p:sld>`,
-      ),
-    );
-    const job = await importParts(parts);
-    const p = expectClean(job)!;
-    expect(job.state).toBe('done');
-    expect(slidesOf(p).map((s) => s.pptx!.class)).toEqual(['native', 'hybrid', 'native']);
-    expect(slidesOf(p)[1]!.pptx!.missing).toEqual(['slide:detail']);
-    const line =
-      'Slide 2 has too much drawing detail for ordo to read, so only its text was imported. In PowerPoint, save the artwork as a picture and import again.';
-    expect(job.log.filter((l) => l.includes(line))).toHaveLength(1);
   });
 
   it('keeps control characters, forged log lines and prototype keys out of logs, labels and objects', async () => {
@@ -340,4 +309,50 @@ describe('pptx-native: mutation fuzz', () => {
     expect(done + failed).toBe(16);
     expect(done).toBeGreaterThan(0);
   }, 60_000);
+});
+
+// The dense slides of this track are imported on a hub without LibreOffice: a hybrid slide on a hub that has it queues a follow-up
+// that draws the slide's art and then replaces the stored slide, a job that outlives its test (it landed in the library during a later
+// test when the machine was slow) and changes what the test reads. What these tests measure is the native import.
+describe('pptx-native: dense slides on a hub without LibreOffice', () => {
+  let lite: TestHub;
+  beforeAll(async () => {
+    lite = await startHub({ libreoffice: { mode: 'off', exe: '' } });
+  }, 60_000);
+  afterAll(async () => {
+    await lite?.cleanup();
+  });
+
+  it('reads a slide part of 12 MB of traced artwork (past the 8 MB the part cap was), as native or hybrid with objects', async () => {
+    // 150 custom shapes of 1,800 points in about 12 MB of compact path XML: the base refuses the part ("is over 8 MB").
+    const parts = denseDeckParts({ shapes: 150, points: 1800 });
+    const size = parts.get('ppt/slides/slide1.xml')!.length;
+    expect(size).toBeGreaterThan(9 * 1024 * 1024);
+    expect(size).toBeLessThan(32 * 1024 * 1024);
+    const job = await importParts(parts, undefined, lite);
+    const p = expectClean(job, lite)!;
+    const slide = slidesOf(p)[0]!;
+    expect(['native', 'hybrid']).toContain(slide.pptx!.class);
+    expect(slide.objects.length).toBeGreaterThan(100);
+    expect(slide.pptx!.missing ?? []).not.toContain('slide');
+    expect(job.log.join('\n')).not.toMatch(/is over \d+ MB: not read/);
+  });
+
+  it('a slide part past the reader\u2019s element bound ends done: hybrid, slide:detail, and the W9 sentence once in the job log', async () => {
+    const parts = deck(3);
+    parts.set(
+      'ppt/slides/slide2.xml',
+      enc.encode(
+        `<p:sld ${NS}><p:cSld><p:spTree>${textBox(2, 'Heavy')}${'<a:b/>'.repeat(500_001)}</p:spTree></p:cSld></p:sld>`,
+      ),
+    );
+    const job = await importParts(parts, undefined, lite);
+    const p = expectClean(job, lite)!;
+    expect(job.state).toBe('done');
+    expect(slidesOf(p).map((s) => s.pptx!.class)).toEqual(['native', 'hybrid', 'native']);
+    expect(slidesOf(p)[1]!.pptx!.missing).toEqual(['slide:detail']);
+    const line =
+      'Slide 2 has too much drawing detail for ordo to read, so only its text was imported. In PowerPoint, save the artwork as a picture and import again.';
+    expect(job.log.filter((l) => l.includes(line))).toHaveLength(1);
+  });
 });
