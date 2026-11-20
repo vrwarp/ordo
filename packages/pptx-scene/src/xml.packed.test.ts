@@ -368,7 +368,9 @@ describe('the CPU-time bounds of this file', () => {
     expect(cpuMs() - c0).toBeLessThan(100);
     // And it does count work.
     const c1 = cpuMs();
-    for (let i = 0, x = 0; i < 3e7; i++) x += i % 7;
+    let sum = 0;
+    for (let i = 0; i < 3e7; i++) sum += i % 7;
+    expect(sum).toBeGreaterThan(0);
     expect(cpuMs() - c1).toBeGreaterThan(5);
   });
 });
