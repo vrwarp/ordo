@@ -636,12 +636,12 @@ objects under it: made once in slices, kept as one unit, copied 1:1 under the di
 - **Measured** (`pnpm --filter @ordo/renderer bench:frame`, software canvas, ten fresh runs for the crowded, 1,000- and
   20,000-object cases and five for the 20 shadows; best to worst of the runs, ms; frame objects under / in the direct part):
 
-  | case | under / direct | turns summed 1920 / 3840 | longest step 1920 / 3840 | final raster 1920 / 3840 | the base's cut draw 1920 / 3840 |
-  | --- | --- | --- | --- | --- | --- |
-  | 340 objects, 24 pictures | 308 / 32 | 25-104 / 32-57 (11 turns) | 5-21 / 15-26 | 9-16 / 42-87 | 5-7 / 18-48 |
-  | 1,000 objects | 834 / 166 | 40-183 / 74-329 (37 turns) | 5-61 / 17-216 | 20-52 / 62-237 | 5-12 / 18-52 |
-  | 20,000 objects, 64 pictures | 19,800 / 200 | 389-1,701 / 472-1,193 (220-250 turns) | 9-330 / 23-143 | 10-33 / 32-59 | 5-26 / 17-39 |
-  | 20 shadowed panels, soft frame | 1 / 20 | 26-37 / 104-126 (2 turns) | 24-36 / 97-119 | 14-22 / 74-82 | 9-17 / 118-150 |
+  | case                           | under / direct | turns summed 1920 / 3840              | longest step 1920 / 3840 | final raster 1920 / 3840 | the base's cut draw 1920 / 3840 |
+  | ------------------------------ | -------------- | ------------------------------------- | ------------------------ | ------------------------ | ------------------------------- |
+  | 340 objects, 24 pictures       | 308 / 32       | 25-104 / 32-57 (11 turns)             | 5-21 / 15-26             | 9-16 / 42-87             | 5-7 / 18-48                     |
+  | 1,000 objects                  | 834 / 166      | 40-183 / 74-329 (37 turns)            | 5-61 / 17-216            | 20-52 / 62-237           | 5-12 / 18-52                    |
+  | 20,000 objects, 64 pictures    | 19,800 / 200   | 389-1,701 / 472-1,193 (220-250 turns) | 9-330 / 23-143           | 10-33 / 32-59            | 5-26 / 17-39                    |
+  | 20 shadowed panels, soft frame | 1 / 20         | 26-37 / 104-126 (2 turns)             | 24-36 / 97-119           | 14-22 / 74-82            | 9-17 / 118-150                  |
 
   The final raster is the direct part over the frame copied under it: the copy of the whole frame (33 MB at 3840) is most of
   the difference from the cut draw (the first 200 objects), which leaves the rest out. The machine was shared (load 12 on 4
