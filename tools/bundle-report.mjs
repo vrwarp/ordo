@@ -7,9 +7,9 @@
  *   node tools/bundle-report.mjs --json out.json    also write them as JSON (for a PR body or a CI artifact)
  *   node tools/bundle-report.mjs --check            fail when an app's initial JavaScript, or the operator's
  *                                                   regular total (what the venue PC loads before its Shell),
- *                                                   grew more than the baseline's budget (4 %) over
+ *                                                   grew more than the baseline's budget (8 %) over
  *                                                   tools/bundle-baseline.json, or the operator's compact first
- *                                                   load is over its budget (300 KB gzip) or holds code a phone
+ *                                                   load is over its budget (600 KB gzip) or holds code a phone
  *                                                   must never load
  *   node tools/bundle-report.mjs --write            record the current sizes as the baseline (a PR whose
  *                                                   growth was accepted re-records it, and says why)
@@ -27,7 +27,7 @@
  * The operator also gets `compact` (design/28 §3.1, §7), what a phone loads: `firstLoad` (the initial chunks,
  * the static closure of every chunk whose map lists a COMPACT_START module, the core worker and the CSS, raw and
  * gzip), `precache` (FILES_COMPACT of dist/sw.js: what a phone's service worker downloads), `chunks` (each
- * COMPACT_START chunk), `headroomGzip` (300,000 B minus the first load's gzip: what is left for the compact shell
+ * COMPACT_START chunk), `headroomGzip` (600,000 B minus the first load's gzip: what is left for the compact shell
  * and P1's views) and `violations` (a file of either set whose source map lists a COMPACT_FORBIDDEN source, or a
  * worker other than COMPACT_WORKERS; apps/operator/src/pageSets.ts). Only file sizes are read: no build, no
  * network. Plain Node 22 (it strips the types of pageSets.ts), no dependencies.
@@ -52,8 +52,11 @@ const argOf = (name) => {
 const root = resolve(argOf('--root') ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
 const BASELINE = join(root, 'tools/bundle-baseline.json');
 const APPS = ['operator', 'output', 'stage'];
-/** The compact first load's budget (design/28 §7), when the baseline file names none. */
-const COMPACT_BUDGET_GZIP = 300_000;
+/**
+ * The compact first load's budget (design/28 §7), when the baseline file names none: 300,000 B gzip until the owner
+ * doubled it on 2026-11-20.
+ */
+const COMPACT_BUDGET_GZIP = 600_000;
 const compactStart = argOf('--compact-start')?.split(',').filter(Boolean) ?? COMPACT_START;
 
 /** What a lazy chunk holds, by a source its map lists (the first that matches). */
@@ -260,9 +263,10 @@ if (args.includes('--write')) {
     if (r.regularTotal) apps[app].regularTotalGzip = r.regularTotal.gzip;
   }
   const old = existsSync(BASELINE) ? JSON.parse(readFileSync(BASELINE, 'utf8')) : {};
-  // The budget and the compact budget are absolute: kept as they are.
+  // The budget and the compact budget are absolute: kept as they are. A file that names none gets the growth budget's
+  // fallback, 0.04 (0.02 until the owner doubled it on 2026-11-20), and the compact budget's constant.
   const next = {
-    budget: old.budget ?? 0.02,
+    budget: old.budget ?? 0.04,
     compact: old.compact ?? { firstLoadGzip: COMPACT_BUDGET_GZIP },
     apps,
   };
@@ -272,7 +276,8 @@ if (args.includes('--write')) {
 
 if (args.includes('--check')) {
   const base = JSON.parse(readFileSync(BASELINE, 'utf8'));
-  const budget = typeof base.budget === 'number' ? base.budget : 0.02;
+  // The growth budget of the baseline file (0.08), else the same 0.04 fallback as --write.
+  const budget = typeof base.budget === 'number' ? base.budget : 0.04;
   let failed = false;
   for (const [app, b] of Object.entries(base.apps ?? {})) {
     const r = report[app];

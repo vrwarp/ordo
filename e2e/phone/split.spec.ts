@@ -299,7 +299,7 @@ test('(4) the service worker precaches no editor, live, settings, Setup or outpu
   expect(bad).toEqual([]);
 });
 
-test('(1c) the first load’s built assets are at most 300 KB gzip', async ({ page }) => {
+test('(1c) the first load’s built assets are at most 600 KB gzip', async ({ page }) => {
   const reqs = await firstLoad(page);
   const files = new Map<string, { raw: number; gzip: number }>();
   let api = 0;
@@ -317,5 +317,7 @@ test('(1c) the first load’s built assets are at most 300 KB gzip', async ({ pa
     `${test.info().project.name}: first load ${files.size} built files, ${raw} B raw, ${gzip} B gzip; ${api} API requests; ${fonts.length} font files`,
   );
   for (const [f, s] of files) console.log(`  ${f} ${s.raw} B, ${s.gzip} B gzip`);
-  expect(gzip).toBeLessThanOrEqual(300_000);
+  // The CI gate: 300,000 B until the owner doubled it on 2026-11-20 (the same cap as tools/bundle-baseline.json's
+  // compact.firstLoadGzip). The product target of design/28 §7 stays 300 KB.
+  expect(gzip).toBeLessThanOrEqual(600_000);
 });

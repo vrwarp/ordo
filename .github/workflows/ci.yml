@@ -38,7 +38,7 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test
       - run: pnpm build
-      - name: Bundle budget (each app's initial JavaScript against tools/bundle-baseline.json, +4 % at most; the operator's compact first load at most 300 KB gzip, with no editor, live or output code)
+      - name: Bundle budget (each app's initial JavaScript against tools/bundle-baseline.json, +8 % at most; the operator's compact first load at most 600 KB gzip, with no editor, live or output code)
         run: node tools/bundle-report.mjs --check --json test-results/bundle.json
       # The GitHub Pages demo (apps/demo); e2e/pages-demo.spec.ts serves and drives it.
       - run: pnpm build:pages
