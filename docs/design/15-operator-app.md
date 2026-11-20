@@ -282,6 +282,31 @@ cells in place of the shape fields).
   192-247 ms of main-thread time per 6 s before (about 20 ms a blink: SlideCanvas re-rendered and the
   objects layer was redrawn) and 32-59 ms after (CDP Performance TaskDuration, headless Chromium, two runs
   of three rounds each).
+- Objects past the slide's drawing budget, drawn whole (SlideCanvas.tsx, `wholeDraw.ts`, `wholeState.ts`; leaf-editor).
+  The slide's budget (`slideBudget`, design/27 §12-13) draws an object past it as a lighter copy: a stored
+  geometry without its geometry, gradient or dash, a shape or picture without its shadow, glow or soft edge. The
+  Audience screens draw such objects whole from units; the editor draws them whole into the node cache it keeps
+  for every object, so the editor and the screens agree. It does so only on a fine pointer, while no service is
+  live (the hub's service as the operator mirrors it, on any computer: the browser cannot tell the computer that
+  runs the service from one that edits, so every computer keeps the lighter drawing, and a GO is never behind a
+  whole drawing), and not with the technician's `?editor=light` on the operator's URL (beside `?profile=`, read
+  once). An iPad with a keyboard and trackpad reports a mouse and is treated as a desktop, as its thumbnails
+  already are. The rule is a function of the slide's objects, its budget, the selection and the last plan
+  (`planWhole`, `drawWhole`, `sameDrawn`): an object goes whole when its own drawing is within one geometry
+  estimate and one slide of effect area (`WHOLE_BOUND`), its cache fits the canvas's 8 M device px node cache at
+  this zoom (past it the node would be drawn live at every redraw) and the whole caches together stay within 32 M
+  device px (`WHOLE_MAX_PX`); otherwise it keeps the copy, counted. The selected object is drawn whole in the plan
+  that finds it (an edit never shows the copy for a frame); the others one a turn in z-order at idle moments
+  (`requestIdleCallback`, timeout 200 ms; 16 ms without it), the next turn asked for only after the last one's
+  frame. A move or a turn keeps a whole object whole (the cache is over the box at the node's origin, unrotated);
+  a changed drawing is the copy until it is made again; a zoom within a tenth keeps the cache, past it every whole
+  node is made again in its turn, drawing from its old cache meanwhile. Going live demotes nothing (a node that is
+  unchanged keeps its bitmap); a node that changes while live draws the copy until End service, when the queue
+  fills again. A stored path past `GEOM_COST.geometry` stays its simple form in the editor (the screens draw it
+  from a sliced unit), and so does an object too big to cache at a high zoom (zooming out draws it whole): no new
+  words on screen, the limits are named here, in the pull request and on `window.__ordo.editor().whole`
+  (`wanted`, `drawn`, `pending`, `blocked`, `px`, `skipped` by bound, cache and total, `stale`, `live`, `coarse`,
+  `light` and the times of the last whole draws).
 - Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).

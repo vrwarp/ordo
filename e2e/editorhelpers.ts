@@ -225,7 +225,27 @@ export type EditorInspect = {
   inline?: { objectId: string; cell?: number };
   /** The canvas's table kit has loaded. */
   tableKit?: boolean;
+  /**
+   * What the canvas draws whole where the slide's drawing budget would draw a lighter copy (the counts of
+   * apps/operator/src/views/editor/wholeState.ts); absent in a build before it (the base of the whole-draw spec).
+   */
+  whole?: EditorWhole;
   draft?: PresentationRec;
+};
+
+/** `window.__ordo.editor().whole`: the canvas's whole drawing (wholeState.ts `WholeStatus`). */
+export type EditorWhole = {
+  wanted: number;
+  drawn: number;
+  pending: number;
+  blocked: number;
+  px: number;
+  skipped: { bound: number; cache: number; total: number };
+  stale: number;
+  live: boolean;
+  coarse: boolean;
+  light: boolean;
+  lastMs: { id: string; ms: number }[];
 };
 
 /** What the editor holds now. */
@@ -241,6 +261,32 @@ export async function editorState(page: Page): Promise<EditorInspect> {
  */
 export async function tableKitReady(page: Page): Promise<void> {
   await expect.poll(async () => (await editorState(page)).tableKit, { timeout: 20_000 }).toBe(true);
+}
+
+/**
+ * Wait until the canvas has drawn every object the slide's drawing budget changes that it is going to draw whole
+ * (nothing waits for a turn and no whole drawing waits to be made again at a new zoom; each candidate is then
+ * drawn, blocked or kept as the lighter copy for a bound), never by a sleep. A build before the whole drawing
+ * has no status: it returns after three frames, so that a base fails on pixels, not on a missing field.
+ */
+export async function wholeSettled(page: Page, timeout = 30_000): Promise<EditorWhole | undefined> {
+  const has = async () => (await editorState(page)).whole !== undefined;
+  if (!(await has())) {
+    for (let i = 0; i < 3; i++) await frames(page);
+    return undefined;
+  }
+  await expect
+    .poll(
+      async () => {
+        const w = (await editorState(page)).whole!;
+        return w.pending === 0 && w.stale === 0;
+      },
+      { timeout },
+    )
+    .toBe(true);
+  // The last drawn object's frame has been painted.
+  await frames(page);
+  return (await editorState(page)).whole;
 }
 
 /**
