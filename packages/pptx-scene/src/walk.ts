@@ -80,8 +80,14 @@ import { child, num, path, pathCommands, type XNode } from './xml.ts';
 
 /** Group nesting followed (design/27 §12). */
 export const MAX_GROUP_DEPTH = 32;
-/** Shape-tree elements read per slide, decorations included (design/27 §12). */
-export const MAX_SHAPES_PER_SLIDE = 5_000;
+/**
+ * Shape-tree elements read per slide, decorations included (design/27 §12; design/29 B3: 5,000 until the packed reader). It is the
+ * walk's own count, shared by the text rescue and a SmartArt drawing. What protects memory is not this count but the reader's
+ * element bound (`MAX_PACKED_ELEMENTS_PER_PART`): 50,000 ordinary shapes are about 650,000 elements and are refused by it first,
+ * so this count binds only for shapes of one to nine elements. What a slide read in full still loses is the converter's own
+ * bounds, not this track's: the emitter's 1,000 objects (`MAX_OBJECTS`) and 65,536 path points a slide (`MAX_SLIDE_PATH_POINTS`).
+ */
+export const MAX_SHAPES_PER_SLIDE = 50_000;
 
 /**
  * Presets M1 drew with today's fields (ordo's rect/ellipse/line and a rounded rect). Since M6 every preset of
