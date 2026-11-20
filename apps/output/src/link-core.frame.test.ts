@@ -1,6 +1,5 @@
 import { HubConnection, OutputLink } from '@ordo/client';
 import type { LiveState, Media } from '@ordo/domain';
-import type { OutputConfigRes } from '@ordo/protocol';
 import type { FromAsset, ToAsset, ToRender } from '@ordo/renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { picture, slideOf, texts } from '../../../packages/renderer/src/frame.test-util.ts';
@@ -14,23 +13,6 @@ import { MemoryStreamStore } from './opfs.ts';
  * clamp's cut (`full`) and the files of every picture of it, so the asset worker can make the frame; the job of an
  * ordinary slide is what it always was.
  */
-
-const config = (): OutputConfigRes =>
-  ({
-    output: {
-      id: 'o1',
-      name: 'Audience 1',
-      kind: 'output',
-      hostIndex: 1,
-      lookId: 'look-main',
-      enabled: true,
-      audioMaster: false,
-    },
-    looks: [],
-    audio: {},
-    general: {},
-    fonts: [],
-  }) as unknown as OutputConfigRes;
 
 function setup() {
   const hub = new HubConnection({ role: 'output', appVersion: 't', url: 'ws://unused' });
@@ -137,6 +119,27 @@ describe('link worker core: the jobs of a crowded slide', () => {
     const job = slideJobs(t.toAsset)[0]!.job;
     expect(job.kind === 'slide' && 'full' in job).toBe(false);
     expect(job.kind === 'slide' && Object.keys(job.images).sort()).toEqual(['m0', 'm1', 'm2']);
+    t.close();
+  });
+
+  it('reports the frames the asset worker has made and dropped in its state (what the e2e reads)', async () => {
+    const slide = slideOf([...texts(340), ...pics], 'crowd');
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(withMedia(stateOf(slide), 24)));
+    await tick(30);
+    const live = slideJobs(t.toAsset).find((m) => m.job.kind === 'slide' && m.job.cueIndex === 0)!;
+    const units = () => (t.core.introspect() as { units: { framesMade: number; framesOver: number } }).units;
+    expect(units()).toMatchObject({ framesMade: 0, framesOver: 0 });
+    t.asset.port2.postMessage({
+      t: 'done',
+      layer: live.job.layer,
+      key: live.job.key,
+      ms: 1,
+      frames: { made: 2, over: 1, workBytes: 7 },
+    } satisfies FromAsset);
+    await tick(20);
+    expect(units()).toMatchObject({ framesMade: 2, framesOver: 1 });
     t.close();
   });
 

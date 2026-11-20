@@ -54,7 +54,9 @@ import { drawObject, type ImageLookup, registerSlideObjectsDrawer } from './text
  *   glow past the effect budget (its body drawn live), a `whole` one of a soft-edged or translucent shape past
  *   it, a `whole` one of a decoration past `DECOR_SPRITE`, and a masked picture's prepared bitmap (`prepared`).
  *   Never text, tables, charts, 3-D looks or a picture's effects (`slideUnitsLeft` counts what keeps its legacy
- *   copy, and why; the census reads it). `setEffectUnits(false)` plans 62a1c3a's geometry units only.
+ *   copy, and why; the census reads it). `setEffectUnits(false)` plans 62a1c3a's geometry units only. A slide past
+ *   one frame of units is split by the underlay frame (`frame.ts`): its direct part's units fit one frame and the
+ *   objects under it are made one by one as the frame, so no object keeps a legacy copy for want of area.
  * - **Where**: at the job's device scale over the object's reach (a shape's geometry, or its composite with its
  *   layers, `effects.ts` `effectRect`), whole device px cut to the frame, so a 1:1 copy at its origin is the very
  *   pixels drawing it there gives.

@@ -382,15 +382,17 @@ type FrameJob = { slide?: Slide; full?: Slide; look?: Look; video?: { objectId: 
  * counts, a look that does not draw it as authored, or `?frame=off`. One function for every path that prepares a
  * slide (the slide job, the late job, the remake, the warm-up), so they all work out the same split and the same
  * frame key. The slide before the cut when the job carries it (`full`), else the live-clamped slide, whose objects
- * the split then shares with the draw.
+ * the split then shares with the draw. `area` false leaves rule (e) out, for the draw a GO waits for (a live slide
+ * job): its late job works the whole split out (`lateUnits`), off the GO's path.
  */
-function frameOf(job: FrameJob, scale: number): FrameSplit | undefined {
+function frameOf(job: FrameJob, scale: number, area = true): FrameSplit | undefined {
   if (drawing.frame === 'off' || drawing.effects === 'base') return undefined;
   const base = job.full ?? (job.slide ? clampSlide(job.slide) : undefined);
   if (!base) return undefined;
   return splitFrame(base, scale, {
     ...(job.look ? { look: job.look } : {}),
     ...(job.video ? { video: { objectId: job.video.objectId } } : {}),
+    ...(area ? {} : { area: false }),
   });
 }
 
@@ -451,7 +453,7 @@ async function prepare(
   job: FrameJob & { nextSlide?: Slide; images?: Record<string, string> },
   scale: number,
   steps: Steps,
-  how?: { key: string; stop(): boolean },
+  how?: { key: string; stop(): boolean; area?: boolean },
 ): Promise<{ missing: string[]; units: UnitHold; made?: UnitJob; split?: FrameSplit }> {
   const host = jobHost(steps);
   // The geometry units it makes or finds stay pinned until the job lets them go (`keepUnits`).
@@ -459,7 +461,7 @@ async function prepare(
   // How it waits for units: absent, as long as `UNIT_WAIT_MS` (prepare/units.ts).
   const made = how ? unitJob(host, { stop: how.stop, afterTurn: turnWait(how.key) }) : undefined;
   try {
-    const split = frameOf(job, scale);
+    const split = await steps.slice(() => frameOf(job, scale, how?.area !== false));
     const pj = prepareJobOf(job, split, scale, steps);
     const missing = await prepareSlides(pj, host);
     // A frame made without a picture whose file was not there: reported with the slide's missing pictures, so the
@@ -565,7 +567,14 @@ type LateJob = {
   stopped: boolean;
   /** A restart's `units` job not planned yet (`remakeUnits`): a draw of the slide meanwhile replaces it. */
   pending?: boolean;
+  /**
+   * Its parts are those of a draw cut without rule (e) (a live slide job, `frameOf` `area` false): the job works the
+   * whole split out first, off the GO's path, and its parts are that split's (`replan`).
+   */
+  approx?: Approx;
 };
+/** What a draw cut without rule (e) was: its direct part, the frame key of its split and whether the draw copied it. */
+type Approx = { slide: Slide; frame?: string; copied: boolean };
 const lateJobs = new Map<string, LateJob>();
 /** The hold of a restart's `units` job until it is planned: pins nothing. */
 const NO_HOLD: UnitHold = { keys: new Set<string>(), release: () => undefined };
@@ -643,14 +652,68 @@ async function lateUnits(job: SlideJob, late: LateJob, scale: number, steps: Ste
     },
     afterTurn: turnWait(lateKey(job.key)),
   });
+  /**
+   * The parts of the whole split, for a late job whose parts were those of a draw cut without rule (e): the frame
+   * and the units of the direct part with it replace those of the cut draw (`late.approx`), the parts left out of
+   * the draw for another reason stay. A frame the draw did not copy and that is in the cache is reported now, so
+   * the slide is drawn again with it. True when the parts changed. A turn of the lane's of its own (the split is
+   * worked out here for the first time: the slide's planning is a turn of the same size).
+   */
+  const replan = (): Promise<boolean> => steps.slice(replanned);
+  const replanned = (): boolean => {
+    const was = late.approx;
+    late.approx = undefined;
+    if (!was) return false;
+    const split = frameOf(job, scale);
+    const slide = split ? split.direct : job.slide;
+    if (!slide) return false;
+    const have = (k: string) => unitCache.has('unit', k) || unitUnmade(k);
+    const fk = split ? frameKey(split, fontEpoch) : undefined;
+    const want = new Set<string>();
+    if (fk && !have(fk)) want.add(fk);
+    for (const u of unitsOfSlide(slide, scale, job.look))
+      if (u.of !== 'prepared' && !have(u.key)) want.add(u.key);
+    // Those the cut draw asked for and the whole split does not: the objects below the direct part are the frame's.
+    const old = new Set<string>(was.frame ? [was.frame] : []);
+    for (const u of unitsOfSlide(was.slide, scale, job.look)) if (u.of !== 'prepared') old.add(u.key);
+    let changed = false;
+    for (const k of old)
+      if (outstanding.has(k) && !want.has(k)) {
+        outstanding.delete(k);
+        changed = true;
+      }
+    for (const k of want)
+      if (!outstanding.has(k)) {
+        outstanding.add(k);
+        changed = true;
+      }
+    if (fk && unitCache.has('unit', fk) && !(was.copied && was.frame === fk)) {
+      late.fresh.push(fk);
+      changed = true;
+    }
+    return changed;
+  };
   let more = false;
   try {
     let progressed = true;
     const going = () => outstanding.size > 0 && !late.ended && !late.stopped;
-    for (let round = 0; round < LATE_ROUNDS && progressed && going(); round++) {
+    for (
+      let round = 0;
+      round < LATE_ROUNDS && progressed && !late.ended && !late.stopped && (going() || late.approx);
+      round++
+    ) {
       // Pinned with the slide's last draw (a draw meanwhile hands its hold on).
       holdInto(host, late.hold);
       late.grew = false;
+      // A draw cut without rule (e): its parts are the whole split's first, off the GO's path.
+      if (late.approx) {
+        late.grew = await replan();
+        flush();
+        if (!going()) {
+          progressed = false;
+          break;
+        }
+      }
       const left0 = outstanding.size;
       await prepareSlides(prepareJobOf(job, frameOf(job, scale), scale, steps), host);
       flush();
@@ -692,7 +755,7 @@ function pushLate(job: SlideJob, late: LateJob, scale: number): void {
  * made by its slide's late job, a new one unless one is running, which they join, its units (those made so far
  * with them) pinned into this draw's hold from now on.
  */
-function lateFor(job: SlideJob, left: readonly string[], hold: UnitHold): void {
+function lateFor(job: SlideJob, left: readonly string[], hold: UnitHold, approx?: Approx): void {
   const running = lateJobs.get(job.key);
   // A restart's `units` job not planned yet: this draw does what it would (its parts left go to a late job).
   if (running?.pending) lateJobs.delete(job.key);
@@ -712,9 +775,14 @@ function lateFor(job: SlideJob, left: readonly string[], hold: UnitHold): void {
         running.outstanding.add(k);
         running.grew = true;
       }
+    // The parts of a draw cut without rule (e) are worked out again with it at the job's next round.
+    if (approx) {
+      running.approx = approx;
+      running.grew = true;
+    }
     return;
   }
-  if (!left.length) return;
+  if (!left.length && !approx) return;
   const late: LateJob = {
     layer: job.layer,
     hold,
@@ -725,6 +793,7 @@ function lateFor(job: SlideJob, left: readonly string[], hold: UnitHold): void {
     ended: false,
     owns: false,
     stopped: false,
+    ...(approx ? { approx } : {}),
   };
   lateJobs.set(job.key, late);
   pushLate(job, late, width / LOGICAL_WIDTH);
@@ -1031,6 +1100,8 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
   let unitsMade: UnitJob | undefined;
   /** The slide a slide job draws: its direct part when the slide has an underlay frame. */
   let drawn: Slide | undefined;
+  /** A draw cut without rule (e): its late job works the whole split out (`lateUnits`). */
+  let approx: Approx | undefined;
   // Units the raster left out until they are made (C2b, `SlideDrawOptions.late`: a decoration past
   // DECOR_SPRITE drawn at once is one task of up to about 115 ms at 3840): they go to the late job and fade in.
   // With `?late=next` nothing fades in, so nothing is left out: such a decoration is drawn at once (repair 3).
@@ -1048,9 +1119,12 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
       // slide's reach and drawing budget are worked out with them; then its geometry units, pinned. Only an
       // armed job waits for its units, until its cue goes live (`hurry`); a live job and a re-draw never do.
       const waits = (role ?? 'armed') === 'armed';
+      // A live job is cut by the counts alone (no rule (e): its late job works the rest out, `lateUnits`).
+      const area = role !== 'live';
       const prep = await prepare(job, scale, steps, {
         key: job.key,
         stop: () => !waits || hurried.has(job.key) || rushed.has(job.key),
+        area,
       });
       units = prep.units;
       unitsMade = prep.made;
@@ -1063,6 +1137,14 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
         : job;
       drawn = sj.slide;
       const under = split ? underFrame(split, fontEpoch) : undefined;
+      if (!area && (split || unitsOfSlide(sj.slide, scale, sj.look).length)) {
+        const fk = split ? frameKey(split, fontEpoch) : undefined;
+        approx = {
+          slide: sj.slide,
+          ...(fk ? { frame: fk } : {}),
+          copied: !!fk && !(prep.made?.left ?? []).includes(fk),
+        };
+      }
       const pre = await preload(sj.images, slidePictures(sj.slide, { scale, look: sj.look }), out, steps);
       release = pre.release;
       skipped = pre.skipped;
@@ -1138,7 +1220,7 @@ async function run(job: AssetJob, steps: Steps, role?: JobRole): Promise<void> {
     // job, pinned with its own (handed on before the layer's older hold is let go).
     const left = [...(unitsMade?.left ?? [])];
     for (const k of leftOut) if (!left.includes(k)) left.push(k);
-    if (hold && job.kind === 'slide') lateFor(job, left, hold);
+    if (hold && job.kind === 'slide') lateFor(job, left, hold, approx);
     if (units && job.kind === 'slide') keepUnits(`layer ${job.layer} ${held}`, units);
     units = undefined;
     // A slide whose content is past the raster budget by its drawing estimate (memoised by the draw, with the

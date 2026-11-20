@@ -111,6 +111,10 @@ describe('makeFrame', () => {
     expect(framesInProgress()).toBe(0);
     expect(unitCache.get('unit', key)).toMatchObject({ w: 1920, h: 1080, bytes: 1920 * 1080 * 4 });
     expect(frameStats().made).toBe(1);
+    // The longest turn and the longest single step the frame took (what M2 and M5 read, and a step over 50 ms is D11's).
+    expect(frameStats().longestTurn).toBe(longest);
+    expect(frameStats().longestStep).toBeGreaterThan(0);
+    expect(frameStats().longestStep).toBeLessThanOrEqual(longest!);
   });
 
   it('is made once each step across a stop and a resume, and a cancelled call keeps the cache empty but its work', async () => {

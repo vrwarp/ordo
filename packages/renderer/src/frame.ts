@@ -65,6 +65,14 @@ export const FRAME_DIRECT_BYTES = CLAMP.maxCueBitmapBytes;
  * direct part's pictures is drawn from its source resampled.
  */
 export const FRAME_DIRECT_TARGETS = 32;
+/**
+ * Whether rule (c) (`FRAME_DIRECT_TARGETS`) holds the direct part back of a slide that is within every other count
+ * (objects, pictures, prepared bytes). Off, as M4 decided (design 29 live-frame step 6): of the 17 slides of the public
+ * decks (shard0-2) that rule (c) alone would have split, 16 drew in 36 ms or less at 3840 at the base (their pictures are
+ * small: 41-57 prepared draws, 0-21 MB) and the slide it was written for, Emoji_Parallel 7 (169 pictures, 15 prepared
+ * draws, 118-136 ms), is not one: its time is 169 draws, not the target count. A slide past another count keeps rule (c).
+ */
+export const FRAME_TARGETS_WITHIN_COUNTS = false;
 /** Objects a frame holds at most: the slide-file bound (design 29 A7), a hostile bound; the rest is cut and counted. */
 export const FRAME_MAX_OBJECTS = BAKE_MAX_OBJECTS;
 /** Frames in progress at most per thread (each holds a scratch canvas of the frame); the oldest is dropped. */
@@ -130,6 +138,15 @@ export interface FrameOptions {
   readonly video?: { readonly objectId: string };
   /** The look the slide is drawn with: a look that does not draw it as authored is not split. */
   readonly look?: Look;
+  /** Rule (c) also for a slide within every other count (default `FRAME_TARGETS_WITHIN_COUNTS`). */
+  readonly targetsWithin?: boolean;
+  /**
+   * Rule (e), the direct part's units fit one frame of area (default true). Off for a draw a GO waits for (the asset
+   * worker's live job): working it out plans every unit of the direct part, which that draw does once more with the
+   * geometry files in (about 150 ms of a crowded line-art slide cold), so the slide is cut by (a) to (d) alone and
+   * its late job works the full split out off the GO's path (`lateUnits`).
+   */
+  readonly area?: boolean;
 }
 
 /** The frame at `scale` in device px (the logical frame's, rounded up as units' is). */
@@ -146,32 +163,40 @@ const splitMemo = new WeakMap<object, Map<string, FrameSplit | null>>();
  *
  * The direct part is chosen from the TOP down, as many objects as satisfy every rule at once: (a) at most
  * `FRAME_DIRECT_OBJECTS` objects, (b) at most `FRAME_DIRECT_IMAGES` distinct pictures (the live clamp's rule),
- * (c) at most `FRAME_DIRECT_TARGETS` distinct prepared picture draws at `scale` (a picture with no target, turned
- * or rounded without a mask, is drawn from the source resampled and counts as one too), (d) the prepared targets'
- * bytes within `FRAME_DIRECT_BYTES`, (e) the direct part's units fit one frame of area (`UNIT_SLIDE_AREAS`: none of
+ * (c) at most `FRAME_DIRECT_TARGETS` distinct prepared picture draws at `scale`, asked of a slide past another count
+ * (`FRAME_TARGETS_WITHIN_COUNTS`; a picture with no target, turned or rounded without a mask, is drawn from the source
+ * resampled and counts as one too), (d) the prepared targets' bytes within `FRAME_DIRECT_BYTES`, (e) the direct part's units fit one frame of area (`UNIT_SLIDE_AREAS`: none of
  * its objects is left to its legacy copy for want of it, `slideUnitsLeft` reports no 'area': r2a MUST c(2)). The
  * anchors are always direct: the frame is only objects below the lowest anchor, and a direct part that holds more
  * than the counts there is cut by the live clamp as it always was (`cut`). Rules (a) to (e) only ever add up, so the
  * direct part is the longest top-down run that satisfies them: as much as possible
- * is live at once, and the words come first.
+ * is live at once, and the words come first. With `area: false` rule (e) is not asked (`FrameOptions.area`).
  */
 export function splitFrame(slide: Slide, scale: number, opts: FrameOptions = {}): FrameSplit | undefined {
   if (!framesOn || !(Number.isFinite(scale) && scale > 0)) return undefined;
   if (opts.look && clampLook(opts.look).layers.slide.mode !== 'authored') return undefined;
   const anchors = [...(opts.anchors ?? []), ...(opts.video ? [opts.video.objectId] : [])];
   const bake = clampSlide(slide, 'bake');
-  const at = `${scale}|${anchors.join(',')}`;
+  const area = opts.area !== false;
+  const within = opts.targetsWithin ?? FRAME_TARGETS_WITHIN_COUNTS;
+  const at = `${scale}|${anchors.join(',')}|${area ? 'a' : ''}${within ? 'w' : ''}`;
   let m = splitMemo.get(bake);
   if (!m) splitMemo.set(bake, (m = new Map()));
   const hit = m.get(at);
   if (hit !== undefined) return hit ?? undefined;
-  const out = split(bake, scale, anchors);
+  const out = split(bake, scale, anchors, area, within);
   if (m.size >= 8) m.clear();
   m.set(at, out ?? null);
   return out;
 }
 
-function split(bake: Slide, scale: number, anchors: readonly string[]): FrameSplit | undefined {
+function split(
+  bake: Slide,
+  scale: number,
+  anchors: readonly string[],
+  area: boolean,
+  within: boolean,
+): FrameSplit | undefined {
   const content = slideContent(bake);
   const objects = content.objects;
   const n = objects.length;
@@ -186,6 +211,25 @@ function split(bake: Slide, scale: number, anchors: readonly string[]): FrameSpl
     bytes += frame.w * frame.h * 4;
   }
   const why = { objects: false, images: false, targets: false, bytes: false, area: false };
+  // Rule (c) is asked of a slide past another count only (`FRAME_TARGETS_WITHIN_COUNTS`): one within them all is drawn
+  // as it always was, its pictures past the prepared targets from their sources.
+  let ruleC = within;
+  if (!ruleC) {
+    const every = new Set<string>();
+    const draws = new Set<string>();
+    let all = content.pictureMediaId ? frame.w * frame.h * 4 : 0;
+    for (const o of objects) {
+      if (o.type !== 'image') continue;
+      every.add(o.mediaId);
+      const t = pictureTarget(o, scale);
+      const key = t ? `${o.mediaId}|${t.key}` : `${o.mediaId}|source`;
+      if (!draws.has(key)) {
+        draws.add(key);
+        all += t ? t.w * t.h * 4 : 0;
+      }
+    }
+    ruleC = n > FRAME_DIRECT_OBJECTS || every.size > FRAME_DIRECT_IMAGES || all > FRAME_DIRECT_BYTES;
+  }
   let start = n;
   for (let i = n - 1; i >= 0; i--) {
     const o = objects[i]!;
@@ -208,7 +252,7 @@ function split(bake: Slide, scale: number, anchors: readonly string[]): FrameSpl
       key = t ? `${o.mediaId}|${t.key}` : `${o.mediaId}|source`;
       if (!targets.has(key)) {
         targetBytes = t ? t.w * t.h * 4 : 0;
-        if (targets.size >= FRAME_DIRECT_TARGETS) {
+        if (ruleC && targets.size >= FRAME_DIRECT_TARGETS) {
           why.targets = true;
           broke = true;
         }
@@ -229,7 +273,7 @@ function split(bake: Slide, scale: number, anchors: readonly string[]): FrameSpl
   // (e) The direct part's units fit one frame of area (r2a MUST c(2)): no object of it is left to its legacy copy
   // for want of area (`slideUnitsLeft`). Units only ever add up, so the longest run that fits is found by
   // halving; a step down from there covers a slide whose areas do not quite add up.
-  if (start < n) {
+  if (area && start < n) {
     const over = (at: number) =>
       slideUnitsLeft(at === 0 ? objects : objects.slice(at), scale).includes('area');
     if (over(start)) {
@@ -345,6 +389,8 @@ export interface FrameMakeOptions {
   readonly pictures?: FramePictures;
   /** The font epoch the key follows (`frameKey`). */
   readonly epoch?: number;
+  /** The turn time a frame may take before it is dropped (default `FRAME_BUDGET_MS`): the bench measures past it. */
+  readonly budgetMs?: number;
 }
 
 type FrameStep =
@@ -397,10 +443,20 @@ interface FrameWork {
 const works = new Map<string, FrameWork>();
 /** Frames made without a picture that was not there yet, by key, and which: made again once it has arrived. */
 const incomplete = new Map<string, string[]>();
-const stats = { made: 0, over: 0, resumed: 0 };
+const stats = { made: 0, over: 0, resumed: 0, longestTurn: 0, longestStep: 0 };
 
-/** Frames made, frames dropped past `FRAME_BUDGET_MS`, and calls that resumed a stopped frame, on this thread. */
-export function frameStats(): { made: number; over: number; resumed: number } {
+/**
+ * Frames made, frames dropped past `FRAME_BUDGET_MS`, calls that resumed a stopped frame, and the longest turn and
+ * the longest single step (ms) of any frame made or dropped, on this thread. The two longest are what M2 and M5
+ * read (a turn is at most `SLICE_MS` / 2 plus one step; a step over 50 ms at 3840 is D11's).
+ */
+export function frameStats(): {
+  made: number;
+  over: number;
+  resumed: number;
+  longestTurn: number;
+  longestStep: number;
+} {
   return { ...stats };
 }
 
@@ -439,6 +495,8 @@ export function clearFrameWork(): void {
   stats.made = 0;
   stats.over = 0;
   stats.resumed = 0;
+  stats.longestTurn = 0;
+  stats.longestStep = 0;
 }
 
 /** Whether the frame under `key` was made without a picture that was not there. */
@@ -561,9 +619,11 @@ export async function makeFrame(
   // Cancelled or hurried between turns (`run.check` throws): `work` stays in `works`, the next call resumes it.
   while (work.index < steps.length) {
     run.check();
-    if (work.ms > FRAME_BUDGET_MS) {
+    if (work.ms > (opts.budgetMs ?? FRAME_BUDGET_MS)) {
       works.delete(key);
       stats.over++;
+      stats.longestTurn = Math.max(stats.longestTurn, work.longestTurn);
+      stats.longestStep = Math.max(stats.longestStep, work.longestStep);
       return markUnitUnmade(key);
     }
     const st = steps[work.index]!;
@@ -653,6 +713,8 @@ export async function makeFrame(
   if (work.missing.size) incomplete.set(key, [...work.missing]);
   else incomplete.delete(key);
   stats.made++;
+  stats.longestTurn = Math.max(stats.longestTurn, work.longestTurn);
+  stats.longestStep = Math.max(stats.longestStep, work.longestStep);
   noteUnitWork(1, work.steps, work.turns);
   return work.longestTurn;
 }

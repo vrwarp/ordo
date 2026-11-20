@@ -26,6 +26,7 @@ import {
   frameStats,
   frameWorkKeys,
   framesInProgress,
+  splitFrame,
 } from '@ordo/renderer/frame.ts';
 import {
   effectUnits,
@@ -2049,6 +2050,53 @@ describe('asset worker: the underlay frame (design 29 R1)', () => {
     const armed = await runAs(crowdedJob(s, 'sl|crowd-warm'), 'armed');
     expect(unitWork()).toEqual(after);
     expect(copiesOf(armed.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
+  });
+
+  /** `n` copies of a line art, each moved a little (units are keyed by what they draw: `dx` is the test's own). */
+  const artSlide = (id: string, n: number, dx: number): Slide => {
+    const art = lineArtSlide().objects.find((o) => o.type === 'shape')!;
+    return {
+      id,
+      objects: Array.from({ length: n }, (_, i) => ({
+        ...art,
+        id: `${art.id}-${i}`,
+        box: { x: 20 + i * 30 + i / 8 + dx, y: 20 + i * 20, w: 600, h: 400, rotation: 0 },
+      })),
+    };
+  };
+
+  it('a jump to a slide past one frame of unit area only is drawn as it always was; its late job makes the whole split off the GO path (rule e)', async () => {
+    const s = artSlide('area-jump', 20, 0.2109375);
+    const key = 'sl|area-jump';
+    const scale = W / 1920;
+    const bake = clampSlide(s, 'bake');
+    // Within the counts and past one frame of area only: the whole split has a frame, the one by the counts none.
+    const whole = splitFrame(bake, scale)!;
+    expect(whole.why.area).toBe(true);
+    expect(splitFrame(bake, scale, { area: false })).toBeUndefined();
+    const plan = unitsOfSlide(s, scale, LOOK_MAIN);
+    const kept = unitsOfSlide(whole.direct, scale, LOOK_MAIN);
+    expect(plan.length).toBeGreaterThan(0);
+    timed(1);
+    rendered.length = 0;
+    replies.length = 0;
+    const frames0 = frameStats().made;
+    send({ t: 'job', job: crowdedJob(s, key), role: 'live' });
+    await vi.waitFor(() => expect(replies.find((r) => r.t === 'done')).toBeDefined());
+    // The slide as it always was: all its objects drawn (past the drawing budget as the base's draw of it, `heavy`; the
+    // direct part of the whole split is 12 of 20), every unit of its plan left to the late job, nothing copied.
+    expect(replies.find((r) => r.t === 'done')).toMatchObject({ key, heavy: true, unitsLeft: plan.length });
+    expect(copiesOf(rendered[0]!.msg.bitmap as unknown as FakeBitmap)).toHaveLength(0);
+    // Its late job works the whole split out: the frame and the units of the direct part, reported once made.
+    await vi.waitFor(() => expect(ready().find((r) => r.slideKey === key && r.left === 0)).toBeDefined(), {
+      timeout: 10_000,
+    });
+    expect(frameStats().made - frames0).toBe(1);
+    expect(ready().flatMap((r) => r.keys)).toHaveLength(kept.length + 1);
+    // The re-draw the link sends is the whole split's: the frame copied, nothing left.
+    const again = await runAs(crowdedJob(s, key, { refresh: true, refreshFadeMs: 300 }), 'late');
+    expect(copiesOf(again.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
+    expect((again.reply as Extract<FromAsset, { t: 'done' }>).unitsLeft ?? 0).toBe(0);
   });
 
   it('the live playlist warm-up makes the frame of a crowded raw slide', async () => {

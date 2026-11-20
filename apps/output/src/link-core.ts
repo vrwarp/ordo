@@ -274,6 +274,7 @@ export class LinkCore {
   private unitCacheBytes = 0;
   /** The asset worker's underlay frames (renderer `frame.ts`): dropped past their time budget, bytes in progress. */
   private framesOver = 0;
+  private framesMade = 0;
   private frameWorkBytes = 0;
   /** Per-lane timing of the asset worker's jobs, and the jobs cancelled as superseded. */
   private laneStats = new LaneStats();
@@ -2277,6 +2278,7 @@ export class LinkCore {
               `${m.key.slice(0, 60)}: a frame past its time budget was dropped (${m.frames.over} so far): the slide keeps the part it draws at once`,
             );
           this.framesOver = m.frames.over;
+          this.framesMade = m.frames.made;
           this.frameWorkBytes = m.frames.workBytes;
         }
         if (m.unitsLeft) {
@@ -2656,6 +2658,7 @@ export class LinkCore {
         made: this.unitsMade,
         late: this.unitsLate,
         cacheBytes: this.unitCacheBytes,
+        framesMade: this.framesMade,
         framesOver: this.framesOver,
         frameWorkBytes: this.frameWorkBytes,
         warmed: [...this.warmedCues],

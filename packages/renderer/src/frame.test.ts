@@ -6,6 +6,7 @@ import {
   FRAME_DIRECT_IMAGES,
   FRAME_DIRECT_OBJECTS,
   FRAME_DIRECT_TARGETS,
+  FRAME_TARGETS_WITHIN_COUNTS,
   FRAME_MAX_OBJECTS,
   FRAME_WORK_MAX,
   frameSize,
@@ -38,6 +39,8 @@ describe('the constants', () => {
     expect(FRAME_DIRECT_IMAGES).toBe(CLAMP.maxImagesPerSlide);
     expect(FRAME_DIRECT_BYTES).toBe(CLAMP.maxCueBitmapBytes);
     expect(FRAME_DIRECT_TARGETS).toBe(32);
+    // M4 (design 29 live-frame step 6): rule (c) is asked of a slide past another count only.
+    expect(FRAME_TARGETS_WITHIN_COUNTS).toBe(false);
     expect(FRAME_MAX_OBJECTS).toBe(20_000);
     expect(FRAME_WORK_MAX).toBe(2);
     expect(UNIT_SLIDE_AREAS).toBe(1);
@@ -101,18 +104,33 @@ describe('splitFrame by pictures (rules b, c, d)', () => {
     expect(ids(f.direct.objects)).toEqual(Array.from({ length: 16 }, (_, i) => `p${i + 8}`));
   });
 
-  it('60 pictures of distinct sizes of a few files at 3840: the direct part holds 32 targets', () => {
-    const s = slideOf(
-      Array.from({ length: 60 }, (_, i) =>
-        picture(`p${i}`, `m${i % 10}`, {
-          x: 10 + (i % 12) * 150,
-          y: 10 + Math.floor(i / 12) * 150,
-          w: 100 + i,
-          h: 100 + i,
-        }),
-      ),
+  const distinctSizes = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      picture(`p${i}`, `m${i % 10}`, {
+        x: 10 + (i % 12) * 150,
+        y: 10 + Math.floor(i / 12) * 150,
+        w: 100 + i,
+        h: 100 + i,
+      }),
     );
+
+  it('60 pictures of distinct sizes of a few files at 3840, within every other count: not split by default (M4)', () => {
+    // 16 of the 17 slides of the public decks that rule (c) alone would split drew in 36 ms or less at the base: the
+    // rule is asked of a slide past another count only (`FRAME_TARGETS_WITHIN_COUNTS`).
+    expect(splitFrame(slideOf(distinctSizes(60)), 2)).toBeUndefined();
+  });
+
+  it('60 pictures of distinct sizes under 150 other objects (past a count): the direct part holds 32 targets', () => {
+    const s = slideOf([...squares(150), ...distinctSizes(60)]);
     const f = splitFrame(s, 2)!;
+    expect(f.why.targets).toBe(true);
+    expect(f.direct.objects).toHaveLength(FRAME_DIRECT_TARGETS);
+    expect(f.under).toHaveLength(178);
+  });
+
+  it('60 pictures of distinct sizes of a few files at 3840, rule (c) asked of every slide: the direct part holds 32 targets', () => {
+    const s = slideOf(distinctSizes(60));
+    const f = splitFrame(s, 2, { targetsWithin: true })!;
     expect(f.why.targets).toBe(true);
     expect(f.direct.objects).toHaveLength(FRAME_DIRECT_TARGETS);
     const keys = new Set(
@@ -172,6 +190,24 @@ describe('splitFrame by effect area (rule e, r2a MUST c(2))', () => {
     // the next object down would have passed the bound
     const next = f.under[f.under.length - 1]!;
     expect(slideUnitsLeft([next, ...f.direct.objects], 1)).toContain('area');
+  });
+
+  it('area: false leaves rule (e) out: the same slide is cut by the counts alone, each answer memoised apart', () => {
+    const slide = effectsSlide({ w: 1100, h: 700 });
+    const whole = splitFrame(slide, 1)!;
+    expect(whole.why.area).toBe(true);
+    // Within the counts and past one frame of unit area only: no frame without the rule.
+    expect(splitFrame(slide, 1, { area: false })).toBeUndefined();
+    expect(splitFrame(slide, 1, { area: true })).toBe(whole);
+    expect(splitFrame(slide, 1)).toBe(whole);
+    // The counts still cut it: 400 text boxes, the top 200 direct, with or without the rule.
+    const crowded = slideOf(
+      Array.from({ length: 400 }, (_, i) => textBox(`ar${i}`, `t${i}`, 8, 8 + i, 80, 10)),
+    );
+    const cut = splitFrame(crowded, 1, { area: false })!;
+    expect(cut.direct.objects).toHaveLength(200);
+    expect(cut.why.area).toBe(false);
+    expect(splitFrame(crowded, 1)!.direct.objects).toHaveLength(200);
   });
 
   it('20 shadowed panels the budget keeps whole (no unit wanted, no area left) are not split for area', () => {
@@ -308,7 +344,7 @@ describe('the split is the smallest frame (seeded fuzz of 500 slides)', () => {
         else objs.push(textBox(`t${i}`, `L${i}`, 20 + (i % 10) * 180, 20 + Math.floor(i / 10) * 40, 170, 36));
       }
       const slide = slideOf(objs, `fz${k}`);
-      const f = splitFrame(slide, scale);
+      const f = splitFrame(slide, scale, { targetsWithin: true });
       const bake = clampSlide(slide, 'bake').objects;
       if (!f) {
         expect(rules(bake, scale), `slide ${k} was not split`).toEqual([]);
