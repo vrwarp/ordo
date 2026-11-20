@@ -545,7 +545,7 @@ index (`apps/hub/src/liveproc.ts:227-237`).
 - Saved on a device that cannot make pictures (phones, compact layouts, iPads, Safari, Firefox): W26, and W20 says
   where the picture will be made instead of "being made again".
 - **Editing cost.** The canvas has one Konva node per object, each cached up to 8 MP (`NODE_CACHE_MAX_PX`,
-  `SlideCanvas.tsx:350`), a memory risk on an iPad with a 6,000-object slide. Measured on slides of 340, 1,000 and
+  `SlideCanvas.tsx:493`), a memory risk on an iPad with a 6,000-object slide. Measured on slides of 340, 1,000 and
   6,251 objects on a desktop and an iPad (open, select, drag); past the measured bound the editor shows W63 and
   opens imported groups locked.
 - Previewing an unsaved big slide on an idle screen uploads its pages first; the preview carries stand-ins and
@@ -860,7 +860,7 @@ The Warning column names §3's entries; their words are there. "Crit." says whet
 | F10 | Live-path counts: pending commands 100 (`liveCore.ts:84`), media replays 64 (`apps/output/src/host.ts:78`)                            | oldest dropped (time-bounded)              | keep    | lossless or time-bounded                                                                               | —                  | no    |
 | F11 | Re-import 4 MiB log line (`reimport.ts:932-934`)                                                                                      | a log line only                            | replace | the merged presentation is planned again (hub-writers)                                                 | —                  | no    |
 | F12 | Clipboard 200 objects a paste (`CLIPBOARD_LIMITS.objects`, `ops/clipboard.ts:45-51`)                                                  | paste cut                                  | raise   | 20,000 (the slide-file bound); past the live counts the slide becomes `count` (editor-slideops)        | W25                | no    |
-| F13 | Editor node cache 8 MP a node (`NODE_CACHE_MAX_PX`, `SlideCanvas.tsx:350`)                                                            | drawn without cache (time only)            | keep    | measured with crowded slides on a desktop and an iPad (prerender-editor)                               | W63                | no    |
+| F13 | Editor node cache 8 MP a node (`NODE_CACHE_MAX_PX`, `SlideCanvas.tsx:493`)                                                            | drawn without cache (time only)            | keep    | measured with crowded slides on a desktop and an iPad (prerender-editor)                               | W63                | no    |
 
 Owned by r2b's planned tracks and only cross-referenced here: the converter's effect and drawing budgets as
 classifier inputs (effect-units), the editor's whole-draw rule (leaf-editor), the table object (tables-conv,
@@ -1337,7 +1337,7 @@ rejected whole. R1 is the first review (28 findings), R2 the second (22).
 | R2.10 | offline download and the Pages demo drop slide files                                  | `OfflineControl.tsx:8-57`, `engine.ts:658-678`, `demo/src/hub.ts:506-520`                                                                                                                                                                             | accepted                      | golive-warnings (offline), hub-writers (demo) (A32)                                                                                                                                                                            |
 | R2.11 | tables on LibreOffice hubs decided without the pending question                       | `inventory.md:277`                                                                                                                                                                                                                                    | partly                        | not decided here; the owner decided question 3 on 2026-11-15 (the table object on every hub, the gate a target). Rejected: "pre-render instead of LibreOffice's page", since ordo's picture cannot close a fidelity gap (§1.9) |
 | R2.12 | the live set past 200 drops content; W24 misleads (same as R1.17)                     | as R1.17                                                                                                                                                                                                                                              | accepted                      | as R1.17                                                                                                                                                                                                                       |
-| R2.13 | editing very large slides unmeasured; clipboard cut at 200; iPads                     | `SlideCanvas.tsx:350`, `ops/clipboard.ts:45-51`                                                                                                                                                                                                       | accepted                      | measure 11, W63, F12, W26 trigger widened (§1.8)                                                                                                                                                                               |
+| R2.13 | editing very large slides unmeasured; clipboard cut at 200; iPads                     | `SlideCanvas.tsx:493`, `ops/clipboard.ts:45-51`                                                                                                                                                                                                       | accepted                      | measure 11, W63, F12, W26 trigger widened (§1.8)                                                                                                                                                                               |
 | R2.14 | `DEGRADED_MAX` and the listing cap hide critical lines                                | `goLive.ts:66`, :199-201, :408                                                                                                                                                                                                                        | accepted                      | one line per presentation, critical first, W60 (A34)                                                                                                                                                                           |
 | R2.15 | warnings that cannot be acted on                                                      | `routes.ts:585-593` (no route deletes one revision); `DegradedBanner.tsx:27`                                                                                                                                                                          | partly                        | W29, W37, W53, W10, W21, W3, W18, W15, lower-case "ordo" and the stale title fixed; no "Remove older versions" action is added (W29's advice changed instead: old pictures already go first)                                   |
 | R2.16 | e2e port blocks collide with default bases and 5173                                   | `e2e/ports.ts:11-14`, :146-148, :169; `serve-demo.mjs:6`                                                                                                                                                                                              | accepted                      | new blocks (§4)                                                                                                                                                                                                                |
@@ -1368,3 +1368,61 @@ The r2b plan (two critics against `62a1c3a`) changed this design where it is bui
   `cut` and `meta.draw`, and 0.8.0 and 0.8.1 keep a stage look's `stagePreset` and `notesScale`
   (`schemas.look.test.ts`).
 - **r2b.7 Owner defaults** applied as §5 lists them.
+
+Sub-wave 2 (the follow-up pull request's part 2, 2026-11-20; `regroup/r2b/integrate-2.md`) built the following where it
+differs from the text above:
+
+- **r2b.8 The service by reference (live-by-ref, §2.3).** There is no GET route and no client fetch for the copy: a
+  screen that holds it says so in `hello` and `live.resync` (`resolvedId`), and the hub sends it the state without the
+  copy (the same `resolvedId`); the `goLive` delta stays whole (it carries the copy once, parsed once); the state
+  without the copy is not tiny, because the cue list stays in it, so the cue list is saved once beside the copy in its
+  own row (`live_cues`, named by the snapshot's `cuesId`) and a snapshot writes 1,242 B instead of the whole service;
+  `ORDO_LIVE_BYREF=off` writes the old whole form again. W58 and W59 ship as PR #29 left them (OQ-LBR3); W59's reason
+  now says that a GO no longer costs a screen more with the size (it writes a record of about 1 KB) and that what the
+  size still costs is the download and parse at the goLive and the one-time save in pieces.
+- **r2b.9 What the by-reference path still costs (named, not met).** The take-over's apply holds the live loop 0.25 s
+  at 20 MiB with sockets (the gate is 0.2 s; about 50 ms are left to gain by computing the cue list's JSON and hash in
+  golive-prepare's worker, which would add a `cuesId` to the worker's result) and a storm of 20 screens saying hello at
+  once holds it at p99 9-13 ms (the gate is 5 ms; pacing the state sends a few sockets a turn is the option, OQ-LBR6).
+  A rollback to the version before this part does not restore a service that was running (OQ-LBR1).
+- **r2b.10 The underlay frame (live-frame, R1).** The frame is a z-prefix of the slide made under the live raster
+  (design/14 "The underlay frame"), not a part of the live set; it travels as a separate descriptor field
+  (`SlideDesc.full`, the slide before the live clamp's cut, only for a slide past a count) and no protocol field; c(2)
+  is closed by the split at one z-position (the direct part's units fit one frame); the limits that remain are named
+  in design/27 §13 (a frame past `FRAME_BUDGET_MS` or 20,000 objects is not made; shapes above a playing video that
+  overlap it are cut at 200, E9); D12's cost figure comes from a synthetic bench, not a venue PC.
+- **r2b.11 Hub storage (prerender-store).** The collection's rule is "unnamed by every presentation, saved version,
+  running service and queued job for 30 days, the clock starting the first night the hub sees it unnamed" (30 days =
+  the backups' retention, so a restore never lacks a file) and the collector ships in report mode (OQ-PS2); keys are
+  computed before the save and stored with a signature; `slide_heads` and `slide_head_pages` replace §1.3's
+  `slide_files` table (no drawn column); the free-space floor (A25) is clamped to 5 GiB at least and 25 GiB at most, 5 %
+  of the volume between (OQ-PS1; `ORDO_MIN_FREE_GB` overrides, 0 turns it off; W44's words); A24's budget counts unique
+  bytes; revision caps (A36's second half) and W66 are not built (OQ-PS4: library-light); `prerender.add` arrives by IPC
+  from the pool, not from a client; there is no view whitelist. Nothing calls the new routes and nothing writes a
+  `prerender` record (`PRERENDER_ON` false).
+- **r2b.12 Dense decks (xml-compact).** X2 (reading a part on demand) is not built as designed: the importer reads
+  parts up to 32 MiB through a packed tokenizer for traced artwork (the children of an `a:path` as numbers), 50,000
+  shapes a slide, and the hub reads a deck slide by slide up to 1 GB of slide XML (Q4.b, OQ-XC1's larger answer; 64 MiB
+  stays the browser's); W9 (a slide or design too detailed: only its text), W10 (the 50,000-shape and 1,000-object cuts)
+  and W17 (a deck over 1 GB of slide XML) are worded in `ImportCore.cutWarnings` and the hub's `XmlTotalError`; the
+  presentation budget is 8 MiB and the compact mark 6 MiB (Q1.c). The whole-XML callers other than the import (the render
+  copy, the text repair) still refuse a deck over 256 MiB.
+- **r2b.13 WordArt geometry (warp-geom).** The 40 preset warps are vendored from a file under
+  Apache-2.0 (provenance and licence text only: the jar has no NOTICE), compiled into `textwarps.gen.ts` and built at a
+  box by `textwarp.ts`; each shape's drawing mode is a property of its geometry (the M9 warps design's mode table was
+  wrong for the vendored file); the shapes follow ECMA-376, so five (Arch Up, Arch Down, Circle, Button and Inflate Top)
+  differ from LibreOffice's own and are named exceptions with their reasons (OQ-WG1); the probe golden's geometry leg
+  (`golden:warps`) is not a CI step (OQ-WG3). Nothing calls the geometry yet (WordArt is drawn straight until part 3
+  and the converter step) and the first call of a warp costs more than the brief's bound (open: warp-geom-2).
+- **r2b.14 The editor (leaf-editor).** The desktop editor draws past-budget objects whole in idle time under a
+  stricter rule than the brief's first draft (a fine pointer, no service live, `?editor=light` off, within
+  `WHOLE_BOUND`, the 8 MP node cache at this density and 32 MP in all), and the guard is for every computer (OQ-LE1: a
+  service live anywhere keeps the lighter drawing, because the browser cannot tell the computer that runs the service
+  from the one that edits); an object that cannot be drawn whole at this zoom keeps its simple form and the Object panel
+  says so in one line (Q7.b); a tablet or phone with a touch screen keeps the lighter drawing, and an iPad whose browser
+  reports a mouse or trackpad (a fine pointer) is treated as a desktop (OQ-LE3: it needs a real iPad to confirm).
+- **r2b.15 The carry-overs (followups-1c).** The hub waits for its bundled fonts before it listens, at most
+  `ORDO_FONTS_WAIT_MS` (2,000 ms; 0 turns the wait off; the live process has none); the image keeps the licence notices
+  of every package (OQ-FU2) and its size target is 2 GB (the owner raised it from design 22's 1.5 GB); kerning is
+  measured once per piece (`Shared.kerns`); the first Alt+N closes a notes dock that opened by itself (macOS Option+N is
+  not measured, OQ-FU5).
