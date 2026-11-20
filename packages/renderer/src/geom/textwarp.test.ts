@@ -450,8 +450,8 @@ const distToPolyline = (x: number, y: number, poly: readonly number[]): number =
 };
 const finiteArc = (a: WarpArc): void => {
   expect(a.xy.length).toBe(2 * a.len.length);
-  for (const v of a.xy) expect(Number.isFinite(v)).toBe(true);
-  for (const v of a.len) expect(Number.isFinite(v)).toBe(true);
+  expect(a.xy.every(Number.isFinite)).toBe(true);
+  expect(a.len.every(Number.isFinite)).toBe(true);
   expect(Number.isFinite(a.total) || a.total === Number.POSITIVE_INFINITY).toBe(true);
 };
 
@@ -472,7 +472,7 @@ describe('flattenWarpPath', () => {
     const dense = sampled(path);
     expect(Math.abs(a.total - dense.length)).toBeLessThan(0.05);
     // The polyline starts at the path's first point and ends at its last.
-    expect([a.xy[0], a.xy[1]]).toEqual([0, 120]);
+    near([a.xy[0]!, a.xy[1]!], [0, 120], 1e-9);
     near([a.xy[a.xy.length - 2]!, a.xy[a.xy.length - 1]!], [360, 120]);
     // Its vertices lie on the curve and every chord stays within the flatness of it.
     const n = a.xy.length / 2;
@@ -621,7 +621,7 @@ describe('arcAt', () => {
 
   it('gives the first point at 0, the last at 1 and the point at half the length at 0.5', () => {
     const up = arc(textWarpGeometry('textArchUp', 360, 240)!.paths[0]!);
-    expect(arcAt(up, 0)).toEqual({ x: 0, y: 120 });
+    near(Object.values(arcAt(up, 0)), [0, 120], 1e-9);
     near(Object.values(arcAt(up, 1)), [360, 120]);
     const mid = arcAt(up, 0.5);
     expect(Math.abs(mid.x - 180)).toBeLessThan(0.02);

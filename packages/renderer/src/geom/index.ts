@@ -150,14 +150,27 @@ export {
 } from './path.ts';
 export { PRESET_GEOMS } from './presets.gen.ts';
 export {
+  arcAt,
+  clearWarpMemo,
+  flattenWarpPath,
   hasTextWarp,
   TEXT_WARP_NAMES,
   textWarpGeometry,
+  WARP_FLATNESS_PX,
+  WARP_MAX_POINTS,
+  WARP_MEMO_MAX,
+  WARP_MEMO_POINTS,
   WARP_PARALLEL_EPS,
+  type WarpArc,
+  type WarpArcs,
   type WarpMode,
+  type WarpPoint,
   warpAdjustNames,
+  warpAreaArcs,
   warpAreas,
+  warpArcs,
   warpFollowsPath,
+  warpMemoStats,
   warpMode,
 } from './textwarp.ts';
 export { TEXT_WARP_GEOMS } from './textwarps.gen.ts';

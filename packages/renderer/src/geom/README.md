@@ -124,6 +124,25 @@ part 3's, and a text object still draws straight.
 - **Adjust values** are read by name (`warpAdjustNames(name)`: `adj`, or `adj1` and `adj2`); the preset's own `pin`
   guides bound every value, so a hostile deck's value gives finite numbers (`buildGeom` bounds the box and every
   coordinate). No clamp lives here: the document's warp clamp (`../clamp/warp.ts`) is the painter's.
+- **Arc tables.** `flattenWarpPath(path, flatness = WARP_FLATNESS_PX)` flattens the first sub-path of a built path
+  (no preset has a second) by adaptive subdivision to `{ xy, len, total, tol }`: the points, the cumulative arc length
+  at each, the total and the tolerance used. A cubic is flat when 3/4 of the larger distance of its control points
+  from its chord is within the flatness (the curve is a convex combination of its control points, so it strays from
+  the chord by no more than that, and a chord point from the curve by no more); quadratics are raised to cubics and
+  the depth is at most 12. `arcAt(arc, u, out?)` is the point u of the way along the length (binary search; u below
+  0, NaN and -Infinity give the first point, u above 1 and Infinity the last; with `out` it allocates nothing).
+  `warpArcs(name, w, h, adj?)` builds a warp at a box and flattens every path, memoised; `warpAreaArcs` deals the
+  arcs out by area (one each for an odd path count, a pair each for an even one).
+- **Bounds.** An arc has at most `WARP_MAX_POINTS` = 4,096 points (a built path holds at most that many). A path that
+  would hold more, which only a hostile box does (at 1920 x 1080 the worst, Circle, is 513 points and all 40 warps
+  12,049; at 8000 x 8000 at most 1,153 a path), is flattened again at twice the tolerance, at most 30 doublings, then
+  with every curve in 16 equal parameter steps, then as its chords; `tol` says which (Infinity for the last two) and a
+  path is never cut short. The memo holds at most `WARP_MEMO_MAX` = 256 entries and `WARP_MEMO_POINTS` = 400,000
+  points (about 9.6 MB at 24 bytes a point): bounding the entries alone would let a deck of 256 distinct huge boxes
+  fill about 150 MB of an asset worker (a 4,096-point arc is 98 kB and a warp has up to six). The least recently
+  used entry goes first, a hit makes an entry the newest, and an entry over the whole points bound is returned but not
+  kept. The key reads the box as `buildGeom` does and the first four adjust pairs by name and value only (a pair with a
+  non-finite value or a name over 16 characters is neither keyed nor passed on), so one meaning has one entry.
 - **Purity.** `textwarp.ts` and `textwarps.gen.ts` import only their pure sibling geometry modules and use no DOM,
   process or network, and module state is literals and a `Map` only, so a bundler leaves both out of every bundle
   that never builds a warp (the apps' initial chunks and a phone's first load are unchanged to the byte, and

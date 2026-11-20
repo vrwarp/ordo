@@ -137,11 +137,8 @@ describe('text warp fuzz', () => {
                 points += count;
                 expect(count).toBeLessThanOrEqual(WARP_MAX_POINTS);
                 expect(a.len.length).toBe(count);
-                for (const v of a.xy) {
-                  expect(Number.isFinite(v)).toBe(true);
-                  expect(Math.abs(v)).toBeLessThanOrEqual(COORD_LIMIT);
-                }
-                for (const v of a.len) expect(Number.isFinite(v)).toBe(true);
+                expect(a.xy.every((v) => Number.isFinite(v) && Math.abs(v) <= COORD_LIMIT)).toBe(true);
+                expect(a.len.every(Number.isFinite)).toBe(true);
                 expect(a.tol).toBeGreaterThan(0);
                 for (const u of us) {
                   const p = arcAt(a, u);
