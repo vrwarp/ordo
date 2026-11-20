@@ -206,9 +206,31 @@ describe('size estimates (design/27 §3.4)', () => {
   });
 });
 
+describe('the presentation budget (the owner, 2026-11-20: Q1.c)', () => {
+  it('is 8 MiB with a 6 MiB compact mark, and every hostile bound is as it was', () => {
+    // Raised from 4 and 3 MiB so that a deck of artwork slides keeps its later slides whole (Traffic Dark 94-98).
+    expect(SIZE_BUDGETS.presentationMax).toBe(8 * MiB);
+    expect(SIZE_BUDGETS.presentationCompact).toBe(6 * MiB);
+    // The same ratio, and the budget stays under what a PUT, an adopt and a socket take.
+    expect(SIZE_BUDGETS.presentationCompact * 4).toBe(SIZE_BUDGETS.presentationMax * 3);
+    expect(SIZE_BUDGETS.presentationMax).toBeLessThan(SIZE_BUDGETS.adoptMax);
+    // Not touched: the hub's body limit, the service's refusal and its critical line (W58, W59), the per-slide
+    // budget of the ladder, a preview, an adopt and the socket.
+    expect(SIZE_BUDGETS.putMax).toBe(32 * MiB);
+    expect(SIZE_BUDGETS.goLiveMax).toBe(32 * MiB);
+    expect(SIZE_BUDGETS.goLiveSlow).toBe(3 * MiB);
+    expect(SIZE_BUDGETS.slideMax).toBe(64 * KiB);
+    expect(SIZE_BUDGETS.previewMax).toBe(1 * MiB);
+    expect(SIZE_BUDGETS.adoptMax).toBe(15 * MiB);
+    expect(SIZE_BUDGETS.socketMax).toBe(16 * MiB);
+  });
+});
+
 describe('planImportSizes', () => {
-  it('keeps a 2,000-slide import within 4 MiB, the tail compact and contiguous', () => {
-    const sizes = Array.from({ length: 2000 }, () => 6 * KiB);
+  it('keeps a 4,000-slide import within 8 MiB, the tail compact and contiguous', () => {
+    // 23 MiB of slides: almost three times the budget, so the plan must close the presentation.
+    const sizes = Array.from({ length: 4000 }, () => 6 * KiB);
+    expect(sizes.reduce((n, b) => n + b, 0)).toBeGreaterThan(2 * SIZE_BUDGETS.presentationMax);
     const plan = planImportSizes(sizes);
     expect(plan.total).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
     expect(plan.fits).toBe(true);
@@ -216,7 +238,7 @@ describe('planImportSizes', () => {
     expect(plan.compact.at(-1)).toBe(true);
     expect(plan.tailFrom).toBe(plan.compact.indexOf(true));
     expect(plan.compact.slice(plan.tailFrom).every(Boolean)).toBe(true);
-    expect(plan.tail).toBe(2000 - plan.tailFrom);
+    expect(plan.tail).toBe(4000 - plan.tailFrom);
     expect(plan.reasons[plan.tailFrom]).toBe('presentation');
     expect(plan.reasons[0]).toBeNull();
     expect(plan.oversized).toBe(0);
@@ -233,29 +255,30 @@ describe('planImportSizes', () => {
 
   it('takes one compact size per slide, and reports a deck that cannot fit even all compact', () => {
     // The tail's own compact sizes decide where it starts: big compact slides start it earlier.
-    const sizes = Array.from({ length: 2000 }, () => 4 * KiB);
+    const sizes = Array.from({ length: 4000 }, () => 4 * KiB);
     const small = planImportSizes(sizes, 300);
     const big = planImportSizes(
       sizes,
       sizes.map(() => 1.5 * KiB),
     );
-    // Small compact slides: the 3 MiB mark closes the presentation (slide 769 passes it).
-    expect(small.tailFrom).toBe(769);
+    // Small compact slides: the 6 MiB mark closes the presentation (slide 1,537 passes it).
+    expect(small.tailFrom).toBe(1537);
     // Large ones: the room the tail needs closes it earlier.
     expect(big.tailFrom).toBeGreaterThan(300);
     expect(big.tailFrom).toBeLessThan(small.tailFrom);
     for (const plan of [small, big]) expect(plan.total).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
+    // 20,000 slides of 512 bytes are 9.8 MiB even compact: past the 8 MiB budget less its reserve.
     const hopeless = planImportSizes(
-      Array.from({ length: 10_000 }, () => 4 * KiB),
+      Array.from({ length: 20_000 }, () => 4 * KiB),
       512,
     );
     expect(hopeless.fits).toBe(false);
     expect(hopeless.compact.every(Boolean)).toBe(true);
   });
 
-  it('a synthetic 2,000-slide deck imports within 4 MiB, even after the LibreOffice follow-up', () => {
-    const slides = Array.from({ length: 2000 }, (_, i) =>
-      Slide.parse(i === 10 || i === 1500 ? hugeSlide(i) : importedSlide(i)),
+  it('a synthetic 4,000-slide deck imports within 8 MiB, even after the LibreOffice follow-up', () => {
+    const slides = Array.from({ length: 4000 }, (_, i) =>
+      Slide.parse(i === 10 || i === 3000 ? hugeSlide(i) : importedSlide(i)),
     );
     const plan = planImportSizes(
       slides.map(slideBytes),
@@ -263,14 +286,14 @@ describe('planImportSizes', () => {
     );
     expect(plan.fits).toBe(true);
     expect(plan.reasons[10]).toBe('slide');
-    expect(plan.reasons[1500]).toBe('slide');
+    expect(plan.reasons[3000]).toBe('slide');
     expect(plan.oversized).toBe(2);
-    // The deck is about 7 MB with its objects: the last part becomes the compact tail. Compact slides keep
-    // their text twice after the follow-up (artText and the page's text boxes), so about 200 slides stay
+    // The deck is about 14 MB with its objects: the last part becomes the compact tail. Compact slides keep
+    // their text twice after the follow-up (artText and the page's text boxes), so about 400 slides stay
     // editable here (real sermon slides carry half this text).
-    expect(slides.reduce((n, s) => n + slideBytes(s), 0)).toBeGreaterThan(6 * MiB);
-    expect(plan.tailFrom).toBeGreaterThan(150);
-    expect(plan.tailFrom).toBeLessThan(1000);
+    expect(slides.reduce((n, s) => n + slideBytes(s), 0)).toBeGreaterThan(SIZE_BUDGETS.presentationMax);
+    expect(plan.tailFrom).toBeGreaterThan(300);
+    expect(plan.tailFrom).toBeLessThan(2000);
     expect(plan.compact.slice(plan.tailFrom).every(Boolean)).toBe(true);
     // Version 1 as stored: every slide still passes the schema.
     const stored = slides.map((s, i) => Slide.parse(plan.compact[i] ? compactSlide(s) : s));

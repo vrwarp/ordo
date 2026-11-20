@@ -69,6 +69,13 @@ export type ExtractOptions = {
    * entry's): a few KB could otherwise name one large stream many times. Untrusted decks set it.
    */
   distinct?: boolean;
+  /**
+   * Read only the first N bytes of this entry (its data is inflated no further) and return them as the entry's content: the
+   * hub's slide-by-slide reading takes the head of each slide, which is all the slide list needs, and the slide itself later. Called
+   * after `skip` and the size checks with the normalized path and the declared size; undefined, or a prefix not shorter than the
+   * entry, reads the whole entry as before. The prefix counts against `maxInMemoryBytes`; the declared size against the zip's total.
+   */
+  head?: (path: string, uncompressedSize: number) => number | undefined;
 };
 
 type Entry = {
@@ -285,6 +292,14 @@ async function extractInto(
       if (budget.bytes > ZIP_MAX_TOTAL_BYTES) throw new Error('zip expands beyond 8 GB');
       const start = await dataOffset(fh, e);
       if (start + e.compressedSize > size) throw new Error(`zip entry ${e.name} is out of range`);
+      const headN = spill ? undefined : opts.head?.(full, e.uncompressedSize);
+      if (headN !== undefined && headN > 0 && headN < e.uncompressedSize) {
+        const prefix = await readPrefix(zipPath, start, e, headN);
+        budget.inMemory += prefix.length;
+        if (budget.inMemory > maxInMemory) throw tooBig(maxInMemory);
+        out.files.set(full, prefix);
+        continue;
+      }
       // An error thrown by `limited` reaches pipeline's caller as a bare AbortError when the sink is an
       // async function (pipeline aborts the other stages first); keep it and rethrow it instead.
       let own: unknown;
@@ -344,6 +359,37 @@ async function extractInto(
   }
   out.inMemoryBytes = budget.inMemory;
   out.entries = budget.entries;
+}
+
+/**
+ * The first `n` bytes of an entry's data, inflating no further than that (a stored entry is read as far as it is needed): the
+ * streams are closed once enough has come, which the pipeline reports as a premature close and which is no failure.
+ */
+async function readPrefix(zipPath: string, start: number, e: Entry, n: number): Promise<Buffer> {
+  if (e.compressedSize === 0) return Buffer.alloc(0);
+  const raw = createReadStream(zipPath, { start, end: start + e.compressedSize - 1 });
+  const chunks: Buffer[] = [];
+  let got = 0;
+  let enough = false;
+  const sink = async (s: AsyncIterable<Buffer>) => {
+    for await (const c of s) {
+      chunks.push(c);
+      got += c.length;
+      if (got >= n) {
+        enough = true;
+        break;
+      }
+    }
+  };
+  try {
+    await (e.method === 8 ? pipeline(raw, createInflateRaw(), sink) : pipeline(raw, sink));
+  } catch (err) {
+    if (!enough) throw err;
+  } finally {
+    raw.destroy();
+  }
+  // A copy: the prefix must not keep the larger chunk it was cut from alive.
+  return Buffer.from(Buffer.concat(chunks).subarray(0, n));
 }
 
 /**

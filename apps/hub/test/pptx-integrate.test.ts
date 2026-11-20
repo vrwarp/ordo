@@ -576,7 +576,7 @@ describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
    * Import a 2,000-slide deck. Since M9's budget ladder the tail is never a picture: its slides are stored
    * minimal (their text, pictures and background), so nothing waits for LibreOffice.
    */
-  async function importLong(slide: (i: number) => string, name: string) {
+  async function importLong(slide: (i: number) => string, name: string, pages: 'kept' | 'left out') {
     const slides = Array.from({ length: 2000 }, (_, i) => ({ shapes: slide(i) }));
     const t0 = performance.now();
     const { result, p } = await importDeck(buildDeck({ slides }), name);
@@ -592,32 +592,38 @@ describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
     expect(result.loJobId).toBeUndefined();
     expect(presentationBytes(p)).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
     expect(largest).toBeLessThan(SIZE_BUDGETS.previewMax);
-    // Only the tail is minimal: no shape, every text box still there. A deck this large does not fit 4 MiB
-    // even minimal with each slide's page (its background colour, about 200 bytes), so the ladder leaves the
-    // pages out rather than cut the text of every slide (`ladder.ts` `planLadder`).
+    // Only the tail is minimal: every text box still there, and no shape but the slide's page (its background
+    // colour, about 200 bytes) while the deck fits the budget with it. A deck too large to fit even minimal
+    // with each slide's page leaves the pages out rather than cut the text of every slide (`ladder.ts`
+    // `planLadder`): then no shape at all.
     for (const s of all.slice(first)) {
-      expect(s.objects.some((o) => o.type === 'shape')).toBe(false);
+      const shapes = s.objects.filter((o) => o.type === 'shape');
+      if (pages === 'kept') expect(shapes.map((o) => o.origin?.role)).toEqual(['bg']);
+      else expect(shapes).toHaveLength(0);
       expect(s.objects.filter((o) => o.type === 'text').length).toBeGreaterThan(0);
     }
     return { result, p, first };
   }
 
-  it('keeps a 2,000-slide sermon-like deck within 4 MiB: the tail minimal, the preview of any slide under 1 MiB', async () => {
+  it('keeps a 2,000-slide sermon-like deck within 8 MiB: the tail minimal, the preview of any slide under 1 MiB', async () => {
     const verse =
       'For God so loved the world, that he gave his only begotten Son, that whosoever believeth. ';
+    // Ten small shapes a slide (the deck's slides are about 8 KB: 2,000 of them are twice the budget).
     const { result, p, first } = await importLong(
       (i) =>
         textBox(2, `Point ${i + 1}`, IN, 0) +
         textBox(3, `${i + 1} ${verse.repeat(4)}`) +
-        [0, 1, 2, 3]
-          .map((k) => sp({ id: 10 + k, x: k * IN, y: 6 * IN, cx: IN, cy: 0.2 * IN, fill: solid('336699') }))
-          .join(''),
+        Array.from({ length: 10 }, (_, k) =>
+          sp({ id: 10 + k, x: k * IN, y: 6 * IN, cx: IN, cy: 0.2 * IN, fill: solid('336699') }),
+        ).join(''),
       'Sermon series.pptx',
+      'kept',
     );
     expect(result.simplified).toBe(2000 - first);
     // A minimal slide keeps its text as objects, so it is larger than the compact picture slide of before M9
-    // (whose tail began past slide 500): the all-minimal deck is near 4 MiB, and the tail starts earlier.
-    expect(first).toBeGreaterThan(250);
+    // (whose tail began past slide 500): the tail begins where the 6 MiB mark is passed.
+    expect(first).toBeGreaterThan(400);
+    expect(first).toBeLessThan(2000);
     // Every lyric stays editable: the last slide's text is whole.
     const last = slidesOf(p).at(-1)!;
     expect(last.objects.flatMap((o) => (o.type === 'text' ? [o.text] : []))).toEqual([
@@ -627,11 +633,12 @@ describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
     expect(last.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
   }, 300_000);
 
-  it('keeps even a deck too large when minimal within 4 MiB: the text of its tail is cut', async () => {
+  it('keeps even a deck too large when minimal within 8 MiB: the text of its tail is cut', async () => {
     const line = 'Holy, holy, holy, Lord God almighty, early in the morning our song shall rise to thee. ';
     const { result, p, first } = await importLong(
-      (i) => textBox(2, `Slide ${i + 1}`, IN, 0) + textBox(3, `${i + 1} ${line.repeat(30)}`),
+      (i) => textBox(2, `Slide ${i + 1}`, IN, 0) + textBox(3, `${i + 1} ${line.repeat(48)}`),
       'Hymnal.pptx',
+      'left out',
     );
     expect(first).toBe(0);
     expect(result.simplified).toBe(2000);

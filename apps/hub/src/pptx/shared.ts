@@ -43,15 +43,26 @@ export {
 export const PPTX_LIMITS = {
   ...PPTX_IMPORT_LIMITS,
   /**
-   * Every XML part in memory together, on the hub: 256 MiB (design/29 B6 asked for 1 GiB read slide by slide, which needs a
-   * reader the converter's synchronous part map cannot be given; the number is the one the hub's other documents in memory use,
-   * `ZIP_MAX_IN_MEMORY_BYTES`). A deck that DECLARES more is refused from its central directory before any byte is read
-   * (`declaredXmlBytes`, W17). The browser keeps `PPTX_IMPORT_LIMITS.xmlTotalBytes` (64 MiB) and hands a bigger deck to the hub.
+   * The slide XML an IMPORT may take, on the hub: 1 GiB (the owner's answer of 2026-11-20, Q4.b; design/29 B6 asked for 1 GiB read
+   * slide by slide). A deck that DECLARES more is refused from its central directory before any byte is read
+   * (`declaredXml`, W17: "1 GB at most"). The import reads the deck's structure whole and each pool call's slide parts from the stored
+   * file just before the call (`readDeckXml` 'deferred', `readSlideParts`), so what it holds is the structure
+   * (`xmlWholeBytes`), the heads of the slides and one call's slides (`batchXmlBytes`). The browser keeps
+   * `PPTX_IMPORT_LIMITS.xmlTotalBytes` (64 MiB) and hands a bigger deck to the hub.
    */
-  xmlTotalBytes: 256 * 1024 ** 2,
+  xmlTotalBytes: 1024 ** 3,
+  /**
+   * The XML a deck read WHOLE may hold: 256 MiB (the number the hub's other documents in memory use, `ZIP_MAX_IN_MEMORY_BYTES`). The
+   * steps that need every part at once keep it, and refuse a bigger deck with one clear line: the render copy of the LibreOffice
+   * follow-up (`extractDeck`), the slide listing of the PowerPoint-PDF reference (`deckListing`) and the text repair
+   * (`readDeckText`). It is also the bound of an import's STRUCTURE (everything but the slides: layouts, masters, themes, charts,
+   * drawings, relationships, notes) and of the slides' heads, which are kept in memory while it imports.
+   */
+  xmlWholeBytes: 256 * 1024 ** 2,
   /**
    * XML of slides one `pptx-scene` pool call may carry (`batchEnds`): a call also holds its copies and one worker's share, so a
-   * deck at the total never sends 150 huge slides at once (measured in the notes of design/29 B6: about 400 MiB of buffers).
+   * deck at the total never sends 150 huge slides at once; the import reads these slides from the stored file just before the call
+   * and holds no other slide (design/29 B6).
    */
   batchXmlBytes: 64 * 1024 ** 2,
   /** Font parts extracted per deck. */

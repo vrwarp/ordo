@@ -28,7 +28,7 @@ import { portOf } from './ports.ts';
  *   and draws on an Audience screen (the first disc, black, covers pi/4 of its box within 0.05); a deck of 20 slides of 4 MB (80 MB
  *   of XML, past the old total of 64 MiB) imports whole; a slide part of 34 MiB (past the part cap of 32 MiB) is left out
  *   with W9 and `slide:detail`; 52,000 shapes of six elements (past the shape cap of 50,000) are cut with W10 and
- *   `element:shapes`; a deck that declares 300 MiB of XML is refused with W17 from its directory;
+ *   `element:shapes`; a deck that declares 1.25 GiB of XML is refused with W17 from its directory;
  * - 1, the Import tab: the 12 MB deck is parsed in the browser and what the hub stores equals what it stores when it parses the
  *   same deck itself (modulo ids and times); the 80 MB deck is declined by the browser (its 64 MiB) and parsed by the hub.
  * The decks are written at run time (`pptxdecks.ts` `denseDeck`), never committed.
@@ -62,7 +62,7 @@ const W9 =
   'Slide 1 has too much drawing detail for ordo to read, so only its text was imported. In PowerPoint, save the artwork as a picture and import again.';
 const W10 = 'Slide 1 has more shapes than ordo keeps on one slide, so the topmost shapes were left out.';
 const W17 =
-  'ordo could not read this file: it holds more slide data than ordo reads (256 MB at most). Nothing was imported. In PowerPoint, save very detailed artwork as pictures and import again.';
+  'ordo could not read this file: it holds more slide data than ordo reads (1 GB at most). Nothing was imported. In PowerPoint, save very detailed artwork as pictures and import again.';
 
 /** Upload a deck and wait for the job, done or failed (`importPptx` expects done). */
 async function importAny(a: APIRequestContext, file: string): Promise<Job> {
@@ -168,7 +168,7 @@ test('dense decks import through the upload route, each as much of itself as ord
     const leanSlides = slidesIn(await presentation(lean));
     expect(leanSlides[0]!.pptx?.missing).toContain('element:shapes');
 
-    // A deck that declares 300 MiB of XML (ten entries of 30 MiB, garbage bytes): refused from its directory, W17.
+    // A deck that declares 1.25 GiB of XML (forty entries of 32 MiB, garbage bytes): refused from its directory, W17.
     const declared = await importAny(a, denseDeck(decks, 'declared'));
     expect(declared.state).toBe('failed');
     expect(declared.error ?? '').toBe(W17);

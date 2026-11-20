@@ -36,11 +36,19 @@ export const SIZE_BUDGETS = {
   slideMax: 64 * KiB,
   /**
    * Once an import's running total passes this, the remaining slides are stored minimal: their text, pictures
-   * and background (`minimalSlide`; the compact picture class before M9).
+   * and background (`minimalSlide`; the compact picture class before M9). 6 MiB since the owner's answer of
+   * 2026-11-20 (Q1.c; it was 3 MiB): a deck of traced artwork spent the old mark on its first dense slides and
+   * stored the later ones without their shapes (Traffic Dark 94-98 fell from 0.996 to 0.44-0.72).
    */
-  presentationCompact: 3 * MiB,
-  /** An import stays within this; the editor warns above it but still saves (PUT allows `putMax`). */
-  presentationMax: 4 * MiB,
+  presentationCompact: 6 * MiB,
+  /**
+   * An import stays within this; the editor warns above it but still saves (PUT allows `putMax`). 8 MiB since
+   * the owner's answer of 2026-11-20 (Q1.c; it was 4 MiB), the same ratio as `presentationCompact`. What it
+   * costs is `goLiveSlow`'s business: a service past 3 MiB carries W59's critical line, so one presentation at
+   * this size does; a save, a library sync and each of the (at most 50) kept revisions carry up to this
+   * many bytes (design/27 §3.4).
+   */
+  presentationMax: 8 * MiB,
   /** A `preview` message: only the previewed slide's section is sent (`previewSlice`). */
   previewMax: 1 * MiB,
   /**
@@ -379,7 +387,7 @@ export function fitSlideBudget(
  * slide's background colour alone (`plainBackground`: the bottom one, a plain rect in its colour, about 200
  * bytes), so dark text is never drawn on the output's black. What the presentation's tail is stored as
  * (`planImportSizes`, which counts those bytes), and what an import keeps of a slide the schema refuses.
- * `page: false` leaves that shape out too: the hub's last resort for a deck that does not fit 4 MiB even
+ * `page: false` leaves that shape out too: the hub's last resort for a deck that does not fit the presentation budget (8 MiB) even
  * minimal with its pages (about 2,000 slides), where 200 bytes a slide would cut every slide's text. Pure.
  */
 export function minimalSlide(slide: Slide, opts: { page?: boolean } = {}): Slide {

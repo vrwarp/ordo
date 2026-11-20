@@ -18,7 +18,7 @@ when the copy cannot be built (no pool, a deck past the caps) the job fails, it 
 ```
 POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by SHA-256; renderer=native default) [H]
  └─ imports.pptx.queueNative ─► light job 'pptx-native' (nativeJob.ts)                                         [B]
-     1 readDeckXml (deckParts.ts): XML parts in memory (≤ 32 MiB each, ≤ 256 MiB in all, a deck declaring more refused first with W17), other parts placeholders; after
+     1 readDeckXml (deckParts.ts) 'deferred': the structure (every XML part but the slides, ≤ 256 MiB) and each slide's first 64 KiB in memory (≤ 32 MiB a part, ≤ 1 GiB of XML declared in all, a deck declaring more refused first with W17: "1 GB"), other parts placeholders; each call's slide parts are read from the stored file just before the call (`readSlideParts`); after
        the scan spillDeckParts writes only the referenced pictures under generated names (≤ 1 GiB, ≤ 2,000);
        embeddings, vbaProject, customXml skipped; no nested zips; overlapping entries refused; no pool: fail [B]
      2 pool 'pptx-scene' (sceneTask.ts → convertDeck), batches ≤ 150 slides and ≤ 64 MiB of slide XML (`batchEnds`; slide parts transferred, shared
@@ -183,11 +183,12 @@ payload (`PptxImportOptions`).
   version, notes ≤ 16, `artText` from `EmittedSlide.art.text`, `pending`), `digest` = pptx-scene `digestOf`
   over the objects exactly as stored (after remap, sanitize and `Slide.parse`); `Slide.hidden`; the deck's
   `source.log` (`logSafe`) and `source.native` (counts, `slideRect`).
-- Classification with the §3.4 budgets: 64 KB per slide, `planImportSizes` for the 4 MiB total (the tail
-  compact, logged and counted in the result). A slide the converter classed picture for its own 64 KB
+- Classification with the §3.4 budgets: 64 KB per slide, `planImportSizes` for the 8 MiB total (4 MiB until the owner's answer of 2026-11-20; the tail
+  past the 6 MiB mark stored minimal, logged and counted in the result). A slide the converter classed picture for its own 64 KB
   text formatting budget (`EmittedSlide.overBudget`) is the same 'slide' case: one warning ("slide n is
   over 64 KB"), counted once in `compact`, the converter's budget note and picture-class line not logged
   besides.
+- What the 8 MiB budget costs (design/27 §3.4 has the numbers): a save of an 8 MiB presentation takes 1.5 s at p50 and 2.2 s at p95 on the hub, the operator parses it in 0.2 s, and the revision list (every kept revision parsed) takes 5.4 s with 57 revisions and peaks at 2.2 GiB in the library process: that list is the cost to watch. W59 (3 MiB at go-live) now fires for the public Traffic Dark template, whose 101 slides are all kept.
 - Placeholder remap (`EmitResult.media` per batch → parts → media ids from C); the `pptx-lo` payload
   (`PptxLoSlide` per slide that needs LibreOffice) enqueued before any clip job; resume pairs in
   `PptxNativeProgress` so a re-queued job never stores a picture twice or saves a second presentation.
@@ -211,9 +212,14 @@ Done (B), and what the other items rely on:
   parsed, under the slide's own root tag, so a slide is not parsed twice).
 - **Parts.** Non-XML parts and XML parts over 32 MiB are empty placeholders, so relationships resolve and a
   slide whose part was too large keeps its text (W9, `slide:detail`) instead of disappearing from the list. The XML a
-  read would keep is summed from the central directory first (`declaredXmlBytes`): over 256 MiB (`PPTX_LIMITS.xmlTotalBytes`)
-  the job fails with W17 (`XmlTotalError`) before any part is read. The callers of `readDeckXml` other than the import
-  (`fallback.ts` the LibreOffice follow-up, `textRepair.ts`) read the same XML and meet the same refusal.
+  read would keep is summed from the central directory first (`declaredXml`): over 1 GiB (`PPTX_LIMITS.xmlTotalBytes`)
+  the job fails with W17 (`XmlTotalError`, "1 GB at most") before any part is read, and so does a deck whose structure alone
+  (everything but `ppt/slides/*.xml`) is over 256 MiB (`xmlWholeBytes`). The import reads slide by slide: the structure and each slide's head
+  (`SLIDE_HEAD_BYTES`, 64 KiB: the slide list) in memory, each pool call's slides from the stored file just before the call,
+  the text rescue reading its failed slides again. The callers of `readDeckXml` other than the import (`fallback.ts` the
+  LibreOffice follow-up's render copy and the slide list of PowerPoint's own PDF, `textRepair.ts`) read the deck WHOLE, under
+  256 MiB (`xmlWholeBytes`), and refuse a bigger one with one clear line (`XmlTotalError` 'whole'); an import of a deck over
+  256 MiB therefore lists what ordo cannot draw instead of queueing a follow-up that cannot run.
 - **Version 1 and `pptx-lo`.** The presentation id is chosen and recorded before the save. `pptx-lo` is
   queued right after `lib.savePresentation`, in the same synchronous step: it cannot start before version 1
   exists, and `PptxLoSlide.digest` is version 1's stored `Slide.pptx.digest`. M5 must queue the deck's clip
@@ -348,7 +354,7 @@ library snapshot size in hub health.
 
 - The importer's checks: B calls `planImportSizes` and `slideBytes`; F owns their definitions, any change
   to the compact-slide estimate, and the tests below.
-- Tests: a 2,000-slide synthetic deck stays within 4 MiB (the tail compact, logged); preview of the largest
+- Tests: a 4,000-slide synthetic deck stays within 8 MiB (the tail minimal, logged); preview of the largest
   slide's section < 1 MiB; a 13 MiB resolved playlist gets the warning and the operator refuses adopt; a year
   of weekly 17-slide decks keeps the library snapshot under 6 MB.
 - Built: `planImportSizes(sizes, compact, reserve = IMPORT_RESERVE_BYTES)` (256 KiB kept for the presentation's
@@ -445,7 +451,7 @@ The items merged in the order A-H; what wires them together:
 - `apps/hub/test/pptx-integrate.test.ts`: a chart over a photo through the route (an edit made while the
   follow-up waits survives; version 2 adds the transparent art in its place), a metafile through both jobs,
   a 4:3 deck aligned with LibreOffice on native, hybrid and picture slides, a hidden slide's notes, pictures
-  and text, two 2,000-slide decks within 4 MiB with every preview under 1 MiB, and the previous release's
+  and text, 2,000-slide decks within 8 MiB with every preview under 1 MiB, and the previous release's
   schema (`@ordo/domain/schemas.prev.test-util.ts`) reading what was saved.
 - The art's `locked` and `origin` are kept once M2's schema (`ObjectOrigin`, `locked`) is merged; until then
   `Slide.parse` strips them and the art is an ordinary picture, as in an older build.
@@ -796,7 +802,7 @@ instead) and, on a hub with LibreOffice, for a slide over 64 KB that the ladder 
   objects that name them (`withoutFiles`, `leftOut`) instead of keeping legacy shapes where traced outlines
   were. A slide the client read as `unreadable`, or one the scene lacks, gets the text rescue from its own
   parts, read from the stored deck here (`rescueClientSlides`); nothing else of the deck runs on the pool.
-- Tests: `pptx-no-libreoffice.test.ts` ('the budget ladder without LibreOffice': over 64 KB, the 4 MiB tail,
+- Tests: `pptx-no-libreoffice.test.ts` ('the budget ladder without LibreOffice': over 64 KB, the 8 MiB tail,
   the outline-file budget, a schema refusal, the rescue, the retry), `pptx-native.test.ts` (the same with
   LibreOffice: no follow-up for a budget but a page for a slide stored plain), `pptx-geoms.test.ts`, `pptx-integrate.test.ts` (2,000-slide decks; a crowded 4:3 slide that keeps LibreOffice's page),
   `pptx-import-route.test.ts` (a client scene past its outline bound, and with slides it could not read).

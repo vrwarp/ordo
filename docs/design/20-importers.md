@@ -227,13 +227,13 @@ fields are one constant each in `@ordo/pptx-scene` (`version.ts`: `CONVERTER_VER
 the deck itself (any failure, timeout or refusal on either side; a playlist live; an old browser). The
 browser's zip reader (`zip-bounded.ts`) reads the central directory itself (never JSZip's private sizes),
 refuses overlapping entries and more than 200,000, and counts inflated bytes as they come: an entry that
-inflates past its declared size, an XML part over 32 MiB or 64 MiB of XML in all (summed from the directory before anything inflates; a bigger deck goes to the hub, which reads 256 MiB) stop the parse; pictures and
+inflates past its declared size, an XML part over 32 MiB or 64 MiB of XML in all (summed from the directory before anything inflates; a bigger deck goes to the hub, which reads 1 GiB, slide by slide) stop the parse; pictures and
 clips are only read for their first bytes (a picture's pixel size, a clip's kind), within the hub's spill
 budget.
 
 The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
 
-- reads the XML and relationship parts (each ≤ 32 MiB, ≤ 256 MiB in all, refused from the zip's own
+- reads the XML and relationship parts (each ≤ 32 MiB, ≤ 1 GiB in all, read slide by slide: the structure (≤ 256 MiB) and each slide's first 64 KiB at once, each pool call's slides from the stored file just before the call; refused from the zip's own
   directory before any part is read, W17; a larger part makes its slide keep its text, W9) and only the pictures the slides, their layouts, masters and themes relate to (≤ 2,000,
   ≤ 1 GiB, under generated names); embeddings, macros, custom XML, document properties and printer settings
   are skipped;
@@ -243,7 +243,7 @@ The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
   a slide that still fails, or one past the import's pool time, keeps its text (M9's rescue), never the deck;
 - applies the size budgets of design/27 §3.4 as M9's budget ladder: a slide over 64 KB is simplified to fit
   (outlines re-gridded, text formatting, then decorations left out), and once the presentation passes
-  3 MiB the slides from there on keep their text, pictures and background; without LibreOffice no slide
+  6 MiB (3 MiB until 2026-11-20) the slides from there on keep their text, pictures and background; without LibreOffice no slide
   becomes a picture for its size (logged, counted in the job result as `simplified`), and with it a slide
   over 64 KB that would lose formatting or decorations keeps LibreOffice's page, as before M9
   (`ImportCore.pageForBudget`);

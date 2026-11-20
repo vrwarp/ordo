@@ -53,6 +53,7 @@ import {
   type Presentation,
   resolvePlaylist,
   SCRIPT_FALLBACK_FONTS,
+  SIZE_BUDGETS,
   type Slide,
   textScripts,
   utf8Bytes,
@@ -71,7 +72,8 @@ export const LITE_TOOLS = ['node', 'ffmpeg', 'ffprobe', 'pdftoppm', 'pdfinfo', '
 export const OFFICE_COMMANDS = ['soffice', 'libreoffice'] as const;
 
 export const SLIDE_MAX_BYTES = 64 * 1024;
-export const PRESENTATION_MAX_BYTES = 4 * 1024 * 1024;
+/** The presentation budget of `@ordo/domain` (8 MiB since the owner's answer of 2026-11-20): one number for the import and this gate. */
+export const PRESENTATION_MAX_BYTES = SIZE_BUDGETS.presentationMax;
 /** A sermon deck reaches version 1 within this (design/27 §13). */
 export const SERMON_V1_MS = 5_000;
 /** The PIN the throwaway hub is set up with (`ORDO_DEV_PIN`). */
@@ -750,7 +752,7 @@ export function hubImportGates(
   const over = sum((x) => x.slidesOver64k ?? 0);
   gate('no slide over 64 KB', over === 0, `${over} slide(s)`);
   const big = d.filter((x) => (x.presentationBytes ?? 0) > PRESENTATION_MAX_BYTES).length;
-  gate('no presentation over 4 MiB', big === 0, `${big} presentation(s)`);
+  gate(`no presentation over ${PRESENTATION_MAX_BYTES / 1024 ** 2} MiB`, big === 0, `${big} presentation(s)`);
   const unresolved = sum((x) => x.manifest?.unresolved ?? 0);
   gate('every manifest reference resolves', unresolved === 0, `${unresolved} unresolved`);
   const slow = d.filter((x) => x.sermon && (x.v1Ms ?? Number.POSITIVE_INFINITY) > SERMON_V1_MS).length;

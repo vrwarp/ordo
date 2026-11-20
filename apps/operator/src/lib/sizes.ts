@@ -49,7 +49,7 @@ export function previewMessage(
 
 /**
  * The editor's size check of a presentation it is about to save: `refuse` above what the hub accepts in a
- * PUT (instead of a bare 413), `warn` above the 4 MiB presentation budget (it still saves).
+ * PUT (instead of a bare 413), `warn` above the 8 MiB presentation budget (`SIZE_BUDGETS.presentationMax`; it still saves).
  */
 export function saveSizeCheck(p: Presentation): { bytes: number; refuse?: string; warn?: string } {
   const bytes = presentationBytes(p);

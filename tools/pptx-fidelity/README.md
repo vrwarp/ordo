@@ -202,7 +202,7 @@ The M9 exit's import of the whole worship set through a real hub (plan §6.3). I
 `hub-import.json` and `hub-import.md`: per deck the job state, the time to version 1, the classes,
 `pending`, the `missing` kinds, `simplified`, the presentation's bytes and its largest slide's, and whether
 a goLive of it resolves every file it names (`resolvePlaylist`, then each file fetched); then the gates
-(every job done, nothing pending, no picture slide, no slide over 64 KB, no presentation over 4 MiB, every
+(every job done, nothing pending, no picture slide, no slide over 64 KB, no presentation over the 8 MiB budget (`SIZE_BUDGETS.presentationMax`), every
 reference resolved, no LibreOffice command in the hub log, sermon decks at version 1 within 5 s, RSS within
 `--mem-limit-mb`). `--libreoffice` runs with LibreOffice on the PATH and counts the slides left to it.
 `--dry-run` lists the decks and the dangling links (unreadable) without a hub. Decks under `--sermons` are
