@@ -85,12 +85,17 @@ describe('previewMessage (design/27 §3.4)', () => {
 });
 
 describe('saveSizeCheck', () => {
-  it('saves quietly within 4 MiB, warns above it, and refuses above the hub body limit', () => {
+  it('saves quietly within 8 MiB, warns above it, and refuses above the hub body limit', () => {
     expect(saveSizeCheck(presentation([slide(0, 1000)]))).toEqual({ bytes: expect.any(Number) });
-    const big = saveSizeCheck(presentation(Array.from({ length: 300 }, (_, i) => slide(i, 15_000))));
-    expect(big.bytes).toBeGreaterThan(4 * MiB);
+    // 4.6 MiB: over the old budget and over the Go-live line (W59 reads `goLiveSlow`), under the budget: quiet.
+    const mid = saveSizeCheck(presentation(Array.from({ length: 300 }, (_, i) => slide(i, 15_000))));
+    expect(mid.bytes).toBeGreaterThan(4 * MiB);
+    expect(mid.bytes).toBeLessThan(SIZE_BUDGETS.presentationMax);
+    expect(mid).toEqual({ bytes: mid.bytes });
+    const big = saveSizeCheck(presentation(Array.from({ length: 600 }, (_, i) => slide(i, 15_000))));
+    expect(big.bytes).toBeGreaterThan(SIZE_BUDGETS.presentationMax);
     expect(big.refuse).toBeUndefined();
-    expect(big.warn).toMatch(/^This presentation is 4\.\d MiB, over the 4\.0 MiB budget/);
+    expect(big.warn).toMatch(/^This presentation is 8\.\d MiB, over the 8\.0 MiB budget/);
     const huge = saveSizeCheck(presentation(Array.from({ length: 1700 }, (_, i) => slide(i, 20_000))));
     expect(huge.bytes).toBeGreaterThan(SIZE_BUDGETS.putMax);
     expect(huge.refuse).toMatch(/more than the hub accepts \(32\.0 MiB\)/);

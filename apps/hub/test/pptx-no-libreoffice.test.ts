@@ -16,6 +16,7 @@ import {
   missingSlideReason,
   type Presentation,
   resolvePlaylist,
+  SIZE_BUDGETS,
   type Slide,
   slideBytes,
 } from '@ordo/domain';
@@ -806,20 +807,20 @@ describe('the budget ladder without LibreOffice (M9)', () => {
     neverRan();
   }, 120_000);
 
-  it('the slides past the 4 MiB tail are minimal native slides', async () => {
-    // 350 slides of about 10 KB: the running total passes 3 MiB near slide 310.
-    const slides = Array.from({ length: 350 }, (_, i) => ({
+  it('the slides past the 8 MiB tail are minimal native slides', async () => {
+    // 700 slides of about 10 KB: the running total passes the 6 MiB mark near slide 610.
+    const slides = Array.from({ length: 700 }, (_, i) => ({
       shapes:
         textBox(2, `Slide ${i + 1} ${'Lorem ipsum dolor sit amet. '.repeat(340)}`) +
         sp({ id: 3, x: 0, y: 6 * IN, cx: 10 * IN, cy: IN / 10, fill: solidFill('336699') }),
     }));
     const { result, p } = await importDeck(buildDeck({ slides }), 'Long.pptx');
-    expect(result).toMatchObject({ slides: 350, picture: 0, compact: 0, pending: 0 });
-    expect(JSON.stringify(p).length).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(result).toMatchObject({ slides: 700, picture: 0, compact: 0, pending: 0 });
+    expect(JSON.stringify(p).length).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
     const all = slidesOf(p);
     const first = all.findIndex((s) => s.pptx!.notes?.some((n) => /reached its size budget/.test(n)));
-    expect(first).toBeGreaterThan(250);
-    expect(result.simplified).toBe(350 - first);
+    expect(first).toBeGreaterThan(400);
+    expect(result.simplified).toBe(700 - first);
     for (const [i, s] of all.entries()) {
       // Every slide keeps its text as a text object; the tail's decoration is left out and said so.
       expect(textsOf(s)[0]).toMatch(new RegExp(`^Slide ${i + 1} Lorem`));

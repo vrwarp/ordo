@@ -6,7 +6,7 @@
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { Presentation, type Slide, slideBytes, slideContent } from '@ordo/domain';
+import { Presentation, SIZE_BUDGETS, type Slide, slideBytes, slideContent } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import { LOOP_IMPORT_NOTE } from '@ordo/importers';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
@@ -507,23 +507,23 @@ async function runHandler(
 }
 
 describe('pptx-native: the presentation budget', () => {
-  it('keeps a long deck within 4 MiB: the tail keeps only its text and pictures, logged and counted (M9)', async () => {
-    // 360 slides of about 10 KB each and a picture each: 3 pool batches, and the running total passes 3 MiB
-    // near slide 300; from there on the slides are minimal (no decoration), every text and picture kept.
-    const slides = Array.from({ length: 360 }, (_, i) => ({
+  it('keeps a long deck within 8 MiB: the tail keeps only its text and pictures, logged and counted (M9)', async () => {
+    // 720 slides of about 10 KB each and a picture each: 5 pool batches, and the running total passes the 6 MiB
+    // mark near slide 600; from there on the slides are minimal (no decoration), every text and picture kept.
+    const slides = Array.from({ length: 720 }, (_, i) => ({
       shapes:
         textBox(2, `Slide ${i + 1} ${'Lorem ipsum dolor sit amet. '.repeat(340)}`) +
         sp({ id: 3, x: 0, y: 6 * IN, cx: 10 * IN, cy: IN / 10, fill: solid('336699') }),
     }));
     const { result, p } = await importDeck(buildDeck({ slides }), 'Long.pptx');
-    expect(result.slides).toBe(360);
+    expect(result.slides).toBe(720);
     expect(result).toMatchObject({ picture: 0, compact: 0, pending: 0 });
     expect(result.simplified).toBeGreaterThan(30);
-    expect(JSON.stringify(p).length).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(JSON.stringify(p).length).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
     const all = slidesOf(p);
     const first = all.findIndex((s) => s.pptx!.missing?.includes('decoration'));
-    expect(first).toBeGreaterThan(200);
-    expect(result.simplified).toBe(360 - first);
+    expect(first).toBeGreaterThan(400);
+    expect(result.simplified).toBe(720 - first);
     // Only the tail is minimal: its decoration left out, its text still a text object, its white page kept
     // as a plain rect (the slide's background colour: dark text never lands on the output's black).
     for (const s of all.slice(first)) {
@@ -539,7 +539,7 @@ describe('pptx-native: the presentation budget', () => {
     }
     for (const s of all.slice(0, first)) expect(s.pptx!.class).toBe('native');
     const last = all.at(-1)!.objects.find((o) => o.type === 'text');
-    expect(last?.type === 'text' && last.text).toMatch(/^Slide 360 Lorem/);
+    expect(last?.type === 'text' && last.text).toMatch(/^Slide 720 Lorem/);
     expect(result.notes.join('\n')).toMatch(
       new RegExp(`slide ${first + 1} and later keep only their text and pictures`),
     );

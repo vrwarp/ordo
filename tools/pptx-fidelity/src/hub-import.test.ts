@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SIZE_BUDGETS } from '@ordo/domain';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   bundledFontsSettled,
@@ -233,5 +234,40 @@ describe('hub-import', () => {
       'no picture slide',
       'sermon decks reach version 1 within 5 s',
     ]);
+  });
+
+  it('holds a presentation to the size budget of @ordo/domain (8 MiB since 2026-11-20), not to a number of its own', () => {
+    const deck = (presentationBytes: number): DeckRecord => ({
+      name: 'd',
+      ext: 'pptx',
+      bytes: 1,
+      state: 'done',
+      v1Ms: 100,
+      classes: { native: 3, hybrid: 1, picture: 0 },
+      pending: 0,
+      slidesOver64k: 0,
+      presentationBytes,
+      manifest: { files: 2, unresolved: 0, degraded: 0 },
+    });
+    const gateOf = (presentationBytes: number) =>
+      hubImportGates(
+        {
+          createdAt: '',
+          dryRun: false,
+          libreoffice: 'hidden',
+          capabilities: { libreoffice: { state: 'absent' } },
+          decks: [deck(presentationBytes)],
+          unreadable: [],
+          rssMaxMb: 900,
+          officeLines: [],
+        },
+        4096,
+      ).find((g) => g.name.startsWith('no presentation over'))!;
+    // 5 MiB: over the old 4 MiB, under the budget.
+    expect(gateOf(5 * 1024 * 1024).pass).toBe(true);
+    expect(gateOf(SIZE_BUDGETS.presentationMax).pass).toBe(true);
+    const over = gateOf(SIZE_BUDGETS.presentationMax + 1);
+    expect(over.pass).toBe(false);
+    expect(over.name).toBe(`no presentation over ${SIZE_BUDGETS.presentationMax / 1024 ** 2} MiB`);
   });
 });

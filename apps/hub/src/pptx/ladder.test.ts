@@ -5,8 +5,8 @@ import { planLadder } from './ladder.ts';
 /**
  * The presentation's tail (design/27 §3.4, M9 `ladder`): stored minimal, each slide keeping its page (the
  * background drawn as a shape, origin role 'bg') as its background colour, so the tail's dark text is never
- * drawn on the output's black; a deck that does not fit 4 MiB even so leaves the pages out before any text is
- * cut.
+ * drawn on the output's black; a deck that does not fit the presentation budget (8 MiB since the owner's answer of
+ * 2026-11-20) even so leaves the pages out before any text is cut.
  */
 
 const id = (n: number, k: string) => `${k}${String(n).padStart(25, '0')}`;
@@ -62,13 +62,14 @@ const roles = (s: Slide) => s.objects.map((o) => o.origin?.role);
 
 describe('the presentation tail keeps each slide page', () => {
   it('stores the tail minimal with its page as a plain rect in its colour, the decoration left out', () => {
-    // 300 slides of about 13 KB, most of it the decoration's outline: the running total passes 3 MiB near
-    // slide 240; minimal, every slide is about 1.4 KB.
+    // 600 slides of about 13 KB, most of it the decoration's outline: the running total passes the 6 MiB
+    // mark near slide 480; minimal, every slide is about 1.4 KB.
     const { slides, plan } = planLadder(
-      Array.from({ length: 300 }, (_, i) => ({ slide: slide(i, 800, 12_000) })),
+      Array.from({ length: 600 }, (_, i) => ({ slide: slide(i, 800, 12_000) })),
     );
     expect(plan.fits).toBe(true);
-    expect(plan.tailFrom).toBeGreaterThan(100);
+    expect(plan.tailFrom).toBeGreaterThan(200);
+    expect(plan.tailFrom).toBeLessThan(600);
     const tail = slides.slice(plan.tailFrom);
     expect(tail.every((s) => s.tail)).toBe(true);
     for (const s of tail) {
@@ -83,10 +84,13 @@ describe('the presentation tail keeps each slide page', () => {
     for (const s of slides.slice(0, plan.tailFrom)) expect(roles(s.slide)).toEqual(['bg', 'body', 'shape']);
   });
 
-  it('leaves the pages out of a deck that does not fit 4 MiB even minimal with them, before cutting text', () => {
-    // 2,000 slides of about 1.8 KB minimal: with its 215-byte page each the deck passes 4 MiB less the
-    // reserve, without it fits.
-    const { slides, plan } = planLadder(Array.from({ length: 2000 }, (_, i) => ({ slide: slide(i, 1_200) })));
+  it('leaves the pages out of a deck that does not fit 8 MiB even minimal with them, before cutting text', () => {
+    // 4,200 slides of about 1.8 KB minimal: with its 215-byte page each the deck passes 8 MiB less the
+    // reserve, without it fits (a deck that did not fit even so would say `fits` false: the fixture holds its own
+    // sizes against the budget).
+    const { slides, plan } = planLadder(
+      Array.from({ length: 4_200 }, (_, i) => ({ slide: slide(i, 1_200) })),
+    );
     expect(plan.fits).toBe(true);
     const tail = slides.slice(plan.tailFrom);
     expect(tail.length).toBeGreaterThan(0);
