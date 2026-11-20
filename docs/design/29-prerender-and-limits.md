@@ -288,8 +288,9 @@ _As built in r2b sub-wave 2 (prerender-store), where the build differs from the 
 table and no `drawn` column: the slide's drawn digest is in the key, and the hub rewrites `uses` and `file.bytes`
 from the row it checked); a page is at most 500 objects and 256 KiB, a head at most 129 pages, 16 MiB and 20,000
 objects (`SLIDE_FILE_LIMITS`, the clamp); the keys of a revision are computed in the pool **before** the save is
-written and stored with a signature (`prerender_keys.sig`), so a presentation PUT adds one pool call only when a
-pre-rendered slide changed; pictures are `prerenders` rows (first upload wins, the operator's replaces, a live
+written and stored with a signature (`prerender_keys.sig`: a SHA-256 of the text of the slide's inputs in the library's
+own key order, taken natively because every save looks at every stand-in; the same inputs in another order cost one
+recompute, never a wrong key), so a presentation PUT adds one pool call only when a pre-rendered slide changed; pictures are `prerenders` rows (first upload wins, the operator's replaces, a live
 service pauses all but its own keys: 503 `paused_during_service`), and the goLive bundle lists them
 (`slideHeads`, `prerenders`, `prerenderKeys`, design/12 "HTTP API").
 
