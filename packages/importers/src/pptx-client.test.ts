@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { body, buildDeck, imageRel, para, pic, run, solid, sp } from '@ordo/pptx-scene/test-util.ts';
+import {
+  body,
+  buildDeck,
+  denseDeckParts,
+  imageRel,
+  para,
+  pic,
+  run,
+  solid,
+  sp,
+} from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
 import { CONVERTER_VERSION, importPptxClient, LOOP_IMPORT_NOTE } from './pptx-client.ts';
 import { pictureGuardDeck } from './pptx-guard.test-util.ts';
@@ -146,6 +156,38 @@ describe('importPptxClient', () => {
 });
 
 describe('a looping PowerPoint show with every slide timed (the client path)', () => {
+  it('reads a slide part of 12 MiB and lists one of 33 MiB as left out, with the 32 MB it says (design/29 B5)', async () => {
+    const zip = async (parts: Map<string, Uint8Array>) => {
+      const z = new JSZip();
+      for (const [k, v] of parts) z.file(k, v);
+      return z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+    };
+    // 12 MiB of traced artwork: read (the base listed it as over 8 MB), objects and no oversized part.
+    const dense = denseDeckParts({ shapes: 400, points: 650 });
+    expect(dense.get('ppt/slides/slide1.xml')!.length).toBeGreaterThan(9 * 1024 * 1024);
+    const read = await importPptxClient(await zip(dense), 'dense.pptx');
+    expect(read.clientScene.oversized).toEqual([]);
+    expect(read.presentation.sections[0]!.slides[0]!.objects.length).toBeGreaterThan(100);
+    // 33 MiB of text in one box: past the part cap, listed, said in the import log in the cap's own number.
+    const huge = buildDeck({
+      slides: [
+        {
+          shapes: sp({
+            id: 2,
+            x: 0,
+            y: 0,
+            cx: IN,
+            cy: IN,
+            txBody: body(para(run('x'.repeat(33 * 1024 * 1024)))),
+          }),
+        },
+      ],
+    });
+    const left = await importPptxClient(await zip(huge), 'huge.pptx');
+    expect(left.clientScene.oversized).toEqual(['ppt/slides/slide1.xml']);
+    expect(left.log.join('\n')).toContain('ppt/slides/slide1.xml is over 32 MB: not read');
+  });
+
   it('imports an announcement loop and says so in the import log, as the hub does', async () => {
     const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
     const timed = (text: string) => ({

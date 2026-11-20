@@ -7,6 +7,7 @@ import {
   externalHost,
   MAX_EXTERNAL_NOTES,
   MAX_PART_NAME_CHARS,
+  MAX_XML_PART_BYTES,
   openPackage,
   PATH_ITEM_BYTES,
   type PartSource,
@@ -128,12 +129,26 @@ describe('openPackage', () => {
     const pkg = openPackage(
       new Map([
         ['a.xml', utf16],
-        ['big.xml', new Uint8Array(8 * 1024 * 1024 + 1)],
+        ['big.xml', new Uint8Array(32 * 1024 * 1024 + 1)],
       ]),
     );
     expect(pkg.xml('a.xml')?.attrs.x).toBe('é');
-    expect(() => pkg.xml('big.xml')).toThrow(/8 MB/);
+    expect(() => pkg.xml('big.xml')).toThrow(/32 MB/);
     expect(pkg.xml('missing.xml')).toBeUndefined();
+  });
+
+  it('reads a part of 22 MB and one of exactly 32 MiB, and refuses one byte more (design/29 B5: 8 -> 32 MiB)', () => {
+    expect(MAX_XML_PART_BYTES).toBe(32 * 1024 * 1024);
+    const part = (bytes: number) => enc(`<a>${'x'.repeat(bytes - '<a></a>'.length)}</a>`);
+    const parts = new Map([
+      ['a22.xml', part(22 * 1024 * 1024)],
+      ['a32.xml', part(MAX_XML_PART_BYTES)],
+      ['a33.xml', part(MAX_XML_PART_BYTES + 1)],
+    ]);
+    const pkg = openPackage(parts);
+    expect(within(5_000, () => pkg.xml('a22.xml'))?.children[0]?.text.length).toBe(22 * 1024 * 1024 - 7);
+    expect(pkg.xml('a32.xml')?.name).toBe('a');
+    expect(() => pkg.xml('a33.xml')).toThrow('a33.xml is larger than 32 MB');
   });
 
   it('decodes by BOM, by UTF-16 markup, else by the declared encoding, else UTF-8', () => {
@@ -675,12 +690,12 @@ describe('hostile packages', () => {
     parts.set('ppt/slides/slide1.xml', enc(bomb));
     const deep = `<p:sld xmlns:p="${NS.p}"><p:cSld><p:spTree>${'<p:grpSp>'.repeat(20_000)}${'</p:grpSp>'.repeat(20_000)}</p:spTree></p:cSld></p:sld>`;
     parts.set('ppt/slides/slide2.xml', enc(deep));
-    parts.set('ppt/slides/slide3.xml', new Uint8Array(9 * 1024 * 1024).fill(0x20));
+    parts.set('ppt/slides/slide3.xml', new Uint8Array(33 * 1024 * 1024).fill(0x20));
     const scene = within(5000, () => parseDeck(parts));
     expect(scene.slides).toHaveLength(3);
     expect(scene.slides[0]!.error).toMatch(/DOCTYPE/);
     expect(scene.slides[1]!.error).toBeUndefined();
-    expect(scene.slides[2]!.error).toMatch(/8 MB/);
+    expect(scene.slides[2]!.error).toMatch(/32 MB/);
     // In the presentation part, the deck cannot be read at all: a clean error.
     const p = buildDeck({ slides: [{}] });
     p.set(

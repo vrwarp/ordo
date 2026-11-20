@@ -8,7 +8,18 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Presentation } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
-import { body, buildDeck, NS_A, NS_P, NS_R, para, partText, run, sp } from '@ordo/pptx-scene/test-util.ts';
+import {
+  body,
+  buildDeck,
+  denseDeckParts,
+  NS_A,
+  NS_P,
+  NS_R,
+  para,
+  partText,
+  run,
+  sp,
+} from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PptxNativeResult } from '../src/pptx/shared.ts';
@@ -112,7 +123,7 @@ describe('pptx-native: broken decks fail cleanly', () => {
 });
 
 describe('pptx-native: hostile slides are quarantined, never the deck', () => {
-  it('a DOCTYPE, a billion laughs and an 8 MB part make only their slides empty, never the deck (M9: no picture)', async () => {
+  it('a DOCTYPE, a billion laughs and a 33 MB part make only their slides empty, never the deck (M9: no picture)', async () => {
     const parts = deck(5);
     parts.set(
       'ppt/slides/slide1.xml',
@@ -128,7 +139,7 @@ describe('pptx-native: hostile slides are quarantined, never the deck', () => {
     parts.set(
       'ppt/slides/slide4.xml',
       enc.encode(
-        `<p:sld ${NS}><p:cSld><p:spTree>${textBox(2, 'x'.repeat(9 * 1024 * 1024))}</p:spTree></p:cSld></p:sld>`,
+        `<p:sld ${NS}><p:cSld><p:spTree>${textBox(2, 'x'.repeat(33 * 1024 * 1024))}</p:spTree></p:cSld></p:sld>`,
       ),
     );
     const job = await importParts(parts);
@@ -143,7 +154,22 @@ describe('pptx-native: hostile slides are quarantined, never the deck', () => {
     }
     expect(slidesOf(p)[1]!.objects.filter((o) => o.type === 'text')).toEqual([]);
     expect(slidesOf(p).map((s) => s.pptx!.index)).toEqual([0, 1, 2, 3, 4]);
-    expect(job.log.join('\n')).toMatch(/\[warn\] ppt\/slides\/slide4\.xml is over 8 MB: not read/);
+    expect(job.log.join('\n')).toMatch(/\[warn\] ppt\/slides\/slide4\.xml is over 32 MB: not read/);
+  });
+
+  it('reads a slide part of 12 MB of traced artwork (past the 8 MB the part cap was), as native or hybrid with objects', async () => {
+    // 400 custom shapes of 650 points in about 12 MB of compact path XML: the base refuses the part ("is over 8 MB").
+    const parts = denseDeckParts({ shapes: 400, points: 650 });
+    const size = parts.get('ppt/slides/slide1.xml')!.length;
+    expect(size).toBeGreaterThan(9 * 1024 * 1024);
+    expect(size).toBeLessThan(32 * 1024 * 1024);
+    const job = await importParts(parts);
+    const p = expectClean(job)!;
+    const slide = slidesOf(p)[0]!;
+    expect(['native', 'hybrid']).toContain(slide.pptx!.class);
+    expect(slide.objects.length).toBeGreaterThan(100);
+    expect(slide.pptx!.missing ?? []).not.toContain('slide');
+    expect(job.log.join('\n')).not.toMatch(/is over \d+ MB: not read/);
   });
 
   it('keeps control characters, forged log lines and prototype keys out of logs, labels and objects', async () => {
