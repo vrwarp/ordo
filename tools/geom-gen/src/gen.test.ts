@@ -175,7 +175,10 @@ describe('text warps', () => {
     const pathAttr = WARPS_XML.replace(/(<textPlain>[\s\S]*?)<path>/, '$1<path spin="1">');
     expect(pathAttr).not.toBe(WARPS_XML);
     expect(() => readPresets(pathAttr, ROOT)).toThrow(/textPlain: unexpected path attribute spin/);
-    const unknownName = WARPS_XML.replace('fmla="*/ a w 100000"', 'fmla="*/ a wz 100000"');
+    const unknownName = WARPS_XML.replace(
+      /(<textPlain>[\s\S]*?)fmla="\*\/ a w 100000"/,
+      '$1fmla="*/ a wz 100000"',
+    );
     expect(unknownName).not.toBe(WARPS_XML);
     expect(() => generateTextWarps(unknownName)).toThrow(/textPlain: unknown name 'wz' in guide 'mid'/);
     const root = WARPS_XML.replace(/presetTextWarpDefinitions>/g, 'presetTextWarpDefinitionz>');

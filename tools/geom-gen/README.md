@@ -1,15 +1,17 @@
 # geom-gen
 
-Compiles the vendored DrawingML preset geometries (`third_party/poi-presets/presetShapeDefinitions.xml`, Apache
-POI 5.2.5) into `packages/renderer/src/geom/presets.gen.ts` (design/27 §1, §15 M6).
+Compiles the vendored DrawingML geometries into `packages/renderer/src/geom/`: the 187 presets
+(`third_party/poi-presets/presetShapeDefinitions.xml`, Apache POI 5.2.5) into `presets.gen.ts` (design/27 §1, §15
+M6), and the 40 WordArt text warps (`third_party/ooxml-textwarps/presetTextWarpDefinitions.xml`, docx4j-core
+11.4.11) into `textwarps.gen.ts`.
 
 ```
-pnpm --filter @ordo/geom-gen gen           # writes presets.gen.ts
-pnpm --filter @ordo/geom-gen gen --check   # exits 1 when the committed file is not the generator's output
+pnpm --filter @ordo/geom-gen gen           # writes presets.gen.ts and textwarps.gen.ts
+pnpm --filter @ordo/geom-gen gen --check   # exits 1 when either committed file is not the generator's output
 ```
 
-`src/gen.test.ts` (in `pnpm test`) fails when the committed file differs from the generator's output, so a change
-to the XML, the fixes, the compiler or the compiled form needs a `gen` run in the same change.
+`src/gen.test.ts` (in `pnpm test`) fails when a committed file differs from the generator's output, so a change
+to an XML file, the fixes, the compiler or the compiled form needs a `gen` run in the same change.
 
 ## What it does
 
@@ -28,6 +30,23 @@ The output (about 127 KB, 32 KB gzipped) is a `Map` from preset name to `Compile
 the text rectangle `r`, paths `p` (command codes and operand slots, the path's own `w`/`h`, fill mode, stroke),
 adjust handles `h` and connection sites `c`. Every operand is a slot index: built-ins first, then the constants,
 then the guides, so the evaluator and the path builder never look a name up.
+
+## Text warps
+
+The second input (`third_party/ooxml-textwarps/`, with its provenance and licence) goes through the same reader,
+the same compiler and the same printer as the first; only what differs is written down here:
+
+- the root element is `presetTextWarpDefinitions` (POI's file spells its root `presetShapeDefinitons`:
+  `readPresets(xml, rootName)`; each generator refuses the other file with 'unexpected root');
+- there are no fixes: the file is compiled as it is, and the output header says so;
+- the file has no text rectangle (`r` is the whole box: slots 2..5), no connection sites and one or two adjust
+  values per preset (`adj`, or `adj1` and `adj2`);
+- the table is `TEXT_WARP_GEOMS` (40 presets; about 17 kB, 4 kB gzipped), which only `geom/textwarp.ts` imports,
+  so a bundle that never builds a warp does not carry it (`apps/operator/src/pageSets.ts` also keeps it off a
+  phone's first load).
+
+`src/gen.test.ts` pins the vendored bytes (SHA-256), the committed output, the 40 names of the domain's
+`TEXT_WARPS`, the path counts the geometry builder reads and the refusals.
 
 ## POI reference values
 
