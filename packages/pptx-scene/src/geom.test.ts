@@ -27,7 +27,6 @@ import { drawingXml, dspSp, smartArtFrame, smartArtRels, withSmartArt } from './
 import {
   body,
   buildDeck,
-  cpuMs,
   custGeom,
   cxnSp,
   type DeckSpec,
@@ -54,7 +53,7 @@ import {
   parseXml,
   rootOf,
 } from './xml.ts';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
 /** Logical px per inch on a standard slide (2 px per point). */

@@ -5,7 +5,6 @@ import type { Affine, Element, ShapeElement, SlideScene } from './ir.ts';
 import {
   body,
   buildDeck,
-  cpuMs,
   type DeckSpec,
   grpSp,
   imageRel,
@@ -29,7 +28,7 @@ import {
   parseXml,
   rootOf,
 } from './xml.ts';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
 const SLIDE = { cx: 12_192_000, cy: 6_858_000 };

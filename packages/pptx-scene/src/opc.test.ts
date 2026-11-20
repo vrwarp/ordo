@@ -17,22 +17,9 @@ import {
   XML_CACHE_BYTES,
   XML_NODE_BYTES,
 } from './opc.ts';
-import {
-  body,
-  buildDeck,
-  cpuMs,
-  grpSp,
-  imageRel,
-  para,
-  pic,
-  run,
-  scheme,
-  solid,
-  solidBg,
-  sp,
-} from './test-util.ts';
+import { body, buildDeck, grpSp, imageRel, para, pic, run, scheme, solid, solidBg, sp } from './test-util.ts';
 import { MAX_PACKED_ELEMENTS_PER_PART, type XNode } from './xml.ts';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
 const IN = 914_400;

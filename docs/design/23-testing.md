@@ -161,7 +161,7 @@ on a developer machine through `budgetMs` (`packages/domain/src/timing.test-util
 CI (`CI` set), whose 2-core runner is about three times slower for CPU-bound work, or the factor in
 `ORDO_TEST_TIME_SCALE` on a machine shared with other jobs. The reader's linear-time proofs on hostile input
 (`xml.packed.test.ts`, `opc.test.ts`'s `within`, the 1.2-million-point read, the 50,001-shape cap) read the CPU
-time the process used (`cpuMs`, `packages/pptx-scene/src/test-util.ts`) with the same `budgetMs` number: the wall clock
+time the process used (`cpuMs`, beside `budgetMs`) with the same `budgetMs` number: the wall clock
 grows with a loaded or niced machine (every run here is at niceness 19 on four shared cores), the work does not,
 and a test of the work must not fail for waiting for a core. Bounds that test the product's own timeouts (a
 library that did not answer within its wait, a socket closed within its grace) are not scaled. Frame and

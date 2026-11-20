@@ -1,7 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
-import { cpuMs } from './test-util.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 import {
   MAX_PACKED_ELEMENTS_PER_PART,
   MAX_PACKED_PATH_ITEMS_PER_PART,

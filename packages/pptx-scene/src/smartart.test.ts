@@ -15,7 +15,6 @@ import {
 import {
   body,
   buildDeck,
-  cpuMs,
   CHART_CONTENT_TYPE,
   chartFrame,
   chartXml,
@@ -27,7 +26,7 @@ import {
   sp,
   withPart,
 } from './test-util.ts';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 import { MAX_SHAPES_PER_SLIDE } from './walk.ts';
 
 const IN = 914_400;

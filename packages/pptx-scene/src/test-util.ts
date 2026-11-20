@@ -1232,14 +1232,3 @@ export function leanDspShapes(n: number): string {
   const one = `<dsp:sp><dsp:nvSpPr><dsp:cNvPr id="0" name=""/></dsp:nvSpPr><dsp:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm></dsp:spPr></dsp:sp>`;
   return one.repeat(n);
 }
-
-/**
- * The CPU time this process has used so far, in ms (user and system, every thread). A test that bounds how long a parser takes, to
- * show it stays linear on hostile input, reads this instead of the wall clock: the wall clock grows with the machine's load and
- * with `nice` (a run here shares four cores and runs at niceness 19), the work done does not. The bound keeps the number the
- * wall-clock one had (`budgetMs`): time spent waiting for a core is not counted, nothing else changes.
- */
-export function cpuMs(): number {
-  const u = process.cpuUsage();
-  return (u.user + u.system) / 1000;
-}

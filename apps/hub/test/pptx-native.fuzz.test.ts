@@ -11,7 +11,6 @@ import type { Job } from '@ordo/protocol';
 import {
   body,
   buildDeck,
-  cpuMs,
   denseDeckParts,
   NS_A,
   NS_P,
@@ -26,7 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PptxNativeResult } from '../src/pptx/shared.ts';
 import { startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
 const enc = new TextEncoder();
