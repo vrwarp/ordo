@@ -42,6 +42,11 @@ export const MAX_EXTERNAL_NOTES = 20;
  * lets a deck within the §12 part budgets keep gigabytes alive.
  */
 export const XML_NODE_BYTES = 300;
+/**
+ * What a command or a point of a packed path (`xml.ts`: an `a:path` read as two typed arrays) is charged against the cache,
+ * in bytes: a command is one byte of `ops` and a point two doubles of `nums`, so 16 covers both with room.
+ */
+export const PATH_ITEM_BYTES = 16;
 /** What one relationship of a kept list is charged against the cache (its object, strings and indexes). */
 export const REL_BYTES = 300;
 /**

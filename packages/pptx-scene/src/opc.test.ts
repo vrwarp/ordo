@@ -8,6 +8,7 @@ import {
   MAX_EXTERNAL_NOTES,
   MAX_PART_NAME_CHARS,
   openPackage,
+  PATH_ITEM_BYTES,
   type PartSource,
   relIdOf,
   relsPartOf,
@@ -16,6 +17,7 @@ import {
   XML_NODE_BYTES,
 } from './opc.ts';
 import { body, buildDeck, grpSp, imageRel, para, pic, run, scheme, solid, solidBg, sp } from './test-util.ts';
+import type { XNode } from './xml.ts';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -234,6 +236,43 @@ describe('openPackage', () => {
     expect(roomy.xml('a.xml')).toBe(a2);
     // The default budget holds a slide's working set: its layout, master and theme, each at the tag limit.
     expect(XML_CACHE_BYTES).toBeGreaterThanOrEqual(3 * (8 * 1024 * 1024 + 250_000 * XML_NODE_BYTES));
+  });
+
+  describe('traced paths (design/29 X1: the package reads each part with packing on)', () => {
+    const tracedPart = (points: number) =>
+      `<a:custGeom><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="1" y="2"/></a:moveTo>` +
+      `${'<a:lnTo><a:pt x="3" y="4"/></a:lnTo>'.repeat(points - 1)}</a:path></a:pathLst></a:custGeom>`;
+    const pathOf = (root: XNode | undefined) => root?.children[0]?.children[0];
+
+    it('parses a part of 200,000 commands (600,000 tags: the unpacked 250,000-tag bound refused it), as one packed path', () => {
+      const pkg = openPackage(new Map([['a.xml', enc(tracedPart(200_000))]]));
+      const path = pathOf(within(10_000, () => pkg.xml('a.xml')));
+      expect(path?.name).toBe('a:path');
+      expect(path?.children).toEqual([]);
+      expect(path?.packed?.ops.length).toBe(200_000);
+      expect(path?.packed?.nums.length).toBe(400_000);
+    });
+
+    it('charges a packed part its characters, 300 bytes a node and 16 a command or a point, to the cache', () => {
+      const text = tracedPart(1000);
+      const parts = new Map([
+        ['a.xml', enc(text)],
+        ['b.xml', enc(text)],
+      ]);
+      // Three nodes (the geometry, its path list and the path) and 2,000 items (1,000 commands, 1,000 points).
+      const cost = text.length + 3 * XML_NODE_BYTES + 2_000 * PATH_ITEM_BYTES;
+      expect(PATH_ITEM_BYTES).toBe(16);
+      // Room for one part and a bit less than two: the second evicts the first ...
+      const tight = openPackage(parts, undefined, { cacheBytes: 2 * cost - 1 });
+      const a = tight.xml('a.xml');
+      tight.xml('b.xml');
+      expect(tight.xml('a.xml')).not.toBe(a);
+      // ... and room for exactly two keeps both: the cost is that and not a byte less.
+      const roomy = openPackage(parts, undefined, { cacheBytes: 2 * cost });
+      const a2 = roomy.xml('a.xml');
+      roomy.xml('b.xml');
+      expect(roomy.xml('a.xml')).toBe(a2);
+    });
   });
 
   it('never evicts pinned parts; the others go least recently used first', () => {

@@ -14,11 +14,19 @@ import {
   scheme,
   solid,
   solidBg,
+  randomGeometry,
+  seededRandom,
   sp,
   themeXml,
 } from './test-util.ts';
 import { alternateBranch, boxAffine, MAX_SHAPES_PER_SLIDE, pathCoverage } from './walk.ts';
-import { parseXml, rootOf } from './xml.ts';
+import {
+  MAX_PACKED_ELEMENTS_PER_PART,
+  MAX_PACKED_PATH_ITEMS_PER_PART,
+  type ParseOptions,
+  parseXml,
+  rootOf,
+} from './xml.ts';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
@@ -595,6 +603,58 @@ describe('custom geometry coverage', () => {
     expect(pathCoverage(many)).toBeUndefined();
     expect(pathCoverage(many)).toBeUndefined(); // memoised
     expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
+  });
+
+  describe('the packed form (design/29 X1: coverage reads paths through pathCommands)', () => {
+    const PACK: ParseOptions = {
+      pack: { maxElements: MAX_PACKED_ELEMENTS_PER_PART, maxPathItems: MAX_PACKED_PATH_ITEMS_PER_PART },
+    };
+    const packedGeom = (paths: string) =>
+      rootOf(parseXml(`<a:custGeom><a:pathLst>${paths}</a:pathLst></a:custGeom>`, 't', PACK))!;
+
+    it('rates 200 generated geometries as the node form does, the same ones undefined', () => {
+      const rand = seededRandom(20_261_121);
+      let rated = 0;
+      let gaveUp = 0;
+      for (let i = 0; i < 200; i++) {
+        // Arcs and guide names are what make the coverage give up: a fifth of the geometries have them.
+        const xml = randomGeometry(rand, { big: i % 10 === 9, guides: i % 5 === 1, arcs: i % 5 === 2 });
+        const a = pathCoverage(rootOf(parseXml(xml, 't', PACK)));
+        const b = pathCoverage(rootOf(parseXml(xml, 't')));
+        expect(a).toBe(b);
+        if (b === undefined) gaveUp++;
+        else rated++;
+      }
+      expect(rated).toBeGreaterThan(60);
+      expect(gaveUp).toBeGreaterThan(20);
+    });
+
+    it('gives up at the same inputs: 4,097 points and 65,537 elements, and not one before', () => {
+      const polyN = (n: number) =>
+        `<a:path w="100" h="100"><a:moveTo>${pt(0, 0)}</a:moveTo>${Array.from(
+          { length: n - 1 },
+          (_, i) => `<a:lnTo>${pt(1 + (i % 99), 1 + ((i * 7) % 99))}</a:lnTo>`,
+        ).join('')}<a:close/></a:path>`;
+      for (const [n, rated] of [
+        [4_096, true],
+        [4_097, false],
+      ] as const) {
+        const packed = pathCoverage(packedGeom(polyN(n)));
+        expect(packed === undefined).toBe(!rated);
+        expect(packed).toBe(pathCoverage(geom(polyN(n))));
+      }
+      // Elements: the path, a moveTo and its point, then closes (one element each).
+      const closes = (k: number) =>
+        `<a:path w="10" h="10"><a:moveTo>${pt(0, 0)}</a:moveTo>${'<a:close/>'.repeat(k)}</a:path>`;
+      for (const [k, rated] of [
+        [65_533, true],
+        [65_534, false],
+      ] as const) {
+        const packed = pathCoverage(packedGeom(closes(k)));
+        expect(packed === undefined).toBe(!rated);
+        expect(packed).toBe(pathCoverage(geom(closes(k))));
+      }
+    });
   });
 
   it('records the coverage on custom shapes', () => {

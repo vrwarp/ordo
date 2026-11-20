@@ -19,13 +19,20 @@ import {
   para,
   partText,
   pic,
+  custGeom,
   pictureBg,
   run,
   solid,
   sp,
   withPart,
 } from './test-util.ts';
-import { parseXml, rootOf } from './xml.ts';
+import {
+  MAX_PACKED_ELEMENTS_PER_PART,
+  MAX_PACKED_PATH_ITEMS_PER_PART,
+  type ParseOptions,
+  parseXml,
+  rootOf,
+} from './xml.ts';
 
 const EMU = 914_400 / 2;
 const text = (parts: Map<string, Uint8Array>, name: string) => partText(parts, name);
@@ -344,6 +351,47 @@ describe('writeXml', () => {
     expect(xml).toContain('xmlns:constructor="urn:c"');
     expect(xml).toContain('<x:a/><constructor:b/><p:d ok="v&amp;&lt;"/>');
     expect(xml).not.toContain('nope');
+  });
+
+  describe('a traced path (design/29 X1: the package reads parts with packed paths; a copy writes them out again)', () => {
+    const PACK: ParseOptions = {
+      pack: { maxElements: MAX_PACKED_ELEMENTS_PER_PART, maxPathItems: MAX_PACKED_PATH_ITEMS_PER_PART },
+    };
+    const path =
+      '<a:path w="10" h="10"><a:moveTo><a:pt x="1" y="2"/></a:moveTo><a:lnTo><a:pt x="3" y="-4"/></a:lnTo>' +
+      '<a:quadBezTo><a:pt x="5" y="6"/><a:pt x="7" y="8"/></a:quadBezTo>' +
+      '<a:cubicBezTo><a:pt x="1" y="1"/><a:pt x="2" y="2"/><a:pt x="3" y="3"/></a:cubicBezTo>' +
+      '<a:arcTo wR="5" hR="6" stAng="0" swAng="5400000"/><a:close/></a:path>';
+    const sld = (paths: string) =>
+      `<p:sld><p:cSld><p:spTree><p:sp><p:spPr><a:custGeom><a:pathLst>${paths}</a:pathLst></a:custGeom></p:spPr></p:sp></p:spTree></p:cSld></p:sld>`;
+
+    it('writes a packed path as the node reader\u2019s tree is written, command for command', () => {
+      const xml = sld(path + path);
+      const packed = writeXml(rootOf(parseXml(xml, 'x', PACK))!);
+      const plain = writeXml(rootOf(parseXml(xml, 'x'))!);
+      expect(packed).toBe(plain);
+      expect(packed).toContain(path);
+    });
+
+    it('prints the traced path of a whole page: the slide part keeps every command and point', () => {
+      const parts = buildDeck({
+        slides: [
+          {
+            shapes: sp({
+              id: 2,
+              x: 0,
+              y: 0,
+              cx: EMU,
+              cy: EMU,
+              geom: 'none',
+              fill: custGeom({ paths: path }) + solid('FF0000'),
+            }),
+          },
+        ],
+      });
+      const copy = buildRenderCopy(parts, [{ index: 0, mode: 'whole' }]);
+      expect(text(copy.parts, 'ppt/slides/slide1.xml')).toContain(path);
+    });
   });
 
   it('refuses a copy past its page budget', () => {

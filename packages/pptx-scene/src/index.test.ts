@@ -8,6 +8,7 @@ import {
   para,
   pic,
   pictureBg,
+  denseDeckParts,
   pngHeader,
   run,
   solid,
@@ -178,6 +179,19 @@ describe('convertDeck (the hub pool task entry, M3)', () => {
         { shapes: box(2, '0000FF') },
       ],
     });
+
+  it('imports a slide of traced artwork of 6 MB, which the 250,000-tag bound refused (design/29 B4, X1)', () => {
+    // 400 custom shapes of 300 points: about 120,000 points and 360,000 tags in about 5.5 MB, under the part cap
+    // (8 MiB at the base), so it is the tag bound that made the base read this slide as a picture, text only.
+    const parts = denseDeckParts({ shapes: 400, points: 300 });
+    const size = parts.get('ppt/slides/slide1.xml')!.length;
+    expect(size).toBeGreaterThan(4 * 1024 * 1024);
+    expect(size).toBeLessThan(8 * 1024 * 1024);
+    const slide = convertDeck(parts).slides[0]!;
+    expect(slide.classification?.reasons ?? []).not.toContain('unreadable');
+    expect(slide.notes.join(' ')).not.toContain('could not be read');
+    expect(slide.slide.objects.length).toBeGreaterThan(100);
+  });
 
   it('converts the whole deck like parseDeck and emitSlides, with the slide list', () => {
     const all = convertDeck(deck());
