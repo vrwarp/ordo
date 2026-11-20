@@ -134,11 +134,16 @@ export type AssetJob =
       key: string;
       cueIndex: number;
       slide: Slide;
+      /**
+       * The slide before the live clamp's cut (`SlideDesc.full`), only for a slide past a count: the asset worker
+       * splits it into the part it draws at once and the frame under it (`frame.ts`), so every object is drawn.
+       */
+      full?: Slide;
       nextSlide?: Slide;
       isSong: boolean;
       presentationKind?: 'song' | 'slides' | 'loop';
       look: Look;
-      /** mediaId -> file hash for every image the slide draws. */
+      /** mediaId -> file hash for every image the slide draws (`full`'s too, when it is given). */
       images: Record<string, string>;
       /** Re-draw of a key the renderer holds: it replaces the held copy in place (no flip). */
       refresh?: boolean;
@@ -186,6 +191,11 @@ export type DrawingSwitches = {
   effects?: 'units' | 'base';
   /** Test mode only (`?unitTurnMs=`): each turn of unit making is followed by this long a wait, ms. */
   unitTurnMs?: number;
+  /**
+   * 'off' (`?frame=off`; implied by `?effects=base`): a slide past a count is drawn cut as it was before the
+   * underlay frame, at most 200 objects and 16 pictures (`frame.ts` `setFrames`).
+   */
+  frame?: 'off';
 };
 
 /**

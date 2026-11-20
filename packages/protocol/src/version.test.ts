@@ -49,9 +49,12 @@ import { APP_VERSION } from './index.ts';
 // than go on without them: without sub-wave 1's shared changes above, or sending the hub PowerPoint scenes
 // parsed as 0.8.1 parsed them (design/27, "CONVERTER_VERSION stays 2 through sub-wave 1c too"). The digest is
 // unchanged (it leaves the APP_VERSION line out).
+// Follow-up PR, sub-wave 2, live-frame: renderer plan.ts gains `SlideDesc.full` (the slide before the live clamp's
+// cut, only for a slide past a count; a descriptor of any other slide is unchanged). Re-recorded at 0.9.0 on the
+// track's branch; the follow-up PR's one bump is its last commit.
 const RECORDED = {
   version: '0.9.0',
-  digest: '7077a1437610daeacb64027cc37a534a758d091ad298af39f1b1e1f3c7c20511',
+  digest: '2c6b9f99a7fe93f615d1d488f4bc891baa430587deb220bbc24d09bc828843b0',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */
