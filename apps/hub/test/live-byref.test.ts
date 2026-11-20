@@ -5,6 +5,7 @@
  * whole forms, and the technician switch ORDO_LIVE_BYREF.
  */
 import { createHash } from 'node:crypto';
+import { type AddressInfo, connect, createServer } from 'node:net';
 import { join } from 'node:path';
 import type { Media, LiveState } from '@ordo/domain';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
@@ -43,10 +44,15 @@ afterEach(() => {
 });
 
 const turn = () => new Promise((r) => setImmediate(r));
-/** The goLive applied, and the turn of the loop in which its second copy is written (design/29 M2's measured decision). */
+/** The turns of the loop after which a deferred second copy is written: the poll between them reads what arrived first. */
+const later = async () => {
+  await turn();
+  await turn();
+};
+/** The goLive applied, and the turns of the loop in which its second copy is written (design/29 M2's measured decision). */
 const goLive = async (live: LiveService, playlistId = 'pl') => {
   const seq = await live.submitQueued({ k: 'goLive', playlistId }, OP);
-  await turn();
+  await later();
   return seq;
 };
 const next = (live: LiveService, n = 1) => {
@@ -218,7 +224,7 @@ describe('legacy forms (step 4)', () => {
       expect(again.state.resolved?.playlist.id).toBe(resolved.playlist.id);
       expect(rows(f.db).length).toBe(0);
       again.snapshot(true);
-      await turn();
+      await later();
       expect(rows(f.db).length).toBe(2);
       expect(snapshotText(f.db)).toContain('"resolvedId"');
       expect(snapshotText(f.db)).not.toContain('"resolved":');
@@ -234,7 +240,7 @@ describe('adopt (step 4)', () => {
     const incoming = JSON.parse(JSON.stringify(donor.live.state)) as LiveState;
     const hubSide = service({ bundles: {} });
     expect(hubSide.live.adopt(incoming)).toMatchObject({ ok: true });
-    await turn();
+    await later();
     expect(rows(hubSide.db).length).toBe(2);
     same(restarted(hubSide).state, hubSide.live.state);
     expect(snapshotText(hubSide.db)).not.toContain('"resolved":');
@@ -533,7 +539,7 @@ describe('the cue list beside the copy (follow-up 1: the periodic snapshot stops
     const incoming = JSON.parse(JSON.stringify(donor.live.state)) as LiveState;
     const hubSide = service({ bundles: {} });
     expect(hubSide.live.adopt(incoming)).toMatchObject({ ok: true });
-    await turn();
+    await later();
     expect(cueRows(hubSide.db).length).toBe(1);
     expect(snapshotText(hubSide.db)).not.toContain('"cues":');
     same(restarted(hubSide).state, hubSide.live.state);
@@ -567,6 +573,39 @@ function snapshotCueId(db: DB): string {
   if (!m) throw new Error('the snapshot names no cue list');
   return m[1]!;
 }
+
+describe('the take-over leaves the loop to what arrived meanwhile (M2: a GO pressed during the apply)', () => {
+  it('a key that reached a socket during the take-over apply is read before the second copy is written', async () => {
+    const s = service();
+    // A TCP pair stands for a screen or the operator: bytes written from inside the apply are in the kernel when it
+    // returns and can only be read by a later poll of the loop, as a GO pressed 10 ms into the take-over is.
+    const server = createServer();
+    const seen: number[] = [];
+    server.on('connection', (c) => c.on('data', () => seen.push(rows(s.db).length)));
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const client = connect((server.address() as AddressInfo).port, '127.0.0.1');
+    await new Promise<void>((r) => client.once('connect', () => r()));
+    const real = LiveService.prototype.apply;
+    LiveService.prototype.apply = function (this: LiveService, ...a: Parameters<LiveService['apply']>) {
+      if (a[0].k === 'goLive') client.write('k');
+      return real.apply(this, a);
+    };
+    try {
+      await s.live.submitQueued({ k: 'goLive', playlistId: 'pl' }, OP);
+      for (let i = 0; i < 200 && !seen.length; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(seen.length).toBeGreaterThan(0);
+      // the key was read with the first copy written and the second not yet: it is applied before the write
+      expect(seen[0]).toBe(1);
+      // and the second copy is written afterwards, in a turn of its own
+      for (let i = 0; i < 200 && rows(s.db).length < 2; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(rows(s.db).length).toBe(2);
+    } finally {
+      LiveService.prototype.apply = real;
+      client.destroy();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});
 
 describe('the snapshots retained', () => {
   it('SNAPSHOTS_PREV_KEEP stays 2', () => {

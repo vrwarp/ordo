@@ -158,6 +158,14 @@ export function librarySource(lib: Library): LiveSource {
 }
 
 const JOURNAL_KEEP = 5000;
+/**
+ * Run `fn` after the loop has polled for I/O once more (two `setImmediate` hops): a callback of the check phase runs
+ * before the next poll, so bytes that reached a socket while the caller held the loop (a GO pressed during a take-over's
+ * apply) would be read only after `fn`; with the second hop they are read first, and applied, before it runs.
+ */
+const afterPoll = (fn: () => void): void => {
+  setImmediate(() => setImmediate(fn));
+};
 /** A copy's id: the SHA-256 of its bytes, hex. */
 const RESOLVED_ID = /^[0-9a-f]{64}$/;
 /**
@@ -545,11 +553,12 @@ export class LiveService {
 
   /**
    * The copy's two rows (copy 0 and 1, the same bytes): written if either is missing; never rewritten. With
-   * `deferSecond` the second goes in a transaction of its own in the next turn of the loop (setImmediate): a goLive's
+   * `deferSecond` the second goes in a transaction of its own after the loop has polled once more (`afterPoll`): a goLive's
    * apply holds the live loop for one 20 MiB write instead of two (design/29 M2: 213 ms against 385 ms for the whole
-   * apply at 20 MiB, measured; the keys pressed meanwhile are applied in the microtask that follows the apply, before
-   * the second write). The snapshot that names the id is written once copy 0 is there; a crash between the two writes
-   * leaves one verified copy, and the next snapshot writes the other.
+   * apply at 20 MiB, measured; the keys already queued are applied in the microtask that follows the apply, those that
+   * reached a socket during it are read by the poll that comes before the second write: `afterPoll`). The snapshot that
+   * names the id is written once copy 0 is there; a crash between the two writes leaves one verified copy, and the next
+   * snapshot writes the other.
    */
   private writeRows(c: { id: string; json: Uint8Array }, deferSecond = false): void {
     const have = this.db.prepare(`SELECT copy FROM live_resolved WHERE resolved_id = ?`).all(c.id) as {
@@ -567,7 +576,7 @@ export class LiveService {
         // copy 0 is there: the second follows in a turn of its own (once per id)
         if (!this.secondRowDue.has(c.id)) {
           this.secondRowDue.add(c.id);
-          setImmediate(() => {
+          afterPoll(() => {
             this.secondRowDue.delete(c.id);
             // only for the service still running (an ended one's rows are the collection's)
             if (this.copy?.id !== c.id) return;

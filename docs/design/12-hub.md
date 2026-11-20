@@ -502,9 +502,14 @@ named by its SHA-256 (`resolvedId`, the id golive-prepare's worker computes over
 ONCE in two rows of `live.db`: `live_resolved (resolved_id, copy, bytes, json, saved_at)`, copy 0 and 1 holding the
 same bytes, each verified against the id and its length on every read. Everything else names the copy:
 
-- **The goLive's apply** (the take-over) writes the two rows, the journal row `{"k":"goLive","resolvedId":...}` and
-  the snapshot in one transaction, then calls its listeners; the copy is parsed once from the prepared bytes, which
-  the live service keeps as the copy's bytes. Nothing on the live loop serialises the copy again.
+- **The goLive's apply** (the take-over) writes the first row of the copy, the journal row
+  `{"k":"goLive","resolvedId":...}`, the snapshot and the cue list's row in one transaction, then calls its listeners;
+  the copy is parsed once from the prepared bytes, which the live service keeps as the copy's bytes. Nothing on the
+  live loop serialises the copy again. The copy's second row is written in a transaction of its own after the loop has
+  polled once more (two `setImmediate` hops): a GO pressed during the apply reaches its socket while the loop is
+  held, and is read and applied by that poll before the second write, not behind it (measured at 20 MiB with real
+  sockets, a GO 10 ms after the take-over: applied 288 ms after its press with the write beside the apply, 223-261 ms
+  after: the apply's own time and nothing more).
 - **The snapshot** (at every goLive, End service and adopt, and every 5 s while the service changes) is the state
   without its copy and without its cue list, ending `,"cuesId":"<id>","resolvedId":"<id>"}`: a few kilobytes at any
   size. The cue list (about 360 bytes a cue: 3.1 MB at 20 MiB) is built once at the goLive and never changes, so it
