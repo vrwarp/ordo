@@ -640,7 +640,7 @@ describe('a node cache on the device pixel grid (the editor against the screens,
   it('is what the canvas caches a past-budget object over: the rectangle of the object’s own reach, moved', () => {
     const objects = effects();
     const p9 = byId(objects, 'p9');
-    const r = cacheRect(p9, 0.8255)!;
+    const r = nodeCacheRect(p9, undefined, 0.8255, ctx, p9.box.h)!;
     const a = alignCacheRect(r, p9.box, 0.8255);
     expect(a.width).toBeGreaterThanOrEqual(r.width);
     expect(a.width).toBeLessThan(r.width + 1 / 0.8255 + 1e-9);
