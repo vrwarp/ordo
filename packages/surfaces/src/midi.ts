@@ -183,6 +183,49 @@ type Learning = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+export type MidiAccessErrorInfo = {
+  kind: 'denied' | 'platform' | 'unsupported' | 'unknown';
+  message: string;
+  hint: string;
+};
+
+/** Classify a `navigator.requestMIDIAccess()` rejection into a clear, actionable message. */
+export function formatMidiAccessError(err: unknown): MidiAccessErrorInfo {
+  const name =
+    err instanceof Error
+      ? err.name
+      : typeof err === 'object' && err !== null && 'name' in err
+        ? String((err as { name: unknown }).name)
+        : '';
+  const raw = err instanceof Error ? err.message : String(err);
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return {
+      kind: 'denied',
+      message: 'Web MIDI permission was denied by the browser.',
+      hint: 'Allow MIDI devices for this site in the browser address bar and try again.',
+    };
+  }
+  if (name === 'InvalidStateError' || /platform dependent initialization failed/i.test(raw)) {
+    return {
+      kind: 'platform',
+      message: 'OS MIDI subsystem failed to initialize.',
+      hint: 'Browser permission is granted, but the OS MIDI service failed (Chromium caches this until restart). On macOS, open Audio MIDI Setup → MIDI Studio or run "killall MIDIServer"; on Linux, check /dev/snd/seq. Then fully quit and relaunch the browser.',
+    };
+  }
+  if (name === 'NotSupportedError') {
+    return {
+      kind: 'unsupported',
+      message: 'Web MIDI is not supported by this browser.',
+      hint: 'Use Chrome or Edge on desktop for Web MIDI.',
+    };
+  }
+  return {
+    kind: 'unknown',
+    message: raw || 'Web MIDI could not be initialized.',
+    hint: 'Check your MIDI interface and restart the browser.',
+  };
+}
+
 export class MidiDriver {
   private access: MIDIAccess | null = null;
   private mappings: MidiMapping[] = [];
@@ -193,6 +236,8 @@ export class MidiDriver {
   private pendingTimers = new Set<ReturnType<typeof setTimeout>>();
   private recentOut: { key: string; time: number }[] = [];
   private nextActivityId = 1;
+  /** Last error from `start()`, cleared on success or `dispose()`. */
+  lastError: MidiAccessErrorInfo | null = null;
   /** Called when the input list changes. */
   onInputs?: (inputs: MidiInputInfo[]) => void;
   /** Called when the output list changes. */
@@ -215,12 +260,22 @@ export class MidiDriver {
 
   async start(): Promise<boolean> {
     if (this.access) return true;
-    if (!MidiDriver.supported) return false;
+    if (!MidiDriver.supported) {
+      this.lastError = {
+        kind: 'unsupported',
+        message: 'Web MIDI is not supported by this browser.',
+        hint: 'Use Chrome or Edge on desktop for Web MIDI.',
+      };
+      return false;
+    }
+    this.lastError = null;
     try {
       this.access = await navigator.requestMIDIAccess({ sysex: false });
     } catch (e) {
-      console.warn('[midi] access denied', e);
-      this.onError?.(`access denied: ${String(e)}`);
+      const info = formatMidiAccessError(e);
+      this.lastError = info;
+      console.warn(`[midi] ${info.kind}: ${info.message}`, e);
+      this.onError?.(`${info.kind}: ${info.message} (${String(e)})`);
       return false;
     }
     this.access.onstatechange = () => {
