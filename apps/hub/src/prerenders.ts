@@ -491,6 +491,18 @@ export class PrerenderIndex {
       .n;
   }
 
+  /**
+   * The failures of a presentation's keys. The key rows are the only link between a failure and its presentation,
+   * so this runs before they go (the library's delete hook runs it before the references forget).
+   */
+  forgetFailures(presentationId: string): void {
+    this.db
+      .prepare(
+        `DELETE FROM prerender_failures WHERE key IN (SELECT DISTINCT key FROM prerender_keys WHERE presentation_id = ?)`,
+      )
+      .run(presentationId);
+  }
+
   /** A deleted presentation's pictures, failures and key rows; the hashes the pictures named. */
   forgetPresentation(presentationId: string): string[] {
     return this.db.transaction(() => {
@@ -499,11 +511,7 @@ export class PrerenderIndex {
           hash: string;
         }[]
       ).map((r) => r.hash);
-      this.db
-        .prepare(
-          `DELETE FROM prerender_failures WHERE key IN (SELECT DISTINCT key FROM prerender_keys WHERE presentation_id = ?)`,
-        )
-        .run(presentationId);
+      this.forgetFailures(presentationId);
       this.db.prepare(`DELETE FROM prerenders WHERE presentation_id = ?`).run(presentationId);
       this.db.prepare(`DELETE FROM prerender_keys WHERE presentation_id = ?`).run(presentationId);
       return hashes;

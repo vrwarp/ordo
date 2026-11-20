@@ -260,8 +260,12 @@ export class Library {
         folder_id: p.folderId ?? null,
         archived: p.archived ? 1 : 0,
       }),
-      // what a deleted presentation's versions named goes with it, whichever way it was deleted
-      (id) => this.refs.forget(id),
+      // what a deleted presentation's versions named goes with it, whichever way it was deleted (the failures of
+      // its keys first: the key rows are their only link to it)
+      (id) => {
+        this.prerenderIndex.forgetFailures(id);
+        this.refs.forget(id);
+      },
     );
     this.playlists = new EntityTable(db, 'playlists', Playlist, (p) => ({ name: p.name }));
     this.media = new EntityTable(db, 'media', Media, (m) => ({ name: m.name, kind: m.kind, state: m.state }));

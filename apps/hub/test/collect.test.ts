@@ -270,6 +270,23 @@ describe('pruning and deleting (RC3, RC5)', () => {
     expect(hub.lib.fileReferenced(g)).toBe(false);
   });
 
+  it("forgets a deleted presentation's failure rows whichever way it is deleted (RC3)", async () => {
+    hub = await startHub();
+    hub.lib.savePresentation({ ...naming('gone', [hash(78)]), rev: 1 }, { create: true });
+    hub.db
+      .prepare(
+        `INSERT INTO prerender_keys (presentation_id, rev, slide_id, key, standby_id, sig, created_at) VALUES ('gone', 1, 's1', ?, ?, 'x', 1)`,
+      )
+      .run(hash(90), hash(91));
+    hub.lib.prerenderIndex.setFailure(hash(90), 'x', 'tester', 1);
+    const rows = () =>
+      (hub!.db.prepare(`SELECT COUNT(*) AS n FROM prerender_failures`).get() as { n: number }).n;
+    expect(rows()).toBe(1);
+    hub.lib.presentations.delete('gone'); // the library's own delete, not the route
+    expect(rows()).toBe(0);
+    expect(hub.lib.prerenderIndex.keySet('gone')).toEqual([]);
+  });
+
   it('answers fileReferenced for a hash a kept revision or a head names, and Store.release keeps such a file (RC5)', async () => {
     hub = await startHub();
     const [old, page, shape] = [hash(20), hash(21), hash(22)];
