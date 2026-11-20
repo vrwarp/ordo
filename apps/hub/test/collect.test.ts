@@ -11,6 +11,7 @@ import type { Logger } from 'pino';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RETENTION_DAYS } from '../src/backup.ts';
 import {
+  BUDGETED_SQL,
   COLLECT_DELAY_DAYS,
   Collector,
   type CollectorOptions,
@@ -258,6 +259,31 @@ describe('pruning and deleting (RC3, RC5)', () => {
         }
       ).n,
     ).toBe(0);
+  });
+
+  it('asks which presentations the budget concerns from the heads, never by scanning every interval (M5)', async () => {
+    // the health numbers ask this every few seconds: with 590,000 intervals and no head it took 45 ms and kept the
+    // library at 0.28 % of a core while idle (0.06 % on an empty library)
+    hub = await startHub();
+    const ins = hub.db.prepare(
+      `INSERT INTO file_refs (presentation_id, hash, first_rev, last_rev) VALUES (?, ?, 1, 1)`,
+    );
+    hub.db.transaction(() => {
+      for (let i = 0; i < 20_000; i++) ins.run(`p${i % 50}`, hash(500_000 + i));
+    })();
+    const plan = (hub.db.prepare(`EXPLAIN QUERY PLAN ${BUDGETED_SQL}`).all() as { detail: string }[]).map(
+      (r) => r.detail,
+    );
+    expect(
+      plan.filter((d) => /\bSCAN r\b/.test(d)),
+      plan.join(' | '),
+    ).toEqual([]);
+    expect(hub.lib.refs.budgeted()).toEqual([]);
+    // and it still names a presentation whose interval reaches a head
+    hub.db
+      .prepare(`INSERT INTO slide_heads (hash, bytes, objects, uses, created_at) VALUES (?, 1, 1, '{}', 'a')`)
+      .run(hash(500_003));
+    expect(hub.lib.refs.budgeted()).toEqual(['p3']);
   });
 
   it("forgets a deleted presentation's references whichever way it is deleted (RC3)", async () => {

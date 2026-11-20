@@ -53,6 +53,14 @@ WHERE NOT EXISTS (SELECT 1 FROM file_refs o WHERE o.hash = m.hash AND o.presenta
   AND NOT EXISTS (SELECT 1 FROM prerenders x WHERE x.hash = m.hash AND x.presentation_id <> :pid)`;
 
 /**
+ * The presentations with a picture or an interval that reaches a head. The heads come first (`CROSS JOIN` fixes the
+ * order): left to itself the planner walks every interval (590,000 on a large library) and looks each up among no
+ * heads at all, 45 ms of the library's loop every time the health numbers are asked.
+ */
+export const BUDGETED_SQL = `SELECT presentation_id AS id FROM prerenders
+  UNION SELECT r.presentation_id FROM slide_heads h CROSS JOIN file_refs r ON r.hash = h.hash`;
+
+/**
  * The backfill's next revision: the first one after the cursor that no save or scan has recorded. A plain index
  * range on the revisions' key, read in key order: no sort and no scan, so a library of 25,000 revisions costs 25,000
  * short reads, not 25,000 sorts of what is left (each of which would carry every remaining body).
@@ -195,12 +203,7 @@ export class RefIndex {
 
   /** The presentations that have a pre-rendered slide's file or a picture: the ones the budget can concern. */
   budgeted(): string[] {
-    return (
-      this.q(
-        `SELECT presentation_id AS id FROM prerenders
-           UNION SELECT r.presentation_id FROM file_refs r JOIN slide_heads h ON h.hash = r.hash`,
-      ).all() as { id: string }[]
-    ).map((r) => r.id);
+    return (this.q(BUDGETED_SQL).all() as { id: string }[]).map((r) => r.id);
   }
 
   /**
