@@ -14,6 +14,12 @@ import { type ClientSceneTaskInput, clientSceneTask } from './pptx/clientScene.t
 import { renderCopyTask } from './pptx/renderCopyTask.ts';
 import { sceneTask } from './pptx/sceneTask.ts';
 import type { ArtTaskInput, BakeTaskInput, RenderCopyTaskInput, SceneTaskInput } from './pptx/shared.ts';
+import {
+  type PrerenderKeysTaskInput,
+  prerenderKeysTask,
+  type SlideFileTaskInput,
+  slideFileTask,
+} from './slidetasks.ts';
 
 type Req = { id: number; kind: string; input: Record<string, unknown>; __ordo?: unknown };
 
@@ -40,6 +46,10 @@ async function handle(m: Req): Promise<unknown> {
       return bakeTask(m.input as unknown as BakeTaskInput);
     case 'pptx-client-scene':
       return clientSceneTask(m.input as unknown as ClientSceneTaskInput);
+    case 'slide-file':
+      return slideFileTask(m.input as unknown as SlideFileTaskInput);
+    case 'prerender-keys':
+      return prerenderKeysTask(m.input as unknown as PrerenderKeysTaskInput);
     default:
       throw new Error(`unknown task ${m.kind}`);
   }

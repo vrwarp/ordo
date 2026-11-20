@@ -26,7 +26,8 @@ export type CapField =
   | 'loop'
   | 'onEnd'
   | 'audio'
-  | 'isBackground';
+  | 'isBackground'
+  | 'prerender';
 
 export type FieldRefusal = { field: CapField; slideId?: string; itemId?: string };
 
@@ -47,6 +48,7 @@ export const FIELD_MESSAGES: Record<CapField, string> = {
   onEnd: "A phone can't change what happens when a video ends.",
   audio: "A phone can't change a video's sound settings.",
   isBackground: "A phone can't change whether media is a background.",
+  prerender: "A phone can't change how a big slide is drawn.",
 };
 
 /** The 403 `cap` for a field refusal: `{ code: 'cap', message, field, slideId? | itemId? }`. */
@@ -105,6 +107,10 @@ export function presentationRefusal(
       if (!same(old?.audio, s.audio)) return { field: 'slide.audio', slideId: id };
       if (!same(old?.durationMs, s.durationMs)) return { field: 'durationMs', slideId: id };
       if (!same(old?.pptx, s.pptx)) return { field: 'pptx', slideId: id };
+      // A slide's pre-render record and its Draw as (design/29 §1.8): a phone can neither forge nor orphan a slide
+      // file's reference, nor change how a big slide is drawn.
+      if (!same(old?.prerender, s.prerender) || !same(old?.draw, s.draw))
+        return { field: 'prerender', slideId: id };
     }
   }
   for (const [id, list] of before)

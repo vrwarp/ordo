@@ -194,6 +194,25 @@ export, ≤ 256 MB, field `showPicture` a JSON array): the reference pictures th
 without LibreOffice. The diagnostics zip holds `capabilities.json`.
 <!-- /m9:lo-detect -->
 
+<!-- prerender-store:routes -->
+_Pre-rendered slides (r2b sub-wave 2, design/29 §1.3), all edit role, `full` cap (a capped phone session gets 403
+`cap`), each of the storing ones first checked against the free-space floor (507 `disk`, "Storage" below)._
+
+| Route                                               | Answer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PUT /files/slide/:hash`                            | A slide page (at most 500 objects and 256 KiB of canonical JSON) or its head (at most 129 pages, 16 MiB of pages together, 20,000 objects), checked in the CPU pool and stored as an `application/json` file named by what is stored; 201 new, 200 known; 400 `bad_name`, `bad_page`, `bad_head`; 409 `pages_missing` (the first 20 pages the hub lacks); 413 `slide_too_large`                                                                                                                            |
+| `PUT /presentations/:id/prerenders/:key?size=`      | A picture (PNG or WebP, not animated, exactly 3840x2160, 1920x1080 or 640x360, at most 32 MiB; the 413 closes the connection); the first picture of a key and size wins, a baker's second is dropped (200 `dropped`), the operator's replaces; 400 `bad_size`, `bad_picture`; 404; 409 `unknown_key` (the key is in no kept revision); 503 `paused_during_service` with `Retry-After` (during a service only the live service's own current keys are taken); 507 `budget` (past the 1 GiB below) or `disk` |
+| `GET /presentations/:id/prerenders`                 | `{ keys: [{ slideId, key, standbyId, sizes, madeBy?, at? }], failures, budget: { usedBytes, limitBytes } }` (at most 5,000 keys; no library change is emitted)                                                                                                                                                                                                                                                                                                                                             |
+| `DELETE /presentations/:id/prerenders/:key[?size=]` | "Make picture again": the key's pictures and its failure go, and so do their files when no other row names them; 423 while the presentation is live; 204                                                                                                                                                                                                                                                                                                                                                   |
+| `POST /presentations/:id/prerenders/:key/failed`    | `{ reason, madeBy? }`: a baker's remembered failure of a key (listed, not retried until deleted); 409 `unknown_key`                                                                                                                                                                                                                                                                                                                                                                                        |
+
+A presentation save names a pre-rendered slide's head (`prerender.file.ref`) only when the hub has it (409 `slide_files_missing`
+otherwise, naming the missing hashes) and computes the keys of the saved revision in the pool before it is
+written (`prerender_keys`, with the signature that lets a font or media change recompute only what it affects). The
+goLive bundle lists each slide's head, pages and shape files, the keys of the presentation's current revision and its
+pictures (`slideHeads`, `prerenderKeys`, `prerenders`): the fields are absent when nothing is pre-rendered.
+<!-- /prerender-store:routes -->
+
 ## WebSocket
 
 `wss://hub.<venue>.synology.me/ws`. Authenticated by the session cookie (operator,
@@ -277,6 +296,46 @@ once and defers itself again if the presentation is still live. Work a job finis
 
 Files under `/data/media/<hh>/<hash>.<ext>`, `/data/fonts/`, `/data/uploads/` (temporary),
 `/data/backups/`.
+
+<!-- prerender-store:storage -->
+**Pre-rendered slides** (migration 14, design/29 §1.3; all tables `IF NOT EXISTS`, nothing copied, so a hub of the
+version before opens the folder at 14 and ignores them, and an update again scans the revisions it missed):
+`slide_heads` and `slide_head_pages` (a head's index: bytes, object count, the files and media it uses, its pages
+in order), `prerender_keys` (per revision, slide and key: the stand-by id and a signature), `prerenders` (a picture
+per presentation, key and size, with the slide's stand-by id; the first upload wins), `prerender_failures`,
+`file_refs`, `refs_scanned` and `collect_marks` (below). A slide page, a head, a shape or mask or decoration file
+and a client scene are `files` rows of mime `application/json` under `media/<hh>/<hash>.json`, named by the SHA-256
+of their canonical bytes; a picture is a `files` row of its own mime, shared between rows of equal bytes.
+
+_The references index._ `file_refs(presentation_id, hash, first_rev, last_rev)` holds, as **intervals of
+revisions**, every content file a saved presentation names (a `ref` of a shape, mask or decoration or of a
+pre-rendered slide's file, and the files of a slide's `uses`): found by a text scan of the JSON string the save
+already built (no parse), extended or opened in the save's own transaction, cleared by `pruneRevisions` and by a
+delete. A 2,000-file presentation saved 50 times is 2,000 rows. A file is named while an interval of it reaches the
+oldest revision still kept; a head names its pages and its `uses` while the head is named; a picture row names its
+picture. `Library.fileReferenced` asks this index with the current rows. Revisions saved before the index
+(`refs_scanned` marks the ones scanned) are read once by a **backfill**: raw text, one revision at a time in
+slices of at most 20 ms with 100 ms of sleep per 10 revisions, two minutes after the start, resumable, never while
+a service is live.
+
+_Collection._ A file nothing names is kept for **30 days**, never less than the nightly backups are kept
+(`RETENTION_DAYS`; a test fails if the delay is lowered below it), so the manifest of any backup that can still be
+restored finds it. The library process runs one pass a day at 04:00 venue time (after the 03:00 backup) and one 10
+minutes after the start, in slices of at most 5 ms (a save in the middle of a pass waits for one slice and no
+more: measured at 1.6 to 1.7 times its quiet 95th percentile in a sweep and 2.1 to 2.7 times, at most 25 ms, in the
+marking pass), never while a service is live, before the backfill is done or
+before it has been told the service's state. Only `application/json` files are candidates (never a media original,
+delivery, poster, font, deck or PDF). A pass marks the unnamed (`collect_marks.since` is the 30-day clock), clears
+the mark of a file named again (a save, a head upload or a pass that finds it named), and deletes the files marked
+for 30 days: heads first (their index rows go in the same transaction as their `files` row, then their pages are
+named by nothing), each after a last check of everything that names a file and of unfinished jobs, inside the
+one synchronous transaction that deletes its row, so a save cannot slip in between; the blob is removed after and a
+missing blob is no error. Pictures of a key in no kept revision whose stand-by is no current slide's are a cache and
+go at the pass, their file with them when no other row names it. `ORDO_COLLECT=report` (the default) records the
+marks and logs one line a pass (`collection run`: counts and bytes that `on` would delete) and deletes nothing;
+`on` deletes; `off` runs nothing. `GET /health` carries `collectedFiles`, `collectedBytes` and `lastCollectAt`;
+`meta.collect_last_run` holds the last pass.
+<!-- /prerender-store:storage -->
 
 ## Media pipeline
 
@@ -451,7 +510,9 @@ capped at the newest three. `ordo-hub restore <date>` stops the service, swaps t
 database, and verifies every manifest hash exists. `live.db` (the live journal, snapshots
 and the live process's copies of the library) is not part of a backup: the live state is
 not restored, and a restore clears the cached library copies in `live.db` so the live
-process fetches the restored library's settings and output tokens when it starts.
+process fetches the restored library's settings and output tokens when it starts. A file collection deletes
+(Storage, "Collection") was unnamed for at least the backups' retention, so it is listed by every backup that can
+still be restored: the restored library finds every file its presentations name.
 
 ## Logging and diagnostics
 
@@ -555,6 +616,18 @@ whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`)
 - Revisions are full copies (design/11 "Revisions"): an imported presentation of 1 MB edited often costs
   up to 50 MB of revision rows.
 - `GET /health` reports the library snapshot's size (Logging and diagnostics).
+<!-- prerender-store:sizes -->
+- **A presentation's files, 1 GiB** (design/29 A24, W29; `PRERENDER_BUDGET_BYTES`): the bytes of the files only its
+  saved versions name (slide pages and heads, shape files and pictures, each file once; a file two presentations
+  name counts for neither, so a duplicate costs nothing), read from the indexes. Past it a picture first drops the
+  pictures of the oldest versions' keys (never a current key, never a current slide's stand-by); when that frees too
+  little the picture is refused, 507 `budget` with `usedBytes` and `limitBytes`, and the screens draw the slide.
+  Slide pages, heads and shape files are never refused for the budget (the only copy of a big slide); they count, so
+  the picture routes feel them. The listing and `GET /health` (`budgetLimitBytes`, `budgetUsedBytes`: the largest
+  presentation's) carry the numbers.
+- **The free-space floor** (design/29 A25, W44): uploads, imports and picture and slide-file routes answer 507
+  `disk` below the floor; saving, GO and the live process are never refused (Configuration, `ORDO_MIN_FREE_GB`).
+<!-- /prerender-store:sizes -->
 
 ## Configuration
 
@@ -585,6 +658,27 @@ fresh data folder, or after an image with new fonts, that takes a fraction of a 
 of a development machine's `/usr/share/fonts`), and a hub that already has them finds every row unchanged and still
 reads and hashes the files (about 50 ms there). Past the bound the hub listens anyway and logs `bundled fonts not registered in
 time`.
+
+<!-- prerender-store:floor -->
+`ORDO_MIN_FREE_GB` (r2b sub-wave 2, design/29 §1.3 A25, W44): the free-space floor of the data volume, a whole
+number of GB from 0 to 10,000; unset, it is 5 % of the volume, never less than 5 GiB and never more than 25 GiB
+(a shared NAS volume of 4 TB would otherwise refuse every upload under 200 GB free). Below it every route that
+stores a user's file (media upload, resumable create and chunks, an SVG's still, font upload and download, the
+PowerPoint, PDF, ProPresenter and SongSelect imports, the PDF of reference pictures, a re-import from a stored
+deck, and the slide-file and picture routes) answers `507` with the reason `disk`, `freeBytes` and `floorBytes`
+and W44's sentence; saving a presentation or a playlist, settings, deleting, GO and everything on the live
+process go on. 0 turns the floor off (one start-up line says so; the value tests that start a hub use); anything
+else is the computed floor with one start-up warning. The volume is read with `statfs` at most once per 2 s,
+every 30 s by the library process, and the floor fails open: a volume that does not answer is one warning and
+no refusal. `GET /health` carries `diskFreeBytes` and `diskFloorBytes` (numbers only), relayed from the library
+process on its stats message.
+<!-- /prerender-store:floor -->
+
+<!-- prerender-store:collect -->
+`ORDO_COLLECT` (r2b sub-wave 2): `report` (the default, also for an unknown value), `on` or `off`: what the daily
+collection of unnamed content files does (Storage, "Collection"); `report` marks and logs what `on` would
+delete, deleting nothing.
+<!-- /prerender-store:collect -->
 
 The hub answers only for hosts it knows: `ORDO_DOMAIN` and any label under it, `localhost`
 and its labels, `127.0.0.1`/`::1`, and `ORDO_ALLOWED_HOSTS`; anything else gets `421` on

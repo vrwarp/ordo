@@ -62,7 +62,8 @@ export type FromChild =
   | { t: 'changes'; changes: Change[]; seq?: number }
   | { t: 'log'; level: 'info' | 'warn' | 'error'; msg: string }
   /** The library's size for hub health (design/27 §3.4), after changes, at most every few seconds. */
-  | LibraryStatsMsg;
+  | LibraryStatsMsg
+  | PrerenderAddMsg;
 
 /** Supervisor -> child. */
 export type ToChild =
@@ -72,7 +73,15 @@ export type ToChild =
   | { t: 'changes'; changes: Change[]; seq?: number }
   | { t: 'status'; processes: ProcessStatus[] }
   | { t: 'shutdown' }
-  | LibraryStatsMsg;
+  | LibraryStatsMsg
+  | PrerenderAddMsg;
+
+/**
+ * A picture the library accepted for a key of the running service (design/29 §1.7): the `prerender.add` event the live
+ * process applies. Library process -> supervisor -> live process, relayed once: an event, unlike stats, never cached
+ * and never replayed to a restarted child (a restarted live process restores the picture from its own journal).
+ */
+export type PrerenderAddMsg = { t: 'prerender.add'; event: unknown };
 
 /** Library process -> supervisor -> live process (cached and replayed to a restarted live process). */
 export type LibraryStatsMsg = { t: 'stats'; library: LibraryStats };

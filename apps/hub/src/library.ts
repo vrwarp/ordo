@@ -33,7 +33,10 @@ import type {
 } from '@ordo/protocol';
 import { z } from 'zod';
 import { type DB, nowIso } from './db.ts';
-import { badRequest, conflict, notFound } from './errors.ts';
+import { badRequest, conflict, HttpError, notFound } from './errors.ts';
+import { RefIndex } from './collect.ts';
+import { PrerenderIndex } from './prerenders.ts';
+import { NAMED_MAX, SlideFileIndex } from './slidefiles.ts';
 import { validate } from './validate.ts';
 
 export type Change = { kind: LibraryKind; id: string; rev?: number; entity?: unknown; deleted?: boolean };
@@ -147,16 +150,19 @@ class EntityTable<T extends { id: string; rev?: number }> {
   private table: string;
   private schema: z.ZodType<T>;
   private columns: (e: T) => Record<string, string | number | null>;
+  private afterDelete?: (id: string) => void;
   constructor(
     db: DB,
     table: string,
     schema: z.ZodType<T>,
     columns: (e: T) => Record<string, string | number | null> = () => ({}),
+    afterDelete?: (id: string) => void,
   ) {
     this.db = db;
     this.table = table;
     this.schema = schema;
     this.columns = columns;
+    this.afterDelete = afterDelete;
   }
 
   private parse(r: Row): T {
@@ -213,11 +219,16 @@ class EntityTable<T extends { id: string; rev?: number }> {
   }
 
   delete(id: string): boolean {
-    return this.db.prepare(`DELETE FROM ${this.table} WHERE id = ?`).run(id).changes > 0;
+    const gone = this.db.prepare(`DELETE FROM ${this.table} WHERE id = ?`).run(id).changes > 0;
+    if (gone) this.afterDelete?.(id);
+    return gone;
   }
 }
 
 export type FileRow = { hash: string; bytes: number; mime: string; path: string };
+
+/** One row of `prerender_keys` as a save writes it (design/29 §1.3): the slide, its key and stand-by id, and `sig`. */
+export type PrerenderKeyRow = { slideId: string; key: string; standbyId: string; sig: string };
 
 export class Library {
   readonly presentations: EntityTable<Presentation>;
@@ -225,6 +236,12 @@ export class Library {
   readonly media: EntityTable<Media>;
   readonly themes: EntityTable<Theme & { rev?: number }>;
   readonly folders: EntityTable<Folder & { rev?: number }>;
+  /** The heads and pages of pre-rendered slides' full forms (DB only: the save check, goLive and collection read it). */
+  readonly slideFiles: SlideFileIndex;
+  /** The keys and pictures of pre-rendered slides (DB only). */
+  readonly prerenderIndex: PrerenderIndex;
+  /** What each presentation's saved versions name (intervals of revisions), for collection and `fileReferenced`. */
+  readonly refs: RefIndex;
   private listeners: ((changes: Change[], seq: number) => void)[] = [];
 
   private timeZone: string;
@@ -233,16 +250,30 @@ export class Library {
   constructor(db: DB, opts: { timeZone: string }) {
     this.db = db;
     this.timeZone = opts.timeZone;
-    this.presentations = new EntityTable(db, 'presentations', Presentation, (p) => ({
-      title: p.title,
-      kind: p.kind,
-      folder_id: p.folderId ?? null,
-      archived: p.archived ? 1 : 0,
-    }));
+    this.presentations = new EntityTable(
+      db,
+      'presentations',
+      Presentation,
+      (p) => ({
+        title: p.title,
+        kind: p.kind,
+        folder_id: p.folderId ?? null,
+        archived: p.archived ? 1 : 0,
+      }),
+      // what a deleted presentation's versions named goes with it, whichever way it was deleted (the failures of
+      // its keys first: the key rows are their only link to it)
+      (id) => {
+        this.prerenderIndex.forgetFailures(id);
+        this.refs.forget(id);
+      },
+    );
     this.playlists = new EntityTable(db, 'playlists', Playlist, (p) => ({ name: p.name }));
     this.media = new EntityTable(db, 'media', Media, (m) => ({ name: m.name, kind: m.kind, state: m.state }));
     this.themes = new EntityTable(db, 'themes', Theme.extend({ rev: z.number().int().optional() }));
     this.folders = new EntityTable(db, 'folders', FolderSchema.extend({ rev: z.number().int().optional() }));
+    this.slideFiles = new SlideFileIndex(db);
+    this.prerenderIndex = new PrerenderIndex(db);
+    this.refs = new RefIndex(db);
     this.seed(opts.timeZone);
   }
 
@@ -408,21 +439,76 @@ export class Library {
   // ---- presentations with revisions ----
   savePresentation(
     p: Presentation,
-    opts: { expectedRev?: number; by?: string; create?: boolean },
+    opts: { expectedRev?: number; by?: string; create?: boolean; keys?: readonly PrerenderKeyRow[] },
   ): Presentation {
     return this.db.transaction(() => {
+      // The slide files a pre-rendered slide names must be the hub's (409 otherwise), and its `uses` and file
+      // bytes are the hub's record, inside this transaction so a head cannot vanish between check and write.
+      const body = this.withSlideFiles(p);
       const saved =
         opts.create || !this.presentations.get(p.id)
-          ? this.presentations.insert(p)
-          : this.presentations.update(p.id, p, opts.expectedRev);
+          ? this.presentations.insert(body)
+          : this.presentations.update(p.id, body, opts.expectedRev);
+      // The revision's JSON is built once: the same string is scanned for the files it names (no parse).
+      const json = JSON.stringify(saved);
       this.db
         .prepare(
           `INSERT OR REPLACE INTO presentation_revisions (presentation_id, rev, json, saved_by, saved_at) VALUES (?, ?, ?, ?, ?)`,
         )
-        .run(saved.id, saved.rev, JSON.stringify(saved), opts.by ?? null, saved.updatedAt ?? nowIso());
+        .run(saved.id, saved.rev, json, opts.by ?? null, saved.updatedAt ?? nowIso());
+      this.refs.recordSave(saved.id, saved.rev, json);
+      if (opts.keys?.length) this.writeKeys(saved.id, saved.rev, opts.keys);
       this.pruneRevisions(saved.id);
       return saved;
     })();
+  }
+
+  /** The keys of a saved revision (`prerender_keys`): additive per revision, a row that exists is replaced. */
+  private writeKeys(id: string, rev: number, keys: readonly PrerenderKeyRow[]): void {
+    const ins = this.db.prepare(
+      `INSERT OR REPLACE INTO prerender_keys (presentation_id, rev, slide_id, key, standby_id, sig, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const at = Date.now();
+    for (const k of keys) ins.run(id, rev, k.slideId, k.key, k.standbyId, k.sig, at);
+  }
+
+  /**
+   * design/29 §1.3: every `prerender.file.ref` of the presentation must have its head row and its file (409
+   * `slide_files_missing`, the first 20 refs); the slide's `uses` and `file.bytes` are rewritten from the hub's
+   * record. A presentation with no such slide costs one pass over its slides and no lookup.
+   */
+  private withSlideFiles(p: Presentation): Presentation {
+    const refs: string[] = [];
+    for (const sec of p.sections ?? [])
+      for (const s of sec.slides) if (s.prerender?.file) refs.push(s.prerender.file.ref);
+    if (!refs.length) return p;
+    const have = this.slideFiles.have(refs);
+    const missing = [...new Set(refs.filter((r) => !have.has(r)))];
+    if (missing.length)
+      throw new HttpError(409, 'slide_files_missing', 'Upload the slides’ full copies first', {
+        refs: missing.slice(0, NAMED_MAX),
+      });
+    const rows = new Map<string, NonNullable<ReturnType<SlideFileIndex['head']>>>();
+    const rowOf = (ref: string) => {
+      let r = rows.get(ref);
+      if (!r) rows.set(ref, (r = this.slideFiles.head(ref)!));
+      return r;
+    };
+    return {
+      ...p,
+      sections: p.sections.map((sec) => ({
+        ...sec,
+        slides: sec.slides.map((s) => {
+          const pre = s.prerender;
+          if (!pre?.file) return s;
+          const row = rowOf(pre.file.ref);
+          return {
+            ...s,
+            prerender: { ...pre, file: { ref: pre.file.ref, bytes: row.bytes }, uses: row.uses },
+          };
+        }),
+      })),
+    };
   }
 
   /** Keep the newest 50 revisions or everything from the last 30 days, whichever is more. */
@@ -434,6 +520,7 @@ export class Library {
          (SELECT rev FROM presentation_revisions WHERE presentation_id = ? ORDER BY rev DESC LIMIT 50)`,
       )
       .run(id, cutoff, id);
+    this.refs.prune(id);
   }
 
   revisions(id: string): RevisionInfo[] {
@@ -458,10 +545,10 @@ export class Library {
     return JSON.parse(r.json) as Presentation;
   }
 
-  restoreRevision(id: string, rev: number, by?: string): Presentation {
+  restoreRevision(id: string, rev: number, by?: string, keys?: readonly PrerenderKeyRow[]): Presentation {
     const old = this.revision(id, rev);
     const cur = this.presentations.must(id);
-    return this.savePresentation({ ...old, id, rev: cur.rev }, { expectedRev: cur.rev, by });
+    return this.savePresentation({ ...old, id, rev: cur.rev }, { expectedRev: cur.rev, by, keys });
   }
 
   // ---- themes with revisions ----
@@ -542,6 +629,7 @@ export class Library {
     this.db
       .prepare(`INSERT OR IGNORE INTO files (hash, bytes, mime, path, created_at) VALUES (?, ?, ?, ?, ?)`)
       .run(f.hash, f.bytes, f.mime, f.path, nowIso());
+    this.refs.unmark([f.hash]);
   }
   getFile(hash: string): FileRow | undefined {
     return this.db.prepare(`SELECT hash, bytes, mime, path FROM files WHERE hash = ?`).get(hash) as
@@ -557,7 +645,50 @@ export class Library {
     const m = this.db.prepare(`SELECT 1 FROM media WHERE json LIKE ? LIMIT 1`).get(like);
     const f = this.db.prepare(`SELECT 1 FROM fonts WHERE json LIKE ? LIMIT 1`).get(like);
     const p = this.db.prepare(`SELECT 1 FROM presentations WHERE json LIKE ? LIMIT 1`).get(like);
-    return !!(m || f || p);
+    // A kept revision or a head a presentation names, a picture row: the references index.
+    return !!(m || f || p) || this.refs.referenced(hash);
+  }
+  /** Whether anything but a picture row names this file (collection asks it of a picture it is about to drop). */
+  namedBesidePictures(hash: string): boolean {
+    const like = `%"${hash}"%`;
+    for (const table of ['media', 'fonts', 'presentations'])
+      if (this.db.prepare(`SELECT 1 FROM ${table} WHERE json LIKE ? LIMIT 1`).get(like)) return true;
+    return this.refs.referenced(hash, { pictures: false });
+  }
+  /**
+   * A page of what the current rows name, as text, for collection's one read per run (it matches the content names in
+   * it): the JSON of media, fonts and presentations and the payloads of unfinished jobs, `limit` rows after `after`.
+   */
+  sourcePage(
+    source: 'media' | 'fonts' | 'presentations' | 'jobs',
+    after: number,
+    limit: number,
+  ): { rowid: number; text: string }[] {
+    const col = source === 'jobs' ? 'payload' : 'json';
+    const where = source === 'jobs' ? `AND state IN ('queued','running')` : '';
+    return this.db
+      .prepare(
+        `SELECT rowid AS rowid, ${col} AS text FROM ${source} WHERE rowid > ? ${where} ORDER BY rowid LIMIT ?`,
+      )
+      .all(after, limit) as { rowid: number; text: string }[];
+  }
+  /**
+   * Collection's one step on a file, in one synchronous transaction: `named` is asked a last time and a file that is
+   * named now keeps its row and loses its mark (a save between the scan and this call wins); otherwise its row goes,
+   * with a head's index rows. Returns the row when it went: the caller removes the blob after.
+   */
+  sweepFile(hash: string, named: (hash: string) => boolean, mime = 'application/json'): FileRow | undefined {
+    return this.db.transaction(() => {
+      let row: FileRow | undefined;
+      if (named(hash)) {
+        // kept
+      } else if ((row = this.getFile(hash)) && (mime === '*' || row.mime === mime)) {
+        this.slideFiles.remove(hash);
+        this.deleteFileRow(hash);
+      } else row = undefined;
+      this.db.prepare(`DELETE FROM collect_marks WHERE hash = ?`).run(hash);
+      return row;
+    })();
   }
   deleteFileRow(hash: string): void {
     this.db.prepare(`DELETE FROM files WHERE hash = ?`).run(hash);

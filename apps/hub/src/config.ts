@@ -1,5 +1,6 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { minFreeConfig, type StatFsFn } from './diskfloor.ts';
 import type { SystemFaceLookup } from './pptx/systemFaces.ts';
 import type { ToolProbe } from './tools.ts';
 
@@ -48,6 +49,16 @@ export type HubConfig = {
    * §5.3): a second service on the same morning, the venue PC's offline download after the first.
    */
   paceGraceMs: number;
+  /** ORDO_COLLECT: what the nightly collection of unnamed content files does (see `collectMode`). */
+  collect: CollectMode;
+  /**
+   * The free-space floor (ORDO_MIN_FREE_GB, whole GB; design/29 §1.3 A25): replaces the computed one
+   * (5 % of the volume, from 5 GiB to 25 GiB); 0 turns it off. Unset: computed. `minFreeWarning`: why a
+   * value given was not understood (logged once at start). `statfs`: tests only.
+   */
+  minFreeBytes?: number;
+  minFreeWarning?: string;
+  statfs?: StatFsFn;
   /** Optional override for the importers module (tests). */
   importers?: unknown;
   /** Tool timeouts (ms). */
@@ -148,6 +159,7 @@ export function loadConfig(
   overrides: Partial<HubConfig> = {},
 ): HubConfig {
   const dataDir = resolve(env.ORDO_DATA ?? './.data');
+  const minFree = minFreeConfig(env.ORDO_MIN_FREE_GB);
   return {
     domain: (env.ORDO_DOMAIN ?? 'localhost').toLowerCase(),
     dataDir,
@@ -169,6 +181,9 @@ export function loadConfig(
     snapshotIntervalMs: 5000,
     healthIntervalMs: 1000,
     paceGraceMs: paceGrace(env.ORDO_PACE_GRACE_MS),
+    collect: collectMode(env.ORDO_COLLECT),
+    minFreeBytes: minFree.bytes,
+    minFreeWarning: minFree.warning,
     timeouts: { probe: 30_000, transcode: 4 * 3600_000, soffice: 180_000, pdf: 300_000, light: 600_000 },
     jobs: { heavy: 1, light: 2 },
     chromium: { path: env.ORDO_CHROMIUM || 'chromium', sandbox: env.ORDO_CHROMIUM_SANDBOX === '1' },
@@ -191,4 +206,16 @@ export function fontsWait(v: string | undefined): number {
 export function paceGrace(v: string | undefined): number {
   const n = Number(v);
   return v !== undefined && v !== '' && Number.isInteger(n) && n >= 0 && n <= 86_400_000 ? n : 120_000;
+}
+
+export type CollectMode = 'off' | 'report' | 'on';
+
+/**
+ * ORDO_COLLECT: `on` deletes the content files nothing has named for 30 days, `off` runs nothing, `report` (the
+ * default, also for any other value) marks them and logs what `on` would delete, deleting nothing (design/29, OQ-PS2:
+ * collection ships in report mode so an owner sees the counts before any file goes).
+ */
+export function collectMode(v: string | undefined): CollectMode {
+  const m = v?.trim().toLowerCase();
+  return m === 'on' || m === 'off' ? m : 'report';
 }

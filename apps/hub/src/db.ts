@@ -200,6 +200,45 @@ CREATE INDEX IF NOT EXISTS auth_global_failures_at ON auth_global_failures(at);
 CREATE TABLE IF NOT EXISTS job_paced (job_id TEXT PRIMARY KEY);
 `,
   },
+  {
+    version: 14,
+    name: 'prerender-store',
+    // The tables of the pre-render store (design/29 §1.3, r2b sub-wave 2), all additive and idempotent, nothing
+    // copied: heads and their pages (a slide file's index), the keys a save computes per revision, the pictures
+    // and the failures of a key, the references each presentation's revisions make to content files (intervals),
+    // the backfill's marker and the collector's marks. PR #29's hub (0.9.0) opens a folder at 14 and ignores them:
+    // an update again rescans (`refs_scanned`).
+    sql: `
+CREATE TABLE IF NOT EXISTS slide_heads (
+  hash TEXT PRIMARY KEY, bytes INTEGER NOT NULL, objects INTEGER NOT NULL, uses TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS slide_head_pages (
+  head TEXT NOT NULL, pos INTEGER NOT NULL, page TEXT NOT NULL, PRIMARY KEY (head, pos));
+CREATE INDEX IF NOT EXISTS slide_head_pages_page ON slide_head_pages(page);
+CREATE TABLE IF NOT EXISTS prerender_keys (
+  presentation_id TEXT NOT NULL, rev INTEGER NOT NULL, slide_id TEXT NOT NULL, key TEXT NOT NULL,
+  standby_id TEXT NOT NULL, sig TEXT NOT NULL, created_at INTEGER NOT NULL,
+  PRIMARY KEY (presentation_id, rev, slide_id, key));
+CREATE INDEX IF NOT EXISTS prerender_keys_key ON prerender_keys(presentation_id, key);
+CREATE INDEX IF NOT EXISTS prerender_keys_standby ON prerender_keys(standby_id);
+CREATE TABLE IF NOT EXISTS prerenders (
+  presentation_id TEXT NOT NULL, key TEXT NOT NULL, size INTEGER NOT NULL, slide_id TEXT NOT NULL,
+  standby_id TEXT NOT NULL, version INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'slide', hash TEXT NOT NULL,
+  mime TEXT NOT NULL, bytes INTEGER NOT NULL, w INTEGER NOT NULL, h INTEGER NOT NULL, opaque INTEGER NOT NULL,
+  made_by TEXT, made_role TEXT NOT NULL, last_rev INTEGER NOT NULL, created_at INTEGER NOT NULL,
+  PRIMARY KEY (presentation_id, key, size));
+CREATE INDEX IF NOT EXISTS prerenders_hash ON prerenders(hash);
+CREATE INDEX IF NOT EXISTS prerenders_standby ON prerenders(presentation_id, standby_id);
+CREATE TABLE IF NOT EXISTS prerender_failures (
+  key TEXT PRIMARY KEY, reason TEXT NOT NULL, made_by TEXT, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS file_refs (
+  presentation_id TEXT NOT NULL, hash TEXT NOT NULL, first_rev INTEGER NOT NULL, last_rev INTEGER NOT NULL,
+  PRIMARY KEY (presentation_id, hash, first_rev));
+CREATE INDEX IF NOT EXISTS file_refs_hash ON file_refs(hash);
+CREATE TABLE IF NOT EXISTS refs_scanned (
+  presentation_id TEXT NOT NULL, rev INTEGER NOT NULL, PRIMARY KEY (presentation_id, rev));
+CREATE TABLE IF NOT EXISTS collect_marks (hash TEXT PRIMARY KEY, since INTEGER NOT NULL);
+`,
+  },
 ];
 
 /**

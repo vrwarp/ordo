@@ -15,6 +15,26 @@ export type LibraryStats = {
   /** The library sequence it was measured at, and when. */
   seq: number;
   at: number;
+  /**
+   * The data volume's free space and the floor under which uploads are refused (diskfloor.ts, design/29 A25, W44):
+   * measured by the library process on its own clock (30 s and after a refusal), absent while it cannot read the
+   * volume. Not part of the library sequence's measurement.
+   */
+  diskFreeBytes?: number;
+  diskFloorBytes?: number;
+  /**
+   * The last collection run (collect.ts): the files and bytes it deleted (0 in report mode, which deletes none) and
+   * when it ran. Absent until a run has run. Not part of the library sequence's measurement either.
+   */
+  collectedFiles?: number;
+  collectedBytes?: number;
+  lastCollectAt?: number;
+  /**
+   * The picture budget (prerenders.ts, design/29 A24, W29): the limit of unique bytes per presentation and the
+   * largest presentation's, so a venue sees one nearing it before a picture is refused.
+   */
+  budgetLimitBytes?: number;
+  budgetUsedBytes?: number;
 };
 
 /**

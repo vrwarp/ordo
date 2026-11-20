@@ -20,6 +20,12 @@ import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import type { Annotation } from '@ordo/pptx-render/annotate.ts';
 import type { Pro7ImportOptions, Pro7Result, PptxText } from './imports.ts';
+import type {
+  PrerenderKeysTaskInput,
+  PrerenderKeysTaskOutput,
+  SlideFileTaskInput,
+  SlideFileTaskOutput,
+} from './slidetasks.ts';
 import type { FontFace } from './fonts/sfnt.ts';
 import type { ClientSceneTaskInput, ClientSceneTaskOutput } from './pptx/clientScene.ts';
 import type {
@@ -52,6 +58,10 @@ export type CpuTasks = {
   'pptx-bake': { input: BakeTaskInput; output: BakeTaskOutput };
   /** A scene parsed in the uploading browser: read, parsed and checked off the event loop (`pptx/clientScene.ts`). */
   'pptx-client-scene': { input: ClientSceneTaskInput; output: ClientSceneTaskOutput };
+  /** The check of a slide file's page or head a writer PUT (design/29 §1.3; `slidetasks.ts`). */
+  'slide-file': { input: SlideFileTaskInput; output: SlideFileTaskOutput };
+  /** The keys of a presentation's pre-rendered slides, computed at save (`slidetasks.ts`). */
+  'prerender-keys': { input: PrerenderKeysTaskInput; output: PrerenderKeysTaskOutput };
 };
 export type CpuTaskKind = keyof CpuTasks;
 
@@ -65,6 +75,8 @@ export const TASK_TIMEOUT_MS: Record<CpuTaskKind, number> = {
   'pptx-art': 60_000,
   'pptx-bake': 60_000,
   'pptx-client-scene': 60_000,
+  'slide-file': 60_000,
+  'prerender-keys': 60_000,
 };
 const IDLE_MS = 30_000;
 /**
