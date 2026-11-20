@@ -42,16 +42,17 @@ Chromium only.
   them; `ORDO_E2E_HUB_STDOUT=1` prints them instead); `ORDO_E2E_HUB_CMD` runs the hub from source instead of
   the build.
 - Every hub a test, a spec, a tool or a demo script starts has the free-space floor off (`ORDO_MIN_FREE_GB=0`,
-  design/12 Configuration): the floor refuses every upload with 507 when the data volume has under 5 GB free (a dev
-  machine, a small CI disk), which says nothing about what the test tests. `apps/hub/test/helpers.ts` (`startHub`,
-  `testFloor`; `twoProcesses` in `phones-helpers.ts`), `e2e/hubproc.ts`, the shared web server in
-  `playwright.config.ts`, `tools/pptx-fidelity` (`hubEnv`) and `apps/demo/scripts/seed.ts` set it, and so do the
-  direct library and live process configurations and the `processes.test.ts` child. A test that gives its hub a
-  volume of its own (`statfs`) or its own value (`minFreeBytes`, `hub.env.ORDO_MIN_FREE_GB`) keeps it: the floor's
-  own tests (`diskfloor.test.ts`, the floor cases of `processes.test.ts`, `slidefiles.test.ts`, `prerenders.test.ts`)
-  do. `apps/hub/test/floor-off.test.ts` and `e2e/floor-off.test.ts` pin it, the first also reading the test folder
-  for a hub started without saying what its floor is. The soak tool starts no hub (it drives the one it is given,
-  whose floor is the venue's own), and CI is left alone: its runners have the room.
+  design/12 Configuration): the floor refuses every upload with 507 when the data volume has less free than the floor
+  (5 % of the volume, 5 to 25 GiB: 12.5 GiB on a 250 GiB volume; a dev machine, a small CI disk), which says nothing
+  about what the test tests. `apps/hub/test/helpers.ts` (`startHub`, `testFloor`; `twoProcesses` in
+  `phones-helpers.ts`), `e2e/hubproc.ts`, the shared web server in `playwright.config.ts`, `tools/pptx-fidelity`
+  (`hubEnv`) and `apps/demo/scripts/seed.ts` set it, and so do the direct library and live process configurations
+  and the `processes.test.ts` child. A test that gives its hub a volume of its own (`statfs`) or its own value
+  (`minFreeBytes`, `hub.env.ORDO_MIN_FREE_GB`) keeps it: the floor's own tests (`diskfloor.test.ts`, the floor cases
+  of `processes.test.ts`, `slidefiles.test.ts`, `prerenders.test.ts`) do. `apps/hub/test/floor-off.test.ts` and
+  `e2e/floor-off.test.ts` pin it, the first also reading the test folder for a hub started without saying what its
+  floor is. The soak tool starts no hub (it drives the one it is given, whose floor is the venue's own), and CI is
+  left alone: its runners have the room.
 - Windows are opened by URL with their output token (`openRoleWindow`), or launched from the operator
   (`window.open`) where the fallback bus needs an opener.
 

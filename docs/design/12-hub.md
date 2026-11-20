@@ -667,13 +667,13 @@ stores a user's file (media upload, resumable create and chunks, an SVG's still,
 PowerPoint, PDF, ProPresenter and SongSelect imports, the PDF of reference pictures, a re-import from a stored
 deck, and the slide-file and picture routes) answers `507` with the reason `disk`, `freeBytes` and `floorBytes`
 and W44's sentence; saving a presentation or a playlist, settings, deleting, GO and everything on the live
-process go on. 0 turns the floor off (one start-up line says so; the value every hub that a test, an e2e spec, the
-demo seed or the fidelity tool starts uses, design/23 "Multi-origin in tests": a volume with under 5 GB free would
-refuse their first upload; a development hub on such a volume sets it too, `ORDO_MIN_FREE_GB=0 pnpm dev`); anything
-else is the computed floor with one start-up warning. The volume is read with `statfs` at most once per 2 s,
-every 30 s by the library process, and the floor fails open: a volume that does not answer is one warning and
-no refusal. `GET /health` carries `diskFreeBytes` and `diskFloorBytes` (numbers only), relayed from the library
-process on its stats message.
+process go on. 0 turns the floor off (one start-up line says so; the value the hubs that tests, e2e specs, the demo
+seed and the fidelity tool start use, except the tests of the floor itself, design/23 "Multi-origin in tests": a
+volume with less free than the floor, 5 % of the volume and 5 to 25 GiB, would refuse their first upload; a
+development hub on such a volume sets it too, `ORDO_MIN_FREE_GB=0 pnpm dev`); anything else is the computed floor
+with one start-up warning. The volume is read with `statfs` at most once per 2 s, every 30 s by the library process,
+and the floor fails open: a volume that does not answer is one warning and no refusal. `GET /health` carries
+`diskFreeBytes` and `diskFloorBytes` (numbers only), relayed from the library process on its stats message.
 <!-- /prerender-store:floor -->
 
 <!-- prerender-store:collect -->
