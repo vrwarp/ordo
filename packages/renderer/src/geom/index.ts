@@ -149,3 +149,15 @@ export {
   presetGeometry,
 } from './path.ts';
 export { PRESET_GEOMS } from './presets.gen.ts';
+export {
+  hasTextWarp,
+  TEXT_WARP_NAMES,
+  textWarpGeometry,
+  WARP_PARALLEL_EPS,
+  type WarpMode,
+  warpAdjustNames,
+  warpAreas,
+  warpFollowsPath,
+  warpMode,
+} from './textwarp.ts';
+export { TEXT_WARP_GEOMS } from './textwarps.gen.ts';
