@@ -281,8 +281,8 @@ export function hubEnv(
     ORDO_DEV_PIN: PIN,
     ORDO_TZ: 'UTC',
     ORDO_FONTS_DIR: '/usr/share/fonts',
-    // The free-space floor is off: it would refuse every import on a volume with under 5 GB free (the tool's
-    // own data folder is a scratch one); the floor has its own tests.
+    // The free-space floor is off: it would refuse every import on a volume with less free than the floor (5 % of
+    // the volume, 5 to 25 GiB; the tool's own data folder is a scratch one); the floor has its own tests.
     ORDO_MIN_FREE_GB: '0',
     ...(parent.TMPDIR ? { TMPDIR: parent.TMPDIR } : {}),
     ...o.env,

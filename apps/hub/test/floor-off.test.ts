@@ -1,7 +1,7 @@
 /**
  * The hubs the tests start have the free-space floor off (design/29 A25, ORDO_MIN_FREE_GB=0): the floor refuses every
- * upload with 507 when the data volume has under 5 GB free (a dev machine, a small CI disk), and no test but those of
- * the floor itself (`diskfloor.test.ts`, the floor cases of `processes.test.ts`, `slidefiles.test.ts` and
+ * upload with 507 when the data volume has less free than the floor (5 % of the volume, 5 to 25 GiB: a dev machine, a
+ * small CI disk), and no test but those of the floor itself (`diskfloor.test.ts`, the floor cases of `processes.test.ts`, `slidefiles.test.ts` and
  * `prerenders.test.ts`) is about that. `helpers.ts` `testFloor` is the rule; the e2e suite pins the same in
  * `e2e/floor-off.test.ts`, the fidelity tool's hubs in `tools/pptx-fidelity` `hubEnv`.
  */

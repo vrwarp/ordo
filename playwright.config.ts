@@ -129,8 +129,8 @@ export default defineConfig({
       ORDO_HOST: '127.0.0.1',
       ORDO_DEV_PIN: '246810',
       ORDO_TZ: 'UTC',
-      // The free-space floor is off: it would refuse every upload on a CI or dev volume with under 5 GB free,
-      // whatever the spec is about; the floor has its own tests.
+      // The free-space floor is off: it would refuse every upload on a CI or dev volume with less free than the
+      // floor (5 % of the volume, 5 to 25 GiB), whatever the spec is about; the floor has its own tests.
       ORDO_MIN_FREE_GB: '0',
     },
   },

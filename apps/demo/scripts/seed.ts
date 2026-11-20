@@ -328,8 +328,8 @@ async function main() {
       ORDO_DOMAIN: 'localhost',
       ORDO_DEV_PIN: PIN,
       ORDO_LOG_LEVEL: 'warn',
-      // The free-space floor is off: it would refuse the sample media on a volume with under 5 GB free (the
-      // data folder is a scratch one); the floor has its own tests.
+      // The free-space floor is off: it would refuse the sample media on a volume with less free than the floor
+      // (5 % of the volume, 5 to 25 GiB; the data folder is a scratch one); the floor has its own tests.
       ORDO_MIN_FREE_GB: '0',
     },
     stdio: ['ignore', 'ignore', 'inherit'],

@@ -914,7 +914,7 @@ describe('collection: gates, modes and the report (CO5, CO12)', () => {
     const dir = tempDir();
     const lp = await createLibraryProcess(
       {
-        minFreeBytes: 0, // the floor would refuse every upload on a volume with under 5 GB free; it has its own tests (helpers.ts)
+        minFreeBytes: 0, // the floor would refuse every upload on a volume with less free than it; it has its own tests (helpers.ts)
         dataDir: dir,
         domain: 'localhost',
         logToStdout: false,

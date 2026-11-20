@@ -46,8 +46,8 @@ export function tempDir(prefix = 'ordo-hub-'): string {
 
 /**
  * The free-space floor of a hub a test starts (`HubConfig.minFreeBytes`): off, ORDO_MIN_FREE_GB=0. The floor would
- * refuse every upload on a CI or dev volume with under 5 GB free, whatever the test is about; the floor has its own
- * tests (`diskfloor.test.ts`). A test that gives its hub a volume of its own (`statfs`) is a test of the floor and
+ * refuse every upload on a CI or dev volume with less free than the floor (5 % of the volume, 5 to 25 GiB), whatever
+ * the test is about; the floor has its own tests (`diskfloor.test.ts`). A test that gives its hub a volume of its own (`statfs`) is a test of the floor and
  * gets the computed one (`undefined`, never the floor of the process's environment); a test that sets
  * `minFreeBytes` itself keeps its value (`...overrides` comes after). Every hub a test starts goes through this
  * or pins its own value (`floor-off.test.ts` reads the test folder for a start that does neither).

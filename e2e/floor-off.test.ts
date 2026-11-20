@@ -8,8 +8,8 @@ import { HubProcess } from './hubproc.ts';
 
 /**
  * The hubs the e2e suite starts have the free-space floor off (design/29 A25, ORDO_MIN_FREE_GB=0): the floor
- * refuses every upload with 507 on a volume with under 5 GB free (a dev machine, a small CI disk), whatever the spec
- * is about. Two places start them: `HubProcess` (a spec that owns its hub) and the shared web server of
+ * refuses every upload with 507 on a volume with less free than the floor (5 % of the volume, 5 to 25 GiB: a dev
+ * machine, a small CI disk), whatever the spec is about. Two places start them: `HubProcess` (a spec that owns its hub) and the shared web server of
  * `playwright.config.ts`. The hub the specs start is the real one; this file starts a stand-in that writes the
  * environment it was given, and reads the configuration.
  */

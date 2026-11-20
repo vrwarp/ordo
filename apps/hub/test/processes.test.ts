@@ -353,7 +353,7 @@ describe('two-process hub', () => {
         ORDO_DEV_PIN: '111111:222222',
         ORDO_LOG_LEVEL: 'warn',
         ORDO_SINGLE_PROCESS: '',
-        ORDO_MIN_FREE_GB: '0', // the floor would refuse every upload on a volume with under 5 GB free; it has its own tests (helpers.ts)
+        ORDO_MIN_FREE_GB: '0', // the floor would refuse every upload on a volume with less free than it; it has its own tests (helpers.ts)
       },
       stdio: ['ignore', 'ignore', 'inherit'],
     });
