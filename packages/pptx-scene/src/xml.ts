@@ -183,13 +183,16 @@ export const MAX_TAGS_PER_PART = 250_000;
  * Nodes (elements and the text between them) one part may hold when it is read with packing: the packed reader counts
  * what it builds, not the `<` it meets (`parseXml`'s `pack` option), and a path read as numbers builds nothing per command.
  *
- * 400,000, fixed by the pool's own heap (design/29 X1, measured on 2026-11-20 with the hub's worker limits, 512 MB old
- * generation; `xml-compact` notes M3): the largest real part has 240,144 such nodes (a Traffic Dark slide, 22 MB), so the bound is
- * 1.67 times it; the real slides peak at 80-181 MB of the heap one at a time and the whole 101-slide deck in one call at 247 MB.
- * A part costs about 370 bytes a node, and the converter pins a slide's layout, master and theme beside the slide: three parts
- * of 400,000 nodes peak at 445 MB of the 512 and are converted, three of 500,000 do not fit (the worker would be killed, the
- * pool's out-of-memory path). So 400,000 is the largest bound inside [300,000, 500,000] at which the hostile deck of
- * three parts at the bound stays in the heap; a part past it is refused at once, as `XmlBoundError` of kind `elements`.
+ * 400,000, chosen inside [300,000, 500,000] by the pool's own heap (design/29 X1, measured on 2026-11-20 with the hub's worker
+ * limits, 512 MB old generation and 64 MB young; the `xml-compact` notes' table M3). The largest real part has 240,144 such nodes
+ * (a Traffic Dark slide, 22 MB), so the bound is 1.67 times it; the real slides peak at 80-181 MB of the heap one at a time and
+ * the 101-slide deck in one call at 247 MB. The converter pins a slide's layout, master and theme beside the slide, so the hostile
+ * case is three parts at the bound: of elements without attributes they peak at 335 MB (300,000 nodes each), 398 (350,000), 445
+ * (400,000), 468 (420,000), 486 (450,000), 488 (480,000) and 522 (499,000) of the 576 MB the worker may use, and the worker lives
+ * in every case. 400,000 is chosen where the margin is still a quarter of the heap: an element with attributes costs more than
+ * the measured 370 bytes a node, so the least a hostile deck can do at the bound is to make the pool's out-of-memory path
+ * (a clean error, the slides retried one by one, their text rescued) the one that runs. A part past the bound is refused at once,
+ * as `XmlBoundError` of kind `elements`.
  */
 export const MAX_PACKED_ELEMENTS_PER_PART = 400_000;
 /**
