@@ -49,16 +49,15 @@ import { APP_VERSION } from './index.ts';
 // than go on without them: without sub-wave 1's shared changes above, or sending the hub PowerPoint scenes
 // parsed as 0.8.1 parsed them (design/27, "CONVERTER_VERSION stays 2 through sub-wave 1c too"). The digest is
 // unchanged (it leaves the APP_VERSION line out).
-// The follow-up pull request's live-by-ref track adds four optional `resolvedId` fields to the protocol (hello,
-// live.resync, live.state, live.delta): older and newer builds read each other's messages as before (a missing
-// field is what they sent before), so the version stays 0.9.0 (the pull request's one bump to 0.10.0 is its last
-// commit) and only the digest is recorded again.
-// Follow-up PR, sub-wave 2, live-frame: renderer plan.ts gains `SlideDesc.full` (the slide before the live clamp's
-// cut, only for a slide past a count; a descriptor of any other slide is unchanged). Re-recorded at 0.9.0 on the
-// track's branch; the follow-up PR's one bump is its last commit.
+// The follow-up pull request's sub-wave 2 changes two shared sources and the version stays 0.9.0 (the pull request's
+// one bump to 0.10.0 is its last commit, so only the digest is recorded, once, after the sub-wave's last merge):
+// live-by-ref adds four optional `resolvedId` fields to the protocol (hello, live.resync, live.state, live.delta), so
+// older and newer builds read each other's messages as before (a missing field is what they sent before); live-frame
+// adds `SlideDesc.full` to the renderer's plan.ts (the slide before the live clamp's cut, only for a slide past a count;
+// the descriptor of any other slide is unchanged).
 const RECORDED = {
   version: '0.9.0',
-  digest: 'b0ee5d00697210888485d78aeb92f0018b2e78d20f69f9150f33c9c88bb55c9a',
+  digest: '3070fa8da409b53126afa9d6874d48b55dfd998f7379dfcb68f31cdf3a4343e8',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */
