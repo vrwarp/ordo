@@ -192,10 +192,30 @@ const stageText = (p: Page) =>
     .catch(() => '');
 
 test('the service by reference: small records per GO, a restart that sends it by name, a storm beside GOs, a take-over beside a GO, on two Audience windows and the Stage', async ({
-  context,
-  page,
+  playwright,
 }) => {
   test.setTimeout(420_000);
+  // Its own browser, closed at the end: the three windows (two at 3840 x 2160, software canvas) take minutes to close
+  // one by one (5.6 min measured), and in the worker's shared browser the next spec's browser.newContext waits behind
+  // that close (120 s timeout); closing the browser kills them at once.
+  const own = await playwright.chromium.launch({
+    args: [
+      '--enable-unsafe-webgpu',
+      '--use-angle=swiftshader',
+      '--use-vulkan=swiftshader',
+      '--enable-features=Vulkan',
+      '--force-color-profile=srgb',
+      '--font-render-hinting=none',
+      '--autoplay-policy=no-user-gesture-required',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding',
+      '--disable-backgrounding-occluded-windows',
+      '--use-fake-ui-for-media-stream',
+      '--disable-popup-blocking',
+    ],
+  });
+  const context = await own.newContext({ viewport: { width: 1280, height: 720 } });
+  const page = await context.newPage();
   const port = portOf('live-by-ref');
   const hub = HubProcess.fresh(port);
   await hub.start();
@@ -359,6 +379,9 @@ test('the service by reference: small records per GO, a restart that sends it by
       .poll(async () => (await hubLive(a3)).resolved?.playlist.id, { timeout: 60_000, intervals: [250] })
       .toBe(second);
   } finally {
+    const t0 = Date.now();
+    await own.close();
+    console.log(`the own browser closed in ${Date.now() - t0} ms`);
     hub.kill();
   }
 });
