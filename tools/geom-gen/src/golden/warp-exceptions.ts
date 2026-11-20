@@ -11,7 +11,7 @@
 export const WARP_EXCEPTIONS: Readonly<Record<string, string>> = {
   textArchUp:
     "LibreOffice puts the line of text on the outside of the curve: the ink of the arch rides above the arch's own " +
-    'path (up to 37 px above the top of the box and 18 px beyond its sides at 360 x 240), where ECMA-376 puts the text ' +
+    'path (up to 37 px above the top of the box and 18 px beyond its left side at 360 x 240), where ECMA-376 puts the text ' +
     "on the path itself. The hull is the arch's own points, so the ink lies outside it at all three boxes.",
   textArchDown:
     "LibreOffice puts the line of text on the outside of the curve: the ink of the bowl hangs below the bowl's own " +
