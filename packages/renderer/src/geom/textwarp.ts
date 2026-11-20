@@ -300,107 +300,103 @@ function segmentsOf(path: GeomPath): Segments | undefined {
 function segmentDistanceSq(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
   const dx = bx - ax;
   const dy = by - ay;
+  const ex = px - ax;
+  const ey = py - ay;
   const l2 = dx * dx + dy * dy;
-  let qx = ax;
-  let qy = ay;
-  if (l2 > 0) {
-    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
-    qx = ax + t * dx;
-    qy = ay + t * dy;
+  if (l2 === 0) return ex * ex + ey * ey;
+  const t = (ex * dx + ey * dy) / l2;
+  if (t <= 0) return ex * ex + ey * ey;
+  if (t >= 1) {
+    const fx = px - bx;
+    const fy = py - by;
+    return fx * fx + fy * fy;
   }
-  const ex = px - qx;
-  const ey = py - qy;
-  return ex * ex + ey * ey;
+  const cross = ex * dy - ey * dx;
+  return (cross * cross) / l2;
 }
 
 /**
- * Flattens the segments with adaptive subdivision (de Casteljau on cubics, depth at most MAX_DEPTH). A cubic is flat when
- * 3/4 of the larger distance of its two control points from its chord is within `tol`: the curve is a convex combination
- * of its control points, so it strays from the chord by at most 3/4 of that distance (and a chord point from the curve
- * by no more than the curve from the chord). Returns the polyline's points, or undefined as soon as it would hold more
- * than WARP_MAX_POINTS.
+ * Appends the points of one cubic, after its start, to `out` by adaptive subdivision (de Casteljau, depth at most
+ * MAX_DEPTH). A cubic is flat when 3/4 of the larger distance of its two control points from its chord is within the
+ * tolerance (`flat2` is the square of tolerance / 0.75): the curve is a convex combination of its control points, so it
+ * strays from the chord by at most that much, and a chord point from the curve by no more. False as soon as `out` would
+ * hold more than WARP_MAX_POINTS points.
  */
+function flatCubic(
+  out: number[],
+  flat2: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  x3: number,
+  y3: number,
+  depth: number,
+): boolean {
+  const d2 = Math.max(segmentDistanceSq(x1, y1, x0, y0, x3, y3), segmentDistanceSq(x2, y2, x0, y0, x3, y3));
+  if (depth >= MAX_DEPTH || !(d2 > flat2)) {
+    if (out.length >= 2 * WARP_MAX_POINTS) return false;
+    out.push(x3, y3);
+    return true;
+  }
+  // Split at t = 1/2.
+  const x01 = (x0 + x1) / 2;
+  const y01 = (y0 + y1) / 2;
+  const x12 = (x1 + x2) / 2;
+  const y12 = (y1 + y2) / 2;
+  const x23 = (x2 + x3) / 2;
+  const y23 = (y2 + y3) / 2;
+  const xa = (x01 + x12) / 2;
+  const ya = (y01 + y12) / 2;
+  const xb = (x12 + x23) / 2;
+  const yb = (y12 + y23) / 2;
+  const xm = (xa + xb) / 2;
+  const ym = (ya + yb) / 2;
+  return (
+    flatCubic(out, flat2, x0, y0, x01, y01, xa, ya, xm, ym, depth + 1) &&
+    flatCubic(out, flat2, xm, ym, xb, yb, x23, y23, x3, y3, depth + 1)
+  );
+}
+
+/** Flattens the segments with adaptive subdivision at `tol`; undefined as soon as the polyline would pass WARP_MAX_POINTS. */
 function flattenAdaptive(seg: Segments, tol: number): number[] | undefined {
   const out: number[] = [seg.x0, seg.y0];
-  // A cubic is flat when 3/4 of its control points' distance from the chord is within tol: compared as squares.
   const flat2 = (tol / 0.75) * (tol / 0.75);
-  // The pending cubics: 8 numbers and a depth each; subdividing leaves one pending sibling per level.
-  const st = new Float64Array(9 * (MAX_DEPTH + 2));
   let cx = seg.x0;
   let cy = seg.y0;
   let at = 0;
   for (const isCurve of seg.curve) {
     if (!isCurve) {
-      if (out.length / 2 >= WARP_MAX_POINTS) return undefined;
+      if (out.length >= 2 * WARP_MAX_POINTS) return undefined;
       cx = seg.xy[at]!;
       cy = seg.xy[at + 1]!;
       out.push(cx, cy);
       at += 2;
       continue;
     }
-    st[0] = cx;
-    st[1] = cy;
-    for (let i = 0; i < 6; i++) st[2 + i] = seg.xy[at + i]!;
-    st[8] = 0;
-    let sp = 1;
+    const x3 = seg.xy[at + 4]!;
+    const y3 = seg.xy[at + 5]!;
+    if (
+      !flatCubic(
+        out,
+        flat2,
+        cx,
+        cy,
+        seg.xy[at]!,
+        seg.xy[at + 1]!,
+        seg.xy[at + 2]!,
+        seg.xy[at + 3]!,
+        x3,
+        y3,
+        0,
+      )
+    )
+      return undefined;
     at += 6;
-    while (sp > 0) {
-      sp--;
-      const o = 9 * sp;
-      const x0 = st[o]!;
-      const y0 = st[o + 1]!;
-      const x1 = st[o + 2]!;
-      const y1 = st[o + 3]!;
-      const x2 = st[o + 4]!;
-      const y2 = st[o + 5]!;
-      const x3 = st[o + 6]!;
-      const y3 = st[o + 7]!;
-      const depth = st[o + 8]!;
-      const d2 = Math.max(
-        segmentDistanceSq(x1, y1, x0, y0, x3, y3),
-        segmentDistanceSq(x2, y2, x0, y0, x3, y3),
-      );
-      if (depth >= MAX_DEPTH || !(d2 > flat2)) {
-        if (out.length / 2 >= WARP_MAX_POINTS) return undefined;
-        out.push(x3, y3);
-        continue;
-      }
-      // Split at t = 1/2. The right half is pushed first (at o), so the left half (at o + 9) is read first.
-      const x01 = (x0 + x1) / 2;
-      const y01 = (y0 + y1) / 2;
-      const x12 = (x1 + x2) / 2;
-      const y12 = (y1 + y2) / 2;
-      const x23 = (x2 + x3) / 2;
-      const y23 = (y2 + y3) / 2;
-      const xa = (x01 + x12) / 2;
-      const ya = (y01 + y12) / 2;
-      const xb = (x12 + x23) / 2;
-      const yb = (y12 + y23) / 2;
-      const xm = (xa + xb) / 2;
-      const ym = (ya + yb) / 2;
-      const nd = depth + 1;
-      st[o] = xm;
-      st[o + 1] = ym;
-      st[o + 2] = xb;
-      st[o + 3] = yb;
-      st[o + 4] = x23;
-      st[o + 5] = y23;
-      st[o + 6] = x3;
-      st[o + 7] = y3;
-      st[o + 8] = nd;
-      st[o + 9] = x0;
-      st[o + 10] = y0;
-      st[o + 11] = x01;
-      st[o + 12] = y01;
-      st[o + 13] = xa;
-      st[o + 14] = ya;
-      st[o + 15] = xm;
-      st[o + 16] = ym;
-      st[o + 17] = nd;
-      sp += 2;
-    }
-    cx = out[out.length - 2]!;
-    cy = out[out.length - 1]!;
+    cx = x3;
+    cy = y3;
   }
   return out;
 }
