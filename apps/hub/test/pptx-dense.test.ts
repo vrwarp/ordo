@@ -1,8 +1,8 @@
 /**
- * Dense decks through the `pptx-native` job (design/29 B6, X2 as built: the hub reads up to 256 MiB of slide XML, refused from the
+ * Dense decks through the `pptx-native` job (design/29 B6: the hub reads up to 1 GiB of slide XML slide by slide, refused from the
  * file's own directory before any byte is read, in pool calls bounded by bytes): an 80 MB deck of traced artwork imports where the
- * base refused it whole, a deck that only DECLARES 300 MiB is refused with W17 and nothing inflated, the calls of a deck are cut
- * by bytes as well as by slides.
+ * base refused it whole, a deck that only DECLARES 1.25 GiB is refused with W17 and nothing inflated, the calls of a deck are cut
+ * by bytes as well as by slides. The reading itself is pptx-slide-by-slide.test.ts's.
  */
 import { rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
@@ -19,7 +19,8 @@ import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
 
 const MiB = 1024 * 1024;
 /** W17 (design/29 section 3) with the number this hub enforces. */
-const W17 = `ordo could not read this file: it holds more slide data than ordo reads (${PPTX_LIMITS.xmlTotalBytes / MiB} MB at most). Nothing was imported. In PowerPoint, save very detailed artwork as pictures and import again.`;
+const W17 =
+  'ordo could not read this file: it holds more slide data than ordo reads (1 GB at most). Nothing was imported. In PowerPoint, save very detailed artwork as pictures and import again.';
 
 let hub: TestHub;
 let dir: string;
@@ -39,9 +40,10 @@ async function importFile(file: string, ms = 120_000) {
   return waitJob(hub, hub.imports.pptx.queueNative(hash, 'Dense.pptx').id, ms);
 }
 
-describe('the hub reads up to 256 MiB of slide XML (design/29 B6)', () => {
-  it('separates the hub\u2019s total (256 MiB) from the browser\u2019s (64 MiB, which hands a bigger deck to the hub)', () => {
-    expect(PPTX_LIMITS.xmlTotalBytes).toBe(256 * MiB);
+describe('the hub reads up to 1 GiB of slide XML (design/29 B6)', () => {
+  it('separates the hub\u2019s total (1 GiB; 256 MiB for what is read whole) from the browser\u2019s (64 MiB, which hands a bigger deck to the hub)', () => {
+    expect(PPTX_LIMITS.xmlTotalBytes).toBe(1024 * MiB);
+    expect(PPTX_LIMITS.xmlWholeBytes).toBe(256 * MiB);
     expect(PPTX_CLIENT_LIMITS.xmlTotalBytes).toBe(64 * MiB);
   });
 
@@ -61,16 +63,16 @@ describe('the hub reads up to 256 MiB of slide XML (design/29 B6)', () => {
     expect(slidesOf(p)).toHaveLength(20);
   }, 240_000);
 
-  it('refuses a deck that declares 300 MiB of XML with W17 from its directory, reading none of it', async () => {
-    // Ten entries of 30 MiB (within the part cap) in a valid central directory whose bytes are garbage: a reader that inflated any
+  it('refuses a deck that declares 1.25 GiB of XML with W17 from its directory, reading none of it', async () => {
+    // Forty entries of 32 MiB (the part cap) in a valid central directory whose bytes are garbage: a reader that inflated any
     // entry fails with an inflate error, not with W17.
-    const entries = Array.from({ length: 10 }, (_, i) => ({
+    const entries = Array.from({ length: 40 }, (_, i) => ({
       name: `ppt/slides/slide${i + 1}.xml`,
-      declared: 30 * MiB,
+      declared: 32 * MiB,
     }));
-    const file = join(dir, 'declared-300.pptx');
+    const file = join(dir, 'declared-1250.pptx');
     await writeFile(file, zipDeclared(entries));
-    expect(await declaredXmlBytes(file, new AbortController().signal)).toBe(300 * MiB);
+    expect(await declaredXmlBytes(file, new AbortController().signal)).toBe(1280 * MiB);
     const job = await importFile(file, 30_000);
     expect(job.state).toBe('failed');
     expect(job.error).toBe(W17);

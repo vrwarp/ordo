@@ -1061,9 +1061,9 @@ export function denseFirstBox(shapes: number): { x: number; y: number; w: number
 /**
  * A dense deck written at run time (never committed): `traced` one slide of 150 discs of 1,800 points (about 12 MB of path XML,
  * past the old 8 MB part cap and within the browser's 64 MiB; the first disc black), `eighty` 20 slides of about 4.2 MB (past the
- * browser's 64 MiB, within the hub's 256), `part34` a slide part of 34 MiB (past the 32 MiB part cap), `lean52k` a slide of 52,000
- * shapes of six elements each (the walk's cap of 50,000 stops them, not the element bound), `declared` a zip that declares 300 MiB of
- * XML in ten entries of garbage (refused from its directory, W17).
+ * browser's 64 MiB, within the hub's 1 GiB), `part34` a slide part of 34 MiB (past the 32 MiB part cap), `lean52k` a slide of 52,000
+ * shapes of six elements each (the walk's cap of 50,000 stops them, not the element bound), `declared` a zip that declares 1.25 GiB of
+ * XML in forty entries of garbage (refused from its directory, W17).
  */
 export function denseDeck(
   dir: string,
@@ -1072,9 +1072,9 @@ export function denseDeck(
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `Dense ${kind}.pptx`);
   if (kind === 'declared') {
-    const entries = Array.from({ length: 10 }, (_, i) => ({
+    const entries = Array.from({ length: 40 }, (_, i) => ({
       name: `ppt/slides/slide${i + 1}.xml`,
-      declared: 30 * 1024 * 1024,
+      declared: 32 * 1024 * 1024,
     }));
     writeFileSync(file, zipDeclared(entries));
     return file;

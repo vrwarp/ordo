@@ -103,8 +103,9 @@ describe('native column helpers', () => {
     expect(spillPart('ppt/slides/slide1.xml', 32 * 1024 * 1024)).toBe(false);
     expect(spillPart('ppt/slides/slide1.xml', 32 * 1024 * 1024 + 1)).toBe(true);
     expect(MAX_XML_PART_BYTES).toBe(converterPartCap);
-    // ... and the XML it keeps in all is the hub's (design/29 B6: 256 MiB), so the census reads what the hub reads.
-    expect(MAX_XML_TOTAL_BYTES).toBe(PPTX_LIMITS.xmlTotalBytes);
+    // ... and the XML it keeps in all is what the hub reads whole (design/29 B6: 256 MiB; the hub's import reads 1 GiB slide by slide,
+    // which the harness's one worker cannot), so the census reads what the hub's whole-deck steps read.
+    expect(MAX_XML_TOTAL_BYTES).toBe(PPTX_LIMITS.xmlWholeBytes);
     expect(spillPart('ppt/media/image1.png', 10)).toBe(true);
     expect(spillPart('ppt/embeddings/oleObject1.bin', 10)).toBe(true);
   });

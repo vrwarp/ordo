@@ -231,7 +231,7 @@ export const PORT_TABLE = {
     offset: 510,
     count: 2,
     spec: 'pptx-dense.spec.ts',
-    what: '0 hub without LibreOffice (the upload route: a traced deck, an 80 MB deck, a part and a slide past the bounds, a deck declaring 300 MiB), 1 hub without LibreOffice (the Import tab: the browser parses a 12 MB deck, declines an 80 MB one and the hub parses it)',
+    what: '0 hub without LibreOffice (the upload route: a traced deck, an 80 MB deck, a part and a slide past the bounds, a deck declaring 1.25 GiB), 1 hub without LibreOffice (the Import tab: the browser parses a 12 MB deck, declines an 80 MB one and the hub parses it)',
   },
 } as const satisfies Record<string, Row>;
 

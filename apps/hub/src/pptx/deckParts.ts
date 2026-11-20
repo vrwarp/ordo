@@ -27,6 +27,30 @@ export const FONT_PART = /^ppt\/fonts\//i;
 
 const EMPTY = new Uint8Array(0);
 
+/** (stub) The slide parts a deferred read leaves to the calls. */
+export const SLIDE_PART = /^ppt\/slides\/[^/]+\.xml$/i;
+
+/** (stub) What `readDeckXml` takes besides the deck. */
+export type DeckXmlOptions = { slides?: 'whole' | 'deferred' };
+
+/** (stub) The XML a deck declares, by kind. */
+export async function declaredXml(
+  deck: string,
+  signal: AbortSignal,
+): Promise<{ total: number; structure: number; slides: Map<string, number> }> {
+  return { total: await declaredXmlBytes(deck, signal), structure: 0, slides: new Map() };
+}
+
+/** (stub) The named parts of a deck, read whole. */
+export async function readSlideParts(
+  _deck: string,
+  _dir: string,
+  _signal: AbortSignal,
+  _names: Iterable<string>,
+): Promise<Map<string, Uint8Array>> {
+  return new Map();
+}
+
 /** A deck's XML as `readDeckXml` reads it. */
 export type DeckXml = {
   /** XML and relationship parts; every other part (and every XML part left out) as an empty placeholder. */
@@ -84,7 +108,12 @@ export async function declaredXmlBytes(deck: string, signal: AbortSignal): Promi
  * The deck's XML parts within the caps; every other part an empty placeholder (see the module comment). A deck whose directory
  * declares more than `PPTX_LIMITS.xmlTotalBytes` of XML is refused first (`XmlTotalError`), before any part is read.
  */
-export async function readDeckXml(deck: string, dir: string, signal: AbortSignal): Promise<DeckXml> {
+export async function readDeckXml(
+  deck: string,
+  dir: string,
+  signal: AbortSignal,
+  _opts: DeckXmlOptions = {},
+): Promise<DeckXml> {
   if ((await declaredXmlBytes(deck, signal)) > PPTX_LIMITS.xmlTotalBytes)
     throw new XmlTotalError(PPTX_LIMITS.xmlTotalBytes);
   const placeholders: string[] = [];

@@ -49,6 +49,8 @@ export const PPTX_LIMITS = {
    * (`declaredXmlBytes`, W17). The browser keeps `PPTX_IMPORT_LIMITS.xmlTotalBytes` (64 MiB) and hands a bigger deck to the hub.
    */
   xmlTotalBytes: 256 * 1024 ** 2,
+  /** (stub) what a whole read keeps in memory. */
+  xmlWholeBytes: 256 * 1024 ** 2,
   /**
    * XML of slides one `pptx-scene` pool call may carry (`batchEnds`): a call also holds its copies and one worker's share, so a
    * deck at the total never sends 150 huge slides at once (measured in the notes of design/29 B6: about 400 MiB of buffers).

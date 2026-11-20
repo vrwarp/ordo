@@ -1182,7 +1182,7 @@ export async function pdfPages(
 }
 
 /** The deck's slide list and size, read on the pool (`pptx-scene` without slides): the deck is untrusted. */
-async function deckListing(
+export async function deckListing(
   file: string,
   dir: string,
   signal: AbortSignal,

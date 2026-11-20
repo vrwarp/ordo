@@ -136,6 +136,13 @@ export type NativeJobEnv = {
    * where the merged presentation would pass it.
    */
   reserve?: number;
+  /** (stub) Reads a call's slide parts from the stored deck (a test seam; default `readSlideParts`). */
+  readSlideParts?: (
+    deck: string,
+    scratch: string,
+    signal: AbortSignal,
+    names: Iterable<string>,
+  ) => Promise<Map<string, Uint8Array>>;
 };
 
 /**
