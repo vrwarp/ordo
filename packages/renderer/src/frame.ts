@@ -7,8 +7,35 @@ import {
   slideContent,
 } from '@ordo/domain';
 import { BAKE_MAX_OBJECTS, CLAMP, clampLook, clampSlide } from './clamp.ts';
-import { pictureTarget } from './picture.ts';
-import { UNIT_SLIDE_AREAS, type UnitRect, unitOf } from './units.ts';
+import { digest } from './digest.ts';
+import { decorPending } from './decor/files.ts';
+import { geomAwaited } from './geom/stored.ts';
+import { withinDrawBudget } from './geombudget.ts';
+import { type PictureSource, pictureTarget } from './picture.ts';
+import { drawGeomShape } from './shape.ts';
+import { drawObject, type ImageLookup } from './text2d.ts';
+import {
+  canvas2d,
+  clearUnitUnmade,
+  type FrameUnit,
+  type GeomUnit,
+  makeUnitPicture,
+  markUnitUnmade,
+  noteUnitWork,
+  objectUnit,
+  placedDigest,
+  SLICE_MS,
+  UNIT_CACHE_BYTES,
+  UNIT_SLIDE_AREAS,
+  UNIT_VERSION,
+  type UnitRect,
+  type UnitRun,
+  unitCache,
+  unitGeneration,
+  unitOf,
+  unitUnmade,
+} from './units.ts';
+import { EFFECT_STEP_PIXELS } from './effects.ts';
 
 /*
  * The underlay frame (design 29 section 2.3 R1, design/14 "The underlay frame"): a slide an output draws that
@@ -238,3 +265,399 @@ function split(bake: Slide, scale: number, anchors: readonly string[]): FrameSpl
     cut,
   };
 }
+
+// ── The frame unit: key, resumable making ───────────────────────────────────────────────────────────────
+
+/**
+ * Time a frame may take at most, ms of its turns summed over every call that works on it (design 29 D12, set by
+ * the bench of a 1,000- and a 20,000-object frame: `packages/renderer/bench/frame.ts`, never below ten seconds).
+ * A frame past it is not made: the slide keeps its direct part, and the overrun is counted (`frameStats`).
+ */
+export const FRAME_BUDGET_MS = 10_000;
+
+/** Whether `o` waits for a geometry, mask or decoration file not read yet: it draws nothing until then. */
+function awaited(o: SlideObject): boolean {
+  if (o.type === 'shape') return geomAwaited(o.geom) || (o.decor !== undefined && decorPending(o.decor));
+  if (o.type === 'image') return geomAwaited(o.mask);
+  return false;
+}
+
+const keyMemo = new WeakMap<FrameSplit, Map<string, string>>();
+
+/**
+ * The key of the frame of `split` under font epoch `epoch`: a digest of `UNIT_VERSION`, what each under object
+ * draws (`placedDigest`: every drawn field and its position, a picture as its file, `setUnitMedia`), which of
+ * them still wait for a file (a file that arrives gives a new key), the font epoch and the scale. Not the objects'
+ * ids, origins or locks. The epoch is a count the caller bumps whenever a face finishes loading: a frame of
+ * fallback glyphs is never copied for a slide whose face has arrived since.
+ */
+export function frameKey(split: FrameSplit, epoch = 0): string {
+  const gen = unitGeneration();
+  const at = `${epoch}|${gen}`;
+  let m = keyMemo.get(split);
+  if (!m) keyMemo.set(split, (m = new Map()));
+  const hit = m.get(at);
+  if (hit !== undefined) return hit;
+  const parts: string[] = [];
+  let waiting = '';
+  split.under.forEach((o, i) => {
+    parts.push(placedDigest(o));
+    if (awaited(o)) waiting += `${i},`;
+  });
+  const key = `f${UNIT_VERSION}:${digest(`${UNIT_VERSION}|frame|${split.scale}|${epoch}|${waiting}|${parts.join(',')}`)}@${split.scale}`;
+  if (m.size >= 8) m.clear();
+  m.set(at, key);
+  return key;
+}
+
+/** One picture a frame draws: the bitmaps the draw asks for and the hold on them. */
+export interface FramePicture {
+  /** What `drawObject` asks for its picture (and its prepared target). */
+  readonly lookup: ImageLookup;
+  /** Let go of the bitmaps once the draw call is done. */
+  release(): void;
+  /**
+   * Set when the picture's file was not there (not cached yet, the hub did not serve it): the object is drawn
+   * without it this time and the frame is marked incomplete until the file arrives (`FramePictures.arrived`).
+   */
+  readonly missing?: string;
+}
+
+/**
+ * Where a frame's pictures come from (the output's implementation: `apps/output/src/prepare/frame.ts`). One
+ * picture at a time: decoded and prepared at the object's size, held for its one draw call, released.
+ */
+export interface FramePictures {
+  /** Decode and prepare what `o` draws at `scale`; throws when the job is cancelled. */
+  acquire(o: Extract<SlideObject, { type: 'image' }>, scale: number): Promise<FramePicture>;
+  /** Whether any of these missing files (`FramePicture.missing`) is there now. */
+  arrived?(missing: readonly string[]): Promise<boolean>;
+}
+
+/** What a frame is made with. */
+export interface FrameMakeOptions {
+  readonly pictures?: FramePictures;
+  /** The font epoch the key follows (`frameKey`). */
+  readonly epoch?: number;
+}
+
+type FrameStep =
+  | { readonly kind: 'plain'; readonly object: SlideObject }
+  | { readonly kind: 'picture'; readonly object: Extract<SlideObject, { type: 'image' }> }
+  | { readonly kind: 'unit'; readonly object: SlideObject; readonly unit: GeomUnit };
+
+const stepMemo = new WeakMap<FrameSplit, { gen: number; steps: readonly FrameStep[] }>();
+
+/**
+ * What each under object is drawn by, in z-order (the frame draws each as if alone on its slide, so a budget the
+ * whole slide shares never takes an effect from one): a picture through the picture provider, a shape or a
+ * decoration past the budget by itself through its own unit (`objectUnit`: made in steps into a canvas that is
+ * copied into the frame and let go), everything else with one draw call (an object past the budget that no unit
+ * draws, a table or a chart, as its legacy copy, as it always was).
+ */
+function stepsOf(split: FrameSplit): readonly FrameStep[] {
+  const gen = unitGeneration();
+  const hit = stepMemo.get(split);
+  if (hit && hit.gen === gen) return hit.steps;
+  const steps: FrameStep[] = [];
+  for (const o of split.under) {
+    if (o.type === 'image') {
+      steps.push({ kind: 'picture', object: o });
+      continue;
+    }
+    const unit = objectUnit(o, split.scale);
+    if (unit && unit.of !== 'prepared') steps.push({ kind: 'unit', object: o, unit });
+    else steps.push({ kind: 'plain', object: withinDrawBudget([o])[0] ?? o });
+  }
+  stepMemo.set(split, { gen, steps });
+  return steps;
+}
+
+/** A frame being made: its scratch canvas of the frame, the next step, and the time spent. */
+interface FrameWork {
+  canvas: OffscreenCanvas;
+  c: OffscreenCanvasRenderingContext2D;
+  index: number;
+  /** Turn time summed over every call (`FRAME_BUDGET_MS`). */
+  ms: number;
+  turns: number;
+  steps: number;
+  longestTurn: number;
+  longestStep: number;
+  /** Pictures that were not there (`FramePicture.missing`). */
+  missing: Set<string>;
+}
+
+const works = new Map<string, FrameWork>();
+/** Frames made without a picture that was not there yet, by key, and which: made again once it has arrived. */
+const incomplete = new Map<string, string[]>();
+const stats = { made: 0, over: 0, resumed: 0 };
+
+/** Frames made, frames dropped past `FRAME_BUDGET_MS`, and calls that resumed a stopped frame, on this thread. */
+export function frameStats(): { made: number; over: number; resumed: number } {
+  return { ...stats };
+}
+
+/** Bytes of the scratch canvases of the frames in progress (at most `FRAME_WORK_MAX` of them). */
+export function frameWorkBytes(): number {
+  let b = 0;
+  for (const w of works.values()) b += w.canvas.width * w.canvas.height * 4;
+  return b;
+}
+
+/** Frames in progress. */
+export function framesInProgress(): number {
+  return works.size;
+}
+
+/** The progress of the frame under `key` (steps done), undefined when none is in progress. */
+export function frameProgress(key: string): { done: number; ms: number } | undefined {
+  const w = works.get(key);
+  return w ? { done: w.index, ms: w.ms } : undefined;
+}
+
+/** Let go of the frame in progress under `key` (its slide left, its job ended, its key was replaced). */
+export function dropFrameWork(key: string): void {
+  works.delete(key);
+}
+
+/** Forget every frame in progress and every incomplete mark (tests, a cold measurement). */
+export function clearFrameWork(): void {
+  works.clear();
+  incomplete.clear();
+  stats.made = 0;
+  stats.over = 0;
+  stats.resumed = 0;
+}
+
+/** Whether the frame under `key` was made without a picture that was not there. */
+export function frameIncomplete(key: string): boolean {
+  return incomplete.has(key);
+}
+
+/**
+ * Copy `src` (a unit's canvas, `rect` of the frame) into `c` in bands of `EFFECT_STEP_PIXELS`, each a step of its
+ * own: source-over, 1:1, the very pixels drawing the unit there gives.
+ */
+function copyBands(
+  c: OffscreenCanvasRenderingContext2D,
+  src: CanvasImageSource,
+  rect: UnitRect,
+): ((n: number) => void)[] {
+  const rows = Math.max(1, Math.floor(EFFECT_STEP_PIXELS / Math.max(1, rect.w)));
+  const out: ((n: number) => void)[] = [];
+  for (let y0 = 0; y0 < rect.h; y0 += rows) {
+    const n = Math.min(rows, rect.h - y0);
+    out.push(() => {
+      c.drawImage(src, 0, y0, rect.w, n, rect.x, rect.y + y0, rect.w, n);
+      c.getImageData(rect.x, rect.y + y0, 1, 1);
+    });
+  }
+  return out;
+}
+
+/** Draw `o` on the scratch with one call, a throw (hostile content) leaving it out. */
+function drawStep(
+  c: OffscreenCanvasRenderingContext2D,
+  o: SlideObject,
+  scale: number,
+  images?: ImageLookup,
+): void {
+  try {
+    drawObject(c as never, o, scale, images);
+  } catch (err) {
+    console.warn('[ordo frame] an object could not be drawn', err);
+  }
+}
+
+/**
+ * The frame of `split` as a unit (`FrameUnit`) for `prepareSlideUnits`: ready when its key is in the unit cache and
+ * complete, made in steps by `makeFrame`.
+ */
+export function frameUnit(split: FrameSplit, opts: FrameMakeOptions = {}): FrameUnit {
+  const key = frameKey(split, opts.epoch ?? 0);
+  return {
+    key,
+    bytes: split.bytes,
+    async ready() {
+      if (!unitCache.has('unit', key)) return false;
+      const missing = incomplete.get(key);
+      if (!missing) return true;
+      // A picture that was not there when it was made: made again once any of them has arrived.
+      if (!(await opts.pictures?.arrived?.(missing))) return true;
+      incomplete.delete(key);
+      unitCache.delete('unit', key);
+      return false;
+    },
+    make: (run) => makeFrame(split, key, run, opts),
+  };
+}
+
+/**
+ * Make the frame of `split` under `key` in steps on `run`, one object a step (design 29 R1 "making"): a scratch
+ * canvas of the frame, each under object drawn at the frame's own transform in z-order, a plain object with one
+ * draw call, a picture through `pictures` (decoded and prepared one at a time, released after its draw call), an
+ * object past the budget by itself through its own unit (`makeUnitPicture`, copied in in bands, then let go).
+ * Turns of at most `SLICE_MS` / 2 on the clock of `run`, as `makeUnit` runs them; each ends with a one-pixel
+ * read, so the canvas draws now and the step is the step's own time. The frame is kept in `unitCache`.
+ *
+ * RESUMABLE: its work (the scratch canvas and the next step) is kept by key, at most `FRAME_WORK_MAX` of them (the
+ * oldest dropped), so a stopped, hurried or cancelled call (`run.check` throws between turns) leaves it and the next
+ * call for the same key goes on at the step it stopped. Resolves with the longest turn (ms), undefined when no frame
+ * could be made (no canvas, the cache refused it, past `FRAME_BUDGET_MS`): remembered as unmade, the slide keeps its
+ * direct part.
+ */
+export async function makeFrame(
+  split: FrameSplit,
+  key: string,
+  run: UnitRun,
+  opts: FrameMakeOptions = {},
+): Promise<number | undefined> {
+  if (unitCache.has('unit', key)) return 0;
+  const now = run.now ?? (() => performance.now());
+  const steps = await run.slice(() => stepsOf(split));
+  let w = works.get(key);
+  if (w) {
+    // Newest last: a third frame drops the oldest.
+    works.delete(key);
+    works.set(key, w);
+    stats.resumed++;
+  } else {
+    const made = canvas2d(split.rect.w, split.rect.h);
+    if (!made) return markUnitUnmade(key);
+    w = {
+      canvas: made.canvas,
+      c: made.c,
+      index: 0,
+      ms: 0,
+      turns: 0,
+      steps: 0,
+      longestTurn: 0,
+      longestStep: 0,
+      missing: new Set(),
+    };
+    works.set(key, w);
+    while (works.size > FRAME_WORK_MAX) works.delete(works.keys().next().value!);
+  }
+  const work = w;
+  const scale = split.scale;
+  const turn = (t0: number) => {
+    const t = now() - t0;
+    work.ms += t;
+    work.turns++;
+    work.longestTurn = Math.max(work.longestTurn, t);
+  };
+  // Cancelled or hurried between turns (`run.check` throws): `work` stays in `works`, the next call resumes it.
+  while (work.index < steps.length) {
+    run.check();
+    if (work.ms > FRAME_BUDGET_MS) {
+      works.delete(key);
+      stats.over++;
+      return markUnitUnmade(key);
+    }
+    const st = steps[work.index]!;
+    if (st.kind === 'picture') {
+      // Its bitmap decoded and prepared off the turns (or in their own), one at a time.
+      const pic = opts.pictures ? await opts.pictures.acquire(st.object, scale) : undefined;
+      try {
+        const t0 = now();
+        await run.slice(() => {
+          if (pic) drawStep(work.c, st.object, scale, pic.lookup);
+          work.c.getImageData(0, 0, 1, 1);
+        });
+        work.longestStep = Math.max(work.longestStep, now() - t0);
+        turn(t0);
+        work.steps++;
+        work.index++;
+        if (pic?.missing) work.missing.add(pic.missing);
+      } finally {
+        pic?.release();
+      }
+    } else if (st.kind === 'unit') {
+      const t1 = now();
+      const made = await makeUnitPicture(st.unit, run);
+      work.ms += now() - t1;
+      if (!made) {
+        // Not drawable here: its legacy copy, never left out.
+        await run.slice(() => {
+          drawStep(work.c, withinDrawBudget([st.object])[0] ?? st.object, scale);
+          work.c.getImageData(0, 0, 1, 1);
+        });
+      } else {
+        const copy = copyBands(work.c, made.picture as CanvasImageSource, st.unit.rect);
+        for (const band of copy) {
+          run.check();
+          const t0 = now();
+          await run.slice(() => band(0));
+          work.longestStep = Math.max(work.longestStep, now() - t0);
+          turn(t0);
+        }
+        if (st.unit.kind === 'layers' && st.object.type === 'shape')
+          await run.slice(() => {
+            drawGeomShape(work.c as never, st.object as never, scale, 'body');
+            work.c.getImageData(0, 0, 1, 1);
+          });
+      }
+      work.steps++;
+      work.index++;
+    } else {
+      const t0 = now();
+      await run.slice(() => {
+        do {
+          const t1 = now();
+          drawStep(work.c, (steps[work.index] as { object: SlideObject }).object, scale);
+          work.index++;
+          work.steps++;
+          work.longestStep = Math.max(work.longestStep, now() - t1);
+        } while (
+          work.index < steps.length &&
+          steps[work.index]!.kind === 'plain' &&
+          now() - t0 < SLICE_MS / 2
+        );
+        work.c.getImageData(0, 0, 1, 1);
+      });
+      turn(t0);
+    }
+  }
+  run.check();
+  // Done: the scratch is the frame (the whole frame at its scale: nothing to copy), its bitmap taken from it.
+  const bitmap = work.canvas.transferToImageBitmap();
+  works.delete(key);
+  const close = () => {
+    const b = bitmap as { close?: () => void };
+    if (typeof b.close === 'function') b.close();
+  };
+  const kept = unitCache.set('unit', key, {
+    source: bitmap,
+    w: split.rect.w,
+    h: split.rect.h,
+    bytes: split.bytes,
+    close,
+  });
+  if (!kept) {
+    close();
+    return markUnitUnmade(key);
+  }
+  clearUnitUnmade(key);
+  if (work.missing.size) incomplete.set(key, [...work.missing]);
+  else incomplete.delete(key);
+  stats.made++;
+  noteUnitWork(1, work.steps, work.turns);
+  return work.longestTurn;
+}
+
+/** The frame's bitmap if it is in the cache. */
+export function frameImage(key: string): CanvasImageSource | undefined {
+  return unitCache.get('unit', key)?.source;
+}
+
+/** Whether the frame under `key` could not be made on this thread when last tried. */
+export function frameUnmade(key: string): boolean {
+  return unitUnmade(key);
+}
+
+/** The most bytes one frame may be (half of the unit cache: the cache refuses a bigger unit). */
+export const FRAME_MAX_BYTES = UNIT_CACHE_BYTES / 2;
+
+/** A picture source type re-exported for the provider's implementation. */
+export type { PictureSource };
