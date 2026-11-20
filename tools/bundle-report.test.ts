@@ -219,6 +219,30 @@ describe('bundle report: the compact first load', () => {
     expect(old.stderr).toContain('(+7.0 %, budget +4 %)');
   });
 
+  it('the operator’s regular total has the same 8 % budget: 7 % passes, 9 % fails', () => {
+    // The entry shrinks against its 1,000,000 B baseline, so only the regular total (every script but the workers)
+    // is near its limit; its baseline is set from the measured size, 7 % and then 9 % below it.
+    const files = tree('x'.repeat(100_000));
+    const measured = run(fakeRoot(files, baselineOf(1_000_000)), '--check');
+    const raw: number = measured.report.operator.regularTotal.raw;
+    const at = (regularTotal: number) =>
+      run(
+        fakeRoot(files, {
+          ...BASE,
+          apps: { operator: { initial: 1_000_000, initialGzip: 1, css: 1, regularTotal } },
+        }),
+        '--check',
+      );
+    const seven = at(Math.round(raw / 1.07));
+    expect(seven.status).toBe(0);
+    expect(seven.stdout).toContain('within budget: operator: regular total');
+    expect(seven.stdout).toContain('(+7.0 %, budget +8 %)');
+    const nine = at(Math.round(raw / 1.09));
+    expect(nine.status).toBe(1);
+    expect(nine.stderr).toContain('over budget: operator: regular total');
+    expect(nine.stderr).toContain('(+9.0 %, budget +8 %)');
+  });
+
   it('a baseline that names no budget falls back to 4 %, and one that names no compact cap to 600,000 B', () => {
     const noBudget = (grown: number) =>
       run(fakeRoot(tree('x'.repeat(grown)), { apps: baselineOf(100_000).apps }), '--check');
