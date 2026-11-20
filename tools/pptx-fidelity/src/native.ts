@@ -60,6 +60,7 @@ import {
   type Tier,
 } from '@ordo/pptx-scene';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
+import { MAX_XML_PART_BYTES } from '@ordo/pptx-scene/opc.ts';
 import { M9_WRITES, PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
 import { bakeKey, type PictureBake } from '@ordo/pptx-scene/bake.ts';
 import { sentToArt } from '@ordo/pptx-scene/budget.ts';
@@ -77,9 +78,12 @@ import type { NativePage, ObjectsResult, PageFont, PageMedia, RenderResult } fro
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../..');
 
-/** XML parts kept in memory: at most this much each, and in all (design/27 §2 step 1, §12). */
-export const MAX_XML_PART_BYTES = 8 * 1024 * 1024;
-export const MAX_XML_TOTAL_BYTES = 64 * 1024 * 1024;
+/**
+ * XML parts kept in memory: at most this much each (the converter's own cap: the harness converts what the hub converts) and in
+ * all (design/27 §2 step 1, §12).
+ */
+export { MAX_XML_PART_BYTES };
+export const MAX_XML_TOTAL_BYTES = PPTX_LIMITS.xmlTotalBytes;
 /** Pictures written out per deck (design/27 §12); the rest are left out with a note. */
 export const MAX_PICTURES = 2_000;
 /** The harness's origin in the page; nothing else is reachable. */
@@ -207,7 +211,7 @@ export function clean(s: string, max = 200): string {
 
 const errorText = (e: unknown) => clean(e instanceof Error ? e.message : String(e), 300);
 
-/** Entries kept in memory: XML and relationship parts up to 8 MB; everything else is spilled to disk. */
+/** Entries kept in memory: XML and relationship parts up to the converter's part cap (32 MB); everything else is spilled to disk. */
 export function spillPart(path: string, size: number): boolean {
   return !/\.(xml|rels)$/i.test(path) || size > MAX_XML_PART_BYTES;
 }

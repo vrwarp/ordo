@@ -1,9 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { body, buildDeck, imageRel, para, pic, run, solid, sp } from '@ordo/pptx-scene/test-util.ts';
+import {
+  body,
+  buildDeck,
+  denseDeckParts,
+  imageRel,
+  para,
+  pic,
+  run,
+  solid,
+  sp,
+} from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
-import { CONVERTER_VERSION, importPptxClient, LOOP_IMPORT_NOTE } from './pptx-client.ts';
+import { CONVERTER_VERSION, importPptxClient, LOOP_IMPORT_NOTE, parsePptxScene } from './pptx-client.ts';
 import { pictureGuardDeck } from './pptx-guard.test-util.ts';
 import { remapMediaIds } from './remap.ts';
+import { zipDeclared } from './zip-declared.test-util.ts';
 
 const IN = 914_400;
 const CHART = 'http://schemas.openxmlformats.org/drawingml/2006/chart';
@@ -146,6 +157,78 @@ describe('importPptxClient', () => {
 });
 
 describe('a looping PowerPoint show with every slide timed (the client path)', () => {
+  it('reads a slide part of 12 MiB and lists one of 33 MiB as left out, with the 32 MB it says (design/29 B5)', async () => {
+    const zip = async (parts: Map<string, Uint8Array>) => {
+      const z = new JSZip();
+      for (const [k, v] of parts) z.file(k, v);
+      return z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+    };
+    // 12 MiB of traced artwork: read (the base listed it as over 8 MB), objects and no oversized part.
+    const dense = denseDeckParts({ shapes: 150, points: 1800 });
+    expect(dense.get('ppt/slides/slide1.xml')!.length).toBeGreaterThan(9 * 1024 * 1024);
+    const read = await importPptxClient(await zip(dense), 'dense.pptx');
+    expect(read.clientScene.oversized).toEqual([]);
+    expect(read.presentation.sections[0]!.slides[0]!.objects.length).toBeGreaterThan(100);
+    // 33 MiB of text in one box: past the part cap, listed, said in the import log in the cap's own number.
+    const huge = buildDeck({
+      slides: [
+        {
+          shapes: sp({
+            id: 2,
+            x: 0,
+            y: 0,
+            cx: IN,
+            cy: IN,
+            txBody: body(para(run('x'.repeat(33 * 1024 * 1024)))),
+          }),
+        },
+      ],
+    });
+    const left = await importPptxClient(await zip(huge), 'huge.pptx');
+    expect(left.clientScene.oversized).toEqual(['ppt/slides/slide1.xml']);
+    expect(left.log.join('\n')).toContain('ppt/slides/slide1.xml is over 32 MB: not read');
+  });
+
+  it('refuses a deck that declares more than 64 MiB of XML from its directory, before reading a part (the hub takes it then)', async () => {
+    // Four entries of 20 MiB (each within the part cap) whose bytes are garbage: the refusal comes from the sum of the declared
+    // sizes; a reader that inflated the first entry would fail with an inflate error instead.
+    const entries = Array.from({ length: 4 }, (_, i) => ({
+      name: `ppt/slides/slide${i + 1}.xml`,
+      declared: 20 * 1024 * 1024,
+    }));
+    await expect(parsePptxScene(zipDeclared(entries))).rejects.toThrow(
+      'The deck holds more than 64 MB of slide XML',
+    );
+    // Parts left out for their size (past the part cap) and pictures are not in the total.
+    const left = [
+      { name: 'ppt/slides/slide1.xml', declared: 40 * 1024 * 1024 },
+      { name: 'ppt/slides/slide2.xml', declared: 40 * 1024 * 1024 },
+      { name: 'ppt/media/image1.png', declared: 400 * 1024 * 1024 },
+    ];
+    await expect(parsePptxScene(zipDeclared(left))).rejects.not.toThrow(
+      'The deck holds more than 64 MB of slide XML',
+    );
+  });
+
+  it('says a slide past the reader\u2019s bounds in the import log, as the hub does (W9)', async () => {
+    const parts = buildDeck({
+      slides: [
+        {
+          shapes: sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, fill: solid('336699') }) + '<a:b/>'.repeat(500_001),
+        },
+      ],
+    });
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    const r = await importPptxClient(
+      await z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }),
+      'heavy.pptx',
+    );
+    const line =
+      'Slide 1 has too much drawing detail for ordo to read, so only its text was imported. In PowerPoint, save the artwork as a picture and import again.';
+    expect(r.log.filter((l) => l.includes(line))).toHaveLength(1);
+  });
+
   it('imports an announcement loop and says so in the import log, as the hub does', async () => {
     const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
     const timed = (text: string) => ({

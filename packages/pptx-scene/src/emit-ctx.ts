@@ -78,6 +78,8 @@ export interface EmitCtx {
   transitionSounds: boolean;
   /** The slide's clips (`media.ts`). */
   clips?: EmittedClip[];
+  /** What emitting this slide cut and nothing draws (`Slide.pptx.missing` entries: `element:shapes` at the object cap, W10). */
+  cut?: Set<string>;
   /**
    * M9: LibreOffice can draw what ordo does not (`EmitOptions.libreoffice`, default true). Without it the
    * art and the metafile pictures are not planned: what they would draw is recorded as missing (`hybrid.ts`).

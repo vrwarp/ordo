@@ -76,12 +76,19 @@ import { readSmartArt, type Walker } from './smartart.ts';
 import { readTable } from './tables.ts';
 import { readShadow, readTextBody, textChars } from './text.ts';
 import { read3d } from './three3d.ts';
-import { child, num, path, type XNode } from './xml.ts';
+import { missingEntry } from '@ordo/domain/missing.ts';
+import { child, num, path, pathCommands, type XNode } from './xml.ts';
 
 /** Group nesting followed (design/27 §12). */
 export const MAX_GROUP_DEPTH = 32;
-/** Shape-tree elements read per slide, decorations included (design/27 §12). */
-export const MAX_SHAPES_PER_SLIDE = 5_000;
+/**
+ * Shape-tree elements read per slide, decorations included (design/27 §12; design/29 B3: 5,000 until the packed reader). It is the
+ * walk's own count, shared by the text rescue and a SmartArt drawing. What protects memory is not this count but the reader's
+ * element bound (`MAX_PACKED_ELEMENTS_PER_PART`): 50,000 ordinary shapes are about 650,000 elements and are refused by it first,
+ * so this count binds only for shapes of one to nine elements. What a slide read in full still loses is the converter's own
+ * bounds, not this track's: the emitter's 1,000 objects (`MAX_OBJECTS`) and 65,536 path points a slide (`MAX_SLIDE_PATH_POINTS`).
+ */
+export const MAX_SHAPES_PER_SLIDE = 50_000;
 
 /**
  * Presets M1 drew with today's fields (ordo's rect/ellipse/line and a rounded rect). Since M6 every preset of
@@ -331,6 +338,8 @@ export function walkTree(
     if (el.name === '#text' || !nvOf(el)) continue;
     if (++st.count > MAX_SHAPES_PER_SLIDE) {
       ctx.log(`more than ${MAX_SHAPES_PER_SLIDE} shapes: the rest are not drawn`);
+      // W10 (design/29 section 3): what the cap leaves out is listed on the slide.
+      (ctx.cut ??= new Set()).add(missingEntry('element', 'shapes'));
       return;
     }
     const chain = chainOf(ctx, el, from);
@@ -909,24 +918,23 @@ function coverageOf(geom: XNode): number | undefined {
       sub = 0;
       first = last = undefined;
     };
-    for (const c of p.children) {
+    for (const c of pathCommands(p)) {
       // Every command counts, with or without points, and so does every child of one.
-      steps += 1 + c.children.length;
+      steps += 1 + c.kids;
       if (steps > MAX_COVERAGE_STEPS) return undefined;
       if (c.name === 'a:close') {
         close();
         continue;
       }
       if (c.name === 'a:moveTo') close();
-      let pt: XNode | undefined;
-      for (const n of c.children) if (n.name === 'a:pt') pt = n;
+      const pt = c.pts[c.pts.length - 1];
       if (!pt) {
         if (c.name === 'a:arcTo') return undefined;
         continue;
       }
       if (++points > MAX_COVERAGE_POINTS) return undefined;
-      const x = num(pt.attrs.x);
-      const y = num(pt.attrs.y);
+      const x = num(pt[0]);
+      const y = num(pt[1]);
       if (x === undefined || y === undefined) return undefined;
       if (last) sub += last[0] * y - x * last[1];
       else first = [x, y];

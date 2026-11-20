@@ -233,6 +233,13 @@ export const PORT_TABLE = {
     spec: 'live-by-ref.spec.ts',
     what: 'hub (restarted)',
   },
+  // xml-compact (design/29 B3-B6): dense decks through the upload route and the Import tab.
+  'pptx-dense': {
+    offset: 510,
+    count: 2,
+    spec: 'pptx-dense.spec.ts',
+    what: '0 hub without LibreOffice (the upload route: a traced deck, an 80 MB deck, a part and a slide past the bounds, a deck declaring 300 MiB), 1 hub without LibreOffice (the Import tab: the browser parses a 12 MB deck, declines an 80 MB one and the hub parses it)',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;

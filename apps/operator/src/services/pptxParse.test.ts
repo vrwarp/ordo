@@ -117,4 +117,14 @@ describe('the browser parse of a PowerPoint import (design/27 §2)', () => {
     expect(failing.workers[0]!.terminated && dying.workers[0]!.terminated).toBe(true);
     expect(logLines().some((l) => /could not read it: zip entries overlap/.test(l.text))).toBe(true);
   });
+
+  it('leaves a deck past the browser\u2019s 64 MB of slide XML to the hub, as a failure of its own reason (the total is deliberately not raised)', async () => {
+    const big = fake((w) => w.send({ t: 'error', message: 'The deck holds more than 64 MB of slide XML' }));
+    expect(await clientScene(req(), { worker: big.factory })).toBeUndefined();
+    expect(useImportParse.getState().hub).toEqual({ live: 0, timeout: 0, failed: 1, unavailable: 0 });
+    expect(big.workers[0]!.terminated).toBe(true);
+    expect(
+      logLines().some((l) => /could not read it: The deck holds more than 64 MB of slide XML/.test(l.text)),
+    ).toBe(true);
+  });
 });

@@ -9,6 +9,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Slide, TextObject } from '@ordo/domain';
 import { blankFont } from '@ordo/renderer/text/blankface.ts';
 import { sfntMetrics } from '@ordo/pptx-scene';
+import { MAX_XML_PART_BYTES as converterPartCap } from '@ordo/pptx-scene/opc.ts';
+import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { familiesOf, fcFamily, fcMatch, isStandIn } from './fonts.ts';
@@ -17,6 +19,8 @@ import {
   caseless,
   convertDeck,
   convertDeckIsolated,
+  MAX_XML_PART_BYTES,
+  MAX_XML_TOTAL_BYTES,
   type NativeDeck,
   NativeRenderer,
   picturesNeeded,
@@ -94,7 +98,13 @@ describe('native column helpers', () => {
   it('keeps XML in memory within the per-part budget and spills everything else', () => {
     expect(spillPart('ppt/slides/slide1.xml', 1000)).toBe(false);
     expect(spillPart('ppt/slides/_rels/slide1.xml.rels', 1000)).toBe(false);
-    expect(spillPart('ppt/slides/slide1.xml', 9 * 1024 * 1024)).toBe(true);
+    // The converter's own part cap (32 MiB, `MAX_XML_PART_BYTES` of @ordo/pptx-scene): a 12 MiB part is read, one past it spilled.
+    expect(spillPart('ppt/slides/slide1.xml', 12 * 1024 * 1024)).toBe(false);
+    expect(spillPart('ppt/slides/slide1.xml', 32 * 1024 * 1024)).toBe(false);
+    expect(spillPart('ppt/slides/slide1.xml', 32 * 1024 * 1024 + 1)).toBe(true);
+    expect(MAX_XML_PART_BYTES).toBe(converterPartCap);
+    // ... and the XML it keeps in all is the hub's (design/29 B6: 256 MiB), so the census reads what the hub reads.
+    expect(MAX_XML_TOTAL_BYTES).toBe(PPTX_LIMITS.xmlTotalBytes);
     expect(spillPart('ppt/media/image1.png', 10)).toBe(true);
     expect(spillPart('ppt/embeddings/oleObject1.bin', 10)).toBe(true);
   });

@@ -227,14 +227,14 @@ fields are one constant each in `@ordo/pptx-scene` (`version.ts`: `CONVERTER_VER
 the deck itself (any failure, timeout or refusal on either side; a playlist live; an old browser). The
 browser's zip reader (`zip-bounded.ts`) reads the central directory itself (never JSZip's private sizes),
 refuses overlapping entries and more than 200,000, and counts inflated bytes as they come: an entry that
-inflates past its declared size, an XML part over 8 MB or 64 MB of XML in all stop the parse; pictures and
+inflates past its declared size, an XML part over 32 MiB or 64 MiB of XML in all (summed from the directory before anything inflates; a bigger deck goes to the hub, which reads 256 MiB) stop the parse; pictures and
 clips are only read for their first bytes (a picture's pixel size, a clip's kind), within the hub's spill
 budget.
 
 The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
 
-- reads the XML and relationship parts (each ≤ 8 MB, ≤ 64 MB in all; a larger part makes its slide a
-  picture slide) and only the pictures the slides, their layouts, masters and themes relate to (≤ 2,000,
+- reads the XML and relationship parts (each ≤ 32 MiB, ≤ 256 MiB in all, refused from the zip's own
+  directory before any part is read, W17; a larger part makes its slide keep its text, W9) and only the pictures the slides, their layouts, masters and themes relate to (≤ 2,000,
   ≤ 1 GiB, under generated names); embeddings, macros, custom XML, document properties and printer settings
   are skipped;
 - parses and converts on the CPU pool with `@ordo/pptx-scene`: a scan (slide list, sections, referenced

@@ -265,6 +265,13 @@ export class ImportCore {
     this.geomBytes += f.bytes.length;
   }
 
+  /**
+   * The slides (`SlideRef.index`) whose XML is past the reader's bounds (a part the converter refused, or one the reader left out for
+   * its size): the job fills it before `drafts`, and their missing entry is `slide:detail` (W9) instead of `slide`, whether the text
+   * rescue could read what is left or not.
+   */
+  readonly pastBounds = new Set<number>();
+
   /** Step 3: one draft per listed slide with its class, notes, hidden flag, transition and timing. */
   drafts(listed: readonly SlideRef[], converted: Map<number, Converted>, scan: SceneScan): Draft[] {
     const notes = new Map(scan.notes);
@@ -292,11 +299,17 @@ export class ImportCore {
             media: new Map(),
             cls: 'hybrid',
             notes: ['not converted: nothing of it could be read'],
-            dropped: [missingEntry('slide')],
+            dropped: [missingEntry('slide', this.pastBounds.has(ref.index) ? 'detail' : undefined)],
           };
       if (c?.rescued) {
         d.cls = 'hybrid';
-        d.dropped = addMissing(d.dropped, 'slide');
+        d.dropped = addMissing(d.dropped, this.pastBounds.has(ref.index) ? 'slide:detail' : 'slide');
+      } else if (
+        c?.s.classification.reasons.includes('unreadable') &&
+        c.s.classification.reasons.includes('detail')
+      ) {
+        // A client scene's slide the converter could not read for its detail (nothing rescued it here).
+        d.dropped = addMissing(d.dropped, 'slide:detail');
       }
       if (d.cls !== 'picture' && (c?.geomLeft?.dropped || c?.geomLeft?.unmasked))
         this.leftOut(d, c.geomLeft, 'batch');
@@ -347,6 +360,33 @@ export class ImportCore {
         `the speaker notes of ${notesCut} slide(s) were cut: a presentation keeps at most ${NOTES_TOTAL_BYTES / 1024 ** 2} MB of notes`,
       );
     return drafts;
+  }
+
+  /**
+   * The report's lines for what an import still cuts (design/29 section 3, once for each kind, in slide order): W9 for the slides
+   * whose XML is past the reader's bounds (only their text was imported) and for the slides whose design is (its artwork was left
+   * out), W10 for the slides cut at the shape or object cap. Read from what the drafts list as missing, so the hub's import and
+   * the browser's give the same lines. Call it once, after `drafts`.
+   */
+  cutWarnings(drafts: readonly Draft[]): void {
+    const slides: number[] = [];
+    const designs: number[] = [];
+    const shapes: number[] = [];
+    for (const d of drafts) {
+      const n = d.ref.index + 1;
+      const entries = [...(d.dropped ?? []), ...(d.missing ?? [])];
+      if (entries.includes('slide:detail')) slides.push(n);
+      if (
+        entries.some(
+          (e) => e === 'decoration:layout' || e === 'decoration:master' || e === 'decoration:theme',
+        )
+      )
+        designs.push(n);
+      if (entries.includes('element:shapes')) shapes.push(n);
+    }
+    if (slides.length) this.warn('detail', cutLine('detail', slides));
+    if (designs.length) this.warn('detail', cutLine('design', designs));
+    if (shapes.length) this.warn('shapes', cutLine('shapes', shapes));
   }
 
   /**
@@ -1011,6 +1051,29 @@ export function addMissing(list: string[] | undefined, entry: string): string[] 
   const out = list ?? [];
   if (!out.includes(e) && out.length < MISSING_LIMITS.entries) out.push(e);
   return out;
+}
+
+/** "Slide 5", "Slides 5 and 6", "Slides 2, 4 and 5", "Slides 2, 4, 5, 7, 9 and 12 others" (at most five numbers are named). */
+export function slideList(numbers: readonly number[]): { text: string; plural: boolean } {
+  const n = numbers.length;
+  if (n === 1) return { text: `Slide ${numbers[0]}`, plural: false };
+  if (n <= 5)
+    return { text: `Slides ${numbers.slice(0, -1).join(', ')} and ${numbers[n - 1]}`, plural: true };
+  return { text: `Slides ${numbers.slice(0, 5).join(', ')} and ${n - 5} others`, plural: true };
+}
+
+/**
+ * The words of W9 and W10 (design/29 section 3; owner question OQ-XC2): a slide whose XML is past the bounds (`detail`), a slide
+ * whose design is (`design`), and a slide cut at the shape or object cap (`shapes`). One table of strings.
+ */
+export function cutLine(kind: 'detail' | 'design' | 'shapes', numbers: readonly number[]): string {
+  const { text, plural } = slideList(numbers);
+  const save = 'In PowerPoint, save the artwork as a picture and import again.';
+  if (kind === 'detail')
+    return `${text} ${plural ? 'have' : 'has'} too much drawing detail for ordo to read, so only ${plural ? 'their' : 'its'} text was imported. ${save}`;
+  if (kind === 'design')
+    return `${text} ${plural ? 'use' : 'uses'} a design with too much drawing detail for ordo to read, so the design's artwork was left out. ${save}`;
+  return `${text} ${plural ? 'have' : 'has'} more shapes than ordo keeps on one slide, so the topmost shapes were left out.`;
 }
 
 /** Reasons of a hybrid slide's art whose element ordo draws as a shape (what a decoration loses). */

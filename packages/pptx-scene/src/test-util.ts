@@ -1088,3 +1088,147 @@ export function lineArtInk(o: { cols?: number; rows?: number; gap?: number; seed
 export function lineArtPoints(cols = 20, rows = 15): number {
   return 5 + 30 * cols * rows;
 }
+
+/** The options of `denseShapes`, `densePathPart` and `denseDeckParts`. */
+export interface DenseOptions {
+  /** Custom shapes, each a filled disc traced with `points` points. */
+  shapes: number;
+  /** Points of each disc's outline (a `moveTo`, then `lnTo`s, then `close`: `points + 1` commands). */
+  points: number;
+  /** Moves the fills (every disc has its own colour) and nothing else. */
+  seed?: number;
+  /** The first shape id (default 2). */
+  firstId?: number;
+  /** The fill of the first disc (a hex colour), so a render can measure it; the others keep their seeded fills. */
+  firstFill?: string;
+}
+
+/**
+ * Traced artwork as design/29 describes it: `o.shapes` custom shapes, each a disc of one `a:path` of `o.points` points in the
+ * strict form the packed reader reads (canonical integers, no whitespace between commands), so a disc's ink is pi/4 of its
+ * box (a regular polygon of many sides) and a render of the slide can measure it. Every shape has its own fill (a seeded
+ * hash), so the converter's decoration budget finds no two of one look and merges none. Deterministic: the same options
+ * write the same string. The discs sit on a grid over a standard 16:9 slide.
+ */
+export function denseShapes(o: DenseOptions): string {
+  const R = 100_000;
+  const cols = Math.max(1, Math.ceil(Math.sqrt(o.shapes * 1.78)));
+  const rows = Math.max(1, Math.ceil(o.shapes / cols));
+  const cell = Math.min(Math.floor(12_192_000 / cols), Math.floor(6_858_000 / rows));
+  const size = Math.max(1000, Math.floor(cell * 0.9));
+  const pathFor = (k: number) => {
+    const out: string[] = [];
+    for (let i = 0; i < o.points; i++) {
+      const a = (2 * Math.PI * i + (k % 7) * 0.01) / o.points;
+      const x = Math.round(R + R * Math.cos(a));
+      const y = Math.round(R + R * Math.sin(a));
+      out.push(
+        i === 0
+          ? `<a:moveTo><a:pt x="${x}" y="${y}"/></a:moveTo>`
+          : `<a:lnTo><a:pt x="${x}" y="${y}"/></a:lnTo>`,
+      );
+    }
+    return `<a:path w="${2 * R}" h="${2 * R}">${out.join('')}<a:close/></a:path>`;
+  };
+  const shapes: string[] = [];
+  for (let k = 0; k < o.shapes; k++) {
+    const hex = ((((k + 1) * 2_654_435_761 + (o.seed ?? 0) * 40_503) >>> 8) & 0xffffff)
+      .toString(16)
+      .padStart(6, '0');
+    shapes.push(
+      sp({
+        id: (o.firstId ?? 2) + k,
+        x: (k % cols) * cell,
+        y: Math.floor(k / cols) * cell,
+        cx: size,
+        cy: size,
+        geom: 'none',
+        fill:
+          custGeom({ paths: pathFor(k) }) + solid(k === 0 && o.firstFill ? o.firstFill : hex.toUpperCase()),
+      }),
+    );
+  }
+  return shapes.join('');
+}
+
+/** A one-slide deck of `denseShapes(o)`. */
+export function denseDeckParts(o: DenseOptions): PartSource {
+  return buildDeck({ slides: [{ shapes: denseShapes(o) }] });
+}
+
+/** The slide part (XML text) of `denseDeckParts(o)`: a compact `p:sld` of traced artwork. */
+export function densePathPart(o: DenseOptions): string {
+  return new TextDecoder().decode(denseDeckParts(o).get('ppt/slides/slide1.xml')!);
+}
+
+/** A small seeded generator (mulberry32): the same seed always gives the same numbers. */
+export function seededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+/** What `randomGeometry` writes besides the strict form. */
+export interface RandomGeometryOptions {
+  /** Commands per path: 1,500-4,500 (a geometry past the compiler's 4,096 points of cost) instead of 3-62. */
+  big?: boolean;
+  /** Mix in a command whose point is a guide name (`x="r"`): its path is read by the node loop, not packed. */
+  guides?: boolean;
+  /** Mix in `a:arcTo` (no point: the coverage gives up on it). */
+  arcs?: boolean;
+}
+
+/**
+ * An `a:custGeom` of one to three paths of random commands in the strict form (canonical integers, no whitespace), for tests
+ * that hold the packed reader to the node reader: every command kind, filled and unfilled paths, paths in boxes of
+ * 20,000 units, points a little outside them.
+ */
+export function randomGeometry(rand: () => number, o: RandomGeometryOptions = {}): string {
+  const paths: string[] = [];
+  const nPaths = 1 + Math.floor(rand() * 3);
+  for (let p = 0; p < nPaths; p++) {
+    const n = o.big ? 1500 + Math.floor(rand() * 3000) : 3 + Math.floor(rand() * 60);
+    const c = () => Math.round((rand() - 0.1) * 20_000);
+    const pt = () => `<a:pt x="${c()}" y="${c()}"/>`;
+    const cmds: string[] = [];
+    for (let k = 0; k < n; k++) {
+      const r = rand();
+      if (k === 0 || r < 0.08) cmds.push(`<a:moveTo>${pt()}</a:moveTo>`);
+      else if (r < 0.5) cmds.push(`<a:lnTo>${pt()}</a:lnTo>`);
+      else if (r < 0.65) cmds.push(`<a:quadBezTo>${pt()}${pt()}</a:quadBezTo>`);
+      else if (r < 0.8) cmds.push(`<a:cubicBezTo>${pt()}${pt()}${pt()}</a:cubicBezTo>`);
+      else if (r < 0.88 && o.arcs !== false)
+        cmds.push(
+          `<a:arcTo wR="${c()}" hR="${c()}" stAng="${Math.floor(rand() * 21_600_000)}" swAng="5400000"/>`,
+        );
+      else if (r < 0.96 || !o.guides) cmds.push('<a:close/>');
+      else cmds.push('<a:lnTo><a:pt x="r" y="b"/></a:lnTo>');
+    }
+    paths.push(`<a:path w="20000" h="20000"${rand() < 0.2 ? ' fill="none"' : ''}>${cmds.join('')}</a:path>`);
+  }
+  return custGeom({ paths: paths.join('') });
+}
+
+/**
+ * `n` shapes of seven elements each (a position, nothing to draw): a hostile slide of very many shapes that stays within the
+ * packed reader's element bound (400,000, `MAX_PACKED_ELEMENTS_PER_PART`: 50,001 of them are 350,007 nodes), so the walk's
+ * shape cap (`MAX_SHAPES_PER_SLIDE`) is what stops it, not the reader.
+ */
+export function leanShapes(n: number, firstId = 2): string {
+  const one = (id: number) =>
+    `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name=""/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm></p:spPr></p:sp>`;
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) out.push(one(firstId + i));
+  return out.join('');
+}
+
+/** `n` shapes of a SmartArt drawing (`dsp:sp`) of seven elements each: the drawing's counterpart of `leanShapes`. */
+export function leanDspShapes(n: number): string {
+  const one = `<dsp:sp><dsp:nvSpPr><dsp:cNvPr id="0" name=""/></dsp:nvSpPr><dsp:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm></dsp:spPr></dsp:sp>`;
+  return one.repeat(n);
+}

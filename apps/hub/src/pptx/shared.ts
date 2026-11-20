@@ -42,6 +42,18 @@ export {
  */
 export const PPTX_LIMITS = {
   ...PPTX_IMPORT_LIMITS,
+  /**
+   * Every XML part in memory together, on the hub: 256 MiB (design/29 B6 asked for 1 GiB read slide by slide, which needs a
+   * reader the converter's synchronous part map cannot be given; the number is the one the hub's other documents in memory use,
+   * `ZIP_MAX_IN_MEMORY_BYTES`). A deck that DECLARES more is refused from its central directory before any byte is read
+   * (`declaredXmlBytes`, W17). The browser keeps `PPTX_IMPORT_LIMITS.xmlTotalBytes` (64 MiB) and hands a bigger deck to the hub.
+   */
+  xmlTotalBytes: 256 * 1024 ** 2,
+  /**
+   * XML of slides one `pptx-scene` pool call may carry (`batchEnds`): a call also holds its copies and one worker's share, so a
+   * deck at the total never sends 150 huge slides at once (measured in the notes of design/29 B6: about 400 MiB of buffers).
+   */
+  batchXmlBytes: 64 * 1024 ** 2,
   /** Font parts extracted per deck. */
   fonts: 20,
   /** Slides per `pptx-scene` pool task, and that task's timeout. */
@@ -492,4 +504,23 @@ export type BakeTaskOutput = {
 /** A stub's error: the work item that will implement it (README.md). */
 export function notYet(item: string, what: string): Error {
   return new Error(`${what} is not implemented yet (M3 item ${item})`);
+}
+
+/**
+ * Where the calls of a deck end: `sizes[i]` is the XML of slide i, a call holds at most `maxSlides` slides and at most `maxBytes`
+ * of XML (a slide whose own XML passes it goes alone), and every call has at least one slide. The ends are exclusive indexes, the
+ * last is `sizes.length`. For a deck whose slides are small the ends are the multiples of `maxSlides`, as the fixed step was.
+ */
+export function batchEnds(sizes: readonly number[], maxSlides: number, maxBytes: number): number[] {
+  const ends: number[] = [];
+  let from = 0;
+  while (from < sizes.length) {
+    let to = from + 1;
+    let bytes = sizes[from]!;
+    while (to < sizes.length && to - from < maxSlides && bytes + sizes[to]! <= maxBytes)
+      bytes += sizes[to++]!;
+    ends.push(to);
+    from = to;
+  }
+  return ends;
 }

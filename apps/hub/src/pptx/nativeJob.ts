@@ -3,7 +3,7 @@
  * into an editable ordo presentation, version 1, before any LibreOffice process starts.
  *
  * 1. `readDeckXml(store.abs(deck))` (`deckParts.ts`) with the skip filter and caps of §12 (`PPTX_LIMITS`): XML and
- *    relationship parts in memory (≤ 8 MB each, ≤ 64 MB in all; a larger part is left out and its slide
+ *    relationship parts in memory (≤ 32 MB each, ≤ 256 MB in all; a larger part is left out and its slide
  *    becomes picture class); every other part an empty placeholder, so relationships resolve; embeddings,
  *    `vbaProject.bin`, `customXml`, `docProps` and printer settings skipped; no nested zips. Entry names never
  *    become paths.
@@ -89,13 +89,14 @@ import { type CpuPool, cpuPool, transferables, WorkerStartError } from '../pool.
 import { type BakeItem, bakeMapKey, storeBakes } from './bakes.ts';
 import type { ClientSceneTaskOutput } from './clientScene.ts';
 import { type ClipFile, ClipImport, spillClips } from './clips.ts';
-import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
+import { type DeckXml, readDeckXml, spillDeckParts, XmlTotalError } from './deckParts.ts';
 import { sceneFontFiles } from './faces.ts';
 import { SCRIPT_NAMES, type SystemScriptFace, systemOnlyScripts } from './systemFaces.ts';
 import { isShapeFilePlaceholder, nameGeoms, storeGeomFiles } from './geoms.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { importResult, logSafe } from './report.ts';
 import {
+  batchEnds,
   CONVERTER_VERSION,
   enqueuePptx,
   PPTX_JOBS,
@@ -234,6 +235,7 @@ export const RESCUE_TOTAL_MS = 2 * 60_000;
 
 type Limits = {
   batchSlides: number;
+  batchXmlBytes: number;
   importPoolMs: number;
   geomFileBytes: number;
   batchGeomBytes: number;
@@ -246,6 +248,7 @@ type Limits = {
 function jobLimits(env: NativeJobEnv): Limits {
   return {
     batchSlides: env.limits?.batchSlides ?? PPTX_LIMITS.batchSlides,
+    batchXmlBytes: env.limits?.batchXmlBytes ?? PPTX_LIMITS.batchXmlBytes,
     importPoolMs: env.limits?.importPoolMs ?? PPTX_LIMITS.importPoolMs,
     geomFileBytes: env.limits?.geomFileBytes ?? PPTX_LIMITS.geomFileBytes,
     batchGeomBytes: env.limits?.batchGeomBytes ?? PPTX_LIMITS.batchGeomBytes,
@@ -387,6 +390,8 @@ class NativeImport {
   private readonly deps: PptxDeps;
   private readonly pool: Pick<CpuPool, 'run'>;
   private readonly limits: Limits;
+  /** The XML parts the read left out for their size (`readDeckXml`): a slide on one is past the reader's bounds (W9). */
+  private oversized = new Set<string>();
   private readonly ctx: JobCtx<PptxNativePayload>;
   private readonly done: PptxNativeProgress;
   private readonly save: () => void;
@@ -602,6 +607,7 @@ class NativeImport {
     // 3. Drafts, classes and the size budgets (M9: the budget ladder; with LibreOffice a slide over 64 KB it
     // would simplify keeps its page, `ImportCore.pageForBudget`).
     const drafts = this.core.drafts(want ? listed.filter((r) => want.has(r.index)) : listed, converted, scan);
+    this.core.cutWarnings(drafts);
     const simplified = this.core.budget(drafts);
 
     // 3b. Geometry files the kept slides name (M6 round 2, `geoms.ts`); the objects that name one that could
@@ -726,6 +732,9 @@ class NativeImport {
       const c = converted.get(r.index);
       const reasons = c?.s.classification?.reasons;
       if (c && !(Array.isArray(reasons) && reasons.includes('unreadable'))) return;
+      // A slide past the reader's bounds keeps that reason through the text rescue (W9: its missing entry is `slide:detail`).
+      if ((Array.isArray(reasons) && reasons.includes('detail')) || this.oversized.has(r.part))
+        this.core.pastBounds.add(r.index);
       converted.delete(r.index);
       failed.push(i);
     });
@@ -742,6 +751,7 @@ class NativeImport {
     // The size budgets as for the hub's own parse (M9: the budget ladder; with LibreOffice a slide over 64 KB
     // it would simplify keeps its page).
     const drafts = this.core.drafts(want ? listed.filter((r) => want.has(r.index)) : listed, converted, scan);
+    this.core.cutWarnings(drafts);
     const simplified = this.core.budget(drafts);
 
     await this.storeGeoms(drafts);
@@ -775,6 +785,11 @@ class NativeImport {
       xml = await readDeckXml(deck, scratch, this.ctx.signal);
     } catch (e) {
       this.checkCancelled();
+      // W17: a deck whose directory declares more XML than the hub reads, refused before anything was read.
+      if (e instanceof XmlTotalError) {
+        this.warn('size', e.message);
+        throw new Error(logSafe(e.message));
+      }
       const msg = errorMessage(e);
       if (/of documents/.test(msg))
         throw new Error(
@@ -783,6 +798,7 @@ class NativeImport {
       throw new Error(`The file is not a readable PowerPoint deck: ${logSafe(msg)}`);
     }
     // Kept as empty parts: a slide that needs one is quarantined (picture class), never dropped.
+    this.oversized = new Set(xml.oversized);
     for (const path of xml.oversized)
       this.warn('part', `${logSafe(path)} is over ${PPTX_LIMITS.xmlPartBytes / 1024 ** 2} MB: not read`);
     if (xml.fonts)
@@ -893,13 +909,18 @@ class NativeImport {
   ): Promise<Map<number, Converted>> {
     const out = new Map<number, Converted>();
     const n = listed.length;
-    const step = this.limits.batchSlides;
+    // The calls: up to `batchSlides` slides and `batchXmlBytes` of slide XML each (a deck of small slides is cut as it always was).
+    const ends = batchEnds(
+      listed.map((r) => parts.get(r.part)?.byteLength ?? 0),
+      this.limits.batchSlides,
+      this.limits.batchXmlBytes,
+    );
     const call = await this.batchCall(parts, listed, pictureSizes, mediaKinds, out);
     /** Slides for the rescue, each with its own parts (kept until then). */
     const failed = new Map<number, SlideParts>();
-    for (let from = 0; from < n; from += step) {
+    for (let k = 0, from = 0; k < ends.length; from = ends[k++]!) {
       this.checkCancelled();
-      const to = Math.min(n, from + step);
+      const to = ends[k]!;
       const wanted: number[] = [];
       for (let i = from; i < to; i++) if (!want || want.has(listed[i]!.index)) wanted.push(i);
       if (!wanted.length) continue;
@@ -932,6 +953,8 @@ class NativeImport {
       for (const i of wanted) {
         const c = out.get(i);
         if (c?.s.classification.reasons.includes('unreadable')) {
+          if (c.s.classification.reasons.includes('detail') || this.oversized.has(listed[i]!.part))
+            this.core.pastBounds.add(listed[i]!.index);
           out.delete(i);
           failed.set(i, mine.get(i)!);
         }

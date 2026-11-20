@@ -1,7 +1,7 @@
 import { type ImageObject, type ShapeObject, Slide, type SlideObject, type TextObject } from '@ordo/domain';
 import * as prev from '@ordo/domain/schemas.prev05.test-util.ts';
 import { charged, EFFECT_COST, GEOM_COST } from '@ordo/renderer/geom/cost.ts';
-import { CMD_CLOSE, CMD_MOVE } from '@ordo/renderer/geom/ops.ts';
+import { CMD_CLOSE, CMD_MOVE, GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
 import { presetGeometry } from '@ordo/renderer/geom/path.ts';
 import { legacyGeometry, storedGeometry } from '@ordo/renderer/geom/stored.ts';
 import { drawnCost, drawnEffectArea, overGeomBudget, slideBudget } from '@ordo/renderer/geombudget.ts';
@@ -17,6 +17,7 @@ import {
   mergedChars,
   mergedPaths,
   nearestDash,
+  readCustGeom,
   replaceEnds,
   shapePiece,
 } from './geom.ts';
@@ -42,7 +43,16 @@ import {
   inlineGeoms,
   lineArtPath,
   lineArtPoints,
+  randomGeometry,
+  seededRandom,
 } from './test-util.ts';
+import {
+  MAX_PACKED_ELEMENTS_PER_PART,
+  MAX_PACKED_PATH_ITEMS_PER_PART,
+  type ParseOptions,
+  parseXml,
+  rootOf,
+} from './xml.ts';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
@@ -1837,5 +1847,47 @@ describe('merged shapes (one object for z-adjacent shapes of one look)', () => {
         s,
       ),
     ).toBeUndefined();
+  });
+});
+
+describe('custom geometry read from the packed form (design/29 X1: the readers read paths through pathCommands)', () => {
+  const PACK: ParseOptions = {
+    pack: { maxElements: MAX_PACKED_ELEMENTS_PER_PART, maxPathItems: MAX_PACKED_PATH_ITEMS_PER_PART },
+  };
+  const read = (xml: string, opts?: ParseOptions) => rootOf(parseXml(xml, 'g.xml', opts))!;
+
+  it('gives the node reader\u2019s strings for 200 generated geometries, small and past the compiler\u2019s points', () => {
+    const rand = seededRandom(20_261_120);
+    let chunked = 0;
+    let withGuides = 0;
+    for (let i = 0; i < 200; i++) {
+      const big = i % 4 === 3;
+      const xml = randomGeometry(rand, { big, guides: !big && i % 3 === 0 });
+      const packed = readCustGeom(read(xml, PACK));
+      const plain = readCustGeom(read(xml));
+      expect(packed).toEqual(plain);
+      const n = plain.paths?.length ?? 0;
+      if (n > (xml.match(/<a:path /g) ?? []).length) chunked++;
+      if (xml.includes('x="r"')) withGuides++;
+      expect(n).toBeGreaterThan(0);
+    }
+    // The generator reaches what it is for: paths cut into chunks by the compiler's points, and paths read as nodes.
+    expect(chunked).toBeGreaterThan(5);
+    expect(withGuides).toBeGreaterThan(5);
+  });
+
+  it('reads only the first budget points of a path of 1.2 million points, the rest unread', () => {
+    const lnTo = '<a:lnTo><a:pt x="1" y="2"/></a:lnTo>';
+    const xml = custGeom({
+      paths: `<a:path w="10" h="10"><a:moveTo><a:pt x="0" y="0"/></a:moveTo>${lnTo.repeat(1_199_999)}</a:path>`,
+    });
+    const root = read(xml, PACK);
+    const t0 = performance.now();
+    const g = readCustGeom(root);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
+    // The budget of a geometry (every path may cost up to the compiler's bound) and one command past it, so the
+    // compiler notes that points were dropped.
+    const commands = (g.paths ?? []).reduce((n, p) => n + p.cmds.length, 0);
+    expect(commands).toBe(GEOM_LIMITS.paths * GEOM_LIMITS.points + 1);
   });
 });

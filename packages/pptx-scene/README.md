@@ -19,7 +19,7 @@ const out = emitSlides(scene, { mediaId }); // ordo Slides; pictures as 'pptxmed
   the spilled file's first bytes).
 - **Never throws for one bad slide.** A slide that cannot be read gets `error` and class `'picture'`; the
   rest of the deck is read. `parseDeck` throws only when there is no presentation part.
-- **Bounded** (design/27 §12): XML ≤ 8 MB and ≤ 250k tags per part, depth 256, ≤ 2,000 slides, ≤ 5,000
+- **Bounded** (design/27 §12): XML ≤ 32 MiB per part and, read packed, ≤ 400,000 nodes and ≤ 4,000,000 path items (unpacked: ≤ 250k tags), depth 256, ≤ 2,000 slides, ≤ 50,000
   shapes per slide, group depth ≤ 32, numbers finite and clamped, no `{}` keyed by deck strings (use `Map`
   or `Object.create(null)`), no regular expression over a whole part, deck strings through `clean()` before
   they reach a note (and every note and reason cleaned once more). Work per element or paragraph never
@@ -488,7 +488,7 @@ design/27 §4 "Pictures", §5 "Element support", §15 M6 ("SmartArt from its dra
   fill colour there, white text on white nodes. Each element gets `ElementBase.diagram` (a number per frame),
   the frame's `cNvPr id` and the frame's flattened group, and keeps its renamed node (`ShapeElement.node`),
   so classification rates it by its own XML, never by a slide shape sharing its id (drawing shapes all have
-  id 0). Bounded as any shape tree (5,000 shapes a slide, groups 32 deep), and per package: a drawing can be
+  id 0). Bounded as any shape tree (50,000 shapes a slide, groups 32 deep), and per package: a drawing can be
   named from every slide, so past `DIAGRAM_NODE_BUDGET` (2,000,000) elements of drawings read in one batch,
   further SmartArt stays residual (noted).
 - **Emission** (`lockDiagram`): every object of a drawing gets `origin { src: 'pptx', shapeId: <frame>, role:
@@ -996,42 +996,42 @@ cells, '1년차' and '２년차', 24 pt in a 46.6 pt column, each over 4 rows, a
 
 ## Module map
 
-| File            | What                                                                                                                                 | Owner         |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------- |
-| `xml.ts`        | Bounded XML reader (moved from pptx-render; no DTD: `<!DOCTYPE` refused, null-prototype `attrs`) and node helpers                    | A             |
-| `opc.ts`        | `PartSource`, `openPackage`: part lookup, decoding, cached parsing, content types, relationships                                     | A             |
-| `markup.ts`     | Every part as one dialect: Strict → Transitional, the usual prefixes, one branch of `mc:AlternateContent`                            | A             |
-| `deck.ts`       | `readDeck`: slide size, order, hidden flags, shown index, defaultTextStyle, sections; `slideParts`                                   | A             |
-| `frame.ts`      | EMU → 1920x1080 contain map, affine transforms, `boxPx`                                                                              | A             |
-| `theme.ts`      | `readTheme`: colour, font and format schemes; `themeFont`, `langScript`, style font/line/effect references                           | B             |
-| `color.ts`      | `ColorCtx`, colour maps, colour elements and modifiers, fills, `styleEntry`, `styleFill`                                             | B             |
-| `inherit.ts`    | Placeholder matching, xfrm/bodyPr chain, paragraph-property chain                                                                    | C             |
-| `walk.ts`       | Shape-tree walk: decorations, groups flattened, shapes                                                                               | C             |
-| `text.ts`       | Text bodies: paragraphs, runs, run styles through the chain                                                                          | C             |
-| `picture.ts`    | `p:pic` and every `a:blipFill`                                                                                                       | C             |
-| `background.ts` | Slide → layout → master background                                                                                                   | C             |
-| `emit.ts`       | IR → ordo objects, media placeholders, digest                                                                                        | C             |
-| `richtext.ts`   | A text body as rich ordo text: runs, paragraph styles, office box fields (M2)                                                        | C (M2)        |
-| `fontmap.ts`    | Script class of each character (Latin, East Asian, complex), substitutes and fallback families (M2)                                  | C (M2)        |
-| `asian-gaps.ts` | LibreOffice's 1/4 em at East Asian/other boundaries, in the converter's model of LibreOffice's cell layout only (1c rule G)          | 1c ko-cells   |
-| `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                                             | F             |
-| `geom.ts`       | Presets, custom geometry, text rectangles and sites, gradients, dashes, arrowheads, connector glue (M6)                              | M6b B         |
-| `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                                         | M3 B          |
-| `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                                         | M3 B          |
-| `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                                      | M3b A         |
-| `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`                      | M3b A         |
-| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6; M9 reads into the table object); `tablestyles.ts`: built-in styles (MPL 2.0)        | M6b C         |
-| `metrics.ts`    | `sfntMetrics`, `metricsOfTables`, `FaceSource`: advances, pair kerning, line heights from font files, bounded                        | M6b C         |
-| `smartart.ts`   | SmartArt from its drawing cache: `readSmartArt` (the drawing's shapes through the walk), `lockDiagram`                               | M6b D         |
-| `bake.ts`       | Baked pictures: `PictureBake` recipes (`bakeOf`, `tileBakeOf`), `applyBake` (recolour and tile pixels); M9 `SheetBake`, `applySheet` | M6b D         |
-| `budget.ts`     | The slide budgets natively (M9): `cullElements`, `fitBudgets`, `budgetCost`, the text ceiling, the guard                             | M9 decor-conv |
-| `decor.ts`      | Decorations (M9): `decorable`, `decorRuns`, `emitDecor`, `decorFiles`; the plate plan `platePlan`                                    | M9 decor-conv |
-| `sheet.ts`      | Picture sheets (M9): composites (`pictureRuns`, `emitComposite`) and the atlas (`atlasParts`, `atlasSlide`)                          | M9 decor-conv |
-| `ir.ts`         | The scene IR (types only)                                                                                                            | shared        |
-| `context.ts`    | `SlideCtx`, `slideContext`                                                                                                           | shared        |
-| `log.ts`        | `clean`, `noteList`                                                                                                                  | shared        |
-| `index.ts`      | `parseDeck`, `emitSlides`, public types                                                                                              | shared        |
-| `test-util.ts`  | Test decks as `PartSource` maps of XML strings                                                                                       | shared        |
+| File            | What                                                                                                                                                 | Owner         |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `xml.ts`        | Bounded XML reader (moved from pptx-render; no DTD: `<!DOCTYPE` refused, null-prototype `attrs`), its packed mode for traced paths, and node helpers | A             |
+| `opc.ts`        | `PartSource`, `openPackage`: part lookup, decoding, cached parsing, content types, relationships                                                     | A             |
+| `markup.ts`     | Every part as one dialect: Strict → Transitional, the usual prefixes, one branch of `mc:AlternateContent`                                            | A             |
+| `deck.ts`       | `readDeck`: slide size, order, hidden flags, shown index, defaultTextStyle, sections; `slideParts`                                                   | A             |
+| `frame.ts`      | EMU → 1920x1080 contain map, affine transforms, `boxPx`                                                                                              | A             |
+| `theme.ts`      | `readTheme`: colour, font and format schemes; `themeFont`, `langScript`, style font/line/effect references                                           | B             |
+| `color.ts`      | `ColorCtx`, colour maps, colour elements and modifiers, fills, `styleEntry`, `styleFill`                                                             | B             |
+| `inherit.ts`    | Placeholder matching, xfrm/bodyPr chain, paragraph-property chain                                                                                    | C             |
+| `walk.ts`       | Shape-tree walk: decorations, groups flattened, shapes                                                                                               | C             |
+| `text.ts`       | Text bodies: paragraphs, runs, run styles through the chain                                                                                          | C             |
+| `picture.ts`    | `p:pic` and every `a:blipFill`                                                                                                                       | C             |
+| `background.ts` | Slide → layout → master background                                                                                                                   | C             |
+| `emit.ts`       | IR → ordo objects, media placeholders, digest                                                                                                        | C             |
+| `richtext.ts`   | A text body as rich ordo text: runs, paragraph styles, office box fields (M2)                                                                        | C (M2)        |
+| `fontmap.ts`    | Script class of each character (Latin, East Asian, complex), substitutes and fallback families (M2)                                                  | C (M2)        |
+| `asian-gaps.ts` | LibreOffice's 1/4 em at East Asian/other boundaries, in the converter's model of LibreOffice's cell layout only (1c rule G)                          | 1c ko-cells   |
+| `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                                                             | F             |
+| `geom.ts`       | Presets, custom geometry, text rectangles and sites, gradients, dashes, arrowheads, connector glue (M6)                                              | M6b B         |
+| `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                                                         | M3 B          |
+| `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                                                         | M3 B          |
+| `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                                                      | M3b A         |
+| `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`                                      | M3b A         |
+| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6; M9 reads into the table object); `tablestyles.ts`: built-in styles (MPL 2.0)                        | M6b C         |
+| `metrics.ts`    | `sfntMetrics`, `metricsOfTables`, `FaceSource`: advances, pair kerning, line heights from font files, bounded                                        | M6b C         |
+| `smartart.ts`   | SmartArt from its drawing cache: `readSmartArt` (the drawing's shapes through the walk), `lockDiagram`                                               | M6b D         |
+| `bake.ts`       | Baked pictures: `PictureBake` recipes (`bakeOf`, `tileBakeOf`), `applyBake` (recolour and tile pixels); M9 `SheetBake`, `applySheet`                 | M6b D         |
+| `budget.ts`     | The slide budgets natively (M9): `cullElements`, `fitBudgets`, `budgetCost`, the text ceiling, the guard                                             | M9 decor-conv |
+| `decor.ts`      | Decorations (M9): `decorable`, `decorRuns`, `emitDecor`, `decorFiles`; the plate plan `platePlan`                                                    | M9 decor-conv |
+| `sheet.ts`      | Picture sheets (M9): composites (`pictureRuns`, `emitComposite`) and the atlas (`atlasParts`, `atlasSlide`)                                          | M9 decor-conv |
+| `ir.ts`         | The scene IR (types only)                                                                                                                            | shared        |
+| `context.ts`    | `SlideCtx`, `slideContext`                                                                                                                           | shared        |
+| `log.ts`        | `clean`, `noteList`                                                                                                                                  | shared        |
+| `index.ts`      | `parseDeck`, `emitSlides`, public types                                                                                                              | shared        |
+| `test-util.ts`  | Test decks as `PartSource` maps of XML strings                                                                                                       | shared        |
 
 Data flow: `parseDeck` → `openPackage` → `readDeck` → `frameOf` → per slide `slideContext` (→ `slideParts`,
 `readTheme`, `colorContext`) → `walkSlide` → `readBackground` → `classifySlide`. `emitSlides` → `emitDeck`.
@@ -1205,7 +1205,7 @@ Done (design/27 §4, §15 M1):
   explicit fill wins, M6 repair); `a:grpFill`; groups by offset, scale, rotation and flips, a child's
   own box scaled along the group's axes (`boxAffine`, no shear; a child the composed affine would shear is
   marked residual and still drawn; since M6 wave 2 it is approx, placed as LibreOffice places it, below);
-  graphic frames residual; ≤ 32 group levels, ≤ 5,000 shapes.
+  graphic frames residual; ≤ 32 group levels, ≤ 50,000 shapes.
 - Pictures: blip part through the holding part's relationships (theme parts too), srcRect, fillRect,
   tile, alphaModFix, recolour effects (an empty `a:lum` is not one), header-sniffed size, metafiles
   residual elements rated approx (not drawn before M3 converts them; design/27 §5), TIFF/WDP noted, linked pictures logged with their host only, video/audio posters recorded.
@@ -1433,8 +1433,8 @@ Done:
   either is a note, and the worker is replaced; the worker loads its TypeScript through tsx's loader, as
   the hub's pool does, so it converts under a test runner too). Spilled parts are found through an index of
   their names built once per deck. A deck link whose file is gone is skipped with a line in
-  the log, not scored as a failed conversion. XML and `.rels` parts of 8 MB or less stay in
-  memory, up to 64 MB in all; every other part is spilled, and `parseDeck` gets the pixel size of a spilled
+  the log, not scored as a failed conversion. XML and `.rels` parts of 32 MiB or less stay in
+  memory, up to 256 MiB in all (the hub's `PPTX_LIMITS.xmlTotalBytes`, which the tool reads); every other part is spilled, and `parseDeck` gets the pixel size of a spilled
   picture from its first bytes (`spilledPictureSize`). Only the pictures the slides use are kept, under generated names
   (`<deck>/native/media/<n>.<ext>`), at most 2,000 per deck. Pictures that are not PNG, JPEG, GIF, WebP or
   BMP by their bytes (EMF, WMF, TIFF, …) are counted in a note and not drawn. `slides.json` holds every

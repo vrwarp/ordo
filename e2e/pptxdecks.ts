@@ -9,6 +9,7 @@ import {
   CLRMAP_OVR,
   clipRels,
   custGeom,
+  denseShapes,
   esc,
   imageRel,
   lineArtInk as lineArtInkOf,
@@ -29,6 +30,7 @@ import {
   type MediaTimingSpec,
   xfrm,
 } from '../packages/pptx-scene/src/test-util.ts';
+import { zipDeclared } from '../packages/importers/src/zip-declared.test-util.ts';
 
 /**
  * Synthetic PowerPoint probe decks for the native import's end-to-end specs (design/27 §14.2, §14.12,
@@ -1043,4 +1045,70 @@ export function loneLineArtDeck(dir: string): string {
     ln: `<a:ln w="12700">${solid('000000')}</a:ln>`,
   });
   return zip(buildDeck({ slides: [{ bg: solidBg('F4EFE6'), shapes }] }), join(dir, 'Lone chain.pptx'));
+}
+
+// ---- dense decks (xml-compact, design/29 B3-B6) ------------------------------------------------------------
+
+/** The traced deck's first disc, in logical px (1920 x 1080): `denseShapes`' grid for `shapes` discs, its black fill. */
+export function denseFirstBox(shapes: number): { x: number; y: number; w: number; h: number } {
+  const cols = Math.max(1, Math.ceil(Math.sqrt(shapes * 1.78)));
+  const rows = Math.max(1, Math.ceil(shapes / cols));
+  const cell = Math.min(Math.floor(12_192_000 / cols), Math.floor(6_858_000 / rows));
+  const size = Math.max(1000, Math.floor(cell * 0.9)) / 6_350;
+  return { x: 0, y: 0, w: size, h: size };
+}
+
+/**
+ * A dense deck written at run time (never committed): `traced` one slide of 150 discs of 1,800 points (about 12 MB of path XML,
+ * past the old 8 MB part cap and within the browser's 64 MiB; the first disc black), `eighty` 20 slides of about 4.2 MB (past the
+ * browser's 64 MiB, within the hub's 256), `part34` a slide part of 34 MiB (past the 32 MiB part cap), `lean52k` a slide of 52,000
+ * shapes of six elements each (the walk's cap of 50,000 stops them, not the element bound), `declared` a zip that declares 300 MiB of
+ * XML in ten entries of garbage (refused from its directory, W17).
+ */
+export function denseDeck(
+  dir: string,
+  kind: 'traced' | 'eighty' | 'part34' | 'lean52k' | 'declared',
+): string {
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `Dense ${kind}.pptx`);
+  if (kind === 'declared') {
+    const entries = Array.from({ length: 10 }, (_, i) => ({
+      name: `ppt/slides/slide${i + 1}.xml`,
+      declared: 30 * 1024 * 1024,
+    }));
+    writeFileSync(file, zipDeclared(entries));
+    return file;
+  }
+  if (kind === 'traced')
+    return zip(
+      buildDeck({ slides: [{ shapes: denseShapes({ shapes: 150, points: 1800, firstFill: '000000' }) }] }),
+      file,
+    );
+  if (kind === 'eighty') {
+    const shapes = denseShapes({ shapes: 50, points: 1900 });
+    return zip(buildDeck({ slides: Array.from({ length: 20 }, () => ({ shapes })) }), file);
+  }
+  if (kind === 'part34')
+    return zip(
+      buildDeck({
+        slides: [
+          {
+            shapes: sp({
+              id: 2,
+              x: 0,
+              y: 0,
+              cx: 914_400,
+              cy: 914_400,
+              txBody: body(para(run('x'.repeat(34 * 1024 * 1024)))),
+            }),
+          },
+        ],
+      }),
+      file,
+    );
+  const one = (id: number) =>
+    `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name=""/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>`;
+  const out: string[] = [];
+  for (let i = 0; i < 52_000; i++) out.push(one(2 + i));
+  return zip(buildDeck({ slides: [{ shapes: out.join('') }] }), file);
 }
