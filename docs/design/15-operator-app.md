@@ -276,7 +276,11 @@ cells in place of the shape fields).
   density (`nodeCacheRect`: what its drawer reaches, `objectReach`, with its hit area; text has its own
   raster cache; an object whose reach the renderer does not know, or one over 8 M device px, is drawn live)
   and drawn again only when it, its picture or geometry file, the fonts or the density change, so a
-  keystroke or a drag copies the slide's other objects instead of drawing them. The floating bar's and the
+  keystroke or a drag copies the slide's other objects instead of drawing them. A node's cache starts on the
+  stage's device pixel grid (`alignCacheRect`, wholeDraw.ts; a turned node keeps its rectangle), so the copy onto
+  the layer is one pixel to one pixel and the edges in it are not blurred: with the dashed red overflow guides
+  hidden the stage then scores 0.9477 to 0.9829 against the Audience page's drawing (greyscale 960x540 SSIM, a
+  device scale of 2, the 17 survey slides: 0.01 to 0.02 more than with the corner between two device px). The floating bar's and the
   touch tools' sizes are kept by a ResizeObserver (`useMeasuredSize`), not read on every render. On a slide
   of 181 objects (90 shapes with gradients, dashed strokes and shadows, 91 text boxes) an idle caret cost
   192-247 ms of main-thread time per 6 s before (about 20 ms a blink: SlideCanvas re-rendered and the
@@ -303,10 +307,14 @@ cells in place of the shape fields).
   node is made again in its turn, drawing from its old cache meanwhile. Going live demotes nothing (a node that is
   unchanged keeps its bitmap); a node that changes while live draws the copy until End service, when the queue
   fills again. A stored path past `GEOM_COST.geometry` stays its simple form in the editor (the screens draw it
-  from a sliced unit), and so does an object too big to cache at a high zoom (zooming out draws it whole): no new
-  words on screen, the limits are named here, in the pull request and on `window.__ordo.editor().whole`
-  (`wanted`, `drawn`, `pending`, `blocked`, `px`, `skipped` by bound, cache and total, `stale`, `live`, `coarse`,
-  `light` and the times of the last whole draws).
+  from a sliced unit), and so does an object too big to cache at a high zoom (zooming out draws it whole).
+  Wherever the editor keeps the copy of the selected object for a lasting reason (those two, a live service, a
+  coarse pointer, `?editor=light`), the Object panel says so in one muted line under the object's name, "Too
+  detailed to draw here while you edit; the screens draw it whole." (OQ-LE2, the owner's words of 2026-11-20;
+  `WholeNote.tsx`, fed by the list `planWhole` returns and the canvas hook publishes after each commit): it is
+  gone once the whole drawing has replaced the copy, and an object waiting for its turn has none (the selected one
+  never waits). The counts are on `window.__ordo.editor().whole` (`wanted`, `drawn`, `pending`, `blocked`, `px`,
+  `skipped` by bound, cache and total, `stale`, `live`, `coarse`, `light` and the times of the last whole draws).
 - Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).

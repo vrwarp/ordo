@@ -13,6 +13,7 @@ import { effectsSlide, PANEL_SHADOW, softFrame } from '@ordo/renderer/units.effe
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nodeCacheRect } from '../src/views/editor/SlideCanvas.tsx';
 import {
+  alignCacheRect,
   drawWhole,
   planWhole,
   readSwitch,
@@ -485,6 +486,165 @@ describe('the status (W11)', () => {
     const budget = slideBudget(objects);
     planWhole(objects, budget, {}, new WholeState(), env({ coarse: true, live: true, light: true }));
     expect(wholeStatus()).toMatchObject({ coarse: true, live: true, light: true, blocked: 3, drawn: 0 });
+  });
+});
+
+describe('the lighter copy the editor keeps (OQ-LE2: the note under the Object panel)', () => {
+  /** What the plan lists as drawn as the lighter copy for a lasting reason (not allowed, or past a bound). */
+  const simpleOf = (plan: ReturnType<typeof planWhole>) => [...plan.simple].sort();
+  const LATE_SORTED = [...LATE].sort();
+  /** The count the status holds for the same objects: everything not drawn and not waiting for a turn. */
+  const lasting = (s: ReturnType<typeof planWhole>['status']) =>
+    s.blocked + s.skipped.bound + s.skipped.cache + s.skipped.total;
+
+  it.each<[string, Partial<WholeEnv>]>([
+    ['a coarse pointer', { coarse: true }],
+    ['a live service', { live: true }],
+    ['?editor=light', { light: true }],
+  ])('%s: every candidate keeps the copy, the selected one too, and the plan says so', (_name, over) => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const plan = planWhole(objects, budget, { primary: 'p10' }, new WholeState(), env(over));
+    expect(simpleOf(plan)).toEqual(LATE_SORTED);
+    expect(plan.simple).toHaveLength(lasting(plan.status));
+  });
+
+  it('is empty once the whole drawing has landed: the selected object at once, the rest as their turns come', () => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const state = new WholeState();
+    // The selected object is whole in the plan that sees it; the two waiting for a turn are not "kept".
+    let plan = planWhole(objects, budget, { primary: 'p10' }, state, env());
+    expect(plan.pending).toEqual(['p9', 'p11']);
+    expect(plan.simple).toEqual([]);
+    plan = settle(objects, budget, 'p10', state, env());
+    expect(plan.simple).toEqual([]);
+    expect(plan.status).toMatchObject({ drawn: 3, pending: 0, blocked: 0 });
+  });
+
+  it('is empty for the objects the budget keeps: only candidates are ever listed', () => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const plan = planWhole(objects, budget, { primary: 'p0' }, new WholeState(), env({ live: true }));
+    expect(simpleOf(plan)).toEqual(LATE_SORTED);
+    for (const id of ['soft', 'p0', 'p1', 'p8']) expect(plan.simple).not.toContain(id);
+  });
+
+  it('a service going live keeps the unchanged whole drawings out of the list and lists a changed one; End service empties it', () => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const state = new WholeState();
+    settle(objects, budget, undefined, state, env());
+    const live = env({ live: true });
+    expect(planWhole(objects, budget, { primary: 'p10' }, state, live).simple).toEqual([]);
+    const edited = objects.map(
+      (o) => (o.id === 'p10' ? { ...o, shadow: { ...PANEL_SHADOW, blur: 20 } } : o) as SlideObject,
+    );
+    const budget2 = slideBudget(edited);
+    expect(planWhole(edited, budget2, { primary: 'p10' }, state, live).simple).toEqual(['p10']);
+    // The service ends: the selected one is whole in the same plan, the list is empty.
+    expect(planWhole(edited, budget2, { primary: 'p10' }, state, env()).simple).toEqual([]);
+  });
+
+  it('an object past WHOLE_BOUND is listed, selected or not, and the objects whole around it are not', () => {
+    const huge = {
+      ...softFrame(),
+      id: 'huge',
+      softEdge: 60,
+      shadow: { ...PANEL_SHADOW, blur: 300 },
+      glow: { radius: 300, color: { r: 255, g: 255, b: 0, a: 0.6 } },
+    } as SlideObject;
+    const objects = [...effects(), huge];
+    const budget = slideBudget(objects);
+    const plan = settle(objects, budget, 'huge', new WholeState(), env());
+    expect(plan.simple).toEqual(['huge']);
+    expect(plan.status.skipped.bound).toBe(1);
+  });
+
+  it('an object too big to cache at this zoom is listed, and leaves the list when the zoom is lower', () => {
+    const full = { ...softFrame(), id: 'full', softEdge: undefined, shadow: PANEL_SHADOW } as SlideObject;
+    const objects = [...effects(), full];
+    const budget = slideBudget(objects);
+    const state = new WholeState();
+    expect(settle(objects, budget, 'full', state, env({ density: 4 })).simple).toEqual(['full']);
+    expect(planWhole(objects, budget, { primary: 'full' }, state, env({ density: 1 })).simple).toEqual([]);
+  });
+
+  it('an object that does not fit the total is listed', () => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const one = rectPx(byId(objects, 'p9'), 1);
+    const plan = settle(objects, budget, undefined, new WholeState(), env({ maxPx: Math.floor(one * 1.5) }));
+    expect(simpleOf(plan)).toEqual(['p10', 'p11']);
+    expect(plan.simple).toHaveLength(lasting(plan.status));
+  });
+
+  it('a whole drawing that keeps its old cache while the pointer is not allowed is not listed', () => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const state = new WholeState();
+    settle(objects, budget, undefined, state, env({ density: 1 }));
+    // Zoomed past the slack while a service is live: the old caches stay, nothing is made.
+    const plan = planWhole(objects, budget, { primary: 'p9' }, state, env({ density: 2, live: true }));
+    expect(plan.simple).toEqual([]);
+    expect(plan.status).toMatchObject({ drawn: 3, stale: 3, blocked: 0 });
+  });
+});
+
+describe('a node cache on the device pixel grid (the editor against the screens, M8)', () => {
+  const rect = { x: -2, y: -3, width: 403, height: 303 };
+  /** Where the cache's corner lies on the stage, in device px. */
+  const corner = (box: { x: number; y: number }, r: { x: number; y: number }, d: number) => [
+    (box.x + r.x) * d,
+    (box.y + r.y) * d,
+  ];
+  const onGrid = (v: number) => Math.abs(v - Math.round(v)) < 1e-6;
+
+  it('moves the cache’s corner left and up onto the device pixel grid, and keeps its far edge', () => {
+    for (const d of [0.8255, 1, 1.5, 0.41, 2.75]) {
+      for (const box of [
+        { x: 120.4, y: 80.7, rotation: 0 },
+        { x: 600, y: 100, rotation: 0 },
+        { x: 33.333, y: 910.91, rotation: 0 },
+      ]) {
+        const a = alignCacheRect(rect, box, d);
+        const [cx, cy] = corner(box, a, d);
+        expect(onGrid(cx!) && onGrid(cy!), `density ${d}, box ${box.x},${box.y}`).toBe(true);
+        // At most one device px to the left and up (the corner moves down to the grid line below it), never right or down.
+        expect(a.x).toBeLessThanOrEqual(rect.x + 1e-9);
+        expect(a.y).toBeLessThanOrEqual(rect.y + 1e-9);
+        expect(rect.x - a.x).toBeLessThan(1 / d + 1e-9);
+        expect(rect.y - a.y).toBeLessThan(1 / d + 1e-9);
+        // The far edge stays where it was: the cache covers what it covered.
+        expect(a.x + a.width).toBeCloseTo(rect.x + rect.width, 6);
+        expect(a.y + a.height).toBeCloseTo(rect.y + rect.height, 6);
+      }
+    }
+  });
+
+  it('leaves a rectangle that is on the grid already as it is', () => {
+    const box = { x: 100, y: 50, rotation: 0 };
+    expect(alignCacheRect(rect, box, 1)).toEqual(rect);
+    expect(alignCacheRect(rect, box, 2)).toEqual(rect);
+  });
+
+  it('leaves a turned object alone (its bitmap is resampled whatever the offset), and an unusable density', () => {
+    const turned = { x: 120.4, y: 80.7, rotation: 7 };
+    expect(alignCacheRect(rect, turned, 0.8255)).toEqual(rect);
+    expect(alignCacheRect(rect, { ...turned, rotation: 360 }, 0.8255)).not.toEqual(rect);
+    expect(alignCacheRect(rect, { ...turned, rotation: 0 }, 0)).toEqual(rect);
+    expect(alignCacheRect(rect, { ...turned, rotation: 0 }, Number.NaN)).toEqual(rect);
+    expect(alignCacheRect(rect, { x: Number.NaN, y: 1, rotation: 0 }, 1.5)).toEqual(rect);
+  });
+
+  it('is what the canvas caches a past-budget object over: the rectangle of the object’s own reach, moved', () => {
+    const objects = effects();
+    const p9 = byId(objects, 'p9');
+    const r = nodeCacheRect(p9, undefined, 0.8255, ctx, p9.box.h)!;
+    const a = alignCacheRect(r, p9.box, 0.8255);
+    expect(a.width).toBeGreaterThanOrEqual(r.width);
+    expect(a.width).toBeLessThan(r.width + 1 / 0.8255 + 1e-9);
+    expect(onGrid((p9.box.x + a.x) * 0.8255)).toBe(true);
   });
 });
 

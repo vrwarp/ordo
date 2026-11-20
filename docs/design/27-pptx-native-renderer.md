@@ -1774,7 +1774,7 @@ budget only decides that it is drawn so.
   keyed by `unitKey` (`UNIT_VERSION`, a digest of the drawn fields with the geometry file's hash, never an id;
   scale, origin and cut), pinned by the asset worker from a job's prepare step to its raster and while its cue is
   armed or warmed (design/14 "Geometry units"). Made by the outputs' prepare step `geometry units` and a desktop's
-  thumbnail worker; never on a phone, never in the editor (it keeps the legacy copies; leaf-editor), never stored.
+  thumbnail worker; never on a phone, never stored; the editor makes none: on a fine pointer, while no service is live and without `?editor=light`, it draws such a shape whole into its node cache in idle time, one object a turn and the selected one at once (design/15 "Canvas drawing", `wholeDraw.ts`), and keeps the legacy copy on a coarse pointer, while a service is live, and past `WHOLE_BOUND`, the 8 MP node cache or the 32 MP total.
 - **Bounded**: a job makes units for at most `UNIT_WAIT_MS` (1 s) and a slide's units cover at most
   `UNIT_SLIDE_AREAS` (one frame; a unit at most half of `UNIT_CACHE_BYTES`); the rest draw as their legacy
   copies this time. An armed or warmed cue's GO does no unit work. _A GO never waits for units_ (the owner's
@@ -1833,8 +1833,11 @@ vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, 
   nothing past the budget (holo-gradients 16, whose estimate underrates its gradients, and the wake template's
   slides 11 and 20, one 41-58 ms object each).
 - _Still open, named:_ a picture's effects past the budget keep their legacy copy (a picture unit needs the
-  decoded picture at the prepare step); the editor and coarse-pointer thumbnails keep legacy copies (leaf-editor,
-  sub-wave 2). (A unit an armed job did not finish within `UNIT_WAIT_MS` is no longer seen only at a later draw:
+  decoded picture at the prepare step); coarse-pointer thumbnails keep legacy copies, and so does the editor of a tablet or
+  phone, while a service is live and for a stored path past `GEOM_COST.geometry` (the screens draw it whole from a
+  sliced unit); a desktop's editor draws past-budget objects whole (leaf-editor, sub-wave 2), and where it keeps the
+  copy of the selected object the Object panel says so in one line ("Too detailed to draw here while you edit; the
+  screens draw it whole.", OQ-LE2, design/15 "Canvas drawing"). (A unit an armed job did not finish within `UNIT_WAIT_MS` is no longer seen only at a later draw:
   the job leaves it to the late job, which fades it in.)
 - _Closed in sub-wave 1b (native tables first; the owner, 2026-11-15, "prioritize native tables"):_ every table
   is the table object on every kind of hub, the 8 dense table slides on a hub with LibreOffice included

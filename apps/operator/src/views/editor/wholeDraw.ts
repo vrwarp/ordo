@@ -3,7 +3,7 @@ import { drawnCost, drawnEffectArea } from '@ordo/renderer';
 import { EFFECT_COST, GEOM_COST } from '@ordo/renderer/geom/cost.ts';
 import { useEffect, useReducer, useRef } from 'react';
 import { useLive } from '../../state/live.ts';
-import { setWholeStatus, type WholeStatus } from './wholeState.ts';
+import { setWholeLighter, setWholeStatus, type WholeStatus } from './wholeState.ts';
 
 /*
  * The editor draws an object whole where the slide's drawing budget would draw its lighter copy (design/15
@@ -102,6 +102,13 @@ export interface WholePlan {
   readonly pending: readonly string[];
   /** The counts the editor reports (`window.__ordo.editor().whole`). */
   readonly status: Omit<WholeStatus, 'lastMs'>;
+  /**
+   * The candidates the editor keeps drawing as the lighter copy for a lasting reason: not allowed (a service is
+   * live, a coarse pointer, `?editor=light`), or past a bound (too detailed, too big at this zoom, too much in
+   * all). Not those waiting for their turn: they are whole in a moment, and the selected one is never among
+   * them. The note under the Object panel reads it (OQ-LE2); its length is `blocked + skipped.*`.
+   */
+  readonly simple: readonly string[];
 }
 
 // ---- stability (W7) ------------------------------------------------------------------------------------
@@ -151,6 +158,36 @@ export function sameDrawn(a: SlideObject, b: SlideObject): boolean {
     if (!sameValue(x[k], y[k], 0)) return false;
   }
   return true;
+}
+
+// ---- the node cache on the device pixel grid -----------------------------------------------------------
+
+/**
+ * The rectangle a node's cache is made over, moved left and up so that its corner lies on the stage's device
+ * pixel grid at `density` (device px per logical px), its far edge where it was. A cache is copied onto the
+ * layer one pixel to one pixel; where its corner fell between two device pixels the copy was resampled (bilinear)
+ * and every edge in it blurred, which is what kept the editor's picture below the screens' (design/15 "Canvas
+ * drawing": measured as the stage against the Audience page, 0.01 to 0.02 of the greyscale SSIM on every slide
+ * of the survey). `box` is the object's box, whose corner is the node's origin; a turned node is resampled
+ * whatever its offset, and a density or a position that is not a number leaves the rectangle as it is.
+ */
+export function alignCacheRect<R extends { x: number; y: number; width: number; height: number }>(
+  rect: R,
+  box: { readonly x: number; readonly y: number; readonly rotation?: number },
+  density: number,
+): R {
+  if (!(density > 0) || !Number.isFinite(box.x + box.y + rect.x + rect.y)) return rect;
+  const turn = (((box.rotation ?? 0) % 360) + 360) % 360;
+  if (turn > 1e-6 && turn < 360 - 1e-6) return rect;
+  // How far the corner lies past the grid line before it, in logical px.
+  const past = (v: number) => {
+    const f = v - Math.floor(v);
+    return f < 1e-9 || f > 1 - 1e-9 ? 0 : f / density;
+  };
+  const dx = past((box.x + rect.x) * density);
+  const dy = past((box.y + rect.y) * density);
+  if (dx === 0 && dy === 0) return rect;
+  return { ...rect, x: rect.x - dx, y: rect.y - dy, width: rect.width + dx, height: rect.height + dy };
 }
 
 // ---- the switch (W2) -----------------------------------------------------------------------------------
@@ -270,6 +307,7 @@ export function planWhole(
     light: env.light,
   };
   const work: Work[] = [];
+  const simple: string[] = [];
 
   for (const o of order) {
     const c = state.committed.get(o.id);
@@ -282,7 +320,10 @@ export function planWhole(
     if (!allowed) {
       if (c) status.stale++;
       if (c) status.drawn++;
-      else status.blocked++;
+      else {
+        status.blocked++;
+        simple.push(o.id);
+      }
       continue;
     }
     const r = rate(o, env);
@@ -296,6 +337,7 @@ export function planWhole(
         drawnPx -= was;
       }
       status.skipped[why]++;
+      simple.push(o.id);
       continue;
     }
     held += r.px - was;
@@ -315,7 +357,7 @@ export function planWhole(
   state.work = work;
   status.px = drawnPx;
   setWholeStatus(status);
-  return { pending: work.map((w) => w.id), status };
+  return { pending: work.map((w) => w.id), status, simple };
 }
 
 /**
@@ -458,12 +500,20 @@ export function useWholeDraw(
   };
   const plan = planWhole(objects, budget, { primary: opts.selectedId }, state.current, env);
   const waiting = plan.pending.length > 0;
-  // After every commit: the next turn is asked for only now, once the last one's object has been drawn.
+  // After every commit: the Object panel's note is told which objects keep the copy (OQ-LE2), and the next turn
+  // is asked for only now, once the last one's object has been drawn.
   useEffect(() => {
+    setWholeLighter(opts.slideId, plan.simple);
     if (waiting) turns.current?.request();
     else turns.current?.cancel();
   });
-  useEffect(() => () => turns.current?.cancel(), []);
+  useEffect(
+    () => () => {
+      turns.current?.cancel();
+      setWholeLighter(undefined, []);
+    },
+    [],
+  );
   const s = state.current;
   return {
     drawAs: (o) => drawWhole(o, budget, env, s),

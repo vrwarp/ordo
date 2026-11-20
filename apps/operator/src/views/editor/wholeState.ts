@@ -62,7 +62,45 @@ export function noteWholeDraw(id: string, ms: number): void {
   if (status.lastMs.length > WHOLE_LAST_KEPT) status.lastMs.splice(0, status.lastMs.length - WHOLE_LAST_KEPT);
 }
 
+// ---- the note under the Object panel (OQ-LE2) ----------------------------------------------------------
+
+/** The key of a slide for the whole drawing's state and the note: the presentation's id and the slide's. */
+export function wholeSlideKey(presentationId: string | undefined, slideId: string): string {
+  return `${presentationId ?? ''}/${slideId}`;
+}
+
+/** The slide the list below belongs to, and the candidates of it the editor keeps drawing as the lighter copy. */
+let lighterSlide: string | undefined;
+let lighter: ReadonlySet<string> = new Set();
+const listeners = new Set<() => void>();
+
+/**
+ * Whether the editor keeps drawing the lighter copy of this object of this slide, and will go on doing so: the
+ * object panel's note reads it (views/editor/WholeNote.tsx). The ids repeat across slides, so it is by slide.
+ */
+export function wholeKeepsLighter(slide: string, id: string): boolean {
+  return slide === lighterSlide && lighter.has(id);
+}
+
+/** The canvas publishes the list after every commit; the listeners are told only when it changed. */
+export function setWholeLighter(slide: string | undefined, ids: readonly string[]): void {
+  if (slide === lighterSlide && ids.length === lighter.size && ids.every((id) => lighter.has(id))) return;
+  lighterSlide = slide;
+  lighter = new Set(ids);
+  for (const l of [...listeners]) l();
+}
+
+/** Be told when the list changed (`useSyncExternalStore`'s subscribe); returns the way back out. */
+export function subscribeWholeLighter(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
 /** Start from nothing (a test). */
 export function resetWholeStatus(): void {
   status = empty();
+  lighterSlide = undefined;
+  lighter = new Set();
 }
