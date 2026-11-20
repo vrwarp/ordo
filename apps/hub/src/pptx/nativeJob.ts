@@ -22,7 +22,7 @@
  * 3. Classification and the §3.4 size budgets, the budget ladder of M9 (`ladder.ts`): an object naming a
  *    shape file (an outline or an M9 decoration file) past the import's budget is left out (`withoutFiles`); a slide over 64 KB as stored takes
  *    the first level of `fitSlideBudget` that fits (its outlines re-gridded, its text formatting dropped, its
- *    decorations left out), and once the presentation passes 3 MiB the slides from there on are stored
+ *    decorations left out), and once the presentation passes 6 MiB the slides from there on are stored
  *    minimal (text, pictures, background; `planImportSizes`). None becomes a picture; what a level leaves out
  *    is in `Slide.pptx.missing` (class hybrid), each simplified slide noted, logged and counted (`simplified`).
  * 3b. Clips (`clips.ts`): the scan's clip parts were spilled after the pictures and sniffed (the batches

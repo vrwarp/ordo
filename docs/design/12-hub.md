@@ -499,12 +499,12 @@ Design/25's table, as implemented in the hub:
 Imported PowerPoint slides are about ten times larger than picture slides, so every path that carries a
 whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`):
 
-- A native import stays within 4 MiB: a slide over 64 KB, and every slide once the presentation passes its
+- A native import stays within 8 MiB (4 MiB until the owner's answer of 2026-11-20, Q1.c): a slide over 64 KB, and every slide once the presentation passes its
   budget, becomes compact picture class (logged, counted on the import card).
   <!-- m9:ladder -->
   Since M9's budget ladder (`pptx/ladder.ts`, design/27 M9) a hub without LibreOffice makes no slide a
   picture for a budget: a slide over 64 KB as stored is re-gridded, then loses its largest text formatting,
-  then its largest decorations (`fitSlideBudget`), the tail past 3 MiB is stored minimal (text, pictures,
+  then its largest decorations (`fitSlideBudget`), the tail past 6 MiB (3 MiB before) is stored minimal (text, pictures,
   background), and what is left out is listed in `Slide.pptx.missing` and counted in the result's
   `simplified`. A hub with LibreOffice keeps LibreOffice's page instead for a slide over 64 KB that would lose
   formatting or decorations (picture class, as before M9; `ImportCore.pageForBudget`), so it never shows less
@@ -517,7 +517,7 @@ whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`)
   service takes a few seconds on the screens. Go live before the service starts." Both are defaults until a
   venue PC confirms them (owner question 14). The operator still never sends a hand-back above 15 MiB
   (design/17 "Hub returns"); the takeover warning above 12 MiB is gone (design/29 A10).
-- `preview` carries only the previewed slide's section; the editor warns on save above 4 MiB and refuses
+- `preview` carries only the previewed slide's section; the editor warns on save above 8 MiB and refuses
   above the 32 MiB body limit.
 - Revisions are full copies (design/11 "Revisions"): an imported presentation of 1 MB edited often costs
   up to 50 MB of revision rows.

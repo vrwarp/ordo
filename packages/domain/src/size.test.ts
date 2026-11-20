@@ -228,9 +228,9 @@ describe('the presentation budget (the owner, 2026-11-20: Q1.c)', () => {
 
 describe('planImportSizes', () => {
   it('keeps a 4,000-slide import within 8 MiB, the tail compact and contiguous', () => {
-    // 24 MiB of slides: three times the budget, so the plan must close the presentation.
+    // 23 MiB of slides: almost three times the budget, so the plan must close the presentation.
     const sizes = Array.from({ length: 4000 }, () => 6 * KiB);
-    expect(sizes.reduce((n, b) => n + b, 0)).toBeGreaterThan(3 * SIZE_BUDGETS.presentationMax);
+    expect(sizes.reduce((n, b) => n + b, 0)).toBeGreaterThan(2 * SIZE_BUDGETS.presentationMax);
     const plan = planImportSizes(sizes);
     expect(plan.total).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
     expect(plan.fits).toBe(true);

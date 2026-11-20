@@ -9,7 +9,7 @@
  * - **The presentation's tail**: once the import passes `SIZE_BUDGETS.presentationCompact`, or the rest would
  *   not fit `presentationMax`, the slides from there on are stored minimal (`minimalSlide`: their text,
  *   pictures and background, a page drawn as a shape kept as the slide's colour), `planImportSizes` taking the
- *   minimal form's size as the compact one. A deck that does not fit even so (about 2,000 slides) is planned
+ *   minimal form's size as the compact one. A deck that does not fit even so (about 4,000 slides) is planned
  *   again with minimal forms without their pages, before any text is cut.
  * - **Outline files past the import's budget** (`PPTX_LIMITS.geomFileBytes`, or a file that could not be
  *   stored): the objects that name one are left out (a shape) or lose their mask (a picture), never the slide
@@ -201,7 +201,7 @@ export function planLadder(
     return { minimal, plan };
   };
   // The tail keeps each slide's page (its background colour) while the deck fits with it; a deck that does not
-  // fit 4 MiB even then (about 2,000 slides) leaves the pages out rather than cut the text of every slide.
+  // fit the presentation budget (8 MiB) even then (about 4,000 slides) leaves the pages out rather than cut the text of every slide.
   let tail = tailOf(true);
   if (!tail.plan.fits) tail = tailOf(false);
   const { minimal, plan } = tail;

@@ -183,8 +183,8 @@ payload (`PptxImportOptions`).
   version, notes ≤ 16, `artText` from `EmittedSlide.art.text`, `pending`), `digest` = pptx-scene `digestOf`
   over the objects exactly as stored (after remap, sanitize and `Slide.parse`); `Slide.hidden`; the deck's
   `source.log` (`logSafe`) and `source.native` (counts, `slideRect`).
-- Classification with the §3.4 budgets: 64 KB per slide, `planImportSizes` for the 4 MiB total (the tail
-  compact, logged and counted in the result). A slide the converter classed picture for its own 64 KB
+- Classification with the §3.4 budgets: 64 KB per slide, `planImportSizes` for the 8 MiB total (4 MiB until the owner's answer of 2026-11-20; the tail
+  past the 6 MiB mark stored minimal, logged and counted in the result). A slide the converter classed picture for its own 64 KB
   text formatting budget (`EmittedSlide.overBudget`) is the same 'slide' case: one warning ("slide n is
   over 64 KB"), counted once in `compact`, the converter's budget note and picture-class line not logged
   besides.
@@ -346,7 +346,7 @@ library snapshot size in hub health.
 
 - The importer's checks: B calls `planImportSizes` and `slideBytes`; F owns their definitions, any change
   to the compact-slide estimate, and the tests below.
-- Tests: a 2,000-slide synthetic deck stays within 4 MiB (the tail compact, logged); preview of the largest
+- Tests: a 4,000-slide synthetic deck stays within 8 MiB (the tail minimal, logged); preview of the largest
   slide's section < 1 MiB; a 13 MiB resolved playlist gets the warning and the operator refuses adopt; a year
   of weekly 17-slide decks keeps the library snapshot under 6 MB.
 - Built: `planImportSizes(sizes, compact, reserve = IMPORT_RESERVE_BYTES)` (256 KiB kept for the presentation's
@@ -443,7 +443,7 @@ The items merged in the order A-H; what wires them together:
 - `apps/hub/test/pptx-integrate.test.ts`: a chart over a photo through the route (an edit made while the
   follow-up waits survives; version 2 adds the transparent art in its place), a metafile through both jobs,
   a 4:3 deck aligned with LibreOffice on native, hybrid and picture slides, a hidden slide's notes, pictures
-  and text, two 2,000-slide decks within 4 MiB with every preview under 1 MiB, and the previous release's
+  and text, 2,000-slide decks within 8 MiB with every preview under 1 MiB, and the previous release's
   schema (`@ordo/domain/schemas.prev.test-util.ts`) reading what was saved.
 - The art's `locked` and `origin` are kept once M2's schema (`ObjectOrigin`, `locked`) is merged; until then
   `Slide.parse` strips them and the art is an ordinary picture, as in an older build.
@@ -794,7 +794,7 @@ instead) and, on a hub with LibreOffice, for a slide over 64 KB that the ladder 
   objects that name them (`withoutFiles`, `leftOut`) instead of keeping legacy shapes where traced outlines
   were. A slide the client read as `unreadable`, or one the scene lacks, gets the text rescue from its own
   parts, read from the stored deck here (`rescueClientSlides`); nothing else of the deck runs on the pool.
-- Tests: `pptx-no-libreoffice.test.ts` ('the budget ladder without LibreOffice': over 64 KB, the 4 MiB tail,
+- Tests: `pptx-no-libreoffice.test.ts` ('the budget ladder without LibreOffice': over 64 KB, the 8 MiB tail,
   the outline-file budget, a schema refusal, the rescue, the retry), `pptx-native.test.ts` (the same with
   LibreOffice: no follow-up for a budget but a page for a slide stored plain), `pptx-geoms.test.ts`, `pptx-integrate.test.ts` (2,000-slide decks; a crowded 4:3 slide that keeps LibreOffice's page),
   `pptx-import-route.test.ts` (a client scene past its outline bound, and with slides it could not read).

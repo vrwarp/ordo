@@ -576,7 +576,7 @@ describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
    * Import a 2,000-slide deck. Since M9's budget ladder the tail is never a picture: its slides are stored
    * minimal (their text, pictures and background), so nothing waits for LibreOffice.
    */
-  async function importLong(slide: (i: number) => string, name: string) {
+  async function importLong(slide: (i: number) => string, name: string, pages: 'kept' | 'left out') {
     const slides = Array.from({ length: 2000 }, (_, i) => ({ shapes: slide(i) }));
     const t0 = performance.now();
     const { result, p } = await importDeck(buildDeck({ slides }), name);
@@ -592,11 +592,14 @@ describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
     expect(result.loJobId).toBeUndefined();
     expect(presentationBytes(p)).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
     expect(largest).toBeLessThan(SIZE_BUDGETS.previewMax);
-    // Only the tail is minimal: no shape, every text box still there. A deck this large does not fit the budget
-    // even minimal with each slide's page (its background colour, about 200 bytes), so the ladder leaves the
-    // pages out rather than cut the text of every slide (`ladder.ts` `planLadder`).
+    // Only the tail is minimal: every text box still there, and no shape but the slide's page (its background
+    // colour, about 200 bytes) while the deck fits the budget with it. A deck too large to fit even minimal
+    // with each slide's page leaves the pages out rather than cut the text of every slide (`ladder.ts`
+    // `planLadder`): then no shape at all.
     for (const s of all.slice(first)) {
-      expect(s.objects.some((o) => o.type === 'shape')).toBe(false);
+      const shapes = s.objects.filter((o) => o.type === 'shape');
+      if (pages === 'kept') expect(shapes.map((o) => o.origin?.role)).toEqual(['bg']);
+      else expect(shapes).toHaveLength(0);
       expect(s.objects.filter((o) => o.type === 'text').length).toBeGreaterThan(0);
     }
     return { result, p, first };
@@ -614,6 +617,7 @@ describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
           sp({ id: 10 + k, x: k * IN, y: 6 * IN, cx: IN, cy: 0.2 * IN, fill: solid('336699') }),
         ).join(''),
       'Sermon series.pptx',
+      'kept',
     );
     expect(result.simplified).toBe(2000 - first);
     // A minimal slide keeps its text as objects, so it is larger than the compact picture slide of before M9
@@ -634,6 +638,7 @@ describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
     const { result, p, first } = await importLong(
       (i) => textBox(2, `Slide ${i + 1}`, IN, 0) + textBox(3, `${i + 1} ${line.repeat(48)}`),
       'Hymnal.pptx',
+      'left out',
     );
     expect(first).toBe(0);
     expect(result.simplified).toBe(2000);

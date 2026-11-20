@@ -589,7 +589,7 @@ than an empty state while nothing has loaded.
     desktop's: it fetches each selected revision whole (`GET /presentations/:id/revisions/:rev`, `:59`,
     and again whenever the open draft changes, `:80`) and draws up to 12 thumbnails at 320 px (`:17`,
     `:173`), and the list route parses every stored revision to read its title
-    (`apps/hub/src/library.ts:403-415`), up to 4 MiB each. On a phone the list comes from a per-revision
+    (`apps/hub/src/library.ts:403-415`), up to 8 MiB each (the presentation budget since 2026-11-20; 4 MiB before). On a phone the list comes from a per-revision
     summary the hub stores at save (§3.4), and a revision's slides are drawn only when the person taps
     Preview: one revision at a time, the first six slides at tile width, within the caps of §3.4. Restore
     needs no body on the phone.
@@ -777,8 +777,8 @@ type LibraryPoke = { t: 'library.poke'; v: 1; seq: number }; // capped sockets, 
 - `library.poke` carries only the library sequence. The phone's core then fetches
   `GET /library/snapshot?since=<seq>` (`routes.ts:420-431`), debounced 2 s and only while visible. That
   request is answered by the library process (redacted for `view`) and only streamed through the live
-  process, so a 4 MiB deck saved during a service costs the live process one small string per phone
-  instead of 4 MiB per phone.
+  process, so an 8 MiB deck saved during a service costs the live process one small string per phone
+  instead of 8 MiB per phone.
 - Both are new message types: one `APP_VERSION` bump in P1 (design/13 "Versioning").
 - **P0: the stripped `library.delta` until P1's `library.poke`.** In P0 a capped socket gets the
   `library.delta` an edit socket gets (no tokens) and the compact client polls `GET /live/summary` (without
@@ -806,10 +806,10 @@ type LibraryPoke = { t: 'library.poke'; v: 1; seq: number }; // capped sockets, 
 | P1    | Public `GET /health` answers `{ ok, version }`; mode and sequence for authenticated callers only (check its consumers first)                              | live    | Today it tells anyone whether a service is running (`routes.ts:324-331`)                                                                                                                                                                            |
 | P2    | Playlist revisions: `playlist_revisions`, `GET /playlists/:id/revisions[/:rev]`, `POST /playlists/:id/restore/:rev` (423 while live)                      | library | Today a playlist has a `rev` and a 409 but no history                                                                                                                                                                                               |
 | P2    | Revision retention for both kinds: newest 50 or 30 days, whichever is more, but at most 200 revisions and 64 MiB per presentation or plan                 | library | Today's prune has no cap (`apps/hub/src/library.ts:392-401`), and phone saves add revisions                                                                                                                                                         |
-| P2    | Revision summaries (`title`, `slides`, `changed`) kept at save, listed without bodies; capped: 200 rows, 20 bodies (≤ 4 MiB) per 10 min                   | library | The list parses every revision to read its title (`library.ts:403-415`); History fetches whole revisions (§2.11)                                                                                                                                    |
+| P2    | Revision summaries (`title`, `slides`, `changed`) kept at save, listed without bodies; capped: 200 rows, 20 bodies (≤ 8 MiB) per 10 min                   | library | The list parses every revision to read its title (`library.ts:403-415`); History fetches whole revisions (§2.11)                                                                                                                                    |
 | P2    | `updatedBy` on presentations and playlists; the per-service item fields; the background override (§3.5)                                                   | domain  | §3.5                                                                                                                                                                                                                                                |
 | P2    | Write budget per session: 60 writes a minute (burst 20) and, while live, 8 MiB of request bodies a minute; uploads: 50 files and 4 GiB a day              | library | A stolen session cannot flood the NAS or the live process                                                                                                                                                                                           |
-| P2    | Request bodies may be `Content-Encoding: gzip` (decompressed size capped at the presentation budget)                                                      | library | A save sends the whole presentation, up to 4 MiB (`routes.ts:444-455`)                                                                                                                                                                              |
+| P2    | Request bodies may be `Content-Encoding: gzip` (decompressed size capped at the presentation budget)                                                      | library | A save sends the whole presentation, up to 8 MiB (`routes.ts:444-455`)                                                                                                                                                                              |
 | P2    | Image ingest removes location and device metadata from the stored original and the delivery file, applies orientation before reading dimensions; backfill | library | Images up to 3840 px are served as uploaded (`apps/hub/src/media/service.ts:381-395`), GPS included                                                                                                                                                 |
 | P2    | Free-space floor: uploads and backfills stop when the data volume has less than max(5 GiB, 5 %) free (`fs.statfs`), with 507 and a health line            | library | No free-space check exists; the same volume holds `live.db`, `ordo.db` and the backups                                                                                                                                                              |
 | P2    | Job priority for media the next plan uses; the `inbox` tag on uploads from capped sessions                                                                | library | §5.2, §4                                                                                                                                                                                                                                            |
@@ -853,7 +853,7 @@ builds on:
 - Edits go through `useEditor` (§2.7). A save sends the whole presentation, gzip-compressed with
   `CompressionStream` when larger than 32 KB.
 - **Drafts** live in an IndexedDB `drafts` store: `{ presentationId, baseRev, draft, savedAt }`, written 1 s
-  after each change and on `pagehide` and `visibilitychange` to hidden. At most 20 drafts of up to 4 MiB;
+  after each change and on `pagehide` and `visibilitychange` to hidden. At most 20 drafts of up to 8 MiB;
   after 30 days a draft is offered once more, then dropped. Opening the presentation again offers the draft
   ("You have an unsaved change from Thu 21:14").
 - A save whose answer was lost and is tapped again gets a 409 whose "theirs" is the phone's own save; the
@@ -955,7 +955,7 @@ type PlaylistOp =
 | Store                            | Contents                                                        | Bound                                                                           | Lifetime                                                       |
 | -------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | IndexedDB library copy (exists)  | Snapshot, changes, search index                                 | The library (budgets in design/27 §3.4)                                         | Readable 14 days after the last signed-in contact; wiped below |
-| IndexedDB `drafts` (new)         | Unsaved presentation drafts and pending plan operations         | 20 drafts, 4 MiB each                                                           | Until saved or discarded; 30 days                              |
+| IndexedDB `drafts` (new)         | Unsaved presentation drafts and pending plan operations         | 20 drafts, 8 MiB each                                                           | Until saved or discarded; 30 days                              |
 | Cache Storage `ordo-phone` (new) | Preview renditions, posters, fonts used, drawn tiles            | 150 MB or 10 % of `navigator.storage.estimate().quota`, least recently used out | Until sign-out or eviction                                     |
 | `localStorage`                   | Words or Slides, filters, language, last signed-in contact time | small                                                                           | as today                                                       |
 

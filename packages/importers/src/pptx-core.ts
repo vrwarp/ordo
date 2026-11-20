@@ -11,7 +11,7 @@
  *   is an empty hybrid slide that says so; the metafiles it draws wait for LibreOffice or are listed missing;
  *   without LibreOffice what it would have drawn is listed (`gaps`).
  * - **Budgets** (`ImportCore.budget`): the §3.4 budgets as M9's budget ladder (`pptx-ladder.ts`): outline
- *   files within the import's budget, each slide within 64 KB, the presentation within 4 MiB (its tail stored
+ *   files within the import's budget, each slide within 64 KB, the presentation within the budget (8 MiB; its tail stored
  *   minimal). Without LibreOffice no slide becomes a picture for its size: the client's old compact step is
  *   gone. With LibreOffice, a slide over 64 KB that the ladder would store without its formatting or
  *   decorations ('plain', 'minimal') keeps LibreOffice's page instead, as before M9 (`pageForBudget`): a hub
@@ -464,7 +464,7 @@ export class ImportCore {
    * (`compactSlideBytes`, with
    * version 2's page record) is within 64 KB, and only while it grows the presentation by no more than
    * `room`, so the presentation's plan still holds. The presentation's tail stays minimal on every hub (its
-   * slides are whole text slides past 3 MiB: editable, and no page to wait for), so a hub with LibreOffice
+   * slides are whole text slides past the 6 MiB mark: editable, and no page to wait for), so a hub with LibreOffice
    * shows it as one without does. The 2026-11-13 review measured 22 worship slides of E that a hub with
    * LibreOffice showed far worse stored plain or minimal (0.13-0.94) than as LibreOffice's page (0.90-0.999):
    * the exit gate of M9 decision 2 for such hubs.
@@ -481,7 +481,7 @@ export class ImportCore {
 
   /**
    * Step 3: the §3.4 budgets, M9's budget ladder (`ladder.ts`): outline files within the import's budget,
-   * each slide within 64 KB (`fitSlideBudget`), the presentation within 4 MiB (its tail stored minimal).
+   * each slide within 64 KB (`fitSlideBudget`), the presentation within the budget (8 MiB; its tail stored minimal).
    * Without LibreOffice no slide becomes a picture; with it, a slide over 64 KB that would be stored plain or
    * minimal keeps LibreOffice's page (`pageForBudget`), unless it holds a table object. Returns how many slides
    * it simplified (formatting or decorations left out).
