@@ -19,7 +19,16 @@ import {
   TITLE_WIDE_PREFIX_CHARS,
   titleTokenIn,
 } from '../src/revisions.ts';
-import { type Client, login, OPERATE_PIN, song, startHub, type TestHub, tempDir } from './helpers.ts';
+import {
+  type Client,
+  EDIT_PIN,
+  login,
+  OPERATE_PIN,
+  song,
+  startHub,
+  type TestHub,
+  tempDir,
+} from './helpers.ts';
 import { type TwoProcesses, twoProcesses } from './phones-helpers.ts';
 
 let hub: TestHub | undefined;
@@ -554,6 +563,46 @@ describe('the backfill', () => {
   it('is part of the hub: one for the library, started with it and stopped with it', async () => {
     hub = await startHub();
     expect(hub.revisionTitles).toBeInstanceOf(RevisionTitleBackfill);
+  });
+});
+
+// ── the route ────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('GET /presentations/:id/revisions', () => {
+  it('answers without parsing the presentation either: the existence check is one row, not the whole document', async () => {
+    hub = await startHub();
+    const ed = await login(hub.url, EDIT_PIN);
+    // a presentation of about 200 KB (the real ones are up to 8 MiB: parsing it was 85 ms and 18 MiB a request)
+    const big = song();
+    big.sections[0]!.slides = Array.from({ length: 300 }, (_, i) => big.sections[0]!.slides[i % 2]!).map(
+      (sl) => ({
+        ...sl,
+        id: newId(),
+      }),
+    );
+    const p = await ed.json<Presentation>('/presentations', { method: 'POST', json: big });
+    await ed.json(`/presentations/${p.id}`, { method: 'PUT', json: { ...p, title: 'Second' } });
+    expect(JSON.stringify(p).length).toBeGreaterThan(50_000);
+    const parse = vi.spyOn(JSON, 'parse');
+    const revs = await ed.json<RevisionInfo[]>(`/presentations/${p.id}/revisions`);
+    // JSON.parse is the server's and the test client's: the answer is 2 short rows, so nothing above 2,000 characters
+    const biggest = Math.max(0, ...parse.mock.calls.map((c) => (typeof c[0] === 'string' ? c[0].length : 0)));
+    expect(biggest).toBeLessThan(2000);
+    expect(revs.map((r) => [r.rev, r.title])).toEqual([
+      [2, 'Second'],
+      [1, 'Amazing Grace'],
+    ]);
+  });
+
+  it('answers 404 for a presentation that is not there, as before', async () => {
+    hub = await startHub();
+    const ed = await login(hub.url, EDIT_PIN);
+    const res = await ed.fetch('/presentations/nope/revisions');
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string; message: string } }).error).toMatchObject({
+      code: 'not_found',
+      message: 'presentation nope not found',
+    });
   });
 });
 

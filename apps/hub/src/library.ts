@@ -179,6 +179,11 @@ class EntityTable<T extends { id: string; rev?: number }> {
     if (!e) throw notFound(`${this.table.replace(/s$/, '')} ${id} not found`);
     return e;
   }
+  /** Whether the row is there: one lookup, nothing parsed (a presentation's JSON is up to 8 MiB). `must` without the entity. */
+  mustExist(id: string): void {
+    if (!this.db.prepare(`SELECT 1 FROM ${this.table} WHERE id = ?`).get(id))
+      throw notFound(`${this.table.replace(/s$/, '')} ${id} not found`);
+  }
 
   insert(input: T): T {
     const now = nowIso();
