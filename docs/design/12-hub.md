@@ -521,6 +521,9 @@ whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`)
   above the 32 MiB body limit.
 - Revisions are full copies (design/11 "Revisions"): an imported presentation of 1 MB edited often costs
   up to 50 MB of revision rows.
+  At the 8 MiB budget that is up to 400 MB for one deck, and the History list parses every kept revision
+  (57 revisions of 8 MiB: 5.4 s and a 2.2 GiB peak in the library process, measured at the raise, design/27
+  §3.4); the cost to watch is that list, not the disk.
 - `GET /health` reports the library snapshot's size (Logging and diagnostics).
 
 ## Configuration

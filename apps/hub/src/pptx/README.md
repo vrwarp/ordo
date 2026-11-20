@@ -188,6 +188,7 @@ payload (`PptxImportOptions`).
   text formatting budget (`EmittedSlide.overBudget`) is the same 'slide' case: one warning ("slide n is
   over 64 KB"), counted once in `compact`, the converter's budget note and picture-class line not logged
   besides.
+- What the 8 MiB budget costs (design/27 §3.4 has the numbers): a save of an 8 MiB presentation takes 1.5 s at p50 and 2.2 s at p95 on the hub, the operator parses it in 0.2 s, and the revision list (every kept revision parsed) takes 5.4 s with 57 revisions and peaks at 2.2 GiB in the library process: that list is the cost to watch. W59 (3 MiB at go-live) now fires for the public Traffic Dark template, whose 101 slides are all kept.
 - Placeholder remap (`EmitResult.media` per batch → parts → media ids from C); the `pptx-lo` payload
   (`PptxLoSlide` per slide that needs LibreOffice) enqueued before any clip job; resume pairs in
   `PptxNativeProgress` so a re-queued job never stores a picture twice or saves a second presentation.
