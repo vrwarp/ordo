@@ -18,10 +18,10 @@ when the copy cannot be built (no pool, a deck past the caps) the job fails, it 
 ```
 POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by SHA-256; renderer=native default) [H]
  └─ imports.pptx.queueNative ─► light job 'pptx-native' (nativeJob.ts)                                         [B]
-     1 readDeckXml (deckParts.ts): XML parts in memory (≤ 8 MB each, ≤ 64 MB), other parts placeholders; after
+     1 readDeckXml (deckParts.ts): XML parts in memory (≤ 32 MiB each, ≤ 256 MiB in all, a deck declaring more refused first with W17), other parts placeholders; after
        the scan spillDeckParts writes only the referenced pictures under generated names (≤ 1 GiB, ≤ 2,000);
        embeddings, vbaProject, customXml skipped; no nested zips; overlapping entries refused; no pool: fail [B]
-     2 pool 'pptx-scene' (sceneTask.ts → convertDeck), batches ≤ 150 slides (slide parts transferred, shared
+     2 pool 'pptx-scene' (sceneTask.ts → convertDeck), batches ≤ 150 slides and ≤ 64 MiB of slide XML (`batchEnds`; slide parts transferred, shared
        parts copied), 2 min per batch, ≤ 15 min of pool time per import                                        [B, A]
        clip parts (SceneScan.clips, ≤ 50) spilled after the pictures, sniffed: the batches get their kinds      [w2 A]
        the library's font files listed (faces.ts, ≤ 2,000): a batch reads one when a table row is measured    [M6]
@@ -209,8 +209,11 @@ Done (B), and what the other items rely on:
   scan did; a batch whose list differs is treated as failed. `SceneTaskOutput.extras` carries each slide's
   transition and timing (`transition.ts` `readSlideTransition`: only the part's tail after `p:cSld` is
   parsed, under the slide's own root tag, so a slide is not parsed twice).
-- **Parts.** Non-XML parts and XML parts over 8 MB are empty placeholders, so relationships resolve and a
-  slide whose part was too large is quarantined (picture class) instead of disappearing from the list.
+- **Parts.** Non-XML parts and XML parts over 32 MiB are empty placeholders, so relationships resolve and a
+  slide whose part was too large keeps its text (W9, `slide:detail`) instead of disappearing from the list. The XML a
+  read would keep is summed from the central directory first (`declaredXmlBytes`): over 256 MiB (`PPTX_LIMITS.xmlTotalBytes`)
+  the job fails with W17 (`XmlTotalError`) before any part is read. The callers of `readDeckXml` other than the import
+  (`fallback.ts` the LibreOffice follow-up, `textRepair.ts`) read the same XML and meet the same refusal.
 - **Version 1 and `pptx-lo`.** The presentation id is chosen and recorded before the save. `pptx-lo` is
   queued right after `lib.savePresentation`, in the same synchronous step: it cannot start before version 1
   exists, and `PptxLoSlide.digest` is version 1's stored `Slide.pptx.digest`. M5 must queue the deck's clip
