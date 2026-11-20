@@ -24,7 +24,8 @@ export const COMPACT_WORKERS: readonly string[] = ['core.worker', 'thumb.worker'
 
 /**
  * What a phone must never download or precache: the canvas editor, the live view, Setup and the settings
- * pages, the output and control-surface services, the renderer's preset geometry and the import worker.
+ * pages, the output and control-surface services, the renderer's preset geometry and text-warp geometry tables
+ * and the import worker.
  * An entry is an app path (`views/...`, `services/...`, `workers/...`: under apps/operator/src), a package
  * path (`packages/...`) or a package name (`konva`: under node_modules); one ending in `/` is a folder.
  */
@@ -42,6 +43,7 @@ export const COMPACT_FORBIDDEN: readonly string[] = [
   'services/programView.ts',
   'packages/surfaces/src/',
   'packages/renderer/src/geom/presets.gen.ts',
+  'packages/renderer/src/geom/textwarps.gen.ts',
   'workers/import.worker.ts',
 ];
 
