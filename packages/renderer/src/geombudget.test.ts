@@ -1,5 +1,14 @@
 import { LOOK_LOWER_THIRD, LOOK_MAIN, type ShapeObject, type SlideObject } from '@ordo/domain';
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  FRAME_DIRECT_BYTES,
+  FRAME_DIRECT_IMAGES,
+  FRAME_DIRECT_TARGETS,
+  splitFrame,
+  underSlides,
+} from './frame.ts';
+import { picture, slideOf } from './frame.test-util.ts';
+import { pictureTarget } from './picture.ts';
 import { charged, EFFECT_COST, effectArea, GEOM_COST } from './geom/cost.ts';
 import { clearGeomFiles, putGeomFile, storedCost, storedGeometry } from './geom/stored.ts';
 import {
@@ -211,6 +220,52 @@ describe("a slide's drawing budget (design/27 §12 drawing cost)", () => {
     expect(drawnEffectArea(turned)).toBeGreaterThan(EFFECT_COST.softEdge);
     // Health's raster estimate reads the same weights: a full-frame feathered photo is no longer 'heavy'.
     expect(slideDrawCost([img('a', 54)]).effects).toBeCloseTo(EFFECT_COST.preparedSoftEdge, 1);
+  });
+
+  it('40 full-frame feathered pictures: one plan at every scale, the direct part within the prepared counts, the rest the frame (no count guard in the rating)', () => {
+    // The budget rates a prepared feathered picture at `EFFECT_COST.preparedSoftEdge` at scale 1 whatever the
+    // outputs prepare (design 29 effect-units item 7: only 32 targets are prepared and 192 MiB held): a guard in
+    // the rating was the answer. With the underlay frame the direct part holds at most `FRAME_DIRECT_TARGETS`
+    // prepared draws and `FRAME_DIRECT_BYTES` and the rest is made one picture at a time, so none is needed.
+    const pics = Array.from({ length: 40 }, (_, i) =>
+      picture(`f${i}`, `m${i}`, { x: 0, y: 0, w: 1920, h: 1080 }, { softEdge: 54 }),
+    );
+    const plan = (withinDrawBudget(pics) as readonly { softEdge?: number }[]).map((o) => o.softEdge ?? 0);
+    // One plan: the rating has no scale in it, and a second ask is the same.
+    expect((withinDrawBudget(pics) as readonly { softEdge?: number }[]).map((o) => o.softEdge ?? 0)).toEqual(
+      plan,
+    );
+    const kept = plan.filter((v) => v > 0).length;
+    expect(kept).toBeGreaterThanOrEqual(8);
+    expect(kept).toBeLessThanOrEqual(10);
+    expect(plan.slice(0, kept).every((v) => v === 54)).toBe(true);
+    for (const scale of [1, 2, 3]) {
+      const f = splitFrame(slideOf(pics), scale);
+      expect(f, `scale ${scale}`).toBeDefined();
+      const direct = f!.direct.objects as unknown as { mediaId: string; id: string }[];
+      // Prepared draws (a picture past the pixel cap at scale 3 is drawn from its source: once per file).
+      const draws = new Set<string>();
+      let bytes = 0;
+      for (const o of direct) {
+        const t = pictureTarget(o as never, scale);
+        draws.add(t ? `${o.mediaId}|${t.key}` : o.mediaId);
+        if (t) bytes += t.w * t.h * 4;
+      }
+      expect(draws.size, `scale ${scale}: prepared draws in the direct part`).toBeLessThanOrEqual(
+        FRAME_DIRECT_TARGETS,
+      );
+      expect(new Set(direct.map((o) => o.mediaId)).size).toBeLessThanOrEqual(FRAME_DIRECT_IMAGES);
+      expect(bytes, `scale ${scale}: prepared bytes in the direct part`).toBeLessThanOrEqual(
+        FRAME_DIRECT_BYTES,
+      );
+      // The rest is the frame: every picture once, bottom first, in chunks the prepare step takes one by one.
+      expect([...f!.under, ...direct].map((o) => o.id)).toEqual(pics.map((o) => o.id));
+      for (const chunk of underSlides(f!)) {
+        expect(
+          new Set(chunk.objects.map((o) => (o as { mediaId: string }).mediaId)).size,
+        ).toBeLessThanOrEqual(FRAME_DIRECT_IMAGES);
+      }
+    }
   });
 
   it("draws the re-review's hostile outlines as legacy shapes (M6 finish)", () => {
