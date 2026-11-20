@@ -91,9 +91,9 @@ between 16000 and 32767.
   `chromium-tablet`). `e2e/layout-class.spec.ts` (the venue PC never compact) uses the shared server.
 - M9 wave r2b holds offsets 400-659, in offset order: `effect-units` (400-401: effects past the budget, and the
   hostile lone line art through the upload route), `units-live` (405-406: a jump to a slide not prepared and a GO
-  50 ms after its arm, and the playlist warmed ahead), `editor-whole` (410: the desktop editor draws line art and shadows past the budget whole, not while a service is
+  50 ms after its arm, and the playlist warmed ahead); `editor-whole` (410: the desktop editor draws line art and shadows past the budget whole, not while a service is
   live, not with `?editor=light`) and `ipad-editor-whole` (412-414, one per tablet project: a tablet keeps the
-  lighter drawing), `editor-table` (420) and `ipad-table-targets` (421-423, one
+  lighter drawing) are sub-wave 2's leaf-editor's; `editor-table` (420) and `ipad-table-targets` (421-423, one
   per tablet project) are the table editing's; `pptx-table-edit` (425, sub-wave 1's integration: the table deck
   imported on a hub without LibreOffice, a cell edited on the canvas, live); `pptx-tables` (430-432, tables-conv
   and tables-flip: the table deck on a hub without LibreOffice through the Import tab and through the upload
@@ -106,11 +106,15 @@ between 16000 and 32767.
   unchanged);
   `live-by-ref` (480: a 6 MiB service kept by reference, the hub killed and started again on the same data, raw
   screens that hold the copy sent the state without it, a storm of 20 screens beside GOs, a take-over beside a GO); `pptx-dense` (510-511, sub-wave 2's xml-compact: dense decks on a hub without LibreOffice,
-  through the upload route and through the Import tab; the decks are written at run time, `pptxdecks.ts` `denseDeck`). The integrations of sub-waves 2-4 hold 630-659. An explicit `ORDO_E2E_PORT_BASE` may sit below
+  through the upload route and through the Import tab; the decks are written at run time, `pptxdecks.ts` `denseDeck`); `sw2-seams` (630-631, sub-wave 2's integration: the seams between its tracks that no one track's spec sees, on hubs without LibreOffice: a crowded service held by a screen, the hub killed and started again, the screen sent its state by name and still drawing the topmost square, and a hub whose free-space floor is above any real disk, `ORDO_MIN_FREE_GB=10000`, that pauses uploads and imports while a GO moves the Audience, another saved playlist goes live and a presentation and a playlist are still saved). The integrations of sub-waves 3 and 4 hold 632-659. An explicit `ORDO_E2E_PORT_BASE` may sit below
   16000 (design/29 §4; `e2e/ports.ts` says what it must avoid).
   `e2e/table-deck.test.ts` checks the deck still tests what the spec is about (the bulletin past M6's cell cap,
   the reading plan's M6 group past 64 KB, measured with the kill switch, and both table objects through the import
   core on both kinds of hub), as `e2e/lineart-deck.test.ts` does for the line-art deck.
+  A measure of how closely the desktop editor agrees with the Audience screen captures the editor's Konva stage
+  with `toDataURL` at the device pixel ratio, never the page element `.konvajs-content`: the stage's 1 px box-shadow
+  ring sits in that element, so the slide lies 2 device pixels inside the picture and 0.25 % smaller than the page,
+  and every slide reads 0.04 to 0.09 less than it agrees (sub-wave 2's leaf-editor-2 measured both).
 
 ### Projects
 

@@ -261,6 +261,13 @@ export const PORT_TABLE = {
     spec: 'pptx-dense.spec.ts',
     what: '0 hub without LibreOffice (the upload route: a traced deck, an 80 MB deck, a part and a slide past the bounds, a deck declaring 1.25 GiB), 1 hub without LibreOffice (the Import tab: the browser parses a 12 MB deck, declines an 80 MB one and the hub parses it)',
   },
+  // sub-wave 2's integration (chore (c)): the seams between the tracks that no single track's spec can see.
+  'sw2-seams': {
+    offset: 630,
+    count: 2,
+    spec: 'sw2-seams.spec.ts',
+    what: '0 hub without LibreOffice (a restarted hub with a crowded service: the screen holding the copy is sent its state by name and still draws the top square), 1 hub without LibreOffice with ORDO_MIN_FREE_GB=10000 (the free-space floor: uploads and imports paused, the service keeps running)',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;
