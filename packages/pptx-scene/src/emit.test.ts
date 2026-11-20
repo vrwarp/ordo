@@ -1044,6 +1044,24 @@ describe('placement', () => {
     expect(objects).toHaveLength(1_000);
     expect(notes.join(' ')).toMatch(/more than 1000 objects/);
   });
+
+  it('lists the objects cut at 1,000 as `element:shapes`, and only a slide that was cut (W10, design/29 section 3)', () => {
+    // The cut is the emitter's (`emitSlide`), so a slide reaches it with a deck made here: text boxes, which the
+    // guard keeps behind the harness's A/B (`budgetArt`). One background object and 999 boxes are exactly 1,000.
+    const boxes = (n: number) =>
+      sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(run('x'))) }).repeat(n);
+    const kept = emitOne({ slides: [{ shapes: boxes(999) }] }, {}, { budgetArt: true });
+    expect(kept.objects).toHaveLength(1_000);
+    expect(kept.out.slides[0]!.missing).toBeUndefined();
+    expect(kept.notes.join(' ')).not.toMatch(/more than 1000 objects/);
+    // One more and the top object is not drawn: the slide says so in its notes and in its missing list.
+    for (const libreoffice of [true, false]) {
+      const cut = emitOne({ slides: [{ shapes: boxes(1_000) }] }, { libreoffice }, { budgetArt: true });
+      expect(cut.objects).toHaveLength(1_000);
+      expect(cut.notes.join(' ')).toMatch(/more than 1000 objects: the top ones are not drawn/);
+      expect(cut.out.slides[0]!.missing).toEqual(['element:shapes']);
+    }
+  });
 });
 
 describe('the object budget (M6; its art only behind budgetArt since M9)', () => {
