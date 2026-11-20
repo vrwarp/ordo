@@ -46,7 +46,9 @@ import { drawObject, type ImageLookup, registerSlideObjectsDrawer } from './text
  * Runtime: draw it, never drop it). The slide's drawing budget (`geombudget.ts`) sends an object past
  * `GEOM_COST.slide` or `EFFECT_COST.slide` to a legacy copy, so that no synchronous draw passes §13's 50 ms task.
  * On the outputs, the desktop thumbnails and the harness such an object is drawn whole instead, from a unit made
- * beforehand in slices; the editor and phones keep the legacy copies.
+ * beforehand in slices; phones, tablets and the editor while a service is live keep the legacy copies, and the
+ * desktop editor with no service live draws such an object whole itself, into its node cache in idle time
+ * (leaf-editor: `apps/operator/src/views/editor/wholeDraw.ts`, design/15 "Canvas drawing").
  *
  * - **What** (`slideUnits`, `effectWanted`): in z-order while their area is within `UNIT_SLIDE_AREAS` frames, a
  *   `whole` unit of a shape past the geometry budget (with its gradient, dash, arrowheads and effects), a
