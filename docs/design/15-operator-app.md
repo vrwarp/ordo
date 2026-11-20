@@ -276,7 +276,11 @@ cells in place of the shape fields).
   density (`nodeCacheRect`: what its drawer reaches, `objectReach`, with its hit area; text has its own
   raster cache; an object whose reach the renderer does not know, or one over 8 M device px, is drawn live)
   and drawn again only when it, its picture or geometry file, the fonts or the density change, so a
-  keystroke or a drag copies the slide's other objects instead of drawing them. The floating bar's and the
+  keystroke or a drag copies the slide's other objects instead of drawing them. A node's cache starts on the
+  stage's device pixel grid (`alignCacheRect`, wholeDraw.ts; a turned node keeps its rectangle), so the copy onto
+  the layer is one pixel to one pixel and the edges in it are not blurred: with the dashed red overflow guides
+  hidden the stage then scores 0.9477 to 0.9829 against the Audience page's drawing (greyscale 960x540 SSIM, a
+  device scale of 2, the 17 survey slides: 0.01 to 0.02 more than with the corner between two device px). The floating bar's and the
   touch tools' sizes are kept by a ResizeObserver (`useMeasuredSize`), not read on every render. On a slide
   of 181 objects (90 shapes with gradients, dashed strokes and shadows, 91 text boxes) an idle caret cost
   192-247 ms of main-thread time per 6 s before (about 20 ms a blink: SlideCanvas re-rendered and the
