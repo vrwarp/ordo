@@ -512,7 +512,7 @@ describe('the backfill', () => {
     expect(hub.lib.summaries.count()).toBe(8);
     state.live = 'idle';
     bf.onLiveMode('idle');
-    await vi.waitFor(() => expect(hub.lib.summaries.count()).toBe(0));
+    await vi.waitFor(() => expect(hub?.lib.summaries.count()).toBe(0));
     expect(state.reads).toHaveLength(8);
   });
 
