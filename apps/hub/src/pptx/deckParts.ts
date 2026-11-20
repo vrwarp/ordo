@@ -3,7 +3,7 @@
  * import, the LibreOffice follow-up and reference pictures, the 'Pictures (LibreOffice)' import and the text
  * repair read a deck only through these.
  *
- * - `readDeckXml`: XML and relationship parts in memory (≤ 32 MB each, ≤ 64 MB in all); a larger XML part is
+ * - `readDeckXml`: XML and relationship parts in memory (≤ 32 MB each, ≤ 256 MB in all, a deck that declares more refused from its directory); a larger XML part is
  *   left out and listed; every other part (pictures, media, fonts) an empty placeholder, so relationships
  *   still resolve; embeddings, `vbaProject.bin`, custom XML, document properties and printer settings never
  *   read. Nothing is written to disk.
@@ -13,6 +13,7 @@
  * Both refuse a zip whose entries' data overlap (`distinct`): a few KB could otherwise name one large
  * stream thousands of times. Entry names never become paths.
  */
+import { tmpdir } from 'node:os';
 import { extractZip } from '@ordo/importers/zip-stream.ts';
 import { PPTX_LIMITS } from './shared.ts';
 
@@ -38,8 +39,54 @@ export type DeckXml = {
   fonts: number;
 };
 
-/** The deck's XML parts within the caps; every other part an empty placeholder (see the module comment). */
+/**
+ * A deck holds more slide XML than the hub reads (W17, design/29 section 3): thrown by `readDeckXml` from the file's own directory,
+ * before any byte is read. The message is the volunteer's line, with the number this hub enforces.
+ */
+export class XmlTotalError extends Error {
+  constructor(total: number) {
+    super(
+      `ordo could not read this file: it holds more slide data than ordo reads (${total / 1024 ** 2} MB at most). ` +
+        'Nothing was imported. In PowerPoint, save very detailed artwork as pictures and import again.',
+    );
+    this.name = 'XmlTotalError';
+  }
+}
+
+/**
+ * The XML a read of this deck would keep, as its central directory declares it (bytes): the XML and relationship parts within the
+ * part cap, never the pictures, fonts, documents the read skips, or the parts it leaves out for their size. Reads the directory
+ * only: every entry is `skip`ped, so nothing is inflated and nothing is written.
+ */
+export async function declaredXmlBytes(deck: string, signal: AbortSignal): Promise<number> {
+  let bytes = 0;
+  await extractZip(deck, {
+    dir: tmpdir(),
+    nested: false,
+    distinct: true,
+    spill: () => false,
+    signal,
+    skip: (path, size) => {
+      if (
+        !SKIPPED_PART.test(path) &&
+        XML_PART.test(path) &&
+        !FONT_PART.test(path) &&
+        size <= PPTX_LIMITS.xmlPartBytes
+      )
+        bytes += size;
+      return true;
+    },
+  });
+  return bytes;
+}
+
+/**
+ * The deck's XML parts within the caps; every other part an empty placeholder (see the module comment). A deck whose directory
+ * declares more than `PPTX_LIMITS.xmlTotalBytes` of XML is refused first (`XmlTotalError`), before any part is read.
+ */
 export async function readDeckXml(deck: string, dir: string, signal: AbortSignal): Promise<DeckXml> {
+  if ((await declaredXmlBytes(deck, signal)) > PPTX_LIMITS.xmlTotalBytes)
+    throw new XmlTotalError(PPTX_LIMITS.xmlTotalBytes);
   const placeholders: string[] = [];
   let fonts = 0;
   const zip = await extractZip(deck, {
@@ -98,9 +145,4 @@ export async function spillDeckParts(
     signal,
   });
   return { files: zip.onDisk, skippedCount: zip.skippedCount + over };
-}
-
-/** The XML of a deck as its central directory declares it, in bytes (the stub reads nothing). */
-export async function declaredXmlBytes(_deck: string, _signal: AbortSignal): Promise<number> {
-  return 0;
 }
