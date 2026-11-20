@@ -1,13 +1,15 @@
 /**
- * The running service by reference (design/29 §2.3 M2; live-by-ref). A 6 MiB service is live with an Audience window
- * on it. (1) The window saves a small record per GO and the copy once, in pieces, after its first flip. (2) A raw
- * screen that says it holds the copy is sent the state without it, under a quarter of the whole frame, and one that
- * holds nothing the whole state. (3) The hub is killed and started again on the same data: the window is back on the hub
- * without a reload, cue 3 still shown; a raw screen holding the copy gets the restored state by name. (4) 20 more
- * screens say hello at once while a GO is sent every 1.2 s: every GO is applied within 1,000 ms and the window flips
- * on time. (5) A second playlist goes live beside the first (the take-over): a GO sent 20 ms after it applies within
- * 250 ms, a screen that reconnects holding the OLD copy is sent the new one whole. (6) The hub is killed again during
- * that service: the new service is restored. Its hub's port: e2e/ports.ts row 'live-by-ref'.
+ * The running service by reference (design/29 §2.3 M2; live-by-ref). A 6 MiB service is live with two Audience windows
+ * (3840 x 2160, Canvas 2D) and the Stage on it. (1) Each window saves a small record per GO and the copy once, in
+ * pieces, after its first flip. (2) A raw screen that says it holds the copy is sent the state without it, under a
+ * quarter of the whole frame, and one that holds nothing the whole state. (3) The hub is killed and started again on
+ * the same data: every window is back on the hub without a reload, cue 3 still shown; a raw screen holding the copy
+ * gets the restored state by name. (4) 20 more screens say hello at once while a GO is sent every 1.2 s: every GO is
+ * applied within 1,000 ms and the Audience windows flip on time. (5) A second playlist goes live beside the first
+ * (the take-over): a GO sent 20 ms after it applies within 250 ms, every window shows the new service's first cue,
+ * a screen that reconnects holding the OLD copy is sent the new one whole. (6) The hub is killed again during that
+ * service: the new service is restored. All three windows are served by the one hub: its port is the one of
+ * e2e/ports.ts row 'live-by-ref'.
  */
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
@@ -16,8 +18,9 @@ import { lyricSlide, newId } from '../packages/domain/src/index.ts';
 import { APP_VERSION } from '../packages/protocol/src/index.ts';
 import { shownSlideCue } from './helpers.ts';
 import { HubProcess } from './hubproc.ts';
-import { hubApi, launchOutputs, login } from './linkhelpers.ts';
+import { hubApi } from './linkhelpers.ts';
 import { portOf } from './ports.ts';
+import { cacheReady, type OutputRec, roleWindow } from './pptxlive.ts';
 
 const hubRequire = createRequire(resolve('apps/hub/package.json'));
 type Frame = { text: string; bytes: number };
@@ -115,12 +118,12 @@ const lateFlips = (p: Page) =>
         .lateFlips ?? 0,
     ),
   );
-/** Has the window saved the whole copy (a marker in its store)? Keys of the form copy:<outputId>. */
-const copySaved = (p: Page) =>
+/** Has the window saved the whole copy (a marker in its store `db`)? Keys of the form copy:<outputId>. */
+const copySaved = (p: Page, db: 'ordo-output' | 'ordo-stage') =>
   p.evaluate(
-    () =>
+    (name) =>
       new Promise<boolean>((resolveFn) => {
-        const req = indexedDB.open('ordo-output');
+        const req = indexedDB.open(name);
         req.onerror = () => resolveFn(false);
         req.onsuccess = () => {
           const db = req.result;
@@ -131,9 +134,18 @@ const copySaved = (p: Page) =>
           keys.onerror = () => resolveFn(false);
         };
       }),
+    db,
   );
 
-test('the service by reference: small records per GO, a restart that sends it by name, a storm beside GOs, a take-over beside a GO', async ({
+/** What the Stage shows now (its `.current` lines): the slide's text. */
+const stageText = (p: Page) =>
+  p
+    .locator('.current')
+    .textContent({ timeout: 2_000 })
+    .then((t) => t ?? '')
+    .catch(() => '');
+
+test('the service by reference: small records per GO, a restart that sends it by name, a storm beside GOs, a take-over beside a GO, on two Audience windows and the Stage', async ({
   context,
   page,
 }) => {
@@ -145,35 +157,51 @@ test('the service by reference: small records per GO, a restart that sends it by
     const a = await hubApi(port);
     const cookieOf = async () =>
       (await a.storageState()).cookies.map((c) => `${c.name}=${c.value}`).join('; ');
-    const outs = (await (await a.get('settings/outputs')).json()) as { kind: string; hostIndex: number }[];
+    const outs = (await (await a.get('settings/outputs')).json()) as OutputRec[];
     expect(
       (
         await a.put('settings/outputs', {
-          data: outs.map((o) => ({ ...o, enabled: o.kind !== 'stage' && o.hostIndex === 1 })),
+          data: outs.map((o) => ({ ...o, enabled: o.kind === 'stage' || o.hostIndex <= 2 })),
         })
       ).ok(),
     ).toBe(true);
+    const outRecs = (await (await a.get('settings/outputs')).json()) as OutputRec[];
+    const audience = [1, 2].map((n) => outRecs.find((o) => o.kind !== 'stage' && o.hostIndex === n)!);
+    const stageRec = outRecs.find((o) => o.kind === 'stage')!;
     const first = await service(a, 'First service', 6);
     const second = await service(a, 'Second service', 2);
     await event(a, { k: 'goLive', playlistId: first });
     await expect.poll(async () => (await hubLive(a)).resolved?.playlist.id, { timeout: 60_000 }).toBe(first);
 
-    // the Audience window on it
-    await login(page, `http://op.localhost:${port}`);
-    const [out] = await launchOutputs(page, context, 1);
-    if (!out) throw new Error('no Audience window');
+    // the two Audience windows (3840 x 2160, Canvas 2D) and the Stage on it
+    const size = { width: 1280, height: 720 };
+    const q4k = 'test=1&renderer=2d&res=3840x2160';
+    const outsOpen: Page[] = [];
+    for (const rec of audience) outsOpen.push(await roleWindow(context, port, rec, size, q4k));
+    const stage = await roleWindow(context, port, stageRec, size, 'test=1');
+    for (const w of outsOpen) await cacheReady(w);
+    const cueOf = async (w: Page) => {
+      await w.bringToFront();
+      return shownSlideCue(w);
+    };
     const cueOn = async () => {
-      await out.bringToFront();
-      return shownSlideCue(out);
+      const cues = [];
+      for (const w of outsOpen) cues.push(await cueOf(w));
+      return cues.every((c) => c === cues[0]) ? cues[0] : cues.join('/');
     };
     for (let i = 0; i < 4; i++) {
       await event(a, { k: 'next', at: Date.now() });
       await page.waitForTimeout(300);
     }
-    await expect.poll(cueOn, { timeout: 20_000 }).toBe(3);
-    // (1) the copy is saved once on the window, after its first flip
-    await expect.poll(() => copySaved(out), { timeout: 30_000, intervals: [250] }).toBe(true);
-    const origin = await out.evaluate(() => performance.timeOrigin);
+    await expect.poll(cueOn, { timeout: 30_000 }).toBe(3);
+    await expect.poll(() => stageText(stage), { timeout: 30_000 }).toContain('0.3 Amazing');
+    // (1) the copy is saved once on each window, after its first flip
+    for (const w of outsOpen)
+      await expect.poll(() => copySaved(w, 'ordo-output'), { timeout: 30_000, intervals: [250] }).toBe(true);
+    await expect.poll(() => copySaved(stage, 'ordo-stage'), { timeout: 30_000, intervals: [250] }).toBe(true);
+    const origins = await Promise.all(
+      [...outsOpen, stage].map((w) => w.evaluate(() => performance.timeOrigin)),
+    );
 
     // (2) raw screens: one holding nothing is sent the whole state, one holding the id the state without it
     const cookie = await cookieOf();
@@ -199,7 +227,11 @@ test('the service by reference: small records per GO, a restart that sends it by
     await expect.poll(async () => (await hubLive(a2)).live, { timeout: 60_000, intervals: [250] }).toBe(3);
     expect((await hubLive(a2)).seq).toBeGreaterThanOrEqual(seqBefore);
     await expect.poll(cueOn, { timeout: 60_000 }).toBe(3);
-    expect(await out.evaluate(() => performance.timeOrigin)).toBe(origin); // no reload
+    await expect.poll(() => stageText(stage), { timeout: 60_000 }).toContain('0.3 Amazing');
+    // no reload of any window
+    expect(
+      await Promise.all([...outsOpen, stage].map((w) => w.evaluate(() => performance.timeOrigin))),
+    ).toEqual(origins);
     const cookie2 = (await a2.storageState()).cookies.map((c) => `${c.name}=${c.value}`).join('; ');
     const afterRestart = await rawScreen(port, cookie2, id);
     const restored = await afterRestart.state();
@@ -208,7 +240,7 @@ test('the service by reference: small records per GO, a restart that sends it by
     afterRestart.ws.terminate();
 
     // (4) 20 screens say hello at once while a GO is sent every 1.2 s
-    const late = await lateFlips(out);
+    const late = await Promise.all(outsOpen.map(lateFlips));
     const storm = await Promise.all(Array.from({ length: 20 }, () => rawScreen(port, cookie2, id)));
     let lastMs = 0;
     for (let i = 0; i < 5; i++) {
@@ -227,7 +259,9 @@ test('the service by reference: small records per GO, a restart that sends it by
       expect(st.msg.state.resolved).toBeUndefined();
       s.ws.terminate();
     }
-    expect(await lateFlips(out)).toBe(late);
+    expect(await Promise.all(outsOpen.map(lateFlips))).toEqual(late);
+    // the Stage kept up with the GOs: five more slides on
+    await expect.poll(() => stageText(stage), { timeout: 20_000 }).toContain('0.8 Amazing');
 
     // (5) a second service goes live beside the first; a GO 20 ms after it applies within 250 ms of its press
     const oldHolder = await rawScreen(port, cookie2, id);
@@ -244,6 +278,9 @@ test('the service by reference: small records per GO, a restart that sends it by
       .poll(async () => (await hubLive(a2)).seq, { timeout: 5_000, intervals: [10] })
       .toBeGreaterThan(before + 1);
     console.log(`take-over: the GO after it applied ${Date.now() - press} ms after its press`);
+    // every window shows the new service's first cue (the GO after the take-over)
+    await expect.poll(cueOn, { timeout: 60_000 }).toBe(0);
+    await expect.poll(() => stageText(stage), { timeout: 30_000 }).toContain('0.0 Amazing');
     oldHolder.ws.terminate();
     const newHolder = await rawScreen(port, cookie2, id); // still holds the OLD copy
     const gotNew = await newHolder.state();
