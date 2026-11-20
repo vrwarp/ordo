@@ -1,7 +1,9 @@
 /**
  * The hub disk's free-space floor (design/29 §1.3, A25, W44): FL1-FL7. The floor is read from an injected
- * statfs, so no test depends on the volume it runs on (a test hub that meets this machine's real volume is the
- * integrator's chore, ORDO_MIN_FREE_GB=0).
+ * statfs, so no test depends on the volume it runs on. Every other hub a test starts has the floor off
+ * (ORDO_MIN_FREE_GB=0, `testFloor` in helpers.ts: a hub that met this machine's real volume would refuse every
+ * upload under 5 GB free); a test that injects a `statfs` is a floor test and gets the computed floor, and
+ * `floor-off.test.ts` pins both.
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';

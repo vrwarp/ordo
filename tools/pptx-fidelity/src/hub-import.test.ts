@@ -253,6 +253,8 @@ describe('hubEnv', () => {
       ORDO_DEV_PIN: '246810',
       ORDO_TZ: 'UTC',
       ORDO_FONTS_DIR: '/usr/share/fonts',
+      // the free-space floor off (a volume with under 5 GB free would refuse every import)
+      ORDO_MIN_FREE_GB: '0',
     });
     // A tools-only PATH replaces the tool's own; with neither, PATH is empty and HOME is the data folder.
     expect(hubEnv({ ...o, path: '/tools' }, 1, parent).PATH).toBe('/tools');

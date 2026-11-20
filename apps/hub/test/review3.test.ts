@@ -402,6 +402,7 @@ describe('H4: an output token the live process cannot check yet gets bye retry',
     livep = libp = undefined;
   });
   const cfg = (dir: string): Partial<HubConfig> => ({
+    minFreeBytes: 0, // the floor would refuse every upload on a volume with under 5 GB free; it has its own tests (helpers.ts)
     dataDir: dir,
     domain: 'localhost',
     devPin: `${OPERATE_PIN}:${EDIT_PIN}`,

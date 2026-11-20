@@ -44,9 +44,22 @@ export function tempDir(prefix = 'ordo-hub-'): string {
   return dir;
 }
 
+/**
+ * The free-space floor of a hub a test starts (`HubConfig.minFreeBytes`): off, ORDO_MIN_FREE_GB=0. The floor would
+ * refuse every upload on a CI or dev volume with under 5 GB free, whatever the test is about; the floor has its own
+ * tests (`diskfloor.test.ts`). A test that gives its hub a volume of its own (`statfs`) is a test of the floor and
+ * gets the computed one (`undefined`, never the floor of the process's environment); a test that sets
+ * `minFreeBytes` itself keeps its value (`...overrides` comes after). Every hub a test starts goes through this
+ * or pins its own value (`floor-off.test.ts` reads the test folder for a start that does neither).
+ */
+export function testFloor(overrides: Partial<HubConfig> = {}): number | undefined {
+  return overrides.statfs ? undefined : 0;
+}
+
 export async function startHub(overrides: Partial<HubConfig> = {}): Promise<TestHub> {
   const dir = overrides.dataDir ?? tempDir();
   const hub = await createHub({
+    minFreeBytes: testFloor(overrides),
     dataDir: dir,
     domain: 'localhost',
     devPin: `${OPERATE_PIN}:${EDIT_PIN}`,

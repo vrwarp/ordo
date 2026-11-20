@@ -293,6 +293,7 @@ describe('jobs paced while live', () => {
   it('a library restarted during a service keeps an interrupted heavy job held (initialLocks)', async () => {
     const dir = tempDir();
     const cfg = {
+      minFreeBytes: 0, // the floor would refuse every upload on a volume with under 5 GB free; it has its own tests (helpers.ts)
       dataDir: dir,
       logToStdout: false,
       logLevel: 'warn',

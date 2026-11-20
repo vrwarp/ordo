@@ -202,6 +202,7 @@ describe('items 4 and 21: the live process applies settings before outputs hear 
     const dir = tempDir();
     const secret = 'test-secret';
     const cfg: Partial<HubConfig> = {
+      minFreeBytes: 0, // the floor would refuse every upload on a volume with under 5 GB free; it has its own tests (helpers.ts)
       dataDir: dir,
       domain: 'localhost',
       devPin: `${OPERATE_PIN}:${EDIT_PIN}`,

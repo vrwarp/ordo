@@ -365,6 +365,7 @@ describe('the hub listens once its bundled fonts are registered (design/27 §10)
   it('the library process says it is ready only once the registration is done', async () => {
     const open = held();
     const cfg = {
+      minFreeBytes: 0, // the floor would refuse every upload on a volume with under 5 GB free; it has its own tests (helpers.ts)
       dataDir: tempDir(),
       logToStdout: false,
       logLevel: 'warn',
