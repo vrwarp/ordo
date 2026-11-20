@@ -34,6 +34,7 @@ import type {
 import { z } from 'zod';
 import { type DB, nowIso } from './db.ts';
 import { badRequest, conflict, notFound } from './errors.ts';
+import { RevisionSummaries } from './revisions.ts';
 import { validate } from './validate.ts';
 
 export type Change = { kind: LibraryKind; id: string; rev?: number; entity?: unknown; deleted?: boolean };
@@ -225,6 +226,8 @@ export class Library {
   readonly media: EntityTable<Media>;
   readonly themes: EntityTable<Theme & { rev?: number }>;
   readonly folders: EntityTable<Folder & { rev?: number }>;
+  /** One small summary row per kept presentation revision (the History list reads these, not the revisions' JSON). */
+  readonly summaries: RevisionSummaries;
   private listeners: ((changes: Change[], seq: number) => void)[] = [];
 
   private timeZone: string;
@@ -243,6 +246,7 @@ export class Library {
     this.media = new EntityTable(db, 'media', Media, (m) => ({ name: m.name, kind: m.kind, state: m.state }));
     this.themes = new EntityTable(db, 'themes', Theme.extend({ rev: z.number().int().optional() }));
     this.folders = new EntityTable(db, 'folders', FolderSchema.extend({ rev: z.number().int().optional() }));
+    this.summaries = new RevisionSummaries(db);
     this.seed(opts.timeZone);
   }
 

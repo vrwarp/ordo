@@ -33,6 +33,7 @@ import { type LibraryStats, LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
 import { cpuPool } from './pool.ts';
+import { RevisionTitleBackfill } from './revisions.ts';
 import {
   cleanupStaleUploads,
   type LibraryApiCtx,
@@ -86,6 +87,8 @@ export type LibraryProcess = {
   db: DB;
   lib: Library;
   jobs: JobQueue;
+  /** The one-off summary of the revisions that have none (the History list reads summaries; library process only). */
+  revisionTitles: RevisionTitleBackfill;
   log: Logger;
   url: string;
   /** Apply the live process's locks (relayed by the supervisor). */
@@ -161,6 +164,7 @@ export async function createLibraryProcess(
     mode: () => locks.mode,
   };
   let liveUrl: string | undefined;
+  const revisionTitles = new RevisionTitleBackfill(lib.summaries, { live: () => locks.mode, log });
   const libStats = new LibraryStatsCache(lib, log, { minIntervalMs: 0 });
   let status: ProcessStatus[] = [];
 
@@ -294,6 +298,7 @@ export async function createLibraryProcess(
   );
   jobs.onLiveMode(locks.mode);
   jobs.start();
+  revisionTitles.start();
   if (cfg.scheduleBackups) backups.schedule();
   // Loopback only, on a port of the OS's choosing: the live process is the only way in.
   await app.listen({ port: 0, host: '127.0.0.1' });
@@ -309,12 +314,14 @@ export async function createLibraryProcess(
     db,
     lib,
     jobs,
+    revisionTitles,
     log,
     url,
     setLocks(m) {
       locks = m;
       lockSets = setsOf(m);
       jobs.onLiveMode(m.mode);
+      revisionTitles.onLiveMode(m.mode);
     },
     setLiveUrl(u) {
       liveUrl = u;
@@ -325,6 +332,7 @@ export async function createLibraryProcess(
     async close() {
       if (statsTimer) clearTimeout(statsTimer);
       backups.stop();
+      revisionTitles.stop();
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       await withTimeout(app.close(), 1000, () => log.warn('http server did not close in time'));
       db.close();
