@@ -303,10 +303,14 @@ cells in place of the shape fields).
   node is made again in its turn, drawing from its old cache meanwhile. Going live demotes nothing (a node that is
   unchanged keeps its bitmap); a node that changes while live draws the copy until End service, when the queue
   fills again. A stored path past `GEOM_COST.geometry` stays its simple form in the editor (the screens draw it
-  from a sliced unit), and so does an object too big to cache at a high zoom (zooming out draws it whole): no new
-  words on screen, the limits are named here, in the pull request and on `window.__ordo.editor().whole`
-  (`wanted`, `drawn`, `pending`, `blocked`, `px`, `skipped` by bound, cache and total, `stale`, `live`, `coarse`,
-  `light` and the times of the last whole draws).
+  from a sliced unit), and so does an object too big to cache at a high zoom (zooming out draws it whole).
+  Wherever the editor keeps the copy of the selected object for a lasting reason (those two, a live service, a
+  coarse pointer, `?editor=light`), the Object panel says so in one muted line under the object's name, "Too
+  detailed to draw here while you edit; the screens draw it whole." (OQ-LE2, the owner's words of 2026-11-20;
+  `WholeNote.tsx`, fed by the list `planWhole` returns and the canvas hook publishes after each commit): it is
+  gone once the whole drawing has replaced the copy, and an object waiting for its turn has none (the selected one
+  never waits). The counts are on `window.__ordo.editor().whole` (`wanted`, `drawn`, `pending`, `blocked`, `px`,
+  `skipped` by bound, cache and total, `stale`, `live`, `coarse`, `light` and the times of the last whole draws).
 - Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).
