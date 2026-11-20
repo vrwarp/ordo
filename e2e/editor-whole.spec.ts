@@ -45,6 +45,8 @@ const DARKER = 20;
 const SAME = 8;
 /** The black share of the line art's box may differ from its ink coverage by this much (edges, overlap). */
 const INK_TOLERANCE = 0.05;
+/** The note under the Object panel's name row (OQ-LE2, the owner's words): shown for the selected object the editor draws as the lighter copy. */
+const NOTE = 'Too detailed to draw here while you edit; the screens draw it whole.';
 
 let hub: HubProcess;
 
@@ -130,6 +132,27 @@ async function drawn(page: Page): Promise<Pixels> {
     .toBe(true);
   return img;
 }
+
+// ---- the note under the Object panel ---------------------------------------------------------------------
+
+/** Select the object whose box holds the slide point (logical px), as a click does; waits until it is the selection. */
+async function selectAt(page: Page, id: string, at: { x: number; y: number }): Promise<void> {
+  await expect(async () => {
+    await clickObject(page, { box: { x: at.x, y: at.y, w: 0, h: 0, rotation: 0 } });
+    expect((await editorState(page)).objectId).toBe(id);
+  }).toPass({ timeout: 15_000 });
+}
+
+/** The Object tab of the inspector drawer, open (the canvas gives it room: the drawer is closed by default on a desktop). */
+async function openObjectPanel(page: Page): Promise<void> {
+  const drawer = page.getByLabel('Inspector drawer');
+  if (!(await drawer.isVisible())) await page.getByRole('button', { name: 'Tune', exact: true }).click();
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole('button', { name: 'Object', exact: true }).click();
+}
+
+/** The note: how many there are in the panel (0 or 1). */
+const noteCount = (page: Page) => page.locator('[data-whole-note]').count();
 
 // ---- the slides ----------------------------------------------------------------------------------------
 
@@ -296,6 +319,12 @@ test('(C) while a service is live the editor keeps the lighter drawing, and draw
       expect(differsBy(during, ref, p), `no late shadow at ${p.x},${p.y} while live`).toBeLessThanOrEqual(
         SAME,
       );
+    // The selected object keeps the lighter copy while live, and the Object panel says so (OQ-LE2).
+    const p11 = effectsSlide().objects.find((o) => o.id === 'p11')!;
+    await selectAt(page, 'p11', { x: p11.box.x + p11.box.w / 2, y: p11.box.y + p11.box.h / 2 });
+    await openObjectPanel(page);
+    await expect(page.locator('[data-whole-note]')).toHaveText(NOTE);
+    expect(await noteCount(page), 'one note').toBe(1);
   } finally {
     await liveEvent(a, { k: 'endService', at: Date.now() });
   }
@@ -312,6 +341,9 @@ test('(C) while a service is live the editor keeps the lighter drawing, and draw
     )
     .toBeGreaterThanOrEqual(DARKER);
   expect((await editorState(page)).whole).toMatchObject({ drawn: 3, blocked: 0, pending: 0 });
+  // The whole drawing has landed: the note under the Object panel is gone, with the object still selected.
+  expect((await editorState(page)).objectId).toBe('p11');
+  await expect(page.locator('[data-whole-note]')).toHaveCount(0);
 });
 
 test('(D) the technician switch ?editor=light keeps the lighter drawing', async ({ page }) => {
@@ -328,6 +360,25 @@ test('(D) the technician switch ?editor=light keeps the lighter drawing', async 
     expect(differsBy(img, ref, p), `no late shadow at ${p.x},${p.y} with ?editor=light`).toBeLessThanOrEqual(
       SAME,
     );
+  // The Object panel says so for the selected object, and for that one only; the controls below move by the
+  // note's own line and nothing more (an object the budget keeps has the panel it had).
+  const first = page.locator('.ed-box-grid input').first();
+  await selectAt(page, 'p0', { x: 100, y: 80 });
+  await openObjectPanel(page);
+  await expect(first).toBeVisible();
+  expect(await noteCount(page), 'p0 is drawn as the budget draws it: no note').toBe(0);
+  const without = (await first.boundingBox())!.y;
+  const p11 = effectsSlide().objects.find((o) => o.id === 'p11')!;
+  await selectAt(page, 'p11', { x: p11.box.x + p11.box.w / 2, y: p11.box.y + p11.box.h / 2 });
+  await expect(page.locator('[data-whole-note]')).toHaveText(NOTE);
+  const note = (await page.locator('[data-whole-note]').boundingBox())!;
+  const withNote = (await first.boundingBox())!.y;
+  // The panel's column puts 10 px between its parts: the note is one line and one gap.
+  expect(
+    Math.abs(withNote - without - (note.height + 10)),
+    'the controls moved by the note’s line',
+  ).toBeLessThanOrEqual(1);
+  expect(note.height, 'one line at this panel width').toBeLessThan(40);
 });
 
 test('(E) a move keeps a whole object whole: no flash of the lighter copy', async ({ page }) => {
@@ -368,4 +419,10 @@ test('(E) a move keeps a whole object whole: no flash of the lighter copy', asyn
   const w = (await editorState(page)).whole!;
   expect(w.drawn, 'no whole drawing was lost to the move').toBe(drawnBefore);
   expect(w.pending).toBe(0);
+  // The selected object is drawn whole, so the Object panel has no note for it (OQ-LE2), at the zoom the open
+  // drawer leaves the canvas with, once the whole drawings are made again there.
+  await openObjectPanel(page);
+  await expect.poll(async () => (await wholeSettled(page))?.drawn, { timeout: 30_000 }).toBe(3);
+  expect((await editorState(page)).objectId).toBe('p11');
+  expect(await noteCount(page), 'no note for an object drawn whole').toBe(0);
 });
