@@ -272,6 +272,9 @@ export class LinkCore {
   private unitsMade = 0;
   private unitsLate = 0;
   private unitCacheBytes = 0;
+  /** The asset worker's underlay frames (renderer `frame.ts`): dropped past their time budget, bytes in progress. */
+  private framesOver = 0;
+  private frameWorkBytes = 0;
   /** Per-lane timing of the asset worker's jobs, and the jobs cancelled as superseded. */
   private laneStats = new LaneStats();
   private delivered = new Map<string, number>();
@@ -1084,7 +1087,13 @@ export class LinkCore {
       seen.add(id);
       const found = findSlide(state.resolved?.presentations, c.presentationId, c.slideId);
       if (!found) continue;
-      slides.push({ cueIndex: i, slide: found.slide });
+      // A slide with pictures names their files: the frame the worker makes of a crowded slide draws them.
+      const pictures = this.slideImages(found.slide);
+      slides.push({
+        cueIndex: i,
+        slide: found.slide,
+        ...(Object.keys(pictures).length ? { images: pictures } : {}),
+      });
       if (slides.length >= WARM_UNITS_MAX_SLIDES) break;
     }
     this.warmUnitsSent = key;
@@ -1125,14 +1134,14 @@ export class LinkCore {
   /** What warming a planned cue prepares: its slide's pictures as its slide job asks, and image cues. */
   private warmJob(plan: FramePlan): WarmJob | undefined {
     const d = plan.slide.desc;
-    const images = d ? this.slideImages(d.slide, d.nextSlide) : {};
+    const images = d ? this.slideImages(d.full ?? d.slide, d.nextSlide) : {};
     const sources: string[] = [];
     for (const desc of [plan.background.desc, plan.media.desc])
       if (desc?.kind === 'image' && !sources.includes(desc.hash)) sources.push(desc.hash);
     if (!Object.keys(images).length && !sources.length) return undefined;
     return {
       key: `wm|${plan.slide.key}|${plan.background.key}|${plan.media.key}`,
-      ...(d ? { slide: d.slide, nextSlide: d.nextSlide } : {}),
+      ...(d ? { slide: d.slide, ...(d.full ? { full: d.full } : {}), nextSlide: d.nextSlide } : {}),
       look: this.look,
       images,
       ...(sources.length ? { sources } : {}),
@@ -1292,11 +1301,12 @@ export class LinkCore {
           key,
           cueIndex: d.cueIndex,
           slide: d.slide,
+          ...(d.full ? { full: d.full } : {}),
           nextSlide: d.nextSlide,
           isSong: d.isSong,
           presentationKind: d.presentationKind,
           look: this.look,
-          images: this.slideImages(d.slide, d.nextSlide),
+          images: this.slideImages(d.full ?? d.slide, d.nextSlide),
           refresh: refresh || undefined,
           ...(units && onScreen ? { refreshFadeMs: REFRESH_FADE_MS } : {}),
           video: scene,
@@ -1399,11 +1409,15 @@ export class LinkCore {
         key,
         cueIndex: d.cueIndex,
         slide: d.slide,
+        ...(d.full ? { full: d.full } : {}),
         nextSlide: d.nextSlide,
         isSong: d.isSong,
         presentationKind: d.presentationKind,
         look: this.look,
-        images: this.slideImages(d.slide, d.nextSlide),
+        images: this.slideImages(d.full ?? d.slide, d.nextSlide),
+        // The remake draws nothing: the playing image is only the anchor of the frame's split (renderer `frame.ts`),
+        // which a slide with its video in place splits below the video.
+        ...(d.video ? { video: { objectId: d.video.objectId, slot: 0, gen: 0 } } : {}),
       },
       role: role === 'live' ? 'live' : 'armed',
     });
@@ -2257,6 +2271,14 @@ export class LinkCore {
           if (this.redrawMs.size > 64) this.redrawMs.delete(this.redrawMs.keys().next().value!);
         }
         if (m.unitCacheBytes !== undefined) this.unitCacheBytes = m.unitCacheBytes;
+        if (m.frames) {
+          if (m.frames.over > this.framesOver)
+            this.diagLog(
+              `${m.key.slice(0, 60)}: a frame past its time budget was dropped (${m.frames.over} so far): the slide keeps the part it draws at once`,
+            );
+          this.framesOver = m.frames.over;
+          this.frameWorkBytes = m.frames.workBytes;
+        }
         if (m.unitsLeft) {
           // Shown (live, or a GO hurried its arm) with parts left to a late job: they come in late.
           if (role === 'live' && !this.lateParts.has(m.key)) {
@@ -2634,6 +2656,8 @@ export class LinkCore {
         made: this.unitsMade,
         late: this.unitsLate,
         cacheBytes: this.unitCacheBytes,
+        framesOver: this.framesOver,
+        frameWorkBytes: this.frameWorkBytes,
         warmed: [...this.warmedCues],
         warmStopped: this.warmUnitsStopped,
         lateParts: [...this.lateParts],
@@ -2697,7 +2721,7 @@ export class LinkCore {
       fonts: this.fontFallbacks.size ? `fallback for ${[...this.fontFallbacks].join(', ')}` : 'ok',
       ...perfDiagnostics(h),
       rasterLanes: this.laneStats.line(),
-      units: `${this.unitsMade} made, ${this.unitsLate} slide(s) with late parts, cache ${Math.round(this.unitCacheBytes / 1e6)} MB${this.warmedCues.length ? `, ${this.warmedCues.length} cue(s) warmed` : ''}${this.drawingSwitches ? `; ${this.drawingSwitches}` : ''}`,
+      units: `${this.unitsMade} made, ${this.unitsLate} slide(s) with late parts, cache ${Math.round(this.unitCacheBytes / 1e6)} MB${this.framesOver ? `, ${this.framesOver} frame(s) over their time` : ''}${this.warmedCues.length ? `, ${this.warmedCues.length} cue(s) warmed` : ''}${this.drawingSwitches ? `; ${this.drawingSwitches}` : ''}`,
       workers: workers || '-',
       audio: h.audio ?? (this.config?.output.audioMaster ? 'none' : 'not master'),
       media:

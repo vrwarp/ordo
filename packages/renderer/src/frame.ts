@@ -411,6 +411,11 @@ export function frameWorkBytes(): number {
   return b;
 }
 
+/** The keys of the frames in progress, oldest first. */
+export function frameWorkKeys(): string[] {
+  return [...works.keys()];
+}
+
 /** Frames in progress. */
 export function framesInProgress(): number {
   return works.size;
@@ -709,4 +714,39 @@ export function frameCost(split: FrameSplit): { making: number; copy: number } {
     making += charged(drawnCost(o));
   }
   return { making, copy: 1 };
+}
+
+const underMemo = new WeakMap<FrameSplit, readonly Slide[]>();
+
+/**
+ * The frame's objects cut into slides of the live counts (at most `FRAME_DIRECT_OBJECTS` objects and
+ * `FRAME_DIRECT_IMAGES` distinct pictures each, in z-order), for the slide prepare steps (`PrepareJob.slides`): the
+ * geometry and decoration files, the drawers and the table layouts of the frame's objects are made ready like those
+ * of any slide, each step reading a slide within the counts it was built for.
+ */
+export function underSlides(split: FrameSplit): readonly Slide[] {
+  const hit = underMemo.get(split);
+  if (hit) return hit;
+  const out: Slide[] = [];
+  let chunk: SlideObject[] = [];
+  let media = new Set<string>();
+  const flush = () => {
+    if (chunk.length) out.push(clampSlide({ id: `${split.slide.id}-under-${out.length}`, objects: chunk }));
+    chunk = [];
+    media = new Set();
+  };
+  for (const o of split.under) {
+    const image = o.type === 'image' && !media.has(o.mediaId);
+    if (chunk.length >= FRAME_DIRECT_OBJECTS || (image && media.size >= FRAME_DIRECT_IMAGES)) flush();
+    chunk.push(o);
+    if (o.type === 'image') media.add(o.mediaId);
+  }
+  flush();
+  underMemo.set(split, out);
+  return out;
+}
+
+/** The pictures the frame under `key` was made without because their files were not there (a hash or `media:id`). */
+export function frameMissing(key: string): readonly string[] {
+  return incomplete.get(key) ?? [];
 }

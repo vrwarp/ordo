@@ -7,6 +7,7 @@ import {
   type Slide,
 } from '@ordo/domain';
 import { loadShapeDrawers, readDecorFiles, readGeomFiles, shapeDrawersWanted } from '@ordo/renderer';
+import type { FrameUnit } from '@ordo/renderer/units.ts';
 
 /*
  * The slide prepare steps (design/27 M9 render-seams): what a worker reads, decodes or lays out before it
@@ -39,10 +40,17 @@ export interface PrepareHost {
 
 /** What is about to be drawn: the slides of the job (the slide, and the next one a look shows). */
 export interface PrepareJob {
+  /**
+   * The slide, the next slide a look shows, then (for a slide with an underlay frame, `frame.ts`) the slide's
+   * under objects in slides of their own, so every file and drawer of the frame's objects is prepared like the
+   * rest: the slide's units are the first slide's.
+   */
   readonly slides: readonly Slide[];
   /** Device px per logical px of the drawing. */
   readonly scale: number;
   readonly look?: Look;
+  /** The slide's underlay frame, made before its units (`prepareSlideUnits`): the asset worker's jobs. */
+  readonly frame?: FrameUnit;
 }
 
 export interface PrepareStep {
@@ -156,10 +164,14 @@ export async function prepareSlides(job: PrepareJob, host: PrepareHost): Promise
   return [...missing];
 }
 
-/** The slides of a job with an optional next slide, as the steps take them. */
-export function jobSlides(job: { slide?: Slide; nextSlide?: Slide }): Slide[] {
+/**
+ * The slides of a job with an optional next slide, as the steps take them; `under`, the slides a frame's objects are
+ * cut into (`frame.ts` `underSlides`), after them.
+ */
+export function jobSlides(job: { slide?: Slide; nextSlide?: Slide }, under: readonly Slide[] = []): Slide[] {
   const out: Slide[] = [];
   if (job.slide) out.push(job.slide);
   if (job.nextSlide) out.push(job.nextSlide);
+  out.push(...under);
   return out;
 }

@@ -204,7 +204,11 @@ export type DrawingSwitches = {
  */
 export type WarmUnitsJob = {
   key: string;
-  slides: { cueIndex: number; slide: Slide }[];
+  /**
+   * `images`: mediaId -> file hash of the slide's pictures, for a slide that has some: the frame the worker makes of
+   * a crowded slide draws them (`frame.ts`); absent for a slide without pictures.
+   */
+  slides: { cueIndex: number; slide: Slide; images?: Record<string, string> }[];
   look: Look;
 };
 
@@ -217,6 +221,8 @@ export type WarmUnitsJob = {
 export type WarmJob = {
   key: string;
   slide?: Slide;
+  /** The slide before the live clamp's cut (`SlideDesc.full`), for a slide past a count (`AssetJob.full`). */
+  full?: Slide;
   nextSlide?: Slide;
   look: Look;
   images: Record<string, string>;
@@ -322,6 +328,11 @@ export type FromAsset =
       /** Units this worker has made so far, and the bytes its unit cache holds now (health). */
       unitsMade?: number;
       unitCacheBytes?: number;
+      /**
+       * The underlay frames (`frame.ts`) of this worker so far: made, dropped past their time budget (design 29
+       * D12, `framesOver`), and the bytes of the frames in progress (`frameWorkBytes`): telemetry and diagnostics.
+       */
+      frames?: { made: number; over: number; workBytes: number };
     }
   /**
    * Units a slide was drawn without are made (`keys`; `left` still to make): the link draws the slide again,

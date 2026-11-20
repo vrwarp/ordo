@@ -14,11 +14,19 @@ import {
   PLANE_FLOATS,
   PLANE_HAS_OVER,
   PLANE_UV,
+  clampSlide,
   SRC_BITMAP,
   SRC_SCENE,
   planeSample,
   preparedKey,
 } from '@ordo/renderer';
+import {
+  clearFrameWork,
+  frameProgress,
+  frameStats,
+  frameWorkKeys,
+  framesInProgress,
+} from '@ordo/renderer/frame.ts';
 import {
   effectUnits,
   putUnit,
@@ -1360,6 +1368,9 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
   }, 30_000);
 
   it('the next arm lets go of the hold of a slide whose late job runs (it may be on screen by a GO to its armed cue): the job keeps it and makes each part once, under cache pressure too (repair 4)', async () => {
+    // These slides pass one frame of unit area (20 line-art units): with the underlay frame the slide is split and its first units
+    // are one frame unit; this test is about the late job's holds on separate units, so it runs with the frame off (`?frame=off`).
+    init({ frame: 'off' });
     const s = manyAt('armed-away', 20, 0.01171875);
     const units = unitsOf(s);
     pressure(units);
@@ -1512,7 +1523,7 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
     // The arm's wait runs on the test's clock (120 ms a step); 60 ms of real time after each unit turn keeps the
     // late job making parts when the re-draw comes.
     timed(120);
-    init({ unitTurnMs: 60 });
+    init({ unitTurnMs: 60, frame: 'off' });
     rendered.length = 0;
     replies.length = 0;
     const record = link.postMessage;
@@ -1663,7 +1674,7 @@ describe('asset worker: geometry units (M9 Slow-to-draw, Runtime)', () => {
     const t = manyAt('jump-armed', 20, 0.09765625);
     const units = unitsOf(t);
     expect(units.length).toBeGreaterThanOrEqual(8);
-    init({ unitTurnMs: 150 });
+    init({ unitTurnMs: 150, frame: 'off' });
     rendered.length = 0;
     replies.length = 0;
     try {
@@ -1846,5 +1857,214 @@ describe('asset worker: warming the live playlist’s units (r2b units-live)', (
     await new Promise((r) => setTimeout(r, 50));
     expect(warmed()).toEqual([]);
     expect(unitWork().made).toBe(before.made);
+  });
+});
+
+describe('asset worker: the underlay frame (design 29 R1)', () => {
+  const send = (m: unknown) => link.onmessage!({ data: m });
+  const init = (drawing: Record<string, unknown> = {}) =>
+    scope.onmessage!({ data: { t: 'init', width: W, height: H, token: '', apiPrefix: '/api/v1', drawing } });
+  const timed = (stepMs: number, paintMs = 0) => {
+    clock.on = true;
+    clock.t = 0;
+    clock.stepMs = stepMs;
+    clock.paintMs = paintMs;
+  };
+  afterEach(() => {
+    clock.on = false;
+    clock.stepMs = 0;
+    clock.paintMs = 0;
+    clock.at = undefined;
+    init();
+    clearFrameWork();
+  });
+  const ready = () =>
+    replies.filter((r) => r.t === 'unitsReady') as Extract<FromAsset, { t: 'unitsReady' }>[];
+
+  /** `n` squares in their own colours (each one fill), `distinct` making each slide's frame a key of its own. */
+  const squareSlide = (id: string, n: number, distinct: number): Slide => ({
+    id,
+    objects: Array.from({ length: n }, (_, i) => ({
+      id: `sq${i}`,
+      type: 'shape',
+      box: { x: 20 + (i % 20) * 90, y: 20 + Math.floor(i / 20) * 60, w: 80, h: 50, rotation: 0 },
+      shape: 'rect',
+      fill: { r: i % 256, g: distinct % 256, b: (i * 13) % 256, a: 1 },
+      opacity: 1,
+      radius: 0,
+    })) as SlideObject[],
+  });
+  /** `n` text boxes of text of their own, so which of them a bitmap holds shows in its ops. */
+  let saltOf = 0;
+  const textSlide = (id: string, n: number, salt = ++saltOf): Slide => ({
+    id,
+    objects: Array.from({ length: n }, (_, i) =>
+      text(`t${i}`, `L${salt}-${i}`, box(20, 20 + (i % 40) * 12, 300, 10)),
+    ),
+  });
+  /** Job of `slide` with its uncut form (`full`) the way the link sends a crowded slide. */
+  const crowdedJob = (s: Slide, key: string, extra: Partial<Extract<AssetJob, { kind: 'slide' }>> = {}) =>
+    slideJob({
+      slide: clampSlide(s),
+      full: clampSlide(s, 'bake'),
+      images: {},
+      video: undefined,
+      key,
+      ...extra,
+    });
+  async function runAs(job: AssetJob, role: 'live' | 'armed' | 'late') {
+    rendered.length = 0;
+    replies.length = 0;
+    send({ t: 'job', job, role });
+    await vi.waitFor(() => expect(replies.length).toBeGreaterThan(0));
+    return { msg: rendered[0]?.msg, reply: replies[0]! };
+  }
+  const textsOf = (b: FakeBitmap) => b.ops.filter((o) => o.startsWith('text:')).length;
+  const copiesOf = (b: FakeBitmap, w = W, h = H) => b.drawn.filter((d) => d.width === w && d.height === h);
+
+  it('a jump to a crowded slide shows its direct part at once, the frame fading in once made', async () => {
+    const s = textSlide('crowd-jump', 260);
+    timed(1);
+    const key = 'sl|crowd-jump';
+    rendered.length = 0;
+    replies.length = 0;
+    const made0 = unitWork().made;
+    send({ t: 'job', job: crowdedJob(s, key), role: 'live' });
+    await vi.waitFor(() => expect(rendered.length).toBeGreaterThan(0));
+    // Sent before any frame work: the top 200 objects, none of the 60 under them, no frame copied.
+    const first = rendered[0]!.msg.bitmap as unknown as FakeBitmap;
+    expect(textsOf(first)).toBe(200);
+    expect(copiesOf(first)).toHaveLength(0);
+    expect(rendered[0]!.made).toBe(made0);
+    await vi.waitFor(() => expect(replies.find((r) => r.t === 'done')).toBeDefined());
+    expect(replies.find((r) => r.t === 'done')).toMatchObject({ key, unitsLeft: 1 });
+    // The late job makes the frame and reports it (its one key); the re-draw the link sends copies it.
+    await vi.waitFor(() => expect(ready().find((r) => r.slideKey === key && r.left === 0)).toBeDefined());
+    expect(ready().flatMap((r) => r.keys)).toHaveLength(1);
+    expect(unitWork().made - made0).toBe(1);
+    const again = await runAs(crowdedJob(s, key, { refresh: true, refreshFadeMs: 300 }), 'late');
+    const second = again.msg!.bitmap as unknown as FakeBitmap;
+    expect(textsOf(second)).toBe(200);
+    expect(copiesOf(second)).toHaveLength(1);
+    // the frame holds the 60 objects under the direct part (its canvas drew their text)
+    expect(textsOf(copiesOf(second)[0]!)).toBe(60);
+    expect(again.msg).toMatchObject({ refresh: true, refreshFadeMs: 300 });
+  });
+
+  it('arming a crowded slide makes its frame before it is sent; its GO does no frame work', async () => {
+    const s = textSlide('crowd-arm', 260);
+    timed(1);
+    const made0 = unitWork().made;
+    const armed = await runAs(crowdedJob(s, 'sl|crowd-arm-a'), 'armed');
+    expect(armed.reply).toMatchObject({ t: 'done' });
+    expect(unitWork().made - made0).toBe(1);
+    expect(copiesOf(armed.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
+    const after = unitWork();
+    const live = await runAs(crowdedJob(s, 'sl|crowd-arm-b'), 'live');
+    expect(live.reply).toMatchObject({ t: 'done' });
+    expect(unitWork()).toEqual(after);
+    expect(copiesOf(live.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
+    expect(textsOf(live.msg!.bitmap as unknown as FakeBitmap)).toBe(200);
+  });
+
+  it('a GO that hurries a half-made frame loses no step: a later job finishes it, each step made once', async () => {
+    const s = squareSlide('crowd-hurry', 340, 77);
+    // One fill is a millisecond of the clock: the frame's 140 squares are a few dozen turns of 5 ms.
+    timed(1, 1);
+    const key = 'sl|crowd-hurry';
+    let progress = 0;
+    clock.at = {
+      t: 40,
+      fn: () => {
+        const k = frameWorkKeys()[0];
+        progress = (k && frameProgress(k)?.done) || 0;
+        send({ t: 'hurry', keys: [key] });
+      },
+    };
+    rendered.length = 0;
+    replies.length = 0;
+    const p0 = paints;
+    send({ t: 'job', job: crowdedJob(s, key), role: 'armed' });
+    await vi.waitFor(() => expect(rendered.length).toBeGreaterThan(0));
+    // Hurried part-way: some steps done and kept in the work state, the frame not in the cache.
+    expect(progress).toBeGreaterThan(5);
+    expect(progress).toBeLessThan(140);
+    // Its late job goes on from the step it stopped at, and reports the frame.
+    await vi.waitFor(() => expect(ready().find((r) => r.slideKey === key && r.left === 0)).toBeDefined());
+    expect(frameStats().resumed).toBeGreaterThanOrEqual(1);
+    expect(framesInProgress()).toBe(0);
+    expect(ready().flatMap((r) => r.keys)).toHaveLength(1);
+    // The armed raster's 200 direct squares and the frame's 140: no step was drawn twice.
+    expect(paints - p0).toBe(340);
+  });
+
+  it('?frame=off draws a crowded slide cut as before: 200 objects, no frame', async () => {
+    init({ frame: 'off' });
+    const s = textSlide('crowd-off', 260);
+    const made0 = unitWork().made;
+    const r = await runAs(crowdedJob(s, 'sl|crowd-off'), 'armed');
+    const bmp = r.msg!.bitmap as unknown as FakeBitmap;
+    expect(textsOf(bmp)).toBe(200);
+    expect(copiesOf(bmp)).toHaveLength(0);
+    expect(unitWork().made).toBe(made0);
+    expect((r.reply as Extract<FromAsset, { t: 'done' }>).unitsLeft).toBeUndefined();
+  });
+
+  it('?effects=base implies ?frame=off', async () => {
+    init({ effects: 'base' });
+    const r = await runAs(crowdedJob(textSlide('crowd-base', 260), 'sl|crowd-base'), 'armed');
+    expect(textsOf(r.msg!.bitmap as unknown as FakeBitmap)).toBe(200);
+    expect(copiesOf(r.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(0);
+  });
+
+  it('draws an ordinary slide as it always was: no frame work, whole objects', async () => {
+    const made0 = unitWork().made;
+    const r = await runAs(
+      slideJob({ slide: textSlide('calm', 30), images: {}, video: undefined, key: 'sl|calm' }),
+      'armed',
+    );
+    expect(textsOf(r.msg!.bitmap as unknown as FakeBitmap)).toBe(30);
+    expect(unitWork().made).toBe(made0);
+    expect(frameStats().made).toBe(0);
+  });
+
+  it('a warm job makes the frame of the next crowded cue, kept pinned: arming it then makes none', async () => {
+    const s = textSlide('crowd-warm', 260);
+    replies.length = 0;
+    const made0 = unitWork().made;
+    send({
+      t: 'warm',
+      warm: {
+        key: 'wm|crowd',
+        slide: clampSlide(s),
+        full: clampSlide(s, 'bake'),
+        look: LOOK_MAIN,
+        images: {},
+      },
+    });
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]).toMatchObject({ t: 'warmed', key: 'wm|crowd' });
+    expect(unitWork().made - made0).toBe(1);
+    const after = unitWork();
+    const armed = await runAs(crowdedJob(s, 'sl|crowd-warm'), 'armed');
+    expect(unitWork()).toEqual(after);
+    expect(copiesOf(armed.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
+  });
+
+  it('the live playlist warm-up makes the frame of a crowded raw slide', async () => {
+    const s = textSlide('crowd-wu', 260);
+    replies.length = 0;
+    const made0 = unitWork().made;
+    send({ t: 'warmUnits', warm: { key: 'wu|crowd', slides: [{ cueIndex: 1, slide: s }], look: LOOK_MAIN } });
+    await vi.waitFor(() =>
+      expect(replies.find((r) => r.t === 'unitsWarmed' && r.stopped === 'done')).toBeDefined(),
+    );
+    const w = replies.find((r) => r.t === 'unitsWarmed') as Extract<FromAsset, { t: 'unitsWarmed' }>;
+    expect(w).toMatchObject({ units: 1, ready: 1 });
+    expect(unitWork().made - made0).toBe(1);
+    // its job after: the same frame key, nothing made
+    const after = unitWork();
+    await runAs(crowdedJob(s, 'sl|crowd-wu'), 'armed');
+    expect(unitWork()).toEqual(after);
   });
 });
