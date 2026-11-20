@@ -137,6 +137,52 @@ const copySaved = (p: Page, db: 'ordo-output' | 'ordo-stage') =>
     db,
   );
 
+/** What the hub and each window say, for the message of a poll that timed out (a window is read, never driven). */
+const explain = async (a: APIRequestContext, wins: Page[], names: string[]) => ({
+  hub: await hubLive(a).then(
+    (s) => ({ seq: s.seq, live: s.live }),
+    (e) => String(e),
+  ),
+  windows: await Promise.all(
+    wins.map((w, i) =>
+      w
+        .evaluate(() => {
+          type Held = { live?: string };
+          const o = (
+            window as unknown as {
+              __ordo: {
+                state(): { mode: string; seq: number; live?: number; held?: Held[] };
+                telemetry(): {
+                  lateFlips?: number;
+                  error?: string;
+                  cache?: unknown;
+                  slideFlip?: { cue?: number; at?: number };
+                };
+              };
+            }
+          ).__ordo;
+          const st = o.state();
+          const t = o.telemetry();
+          return {
+            visible: document.visibilityState,
+            mode: st.mode,
+            seq: st.seq,
+            live: st.live,
+            held: (st.held ?? []).map((h) => String(h?.live ?? '').slice(0, 160)),
+            flip: t.slideFlip,
+            lateFlips: t.lateFlips,
+            error: t.error,
+            cache: t.cache,
+          };
+        })
+        .then(
+          (r) => ({ name: names[i], ...r }),
+          (e) => ({ name: names[i], error: String(e) }),
+        ),
+    ),
+  ),
+});
+
 /** What the Stage shows now (its `.current` lines): the slide's text. */
 const stageText = (p: Page) =>
   p
@@ -180,20 +226,36 @@ test('the service by reference: small records per GO, a restart that sends it by
     for (const rec of audience) outsOpen.push(await roleWindow(context, port, rec, size, q4k));
     const stage = await roleWindow(context, port, stageRec, size, 'test=1');
     for (const w of outsOpen) await cacheReady(w);
+    // What the window's mirror of the live state says (what the by-reference path delivers), and what it has drawn.
+    const mirrorCue = (w: Page) =>
+      w.evaluate(
+        () => (window as unknown as { __ordo: { state(): { live?: number } } }).__ordo.state().live ?? null,
+      );
+    // A window draws only while it is in front, and a 3840 flip is slow on a busy machine (software canvas): each
+    // window is polled in turn, in front for as long as it takes (alternating between the two steals the front from
+    // a flip that is half drawn; at load 15-30 on four cores neither window, or only one, finished in 30 s while
+    // the windows' mirrors were at the cue the whole time), so the mirror is asserted first within the usual bound
+    // and the drawn slide within a long one.
     const cueOf = async (w: Page) => {
       await w.bringToFront();
       return shownSlideCue(w);
     };
-    const cueOn = async () => {
-      const cues = [];
-      for (const w of outsOpen) cues.push(await cueOf(w));
-      return cues.every((c) => c === cues[0]) ? cues[0] : cues.join('/');
+    // a poll that times out says what the hub and every window held at that moment
+    const pollCue = async (api: APIRequestContext, cue: number, timeout: number) => {
+      try {
+        for (const w of outsOpen) await expect.poll(() => mirrorCue(w), { timeout: 30_000 }).toBe(cue);
+        for (const w of outsOpen) await expect.poll(() => cueOf(w), { timeout }).toBe(cue);
+      } catch (e) {
+        const seen = await explain(api, [...outsOpen, stage], ['audience 1', 'audience 2', 'stage']);
+        console.error(`the windows did not reach cue ${cue}: ${JSON.stringify(seen)}`);
+        throw e;
+      }
     };
     for (let i = 0; i < 4; i++) {
       await event(a, { k: 'next', at: Date.now() });
       await page.waitForTimeout(300);
     }
-    await expect.poll(cueOn, { timeout: 30_000 }).toBe(3);
+    await pollCue(a, 3, 120_000);
     await expect.poll(() => stageText(stage), { timeout: 30_000 }).toContain('0.3 Amazing');
     // (1) the copy is saved once on each window, after its first flip
     for (const w of outsOpen)
@@ -226,7 +288,7 @@ test('the service by reference: small records per GO, a restart that sends it by
     const a2 = await hubApi(port);
     await expect.poll(async () => (await hubLive(a2)).live, { timeout: 60_000, intervals: [250] }).toBe(3);
     expect((await hubLive(a2)).seq).toBeGreaterThanOrEqual(seqBefore);
-    await expect.poll(cueOn, { timeout: 60_000 }).toBe(3);
+    await pollCue(a2, 3, 120_000);
     await expect.poll(() => stageText(stage), { timeout: 60_000 }).toContain('0.3 Amazing');
     // no reload of any window
     expect(
@@ -279,7 +341,7 @@ test('the service by reference: small records per GO, a restart that sends it by
       .toBeGreaterThan(before + 1);
     console.log(`take-over: the GO after it applied ${Date.now() - press} ms after its press`);
     // every window shows the new service's first cue (the GO after the take-over)
-    await expect.poll(cueOn, { timeout: 60_000 }).toBe(0);
+    await pollCue(a2, 0, 120_000);
     await expect.poll(() => stageText(stage), { timeout: 30_000 }).toContain('0.0 Amazing');
     oldHolder.ws.terminate();
     const newHolder = await rawScreen(port, cookie2, id); // still holds the OLD copy
