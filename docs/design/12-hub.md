@@ -268,8 +268,8 @@ simple numbered-SQL runner; every migration is idempotent and tested.
 
 `/data/live.db` (live process only): `live_journal (seq, at, cmd_id, kind, event_json)`,
 `live_snapshot (singleton)`, `live_snapshot_prev` (the two snapshots before it), `live_resolved` (the running
-service's resolved copy, once, in two verified rows: "The running service by reference") and `live_kv` (the cached
-library context and goLive bundles). On its first start the live process copies the journal and snapshot
+service's resolved copy, once, in two verified rows) and `live_cues` (its cue list, once, in one verified row: both in
+"The running service by reference") and `live_kv` (the cached library context and goLive bundles). On its first start the live process copies the journal and snapshot
 over from ordo.db, where the one-process hub kept them. In one-process mode the same tables live in
 ordo.db.
 
@@ -563,19 +563,35 @@ named by its SHA-256 (`resolvedId`, the id golive-prepare's worker computes over
 ONCE in two rows of `live.db`: `live_resolved (resolved_id, copy, bytes, json, saved_at)`, copy 0 and 1 holding the
 same bytes, each verified against the id and its length on every read. Everything else names the copy:
 
-- **The goLive's apply** (the take-over) writes the two rows, the journal row `{"k":"goLive","resolvedId":...}` and
-  the snapshot in one transaction, then calls its listeners; the copy is parsed once from the prepared bytes, which
-  the live service keeps as the copy's bytes. Nothing on the live loop serialises the copy again.
+- **The goLive's apply** (the take-over) writes the first row of the copy, the journal row
+  `{"k":"goLive","resolvedId":...}`, the snapshot and the cue list's row in one transaction, then calls its listeners;
+  the copy is parsed once from the prepared bytes, which the live service keeps as the copy's bytes. Nothing on the
+  live loop serialises the copy again. The copy's second row is written in a transaction of its own after the loop has
+  polled once more (two `setImmediate` hops): a GO pressed during the apply reaches its socket while the loop is
+  held, and is read and applied by that poll before the second write, not behind it (measured at 20 MiB with real
+  sockets, a GO 10 ms after the take-over: applied 288 ms after its press with the write beside the apply, 223-261 ms
+  after: the apply's own time and nothing more).
 - **The snapshot** (at every goLive, End service and adopt, and every 5 s while the service changes) is the state
-  without its copy, the cue list from a cache keyed by the array's identity (built once per goLive: about 300 bytes a
-  cue) and the id last. An idle state, or any state with `ORDO_LIVE_BYREF=off`, is written whole as before.
+  without its copy and without its cue list, ending `,"cuesId":"<id>","resolvedId":"<id>"}`: a few kilobytes at any
+  size. The cue list (about 360 bytes a cue: 3.1 MB at 20 MiB) is built once at the goLive and never changes, so it
+  has a row of its own, `live_cues (cues_id, bytes, json, saved_at)`, `cues_id` the SHA-256 of its bytes, written
+  once per cue list in the same transaction as the goLive's snapshot and never by a periodic snapshot (which wrote
+  it twice before: its own row and the rotation's copy of the previous row, 10-19 ms at 6-20 MiB). The ids sit at
+  fixed places at the end of the row, so the collection reads them without parsing it. An idle state, or any state
+  with `ORDO_LIVE_BYREF=off`, is written whole as before.
 - **Restore** reads both forms: a snapshot or goLive journal row that names a copy joins it from the rows (copy 0,
   else copy 1; a torn row is a warning, a copy neither row can give skips that snapshot for the previous one, and
-  with none usable the service starts idle as before); a whole (older) snapshot or row is read as it is and named at
-  its first snapshot. The verified bytes are kept, so the first state sent after a restart serialises nothing.
+  with none usable the service starts idle as before); the cue list is joined the same way, from its row when the
+  SHA-256 of the row's bytes is the id and its length is `bytes`. A cue row that is torn or gone does not lose the
+  service: the cue list is built from the copy as the goLive's reducer built it (the replay of a journal-only goLive
+  does the same), with a warning, and the next snapshot writes the row again. A whole (older) snapshot or row, and
+  the first by-name form with the cue list inside the snapshot, are read as they are and named at the next
+  snapshot. The verified bytes are kept, so the first state sent after a restart serialises nothing.
 - **Collection**: a copy's rows are deleted when the running service, a retained snapshot (the current and the two
   before it) and a goLive journal row newer than the oldest of those no longer name it, after each snapshot that
-  rotated, each goLive, End service and adopt, and once at start: at most three ids, two rows each.
+  rotated, each goLive, End service and adopt, and once at start: at most three ids, two rows each. A cue list's row
+  goes the same way, named by the running service and the retained snapshots only (a replayed goLive builds its own
+  from the copy): at most three rows.
 - **On the wire** (design/13): every socket is sent the same encoded state message per variant; a socket that said
   in its hello or resync which copy it holds, or was written the copy, is sent the state without it (as big as the
   cue list); every other gets it whole once. The goLive delta stays whole (the copy is encoded once, from the
@@ -586,7 +602,7 @@ same bytes, each verified against the id and its length on every read. Everythin
   as long as a venue wants; a data folder written either way restores either way.
 
 The one-process hub (tests, development) keeps its live tables in `ordo.db`; the live service creates
-`live_resolved` itself there (`LIVE_RESOLVED_SQL`, no migration).
+`live_resolved` and `live_cues` itself there (`LIVE_RESOLVED_SQL`, `LIVE_CUES_SQL`, no migration).
 
 ## Sizes
 

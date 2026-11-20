@@ -5,6 +5,7 @@
  * whole forms, and the technician switch ORDO_LIVE_BYREF.
  */
 import { createHash } from 'node:crypto';
+import { type AddressInfo, connect, createServer } from 'node:net';
 import { join } from 'node:path';
 import type { Media, LiveState } from '@ordo/domain';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
@@ -12,7 +13,7 @@ import pino from 'pino';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type DB, openLiveDb } from '../src/db.ts';
 import { LiveService, SNAPSHOTS_PREV_KEEP } from '../src/live.ts';
-import { bigBundle, bundleBytes, bundleSource, stringifySpy } from './byref-helpers.ts';
+import { bigBundle, bundleBytes, bundleSource, field, stringifySpy } from './byref-helpers.ts';
 import { song, startHub, tempDir } from './helpers.ts';
 
 const quiet = pino({ level: 'silent' });
@@ -43,10 +44,15 @@ afterEach(() => {
 });
 
 const turn = () => new Promise((r) => setImmediate(r));
-/** The goLive applied, and the turn of the loop in which its second copy is written (design/29 M2's measured decision). */
+/** The turns of the loop after which a deferred second copy is written: the poll between them reads what arrived first. */
+const later = async () => {
+  await turn();
+  await turn();
+};
+/** The goLive applied, and the turns of the loop in which its second copy is written (design/29 M2's measured decision). */
 const goLive = async (live: LiveService, playlistId = 'pl') => {
   const seq = await live.submitQueued({ k: 'goLive', playlistId }, OP);
-  await turn();
+  await later();
   return seq;
 };
 const next = (live: LiveService, n = 1) => {
@@ -218,7 +224,7 @@ describe('legacy forms (step 4)', () => {
       expect(again.state.resolved?.playlist.id).toBe(resolved.playlist.id);
       expect(rows(f.db).length).toBe(0);
       again.snapshot(true);
-      await turn();
+      await later();
       expect(rows(f.db).length).toBe(2);
       expect(snapshotText(f.db)).toContain('"resolvedId"');
       expect(snapshotText(f.db)).not.toContain('"resolved":');
@@ -234,7 +240,7 @@ describe('adopt (step 4)', () => {
     const incoming = JSON.parse(JSON.stringify(donor.live.state)) as LiveState;
     const hubSide = service({ bundles: {} });
     expect(hubSide.live.adopt(incoming)).toMatchObject({ ok: true });
-    await turn();
+    await later();
     expect(rows(hubSide.db).length).toBe(2);
     same(restarted(hubSide).state, hubSide.live.state);
     expect(snapshotText(hubSide.db)).not.toContain('"resolved":');
@@ -267,7 +273,7 @@ describe('the periodic snapshot (step 4)', () => {
     next(s.live, 100);
     const cuesBytes = JSON.stringify(s.live.state.cues).length;
     const cues = s.live.state.cues;
-    const spy = stringifySpy((a) => a === cues || a?.resolved !== undefined);
+    const spy = stringifySpy((a) => a === cues || field(a, 'resolved') !== undefined);
     next(s.live);
     const t0 = performance.now();
     s.live.snapshot();
@@ -337,7 +343,9 @@ describe('naming (steps 4 and 5)', () => {
       hub.live.submit({ k: 'goLive', playlistId: pl.id }, OP);
       // the goLive named the copy (the apply's one serialisation, with its journal row, snapshot and delta by
       // name): nothing after it serialises the copy again, however many sockets ask for it
-      const spy = stringifySpy((a) => !!a.presentations && !!a.playlist && !!a.manifestId);
+      const spy = stringifySpy(
+        (a) => !!field(a, 'presentations') && !!field(a, 'playlist') && !!field(a, 'manifestId'),
+      );
       const first = hub.live.resolvedCopy();
       const second = hub.live.resolvedCopy();
       hub.live.snapshot(true);
@@ -348,6 +356,253 @@ describe('naming (steps 4 and 5)', () => {
       expect(spy.count()).toBe(0);
     } finally {
       await hub.cleanup();
+    }
+  });
+});
+
+type CueRow = { cues_id: string; bytes: number; json: Buffer };
+/** The rows of the cue lists kept beside the copies (follow-up 1: the snapshot names the cue list, it does not hold it). */
+function cueRows(db: DB): CueRow[] {
+  try {
+    return db.prepare(`SELECT cues_id, bytes, json FROM live_cues ORDER BY cues_id`).all() as CueRow[];
+  } catch {
+    return [];
+  }
+}
+
+describe('the cue list beside the copy (follow-up 1: the periodic snapshot stops writing it)', () => {
+  it('a goLive saves the cue list once under its own SHA-256; the snapshot names it and stays small', async () => {
+    const s = service();
+    await goLive(s.live);
+    const c = cueRows(s.db);
+    expect(c.length).toBe(1);
+    const row = c[0]!;
+    expect(sha(row.json)).toBe(row.cues_id);
+    expect(row.bytes).toBe(row.json.byteLength);
+    expect(JSON.parse(row.json.toString('utf8'))).toEqual(s.live.state.cues);
+    const snap = snapshotText(s.db);
+    const copyId = rows(s.db)[0]!.resolved_id;
+    // the ids sit at fixed places at the end: the cue list's, then the copy's
+    expect(snap.endsWith(`,"cuesId":"${row.cues_id}","resolvedId":"${copyId}"}`)).toBe(true);
+    expect(snap).not.toContain('"cues":');
+    expect(snap).not.toContain('"resolved":');
+    // the cue list is no part of the snapshot any more: the whole row is the small remainder of the state
+    expect(snap.length).toBeLessThanOrEqual(20 * 1024);
+    expect(snap.length).toBeLessThan(0.05 * row.bytes + 20 * 1024);
+    expect(JSON.parse(journalRow(s.db, 1))).toEqual({ k: 'goLive', resolvedId: copyId });
+  });
+
+  it('the periodic snapshot writes no cue list: one write at the goLive, none across 100 events and three snapshots', async () => {
+    const s = service();
+    s.db.exec(`CREATE TABLE IF NOT EXISTS cue_writes (n INTEGER)`);
+    s.db.exec(
+      `CREATE TRIGGER IF NOT EXISTS cues_ins AFTER INSERT ON live_cues BEGIN INSERT INTO cue_writes VALUES (1); END;
+       CREATE TRIGGER IF NOT EXISTS cues_upd AFTER UPDATE ON live_cues BEGIN INSERT INTO cue_writes VALUES (1); END`,
+    );
+    const writes = () => (s.db.prepare(`SELECT count(*) AS n FROM cue_writes`).get() as { n: number }).n;
+    await goLive(s.live);
+    expect(writes()).toBe(1);
+    for (let k = 0; k < 3; k++) {
+      next(s.live, 100);
+      s.live.snapshot(true);
+      expect(snapshotText(s.db).length).toBeLessThanOrEqual(20 * 1024);
+      const prev = s.db.prepare(`SELECT json FROM live_snapshot_prev`).all() as { json: string }[];
+      for (const p of prev) expect(p.json.length).toBeLessThanOrEqual(20 * 1024);
+    }
+    expect(writes()).toBe(1);
+    expect(cueRows(s.db).length).toBe(1);
+  });
+
+  it('restores through the cue row: after the goLive alone, after 50 events, and with the snapshot older than the goLive', async () => {
+    const s = service();
+    await goLive(s.live);
+    same(restarted(s).state, s.live.state);
+    next(s.live, 50);
+    s.live.snapshot(true);
+    const again = restarted(s);
+    same(again.state, s.live.state);
+    expect(again.restoreWarnings).toEqual([]);
+    expect(snapshotText(s.db)).toContain('"cuesId":"');
+    // the joined cue list is the one the reducer built, content for content
+    expect(again.state.cues.length).toBe(s.live.state.cues.length);
+    // a snapshot of an earlier seq, the later events from the journal
+    const t = service();
+    await goLive(t.live);
+    t.live.snapshot(true);
+    next(t.live, 7);
+    same(restarted(t).state, t.live.state);
+  });
+
+  it('a restore keeps the verified cue bytes: the first snapshot after it writes no second cue row and encodes nothing', async () => {
+    const s = service();
+    await goLive(s.live);
+    next(s.live, 3);
+    s.live.snapshot(true);
+    const again = restarted(s);
+    const cues = again.state.cues;
+    const spy = stringifySpy((a) => a === cues);
+    next(again, 2);
+    again.snapshot(true);
+    spy.restore();
+    expect(spy.count()).toBe(0);
+    expect(cueRows(s.db).length).toBe(1);
+  });
+
+  it('a torn cue row is a warning, not a lost service: the cue list is derived from the copy, and the next snapshot rewrites the row', async () => {
+    const s = service();
+    await goLive(s.live);
+    next(s.live, 5);
+    s.live.snapshot(true);
+    const id = cueRows(s.db)[0]!.cues_id;
+    const torn = Buffer.from(cueRows(s.db)[0]!.json);
+    torn[torn.length >> 1] = torn[torn.length >> 1]! ^ 0xff;
+    s.db.prepare(`UPDATE live_cues SET json = ? WHERE cues_id = ?`).run(torn, id);
+    const again = restarted(s);
+    same(again.state, s.live.state);
+    expect(again.restoreWarnings.join(' ')).toMatch(/cue list/);
+    // the row is made good again by the next snapshot of the restored service
+    next(again, 1);
+    again.snapshot(true);
+    const fixed = cueRows(s.db);
+    expect(fixed.length).toBe(1);
+    expect(sha(fixed[0]!.json)).toBe(id);
+    const third = restarted(s);
+    same(third.state, again.state);
+    expect(third.restoreWarnings).toEqual([]);
+    // a row that is gone is the same case
+    s.db.exec(`DELETE FROM live_cues`);
+    const fourth = restarted(s);
+    same(fourth.state, again.state);
+    expect(fourth.restoreWarnings.join(' ')).toMatch(/cue list/);
+  });
+
+  it('collection: the cue row of an ended service goes with its copy once no snapshot names it; never the live one; at most three', async () => {
+    const bundles = { a: bigBundleBytes(1, 'a'), b: bigBundleBytes(1, 'b'), c: bigBundleBytes(1, 'c') };
+    const s = service({ bundles });
+    await goLive(s.live, 'a');
+    const idA = cueRows(s.db)[0]!.cues_id;
+    s.live.submit({ k: 'endService', at: Date.now() }, OP);
+    expect(cueRows(s.db).some((x) => x.cues_id === idA)).toBe(true); // retained snapshots still name it
+    logo(s.live);
+    s.live.snapshot(true);
+    logo(s.live);
+    s.live.snapshot(true);
+    expect(cueRows(s.db).some((x) => x.cues_id === idA)).toBe(false);
+    await goLive(s.live, 'b');
+    await goLive(s.live, 'c');
+    for (let i = 0; i < 4; i++) {
+      next(s.live);
+      s.live.snapshot(true);
+      expect(cueRows(s.db).length).toBeLessThanOrEqual(3);
+      expect(sha(cueRows(s.db).find((x) => x.cues_id === snapshotCueId(s.db))!.json)).toBe(
+        snapshotCueId(s.db),
+      );
+    }
+    // the copy rows keep their own bound beside them
+    expect(rows(s.db).length).toBeLessThanOrEqual(6);
+  });
+
+  it('the by-name form with the cue list inside (what the first by-reference build wrote) still restores and turns into the new form', async () => {
+    const donor = service();
+    await goLive(donor.live);
+    next(donor.live, 4);
+    const st = donor.live.state;
+    const id = rows(donor.db)[0]!.resolved_id;
+    const f = service({ bundles: {} });
+    // the donor's copy rows, a snapshot with `cues` inside and the id last, the goLive journal row by name
+    for (const r of rows(donor.db))
+      f.db
+        .prepare(
+          `INSERT INTO live_resolved (resolved_id, copy, bytes, json, saved_at) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(r.resolved_id, r.copy, r.bytes, r.json, Date.now());
+    const { resolved: _r, cues: _c, ...rest } = st;
+    const text = `${JSON.stringify(rest).slice(0, -1)},"cues":${JSON.stringify(st.cues)},"resolvedId":"${id}"}`;
+    f.db
+      .prepare(`INSERT INTO live_snapshot (id, seq, json, saved_at) VALUES (1, ?, ?, ?)`)
+      .run(st.seq, text, Date.now());
+    expect(cueRows(f.db).length).toBe(0);
+    const again = restarted(f);
+    same(again.state, st);
+    expect(again.restoreWarnings).toEqual([]);
+    again.snapshot(true);
+    expect(cueRows(f.db).length).toBe(1);
+    expect(snapshotText(f.db)).toContain('"cuesId":"');
+    expect(snapshotText(f.db)).not.toContain('"cues":');
+    same(restarted(f).state, st);
+  });
+
+  it("adopt saves the adopted state's cue list too, and a restart gives the same state", async () => {
+    const donor = service();
+    await goLive(donor.live);
+    next(donor.live, 4);
+    const incoming = JSON.parse(JSON.stringify(donor.live.state)) as LiveState;
+    const hubSide = service({ bundles: {} });
+    expect(hubSide.live.adopt(incoming)).toMatchObject({ ok: true });
+    await later();
+    expect(cueRows(hubSide.db).length).toBe(1);
+    expect(snapshotText(hubSide.db)).not.toContain('"cues":');
+    same(restarted(hubSide).state, hubSide.live.state);
+  });
+
+  it('with the switch off the snapshot is whole and no cue row is written; either way restores either way', async () => {
+    const off = service({ byRef: false });
+    await goLive(off.live);
+    next(off.live, 3);
+    expect(cueRows(off.db).length).toBe(0);
+    expect(snapshotText(off.db)).toContain('"cues":');
+    same(restarted(off, true).state, off.live.state);
+    const on = service({ byRef: true });
+    await goLive(on.live);
+    next(on.live, 3);
+    expect(cueRows(on.db).length).toBe(1);
+    same(restarted(on, false).state, on.live.state);
+  });
+
+  it('resolvedIdsInUse still names the copies only (the hand-back by name builds on it)', async () => {
+    const s = service();
+    await goLive(s.live);
+    const idCopy = rows(s.db)[0]!.resolved_id;
+    expect([...s.live.resolvedIdsInUse()]).toEqual([idCopy]);
+  });
+});
+
+/** The cue list's id a snapshot names (the fixed place before the copy's id). */
+function snapshotCueId(db: DB): string {
+  const m = /"cuesId":"([0-9a-f]{64})","resolvedId":"[0-9a-f]{64}"\}$/.exec(snapshotText(db));
+  if (!m) throw new Error('the snapshot names no cue list');
+  return m[1]!;
+}
+
+describe('the take-over leaves the loop to what arrived meanwhile (M2: a GO pressed during the apply)', () => {
+  it('a key that reached a socket during the take-over apply is read before the second copy is written', async () => {
+    const s = service();
+    // A TCP pair stands for a screen or the operator: bytes written from inside the apply are in the kernel when it
+    // returns and can only be read by a later poll of the loop, as a GO pressed 10 ms into the take-over is.
+    const server = createServer();
+    const seen: number[] = [];
+    server.on('connection', (c) => c.on('data', () => seen.push(rows(s.db).length)));
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const client = connect((server.address() as AddressInfo).port, '127.0.0.1');
+    await new Promise<void>((r) => client.once('connect', () => r()));
+    const real = LiveService.prototype.apply;
+    LiveService.prototype.apply = function (this: LiveService, ...a: Parameters<LiveService['apply']>) {
+      if (a[0].k === 'goLive') client.write('k');
+      return real.apply(this, a);
+    };
+    try {
+      await s.live.submitQueued({ k: 'goLive', playlistId: 'pl' }, OP);
+      for (let i = 0; i < 200 && !seen.length; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(seen.length).toBeGreaterThan(0);
+      // the key was read with the first copy written and the second not yet: it is applied before the write
+      expect(seen[0]).toBe(1);
+      // and the second copy is written afterwards, in a turn of its own
+      for (let i = 0; i < 200 && rows(s.db).length < 2; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(rows(s.db).length).toBe(2);
+    } finally {
+      LiveService.prototype.apply = real;
+      client.destroy();
+      await new Promise<void>((r) => server.close(() => r()));
     }
   });
 });

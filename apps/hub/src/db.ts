@@ -255,6 +255,18 @@ CREATE TABLE IF NOT EXISTS live_resolved (
 `;
 
 /**
+ * The running service's cue list, once per id (live-by-ref follow-up, design/29 §2.3 M2): the id is the SHA-256 (hex) of
+ * the exact UTF-8 bytes in `json`, verified on every read. It is built once at the goLive and never changes (the reducer
+ * keeps the array), so the snapshot names it beside the copy instead of writing it again each time it is taken; one
+ * row, because the cue list can be derived from the copy it belongs to when the row is torn (the restore does, with a
+ * warning). Created the way `live_resolved` is.
+ */
+export const LIVE_CUES_SQL = `
+CREATE TABLE IF NOT EXISTS live_cues (
+  cues_id TEXT NOT NULL PRIMARY KEY, bytes INTEGER NOT NULL, json BLOB NOT NULL, saved_at INTEGER NOT NULL);
+`;
+
+/**
  * The live process's own database (design/25): journal, snapshots and the cached copies of library data it
  * needs to run a service while the library process is down. Separate from ordo.db so a library failure (a
  * long write lock, a corrupt page) cannot stall or break the live service.
@@ -267,7 +279,7 @@ CREATE TABLE IF NOT EXISTS live_snapshot (
 CREATE TABLE IF NOT EXISTS live_snapshot_prev (
   rowid INTEGER PRIMARY KEY AUTOINCREMENT, seq INTEGER NOT NULL, json TEXT NOT NULL, saved_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS live_kv (key TEXT PRIMARY KEY, json TEXT NOT NULL, saved_at INTEGER NOT NULL);
-${LIVE_RESOLVED_SQL}`;
+${LIVE_RESOLVED_SQL}${LIVE_CUES_SQL}`;
 
 export function openLiveDb(file: string): DB {
   const db = new Database(file);
