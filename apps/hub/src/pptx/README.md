@@ -18,7 +18,7 @@ when the copy cannot be built (no pool, a deck past the caps) the job fails, it 
 ```
 POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by SHA-256; renderer=native default) [H]
  └─ imports.pptx.queueNative ─► light job 'pptx-native' (nativeJob.ts)                                         [B]
-     1 readDeckXml (deckParts.ts): XML parts in memory (≤ 32 MiB each, ≤ 256 MiB in all, a deck declaring more refused first with W17), other parts placeholders; after
+     1 readDeckXml (deckParts.ts) 'deferred': the structure (every XML part but the slides, ≤ 256 MiB) and each slide's first 64 KiB in memory (≤ 32 MiB a part, ≤ 1 GiB of XML declared in all, a deck declaring more refused first with W17: "1 GB"), other parts placeholders; each call's slide parts are read from the stored file just before the call (`readSlideParts`); after
        the scan spillDeckParts writes only the referenced pictures under generated names (≤ 1 GiB, ≤ 2,000);
        embeddings, vbaProject, customXml skipped; no nested zips; overlapping entries refused; no pool: fail [B]
      2 pool 'pptx-scene' (sceneTask.ts → convertDeck), batches ≤ 150 slides and ≤ 64 MiB of slide XML (`batchEnds`; slide parts transferred, shared
@@ -211,9 +211,14 @@ Done (B), and what the other items rely on:
   parsed, under the slide's own root tag, so a slide is not parsed twice).
 - **Parts.** Non-XML parts and XML parts over 32 MiB are empty placeholders, so relationships resolve and a
   slide whose part was too large keeps its text (W9, `slide:detail`) instead of disappearing from the list. The XML a
-  read would keep is summed from the central directory first (`declaredXmlBytes`): over 256 MiB (`PPTX_LIMITS.xmlTotalBytes`)
-  the job fails with W17 (`XmlTotalError`) before any part is read. The callers of `readDeckXml` other than the import
-  (`fallback.ts` the LibreOffice follow-up, `textRepair.ts`) read the same XML and meet the same refusal.
+  read would keep is summed from the central directory first (`declaredXml`): over 1 GiB (`PPTX_LIMITS.xmlTotalBytes`)
+  the job fails with W17 (`XmlTotalError`, "1 GB at most") before any part is read, and so does a deck whose structure alone
+  (everything but `ppt/slides/*.xml`) is over 256 MiB (`xmlWholeBytes`). The import reads slide by slide: the structure and each slide's head
+  (`SLIDE_HEAD_BYTES`, 64 KiB: the slide list) in memory, each pool call's slides from the stored file just before the call,
+  the text rescue reading its failed slides again. The callers of `readDeckXml` other than the import (`fallback.ts` the
+  LibreOffice follow-up's render copy and the slide list of PowerPoint's own PDF, `textRepair.ts`) read the deck WHOLE, under
+  256 MiB (`xmlWholeBytes`), and refuse a bigger one with one clear line (`XmlTotalError` 'whole'); an import of a deck over
+  256 MiB therefore lists what ordo cannot draw instead of queueing a follow-up that cannot run.
 - **Version 1 and `pptx-lo`.** The presentation id is chosen and recorded before the save. `pptx-lo` is
   queued right after `lib.savePresentation`, in the same synchronous step: it cannot start before version 1
   exists, and `PptxLoSlide.digest` is version 1's stored `Slide.pptx.digest`. M5 must queue the deck's clip

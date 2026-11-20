@@ -217,12 +217,12 @@ async function runHandler(hash: string, env: NativeJobEnv, deps = hub.imports.pp
 describe('a deck of 700 MiB of slide XML imports, in calls of at most 64 MiB of slides', () => {
   const pool = new CpuPool(1);
   afterAll(() => pool.close());
-  it('imports 22 slides of 31.8 MiB (700 MiB declared, past the old 256 MiB), done, every slide with its text', async () => {
+  it('imports 22 slides of 31.9 MiB (700 MiB declared, past the old 256 MiB), done, every slide with its text', async () => {
     const parts = buildDeck({
       slides: Array.from({ length: 22 }, (_, i) => ({ shapes: textBox(2, `Slide ${i + 1}`) })),
     });
     const file = join(dir, 'huge700.pptx');
-    const { xmlBytes } = await writeBigDeck(file, parts, { padBytes: Math.floor(31.8 * MiB), padSlides: 22 });
+    const { xmlBytes } = await writeBigDeck(file, parts, { padBytes: Math.floor(31.9 * MiB), padSlides: 22 });
     expect(xmlBytes).toBeGreaterThan(700 * MiB);
     const hash = await storeDeck(hub, file);
     rmSync(file, { force: true });
@@ -249,7 +249,7 @@ describe('a deck of 700 MiB of slide XML imports, in calls of at most 64 MiB of 
     // The scan holds each slide's head (64 KiB at most), never a slide: well under the 256 MiB the old whole read would have kept.
     const scan = calls.find((c) => c.scan)!;
     expect(scan.bytes).toBeLessThan(22 * SLIDE_HEAD_BYTES + 1 * MiB);
-    // A call holds the slides it converts and no more: at most 64 MiB of slide XML, or one slide alone (31.8 MiB).
+    // A call holds the slides it converts and no more: at most 64 MiB of slide XML, or one slide alone (31.9 MiB).
     const conv = calls.filter((c) => !c.scan);
     expect(conv.length).toBeGreaterThanOrEqual(11);
     for (const c of conv) expect(c.bytes).toBeLessThanOrEqual(PPTX_LIMITS.batchXmlBytes + 1 * MiB);
@@ -281,7 +281,9 @@ describe('what a failed call leaves to the rescue is read again, not kept', () =
           from: input.range.from,
           to: input.range.to,
           rescue: !!input.rescue,
-          hasSlide3: (input.parts.get('ppt/slides/slide3.xml')?.byteLength ?? 0) > 1000,
+          hasSlide3: new TextDecoder()
+            .decode(input.parts.get('ppt/slides/slide3.xml') ?? new Uint8Array(0))
+            .includes('Slide 3'),
         });
         // Slide 3 never converts (as a slide that exhausts the worker): its call and its retry fail; its rescue does not.
         return !input.scan && !input.rescue && input.range.from <= 2 && input.range.to > 2
@@ -320,7 +322,7 @@ describe('a deck past what the whole-deck steps read (256 MiB) is imported witho
         slides: Array.from({ length: 9 }, (_, i) => ({ shapes: textBox(2, `Slide ${i + 1}`) })),
       });
       const file = join(dir, 'over256.pptx');
-      await writeBigDeck(file, parts, { padBytes: Math.floor(31.8 * MiB), padSlides: 9 });
+      await writeBigDeck(file, parts, { padBytes: Math.floor(31.9 * MiB), padSlides: 9 });
       const hash = await storeDeck(withLo, file);
       rmSync(file, { force: true });
       const { out, lines } = await runHandler(hash, {}, withLo.imports.pptx.deps);

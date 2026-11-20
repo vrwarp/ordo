@@ -83,7 +83,7 @@ const root = resolve(here, '../../..');
  * all (design/27 §2 step 1, §12).
  */
 export { MAX_XML_PART_BYTES };
-export const MAX_XML_TOTAL_BYTES = PPTX_LIMITS.xmlTotalBytes;
+export const MAX_XML_TOTAL_BYTES = PPTX_LIMITS.xmlWholeBytes;
 /** Pictures written out per deck (design/27 §12); the rest are left out with a note. */
 export const MAX_PICTURES = 2_000;
 /** The harness's origin in the page; nothing else is reachable. */

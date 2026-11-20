@@ -214,7 +214,7 @@ export async function sofficeToPdf(
 
 /**
  * The stored deck's parts for a render copy of `copy.pages` (or of every shown slide): the XML in memory
- * (`readDeckXml`: ≤ 32 MiB a part, ≤ 256 MiB in all, every other part a placeholder), then a plan call on the
+ * (`readDeckXml`: ≤ 32 MiB a part, ≤ 256 MiB in all, a bigger deck refused with one clear line, every other part a placeholder), then a plan call on the
  * pool names the pictures that copy keeps, and only those are spilled under generated names in `dir`
  * (`spillDeckParts`: ≤ 2,000, ≤ 1 GiB). Unreferenced parts, media payloads and fonts are never written.
  */

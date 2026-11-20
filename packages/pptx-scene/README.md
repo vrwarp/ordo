@@ -1434,7 +1434,7 @@ Done:
   the hub's pool does, so it converts under a test runner too). Spilled parts are found through an index of
   their names built once per deck. A deck link whose file is gone is skipped with a line in
   the log, not scored as a failed conversion. XML and `.rels` parts of 32 MiB or less stay in
-  memory, up to 256 MiB in all (the hub's `PPTX_LIMITS.xmlTotalBytes`, which the tool reads); every other part is spilled, and `parseDeck` gets the pixel size of a spilled
+  memory, up to 256 MiB in all (the hub's `PPTX_LIMITS.xmlWholeBytes`, what the hub reads whole, which the tool reads; the hub's import reads up to 1 GiB slide by slide); every other part is spilled, and `parseDeck` gets the pixel size of a spilled
   picture from its first bytes (`spilledPictureSize`). Only the pictures the slides use are kept, under generated names
   (`<deck>/native/media/<n>.<ext>`), at most 2,000 per deck. Pictures that are not PNG, JPEG, GIF, WebP or
   BMP by their bytes (EMF, WMF, TIFF, …) are counted in a note and not drawn. `slides.json` holds every
