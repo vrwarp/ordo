@@ -266,6 +266,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   jobs.onLiveMode(live.state.mode);
   live.onDelta(() => jobs.onLiveMode(live.state.mode));
   live.onState((s) => jobs.onLiveMode(s.mode));
+  live.onDelta(() => revisionTitles.onLiveMode(live.state.mode));
   live.onState((s) => revisionTitles.onLiveMode(s.mode));
   jobs.start();
   sockets.start();

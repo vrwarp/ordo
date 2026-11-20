@@ -5,7 +5,7 @@
  * paced backfill and the scanner that finds a title in the first characters of a body.
  */
 import { join } from 'node:path';
-import type { Presentation } from '@ordo/domain';
+import { newId, type Playlist, type Presentation } from '@ordo/domain';
 import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 import type { RevisionInfo } from '@ordo/protocol';
 import Database from 'better-sqlite3';
@@ -19,7 +19,8 @@ import {
   TITLE_WIDE_PREFIX_CHARS,
   titleTokenIn,
 } from '../src/revisions.ts';
-import { song, startHub, type TestHub, tempDir } from './helpers.ts';
+import { type Client, login, OPERATE_PIN, song, startHub, type TestHub, tempDir } from './helpers.ts';
+import { type TwoProcesses, twoProcesses } from './phones-helpers.ts';
 
 let hub: TestHub | undefined;
 afterEach(async () => {
@@ -262,6 +263,22 @@ describe('the list reads summaries, not bodies', () => {
     expect(ms).toBeLessThan(budgetMs(250));
   });
 
+  it('reads the keys of a presentation from the index alone: the plan never visits a revision row', async () => {
+    hub = await startHub();
+    const plan = hub.lib.db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT r.rev AS rev, s.title_json AS title_json, s.saved_by AS saved_by, s.saved_at AS saved_at
+         FROM presentation_revisions r
+         LEFT JOIN revision_summaries s ON s.presentation_id = r.presentation_id AND s.rev = r.rev
+         WHERE r.presentation_id = ? ORDER BY r.rev DESC`,
+      )
+      .all('p') as { detail: string }[];
+    const text = plan.map((r) => r.detail).join(' | ');
+    expect(text).toMatch(/COVERING INDEX sqlite_autoindex_presentation_revisions/);
+    expect(text).toMatch(/SEARCH s USING (COVERING )?INDEX sqlite_autoindex_revision_summaries/);
+    expect(text).not.toMatch(/SCAN r\b(?! USING)/);
+  });
+
   it('lists a presentation with no revision as before', async () => {
     hub = await startHub();
     expect(hub.lib.revisions('nobody')).toEqual([]);
@@ -306,17 +323,19 @@ describe('a revision with no summary (an older hub saved it) is read one row at 
         kind: 'deck',
       }),
     ],
+    ['a key spelled with an escape (t\\u0069tle)', '{"id":"p","t\\u0069tle":"Escaped key","kind":"deck"}'],
     ['no title at all', JSON.stringify({ id: 'p', rev: 1, kind: 'deck' })],
   ];
 
   it.each(shapes)('gives the title the old reading gave: %s', async (_name, json) => {
     hub = await startHub();
     rawRevision(hub.lib, 'pS', 1, json, 'edit@9');
+    rawRevision(hub.lib, 'pS', 2, body('Decoy: the revision after it'), 'edit@8');
     const before = oracle(hub.lib, 'pS');
     expect(hub.lib.revisions('pS')).toEqual(before);
     // and the next call finds the summary the first one made (a title that exists)
-    if (before[0]!.title !== undefined) {
-      expect(summaryRows(hub.lib, 'pS')).toHaveLength(1);
+    if (before[1]!.title !== undefined) {
+      expect(summaryRows(hub.lib, 'pS')).toHaveLength(2);
       const parse = vi.spyOn(JSON, 'parse');
       expect(hub.lib.revisions('pS')).toEqual(before);
       expect(
@@ -409,11 +428,14 @@ function backfillRig(
     live: () => state.live,
     log,
     now: () => t,
+    // a macrotask each, so a loop that never ends is a test timeout and not a frozen process
     yield: async () => {
       state.yields++;
+      await new Promise<void>((r) => setImmediate(r));
     },
     sleep: async (ms) => {
       state.sleeps.push(ms);
+      await new Promise<void>((r) => setImmediate(r));
     },
     onRead: (id, rev) => {
       state.reads.push(`${id}:${rev}`);
@@ -492,6 +514,7 @@ describe('the backfill', () => {
     const { bf, state } = backfillRig(hub.lib, {
       yield: async () => {
         state.yields++;
+        await new Promise<void>((r) => setImmediate(r));
         if (state.yields === 2) {
           hub!.lib.savePresentation({ ...p, title: 'Saved during a yield' }, { expectedRev: p.rev });
           state.live = 'live';
@@ -531,6 +554,50 @@ describe('the backfill', () => {
   it('is part of the hub: one for the library, started with it and stopped with it', async () => {
     hub = await startHub();
     expect(hub.revisionTitles).toBeInstanceOf(RevisionTitleBackfill);
+  });
+});
+
+// ── the wiring: one library, one backfill, End service resumes it ─────────────────────────────────────────────────
+
+async function goLiveWith(op: Client): Promise<void> {
+  const p = await op.json<Presentation>('/presentations', { method: 'POST', json: song() });
+  const pl = await op.json<Playlist>('/playlists', {
+    method: 'POST',
+    json: { name: 'Sunday', items: [{ id: newId(), kind: 'presentation', presentationId: p.id }] },
+  });
+  await op.json('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: pl.id } });
+}
+const endServiceWith = (op: Client) =>
+  op.json('/live/events', { method: 'POST', json: { k: 'endService', at: Date.now() } });
+
+describe('the backfill follows the service', () => {
+  let two: TwoProcesses | undefined;
+  afterEach(async () => {
+    await two?.close();
+    two = undefined;
+  });
+
+  it('one-process hub: it reads nothing while a service is live and carries on at End service', async () => {
+    hub = await startHub();
+    seedRows(hub.lib, 5, 2);
+    const op = await login(hub.url, OPERATE_PIN);
+    await goLiveWith(op);
+    await hub.revisionTitles.run();
+    expect(hub.lib.summaries.count()).toBe(10);
+    await endServiceWith(op);
+    await expect.poll(() => hub!.lib.summaries.count(), { timeout: budgetMs(10_000) }).toBe(0);
+  });
+
+  it('library process: the live process relays the mode, and the same holds', async () => {
+    two = await twoProcesses();
+    seedRows(two.lib.lib, 5, 2);
+    const op = await login(two.base, OPERATE_PIN);
+    await goLiveWith(op);
+    await expect.poll(() => two!.live.live.state.mode).toBe('live');
+    await two.lib.revisionTitles.run();
+    expect(two.lib.lib.summaries.count()).toBe(10);
+    await endServiceWith(op);
+    await expect.poll(() => two!.lib.lib.summaries.count(), { timeout: budgetMs(10_000) }).toBe(0);
   });
 });
 

@@ -419,11 +419,14 @@ export class Library {
         opts.create || !this.presentations.get(p.id)
           ? this.presentations.insert(p)
           : this.presentations.update(p.id, p, opts.expectedRev);
+      const savedAt = saved.updatedAt ?? nowIso();
       this.db
         .prepare(
           `INSERT OR REPLACE INTO presentation_revisions (presentation_id, rev, json, saved_by, saved_at) VALUES (?, ?, ?, ?, ?)`,
         )
-        .run(saved.id, saved.rev, JSON.stringify(saved), opts.by ?? null, saved.updatedAt ?? nowIso());
+        .run(saved.id, saved.rev, JSON.stringify(saved), opts.by ?? null, savedAt);
+      // The summary the History list reads, written in the save that writes the revision (design/28 P2).
+      this.summaries.record(saved.id, saved.rev, saved.title, opts.by ?? null, savedAt);
       this.pruneRevisions(saved.id);
       return saved;
     })();
@@ -440,18 +443,12 @@ export class Library {
       .run(id, cutoff, id);
   }
 
+  /**
+   * The revisions of a presentation, newest first, from the summaries (apps/hub/src/revisions.ts): no revision's JSON is read
+   * or parsed, except one at a time for a revision that has no summary yet.
+   */
   revisions(id: string): RevisionInfo[] {
-    const rows = this.db
-      .prepare(
-        `SELECT rev, json, saved_by, saved_at FROM presentation_revisions WHERE presentation_id = ? ORDER BY rev DESC`,
-      )
-      .all(id) as { rev: number; json: string; saved_by: string | null; saved_at: string }[];
-    return rows.map((r) => ({
-      rev: r.rev,
-      savedAt: r.saved_at,
-      savedBy: r.saved_by ?? undefined,
-      title: (JSON.parse(r.json) as Presentation).title,
-    }));
+    return this.summaries.list(id);
   }
 
   revision(id: string, rev: number): Presentation {

@@ -706,7 +706,9 @@ the audio slot as `slideOwned` until the live cue leaves `[cueIndex, untilCue]`.
 
 Each presentation save writes a row to `presentation_revisions (presentation_id, rev,
 json, saved_by, saved_at)`. Restore copies an old row's JSON into a new revision. Thirty
-days or 50 revisions are kept per presentation, whichever is more.
+days or 50 revisions are kept per presentation, whichever is more. The History list reads a
+small summary row per revision (`revision_summaries`: the title, who and when, written in the
+same transaction, design/12 "Storage"), not the revisions' JSON.
 
 ## Arrangement expansion
 
