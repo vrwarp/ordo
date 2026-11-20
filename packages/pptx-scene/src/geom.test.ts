@@ -27,6 +27,7 @@ import { drawingXml, dspSp, smartArtFrame, smartArtRels, withSmartArt } from './
 import {
   body,
   buildDeck,
+  cpuMs,
   custGeom,
   cxnSp,
   type DeckSpec,
@@ -1882,9 +1883,9 @@ describe('custom geometry read from the packed form (design/29 X1: the readers r
       paths: `<a:path w="10" h="10"><a:moveTo><a:pt x="0" y="0"/></a:moveTo>${lnTo.repeat(1_199_999)}</a:path>`,
     });
     const root = read(xml, PACK);
-    const t0 = performance.now();
+    const t0 = cpuMs();
     const g = readCustGeom(root);
-    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
+    expect(cpuMs() - t0).toBeLessThan(budgetMs(5_000));
     // The budget of a geometry (every path may cost up to the compiler's bound) and one command past it, so the
     // compiler notes that points were dropped.
     const commands = (g.paths ?? []).reduce((n, p) => n + p.cmds.length, 0);

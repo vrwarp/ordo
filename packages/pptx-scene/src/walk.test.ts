@@ -5,6 +5,7 @@ import type { Affine, Element, ShapeElement, SlideScene } from './ir.ts';
 import {
   body,
   buildDeck,
+  cpuMs,
   type DeckSpec,
   grpSp,
   imageRel,
@@ -501,12 +502,12 @@ describe('groups', () => {
     expect(s.elements).toEqual([]);
     expect(s.notes.join(' ')).toMatch(/nested deeper than 32/);
 
-    const t0 = performance.now();
-    // Shapes of nine elements each: 50,001 of them are 450,009 elements, within the reader's bound, so the walk's cap stops them.
+    const t0 = cpuMs();
+    // Shapes of seven elements each: 50,001 of them are 350,007 elements, within the reader's bound, so the walk's cap stops them.
     const many = slideOf({ slides: [{ shapes: leanShapes(MAX_SHAPES_PER_SLIDE + 1) }] });
     expect(many.elements).toHaveLength(MAX_SHAPES_PER_SLIDE);
     expect(many.notes.join(' ')).toMatch(/more than 50000 shapes/);
-    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
+    expect(cpuMs() - t0).toBeLessThan(budgetMs(5_000));
   });
 });
 
