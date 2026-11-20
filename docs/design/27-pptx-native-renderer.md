@@ -1749,7 +1749,9 @@ budget only decides that it is drawn so.
   tiny path: one call of it took 250 to 670 ms at 4K) keeps its legacy copy: no task could draw it.
 - **At most one frame a slide** (`UNIT_SLIDE_AREAS`): units in z-order while their area is within one frame; a
   full-frame copy at 4K takes about 5 ms on the asset worker's software canvas (a 16 MB unit 1.7 ms), so the
-  slide's draw stays within the task the budget leaves room for, and a cue holds at most a frame of units.
+  slide's draw stays within the task the budget leaves room for, and a cue holds at most a frame of units in its
+  direct part and one underlay frame under it (design/14 "The underlay frame": the objects under the direct part of a
+  crowded slide, made off the GO's path).
 - **Made in steps of one draw call** (`makeUnit`): a scratch canvas of the frame, then each of the shape's draw
   calls (`shape.ts` `geomShapeSteps`: a path's fill, its outline, the open outlines last, as `drawGeom` orders
   them) at the frame's own transform, each flushed (a one-pixel read) so its time is its own, then the rect copied
@@ -1794,9 +1796,14 @@ budget only decides that it is drawn so.
   budget for their gradient or dash are `whole` units with them, and masked pictures are drawn from their
   prepared bitmap with their mask; (4) a geometry whose effects would put its one call past a task is a `whole`
   unit with its effects, made in steps; shapes past `EFFECT_COST.slide` are `layers` (shadow and glow; the body
-  live) or `whole` (soft-edged, translucent) units. Left to live-frame (sub-wave 2): (2) objects past the slide's
-  `UNIT_SLIDE_AREAS` keep their legacy copies, counted `unitsLeft` 'area' (a census note), as do effects past
-  one frame of units; a picture's effects past the budget keep theirs (`kind`).
+  live) or `whole` (soft-edged, translucent) units. (2) Closed in r2b sub-wave 2 (live-frame): a slide whose units
+  pass one frame of area is split at one z-position, the direct part's units fit one frame (`UNIT_SLIDE_AREAS`, the
+  exact c(2) condition: `slideUnitsLeft(direct)` reports no 'area') and the objects under it are the underlay frame
+  (design/14 "The underlay frame"), each drawn alone through its own unit; `unitsLeft` 'area' is 0 on every slide at
+  the head (at the base the planner leaves 'area' on 34 slides of the whole collection, 29 of them drawn in 50 ms or
+  less; the census column lists only slides with `budgetLegacy` > 0, which was one of them, 9 objects). A live slide
+  job is cut by the counts alone and its late job works the whole split out (a GO never waits for planning). A
+  picture's effects past the budget keep theirs (`kind`).
 <!-- /m9:geometry-units -->
 
 **Named exception to the editor's 15 ms thumbnail at 640 px** (M6 merge review): _the first thumbnail of a heavy traced-outline slide_, which builds its geometry paths and its effect layers: 22.6 ms for a slide of 136 shadowed geometry-file shapes, 19.2 ms and 13.9 ms for two others; later draws take 1 to 8 ms. The thumbnail worker draws in a worker of its own, so the editor's main thread does not wait for it.
@@ -1813,10 +1820,11 @@ budget only decides that it is drawn so.
   holds a decoration to at most its shapes drawn one by one + 10 % (checked).
 
 <!-- r2b:open-items -->
-**Open items of §12-13 after wave r2b sub-waves 1, 1b and 1c** (one list: sub-wave 1's effect-units, units-live
-and tables-conv, sub-wave 1b's tables-flip, tables-form, tables-cells and text-lines, then sub-wave 1c's ko-cells and
-vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, `regroup/r2b/integrate-1b.md`,
-`regroup/r2b/integrate-1c.md`).
+**Open items of §12-13 after wave r2b sub-waves 1, 1b, 1c and 2** (one list: sub-wave 1's effect-units, units-live
+and tables-conv, sub-wave 1b's tables-flip, tables-form, tables-cells and text-lines, sub-wave 1c's ko-cells and
+vert-cells, then sub-wave 2's live-frame, leaf-editor, live-by-ref, xml-compact, followups-1c, warp-geom,
+prerender-store and their continuations; the wave's integrations measure them: `regroup/r2b/integrate-1.md`,
+`regroup/r2b/integrate-1b.md`, `regroup/r2b/integrate-1c.md`, `regroup/r2b/integrate-2.md`).
 - _Closed in sub-wave 1:_ r2a must a (a decoration at its caps drawn at once on the outputs): a `whole` effect unit
   made in slices, left out of an output raster until made (`SlideDrawOptions.late`, C2b, on every asset-worker
   raster) and faded in. r2a must b (a GO waits for units): a jump is drawn at once, a GO hurries an armed or warm
@@ -1825,10 +1833,34 @@ vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, 
   dashed shapes and masked pictures past the budget (`whole` units, prepared bitmaps); c(4) a geometry whose
   effects would pass a task (`whole` with its effects, in steps); decorations rated in the drawing budget
   (`DecorHooks`). `?effects=base` (C6) gives a venue 62a1c3a's drawing of effects and decorations back.
-- _Left to live-frame (sub-wave 2):_ c(2), objects past one frame of units a slide (`UNIT_SLIDE_AREAS`) keep their
-  legacy copies, counted `unitsLeft` 'area'; effects past one frame of units likewise (the wake template's slide
-  12 has two, the suite's prisma slide nine). The emoji game slide's warm draw (325 pictures) and crowded slides
-  past 200 shapes or 16 pictures are live-frame's too.
+- _Closed in sub-wave 2 (live-frame):_ c(2), and crowded slides past 200 shapes or 16 pictures: they are drawn whole
+  on the Audience screens, the top 200 objects at once (the words) and the rest as the underlay frame, fading in once
+  made (the worship decks measured have none: the largest slide has 179 shapes in shard0-2 and 199 in the whole
+  collection; the 34 slides the planner left 'area' on are split by the exact c(2) rule). The emoji game slide is
+  not a count case: its stored form is 179 objects (169 pictures of 15 files, 15 prepared draws, none from the
+  source), and its warm draw of 118-180 ms at 3840 is 169 draws, which no frame rule shipped here selects (the
+  picture-target rule (c) asks of a slide past another count only; the speed rule belongs to render-bounds); it stays
+  as it is, and the owner's question about the frame on the 34 collection slides (the frame costs those slides a
+  few ms: 24 of 34 at or under 50 ms with it against 29 of 34 without, median +4.5 ms) is Q23 of integrate-2.
+- _Closed in sub-wave 2 (leaf-editor):_ the desktop editor draws past-budget objects whole in idle time (a fine
+  pointer, no service live, `?editor=light` off; one object a turn and the selected one at once; design/15 "Canvas
+  drawing", `wholeDraw.ts`); where it keeps the copy of the selected object the Object panel says so in one line.
+- _Closed in sub-wave 2 (the others):_ a running service is kept once, by name (live-by-ref: `resolvedId`, the copy
+  in two rows, a screen that holds it is sent the state without it, a GO costs a screen a record of about 1 KB, the
+  take-over's apply is parsed once; design/12, design/13, design/29 §2.3); dense decks import (xml-compact: parts up
+  to 32 MiB, a packed reader for traced artwork, 50,000 shapes a slide, a deck read slide by slide up to 1 GB of
+  slide XML, W9, W10 and W17 in the import report; the presentation budget is 8 MiB, owner question Q1.c); the hub's
+  disk floor and the pre-rendered slide files' storage exist and nothing calls them (prerender-store; PRERENDER_ON
+  stays false); the 40 WordArt warps exist as data and geometry and nothing draws them (warp-geom); kerning is
+  measured once per piece (followups-1c); the History list of a deck reads a summary per revision (library-revisions).
+- _Left after sub-wave 2:_ the take-over still holds the live loop about 0.25 s at 20 MiB (the gate is 0.2 s; about 50
+  ms are left to gain by computing the cue list's JSON and hash in golive-prepare's worker) and a reconnect storm of
+  20 screens holds it at p99 9-13 ms (the gate is 5 ms; pacing the state sends is the option), both named in
+  integrate-2 for the owner (Q20); frames above a playing video (a slide that plays a video inside itself keeps
+  the video and the shapes above it at 200, counted: design/29 E9), a frame past its time limit
+  (`FRAME_BUDGET_MS`) or 20,000 objects is not made and the slide keeps its direct part; the editor's single
+  drawing too detailed to build in one piece (the screens draw it whole); the GO list (a jump that waits behind another
+  cue's preparation), the bake worker, pre-rendering itself and the Go-live check's warnings are sub-waves 3 and 4.
 - _Left to render-bounds (sub-wave 3):_ one draw call of a hostile fill at 4K can take up to about 50 ms with
   nothing past the budget (holo-gradients 16, whose estimate underrates its gradients, and the wake template's
   slides 11 and 20, one 41-58 ms object each).
@@ -1963,8 +1995,11 @@ vert-cells; the wave's integrations measure them: `regroup/r2b/integrate-1.md`, 
     see the tab, and one in the measure alone makes a cell's fixed rows hold other lines than it draws:
     `tables.lines.test.ts`). 'Shrink text to fit' turned on or off on an imported box with mixed sizes moves
     its lines even when nothing shrinks (own-run line heights depend on the flag), with LibreOffice's autofit
-    model above. `kernAfter` (lines.ts) is measured again at every step of the autofit search: once per piece
-    and reference scale would do (verse-heavy text lays out about twice as slowly as before 1b, still linear).
+    model above. `kernAfter` (lines.ts) keeps the kerning across an office break once per piece and reference scale for the life
+    of one layout (sub-wave 2, followups-1c: `Shared.kerns`, keyed by the piece, the piece after it and the scale);
+    the verse-list case lays out about a fifth faster (1.50 to 1.20 ms, 300 interleaved layouts) and a 10,000-character
+    word with many breaks about a third (27.5 to 17.3 ms), the lines identical (`kerncache.test.ts`); the doubling
+    since 1b that came from the extra pieces the break after a hyphen makes remains.
 - _Left to render-bounds (sub-wave 3), tables:_ a hostile table at `TABLE_LIMITS` (60,000 characters in 6 cells
   of 10,000) draws in 61-63 ms at 3840 (`bench:tables`, named there; 4,096 cells of 60,000 characters: 35-39 ms;
   the corpus's table slides at most 43.5 ms): render-bounds' 20,000-character bound and pre-rendered big slides
