@@ -1,6 +1,6 @@
 import type { AdjustPairs } from './eval.ts';
 import { CMD_LINE, CMD_MOVE } from './ops.ts';
-import { type BuiltGeom, buildGeom } from './path.ts';
+import { type BuiltGeom, buildGeom, type GeomPath } from './path.ts';
 import { TEXT_WARP_GEOMS } from './textwarps.gen.ts';
 
 /*
@@ -148,4 +148,71 @@ export function warpMode(geom: Pick<BuiltGeom, 'w' | 'h' | 'paths'>): WarpMode {
 export function warpAreas(geom: Pick<BuiltGeom, 'paths'>): number {
   const n = geom.paths.length;
   return n % 2 === 1 ? n : n / 2;
+}
+
+// STUB (red first): the arc tables and their memo do nothing yet; the tests of textwarp.test.ts and
+// textwarp.fuzz.test.ts fail against it and the next commit builds them.
+
+/** The flatness a path is flattened to, in px (a thousandth of a pixel is far below anything drawn). */
+export const WARP_FLATNESS_PX = 0.02;
+/** Most points of one flattened path. */
+export const WARP_MAX_POINTS = 4096;
+/** Most entries of the arc memo. */
+export const WARP_MEMO_MAX = 256;
+/** Most points of all the arc memo's entries together. */
+export const WARP_MEMO_POINTS = 400_000;
+
+/** A path flattened to a polyline with its cumulative length. */
+export interface WarpArc {
+  readonly xy: Float64Array;
+  readonly len: Float64Array;
+  readonly total: number;
+  readonly tol: number;
+}
+
+/** A point of an arc. */
+export interface WarpPoint {
+  x: number;
+  y: number;
+}
+
+/** A warp's arcs, one per path, with what a painter asks of the built geometry. */
+export interface WarpArcs {
+  readonly name: string;
+  readonly w: number;
+  readonly h: number;
+  readonly arcs: readonly WarpArc[];
+  readonly mode: WarpMode;
+  readonly areas: number;
+  readonly points: number;
+}
+
+export function flattenWarpPath(_path: GeomPath, _flatness: number = WARP_FLATNESS_PX): WarpArc {
+  return { xy: new Float64Array(0), len: new Float64Array(0), total: 0, tol: 0 };
+}
+
+export function arcAt(_arc: WarpArc, _u: number, out: WarpPoint = { x: 0, y: 0 }): WarpPoint {
+  return out;
+}
+
+export function warpArcs(_name: string, _w: number, _h: number, _adj?: AdjustPairs): WarpArcs | undefined {
+  return undefined;
+}
+
+export function warpAreaArcs<T>(_arcs: readonly T[], _area: number): readonly T[] {
+  return [];
+}
+
+export function memoPut<T extends { readonly points: number }>(
+  _memo: Map<string, T>,
+  _key: string,
+  _entry: T,
+  _maxEntries: number,
+  _maxPoints: number,
+): void {}
+
+export function clearWarpMemo(): void {}
+
+export function warpMemoStats(): { entries: number; points: number } {
+  return { entries: 0, points: 0 };
 }

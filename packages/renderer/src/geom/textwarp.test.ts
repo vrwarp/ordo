@@ -1,17 +1,30 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TEXT_WARPS } from '@ordo/domain';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import { describe, expect, it } from 'vitest';
-import { CMD_CUBIC, CMD_LINE, CMD_MOVE } from './ops.ts';
+import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from './ops.ts';
 import { buildGeom, COORD_LIMIT, type GeomPath } from './path.ts';
 import {
+  arcAt,
+  clearWarpMemo,
+  flattenWarpPath,
   hasTextWarp,
+  memoPut,
   TEXT_WARP_NAMES,
   textWarpGeometry,
+  WARP_FLATNESS_PX,
+  WARP_MAX_POINTS,
+  WARP_MEMO_MAX,
+  WARP_MEMO_POINTS,
   WARP_PARALLEL_EPS,
+  type WarpArc,
   warpAdjustNames,
+  warpAreaArcs,
   warpAreas,
+  warpArcs,
   warpFollowsPath,
+  warpMemoStats,
   warpMode,
 } from './textwarp.ts';
 import { TEXT_WARP_GEOMS } from './textwarps.gen.ts';
@@ -369,6 +382,430 @@ describe('warpAreas', () => {
     expect(warpAreas(shape(1, 1, [curve, curve]))).toBe(1);
     expect(warpAreas(shape(1, 1, [curve, curve, curve]))).toBe(3);
     expect(warpAreas(shape(1, 1, [curve, curve, curve, curve]))).toBe(2);
+  });
+});
+
+// The arc-length tables: a built path flattened to a polyline with its cumulative length, so a painter can place a
+// glyph at a fraction of the way along a warp's line, and the bounded memo of the arcs of a warp at a box.
+
+/** A cubic's point at t. */
+const cubicAt = (p: readonly number[], t: number): [number, number] => {
+  const u = 1 - t;
+  const a = u * u * u;
+  const b = 3 * u * u * t;
+  const c = 3 * u * t * t;
+  const d = t * t * t;
+  return [a * p[0]! + b * p[2]! + c * p[4]! + d * p[6]!, a * p[1]! + b * p[3]! + c * p[5]! + d * p[7]!];
+};
+/** A polyline's length and points from sampling `n` equal steps of each cubic of a path of curves. */
+const sampled = (path: GeomPath, n = 20_000): { pts: number[]; length: number } => {
+  const pts: number[] = [path.pts[0]!, path.pts[1]!];
+  let at = 2;
+  let cx = path.pts[0]!;
+  let cy = path.pts[1]!;
+  for (const c of path.cmds.slice(1)) {
+    if (c === CMD_CUBIC) {
+      const seg = [cx, cy, ...path.pts.slice(at, at + 6)];
+      for (let i = 1; i <= n; i++) pts.push(...cubicAt(seg, i / n));
+      at += 6;
+    } else if (c === CMD_QUAD) {
+      const q = path.pts.slice(at, at + 4);
+      const seg = [
+        cx,
+        cy,
+        cx + (2 / 3) * (q[0]! - cx),
+        cy + (2 / 3) * (q[1]! - cy),
+        q[2]! + (2 / 3) * (q[0]! - q[2]!),
+        q[3]! + (2 / 3) * (q[1]! - q[3]!),
+        q[2]!,
+        q[3]!,
+      ];
+      for (let i = 1; i <= n; i++) pts.push(...cubicAt(seg, i / n));
+      at += 4;
+    } else if (c === CMD_LINE) {
+      pts.push(path.pts[at]!, path.pts[at + 1]!);
+      at += 2;
+    }
+    cx = pts[pts.length - 2]!;
+    cy = pts[pts.length - 1]!;
+  }
+  let length = 0;
+  for (let i = 2; i < pts.length; i += 2)
+    length += Math.hypot(pts[i]! - pts[i - 2]!, pts[i + 1]! - pts[i - 1]!);
+  return { pts, length };
+};
+/** The distance of a point from a polyline. */
+const distToPolyline = (x: number, y: number, poly: readonly number[]): number => {
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 2; i < poly.length; i += 2) {
+    const ax = poly[i - 2]!;
+    const ay = poly[i - 1]!;
+    const dx = poly[i]! - ax;
+    const dy = poly[i + 1]! - ay;
+    const l2 = dx * dx + dy * dy;
+    const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2));
+    best = Math.min(best, Math.hypot(x - (ax + t * dx), y - (ay + t * dy)));
+  }
+  return best;
+};
+const finiteArc = (a: WarpArc): void => {
+  expect(a.xy.length).toBe(2 * a.len.length);
+  for (const v of a.xy) expect(Number.isFinite(v)).toBe(true);
+  for (const v of a.len) expect(Number.isFinite(v)).toBe(true);
+  expect(Number.isFinite(a.total) || a.total === Number.POSITIVE_INFINITY).toBe(true);
+};
+
+describe('flattenWarpPath', () => {
+  it('reads a straight line as its two points with its length', () => {
+    const a = flattenWarpPath(line(0, 0, 30, 40));
+    expect([...a.xy]).toEqual([0, 0, 30, 40]);
+    expect([...a.len]).toEqual([0, 50]);
+    expect(a.total).toBe(50);
+    expect(a.tol).toBe(WARP_FLATNESS_PX);
+    expect(WARP_FLATNESS_PX).toBe(0.02);
+    expect(WARP_MAX_POINTS).toBe(4096);
+  });
+
+  it('flattens textArchUp to the half ellipse’s length, every chord within the flatness of the curve', () => {
+    const path = textWarpGeometry('textArchUp', 360, 240)!.paths[0]!;
+    const a = flattenWarpPath(path);
+    const dense = sampled(path);
+    expect(Math.abs(a.total - dense.length)).toBeLessThan(0.05);
+    // The polyline starts at the path's first point and ends at its last.
+    expect([a.xy[0], a.xy[1]]).toEqual([0, 120]);
+    near([a.xy[a.xy.length - 2]!, a.xy[a.xy.length - 1]!], [360, 120]);
+    // Its vertices lie on the curve and every chord stays within the flatness of it.
+    const n = a.xy.length / 2;
+    for (let i = 0; i < n; i++)
+      expect(distToPolyline(a.xy[2 * i]!, a.xy[2 * i + 1]!, dense.pts)).toBeLessThan(2e-3);
+    for (let i = 1; i < n; i++)
+      for (const t of [0.25, 0.5, 0.75]) {
+        const x = a.xy[2 * i - 2]! + t * (a.xy[2 * i]! - a.xy[2 * i - 2]!);
+        const y = a.xy[2 * i - 1]! + t * (a.xy[2 * i + 1]! - a.xy[2 * i - 1]!);
+        expect(distToPolyline(x, y, dense.pts)).toBeLessThanOrEqual(WARP_FLATNESS_PX + 2e-3);
+      }
+    // The cumulative length never decreases, starts at 0 and ends at the total.
+    expect(a.len[0]).toBe(0);
+    expect(a.len[a.len.length - 1]).toBe(a.total);
+    for (let i = 1; i < a.len.length; i++) expect(a.len[i]!).toBeGreaterThanOrEqual(a.len[i - 1]!);
+    expect(a.tol).toBe(WARP_FLATNESS_PX);
+  });
+
+  it('flattens a quadratic as the cubic it raises to, and a closed path back to its start', () => {
+    const quad: GeomPath = {
+      cmds: [CMD_MOVE, CMD_QUAD],
+      pts: [0, 0, 50, 100, 100, 0],
+      fill: 'norm',
+      stroke: true,
+    };
+    const a = flattenWarpPath(quad);
+    expect(Math.abs(a.total - sampled(quad).length)).toBeLessThan(0.05);
+    near([a.xy[a.xy.length - 2]!, a.xy[a.xy.length - 1]!], [100, 0]);
+    const tri: GeomPath = {
+      cmds: [CMD_MOVE, CMD_LINE, CMD_LINE, CMD_CLOSE],
+      pts: [0, 0, 30, 0, 30, 40],
+      fill: 'norm',
+      stroke: true,
+    };
+    const c = flattenWarpPath(tri);
+    expect([...c.xy]).toEqual([0, 0, 30, 0, 30, 40, 0, 0]);
+    expect(c.total).toBeCloseTo(30 + 40 + 50, 9);
+  });
+
+  it('reads only the first sub-path of a path, and no preset has a second', () => {
+    const two: GeomPath = {
+      cmds: [CMD_MOVE, CMD_LINE, CMD_MOVE, CMD_LINE],
+      pts: [0, 0, 10, 0, 50, 50, 90, 90],
+      fill: 'norm',
+      stroke: true,
+    };
+    expect([...flattenWarpPath(two).xy]).toEqual([0, 0, 10, 0]);
+    for (const name of TEXT_WARPS)
+      for (const p of textWarpGeometry(name, 360, 240)!.paths)
+        expect(p.cmds.filter((c) => c === CMD_MOVE).length, name).toBe(1);
+  });
+
+  it('returns an empty arc for a path with nothing in it, and never a non-finite number', () => {
+    const empty = flattenWarpPath({ cmds: [], pts: [], fill: 'norm', stroke: true });
+    expect(empty.xy.length).toBe(0);
+    expect(empty.total).toBe(0);
+    const nan = flattenWarpPath({
+      cmds: [CMD_MOVE, CMD_LINE],
+      pts: [Number.NaN, 0, Number.POSITIVE_INFINITY, 5],
+      fill: 'norm',
+      stroke: true,
+    });
+    finiteArc(nan);
+    for (const f of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const a = flattenWarpPath(textWarpGeometry('textArchUp', 360, 240)!.paths[0]!, f);
+      expect(a.tol, String(f)).toBe(WARP_FLATNESS_PX);
+    }
+  });
+
+  it('bounds every path of every warp to 4,096 points at any box, raising the tolerance rather than cutting a path short', () => {
+    const counts = new Map<string, { worst: number; total: number }>();
+    for (const [w, h] of [
+      [360, 240],
+      [1920, 1080],
+      [8000, 8000],
+      [1e9, 1e9],
+    ] as const) {
+      let worst = 0;
+      let total = 0;
+      for (const name of TEXT_WARPS)
+        for (const p of textWarpGeometry(name, w, h)!.paths) {
+          const a = flattenWarpPath(p);
+          finiteArc(a);
+          const n = a.xy.length / 2;
+          expect(n, `${name} ${w}x${h}`).toBeLessThanOrEqual(WARP_MAX_POINTS);
+          expect(a.tol, `${name} ${w}x${h}`).toBeGreaterThanOrEqual(WARP_FLATNESS_PX);
+          // The polyline ends where the path ends.
+          near(
+            [a.xy[a.xy.length - 2]!, a.xy[a.xy.length - 1]!],
+            [p.pts[p.pts.length - 2]!, p.pts[p.pts.length - 1]!],
+            Math.max(1e-3, w * 1e-12),
+          );
+          worst = Math.max(worst, n);
+          total += n;
+        }
+      counts.set(`${w}x${h}`, { worst, total });
+    }
+    // The planning measure: at most 513 points a path (textCircle) and 12,049 for all 40 at 1920 x 1080, at most
+    // 1,153 at 8000 x 8000; at an ordinary 360 x 240 nothing needs a doubled tolerance.
+    expect(counts.get('1920x1080')!.worst).toBeLessThanOrEqual(513);
+    expect(counts.get('1920x1080')!.total).toBeLessThanOrEqual(12_049);
+    expect(counts.get('8000x8000')!.worst).toBeLessThanOrEqual(1_153);
+    for (const name of TEXT_WARPS)
+      for (const p of textWarpGeometry(name, 360, 240)!.paths)
+        expect(flattenWarpPath(p).tol).toBe(WARP_FLATNESS_PX);
+    // A hostile box doubles the tolerance until the path fits.
+    const hostile = flattenWarpPath(textWarpGeometry('textCircle', 1e9, 1e9)!.paths[0]!);
+    expect(hostile.tol).toBeGreaterThan(WARP_FLATNESS_PX);
+    expect(Number.isFinite(hostile.tol)).toBe(true);
+  });
+
+  it('keeps a path of the most curves a built path can hold within the cap, cutting no curve short', () => {
+    const cmds: number[] = [CMD_MOVE];
+    const pts: number[] = [0, 0];
+    for (let i = 0; i < 1_300; i++) {
+      cmds.push(CMD_CUBIC);
+      pts.push(i + 5e8, 5e8, i - 5e8, -5e8, i + 1, 0);
+    }
+    const path: GeomPath = { cmds, pts, fill: 'norm', stroke: true };
+    const a = flattenWarpPath(path);
+    finiteArc(a);
+    expect(a.xy.length / 2).toBeGreaterThanOrEqual(1_301);
+    expect(a.xy.length / 2).toBeLessThanOrEqual(WARP_MAX_POINTS);
+    // Past thirty doublings and sixteen steps a curve a chord is the last resort, reported as an infinite tolerance.
+    expect(a.tol).toBe(Number.POSITIVE_INFINITY);
+    expect([a.xy[0], a.xy[1]]).toEqual([0, 0]);
+    expect([a.xy[a.xy.length - 2], a.xy[a.xy.length - 1]]).toEqual([1_300, 0]);
+  });
+
+  it('cuts every curve into sixteen equal parameter steps when thirty doublings do not fit it', () => {
+    const cmds: number[] = [CMD_MOVE];
+    const pts: number[] = [0, 0];
+    for (let i = 0; i < 100; i++) {
+      cmds.push(CMD_CUBIC);
+      pts.push(i + 50, 40, i + 60, -40, i + 100, 0);
+    }
+    const a = flattenWarpPath({ cmds, pts, fill: 'norm', stroke: true }, 1e-300);
+    expect(a.tol).toBe(Number.POSITIVE_INFINITY);
+    expect(a.xy.length / 2).toBe(100 * 16 + 1);
+    near([a.xy[a.xy.length - 2]!, a.xy[a.xy.length - 1]!], [199, 0]);
+  });
+});
+
+describe('arcAt', () => {
+  const arc = (path: GeomPath): WarpArc => flattenWarpPath(path);
+
+  it('gives the first point at 0, the last at 1 and the point at half the length at 0.5', () => {
+    const up = arc(textWarpGeometry('textArchUp', 360, 240)!.paths[0]!);
+    expect(arcAt(up, 0)).toEqual({ x: 0, y: 120 });
+    near(Object.values(arcAt(up, 1)), [360, 120]);
+    const mid = arcAt(up, 0.5);
+    expect(Math.abs(mid.x - 180)).toBeLessThan(0.02);
+    expect(Math.abs(mid.y - 0)).toBeLessThan(0.02);
+    expect(arcAt(arc(line(0, 0, 30, 40)), 0.25)).toEqual({ x: 7.5, y: 10 });
+  });
+
+  it('takes u below 0, NaN and -Infinity as 0 and u above 1 and Infinity as 1', () => {
+    const l = arc(line(0, 0, 30, 40));
+    for (const u of [-0.5, -1e300, Number.NaN, Number.NEGATIVE_INFINITY])
+      expect(arcAt(l, u), String(u)).toEqual({ x: 0, y: 0 });
+    for (const u of [1.5, 1e300, Number.POSITIVE_INFINITY])
+      expect(arcAt(l, u), String(u)).toEqual({ x: 30, y: 40 });
+  });
+
+  it('returns the point of an arc of zero length, and of an empty one the origin', () => {
+    const dot = arc(line(7, 9, 7, 9));
+    expect(dot.total).toBe(0);
+    for (const u of [0, 0.3, 1]) expect(arcAt(dot, u)).toEqual({ x: 7, y: 9 });
+    expect(arcAt(arc({ cmds: [], pts: [], fill: 'norm', stroke: true }), 0.5)).toEqual({ x: 0, y: 0 });
+  });
+
+  it('fills and returns the point it is given, without allocating one', () => {
+    const l = arc(line(0, 0, 30, 40));
+    const out = { x: -1, y: -1 };
+    expect(arcAt(l, 0.5, out)).toBe(out);
+    expect(out).toEqual({ x: 15, y: 20 });
+    expect(arcAt(l, 0.5)).not.toBe(out);
+  });
+});
+
+describe('warpArcs and the memo', () => {
+  it('is undefined for a name that is not a warp and holds one arc per path otherwise', () => {
+    clearWarpMemo();
+    expect(warpArcs('rect', 360, 240)).toBeUndefined();
+    expect(warpArcs('__proto__', 360, 240)).toBeUndefined();
+    expect(warpMemoStats()).toEqual({ entries: 0, points: 0 });
+    for (const name of TEXT_WARPS) {
+      const g = textWarpGeometry(name, 360, 240)!;
+      const a = warpArcs(name, 360, 240)!;
+      expect(a.name).toBe(name);
+      expect([a.w, a.h]).toEqual([360, 240]);
+      expect(a.arcs.length).toBe(g.paths.length);
+      expect(a.mode).toBe(warpMode(g));
+      expect(a.areas).toBe(warpAreas(g));
+      expect(a.points).toBe(a.arcs.reduce((s, x) => s + x.xy.length / 2, 0));
+      for (let i = 0; i < g.paths.length; i++) expect(a.arcs[i], name).toEqual(flattenWarpPath(g.paths[i]!));
+    }
+  });
+
+  it('returns the same entry for the same arguments and another for another adjust value or box', () => {
+    clearWarpMemo();
+    const a = warpArcs('textPlain', 360, 240)!;
+    expect(warpArcs('textPlain', 360, 240)).toBe(a);
+    expect(warpArcs('textPlain', 360, 240, [['adj', 60_000]])).not.toBe(a);
+    expect(warpArcs('textPlain', 360, 241)).not.toBe(a);
+    expect(warpArcs('textPlain', 361, 240)).not.toBe(a);
+    expect(warpArcs('textWave1', 360, 240)).not.toBe(a);
+  });
+
+  it('reads adjust pairs by name and value only: a bad pair, a long name or a fifth pair is not part of the key', () => {
+    clearWarpMemo();
+    const a = warpArcs('textPlain', 360, 240)!;
+    expect(warpArcs('textPlain', 360, 240, [['adj', Number.NaN]])).toBe(a);
+    expect(warpArcs('textPlain', 360, 240, [['adj', Number.POSITIVE_INFINITY]])).toBe(a);
+    expect(warpArcs('textPlain', 360, 240, [['x'.repeat(17), 5]])).toBe(a);
+    expect(warpArcs('textPlain', 360, 240, [])).toBe(a);
+    const four: [string, number][] = [
+      ['adj', 60_000],
+      ['a', 1],
+      ['b', 2],
+      ['c', 3],
+    ];
+    const b = warpArcs('textPlain', 360, 240, four)!;
+    expect(b).not.toBe(a);
+    expect(warpArcs('textPlain', 360, 240, [...four, ['d', 4]])).toBe(b);
+    expect(
+      warpArcs('textPlain', 360, 240, [['adj', Number.NaN], ...four.slice(0, 3)] as [string, number][]),
+    ).not.toBe(b);
+    // A box is read as buildGeom reads it: NaN and negative sides are 0, huge ones are the largest box.
+    expect(warpArcs('textPlain', Number.NaN, 240)).toBe(warpArcs('textPlain', 0, 240));
+    expect(warpArcs('textPlain', -5, 240)).toBe(warpArcs('textPlain', 0, 240));
+    expect(warpArcs('textPlain', 1e12, 240)).toBe(warpArcs('textPlain', 1e9, 240));
+  });
+
+  it('keeps at most 256 entries and 400,000 points, the least recently used out first, a hit refreshing recency', () => {
+    expect([WARP_MEMO_MAX, WARP_MEMO_POINTS]).toEqual([256, 400_000]);
+    clearWarpMemo();
+    const first = Array.from({ length: WARP_MEMO_MAX }, (_, i) => warpArcs('textPlain', 100 + i, 100)!);
+    expect(warpMemoStats().entries).toBe(WARP_MEMO_MAX);
+    // A hit on the oldest makes the second oldest the next to go.
+    expect(warpArcs('textPlain', 100, 100)).toBe(first[0]);
+    warpArcs('textPlain', 5_000, 100);
+    expect(warpMemoStats().entries).toBe(WARP_MEMO_MAX);
+    expect(warpArcs('textPlain', 100, 100)).toBe(first[0]);
+    expect(warpArcs('textPlain', 101, 100)).not.toBe(first[1]);
+    clearWarpMemo();
+    expect(warpMemoStats()).toEqual({ entries: 0, points: 0 });
+  });
+
+  it('holds both bounds after 300 distinct hostile boxes', () => {
+    clearWarpMemo();
+    let most = 0;
+    for (let i = 0; i < 300; i++) {
+      const e = warpArcs('textButtonPour', 1e9 - 1_000 * i, 1e9 - 3 * i)!;
+      expect(e.arcs.length).toBe(6);
+      for (const a of e.arcs) expect(a.xy.length / 2).toBeLessThanOrEqual(WARP_MAX_POINTS);
+      const s = warpMemoStats();
+      expect(s.entries).toBeLessThanOrEqual(WARP_MEMO_MAX);
+      expect(s.points).toBeLessThanOrEqual(WARP_MEMO_POINTS);
+      most = Math.max(most, s.points);
+    }
+    expect(warpMemoStats().entries).toBeLessThanOrEqual(WARP_MEMO_MAX);
+    expect(most).toBeGreaterThan(0);
+    clearWarpMemo();
+  });
+
+  it('evicts by entries, then by points, and does not keep an entry larger than the whole points bound', () => {
+    const e = (points: number): { points: number } => ({ points });
+    const keys = (m: Map<string, unknown>): string[] => [...m.keys()];
+    const byEntries = new Map<string, { points: number }>();
+    for (const k of ['a', 'b', 'c', 'd']) memoPut(byEntries, k, e(1), 3, 100);
+    expect(keys(byEntries)).toEqual(['b', 'c', 'd']);
+    const byPoints = new Map<string, { points: number }>();
+    for (const k of ['a', 'b', 'c']) memoPut(byPoints, k, e(10), 100, 25);
+    expect(keys(byPoints)).toEqual(['b', 'c']);
+    memoPut(byPoints, 'big', e(26), 100, 25);
+    expect(keys(byPoints)).toEqual(['b', 'c']);
+    memoPut(byPoints, 'exact', e(25), 100, 25);
+    expect(keys(byPoints)).toEqual(['exact']);
+    // A key put again is replaced and becomes the newest.
+    const again = new Map<string, { points: number }>();
+    memoPut(again, 'a', e(1), 3, 100);
+    memoPut(again, 'b', e(1), 3, 100);
+    memoPut(again, 'a', e(2), 3, 100);
+    expect(keys(again)).toEqual(['b', 'a']);
+    expect(again.get('a')).toEqual({ points: 2 });
+  });
+
+  it('deals a warp’s arcs out by area: one arc each when the path count is odd, a pair each when it is even', () => {
+    const a = [10, 11, 12, 13, 14, 15];
+    expect(warpAreaArcs(a, 0)).toEqual([10, 11]);
+    expect(warpAreaArcs(a, 1)).toEqual([12, 13]);
+    expect(warpAreaArcs(a, 2)).toEqual([14, 15]);
+    expect(warpAreaArcs(a, 3)).toEqual([]);
+    expect(warpAreaArcs([10, 11, 12], 0)).toEqual([10]);
+    expect(warpAreaArcs([10, 11, 12], 2)).toEqual([12]);
+    expect(warpAreaArcs([10, 11, 12], 3)).toEqual([]);
+    expect(warpAreaArcs([], 0)).toEqual([]);
+    expect(warpAreaArcs([10, 11], -1)).toEqual([]);
+    // Against the built warps: the first area of Button is its first path, of Button Pour its first two.
+    expect(warpAreaArcs(warpArcs('textButton', 360, 240)!.arcs, 0).length).toBe(1);
+    expect(warpAreaArcs(warpArcs('textButtonPour', 360, 240)!.arcs, 0).length).toBe(2);
+    expect(warpAreaArcs(warpArcs('textArchUp', 360, 240)!.arcs, 0).length).toBe(1);
+  });
+
+  it('costs little: all 40 warps cold at 1920 x 1080 and a thousand hits', () => {
+    clearWarpMemo();
+    const t0 = performance.now();
+    for (const name of TEXT_WARPS) warpArcs(name, 1920, 1080);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(100));
+    const t1 = performance.now();
+    for (let i = 0; i < 1_000; i++) warpArcs('textCircle', 1920, 1080);
+    expect(performance.now() - t1).toBeLessThan(budgetMs(5));
+    clearWarpMemo();
+  });
+
+  it('gives the same bytes for the same arguments in a fresh memo', () => {
+    for (const name of TEXT_WARPS) {
+      clearWarpMemo();
+      const a = warpArcs(name, 1920, 1080, [[warpAdjustNames(name)![0]!, 33_333]])!;
+      clearWarpMemo();
+      const b = warpArcs(name, 1920, 1080, [[warpAdjustNames(name)![0]!, 33_333]])!;
+      expect(a).not.toBe(b);
+      expect(a.arcs.length).toBe(b.arcs.length);
+      for (let i = 0; i < a.arcs.length; i++) {
+        expect(Buffer.from(a.arcs[i]!.xy.buffer).equals(Buffer.from(b.arcs[i]!.xy.buffer)), name).toBe(true);
+        expect(Buffer.from(a.arcs[i]!.len.buffer).equals(Buffer.from(b.arcs[i]!.len.buffer)), name).toBe(
+          true,
+        );
+        expect(a.arcs[i]!.total).toBe(b.arcs[i]!.total);
+        expect(a.arcs[i]!.tol).toBe(b.arcs[i]!.tol);
+      }
+    }
   });
 });
 
