@@ -438,7 +438,9 @@ describe('packed paths: structure (T7) and the unpacked pin (T8)', () => {
 
 // ── T9: fuzz parity ─────────────────────────────────────────────────────────────────────────────────────
 
-const SEED = 20261118;
+/** The suite runs 3,000 parts on a fixed seed; the long run of the measures (xml-compact M10) sets both, out of the suite. */
+const RUNS = Number(process.env.ORDO_XML_FUZZ_RUNS) || 3000;
+const SEED = Number(process.env.ORDO_XML_FUZZ_SEED) || 20261118;
 const numberArb = fc.oneof(
   { weight: 14, arbitrary: fc.integer({ min: -1_000_000, max: 1_000_000 }).map(String) },
   { weight: 1, arbitrary: fc.integer({ min: -999_999_999_999_999, max: 999_999_999_999_999 }).map(String) },
@@ -590,14 +592,14 @@ const partArb = fc
 
 describe('packed paths: fuzz parity with the node reader (T9)', () => {
   it('gives equal trees and equal refusals for 3,000 generated path-heavy parts', () => {
-    // eslint-disable-next-line no-console
-    console.info(`xml.packed fuzz seed ${SEED}`);
     let packedTotal = 0;
+    let slowest = 0;
     let accepted = 0;
     let refused = 0;
     const t0 = performance.now();
     fc.assert(
       fc.property(partArb, (xml) => {
+        const t = performance.now();
         let raw: XNode[] | undefined;
         const a = outcome(() => (raw = packed(xml)));
         const b = outcome(() => plain(xml));
@@ -605,10 +607,16 @@ describe('packed paths: fuzz parity with the node reader (T9)', () => {
         if ('tree' in b) accepted++;
         else refused++;
         if (raw) packedTotal += packedPaths(raw as XNode[]).length;
+        slowest = Math.max(slowest, performance.now() - t);
       }),
-      { numRuns: 3000, seed: SEED },
+      { numRuns: RUNS, seed: SEED },
     );
-    expect(performance.now() - t0).toBeLessThan(budgetMs(20_000));
+    console.info(
+      `xml.packed fuzz: ${RUNS} parts, seed ${SEED}: ${accepted} read, ${refused} refused, ${packedTotal} packed paths, slowest part ${slowest.toFixed(1)} ms (both readers)`,
+    );
+    if (RUNS === 3000) expect(performance.now() - t0).toBeLessThan(budgetMs(20_000));
+    // A generated part is a few KB: the readers stay linear (T6 proves it at 300,000 commands inside budgetMs(5_000)).
+    expect(slowest).toBeLessThan(budgetMs(5_000));
     // The generator exercises both sides: parts that parse, parts that are refused, and paths that pack.
     expect(accepted).toBeGreaterThan(500);
     expect(refused).toBeGreaterThan(50);
