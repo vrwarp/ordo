@@ -1099,6 +1099,8 @@ export interface DenseOptions {
   seed?: number;
   /** The first shape id (default 2). */
   firstId?: number;
+  /** The fill of the first disc (a hex colour), so a render can measure it; the others keep their seeded fills. */
+  firstFill?: string;
 }
 
 /**
@@ -1141,7 +1143,8 @@ export function denseShapes(o: DenseOptions): string {
         cx: size,
         cy: size,
         geom: 'none',
-        fill: custGeom({ paths: pathFor(k) }) + solid(hex.toUpperCase()),
+        fill:
+          custGeom({ paths: pathFor(k) }) + solid(k === 0 && o.firstFill ? o.firstFill : hex.toUpperCase()),
       }),
     );
   }
