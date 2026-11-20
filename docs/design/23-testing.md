@@ -87,7 +87,9 @@ between 16000 and 32767.
   a reading-plan cell is edited on the canvas); `editor-reimport-lo` (440, sub-wave 1b's tables-cells: 'Make
   editable' on LibreOffice's 64 KB page a native import stored, on a hub with LibreOffice; 445-449 are kept for
   sub-wave 1b's integration); `golive-prepare` (450-451: Go live again during a service on a hub with a slowed library, and
-  the size ceiling). The integrations of sub-waves 2-4 hold 630-659. An explicit `ORDO_E2E_PORT_BASE` may sit below
+  the size ceiling); `live-frame` (470, sub-wave 2: the underlay frame on a hub without LibreOffice: a crowded slide drawn
+  whole on both Audience screens, the late frame, the switches, effects past one frame of units, an ordinary slide
+  unchanged). The integrations of sub-waves 2-4 hold 630-659. An explicit `ORDO_E2E_PORT_BASE` may sit below
   16000 (design/29 §4; `e2e/ports.ts` says what it must avoid).
   `e2e/table-deck.test.ts` checks the deck still tests what the spec is about (the bulletin past M6's cell cap,
   the reading plan's M6 group past 64 KB, measured with the kill switch, and both table objects through the import

@@ -106,9 +106,9 @@ export const BUILDERS: Record<string, () => Slide> = {
       [...flatShapes(17_500, 160), ...pictures(64), ...boxes(FRAME_MAX_OBJECTS - 17_564, 16, 0)],
       'objects20000',
     ),
-  // 20 shadowed panels (effectsSlide's pattern twice) past one frame of units on a soft-edged frame.
+  // 20 shadowed panels (effectsSlide's twelve large ones and eight more) past one frame of units on a soft-edged frame.
   shadows20: () => {
-    const e = effectsSlide({ w: 420, h: 260 });
+    const e = effectsSlide({ w: 1100, h: 700 });
     const more = Array.from({ length: 8 }, (_, i) =>
       panel(`q${i}`, 40 + (i % 4) * 440, 600 + Math.floor(i / 4) * 200, 420, 180, 12 + i),
     );
