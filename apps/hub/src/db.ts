@@ -239,6 +239,34 @@ CREATE TABLE IF NOT EXISTS refs_scanned (
 CREATE TABLE IF NOT EXISTS collect_marks (hash TEXT PRIMARY KEY, since INTEGER NOT NULL);
 `,
   },
+  {
+    // 14 is the pre-render store's (design/29 §1.3): this is the next number after it, so the two lists merge in order.
+    version: 15,
+    name: 'revision-summaries',
+    // One small row per kept presentation revision for the History list (design/28 P2, the title only): a revision is a full
+    // copy of the presentation, up to 8 MiB, and listing them parsed every one (57 of 8 MiB: 5.4 s and 2.2 GiB). A side table
+    // rather than a column, so the migration stays idempotent (the test re-applies every migration's SQL); nothing is copied
+    // here (the library process makes the rows of the revisions that have none, paced: apps/hub/src/revisions.ts). `title_json`
+    // is the title as its JSON string literal, so it comes back exactly. The three triggers delete a summary whenever its
+    // revision row is replaced, edited or deleted, by any hub: one that opens the folder and does not know this table writes
+    // revisions as it always did, and a summary is never wrong or left behind (an INSERT OR REPLACE fires the insert trigger
+    // whatever `recursive_triggers` says). An older hub opens a folder at 15 and ignores the table.
+    sql: `
+CREATE TABLE IF NOT EXISTS revision_summaries (
+  presentation_id TEXT NOT NULL, rev INTEGER NOT NULL, title_json TEXT NOT NULL,
+  saved_by TEXT, saved_at TEXT NOT NULL, PRIMARY KEY (presentation_id, rev));
+CREATE TRIGGER IF NOT EXISTS revision_summaries_replace BEFORE INSERT ON presentation_revisions BEGIN
+  DELETE FROM revision_summaries WHERE presentation_id = NEW.presentation_id AND rev = NEW.rev;
+END;
+CREATE TRIGGER IF NOT EXISTS revision_summaries_delete AFTER DELETE ON presentation_revisions BEGIN
+  DELETE FROM revision_summaries WHERE presentation_id = OLD.presentation_id AND rev = OLD.rev;
+END;
+CREATE TRIGGER IF NOT EXISTS revision_summaries_edit AFTER UPDATE ON presentation_revisions BEGIN
+  DELETE FROM revision_summaries WHERE presentation_id = OLD.presentation_id AND rev = OLD.rev;
+  DELETE FROM revision_summaries WHERE presentation_id = NEW.presentation_id AND rev = NEW.rev;
+END;
+`,
+  },
 ];
 
 /**

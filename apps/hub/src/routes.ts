@@ -724,7 +724,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     return reply.code(204).send();
   });
   route('GET', '/presentations/:id/revisions', 'edit', 'light', async (req) => {
-    lib.presentations.must(params(req).id!);
+    // the row is checked, not read: parsing the presentation (up to 8 MiB) to list its revisions was the rest of the cost
+    lib.presentations.mustExist(params(req).id!);
     return lib.revisions(params(req).id!);
   });
   route('GET', '/presentations/:id/revisions/:rev', 'edit', 'light', async (req) =>

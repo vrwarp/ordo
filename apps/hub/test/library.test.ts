@@ -76,15 +76,15 @@ describe('migration 14: the tables of the pre-render store (design/29 §1.3)', (
       (r) => r.name,
     );
 
-  it('is the last migration and creates every table and index, once', () => {
-    expect(MIGRATIONS.at(-1)!.version).toBe(14);
+  it('is migration 14 and creates every table and index, once', () => {
+    expect(MIGRATIONS.find((m) => m.name === 'prerender-store')?.version).toBe(14);
     const db = new Database(join(tempDir(), 'm14.db'));
-    expect(migrate(db)).toBe(14);
+    expect(migrate(db)).toBe(MIGRATIONS.at(-1)!.version);
     for (const t of TABLES) expect(names(db, 'table'), t).toContain(t);
     for (const i of INDEXES) expect(names(db, 'index'), i).toContain(i);
     // twice changes nothing; re-applying the SQL is a no-op
     const before = db.prepare(`SELECT name, sql FROM sqlite_master ORDER BY name`).all();
-    expect(migrate(db)).toBe(14);
+    expect(migrate(db)).toBe(MIGRATIONS.at(-1)!.version);
     for (const m of MIGRATIONS) db.exec(m.sql);
     expect(db.prepare(`SELECT name, sql FROM sqlite_master ORDER BY name`).all()).toEqual(before);
     db.close();
@@ -105,7 +105,7 @@ describe('migration 14: the tables of the pre-render store (design/29 §1.3)', (
       `INSERT INTO files (hash, bytes, mime, path, created_at) VALUES ('h1', 5, 'image/png', 'media/h1.png', 'a')`,
     ).run();
     for (const t of TABLES) expect(names(db, 'table'), t).not.toContain(t);
-    expect(migrate(db)).toBe(14);
+    expect(migrate(db)).toBe(MIGRATIONS.at(-1)!.version);
     expect(db.prepare(`SELECT rev FROM presentations WHERE id = 'p1'`).get()).toEqual({ rev: 3 });
     expect(db.prepare(`SELECT bytes FROM files WHERE hash = 'h1'`).get()).toEqual({ bytes: 5 });
     for (const t of TABLES) expect(names(db, 'table'), t).toContain(t);
@@ -121,7 +121,7 @@ describe('migration 14: the tables of the pre-render store (design/29 §1.3)', (
         db,
         MIGRATIONS.filter((m) => m.version <= 13),
       ),
-    ).toBe(14);
+    ).toBe(MIGRATIONS.at(-1)!.version);
     expect(names(db, 'table')).toContain('slide_heads');
     db.close();
   });

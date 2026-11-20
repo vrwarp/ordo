@@ -260,11 +260,33 @@ bounded, so the process exits within about 2 s even with a frozen client; `main.
 SQLite file at `/data/ordo.db`, WAL mode, `synchronous=NORMAL`. Tables: `presentations`,
 `presentation_revisions`, `playlists`, `media`, `files`, `fonts`, `themes`, `looks`,
 `outputs`, `settings`, `sessions`, `capped_sessions`, `auth_attempts`, `auth_global_failures`, `jobs`,
-`job_attempts`, `library_changes`,
+`job_attempts`, `library_changes`, `revision_summaries` (one small row per kept presentation revision for
+the History list, migration 15, below),
 `uploads`, `media_hashes` (the SHA-256 media hash index: imports find media with the same content without
 scanning `media`; its `content` rows are kept by triggers on `media`, its `source` rows record the deck
 part a prepared picture was made from, design/20 "Pictures of the native import"). Migrations with a
 simple numbered-SQL runner; every migration is idempotent and tested.
+
+**Revision summaries** (migration 15, `apps/hub/src/revisions.ts`; design/28 P2, the title only). A revision
+is a full copy of its presentation (up to the 8 MiB budget), so listing them used to parse every kept
+revision: 57 revisions of 8 MiB took 5.4 s and a 2.2 GiB peak in the library process. `GET
+/presentations/:id/revisions` now reads `revision_summaries (presentation_id, rev, title_json, saved_by,
+saved_at)`, written in the same transaction as the revision (`savePresentation`), and never reads a
+revision's JSON: the keys come from the index of `presentation_revisions` and the rest from the summary. The
+title is kept as its JSON string literal, so what the list answers is `JSON.parse` of it, exactly the string
+the old reading gave. A side table rather than a column (a column's `ALTER TABLE` cannot be re-applied, and
+the migration test re-applies every migration), with three triggers on `presentation_revisions` that delete
+a summary when its row is replaced, edited or deleted, whoever does it: an older hub that opens the folder
+(it ignores the table) writes revisions as it always did, and a summary is never wrong or left behind. A
+revision with no summary (an older hub saved it, or the backfill has not reached it) is read once, one row at
+a time, inside SQLite: the first 16 KiB of its JSON are scanned for the top-level `"title"` (where a stored
+presentation keeps it, third), then the first 1 MiB, then SQLite's own parse (`json -> '$.title'`), and only
+for what none of them answers (a title that is not a string, no title) the old parse of that one body; the
+summary is recorded. The backfill (`RevisionTitleBackfill`, library process only, 2 minutes after the start)
+makes the summaries of the revisions that have none: slices of at most 5 ms, a rest of four times the slice
+between them, never while a service is live, resumable (a revision with a summary is not read again). The
+migration copies nothing. Revision caps (design/28 P2's 200 rows) and the retention (50 revisions or 30 days)
+are unchanged.
 
 `/data/live.db` (live process only): `live_journal (seq, at, cmd_id, kind, event_json)`,
 `live_snapshot (singleton)`, `live_snapshot_prev` (the two snapshots before it), `live_resolved` (the running
@@ -631,9 +653,10 @@ whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`)
   above the 32 MiB body limit.
 - Revisions are full copies (design/11 "Revisions"): an imported presentation of 1 MB edited often costs
   up to 50 MB of revision rows.
-  At the 8 MiB budget that is up to 400 MB for one deck, and the History list parses every kept revision
+  At the 8 MiB budget that is up to 400 MB for one deck. The History list used to parse every kept revision
   (57 revisions of 8 MiB: 5.4 s and a 2.2 GiB peak in the library process, measured at the raise, design/27
-  §3.4); the cost to watch is that list, not the disk.
+  §3.4); it now reads a summary per revision ("Storage": `revision_summaries`) and no body, so what stays to
+  watch is the disk, not the list.
 - `GET /health` reports the library snapshot's size (Logging and diagnostics).
 <!-- prerender-store:sizes -->
 - **A presentation's files, 1 GiB** (design/29 A24, W29; `PRERENDER_BUDGET_BYTES`): the bytes of the files only its

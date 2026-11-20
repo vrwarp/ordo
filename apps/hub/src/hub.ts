@@ -26,6 +26,7 @@ import { contextMediaIds, forOutputs } from './librarylink.ts';
 import { LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
+import { RevisionTitleBackfill } from './revisions.ts';
 import {
   cleanupStaleUploads,
   type LibraryApiCtx,
@@ -57,6 +58,8 @@ export type Hub = {
   live: LiveService;
   sockets: SocketHub;
   backups: Backups;
+  /** The one-off summary of the revisions that have none (the History list reads summaries): paced, waits for End service. */
+  revisionTitles: RevisionTitleBackfill;
   log: Logger;
   ring: LogRing;
   /** The keys of pre-rendered slides (computed at save; the recompute and safety-net jobs). */
@@ -158,6 +161,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   if (cfg.liveByRefWarning) log.warn({}, cfg.liveByRefWarning);
   const timeZone = () => venueTimeZone(lib.getSetting('general').timeZone, cfg.timeZone);
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
+  const revisionTitles = new RevisionTitleBackfill(lib.summaries, { live: () => live.state.mode, log });
   const statics = new StaticApps(cfg.appsDir, cfg.domain);
 
   const http = await createHttpApp({ cfg, log, auth: () => auth, phonesEnabled: phones.enabled });
@@ -223,6 +227,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     live,
     sockets,
     backups,
+    revisionTitles,
     log,
     ring,
     timeZone,
@@ -241,6 +246,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
       // die with the abort signal), snapshot the live state, and only then drop the sockets: the clients
       // get a `bye` and are terminated without waiting for a close handshake a stuck client never sends.
       backups.stop();
+      revisionTitles.stop();
       prerenderKeys.stop();
       backfill.stop();
       collector.stop();
@@ -340,12 +346,14 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     prerenderKeys.onLiveMode(live.state.mode);
     backfill.onLiveMode(live.state.mode);
     collector.onLiveMode(live.state.mode);
+    revisionTitles.onLiveMode(live.state.mode);
   });
   live.onState((s) => {
     jobs.onLiveMode(s.mode);
     prerenderKeys.onLiveMode(s.mode);
     backfill.onLiveMode(s.mode);
     collector.onLiveMode(s.mode);
+    revisionTitles.onLiveMode(s.mode);
   });
   jobs.start();
   prerenderKeys.start();
@@ -353,5 +361,6 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   collector.start();
   sockets.start();
   if (cfg.scheduleBackups) backups.schedule();
+  revisionTitles.start();
   return hub;
 }

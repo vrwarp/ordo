@@ -34,6 +34,7 @@ import { type LibraryStats, LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
 import { cpuPool } from './pool.ts';
+import { RevisionTitleBackfill } from './revisions.ts';
 import { PrerenderKeys } from './prerenderkeys.ts';
 import { Collector, RefBackfill } from './collect.ts';
 import { goLiveExtras, PrerenderStore } from './prerenders.ts';
@@ -91,6 +92,8 @@ export type LibraryProcess = {
   db: DB;
   lib: Library;
   jobs: JobQueue;
+  /** The one-off summary of the revisions that have none (the History list reads summaries; library process only). */
+  revisionTitles: RevisionTitleBackfill;
   log: Logger;
   url: string;
   /** The collection of content files nothing names. */
@@ -192,6 +195,7 @@ export async function createLibraryProcess(
     schedule: cfg.scheduleBackups,
     onRun: () => reportStats(),
   });
+  const revisionTitles = new RevisionTitleBackfill(lib.summaries, { live: () => locks.mode, log });
   const libStats = new LibraryStatsCache(lib, log, { minIntervalMs: 0 });
   let status: ProcessStatus[] = [];
 
@@ -367,6 +371,7 @@ export async function createLibraryProcess(
   prerenderKeys.start();
   backfill.start();
   collector.start();
+  revisionTitles.start();
   if (cfg.scheduleBackups) backups.schedule();
   // The library lists its fonts to the live process and the editor: it says ready once the bundled fonts are
   // registered, at most `fontsWaitMs` (a restart finds every row unchanged and waits for nothing).
@@ -386,6 +391,7 @@ export async function createLibraryProcess(
     db,
     lib,
     jobs,
+    revisionTitles,
     log,
     url,
     collector,
@@ -397,6 +403,7 @@ export async function createLibraryProcess(
       prerenderKeys.onLiveMode(m.mode);
       backfill.onLiveMode(m.mode);
       collector.onLiveMode(m.mode);
+      revisionTitles.onLiveMode(m.mode);
     },
     setLiveUrl(u) {
       liveUrl = u;
@@ -411,6 +418,7 @@ export async function createLibraryProcess(
       backfill.stop();
       collector.stop();
       backups.stop();
+      revisionTitles.stop();
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       await withTimeout(app.close(), 1000, () => log.warn('http server did not close in time'));
       db.close();

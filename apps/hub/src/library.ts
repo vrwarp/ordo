@@ -37,6 +37,7 @@ import { badRequest, conflict, HttpError, notFound } from './errors.ts';
 import { RefIndex } from './collect.ts';
 import { PrerenderIndex } from './prerenders.ts';
 import { NAMED_MAX, SlideFileIndex } from './slidefiles.ts';
+import { RevisionSummaries } from './revisions.ts';
 import { validate } from './validate.ts';
 
 export type Change = { kind: LibraryKind; id: string; rev?: number; entity?: unknown; deleted?: boolean };
@@ -184,6 +185,11 @@ class EntityTable<T extends { id: string; rev?: number }> {
     if (!e) throw notFound(`${this.table.replace(/s$/, '')} ${id} not found`);
     return e;
   }
+  /** Whether the row is there: one lookup, nothing parsed (a presentation's JSON is up to 8 MiB). `must` without the entity. */
+  mustExist(id: string): void {
+    if (!this.db.prepare(`SELECT 1 FROM ${this.table} WHERE id = ?`).get(id))
+      throw notFound(`${this.table.replace(/s$/, '')} ${id} not found`);
+  }
 
   insert(input: T): T {
     const now = nowIso();
@@ -236,6 +242,8 @@ export class Library {
   readonly media: EntityTable<Media>;
   readonly themes: EntityTable<Theme & { rev?: number }>;
   readonly folders: EntityTable<Folder & { rev?: number }>;
+  /** One small summary row per kept presentation revision (the History list reads these, not the revisions' JSON). */
+  readonly summaries: RevisionSummaries;
   /** The heads and pages of pre-rendered slides' full forms (DB only: the save check, goLive and collection read it). */
   readonly slideFiles: SlideFileIndex;
   /** The keys and pictures of pre-rendered slides (DB only). */
@@ -271,6 +279,7 @@ export class Library {
     this.media = new EntityTable(db, 'media', Media, (m) => ({ name: m.name, kind: m.kind, state: m.state }));
     this.themes = new EntityTable(db, 'themes', Theme.extend({ rev: z.number().int().optional() }));
     this.folders = new EntityTable(db, 'folders', FolderSchema.extend({ rev: z.number().int().optional() }));
+    this.summaries = new RevisionSummaries(db);
     this.slideFiles = new SlideFileIndex(db);
     this.prerenderIndex = new PrerenderIndex(db);
     this.refs = new RefIndex(db);
@@ -451,11 +460,14 @@ export class Library {
           : this.presentations.update(p.id, body, opts.expectedRev);
       // The revision's JSON is built once: the same string is scanned for the files it names (no parse).
       const json = JSON.stringify(saved);
+      const savedAt = saved.updatedAt ?? nowIso();
       this.db
         .prepare(
           `INSERT OR REPLACE INTO presentation_revisions (presentation_id, rev, json, saved_by, saved_at) VALUES (?, ?, ?, ?, ?)`,
         )
-        .run(saved.id, saved.rev, json, opts.by ?? null, saved.updatedAt ?? nowIso());
+        .run(saved.id, saved.rev, json, opts.by ?? null, savedAt);
+      // The summary the History list reads, written in the save that writes the revision (design/28 P2).
+      this.summaries.record(saved.id, saved.rev, saved.title, opts.by ?? null, savedAt);
       this.refs.recordSave(saved.id, saved.rev, json);
       if (opts.keys?.length) this.writeKeys(saved.id, saved.rev, opts.keys);
       this.pruneRevisions(saved.id);
@@ -523,18 +535,12 @@ export class Library {
     this.refs.prune(id);
   }
 
+  /**
+   * The revisions of a presentation, newest first, from the summaries (apps/hub/src/revisions.ts): no revision's JSON is read
+   * or parsed, except one at a time for a revision that has no summary yet.
+   */
   revisions(id: string): RevisionInfo[] {
-    const rows = this.db
-      .prepare(
-        `SELECT rev, json, saved_by, saved_at FROM presentation_revisions WHERE presentation_id = ? ORDER BY rev DESC`,
-      )
-      .all(id) as { rev: number; json: string; saved_by: string | null; saved_at: string }[];
-    return rows.map((r) => ({
-      rev: r.rev,
-      savedAt: r.saved_at,
-      savedBy: r.saved_by ?? undefined,
-      title: (JSON.parse(r.json) as Presentation).title,
-    }));
+    return this.summaries.list(id);
   }
 
   revision(id: string, rev: number): Presentation {
