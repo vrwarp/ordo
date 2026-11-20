@@ -13,15 +13,14 @@
  * writer that saved without keys, a library that starts with slides lacking rows) are paced one slide at a time
  * and never run while a service is live.
  */
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import {
-  canonicalJson,
   DEFAULT_FONT,
   drawnMediaIds,
   type Presentation,
   SCRIPT_FALLBACK_FONTS,
   type Slide,
-  sha256Text,
   slideMediaIds,
   stillFile,
 } from '@ordo/domain';
@@ -152,7 +151,14 @@ export class PrerenderKeys {
       live: pre.live,
       ...(pre.file ? { file: pre.file.ref } : {}),
     };
-    return { slide, head, media, sig: sha256Text(canonicalJson({ slide: stable, media, faces })) };
+    // The sig only tells whether this slide's inputs are the ones a row was computed from: the text of what the
+    // save carries, in the order the library keeps it, hashed natively (a stand-in is up to hundreds of KB and
+    // every save looks at each one). Equal text is the same inputs; the same inputs in another key order only
+    // cost a recompute by the pool, which works the key from canonical bytes, never a wrong key.
+    const sig = createHash('sha256')
+      .update(JSON.stringify({ slide: stable, media, faces }))
+      .digest('hex');
+    return { slide, head, media, sig };
   }
 
   private faces(): { family: string; hash: string }[] {

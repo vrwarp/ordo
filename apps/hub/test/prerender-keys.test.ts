@@ -3,6 +3,7 @@
  * pool when a presentation is saved and writes them in the save's transaction; the expected keys are computed IN THE
  * TEST with the domain's own functions.
  */
+import { createHash } from 'node:crypto';
 import { newId, type Presentation, type Slide, stillFile } from '@ordo/domain';
 import { pictureSource, prerenderKey, standbyId } from '@ordo/domain/prerender.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -242,6 +243,44 @@ describe('keys at save (PK1-PK5, PK8)', () => {
     expect(rows(p.id).filter((x) => x.rev === fourth.rev)).toMatchObject([
       { sig: fresh[0]!.sig, key: fresh[0]!.key },
     ]);
+  });
+
+  it('plans the rows of a save whose pre-rendered slides did not change in about the time of reading them (PK10)', async () => {
+    // Each save looks at every pre-rendered slide's stand-in to know it did not change: that must cost about one
+    // pass over its bytes (a hash of the text), not a canonical rewrite and a hash in plain script (M2: 290 ms a
+    // save for 60 stand-ins of 120 KB, against 5 ms asked).
+    const ed = await setup();
+    const slides: Slide[] = [];
+    for (let i = 0; i < 24; i++) {
+      const s = bigSlide(`heavy${i}`, 40, `t${i}`);
+      for (let k = 0; k < 6; k++) s.objects.push(textObject(`h${k}`, `${i}.${k} ${'grace '.repeat(3000)}`));
+      const f = fullOf(s);
+      await uploadSlideFile(ed, f.pages);
+      slides.push(f.standIn);
+    }
+    const p = await ed.json<Presentation>('/presentations', { method: 'POST', json: presentationOf(slides) });
+    expect(rows(p.id)).toHaveLength(24);
+    const saved = await ed.json<Presentation>(`/presentations/${p.id}`);
+    const bytes = JSON.stringify(saved).length;
+    expect(bytes).toBeGreaterThan(2_000_000);
+    const tasks = keyTasks();
+    const best = async (fn: () => unknown) => {
+      let min = Infinity;
+      for (let i = 0; i < 5; i++) {
+        const t0 = performance.now();
+        await fn();
+        min = Math.min(min, performance.now() - t0);
+      }
+      return min;
+    };
+    // the least a pass over the same stand-ins costs: a stringify and a native hash of each
+    const read = await best(() => {
+      for (const sec of saved.sections)
+        for (const sl of sec.slides) createHash('sha256').update(JSON.stringify(sl)).digest('hex');
+    });
+    const plan = await best(() => hub!.prerenderKeys.keysFor(saved));
+    expect(tasks()).toBe(0); // every row was copied
+    expect(plan).toBeLessThan(read * 2 + 5);
   });
 
   it('computes the rows of a restored body (PK8)', async () => {
