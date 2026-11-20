@@ -60,19 +60,37 @@ class FakeOffscreenCanvas {
 }
 
 /** A lane's turns on an injected clock: every reading of the clock is `tick` ms, so a turn takes what its steps read. */
-function runner(o: { tick?: number; cancelAfter?: number } = {}) {
-  const log = { slices: 0, checks: 0, turns: [] as number[], clock: 0 };
+function runner(o: { tick?: number; cancelAfter?: number; cancelPlanAfter?: number; key?: string } = {}) {
+  const canvases0 = FakeOffscreenCanvas.made.length;
+  const log = {
+    slices: 0,
+    /** The turns after the plan's (the drawing ones): what `cancelAfter` counts. */
+    drawSlices: 0,
+    checks: 0,
+    turns: [] as number[],
+    clock: 0,
+    planTurns: [] as number[],
+  };
   const run = {
     slice: async <T>(fn: () => T): Promise<T> => {
       log.slices++;
       const t0 = log.clock;
+      // A turn run before the frame's scratch canvas is made is a turn of the plan (the steps of the frame).
+      // (Of the frame under `o.key` while it has no work yet; else while no canvas was made since the runner was.)
+      const planning = o.key
+        ? frameProgress(o.key) === undefined
+        : FakeOffscreenCanvas.made.length === canvases0;
       const out = fn();
       log.turns.push(log.clock - t0);
+      if (planning) log.planTurns.push(log.clock - t0);
+      else log.drawSlices++;
       return out;
     },
     check: () => {
       log.checks++;
-      if (o.cancelAfter !== undefined && log.slices >= o.cancelAfter) throw new Error('Cancelled');
+      if (o.cancelAfter !== undefined && log.drawSlices >= o.cancelAfter) throw new Error('Cancelled');
+      if (o.cancelPlanAfter !== undefined && log.planTurns.length >= o.cancelPlanAfter)
+        throw new Error('Cancelled');
     },
     now: () => (log.clock += o.tick ?? 1),
   };
@@ -117,6 +135,40 @@ describe('makeFrame', () => {
     expect(frameStats().longestStep).toBeLessThanOrEqual(longest!);
   });
 
+  it('plans the steps of a frame in turns of its own, none past SLICE_MS / 2 and one object (M5: no turn over 16 ms at 20,000 objects)', async () => {
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+    FakeOffscreenCanvas.made = [];
+    const split = splitFrame(slideOf(squares(5_000)), 1)!;
+    expect(split.under.length).toBeGreaterThan(4_000);
+    const { run, log } = runner();
+    await makeFrame(split, frameKey(split), run, { budgetMs: Number.POSITIVE_INFINITY });
+    // The plan is many turns (about SLICE_MS / 2 of the clock each: an object reads it once), never one.
+    expect(log.planTurns.length).toBeGreaterThan(split.under.length / (SLICE_MS / 2 + 1));
+    expect(Math.max(...log.planTurns)).toBeLessThanOrEqual(SLICE_MS / 2 + 1);
+    // And every object was planned once: the frame is whole.
+    expect(fills(frameCanvases(1920)[0]!)).toBe(split.under.length);
+  });
+
+  it('keeps the plan across a stop: a hurried call plans on from where it stopped, not from the start', async () => {
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+    FakeOffscreenCanvas.made = [];
+    const split = splitFrame(slideOf(squares(2_000)), 1)!;
+    const key = frameKey(split);
+    const first = runner({ cancelPlanAfter: 20 });
+    await expect(makeFrame(split, key, first.run)).rejects.toThrow('Cancelled');
+    expect(FakeOffscreenCanvas.made.length).toBe(0);
+    const second = runner();
+    await makeFrame(split, key, second.run);
+    // Planned 20 turns of it before the stop: the rest took 20 plan turns fewer than a whole plan.
+    const whole = runner();
+    unitCache.delete('unit', key);
+    clearFrameWork();
+    FakeOffscreenCanvas.made = [];
+    await makeFrame(splitFrame(slideOf(squares(2_000)), 1)!, key, whole.run);
+    expect(second.log.planTurns.length).toBeLessThanOrEqual(whole.log.planTurns.length - 19);
+    expect(unitCache.has('unit', key)).toBe(true);
+  });
+
   it('is made once each step across a stop and a resume, and a cancelled call keeps the cache empty but its work', async () => {
     vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
     FakeOffscreenCanvas.made = [];
@@ -156,7 +208,7 @@ describe('makeFrame', () => {
       const split = splitFrame(slideOf(objs, `w${i}`), 1)!;
       const key = frameKey(split);
       keys.push(key);
-      await expect(makeFrame(split, key, runner({ cancelAfter: 2 }).run)).rejects.toThrow('Cancelled');
+      await expect(makeFrame(split, key, runner({ cancelAfter: 2, key }).run)).rejects.toThrow('Cancelled');
     }
     expect(framesInProgress()).toBe(FRAME_WORK_MAX);
     expect(frameProgress(keys[0]!)).toBeUndefined();

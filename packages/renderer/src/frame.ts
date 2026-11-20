@@ -412,17 +412,48 @@ function stepsOf(split: FrameSplit): readonly FrameStep[] {
   const hit = stepMemo.get(split);
   if (hit && hit.gen === gen) return hit.steps;
   const steps: FrameStep[] = [];
-  for (const o of split.under) {
-    if (o.type === 'image') {
-      steps.push({ kind: 'picture', object: o });
-      continue;
-    }
-    const unit = objectUnit(o, split.scale);
-    if (unit && unit.of !== 'prepared') steps.push({ kind: 'unit', object: o, unit });
-    else steps.push({ kind: 'plain', object: withinDrawBudget([o])[0] ?? o });
-  }
+  for (const o of split.under) steps.push(stepOf(o, split.scale));
   stepMemo.set(split, { gen, steps });
   return steps;
+}
+
+/** The step of one under object (see `stepsOf`). */
+function stepOf(o: SlideObject, scale: number): FrameStep {
+  if (o.type === 'image') return { kind: 'picture', object: o };
+  const unit = objectUnit(o, scale);
+  if (unit && unit.of !== 'prepared') return { kind: 'unit', object: o, unit };
+  return { kind: 'plain', object: withinDrawBudget([o])[0] ?? o };
+}
+
+/** A plan in progress: the steps worked out so far and the next under object. */
+const plans = new WeakMap<FrameSplit, { gen: number; steps: FrameStep[]; at: number }>();
+
+/**
+ * The steps of `split` worked out in turns of at most `SLICE_MS` / 2 and one object (about 7 us an object: a frame of
+ * 20,000 objects was one turn of 130-170 ms), kept across a stopped call (a hurried or cancelled one plans on from
+ * where it stopped) and memoised as `stepsOf`.
+ */
+async function planSteps(split: FrameSplit, run: UnitRun, now: () => number): Promise<readonly FrameStep[]> {
+  const gen = unitGeneration();
+  const hit = stepMemo.get(split);
+  if (hit && hit.gen === gen) return hit.steps;
+  let p = plans.get(split);
+  if (!p || p.gen !== gen) plans.set(split, (p = { gen, steps: [], at: 0 }));
+  const plan = p;
+  const under = split.under;
+  while (plan.at < under.length) {
+    run.check();
+    await run.slice(() => {
+      const t0 = now();
+      do {
+        plan.steps.push(stepOf(under[plan.at]!, split.scale));
+        plan.at++;
+      } while (plan.at < under.length && now() - t0 < SLICE_MS / 2);
+    });
+  }
+  plans.delete(split);
+  stepMemo.set(split, { gen, steps: plan.steps });
+  return plan.steps;
 }
 
 /** A frame being made: its scratch canvas of the frame, the next step, and the time spent. */
@@ -584,7 +615,7 @@ export async function makeFrame(
 ): Promise<number | undefined> {
   if (unitCache.has('unit', key)) return 0;
   const now = run.now ?? (() => performance.now());
-  const steps = await run.slice(() => stepsOf(split));
+  const steps = await planSteps(split, run, now);
   let w = works.get(key);
   if (w) {
     // Newest last: a third frame drops the oldest.

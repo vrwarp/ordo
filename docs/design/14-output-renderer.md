@@ -601,7 +601,8 @@ objects under it: made once in slices, kept as one unit, copied 1:1 under the di
   "alone" at the frame's transform in z-order, one step each: a picture through the picture provider (decoded and
   prepared one at a time, released after its draw), a shape or decoration past the budget by itself through its own unit
   (`makeUnitPicture`, copied in in bands), anything else with one draw call. Turns of at most `SLICE_MS` / 2 (5 ms) on the
-  lane's clock, each ending with a one-pixel read so the canvas has drawn. Its work (the canvas and the next step) is
+  lane's clock, each ending with a one-pixel read so the canvas has drawn; the plan of the steps (an under object each, about 7 µs) comes first,
+  in turns of its own and kept across a stop (at 20,000 objects it was one turn of 130-170 ms). Its work (the canvas and the next step) is
   kept by key, at most `FRAME_WORK_MAX` (2) of them (about 66 MB at 4K), so a hurried or cancelled call resumes at the step
   it stopped: no step is drawn twice. The time a frame may take, its turns summed, is `FRAME_BUDGET_MS`
   (10 s: the larger of 10 s and three times the 20,000-object frame's summed turn time, 0.5-1.7 s in the bench's runs); past it the frame is dropped (`frameStats().over`, `done.frames.over`, a line in the diagnostics) and the
@@ -642,6 +643,10 @@ objects under it: made once in slices, kept as one unit, copied 1:1 under the di
   | 1,000 objects                  | 834 / 166      | 40-183 / 74-329 (37 turns)            | 5-61 / 17-216            | 20-52 / 62-237           | 5-12 / 18-52                    |
   | 20,000 objects, 64 pictures    | 19,800 / 200   | 389-1,701 / 472-1,193 (220-250 turns) | 9-330 / 23-143           | 10-33 / 32-59            | 5-26 / 17-39                    |
   | 20 shadowed panels, soft frame | 1 / 20         | 26-37 / 104-126 (2 turns)             | 24-36 / 97-119           | 14-22 / 74-82            | 9-17 / 118-150                  |
+
+  A quiet re-run (load 3, five runs): the longest turn is 6-8 ms at 1920 in every case and 20-21 ms at 3840, which is the longest step
+  (one picture draw on the CPU canvas); the 1,000-object frame's final raster at 3840 is 81-105 ms, 150 text boxes in its direct part
+  against the base's cut draw, which leaves them out.
 
   The final raster is the direct part over the frame copied under it: the copy of the whole frame (33 MB at 3840) is most of
   the difference from the cut draw (the first 200 objects), which leaves the rest out. The machine was shared (load 12 on 4
