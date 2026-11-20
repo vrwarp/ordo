@@ -102,6 +102,7 @@ import type {
   SlideObject,
   TextObject,
 } from '@ordo/domain';
+import { missingEntry } from '@ordo/domain/missing.ts';
 import { drawnBounds } from '@ordo/renderer/geom/bounds.ts';
 import { geometryAt, legacyGeometry } from '@ordo/renderer/geom/built.ts';
 import {
@@ -515,6 +516,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     const spans: [number, number][] = [];
     ctx.metafiles = [];
     ctx.clips = [];
+    ctx.cut = new Set();
     const slide = emitSlide(ctx, s, spans);
     // M9 (`decor-conv`): large decorations in decoration files first, so the slide's budget below counts
     // them as stored (`storedSlideBytes`), as its large geometries go to geometry files there.
@@ -540,7 +542,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     if (gaps) classification = gaps.classification;
     // M9: what the slide budgets' guard left out (`budget.ts`), whatever draws the rest.
     const left = s.classification.missing ?? [];
-    const missing = [...new Set([...left, ...(gaps?.missing ?? [])])];
+    const missing = [...new Set([...left, ...(ctx.cut ?? []), ...(gaps?.missing ?? [])])];
     const plate = ctx.plate;
     ctx.plate = undefined;
     return {
@@ -660,6 +662,8 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
   if (media.remove.size) leaveOut(ctx, slide, spans, media.remove);
   if (objects.length > MAX_OBJECTS) {
     ctx.log(`more than ${MAX_OBJECTS} objects: the top ones are not drawn`);
+    // W10 (design/29 section 3): the same line as the shape cap's, for a slide that keeps only 1,000 objects.
+    (ctx.cut ??= new Set()).add(missingEntry('element', 'shapes'));
     objects.length = MAX_OBJECTS;
   }
   // M9 (`decor-conv`): the slide's picture budget, its fewest smallest pictures in one atlas (`sheet.ts`).

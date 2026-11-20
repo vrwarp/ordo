@@ -17,7 +17,7 @@ import { DEFAULT_SLIDE, MAX_SIDE, MIN_SIDE } from './frame.ts';
 import type { SectionInfo } from './ir.ts';
 import { clean } from './log.ts';
 import { decodeText, type Package, relIdOf, relType, SLIDE_CONTENT_TYPE } from './opc.ts';
-import { child, children, num, rootTag, type XNode } from './xml.ts';
+import { child, children, num, rootTag, type XNode, XmlBoundError } from './xml.ts';
 
 /** At most this many slides are read (design/27 §4). */
 export const MAX_SLIDES = 2_000;
@@ -79,6 +79,12 @@ export interface SlideParts {
   master?: XNode;
   themePart?: string;
   theme?: XNode;
+  /**
+   * The layout, master or theme this slide uses whose part is past the reader's bounds (`XmlBoundError`: too many elements, too
+   * many path points or too many bytes): the slide is read without it, and `slideContext` says so on the slide (W9, design/29).
+   * A part that cannot be read for any other reason is only noted on the deck, as before.
+   */
+  unread?: { kind: 'layout' | 'master' | 'theme'; part: string }[];
 }
 
 /** The presentation part: the package's officeDocument, else a presentation content type, else the usual name. */
@@ -266,7 +272,11 @@ export function slideParts(pkg: Package, part: string): SlideParts {
   const out: SlideParts = { slide };
   const pinned: string[] = [];
   /** A related part with the expected root element; anything else (a cycle, a wrong type) is not used. */
-  const read = (p: string | undefined, root: string): XNode | undefined => {
+  const read = (
+    p: string | undefined,
+    root: string,
+    kind: 'layout' | 'master' | 'theme',
+  ): XNode | undefined => {
     if (p === undefined) return undefined;
     pinned.push(p);
     pkg.pin(pinned);
@@ -279,17 +289,18 @@ export function slideParts(pkg: Package, part: string): SlideParts {
       return n;
     } catch (e) {
       pkg.log(`${clean(p)} could not be read: ${clean((e as Error).message)}`);
+      if (e instanceof XmlBoundError) (out.unread ??= []).push({ kind, part: p });
       return undefined;
     }
   };
   const layoutPart = pkg.relOfType(part, 'slideLayout')?.target;
-  out.layout = read(layoutPart, 'p:sldLayout');
+  out.layout = read(layoutPart, 'p:sldLayout', 'layout');
   if (out.layout) out.layoutPart = layoutPart;
   const masterPart = out.layoutPart && pkg.relOfType(out.layoutPart, 'slideMaster')?.target;
-  out.master = read(masterPart, 'p:sldMaster');
+  out.master = read(masterPart, 'p:sldMaster', 'master');
   if (out.master) out.masterPart = masterPart;
   const themePart = out.masterPart && pkg.relOfType(out.masterPart, 'theme')?.target;
-  out.theme = read(themePart, 'a:theme');
+  out.theme = read(themePart, 'a:theme', 'theme');
   if (out.theme) out.themePart = themePart;
   return out;
 }

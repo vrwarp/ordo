@@ -569,6 +569,7 @@ export async function assemblePptxScene(
     converted.set(s.index, { s, media, extra: extras.get(s.index), ...(geomLeft ? { geomLeft } : {}) });
   }
   const drafts = core.drafts(scene.listed, converted, scene.scan);
+  core.cutWarnings(drafts);
   const simplified = core.budget(drafts);
   // Clips: not imported by a client assembly (the hub ingests them): each use left out, its poster kept.
   for (const d of drafts) {

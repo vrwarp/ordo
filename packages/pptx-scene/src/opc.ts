@@ -27,6 +27,7 @@ import {
   parseXml,
   rootOf,
   type XNode,
+  XmlBoundError,
 } from './xml.ts';
 
 /** A deck's parts by zip entry name (no leading slash), as `extractZip` returns them in `files`. */
@@ -297,7 +298,7 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
     if (real === undefined) return undefined;
     const b = src.get(real)!;
     if (b.length > MAX_XML_PART_BYTES)
-      throw new Error(`${clean(real)} is larger than ${MAX_XML_PART_BYTES / 1024 ** 2} MB`);
+      throw new XmlBoundError('bytes', `${clean(real)} is larger than ${MAX_XML_PART_BYTES / 1024 ** 2} MB`);
     return decodeText(b);
   };
 

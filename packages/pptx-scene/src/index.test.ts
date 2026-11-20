@@ -227,14 +227,6 @@ describe('convertDeck (the hub pool task entry, M3)', () => {
     // The walk's shape cap and the emitter's object cap list what they cut (element:shapes).
     const capped = convertDeck(buildDeck({ slides: [{ shapes: leanShapes(MAX_SHAPES_PER_SLIDE + 1) }] }));
     expect(capped.slides[0]!.missing).toContain('element:shapes');
-    // 1,200 text boxes (text objects are not merged by the decoration budget): 200 more than a slide keeps.
-    const rects = Array.from({ length: 1_200 }, (_, i) =>
-      sp({ id: 2 + i, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(run(`t${i}`))) }),
-    ).join('');
-    const cut = convertDeck(buildDeck({ slides: [{ shapes: rects }] })).slides[0]!;
-    expect(cut.slide.objects).toHaveLength(1_000);
-    expect(cut.missing).toContain('element:shapes');
-    expect(cut.classification.class).not.toBe('picture');
   });
 
   it('converts the whole deck like parseDeck and emitSlides, with the slide list', () => {

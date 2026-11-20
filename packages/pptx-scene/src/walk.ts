@@ -76,6 +76,7 @@ import { readSmartArt, type Walker } from './smartart.ts';
 import { readTable } from './tables.ts';
 import { readShadow, readTextBody, textChars } from './text.ts';
 import { read3d } from './three3d.ts';
+import { missingEntry } from '@ordo/domain/missing.ts';
 import { child, num, path, pathCommands, type XNode } from './xml.ts';
 
 /** Group nesting followed (design/27 §12). */
@@ -337,6 +338,8 @@ export function walkTree(
     if (el.name === '#text' || !nvOf(el)) continue;
     if (++st.count > MAX_SHAPES_PER_SLIDE) {
       ctx.log(`more than ${MAX_SHAPES_PER_SLIDE} shapes: the rest are not drawn`);
+      // W10 (design/29 section 3): what the cap leaves out is listed on the slide.
+      (ctx.cut ??= new Set()).add(missingEntry('element', 'shapes'));
       return;
     }
     const chain = chainOf(ctx, el, from);

@@ -3,7 +3,7 @@
  * colour context. Shared by all work items; change it only by adding fields.
  */
 import { type ColorCtx, colorContext } from './color.ts';
-import { type DeckInfo, type SlideRef, slideParts } from './deck.ts';
+import { type DeckInfo, type SlideParts, type SlideRef, slideParts } from './deck.ts';
 import type { Frame } from './ir.ts';
 import type { Log } from './log.ts';
 import type { FaceSource } from './metrics.ts';
@@ -47,6 +47,13 @@ export interface SlideCtx {
    * timing decide.
    */
   mediaKind?: (part: string) => 'video' | 'audio' | undefined;
+  /** The parts of its design past the reader's bounds, read without (`SlideParts.unread`). */
+  unread?: SlideParts['unread'];
+  /**
+   * What the reading of this slide cut and nothing draws, as `Slide.pptx.missing` entries (`element:shapes`: the walk stopped at
+   * `MAX_SHAPES_PER_SLIDE`); `readSlide` lists them in the slide's classification (W10, design/29).
+   */
+  cut?: Set<string>;
   /** The slide's `p:timing` and transition sound (`timing.ts`), read before its shape tree. */
   timing?: SlideTiming;
   /**
@@ -80,7 +87,13 @@ export function slideContext(
 ): SlideCtx {
   const parts = slideParts(pkg, ref.part);
   const theme = readTheme(parts.theme);
+  // W9 (design/29 section 3): a design part past the reader's bounds is not an error of the slides that use it, it is said on each.
+  for (const u of parts.unread ?? [])
+    log(
+      `its ${u.kind} has too much drawing detail to read: the slide is read without the ${u.kind}'s artwork`,
+    );
   return {
+    ...(parts.unread?.length ? { unread: parts.unread } : {}),
     pkg,
     deck,
     frame,
