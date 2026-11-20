@@ -100,14 +100,16 @@ other file of that folder is removed, but the fonts' folders, which stay as they
 product's own.
 Runs as a non-root user under tini, entrypoint the supervisor. Health check `GET /api/v1/health` (answered by the live process; it reports the library
 process state too).
-Image size target under 1.5 GB. The first real build (the Docker dry run of PR #29) was 1,687,519,174 bytes (about
-1.69 GB), 188 MB over the target. By Debian's package sizes (an estimate: the pull-request job prints the real
-numbers) Chromium for the pptx-preview renderer is about 440 MB of it, LibreOffice about 320 MB, ffmpeg about
-200 MB and the fonts about 100 MB. Chromium serves only `renderer=pptx-preview`, which the import screen no
-longer offers (design/20, 'Two renderers') and design/27 M8 retires; without it the image would be near 1.25 GB.
-The target number is the owner's to keep or restate, and nothing is removed from the image for it. The pull-request
-job prints the amd64 image's size and warns above the target, never failing on it, and then prints what the
-image is made of (its layers, its 40 largest packages, its largest folders and what `/usr/share/doc` keeps). The
+Image size target under 2 GB (decimal GB, 2,000,000,000 bytes, uncompressed, linux/amd64). It has been 2 GB since
+2026-11-20, when the owner raised it from 1.5 GB. The first real build (the Docker dry run of PR #29) was
+1,687,519,174 bytes (about 1.69 GB): 188 MB over the old target, and about 312 MB under the present one. By Debian's
+package sizes (an estimate: the pull-request job prints the real numbers) Chromium for the pptx-preview renderer is
+about 440 MB of it, LibreOffice about 320 MB, ffmpeg about 200 MB and the fonts about 100 MB. Chromium serves only
+`renderer=pptx-preview`, which the import screen no longer offers (design/20, 'Two renderers') and design/27 M8
+retires. Dropping it (the image would then be near 1.25 GB) is no longer needed for the target, so Chromium stays and
+nothing is removed from the image for it. The pull-request job prints the amd64 image's size and warns above the
+target, never failing on it (printed, not enforced), and then prints what the image is made of (its layers, its 40
+largest packages, its largest folders and what `/usr/share/doc` keeps). The
 pull-request smoke test starts both renderers inside the image, checks its CJK face (fontconfig's face for
 Hangul, and the hub's `system faces` start-log line naming it for Han, Hiragana, Katakana and Hangul) and checks
 that the product's own packages kept their copyright files.

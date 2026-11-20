@@ -50,11 +50,12 @@ jobs:
             type=gha,scope=docker-pr-${{ github.event.pull_request.number || 'manual' }}
       - name: The image's size
         run: |
-          # Printed, not enforced: design/22 sets a target under 1.5 GB for the image (uncompressed, linux/amd64).
+          # Printed, not enforced: design/22 sets a target under 2 GB for the image (uncompressed, linux/amd64;
+          # decimal GB, 2,000,000,000 bytes, as counted here).
           size=$(docker image inspect ordo-hub:smoke --format '{{.Size}}')
           echo "ordo-hub:smoke (linux/amd64): $size bytes, about $((size / 1000000)) MB"
-          if [ "$size" -gt 1500000000 ]; then
-            echo "::warning::The image is larger than design/22's target of 1.5 GB ($size bytes)."
+          if [ "$size" -gt 2000000000 ]; then
+            echo "::warning::The image is larger than design/22's target of 2 GB ($size bytes)."
           fi
       - name: What the image is made of
         if: always()
