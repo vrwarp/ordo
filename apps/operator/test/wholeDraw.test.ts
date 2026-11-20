@@ -488,6 +488,108 @@ describe('the status (W11)', () => {
   });
 });
 
+describe('the lighter copy the editor keeps (OQ-LE2: the note under the Object panel)', () => {
+  /** What the plan lists as drawn as the lighter copy for a lasting reason (not allowed, or past a bound). */
+  const simpleOf = (plan: ReturnType<typeof planWhole>) => [...plan.simple].sort();
+  const LATE_SORTED = [...LATE].sort();
+  /** The count the status holds for the same objects: everything not drawn and not waiting for a turn. */
+  const lasting = (s: ReturnType<typeof planWhole>['status']) =>
+    s.blocked + s.skipped.bound + s.skipped.cache + s.skipped.total;
+
+  it.each<[string, Partial<WholeEnv>]>([
+    ['a coarse pointer', { coarse: true }],
+    ['a live service', { live: true }],
+    ['?editor=light', { light: true }],
+  ])('%s: every candidate keeps the copy, the selected one too, and the plan says so', (_name, over) => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const plan = planWhole(objects, budget, { primary: 'p10' }, new WholeState(), env(over));
+    expect(simpleOf(plan)).toEqual(LATE_SORTED);
+    expect(plan.simple).toHaveLength(lasting(plan.status));
+  });
+
+  it('is empty once the whole drawing has landed: the selected object at once, the rest as their turns come', () => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const state = new WholeState();
+    // The selected object is whole in the plan that sees it; the two waiting for a turn are not "kept".
+    let plan = planWhole(objects, budget, { primary: 'p10' }, state, env());
+    expect(plan.pending).toEqual(['p9', 'p11']);
+    expect(plan.simple).toEqual([]);
+    plan = settle(objects, budget, 'p10', state, env());
+    expect(plan.simple).toEqual([]);
+    expect(plan.status).toMatchObject({ drawn: 3, pending: 0, blocked: 0 });
+  });
+
+  it('is empty for the objects the budget keeps: only candidates are ever listed', () => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const plan = planWhole(objects, budget, { primary: 'p0' }, new WholeState(), env({ live: true }));
+    expect(simpleOf(plan)).toEqual(LATE_SORTED);
+    for (const id of ['soft', 'p0', 'p1', 'p8']) expect(plan.simple).not.toContain(id);
+  });
+
+  it('a service going live keeps the unchanged whole drawings out of the list and lists a changed one; End service empties it', () => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const state = new WholeState();
+    settle(objects, budget, undefined, state, env());
+    const live = env({ live: true });
+    expect(planWhole(objects, budget, { primary: 'p10' }, state, live).simple).toEqual([]);
+    const edited = objects.map(
+      (o) => (o.id === 'p10' ? { ...o, shadow: { ...PANEL_SHADOW, blur: 20 } } : o) as SlideObject,
+    );
+    const budget2 = slideBudget(edited);
+    expect(planWhole(edited, budget2, { primary: 'p10' }, state, live).simple).toEqual(['p10']);
+    // The service ends: the selected one is whole in the same plan, the list is empty.
+    expect(planWhole(edited, budget2, { primary: 'p10' }, state, env()).simple).toEqual([]);
+  });
+
+  it('an object past WHOLE_BOUND is listed, selected or not, and the objects whole around it are not', () => {
+    const huge = {
+      ...softFrame(),
+      id: 'huge',
+      softEdge: 60,
+      shadow: { ...PANEL_SHADOW, blur: 300 },
+      glow: { radius: 300, color: { r: 255, g: 255, b: 0, a: 0.6 } },
+    } as SlideObject;
+    const objects = [...effects(), huge];
+    const budget = slideBudget(objects);
+    const plan = settle(objects, budget, 'huge', new WholeState(), env());
+    expect(plan.simple).toEqual(['huge']);
+    expect(plan.status.skipped.bound).toBe(1);
+  });
+
+  it('an object too big to cache at this zoom is listed, and leaves the list when the zoom is lower', () => {
+    const full = { ...softFrame(), id: 'full', softEdge: undefined, shadow: PANEL_SHADOW } as SlideObject;
+    const objects = [...effects(), full];
+    const budget = slideBudget(objects);
+    const state = new WholeState();
+    expect(settle(objects, budget, 'full', state, env({ density: 4 })).simple).toEqual(['full']);
+    expect(planWhole(objects, budget, { primary: 'full' }, state, env({ density: 1 })).simple).toEqual([]);
+  });
+
+  it('an object that does not fit the total is listed', () => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const one = rectPx(byId(objects, 'p9'), 1);
+    const plan = settle(objects, budget, undefined, new WholeState(), env({ maxPx: Math.floor(one * 1.5) }));
+    expect(simpleOf(plan)).toEqual(['p10', 'p11']);
+    expect(plan.simple).toHaveLength(lasting(plan.status));
+  });
+
+  it('a whole drawing that keeps its old cache while the pointer is not allowed is not listed', () => {
+    const objects = effects();
+    const budget = slideBudget(objects);
+    const state = new WholeState();
+    settle(objects, budget, undefined, state, env({ density: 1 }));
+    // Zoomed past the slack while a service is live: the old caches stay, nothing is made.
+    const plan = planWhole(objects, budget, { primary: 'p9' }, state, env({ density: 2, live: true }));
+    expect(plan.simple).toEqual([]);
+    expect(plan.status).toMatchObject({ drawn: 3, stale: 3, blocked: 0 });
+  });
+});
+
 describe('?editor=light (W2)', () => {
   it('(j) is on for editor=light and nothing else', () => {
     expect(readSwitch('?editor=light')).toBe(true);

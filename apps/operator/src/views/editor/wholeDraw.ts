@@ -3,7 +3,7 @@ import { drawnCost, drawnEffectArea } from '@ordo/renderer';
 import { EFFECT_COST, GEOM_COST } from '@ordo/renderer/geom/cost.ts';
 import { useEffect, useReducer, useRef } from 'react';
 import { useLive } from '../../state/live.ts';
-import { setWholeStatus, type WholeStatus } from './wholeState.ts';
+import { setWholeLighter, setWholeStatus, type WholeStatus } from './wholeState.ts';
 
 /*
  * The editor draws an object whole where the slide's drawing budget would draw its lighter copy (design/15
@@ -102,6 +102,13 @@ export interface WholePlan {
   readonly pending: readonly string[];
   /** The counts the editor reports (`window.__ordo.editor().whole`). */
   readonly status: Omit<WholeStatus, 'lastMs'>;
+  /**
+   * The candidates the editor keeps drawing as the lighter copy for a lasting reason: not allowed (a service is
+   * live, a coarse pointer, `?editor=light`), or past a bound (too detailed, too big at this zoom, too much in
+   * all). Not those waiting for their turn: they are whole in a moment, and the selected one is never among
+   * them. The note under the Object panel reads it (OQ-LE2); its length is `blocked + skipped.*`.
+   */
+  readonly simple: readonly string[];
 }
 
 // ---- stability (W7) ------------------------------------------------------------------------------------
@@ -270,6 +277,7 @@ export function planWhole(
     light: env.light,
   };
   const work: Work[] = [];
+  const simple: string[] = [];
 
   for (const o of order) {
     const c = state.committed.get(o.id);
@@ -282,7 +290,10 @@ export function planWhole(
     if (!allowed) {
       if (c) status.stale++;
       if (c) status.drawn++;
-      else status.blocked++;
+      else {
+        status.blocked++;
+        simple.push(o.id);
+      }
       continue;
     }
     const r = rate(o, env);
@@ -296,6 +307,7 @@ export function planWhole(
         drawnPx -= was;
       }
       status.skipped[why]++;
+      simple.push(o.id);
       continue;
     }
     held += r.px - was;
@@ -315,7 +327,7 @@ export function planWhole(
   state.work = work;
   status.px = drawnPx;
   setWholeStatus(status);
-  return { pending: work.map((w) => w.id), status };
+  return { pending: work.map((w) => w.id), status, simple };
 }
 
 /**
@@ -458,12 +470,20 @@ export function useWholeDraw(
   };
   const plan = planWhole(objects, budget, { primary: opts.selectedId }, state.current, env);
   const waiting = plan.pending.length > 0;
-  // After every commit: the next turn is asked for only now, once the last one's object has been drawn.
+  // After every commit: the Object panel's note is told which objects keep the copy (OQ-LE2), and the next turn
+  // is asked for only now, once the last one's object has been drawn.
   useEffect(() => {
+    setWholeLighter(opts.slideId, plan.simple);
     if (waiting) turns.current?.request();
     else turns.current?.cancel();
   });
-  useEffect(() => () => turns.current?.cancel(), []);
+  useEffect(
+    () => () => {
+      turns.current?.cancel();
+      setWholeLighter(undefined, []);
+    },
+    [],
+  );
   const s = state.current;
   return {
     drawAs: (o) => drawWhole(o, budget, env, s),

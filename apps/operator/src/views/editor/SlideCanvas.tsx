@@ -86,7 +86,7 @@ import { markTableKitLoaded, tableKitLoaded } from './tableKitState.ts';
 import { TEXT_MARGIN, textDensity, textRasterKey } from './textRaster.ts';
 import { floatingBarSpot, objectToolsSpot, rotaterAngle } from './touchGeometry.ts';
 import { useWholeDraw } from './wholeDraw.ts';
-import { noteWholeDraw } from './wholeState.ts';
+import { noteWholeDraw, wholeSlideKey } from './wholeState.ts';
 
 // ---- image cache (HTMLImageElement per file hash) ----
 const images = new Map<string, HTMLImageElement>();
@@ -1127,7 +1127,7 @@ export function SlideCanvas(props: {
     selectedId,
     density,
     coarse,
-    slideId: `${useEditor.getState().id ?? ''}/${slide.id}`,
+    slideId: wholeSlideKey(useEditor.getState().id, slide.id),
     cacheRect: (o, d) => nodeCacheRect(o, undefined, d, undefined, drawnHeight(o)),
   });
   // What is edited inline: a text box, or a table's cell as its edit view (design/15 "Table editing").

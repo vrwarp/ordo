@@ -41,6 +41,7 @@ import { ParagraphStrip } from './ParagraphStrip.tsx';
 import { type AlignTo, alignedBox, nearBox, placementArea, presetIn } from './placement.ts';
 import { fitMessage } from './textFit.ts';
 import { UnifiedTypography } from './UnifiedTypography.tsx';
+import { WholeNote } from './WholeNote.tsx';
 
 const PLACEMENT_PRESETS: { id: string; label: string; desc: string; box: Box }[] = [
   {
@@ -158,12 +159,13 @@ function HeadingSection({ o, readOnly, isLyric, slideId, draft }: ObjectSectionC
   );
 }
 
-/** Whether the object is locked, and the group it belongs to. */
-function NotesSection({ o, liveLocked }: ObjectSectionContext) {
+/** Whether the object is locked, the group it belongs to, and whether the editor draws it as a lighter copy. */
+function NotesSection({ o, liveLocked, slideId }: ObjectSectionContext) {
   return (
     <>
       <LockedNote o={o} />
       <GroupNote o={o} readOnly={liveLocked} />
+      <WholeNote o={o} slideId={slideId} />
     </>
   );
 }
