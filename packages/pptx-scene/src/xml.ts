@@ -182,9 +182,22 @@ export const MAX_TAGS_PER_PART = 250_000;
 /**
  * Nodes (elements and the text between them) one part may hold when it is read with packing: the packed reader counts
  * what it builds, not the `<` it meets (`parseXml`'s `pack` option), and a path read as numbers builds nothing per command.
+ *
+ * 400,000, fixed by the pool's own heap (design/29 X1, measured on 2026-11-20 with the hub's worker limits, 512 MB old
+ * generation; `xml-compact` notes M3): the largest real part has 240,144 such nodes (a Traffic Dark slide, 22 MB), so the bound is
+ * 1.67 times it; the real slides peak at 80-181 MB of the heap one at a time and the whole 101-slide deck in one call at 247 MB.
+ * A part costs about 370 bytes a node, and the converter pins a slide's layout, master and theme beside the slide: three parts
+ * of 400,000 nodes peak at 445 MB of the 512 and are converted, three of 500,000 do not fit (the worker would be killed, the
+ * pool's out-of-memory path). So 400,000 is the largest bound inside [300,000, 500,000] at which the hostile deck of
+ * three parts at the bound stays in the heap; a part past it is refused at once, as `XmlBoundError` of kind `elements`.
  */
-export const MAX_PACKED_ELEMENTS_PER_PART = 500_000;
-/** Commands and points of one packed part in all (an arcTo counts as two points); never reached inside the part-size bound. */
+export const MAX_PACKED_ELEMENTS_PER_PART = 400_000;
+/**
+ * Commands and points of one packed part in all (an arcTo counts as two points). It cannot bind inside a 32 MiB part (the
+ * smallest point, `<a:pt x="1" y="1"/>`, is 19 bytes: at most 1.76 million of them, 3.4 million `<a:close/>`), and the arrays are
+ * typed memory outside the heap (a part of `<a:close/>` at the part cap peaks at 50 MB); it is kept as a cheap invariant and
+ * lowered through the option in the tests. It protects nothing on its own: the element bound does.
+ */
 export const MAX_PACKED_PATH_ITEMS_PER_PART = 4_000_000;
 
 /** Occurrences of `ch` (a character or a string) in `s`, counted up to `limit + 1`. */

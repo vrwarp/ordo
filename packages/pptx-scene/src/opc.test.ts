@@ -18,7 +18,7 @@ import {
   XML_NODE_BYTES,
 } from './opc.ts';
 import { body, buildDeck, grpSp, imageRel, para, pic, run, scheme, solid, solidBg, sp } from './test-util.ts';
-import type { XNode } from './xml.ts';
+import { MAX_PACKED_ELEMENTS_PER_PART, type XNode } from './xml.ts';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -249,8 +249,20 @@ describe('openPackage', () => {
     const a2 = roomy.xml('a.xml');
     roomy.xml('b.xml');
     expect(roomy.xml('a.xml')).toBe(a2);
-    // The default budget holds a slide's working set: its layout, master and theme, each at the tag limit.
-    expect(XML_CACHE_BYTES).toBeGreaterThanOrEqual(3 * (8 * 1024 * 1024 + 250_000 * XML_NODE_BYTES));
+    // The default budget holds the working set of the largest real slide (RESTATED for the packed reader, design/29 X1: the
+    // old assertion held three parts at the OLD hostile bounds, 8 MiB and 250,000 tags each, which no heap the pool has can
+    // hold at 32 MiB and 400,000 nodes; the pool-level test of a hostile deck is what proves a part at the bounds survives):
+    // a Traffic Dark slide (22 MiB, 240,144 nodes, 396,636 points), a Halloween layout (12.5 MiB, 8,554 nodes, 322,417 points),
+    // a master and a theme of 2 MiB each.
+    const part = (bytes: number, nodes: number, points: number) =>
+      bytes + XML_NODE_BYTES * nodes + PATH_ITEM_BYTES * 2 * points;
+    const workingSet =
+      part(22 * 1024 * 1024, 240_144, 396_636) +
+      part(12.5 * 1024 * 1024, 8_554, 322_417) +
+      2 * part(2 * 1024 * 1024, 5_000, 0);
+    expect(workingSet).toBeLessThanOrEqual(XML_CACHE_BYTES);
+    // And a part at the bounds is not what the budget is sized for: it is kept (pinned or newest) over the budget.
+    expect(part(MAX_XML_PART_BYTES, MAX_PACKED_ELEMENTS_PER_PART, 0)).toBeGreaterThan(XML_CACHE_BYTES / 2);
   });
 
   describe('traced paths (design/29 X1: the package reads each part with packing on)', () => {

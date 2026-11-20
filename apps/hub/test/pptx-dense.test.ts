@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { PPTX_CLIENT_LIMITS } from '@ordo/importers/pptx-client.ts';
 import { zipDeclared } from '@ordo/importers/zip-declared.test-util.ts';
 import { buildDeck, denseShapes } from '@ordo/pptx-scene/test-util.ts';
+import { MAX_PACKED_ELEMENTS_PER_PART } from '@ordo/pptx-scene/xml.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { declaredXmlBytes } from '../src/pptx/deckParts.ts';
 import { batchEnds, PPTX_LIMITS } from '../src/pptx/shared.ts';
@@ -87,6 +88,40 @@ describe('the hub reads up to 256 MiB of slide XML (design/29 B6)', () => {
     await writeFile(file, zipDeclared(entries));
     expect(await declaredXmlBytes(file, new AbortController().signal)).toBe(10 * MiB + 1000);
   });
+});
+
+describe('hostile parts at and past the reader\u2019s element bound, through the real pool (design/29 X1, B4)', () => {
+  const junk = (n: number) => '<a:b/>'.repeat(n);
+
+  it('imports a deck whose slide, layout and master each hold 399,900 elements: done, never failed whole', async () => {
+    // Three parts at the bound pinned together: the measured case that sets the bound (445 MB of the pool's 512 MB heap).
+    const n = MAX_PACKED_ELEMENTS_PER_PART - 100;
+    const parts = buildDeck({
+      slides: [{ shapes: junk(n) }],
+      layouts: [{ shapes: junk(n) }],
+      master: { shapes: junk(n) },
+    });
+    const job = await importFile(await zipDeck(parts, dir, 'three-at-bound.pptx'), 180_000);
+    expect(job.error).toBeUndefined();
+    expect(job.state).toBe('done');
+    const p = hub.lib.presentations.must((job.result as { presentationId: string }).presentationId);
+    expect(slidesOf(p)).toHaveLength(1);
+  }, 240_000);
+
+  it('refuses parts past the bound at once and ends done: the slide keeps only what it can, the designs are said (W9)', async () => {
+    const n = MAX_PACKED_ELEMENTS_PER_PART + 100;
+    const parts = buildDeck({
+      slides: [{ shapes: junk(n) }],
+      layouts: [{ shapes: junk(n) }],
+      master: { shapes: junk(n) },
+    });
+    const job = await importFile(await zipDeck(parts, dir, 'three-past-bound.pptx'), 180_000);
+    expect(job.error).toBeUndefined();
+    expect(job.state).toBe('done');
+    expect(job.log.join('\n')).toContain(
+      'Slide 1 has too much drawing detail for ordo to read, so only its text was imported.',
+    );
+  }, 240_000);
 });
 
 describe('the calls of a deck are cut by bytes as well as by slides (batchEnds)', () => {
