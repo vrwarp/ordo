@@ -399,3 +399,35 @@ describe('census', () => {
     expect(noLo.missing).toEqual(['decoration']);
   }, 120_000);
 });
+
+describe('legacyColumns: the slides the underlay frame splits (M4)', () => {
+  const squares = (n: number) =>
+    Array.from(
+      { length: n },
+      (_, i) =>
+        ({
+          id: `s${i}`,
+          type: 'shape',
+          shape: 'rect',
+          box: { x: (i % 20) * 90, y: Math.floor(i / 20) * 60, w: 80, h: 50, rotation: 0 },
+          radius: 0,
+          opacity: 1,
+          fill: { r: i % 256, g: 7, b: 9, a: 1 },
+        }) as Slide['objects'][number],
+    );
+
+  it('lists a slide of 340 objects: the frame under the 200 the live clamp keeps, at 3840 and at 1920, with its rule', () => {
+    expect(legacyColumns(slide(squares(340)))).toEqual({
+      frame: 140,
+      frame_objects: 1,
+      frameBytes: 3840 * 2160 * 4,
+      frame1080: 140,
+      frame1080_objects: 1,
+    });
+  });
+
+  it('says nothing of a slide the counts hold: 200 objects, and an empty slide', () => {
+    expect(legacyColumns(slide(squares(200)))).toEqual({});
+    expect(legacyColumns(slide([]))).toEqual({});
+  });
+});

@@ -170,6 +170,10 @@ function storedPaths(o: { geom?: unknown; box: { w: number; h: number } }) {
  *   there as their legacy shapes; `unitsAlone` those of them past
  *   `GEOM_COST.slide` alone (no task could draw one; for thin line art its legacy line draws nothing). The
  *   ratchet fails `unitsAlone` wherever it is (never drop) and reports `unitsLeft`.
+ * - `frame` / `frame1080`: the objects of the frame under the direct part when outputs split the slide (renderer `frame.ts`
+ *   `splitFrame`) at 3840 / at 1920, and `frame_<rule>` / `frame1080_<rule>` (1) for each rule that held the direct
+ *   part back (`objects`, `images`, `targets`, `bytes`, `area`: `FrameWhy`); `frameBytes` the frame's bitmap at 3840.
+ *   Reported by tally; no ratchet reads them.
  * Zeros left out.
  */
 export function legacyColumns(slide: Pick<Slide, 'objects'>): Record<string, number> {
@@ -195,7 +199,7 @@ export function legacyColumns(slide: Pick<Slide, 'objects'>): Record<string, num
   }
   // Outputs draw a slide past a count or past one frame of unit area as a direct part and a frame under it
   // (renderer `frame.ts`): what is left is counted over both, the frame's objects each drawn alone (never 'area').
-  const split = budgetLegacy ? splitFrame(slide as Slide, 2) : undefined;
+  const split = splitFrame(slide as Slide, 2);
   const left = !budgetLegacy
     ? []
     : split
@@ -204,6 +208,17 @@ export function legacyColumns(slide: Pick<Slide, 'objects'>): Record<string, num
   const unitsLeft = left.length;
   const unitsAlone = left.filter((w) => w === 'alone').length;
   const out: Record<string, number> = { budgetLegacy, legacyFills, unitsLeft, unitsAlone };
+  // The slides that get a frame, at 3840 and at 1920, and the rules that held the direct part back (M4's list).
+  for (const [scale, at, tag] of [
+    [2, split, 'frame'],
+    [1, splitFrame(slide as Slide, 1), 'frame1080'],
+  ] as const) {
+    if (!at) continue;
+    out[tag] = at.under.length;
+    for (const rule of ['objects', 'images', 'targets', 'bytes', 'area'] as const)
+      if (at.why[rule]) out[`${tag}_${rule}`] = 1;
+    if (scale === 2) out.frameBytes = at.bytes;
+  }
   for (const k of Object.keys(out)) if (!out[k]) delete out[k];
   return out;
 }

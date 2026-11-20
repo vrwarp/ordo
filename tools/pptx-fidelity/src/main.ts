@@ -7,7 +7,7 @@
  *        [--out DIR] [--chromium PATH] [--raw] [--fresh-lo] [--manifest FILE] [--baseline FILE]
  *        [--max-drop 0.02] [--lo-compat] [--slides [DECK:]LIST]... [--script-stand-ins]
  *        [--before hub|paste] [--ask-hub [DECK:]LIST]... [--ask-hub-nolo [DECK:]LIST|all-tables]...
- *        [--hub dist|source] [--no-libreoffice] [--hub-budget]
+ *        [--hub dist|source] [--no-libreoffice] [--hub-budget] [--frames]
  *        [deck.pptx | dir]...
  *
  * Folders are searched with their subfolders for PresentationML decks (src/decks.ts `DECK_RE`); a deck any
@@ -60,6 +60,11 @@
  *               `perSlide.missing`), each slide as the hub stores it (a picture slide: no objects)
  * --hub-budget  draw every slide as the hub stores it once its budgets ran (`native.ts` `withHubBudget`:
  *               M9's budget ladder, re-gridded, simplified or minimal, never a picture for its size)
+ * --frames      draw a slide past a count (more than 200 objects or 16 pictures) or past one frame of unit area
+ *               as an output does since the underlay frame (a direct part over the frame made beforehand,
+ *               renderer `frame.ts`), not cut at 200 objects: the timings are then the copy plus the direct part,
+ *               the cold arm includes making the frame, `perSlide.frame` says what the frame did (objects, the
+ *               rules, its time, parity against the whole slide); a slide within the counts is drawn as before
  *
  * Real decks stay outside the repository: pass their paths. The score is SSIM of greyscale pictures at
  * 960x540 (1 = identical), computed by ffmpeg. A native run also writes <out>/native-baseline.json.
@@ -271,6 +276,8 @@ type NativeOpts = {
   before?: 'hub' | 'paste';
   noLibreOffice: boolean;
   hubBudget: boolean;
+  /** `--frames`: draw a slide the underlay frame splits as an output does (`native-page.ts` `RenderJob.frames`). */
+  frames?: boolean;
   /** `--ask-hub`: slides (1-based) the hub is asked for whatever it stores (`askedSet`'s `extra`). */
   askHub?: ReadonlySet<number>;
   /** `--ask-hub-nolo`: slides (1-based) a hub without LibreOffice is asked for, and/or every table slide. */
@@ -339,6 +346,7 @@ async function nativeColumn(
         loCompat: opts.loCompat,
         standIns: opts.standIns,
         noLo: opts.noLibreOffice,
+        ...(opts.frames ? { frames: true } : {}),
       });
     } catch (e) {
       notes.push(`not drawn: ${(e as Error).message.slice(0, 300)}`);
@@ -562,6 +570,7 @@ async function main(): Promise<void> {
         ? { noLibreOffice: true, noLoMean: mean(counted.map((s) => s.noLoSsim ?? s.nativeSsim!)) }
         : {}),
       ...(nativeOn && a.hubBudget ? { hubBudget: true } : {}),
+      ...(nativeOn && a.frames ? { frames: true } : {}),
       ...(hubBefore || hubNoLo
         ? { askedHubs: [hubBefore?.info(), hubNoLo?.info()].filter((h) => h !== undefined) }
         : {}),
@@ -664,6 +673,7 @@ async function main(): Promise<void> {
             ...(a.before ? { before: a.before } : {}),
             noLibreOffice: a.noLibreOffice,
             hubBudget: a.hubBudget,
+            ...(a.frames ? { frames: true } : {}),
             ...(askHub ? { askHub } : {}),
             ...(askHubNoLo ? { askHubNoLo } : {}),
             ...(a.askHubNoLoTables ? { askHubNoLoTables: true } : {}),

@@ -675,6 +675,68 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
     }
   }, 120_000);
 
+  it('draws a slide past 200 objects as an output does with `frames` (the frame under the direct part, equal to the whole slide) and cut as before without', async () => {
+    const squares = (n: number, at: string): Slide['objects'] =>
+      Array.from({ length: n }, (_, i) => ({
+        id: `${at}${i}`,
+        type: 'shape' as const,
+        box: { x: 20 + (i % 20) * 90, y: 20 + Math.floor(i / 20) * 60, w: 80, h: 50, rotation: 0 },
+        shape: 'rect' as const,
+        fill: { r: 30 + ((i * 7) % 190), g: 40 + ((i * 13) % 170), b: 50 + ((i * 29) % 150), a: 1 },
+        opacity: 1,
+        radius: 0,
+      }));
+    const entry = (i: number, objects: Slide['objects']) => ({
+      index: i,
+      shown: i,
+      hidden: false,
+      tier: 'T1' as const,
+      class: 'native' as const,
+      reasons: [],
+      convertMs: 0,
+      notes: [],
+      compat: [],
+      slide: { id: `s${i}`, objects },
+      textFeatures: [],
+    });
+    const deck: NativeDeck = {
+      slides: [entry(0, squares(340, 'a')), entry(1, squares(30, 'b'))],
+      slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
+      media: [],
+      notes: [],
+      embeddedFonts: false,
+      textFeatures: [],
+      extractMs: 0,
+      parseMs: 0,
+      emitMs: 0,
+    };
+    const r = await NativeRenderer.start(chromium!);
+    try {
+      const dir = await work();
+      const cut = await r.renderDeck(deck, dir, { repeats: 0 });
+      expect(cut.slides.map((s) => s.frame)).toEqual([undefined, undefined]);
+      const cutPng = await readFile(join(dir, 'slide-0001.png'));
+      const framed = await r.renderDeck(deck, dir, { repeats: 1, frames: true });
+      expect(framed.notes).toEqual([]);
+      const f = framed.slides[0]!.frame!;
+      expect(f['1920']).toMatchObject({
+        under: 140,
+        direct: 200,
+        why: ['objects'],
+        parityMax: 0,
+        parityOver2: 0,
+      });
+      expect(f['3840']).toMatchObject({ under: 140, direct: 200, parityMax: 0, parityOver2: 0 });
+      expect(f['1920']!.makeMs).toBeGreaterThan(0);
+      // The whole slide is on the page: the cut draw left 140 squares out.
+      expect((await readFile(join(dir, 'slide-0001.png'))).equals(cutPng)).toBe(false);
+      // A slide within the counts is drawn as before.
+      expect(framed.slides[1]!.frame).toBeUndefined();
+    } finally {
+      await r.close();
+    }
+  }, 120_000);
+
   it("registers the faces it is given instead of fontconfig's (an output's own faces)", async () => {
     // A face without ink (the coverage probe's blank face) given for the deck's family: its text then draws
     // nothing, as on an empty slide, where fontconfig's face for the family (or the generic chain) draws
