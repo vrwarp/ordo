@@ -160,6 +160,36 @@ export function sameDrawn(a: SlideObject, b: SlideObject): boolean {
   return true;
 }
 
+// ---- the node cache on the device pixel grid -----------------------------------------------------------
+
+/**
+ * The rectangle a node's cache is made over, moved left and up so that its corner lies on the stage's device
+ * pixel grid at `density` (device px per logical px), its far edge where it was. A cache is copied onto the
+ * layer one pixel to one pixel; where its corner fell between two device pixels the copy was resampled (bilinear)
+ * and every edge in it blurred, which is what kept the editor's picture below the screens' (design/15 "Canvas
+ * drawing": measured as the stage against the Audience page, 0.01 to 0.02 of the greyscale SSIM on every slide
+ * of the survey). `box` is the object's box, whose corner is the node's origin; a turned node is resampled
+ * whatever its offset, and a density or a position that is not a number leaves the rectangle as it is.
+ */
+export function alignCacheRect<R extends { x: number; y: number; width: number; height: number }>(
+  rect: R,
+  box: { readonly x: number; readonly y: number; readonly rotation?: number },
+  density: number,
+): R {
+  if (!(density > 0) || !Number.isFinite(box.x + box.y + rect.x + rect.y)) return rect;
+  const turn = (((box.rotation ?? 0) % 360) + 360) % 360;
+  if (turn > 1e-6 && turn < 360 - 1e-6) return rect;
+  // How far the corner lies past the grid line before it, in logical px.
+  const past = (v: number) => {
+    const f = v - Math.floor(v);
+    return f < 1e-9 || f > 1 - 1e-9 ? 0 : f / density;
+  };
+  const dx = past((box.x + rect.x) * density);
+  const dy = past((box.y + rect.y) * density);
+  if (dx === 0 && dy === 0) return rect;
+  return { ...rect, x: rect.x - dx, y: rect.y - dy, width: rect.width + dx, height: rect.height + dy };
+}
+
 // ---- the switch (W2) -----------------------------------------------------------------------------------
 
 /**

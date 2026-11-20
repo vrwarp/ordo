@@ -13,6 +13,7 @@ import { effectsSlide, PANEL_SHADOW, softFrame } from '@ordo/renderer/units.effe
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nodeCacheRect } from '../src/views/editor/SlideCanvas.tsx';
 import {
+  alignCacheRect,
   drawWhole,
   planWhole,
   readSwitch,
@@ -587,6 +588,63 @@ describe('the lighter copy the editor keeps (OQ-LE2: the note under the Object p
     const plan = planWhole(objects, budget, { primary: 'p9' }, state, env({ density: 2, live: true }));
     expect(plan.simple).toEqual([]);
     expect(plan.status).toMatchObject({ drawn: 3, stale: 3, blocked: 0 });
+  });
+});
+
+describe('a node cache on the device pixel grid (the editor against the screens, M8)', () => {
+  const rect = { x: -2, y: -3, width: 403, height: 303 };
+  /** Where the cache's corner lies on the stage, in device px. */
+  const corner = (box: { x: number; y: number }, r: { x: number; y: number }, d: number) => [
+    (box.x + r.x) * d,
+    (box.y + r.y) * d,
+  ];
+  const onGrid = (v: number) => Math.abs(v - Math.round(v)) < 1e-6;
+
+  it('moves the cache’s corner left and up onto the device pixel grid, and keeps its far edge', () => {
+    for (const d of [0.8255, 1, 1.5, 0.41, 2.75]) {
+      for (const box of [
+        { x: 120.4, y: 80.7, rotation: 0 },
+        { x: 600, y: 100, rotation: 0 },
+        { x: 33.333, y: 910.91, rotation: 0 },
+      ]) {
+        const a = alignCacheRect(rect, box, d);
+        const [cx, cy] = corner(box, a, d);
+        expect(onGrid(cx!) && onGrid(cy!), `density ${d}, box ${box.x},${box.y}`).toBe(true);
+        // At most one device px to the left and up (the corner moves down to the grid line below it), never right or down.
+        expect(a.x).toBeLessThanOrEqual(rect.x + 1e-9);
+        expect(a.y).toBeLessThanOrEqual(rect.y + 1e-9);
+        expect(rect.x - a.x).toBeLessThan(1 / d + 1e-9);
+        expect(rect.y - a.y).toBeLessThan(1 / d + 1e-9);
+        // The far edge stays where it was: the cache covers what it covered.
+        expect(a.x + a.width).toBeCloseTo(rect.x + rect.width, 6);
+        expect(a.y + a.height).toBeCloseTo(rect.y + rect.height, 6);
+      }
+    }
+  });
+
+  it('leaves a rectangle that is on the grid already as it is', () => {
+    const box = { x: 100, y: 50, rotation: 0 };
+    expect(alignCacheRect(rect, box, 1)).toEqual(rect);
+    expect(alignCacheRect(rect, box, 2)).toEqual(rect);
+  });
+
+  it('leaves a turned object alone (its bitmap is resampled whatever the offset), and an unusable density', () => {
+    const turned = { x: 120.4, y: 80.7, rotation: 7 };
+    expect(alignCacheRect(rect, turned, 0.8255)).toEqual(rect);
+    expect(alignCacheRect(rect, { ...turned, rotation: 360 }, 0.8255)).not.toEqual(rect);
+    expect(alignCacheRect(rect, { ...turned, rotation: 0 }, 0)).toEqual(rect);
+    expect(alignCacheRect(rect, { ...turned, rotation: 0 }, Number.NaN)).toEqual(rect);
+    expect(alignCacheRect(rect, { x: Number.NaN, y: 1, rotation: 0 }, 1.5)).toEqual(rect);
+  });
+
+  it('is what the canvas caches a past-budget object over: the rectangle of the object’s own reach, moved', () => {
+    const objects = effects();
+    const p9 = byId(objects, 'p9');
+    const r = cacheRect(p9, 0.8255)!;
+    const a = alignCacheRect(r, p9.box, 0.8255);
+    expect(a.width).toBeGreaterThanOrEqual(r.width);
+    expect(a.width).toBeLessThan(r.width + 1 / 0.8255 + 1e-9);
+    expect(onGrid((p9.box.x + a.x) * 0.8255)).toBe(true);
   });
 });
 

@@ -426,3 +426,58 @@ test('(E) a move keeps a whole object whole: no flash of the lighter copy', asyn
   expect((await editorState(page)).objectId).toBe('p11');
   expect(await noteCount(page), 'no note for an object drawn whole').toBe(0);
 });
+
+test('(F) every node cache lies on the device pixel grid: the copy onto the layer is not resampled', async ({
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  // A device scale of 2 and a window whose pane gives the canvas a scale that is no round number: the panels' corners fall between
+  // device pixels (40 + 340 k logical px at about 0.83 device px each) unless the caches are made to start on the grid.
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 2 });
+  const page = await context.newPage();
+  try {
+    await openEditor(page, PORT, await fullOf());
+    await expect.poll(async () => (await wholeSettled(page))?.drawn, { timeout: 30_000 }).toBe(3);
+    const grid = await page.evaluate(() => {
+      const K = (window as unknown as { Konva: { stages: { getLayers(): unknown[] }[] } }).Konva;
+      type N = {
+        isCached(): boolean;
+        rotation(): number;
+        x(): number;
+        y(): number;
+        offsetX(): number;
+        offsetY(): number;
+        _canvasCache: { x: number; y: number };
+      };
+      type L = { scaleX(): number; getChildren(): N[] };
+      const dpr = window.devicePixelRatio;
+      let nodes = 0;
+      let off = 0;
+      let density = 0;
+      for (const layer of K.stages[0]!.getLayers() as L[]) {
+        const scale = layer.scaleX();
+        if (!(scale > 0) || scale === 1) continue;
+        density = scale * dpr;
+        for (const n of layer.getChildren()) {
+          if (typeof n.isCached !== 'function' || !n.isCached() || n.rotation() !== 0) continue;
+          const c = n._canvasCache;
+          for (const v of [(n.x() - n.offsetX() + c.x) * density, (n.y() - n.offsetY() + c.y) * density]) {
+            off = Math.max(off, Math.abs(v - Math.round(v)));
+          }
+          nodes++;
+        }
+      }
+      return { nodes, off, density };
+    });
+    expect(grid.nodes, 'the slide’s 13 shapes are cached nodes').toBeGreaterThanOrEqual(13);
+    expect(grid.density % 1, 'the canvas’s density is not a whole number: the grid matters').toBeGreaterThan(
+      0.01,
+    );
+    expect(
+      grid.off,
+      'the largest distance of a cache corner to the device pixel grid, in device px',
+    ).toBeLessThan(0.01);
+  } finally {
+    await context.close();
+  }
+});

@@ -85,7 +85,7 @@ import { snapBox } from './snapping.ts';
 import { markTableKitLoaded, tableKitLoaded } from './tableKitState.ts';
 import { TEXT_MARGIN, textDensity, textRasterKey } from './textRaster.ts';
 import { floatingBarSpot, objectToolsSpot, rotaterAngle } from './touchGeometry.ts';
-import { useWholeDraw } from './wholeDraw.ts';
+import { alignCacheRect, useWholeDraw } from './wholeDraw.ts';
 import { noteWholeDraw, wholeSlideKey } from './wholeState.ts';
 
 // ---- image cache (HTMLImageElement per file hash) ----
@@ -584,7 +584,12 @@ function ObjectNode(props: {
       return;
     }
     const from = props.whole ? performance.now() : 0;
-    n.cache({ ...rect, pixelRatio: props.cacheDensity, hitCanvasPixelRatio: Math.min(1, props.scale) });
+    // Over the rectangle with its corner on the device pixel grid, so the copy onto the layer is not resampled.
+    n.cache({
+      ...alignCacheRect(rect, b, props.cacheDensity),
+      pixelRatio: props.cacheDensity,
+      hitCanvasPixelRatio: Math.min(1, props.scale),
+    });
     if (props.whole) noteWholeDraw(o.id, performance.now() - from);
   }, [o, props.drawAs, props.cacheDensity, props.media, props.height, tick]);
   return (
