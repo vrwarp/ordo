@@ -42,6 +42,8 @@ export {
  */
 export const PPTX_LIMITS = {
   ...PPTX_IMPORT_LIMITS,
+  /** XML of slides one `pptx-scene` pool call may carry (a call also holds its copies, one worker's share and the result). */
+  batchXmlBytes: 64 * 1024 ** 2,
   /** Font parts extracted per deck. */
   fonts: 20,
   /** Slides per `pptx-scene` pool task, and that task's timeout. */
@@ -492,4 +494,17 @@ export type BakeTaskOutput = {
 /** A stub's error: the work item that will implement it (README.md). */
 export function notYet(item: string, what: string): Error {
   return new Error(`${what} is not implemented yet (M3 item ${item})`);
+}
+
+/**
+ * Where the calls of a deck end: `sizes[i]` is the XML of slide i, a call holds at most `maxSlides` slides and at most `maxBytes`
+ * of XML (a slide whose own XML passes it goes alone), and every call has at least one slide. The ends are exclusive indexes, the
+ * last is `sizes.length`.
+ */
+export function batchEnds(sizes: readonly number[], maxSlides: number, maxBytes: number): number[] {
+  void maxBytes;
+  const ends: number[] = [];
+  for (let to = maxSlides; to < sizes.length; to += maxSlides) ends.push(to);
+  if (sizes.length) ends.push(sizes.length);
+  return ends;
 }

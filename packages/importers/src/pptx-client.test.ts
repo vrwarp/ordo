@@ -11,9 +11,10 @@ import {
   sp,
 } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
-import { CONVERTER_VERSION, importPptxClient, LOOP_IMPORT_NOTE } from './pptx-client.ts';
+import { CONVERTER_VERSION, importPptxClient, LOOP_IMPORT_NOTE, parsePptxScene } from './pptx-client.ts';
 import { pictureGuardDeck } from './pptx-guard.test-util.ts';
 import { remapMediaIds } from './remap.ts';
+import { zipDeclared } from './zip-declared.test-util.ts';
 
 const IN = 914_400;
 const CHART = 'http://schemas.openxmlformats.org/drawingml/2006/chart';
@@ -186,6 +187,27 @@ describe('a looping PowerPoint show with every slide timed (the client path)', (
     const left = await importPptxClient(await zip(huge), 'huge.pptx');
     expect(left.clientScene.oversized).toEqual(['ppt/slides/slide1.xml']);
     expect(left.log.join('\n')).toContain('ppt/slides/slide1.xml is over 32 MB: not read');
+  });
+
+  it('refuses a deck that declares more than 64 MiB of XML from its directory, before reading a part (the hub takes it then)', async () => {
+    // Four entries of 20 MiB (each within the part cap) whose bytes are garbage: the refusal comes from the sum of the declared
+    // sizes; a reader that inflated the first entry would fail with an inflate error instead.
+    const entries = Array.from({ length: 4 }, (_, i) => ({
+      name: `ppt/slides/slide${i + 1}.xml`,
+      declared: 20 * 1024 * 1024,
+    }));
+    await expect(parsePptxScene(zipDeclared(entries))).rejects.toThrow(
+      'The deck holds more than 64 MB of slide XML',
+    );
+    // Parts left out for their size (past the part cap) and pictures are not in the total.
+    const left = [
+      { name: 'ppt/slides/slide1.xml', declared: 40 * 1024 * 1024 },
+      { name: 'ppt/slides/slide2.xml', declared: 40 * 1024 * 1024 },
+      { name: 'ppt/media/image1.png', declared: 400 * 1024 * 1024 },
+    ];
+    await expect(parsePptxScene(zipDeclared(left))).rejects.not.toThrow(
+      'The deck holds more than 64 MB of slide XML',
+    );
   });
 
   it('imports an announcement loop and says so in the import log, as the hub does', async () => {

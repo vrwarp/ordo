@@ -10,6 +10,7 @@ import type { Slide, TextObject } from '@ordo/domain';
 import { blankFont } from '@ordo/renderer/text/blankface.ts';
 import { sfntMetrics } from '@ordo/pptx-scene';
 import { MAX_XML_PART_BYTES as converterPartCap } from '@ordo/pptx-scene/opc.ts';
+import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { familiesOf, fcFamily, fcMatch, isStandIn } from './fonts.ts';
@@ -19,6 +20,7 @@ import {
   convertDeck,
   convertDeckIsolated,
   MAX_XML_PART_BYTES,
+  MAX_XML_TOTAL_BYTES,
   type NativeDeck,
   NativeRenderer,
   picturesNeeded,
@@ -101,6 +103,8 @@ describe('native column helpers', () => {
     expect(spillPart('ppt/slides/slide1.xml', 32 * 1024 * 1024)).toBe(false);
     expect(spillPart('ppt/slides/slide1.xml', 32 * 1024 * 1024 + 1)).toBe(true);
     expect(MAX_XML_PART_BYTES).toBe(converterPartCap);
+    // ... and the XML it keeps in all is the hub's (design/29 B6: 256 MiB), so the census reads what the hub reads.
+    expect(MAX_XML_TOTAL_BYTES).toBe(PPTX_LIMITS.xmlTotalBytes);
     expect(spillPart('ppt/media/image1.png', 10)).toBe(true);
     expect(spillPart('ppt/embeddings/oleObject1.bin', 10)).toBe(true);
   });

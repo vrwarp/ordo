@@ -99,3 +99,8 @@ export async function spillDeckParts(
   });
   return { files: zip.onDisk, skippedCount: zip.skippedCount + over };
 }
+
+/** The XML of a deck as its central directory declares it, in bytes (the stub reads nothing). */
+export async function declaredXmlBytes(_deck: string, _signal: AbortSignal): Promise<number> {
+  return 0;
+}
