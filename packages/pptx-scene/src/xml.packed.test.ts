@@ -514,6 +514,39 @@ const commandArb: fc.Arbitrary<string> = fc.oneof(
     ),
   },
 );
+/** Strict-form commands only (canonical integers, no extras): the paths that pack. */
+const strictPtArb = fc
+  .record({
+    x: fc.integer({ min: -1_000_000, max: 1_000_000 }),
+    y: fc.integer({ min: -999_999_999_999_999, max: 999_999_999_999_999 }),
+    yFirst: fc.boolean(),
+    q: quoteArb,
+  })
+  .map(
+    (r) =>
+      `<a:pt ${r.yFirst ? `y=${r.q}${r.y}${r.q} x=${r.q}${r.x}${r.q}` : `x=${r.q}${r.x}${r.q} y=${r.q}${r.y}${r.q}`}/>`,
+  );
+const strictCommandArb: fc.Arbitrary<string> = fc.oneof(
+  { weight: 2, arbitrary: strictPtArb.map((p) => `<a:moveTo>${p}</a:moveTo>`) },
+  { weight: 6, arbitrary: strictPtArb.map((p) => `<a:lnTo>${p}</a:lnTo>`) },
+  {
+    weight: 2,
+    arbitrary: fc.tuple(strictPtArb, strictPtArb).map(([a, b]) => `<a:quadBezTo>${a}${b}</a:quadBezTo>`),
+  },
+  {
+    weight: 2,
+    arbitrary: fc
+      .tuple(strictPtArb, strictPtArb, strictPtArb)
+      .map(([a, b, c]) => `<a:cubicBezTo>${a}${b}${c}</a:cubicBezTo>`),
+  },
+  {
+    weight: 1,
+    arbitrary: fc
+      .tuple(fc.integer(), fc.integer(), fc.integer(), fc.integer())
+      .map(([a, b, c, d]) => `<a:arcTo wR="${a}" hR="${b}" stAng="${c}" swAng="${d}"/>`),
+  },
+  { weight: 2, arbitrary: fc.constant('<a:close/>') },
+);
 const pathArb = fc
   .record({
     attrs: fc.constantFrom(
@@ -522,15 +555,26 @@ const pathArb = fc
       ' w="5" h="5" fill="none" stroke="0" extrusionOk="0"',
       " fill='none'",
     ),
+    // Half of the paths are strict-form paths (they pack), half mix in every form that makes the packed reader fall back.
+    strict: fc.boolean(),
+    strictCommands: fc.array(strictCommandArb, { maxLength: 24 }),
     commands: fc.array(commandArb, { maxLength: 24 }),
     selfClose: fc.constantFrom(false, false, false, false, false, true),
   })
-  .map((r) => (r.selfClose ? `<a:path${r.attrs}/>` : `<a:path${r.attrs}>${r.commands.join('')}</a:path>`));
+  .map((r) =>
+    r.selfClose
+      ? `<a:path${r.attrs}/>`
+      : `<a:path${r.attrs}>${(r.strict ? r.strictCommands : r.commands).join('')}</a:path>`,
+  );
 const partArb = fc
   .record({
     paths: fc.array(pathArb, { minLength: 1, maxLength: 6 }),
     wrap: fc.constantFrom(0, 1, 2, 3, 4),
-    cut: fc.option(fc.double({ min: 0, max: 1, noNaN: true }), { nil: undefined, freq: 8 }),
+    // One part in four is cut at a random place (fc.option's freq is the weight of the nil value, not of the cut).
+    cut: fc.oneof(
+      { weight: 3, arbitrary: fc.constant(undefined) },
+      { weight: 1, arbitrary: fc.double({ min: 0, max: 1, noNaN: true }) },
+    ),
   })
   .map((r) => {
     const list = `<a:pathLst>${r.paths.join('')}</a:pathLst>`;

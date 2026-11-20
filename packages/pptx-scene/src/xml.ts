@@ -12,6 +12,26 @@
  * its name (an end tag with no open element of that name is ignored) and elements still open at the end are
  * closed. Only an unterminated tag, comment, CDATA section or processing instruction, and a declaration,
  * throw: the caller quarantines that part.
+ *
+ * Two readers, one tree. The NODE READER is the default and the reference: one `XNode` per element and per run
+ * of text, and a part is refused past `MAX_TAGS_PER_PART` tags (a count of `<` before anything is built). The
+ * PACKED READER (`parseXml` with `ParseOptions.pack`, which only the converter's package asks for: design/29
+ * §2.3 X1) reads traced artwork as numbers. Traced artwork is a custom geometry of hundreds of thousands of
+ * `a:pt` points, one node each (a slide of 1.5 million tags held 472 MB of a 512 MB heap), so an `a:path` that
+ * is a child of an `a:pathLst` and is written in the strict form below becomes ONE node whose commands and
+ * points are two typed arrays (`PackedPath`), read through `pathCommands` and nowhere else. The strict form is
+ * what real tools write: no whitespace, comment, text or CDATA between the commands of the path; only the
+ * commands `a:moveTo` and `a:lnTo` (one `a:pt`), `a:quadBezTo` (two), `a:cubicBezTo` (three), `a:arcTo` (its
+ * four attributes `wR hR stAng swAng`, no child) and `a:close` (no attribute); each `a:pt` with exactly `x`
+ * and `y`, written with one space between the attributes and `/>` right after the last; every number a
+ * canonical integer (`-?[0-9]{1,15}`, no leading zero, no `-0`, no sign but minus, no entity), so the string a
+ * reader makes from a number is the string the node reader would have read. A path that departs from this in
+ * any way (a guide name, a decimal, a space, an unknown child, a deeper tree than `XML_MAX_DEPTH` leaves room
+ * for, a missing end tag) is read again from its start tag by the ordinary loop: the tree is the node
+ * reader's, node for node, and that fallback is the whole safety argument. `unpackPaths` rebuilds the node
+ * reader's tree from a packed one, so the two can be compared on any input; both give the same refusals for
+ * every reason that is not a bound, and the packed reader's own bounds (`ParseOptions.pack`) are counted
+ * where the loop builds, since no count before it can tell the packed children from the rest.
  */
 
 /** A namespaced XML element as a small tree (order preserved). Text nodes have the name `#text`. */
@@ -65,9 +85,26 @@ export interface PathCommand {
   attrs: Record<string, string>;
 }
 
-/** The children of an `a:path` in order, for either form of the path (the only way a reader reads them). */
+const EMPTY_ATTRS: Record<string, string> = Object.freeze(Object.create(null));
+
+/** The commands of a packed path, by `PackedPath.ops` code: the element name and how many `a:pt` it holds. */
+const OP_NAMES = ['a:close', 'a:moveTo', 'a:lnTo', 'a:quadBezTo', 'a:cubicBezTo', 'a:arcTo'] as const;
+const OP_POINTS = [0, 1, 1, 2, 3, 0] as const;
+const OP_CLOSE = 0;
+const OP_MOVE = 1;
+const OP_LINE = 2;
+const OP_QUAD = 3;
+const OP_CUBIC = 4;
+const OP_ARC = 5;
+const ARC_ATTRS = ['wR', 'hR', 'stAng', 'swAng'] as const;
+
+/**
+ * The children of an `a:path` in order, for either form of the path (the only way a reader reads them: a packed path has
+ * no `children`). For the node form every child in order, text nodes included, with the command's `a:pt` children as
+ * string pairs and its own attributes; for the packed form the same values made from the numbers on demand.
+ */
 export function pathCommands(p: XNode): Iterable<PathCommand> {
-  return nodeCommands(p);
+  return p.packed ? packedCommands(p.packed) : nodeCommands(p);
 }
 
 function* nodeCommands(p: XNode): Generator<PathCommand> {
@@ -78,9 +115,55 @@ function* nodeCommands(p: XNode): Generator<PathCommand> {
   }
 }
 
-/** The trees `parseXml` makes without packing: every packed path becomes the nodes the node reader would have made. */
+function* packedCommands(p: PackedPath): Generator<PathCommand> {
+  const { ops, nums } = p;
+  let k = 0;
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i]!;
+    const name = OP_NAMES[op]!;
+    if (op === OP_ARC) {
+      const attrs: Record<string, string> = Object.create(null);
+      for (let j = 0; j < 4; j++) attrs[ARC_ATTRS[j]!] = String(nums[k + j]);
+      k += 4;
+      yield { name, kids: 0, pts: [], attrs };
+      continue;
+    }
+    const n = OP_POINTS[op]!;
+    const pts: PathCommand['pts'] = [];
+    for (let j = 0; j < n; j++, k += 2) pts.push([String(nums[k]), String(nums[k + 1])]);
+    yield { name, kids: n, pts, attrs: EMPTY_ATTRS };
+  }
+}
+
+/** The nodes the node reader makes for the commands of a packed path (`unpackPaths`). */
+function commandNodes(p: PackedPath): XNode[] {
+  const out: XNode[] = [];
+  for (const c of packedCommands(p)) {
+    const kids: XNode[] = [];
+    for (const [x, y] of c.pts) {
+      const attrs: Record<string, string> = Object.create(null);
+      attrs.x = x!;
+      attrs.y = y!;
+      kids.push({ name: 'a:pt', attrs, children: [], text: '' });
+    }
+    const attrs: Record<string, string> = Object.create(null);
+    Object.assign(attrs, c.attrs);
+    out.push({ name: c.name, attrs, children: kids, text: '' });
+  }
+  return out;
+}
+
+/**
+ * The trees `parseXml` makes without packing: every packed path becomes the nodes the node reader would have made. A new
+ * tree; the argument is not changed. For tests and tools that compare the two readers: no reader of the converter needs it.
+ */
 export function unpackPaths(nodes: XNode[]): XNode[] {
-  return nodes;
+  const one = (n: XNode): XNode => {
+    if (n.packed) return { name: n.name, attrs: n.attrs, children: commandNodes(n.packed), text: n.text };
+    if (!n.children.length) return n;
+    return { name: n.name, attrs: n.attrs, children: n.children.map(one), text: n.text };
+  };
+  return nodes.map(one);
 }
 
 /** Element nesting kept; deeper content is dropped (real slides nest a few dozen levels). */
@@ -225,12 +308,242 @@ function readTag(inner: string, part: string): XNode {
   return { name, attrs, children: [], text: '' };
 }
 
-const EMPTY_ATTRS: Record<string, string> = Object.freeze(Object.create(null));
+/**
+ * What a packed path is being built into while it is scanned: the two typed arrays (grown by doubling, reused by every path
+ * of the part, copied exactly to the path that keeps them) and the part's running count of commands and points. A path
+ * that departs from the strict form is abandoned with `abandon`, which takes its items back.
+ */
+class Packer {
+  private ops = new Uint8Array(256);
+  private nums = new Float64Array(512);
+  private nOps = 0;
+  private nNums = 0;
+  private items = 0;
+  private base = 0;
+  private readonly part: string;
+  private readonly maxItems: number;
+  constructor(part: string, maxItems: number) {
+    this.part = part;
+    this.maxItems = maxItems;
+  }
+  begin(): void {
+    this.nOps = 0;
+    this.nNums = 0;
+    this.base = this.items;
+  }
+  abandon(): void {
+    this.items = this.base;
+  }
+  take(): PackedPath {
+    return { ops: this.ops.slice(0, this.nOps), nums: this.nums.slice(0, this.nNums) };
+  }
+  private count(n: number): void {
+    this.items += n;
+    if (this.items > this.maxItems)
+      throw new XmlBoundError(
+        'points',
+        `${this.part} has more than ${this.maxItems} path commands and points`,
+      );
+  }
+  op(code: number): void {
+    if (this.nOps === this.ops.length) {
+      const bigger = new Uint8Array(this.ops.length * 2);
+      bigger.set(this.ops);
+      this.ops = bigger;
+    }
+    this.ops[this.nOps++] = code;
+    this.count(1);
+  }
+  private num(v: number): void {
+    if (this.nNums === this.nums.length) {
+      const bigger = new Float64Array(this.nums.length * 2);
+      bigger.set(this.nums);
+      this.nums = bigger;
+    }
+    this.nums[this.nNums++] = v;
+  }
+  point(x: number, y: number): void {
+    this.num(x);
+    this.num(y);
+    this.count(1);
+  }
+  arc(wR: number, hR: number, stAng: number, swAng: number): void {
+    this.num(wR);
+    this.num(hR);
+    this.num(stAng);
+    this.num(swAng);
+    this.count(2);
+  }
+}
 
-/** Parse one XML part; throws on a part too large to be a real slide, on a declaration and on cut markup. */
-export function parseXml(xml: string, part: string, _opts?: ParseOptions): XNode[] {
-  if (countUpTo(xml, '<', MAX_TAGS_PER_PART) > MAX_TAGS_PER_PART)
+/** The value `quotedInt` read. */
+let intValue = 0;
+
+/**
+ * `="N"` or `='N'` at `at`, N a canonical integer (`-?[0-9]{1,15}`: no leading zero, no `-0`, no plus, no entity, so the
+ * string a reader makes from the number is the string that was written): the index past the closing quote, the number in
+ * `intValue`; -1 for anything else.
+ */
+function quotedInt(xml: string, at: number): number {
+  if (xml.charCodeAt(at) !== 0x3d) return -1;
+  const q = xml.charCodeAt(at + 1);
+  if (q !== 0x22 && q !== 0x27) return -1;
+  let j = at + 2;
+  let c = xml.charCodeAt(j);
+  const neg = c === 0x2d;
+  if (neg) c = xml.charCodeAt(++j);
+  if (c < 0x30 || c > 0x39) return -1;
+  let v = 0;
+  if (c === 0x30) {
+    if (neg) return -1;
+    j++;
+  } else {
+    for (let digits = 0; c >= 0x30 && c <= 0x39; c = xml.charCodeAt(++j)) {
+      if (++digits > 15) return -1;
+      v = v * 10 + (c - 0x30);
+    }
+  }
+  if (xml.charCodeAt(j) !== q) return -1;
+  intValue = neg ? -v : v;
+  return j + 1;
+}
+
+/** `<a:pt x=".." y=".."/>` (or y first) at `at`: the index past it, the point added; -1 for any other form. */
+function packPoint(xml: string, at: number, pk: Packer): number {
+  if (!xml.startsWith('<a:pt ', at)) return -1;
+  const c = xml.charCodeAt(at + 6);
+  const second = c === 0x78 ? ' y' : c === 0x79 ? ' x' : '';
+  if (!second) return -1;
+  let i = quotedInt(xml, at + 7);
+  if (i < 0) return -1;
+  const first = intValue;
+  if (!xml.startsWith(second, i)) return -1;
+  i = quotedInt(xml, i + 2);
+  if (i < 0 || !xml.startsWith('/>', i)) return -1;
+  if (c === 0x78) pk.point(first, intValue);
+  else pk.point(intValue, first);
+  return i + 2;
+}
+
+/** A command that holds `n` points: `<open><a:pt/>...</close>`; the index past it, or -1. */
+function packCommand(
+  xml: string,
+  at: number,
+  open: string,
+  close: string,
+  op: number,
+  n: number,
+  pk: Packer,
+): number {
+  if (!xml.startsWith(open, at)) return -1;
+  let i = at + open.length;
+  pk.op(op);
+  for (let k = 0; k < n; k++) {
+    i = packPoint(xml, i, pk);
+    if (i < 0) return -1;
+  }
+  return xml.startsWith(close, i) ? i + close.length : -1;
+}
+
+const arcValues = [0, 0, 0, 0];
+
+/** `<a:arcTo wR=".." hR=".." stAng=".." swAng=".."/>` with the four attributes in any order: the index past it, or -1. */
+function packArc(xml: string, at: number, pk: Packer): number {
+  if (!xml.startsWith('<a:arcTo ', at)) return -1;
+  let i = at + 9;
+  let seen = 0;
+  for (let k = 0; k < 4; k++) {
+    let slot: number;
+    if (xml.startsWith('wR', i)) {
+      slot = 0;
+      i += 2;
+    } else if (xml.startsWith('hR', i)) {
+      slot = 1;
+      i += 2;
+    } else if (xml.startsWith('stAng', i)) {
+      slot = 2;
+      i += 5;
+    } else if (xml.startsWith('swAng', i)) {
+      slot = 3;
+      i += 5;
+    } else return -1;
+    if (seen & (1 << slot)) return -1;
+    seen |= 1 << slot;
+    i = quotedInt(xml, i);
+    if (i < 0) return -1;
+    arcValues[slot] = intValue;
+    if (k < 3) {
+      if (xml.charCodeAt(i) !== 0x20) return -1;
+      i++;
+    }
+  }
+  if (!xml.startsWith('/>', i)) return -1;
+  pk.op(OP_ARC);
+  pk.arc(arcValues[0]!, arcValues[1]!, arcValues[2]!, arcValues[3]!);
+  return i + 2;
+}
+
+/**
+ * The commands of an `a:path` in the strict form (see the module comment), from just after its start tag: the index past
+ * its `</a:path>`, with the commands in `pk`; -1 at the first byte that departs from the form (the caller reads the path
+ * with the ordinary loop). One forward pass over the path's own bytes.
+ */
+function packPath(xml: string, from: number, pk: Packer): number {
+  let i = from;
+  for (;;) {
+    if (xml.charCodeAt(i) !== 0x3c) return -1;
+    const c1 = xml.charCodeAt(i + 1);
+    if (c1 === 0x2f) return xml.startsWith('</a:path>', i) ? i + 9 : -1;
+    if (c1 !== 0x61 || xml.charCodeAt(i + 2) !== 0x3a) return -1;
+    switch (xml.charCodeAt(i + 3)) {
+      case 0x6c: // a:lnTo
+        i = packCommand(xml, i, '<a:lnTo>', '</a:lnTo>', OP_LINE, 1, pk);
+        break;
+      case 0x6d: // a:moveTo
+        i = packCommand(xml, i, '<a:moveTo>', '</a:moveTo>', OP_MOVE, 1, pk);
+        break;
+      case 0x71: // a:quadBezTo
+        i = packCommand(xml, i, '<a:quadBezTo>', '</a:quadBezTo>', OP_QUAD, 2, pk);
+        break;
+      case 0x63: // a:close or a:cubicBezTo
+        if (xml.charCodeAt(i + 4) === 0x6c) {
+          if (!xml.startsWith('<a:close/>', i)) return -1;
+          pk.op(OP_CLOSE);
+          i += 10;
+        } else i = packCommand(xml, i, '<a:cubicBezTo>', '</a:cubicBezTo>', OP_CUBIC, 3, pk);
+        break;
+      case 0x61: // a:arcTo
+        i = packArc(xml, i, pk);
+        break;
+      default:
+        return -1;
+    }
+    if (i < 0) return -1;
+  }
+}
+
+/** The part's name, then how many nodes or items it may hold: the message of a bound (`XmlBoundError` of kind `elements`). */
+function tooManyElements(part: string, max: number): never {
+  throw new XmlBoundError('elements', `${part} has more than ${max} XML elements`);
+}
+
+/** The name of an `a:path` start tag ends here: whitespace, `/` or `>`. */
+function nameEnds(c: number): boolean {
+  return c === 0x20 || c === 0x2f || c === 0x3e || c === 0x09 || c === 0x0a || c === 0x0d;
+}
+
+/**
+ * Parse one XML part; throws on a part too large to be a real slide, on a declaration and on cut markup. Without
+ * `opts.pack` this is the node reader (the reference); with it, the packed reader (see the module comment).
+ */
+export function parseXml(xml: string, part: string, opts?: ParseOptions): XNode[] {
+  const pack = opts?.pack;
+  // The node reader counts tags before it builds anything; the packed reader counts what it builds, as it builds it.
+  if (!pack && countUpTo(xml, '<', MAX_TAGS_PER_PART) > MAX_TAGS_PER_PART)
     throw new Error(`${part} has more than ${MAX_TAGS_PER_PART} XML tags`);
+  const maxNodes = pack ? pack.maxElements : Number.POSITIVE_INFINITY;
+  const packer = pack ? new Packer(part, pack.maxPathItems) : undefined;
+  let nodes = 0;
   const top: XNode[] = [];
   const open: XNode[] = [];
   /** Elements open below the depth limit: not kept, only counted so their end tags pair up. */
@@ -239,7 +552,10 @@ export function parseXml(xml: string, part: string, _opts?: ParseOptions): XNode
   const flush = () => {
     if (!text) return;
     const parent = open[open.length - 1];
-    if (parent && !dropped) parent.children.push({ name: '#text', attrs: EMPTY_ATTRS, children: [], text });
+    if (parent && !dropped) {
+      if (++nodes > maxNodes) tooManyElements(part, maxNodes);
+      parent.children.push({ name: '#text', attrs: EMPTY_ATTRS, children: [], text });
+    }
     text = '';
   };
   const n = xml.length;
@@ -298,9 +614,31 @@ export function parseXml(xml: string, part: string, _opts?: ParseOptions): XNode
       if (!selfClosing) dropped++;
     } else {
       const node = readTag(xml.slice(lt + 1, selfClosing ? gt - 1 : gt), part);
+      if (++nodes > maxNodes) tooManyElements(part, maxNodes);
       const parent = open[open.length - 1];
       (parent ? parent.children : top).push(node);
-      if (!selfClosing) open.push(node);
+      if (!selfClosing) {
+        // The packed reader: a path of a path list is tried once, from here; a path that does not fit the strict form is
+        // read by the loop below it (its children are nodes, the node reader's).
+        if (
+          packer &&
+          parent?.name === 'a:pathLst' &&
+          node.name === 'a:path' &&
+          open.length + 2 <= XML_MAX_DEPTH &&
+          xml.startsWith('<a:path', lt) &&
+          nameEnds(xml.charCodeAt(lt + 7))
+        ) {
+          packer.begin();
+          const end = packPath(xml, gt + 1, packer);
+          if (end >= 0) {
+            node.packed = packer.take();
+            i = end;
+            continue;
+          }
+          packer.abandon();
+        }
+        open.push(node);
+      }
     }
     i = gt + 1;
   }
