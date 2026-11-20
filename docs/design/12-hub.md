@@ -320,7 +320,9 @@ a service is live.
 _Collection._ A file nothing names is kept for **30 days**, never less than the nightly backups are kept
 (`RETENTION_DAYS`; a test fails if the delay is lowered below it), so the manifest of any backup that can still be
 restored finds it. The library process runs one pass a day at 04:00 venue time (after the 03:00 backup) and one 10
-minutes after the start, in slices of at most 20 ms, never while a service is live, before the backfill is done or
+minutes after the start, in slices of at most 5 ms (a save in the middle of a pass waits for one slice and no
+more: measured at 1.6 to 1.7 times its quiet 95th percentile in a sweep and 2.1 to 2.7 times, at most 25 ms, in the
+marking pass), never while a service is live, before the backfill is done or
 before it has been told the service's state. Only `application/json` files are candidates (never a media original,
 delivery, poster, font, deck or PDF). A pass marks the unnamed (`collect_marks.since` is the 30-day clock), clears
 the mark of a file named again (a save, a head upload or a pass that finds it named), and deletes the files marked

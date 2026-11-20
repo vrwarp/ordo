@@ -421,7 +421,7 @@ const BACKFILL_RETRY_MS = 10 * 60_000;
 const MIN_ARM_MS = 1000;
 const PAGE = 200;
 /** A slice of a pass: at most this long between yields (the loop's delay is this plus a step; 20 ms is the rule). */
-const COLLECT_SLICE_MS = 10;
+const COLLECT_SLICE_MS = 5;
 
 export type CollectResult =
   | { ran: false; reason: 'off' | 'live' | 'unknown' | 'backfill' | 'busy' }

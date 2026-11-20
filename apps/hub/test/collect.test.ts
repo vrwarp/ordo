@@ -1088,7 +1088,8 @@ describe('collection: slices and timers (CO9)', () => {
     expect(r).toMatchObject({ ran: true, files: 1500 });
     const sizes = t.slices.map((s, i) => s - (t.slices[i - 1] ?? 0));
     expect(sizes.length).toBeGreaterThan(50);
-    expect(Math.max(...sizes)).toBeLessThanOrEqual(20);
+    // a slice is 5 ms (M3 c: a save in the middle of a pass stays within twice its quiet 95th percentile; 10 ms did not)
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(6);
 
     // with the real clock and yields, a save in the middle of a run is answered
     for (let i = 0; i < 1500; i++)
