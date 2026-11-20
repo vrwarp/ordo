@@ -43,6 +43,11 @@ export type SlideScore = {
   maxObjectMs?: { '1920': number; '3840': number };
   /** The id of that object at 3840 px. */
   maxObjectId?: string;
+  /** `--frames`, on a slide the underlay frame splits: what it did at 1920 and 3840 (`native-page.ts` `FrameInfo`). */
+  frame?: Record<
+    string,
+    { under: number; direct: number; why: string[]; makeMs: number; parityMax: number; parityOver2: number }
+  >;
   /** The slide's class in the hub when its budgets made it differ from `class` (`census.ts` `hubClasses`). */
   hub?: string;
   /**
@@ -146,6 +151,8 @@ export type Summary = {
   noLoMean?: number;
   /** `--hub-budget`: every slide drawn as the hub stores it. */
   hubBudget?: boolean;
+  /** `--frames`: a slide past a count drawn with the underlay frame, as an output draws it. */
+  frames?: boolean;
   /** The real hubs the run asked (`--before hub`, `--ask-hub-nolo`): kind, hub entry, LibreOffice's state. */
   askedHubs?: HubInfo[];
   /** The native column's tables (`nativeTables`): all decks, and worship decks when a manifest says. */
@@ -165,7 +172,7 @@ export const mean = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0)
 /** The timings a slide's score carries from what the native page drew (`native.ts` `RenderedSlide`). */
 export type SlideTimings = Pick<
   SlideScore,
-  'rasterMs' | 'rasterMaxMs' | 'coldMs' | 'maxObjectMs' | 'maxObjectId'
+  'rasterMs' | 'rasterMaxMs' | 'coldMs' | 'maxObjectMs' | 'maxObjectId' | 'frame'
 >;
 
 /**
@@ -179,6 +186,7 @@ export function slideTimings(r: SlideTimings | undefined): SlideTimings {
   if (r?.coldMs) out.coldMs = r.coldMs;
   if (r?.maxObjectMs) out.maxObjectMs = r.maxObjectMs;
   if (r?.maxObjectId) out.maxObjectId = r.maxObjectId;
+  if (r?.frame) out.frame = r.frame;
   return out;
 }
 

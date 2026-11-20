@@ -12,7 +12,7 @@ import {
   playableFile,
   withoutBackdrops,
 } from '@ordo/domain';
-import { clampLook, clampSlide, clampText } from './clamp.ts';
+import { CLAMP, clampLook, clampSlide, clampText } from './clamp.ts';
 import { drawableContent } from './content.ts';
 import { lyricTextFor, stagePreview } from './text2d.ts';
 
@@ -39,6 +39,13 @@ export type SlideDesc = {
   presentationId: string;
   slideId: string;
   slide: Slide;
+  /**
+   * The slide before the live clamp's cut (`clampSlide(.., 'bake')`), set only for a slide the live clamp cuts
+   * (more than `CLAMP.maxObjects` objects or `CLAMP.maxImagesPerSlide` distinct images): the asset worker splits
+   * it into the part drawn at once and the underlay frame (`frame.ts`). `slide` stays the cut one, which every
+   * other reader of the descriptor takes.
+   */
+  full?: Slide;
   nextSlide?: Slide;
   isSong: boolean;
   presentationKind?: 'song' | 'slides' | 'loop';
@@ -200,6 +207,40 @@ function inSlideFor(
   return o.play.showWhenStopped === false ? { objectId: o.id, showWhenStopped: false } : { objectId: o.id };
 }
 
+/** Whether `slide` holds more objects, or more distinct images, than the live clamp keeps (a cheap scan). */
+function passesCount(slide: unknown): boolean {
+  const objects = (slide as { objects?: unknown } | null | undefined)?.objects;
+  if (!Array.isArray(objects)) return false;
+  if (objects.length > CLAMP.maxObjects) return true;
+  const images = new Set<unknown>();
+  for (const o of objects) {
+    const x = o as { type?: unknown; mediaId?: unknown } | null | undefined;
+    if (x?.type === 'image' && typeof x.mediaId === 'string') images.add(x.mediaId);
+    if (images.size > CLAMP.maxImagesPerSlide) return true;
+  }
+  return false;
+}
+
+const uncutMemo = new WeakMap<object, Slide | null>();
+
+/**
+ * The slide the live clamp cut, whole (`SlideDesc.full`): `clampSlide(source, 'bake')` when `source` passes a count
+ * and the live clamp (`live`) really kept less of it, else undefined (every ordinary slide: its descriptor is
+ * the one it always was).
+ */
+function uncutSlide(source: Slide, live: Slide): Slide | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  const hit = uncutMemo.get(source);
+  if (hit !== undefined) return hit ?? undefined;
+  let out: Slide | null = null;
+  if (passesCount(source)) {
+    const bake = clampSlide(source, 'bake');
+    if (bake.objects.length > live.objects.length) out = bake;
+  }
+  uncutMemo.set(source, out);
+  return out ?? undefined;
+}
+
 /**
  * Plan every layer of `state` under `look`. Slides and looks are clamped on the way in (design/25): the
  * descriptors carry clamped copies, so nothing unbounded reaches the rasterizer. Never throws.
@@ -264,9 +305,9 @@ export function planFrame(state: LiveState, rawLook: Look, opts: PlanOptions = {
     // Over a playlist item's Background override (on a look that shows backgrounds), the slide is drawn
     // without its backdrops, the colour or gradient it was imported on (`withoutBackdrops`).
     const over = !!c && state.cues[c.cueIndex]?.backgroundOverride === true && look.layers.background.visible;
-    const found = raw
-      ? { slide: clampSlide(over ? withoutBackdrops(raw.slide) : raw.slide), presentation: raw.presentation }
-      : undefined;
+    const source = raw ? (over ? withoutBackdrops(raw.slide) : raw.slide) : undefined;
+    const found = raw ? { slide: clampSlide(source), presentation: raw.presentation } : undefined;
+    const full = source && found ? uncutSlide(source, found.slide) : undefined;
     if (c && found) {
       plan.slideCue = c.cueIndex;
       const presKind = found.presentation.kind;
@@ -292,6 +333,7 @@ export function planFrame(state: LiveState, rawLook: Look, opts: PlanOptions = {
             presentationId: c.presentationId,
             slideId: c.slideId,
             slide: found.slide,
+            ...(full ? { full } : {}),
             nextSlide,
             isSong,
             presentationKind: presKind,

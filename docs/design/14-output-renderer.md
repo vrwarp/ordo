@@ -425,7 +425,7 @@ drawing budget (`geombudget.ts`) would draw as a lesser legacy copy on the outpu
   copy that ended a full-slide soft edge's unit took 102 ms at 3840 before it).
 - **Drawn** by `drawSlide2D` (the slide objects' drawer `units.ts` registers): in z-order, an object whose unit is
   ready is copied 1:1 (`layers`: its body drawn live over it); one whose unit is not ready keeps its cheap legacy
-  copy as the placeholder (live-frame removes it in sub-wave 2). With `SlideDrawOptions.late` (C2b: every raster
+  copy as the placeholder (the frame's objects are never legacy copies: "The underlay frame" below). With `SlideDrawOptions.late` (C2b: every raster
   of the output's asset worker passes it, a slide's and a scene's base and over, through `rasterSlide` and
   `rasterSceneSprites`) a decoration past `DECOR_SPRITE` whose unit is not ready is left out and reported by its
   key, to fade in once made: drawn at once it is a task of 100-115 ms at 3840. The worker adds the keys to the
@@ -433,8 +433,10 @@ drawing budget (`geombudget.ts`) would draw as a lesser legacy copy on the outpu
   below). Without it (the harness, thumbnails, the editor) it is drawn directly, as before.
 - **Bounded**: a slide's units cover at most `UNIT_SLIDE_AREAS` (one frame, z-order first; a prepared picture has
   no area of its own), so a cue (the slide and the next one a look shows) holds at most two frames, about 63 MiB
-  at 4K, in the one unit cache (`UNIT_CACHE_BYTES`, 192 MiB, `unitCacheBytes`). An object past that frame keeps
-  its legacy copy this time (`unitsLeft` 'area', a census note) for live-frame's frame unit (sub-wave 2).
+  at 4K, in the one unit cache (`UNIT_CACHE_BYTES`, 192 MiB, `unitCacheBytes`). A slide whose units would pass that
+  frame is split by the underlay frame ("The underlay frame" below) so that its direct part's units fit one frame and
+  the objects under it are made one by one: no object keeps its legacy copy for want of area (`unitsLeft` 'area' is
+  0 on every slide of the collection; the census counts over the direct part and the frame).
 - **The look gate** (`authoredObjects`): a lyric-only, hidden or band look makes no unit of any kind.
 - **Decorations rated** (`geombudget.ts` `ratedOf`): a decoration is rated as its shapes drawn one by one
   (`decorCost`: estimate, points, shadow layers), through the decoration's hooks once its drawer is loaded, so the
@@ -572,6 +574,90 @@ drawn this time, and the parts fade in when they are made (`apps/output/src/late
   picture alone take a frame or more (measured: the same jump flipped 75 ms late on it, its job done before the
   GO's time).
 <!-- /r2b:units-live -->
+
+### The underlay frame
+
+<!-- r2b2:live-frame -->
+A slide past a count or past one frame of unit area is drawn whole on the Audience screens (owner decision, "never
+drop an element for being slow": design 29 §2.3 R1). The slide is split at one z-position into a **direct part** (the
+top objects, within the live counts: what `drawSlide2D` draws in one task, the words first) and a **frame** (the
+objects under it: made once in slices, kept as one unit, copied 1:1 under the direct part in the same raster).
+`renderer/src/frame.ts`.
+
+- **The split** (`splitFrame(slide, scale, {anchors, video, look})`, a pure function memoised on the bake-clamped
+  slide): the direct part is the longest top-down run of objects that holds (a) at most `FRAME_DIRECT_OBJECTS` (200)
+  objects, (b) at most `FRAME_DIRECT_IMAGES` (16) distinct pictures, (c) at most `FRAME_DIRECT_TARGETS` (32)
+  distinct prepared picture draws (a picture's `pictureTarget` key; a picture drawn from its source counts once per
+  file), (d) at most `FRAME_DIRECT_BYTES` (192 MiB) of prepared pictures, (e) units that fit one frame of area
+  (`slideUnitsLeft(direct)` reports no 'area': found by halving, the exact condition and not a bound). The rules only
+  add up, so the run is as long as it can be. A slide none of them holds back is not split (`undefined`: drawn as it
+  always was). Anchors (a playing video's object, the live set's ids) are always direct; what the live clamp still cuts
+  above them is counted (`cut`: a video under more than 200 objects, OQ-LF2 "cut above a playing video"). The frame's
+  rect is the whole frame (33 MB at 4K), whole device pixels. `?frame=off` (and `?effects=base`) switch it off:
+  `setFrames(false)`, the cut drawing.
+- **The key** (`frameKey`): a digest of `UNIT_VERSION`, what each under object draws (`placedDigest`: every drawn field
+  and its position, a picture as its file), which of them still wait for a geometry, mask or decoration file, the font
+  epoch (a frame of fallback glyphs is never copied for a slide whose face has arrived) and the scale. A frame made
+  without a picture file that was not there yet is flagged incomplete and made again when the file arrives
+  (`FramePictures.arrived`).
+- **Making** (`makeFrame`, resumable): one scratch canvas of the frame at the job's scale, each under object drawn
+  "alone" at the frame's transform in z-order, one step each: a picture through the picture provider (decoded and
+  prepared one at a time, released after its draw), a shape or decoration past the budget by itself through its own unit
+  (`makeUnitPicture`, copied in in bands), anything else with one draw call. Turns of at most `SLICE_MS` / 2 (5 ms) on the
+  lane's clock, each ending with a one-pixel read so the canvas has drawn; the plan of the steps (an under object each, about 7 µs) comes first,
+  in turns of its own and kept across a stop (at 20,000 objects it was one turn of 130-170 ms). Its work (the canvas and the next step) is
+  kept by key, at most `FRAME_WORK_MAX` (2) of them (about 66 MB at 4K), so a hurried or cancelled call resumes at the step
+  it stopped: no step is drawn twice. The time a frame may take, its turns summed, is `FRAME_BUDGET_MS`
+  (10 s: the larger of 10 s and three times the 20,000-object frame's summed turn time, 0.5-1.7 s in the bench's runs); past it the frame is dropped (`frameStats().over`, `done.frames.over`, a line in the diagnostics) and the
+  slide keeps its direct part. A frame bounds at `FRAME_MAX_OBJECTS` (20,000), the bake profile's.
+- **Kept** in the unit cache like every unit, pinned while its cue is live, armed or warmed; a frame is at most half the
+  cache (`FRAME_MAX_BYTES`).
+- **Drawn**: `drawSlide2D(ctx, direct, {under})` copies the frame 1:1 after the slide's own picture and draws the
+  direct part over it. The frame not ready (or unmade) is left out of the raster and reported through `late` by its key,
+  never drawn there (it is seconds of work): the slide's job leaves it as `done.unitsLeft`, the late job makes it and
+  `unitsReady` fades it in, as every late unit. A GO never waits for it: a live job stops before its first unit, an arm
+  waits at most `UNIT_WAIT_MS`, a hurry stops a frame between turns and it resumes.
+- **The asset worker** (`asset.worker.ts` `frameOf`): one function computes the split and the key for the slide job,
+  the late job, a remake, a warm job and the playlist warm-up, so every path asks for the same key. The one exception is
+  the live slide job (a jump to a slide neither armed nor warmed, the first cue of a window): its split is cut by the
+  counts (a)-(d) alone (`splitFrame` `area: false`), because rule (e) plans every unit of the direct part (about 150 ms
+  of a crowded line-art slide cold) and a GO never waits for planning; a slide that fits the counts is drawn as it always
+  was, and its late job works the whole split out off the GO's path (`LateJob.approx`, `replan`: the frame and the units
+  of the full direct part replace the cut draw's parts), so the re-draw the link sends is the whole split's. The link carries the
+  whole slide in the job (`SlideDesc.full`/`AssetJob.full`, only for a slide the live clamp cuts, so the descriptor of
+  every other slide is unchanged) and the files of every picture of it; `prepare/frame.ts` supplies the pictures and
+  `underSlides(split)` (chunks of at most 200 objects and 16 pictures) are prepared like slides, so the frame's
+  geometry and decoration files, table layouts and pictures are there when it is made. The direct job's preload
+  slots (16 files) are not taken by the under pictures.
+- **Tested** by `e2e/live-frame.spec.ts` (row `live-frame`, offset 470): a deck of 340 squares, 24 pictures and four text
+  boxes through the hub API on a hub without LibreOffice; (A) both Audience windows (1920 and 3840) show all of it
+  (the cut drawing showed squares 0-199 only); (B) a jump to it (`?warm=off&unitTurnMs=1000`) shows the text boxes and the
+  top pictures on the first capture, the frame absent, then fading in, and the log says the slide was shown with its
+  frame drawn late; (C) `?frame=off` and `?effects=base` give the cut drawing back, no frame made (`units.framesMade`);
+  (D) twelve shadowed panels past one frame of units each show their shadow; (E) an ordinary slide draws the same
+  pixels with the frame on and off and a GO onto it makes no frame. Audience 1 is a WebGPU window and Audience 2 a
+  Canvas 2D one: a Canvas 2D window alone presents no frames on a still slide and Playwright's capture then waits on it.
+- **Measured** (`pnpm --filter @ordo/renderer bench:frame`, software canvas, ten fresh runs for the crowded, 1,000- and
+  20,000-object cases and five for the 20 shadows; best to worst of the runs, ms; frame objects under / in the direct part):
+
+  | case                           | under / direct | turns summed 1920 / 3840              | longest step 1920 / 3840 | final raster 1920 / 3840 | the base's cut draw 1920 / 3840 |
+  | ------------------------------ | -------------- | ------------------------------------- | ------------------------ | ------------------------ | ------------------------------- |
+  | 340 objects, 24 pictures       | 308 / 32       | 25-104 / 32-57 (11 turns)             | 5-21 / 15-26             | 9-16 / 42-87             | 5-7 / 18-48                     |
+  | 1,000 objects                  | 834 / 166      | 40-183 / 74-329 (37 turns)            | 5-61 / 17-216            | 20-52 / 62-237           | 5-12 / 18-52                    |
+  | 20,000 objects, 64 pictures    | 19,800 / 200   | 389-1,701 / 472-1,193 (220-250 turns) | 9-330 / 23-143           | 10-33 / 32-59            | 5-26 / 17-39                    |
+  | 20 shadowed panels, soft frame | 1 / 20         | 26-37 / 104-126 (2 turns)             | 24-36 / 97-119           | 14-22 / 74-82            | 9-17 / 118-150                  |
+
+  A quiet re-run (load 3, five runs): the longest turn is 6-8 ms at 1920 in every case and 20-21 ms at 3840, which is the longest step
+  (one picture draw on the CPU canvas); the 1,000-object frame's final raster at 3840 is 81-105 ms, 150 text boxes in its direct part
+  against the base's cut draw, which leaves them out.
+
+  The final raster is the direct part over the frame copied under it: the copy of the whole frame (33 MB at 3840) is most of
+  the difference from the cut draw (the first 200 objects), which leaves the rest out. The machine was shared (load 12 on 4
+  CPUs) and the clock is wall time: a turn or a step that was put off the CPU shows as long, so the worst figures are
+  the machine's more than the frame's, and the 4K figures are a venue PC's to confirm. One step is over 50 ms by itself
+  and not load: the 20-shadows frame's one object, a soft-edged full-frame shape, is its own unit's step, 97-119 ms at 3840 in all
+  five runs (render-bounds' D11 list).
+<!-- /r2b2:live-frame -->
 
 ## Frame loop
 
@@ -887,7 +973,10 @@ the first copy the rebuilt compositor makes after drawing for 750 ms without ano
 `packages/renderer/src/clamp.ts` clamps everything the planner hands on (design/25): box edges within
 ±2× the logical canvas, text to 10,000 characters, font sizes to [4, 1000] px, 200 objects and 16
 distinct images per slide, finite numbers everywhere, unknown objects dropped; looks are completed from
-the main look. `planFrame`/`planPreview` carry clamped copies (memoised by identity) and the rasterizer
+the main look. That is the LIVE profile (`clampSlide(slide, 'live')`, the direct part of a slide: what one raster
+draws in a task). The BAKE profile (`'bake'`: up to 20,000 objects, no image cap, its own memo, `bakeCuts()`) holds a
+whole slide for the underlay frame ("The underlay frame" above) and for the bake; `SlideDesc.full` carries it, only for a
+slide the live clamp cuts. `planFrame`/`planPreview` carry clamped copies (memoised by identity) and the rasterizer
 re-applies the cheap clamps and culls lines far outside the canvas. The asset worker bounds the decoded
 image bytes per cue (192 MiB) and reports text in a font family that is not loaded
 (`health.fontFallbacks`; run, bullet and fallback fonts count, and so does Inter, which ships like any

@@ -53,6 +53,9 @@ import { APP_VERSION } from './index.ts';
 // live.resync, live.state, live.delta): older and newer builds read each other's messages as before (a missing
 // field is what they sent before), so the version stays 0.9.0 (the pull request's one bump to 0.10.0 is its last
 // commit) and only the digest is recorded again.
+// Follow-up PR, sub-wave 2, live-frame: renderer plan.ts gains `SlideDesc.full` (the slide before the live clamp's
+// cut, only for a slide past a count; a descriptor of any other slide is unchanged). Re-recorded at 0.9.0 on the
+// track's branch; the follow-up PR's one bump is its last commit.
 const RECORDED = {
   version: '0.9.0',
   digest: 'b0ee5d00697210888485d78aeb92f0018b2e78d20f69f9150f33c9c88bb55c9a',

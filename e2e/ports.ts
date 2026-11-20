@@ -239,6 +239,14 @@ export const PORT_TABLE = {
     spec: 'golive-prepare.spec.ts',
     what: '0 hub with a slowed library (Go live again during a service), 1 hub (size ceiling)',
   },
+  // live-frame (sub-wave 2): crowded slides, pictures past a screen's prepared count and effects past one frame of
+  // units drawn whole, from the underlay frame under the live raster.
+  'live-frame': {
+    offset: 470,
+    count: 1,
+    spec: 'live-frame.spec.ts',
+    what: 'hub without LibreOffice (a crowded slide, the late frame, the switches, effects past one frame, an ordinary slide)',
+  },
   // live-by-ref (design/29 §2.3 M2): a hub killed and restarted during a 6 MiB service kept by reference.
   'live-by-ref': {
     offset: 480,

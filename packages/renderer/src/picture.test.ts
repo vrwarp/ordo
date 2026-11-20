@@ -1,6 +1,14 @@
 import fc from 'fast-check';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LOOK_LOWER_THIRD, LOOK_MAIN, type Look, type Slide, type SlideObject } from '@ordo/domain';
+import {
+  type ImageObject,
+  LOOK_LOWER_THIRD,
+  LOOK_MAIN,
+  type Look,
+  type Slide,
+  type SlideObject,
+} from '@ordo/domain';
+import { legacyCopy } from './geombudget.ts';
 import {
   MAX_PREPARED_PIXELS,
   type PictureFrom,
@@ -137,6 +145,41 @@ describe('pictureTarget: the device pixels a picture is prepared for (design/27 
     // Entirely off the canvas: nothing to prepare.
     expect(pictureTarget({ box: box(1920, 0, 400, 300), fit: 'stretch' }, 1)).toBeUndefined();
     expect(pictureTarget({ box: box(-400, -300, 400, 300), fit: 'stretch' }, 1)).toBeUndefined();
+  });
+
+  it("prepares a round-cornered picture's copy without its effects as its original: one bitmap, cut to its corners (F4)", () => {
+    const shadow = { dx: 10, dy: 10, blur: 20, color: { r: 0, g: 0, b: 0, a: 0.6 } };
+    const o: ImageObject = {
+      id: 'p',
+      type: 'image',
+      box: box(100, 100, 600, 400),
+      mediaId: 'm',
+      fit: 'cover',
+      opacity: 1,
+      radius: 60,
+      shadow,
+    };
+    const t = pictureTarget(o, 2);
+    expect(t?.shape?.mask, 'the original is cut to its corners').toBeDefined();
+    // Past the slide's effect budget the picture is drawn as its legacy copy: no shadow, the corners kept. It is
+    // prepared for the same pixels (a shadow is no part of the target), not drawn from the source through a clip.
+    const copy = legacyCopy(o, 'effects');
+    expect(copy.shadow).toBeUndefined();
+    expect(copy.radius).toBe(60);
+    const ct = pictureTarget(copy, 2);
+    expect(ct?.key, "the copy's target is its original's").toBe(t?.key);
+    expect(ct?.shape?.mask).toEqual(t?.shape?.mask);
+    // A picture that never had effects stays as it was: drawn from its source through a clip.
+    expect(pictureTarget({ ...o, shadow: undefined }, 2)).toBeUndefined();
+    const plain: ImageObject = { ...o, id: 'q' };
+    delete plain.shadow;
+    expect(pictureTarget(legacyCopy(plain, 'both'), 2)).toBeUndefined();
+    // A soft edge is the copy's no more: the original's key says it, the copy's does not.
+    const soft: ImageObject = { ...o, id: 's', softEdge: 30 };
+    expect(pictureTarget(soft, 2)?.key).toMatch(/ e30$/);
+    const softCopy = pictureTarget(legacyCopy(soft, 'effects'), 2);
+    expect(softCopy?.key).toBe(t?.key);
+    expect(softCopy?.shape?.softEdge).toBeUndefined();
   });
 
   it('prepares only the part of the box on the canvas, keeping the box where it is', () => {

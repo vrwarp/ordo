@@ -23,6 +23,7 @@ import {
   drawSlide2D,
   drawText,
   fillColor,
+  type UnderFrame,
 } from './text2d.ts';
 
 /**
@@ -53,6 +54,8 @@ export function rasterSlide(
     presentationKind?: 'song' | 'slides' | 'loop';
     /** An output raster's report of a part left out until its unit is made (`SlideDrawOptions.late`, C2b). */
     late?: (key: string) => void;
+    /** The slide's underlay frame (`SlideDrawOptions.under`): `slide` is then its direct part. */
+    under?: UnderFrame;
   } = {},
 ): void {
   drawSlide2D(ctx, slide, {
@@ -63,6 +66,7 @@ export function rasterSlide(
     isSong: opts.isSong ?? true,
     presentationKind: opts.presentationKind,
     ...(opts.late ? { late: opts.late } : {}),
+    ...(opts.under ? { under: opts.under } : {}),
   });
 }
 

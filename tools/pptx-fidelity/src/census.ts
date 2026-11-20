@@ -47,6 +47,7 @@ import type { GeomPath } from '@ordo/renderer/geom/path.ts';
 import { clearGeomFiles, putGeomFile, resolvedGeom } from '@ordo/renderer/geom/stored.ts';
 import { drawableContent } from '@ordo/renderer/content.ts';
 import { slideBudget } from '@ordo/renderer/geombudget.ts';
+import { frameUnitsLeft, splitFrame } from '@ordo/renderer/frame.ts';
 import { slideUnitsLeft } from '@ordo/renderer/units.ts';
 import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import { listDecks } from './decks.ts';
@@ -164,10 +165,15 @@ function storedPaths(o: { geom?: unknown; box: { w: number; h: number } }) {
  *   is under MIN_RECT_COVERAGE or cannot be worked out: the box of its fill an older build or a drawer past the
  *   budget draws over line art, which the converter must never write (`emit.ts`: a line). The ratchet fails it;
  * - `unitsLeft`: the objects the budget sends to legacy copies that get no geometry unit at 3840 on outputs
- *   (`units.ts` `slideUnitsLeft`: a plain shape past it for its paint, a masked picture, past the slide's unit
- *   area), drawn there as their legacy shapes until effect units; `unitsAlone` those of them past
+ *   (`units.ts` `slideUnitsLeft`: a plain shape past it for its paint, a masked picture; counted over the direct
+ *   part and the frame under it of a slide the frame splits, `frame.ts`, so never for want of unit area), drawn
+ *   there as their legacy shapes; `unitsAlone` those of them past
  *   `GEOM_COST.slide` alone (no task could draw one; for thin line art its legacy line draws nothing). The
  *   ratchet fails `unitsAlone` wherever it is (never drop) and reports `unitsLeft`.
+ * - `frame` / `frame1080`: the objects of the frame under the direct part when outputs split the slide (renderer `frame.ts`
+ *   `splitFrame`) at 3840 / at 1920, and `frame_<rule>` / `frame1080_<rule>` (1) for each rule that held the direct
+ *   part back (`objects`, `images`, `targets`, `bytes`, `area`: `FrameWhy`); `frameBytes` the frame's bitmap at 3840.
+ *   Reported by tally; no ratchet reads them.
  * Zeros left out.
  */
 export function legacyColumns(slide: Pick<Slide, 'objects'>): Record<string, number> {
@@ -191,10 +197,28 @@ export function legacyColumns(slide: Pick<Slide, 'objects'>): Record<string, num
     const ink = inkOf(g);
     if (!(ink !== undefined && ink >= MIN_RECT_COVERAGE)) legacyFills++;
   }
-  const left = budgetLegacy ? slideUnitsLeft(drawableContent(slide).objects, 2) : [];
+  // Outputs draw a slide past a count or past one frame of unit area as a direct part and a frame under it
+  // (renderer `frame.ts`): what is left is counted over both, the frame's objects each drawn alone (never 'area').
+  const split = splitFrame(slide as Slide, 2);
+  const left = !budgetLegacy
+    ? []
+    : split
+      ? [...slideUnitsLeft(split.direct.objects, 2), ...frameUnitsLeft(split)]
+      : slideUnitsLeft(drawableContent(slide).objects, 2);
   const unitsLeft = left.length;
   const unitsAlone = left.filter((w) => w === 'alone').length;
   const out: Record<string, number> = { budgetLegacy, legacyFills, unitsLeft, unitsAlone };
+  // The slides that get a frame, at 3840 and at 1920, and the rules that held the direct part back (M4's list).
+  for (const [scale, at, tag] of [
+    [2, split, 'frame'],
+    [1, splitFrame(slide as Slide, 1), 'frame1080'],
+  ] as const) {
+    if (!at) continue;
+    out[tag] = at.under.length;
+    for (const rule of ['objects', 'images', 'targets', 'bytes', 'area'] as const)
+      if (at.why[rule]) out[`${tag}_${rule}`] = 1;
+    if (scale === 2) out.frameBytes = at.bytes;
+  }
   for (const k of Object.keys(out)) if (!out[k]) delete out[k];
   return out;
 }

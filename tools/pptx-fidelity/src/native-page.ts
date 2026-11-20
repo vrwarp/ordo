@@ -4,6 +4,7 @@ import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import { pictureKey } from '@ordo/renderer/bitmap-cache.ts';
 import { clampSlide } from '@ordo/renderer/clamp.ts';
 import { drawableContent } from '@ordo/renderer/content.ts';
+import { frameUnit, splitFrame, underFrame } from '@ordo/renderer/frame.ts';
 import { clearEffectCache } from '@ordo/renderer/effects.ts';
 import { withinDrawBudget } from '@ordo/renderer/geombudget.ts';
 import { clearGeomFiles, putGeomFile } from '@ordo/renderer/geom/stored.ts';
@@ -20,6 +21,7 @@ import {
   drawSlide2D,
   fillColor,
   slidePictures,
+  type UnderFrame,
 } from '@ordo/renderer/text2d.ts';
 // The table and decoration drawers, registered at once: the outputs load them per kind before they draw
 // (`loadShapeDrawers`).
@@ -78,6 +80,26 @@ export type RenderJob = {
   rect: { x: number; y: number; w: number; h: number };
   /** Timed draws at each width (the median is reported); 0 skips the timing (both times are then 0). */
   repeats: number;
+  /**
+   * Draw a slide the underlay frame splits (renderer `frame.ts`) as an output does: the frame made beforehand
+   * (its time is the cold arm's), then the direct part over it; every other slide as before. Without it the live
+   * clamp's cut list is drawn (the harness's default, the base's drawing).
+   */
+  frames?: boolean;
+};
+
+/** What the underlay frame did for a slide at one width (`RenderJob.frames`). */
+export type FrameInfo = {
+  /** Objects in the frame under the direct part, and in the direct part. */
+  under: number;
+  direct: number;
+  /** The rules that held the direct part back. */
+  why: string[];
+  /** Making the frame in one go, ms (pictures decoded and prepared one at a time inside). */
+  makeMs: number;
+  /** The frame plus the direct part against the whole uncut slide drawn object by object: largest channel difference and pixels over 2. */
+  parityMax: number;
+  parityOver2: number;
 };
 
 export type RenderResult = {
@@ -99,6 +121,8 @@ export type RenderResult = {
   cold3840: number;
   /** Media ids the slide uses that could not be decoded. */
   missing: string[];
+  /** With `frames`, on a slide the frame splits: what it did at 1920 and at 3840. */
+  frame?: { '1920'?: FrameInfo; '3840'?: FrameInfo };
 };
 
 export type ObjectsJob = Omit<RenderJob, 'repeats'>;
@@ -286,6 +310,7 @@ function draw(
   slide: Slide,
   width: number,
   images: ImageLookup,
+  under?: UnderFrame,
 ): void {
   const scale = width / 1920;
   fillColor(ctx, { r: 0, g: 0, b: 0, a: 1 }, width, Math.round(1080 * scale));
@@ -294,7 +319,7 @@ function draw(
     const bg = images(slide.backgroundMediaId, target);
     if (bg) drawImageFit(ctx, bg, BACKGROUND.box, scale, 'cover', 1, 0, undefined, target);
   }
-  drawSlide2D(ctx, slide, { scale, images });
+  drawSlide2D(ctx, slide, { scale, images, ...(under ? { under } : {}) });
 }
 
 /** Draw, then read one pixel back: Chromium records canvas commands and only rasterizes on a read. */
@@ -304,11 +329,12 @@ function timed(
   width: number,
   images: ImageLookup,
   repeats: number,
+  under?: UnderFrame,
 ): { median: number; max: number } {
   const times: number[] = [];
   for (let i = 0; i < repeats; i++) {
     const t0 = performance.now();
-    draw(ctx, slide, width, images);
+    draw(ctx, slide, width, images, under);
     ctx.getImageData(0, 0, 1, 1);
     times.push(performance.now() - t0);
   }
@@ -396,6 +422,81 @@ function largestObject(slide: Slide, width: number, images: ImageLookup): { ms: 
   return { ms: t.max, ...(t.at >= 0 ? { id: objects[t.at]!.id } : {}) };
 }
 
+/** What a slide is drawn from at a width: the slide, its pictures and, past a count, the frame under it. */
+type Prepared = { slide: Slide; images: ImageLookup; under?: UnderFrame; info?: FrameInfo };
+
+/**
+ * The pictures, geometry units and (with `frames`, for a slide the frame splits) the frame a draw at `width`
+ * needs, made as an output makes them before the draw, here at once. The frame's pictures are decoded and
+ * prepared one at a time (`FramePictures`), its time counted in `info.makeMs`; the direct part's pictures
+ * after, so a small cache never loses them. Parity: the frame and the direct part against the whole uncut slide
+ * drawn object by object, each picture from its own prepared bitmap.
+ */
+async function prepared(job: RenderJob, width: number, missing: string[]): Promise<Prepared> {
+  const scale = width / 1920;
+  const split = job.frames ? splitFrame(job.slide, scale) : undefined;
+  if (!split) {
+    const images = await picturesOf(job.slide, missing, [width]);
+    await unitsOf(job.slide, width);
+    return { slide: job.slide, images };
+  }
+  const lookupOf = async (o: Slide['objects'][number]) =>
+    o.type === 'image' ? picturesOf({ id: 'one', objects: [o] } as Slide, missing, [width]) : undefined;
+  const t0 = performance.now();
+  const unit = frameUnit(split, {
+    pictures: {
+      acquire: async (o: Slide['objects'][number]) => ({
+        lookup: (await lookupOf(o)) as ImageLookup,
+        release: () => undefined,
+      }),
+    } as never,
+  });
+  await unit.make({ slice: async (fn) => fn(), check: () => {} });
+  const makeMs = performance.now() - t0;
+  const images = await picturesOf(split.direct, missing, [width]);
+  await unitsOf(split.direct, width);
+  const under = underFrame(split);
+  // The reference: every object of the whole slide, in z-order, one after the other.
+  const ref = new OffscreenCanvas(width, Math.round(1080 * scale)).getContext('2d', {
+    willReadFrequently: true,
+  })!;
+  fillColor(ref, { r: 0, g: 0, b: 0, a: 1 }, width, Math.round(1080 * scale));
+  if (job.slide.backgroundMediaId) {
+    const target = pictureTarget(BACKGROUND, scale);
+    const bg = (await picturesOf(job.slide, [], [width]))(job.slide.backgroundMediaId, target);
+    if (bg) drawImageFit(ref, bg, BACKGROUND.box, scale, 'cover', 1, 0, undefined, target);
+  }
+  for (const o of split.slide.objects) drawObject(ref, o, scale, (await lookupOf(o)) ?? images);
+  const out = context(width, parityCanvases);
+  draw(out, split.direct, width, images, under);
+  const a = out.getImageData(0, 0, out.canvas.width, out.canvas.height).data;
+  const b = ref.getImageData(0, 0, ref.canvas.width, ref.canvas.height).data;
+  let parityMax = 0;
+  let parityOver2 = 0;
+  for (let i = 0; i < a.length; i += 4) {
+    let m = 0;
+    for (let k = 0; k < 4; k++) m = Math.max(m, Math.abs(a[i + k]! - b[i + k]!));
+    if (m > parityMax) parityMax = m;
+    if (m > 2) parityOver2++;
+  }
+  const why = (Object.entries(split.why) as [string, boolean][]).filter(([, on]) => on).map(([k]) => k);
+  return {
+    slide: split.direct,
+    images,
+    under,
+    info: {
+      under: split.under.length,
+      direct: split.direct.objects.length,
+      why,
+      makeMs,
+      parityMax,
+      parityOver2,
+    },
+  };
+}
+
+const parityCanvases = new Map<number, OffscreenCanvasRenderingContext2D>();
+
 const page: NativePage = {
   async fonts(list) {
     for (const f of list) if (!fontUrls.has(f.hash)) fontUrls.set(f.hash, f.url);
@@ -422,10 +523,10 @@ const page: NativePage = {
     const missing: string[] = [];
     // Cold at 1920: the pictures the cache lacks and the geometry units, then the first draw and flush.
     const t0 = performance.now();
-    const images = await picturesOf(job.slide, missing, [1920]);
-    await unitsOf(job.slide, 1920);
+    const p1 = await prepared(job, 1920, missing);
+    const images = p1.images;
     const ctx = context(1920);
-    draw(ctx, job.slide, 1920, images);
+    draw(ctx, p1.slide, 1920, images, p1.under);
     ctx.getImageData(0, 0, 1, 1);
     const cold1920 = performance.now() - t0;
     const x = Math.max(0, Math.min(1919, Math.round(job.rect.x)));
@@ -435,18 +536,21 @@ const page: NativePage = {
     const crop = new OffscreenCanvas(w, h);
     crop.getContext('2d')!.drawImage(ctx.canvas, x, y, w, h, 0, 0, w, h);
     const png = await blobToBase64(await crop.convertToBlob({ type: 'image/png' }));
-    const t1920 = job.repeats ? timed(ctx, job.slide, 1920, images, job.repeats) : { median: 0, max: 0 };
+    const t1920 = job.repeats
+      ? timed(ctx, p1.slide, 1920, images, job.repeats, p1.under)
+      : { median: 0, max: 0 };
     let t3840 = { median: 0, max: 0 };
     let cold3840 = 0;
+    let p4: Prepared | undefined;
     if (job.repeats) {
       const t1 = performance.now();
-      const big = await picturesOf(job.slide, missing, [3840]);
-      await unitsOf(job.slide, 3840);
+      p4 = await prepared(job, 3840, missing);
+      const big = p4.images;
       const ctx4 = context(3840);
-      draw(ctx4, job.slide, 3840, big);
+      draw(ctx4, p4.slide, 3840, big, p4.under);
       ctx4.getImageData(0, 0, 1, 1);
       cold3840 = performance.now() - t1;
-      t3840 = timed(ctx4, job.slide, 3840, big, job.repeats);
+      t3840 = timed(ctx4, p4.slide, 3840, big, job.repeats, p4.under);
     }
     return {
       png,
@@ -459,6 +563,9 @@ const page: NativePage = {
       cold1920,
       cold3840,
       missing,
+      ...(p1.info || p4?.info
+        ? { frame: { ...(p1.info ? { '1920': p1.info } : {}), ...(p4?.info ? { '3840': p4.info } : {}) } }
+        : {}),
     };
   },
   async objects(job) {

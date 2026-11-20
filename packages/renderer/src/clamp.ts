@@ -855,17 +855,44 @@ function clampObjectOf(o: unknown): SlideObject | undefined {
 }
 
 const slideMemo = new WeakMap<object, Slide>();
+/** The memo of the 'bake' profile: kept apart, so the two profiles never serve each other (`clampSlide`). */
+const bakeMemo = new WeakMap<object, Slide>();
+
+/**
+ * Objects a 'bake' clamp keeps at most (design 29 A7): the slide-file bound, a hostile bound (a stored slide holds
+ * at most 1,000: packages/domain `schemas.ts`). A slide past it is cut here and counted (`bakeCuts`).
+ */
+export const BAKE_MAX_OBJECTS = 20_000;
+
+/**
+ * What `clampSlide` keeps of a slide (design 29 section 2.3): `'live'`, the default, is the drawing every live
+ * output has always had, at most `CLAMP.maxObjects` objects and `CLAMP.maxImagesPerSlide` distinct images; `'bake'`
+ * keeps every object up to `BAKE_MAX_OBJECTS` and every image, for what draws a slide whole in pieces (the
+ * output's underlay frame, `frame.ts`, and later the bake worker and the pre-rendered outputs). The per-object
+ * clamps are the same in both.
+ */
+export type ClampProfile = 'live' | 'bake';
+
+let bakeCut = 0;
+
+/** Slides a 'bake' clamp cut at `BAKE_MAX_OBJECTS` on this thread so far (the link's telemetry reads it). */
+export function bakeCuts(): number {
+  return bakeCut;
+}
 
 /**
  * A drawable copy of `slide`: at most 200 objects, each clamped; unknown objects dropped; at most
  * `maxImagesPerSlide` distinct images drawn (further image objects are dropped). The imported image objects
  * of a slide set to show its PowerPoint picture are not drawn (`slideContent`, design/27 §5) and do not
  * count; they are kept, since lyric-only looks still read the slide's text. An image object keeps its
- * clamped `play`, and the slide its clamped `audio` (design/27 §3.1). Never throws.
+ * clamped `play`, and the slide its clamped `audio` (design/27 §3.1). Never throws. With the 'bake' `profile`
+ * (`ClampProfile`) the object and image counts are not the live ones.
  */
-export function clampSlide(slide: unknown): Slide {
+export function clampSlide(slide: unknown, profile: ClampProfile = 'live'): Slide {
+  const bake = profile === 'bake';
+  const memo = bake ? bakeMemo : slideMemo;
   if (slide && typeof slide === 'object') {
-    const hit = slideMemo.get(slide);
+    const hit = memo.get(slide);
     if (hit) return hit;
   }
   const s = (slide && typeof slide === 'object' ? slide : {}) as Partial<Slide>;
@@ -873,17 +900,20 @@ export function clampSlide(slide: unknown): Slide {
   const images = new Set<string>();
   const src = Array.isArray(s.objects) ? s.objects : [];
   const underPicture = !!referencePicture(s);
-  for (let i = 0; i < src.length && objects.length < CLAMP.maxObjects; i++) {
+  const maxObjects = bake ? BAKE_MAX_OBJECTS : CLAMP.maxObjects;
+  const maxImages = bake ? Number.POSITIVE_INFINITY : CLAMP.maxImagesPerSlide;
+  for (let i = 0; i < src.length && objects.length < maxObjects; i++) {
     // An object clamped already (a part of a clamped slide, `sceneSlides`) is kept as it is.
     const raw = src[i];
     const o = isClamped(raw) ? (raw as SlideObject) : withPlay(clampObject(raw), raw);
     if (!o) continue;
     if (o.type === 'image' && !(underPicture && fromImport(o))) {
-      if (!images.has(o.mediaId) && images.size >= CLAMP.maxImagesPerSlide) continue;
+      if (!images.has(o.mediaId) && images.size >= maxImages) continue;
       images.add(o.mediaId);
     }
     objects.push(o);
   }
+  if (bake && src.length > maxObjects && objects.length >= maxObjects) bakeCut++;
   const out: Slide = { id: str(s.id) || 'slide', objects };
   if (typeof s.lyricObjectId === 'string') out.lyricObjectId = s.lyricObjectId.slice(0, 200);
   if (typeof s.backgroundMediaId === 'string') out.backgroundMediaId = s.backgroundMediaId.slice(0, 200);
@@ -911,8 +941,8 @@ export function clampSlide(slide: unknown): Slide {
   if (transition) out.transition = transition;
   const pptx = clampPptx(s.pptx);
   if (pptx) out.pptx = pptx;
-  if (slide && typeof slide === 'object') slideMemo.set(slide, out);
-  slideMemo.set(out, out);
+  if (slide && typeof slide === 'object') memo.set(slide, out);
+  memo.set(out, out);
   return out;
 }
 

@@ -134,11 +134,16 @@ export type AssetJob =
       key: string;
       cueIndex: number;
       slide: Slide;
+      /**
+       * The slide before the live clamp's cut (`SlideDesc.full`), only for a slide past a count: the asset worker
+       * splits it into the part it draws at once and the frame under it (`frame.ts`), so every object is drawn.
+       */
+      full?: Slide;
       nextSlide?: Slide;
       isSong: boolean;
       presentationKind?: 'song' | 'slides' | 'loop';
       look: Look;
-      /** mediaId -> file hash for every image the slide draws. */
+      /** mediaId -> file hash for every image the slide draws (`full`'s too, when it is given). */
       images: Record<string, string>;
       /** Re-draw of a key the renderer holds: it replaces the held copy in place (no flip). */
       refresh?: boolean;
@@ -186,6 +191,11 @@ export type DrawingSwitches = {
   effects?: 'units' | 'base';
   /** Test mode only (`?unitTurnMs=`): each turn of unit making is followed by this long a wait, ms. */
   unitTurnMs?: number;
+  /**
+   * 'off' (`?frame=off`; implied by `?effects=base`): a slide past a count is drawn cut as it was before the
+   * underlay frame, at most 200 objects and 16 pictures (`frame.ts` `setFrames`).
+   */
+  frame?: 'off';
 };
 
 /**
@@ -194,7 +204,11 @@ export type DrawingSwitches = {
  */
 export type WarmUnitsJob = {
   key: string;
-  slides: { cueIndex: number; slide: Slide }[];
+  /**
+   * `images`: mediaId -> file hash of the slide's pictures, for a slide that has some: the frame the worker makes of
+   * a crowded slide draws them (`frame.ts`); absent for a slide without pictures.
+   */
+  slides: { cueIndex: number; slide: Slide; images?: Record<string, string> }[];
   look: Look;
 };
 
@@ -207,6 +221,8 @@ export type WarmUnitsJob = {
 export type WarmJob = {
   key: string;
   slide?: Slide;
+  /** The slide before the live clamp's cut (`SlideDesc.full`), for a slide past a count (`AssetJob.full`). */
+  full?: Slide;
   nextSlide?: Slide;
   look: Look;
   images: Record<string, string>;
@@ -312,6 +328,11 @@ export type FromAsset =
       /** Units this worker has made so far, and the bytes its unit cache holds now (health). */
       unitsMade?: number;
       unitCacheBytes?: number;
+      /**
+       * The underlay frames (`frame.ts`) of this worker so far: made, dropped past their time budget (design 29
+       * D12, `framesOver`), and the bytes of the frames in progress (`frameWorkBytes`): telemetry and diagnostics.
+       */
+      frames?: { made: number; over: number; workBytes: number };
     }
   /**
    * Units a slide was drawn without are made (`keys`; `left` still to make): the link draws the slide again,

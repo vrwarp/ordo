@@ -1,5 +1,7 @@
 import type { ImageObject, ShapeObject, Slide, SlideObject } from '@ordo/domain';
 import { clearEffectCache, effectWork } from './effects.ts';
+import { clampObject } from './clamp.ts';
+import { legacyCopy } from './geombudget.ts';
 import {
   PREPARE_STEP_PIXELS,
   type PictureTarget,
@@ -164,6 +166,59 @@ function roundedShadow(): CaseResult {
     );
   }
   return { name: 'rounded picture with a shadow', checks };
+}
+
+/**
+ * A rounded picture past the slide's effect budget is drawn as its legacy copy (`legacyCopy` 'effects': no shadow,
+ * no soft edge, the radius kept). Its corners are the original's, and it is prepared as the original is: one
+ * bitmap for both (a shadow is no part of the target), cut to its corners (anti-aliased), not drawn from the
+ * source through a clip (whose corners are not: a hard edge in Chromium).
+ */
+function roundedLegacy(): CaseResult {
+  const checks: Check[] = [];
+  // A shadow too faint to paint (alpha 0.001) still makes the picture "effected": round corners cut as a mask.
+  const raw = image('p', [400, 300, 600, 400], {
+    radius: 80,
+    shadow: { dx: 0, dy: 0, blur: 0, color: BLACK(0.001) },
+  });
+  // As the drawers hold it: clamped (`clampObject`), so its legacy copy is the very object the budget draws.
+  const o = clampObject(raw) as ImageObject;
+  const legacy = legacyCopy(o, 'effects');
+  const t = pictureTarget(o, 1);
+  const lt = pictureTarget(legacy, 1);
+  check(checks, 'the original is prepared, cut to its corners', !!t?.shape?.mask, t?.key ?? 'none');
+  check(
+    checks,
+    "the legacy copy is prepared with its original's bitmap",
+    !!lt?.shape?.mask && lt.key === t?.key,
+    {
+      legacy: lt?.key ?? 'none',
+      original: t?.key ?? 'none',
+    },
+  );
+  // The outputs' path: both from the prepared bitmap.
+  const lookup = preparedLookup();
+  const a = draw([o], lookup);
+  const b = draw([legacy], lookup);
+  const dd = diff(a, b, 12);
+  check(
+    checks,
+    "prepared: the legacy copy's corners are the original's",
+    dd.differing <= 40 && dd.max <= 40,
+    dd,
+  );
+  const edge = Array.from({ length: 12 }, (_, k) => px(b, 466 + k, 300)[3]);
+  check(
+    checks,
+    'prepared: the corner arc is anti-aliased (alpha climbs over several pixels, not a hard edge)',
+    edge.filter((v) => v > 0 && v < 255).length >= 6,
+    edge,
+  );
+  const corner = px(b, 404, 304);
+  check(checks, 'prepared: the corner outside the round corner is not the picture', corner[3] < 60, corner);
+  const centre = px(b, 700, 500);
+  check(checks, 'prepared: the centre is the picture', centre[0] > 200 && centre[3] === 255, centre);
+  return { name: 'rounded picture past the effect budget', checks };
 }
 
 /** Round corners kept with a soft edge: the edges fade, the corners round. */
@@ -401,6 +456,7 @@ export function runCases(): CaseResult[] {
   const all = [
     intoSprite,
     roundedShadow,
+    roundedLegacy,
     roundedFeather,
     preparedFeather,
     bandedFeather,

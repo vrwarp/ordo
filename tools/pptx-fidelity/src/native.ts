@@ -738,6 +738,8 @@ export type RenderedSlide = {
   maxObjectMs?: { '1920': number; '3840': number };
   /** The id of that object at 3840 px. */
   maxObjectId?: string;
+  /** With `frames`, on a slide the underlay frame splits: what it did at each width (`native-page.ts` `FrameInfo`). */
+  frame?: RenderResult['frame'];
   error?: string;
 };
 
@@ -758,6 +760,8 @@ export type RenderOptions = {
   only?: ReadonlySet<number>;
   /** Draw each slide as LibreOffice would (`compatSlide`), and as ordo does next to it (`policyPng`). */
   loCompat?: boolean;
+  /** Draw a slide past a count as an output does, with the underlay frame (`RenderJob.frames`; `--frames`). */
+  frames?: boolean;
   /** Font requests to resolve on the page once its faces are loaded (diagnostics, tests). */
   probe?: FaceRequest[];
   /** Register stand-ins for script fallback families this machine lacks (`fonts.ts`). */
@@ -971,7 +975,7 @@ export class NativeRenderer {
     const offered = new Set(media.map((m) => m.id));
     const draw = async (slide: Slide, name: string, times: number) => {
       const p = page ?? (await open());
-      const job = { slide, rect: deck.slideRect, repeats: times };
+      const job = { slide, rect: deck.slideRect, repeats: times, ...(opts.frames ? { frames: true } : {}) };
       const r: RenderResult = await withTimeout(
         p.evaluate((j) => window.__native.render(j), job),
         SLIDE_TIMEOUT_MS,
@@ -1001,6 +1005,7 @@ export class NativeRenderer {
                   coldMs: { '1920': round2(r.cold1920), '3840': round2(r.cold3840) },
                 }
               : {}),
+            ...(r.frame ? { frame: r.frame } : {}),
           });
           if (compat) {
             await draw(s.slide, `${base}.policy.png`, 0);
