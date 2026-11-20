@@ -203,7 +203,13 @@ function relsXml(rels: readonly [string, string, string][]): string {
 }
 
 /** The parts of the probe deck, by name, in the order they are written. */
-export function probeParts(shapes: readonly ProbeShape[]): [string, string][] {
+/** STUB (red first): the shape writer is accepted and not used yet. */
+export type ShapeWriter = (s: ProbeShape, id: number) => string;
+
+export function probeParts(
+  shapes: readonly ProbeShape[],
+  _write: ShapeWriter = shapeXml,
+): [string, string][] {
   const n = slideCount(shapes);
   const slides = Array.from({ length: n }, (_, i) => i + 1);
   const types =
@@ -332,7 +338,7 @@ export function zipStore(files: readonly [string, Uint8Array][]): Uint8Array {
 }
 
 /** The probe deck (.pptx bytes) of a layout. */
-export function probeDeck(shapes: readonly ProbeShape[]): Uint8Array {
+export function probeDeck(shapes: readonly ProbeShape[], write: ShapeWriter = shapeXml): Uint8Array {
   const enc = new TextEncoder();
-  return zipStore(probeParts(shapes).map(([name, xml]) => [name, enc.encode(xml)]));
+  return zipStore(probeParts(shapes, write).map(([name, xml]) => [name, enc.encode(xml)]));
 }
