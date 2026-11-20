@@ -568,6 +568,13 @@ export function objectUnit(o: SlideObject, scale: number): GeomUnit | undefined 
   return w && 'u' in w ? w.u : undefined;
 }
 
+/** Why an object drawn alone gets no unit though its budget alone leaves something out of it (`UnitLeft`), if so. */
+export function objectLeft(o: SlideObject, scale: number): UnitLeft | undefined {
+  if (!o) return undefined;
+  const w = wanted(o, partOf(o, slideBudget([o])), num(scale, 0.01, 8, 1));
+  return w && 'left' in w ? w.left : undefined;
+}
+
 /**
  * The unit of `o` (a slide object, clamped) at `scale` as if alone on its slide, with what the budget leaves out
  * of it (`part`; default: its geometry, as when past `GEOM_COST.slide`): undefined when none would draw it.

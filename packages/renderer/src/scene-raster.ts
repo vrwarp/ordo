@@ -23,7 +23,7 @@ import {
 } from './scene.ts';
 import { type DrawnSprite, drawSprite, slideReach, spriteRect } from './sprite.ts';
 import { spriteCache } from './spritecache.ts';
-import { type Ctx2D, frameBytes, type ImageLookup, layoutText } from './text2d.ts';
+import { type Ctx2D, frameBytes, type ImageLookup, layoutText, type UnderFrame } from './text2d.ts';
 
 /**
  * The asset worker's half of a scene stack (design/27 §7.2, SCENE.md item E): a slide job that carries
@@ -237,6 +237,8 @@ export function rasterScene<B>(
     clip?: { w?: number; h?: number };
     /** An output raster's report of a part left out until its unit is made (`SlideDrawOptions.late`, C2b). */
     late?: (key: string) => void;
+    /** The slide's underlay frame: below every object of `slide` (its direct part), so in the base only. */
+    under?: UnderFrame;
   } = {},
 ): { base: B; over: B | null; plane: Float32Array } | undefined {
   const scene = sceneSlides(ctx, slide, look, scale, images, objectId, opts.clip);
@@ -247,7 +249,8 @@ export function rasterScene<B>(
     const base = take();
     let over: B | null = null;
     if (scene.over) {
-      rasterSlide(ctx, scene.over, look, scale, images, opts);
+      // The frame lies under the video, so under the base: the over holds what is above the video only.
+      rasterSlide(ctx, scene.over, look, scale, images, { ...opts, under: undefined });
       over = take();
     }
     return { base, over, plane: scene.plane };
@@ -277,6 +280,8 @@ export function rasterSceneSprites<B>(
     clip?: { w?: number; h?: number };
     /** An output raster's report of a part left out until its unit is made (`SlideDrawOptions.late`, C2b). */
     late?: (key: string) => void;
+    /** The slide's underlay frame: below every object of `slide` (its direct part), so in the base only. */
+    under?: UnderFrame;
   } = {},
 ): { base: DrawnSprite<B>; over: DrawnSprite<B> | null; plane: Float32Array } | undefined {
   const scene = sceneSlides(ctx, slide, look, scale, images, objectId, opts.clip);
@@ -287,18 +292,21 @@ export function rasterSceneSprites<B>(
     presentationKind: opts.presentationKind,
     late: opts.late,
   };
-  const part = (s: Slide) =>
-    drawSprite(
+  const part = (s: Slide, under?: UnderFrame) => {
+    const p = { ...o, ...(under ? { under } : {}) };
+    return drawSprite(
       surface,
       take,
       frame.width,
       frame.height,
-      spriteRect(slideReach(ctx, s, { scale, look, ...o }), scale, frame.width, frame.height),
-      (c) => rasterSlide(c, s, look, scale, images, o),
+      spriteRect(slideReach(ctx, s, { scale, look, ...p }), scale, frame.width, frame.height),
+      (c) => rasterSlide(c, s, look, scale, images, p),
     );
+  };
   // Base and over are one raster of the sprite cache (spritecache.ts): neither evicts the other's sprites.
   return spriteCache.raster(() => {
-    const base = part(scene.base);
+    // The underlay frame is below the video, so it is the base's: the over holds what is above the video only.
+    const base = part(scene.base, opts.under);
     return { base, over: scene.over ? part(scene.over) : null, plane: scene.plane };
   }, frameBytes(scale));
 }

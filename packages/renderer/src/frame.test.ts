@@ -16,8 +16,8 @@ import {
 import { picture, seeded, slideOf, square, squares, textBox, texts } from './frame.test-util.ts';
 import { RecPath } from './geom/path2d.test-util.ts';
 import { pictureTarget } from './picture.ts';
-import { clearUnits, UNIT_SLIDE_AREAS, unitOf } from './units.ts';
-import { panel } from './units.effects.test-util.ts';
+import { clearUnits, slideUnitsLeft, UNIT_SLIDE_AREAS } from './units.ts';
+import { effectsSlide, panel } from './units.effects.test-util.ts';
 
 /*
  * The pure split of the underlay frame (design 29 R1, frame.ts): the direct part is the longest top-down run of
@@ -158,27 +158,29 @@ describe('splitFrame by pictures (rules b, c, d)', () => {
 });
 
 describe('splitFrame by effect area (rule e, r2a MUST c(2))', () => {
-  it('20 shadowed panels of 0.12 frame each: the direct units add up to at most one frame', () => {
+  it('a soft frame and 12 large shadowed panels: the direct units fit one frame, the next object down would pass it', () => {
+    const slide = effectsSlide({ w: 1100, h: 700 });
+    // the whole slide leaves later effects to their legacy copies for want of area
+    expect(slideUnitsLeft(slide.objects, 1)).toContain('area');
+    const f = splitFrame(slide, 1)!;
+    expect(f).toBeDefined();
+    expect(f.why.area).toBe(true);
+    expect(slideUnitsLeft(f.direct.objects, 1)).not.toContain('area');
+    expect(f.direct.objects.length).toBeGreaterThan(0);
+    expect(f.under.length).toBeGreaterThan(0);
+    expect(f.direct.objects.length + f.under.length).toBe(slide.objects.length);
+    // the next object down would have passed the bound
+    const next = f.under[f.under.length - 1]!;
+    expect(slideUnitsLeft([next, ...f.direct.objects], 1)).toContain('area');
+  });
+
+  it('20 shadowed panels the budget keeps whole (no unit wanted, no area left) are not split for area', () => {
     const panels: SlideObject[] = [];
     for (let i = 0; i < 20; i++)
       panels.push(panel(`pa${i}`, 100 + (i % 5) * 300, 80 + Math.floor(i / 5) * 240, 640, 390, i));
-    const s = slideOf(panels);
-    const f = splitFrame(s, 2)!;
-    expect(f).toBeDefined();
-    expect(f.why.area).toBe(true);
-    const frame = frameSize(2);
-    const area = (os: readonly SlideObject[]) =>
-      os.reduce((sum, o) => {
-        const u = unitOf(o, 2, 'both');
-        return sum + (u && u.bytes > 0 ? (u.rect.w * u.rect.h) / (frame.w * frame.h) : 0);
-      }, 0);
-    expect(area(f.direct.objects)).toBeLessThanOrEqual(UNIT_SLIDE_AREAS + 1e-9);
-    expect(f.direct.objects.length).toBeGreaterThan(0);
-    expect(f.under.length).toBeGreaterThan(0);
-    expect(f.direct.objects.length + f.under.length).toBe(20);
-    // the next object down would have passed the bound
-    const next = f.under[f.under.length - 1]!;
-    expect(area([next, ...f.direct.objects])).toBeGreaterThan(UNIT_SLIDE_AREAS);
+    const slide = slideOf(panels);
+    expect(slideUnitsLeft(slide.objects, 2)).toEqual([]);
+    expect(splitFrame(slide, 2)).toBeUndefined();
   });
 });
 
@@ -254,8 +256,6 @@ describe('the split is the smallest frame (seeded fuzz of 500 slides)', () => {
     const media = new Set<string>();
     const targets = new Set<string>();
     let bytes = 0;
-    let area = 0;
-    const frame = frameSize(scale);
     for (const o of objs) {
       if (o.type === 'image') {
         media.add(o.mediaId);
@@ -264,13 +264,12 @@ describe('the split is the smallest frame (seeded fuzz of 500 slides)', () => {
         if (!targets.has(key)) bytes += t ? t.w * t.h * 4 : 0;
         targets.add(key);
       }
-      const u = unitOf(o, scale, 'both');
-      if (u && u.bytes > 0) area += (u.rect.w * u.rect.h) / (frame.w * frame.h);
     }
     if (media.size > FRAME_DIRECT_IMAGES) broken.push('images');
     if (targets.size > FRAME_DIRECT_TARGETS) broken.push('targets');
     if (bytes > FRAME_DIRECT_BYTES) broken.push('bytes');
-    if (area > UNIT_SLIDE_AREAS + 1e-9) broken.push('area');
+    // (e) no object left to its legacy copy for want of one frame of unit area (r2a MUST c(2))
+    if (slideUnitsLeft(objs, scale).includes('area')) broken.push('area');
     return broken;
   }
 

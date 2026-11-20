@@ -258,6 +258,32 @@ describe('legacyColumns (M9 leaf-legacy)', () => {
     expect(legacyColumns(slide([hostile]))).toEqual({ budgetLegacy: 1, unitsLeft: 1, unitsAlone: 1 });
   });
 
+  it('counts nothing for want of unit area: two full-frame line-art shapes are a direct part and a frame', () => {
+    // At r2b2-base the second one's unit passed the slide's one frame of unit area and was counted `unitsLeft`
+    // (r2a MUST c(2)); outputs now draw the bottom one from a frame, the top one directly, both whole.
+    const art = (id: string, wall: number) =>
+      ({
+        id,
+        type: 'shape',
+        box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+        shape: 'line',
+        opacity: 1,
+        radius: 0,
+        fill: red,
+        geom: {
+          paths: Array.from({ length: 8 }, (_, i) => ({
+            d: lineArtD({ w: 4000, h: 3000, cols: 20, rows: 15, wall: wall + 0.02 * i }),
+            w: 4000,
+            h: 3000,
+          })),
+        },
+      }) as Slide['objects'][number];
+    const cols = legacyColumns(slide([art('a', 0.1), art('b', 0.12)]));
+    expect(cols.budgetLegacy).toBeGreaterThanOrEqual(1);
+    expect(cols).not.toHaveProperty('unitsLeft');
+    expect(cols).not.toHaveProperty('unitsAlone');
+  });
+
   it("counts what the slide budget draws as legacy shapes, and the guard deck's line art draws no fill", async () => {
     const dir = await work();
     const out = join(dir, 'guard.jsonl');

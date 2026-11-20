@@ -10,10 +10,11 @@ import { BAKE_MAX_OBJECTS, CLAMP, clampLook, clampSlide } from './clamp.ts';
 import { digest } from './digest.ts';
 import { decorPending } from './decor/files.ts';
 import { geomAwaited } from './geom/stored.ts';
-import { withinDrawBudget } from './geombudget.ts';
+import { charged } from './geom/cost.ts';
+import { drawnCost, withinDrawBudget } from './geombudget.ts';
 import { type PictureSource, pictureTarget } from './picture.ts';
 import { drawGeomShape } from './shape.ts';
-import { drawObject, type ImageLookup } from './text2d.ts';
+import { drawObject, type ImageLookup, type UnderFrame } from './text2d.ts';
 import {
   canvas2d,
   clearUnitUnmade,
@@ -22,17 +23,18 @@ import {
   makeUnitPicture,
   markUnitUnmade,
   noteUnitWork,
+  objectLeft,
   objectUnit,
   placedDigest,
   SLICE_MS,
   UNIT_CACHE_BYTES,
-  UNIT_SLIDE_AREAS,
   UNIT_VERSION,
   type UnitRect,
   type UnitRun,
   unitCache,
   unitGeneration,
-  unitOf,
+  type UnitLeft,
+  slideUnitsLeft,
   unitUnmade,
 } from './units.ts';
 import { EFFECT_STEP_PIXELS } from './effects.ts';
@@ -146,11 +148,11 @@ const splitMemo = new WeakMap<object, Map<string, FrameSplit | null>>();
  * `FRAME_DIRECT_OBJECTS` objects, (b) at most `FRAME_DIRECT_IMAGES` distinct pictures (the live clamp's rule),
  * (c) at most `FRAME_DIRECT_TARGETS` distinct prepared picture draws at `scale` (a picture with no target, turned
  * or rounded without a mask, is drawn from the source resampled and counts as one too), (d) the prepared targets'
- * bytes within `FRAME_DIRECT_BYTES`, (e) the sum of its objects' stand-alone unit areas (`unitOf`: a conservative
- * bound) within `UNIT_SLIDE_AREAS` frames, so the direct part never leaves an effect to its legacy copy for want of
- * area (r2a MUST c(2)). The anchors are always direct: the frame is only objects below the lowest anchor, and a
- * direct part that holds more than the counts there is cut by the live clamp as it always was (`cut`). Rules (a)
- * to (e) only ever add up, so the direct part is the longest top-down run that satisfies them: as much as possible
+ * bytes within `FRAME_DIRECT_BYTES`, (e) the direct part's units fit one frame of area (`UNIT_SLIDE_AREAS`: none of
+ * its objects is left to its legacy copy for want of it, `slideUnitsLeft` reports no 'area': r2a MUST c(2)). The
+ * anchors are always direct: the frame is only objects below the lowest anchor, and a direct part that holds more
+ * than the counts there is cut by the live clamp as it always was (`cut`). Rules (a) to (e) only ever add up, so the
+ * direct part is the longest top-down run that satisfies them: as much as possible
  * is live at once, and the words come first.
  */
 export function splitFrame(slide: Slide, scale: number, opts: FrameOptions = {}): FrameSplit | undefined {
@@ -169,14 +171,6 @@ export function splitFrame(slide: Slide, scale: number, opts: FrameOptions = {})
   return out;
 }
 
-/** The area of `o`'s unit as if it were alone on its slide, in frames (0: it has none, or no area of its own). */
-function unitArea(o: SlideObject, scale: number): number {
-  const u = unitOf(o, scale, 'both');
-  if (!u || u.bytes <= 0) return 0;
-  const f = frameSize(scale);
-  return (u.rect.w * u.rect.h) / (f.w * f.h);
-}
-
 function split(bake: Slide, scale: number, anchors: readonly string[]): FrameSplit | undefined {
   const content = slideContent(bake);
   const objects = content.objects;
@@ -186,7 +180,6 @@ function split(bake: Slide, scale: number, anchors: readonly string[]): FrameSpl
   const images = new Set<string>();
   const targets = new Map<string, number>();
   let bytes = 0;
-  let area = 0;
   // The slide's own picture (a reference picture or an imported page) is one prepared draw of the whole frame.
   if (content.pictureMediaId) {
     targets.set(`${content.pictureMediaId}|frame`, 1);
@@ -225,11 +218,6 @@ function split(bake: Slide, scale: number, anchors: readonly string[]): FrameSpl
         }
       }
     }
-    const a = unitArea(o, scale);
-    if (a > 0 && area + a > UNIT_SLIDE_AREAS + 1e-9) {
-      why.area = true;
-      broke = true;
-    }
     if (broke) break;
     start = i;
     if (image) images.add((o as { mediaId: string }).mediaId);
@@ -237,7 +225,25 @@ function split(bake: Slide, scale: number, anchors: readonly string[]): FrameSpl
       targets.set(key, targetBytes);
       bytes += targetBytes;
     }
-    area += a;
+  }
+  // (e) The direct part's units fit one frame of area (r2a MUST c(2)): no object of it is left to its legacy copy
+  // for want of area (`slideUnitsLeft`). Units only ever add up, so the longest run that fits is found by
+  // halving; a step down from there covers a slide whose areas do not quite add up.
+  if (start < n) {
+    const over = (at: number) =>
+      slideUnitsLeft(at === 0 ? objects : objects.slice(at), scale).includes('area');
+    if (over(start)) {
+      let lo = start;
+      let hi = n - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (over(mid)) lo = mid + 1;
+        else hi = mid;
+      }
+      while (lo < n - 1 && over(lo)) lo++;
+      start = lo;
+      why.area = true;
+    }
   }
   // The anchors stay direct: nothing below the lowest one is, but everything from it up is.
   if (anchors.length) {
@@ -661,3 +667,46 @@ export const FRAME_MAX_BYTES = UNIT_CACHE_BYTES / 2;
 
 /** A picture source type re-exported for the provider's implementation. */
 export type { PictureSource };
+
+/**
+ * The frame of `split` as the draw takes it (`SlideDrawOptions.under`): its key, its rect, its picture when it is in
+ * the unit cache, and whether it could not be made here (`late` is not told then: the slide keeps its direct part).
+ */
+export function underFrame(split: FrameSplit, epoch = 0): UnderFrame {
+  const key = frameKey(split, epoch);
+  return {
+    key,
+    rect: split.rect,
+    image: () => frameImage(key),
+    unmade: () => frameUnmade(key),
+  };
+}
+
+/**
+ * The objects of the frame that get no unit and why (`UnitLeft`), for the census: an under object is drawn alone, so
+ * none is ever left for want of area (r2a MUST c(2)); a table or a chart past its budget keeps its legacy copy
+ * (`kind`), one sub-path past the per-call bound is `alone`.
+ */
+export function frameUnitsLeft(split: FrameSplit): UnitLeft[] {
+  const out: UnitLeft[] = [];
+  for (const o of split.under) {
+    if (o.type === 'image') continue;
+    const w = objectLeft(o, split.scale);
+    if (w) out.push(w);
+  }
+  return out;
+}
+
+/**
+ * What making the frame costs, in the units of `slideUnitsCost` (health reads the direct part only: the frame is
+ * paid once at arm, in the lanes' turns, never in a raster): the drawing units of the under objects each drawn
+ * alone, and the one frame the raster copies.
+ */
+export function frameCost(split: FrameSplit): { making: number; copy: number } {
+  let making = 0;
+  for (const st of stepsOf(split)) {
+    const o = st.kind === 'unit' ? st.unit.drawn : st.object;
+    making += charged(drawnCost(o));
+  }
+  return { making, copy: 1 };
+}

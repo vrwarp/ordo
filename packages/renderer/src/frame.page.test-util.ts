@@ -1,7 +1,7 @@
 import type { ShapeObject, Slide, SlideObject } from '@ordo/domain';
-import { clearFrameWork, frameKey, frameUnit, setFrames, splitFrame } from './frame.ts';
-import { picture, slideOf, squares, textBox } from './frame.test-util.ts';
-import { drawObject } from './text2d.ts';
+import { clearFrameWork, frameKey, frameUnit, setFrames, splitFrame, underFrame } from './frame.ts';
+import { picture, seeded, slideOf, square, squares, textBox } from './frame.test-util.ts';
+import { drawObject, drawSlide2D } from './text2d.ts';
 import { loneChain, panel } from './units.effects.test-util.ts';
 import { clearUnits, SLICE_MS, unitCache } from './units.ts';
 
@@ -144,3 +144,88 @@ export async function runFrames(): Promise<{ cases: FrameCase[]; sliceMs: number
 (globalThis as unknown as { __frames: typeof runFrames }).__frames = runFrames;
 // the key helper is part of the bundle so a page test may ask for it
 (globalThis as unknown as { __frameKey: typeof frameKey }).__frameKey = frameKey;
+
+/** The result of the parity property: slides compared, and the worst difference. */
+export type ParityResult = {
+  width: number;
+  slides: number;
+  /** Slides that were split (the others fit the counts whole). */
+  split: number;
+  /** Largest channel difference over every slide. */
+  maxDiff: number;
+  worst: string;
+  /** Painted pixels summed (the check passes on empty canvases otherwise). */
+  painted: number;
+};
+
+/**
+ * M1, the property: for `count` seeded crowded slides, the frame made in turns plus the direct part drawn by
+ * `drawSlide2D` is the picture of the whole uncut slide, every object drawn one after the other onto a
+ * transparent canvas (no budget, no cut).
+ */
+export async function runParity(count: number, width: number): Promise<ParityResult> {
+  const scale = width / 1920;
+  const height = Math.round(1080 * scale);
+  const rnd = seeded(31_415_926 + width);
+  const media: Record<string, OffscreenCanvas> = {};
+  const lookup = (id: string) =>
+    (media[id] ??= flat(
+      160,
+      120,
+      `rgb(${(id.length * 53) % 255},120,${(id.charCodeAt(id.length - 1) * 7) % 255})`,
+    ));
+  const pictures = { acquire: async () => ({ lookup: lookup as never, release: () => undefined }) };
+  let worst = 0;
+  let worstAt = '';
+  let split = 0;
+  let painted = 0;
+  for (let k = 0; k < count; k++) {
+    clearUnits();
+    clearFrameWork();
+    const n = 205 + Math.floor(rnd() * 200);
+    const objs: SlideObject[] = [];
+    for (let i = 0; i < n; i++) {
+      const r = rnd();
+      if (r < 0.1)
+        objs.push(
+          picture(`p${i}`, `m${Math.floor(rnd() * 6)}`, {
+            x: Math.floor(rnd() * 1500),
+            y: Math.floor(rnd() * 800),
+            w: 80 + Math.floor(rnd() * 500),
+            h: 80 + Math.floor(rnd() * 300),
+          }),
+        );
+      else if (r < 0.65) objs.push(square(i, { opacity: rnd() < 0.2 ? 0.6 : 1 }));
+      else
+        objs.push(
+          textBox(`t${i}`, `Line ${i}`, 40 + Math.floor(rnd() * 1500), 20 + Math.floor(rnd() * 900), 320, 60),
+        );
+    }
+    const slide = slideOf(objs, `par${k}`);
+    const sp = splitFrame(slide, scale);
+    if (!sp) continue;
+    split++;
+    const whole = canvas(width, height);
+    for (const o of sp.slide.objects) drawObject(whole, o, scale, lookup as never);
+    const unit = frameUnit(sp, { pictures: pictures as never });
+    await unit.make({ slice: async (fn) => fn(), check: () => undefined });
+    const got = canvas(width, height);
+    drawSlide2D(got, sp.direct, { scale, images: lookup as never, under: underFrame(sp) });
+    const a = whole.getImageData(0, 0, width, height);
+    const b = got.getImageData(0, 0, width, height);
+    let max = 0;
+    for (let i = 0; i < a.data.length; i += 4) {
+      let m = 0;
+      for (let c = 0; c < 4; c++) m = Math.max(m, Math.abs(a.data[i + c]! - b.data[i + c]!));
+      if (m > max) max = m;
+      if (a.data[i + 3]! > 0) painted++;
+    }
+    if (max > worst) {
+      worst = max;
+      worstAt = slide.id;
+    }
+  }
+  return { width, slides: count, split, maxDiff: worst, worst: worstAt, painted };
+}
+
+(globalThis as unknown as { __parity: typeof runParity }).__parity = runParity;

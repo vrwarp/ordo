@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { findChromium } from '../../../tools/find-chromium.ts';
-import type { runFrames } from './frame.page.test-util.ts';
+import type { runFrames, runParity } from './frame.page.test-util.ts';
 
 /**
  * Headless check of the underlay frame (design 29 R1): bundles frame.page.test-util.ts, runs it in headless
@@ -84,4 +84,47 @@ describe.skipIf(!executablePath)('the underlay frame in headless Chromium', () =
         );
     }
   }, 240_000);
+
+  it('plus the direct part is the whole uncut slide, for 200 seeded crowded slides at 1920 and 20 at 3840 (M1)', async () => {
+    const esbuild = await loadEsbuild();
+    const built = await esbuild.build({
+      entryPoints: [join(here, 'frame.page.test-util.ts')],
+      bundle: true,
+      write: false,
+      format: 'iife',
+      target: 'es2022',
+      absWorkingDir: root,
+      logLevel: 'silent',
+    });
+    const { chromium } = await import('@playwright/test');
+    const browser = await chromium.launch({ headless: true, executablePath });
+    const out: Awaited<ReturnType<typeof runParity>>[] = [];
+    try {
+      const page = await browser.newPage();
+      const errors: string[] = [];
+      page.on('pageerror', (e) => errors.push(e.message));
+      await page.setContent('<!doctype html><html><body></body></html>');
+      await page.addScriptTag({ content: built.outputFiles[0]!.text });
+      type Run = { __parity: typeof runParity };
+      for (const [count, width] of [
+        [200, 1920],
+        [20, 3840],
+      ] as const)
+        out.push(
+          await page.evaluate(([c, w]) => (window as unknown as Run).__parity(c!, w!), [count, width]),
+        );
+      expect(errors).toEqual([]);
+    } finally {
+      await browser.close();
+    }
+    for (const r of out) {
+      console.log(
+        `parity at ${r.width}: ${r.slides} slides, ${r.split} split, max diff ${r.maxDiff} (${r.worst || 'none'}), ${r.painted} px painted`,
+      );
+      expect(r.split, `${r.width}: the generator makes crowded slides`).toBeGreaterThan(r.slides * 0.9);
+      expect(r.painted, `${r.width}: the slides paint something`).toBeGreaterThan(r.slides * r.width);
+      // No unit inside: exactly the whole drawing's pixels.
+      expect(r.maxDiff, `${r.width}: the frame and the direct part against the whole slide`).toBe(0);
+    }
+  }, 600_000);
 });
