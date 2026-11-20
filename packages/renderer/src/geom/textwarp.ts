@@ -22,7 +22,9 @@ import { TEXT_WARP_GEOMS } from './textwarps.gen.ts';
  *   whether a warp follows its path asks that, and writes no table of names to modes.
  * - Every function here is pure (imports only sibling geometry modules, no DOM, no process, no network, no timers),
  *   total (a hostile name, box or adjust value gives undefined or finite numbers, never a throw: `buildGeom` bounds
- *   the box and every coordinate) and costs a few microseconds a call.
+ *   the box and every coordinate). Building and flattening a warp takes about 25 us
+ *   once the code is warm (all 40 at 1920 x 1080 in about 1 ms), and 15-20 ms for all 40 the first time in a process (the
+ *   first call alone 3-6 ms: the code's first run); a memo hit takes under a microsecond.
  *
  * Arc-length tables (`flattenWarpPath`, `arcAt`, `warpArcs`): a built path flattened to a polyline with its cumulative
  * length, so a painter can put a glyph at a fraction of the way along a line, and a memo of the arcs of a warp at a
@@ -319,7 +321,7 @@ function segmentDistanceSq(px: number, py: number, ax: number, ay: number, bx: n
  * Appends the points of one cubic, after its start, to `out` by adaptive subdivision (de Casteljau, depth at most
  * MAX_DEPTH). A cubic is flat when 3/4 of the larger distance of its two control points from its chord is within the
  * tolerance (`flat2` is the square of tolerance / 0.75): the curve is a convex combination of its control points, so it
- * strays from the chord by at most that much, and a chord point from the curve by no more. False as soon as `out` would
+ * strays from the chord by at most that much. False as soon as `out` would
  * hold more than WARP_MAX_POINTS points.
  */
 function flatCubic(

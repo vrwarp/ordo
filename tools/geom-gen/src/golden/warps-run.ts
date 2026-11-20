@@ -40,7 +40,7 @@ import {
  *
  * The numbers are committed (warp-baseline.json) and judged against the live geometry by warps-baseline.test.ts
  * without LibreOffice, so CI checks the shapes against LibreOffice's text; this run only refreshes or verifies them
- * (it is not a CI step). Needs soffice (LibreOffice 24.2 made the baseline), pdftoppm and ffmpeg. A run takes about 10 s.
+ * (it is not a CI step). Needs soffice (LibreOffice 24.2 made the baseline), pdftoppm and ffmpeg. A run takes about 15 s.
  */
 
 const LABEL = 'warp probe golden';

@@ -128,9 +128,9 @@ part 3's, and a text object still draws straight.
   (no preset has a second) by adaptive subdivision to `{ xy, len, total, tol }`: the points, the cumulative arc length
   at each, the total and the tolerance used. A cubic is flat when 3/4 of the larger distance of its control points
   from its chord is within the flatness (the curve is a convex combination of its control points, so it strays from
-  the chord by no more than that, and a chord point from the curve by no more); quadratics are raised to cubics and
-  the depth is at most 12. `arcAt(arc, u, out?)` is the point u of the way along the length (binary search; u below
-  0, NaN and -Infinity give the first point, u above 1 and Infinity the last; with `out` it allocates nothing).
+  the chord by no more than that); quadratics are raised to cubics and the depth is at most 12. `arcAt(arc, u, out?)`
+  is the point u of the way along the length (binary search; u below 0, NaN and -Infinity give the first point, u
+  above 1 and Infinity the last; with `out` it allocates nothing).
   `warpArcs(name, w, h, adj?)` builds a warp at a box and flattens every path, memoised; `warpAreaArcs` deals the
   arcs out by area (one each for an odd path count, a pair each for an even one).
 - **Bounds.** An arc has at most `WARP_MAX_POINTS` = 4,096 points (a built path holds at most that many). A path that

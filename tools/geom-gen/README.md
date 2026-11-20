@@ -150,5 +150,5 @@ The ink numbers are committed (`src/golden/warp-baseline.json`) and `src/golden/
 judges them against the live geometry with no LibreOffice, so CI checks the shapes against LibreOffice's text. The
 LibreOffice run only refreshes or verifies them; like the preset golden it is not a CI step. Needs LibreOffice (24.2.7
 made the baseline), poppler's `pdftoppm` and ffmpeg; a missing tool skips the run, or fails it under `--strict` or `CI`.
-A run takes about 10 s. A different LibreOffice or Liberation Sans moves the ink of the four path warps (it sits on the
+A run takes about 15 s. A different LibreOffice or Liberation Sans moves the ink of the four path warps (it sits on the
 font's metrics), which is why only the 35 others are drift-checked.
