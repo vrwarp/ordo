@@ -210,6 +210,25 @@ describe('a looping PowerPoint show with every slide timed (the client path)', (
     );
   });
 
+  it('says a slide past the reader\u2019s bounds in the import log, as the hub does (W9)', async () => {
+    const parts = buildDeck({
+      slides: [
+        {
+          shapes: sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, fill: solid('336699') }) + '<a:b/>'.repeat(500_001),
+        },
+      ],
+    });
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    const r = await importPptxClient(
+      await z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }),
+      'heavy.pptx',
+    );
+    const line =
+      'Slide 1 has too much drawing detail for ordo to read, so only its text was imported. In PowerPoint, save the artwork as a picture and import again.';
+    expect(r.log.filter((l) => l.includes(line))).toHaveLength(1);
+  });
+
   it('imports an announcement loop and says so in the import log, as the hub does', async () => {
     const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
     const timed = (text: string) => ({

@@ -1,6 +1,8 @@
 import { Slide } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
 import { convertDeck, emitSlides, MEDIA_PREFIX, parseDeck } from './index.ts';
+import { MAX_SHAPES_PER_SLIDE } from './walk.ts';
+import { MAX_PACKED_ELEMENTS_PER_PART } from './xml.ts';
 import {
   body,
   buildDeck,
@@ -9,6 +11,7 @@ import {
   pic,
   pictureBg,
   denseDeckParts,
+  leanShapes,
   pngHeader,
   run,
   solid,
@@ -191,6 +194,47 @@ describe('convertDeck (the hub pool task entry, M3)', () => {
     expect(slide.classification?.reasons ?? []).not.toContain('unreadable');
     expect(slide.notes.join(' ')).not.toContain('could not be read');
     expect(slide.slide.objects.length).toBeGreaterThan(100);
+  });
+
+  it('lists what it cuts and nothing draws: a slide and a design past the reader\u2019s bounds, the shape cap, the object cap (W9, W10)', () => {
+    const junk = '<a:b/>'.repeat(MAX_PACKED_ELEMENTS_PER_PART + 1);
+    // A slide part past the element bound is unreadable with the reason detail; a malformed one is unreadable only.
+    const parts = buildDeck({ slides: [{ shapes: box(2, 'FF0000') + junk }, { shapes: '' }] });
+    parts.set(
+      'ppt/slides/slide2.xml',
+      new TextEncoder().encode('<p:sld xmlns:p="x"><p:cSld><p:spTree><broken'),
+    );
+    const r = convertDeck(parts);
+    expect(r.slides[0]!.classification?.reasons).toEqual(['unreadable', 'detail']);
+    expect(r.slides[1]!.classification?.reasons).toEqual(['unreadable']);
+    // A layout past the bounds is a note on every slide that uses it and a missing design on each, not on the others.
+    const deck = buildDeck({
+      layouts: [{ shapes: junk }, {}],
+      slides: [
+        { layout: 1, shapes: box(2, 'FF0000') },
+        { layout: 1, shapes: box(2, '00FF00') },
+        { layout: 2, shapes: box(2, '0000FF') },
+      ],
+    });
+    const d = convertDeck(deck).slides;
+    for (const i of [0, 1]) {
+      expect(d[i]!.missing).toEqual(['decoration:layout']);
+      expect(d[i]!.classification.class).toBe('hybrid');
+      expect(d[i]!.notes.join(' ')).toMatch(/layout has too much drawing detail/);
+    }
+    expect(d[2]!.missing).toBeUndefined();
+    expect(d[2]!.classification.class).toBe('native');
+    // The walk's shape cap and the emitter's object cap list what they cut (element:shapes).
+    const capped = convertDeck(buildDeck({ slides: [{ shapes: leanShapes(MAX_SHAPES_PER_SLIDE + 1) }] }));
+    expect(capped.slides[0]!.missing).toContain('element:shapes');
+    // 1,200 text boxes (text objects are not merged by the decoration budget): 200 more than a slide keeps.
+    const rects = Array.from({ length: 1_200 }, (_, i) =>
+      sp({ id: 2 + i, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(run(`t${i}`))) }),
+    ).join('');
+    const cut = convertDeck(buildDeck({ slides: [{ shapes: rects }] })).slides[0]!;
+    expect(cut.slide.objects).toHaveLength(1_000);
+    expect(cut.missing).toContain('element:shapes');
+    expect(cut.classification.class).not.toBe('picture');
   });
 
   it('converts the whole deck like parseDeck and emitSlides, with the slide list', () => {

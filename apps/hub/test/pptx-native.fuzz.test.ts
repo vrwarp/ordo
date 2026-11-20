@@ -148,10 +148,13 @@ describe('pptx-native: hostile slides are quarantined, never the deck', () => {
     // Slide 2 nests 20,000 levels: the reader drops what is deeper than 256 and reads an empty slide. Slides 1
     // and 4 cannot be read even by the text rescue (M9 ladder): empty hybrid slides that say so.
     expect(cls).toEqual(['hybrid', 'native', 'native', 'hybrid', 'native']);
-    for (const i of [0, 3]) {
-      expect(slidesOf(p)[i]!.objects).toEqual([]);
-      expect(slidesOf(p)[i]!.pptx!.missing).toEqual(['slide']);
-    }
+    for (const i of [0, 3]) expect(slidesOf(p)[i]!.objects).toEqual([]);
+    // The DOCTYPE slide is malformed ('slide'); the 33 MB part is past the reader's bounds ('slide:detail', W9).
+    expect(slidesOf(p)[0]!.pptx!.missing).toEqual(['slide']);
+    expect(slidesOf(p)[3]!.pptx!.missing).toEqual(['slide:detail']);
+    expect(job.log.join('\n')).toContain(
+      'Slide 4 has too much drawing detail for ordo to read, so only its text was imported. In PowerPoint, save the artwork as a picture and import again.',
+    );
     expect(slidesOf(p)[1]!.objects.filter((o) => o.type === 'text')).toEqual([]);
     expect(slidesOf(p).map((s) => s.pptx!.index)).toEqual([0, 1, 2, 3, 4]);
     expect(job.log.join('\n')).toMatch(/\[warn\] ppt\/slides\/slide4\.xml is over 32 MB: not read/);
@@ -170,6 +173,24 @@ describe('pptx-native: hostile slides are quarantined, never the deck', () => {
     expect(slide.objects.length).toBeGreaterThan(100);
     expect(slide.pptx!.missing ?? []).not.toContain('slide');
     expect(job.log.join('\n')).not.toMatch(/is over \d+ MB: not read/);
+  });
+
+  it('a slide part past the reader\u2019s element bound ends done: hybrid, slide:detail, and the W9 sentence once in the job log', async () => {
+    const parts = deck(3);
+    parts.set(
+      'ppt/slides/slide2.xml',
+      enc.encode(
+        `<p:sld ${NS}><p:cSld><p:spTree>${textBox(2, 'Heavy')}${'<a:b/>'.repeat(500_001)}</p:spTree></p:cSld></p:sld>`,
+      ),
+    );
+    const job = await importParts(parts);
+    const p = expectClean(job)!;
+    expect(job.state).toBe('done');
+    expect(slidesOf(p).map((s) => s.pptx!.class)).toEqual(['native', 'hybrid', 'native']);
+    expect(slidesOf(p)[1]!.pptx!.missing).toEqual(['slide:detail']);
+    const line =
+      'Slide 2 has too much drawing detail for ordo to read, so only its text was imported. In PowerPoint, save the artwork as a picture and import again.';
+    expect(job.log.filter((l) => l.includes(line))).toHaveLength(1);
   });
 
   it('keeps control characters, forged log lines and prototype keys out of logs, labels and objects', async () => {

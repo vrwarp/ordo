@@ -10,8 +10,10 @@ import {
   bodyBoxes,
   bodyTexts,
   type Converted,
+  cutLine,
   type Draft,
   ImportCore,
+  slideList,
   toPicture,
 } from './pptx-core.ts';
 import { pictureGuardDeck } from './pptx-guard.test-util.ts';
@@ -184,5 +186,61 @@ describe("a table object's cells are text bodies, as the M6 group's text objects
     expect(boxes[6]!.box).toMatchObject({ x: o.box.x + t.cols[0]!, y: o.box.y + t.rows[0]!, w: t.cols[1] });
     toPicture(d);
     expect(d.artText?.split('\n')).toEqual(texts);
+  });
+});
+
+describe('what an import still cuts is said once, in owner words (design/29 section 3: W9, W10; OQ-XC2)', () => {
+  it('names the slides in words: one, two, up to five, then "and N others"', () => {
+    expect(slideList([5])).toEqual({ text: 'Slide 5', plural: false });
+    expect(slideList([5, 6])).toEqual({ text: 'Slides 5 and 6', plural: true });
+    expect(slideList([2, 4, 5]).text).toBe('Slides 2, 4 and 5');
+    expect(slideList([1, 2, 3, 4, 5]).text).toBe('Slides 1, 2, 3, 4 and 5');
+    const seventeen = [2, 4, 5, 7, 9, ...Array.from({ length: 12 }, (_, i) => 20 + i)];
+    expect(slideList(seventeen).text).toBe('Slides 2, 4, 5, 7, 9 and 12 others');
+  });
+
+  it('words W9 for a slide, several slides and a design, and W10 for one slide and several', () => {
+    const save = 'In PowerPoint, save the artwork as a picture and import again.';
+    expect(cutLine('detail', [89])).toBe(
+      `Slide 89 has too much drawing detail for ordo to read, so only its text was imported. ${save}`,
+    );
+    expect(cutLine('detail', [88, 89, 91])).toBe(
+      `Slides 88, 89 and 91 have too much drawing detail for ordo to read, so only their text was imported. ${save}`,
+    );
+    expect(cutLine('design', [2, 4, 5])).toBe(
+      `Slides 2, 4 and 5 use a design with too much drawing detail for ordo to read, so the design's artwork was left out. ${save}`,
+    );
+    expect(cutLine('design', [2])).toContain('Slide 2 uses a design with too much drawing detail');
+    expect(cutLine('shapes', [35])).toBe(
+      'Slide 35 has more shapes than ordo keeps on one slide, so the topmost shapes were left out.',
+    );
+    expect(cutLine('shapes', [35, 36])).toBe(
+      'Slides 35 and 36 have more shapes than ordo keeps on one slide, so the topmost shapes were left out.',
+    );
+  });
+
+  it('cutWarnings writes each line once, kind by kind, from what the drafts list as missing; nothing when nothing was cut', () => {
+    const lines: [string, string][] = [];
+    const c = new ImportCore({
+      lo: true,
+      log: new ImportLog(),
+      warn: (k, m) => lines.push([k, m]),
+      geomFileBytes: 1 << 20,
+    });
+    const draft = (index: number, dropped?: string[], missing?: string[]) =>
+      ({ ref: { index }, dropped, missing }) as unknown as Draft;
+    c.cutWarnings([draft(0), draft(1)]);
+    expect(lines).toEqual([]);
+    c.cutWarnings([
+      draft(0, ['slide:detail']),
+      draft(1, undefined, ['decoration:layout']),
+      draft(2, ['decoration:master', 'element:shapes']),
+      draft(3, ['slide:detail']),
+      draft(4, undefined, ['element:shapes']),
+    ]);
+    expect(lines.map(([k]) => k)).toEqual(['detail', 'detail', 'shapes']);
+    expect(lines[0]![1]).toBe(cutLine('detail', [1, 4]));
+    expect(lines[1]![1]).toBe(cutLine('design', [2, 3]));
+    expect(lines[2]![1]).toBe(cutLine('shapes', [3, 5]));
   });
 });
