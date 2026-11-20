@@ -10,8 +10,10 @@ import {
   liveHub,
   type Raw,
   rawSocket,
+  type ServerSocket,
   type ServiceHub,
   stringifySpy,
+  type WireMsg,
   waitFor,
 } from './byref-helpers.ts';
 import { startHub, tempDir } from './helpers.ts';
@@ -120,7 +122,7 @@ describe('one encoded live state a seq (step 2)', () => {
 
 // ---- step 5: the wire by name ----
 
-type Wire = Record<string, any>;
+type Wire = WireMsg;
 const stateFrames = (s: { frames: { text: string }[] }) =>
   s.frames.filter((f) => f.text.includes('"t":"live.state"'));
 const lastState = (s: { frames: { text: string }[] }): { msg: Wire; bytes: number } => {
@@ -264,7 +266,7 @@ describe('the state by name (step 5)', () => {
     svc = await liveHub(1, { healthIntervalMs: 600_000 });
     const { hub, cookie } = svc;
     const id = liveId(svc);
-    const serverSide = () => [...(hub.sockets as unknown as { clients: Set<Record<string, any>> }).clients];
+    const serverSide = () => [...(hub.sockets as unknown as { clients: Set<ServerSocket> }).clients];
     const s = await rawSocket(hub, cookie, { resolvedId: id });
     await waitFor(() => stateFrames(s).length > 0);
     const mine = serverSide().at(-1);

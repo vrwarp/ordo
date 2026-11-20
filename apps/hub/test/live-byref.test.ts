@@ -12,7 +12,7 @@ import pino from 'pino';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type DB, openLiveDb } from '../src/db.ts';
 import { LiveService, SNAPSHOTS_PREV_KEEP } from '../src/live.ts';
-import { bigBundle, bundleBytes, bundleSource, stringifySpy } from './byref-helpers.ts';
+import { bigBundle, bundleBytes, bundleSource, field, stringifySpy } from './byref-helpers.ts';
 import { song, startHub, tempDir } from './helpers.ts';
 
 const quiet = pino({ level: 'silent' });
@@ -267,7 +267,7 @@ describe('the periodic snapshot (step 4)', () => {
     next(s.live, 100);
     const cuesBytes = JSON.stringify(s.live.state.cues).length;
     const cues = s.live.state.cues;
-    const spy = stringifySpy((a) => a === cues || a?.resolved !== undefined);
+    const spy = stringifySpy((a) => a === cues || field(a, 'resolved') !== undefined);
     next(s.live);
     const t0 = performance.now();
     s.live.snapshot();
@@ -337,7 +337,9 @@ describe('naming (steps 4 and 5)', () => {
       hub.live.submit({ k: 'goLive', playlistId: pl.id }, OP);
       // the goLive named the copy (the apply's one serialisation, with its journal row, snapshot and delta by
       // name): nothing after it serialises the copy again, however many sockets ask for it
-      const spy = stringifySpy((a) => !!a.presentations && !!a.playlist && !!a.manifestId);
+      const spy = stringifySpy(
+        (a) => !!field(a, 'presentations') && !!field(a, 'playlist') && !!field(a, 'manifestId'),
+      );
       const first = hub.live.resolvedCopy();
       const second = hub.live.resolvedCopy();
       hub.live.snapshot(true);

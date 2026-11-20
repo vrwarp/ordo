@@ -69,12 +69,33 @@ export function bundleSource(
 }
 
 export type Frame = { text: string; binary: boolean };
+
+/** A parsed frame of the live wire, with the fields these tests read (anything else it carries is not asserted on). */
+export type WireMsg = {
+  t: string;
+  seq?: number;
+  fromSeq?: number;
+  resolvedId?: string;
+  /** The id of an ack. */
+  id?: string;
+  rejected?: boolean;
+  state?: { resolved?: unknown; cues?: unknown[]; [k: string]: unknown };
+  event?: { k?: string; resolved?: unknown; [k: string]: unknown };
+  [k: string]: unknown;
+};
+
+/** The fields of a socket's record on the server side that the slow-socket test reads and sets. */
+export type ServerSocket = { holds?: string; needsState?: boolean };
+
+/** A field of an object JSON.stringify was called with (a predicate of `stringifySpy` reads it through this). */
+export const field = (a: object, k: string): unknown => (a as Record<string, unknown>)[k];
+
 export type Raw = {
   ws: WebSocket;
   frames: Frame[];
   send(m: Record<string, unknown>): void;
   /** Parsed frames of one message type. */
-  of(t: string): Record<string, any>[];
+  of(t: string): WireMsg[];
   close(): void;
 };
 
@@ -95,7 +116,7 @@ export async function rawSocket(
     ws,
     frames,
     send: (m) => ws.send(JSON.stringify({ v: 1, ...m })),
-    of: (t) => frames.map((f) => JSON.parse(f.text) as Record<string, any>).filter((m) => m.t === t),
+    of: (t) => frames.map((f) => JSON.parse(f.text) as WireMsg).filter((m) => m.t === t),
     close: () => ws.close(),
   };
   if (hello) r.send({ t: 'hello', role: 'operate', appVersion: APP_VERSION, ...hello });
@@ -114,7 +135,7 @@ export async function waitFor(check: () => boolean, ms = 10_000, what = 'conditi
  * Counts the JSON.stringify calls whose argument `pred` accepts, from now until `restore()`.
  * (JSON.stringify is also what the HTTP layer and the logger use; only matching arguments count.)
  */
-export function stringifySpy(pred: (a: any) => boolean) {
+export function stringifySpy(pred: (a: object) => boolean) {
   const real = JSON.stringify;
   let n = 0;
   const spy = vi.spyOn(JSON, 'stringify').mockImplementation(((
@@ -134,13 +155,17 @@ export function stringifySpy(pred: (a: any) => boolean) {
 }
 
 /** A message that carries the whole copy, or the copy itself (what the live path must not serialise per socket). */
-export const carriesCopy = (a: any): boolean =>
-  (a.t === 'live.state' && !!a.state?.resolved) ||
-  (a.t === 'live.delta' && !!a.event?.resolved) ||
-  (!!a.presentations && !!a.playlist && !!a.manifestId);
+export const carriesCopy = (a: object): boolean => {
+  const m = a as WireMsg & { presentations?: unknown; playlist?: unknown; manifestId?: unknown };
+  return (
+    (m.t === 'live.state' && !!m.state?.resolved) ||
+    (m.t === 'live.delta' && !!m.event?.resolved) ||
+    (!!m.presentations && !!m.playlist && !!m.manifestId)
+  );
+};
 
 /** A message that is a live.state of any kind. */
-export const isLiveStateMsg = (a: any): boolean => a.t === 'live.state';
+export const isLiveStateMsg = (a: object): boolean => field(a, 't') === 'live.state';
 
 export type ServiceHub = { hub: TestHub; cookie: string; bytes: Uint8Array; op: Raw };
 
