@@ -3,7 +3,7 @@
  * import, the LibreOffice follow-up and reference pictures, the 'Pictures (LibreOffice)' import and the text
  * repair read a deck only through these.
  *
- * - `readDeckXml`: XML and relationship parts in memory (≤ 8 MB each, ≤ 64 MB in all); a larger XML part is
+ * - `readDeckXml`: XML and relationship parts in memory (≤ 32 MB each, ≤ 64 MB in all); a larger XML part is
  *   left out and listed; every other part (pictures, media, fonts) an empty placeholder, so relationships
  *   still resolve; embeddings, `vbaProject.bin`, custom XML, document properties and printer settings never
  *   read. Nothing is written to disk.

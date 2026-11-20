@@ -3,7 +3,7 @@
  * into an editable ordo presentation, version 1, before any LibreOffice process starts.
  *
  * 1. `readDeckXml(store.abs(deck))` (`deckParts.ts`) with the skip filter and caps of §12 (`PPTX_LIMITS`): XML and
- *    relationship parts in memory (≤ 8 MB each, ≤ 64 MB in all; a larger part is left out and its slide
+ *    relationship parts in memory (≤ 32 MB each, ≤ 64 MB in all; a larger part is left out and its slide
  *    becomes picture class); every other part an empty placeholder, so relationships resolve; embeddings,
  *    `vbaProject.bin`, `customXml`, `docProps` and printer settings skipped; no nested zips. Entry names never
  *    become paths.

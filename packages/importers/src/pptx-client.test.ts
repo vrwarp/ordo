@@ -163,7 +163,7 @@ describe('a looping PowerPoint show with every slide timed (the client path)', (
       return z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
     };
     // 12 MiB of traced artwork: read (the base listed it as over 8 MB), objects and no oversized part.
-    const dense = denseDeckParts({ shapes: 400, points: 650 });
+    const dense = denseDeckParts({ shapes: 150, points: 1800 });
     expect(dense.get('ppt/slides/slide1.xml')!.length).toBeGreaterThan(9 * 1024 * 1024);
     const read = await importPptxClient(await zip(dense), 'dense.pptx');
     expect(read.clientScene.oversized).toEqual([]);

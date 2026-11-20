@@ -158,8 +158,8 @@ describe('pptx-native: hostile slides are quarantined, never the deck', () => {
   });
 
   it('reads a slide part of 12 MB of traced artwork (past the 8 MB the part cap was), as native or hybrid with objects', async () => {
-    // 400 custom shapes of 650 points in about 12 MB of compact path XML: the base refuses the part ("is over 8 MB").
-    const parts = denseDeckParts({ shapes: 400, points: 650 });
+    // 150 custom shapes of 1,800 points in about 12 MB of compact path XML: the base refuses the part ("is over 8 MB").
+    const parts = denseDeckParts({ shapes: 150, points: 1800 });
     const size = parts.get('ppt/slides/slide1.xml')!.length;
     expect(size).toBeGreaterThan(9 * 1024 * 1024);
     expect(size).toBeLessThan(32 * 1024 * 1024);

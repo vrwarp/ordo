@@ -2,7 +2,7 @@
  * Limit cases of design/27 §14.3 for shared parts: work per run, paragraph, shape or slide must not grow with
  * the length of a deck string or the size of a node that a shared part (the presentation's defaultTextStyle,
  * a layout, a master, a theme) holds once and every slide reads again. Each case is a crafted deck within the
- * §12 part budgets (≤ 8 MB, ≤ 250k tags) and must convert in under 5 s.
+ * §12 part budgets (≤ 32 MB, ≤ 250k tags when read as nodes) and must convert in under 5 s.
  */
 import { describe, expect, it } from 'vitest';
 import { convertDeck, parseDeck } from './index.ts';
@@ -11,7 +11,7 @@ import { body, buildDeck, type DeckSpec, para, run, sp, xfrm } from './test-util
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
-/** About 7 MB of one attribute: within the 8 MB part budget, with the rest of the part. */
+/** About 7 MB of one attribute: within the part budget, with the rest of the part. */
 const HUGE = 7_000_000;
 
 /** Convert a deck and fail when it takes 5 s or more (design/27 §14.3). */

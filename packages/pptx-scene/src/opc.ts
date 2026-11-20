@@ -32,8 +32,12 @@ import {
 /** A deck's parts by zip entry name (no leading slash), as `extractZip` returns them in `files`. */
 export type PartSource = Map<string, Uint8Array>;
 
-/** An XML part larger than this is refused (design/27 §12). */
-export const MAX_XML_PART_BYTES = 8 * 1024 * 1024;
+/**
+ * An XML part larger than this is refused (design/27 §12; design/29 B5: 8 MiB until the packed tokenizer, which reads traced
+ * artwork as numbers, took the largest real part, 22.3 MB of traced artwork, within a heap the pool can give it). Every reader of
+ * a deck's parts derives its cap from this one constant: the hub, the operator's import worker, the measuring tool and this package.
+ */
+export const MAX_XML_PART_BYTES = 32 * 1024 * 1024;
 /** A relationship target longer than this is ignored (real ones are a few dozen characters). */
 export const MAX_TARGET_CHARS = 2_048;
 /**
@@ -292,7 +296,8 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
     const real = find(name);
     if (real === undefined) return undefined;
     const b = src.get(real)!;
-    if (b.length > MAX_XML_PART_BYTES) throw new Error(`${clean(real)} is larger than 8 MB`);
+    if (b.length > MAX_XML_PART_BYTES)
+      throw new Error(`${clean(real)} is larger than ${MAX_XML_PART_BYTES / 1024 ** 2} MB`);
     return decodeText(b);
   };
 
