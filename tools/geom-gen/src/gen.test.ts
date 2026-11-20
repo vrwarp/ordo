@@ -1,7 +1,17 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { applyFixes, FIXES, generate, POI_SHA256, readPresets } from './gen.ts';
+import { TEXT_WARPS } from '../../../packages/domain/src/schemas.ts';
+import {
+  applyFixes,
+  compilePresets,
+  FIXES,
+  generate,
+  generateTextWarps,
+  POI_SHA256,
+  readPresets,
+  TEXTWARPS_SHA256,
+} from './gen.ts';
 import { parseXml } from './xml.ts';
 
 const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url), 'utf8');
@@ -86,6 +96,101 @@ describe('geom-gen', () => {
       '<gd name="wt1" fmla="sin wd7 stAng" />',
     );
     expect(() => generate(unknownName)).toThrow(/: unknown name 'wd7' in guide 'wt1'/);
+  });
+});
+
+describe('text warps', () => {
+  // ECMA-376 Part 1 20.1.9.19 presetTextWarpDefinitions, docx4j-core 11.4.11's copy (third_party/ooxml-textwarps).
+  const WARPS_URL = '../../../third_party/ooxml-textwarps/presetTextWarpDefinitions.xml';
+  // Read inside each test, so a missing file fails the warp tests only and the preset tests above still run.
+  const warps = (): string => read(WARPS_URL);
+  const ROOT = 'presetTextWarpDefinitions';
+
+  it('vendors the 40 warps byte for byte (61,386 bytes, the jar entry)', () => {
+    const bytes = readFileSync(new URL(WARPS_URL, import.meta.url));
+    expect(bytes.length).toBe(61_386);
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(TEXTWARPS_SHA256);
+    expect(TEXTWARPS_SHA256).toBe('665b2e494d853d1e776d5b59322926a089ba7933236a9458e49389545c621fd1');
+  });
+
+  it('matches the committed textwarps.gen.ts and is deterministic', () => {
+    const out = generateTextWarps(warps());
+    expect(out === read('../../../packages/renderer/src/geom/textwarps.gen.ts')).toBe(true);
+    expect(generateTextWarps(warps())).toBe(out);
+    expect(out).toContain(TEXTWARPS_SHA256);
+    expect(out).toContain('export const TEXT_WARP_GEOMS: ReadonlyMap<string, CompiledGeom>');
+  });
+
+  it('reads the 40 presets of the domain schema, each with its parts and no text rectangle', () => {
+    const defs = readPresets(warps(), ROOT);
+    expect(defs.size).toBe(40);
+    expect([...defs.keys()].sort()).toEqual([...TEXT_WARPS].sort());
+    const names = new Set<string>();
+    const two: string[] = [];
+    for (const [name, d] of defs) {
+      expect(d.gd.length, name).toBeGreaterThan(0);
+      expect(d.handles.length, name).toBeGreaterThan(0);
+      expect(d.paths.length, name).toBeGreaterThan(0);
+      expect(d.rect, name).toBeUndefined();
+      expect(d.sites, name).toEqual([]);
+      for (const [a] of d.av) names.add(a);
+      if (d.av.length === 2) two.push(name);
+    }
+    expect([...names].sort()).toEqual(['adj', 'adj1', 'adj2']);
+    expect([...defs.values()].filter((d) => d.av.length === 1).length).toBe(32);
+    expect(two.sort()).toEqual([
+      'textArchDownPour',
+      'textArchUpPour',
+      'textButtonPour',
+      'textCirclePour',
+      'textDoubleWave1',
+      'textWave1',
+      'textWave2',
+      'textWave4',
+    ]);
+  });
+
+  it('compiles every preset with no note, to the path counts the geometry builder reads', () => {
+    const compiled = compilePresets(readPresets(warps(), ROOT));
+    expect(compiled.size).toBe(40);
+    const counts = new Map<number, string[]>();
+    for (const [name, g] of compiled) counts.set(g.p.length, [...(counts.get(g.p.length) ?? []), name]);
+    expect(counts.get(2)!.length).toBe(33);
+    expect(counts.get(1)!.sort()).toEqual(['textArchDown', 'textArchUp', 'textCircle']);
+    expect(counts.get(3)).toEqual(['textButton']);
+    expect(counts.get(4)).toEqual(['textDeflateInflate']);
+    expect(counts.get(6)!.sort()).toEqual(['textButtonPour', 'textDeflateInflateDeflate']);
+    // The file has no text rectangle (slots 2..5 are the box's own l, t, r, b) and no connection sites.
+    for (const [name, g] of compiled) {
+      expect(g.r, name).toEqual([2, 3, 4, 5]);
+      expect(g.c, name).toBeUndefined();
+    }
+  });
+
+  it('refuses what the compiler would not read, naming the preset', () => {
+    const WARPS_XML = warps();
+    const unknownElement = WARPS_XML.replace('<textPlain>', '<textPlain>\n<frobnicate/>');
+    expect(unknownElement).not.toBe(WARPS_XML);
+    expect(() => readPresets(unknownElement, ROOT)).toThrow(/textPlain: unexpected <frobnicate>/);
+    const pathAttr = WARPS_XML.replace(/(<textPlain>[\s\S]*?)<path>/, '$1<path spin="1">');
+    expect(pathAttr).not.toBe(WARPS_XML);
+    expect(() => readPresets(pathAttr, ROOT)).toThrow(/textPlain: unexpected path attribute spin/);
+    const unknownName = WARPS_XML.replace('fmla="*/ a w 100000"', 'fmla="*/ a wz 100000"');
+    expect(unknownName).not.toBe(WARPS_XML);
+    expect(() => generateTextWarps(unknownName)).toThrow(/textPlain: unknown name 'wz' in guide 'mid'/);
+    const root = WARPS_XML.replace(/presetTextWarpDefinitions>/g, 'presetTextWarpDefinitionz>');
+    expect(root).not.toBe(WARPS_XML);
+    expect(() => generateTextWarps(root)).toThrow(/unexpected root <presetTextWarpDefinitionz>/);
+  });
+
+  it('keeps the two files apart: each generator refuses the other input', () => {
+    expect(() => generateTextWarps(XML)).toThrow(/unexpected root <presetShapeDefinitons>/);
+    expect(() => generate(warps())).toThrow(/unexpected root <presetTextWarpDefinitions>/);
+    expect(() => readPresets(warps())).toThrow(/unexpected root/);
+  });
+
+  it('leaves the 187-preset table as it was (the existing test, restated: no byte moved)', () => {
+    expect(generate(XML) === read('../../../packages/renderer/src/geom/presets.gen.ts')).toBe(true);
   });
 });
 

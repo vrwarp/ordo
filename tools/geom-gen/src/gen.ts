@@ -141,10 +141,13 @@ function readHandle(el: XmlElement, where: string): HandleSource {
   };
 }
 
-/** Every preset of the file, in document order. */
-export function readPresets(xml: string): Map<string, Def> {
+/** The root element of POI's file (POI spells it 'presetShapeDefinitons', as its own reader does). */
+const POI_ROOT = 'presetShapeDefinitons';
+
+/** Every preset of the file, in document order; `rootName` is the file's root element. */
+export function readPresets(xml: string, rootName: string = POI_ROOT): Map<string, Def> {
   const root = parseXml(xml);
-  if (root.name !== 'presetShapeDefinitons') throw new Error(`unexpected root <${root.name}>`);
+  if (root.name !== rootName) throw new Error(`unexpected root <${root.name}>`);
   const out = new Map<string, Def>();
   for (const p of root.children) {
     const where = p.name;
@@ -318,4 +321,12 @@ export function generate(xml: string): string {
     '',
   ];
   return lines.join('\n');
+}
+
+/** The SHA-256 of third_party/ooxml-textwarps/presetTextWarpDefinitions.xml, as vendored (byte for byte the jar's entry). */
+export const TEXTWARPS_SHA256 = '665b2e494d853d1e776d5b59322926a089ba7933236a9458e49389545c621fd1';
+
+/** textwarps.gen.ts for the given file. */
+export function generateTextWarps(_xml: string): string {
+  throw new Error('not built');
 }
