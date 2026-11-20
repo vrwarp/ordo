@@ -108,3 +108,47 @@ flowchart boxes 0.968-0.99).
 
 The golden found one drawing difference, fixed in `draw.ts`: LibreOffice strokes the open paths (chartX,
 chartStar and chartPlus's lines, which come before their filled box) after every other path.
+
+## Warp probe golden (r2b sub-wave 2, the geometry leg)
+
+```
+pnpm --filter @ordo/geom-gen golden:warps                 # compare with src/golden/warp-baseline.json; exit 1 on a failure
+pnpm --filter @ordo/geom-gen golden:warps --update        # rewrite the baseline from this run
+pnpm --filter @ordo/geom-gen golden:warps --out DIR       # keep the decks, the pages, report.json and geometry.json
+```
+
+LibreOffice's text of the 40 WordArt warps against the hulls of ordo's shapes (`geom/textwarp.ts`, compiled from
+`third_party/ooxml-textwarps`):
+
+1. `src/golden/warps.ts` writes three decks of ordo's own (no third-party deck), one per box shape: 360 x 240 px in a
+   3 x 2 grid of 640 x 540 px cells, a wide 600 x 120 in a 2 x 3 grid of 960 x 360 and a tall 240 x 300 in a 3 x 2 grid.
+   Each warp is a text box at its default adjust values holding "WordArt Ag" in Liberation Sans 40 pt (regular, black,
+   one line, zero insets, middle-anchored, no autofit, no fill, no outline); the box is centred in its cell with whole
+   pixels and the cell leaves at least 90 px beyond it (LibreOffice's ink overshot a box by at most 38 px). 40 warps are
+   7 slides a deck. `probe.ts`'s deck writer takes the shape writer as a parameter, its default being the preset golden's
+   (that deck's bytes did not change).
+2. LibreOffice draws them as the preset golden's deck is drawn (`soffice --convert-to pdf`, `pdftoppm -r 144`, a private
+   profile; `src/golden/lo.ts`, moved out of `run.ts` unchanged). The ink of a cell is the bounding box of its pixels
+   below grey 250, in px relative to the box, the right and bottom edges exclusive. No browser is needed: ordo's side is
+   pure geometry. The hull of a warp is the bounding box of the points of its arcs (`warpArcs` at the same box); its
+   first-area hull is that of the first area's arcs (`warpAreaArcs`).
+3. `src/golden/warps-score.ts` judges a run (pure, with `warps-score.test.ts`): an unlisted warp whose ink is outside its
+   hull by more than 2 px fails; so does textPlain's ink not filling its hull, Button Pour, Deflate Inflate and Deflate
+   Inflate Deflate outside their first area's hull, Button's ink not Arch Up's (or Button Pour's Arch Up Pour's) within
+   1 px, ink within 8 px of a cell's edge, a baseline that lacks a warp at a box, and a listed warp that the baseline does
+   not show outside its hull; an ink edge more than 2 px from the baseline fails for the unlisted warps, only when
+   LibreOffice is the baseline's version.
+
+Results (LibreOffice 24.2.7.2, Liberation Sans): 35 of the 40 warps are inside their hull within 2 px at all three boxes.
+The five that are not, each listed in `src/golden/warp-exceptions.ts` with its reason, are not a fault of the shapes,
+which follow ECMA-376 (what PowerPoint draws): LibreOffice puts the text of **Arch Up, Arch Down, Circle and Button** on
+the outside of the curve (Button's one-line text is in its first area, so its ink is Arch Up's to the pixel), and its
+text for **Inflate Top** reaches the top of the box where ECMA-376's top path peaks a fifth of the height below it.
+Plain Text fills its hull to the pixel at all three boxes.
+
+The ink numbers are committed (`src/golden/warp-baseline.json`) and `src/golden/warps-baseline.test.ts` (in `pnpm test`)
+judges them against the live geometry with no LibreOffice, so CI checks the shapes against LibreOffice's text. The
+LibreOffice run only refreshes or verifies them; like the preset golden it is not a CI step. Needs LibreOffice (24.2.7
+made the baseline), poppler's `pdftoppm` and ffmpeg; a missing tool skips the run, or fails it under `--strict` or `CI`.
+A run takes about 10 s. A different LibreOffice or Liberation Sans moves the ink of the four path warps (it sits on the
+font's metrics), which is why only the 35 others are drift-checked.

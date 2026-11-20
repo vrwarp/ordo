@@ -64,8 +64,8 @@ describe('inkRelative and cellClear', () => {
   });
 
   it('is clear when the ink keeps its distance from the cell’s edges', () => {
-    const cell = { x: 0, y: 150, w: 640, h: 540 };
-    const box = { x: 140, y: 300, w: 360, h: 240 };
+    const cell = { x: 0, y: 0, w: 640, h: 540 };
+    const box = { x: 140, y: 150, w: 360, h: 240 };
     expect(cellClear([-18, -37, 371, 101], cell, box)).toBe(true);
     expect(cellClear([-132, 0, 360, 240], cell, box)).toBe(true);
     expect(cellClear([-133, 0, 360, 240], cell, box)).toBe(false);
@@ -73,9 +73,11 @@ describe('inkRelative and cellClear', () => {
     expect(cellClear([0, -143, 360, 240], cell, box)).toBe(false);
     expect(cellClear([0, 0, 492, 240], cell, box)).toBe(true);
     expect(cellClear([0, 0, 493, 240], cell, box)).toBe(false);
-    expect(cellClear([0, 0, 360, 392], cell, box)).toBe(true);
-    expect(cellClear([0, 0, 360, 393], cell, box)).toBe(false);
+    expect(cellClear([0, 0, 360, 382], cell, box)).toBe(true);
+    expect(cellClear([0, 0, 360, 383], cell, box)).toBe(false);
     expect(cellClear([-9, 0, 360, 240], cell, box, 0)).toBe(true);
+    expect(cellClear([-140, 0, 360, 240], cell, box, 0)).toBe(true);
+    expect(cellClear([-141, 0, 360, 240], cell, box, 0)).toBe(false);
   });
 });
 
@@ -115,9 +117,18 @@ describe('verdictWarps', () => {
   });
 
   it('fails a cell outside its hull that is not listed, naming the preset and the box', () => {
-    const v = verdictWarps(cells(cell([-9, 0, 100, 50]), cell(OUT)), baseline(IN, OUT), EXC, VERSION, world);
+    const v = verdictWarps(cells(cell([-9, 0, 100, 50]), cell(OUT)), undefined, EXC, VERSION, world);
     expect(v.failures.length).toBe(1);
     expect(v.failures[0]).toMatch(/textInside.*box.*outside/);
+    // Against a baseline that had it inside, the same ink also drifted.
+    const drifted = verdictWarps(
+      cells(cell([-9, 0, 100, 50]), cell(OUT)),
+      baseline(IN, OUT),
+      EXC,
+      VERSION,
+      world,
+    );
+    expect(drifted.failures.length).toBe(2);
   });
 
   it('notes a listed warp that is inside its hull now, and fails nothing for it', () => {

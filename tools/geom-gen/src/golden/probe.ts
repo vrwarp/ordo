@@ -131,10 +131,10 @@ const GROUP_PROPS =
   '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>' +
   '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>';
 
-function slideXml(shapes: readonly ProbeShape[]): string {
+function slideXml(shapes: readonly ProbeShape[], write: ShapeWriter): string {
   return (
     `${HEAD}<p:sld ${NS}><p:cSld><p:spTree>${GROUP_PROPS}` +
-    shapes.map((s, i) => shapeXml(s, i + 2)).join('') +
+    shapes.map((s, i) => write(s, i + 2)).join('') +
     '</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>'
   );
 }
@@ -202,14 +202,11 @@ function relsXml(rels: readonly [string, string, string][]): string {
   );
 }
 
-/** The parts of the probe deck, by name, in the order they are written. */
-/** STUB (red first): the shape writer is accepted and not used yet. */
+/** Writes the p:sp of one probe shape (its `cNvPr` id is the given one): the preset probe's is `shapeXml`. */
 export type ShapeWriter = (s: ProbeShape, id: number) => string;
 
-export function probeParts(
-  shapes: readonly ProbeShape[],
-  _write: ShapeWriter = shapeXml,
-): [string, string][] {
+/** The parts of the probe deck, by name, in the order they are written. */
+export function probeParts(shapes: readonly ProbeShape[], write: ShapeWriter = shapeXml): [string, string][] {
   const n = slideCount(shapes);
   const slides = Array.from({ length: n }, (_, i) => i + 1);
   const types =
@@ -260,7 +257,13 @@ export function probeParts(
     ],
   ];
   for (const i of slides) {
-    parts.push([`ppt/slides/slide${i}.xml`, slideXml(shapes.filter((s) => s.slide === i - 1))]);
+    parts.push([
+      `ppt/slides/slide${i}.xml`,
+      slideXml(
+        shapes.filter((s) => s.slide === i - 1),
+        write,
+      ),
+    ]);
     parts.push([
       `ppt/slides/_rels/slide${i}.xml.rels`,
       relsXml([['rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml']]),
@@ -337,7 +340,7 @@ export function zipStore(files: readonly [string, Uint8Array][]): Uint8Array {
   return out;
 }
 
-/** The probe deck (.pptx bytes) of a layout. */
+/** The probe deck (.pptx bytes) of a layout, its shapes written by `write` (default: the preset probe's). */
 export function probeDeck(shapes: readonly ProbeShape[], write: ShapeWriter = shapeXml): Uint8Array {
   const enc = new TextEncoder();
   return zipStore(probeParts(shapes, write).map(([name, xml]) => [name, enc.encode(xml)]));

@@ -496,7 +496,7 @@ import, `packages/pptx-render`) find their browser with one helper, `tools/find-
 Chromium (the build the end-to-end suite runs), else `ORDO_TEST_CHROMIUM`. On a developer's machine without
 either they skip; with `CI` or `ORDO_CI` set the helper throws instead, so a browser test can no longer pass CI
 by skipping (before the check job installed Playwright's Chromium, CI run 164 skipped 12 of them). The CLI tools
-(the fidelity harness, the preset golden) take `ORDO_CHROMIUM` first and the system's Chromium or Chrome last.
+(the fidelity harness, the preset golden) take `ORDO_CHROMIUM` first and the system's Chromium or Chrome last. The warp probe golden (`golden:warps`, the geometry leg of the WordArt warps) takes no browser: it needs only LibreOffice, pdftoppm and ffmpeg.
 
 ## Test content
 
