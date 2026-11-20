@@ -1210,3 +1210,21 @@ export function randomGeometry(rand: () => number, o: RandomGeometryOptions = {}
   }
   return custGeom({ paths: paths.join('') });
 }
+
+/**
+ * `n` shapes of nine elements each (a position, nothing to draw): a hostile slide of very many shapes that stays within the
+ * packed reader's element bound (500,000), so the walk's shape cap (`MAX_SHAPES_PER_SLIDE`) is what stops it, not the reader.
+ */
+export function leanShapes(n: number, firstId = 2): string {
+  const one = (id: number) =>
+    `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name=""/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm></p:spPr></p:sp>`;
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) out.push(one(firstId + i));
+  return out.join('');
+}
+
+/** `n` shapes of a SmartArt drawing (`dsp:sp`) of eight elements each: the drawing's counterpart of `leanShapes`. */
+export function leanDspShapes(n: number): string {
+  const one = `<dsp:sp><dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm></dsp:spPr></dsp:sp>`;
+  return one.repeat(n);
+}

@@ -8,6 +8,7 @@ import {
   type DeckSpec,
   grpSp,
   imageRel,
+  leanShapes,
   para,
   pic,
   run,
@@ -492,7 +493,8 @@ describe('groups', () => {
     });
   });
 
-  it('stops at 32 nested groups and 5,000 shapes, with a note', () => {
+  it('stops at 32 nested groups and 50,000 shapes, with a note (design/29 B3: 5,000 until the packed reader)', () => {
+    expect(MAX_SHAPES_PER_SLIDE).toBe(50_000);
     let deep = rect(2, 0, 'FF0000');
     for (let i = 0; i < 40; i++) deep = grpSp({ id: 100 + i, x: 0, y: 0, cx: IN, cy: IN }, deep);
     const s = slideOf({ slides: [{ shapes: deep }] });
@@ -500,9 +502,10 @@ describe('groups', () => {
     expect(s.notes.join(' ')).toMatch(/nested deeper than 32/);
 
     const t0 = performance.now();
-    const many = slideOf({ slides: [{ shapes: rect(2, 0, 'FF0000').repeat(MAX_SHAPES_PER_SLIDE + 1) }] });
+    // Shapes of nine elements each: 50,001 of them are 450,009 elements, within the reader's bound, so the walk's cap stops them.
+    const many = slideOf({ slides: [{ shapes: leanShapes(MAX_SHAPES_PER_SLIDE + 1) }] });
     expect(many.elements).toHaveLength(MAX_SHAPES_PER_SLIDE);
-    expect(many.notes.join(' ')).toMatch(/more than 5000 shapes/);
+    expect(many.notes.join(' ')).toMatch(/more than 50000 shapes/);
     expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
   });
 });
