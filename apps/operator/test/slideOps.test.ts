@@ -1358,17 +1358,32 @@ describe('the Object panel and slide list actions', () => {
     });
   };
 
-  it('the slide list dims a hidden slide and offers New slide like this and Hidden for the selected one', async () => {
+  it('the slide list dims a hidden slide and offers New slide like this and Show/Hide in its context menu', async () => {
     open('s2');
     const { SlidesPanel } = await import('../src/views/editor/SlidesPanel.tsx');
+    const { buildSlideCardContextMenu } = await import('../src/views/editor/editorContextMenu.ts');
     const out = html(createElement(SlidesPanel, { p: ui, readOnly: false }));
     const items = out.match(/<div[^>]*data-slide-id="[^"]*"[^>]*>/g) ?? [];
     expect(items).toHaveLength(3);
     expect(items.map((x) => x.includes('hidden-slide'))).toEqual([false, true, false]);
     expect(HIDDEN_DIM.opacity).toBeLessThan(1);
     expect(out).toContain('opacity:0.4');
-    expect(out).toContain('data-new-slide-like');
-    expect(out).toMatch(/aria-pressed="true"[^>]*data-hide-slide/);
+    expect(out).toContain('data-hidden-slide');
+    const menu = buildSlideCardContextMenu({
+      slide: sl(ui, 's2'),
+      p: ui,
+      readOnly: false,
+      onCopy: noop,
+      onCut: noop,
+      onPaste: noop,
+      onDuplicate: noop,
+      onNewLike: noop,
+      onToggleHidden: noop,
+      onDelete: noop,
+    });
+    const labels = menu.map((e) => ('label' in e ? e.label : ''));
+    expect(labels).toContain('New slide like this');
+    expect(labels).toContain('Show slide');
   });
 
   it('the Slide panel has the background section, the Presentation panel Replace on all slides', async () => {
