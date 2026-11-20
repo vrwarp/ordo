@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   type ContextMenuEntry,
   closeContextMenu,
+  installTouchLongPress,
   isEditableTarget,
+  LONG_PRESS_MENU_MS,
+  LONG_PRESS_MOVE_PX,
   normalizeContextMenuEntries,
   openContextMenu,
 } from '../src/components/ContextMenu.tsx';
@@ -390,5 +393,146 @@ describe('duplicateSection', () => {
     expect(cloned.slides.length).toBe(origSec.slides.length);
     expect(cloned.slides[0]!.id).not.toBe(origSlide.id);
     expect(cloned.slides[0]!.objects[0]!.id).not.toBe(origSlide.objects[0]!.id);
+  });
+});
+
+describe('installTouchLongPress', () => {
+  function makeMockDoc() {
+    const listeners = new Map<string, Set<(e: unknown) => void>>();
+    const doc = {
+      defaultView: null,
+      body: { classList: { contains: () => false } },
+      activeElement: null,
+      addEventListener: (type: string, fn: (e: unknown) => void) => {
+        if (!listeners.has(type)) listeners.set(type, new Set());
+        listeners.get(type)!.add(fn);
+      },
+      removeEventListener: (type: string, fn: (e: unknown) => void) => {
+        listeners.get(type)?.delete(fn);
+      },
+      emit: (type: string, ev: unknown) => {
+        for (const fn of [...(listeners.get(type) ?? [])]) fn(ev);
+      },
+    };
+    return doc;
+  }
+
+  it('dispatches a bubbling contextmenu event after LONG_PRESS_MENU_MS on touch hold', () => {
+    vi.useFakeTimers();
+    const origMouseEvent = globalThis.MouseEvent;
+    globalThis.MouseEvent = class MockMouseEvent {
+      type: string;
+      clientX: number;
+      clientY: number;
+      defaultPrevented = false;
+      constructor(type: string, init?: { clientX?: number; clientY?: number }) {
+        this.type = type;
+        this.clientX = init?.clientX ?? 0;
+        this.clientY = init?.clientY ?? 0;
+      }
+      preventDefault() {
+        this.defaultPrevented = true;
+      }
+    } as unknown as typeof MouseEvent;
+
+    try {
+      const doc = makeMockDoc();
+      const uninstall = installTouchLongPress(doc as unknown as Document);
+      const dispatched: unknown[] = [];
+      const target = {
+        tagName: 'DIV',
+        closest: () => null,
+        dispatchEvent: (ev: { preventDefault: () => void }) => {
+          dispatched.push(ev);
+          ev.preventDefault();
+          return false;
+        },
+      };
+
+      doc.emit('pointerdown', {
+        pointerType: 'touch',
+        isPrimary: true,
+        pointerId: 1,
+        clientX: 120,
+        clientY: 240,
+        target,
+      });
+
+      vi.advanceTimersByTime(LONG_PRESS_MENU_MS - 10);
+      expect(dispatched).toHaveLength(0);
+
+      vi.advanceTimersByTime(20);
+      expect(dispatched).toHaveLength(1);
+      expect((dispatched[0] as { type: string; clientX: number; clientY: number }).type).toBe('contextmenu');
+      expect((dispatched[0] as { clientX: number }).clientX).toBe(120);
+      expect((dispatched[0] as { clientY: number }).clientY).toBe(240);
+
+      // Trailing click is swallowed
+      const clickEv = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
+      doc.emit('click', clickEv);
+      expect(clickEv.preventDefault).toHaveBeenCalledTimes(1);
+
+      uninstall();
+    } finally {
+      globalThis.MouseEvent = origMouseEvent;
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels on movement beyond LONG_PRESS_MOVE_PX, ignores mouse, and ignores [data-sort-handle]', () => {
+    vi.useFakeTimers();
+    const doc = makeMockDoc();
+    const uninstall = installTouchLongPress(doc as unknown as Document);
+    const dispatchEvent = vi.fn();
+
+    // Movement cancels
+    const normalTarget = { tagName: 'DIV', closest: () => null, dispatchEvent };
+    doc.emit('pointerdown', {
+      pointerType: 'touch',
+      isPrimary: true,
+      pointerId: 2,
+      clientX: 50,
+      clientY: 50,
+      target: normalTarget,
+    });
+    doc.emit('pointermove', {
+      pointerId: 2,
+      clientX: 50 + LONG_PRESS_MOVE_PX + 5,
+      clientY: 50,
+    });
+    vi.advanceTimersByTime(LONG_PRESS_MENU_MS + 50);
+    expect(dispatchEvent).not.toHaveBeenCalled();
+
+    // Mouse pointer ignored
+    doc.emit('pointerdown', {
+      pointerType: 'mouse',
+      isPrimary: true,
+      pointerId: 3,
+      clientX: 50,
+      clientY: 50,
+      target: normalTarget,
+    });
+    vi.advanceTimersByTime(LONG_PRESS_MENU_MS + 50);
+    expect(dispatchEvent).not.toHaveBeenCalled();
+
+    // Sort handle ignored (leaves 300ms drag intact)
+    const handleTarget = {
+      tagName: 'BUTTON',
+      closest: (sel: string) => (sel === '[data-sort-handle]' ? {} : null),
+      dispatchEvent,
+    };
+    doc.emit('pointerdown', {
+      pointerType: 'touch',
+      isPrimary: true,
+      pointerId: 4,
+      clientX: 50,
+      clientY: 50,
+      target: handleTarget,
+    });
+    vi.advanceTimersByTime(LONG_PRESS_MENU_MS + 50);
+    expect(dispatchEvent).not.toHaveBeenCalled();
+
+    uninstall();
+    vi.useRealTimers();
   });
 });

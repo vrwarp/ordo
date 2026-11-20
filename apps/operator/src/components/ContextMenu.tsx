@@ -408,9 +408,147 @@ function ContextMenuPanel({
   );
 }
 
+/** Hold duration (ms) for a touch long-press to open a context menu on iPad / Android. */
+export const LONG_PRESS_MENU_MS = 500;
+/** Finger movement tolerance (px) before a touch press is treated as a scroll or drag instead of a long-press. */
+export const LONG_PRESS_MOVE_PX = 10;
+
+/**
+ * Install a document-wide touch long-press recognizer that dispatches a bubbling `contextmenu`
+ * event after holding still for `LONG_PRESS_MENU_MS`.
+ * - Skips non-touch pointers, secondary touches, editable inputs, open menus, and `[data-sort-handle]`
+ *   (so Sortable's 300 ms handle drag has zero conflict).
+ * - Deduplicates against Android Chrome's native `contextmenu` event and swallows the trailing `click`
+ *   when a custom menu actually opens.
+ */
+export function installTouchLongPress(doc: Document = document): () => void {
+  const win = doc.defaultView;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let activeId: number | null = null;
+  let startX = 0;
+  let startY = 0;
+  let target: EventTarget | null = null;
+  let lastSyntheticAt = 0;
+
+  const cancel = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    activeId = null;
+    target = null;
+  };
+
+  const onPointerDown = (e: PointerEvent) => {
+    if (e.pointerType !== 'touch') return;
+    if (!e.isPrimary) {
+      cancel();
+      return;
+    }
+    if (isEditableTarget(e.target)) return;
+    const el = e.target as { closest?: (sel: string) => unknown } | null;
+    if (typeof el?.closest === 'function' && (el.closest('[data-sort-handle]') || el.closest('.ctx-menu'))) {
+      return;
+    }
+    cancel();
+    activeId = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
+    target = e.target;
+    timer = setTimeout(() => {
+      const t = target;
+      const x = startX;
+      const y = startY;
+      cancel();
+      if (!t || doc.body?.classList.contains('sorting')) return;
+      lastSyntheticAt = Date.now();
+      const ev = new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        view: win ?? undefined,
+      });
+      t.dispatchEvent(ev);
+      if (ev.defaultPrevented) {
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          navigator.vibrate(10);
+        }
+        const swallow = (clickEv: Event) => {
+          clickEv.preventDefault();
+          clickEv.stopPropagation();
+        };
+        doc.addEventListener('click', swallow, { capture: true, once: true });
+        setTimeout(() => doc.removeEventListener('click', swallow, { capture: true }), 400);
+      }
+    }, LONG_PRESS_MENU_MS);
+  };
+
+  const onPointerMove = (e: PointerEvent) => {
+    if (activeId === null || e.pointerId !== activeId) return;
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > LONG_PRESS_MOVE_PX) cancel();
+  };
+
+  const onPointerEnd = (e: PointerEvent) => {
+    if (activeId !== null && e.pointerId === activeId) cancel();
+  };
+
+  const onScroll = () => cancel();
+
+  const onNativeContextMenu = (e: MouseEvent) => {
+    if (e.isTrusted && Date.now() - lastSyntheticAt < 400) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
+  const onContextKey = (e: KeyboardEvent) => {
+    if (e.key !== 'ContextMenu' && !(e.shiftKey && e.key === 'F10')) return;
+    const active = doc.activeElement as HTMLElement | null;
+    if (!active || active === doc.body || isEditableTarget(active)) return;
+    const rect = active.getBoundingClientRect();
+    const ev = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.left + Math.min(rect.width / 2, 48),
+      clientY: rect.top + Math.min(rect.height / 2, 24),
+      view: win ?? undefined,
+    });
+    active.dispatchEvent(ev);
+    if (ev.defaultPrevented) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
+  doc.addEventListener('pointerdown', onPointerDown);
+  doc.addEventListener('pointermove', onPointerMove);
+  doc.addEventListener('pointerup', onPointerEnd);
+  doc.addEventListener('pointercancel', onPointerEnd);
+  doc.addEventListener('scroll', onScroll, true);
+  doc.addEventListener('contextmenu', onNativeContextMenu, true);
+  doc.addEventListener('keydown', onContextKey);
+
+  return () => {
+    cancel();
+    doc.removeEventListener('pointerdown', onPointerDown);
+    doc.removeEventListener('pointermove', onPointerMove);
+    doc.removeEventListener('pointerup', onPointerEnd);
+    doc.removeEventListener('pointercancel', onPointerEnd);
+    doc.removeEventListener('scroll', onScroll, true);
+    doc.removeEventListener('contextmenu', onNativeContextMenu, true);
+    doc.removeEventListener('keydown', onContextKey);
+  };
+}
+
 /** Global host mounted once in RegularFrame; renders the active context menu in a body portal. */
 export function ContextMenuHost() {
   const state = useSyncExternalStore(subscribe, getSnapshot, () => null);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    return installTouchLongPress(document);
+  }, []);
 
   useEffect(() => {
     if (!state) return;

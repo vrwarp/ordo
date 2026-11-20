@@ -2,7 +2,6 @@ import { parseSectionLabel, type Presentation, type Slide } from '@ordo/domain';
 import { type PointerEvent as ReactPointerEvent, useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
-import { Menu } from '../../components/Menu.tsx';
 import { midiTriggerBadge, slideMidiTrigger } from '../../components/MidiTriggerPicker.tsx';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { type FlatEntry, flatSlideMove } from '../../components/sortableMath.ts';
@@ -107,6 +106,7 @@ function SlideItem(props: {
       ref={ref}
       {...props.sort.item}
       {...props.sort.mouseArea}
+      tabIndex={0}
       data-slide-id={props.slide.id}
       className={`ed-slide-card ${props.selected ? 'sel' : ''} ${hidden ? 'hidden-slide' : ''} ${props.sort.cls}`}
       onClick={() => selectSlide(props.slide.id)}
@@ -188,80 +188,6 @@ function SlideItem(props: {
           </span>
         ) : null}
       </div>
-
-      {/* Inline contextual actions directly on the selected slide card (replaces the stranded bottom footer) */}
-      {props.selected && !props.readOnly && (
-        <div
-          className="ed-slide-inline-actions"
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            className="small ghost"
-            onClick={props.onDuplicate}
-            title="Duplicate this slide"
-          >
-            Duplicate
-          </button>
-          <button
-            type="button"
-            className="small ghost"
-            aria-label="New slide like this"
-            title="A copy with its text cleared, to type a new verse or notice in the same look"
-            data-new-slide-like
-            onClick={props.onNewLike}
-          >
-            + Like
-          </button>
-          <HideSlideToggle hidden={hidden} onToggle={props.onToggleHidden} compact />
-          <Menu
-            label="⋯"
-            align="right"
-            items={[
-              {
-                label: '⎘ Copy slide',
-                name: 'Copy slide',
-                onSelect: () => {
-                  if (copySlideSelection(undefined, props.slide.id)) toast('Slide copied.', 'ok');
-                },
-              },
-              {
-                label: '✂ Cut slide',
-                name: 'Cut slide',
-                onSelect: () => void cutSlideSelection(undefined, props.slide.id),
-              },
-              {
-                label: '📋 Paste slide',
-                name: 'Paste slide',
-                onSelect: () => {
-                  void readSystemClipboard().then((sys) => {
-                    const readable = sys
-                      ? {
-                          getData: (type: string) =>
-                            type === 'text/html' ? sys.html : type === 'text/plain' ? sys.plain : '',
-                        }
-                      : null;
-                    const pasted = tryPasteSlidesFromClipboard(readable, props.slide.id);
-                    if (!pasted) toast('No copied slide on the clipboard.', 'warn');
-                  });
-                },
-              },
-              ...(props.onMoveUp
-                ? [{ label: '↑ Move slide up', name: 'Slide up', onSelect: props.onMoveUp }]
-                : []),
-              ...(props.onMoveDown
-                ? [{ label: '↓ Move slide down', name: 'Slide down', onSelect: props.onMoveDown }]
-                : []),
-              ...(props.onSplit ? [{ label: '✂ Split lyrics', name: 'Split', onSelect: props.onSplit }] : []),
-              ...(props.onMerge
-                ? [{ label: '⤹ Merge with next', name: 'Merge next', onSelect: props.onMerge }]
-                : []),
-              { label: '🗑 Delete slide', name: 'Delete slide', danger: true, onSelect: props.onDelete },
-            ]}
-          />
-        </div>
-      )}
     </div>
   );
 }
@@ -453,56 +379,6 @@ export function SlidesPanel({
                   )
                 }
               />
-              {!readOnly && (
-                <div className="row" style={{ gap: 2, alignItems: 'center' }}>
-                  <button
-                    type="button"
-                    className="ghost small sec-delete-btn"
-                    title="Move section up"
-                    aria-label="Move section up"
-                    disabled={si === 0}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      edit((q) => moveSection(q, si, si - 1));
-                    }}
-                  >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost small sec-delete-btn"
-                    title="Move section down"
-                    aria-label="Move section down"
-                    disabled={si >= p.sections.length - 1}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      edit((q) => moveSection(q, si, si + 1));
-                    }}
-                  >
-                    ↓
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost small sec-delete-btn"
-                    title="Delete section"
-                    aria-label="Delete section"
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      if (
-                        await confirmDialog(
-                          'Delete section',
-                          `Delete “${sec.label}” and its ${sec.slides.length} slides? It is removed from every arrangement.`,
-                          'Delete',
-                          true,
-                        )
-                      )
-                        edit((q) => deleteSection(q, sec.id));
-                    }}
-                  >
-                    🗑
-                  </button>
-                </div>
-              )}
             </div>
             {sec.slides.map((sl, i) => {
               const fi = flatIndex.get(sl.id)!;
