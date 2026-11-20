@@ -62,7 +62,7 @@ import { type OutlineFields, outlineOf } from '@ordo/renderer/geom/outline.ts';
 import { apply, boxPx, decompose, multiply, xfrmAffine } from './frame.ts';
 import type { Affine, CustomPaths, Element, Fill, Frame, Line, RectEmu, Rgba, ShapeElement } from './ir.ts';
 import { clean } from './log.ts';
-import { child, type XNode } from './xml.ts';
+import { child, type PathCommand, pathCommands, type XNode } from './xml.ts';
 
 /** Longest path string the schema keeps (`ShapeGeom.paths[].d`). */
 export const MAX_PATH_CHARS = 40_000;
@@ -107,18 +107,17 @@ const COST: Readonly<Record<string, number>> = Object.assign(Object.create(null)
   'a:arcTo': 12,
 });
 
-function ptArgs(c: XNode, n: number): string[] {
+function ptArgs(c: PathCommand, n: number): string[] {
   const args: string[] = [];
-  for (const p of c.children) {
-    if (p.name !== 'a:pt') continue;
-    args.push(cut(p.attrs.x) ?? '0', cut(p.attrs.y) ?? '0');
+  for (const [x, y] of c.pts) {
+    args.push(cut(x) ?? '0', cut(y) ?? '0');
     if (args.length >= 2 * n) break;
   }
   return args;
 }
 
 /** One command of an `a:path` as the compiler reads it, or undefined for another element. */
-function readCmd(c: XNode): PathCmdSource | undefined {
+function readCmd(c: PathCommand): PathCmdSource | undefined {
   switch (c.name) {
     case 'a:moveTo':
     case 'a:lnTo':
@@ -168,19 +167,22 @@ function readPath(p: XNode, budget: number): PathSource[] {
     sub = [];
     subCost = 0;
   };
-  const kids = p.children;
-  const scan = Math.min(kids.length, SCAN_FACTOR * budget);
-  // One command past the budget is read, so the compiler notes that points were dropped.
-  for (let i = 0; i < scan && total <= budget; i++) {
-    const c = kids[i]!;
+  // The children of the path, in either form (`pathCommands`: a packed path has none of its own): at most
+  // SCAN_FACTOR x budget of them are looked at, and one command past the budget is read, so the compiler notes that
+  // points were dropped.
+  const scan = SCAN_FACTOR * budget;
+  let seen = 0;
+  for (const c of pathCommands(p)) {
+    if (seen++ >= scan) break;
     const cost = COST[c.name];
-    if (cost === undefined) continue;
-    const cmd = readCmd(c);
-    if (!cmd) continue;
-    if (cmd.op === 'moveTo') flush();
-    total += cost;
-    sub.push(cmd);
-    subCost += cost;
+    const cmd = cost === undefined ? undefined : readCmd(c);
+    if (cost !== undefined && cmd) {
+      if (cmd.op === 'moveTo') flush();
+      total += cost;
+      sub.push(cmd);
+      subCost += cost;
+    }
+    if (total > budget) break;
   }
   flush();
   const a = p.attrs;

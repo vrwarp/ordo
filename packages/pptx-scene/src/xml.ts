@@ -154,6 +154,15 @@ function commandNodes(p: PackedPath): XNode[] {
 }
 
 /**
+ * The children of any node as the node reader makes them: a packed path's commands and points made into nodes (a new array
+ * on every call), else the node's own children. For the writers of trees (the render copy writes each part again from its
+ * parsed tree); a reader of a path uses `pathCommands`.
+ */
+export function nodeChildren(n: XNode): readonly XNode[] {
+  return n.packed ? commandNodes(n.packed) : n.children;
+}
+
+/**
  * The trees `parseXml` makes without packing: every packed path becomes the nodes the node reader would have made. A new
  * tree; the argument is not changed. For tests and tools that compare the two readers: no reader of the converter needs it.
  */

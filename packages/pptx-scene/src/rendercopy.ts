@@ -35,7 +35,7 @@ import { clean, noteList } from './log.ts';
 import { NS, USUAL_PREFIX } from './markup.ts';
 import { openPackage, type Package, type PartSource, type Rel, relType, SLIDE_CONTENT_TYPE } from './opc.ts';
 import { modelDrawingRelId } from './smartart.ts';
-import { child, num, path, type XNode } from './xml.ts';
+import { child, nodeChildren, num, path, type XNode } from './xml.ts';
 
 /** One printed page of the render copy. */
 export type RenderCopyPage =
@@ -263,12 +263,14 @@ export function writeXml(root: XNode, rootDecls: Readonly<Record<string, string>
       if (ap && !inScope.has(ap)) continue;
       tag += ` ${k}="${escAttr(v)}"`;
     }
-    if (!n.children.length) {
+    // A packed path (xml.ts) has no children of its own: its commands are written out as the node reader had read them.
+    const kids = nodeChildren(n);
+    if (!kids.length) {
       out.push(`${tag}/>`);
       return;
     }
     out.push(`${tag}>`);
-    for (const c of n.children) write(c, false, inScope);
+    for (const c of kids) write(c, false, inScope);
     out.push(`</${n.name}>`);
   };
   write(root, true, base);

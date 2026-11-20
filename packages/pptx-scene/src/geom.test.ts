@@ -1866,9 +1866,10 @@ describe('custom geometry read from the packed form (design/29 X1: the readers r
       const packed = readCustGeom(read(xml, PACK));
       const plain = readCustGeom(read(xml));
       expect(packed).toEqual(plain);
-      if (plain.paths.length > (xml.match(/<a:path /g) ?? []).length) chunked++;
+      const n = plain.paths?.length ?? 0;
+      if (n > (xml.match(/<a:path /g) ?? []).length) chunked++;
       if (xml.includes('x="r"')) withGuides++;
-      expect(plain.paths.length).toBeGreaterThan(0);
+      expect(n).toBeGreaterThan(0);
     }
     // The generator reaches what it is for: paths cut into chunks by the compiler's points, and paths read as nodes.
     expect(chunked).toBeGreaterThan(5);
@@ -1886,7 +1887,7 @@ describe('custom geometry read from the packed form (design/29 X1: the readers r
     expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     // The budget of a geometry (every path may cost up to the compiler's bound) and one command past it, so the
     // compiler notes that points were dropped.
-    const commands = g.paths.reduce((n, p) => n + p.cmds.length, 0);
+    const commands = (g.paths ?? []).reduce((n, p) => n + p.cmds.length, 0);
     expect(commands).toBe(GEOM_LIMITS.paths * GEOM_LIMITS.points + 1);
   });
 });
