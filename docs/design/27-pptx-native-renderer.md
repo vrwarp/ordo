@@ -901,7 +901,7 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   longer in it (2.6 kB: only the asset and thumbnail workers make them, importing `@ordo/renderer/units.ts`
   themselves; the renderer's index exports their types only); the import worker is 666.7 kB, the output's
   initial 182.1 kB and the stage's 383.9 kB.
-  CI fails a PR whose initial JavaScript grows more than 4 % (2 % until wave r2b) over
+  CI fails a PR whose initial JavaScript grows more than 8 % (2 % until wave r2b, 4 % until 2026-11-20) over
   `tools/bundle-baseline.json` (design/24 "Bundle budget"), recorded from wave r2a's build.
 - **The tail keeps its page.** The presentation's tail (§3.4) stores each slide minimal with its page, the
   background drawn as a shape, as a plain rect in its colour (`minimalSlide`), so its dark text is never drawn

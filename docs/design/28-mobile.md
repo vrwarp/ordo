@@ -1210,6 +1210,11 @@ and textareas beyond titles. The regular layout keeps its inline English (the kn
 | Data and battery                           | No polling while hidden; Keep offline only on request or as chosen; tiles at DPR ≤ 2                                    | Network log over a week of normal use       |
 | The service while phones browse and upload | Zero missed vsync on every output; live-process lag p99 within 5 ms of a run without phones; no late heartbeat          | Rehearsal gate with output telemetry (§5.3) |
 
+The first-load row is the target and the CI gate is looser: since 2026-11-20 the gate is 600,000 B gzip
+(`tools/bundle-baseline.json` `compact.firstLoadGzip`, pinned by `e2e/phone/split.spec.ts`; the owner doubled it
+from 300,000 B, design/24 "Bundle budget"), and the 300 KB stays the target (the compact first load measured
+281,600 B gzip at PR #29).
+
 **What the code split must cut.** Main's initial operator chunk (`bd9dbcd`, `vite build`) is 1,713.5 kB,
 535.2 kB gzip, with 43.6 kB of CSS (9.3 kB gzip); at #24's merge (`1764e05`) it was 1,713.3 kB and 535.1 kB,
 and before #24 (`d07fe12`) 1,685.4 kB and 527.3 kB. The core worker (301.7 kB) and the thumbnail worker
@@ -1386,11 +1391,12 @@ no refused phone request; real phones in the room do the same by hand. A two-min
    plan, a presentation's previews, the sign-in and every sheet, in `webkit-iphone` (390x844, 390x664, 844x390,
    320x568) and `chromium-android` (360x800), and at 200 % root text. Open: the bars inside the visual
    viewport with the keyboard open (a device check at the gate).
-2. _The compact first load is at most 300 KB gzip and fetches no editor chunk_: `e2e/phone/split.spec.ts`
+2. _The compact first load is at most 600 KB gzip (the CI gate since 2026-11-20, 300 KB until then; the 300 KB
+   stays the target, §7) and fetches no editor chunk_: `e2e/phone/split.spec.ts`
    (the built assets a phone fetches, no forbidden source, no thumbnail worker or font before a preview,
    `#/edit` and the settings routes fetch no chunk, Request Desktop Website never mounts the editor, the
    precache holds no forbidden file) in both phone projects, and `tools/bundle-report.mjs --check` (the
-   compact first load against 300,000 B gzip, no compact violation). The budget is the gzip size of those
+   compact first load against 600,000 B gzip, no compact violation). The budget is the gzip size of those
    files; the hub serves them uncompressed until gzip ships in P1 (§3.4, the P1 row), so a P0 phone downloads
    about 0.9 MB raw on a cold load.
 3. _The full profile's screenshots are unchanged_: the 34 A/B screenshots against `d0f49cb` (the full profile at
@@ -1534,7 +1540,7 @@ need if the church wants it after the first service.
 | `design/22-deployment.md`                                | Split DNS for church Wi-Fi                                                                                                                                                                    |
 | `deploy/README.md`                                       | The PIN lockout as built (P0: LAN addresses out of the hub-wide bucket, attempts counted on arrival)                                                                                          |
 | `design/23-testing.md`                                   | The phone and tablet projects, their CI job and the phone gates                                                                                                                               |
-| `design/24-repo-conventions.md` "Bundle budget"          | The compact path's budget (300 KB gzip) beside the initial chunk's                                                                                                                            |
+| `design/24-repo-conventions.md` "Bundle budget"          | The compact path's budget (600,000 B gzip since 2026-11-20, 300 KB before) beside the initial chunk's                                                                                         |
 | `prd/03-editor.md`, `prd/09-security-and-remote-prep.md` | "On a phone"; caps, the view PIN and passes as credentials                                                                                                                                    |
 | `milestones.md`                                          | P0 to P3 with their gates                                                                                                                                                                     |
 | ADR 0015 (P3)                                            | Device passes for phones: scoped, revocable, passkey-backed, never live, never tokens                                                                                                         |
@@ -1716,8 +1722,8 @@ Where this differs from the text above, this is what the code does. Three lanes 
   preload and the venue PC's strict gate, the operate services in their own module, the import sites moved
   (`services/fonts.ts`, `components/ColorField.tsx`, `lib/playlistItems.ts`), the thumbnail worker and the
   document's fonts on first use on the compact layout, the service worker's precache by device class
-  (`src/sw/sets.ts`, `src/sw/register.ts`), the bundle report's compact section and CI budget (300,000 B gzip,
-  `tools/bundle-baseline.json` `compact`), and `apps/operator/test/entry.test.ts`. Nothing under
+  (`src/sw/sets.ts`, `src/sw/register.ts`), the bundle report's compact section and CI budget (300,000 B gzip, 600,000 B
+  since 2026-11-20; `tools/bundle-baseline.json` `compact`), and `apps/operator/test/entry.test.ts`. Nothing under
   `views/editor/` changed. The full profile's 34 screenshots (Chromium 1280x720, 1024x768, 1280x480, 600x900;
   WebKit iPad in both orientations) are byte-identical to `d0f49cb`'s.
 - **Where it differs from the plan**: `COMPACT_FORBIDDEN` applies to the page's files, and a compact worker must
