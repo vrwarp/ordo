@@ -64,8 +64,9 @@ export const SIZE_BUDGETS = {
    * past the 33 ms GO lead from about 3 MiB). A default until a venue PC confirms it. 6 MiB since the owner's answer
    * of 2026-11-21 (Q16.b; he wrote "6mb", read as 6 MiB, the unit of every budget here; it was 3 MiB): a deck of
    * 3.13 MiB (Traffic Dark) no longer carries the line. What the size costs, from live-by-ref's measures (design/29
-   * r2b.8; a venue PC confirms them): the one-time save of the copy about 10 ms a MiB on the hub's CPU (the track's
-   * note gives no load for it); a take-over applies the copy in about 100 ms at 6 MiB with 20 screens connected over
+   * r2b.8; a venue PC confirms them): the one-time save of the copy is each screen's own, on its computer (Chromium's
+   * IndexedDB, 16.7 / 37 / 128 ms at 1.5 / 4 / 13 MiB, about 10 ms a MiB, in pieces off the GO: live-by-ref's M4, which
+   * records no load); a take-over applies the copy in about 100 ms at 6 MiB with 20 screens connected over
    * real sockets (101 ms, 9 take-overs at loads 8-39; 77 ms with no screen) and in 47 ms with no sockets in the apply
    * (the live loop's share alone: integrate-2's I8, 2 runs). The 8 MiB save's 1.5 s at p50 (xml-compact-3's measure
    * at load 12-14, design/27 §3) is another measure.
