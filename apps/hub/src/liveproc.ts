@@ -493,7 +493,7 @@ export async function createLiveProcess(
     setLibraryStats(s) {
       libraryStats = s;
     },
-    applyHubEvent: (raw) => void applyHubEventTo(live, raw),
+    applyHubEvent: (raw) => void applyHubEventTo(live, raw, log),
     setStatus(p) {
       status = p;
     },

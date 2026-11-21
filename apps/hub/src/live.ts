@@ -122,6 +122,9 @@ type Prep = {
   expiry?: NodeJS.Timeout;
 };
 
+/** After an auto-advance whose write failed, the same advance is tried again after this (see `advanceDue`). */
+export const ADVANCE_RETRY_MS = 2000;
+
 /** A prepared goLive not applied within this is dropped; a goLive after it prepares again (design/29 M8). */
 export const PREPARED_TTL_MS = 10_000;
 /**
@@ -204,6 +207,8 @@ export class LiveService {
   private snapshotTimer?: NodeJS.Timeout;
   private advanceTimer?: NodeJS.Timeout;
   private advanceKey = '';
+  /** Auto-advances in a row whose write failed (reset by one that was written). */
+  private advanceFailures = 0;
   private queue: Promise<unknown> = Promise.resolve();
   /** goLives in arrival order among themselves, each entering `queue` once prepared (design/29 M8). */
   private goLiveChain: Promise<unknown> = Promise.resolve();
@@ -1283,15 +1288,43 @@ export class LiveService {
     this.advanceKey = key;
     if (!next) return;
     const delay = Math.max(0, next.dueAt - 100 - this.now());
-    this.advanceTimer = setTimeout(() => {
-      this.advanceKey = '';
-      const again = autoAdvance(this.state);
-      if (!again || again.dueAt !== next.dueAt || again.target !== next.target) return this.scheduleAdvance();
+    this.armAdvance(next, key, delay);
+  }
+
+  private armAdvance(next: { dueAt: number; target: number }, key: string, delay: number): void {
+    this.advanceTimer = setTimeout(() => this.advanceDue(next, key), delay);
+    this.advanceTimer.unref();
+  }
+
+  /**
+   * The auto-advance timer fired: send the loop's next `go` unless the state moved on. A write that fails (the data
+   * folder's disk is full) has already put the state back and throws out of `apply`; out of a timer's callback that
+   * would be an uncaught exception, which the live process answers with a restart (main.ts), in the middle of a
+   * service. So it is caught here: the cue stays where it is, and the same advance is tried again after
+   * ADVANCE_RETRY_MS (never at once: the cue is overdue, so a timer armed again from the state would fire in a loop).
+   * The first failure and then one in 30 are logged.
+   */
+  private advanceDue(next: { dueAt: number; target: number }, key: string): void {
+    this.advanceKey = '';
+    const again = autoAdvance(this.state);
+    if (!again || again.dueAt !== next.dueAt || again.target !== next.target) {
+      this.scheduleAdvance();
+      return;
+    }
+    try {
       this.apply(
         { k: 'go', cueIndex: next.target, at: Math.max(next.dueAt, this.now() + 33) },
         'auto-advance',
       );
-    }, delay);
-    this.advanceTimer.unref();
+      this.advanceFailures = 0;
+    } catch (e) {
+      if (this.advanceFailures++ % 30 === 0)
+        this.log.error(
+          { err: (e as Error).message, cue: next.target, failures: this.advanceFailures },
+          'the loop could not advance: the write failed; the cue stays and the advance is tried again',
+        );
+      this.advanceKey = key;
+      this.armAdvance(next, key, ADVANCE_RETRY_MS);
+    }
   }
 }

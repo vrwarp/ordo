@@ -190,14 +190,18 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const prerenders = new PrerenderStore(lib, store, liveView, { log });
   // A picture accepted for a key of the running service goes straight to the live loop (one process).
   prerenders.onAccepted((e) =>
-    applyHubEvent(live, {
-      k: 'prerender.add',
-      presentationId: e.presentationId,
-      slideId: e.slideId,
-      key: e.key,
-      size: e.size,
-      file: e.file.hash,
-    }),
+    applyHubEvent(
+      live,
+      {
+        k: 'prerender.add',
+        presentationId: e.presentationId,
+        slideId: e.slideId,
+        key: e.key,
+        size: e.size,
+        file: e.file.hash,
+      },
+      log,
+    ),
   );
   const backfill = new RefBackfill(lib, { live: () => live.state.mode, log });
   const collector = new Collector(lib, store, {

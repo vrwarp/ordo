@@ -600,7 +600,12 @@ same bytes, each verified against the id and its length on every read. Everythin
   after: the apply's own time and nothing more). An event whose write fails (the data folder's disk is full) is not
   applied: every event is one transaction, the state and the copy it had are put back before the error reaches the
   caller, nothing is sent, and the next event follows with no gap in the seq (a failed goLive leaves the old
-  service running; the operator's adopt that cannot be written is refused and the hub keeps its own state).
+  service running; the operator's adopt that cannot be written is refused and the hub keeps its own state). The two
+  callers that no client waits for catch it too, because an exception out of a timer or a message handler ends the live
+  process (`main.ts`) in the middle of a service: the loop's auto-advance leaves the cue where it is, logs it (the first
+  failure and then one in 30) and sends the same advance again after `ADVANCE_RETRY_MS` (2 s: never at once, the
+  advance being overdue), and `applyHubEvent` (the library's `prerender.add`) applies nothing and warns, the picture
+  staying in the library and the slide drawn live.
 - **The snapshot** (at every goLive, End service and adopt, and every 5 s while the service changes) is the state
   without its copy and without its cue list, ending `,"cuesId":"<id>","resolvedId":"<id>"}`: a few kilobytes at any
   size. The cue list (about 360 bytes a cue: 3.1 MB at 20 MiB) is built once at the goLive and never changes, so it

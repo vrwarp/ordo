@@ -7,9 +7,9 @@
  */
 import { join } from 'node:path';
 import pino from 'pino';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openLiveDb } from '../src/db.ts';
-import { LiveService } from '../src/live.ts';
+import { ADVANCE_RETRY_MS, LiveService } from '../src/live.ts';
 import { bigBundle, bundleBytes, bundleSource } from './byref-helpers.ts';
 import { tempDir } from './helpers.ts';
 
@@ -121,5 +121,43 @@ describe('an event whose write fails is not applied', () => {
     );
     heal();
     expect(live.adopt(incoming, true)).toEqual({ ok: true, seq: before.seq + 1 });
+  });
+});
+
+describe('the loop whose advance cannot be written', () => {
+  afterEach(() => vi.useRealTimers());
+
+  /**
+   * The auto-advance timer calls `apply` with nothing to catch what it throws: a failing write used to leave the timer
+   * as an uncaught exception, which the live process turns into a restart (main.ts). The timers are the test's own
+   * (fake), so the exception shows as a throw out of `advanceTimersByTime`.
+   */
+  it('raises nothing, keeps the cue, tries again after a pause (not at once) and advances once the disk is healed', async () => {
+    const { db, live } = setup(true);
+    await live.submitQueued({ k: 'goLive', playlistId: 'pl1' }, OP);
+    await later();
+    live.state = { ...live.state, cues: live.state.cues.map((c) => ({ ...c, autoAdvanceMs: 150 })) };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    live.submit({ k: 'go', cueIndex: 0, at: Date.now() }, OP);
+    const before = live.state;
+    const applied = vi.spyOn(live, 'apply');
+    const heal = failJournal(db);
+    // the timer fires (about 50 ms after the go): the write fails, nothing is raised, the cue and the seq stay
+    expect(() => vi.advanceTimersToNextTimer()).not.toThrow();
+    expect(applied).toHaveBeenCalledTimes(1);
+    expect(live.state === before, `the state advanced from seq ${before.seq} to ${live.state.seq}`).toBe(
+      true,
+    );
+    // no hot loop: the overdue cue is not tried again until the pause is over
+    vi.advanceTimersByTime(ADVANCE_RETRY_MS - 1);
+    expect(applied).toHaveBeenCalledTimes(1);
+    expect(() => vi.advanceTimersByTime(1)).not.toThrow();
+    expect(applied).toHaveBeenCalledTimes(2);
+    expect(live.state === before).toBe(true);
+    // the disk is healed: the next try advances the loop
+    heal();
+    vi.advanceTimersByTime(ADVANCE_RETRY_MS);
+    expect(live.state.live).toBe(1);
+    expect(live.state.seq).toBe(before.seq + 1);
   });
 });

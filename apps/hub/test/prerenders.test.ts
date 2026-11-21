@@ -453,6 +453,37 @@ describe('announcing a picture to the live loop (PA1, PA2, PA4)', () => {
     expect(after.state.prerendered).toBeUndefined();
   });
 
+  it('applies nothing and raises nothing when the journal row cannot be written (PA1)', async () => {
+    // The live process calls applyHubEvent from the supervisor's message handler: an exception there ends the process.
+    const { op, p, key } = await live();
+    const { applyHubEvent } = await import('../src/hubevents.ts');
+    const before = await state(op);
+    const warned: string[] = [];
+    hub!.db.exec(
+      `CREATE TRIGGER fail_journal BEFORE INSERT ON live_journal BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END`,
+    );
+    const ev = {
+      k: 'prerender.add',
+      presentationId: p.id,
+      slideId: 'big',
+      key,
+      size: 1920,
+      file: 'b'.repeat(64),
+    };
+    let seq: number | undefined = -1;
+    expect(() => {
+      seq = applyHubEvent(hub!.live, ev, { warn: (_o: unknown, m?: string) => void warned.push(String(m)) });
+    }).not.toThrow();
+    expect(seq).toBeUndefined();
+    expect(warned).toHaveLength(1);
+    hub!.db.exec(`DROP TRIGGER fail_journal`);
+    const after = await state(op);
+    expect(after.seq).toBe(before.seq);
+    expect(after.state.prerendered).toBeUndefined();
+    // the same picture applies once the disk is healed
+    expect(applyHubEvent(hub!.live, ev)).toBe(before.seq + 1);
+  });
+
   it("still refuses a client's own prerender.add on POST /live/events and a socket (PA2)", async () => {
     const { op, p, key } = await live();
     const before = await state(op);
