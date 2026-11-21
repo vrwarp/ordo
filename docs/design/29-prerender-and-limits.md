@@ -523,7 +523,13 @@ index (`apps/hub/src/liveproc.ts:227-237`).
   canvas uses it: Find and replace (`ops/slides.ts:215`), replace background for one or all slides (:390, :411),
   apply style to similar (:590), new slide like this (:686), use as background (:745), reset to theme (`ops.ts:440`,
   from `SlidePanel.tsx:190` and `SongReflowEditor.tsx:463`), duplicate (`ops.ts:123`), split (:170, :215), the Lyric
-  Script split (`songScript.ts:129`), and copy and paste of slides and objects (`ops/clipboard.ts`). Each has a test
+  Script split (`songScript.ts:129`), and copy and paste of slides and objects (`ops/clipboard.ts`). Main's editor
+  writers from its pull requests #33 to #39 are on the list too: slide paste (`pasteSlides`, `pastedSlide` and
+  `serializeSlidesToHtml` in `ops/clipboard.ts`: `pastedSlide` parses the slide with `Slide.safeParse`, so a pasted
+  slide keeps its `prerender`, `draw` and `cut` as `cloneSlide` keeps them for Duplicate, and a slide pasted from
+  another presentation or hub must not carry that one's slide-file record), table-cell paste, `ops/table.ts` (every
+  cell, row, column, border and merge write on a table) and the slide and object actions of `actions.ts` and
+  `editorContextMenu.ts`. Each has a test
   that fails before (replace the background of a deck with 3 big slides: the pages and keys change, and the screens
   show the new background). During development an operation not yet converted refuses on pre-rendered slides;
   `prerender` leaves `M9_HELD_BACK` only once all are converted (editor-slideops), so volunteers never see a refusal.
