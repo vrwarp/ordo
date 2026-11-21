@@ -501,14 +501,15 @@ golden-pptx and the sermons today.
 ## CI
 
 GitHub Actions on every pull request and merge to main (and by hand), `.github/workflows/ci.yml`, in five
-jobs that run side by side (one job took 30 to 45 minutes before); the check job is limited to 40 minutes (its unit
+jobs that run side by side (one job took 30 to 45 minutes before); the check job is limited to 45 minutes (its unit
 tests alone took 478 s on four CPUs after sub-wave 2, 299 s before it, and a runner is 1.15 to 1.65 times slower than
-that machine, with 3 to 5 minutes of set-up before them), the two end-to-end jobs to 90 and 60 because their limit
-counts a slow runner's set-up (below the table):
+that machine, with 3 to 5 minutes of set-up before them; the wave measured 40, main's PR #31 set 45 for the same slow
+mirror and the larger stands), the two end-to-end jobs to 90 and 60 because their limit counts a slow runner's set-up
+(below the table; PR #31's 45 for the phones is the smaller and does not stand):
 
 | Job                                   | Runs                                                                                                                                                                                                                                                                                   | Limit  |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| Lint, types, unit tests, build        | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), Playwright Chromium, `pnpm test` (`CI` set: timing bounds ×3, golden runs strict, browser tests run or fail), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                                               | 40 min |
+| Lint, types, unit tests, build        | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), Playwright Chromium, `pnpm test` (`CI` set: timing bounds ×3, golden runs strict, browser tests run or fail), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                                               | 45 min |
 | End-to-end (2 shards)                 | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2 --project=chromium --project=webkit-ipad --project=webkit-ipad-portrait` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure | 90 min |
 | End-to-end, phones and Android tablet | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --project=webkit-iphone --project=chromium-android --project=chromium-tablet` with `ORDO_CI=1`; uploads `playwright-report-phones` on failure ("Projects" above)                                                | 60 min |
 | Goldens (pinned container)            | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                                                                                                    | 20 min |

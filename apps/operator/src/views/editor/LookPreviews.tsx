@@ -1,7 +1,9 @@
 import type { Look, Media, Presentation, Slide } from '@ordo/domain';
 import { memo, useEffect, useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { useMediaLookup } from '../../hooks.ts';
 import { LOOK_ROLE, lookBackgroundId, previewLooks, slideAndNext } from '../../lib/lookPreviews.ts';
+import { navigate } from '../../useRoute.ts';
 import { slideImages, stillHash, thumbs } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
 import type { ThumbJob } from '../../workers/thumb.worker.ts';
@@ -90,6 +92,27 @@ const LookPreview = memo(function LookPreview(props: {
       data-look-id={look.id}
       data-rendered={shown?.key === key ? 'current' : shown ? 'stale' : 'pending'}
       onClick={props.onSelectLook ? () => props.onSelectLook?.(look.id) : undefined}
+      onContextMenu={(e) => {
+        openContextMenu(
+          e,
+          [
+            ...(props.onSelectLook
+              ? [{ label: `Focus ${look.name} on stage`, onSelect: () => props.onSelectLook?.(look.id) }]
+              : []),
+            ...(isKey
+              ? [
+                  {
+                    label: rawKey ? 'Show simulated camera backdrop' : 'Show raw chroma key matte',
+                    onSelect: () => setRawKey((v) => !v),
+                  },
+                ]
+              : []),
+            { kind: 'separator' },
+            { label: 'Configure looks in Settings…', onSelect: () => navigate('#/settings/looks') },
+          ],
+          { ariaLabel: `${look.name} preview actions` },
+        );
+      }}
     >
       <figcaption className="look-preview-hdr">
         <span className="look-preview-name">{look.name}</span>

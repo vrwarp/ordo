@@ -287,7 +287,7 @@ test('edit a text box by touch: move, resize, rotate, double-tap, nudge, undo, s
     // The Arrange menu: 44 px items, closed by a tap outside.
     await page.getByRole('button', { name: /^Arrange/ }).tap();
     const items = page.getByRole('menuitem');
-    await expect(items).toHaveCount(6);
+    await expect(items).toHaveCount(9);
     for (const h of await items.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height)))
       expect(h).toBeGreaterThanOrEqual(44);
     await shot(page, 'editor-arrange-menu');

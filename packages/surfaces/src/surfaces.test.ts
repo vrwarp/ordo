@@ -7,6 +7,7 @@ import {
   defaultDeckPages,
   dialActions,
   faceKey,
+  formatMidiAccessError,
   KeyboardDriver,
   keyFace,
   lcdText,
@@ -328,6 +329,109 @@ describe('ProPresenter dynamic velocity and show-control features', () => {
     expect(received).toEqual([{ kind: 'noteOn', number: 60, value: 100 }]);
     expect(fired).toEqual([{ id: 'next' }]);
   });
+
+  it('matches noteOff mappings for both 0x8n and 0x9n vel 0, and learns noteOff only when opted in', () => {
+    const maps: MidiMapping[] = [
+      { id: 'rel', kind: 'noteOff', number: 60, channel: 1, threshold: 0, action: { id: 'clearSlide' } },
+    ];
+    const cc = new Map<string, number>();
+    expect(matchMidi(maps, 'QuickQ', new Uint8Array([0x80, 60, 0]), cc)).toEqual([{ id: 'clearSlide' }]);
+    expect(matchMidi(maps, 'QuickQ', new Uint8Array([0x90, 60, 0]), cc)).toEqual([{ id: 'clearSlide' }]);
+    expect(matchMidi(maps, 'QuickQ', new Uint8Array([0x90, 60, 100]), cc)).toEqual([]);
+
+    expect(learnFrom({ id: 'clearSlide' }, 'QuickQ', new Uint8Array([0x80, 60, 0]), cc)).toBeNull();
+    expect(
+      learnFrom({ id: 'clearSlide' }, 'QuickQ', new Uint8Array([0x80, 60, 0]), cc, { acceptNoteOff: true }),
+    ).toMatchObject({ kind: 'noteOff', number: 60, channel: 1, threshold: 0 });
+  });
+
+  it('routes to defaultOutput, emits structured activity events, and detects echo loops', () => {
+    const events: {
+      direction: string;
+      status: string;
+      device: string;
+      quickq: string | null;
+      loopWarning?: boolean;
+      detail?: string;
+    }[] = [];
+    const sentA: number[][] = [];
+    const sentB: number[][] = [];
+    const d = new MidiDriver(() => {});
+    d.onActivity = (ev) =>
+      events.push({
+        direction: ev.direction,
+        status: ev.status,
+        device: ev.device,
+        quickq: ev.quickq,
+        loopWarning: ev.loopWarning,
+        detail: ev.detail,
+      });
+
+    // Disabled driver drops outgoing message with explicit reason
+    expect(d.send({ type: 'noteOn', channel: 1, number: 72, value: 127 }, undefined, 'Test')).toBe(false);
+    expect(events.at(-1)).toMatchObject({
+      direction: 'out',
+      status: 'dropped',
+      quickq: 'QuickQ PB 1 · Go',
+      detail: 'Test — Web MIDI disabled',
+    });
+
+    // Inject fake Web MIDI access with two connected outputs
+    const fakeAccess = {
+      inputs: new Map(),
+      outputs: new Map([
+        ['a', { id: 'a', name: 'QuickQ USB-MIDI', state: 'connected', send: (b: number[]) => sentA.push(b) }],
+        ['b', { id: 'b', name: 'Other Synth', state: 'connected', send: (b: number[]) => sentB.push(b) }],
+      ]),
+    };
+    (d as unknown as { access: unknown }).access = fakeAccess;
+
+    d.setDefaultOutput('QuickQ USB-MIDI');
+    expect(d.send({ type: 'noteOn', channel: 1, number: 48, value: 5 }, undefined, 'Live: Song 1')).toBe(
+      true,
+    );
+    expect(sentA).toEqual([new Uint8Array([0x90, 48, 5])]);
+    expect(sentB).toEqual([]);
+    expect(events.at(-1)).toMatchObject({
+      direction: 'out',
+      status: 'sent',
+      device: 'QuickQ USB-MIDI',
+      quickq: 'QuickQ PB 1 · Go to Cue 5',
+    });
+
+    // Same message arriving immediately triggers loopWarning
+    d.handle('QuickQ USB-MIDI', new Uint8Array([0x90, 48, 5]));
+    expect(events.at(-1)).toMatchObject({
+      direction: 'in',
+      status: 'unmatched',
+      quickq: 'QuickQ PB 1 · Go to Cue 5',
+      loopWarning: true,
+    });
+
+    // Disconnected target output reports dropped
+    d.setDefaultOutput('Missing Adapter');
+    expect(d.send({ type: 'noteOn', channel: 1, number: 72, value: 127 })).toBe(false);
+    expect(events.at(-1)).toMatchObject({
+      direction: 'out',
+      status: 'dropped',
+      device: 'Missing Adapter',
+    });
+  });
+
+  it('cancels pending delayed cues when cancelPendingCues is called', async () => {
+    const sent: number[][] = [];
+    const d = new MidiDriver(() => {});
+    (d as unknown as { access: unknown }).access = {
+      inputs: new Map(),
+      outputs: new Map([
+        ['a', { id: 'a', name: 'QuickQ', state: 'connected', send: (b: number[]) => sent.push(b) }],
+      ]),
+    };
+    d.sendCues([{ id: '1', type: 'noteOn', channel: 1, number: 72, value: 127, delayMs: 30 }], 'Slide 1');
+    d.cancelPendingCues();
+    await new Promise((r) => setTimeout(r, 60));
+    expect(sent).toEqual([]);
+  });
 });
 
 describe('defaultDeckPages', () => {
@@ -450,5 +554,27 @@ describe('wrapText', () => {
   it('wraps and ellipsises', () => {
     expect(wrapText(measure, 'Amazing Grace', 80, 2)).toEqual(['Amazing', 'Grace']);
     expect(wrapText(measure, 'one two three four', 80, 1)[0]!.endsWith('…')).toBe(true);
+  });
+});
+
+describe('formatMidiAccessError', () => {
+  it('distinguishes InvalidStateError platform init failure from NotAllowedError', () => {
+    const platform = formatMidiAccessError(
+      Object.assign(new Error('Platform dependent initialization failed.'), { name: 'InvalidStateError' }),
+    );
+    expect(platform.kind).toBe('platform');
+    expect(platform.hint).toContain('relaunch the browser');
+
+    const denied = formatMidiAccessError(
+      Object.assign(new Error('Permission to use Web MIDI API was not granted.'), {
+        name: 'NotAllowedError',
+      }),
+    );
+    expect(denied.kind).toBe('denied');
+
+    const unsupported = formatMidiAccessError(
+      Object.assign(new Error('Not supported'), { name: 'NotSupportedError' }),
+    );
+    expect(unsupported.kind).toBe('unsupported');
   });
 });

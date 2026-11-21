@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Five jobs side by side (design/23 "CI"): lint, types, unit tests and the builds (check, 40 minutes); the
+  # Five jobs side by side (design/23 "CI"): lint, types, unit tests and the builds (check, 45 minutes); the
   # end-to-end suite in two shards (e2e, 90 minutes: its limit counts the set-up of a slow runner, see there) and
   # the phone and Android tablet projects (e2e-phones, 60 minutes); the renderer goldens in a pinned container
   # (goldens); the fidelity ratchets (fidelity).
@@ -23,8 +23,10 @@ jobs:
     # The whole unit-test run took 478 s on the four CPUs of the integration machine after sub-wave 2 (299 s before it),
     # typecheck 124 s, the pages build 52 s and the build 19 s; a runner is 1.15 to 1.65 times slower, and the set-up
     # (system packages, pnpm install, Playwright Chromium) takes 3 to 5 minutes (26 to 34 on the slow mirror the end-to-end
-    # jobs met), so 25 minutes left no room: a timeout fails the required check and the next run starts again.
-    timeout-minutes: 40
+    # jobs met), so 25 minutes left no room: a timeout fails the required check and the next run starts again. 45 is the
+    # larger of the two limits set for it (40 by the end-to-end jobs' measures above, 45 by main's PR #31, which also
+    # moved the system packages to archive.ubuntu.com, away from the regional mirrors that throttle).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -33,7 +35,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: System tools for the media pipeline and bundled fonts
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
+        run: |
+          sudo sed -i -E 's|https?://[^/]+\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
@@ -80,7 +84,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: System tools for the media pipeline and bundled fonts
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
+        run: |
+          sudo sed -i -E 's|https?://[^/]+\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm build:pages
@@ -110,7 +116,8 @@ jobs:
     runs-on: ubuntu-24.04
     # The same two install steps as the e2e shards (the system packages and both Playwright browsers) count against
     # this limit, and a slow mirror took 26 to 34 minutes of them for a shard; its 61 tests take 5.4 minutes of test
-    # time on the integration machine (about 9 to 10 on a runner), so a slow mirror needs 35 to 44 minutes: 60.
+    # time on the integration machine (about 9 to 10 on a runner), so a slow mirror needs 35 to 44 minutes: 60 (main's
+    # PR #31 set 45; the larger of the two stays).
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -120,7 +127,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: System tools for the media pipeline and bundled fonts
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
+        run: |
+          sudo sed -i -E 's|https?://[^/]+\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm build:pages
@@ -188,7 +197,9 @@ jobs:
       # The runner's font list and the faces the golden images were drawn with (golden/expected/meta.json; a
       # missing one fails the run). Keep in step with tools/golden-docker.sh.
       - name: Fonts
-        run: apt-get update && apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter fonts-dejavu-core fonts-freefont-ttf fonts-ipafont-gothic
+        run: |
+          sed -i -E 's|https?://[^/]+\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          apt-get update && apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter fonts-dejavu-core fonts-freefont-ttf fonts-ipafont-gothic
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

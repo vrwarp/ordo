@@ -2,6 +2,7 @@ import { api } from '@ordo/client';
 import { newId, type Playlist } from '@ordo/domain';
 import { useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { useLivePlaylistId } from '../../hooks.ts';
 import { useProfile } from '../../lib/capabilities.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
@@ -91,7 +92,29 @@ export function PlaylistsView({ id }: { id?: string }) {
           </button>
         </div>
         {sorted.map((p) => (
-          <a key={p.id} href={`#/playlists/${p.id}`} className={p.id === current?.id ? 'active' : ''}>
+          <a
+            key={p.id}
+            href={`#/playlists/${p.id}`}
+            className={p.id === current?.id ? 'active' : ''}
+            onContextMenu={(e) => {
+              const isThisLive = p.id === liveId;
+              openContextMenu(
+                e,
+                [
+                  { label: 'Open playlist', onSelect: () => navigate({ name: 'playlists', id: p.id }) },
+                  { label: 'Duplicate playlist', onSelect: () => void duplicate(p) },
+                  { kind: 'separator' },
+                  {
+                    label: 'Delete playlist…',
+                    danger: true,
+                    disabled: isThisLive,
+                    onSelect: () => void del(p),
+                  },
+                ],
+                { ariaLabel: `${p.name} playlist actions` },
+              );
+            }}
+          >
             <span className="col grow" style={{ gap: 2 }}>
               <span className="ellipsis">
                 {p.id === liveId && <span style={{ color: 'var(--live)' }}>● </span>}

@@ -57,9 +57,9 @@ test('every control of the editor is a 44 px touch target, apart from the named 
     await expect(stage).toBeVisible({ timeout: 20_000 });
     expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
 
-    // The canvas with nothing selected: top bar, slides list (the selected card's actions), Stage lens and
+    // The canvas with nothing selected: top bar, slides list (the selected card), Stage lens and
     // the docked panel on its Slide and Presentation tabs.
-    await expect(page.locator('.ed-slide-inline-actions')).toBeVisible();
+    await expect(page.locator('.ed-slide-card.sel')).toBeVisible();
     misses.push(...(await audit(page, 'canvas', '.editor')));
     for (const tab of ['Slide', 'Presentation']) {
       await page.locator('.ed-drawer-hdr').getByRole('button', { name: tab, exact: true }).tap();

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  type ActionId,
   ContentHash,
   FileRef,
   Font,
@@ -7,13 +8,16 @@ import {
   Look,
   Media,
   type MediaOnEnd,
+  type MidiCue,
+  MidiPreset,
   Playlist,
   Presentation,
   TimerSpec,
   type Transition,
-  type ActionId,
-  type MidiCue,
 } from './schemas.ts';
+
+/** A resolved MIDI cue carried on a flattened Cue, optionally annotated with its venue preset name. */
+export type ResolvedMidiCue = MidiCue & { presetName?: string };
 
 /** The sizes a screen fetches of a pre-rendered slide's picture (design/29 §1.2, §1.7): 4K, and the 1080p copy. */
 export const PrerenderSize = z.union([z.literal(3840), z.literal(1920)]);
@@ -57,6 +61,8 @@ export const ResolvedPlaylist = z.object({
   media: z.record(z.string(), Media),
   fonts: z.array(Font),
   looks: z.array(Look),
+  /** Snapshot of venue MIDI presets at goLive so live services are immune to mid-week preset edits. */
+  midiPresets: z.array(MidiPreset).max(64).optional(),
   logoMediaId: Id.optional(),
   files: z.array(ManifestFile),
   /**
@@ -162,8 +168,14 @@ export type Cue = {
   mediaShowWhenStopped?: boolean;
   /** The slide's sound; it plays on until the live cue leaves [this cue, untilCue]. */
   slideAudio?: { mediaId: string; start: 'auto' | 'click'; loop: boolean; gainDb?: number; untilCue: number };
-  /** Outgoing MIDI cues to fire when this cue goes live. */
-  midiCues?: MidiCue[];
+  /** Outgoing MIDI cues fired when this slide's background media becomes active (e.g. stage color). */
+  backgroundMidi?: ResolvedMidiCue[];
+  /** Outgoing MIDI cues fired once when entering this playlist item. */
+  itemMidi?: ResolvedMidiCue[];
+  /** Outgoing MIDI cues fired once when entering this section occurrence (repeats included). */
+  sectionMidi?: ResolvedMidiCue[];
+  /** Outgoing MIDI cues fired when landing on this specific slide cue. */
+  midiCues?: ResolvedMidiCue[];
 };
 
 export type SlideContent = { kind: 'slide'; cueIndex: number; presentationId: Id; slideId: Id };

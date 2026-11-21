@@ -11,6 +11,7 @@ export function VirtualList<T>(props: {
   rowClass?: (item: T, index: number) => string;
   onRowClick?: (item: T, index: number) => void;
   onRowDoubleClick?: (item: T, index: number) => void;
+  onRowContextMenu?: (e: React.MouseEvent<HTMLDivElement>, item: T, index: number) => void;
   keyOf?: (item: T, index: number) => string;
   scrollToIndex?: number;
 }) {
@@ -92,6 +93,7 @@ export function VirtualList<T>(props: {
         style={{ top: rowTop, height: rowH }}
         onClick={props.onRowClick ? () => props.onRowClick!(it, i) : undefined}
         onDoubleClick={props.onRowDoubleClick ? () => props.onRowDoubleClick!(it, i) : undefined}
+        onContextMenu={props.onRowContextMenu ? (e) => props.onRowContextMenu!(e, it, i) : undefined}
       >
         {props.render(it, i)}
       </div>,

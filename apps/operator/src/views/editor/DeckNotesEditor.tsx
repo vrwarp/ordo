@@ -1,5 +1,6 @@
 import { importedText, type Presentation, readableText, type Slide } from '@ordo/domain';
 import { type KeyboardEvent, type ReactNode, useMemo, useRef, useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { useMediaLookup, useVisible } from '../../hooks.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
@@ -73,7 +74,40 @@ function ManuscriptSlideCard(props: {
       className={`ed-ms-card${selected ? ' sel' : ''}${slide.hidden ? ' hidden-slide' : ''}`}
     >
       {/* Left Visual Slide Thumbnail & Slide Context */}
-      <div className="ed-ms-left">
+      <div
+        className="ed-ms-left"
+        onContextMenu={(e) => {
+          selectSlide(slide.id);
+          openContextMenu(
+            e,
+            [
+              {
+                label: 'Edit slide on Canvas',
+                onSelect: () => {
+                  selectSlide(slide.id);
+                  onEditCanvas();
+                },
+              },
+              ...(notes.trim()
+                ? [
+                    { kind: 'separator' as const },
+                    {
+                      label: 'Copy speaker notes',
+                      onSelect: () => void navigator.clipboard?.writeText?.(notes),
+                    },
+                    {
+                      label: 'Clear speaker notes',
+                      danger: true,
+                      disabled: readOnly,
+                      onSelect: () => setNotes(''),
+                    },
+                  ]
+                : []),
+            ],
+            { ariaLabel: `Slide ${slideNumber} notes actions` },
+          );
+        }}
+      >
         <div className="ed-ms-thumb-box">
           {thumbUrl ? (
             <img src={thumbUrl} alt={`Slide ${slideNumber}`} draggable={false} />

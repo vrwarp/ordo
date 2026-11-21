@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { ConfirmHost } from '../components/Confirm.tsx';
+import { ContextMenuHost } from '../components/ContextMenu.tsx';
 import { ErrorBoundary, PageError } from '../components/ErrorBoundary.tsx';
 import { Toasts } from '../components/Toasts.tsx';
 import { UpdatingOverlay } from '../components/UpdatingScreen.tsx';
@@ -44,6 +45,7 @@ export function RegularFrame({ role, route, profile, signedOut, fallback, body }
       </div>
       <Toasts />
       <ConfirmHost />
+      <ContextMenuHost />
       <UpdatingOverlay />
       {signedOut && (
         <div

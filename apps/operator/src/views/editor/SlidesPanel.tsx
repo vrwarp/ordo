@@ -1,26 +1,39 @@
 import { parseSectionLabel, type Presentation, type Slide } from '@ordo/domain';
 import { type PointerEvent as ReactPointerEvent, useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
-import { Menu } from '../../components/Menu.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { midiTriggerBadge, slideMidiTrigger } from '../../components/MidiTriggerPicker.tsx';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { type FlatEntry, flatSlideMove } from '../../components/sortableMath.ts';
 import { useMediaLookup, useVisible } from '../../hooks.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
-import { addSlideLike, setSlideHidden } from './actions.ts';
+import {
+  addSlideLike,
+  copySlideSelection,
+  cutSlideSelection,
+  readSystemClipboard,
+  setSlideHidden,
+  tryPasteSlidesFromClipboard,
+} from './actions.ts';
+import { buildSectionHeaderContextMenu, buildSlideCardContextMenu } from './editorContextMenu.ts';
+import { toast } from '../../state/toasts.ts';
 import { change, selectSlide, useEditor } from './editorStore.ts';
 import {
   addSection,
   addSlide,
   deleteSection,
   deleteSlide,
+  duplicateSection,
   duplicateSlide,
   mergeWithNext,
   moveSection,
   moveSlide,
   renameSection,
+  resetSlideToTheme,
   splitSlide,
   themeOf,
+  updateSlide,
 } from './ops.ts';
 
 /** How a hidden slide's number and picture are dimmed in the slide list (design/27 §11 item 9). */
@@ -39,6 +52,7 @@ function SlideItem(props: {
   onToggleHidden: (hidden: boolean) => void;
   onSplit?: () => void;
   onMerge?: () => void;
+  onResetToTheme?: () => void;
   onDelete: () => void;
   sort: {
     item: Record<string, unknown>;
@@ -48,6 +62,7 @@ function SlideItem(props: {
   };
 }) {
   const media = useMediaLookup();
+  const midiPresets = useLibrary((s) => s.data.settings.surfaces.midiPresets);
   const [ref, visible] = useVisible<HTMLDivElement>();
   const bgId = props.slide.backgroundMediaId ?? props.p.backgroundMediaId;
   const url = useThumb(
@@ -58,7 +73,8 @@ function SlideItem(props: {
   const hidden = !!props.slide.hidden;
   const dim = hidden ? HIDDEN_DIM : undefined;
   const hasAudio = !!props.slide.audio;
-  const hasMidi = (props.slide.midiCues?.length ?? 0) > 0;
+  const midiBadge = midiTriggerBadge(slideMidiTrigger(props.slide), midiPresets);
+  const hasMidi = !!midiBadge;
   const notesPreview = props.slide.notes?.trim() ?? '';
   const hasNotes = notesPreview.length > 0;
   const loopSec =
@@ -72,14 +88,54 @@ function SlideItem(props: {
     }
   }, [props.selected, ref]);
 
+  const pasteSlideAfter = () => {
+    void readSystemClipboard().then((sys) => {
+      const readable = sys
+        ? {
+            getData: (type: string) =>
+              type === 'text/html' ? sys.html : type === 'text/plain' ? sys.plain : '',
+          }
+        : null;
+      const pasted = tryPasteSlidesFromClipboard(readable, props.slide.id);
+      if (!pasted) toast('No copied slide on the clipboard.', 'warn');
+    });
+  };
+
   return (
     <div
       ref={ref}
       {...props.sort.item}
       {...props.sort.mouseArea}
+      tabIndex={0}
       data-slide-id={props.slide.id}
       className={`ed-slide-card ${props.selected ? 'sel' : ''} ${hidden ? 'hidden-slide' : ''} ${props.sort.cls}`}
       onClick={() => selectSlide(props.slide.id)}
+      onContextMenu={(e) => {
+        selectSlide(props.slide.id);
+        openContextMenu(
+          e,
+          buildSlideCardContextMenu({
+            slide: props.slide,
+            p: props.p,
+            readOnly: props.readOnly,
+            onCopy: () => {
+              if (copySlideSelection(undefined, props.slide.id)) toast('Slide copied.', 'ok');
+            },
+            onCut: () => void cutSlideSelection(undefined, props.slide.id),
+            onPaste: pasteSlideAfter,
+            onDuplicate: props.onDuplicate,
+            onNewLike: props.onNewLike,
+            onToggleHidden: props.onToggleHidden,
+            onMoveUp: props.onMoveUp,
+            onMoveDown: props.onMoveDown,
+            onSplit: props.onSplit,
+            onMerge: props.onMerge,
+            onResetToTheme: props.onResetToTheme,
+            onDelete: props.onDelete,
+          }),
+          { ariaLabel: `Slide ${props.index + 1} actions` },
+        );
+      }}
     >
       <div className={`ed-slide ${props.selected ? 'sel' : ''} ${hidden ? 'hidden-slide' : ''}`}>
         <DragHandle label="Drag to reorder" disabled={props.readOnly} {...props.sort.handle} />
@@ -104,8 +160,8 @@ function SlideItem(props: {
                   ♪
                 </span>
               )}
-              {hasMidi && (
-                <span className="ed-cue-badge midi" title="Slide sends MIDI cue">
+              {midiBadge && (
+                <span className="ed-cue-badge midi" title={midiBadge.title}>
                   ⚡
                 </span>
               )}
@@ -132,52 +188,6 @@ function SlideItem(props: {
           </span>
         ) : null}
       </div>
-
-      {/* Inline contextual actions directly on the selected slide card (replaces the stranded bottom footer) */}
-      {props.selected && !props.readOnly && (
-        <div
-          className="ed-slide-inline-actions"
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            className="small ghost"
-            onClick={props.onDuplicate}
-            title="Duplicate this slide"
-          >
-            Duplicate
-          </button>
-          <button
-            type="button"
-            className="small ghost"
-            aria-label="New slide like this"
-            title="A copy with its text cleared, to type a new verse or notice in the same look"
-            data-new-slide-like
-            onClick={props.onNewLike}
-          >
-            + Like
-          </button>
-          <HideSlideToggle hidden={hidden} onToggle={props.onToggleHidden} compact />
-          <Menu
-            label="⋯"
-            align="right"
-            items={[
-              ...(props.onMoveUp
-                ? [{ label: '↑ Move slide up', name: 'Slide up', onSelect: props.onMoveUp }]
-                : []),
-              ...(props.onMoveDown
-                ? [{ label: '↓ Move slide down', name: 'Slide down', onSelect: props.onMoveDown }]
-                : []),
-              ...(props.onSplit ? [{ label: '✂ Split lyrics', name: 'Split', onSelect: props.onSplit }] : []),
-              ...(props.onMerge
-                ? [{ label: '⤹ Merge with next', name: 'Merge next', onSelect: props.onMerge }]
-                : []),
-              { label: '🗑 Delete slide', name: 'Delete slide', danger: true, onSelect: props.onDelete },
-            ]}
-          />
-        </div>
-      )}
     </div>
   );
 }
@@ -316,6 +326,40 @@ export function SlidesPanel({
               {...sections.mouseArea(si)}
               className="row ed-sec-head"
               style={{ cursor: readOnly ? undefined : 'grab' }}
+              onContextMenu={(e) => {
+                const headEl = e.currentTarget;
+                openContextMenu(
+                  e,
+                  buildSectionHeaderContextMenu({
+                    section: sec,
+                    index: si,
+                    totalSections: p.sections.length,
+                    readOnly,
+                    onAddSlide: () => edit((q) => addSlide(q, sec.id, theme)),
+                    onDuplicateSection: () => edit((q) => duplicateSection(q, sec.id)),
+                    onRename: () => {
+                      const inp = headEl.querySelector('input');
+                      inp?.focus();
+                      inp?.select();
+                    },
+                    onMoveUp: si > 0 ? () => edit((q) => moveSection(q, si, si - 1)) : undefined,
+                    onMoveDown:
+                      si < p.sections.length - 1 ? () => edit((q) => moveSection(q, si, si + 1)) : undefined,
+                    onDelete: async () => {
+                      if (
+                        await confirmDialog(
+                          'Delete section',
+                          `Delete “${sec.label}” and its ${sec.slides.length} slides? It is removed from every arrangement.`,
+                          'Delete',
+                          true,
+                        )
+                      )
+                        edit((q) => deleteSection(q, sec.id));
+                    },
+                  }),
+                  { ariaLabel: `Section ${sec.label} actions` },
+                );
+              }}
             >
               <DragHandle label="Drag the section" disabled={readOnly} {...sections.handle(si)} />
               <span className="tag">{sec.short}</span>
@@ -335,56 +379,6 @@ export function SlidesPanel({
                   )
                 }
               />
-              {!readOnly && (
-                <div className="row" style={{ gap: 2, alignItems: 'center' }}>
-                  <button
-                    type="button"
-                    className="ghost small sec-delete-btn"
-                    title="Move section up"
-                    aria-label="Move section up"
-                    disabled={si === 0}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      edit((q) => moveSection(q, si, si - 1));
-                    }}
-                  >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost small sec-delete-btn"
-                    title="Move section down"
-                    aria-label="Move section down"
-                    disabled={si >= p.sections.length - 1}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      edit((q) => moveSection(q, si, si + 1));
-                    }}
-                  >
-                    ↓
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost small sec-delete-btn"
-                    title="Delete section"
-                    aria-label="Delete section"
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      if (
-                        await confirmDialog(
-                          'Delete section',
-                          `Delete “${sec.label}” and its ${sec.slides.length} slides? It is removed from every arrangement.`,
-                          'Delete',
-                          true,
-                        )
-                      )
-                        edit((q) => deleteSection(q, sec.id));
-                    }}
-                  >
-                    🗑
-                  </button>
-                </div>
-              )}
             </div>
             {sec.slides.map((sl, i) => {
               const fi = flatIndex.get(sl.id)!;
@@ -413,6 +407,9 @@ export function SlidesPanel({
                   onToggleHidden={(h) => setSlideHidden(sl.id, h)}
                   onSplit={p.kind === 'song' ? () => edit((q) => splitSlide(q, sl.id)) : undefined}
                   onMerge={p.kind === 'song' ? () => edit((q) => mergeWithNext(q, sl.id)) : undefined}
+                  onResetToTheme={() =>
+                    edit((q) => updateSlide(q, sl.id, (s) => resetSlideToTheme(s, theme)))
+                  }
                   onDelete={() => {
                     edit((q) => deleteSlide(q, sl.id));
                     selectSlide(undefined);

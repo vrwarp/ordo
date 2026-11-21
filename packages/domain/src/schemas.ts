@@ -935,6 +935,22 @@ export const MidiCue = z.object({
 });
 export type MidiCue = z.infer<typeof MidiCue>;
 
+/** Named venue-level MIDI/lighting preset (e.g. "Lights: Full", "Lights: Half"). */
+export const MidiPreset = z.object({
+  id: Id,
+  name: name(),
+  color: z.string().max(32).optional(),
+  cues: z.array(MidiCue).min(1).max(8),
+});
+export type MidiPreset = z.infer<typeof MidiPreset>;
+
+/** Uniform MIDI trigger attached to a PlaylistItem, Section, or Slide. */
+export const MidiTrigger = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('preset'), presetId: Id }),
+  z.object({ kind: z.literal('cues'), cues: z.array(MidiCue).min(1).max(8) }),
+]);
+export type MidiTrigger = z.infer<typeof MidiTrigger>;
+
 /** A name in the hub's content store: a SHA-256 in hex (slide files' heads and pages, pictures; design/29 §1.2). */
 export const ContentHash = z.string().regex(/^[0-9a-f]{64}$/);
 export type ContentHash = z.infer<typeof ContentHash>;
@@ -1032,8 +1048,10 @@ export const Slide = z.object({
   scripture: ScriptureSlideSource.optional(),
   /** The slide's own sound (design/27 §8); it can play on across `slides` shown slides. */
   audio: SlideSound.optional(),
-  /** Outgoing MIDI cues to fire when this slide goes live. */
+  /** Outgoing MIDI cues to fire when this slide goes live (legacy; prefer `midi`). */
   midiCues: z.array(MidiCue).max(32).optional(),
+  /** Uniform MIDI trigger (named preset or custom cues) fired when this slide goes live. */
+  midi: MidiTrigger.optional().catch(undefined),
   /**
    * design/29 §1.2: the slide is pre-rendered; its `objects` are then its stand-in (the live objects whole, the
    * rest simplified) and the full slide is in its slide file. Damaged: dropped, and the stand-in draws.
@@ -1056,6 +1074,8 @@ export const Section = z.object({
   slides: z.array(Slide).max(5000).default([]),
   /** Chords per lyric line, kept from ChordPro imports for a future chord view. */
   chords: z.array(z.string().max(2000)).max(20_000).optional(),
+  /** Optional MIDI trigger fired once when entering this section occurrence (repeats included). */
+  midi: MidiTrigger.optional().catch(undefined),
 });
 export type Section = z.infer<typeof Section>;
 
@@ -1188,6 +1208,8 @@ export const Media = z.object({
     })
     .optional(),
   trim: MediaTrim.optional(),
+  /** Optional MIDI trigger (e.g. stage color preset) fired when this media is used as a slide background. */
+  midi: MidiTrigger.optional().catch(undefined),
   createdAt: z.string().max(100).optional(),
   updatedAt: z.string().max(100).optional(),
 });
@@ -1248,6 +1270,7 @@ export const ActionId = z.enum([
   'audioFadeOut',
   'launchOutputs',
   'relaunchOutputs',
+  'midiPreset',
 ]);
 export type ActionId = z.infer<typeof ActionId>;
 
@@ -1262,6 +1285,8 @@ export const PlaylistItem = z.discriminatedUnion('kind', [
     keepBackground: z.boolean().optional(),
     audioMediaId: Id.optional(),
     countdownTimer: TimerSpec.optional(),
+    /** Optional MIDI trigger fired once when entering this playlist item. */
+    midi: MidiTrigger.optional().catch(undefined),
   }),
   z.object({
     id: Id,
@@ -1270,8 +1295,16 @@ export const PlaylistItem = z.discriminatedUnion('kind', [
     loop: z.boolean().optional(),
     onEnd: MediaOnEnd.optional(),
     audio: z.object({ pairId: Id.optional(), gainDb: z.number().min(-100).max(100).optional() }).optional(),
+    /** Optional MIDI trigger fired once when entering this playlist item. */
+    midi: MidiTrigger.optional().catch(undefined),
   }),
-  z.object({ id: Id, kind: z.literal('timer'), timer: TimerSpec }),
+  z.object({
+    id: Id,
+    kind: z.literal('timer'),
+    timer: TimerSpec,
+    /** Optional MIDI trigger fired once when entering this playlist item. */
+    midi: MidiTrigger.optional().catch(undefined),
+  }),
   z.object({ id: Id, kind: z.literal('action'), action: ActionId }),
 ]);
 export type PlaylistItem = z.infer<typeof PlaylistItem>;
@@ -1434,7 +1467,7 @@ export type MidiParamSource = z.infer<typeof MidiParamSource>;
 export const MidiMapping = z.object({
   id: Id,
   deviceName: z.string().max(500).optional(),
-  kind: z.enum(['note', 'cc', 'programChange']),
+  kind: z.enum(['note', 'noteOff', 'cc', 'programChange']),
   number: z.number().int().min(0).max(127),
   channel: z.number().int().min(1).max(16).optional(),
   threshold: z.number().int().min(0).max(127).default(64),
@@ -1447,6 +1480,8 @@ export const SurfaceSettings = z.object({
   streamDeckPages: z.array(StreamDeckPage).max(100).default([]),
   midi: z.array(MidiMapping).max(1000).default([]),
   midiEnabled: z.boolean().default(false),
+  midiDefaultOutput: z.string().max(500).optional(),
+  midiPresets: z.array(MidiPreset).max(64).default([]),
   messagePresets: z.array(z.string().max(500)).max(200).default([]),
 });
 export type SurfaceSettings = z.infer<typeof SurfaceSettings>;

@@ -3,11 +3,17 @@ import { type ActionId, type Arrangement, newId, type PlaylistItem, type Section
 import { useState } from 'react';
 import { ArrangementEditor } from '../../components/ArrangementEditor.tsx';
 import { Check, Field, NumberField, Select, TextField, TransitionEditor } from '../../components/fields.tsx';
+import {
+  countPresentationMidi,
+  midiTriggerBadge,
+  MidiTriggerPicker,
+  shouldShowMidiUi,
+} from '../../components/MidiTriggerPicker.tsx';
 import { authoringArrangement } from '../../lib/arrangement.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { errorText, toast } from '../../state/toasts.ts';
-import { ACTIONS } from './AddItemsPanel.tsx';
 import { BackgroundPicker } from '../editor/BackgroundPicker.tsx';
+import { ACTIONS } from './AddItemsPanel.tsx';
 
 /** Settings for one playlist item, by kind. */
 export function ItemSettings(props: {
@@ -141,6 +147,59 @@ export function ItemSettings(props: {
             props.onChange({ ...it, keepBackground: keepBackground || undefined })
           }
         />
+        {(() => {
+          const effBgId = it.backgroundMediaId ?? p.backgroundMediaId;
+          const effBg = effBgId ? lib.media.find((m) => m.id === effBgId) : undefined;
+          const bgBadge = effBg?.midi
+            ? midiTriggerBadge(effBg.midi, lib.settings.surfaces.midiPresets)
+            : null;
+          const inner = countPresentationMidi(p);
+          const hasAny = Boolean(it.midi || bgBadge || inner.sections > 0 || inner.slides > 0);
+          if (!shouldShowMidiUi(lib.settings.surfaces, hasAny)) return null;
+          return (
+            <Field label="Lighting / MIDI on start">
+              <div className="col" style={{ gap: 6 }}>
+                {bgBadge && effBg && (
+                  <div className="row wrap small" style={{ gap: 6, alignItems: 'center' }}>
+                    <span className="muted">From background:</span>
+                    <span
+                      className="tag"
+                      title={bgBadge.title}
+                      style={{
+                        borderLeft: bgBadge.color ? `3px solid ${bgBadge.color}` : undefined,
+                      }}
+                    >
+                      💡 {bgBadge.label}
+                    </span>
+                    <span className="muted">({effBg.name})</span>
+                  </div>
+                )}
+                <MidiTriggerPicker
+                  value={it.midi}
+                  disabled={props.disabled}
+                  onChange={(midi) => props.onChange({ ...it, midi })}
+                  hint="Fires once when entering this item (this service only)."
+                />
+                {(inner.sections > 0 || inner.slides > 0) && (
+                  <span className="muted" style={{ fontSize: 11 }}>
+                    Also includes{' '}
+                    {[
+                      inner.sections > 0
+                        ? `${inner.sections} section lighting cue${inner.sections === 1 ? '' : 's'}`
+                        : '',
+                      inner.slides > 0
+                        ? `${inner.slides} slide MIDI cue${inner.slides === 1 ? '' : 's'}`
+                        : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' and ')}{' '}
+                    inside this presentation.
+                  </span>
+                )}
+              </div>
+            </Field>
+          );
+        })()}
         {p.kind === 'loop' && (
           <div className="card col" style={{ gap: 8, marginTop: 4 }}>
             <strong style={{ fontSize: 13 }}>Pre-Service Loop Automation</strong>
@@ -250,6 +309,16 @@ export function ItemSettings(props: {
             />
           </div>
         )}
+        {shouldShowMidiUi(lib.settings.surfaces, Boolean(it.midi)) && (
+          <Field label="Lighting / MIDI on start">
+            <MidiTriggerPicker
+              value={it.midi}
+              disabled={props.disabled}
+              onChange={(midi) => props.onChange({ ...it, midi })}
+              hint="Fires once when this media item goes live."
+            />
+          </Field>
+        )}
       </div>
     );
   }
@@ -292,6 +361,16 @@ export function ItemSettings(props: {
           disabled={props.disabled}
           onChange={(label) => props.onChange({ ...it, timer: { ...t, label: label || undefined } })}
         />
+        {shouldShowMidiUi(lib.settings.surfaces, Boolean(it.midi)) && (
+          <Field label="Lighting / MIDI on start">
+            <MidiTriggerPicker
+              value={it.midi}
+              disabled={props.disabled}
+              onChange={(midi) => props.onChange({ ...it, midi })}
+              hint="Fires once when this timer goes live."
+            />
+          </Field>
+        )}
       </div>
     );
   }

@@ -1,4 +1,6 @@
 import type { PlaylistItem } from '@ordo/domain';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { midiTriggerBadge } from '../../components/MidiTriggerPicker.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
 import { itemGoTarget } from '../../lib/sections.ts';
@@ -91,8 +93,66 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
           const c = firstCueOf(i);
           if (c !== undefined) controller()?.go(c);
         }}
+        onRowContextMenu={(e, it, i) => {
+          const first = firstCueOf(i);
+          openContextMenu(
+            e,
+            [
+              {
+                label: 'Go to first cue',
+                disabled: first === undefined,
+                onSelect: () => {
+                  if (first !== undefined) controller()?.go(first);
+                },
+              },
+              {
+                label: 'Arm first cue',
+                disabled: first === undefined,
+                onSelect: () => {
+                  if (first !== undefined) controller()?.select(first);
+                },
+              },
+              {
+                label: 'Scroll to item',
+                onSelect: () => requestScrollToPlaylistItem(i),
+              },
+              ...(it.kind === 'presentation'
+                ? [
+                    { kind: 'separator' as const },
+                    {
+                      label: 'Edit presentation…',
+                      onSelect: () => navigate({ name: 'edit', id: it.presentationId }),
+                    },
+                  ]
+                : []),
+              ...(op.playlist
+                ? [
+                    { kind: 'separator' as const },
+                    {
+                      label: op.live ? 'View playlist…' : 'Edit playlist…',
+                      onSelect: () => navigate({ name: 'playlists', id: op.playlist!.id }),
+                    },
+                  ]
+                : []),
+            ],
+            { ariaLabel: `${itemTitle(it, op)} actions` },
+          );
+        }}
         render={(it, i) => {
           const isItemLive = op.live && i === liveItem;
+          const presets = op.live
+            ? live.resolved?.midiPresets
+            : useLibrary.getState().data.settings.surfaces.midiPresets;
+          const midiBadge = it.kind !== 'action' && it.midi ? midiTriggerBadge(it.midi, presets) : null;
+          const bgBadge =
+            it.kind === 'presentation'
+              ? (() => {
+                  const p = op.presentation(it.presentationId);
+                  const effBgId = it.backgroundMediaId ?? p?.backgroundMediaId;
+                  const effBg = effBgId ? op.media(effBgId) : undefined;
+                  return effBg?.midi ? midiTriggerBadge(effBg.midi, presets) : null;
+                })()
+              : null;
           return (
             <>
               <span className={`kind ${isItemLive ? 'live' : ''}`}>
@@ -102,6 +162,33 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
                 <span className="ellipsis row" style={{ gap: 6, alignItems: 'center' }}>
                   <span className="ellipsis">{itemTitle(it, op)}</span>
                   {isItemLive && <span className="live-pill-mini">ON AIR</span>}
+                  {bgBadge && (
+                    <span
+                      className="tag"
+                      title={`From background: ${bgBadge.title}`}
+                      style={{
+                        fontSize: 9.5,
+                        padding: '1px 4px',
+                        borderLeft: bgBadge.color ? `3px solid ${bgBadge.color}` : undefined,
+                        opacity: 0.85,
+                      }}
+                    >
+                      ● {bgBadge.label}
+                    </span>
+                  )}
+                  {midiBadge && (
+                    <span
+                      className="tag"
+                      title={midiBadge.title}
+                      style={{
+                        fontSize: 9.5,
+                        padding: '1px 4px',
+                        borderLeft: midiBadge.color ? `3px solid ${midiBadge.color}` : undefined,
+                      }}
+                    >
+                      💡 {midiBadge.label}
+                    </span>
+                  )}
                 </span>
                 <span className="muted small ellipsis">{itemSubtitle(it, op)}</span>
               </span>

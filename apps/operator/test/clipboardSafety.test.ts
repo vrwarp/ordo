@@ -14,6 +14,7 @@ import {
   type ImageObject,
   Presentation,
   type ShapeObject,
+  Slide,
   SlideObject,
   type TextObject,
 } from '@ordo/domain';
@@ -36,10 +37,12 @@ import {
   canAdd,
   htmlToRichText,
   parseObjectsFromHtml,
+  parseSlidesFromHtml,
   pastedObject,
   pasteRichText,
   richTextToHtml,
   serializeObjectsToHtml,
+  serializeSlidesToHtml,
 } from '../src/views/editor/ops/index.ts';
 
 const bound = (ms: number) => ms * (process.env.CI ? 3 : 1);
@@ -303,5 +306,57 @@ describe('text paste bounds', () => {
     const r = htmlToRichText('<p>verse</p>'.repeat(200_000))!;
     expect(r.text.length).toBeLessThanOrEqual(CLIPBOARD_LIMITS.text);
     expect(htmlToRichText('a &#99999999999; b')?.text).toBe('a &#99999999999; b');
+  });
+});
+
+describe('a slide paste from the system clipboard', () => {
+  const slidePayload = (slides: unknown[], extra: Record<string, unknown> = {}) =>
+    `<meta charset="utf-8"><div data-ordo-slides="${JSON.stringify({ slides, ...extra })
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')}">x</div>`;
+
+  it('validates slides against the Slide schema, runs sanitizeObject, drops origin IDs, and caps at CLIPBOARD_LIMITS.slides', () => {
+    const html = slidePayload([
+      // Missing objects array -> invalid slide
+      { id: 'bad-slide' },
+      null,
+      // Valid slide with one valid object (with origin shapeId + group) and one invalid object
+      {
+        id: 'ok-slide',
+        objects: [
+          {
+            ...text('ok-t', {
+              style: { ...DEFAULT_THEME.textBoxDefaults, fontSizePx: 4000 },
+              origin: { src: 'pptx', shapeId: 12, ph: 'title', group: 4 },
+            }),
+            evil: '<script>1</script>',
+          },
+          { id: 'bad-obj', type: 'chart' },
+        ],
+      },
+    ]);
+    const got = parseSlidesFromHtml(html, sanitizeObject)!;
+    expect(got.slides).toHaveLength(1);
+    expect(got.left).toBe(2);
+    expect(got.leftObjects).toBe(1);
+    const s = got.slides[0]!;
+    expect(Slide.safeParse(s).success).toBe(true);
+    expect(s.objects).toHaveLength(1);
+    expect((s.objects[0] as TextObject).style.fontSizePx).toBeLessThanOrEqual(1000);
+    expect(s.objects[0]!.origin).toEqual({ src: 'pptx', group: 4 });
+
+    // Version check: own version accepted, newer version ignored.
+    const serialized = serializeSlidesToHtml([s]);
+    expect(parseSlidesFromHtml(serialized.html)?.slides).toHaveLength(1);
+    expect(parseSlidesFromHtml(slidePayload([s], { v: CLIPBOARD_FORMAT + 1 }))).toBeNull();
+
+    // Limit check: at most CLIPBOARD_LIMITS.slides slides parsed.
+    const many = Array.from({ length: 120 }, (_, i) => ({ id: `s${i}`, objects: [] }));
+    expect(parseSlidesFromHtml(slidePayload(many))?.slides).toHaveLength(CLIPBOARD_LIMITS.slides);
+  });
+
+  it('handles hostile slide payload attributes without throwing', () => {
+    expect(() => parseSlidesFromHtml(`<div data-ordo-slides="${'a'.repeat(3_000_000)}">`)).not.toThrow();
+    expect(parseSlidesFromHtml(`<div data-ordo-slides="{bad json">`)).toBeNull();
   });
 });

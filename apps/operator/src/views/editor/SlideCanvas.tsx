@@ -55,6 +55,7 @@ import {
   currentSlide,
   redo,
   selectCell,
+  selectCellRange,
   selectObject,
   selectObjects,
   setTextRange,
@@ -68,20 +69,25 @@ import { BACKING_FIELD, composing, historyKey, releaseBackingField } from './edi
 import { barState, shortcutOf, togglePatch } from './FormatBar.tsx';
 import { refocusText, textField } from './formatControls.tsx';
 import {
+  armPlainPaste,
+  consumePlainPaste,
   copyTextSelection,
   cutTextSelection,
   dragSelection,
   formatSelection,
   handleTextPaste,
+  pasteTableFromClipboard,
   tabCell,
   transformSelection,
   typeText,
 } from './actions.ts';
 import { updateObject } from './ops.ts';
 import { boxFromCorner, clickSelection, groupBox, groupMembers, isLocked, keepsAspect } from './ops/group.ts';
+import { rangeOfCells } from './ops/table.ts';
 import { selectionStyle } from './ops/text.ts';
 import { useOriginalOver } from './original.ts';
 import { snapBox } from './snapping.ts';
+import { TableCanvasOverlay } from './TableCanvasOverlay.tsx';
 import { markTableKitLoaded, tableKitLoaded } from './tableKitState.ts';
 import { TEXT_MARGIN, textDensity, textRasterKey } from './textRaster.ts';
 import { floatingBarSpot, objectToolsSpot, rotaterAngle } from './touchGeometry.ts';
@@ -190,13 +196,20 @@ export { tableKitLoaded };
  * has loaded, the press is kept and its cell selected when the kit arrives (the press is never lost). Returns
  * the kit's load (resolved at once when it is there).
  */
-export function pressTable(o: SlideObject, x: number, y: number): Promise<void> {
+export function pressTable(o: SlideObject, x: number, y: number, shift = false): Promise<void> {
   if (!tableKit) {
     pressBeforeKit = { objectId: o.id, x, y };
     return loadTableKit();
   }
   const st = useEditor.getState();
   const cell = cellAt(o, x, y);
+  if (cell >= 0 && shift && isTable(o) && st.objectId === o.id && st.cell !== undefined) {
+    const r = rangeOfCells(o.table, st.cell, cell);
+    if (r) {
+      selectCellRange(o.id, st.cell, r);
+      return Promise.resolve();
+    }
+  }
   if (cell >= 0 && !(st.inlineEditingId === o.id && st.inlineEditingCell === cell)) selectCell(o.id, cell);
   return Promise.resolve();
 }
@@ -279,6 +292,32 @@ export function tableBoxAfterTransform(
     w,
     h,
     rotation: b.rotation ?? 0,
+  };
+}
+
+/**
+ * Live slide-space bounding box of a single Konva node during an in-progress drag or transform (before
+ * `dragEnd` / `transformEnd` commits to the store), used so DOM overlays (table rails, floating bar, touch
+ * tools) move and resize in lockstep with the Konva node.
+ */
+export function liveNodeBox(
+  o: SlideObject,
+  drawnH: number,
+  node: { x: number; y: number; scaleX: number; scaleY: number; rotation: number },
+): Box {
+  const b = o.box;
+  const sx = node.scaleX;
+  const sy = node.scaleY;
+  const x0 = node.x - (b.w / 2) * sx;
+  const x1 = node.x + (b.w / 2) * sx;
+  const y0 = node.y - (b.h / 2) * sy;
+  const y1 = node.y + (drawnH - b.h / 2) * sy;
+  return {
+    x: Math.min(x0, x1),
+    y: Math.min(y0, y1),
+    w: Math.max(8, b.w * Math.abs(sx)),
+    h: Math.max(8, drawnH * Math.abs(sy)),
+    rotation: isTable(o) ? (b.rotation ?? 0) : node.rotation,
   };
 }
 function useImageTick(): number {
@@ -712,6 +751,7 @@ function TextEditingOverlay(props: {
   const inlineEditingCell = useEditor((s) => s.inlineEditingCell);
   const selectedId = useEditor((s) => s.objectId);
   const selectedCell = useEditor((s) => s.cell);
+  const selectedCellRange = useEditor((s) => s.cellRange);
   const selectedCount = useEditor((s) => s.objectIds.length);
   const range = useEditor((s) => s.textRange);
   const targetId = inlineEditingId ?? (selectedCount === 1 ? selectedId : undefined);
@@ -721,6 +761,7 @@ function TextEditingOverlay(props: {
   const o = target?.view;
   const host = target ? props.objects.find((x) => x.id === target.target.objectId) : undefined;
   const editing = !!target && inlineEditingId === target.target.objectId;
+  const activeCellRange = !editing && targetId === selectedId ? selectedCellRange : undefined;
   const [visible, setVisible] = useState(true);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new caret, selection or text restarts the blink
   useEffect(() => {
@@ -769,7 +810,28 @@ function TextEditingOverlay(props: {
               showCaret: editing && visible,
             };
             if (target.target.cell !== undefined) {
-              // The selected cell's outline, in the table's frame.
+              // The selected cell or multi-cell range outline, in the table's frame.
+              const layout = activeCellRange && isTable(host) ? tableLayoutOf(host) : undefined;
+              if (
+                activeCellRange &&
+                layout &&
+                activeCellRange.r1 < layout.rowY.length - 1 &&
+                activeCellRange.c1 < layout.colX.length - 1
+              ) {
+                const x0 = Math.min(layout.colX[activeCellRange.c0]!, layout.colX[activeCellRange.c1 + 1]!);
+                const x1 = Math.max(layout.colX[activeCellRange.c0]!, layout.colX[activeCellRange.c1 + 1]!);
+                const y0 = layout.rowY[activeCellRange.r0]!;
+                const y1 = layout.rowY[activeCellRange.r1 + 1]!;
+                ctx.save();
+                ctx.fillStyle = 'rgba(59, 130, 246, 0.16)';
+                ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+                ctx.strokeStyle = '#3b82f6';
+                ctx.lineWidth = 2 / props.scale;
+                ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+                ctx.restore();
+                ctx.restore();
+                return;
+              }
               const f = target.frame;
               ctx.save();
               ctx.strokeStyle = '#3b82f6';
@@ -839,6 +901,8 @@ export function SlideCanvas(props: {
   hasExternalTextEditor?: boolean;
   /** The deck's area of an imported deck that is not 16:9 (`source.native.slideRect`): the 4:3 guide. */
   slideRect?: SlideRect;
+  /** Desktop right-click context menu on the slide canvas or an object. */
+  onCanvasContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const coarse = useCoarsePointer();
@@ -919,7 +983,12 @@ export function SlideCanvas(props: {
     t.nodes(ns);
     t.getLayer()?.batchDraw();
   }, [objectIds, slide, props.readOnly]);
-  const selBox = selected.length > 1 ? groupBox(selected) : selected[0] && drawnBox(selected[0]);
+  const [liveBox, setLiveBox] = useState<Box | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset any in-flight live preview box when selection changes
+  useEffect(() => {
+    setLiveBox(null);
+  }, [objectIds]);
+  const selBox = liveBox ?? (selected.length > 1 ? groupBox(selected) : selected[0] && drawnBox(selected[0]));
   // A long press under a finger (Alt-click's touch equivalent) is pending.
   const press = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | undefined>(undefined);
   const endPress = () => {
@@ -945,17 +1014,22 @@ export function SlideCanvas(props: {
       // Shift toggles, so it acts once per press: on its pointer event (a mouse press fires mousedown too).
       if (mods.shift && kind !== 'pointer') return;
       const st = useEditor.getState();
-      // A press on the table already selected alone selects the cell under it (design/15 "Table editing").
+      const isRightClick = ev.button === 2;
+      // Right-clicking an object already inside a multi-selection keeps the whole multi-selection intact.
+      if (isRightClick && st.objectIds.length > 1 && st.objectIds.includes(o.id)) return;
+      // A press on the table already selected alone selects the cell under it (or Shift+Click extends cellRange).
       if (
         kind === 'pointer' &&
-        !mods.shift &&
         !mods.alt &&
+        (!mods.shift || st.cell !== undefined) &&
         isTable(o) &&
         st.objectId === o.id &&
         st.objectIds.length === 1
       ) {
+        // Right-clicking while a multi-cell range is selected keeps the range for Merge/Copy/Clear actions.
+        if (isRightClick && st.cellRange) return;
         const pos = e.target.getStage()?.getPointerPosition();
-        if (pos) void pressTable(o, pos.x / scale, pos.y / scale);
+        if (pos) void pressTable(o, pos.x / scale, pos.y / scale, mods.shift);
         return;
       }
       const sel = clickSelection(
@@ -1010,7 +1084,6 @@ export function SlideCanvas(props: {
       drag.current = box ? { leader: o.id, from, box } : undefined;
     },
     dragMove(o, e, others) {
-      overlayFollow();
       const n = e.target;
       if (inGroup(o.id)) {
         const d = drag.current;
@@ -1028,6 +1101,7 @@ export function SlideCanvas(props: {
           if (m && (id === o.id || m.isDragging())) m.position({ x: q.x + dx, y: q.y + dy });
         }
         useEditor.setState({ guides: snapped.guides });
+        overlayFollow();
         return;
       }
       const b = o.box;
@@ -1038,8 +1112,10 @@ export function SlideCanvas(props: {
       );
       n.position({ x: snapped.x + b.w / 2, y: snapped.y + b.h / 2 });
       useEditor.setState({ guides: snapped.guides });
+      overlayFollow();
     },
     dragEnd(o, e) {
+      setLiveBox(null);
       const n = e.target;
       if (inGroup(o.id)) {
         const d = drag.current;
@@ -1063,6 +1139,7 @@ export function SlideCanvas(props: {
     transformEnd(o, e) {
       // A multi-object selection is transformed as one by the Transformer's own end (below).
       if (inGroup(o.id)) return;
+      setLiveBox(null);
       const n = e.target;
       if (isTable(o)) {
         // A height drag sets box.h from the drawn height (rows a table made in ordo grows by its text); a
@@ -1126,6 +1203,17 @@ export function SlideCanvas(props: {
   const selectedCount = useEditor((s) => s.objectIds.length);
   const inlineEditingCell = useEditor((s) => s.inlineEditingCell);
   const selectedCell = useEditor((s) => s.cell);
+  const selectedCellRange = useEditor((s) => s.cellRange);
+  const selectedTable =
+    !coarse &&
+    !props.readOnly &&
+    !inlineEditingId &&
+    selected.length === 1 &&
+    isTable(selected[0]) &&
+    !isLocked(selected[0])
+      ? selected[0]
+      : undefined;
+  const selectedTableLayout = selectedTable ? tableLayoutOf(selectedTable) : undefined;
   // What the editor draws whole where that budget would draw the lighter copy: in idle time, the selected
   // object at once, never while a service is live (wholeDraw.ts, design/15 "Canvas drawing").
   const whole = useWholeDraw(drawn.objects, budget, {
@@ -1167,9 +1255,27 @@ export function SlideCanvas(props: {
     if (was && !inlineEditingId) releaseBackingField();
   }, [inlineEditingId]);
   // The editing overlay's layer: redrawn by itself (the caret's blink, a selection), and with the objects
-  // when one of them moves under it (a drag, a transform).
+  // when one of them moves under it (a drag, a transform). Also keeps DOM overlays (table rails, floating
+  // bar, touch tools) synced in real time with the Konva node's live transform.
   const overlay = useRef<Konva.Layer>(null);
-  const overlayFollow = () => overlay.current?.batchDraw();
+  const overlayFollow = () => {
+    overlay.current?.batchDraw();
+    if (selected.length === 1) {
+      const o = selected[0]!;
+      const n = nodes.current.get(o.id);
+      if (n) {
+        setLiveBox(
+          liveNodeBox(o, drawnHeight(o), {
+            x: n.x(),
+            y: n.y(),
+            scaleX: n.scaleX(),
+            scaleY: n.scaleY(),
+            rotation: n.rotation(),
+          }),
+        );
+      }
+    }
+  };
 
   // 'Show original' (PptxSlideCard): the PowerPoint picture over the slide, to compare; it takes the pointer.
   const originalId = useOriginalOver(slide);
@@ -1180,7 +1286,16 @@ export function SlideCanvas(props: {
   );
   const stageContainerRef = useRef<HTMLDivElement>(null);
   return (
-    <div ref={box} className="canvasbox">
+    <div
+      ref={box}
+      className="canvasbox"
+      data-editor-keys=""
+      onContextMenu={(e) => {
+        if (!props.onCanvasContextMenu) return;
+        if (useEditor.getState().inlineEditingId) return;
+        props.onCanvasContextMenu(e);
+      }}
+    >
       <div ref={stageContainerRef} style={{ position: 'relative', width: size.w, height: size.h }}>
         <Stage
           width={size.w}
@@ -1334,6 +1449,15 @@ export function SlideCanvas(props: {
             </Layer>
           )}
         </Stage>
+        {selectedTable && selectedTableLayout && (
+          <TableCanvasOverlay
+            o={selectedTable}
+            layout={selectedTableLayout}
+            scale={scale}
+            cellRange={selectedCellRange}
+            liveBox={liveBox ?? undefined}
+          />
+        )}
         {!props.hasExternalTextEditor && backing && (
           <CanvasBackingTextEditor
             obj={backing.view}
@@ -1486,6 +1610,10 @@ export function CanvasBackingTextEditor({
       }}
       onKeyDown={(e) => {
         if (composing(e)) return;
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'v') {
+          armPlainPaste();
+          return;
+        }
         // Tab and Shift+Tab in a table's cell: the next or previous cell, its text selected (a new row past
         // the last cell, as PowerPoint adds one).
         if (target.cell !== undefined && e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -1548,8 +1676,25 @@ export function CanvasBackingTextEditor({
       }}
       onPaste={(e) => {
         if (off) return;
+        const plainOnly = consumePlainPaste();
+        if (!plainOnly && target.cell !== undefined) {
+          const html = e.clipboardData?.getData('text/html') ?? '';
+          const plain = e.clipboardData?.getData('text/plain') ?? '';
+          if (pasteTableFromClipboard(target.objectId, target.cell, html, plain)) {
+            e.preventDefault();
+            stopInlineEditing();
+            return;
+          }
+        }
         const el = e.currentTarget;
-        const caret = handleTextPaste(obj, el.selectionStart, el.selectionEnd, e.clipboardData, target);
+        const caret = handleTextPaste(
+          obj,
+          el.selectionStart,
+          el.selectionEnd,
+          e.clipboardData,
+          target,
+          plainOnly,
+        );
         if (caret !== null) {
           e.preventDefault();
           setTextRange({ start: caret, end: caret, caret });

@@ -1,5 +1,6 @@
 import { api } from '@ordo/client';
 import { useEffect, useState } from 'react';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { errorText, toast } from '../../state/toasts.ts';
 
 export function BackupsPage() {
@@ -46,7 +47,29 @@ export function BackupsPage() {
       <table className="list">
         <tbody>
           {files?.map((f) => (
-            <tr key={f}>
+            <tr
+              key={f}
+              onContextMenu={(e) => {
+                const dateArg = f.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? f;
+                openContextMenu(e, [
+                  {
+                    label: 'Copy filename',
+                    onSelect: () => {
+                      void navigator.clipboard?.writeText(f);
+                      toast('Copied backup filename.', 'info');
+                    },
+                  },
+                  {
+                    label: 'Copy restore command',
+                    onSelect: () => {
+                      const cmd = `ordo-hub restore ${dateArg}`;
+                      void navigator.clipboard?.writeText(cmd);
+                      toast(`Copied: ${cmd}`, 'info');
+                    },
+                  },
+                ]);
+              }}
+            >
               <td className="mono">{f}</td>
             </tr>
           ))}

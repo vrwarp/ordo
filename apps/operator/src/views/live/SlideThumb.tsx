@@ -1,9 +1,11 @@
+import { fileUrl } from '@ordo/client';
 import { type Cue, firstText, type Look, type Media, type Slide } from '@ordo/domain';
 import type { OutputHealthEntry } from '@ordo/protocol';
-import { fileUrl } from '@ordo/client';
 import { memo } from 'react';
+import { midiTriggerBadge, slideMidiTrigger } from '../../components/MidiTriggerPicker.tsx';
 import { useVisible } from '../../hooks.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
+import { useLibrary } from '../../state/library.ts';
 
 export type ThumbMarks = {
   live: boolean;
@@ -28,9 +30,12 @@ export const SlideThumb = memo(function SlideThumb(props: {
   hidden?: boolean;
   onClick?: () => void;
   onDoubleClick?: () => void;
+  onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
   footer?: React.ReactNode;
 }) {
   const [ref, visible] = useVisible<HTMLDivElement>();
+  const midiPresets = useLibrary((s) => s.data.settings.surfaces.midiPresets);
+  const midiBadge = props.slide ? midiTriggerBadge(slideMidiTrigger(props.slide), midiPresets) : null;
   const bg = props.bgMediaId ? stillHash(props.media(props.bgMediaId)) : undefined;
   const url = useThumb(
     props.slide,
@@ -44,6 +49,7 @@ export const SlideThumb = memo(function SlideThumb(props: {
       className={cls}
       onClick={props.onClick}
       onDoubleClick={props.onDoubleClick}
+      onContextMenu={props.onContextMenu}
       title={props.label}
     >
       {url || (!props.slide && bg && visible) ? (
@@ -64,13 +70,36 @@ export const SlideThumb = memo(function SlideThumb(props: {
       {props.marks.waiting && <span className="wait" title="Waiting for outputs to arm" />}
       <div className="cap">
         <span className="ellipsis grow">{props.label}</span>
-        {props.slide?.midiCues && props.slide.midiCues.length > 0 && (
+        {midiBadge && (
           <span
             className="tag"
-            title={`${props.slide.midiCues.length} outgoing MIDI cue(s)`}
-            style={{ fontSize: 9, padding: '1px 4px', lineHeight: '12px', background: 'var(--panel-alt)' }}
+            title={midiBadge.title}
+            style={{
+              fontSize: 9,
+              padding: '1px 4px',
+              lineHeight: '12px',
+              background: 'var(--panel-alt)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              maxWidth: 96,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
           >
-            MIDI
+            {midiBadge.color && (
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: midiBadge.color,
+                  flexShrink: 0,
+                }}
+              />
+            )}
+            <span className="ellipsis">{midiBadge.label}</span>
           </span>
         )}
         {props.footer}

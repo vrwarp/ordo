@@ -49,15 +49,22 @@ import { APP_VERSION } from './index.ts';
 // than go on without them: without sub-wave 1's shared changes above, or sending the hub PowerPoint scenes
 // parsed as 0.8.1 parsed them (design/27, "CONVERTER_VERSION stays 2 through sub-wave 1c too"). The digest is
 // unchanged (it leaves the APP_VERSION line out).
-// The follow-up pull request's sub-wave 2 changes two shared sources and the version stays 0.9.0 (the pull request's
-// one bump to 0.10.0 is its last commit, so only the digest is recorded, once, after the sub-wave's last merge):
-// live-by-ref adds four optional `resolvedId` fields to the protocol (hello, live.resync, live.state, live.delta), so
-// older and newer builds read each other's messages as before (a missing field is what they sent before); live-frame
-// adds `SlideDesc.full` to the renderer's plan.ts (the slide before the live clamp's cut, only for a slide past a count;
-// the descriptor of any other slide is unchanged).
+// 0.9.1 for QuickQ 20 MIDI support: schemas.ts adds MidiMapping.kind 'noteOff' and SurfaceSettings.midiDefaultOutput,
+// which a stale 0.9.0 operator tab would reject or strip when saving surface settings.
+// 0.9.2 for Lighting & MIDI triggers: schemas.ts adds MidiPreset, MidiTrigger, Media.midi, PlaylistItem.midi,
+// Section.midi, Slide.midi, ActionId 'midiPreset', and SurfaceSettings.midiPresets; live.ts and cues.ts resolve
+// 4-scope background/item/section/slide MIDI cues onto Cue.
+// The follow-up pull request's sub-wave 2 changes two shared sources and, with main's 0.9.1 and 0.9.2 (the two entries
+// above, merged in from main's PRs #31 to #39), the version stays 0.9.2 until the pull request's one bump to 0.10.0, its
+// last commit, so only the digest is recorded, once, after the merge: live-by-ref adds four optional `resolvedId` fields
+// to the protocol (hello, live.resync, live.state, live.delta), so older and newer builds read each other's messages as
+// before (a missing field is what they sent before); live-frame adds `SlideDesc.full` to the renderer's plan.ts (the
+// slide before the live clamp's cut, only for a slide past a count; the descriptor of any other slide is unchanged).
+// The two sides changed different shared sources (main's: schemas.ts, cues.ts, live.ts; the sub-wave's: the protocol's
+// index.ts and plan.ts), so the merged digest is each side's changes together.
 const RECORDED = {
-  version: '0.9.0',
-  digest: '3070fa8da409b53126afa9d6874d48b55dfd998f7379dfcb68f31cdf3a4343e8',
+  version: '0.9.2',
+  digest: 'b80fba978e638b215a719602e0653722870a98011ae2d360b5e9a7396724d174',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

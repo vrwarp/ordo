@@ -1,8 +1,31 @@
-import type { Cue, ResolvedPlaylist } from './live.ts';
+import type { Cue, ResolvedMidiCue, ResolvedPlaylist } from './live.ts';
 import { extraText } from './m9-readers.ts';
 import { readableText } from './readable.ts';
 import { playingObject } from './resolve.ts';
-import type { Arrangement, Presentation, Section, Slide, SlideObject, TextObject } from './schemas.ts';
+import type {
+  Arrangement,
+  MidiPreset,
+  MidiTrigger,
+  Presentation,
+  Section,
+  Slide,
+  SlideObject,
+  TextObject,
+} from './schemas.ts';
+
+/** Resolve a MidiTrigger against the venue's snapshotted MidiPresets. Missing presets degrade silently to undefined. */
+export function resolveMidiTrigger(
+  trigger: MidiTrigger | undefined,
+  presets: readonly MidiPreset[] | undefined,
+): ResolvedMidiCue[] | undefined {
+  if (!trigger) return undefined;
+  if (trigger.kind === 'cues') {
+    return trigger.cues.length ? trigger.cues.map((c) => ({ ...c })) : undefined;
+  }
+  const preset = presets?.find((p) => p.id === trigger.presetId);
+  if (!preset || preset.cues.length === 0) return undefined;
+  return preset.cues.map((c) => ({ ...c, presetName: preset.name }));
+}
 
 /** The arrangement used by a playlist item: the named one, else the first, else authoring order. */
 export function arrangementFor(p: Presentation, arrangementId?: string): Arrangement {
@@ -25,12 +48,16 @@ export function arrangedSections(p: Presentation, arrangementId?: string): Secti
 }
 
 /** Flatten a resolved playlist into the operator's position space. */
-export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presentations' | 'media'>): Cue[] {
+export function expandCues(
+  resolved: Pick<ResolvedPlaylist, 'playlist' | 'presentations' | 'media' | 'midiPresets'>,
+): Cue[] {
   const cues: Cue[] = [];
+  const presets = resolved.midiPresets;
   resolved.playlist.items.forEach((item, itemIndex) => {
     if (item.kind === 'presentation') {
       const p = resolved.presentations[item.presentationId];
       if (!p) return;
+      const itemMidi = resolveMidiTrigger(item.midi, presets);
       const sections = arrangedSections(p, item.arrangementId);
       const slides = sections.flatMap((section, arrangementPos) =>
         section.slides.map((slide, slideIndexInSection) => ({
@@ -63,6 +90,11 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
             untilCue: first + slides.length - 1,
           };
         }
+        const backgroundMidi = bgId ? resolveMidiTrigger(resolved.media[bgId]?.midi, presets) : undefined;
+        const sectionMidi = resolveMidiTrigger(section.midi, presets);
+        const slideTrigger: MidiTrigger | undefined =
+          slide.midi ?? (slide.midiCues?.length ? { kind: 'cues', cues: slide.midiCues } : undefined);
+        const slideMidi = resolveMidiTrigger(slideTrigger, presets);
         cues.push({
           index: cues.length,
           itemId: item.id,
@@ -90,7 +122,10 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
           // A hidden PowerPoint slide stays in the service (design/27 §9): sequential navigation skips its
           // cue (`nextShownCue`), a GO with its index shows it.
           ...(slide.hidden === true ? { hidden: true } : {}),
-          ...(slide.midiCues?.length ? { midiCues: slide.midiCues } : {}),
+          ...(backgroundMidi?.length ? { backgroundMidi } : {}),
+          ...(itemMidi?.length ? { itemMidi } : {}),
+          ...(sectionMidi?.length ? { sectionMidi } : {}),
+          ...(slideMidi?.length ? { midiCues: slideMidi } : {}),
           ...mediaCues,
           ...(itemSlideAudio ? { slideAudio: itemSlideAudio } : {}),
         });
@@ -98,6 +133,7 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
     } else if (item.kind === 'media') {
       const m = resolved.media[item.mediaId];
       if (!m) return;
+      const itemMidi = resolveMidiTrigger(item.midi, presets);
       cues.push({
         index: cues.length,
         itemId: item.id,
@@ -109,8 +145,10 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
         loop: item.loop ?? m.loop,
         onEnd: item.onEnd ?? 'hold',
         audio: item.audio ?? (m.audio ? { pairId: m.audio.pairId, gainDb: m.audio.gainDb } : undefined),
+        ...(itemMidi?.length ? { itemMidi } : {}),
       });
     } else if (item.kind === 'timer') {
+      const itemMidi = resolveMidiTrigger(item.midi, presets);
       cues.push({
         index: cues.length,
         itemId: item.id,
@@ -123,6 +161,7 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
         ),
         timerId: item.id,
         timer: item.timer,
+        ...(itemMidi?.length ? { itemMidi } : {}),
       });
     } else {
       cues.push({

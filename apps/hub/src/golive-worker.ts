@@ -46,6 +46,7 @@ export type GoLiveBundle = {
   fonts: Font[];
   looks: Look[];
   general: GeneralSettings;
+  midiPresets?: import('@ordo/domain').MidiPreset[];
   takenAt: number;
 };
 
@@ -76,6 +77,7 @@ export function bundleInputs(
     fonts: () => (Array.isArray(b.fonts) ? b.fonts : []),
     looks: Array.isArray(b.looks) ? b.looks : [],
     general: b.general && typeof b.general === 'object' ? b.general : {},
+    ...(Array.isArray(b.midiPresets) ? { midiPresets: b.midiPresets } : {}),
     ...(extra.takenAt !== undefined ? { takenAt: extra.takenAt } : {}),
     ...(extra.cachedCopy ? { cachedCopy: extra.cachedCopy } : {}),
   };

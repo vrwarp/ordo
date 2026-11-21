@@ -216,8 +216,25 @@ export const DEFAULT_SURFACES: SurfaceSettings = {
     { id: 'midi-prev', kind: 'note', number: 62, threshold: 1, action: { id: 'prev' } },
   ],
   midiEnabled: false,
+  midiPresets: [],
   messagePresets: ['Wrap up', 'Repeat chorus', 'One more time', 'Watch the leader', 'Mic check'],
 };
+
+/** Starter ChamSys QuickQ 20 lighting presets matching a typical Sunday run sheet (PB 1 Cue 1 & 2). */
+export const QUICKQ_STARTER_MIDI_PRESETS = [
+  {
+    id: 'qq-lights-full',
+    name: 'Lights: Full',
+    color: '#f59e0b',
+    cues: [{ id: 'qq-full-1', channel: 1, type: 'noteOn' as const, number: 48, value: 1 }],
+  },
+  {
+    id: 'qq-lights-half',
+    name: 'Lights: Half',
+    color: '#3b82f6',
+    cues: [{ id: 'qq-half-1', channel: 1, type: 'noteOn' as const, number: 48, value: 2 }],
+  },
+];
 
 /** Phones are not used during services until Settings → PINs says so (design/28 §9, owner question 5). */
 export const DEFAULT_PHONES: PhoneSettings = { enabled: false };
@@ -273,6 +290,33 @@ export const PROPRESENTER_MIDI_MAPPINGS: MidiMapping[] = [
   { id: 'pro-clear-msg', kind: 'note', number: 28, threshold: 1, action: { id: 'messageDismiss' } },
   { id: 'pro-play-pause', kind: 'note', number: 29, threshold: 1, action: { id: 'mediaPlayPause' } },
   { id: 'pro-restart', kind: 'note', number: 30, threshold: 1, action: { id: 'mediaRestart' } },
+];
+
+/**
+ * ChamSys QuickQ 20 starter MIDI input preset (requires QuickQ v11+ MIDI Output on Channel 1).
+ * Uses Playback 1 control notes per QuickQ manual Chapter 12 Table 1:
+ * Go = 72, Pause/Back = 84, Release (Note Off) = 60, Go to Cue (velocity = cue #) = 48.
+ */
+export const QUICKQ_MIDI_MAPPINGS: MidiMapping[] = [
+  { id: 'qq-pb1-go', kind: 'note', channel: 1, number: 72, threshold: 1, action: { id: 'next' } },
+  { id: 'qq-pb1-pause', kind: 'note', channel: 1, number: 84, threshold: 1, action: { id: 'prev' } },
+  {
+    id: 'qq-pb1-release',
+    kind: 'noteOff',
+    channel: 1,
+    number: 60,
+    threshold: 0,
+    action: { id: 'clearSlide' },
+  },
+  {
+    id: 'qq-pb1-goto',
+    kind: 'note',
+    channel: 1,
+    number: 48,
+    threshold: 1,
+    paramSource: 'velocity',
+    action: { id: 'goToSlide' },
+  },
 ];
 
 export const DEFAULT_GENERAL: GeneralSettings = {
