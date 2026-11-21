@@ -523,9 +523,7 @@ describe('resolved playlist size (design/27 §14.10)', () => {
   const w59Lines = (r: ReturnType<typeof resolvePlaylist>) =>
     r.degraded?.filter((d) => d.reason === W59_TEXT) ?? [];
 
-  it('a service past the GO-lead size (6 MiB) goes live with the W59 line; a small one without', {
-    timeout: budgetMs(60_000),
-  }, () => {
+  it('a service past the GO-lead size (6 MiB) goes live with the W59 line; a small one without', () => {
     const big = resolvePlaylist(inputs(1, 500, charsFor(GOLIVE_SLOW_BYTES + 64 * KiB)), 'pl', { digest });
     const bytes = jsonBytes({ ...big, degraded: undefined });
     expect(bytes).toBeGreaterThan(6 * MiB);
@@ -537,9 +535,7 @@ describe('resolved playlist size (design/27 §14.10)', () => {
   });
 
   // Q16.b: the line was 3 MiB, and Traffic Dark's one presentation (3.13 MiB) carried it.
-  it('a service of 3.13 MiB (Traffic Dark) goes live without W59; so does one just under 6 MiB', {
-    timeout: budgetMs(60_000),
-  }, () => {
+  it('a service of 3.13 MiB (Traffic Dark) goes live without W59; so does one just under 6 MiB', () => {
     const traffic = resolvePlaylist(inputs(1, 500, charsFor(Math.round(3.13 * MiB))), 'pl', { digest });
     const bytes = jsonBytes({ ...traffic, degraded: undefined });
     expect(bytes).toBeGreaterThan(3 * MiB);
@@ -552,7 +548,7 @@ describe('resolved playlist size (design/27 §14.10)', () => {
     expect(w59Lines(under)).toEqual([]);
   });
 
-  it('a presentation at the 8 MiB budget still goes live with W59', { timeout: budgetMs(60_000) }, () => {
+  it('a presentation at the 8 MiB budget still goes live with W59', () => {
     const full = resolvePlaylist(inputs(1, 500, charsFor(SIZE_BUDGETS.presentationMax)), 'pl', { digest });
     expect(jsonBytes({ ...full, degraded: undefined })).toBeGreaterThan(7.9 * MiB);
     expect(w59Lines(full)).toEqual([{ cueIndex: -1, reason: W59_TEXT }]);
