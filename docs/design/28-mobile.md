@@ -711,7 +711,11 @@ hub downgraded past it never finds a capped cookie and answers 401):
   not carry them, a slide that has MIDI cues may not be removed, and a kept one keeps them unchanged. (P0 as
   built, after its review: also a slide's `audio` and `durationMs`, playback as a plan item's fields are, and
   the presentation's `loop` timing; a new presentation's `source` may only be of a typed kind, `manual`, `paste`
-  or `songselect`, with no file, the seam for P2's "New song from text".)
+  or `songselect`, with no file, the seam for P2's "New song from text".) The lighting triggers main's PR #37 added
+  (`Slide.midi`, the uniform trigger the editor writes now, with `midiCues` as the older form; `Section.midi`; a
+  plan item's `midi`; `Media.midi`) are show control as the cues are: the same comparison for a slide (field
+  `midiCues`), and field `midi` for a section, a plan item and a media item (`mediaPatchRefusal`); a section that
+  had a trigger may not be removed either.
 - **Plates**: a phone never bakes the decoration plates of M9 (design/27; decisions: never on phones or
   compact layouts, never while live except the go-live bake). A phone's save may leave a plate stale; the
   venue PC re-bakes it after its own save or at Go live, and readiness lists it (§5.2).

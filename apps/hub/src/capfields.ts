@@ -2,7 +2,8 @@
  * Per-field caps on whole-document saves (design/28 §3.2 "Refused for `light`, per field"; §10 items 6 and 11).
  * A presentation or playlist save sends the whole document, so the hub compares a capped session's body with
  * the stored one, by slide id and by item id, and refuses (403 `cap` naming the field) a change to what a phone
- * may never change: a slide's MIDI cues (show control), its sound and its auto-advance time (playback, as a plan
+ * may never change: the MIDI cues and lighting triggers of a slide, a section, a plan item or a background (show
+ * control), a slide's sound and its auto-advance time (playback, as a plan
  * item's), its PowerPoint data and the presentation's source (a phone can never set `pptx.pending` and queue a
  * LibreOffice follow-up), the presentation's loop timing, and a plan item's show-control and playback fields.
  * Pure; O(size of the body), which the schemas already bound.
@@ -13,6 +14,7 @@ import { HttpError } from './errors.ts';
 
 export type CapField =
   | 'midiCues'
+  | 'midi'
   | 'slide.audio'
   | 'durationMs'
   | 'pptx'
@@ -34,6 +36,7 @@ export type FieldRefusal = { field: CapField; slideId?: string; itemId?: string 
 /** What the phone shows when a save is refused for a field (the client shows the hub's message). */
 export const FIELD_MESSAGES: Record<CapField, string> = {
   midiCues: "A phone can't change a slide's lighting (MIDI) cues.",
+  midi: "A phone can't change the lighting (MIDI) of a section, a plan item or a background.",
   'slide.audio': "A phone can't change a slide's sound.",
   durationMs: "A phone can't change how long a slide shows before the next one.",
   pptx: "A phone can't change a slide's PowerPoint data.",
@@ -63,7 +66,12 @@ function same(a: unknown, b: unknown): boolean {
   return isDeepStrictEqual(JSON.parse(JSON.stringify(a)), JSON.parse(JSON.stringify(b)));
 }
 
-const cues = (s: Slide | undefined) => (s?.midiCues?.length ? s.midiCues : []);
+/**
+ * A slide's lighting: its MIDI cues and its uniform trigger (`Slide.midi`, which is what the editor writes now, the
+ * cues being the older form). Absent and empty cues are the same; an absent trigger is nothing.
+ */
+const lighting = (s: Slide | undefined) => ({ cues: s?.midiCues?.length ? s.midiCues : [], midi: s?.midi });
+const hasLighting = (s: Slide) => (s.midiCues?.length ?? 0) > 0 || s.midi !== undefined;
 
 function slidesById(p: Presentation | undefined): Map<string, Slide[]> {
   const out = new Map<string, Slide[]>();
@@ -103,7 +111,7 @@ export function presentationRefusal(
   for (const [id, list] of after) {
     const old = before.get(id)?.[0];
     for (const s of list) {
-      if (!same(cues(old), cues(s))) return { field: 'midiCues', slideId: id };
+      if (!same(lighting(old), lighting(s))) return { field: 'midiCues', slideId: id };
       if (!same(old?.audio, s.audio)) return { field: 'slide.audio', slideId: id };
       if (!same(old?.durationMs, s.durationMs)) return { field: 'durationMs', slideId: id };
       if (!same(old?.pptx, s.pptx)) return { field: 'pptx', slideId: id };
@@ -114,7 +122,16 @@ export function presentationRefusal(
     }
   }
   for (const [id, list] of before)
-    if (!after.has(id) && list.some((s) => cues(s).length)) return { field: 'midiCues', slideId: id };
+    if (!after.has(id) && list.some(hasLighting)) return { field: 'midiCues', slideId: id };
+  // A section's own trigger (`Section.midi`): kept as stored, none on a new one, and a section that had one stays.
+  const sections = new Map<string, Presentation['sections'][number]>();
+  for (const sec of stored?.sections ?? []) if (!sections.has(sec.id)) sections.set(sec.id, sec);
+  const kept = new Set<string>();
+  for (const sec of next.sections ?? []) {
+    kept.add(sec.id);
+    if (!same(sections.get(sec.id)?.midi, sec.midi)) return { field: 'midi' };
+  }
+  for (const [id, sec] of sections) if (!kept.has(id) && sec.midi !== undefined) return { field: 'midi' };
   return undefined;
 }
 
@@ -137,9 +154,11 @@ function itemRefusal(old: Item | undefined, it: Item): FieldRefusal | undefined 
       return { field: 'keepBackground', itemId };
     if (!same(o?.audioMediaId, it.audioMediaId)) return { field: 'audioMediaId', itemId };
     if (!same(o?.countdownTimer, it.countdownTimer)) return { field: 'countdownTimer', itemId };
+    if (!same(o?.midi, it.midi)) return { field: 'midi', itemId };
     return undefined;
   }
   const o = old?.kind === 'media' ? old : undefined;
+  if (!same(o?.midi, it.midi)) return { field: 'midi', itemId };
   if (!same(o?.loop, it.loop)) return { field: 'loop', itemId };
   if (!same(o?.onEnd, it.onEnd)) return { field: 'onEnd', itemId };
   if (!same(o?.audio, it.audio)) return { field: 'audio', itemId };
@@ -148,8 +167,8 @@ function itemRefusal(old: Item | undefined, it: Item): FieldRefusal | undefined 
 
 /**
  * Why a capped save of a playlist is refused, or undefined: per item id, a presentation item keeps its
- * `keepBackground`, `audioMediaId` and `countdownTimer` (a new one has none), a media item its `loop`, `onEnd`
- * and `audio`; action and timer items are not added, changed or removed.
+ * `keepBackground`, `audioMediaId`, `countdownTimer` and `midi` (a new one has none), a media item its `loop`,
+ * `onEnd`, `audio` and `midi`; action and timer items are not added, changed or removed.
  */
 export function playlistRefusal(stored: Playlist | undefined, next: Playlist): FieldRefusal | undefined {
   const before = new Map<string, Item>();
@@ -168,10 +187,11 @@ export function playlistRefusal(stored: Playlist | undefined, next: Playlist): F
   return undefined;
 }
 
-/** `PUT /media/:id` from a capped session: name and tags only; the playback fields stay as stored. */
+/** `PUT /media/:id` from a capped session: name and tags only; the playback fields and the lighting trigger stay as stored. */
 export function mediaPatchRefusal(cur: Media, next: Media): FieldRefusal | undefined {
   if (!same(cur.loop, next.loop)) return { field: 'loop' };
   if (!same(cur.isBackground, next.isBackground)) return { field: 'isBackground' };
   if (!same(cur.audio, next.audio)) return { field: 'audio' };
+  if (!same(cur.midi, next.midi)) return { field: 'midi' };
   return undefined;
 }

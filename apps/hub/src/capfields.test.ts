@@ -9,6 +9,9 @@ import {
 } from './capfields.ts';
 
 const cue = { id: 'c1', channel: 2, type: 'programChange' as const, number: 5, value: 127 };
+/** A lighting trigger as the editor writes it now (`Slide.midi`, `Section.midi`, a plan item's and a media item's `midi`). */
+const light = { kind: 'preset' as const, presetId: 'lights-full' };
+const lightB = { kind: 'cues' as const, cues: [cue] };
 const pptx = { fileId: 'f'.repeat(64), index: 0, class: 'native' as const, version: 1 };
 
 function deck(slides: Slide[], extra: Partial<Presentation> = {}): Presentation {
@@ -102,6 +105,80 @@ describe('presentationRefusal (design/28 §3.2 per field)', () => {
     it(what, () => {
       expect(presentationRefusal(stored, next)).toEqual(want);
     });
+
+  // Lighting triggers (main's PR #37): the same rule as the cues, for a slide's `midi` and a section's `midi`.
+  describe('lighting triggers', () => {
+    const lit = deck([slide('a', { midi: light }), slide('b')], {
+      sections: [
+        {
+          id: 'sec',
+          label: 'Main',
+          short: 'M',
+          slides: [slide('a', { midi: light }), slide('b')],
+          midi: lightB,
+        },
+      ],
+    });
+    const slidesOf = (p: Presentation) => p.sections[0]!.slides;
+    const withSection = (slides: Slide[], midi?: typeof light | typeof lightB): Presentation =>
+      deck([], { sections: [{ id: 'sec', label: 'Main', short: 'M', slides, ...(midi ? { midi } : {}) }] });
+    const sameSlides = slidesOf(lit);
+    const rowsM: [string, Presentation, ReturnType<typeof presentationRefusal>][] = [
+      ['unchanged', withSection(sameSlides, lightB), undefined],
+      [
+        'a kept slide with its trigger changed',
+        withSection([slide('a', { midi: lightB }), slide('b')], lightB),
+        { field: 'midiCues', slideId: 'a' },
+      ],
+      [
+        'a kept slide with a trigger added',
+        withSection([sameSlides[0]!, slide('b', { midi: light })], lightB),
+        { field: 'midiCues', slideId: 'b' },
+      ],
+      [
+        'a kept slide with its trigger removed',
+        withSection([slide('a'), slide('b')], lightB),
+        { field: 'midiCues', slideId: 'a' },
+      ],
+      [
+        'a slide with a trigger removed',
+        withSection([slide('b')], lightB),
+        { field: 'midiCues', slideId: 'a' },
+      ],
+      [
+        'a new slide with a trigger',
+        withSection([...sameSlides, slide('n', { midi: light })], lightB),
+        { field: 'midiCues', slideId: 'n' },
+      ],
+      ['a section trigger changed', withSection(sameSlides, light), { field: 'midi' }],
+      ['a section trigger removed', withSection(sameSlides), { field: 'midi' }],
+      ['a section trigger added to a kept section', withSection(sameSlides, lightB), undefined],
+    ];
+    for (const [what, next, want] of rowsM)
+      it(what, () => {
+        expect(presentationRefusal(lit, next)).toEqual(want);
+      });
+    it('a new section with a trigger, and a section that had one removed', () => {
+      const plain = deck([slide('a'), slide('b')]);
+      expect(presentationRefusal(plain, withSection([slide('a'), slide('b')], light))).toEqual({
+        field: 'midi',
+      });
+      const two = deck([], {
+        sections: [
+          { id: 'sec', label: 'Main', short: 'M', slides: [slide('a'), slide('b')] },
+          { id: 'sec2', label: 'More', short: 'N', slides: [], midi: light },
+        ],
+      });
+      expect(presentationRefusal(two, withSection([slide('a'), slide('b')]))).toEqual({ field: 'midi' });
+    });
+    it('a new presentation carries no trigger', () => {
+      expect(presentationRefusal(undefined, deck([slide('a', { midi: light })]))).toEqual({
+        field: 'midiCues',
+        slideId: 'a',
+      });
+      expect(presentationRefusal(undefined, withSection([slide('a')], light))).toEqual({ field: 'midi' });
+    });
+  });
 
   it('a new presentation carries no cues, no PowerPoint data and no source', () => {
     expect(presentationRefusal(undefined, deck([slide('a'), slide('b')]))).toBeUndefined();
@@ -267,6 +344,33 @@ describe('playlistRefusal', () => {
       with_(stored.items.slice(1)),
       undefined,
     ],
+    [
+      'a lighting trigger set on a presentation item',
+      with_([{ ...it1, midi: light } as Playlist['items'][0], ...stored.items.slice(1)]),
+      { field: 'midi', itemId: 'i1' },
+    ],
+    [
+      'a lighting trigger set on a media item',
+      with_([
+        it1,
+        { id: 'i2', kind: 'media', mediaId: 'v1', loop: true, midi: lightB },
+        ...stored.items.slice(2),
+      ]),
+      { field: 'midi', itemId: 'i2' },
+    ],
+    [
+      'a new item with a lighting trigger',
+      with_([...stored.items, { id: 'n', kind: 'presentation', presentationId: 'p2', midi: light }]),
+      { field: 'midi', itemId: 'n' },
+    ],
+    [
+      'a timer item given a lighting trigger',
+      with_([
+        ...stored.items.slice(0, 3),
+        { id: 'i4', kind: 'timer', timer: { kind: 'elapsed' }, midi: light },
+      ]),
+      { field: 'item.timer', itemId: 'i4' },
+    ],
   ];
   for (const [what, next, want] of rows)
     it(what, () => {
@@ -284,6 +388,13 @@ describe('mediaPatchRefusal', () => {
     expect(
       mediaPatchRefusal(cur, { ...cur, audio: { gainDb: -3, pairId: undefined } } as Media),
     ).toBeUndefined();
+  });
+  it('the lighting trigger stays as stored (a background’s lighting is show control)', () => {
+    expect(mediaPatchRefusal(cur, { ...cur, midi: light } as Media)).toEqual({ field: 'midi' });
+    const lit = { ...cur, midi: light } as Media;
+    expect(mediaPatchRefusal(lit, { ...lit, name: 'x' } as Media)).toBeUndefined();
+    expect(mediaPatchRefusal(lit, { ...lit, midi: undefined } as Media)).toEqual({ field: 'midi' });
+    expect(mediaPatchRefusal(lit, { ...lit, midi: lightB } as Media)).toEqual({ field: 'midi' });
   });
 });
 
