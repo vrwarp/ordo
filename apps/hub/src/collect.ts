@@ -8,7 +8,9 @@
  * saved 50 times is 2,000 rows. A file is named while an interval of it reaches the oldest revision the hub still
  * keeps of that presentation (the current one always does). Pruning and deleting remove what they remove.
  */
+import { readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
+import { uptime } from 'node:os';
 import { nextTimeOfDay } from '@ordo/domain';
 import type Database from 'better-sqlite3';
 import type { Logger } from 'pino';
@@ -438,13 +440,19 @@ const COLLECT_SLICE_MS = 5;
  * suspended machine), so every mark starts again. A jump shorter than this is inside the night the delay adds.
  */
 const CLOCK_JUMP_MS = 6 * 3_600_000;
+/**
+ * A wall clock before this is not a date: a hub without a clock battery starts at its firmware's date or at 1970 and
+ * waits for the network (or a technician) to set it, and marks made on it would be years old the day it is set.
+ * A run on such a clock does nothing (no mark, no sweep, no report); it is the first of the product's year.
+ */
+export const COLLECT_CLOCK_FLOOR_MS = Date.UTC(2026, 0, 1);
 
 export type CollectResult =
-  | { ran: false; reason: 'off' | 'live' | 'unknown' | 'backfill' | 'busy' }
+  | { ran: false; reason: 'off' | 'live' | 'unknown' | 'backfill' | 'busy' | 'clock' }
   | {
       ran: true;
       mode: 'report' | 'on';
-      /** Files newly marked unnamed by this run (their 30 days start). */
+      /** Files newly marked unnamed by this run (the delay's days start). */
       marked: number;
       /** Files deleted (report: that `on` would delete). */
       files: number;
@@ -462,8 +470,13 @@ export type CollectorOptions = {
   timeZone: () => string;
   log: Logger;
   now?: () => number;
-  /** A clock that only runs forward, in milliseconds (default `performance.now()`; with `now` injected it follows `now`). */
+  /**
+   * A clock that only runs forward and counts the time the machine sleeps, in milliseconds (default the system's
+   * uptime, which does; with `now` injected it follows `now`).
+   */
   mono?: () => number;
+  /** The id of this boot of the machine (default Linux's `boot_id`; undefined where there is none). */
+  boot?: () => string | undefined;
   yield?: () => Promise<void>;
   sliceMs?: number;
   /** Called after each file or picture the run looks at (tests count steps and advance their clock). */
@@ -476,6 +489,9 @@ export type CollectorOptions = {
   /** After every run that ran (the library process pushes fresh health). */
   onRun?: (r: CollectResult) => void;
 };
+
+/** The clocks at the start of a run, kept with the marks: a boot's id makes the monotonic one comparable across a restart. */
+type ClockSample = { wall: number; mono: number; boot?: string };
 
 type LastRun = {
   at: number;
@@ -492,12 +508,13 @@ const HEX64 = /"([0-9a-f]{64})"/g;
 /**
  * The collection of content files nothing names (design/29 §1.3, A37, M7): a nightly mark and sweep over the
  * `application/json` files (shape, mask and decoration files, slide pages and heads, client scenes), never a media
- * original, delivery, poster, font, deck or pdf. A file nothing names is marked (the 30-day clock, `collect_marks`);
- * a file that is named again loses its mark; a file marked for 30 days is deleted, after a last check inside the same
- * synchronous transaction as its row's delete (a save cannot slip in between). Pictures of keys no kept revision has
- * are a cache and go at the run. Mode `report` (the default) does all of it but the deleting and says what `on` would
- * delete. Nothing runs while a service is live, before the references backfill is done, or before the library
- * process has been told the service's state; every step of a run is a slice of at most 20 ms.
+ * original, delivery, poster, font, deck or pdf. A file nothing names is marked (the delay's clock, `collect_marks`);
+ * a file that is named again loses its mark; a file marked for the whole delay (31 days) is deleted, after a last
+ * check inside the same synchronous transaction as its row's delete (a save cannot slip in between). Pictures of keys
+ * no kept revision has are a cache and go at the run. Mode `report` (the default) does all of it but the deleting and
+ * says what `on` would delete. Nothing runs while a service is live, before the references backfill is done, before
+ * the library process has been told the service's state, or on a clock that has not been set (before 2026); every
+ * step of a run is a slice of at most 20 ms.
  */
 export class Collector {
   readonly mode: CollectMode;
@@ -512,7 +529,7 @@ export class Collector {
   private last?: LastRun;
   private sliceStart = 0;
   /** The wall and monotonic clocks at the start of this process's last run: a jump shows as the two moving apart. */
-  private clock?: { wall: number; mono: number };
+  private clock?: ClockSample;
 
   constructor(lib: Library, store: Store, opts: CollectorOptions) {
     this.lib = lib;
@@ -525,18 +542,42 @@ export class Collector {
     return this.opts.now?.() ?? Date.now();
   }
 
+  /** The time since the machine started, sleep included (a suspended hub's wall clock keeps going, so must this). */
   private mono(): number {
-    return this.opts.mono?.() ?? (this.opts.now ? this.opts.now() : performance.now());
+    return this.opts.mono?.() ?? (this.opts.now ? this.opts.now() : uptime() * 1000);
+  }
+
+  private boot(): string | undefined {
+    if (this.opts.boot) return this.opts.boot();
+    try {
+      return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() || undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
-   * Whether the wall clock has jumped since the last run: against this process's last run (the wall clock moved by
-   * something other than the monotonic one did), and against the last run of any process (the clock is before it).
+   * Whether the wall clock has jumped since the last run: against this process's last run, or against the last run of
+   * a process of the same boot (the wall clock moved by something other than the monotonic one did: a clock set by the
+   * network or by hand, in the same process or after a restart of the hub), and against the last run of any process
+   * (the clock is before it). A reboot starts a new monotonic clock, so across one only the last test can tell.
    */
-  private clockJumped(at: number, mono: number): boolean {
-    if (this.clock && Math.abs(at - this.clock.wall - (mono - this.clock.mono)) > CLOCK_JUMP_MS) return true;
+  private clockJumped(now: ClockSample): boolean {
+    const was = this.clock ?? this.readClock();
+    if (was && (was === this.clock || (now.boot !== undefined && was.boot === now.boot))) {
+      if (Math.abs(now.wall - was.wall - (now.mono - was.mono)) > CLOCK_JUMP_MS) return true;
+    }
     const last = this.readLast();
-    return !!last && at < last.at - CLOCK_JUMP_MS;
+    return !!last && now.wall < last.at - CLOCK_JUMP_MS;
+  }
+
+  private readClock(): ClockSample | undefined {
+    try {
+      const raw = this.lib.refs.meta('collect_clock');
+      return raw ? (JSON.parse(raw) as ClockSample) : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** The next 04:00 in the venue time zone, strictly after `now` (a run that just fired arms tomorrow's). */
@@ -668,16 +709,24 @@ export class Collector {
     this.sliceStart = at;
     const aborted: CollectResult = { ran: false, reason: 'live' };
 
+    // A clock that is not a date yet (no battery, the network has not set it) marks nothing and deletes nothing.
+    if (at < COLLECT_CLOCK_FLOOR_MS) {
+      this.opts.log.warn({ at }, 'the clock is before 2026, so it has not been set; collection waits for it');
+      return { ran: false, reason: 'clock' };
+    }
+
     // A wall clock that jumped makes every file look unnamed for as long as the jump: deleting for good on that would
     // be deleting on a wrong date, so the marks start again from now (the delay is then counted in days that passed).
-    if (this.clockJumped(at, mono)) {
+    const sample: ClockSample = { wall: at, mono, boot: this.boot() };
+    if (this.clockJumped(sample)) {
       const n = this.lib.refs.rebaseMarks(at);
       this.opts.log.warn(
         { marks: n },
-        'the clock jumped since the last collection run; the 30-day clocks start again',
+        `the clock jumped since the last collection run; the ${COLLECT_DELAY_DAYS}-day delay starts again`,
       );
     }
-    this.clock = { wall: at, mono };
+    this.clock = sample;
+    this.lib.refs.setMeta('collect_clock', JSON.stringify(sample));
 
     // What media, fonts and unfinished jobs name, read once; the index answers for everything else.
     const outside = await this.gather(false);

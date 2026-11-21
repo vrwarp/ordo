@@ -5,6 +5,7 @@
  * injected, nothing waits.
  */
 import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { uptime } from 'node:os';
 import { join } from 'node:path';
 import type { Presentation } from '@ordo/domain';
 import type { Logger } from 'pino';
@@ -12,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RETENTION_DAYS } from '../src/backup.ts';
 import {
   BUDGETED_SQL,
+  COLLECT_CLOCK_FLOOR_MS,
   COLLECT_DELAY_DAYS,
   Collector,
   type CollectorOptions,
@@ -1392,5 +1394,79 @@ describe('collection: a file stored again and a clock that jumps (repair 1)', ()
     expect(
       (hub.db.prepare(`SELECT since FROM collect_marks WHERE hash = ?`).get(u) as { since: number }).since,
     ).toBe(T0 - 400 * DAY);
+  });
+});
+
+describe('collection: the clock across a restart, a sleeping machine and a clock that is not a date (repair 2)', () => {
+  const sinceOf = (h: string) =>
+    (hub!.db.prepare(`SELECT since FROM collect_marks WHERE hash = ?`).get(h) as { since: number }).since;
+
+  it('a clock set right between two processes of one boot starts the marks again (CO3b)', async () => {
+    hub = await startHub();
+    ready();
+    const u = await json('set-right');
+    // the first process ran on a wrong clock (a hub with no battery and no network time): T0 is that clock
+    const first = rig({ boot: () => 'boot-1' });
+    first.t.mono = 5_000_000;
+    await first.c.run();
+    expect(marks()).toEqual([u]);
+    // the hub is restarted a day later by the machine's own clock; the clock now reads two years on (it was set)
+    const second = rig({ boot: () => 'boot-1' });
+    second.t.mono = 5_000_000 + DAY;
+    second.t.now = T0 + 2 * 365 * DAY;
+    expect(await second.c.run()).toMatchObject({ ran: true, files: 0 });
+    expect(has(u)).toBe(true);
+    expect(sinceOf(u)).toBe(second.t.now);
+    expect(second.lines.some((l) => l.level === 'warn' && /clock/i.test(l.msg))).toBe(true);
+  });
+
+  it('an ordinary night between two processes of one boot is not a jump, and a new boot is not compared (CO3b)', async () => {
+    hub = await startHub();
+    ready();
+    const u = await json('ordinary');
+    const first = rig({ boot: () => 'boot-1' });
+    first.t.mono = 5_000_000;
+    await first.c.run();
+    const second = rig({ boot: () => 'boot-1' });
+    second.t.mono = 5_000_000 + DAY;
+    second.t.now = T0 + DAY;
+    await second.c.run();
+    expect(sinceOf(u)).toBe(T0);
+    // another boot has a monotonic clock of its own: only the last run's time is compared (an hour on is nothing)
+    const third = rig({ boot: () => 'boot-2' });
+    third.t.mono = 100;
+    third.t.now = T0 + 2 * DAY;
+    await third.c.run();
+    expect(sinceOf(u)).toBe(T0);
+  });
+
+  it("measures time with the system's uptime, which counts the nights a machine sleeps (CO3b)", () => {
+    hub = undefined;
+    const c = new Collector({} as never, {} as never, {
+      mode: 'report',
+      live: () => 'idle',
+      known: () => true,
+      timeZone: () => 'UTC',
+      log: recorder().log,
+    });
+    const read = (c as unknown as { mono(): number }).mono();
+    // performance.now() is the age of this process (seconds); uptime() is the machine's
+    expect(Math.abs(read - uptime() * 1000)).toBeLessThan(5_000);
+  });
+
+  it('does nothing on a clock that has not been set: nothing marked, nothing deleted, a warning (CO3b)', async () => {
+    hub = await startHub();
+    ready();
+    const u = await json('unset-clock');
+    const { c, t, lines } = rig();
+    t.now = Date.UTC(1970, 0, 2);
+    expect(await c.run()).toEqual({ ran: false, reason: 'clock' });
+    expect(marks()).toEqual([]);
+    expect(has(u)).toBe(true);
+    expect(lines.some((l) => l.level === 'warn' && /clock/i.test(l.msg))).toBe(true);
+    // the first day of the product's year is a date
+    t.now = COLLECT_CLOCK_FLOOR_MS;
+    expect(await c.run()).toMatchObject({ ran: true });
+    expect(marks()).toEqual([u]);
   });
 });

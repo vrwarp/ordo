@@ -211,9 +211,10 @@ export function paceGrace(v: string | undefined): number {
 export type CollectMode = 'off' | 'report' | 'on';
 
 /**
- * ORDO_COLLECT: `on` deletes the content files nothing has named for 30 days, `off` runs nothing, `report` (the
- * default, also for any other value) marks them and logs what `on` would delete, deleting nothing (design/29, OQ-PS2:
- * collection ships in report mode so an owner sees the counts before any file goes).
+ * ORDO_COLLECT: `on` deletes the content files nothing has named for 31 days (the backups' retention and a night),
+ * `off` runs nothing, `report` (the default, also for any other value) marks them and logs what `on` would delete,
+ * deleting nothing (design/29, OQ-PS2: collection ships in report mode so an owner sees the counts before any file
+ * goes).
  */
 export function collectMode(v: string | undefined): CollectMode {
   const m = v?.trim().toLowerCase();
