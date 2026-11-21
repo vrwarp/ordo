@@ -255,6 +255,11 @@ export class RefIndex {
     ).run();
   }
 
+  /** Every file's clock starts again at `at` (the hub's clock jumped); the number of marks moved. */
+  rebaseMarks(at: number): number {
+    return this.q(`UPDATE collect_marks SET since = ?`).run(at).changes;
+  }
+
   /** The files whose mark is `before` or older: heads first, so their pages are named by nothing when they come. */
   dueFiles(before: number): { hash: string; bytes: number }[] {
     return this.q(
@@ -410,10 +415,12 @@ export class RefBackfill {
 // ── collection ───────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * How long a content file nothing names is kept before it may go: never less than the nightly backups are kept, so
- * the manifest of any backup that can still be restored finds the file (CO3, CO6: a test fails if this is lowered).
+ * How long a content file nothing names is kept before it may go: the nightly backups' retention and one night more,
+ * so the manifest of any backup that can still be restored finds the file, the backup made the night the file was
+ * first seen unnamed included (it is pruned at the 03:00 backup of the 31st day, the sweep is the 04:00 run after it;
+ * with exactly the retention the two fell on the same night). CO3, CO6: a test fails if this is lowered.
  */
-export const COLLECT_DELAY_DAYS = RETENTION_DAYS;
+export const COLLECT_DELAY_DAYS = RETENTION_DAYS + 1;
 const DELAY_MS = COLLECT_DELAY_DAYS * 86_400_000;
 /** The first run is this long after the start; the others are at 04:00 venue time, an hour after the 03:00 backup. */
 export const COLLECT_START_DELAY_MS = 10 * 60_000;
@@ -425,6 +432,12 @@ const MIN_ARM_MS = 1000;
 const PAGE = 200;
 /** A slice of a pass: at most this long between yields (the loop's delay is this plus a step; 20 ms is the rule). */
 const COLLECT_SLICE_MS = 5;
+/**
+ * The wall clock against the monotonic one between two runs of a process, and against the last run's own time across
+ * a restart: more apart than this and the clock has jumped (a hub without a clock battery set by the network, a
+ * suspended machine), so every mark starts again. A jump shorter than this is inside the night the delay adds.
+ */
+const CLOCK_JUMP_MS = 6 * 3_600_000;
 
 export type CollectResult =
   | { ran: false; reason: 'off' | 'live' | 'unknown' | 'backfill' | 'busy' }
@@ -449,6 +462,8 @@ export type CollectorOptions = {
   timeZone: () => string;
   log: Logger;
   now?: () => number;
+  /** A clock that only runs forward, in milliseconds (default `performance.now()`; with `now` injected it follows `now`). */
+  mono?: () => number;
   yield?: () => Promise<void>;
   sliceMs?: number;
   /** Called after each file or picture the run looks at (tests count steps and advance their clock). */
@@ -496,6 +511,8 @@ export class Collector {
   private stopped = false;
   private last?: LastRun;
   private sliceStart = 0;
+  /** The wall and monotonic clocks at the start of this process's last run: a jump shows as the two moving apart. */
+  private clock?: { wall: number; mono: number };
 
   constructor(lib: Library, store: Store, opts: CollectorOptions) {
     this.lib = lib;
@@ -506,6 +523,20 @@ export class Collector {
 
   private now(): number {
     return this.opts.now?.() ?? Date.now();
+  }
+
+  private mono(): number {
+    return this.opts.mono?.() ?? (this.opts.now ? this.opts.now() : performance.now());
+  }
+
+  /**
+   * Whether the wall clock has jumped since the last run: against this process's last run (the wall clock moved by
+   * something other than the monotonic one did), and against the last run of any process (the clock is before it).
+   */
+  private clockJumped(at: number, mono: number): boolean {
+    if (this.clock && Math.abs(at - this.clock.wall - (mono - this.clock.mono)) > CLOCK_JUMP_MS) return true;
+    const last = this.readLast();
+    return !!last && at < last.at - CLOCK_JUMP_MS;
   }
 
   /** The next 04:00 in the venue time zone, strictly after `now` (a run that just fired arms tomorrow's). */
@@ -632,9 +663,18 @@ export class Collector {
 
   private async doRun(): Promise<CollectResult> {
     const at = this.now();
+    const mono = this.mono();
     const report = this.mode === 'report';
     this.sliceStart = at;
     const aborted: CollectResult = { ran: false, reason: 'live' };
+
+    // A wall clock that jumped makes every file look unnamed for as long as the jump: deleting for good on that would
+    // be deleting on a wrong date, so the marks start again from now (the delay is then counted in days that passed).
+    if (this.clockJumped(at, mono)) {
+      const n = this.lib.refs.rebaseMarks(at);
+      this.opts.log.warn({ marks: n }, 'the clock jumped since the last collection run; the 30-day clocks start again');
+    }
+    this.clock = { wall: at, mono };
 
     // What media, fonts and unfinished jobs name, read once; the index answers for everything else.
     const outside = await this.gather(false);
@@ -674,7 +714,7 @@ export class Collector {
     } else {
       for (const f of due) {
         if (!(await this.step('sweep'))) return aborted;
-        const row = this.lib.sweepFile(f.hash, named);
+        const row = this.lib.sweepFile(f.hash, named, 'application/json', at - DELAY_MS);
         if (!row) continue;
         files++;
         bytes += row.bytes;

@@ -657,6 +657,8 @@ function rig(over: Partial<CollectorOptions> = {}) {
     slices: [] as number[],
     mode: 'idle' as 'idle' | 'live',
     known: true,
+    /** The monotonic clock: follows `now` until a test moves it apart from it (a clock that jumped). */
+    mono: undefined as number | undefined,
   };
   const rec = recorder();
   const c = new Collector(hub!.lib, hub!.store, {
@@ -666,6 +668,7 @@ function rig(over: Partial<CollectorOptions> = {}) {
     timeZone: () => 'UTC',
     log: rec.log,
     now: () => t.now,
+    mono: () => t.mono ?? t.now,
     yield: async () => {
       t.slices.push(t.steps);
       t.now += t.stepMs;
@@ -1311,5 +1314,83 @@ describe('the budget: unique bytes (BU1)', () => {
       plan.some((d) => /SEARCH/.test(d)),
       plan.join('\n'),
     ).toBe(true);
+  });
+});
+
+describe('collection: a file stored again and a clock that jumps (repair 1)', () => {
+  it('keeps a file that is stored again between the scan and the sweep: its clock stopped, row and blob stay (CO4)', async () => {
+    hub = await startHub();
+    ready();
+    const u = await json('restored');
+    let again = false;
+    const { c, t } = rig({
+      afterScan: async () => {
+        // an import stores the same bytes again: Store.put stops the file's clock before anything names it
+        if (again) await store('json restored', 'application/json', 'json');
+      },
+    });
+    await c.run();
+    expect(marks()).toEqual([u]);
+    again = true;
+    t.now = T0 + COLLECT_DELAY_DAYS * DAY;
+    expect(await c.run()).toMatchObject({ ran: true, files: 0 });
+    expect(has(u)).toBe(true);
+    expect(onDisk(u)).toBe(true);
+    // it is unnamed still: the next night starts its clock again, from that night
+    again = false;
+    t.now += DAY;
+    await c.run();
+    expect(marks()).toEqual([u]);
+    expect(
+      (hub.db.prepare(`SELECT since FROM collect_marks WHERE hash = ?`).get(u) as { since: number }).since,
+    ).toBe(t.now);
+  });
+
+  it('is never shorter than the backups plus the night the last of them goes: 31 days, not 30 (CO3)', () => {
+    expect(COLLECT_DELAY_DAYS).toBe(RETENTION_DAYS + 1);
+  });
+
+  it('a clock that jumps forward between two runs does not make a file due: the marks start again (CO3b)', async () => {
+    hub = await startHub();
+    ready();
+    const u = await json('jump');
+    const { c, t, lines } = rig();
+    await c.run();
+    expect(marks()).toEqual([u]);
+    // one real day later by the monotonic clock, two years by the wall clock (a dead battery set right by the network)
+    t.mono = T0 + DAY;
+    t.now = T0 + DAY + 2 * 365 * DAY;
+    expect(await c.run()).toMatchObject({ ran: true, files: 0 });
+    expect(has(u)).toBe(true);
+    expect(lines.some((l) => l.level === 'warn' && /clock/i.test(l.msg))).toBe(true);
+    const since = () =>
+      (hub!.db.prepare(`SELECT since FROM collect_marks WHERE hash = ?`).get(u) as { since: number }).since;
+    expect(since()).toBe(t.now);
+    // and the real days that follow count: the file goes once its delay has run
+    t.mono += COLLECT_DELAY_DAYS * DAY;
+    t.now += COLLECT_DELAY_DAYS * DAY;
+    expect(await c.run()).toMatchObject({ ran: true, files: 1 });
+    expect(has(u)).toBe(false);
+  });
+
+  it('a clock set back before the last run starts the marks again, in a new process too (CO3b)', async () => {
+    hub = await startHub();
+    ready();
+    const u = await json('back');
+    const first = rig();
+    await first.c.run();
+    // a restart with a clock that starts in the past (a hub without a clock battery, before the network sets it)
+    const second = rig();
+    second.t.now = T0 - 400 * DAY;
+    expect(await second.c.run()).toMatchObject({ ran: true, files: 0 });
+    expect(
+      (hub.db.prepare(`SELECT since FROM collect_marks WHERE hash = ?`).get(u) as { since: number }).since,
+    ).toBe(second.t.now);
+    // two ordinary nights are not a jump
+    second.t.now += DAY;
+    await second.c.run();
+    expect(
+      (hub.db.prepare(`SELECT since FROM collect_marks WHERE hash = ?`).get(u) as { since: number }).since,
+    ).toBe(T0 - 400 * DAY);
   });
 });

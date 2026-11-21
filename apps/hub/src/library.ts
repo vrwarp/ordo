@@ -681,13 +681,25 @@ export class Library {
   /**
    * Collection's one step on a file, in one synchronous transaction: `named` is asked a last time and a file that is
    * named now keeps its row and loses its mark (a save between the scan and this call wins); otherwise its row goes,
-   * with a head's index rows. Returns the row when it went: the caller removes the blob after.
+   * with a head's index rows. With `dueBefore` the file also needs its mark, as old as that: a file stored again since
+   * the scan lost its mark (its clock stopped, nothing names it yet) and is kept. Returns the row when it went: the
+   * caller removes the blob after.
    */
-  sweepFile(hash: string, named: (hash: string) => boolean, mime = 'application/json'): FileRow | undefined {
+  sweepFile(
+    hash: string,
+    named: (hash: string) => boolean,
+    mime = 'application/json',
+    dueBefore?: number,
+  ): FileRow | undefined {
     return this.db.transaction(() => {
       let row: FileRow | undefined;
+      const due =
+        dueBefore === undefined ||
+        !!this.db.prepare(`SELECT 1 FROM collect_marks WHERE hash = ? AND since <= ?`).get(hash, dueBefore);
       if (named(hash)) {
         // kept
+      } else if (!due) {
+        return undefined;
       } else if ((row = this.getFile(hash)) && (mime === '*' || row.mime === mime)) {
         this.slideFiles.remove(hash);
         this.deleteFileRow(hash);

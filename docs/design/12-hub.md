@@ -340,19 +340,23 @@ picture. `Library.fileReferenced` asks this index with the current rows. Revisio
 slices of at most 20 ms with 100 ms of sleep per 10 revisions, two minutes after the start, resumable, never while
 a service is live.
 
-_Collection._ A file nothing names is kept for **30 days**, never less than the nightly backups are kept
-(`RETENTION_DAYS`; a test fails if the delay is lowered below it), so the manifest of any backup that can still be
-restored finds it. The library process runs one pass a day at 04:00 venue time (after the 03:00 backup) and one 10
+_Collection._ A file nothing names is kept for **30 days and the night after them** (`COLLECT_DELAY_DAYS` = the
+nightly backups' `RETENTION_DAYS` + 1; a test fails if the delay is lowered below it), so the manifest of any backup
+that can still be restored finds it, the backup of the night the file was first seen unnamed included (with exactly
+the retention that backup and the sweep fell on the same night). The library process runs one pass a day at 04:00 venue time (after the 03:00 backup) and one 10
 minutes after the start, in slices of at most 5 ms (a save in the middle of a pass waits for one slice and no
 more: measured at 1.6 to 1.7 times its quiet 95th percentile in a sweep and 2.1 to 2.7 times, at most 25 ms, in the
 marking pass), never while a service is live, before the backfill is done or
 before it has been told the service's state. Only `application/json` files are candidates (never a media original,
 delivery, poster, font, deck or PDF). A pass marks the unnamed (`collect_marks.since` is the 30-day clock), clears
-the mark of a file named again (a save, a head upload or a pass that finds it named), and deletes the files marked
-for 30 days: heads first (their index rows go in the same transaction as their `files` row, then their pages are
-named by nothing), each after a last check of everything that names a file and of unfinished jobs, inside the
-one synchronous transaction that deletes its row, so a save cannot slip in between; the blob is removed after and a
-missing blob is no error. Pictures of a key in no kept revision whose stand-by is no current slide's are a cache and
+the mark of a file named again (a save, a head upload, a file stored again or a pass that finds it named), and
+deletes the files marked for the whole delay: heads first (their index rows go in the same transaction as their
+`files` row, then their pages are named by nothing), each after a last check of everything that names a file and of
+unfinished jobs, and of its own mark (still there and old enough: a file stored again since the scan lost it), inside
+the one synchronous transaction that deletes its row, so a save or an import cannot slip in between; the blob is
+removed after and a missing blob is no error. A wall clock that has jumped since the last pass (it moved by other
+than the monotonic clock did, or is before the last pass's time by more than 6 hours) starts every mark again from
+now and logs it: a clock set right by the network after a start without a battery is not 30 days of unnamed files. Pictures of a key in no kept revision whose stand-by is no current slide's are a cache and
 go at the pass, their file with them when no other row names it. `ORDO_COLLECT=report` (the default) records the
 marks and logs one line a pass (`collection run`: counts and bytes that `on` would delete) and deletes nothing;
 `on` deletes; `off` runs nothing. `GET /health` carries `collectedFiles`, `collectedBytes` and `lastCollectAt`;
