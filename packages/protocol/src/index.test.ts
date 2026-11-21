@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { estimateOffset, type LiveDeltaMsg, type LiveStateMsg, parseClientMessage } from './index.ts';
+import {
+  APP_VERSION,
+  estimateOffset,
+  type LiveDeltaMsg,
+  type LiveStateMsg,
+  parseClientMessage,
+} from './index.ts';
 
 const health = (extra: Record<string, unknown>) =>
   parseClientMessage(
@@ -59,7 +65,9 @@ describe('protocol', () => {
 
 describe('the running service by reference (live-by-ref)', () => {
   const hello = (extra: Record<string, unknown>) =>
-    parseClientMessage(JSON.stringify({ t: 'hello', v: 1, role: 'output', appVersion: '0.9.0', ...extra }));
+    parseClientMessage(
+      JSON.stringify({ t: 'hello', v: 1, role: 'output', appVersion: APP_VERSION, ...extra }),
+    );
   const resync = (extra: Record<string, unknown>) =>
     parseClientMessage(JSON.stringify({ t: 'live.resync', v: 1, ...extra }));
   const id = 'a'.repeat(64);

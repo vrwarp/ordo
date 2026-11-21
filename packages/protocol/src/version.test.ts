@@ -28,8 +28,8 @@ import { APP_VERSION } from './index.ts';
 // tabs reload on the hub's bye version. Re-recorded at 0.8.1 for plan.ts slideVisible's stage-preview notes (the
 // planner's own slides carry no notes, so no plan changes).
 // Main's version kept through wave r2b's sub-waves (main published 0.8.0 with PR #28, merged into sub-wave 1
-// before the wave PR opened, and 0.8.1 with PR #30, merged into the wave PR; the wave's one bump, 0.9.0, is the
-// wave PR's last commit), with the merged digest recorded at main's version.
+// before the wave PR opened, and 0.8.1 with PR #30, merged into the wave PR; that pull request's one bump, 0.9.0, is
+// its last commit), with the merged digest recorded at main's version.
 // Sub-wave 1: golive-prepare (design/29 M8) adds the POST /live/prepare request and answer types, which no older
 // client sends or reads; units-live adds OutputHealth's optional unitsMade, unitsLate and unitCacheBytes, which an
 // older hub's parse strips; prerender-model (design/29) adds schemas.ts Slide.prerender, draw, cut and meta.draw,
@@ -44,7 +44,7 @@ import { APP_VERSION } from './index.ts';
 // the shared sources are the wave's as they were (the digest leaves the APP_VERSION line out), so the merged
 // digest is the wave's, recorded at 0.8.1.
 // 0.9.0 for PR #29 (wave r2b's parts 1, 1b and 1c: editable PowerPoint tables, Go live during a service, a GO
-// never waits for drawing), the wave's one bump, its last commit. Main published 0.8.1 without them, so an
+// never waits for drawing), that pull request's one bump, its last commit. Main published 0.8.1 without them, so an
 // operator, output or stage tab still running 0.8.1 from its cache must reload (the hub's bye version) rather
 // than go on without them: without sub-wave 1's shared changes above, or sending the hub PowerPoint scenes
 // parsed as 0.8.1 parsed them (design/27, "CONVERTER_VERSION stays 2 through sub-wave 1c too"). The digest is
@@ -54,16 +54,24 @@ import { APP_VERSION } from './index.ts';
 // 0.9.2 for Lighting & MIDI triggers: schemas.ts adds MidiPreset, MidiTrigger, Media.midi, PlaylistItem.midi,
 // Section.midi, Slide.midi, ActionId 'midiPreset', and SurfaceSettings.midiPresets; live.ts and cues.ts resolve
 // 4-scope background/item/section/slide MIDI cues onto Cue.
-// The follow-up pull request's sub-wave 2 changes two shared sources and, with main's 0.9.1 and 0.9.2 (the two entries
-// above, merged in from main's PRs #31 to #39), the version stays 0.9.2 until the pull request's one bump to 0.10.0, its
-// last commit, so only the digest is recorded, once, after the merge: live-by-ref adds four optional `resolvedId` fields
-// to the protocol (hello, live.resync, live.state, live.delta), so older and newer builds read each other's messages as
-// before (a missing field is what they sent before); live-frame adds `SlideDesc.full` to the renderer's plan.ts (the
-// slide before the live clamp's cut, only for a slide past a count; the descriptor of any other slide is unchanged).
-// The two sides changed different shared sources (main's: schemas.ts, cues.ts, live.ts; the sub-wave's: the protocol's
-// index.ts and plan.ts), so the merged digest is each side's changes together.
+// 0.10.0 for wave r2b's sub-wave 2 (part 2: crowded slides drawn whole on the Audience screens, the running service
+// kept by name, the editor's line art and shadows drawn whole, dense decks imported, the hub's disk watched), its own
+// pull request and its one bump, its last commit (the owner, 2026-11-20: a bump per merged milestone; the next is
+// 0.11.0). Main published 0.9.2 without them (0.9.0 was PR #29's, 0.9.1 and 0.9.2 are the two entries above, merged into
+// this pull request with main's PRs #31 to #39), so an operator, output or stage tab still running 0.9.2 from its cache
+// reloads on the hub's bye version rather than go on without them. The sub-wave changes two shared sources, recorded in
+// the digest once, after the merge (the digest leaves the APP_VERSION line out, so the bump itself leaves it as it was):
+// live-by-ref adds four optional `resolvedId` fields to the protocol (hello, live.resync, live.state, live.delta), so
+// older and newer builds read each other's messages as before (a missing field is what they sent before); live-frame
+// adds `SlideDesc.full` to the renderer's plan.ts (the slide before the live clamp's cut, only for a slide past a count;
+// the descriptor of any other slide is unchanged). The two sides changed different shared sources (main's: schemas.ts,
+// cues.ts, live.ts, and the APP_VERSION line of the protocol's index.ts, which the digest leaves out; the sub-wave's: the
+// rest of the protocol's index.ts and plan.ts), so the digest is each side's changes together.
+// schemas.ts is as 0.9.2 has it (the sub-wave stores no new field), so a rollback to 0.9.2 reads every stored
+// presentation and look 0.10.0 writes, and the older-build fixtures (0.8.1 and 0.5.0) stand. A rollback does not restore
+// a service that was running: an older hub reads the by-name snapshot as invalid and starts idle (design/29 r2b.9, Q6.a).
 const RECORDED = {
-  version: '0.9.2',
+  version: '0.10.0',
   digest: 'b80fba978e638b215a719602e0653722870a98011ae2d360b5e9a7396724d174',
 };
 

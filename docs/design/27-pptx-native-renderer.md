@@ -3275,8 +3275,9 @@ be measured):
   hub can still send a version-2 scene whose tables are in the grown-row form, which a 1b hub stores as sent
   (it draws as sub-wave 1's did; Re-import gives LibreOffice's form). It stays 2 in PR #29 as well (parts 1, 1b
   and 1c; its last commit raises `APP_VERSION` to 0.9.0). Whether it moves is decided at the end of wave r2b,
-  which owner question N1's answer put in the follow-up pull request with parts 2, 3 and 4 (design/29 §1.11 plans
-  `CONVERTER_VERSION` 3 with pre-rendering, part 4).
+  which owner question N1's answer put in the follow-up with parts 2, 3 and 4 (which go in pull requests of one
+  milestone each, each with its own version bump: the owner, 2026-11-20; design/29 §1.11 plans `CONVERTER_VERSION` 3
+  with pre-rendering, part 4).
 - **`CONVERTER_VERSION` stays 2 through sub-wave 1c too** (integrate-1c), for the same reason, although 1c changes
   the stored form again: a table whose vertical cells are all `eaVert` is the table object (it was LibreOffice's art
   on a hub with LibreOffice and missing on one without), and the rows of table cells in Han, Kana or Hangul are

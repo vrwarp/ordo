@@ -600,8 +600,11 @@ fit the slide budget: … left out" (:528), the tail and 200-character notes (:5
 New: `Slide.prerender`, `Slide.draw`, `Slide.cut`, `meta.draw`; `ResolvedPlaylist.prerenders` and its key set;
 `state.prerendered`, `state.drawOverride`; `prerender.add`, `prerender.use`; `hello.resolvedId`, `live.state`
 without `resolved` when the client holds it, `live.adopt` by reference (§2.3 M2-M3); the prepare request and its
-progress (M8); `library.poke` for every client (M4); health fields (§3). One `APP_VERSION` bump in the PR that
-carries them, digest re-recorded once by the integrator (design/24); stale tabs reload.
+progress (M8); `library.poke` for every client (M4); health fields (§3). `APP_VERSION` moves once per merged milestone,
+not once for the whole list (the owner, 2026-11-20): 0.9.0 with the first pull request's share (the `Slide` fields, the
+prepare request, `prerender.add` and `prerender.use`, the two state fields), 0.10.0 with sub-wave 2's (the optional
+`resolvedId` fields of the service by reference, `SlideDesc.full`), the next with the pull request that carries the
+rest; each re-records the digest once, by the integrator (design/24); stale tabs reload.
 
 `prerender.add` is applied by the hub only. `LiveCommand`, what a client's `live.event` (`packages/protocol`) and
 `POST /live/events` carry, is `GoLiveCommand` or a `LiveEvent` other than `prerender.add`, so no socket can send
