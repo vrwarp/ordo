@@ -146,6 +146,15 @@ type LiveState += {
 
 ## Sequence rules
 
+- A window that holds the resolved copy of the running service names it in its `hello` and `live.resync`
+  (`resolvedId`, the SHA-256 of the copy's bytes; a value that is not a string reads as absent, a string of any
+  shape only means "I hold something else"). While a service is live every `live.state` carries `resolvedId`;
+  its `state` has no `resolved` when the socket was said (or was written) to hold that copy, and a goLive
+  `live.delta` carries `resolvedId` beside the whole event. A window holds only a copy the hub gave this
+  connection (a whole state or a goLive delta) or one it saved itself under that id; it joins a by-name state to
+  the object it holds (the same object every time), applies nothing for an id it does not hold and asks for the
+  whole state with a `live.resync` that names nothing (at most one per 2 s). End service and an idle state clear
+  the held copy. With `ORDO_LIVE_BYREF=off` no message carries `resolvedId` and every state is whole.
 - `seq` is the hub's. Clients track `appliedSeq`. A delta with `fromSeq !== appliedSeq`
   is a gap: the client requests `live.resync` and ignores deltas until the full state
   arrives.

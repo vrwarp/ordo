@@ -307,7 +307,12 @@ describe('the merge', () => {
     const cue = { id: 'm1', channel: 1, type: 'noteOn' as const, number: 64, value: 127 };
     // A strap text, an emptied strap (it silences the lower third) and MIDI cues set in the Slide panel.
     const s0 = native(0, [text('a', 'Welcome', { origin: PPTX })], { bottomThirdText: 'Welcome, friends' });
-    const s1 = native(1, [text('b', 'Offering', { origin: PPTX })], { bottomThirdText: '', midiCues: [cue] });
+    const trigger = { kind: 'preset' as const, presetId: 'lights-half' };
+    const s1 = native(1, [text('b', 'Offering', { origin: PPTX })], {
+      bottomThirdText: '',
+      midiCues: [cue],
+      midi: trigger,
+    });
     const p = presentation([[s0, s1]], {
       native: { version: 1, slides: 2, native: 2, hybrid: 0, picture: 0 },
     });
@@ -325,11 +330,13 @@ describe('the merge', () => {
     expect(a!.bottomThirdText).toBe('Welcome, friends');
     expect(b!.bottomThirdText).toBe('');
     expect(b!.midiCues).toEqual([cue]);
+    expect(b!.midi).toEqual(trigger);
     // 'Reset slide from PowerPoint' rebuilds the slide's objects and keeps its settings the same way.
     const reset = mergeReimport(m.p, { ...f, whole: false }, { slideIds: [b!.id], reset: [b!.id] }, noTags);
     const r = slidesIn(reset.p)[1]!;
     expect(r.bottomThirdText).toBe('');
     expect(r.midiCues).toEqual([cue]);
+    expect(r.midi).toEqual(trigger);
   });
 
   it('leaves a slide alone that the converter would write again as it is', () => {

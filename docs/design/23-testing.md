@@ -41,6 +41,18 @@ Chromium only.
   `test-results/hub-<port>.log` (appended across the spec's restarts, so CI's uploaded test-results carry
   them; `ORDO_E2E_HUB_STDOUT=1` prints them instead); `ORDO_E2E_HUB_CMD` runs the hub from source instead of
   the build.
+- Every hub a test, a spec, a tool or a demo script starts has the free-space floor off (`ORDO_MIN_FREE_GB=0`,
+  design/12 Configuration): the floor refuses every upload with 507 when the data volume has less free than the floor
+  (5 % of the volume, 5 to 25 GiB: 12.5 GiB on a 250 GiB volume; a dev machine, a small CI disk), which says nothing
+  about what the test tests. `apps/hub/test/helpers.ts` (`startHub`, `testFloor`; `twoProcesses` in
+  `phones-helpers.ts`), `e2e/hubproc.ts`, the shared web server in `playwright.config.ts`, `tools/pptx-fidelity`
+  (`hubEnv`) and `apps/demo/scripts/seed.ts` set it, and so do the direct library and live process configurations
+  and the `processes.test.ts` child. A test that gives its hub a volume of its own (`statfs`) or its own value
+  (`minFreeBytes`, `hub.env.ORDO_MIN_FREE_GB`) keeps it: the floor's own tests (`diskfloor.test.ts`, the floor cases
+  of `processes.test.ts`, `slidefiles.test.ts`, `prerenders.test.ts`) do. `apps/hub/test/floor-off.test.ts` and
+  `e2e/floor-off.test.ts` pin it, the first also reading the test folder for a hub started without saying what its
+  floor is. The soak tool starts no hub (it drives the one it is given, whose floor is the venue's own), and CI is
+  left alone: its runners have the room.
 - Windows are opened by URL with their output token (`openRoleWindow`), or launched from the operator
   (`window.open`) where the fallback bus needs an opener.
 
@@ -79,7 +91,9 @@ between 16000 and 32767.
   `chromium-tablet`). `e2e/layout-class.spec.ts` (the venue PC never compact) uses the shared server.
 - M9 wave r2b holds offsets 400-659, in offset order: `effect-units` (400-401: effects past the budget, and the
   hostile lone line art through the upload route), `units-live` (405-406: a jump to a slide not prepared and a GO
-  50 ms after its arm, and the playlist warmed ahead), `editor-table` (420) and `ipad-table-targets` (421-423, one
+  50 ms after its arm, and the playlist warmed ahead); `editor-whole` (410: the desktop editor draws line art and shadows past the budget whole, not while a service is
+  live, not with `?editor=light`) and `ipad-editor-whole` (412-414, one per tablet project: a tablet keeps the
+  lighter drawing) are sub-wave 2's leaf-editor's; `editor-table` (420) and `ipad-table-targets` (421-423, one
   per tablet project) are the table editing's; `pptx-table-edit` (425, sub-wave 1's integration: the table deck
   imported on a hub without LibreOffice, a cell edited on the canvas, live); `pptx-tables` (430-432, tables-conv
   and tables-flip: the table deck on a hub without LibreOffice through the Import tab and through the upload
@@ -87,11 +101,20 @@ between 16000 and 32767.
   a reading-plan cell is edited on the canvas); `editor-reimport-lo` (440, sub-wave 1b's tables-cells: 'Make
   editable' on LibreOffice's 64 KB page a native import stored, on a hub with LibreOffice; 445-449 are kept for
   sub-wave 1b's integration); `golive-prepare` (450-451: Go live again during a service on a hub with a slowed library, and
-  the size ceiling). The integrations of sub-waves 2-4 hold 630-659. An explicit `ORDO_E2E_PORT_BASE` may sit below
+  the size ceiling); `live-frame` (470, sub-wave 2: the underlay frame on a hub without LibreOffice: a crowded slide drawn
+  whole on both Audience screens, the late frame, the switches, effects past one frame of units, an ordinary slide
+  unchanged);
+  `live-by-ref` (480: a 6 MiB service kept by reference, the hub killed and started again on the same data, raw
+  screens that hold the copy sent the state without it, a storm of 20 screens beside GOs, a take-over beside a GO); `pptx-dense` (510-511, sub-wave 2's xml-compact: dense decks on a hub without LibreOffice,
+  through the upload route and through the Import tab; the decks are written at run time, `pptxdecks.ts` `denseDeck`); `sw2-seams` (630-631, sub-wave 2's integration: the seams between its tracks that no one track's spec sees, on hubs without LibreOffice: a crowded service held by a screen, the hub killed and started again, the screen sent its state by name and still drawing the topmost square, and a hub whose free-space floor is above any real disk, `ORDO_MIN_FREE_GB=10000`, that pauses uploads and imports while a GO moves the Audience, another saved playlist goes live and a presentation and a playlist are still saved; the file starts its browser with `CPU_ONLY_ARGS` (no GPU switches, no GPU: every window in it is `renderer=2d`), because the config's SwiftShader process takes about 170 % of a CPU for an idle 1920 x 1080 window and starves a machine of two CPUs, which is what a runner has: there the file took 8 to 12 minutes when it completed and failed in 2 of the 7 recorded runs of its earlier form, including 2 of 3 of one reviewer's (`taskset -c 0-1`, retries 0), and with the list it takes 21.5 to 26.8 seconds there and 20.8 to 21.5 on four CPUs; its GO lead is the product's 33 ms and it keeps its three captures per window, the trace and the zero-late-flip equality as written). The integrations of sub-waves 3 and 4 hold 632-659. An explicit `ORDO_E2E_PORT_BASE` may sit below
   16000 (design/29 §4; `e2e/ports.ts` says what it must avoid).
   `e2e/table-deck.test.ts` checks the deck still tests what the spec is about (the bulletin past M6's cell cap,
   the reading plan's M6 group past 64 KB, measured with the kill switch, and both table objects through the import
   core on both kinds of hub), as `e2e/lineart-deck.test.ts` does for the line-art deck.
+  A measure of how closely the desktop editor agrees with the Audience screen captures the editor's Konva stage
+  with `toDataURL` at the device pixel ratio, never the page element `.konvajs-content`: the stage's 1 px box-shadow
+  ring sits in that element, so the slide lies 2 device pixels inside the picture and 0.25 % smaller than the page,
+  and every slide reads 0.04 to 0.09 less than it agrees (sub-wave 2's leaf-editor-2 measured both).
 
 ### Projects
 
@@ -109,9 +132,12 @@ hub of its own in path mode (`http://localhost:<port>/`):
 
 The three Chromium projects launch with the suite's switches in the top-level `use.launchOptions` (WebGPU on
 SwiftShader, sRGB, `--font-render-hinting=none`, autoplay, no background throttling): a project's `use`
-replaces only the keys it names, and none of them names `launchOptions`. The WebKit projects set
-`launchOptions: {}`, as the switches are Chromium's; no tablet or phone spec compares text against another
-renderer.
+replaces only the keys it names, and none of them names `launchOptions`. The list is `e2e/chromiumargs.ts`
+(`CHROMIUM_ARGS`: the GPU switches, then the common ones). A spec that needs another names its own with
+`test.use({ launchOptions: { args } })`, which replaces the config's `args` whole (Playwright does not merge the two
+lists; the headless shell's defaults are all that stays): `sw2-seams` takes `CPU_ONLY_ARGS`, the common switches and
+`--disable-gpu`. The WebKit projects set `launchOptions: {}`, as the switches are Chromium's; no tablet or phone spec
+compares text against another renderer.
 
 The Chromium tablet and phone model Android Chrome with `e2e/touchdevice.ts` `touchDevice(page)`, which the
 sign-in helpers call before a context's first navigation: an init script deletes `Navigator.prototype.hid`
@@ -158,7 +184,11 @@ Wall-clock bounds in unit tests (a parser, a layout or an import "within 5 s" on
 work stays linear and never runs away; they are not performance budgets. A bound is written as the budget
 on a developer machine through `budgetMs` (`packages/domain/src/timing.test-util.ts`): three times that on
 CI (`CI` set), whose 2-core runner is about three times slower for CPU-bound work, or the factor in
-`ORDO_TEST_TIME_SCALE` on a machine shared with other jobs. Bounds that test the product's own timeouts (a
+`ORDO_TEST_TIME_SCALE` on a machine shared with other jobs. The reader's linear-time proofs on hostile input
+(`xml.packed.test.ts`, `opc.test.ts`'s `within`, the 1.2-million-point read, the 50,001-shape cap) read the CPU
+time the process used (`cpuMs`, beside `budgetMs`) with the same `budgetMs` number: the wall clock
+grows with a loaded or niced machine (every run here is at niceness 19 on four shared cores), the work does not,
+and a test of the work must not fail for waiting for a core. Bounds that test the product's own timeouts (a
 library that did not answer within its wait, a socket closed within its grace) are not scaled. Frame and
 task budgets (design/27 §13: a 50 ms asset-worker task) are gated by the benches, on a known machine, not
 by vitest: `bench:slides --check` for slide rasters and `bench:tables` for the table object's prepare
@@ -206,7 +236,7 @@ screen" prompt (`capture` hides `.fs-prompt`; a test window is never full screen
 the same 0.99: its text lines must be as wide on the outputs as on the page (the spec logs each line's width
 on both sides), and the hub must store the verse object the harness converts (size, runs, fit, box,
 spacing). Both sides keep the fonts' glyph advances on every machine: the suite's browser runs with
-`--font-render-hinting=none` (playwright.config.ts; Playwright's headless shell defaults to full hinting,
+`--font-render-hinting=none` (`e2e/chromiumargs.ts`, used by playwright.config.ts; Playwright's headless shell defaults to full hinting,
 which rounds every advance to a whole pixel and made the CI runner's outputs draw the verse 0.25 % to 0.6 %
 narrower than the page, SSIM 0.971, reproduced here byte for byte with the shell started without the switch),
 and the page's browser draws with glyph hinting off whatever the machine's fontconfig says
@@ -471,15 +501,27 @@ golden-pptx and the sermons today.
 ## CI
 
 GitHub Actions on every pull request and merge to main (and by hand), `.github/workflows/ci.yml`, in five
-jobs that run side by side so none takes more than about 35 minutes (one job took 30 to 45 minutes before):
+jobs that run side by side (one job took 30 to 45 minutes before); the check job is limited to 45 minutes (its unit
+tests alone took 478 s on four CPUs after sub-wave 2, 299 s before it, and a runner is 1.15 to 1.65 times slower than
+that machine, with 3 to 5 minutes of set-up before them; the wave measured 40, main's PR #31 set 45 for the same slow
+mirror and the larger stands), the two end-to-end jobs to 90 and 60 because their limit counts a slow runner's set-up
+(below the table; PR #31's 45 for the phones is the smaller and does not stand):
 
 | Job                                   | Runs                                                                                                                                                                                                                                                                                   | Limit  |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| Lint, types, unit tests, build        | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), Playwright Chromium, `pnpm test` (`CI` set: timing bounds ×3, golden runs strict, browser tests run or fail), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                                               | 25 min |
-| End-to-end (2 shards)                 | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2 --project=chromium --project=webkit-ipad --project=webkit-ipad-portrait` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure | 35 min |
-| End-to-end, phones and Android tablet | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --project=webkit-iphone --project=chromium-android --project=chromium-tablet` with `ORDO_CI=1`; uploads `playwright-report-phones` on failure ("Projects" above)                                                | 25 min |
+| Lint, types, unit tests, build        | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), Playwright Chromium, `pnpm test` (`CI` set: timing bounds ×3, golden runs strict, browser tests run or fail), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                                               | 45 min |
+| End-to-end (2 shards)                 | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2 --project=chromium --project=webkit-ipad --project=webkit-ipad-portrait` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure | 90 min |
+| End-to-end, phones and Android tablet | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --project=webkit-iphone --project=chromium-android --project=chromium-tablet` with `ORDO_CI=1`; uploads `playwright-report-phones` on failure ("Projects" above)                                                | 60 min |
 | Goldens (pinned container)            | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                                                                                                    | 20 min |
 | Fidelity ratchets                     | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                                                                                              | 20 min |
+
+The two end-to-end jobs' limits count their set-up (the system packages and both Playwright browsers), which took 26
+to 34 minutes on a runner with a slow mirror: a shard's tests are about 33 minutes on a runner after sub-wave 2 (shard
+2 of 78 tests took 20.1 minutes on the integration machine, a runner 1.65 times that; the `sw2-seams` file in it takes
+21.5 to 26.8 seconds on two CPUs (20.8 to 21.5 on four), as it starts its browser without a GPU, where a runner of two
+CPUs took 8 to 12 minutes for it), so 35 minutes were spent before the last test and 60 could be; 90 leaves a slow
+set-up 23 minutes of slack, and the phones job (61 tests, about 9 to 10 minutes on a runner, so 35 to 44 minutes
+with that slow set-up) has 60.
 
 The end-to-end, goldens and fidelity jobs install the image's bundled font packages (Carlito, Caladea,
 Liberation 2, Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them, not its CJK
@@ -496,7 +538,7 @@ import, `packages/pptx-render`) find their browser with one helper, `tools/find-
 Chromium (the build the end-to-end suite runs), else `ORDO_TEST_CHROMIUM`. On a developer's machine without
 either they skip; with `CI` or `ORDO_CI` set the helper throws instead, so a browser test can no longer pass CI
 by skipping (before the check job installed Playwright's Chromium, CI run 164 skipped 12 of them). The CLI tools
-(the fidelity harness, the preset golden) take `ORDO_CHROMIUM` first and the system's Chromium or Chrome last.
+(the fidelity harness, the preset golden) take `ORDO_CHROMIUM` first and the system's Chromium or Chrome last. The warp probe golden (`golden:warps`, the geometry leg of the WordArt warps) takes no browser: it needs only LibreOffice, pdftoppm and ffmpeg.
 
 ## Test content
 

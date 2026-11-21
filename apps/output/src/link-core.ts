@@ -1,5 +1,7 @@
 import { ErrorBudget, type OutputLink, api, clock, fileUrl } from '@ordo/client';
+import { joinSaved, loadCopy, saveCopy, slimState } from '@ordo/client/savedLive.ts';
 import {
+  type Cue,
   DEFAULT_LOOKS,
   type Font,
   LOOK_MAIN,
@@ -8,6 +10,7 @@ import {
   type ManifestFile,
   type Media,
   type Presentation,
+  type ResolvedPlaylist,
   type Slide,
   drawnMediaIds,
   isHiddenCue,
@@ -82,6 +85,11 @@ import {
 const DELIVERED_GRACE_MS = 1500;
 const ERROR_RETRY_MS = 3000;
 const STATE_CACHE_MAX_AGE_MS = 12 * 3600_000;
+/**
+ * The service's copy is saved on this computer (once, in pieces: packages/client savedLive.ts) after the window
+ * presented a frame following its arrival, and at the latest this long after it arrived.
+ */
+const COPY_SAVE_LATEST_MS = 5000;
 /** The props tick wakes this long before each whole second to rasterize that second's text. */
 const PROPS_LEAD_MS = 150;
 /** Arm failures of one key within a minute before it is quarantined for the rest of the service. */
@@ -272,6 +280,10 @@ export class LinkCore {
   private unitsMade = 0;
   private unitsLate = 0;
   private unitCacheBytes = 0;
+  /** The asset worker's underlay frames (renderer `frame.ts`): dropped past their time budget, bytes in progress. */
+  private framesOver = 0;
+  private framesMade = 0;
+  private frameWorkBytes = 0;
   /** Per-lane timing of the asset worker's jobs, and the jobs cancelled as superseded. */
   private laneStats = new LaneStats();
   private delivered = new Map<string, number>();
@@ -395,6 +407,18 @@ export class LinkCore {
   private coverSince = 0;
   private saving?: Promise<void>;
   private saveAgain = false;
+  /** The copy of the service saved on this window (or loaded from it) and the save wanted next. */
+  private copySavedId?: string;
+  private copyWanted?: {
+    id: string;
+    resolved: ResolvedPlaylist;
+    cues: Cue[];
+    since: number;
+    presented: number;
+  };
+  private copyCtl?: AbortController;
+  /** The id whose save is under way: a GO that names it again must not restart (abort) it. */
+  private copySavingId?: string;
   private viewQueued = false;
   private started = false;
   /** The persisted state has been read (or timed out): planning may start. */
@@ -455,7 +479,7 @@ export class LinkCore {
     const outputId = this.link.outputId;
     const [cfg, saved, recent, accepted, held] = await Promise.all([
       timeout(this.json.get<OutputConfigRes>(`config:${outputId}`)).catch(() => undefined),
-      timeout(this.json.get<{ state: LiveState; savedAt: number }>(`state:${outputId}`)).catch(
+      timeout(this.json.get<{ state: LiveState; copy?: string; savedAt: number }>(`state:${outputId}`)).catch(
         () => undefined,
       ),
       timeout(this.json.get<RecentManifest[]>(`manifests:${outputId}`)).catch(() => undefined),
@@ -485,10 +509,26 @@ export class LinkCore {
     this.persistedRead = true;
     if (cfg && !this.config) this.applyConfig(cfg);
     if (saved && Date.now() - saved.savedAt < STATE_CACHE_MAX_AGE_MS && !this.link.mirror.ready) {
-      const bad = checkInvariants(saved.state);
-      if (bad.length) this.diagLog(`cached state has invariant violations (${bad[0]}); painting it anyway`);
-      this.cachedState = saved.state;
-      this.onState();
+      let state: LiveState | undefined = saved.state;
+      if (typeof saved.copy === 'string') {
+        // The record names a copy (live-by-ref): only a complete saved copy with that id paints; anything else
+        // waits for the hub, as a window with no cache does.
+        const copy = await timeout(loadCopy(this.json, outputId)).catch(() => undefined);
+        if (copy && copy.id === saved.copy) {
+          state = joinSaved(saved.state as never, copy);
+          this.link.hub.copies.seed(copy.id, copy.resolved);
+          this.copySavedId = copy.id;
+        } else {
+          state = undefined;
+          this.diagLog('the saved service copy is not complete; waiting for the hub');
+        }
+      }
+      if (state) {
+        const bad = checkInvariants(state);
+        if (bad.length) this.diagLog(`cached state has invariant violations (${bad[0]}); painting it anyway`);
+        this.cachedState = state;
+        this.onState();
+      }
     }
     this.requestSync();
 
@@ -530,7 +570,10 @@ export class LinkCore {
     setInterval(() => this.sampleStall(), 50);
     setInterval(() => this.postRender({ t: 'frames' }), 1000);
     setInterval(() => this.sync(), 2000); // retries (errors, busy slots) and media transport upkeep
-    setInterval(() => this.publishView(), 250);
+    setInterval(() => {
+      this.publishView();
+      this.maybeSaveCopy();
+    }, 250);
     setInterval(() => void this.verifyCache(false), INTEGRITY_EVERY_MS);
     this.scheduleProps();
     setTimeout(() => {
@@ -895,8 +938,18 @@ export class LinkCore {
       return;
     }
     const outputId = this.link.outputId;
+    // What a GO writes is small whatever the service: the state without its copy and cue list, and the copy's
+    // id. The copy and the cues are saved once, in pieces, off the GO (`maybeSaveCopy`). A copy that is not the
+    // one the hub gave this window (the fallback bus's, the operator's offline resolve) is saved whole, as before.
+    const st = this.link.mirror.state;
+    const held = this.link.hub.copies;
+    const named = st.mode === 'live' && !!st.resolved && held.id !== undefined && st.resolved === held.value;
+    if (named) this.wantCopy(held.id as string, st.resolved as ResolvedPlaylist, st.cues);
+    const record = named
+      ? { state: slimState(st), copy: held.id, savedAt: Date.now() }
+      : { state: st, savedAt: Date.now() };
     this.saving = this.json
-      .set(`state:${outputId}`, { state: this.link.mirror.state, savedAt: Date.now() })
+      .set(`state:${outputId}`, record)
       .catch(() => undefined)
       .finally(() => {
         this.saving = undefined;
@@ -905,6 +958,49 @@ export class LinkCore {
           this.saveState();
         }
       });
+  }
+
+  /** The copy of this service is to be saved (once per id): at the next tick after a frame was presented. */
+  private wantCopy(id: string, resolved: ResolvedPlaylist, cues: Cue[]): void {
+    if (this.copySavedId === id || this.copyWanted?.id === id || this.copySavingId === id) return;
+    this.copyCtl?.abort();
+    this.copyWanted = {
+      id,
+      resolved,
+      cues,
+      since: Date.now(),
+      presented: this.tel.presented + this.telBase.presented,
+    };
+  }
+
+  /**
+   * Save the wanted copy, in pieces, once the window presented a frame after it arrived (or 5 s after it did): a
+   * timer tick of its own, never inside the task that applies a message. A failure (a full disk, a closed
+   * database) is one diagnostic line: the next GO's record still names the id, and a restart that finds no
+   * complete copy waits for the hub.
+   */
+  private maybeSaveCopy(): void {
+    const w = this.copyWanted;
+    if (!w) return;
+    const presented = this.tel.presented + this.telBase.presented;
+    if (presented <= w.presented && Date.now() - w.since < COPY_SAVE_LATEST_MS) return;
+    this.copyWanted = undefined;
+    const ctl = new AbortController();
+    this.copyCtl = ctl;
+    this.copySavingId = w.id;
+    const t0 = Date.now();
+    void saveCopy(this.json, this.link.outputId, w.id, w.resolved, w.cues, { signal: ctl.signal }).then(
+      (r) => {
+        if (this.copyCtl === ctl) {
+          this.copyCtl = undefined;
+          this.copySavingId = undefined;
+        }
+        if (r === 'saved' || r === 'present') {
+          this.copySavedId = w.id;
+          this.diagLog(`service copy saved (${r}, ${Date.now() - t0} ms)`);
+        } else if (r === 'failed') this.diagLog('the service copy could not be saved on this computer');
+      },
+    );
   }
 
   private requestSync(): void {
@@ -1084,7 +1180,13 @@ export class LinkCore {
       seen.add(id);
       const found = findSlide(state.resolved?.presentations, c.presentationId, c.slideId);
       if (!found) continue;
-      slides.push({ cueIndex: i, slide: found.slide });
+      // A slide with pictures names their files: the frame the worker makes of a crowded slide draws them.
+      const pictures = this.slideImages(found.slide);
+      slides.push({
+        cueIndex: i,
+        slide: found.slide,
+        ...(Object.keys(pictures).length ? { images: pictures } : {}),
+      });
       if (slides.length >= WARM_UNITS_MAX_SLIDES) break;
     }
     this.warmUnitsSent = key;
@@ -1125,14 +1227,14 @@ export class LinkCore {
   /** What warming a planned cue prepares: its slide's pictures as its slide job asks, and image cues. */
   private warmJob(plan: FramePlan): WarmJob | undefined {
     const d = plan.slide.desc;
-    const images = d ? this.slideImages(d.slide, d.nextSlide) : {};
+    const images = d ? this.slideImages(d.full ?? d.slide, d.nextSlide) : {};
     const sources: string[] = [];
     for (const desc of [plan.background.desc, plan.media.desc])
       if (desc?.kind === 'image' && !sources.includes(desc.hash)) sources.push(desc.hash);
     if (!Object.keys(images).length && !sources.length) return undefined;
     return {
       key: `wm|${plan.slide.key}|${plan.background.key}|${plan.media.key}`,
-      ...(d ? { slide: d.slide, nextSlide: d.nextSlide } : {}),
+      ...(d ? { slide: d.slide, ...(d.full ? { full: d.full } : {}), nextSlide: d.nextSlide } : {}),
       look: this.look,
       images,
       ...(sources.length ? { sources } : {}),
@@ -1292,11 +1394,12 @@ export class LinkCore {
           key,
           cueIndex: d.cueIndex,
           slide: d.slide,
+          ...(d.full ? { full: d.full } : {}),
           nextSlide: d.nextSlide,
           isSong: d.isSong,
           presentationKind: d.presentationKind,
           look: this.look,
-          images: this.slideImages(d.slide, d.nextSlide),
+          images: this.slideImages(d.full ?? d.slide, d.nextSlide),
           refresh: refresh || undefined,
           ...(units && onScreen ? { refreshFadeMs: REFRESH_FADE_MS } : {}),
           video: scene,
@@ -1399,11 +1502,15 @@ export class LinkCore {
         key,
         cueIndex: d.cueIndex,
         slide: d.slide,
+        ...(d.full ? { full: d.full } : {}),
         nextSlide: d.nextSlide,
         isSong: d.isSong,
         presentationKind: d.presentationKind,
         look: this.look,
-        images: this.slideImages(d.slide, d.nextSlide),
+        images: this.slideImages(d.full ?? d.slide, d.nextSlide),
+        // The remake draws nothing: the playing image is only the anchor of the frame's split (renderer `frame.ts`),
+        // which a slide with its video in place splits below the video.
+        ...(d.video ? { video: { objectId: d.video.objectId, slot: 0, gen: 0 } } : {}),
       },
       role: role === 'live' ? 'live' : 'armed',
     });
@@ -2257,6 +2364,15 @@ export class LinkCore {
           if (this.redrawMs.size > 64) this.redrawMs.delete(this.redrawMs.keys().next().value!);
         }
         if (m.unitCacheBytes !== undefined) this.unitCacheBytes = m.unitCacheBytes;
+        if (m.frames) {
+          if (m.frames.over > this.framesOver)
+            this.diagLog(
+              `${m.key.slice(0, 60)}: a frame past its time budget was dropped (${m.frames.over} so far): the slide keeps the part it draws at once`,
+            );
+          this.framesOver = m.frames.over;
+          this.framesMade = m.frames.made;
+          this.frameWorkBytes = m.frames.workBytes;
+        }
         if (m.unitsLeft) {
           // Shown (live, or a GO hurried its arm) with parts left to a late job: they come in late.
           if (role === 'live' && !this.lateParts.has(m.key)) {
@@ -2348,6 +2464,9 @@ export class LinkCore {
       case 'unitsWarmed':
         if (m.key !== this.warmUnitsSent) return;
         this.unitCacheBytes = m.unitCacheBytes;
+        // The units the warm-up made are the worker's too: a count only a slide job's `done` carried stood still
+        // after the last one (the warmed list grew, `unitsMade` did not).
+        if (m.unitsMade !== undefined) this.unitsMade = m.unitsMade;
         if (m.units && m.ready >= m.units && !this.warmedCues.includes(m.cueIndex))
           this.warmedCues = [...this.warmedCues, m.cueIndex].slice(-64);
         if (m.stopped) {
@@ -2634,6 +2753,9 @@ export class LinkCore {
         made: this.unitsMade,
         late: this.unitsLate,
         cacheBytes: this.unitCacheBytes,
+        framesMade: this.framesMade,
+        framesOver: this.framesOver,
+        frameWorkBytes: this.frameWorkBytes,
         warmed: [...this.warmedCues],
         warmStopped: this.warmUnitsStopped,
         lateParts: [...this.lateParts],
@@ -2697,7 +2819,7 @@ export class LinkCore {
       fonts: this.fontFallbacks.size ? `fallback for ${[...this.fontFallbacks].join(', ')}` : 'ok',
       ...perfDiagnostics(h),
       rasterLanes: this.laneStats.line(),
-      units: `${this.unitsMade} made, ${this.unitsLate} slide(s) with late parts, cache ${Math.round(this.unitCacheBytes / 1e6)} MB${this.warmedCues.length ? `, ${this.warmedCues.length} cue(s) warmed` : ''}${this.drawingSwitches ? `; ${this.drawingSwitches}` : ''}`,
+      units: `${this.unitsMade} made, ${this.unitsLate} slide(s) with late parts, cache ${Math.round(this.unitCacheBytes / 1e6)} MB${this.framesOver ? `, ${this.framesOver} frame(s) over their time` : ''}${this.warmedCues.length ? `, ${this.warmedCues.length} cue(s) warmed` : ''}${this.drawingSwitches ? `; ${this.drawingSwitches}` : ''}`,
       workers: workers || '-',
       audio: h.audio ?? (this.config?.output.audioMaster ? 'none' : 'not master'),
       media:

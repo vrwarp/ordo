@@ -18,6 +18,7 @@ import {
   CHART_CONTENT_TYPE,
   chartFrame,
   chartXml,
+  leanDspShapes,
   para,
   partText,
   run,
@@ -25,7 +26,8 @@ import {
   sp,
   withPart,
 } from './test-util.ts';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
+import { MAX_SHAPES_PER_SLIDE } from './walk.ts';
 
 const IN = 914_400;
 /** The frame: 1 in from the left, 1 in down, 8 x 4 in. */
@@ -390,14 +392,15 @@ describe('SmartArt from its drawing cache (M6)', () => {
     expect(diagram.every((e) => e.support !== 'residual')).toBe(true);
   });
 
-  it('reads at most 5,000 shapes of a hostile drawing on a slide', () => {
-    let many = '';
-    for (let i = 0; i < 6_000; i++) many += dspSp({ x: 0, y: 0, cx: IN / 10, cy: IN / 10 });
-    const t0 = performance.now();
+  it('reads at most MAX_SHAPES_PER_SLIDE shapes of a hostile drawing on a slide (the walk\u2019s one constant)', () => {
+    // 51,000 drawing shapes of seven elements each: 357,000 elements, within the reader's bound, so the cap stops them.
+    const many = leanDspShapes(MAX_SHAPES_PER_SLIDE + 1_000);
+    const t0 = cpuMs();
     const s = parseDeck(deckWith(drawingXml(many))).slides[0]!;
-    expect(s.elements.length).toBeLessThanOrEqual(5_000);
-    expect(s.notes.join(' ')).toMatch(/more than 5000 shapes/);
-    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
+    expect(s.elements.length).toBeLessThanOrEqual(MAX_SHAPES_PER_SLIDE);
+    expect(s.elements.length).toBeGreaterThan(MAX_SHAPES_PER_SLIDE - 100);
+    expect(s.notes.join(' ')).toMatch(new RegExp(`more than ${MAX_SHAPES_PER_SLIDE} shapes`));
+    expect(cpuMs() - t0).toBeLessThan(budgetMs(5_000));
   });
 
   it('reads groups of a drawing to a depth of 32 and no further', () => {

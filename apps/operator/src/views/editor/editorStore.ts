@@ -167,7 +167,7 @@ export function selectCellRange(objectId: string, anchorCell: number, range: Tab
 }
 
 const history = new History<Presentation>(200, 800);
-/** Presentations already warned about this session for passing the 4 MiB budget (design/27 §3.4). */
+/** Presentations already warned about this session for passing the presentation budget (8 MiB, design/27 §3.4). */
 const warnedLarge = new Set<string>();
 
 function firstSlideId(p: Presentation): string | undefined {
@@ -357,7 +357,7 @@ const MAX_MERGES = 3;
  * (`adoptJobSaves`), else merges the version that won (`mergeTheirs`) and saves again (a second 409 merges
  * again, `MAX_MERGES` at most), else opens the conflict dialog with what could not be merged. `force` ('Save
  * mine anyway') saves over theirs without merging. 423 means locked by the live playlist. A presentation
- * over the 4 MiB budget saves with a warning (once per session); one over the hub's 32 MiB body limit is
+ * over the 8 MiB budget saves with a warning (once per session); one over the hub's 32 MiB body limit is
  * refused here with the reason (design/27 §3.4). `merges` counts the merges this save made.
  */
 export async function save(force = false, adopted = false, merges = 0): Promise<boolean> {

@@ -46,7 +46,9 @@ import { drawObject, type ImageLookup, registerSlideObjectsDrawer } from './text
  * Runtime: draw it, never drop it). The slide's drawing budget (`geombudget.ts`) sends an object past
  * `GEOM_COST.slide` or `EFFECT_COST.slide` to a legacy copy, so that no synchronous draw passes §13's 50 ms task.
  * On the outputs, the desktop thumbnails and the harness such an object is drawn whole instead, from a unit made
- * beforehand in slices; the editor and phones keep the legacy copies.
+ * beforehand in slices; phones, tablets and the editor while a service is live keep the legacy copies, and the
+ * desktop editor with no service live draws such an object whole itself, into its node cache in idle time
+ * (leaf-editor: `apps/operator/src/views/editor/wholeDraw.ts`, design/15 "Canvas drawing").
  *
  * - **What** (`slideUnits`, `effectWanted`): in z-order while their area is within `UNIT_SLIDE_AREAS` frames, a
  *   `whole` unit of a shape past the geometry budget (with its gradient, dash, arrowheads and effects), a
@@ -54,7 +56,9 @@ import { drawObject, type ImageLookup, registerSlideObjectsDrawer } from './text
  *   glow past the effect budget (its body drawn live), a `whole` one of a soft-edged or translucent shape past
  *   it, a `whole` one of a decoration past `DECOR_SPRITE`, and a masked picture's prepared bitmap (`prepared`).
  *   Never text, tables, charts, 3-D looks or a picture's effects (`slideUnitsLeft` counts what keeps its legacy
- *   copy, and why; the census reads it). `setEffectUnits(false)` plans 62a1c3a's geometry units only.
+ *   copy, and why; the census reads it). `setEffectUnits(false)` plans 62a1c3a's geometry units only. A slide past
+ *   one frame of units is split by the underlay frame (`frame.ts`): its direct part's units fit one frame and the
+ *   objects under it are made one by one as the frame, so no object keeps a legacy copy for want of area.
  * - **Where**: at the job's device scale over the object's reach (a shape's geometry, or its composite with its
  *   layers, `effects.ts` `effectRect`), whole device px cut to the frame, so a 1:1 copy at its origin is the very
  *   pixels drawing it there gives.
@@ -531,6 +535,50 @@ function partOf(o: SlideObject, copies: ReadonlyMap<SlideObject, SlideObject>): 
   return c ? legacyOf(c)?.part : undefined;
 }
 
+/** What `plan`s depend on besides their objects (`generation`), for a key memo outside this file (`frame.ts`). */
+export const unitGeneration = generation;
+
+const placedMemo = new WeakMap<SlideObject, { gen: number; d: string }>();
+
+/**
+ * A digest of what `o` draws, its position included (`drawnFields` placed): what a frame's key is made of, per
+ * object, memoised until the media a picture is keyed by changes (`setUnitMedia`).
+ */
+export function placedDigest(o: SlideObject): string {
+  const gen = mediaResolvers;
+  const hit = placedMemo.get(o);
+  if (hit && hit.gen === gen) return hit.d;
+  const d = digest(canonicalJson(drawnFields(o, true)));
+  placedMemo.set(o, { gen, d });
+  return d;
+}
+
+const aloneMemo = new WeakMap<SlideObject, LegacyPart | null>();
+
+/**
+ * The unit an object gets when it is drawn alone on a slide of its own, as the frame draws each of its objects
+ * (design 29 R1): what its drawing budget alone leaves out of it decides (`slideBudget` of the object), so a
+ * shape past `GEOM_COST.slide` or `EFFECT_COST.slide` by itself, or a decoration past `DECOR_SPRITE`, has one;
+ * undefined when it is drawn as it is, or when no unit draws it.
+ */
+export function objectUnit(o: SlideObject, scale: number): GeomUnit | undefined {
+  if (!o) return undefined;
+  let part = aloneMemo.get(o);
+  if (part === undefined) {
+    part = partOf(o, slideBudget([o])) ?? null;
+    aloneMemo.set(o, part);
+  }
+  const w = wanted(o, part ?? undefined, num(scale, 0.01, 8, 1));
+  return w && 'u' in w ? w.u : undefined;
+}
+
+/** Why an object drawn alone gets no unit though its budget alone leaves something out of it (`UnitLeft`), if so. */
+export function objectLeft(o: SlideObject, scale: number): UnitLeft | undefined {
+  if (!o) return undefined;
+  const w = wanted(o, partOf(o, slideBudget([o])), num(scale, 0.01, 8, 1));
+  return w && 'left' in w ? w.left : undefined;
+}
+
 /**
  * The unit of `o` (a slide object, clamped) at `scale` as if alone on its slide, with what the budget leaves out
  * of it (`part`; default: its geometry, as when past `GEOM_COST.slide`): undefined when none would draw it.
@@ -626,7 +674,7 @@ export interface UnitRun {
 }
 
 /** A software-backed 2D canvas (read back each step; its bitmap is the CPU's, as the asset worker's surface). */
-function canvas2d(
+export function canvas2d(
   w: number,
   h: number,
 ): { canvas: OffscreenCanvas; c: OffscreenCanvasRenderingContext2D } | undefined {
@@ -798,9 +846,22 @@ function unitSteps(u: GeomUnit): UnitSteps | undefined {
  */
 export async function makeUnit(u: GeomUnit, run: UnitRun): Promise<number | undefined> {
   if (u.of === 'prepared' || unitCache.has('unit', u.key)) return 0;
-  const now = run.now ?? (() => performance.now());
   const plan = unitSteps(u);
   if (!plan) return unmadeOf(u);
+  const { failed, longest } = await runUnitSteps(plan, run);
+  const picture = failed ? undefined : plan.picture();
+  if (!picture) return unmadeOf(u);
+  run.check();
+  // Its bitmap taken from the canvas (no copy).
+  if (!putUnit(u, picture.transferToImageBitmap())) return unmadeOf(u);
+  unmade.delete(u.key);
+  work.made++;
+  return longest;
+}
+
+/** A plan's steps run turn by turn on `run` (see `makeUnit`): whether one failed, and the longest turn (ms). */
+async function runUnitSteps(plan: UnitSteps, run: UnitRun): Promise<{ failed: boolean; longest: number }> {
+  const now = run.now ?? (() => performance.now());
   const { steps } = plan;
   let at = 0;
   let failed = false;
@@ -825,14 +886,44 @@ export async function makeUnit(u: GeomUnit, run: UnitRun): Promise<number | unde
     work.turns++;
     longest = Math.max(longest, now() - t0);
   }
+  return { failed, longest };
+}
+
+/**
+ * `u` made in steps like `makeUnit` but not kept: its picture, to be copied into a frame and let go (the frame
+ * holds one such canvas at a time, never two frames of memory), and the longest turn (ms); undefined when it
+ * cannot be made here (no plan or canvas, a drawing error): the frame then draws the object's legacy copy.
+ * A cancelled job (`run.check`) throws and nothing is kept.
+ */
+export async function makeUnitPicture(
+  u: GeomUnit,
+  run: UnitRun,
+): Promise<{ picture: CanvasImageSource; longest: number } | undefined> {
+  const plan = unitSteps(u);
+  if (!plan) return undefined;
+  const { failed, longest } = await runUnitSteps(plan, run);
   const picture = failed ? undefined : plan.picture();
-  if (!picture) return unmadeOf(u);
-  run.check();
-  // Its bitmap taken from the canvas (no copy).
-  if (!putUnit(u, picture.transferToImageBitmap())) return unmadeOf(u);
-  unmade.delete(u.key);
-  work.made++;
-  return longest;
+  return picture ? { picture, longest } : undefined;
+}
+
+/** Count what a frame's making did beside the units' own (`unitWork`: a frame is a unit that was made). */
+export function noteUnitWork(made: number, steps: number, turns: number): void {
+  work.made += made;
+  work.steps += steps;
+  work.turns += turns;
+}
+
+/** Remember that `key`'s unit could not be made on this thread (`unitUnmade`): a frame's, by its key. */
+export function markUnitUnmade(key: string): undefined {
+  unmade.delete(key);
+  unmade.add(key);
+  if (unmade.size > UNMADE_KEYS) unmade.delete(unmade.keys().next().value!);
+  return undefined;
+}
+
+/** Forget that `key`'s unit could not be made (it was made, or is to be tried again). */
+export function clearUnitUnmade(key: string): void {
+  unmade.delete(key);
 }
 
 /** What `prepareSlideUnits` did. */
@@ -853,8 +944,27 @@ export interface SlideUnitsMade {
   readonly ms: number;
 }
 
+/**
+ * The underlay frame of a slide, made like a unit and first among its units (`frame.ts`; design 29 R1): its key
+ * is the unit cache's, so pins, holds, `onUnit`, `skip`, the late job and `unitUnmade` serve it as they serve a unit.
+ */
+export interface FrameUnit {
+  readonly key: string;
+  /** Its bitmap's bytes. */
+  readonly bytes: number;
+  /**
+   * Whether it is ready: in the cache and complete. A frame made while a picture's file was not there is
+   * forgotten here once the file has arrived, so it is made again with it.
+   */
+  ready(): Promise<boolean>;
+  /** Make it in steps on `run` (resumed where an earlier call stopped); the longest turn, ms, undefined if it cannot be made. */
+  make(run: UnitRun): Promise<number | undefined>;
+}
+
 /** How `prepareSlideUnits` keeps what it makes. */
 export interface SlideUnitsOptions {
+  /** The slide's underlay frame: made before its units (`FrameUnit`). */
+  frame?: FrameUnit;
   /** Called with each unit's key before it is made or used (the caller unpins it when its job is done). */
   pin?(key: string): void;
   /** `UNIT_WAIT_MS` unless given. */
@@ -899,6 +1009,26 @@ export async function prepareSlideUnits(
   let left = 0;
   let bytes = 0;
   let longestMs = 0;
+  const frame = opts.frame;
+  if (frame) {
+    if (await frame.ready()) {
+      opts.pin?.(frame.key);
+      ready++;
+      bytes += frame.bytes;
+    } else if (opts.skip?.(frame.key) || opts.stop?.() || now() - t0 > waitMs) left++;
+    else {
+      opts.pin?.(frame.key);
+      run.check();
+      const longest = await frame.make(run);
+      if (longest === undefined) left++;
+      else {
+        made++;
+        opts.onUnit?.(frame.key);
+        bytes += frame.bytes;
+        longestMs = Math.max(longestMs, longest);
+      }
+    }
+  }
   for (const u of units) {
     if (u.of === 'prepared' || unitCache.has('unit', u.key)) {
       opts.pin?.(u.key);
@@ -930,7 +1060,7 @@ export async function prepareSlideUnits(
     bytes += u.bytes;
     longestMs = Math.max(longestMs, longest);
   }
-  return { units: units.length, made, ready, left, bytes, longestMs, ms: now() - t0 };
+  return { units: units.length + (frame ? 1 : 0), made, ready, left, bytes, longestMs, ms: now() - t0 };
 }
 
 // ── Drawing ─────────────────────────────────────────────────────────────────────────────────────────────

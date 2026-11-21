@@ -1,6 +1,9 @@
 import { Slide } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
+import { MAX_OBJECTS } from './emit.ts';
 import { convertDeck, emitSlides, MEDIA_PREFIX, parseDeck } from './index.ts';
+import { MAX_SHAPES_PER_SLIDE } from './walk.ts';
+import { MAX_PACKED_ELEMENTS_PER_PART } from './xml.ts';
 import {
   body,
   buildDeck,
@@ -8,6 +11,8 @@ import {
   para,
   pic,
   pictureBg,
+  denseDeckParts,
+  leanShapes,
   pngHeader,
   run,
   solid,
@@ -178,6 +183,72 @@ describe('convertDeck (the hub pool task entry, M3)', () => {
         { shapes: box(2, '0000FF') },
       ],
     });
+
+  it('imports a slide of traced artwork of 6 MB, which the 250,000-tag bound refused (design/29 B4, X1)', () => {
+    // 400 custom shapes of 300 points: about 120,000 points and 360,000 tags in about 5.5 MB, under the part cap
+    // (8 MiB at the base), so it is the tag bound that made the base read this slide as a picture, text only.
+    const parts = denseDeckParts({ shapes: 400, points: 300 });
+    const size = parts.get('ppt/slides/slide1.xml')!.length;
+    expect(size).toBeGreaterThan(4 * 1024 * 1024);
+    expect(size).toBeLessThan(8 * 1024 * 1024);
+    const slide = convertDeck(parts).slides[0]!;
+    expect(slide.classification?.reasons ?? []).not.toContain('unreadable');
+    expect(slide.notes.join(' ')).not.toContain('could not be read');
+    expect(slide.slide.objects.length).toBeGreaterThan(100);
+  });
+
+  it('lists what it cuts and nothing draws: a slide and a design past the reader\u2019s bounds, the shape cap, the object cap (W9, W10)', () => {
+    const junk = '<a:b/>'.repeat(MAX_PACKED_ELEMENTS_PER_PART + 1);
+    // A slide part past the element bound is unreadable with the reason detail; a malformed one is unreadable only.
+    const parts = buildDeck({ slides: [{ shapes: box(2, 'FF0000') + junk }, { shapes: '' }] });
+    parts.set(
+      'ppt/slides/slide2.xml',
+      new TextEncoder().encode('<p:sld xmlns:p="x"><p:cSld><p:spTree><broken'),
+    );
+    const r = convertDeck(parts);
+    expect(r.slides[0]!.classification?.reasons).toEqual(['unreadable', 'detail']);
+    expect(r.slides[1]!.classification?.reasons).toEqual(['unreadable']);
+    // A layout past the bounds is a note on every slide that uses it and a missing design on each, not on the others.
+    const deck = buildDeck({
+      layouts: [{ shapes: junk }, {}],
+      slides: [
+        { layout: 1, shapes: box(2, 'FF0000') },
+        { layout: 1, shapes: box(2, '00FF00') },
+        { layout: 2, shapes: box(2, '0000FF') },
+      ],
+    });
+    const d = convertDeck(deck).slides;
+    for (const i of [0, 1]) {
+      expect(d[i]!.missing).toEqual(['decoration:layout']);
+      expect(d[i]!.classification.class).toBe('hybrid');
+      expect(d[i]!.notes.join(' ')).toMatch(/layout has too much drawing detail/);
+    }
+    expect(d[2]!.missing).toBeUndefined();
+    expect(d[2]!.classification.class).toBe('native');
+    // The walk's shape cap and the emitter's object cap list what they cut (element:shapes).
+    const capped = convertDeck(buildDeck({ slides: [{ shapes: leanShapes(MAX_SHAPES_PER_SLIDE + 1) }] }));
+    expect(capped.slides[0]!.missing).toContain('element:shapes');
+  });
+
+  it('lists the objects cut at 1,000 for a slide of traced artwork, on both kinds of hub (W10)', () => {
+    // 2,500 discs of 50 points: the converter's path-point bound (65,536 a slide, `MAX_SLIDE_PATH_POINTS`) ends the
+    // geometry it draws at about 1,300 of them; the others are the art's (LibreOffice's on a hub that has it) and
+    // stand in as the rectangles they are (`custGeom drawn as rect`): more objects than a slide keeps, which the
+    // emitter cuts from the top and lists. (Slide 89 of a real template reaches the cut the same way.)
+    const parts = denseDeckParts({ shapes: 2_500, points: 50 });
+    for (const libreoffice of [true, false]) {
+      const s = convertDeck(parts, { libreoffice }).slides[0]!;
+      expect(s.slide.objects).toHaveLength(MAX_OBJECTS);
+      expect(s.missing).toContain('element:shapes');
+      expect(s.notes.join(' ')).toMatch(/more than 1000 objects: the top ones are not drawn/);
+      expect(s.classification.class).toBe('hybrid');
+    }
+    // A slide short of the cut, from the same generator, lists nothing of the kind.
+    const fewer = convertDeck(denseDeckParts({ shapes: 1_700, points: 50 })).slides[0]!;
+    expect(fewer.slide.objects.length).toBeLessThan(MAX_OBJECTS);
+    expect(fewer.missing ?? []).not.toContain('element:shapes');
+    expect(fewer.notes.join(' ')).not.toMatch(/more than 1000 objects/);
+  });
 
   it('converts the whole deck like parseDeck and emitSlides, with the slide list', () => {
     const all = convertDeck(deck());

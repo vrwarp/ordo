@@ -15,7 +15,7 @@ import {
 import { outlineOf } from './geom/outline.ts';
 import type { BuiltGeom } from './geom/path.ts';
 import { geomFilesVersion, storedCost, storedGeometry } from './geom/stored.ts';
-import { pictureTarget } from './picture.ts';
+import { hasPictureEffects, keepRoundMask, pictureShape, pictureTarget } from './picture.ts';
 import { decorFilesVersion } from './decor/files.ts';
 import { clampShapeObject, decorHooks, decorHooksGeneration } from './shape.ts';
 
@@ -89,6 +89,9 @@ export function legacyCopy<T extends SlideObject>(o: T, what: LegacyPart): T {
   if (hit) return hit as T;
   const out = withoutPart(o, what);
   if (isClamped(o)) keepClamped(out);
+  // A round-cornered picture drawn without its effects keeps the bitmap prepared for it with them (F4).
+  if (what === 'effects' && o.type === 'image' && (o.radius ?? 0) > 0 && hasPictureEffects(pictureShape(o)))
+    keepRoundMask(out);
   originals.set(out, { original: o, part: what });
   c[what] = out;
   return out;

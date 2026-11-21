@@ -7,7 +7,9 @@ import {
   externalHost,
   MAX_EXTERNAL_NOTES,
   MAX_PART_NAME_CHARS,
+  MAX_XML_PART_BYTES,
   openPackage,
+  PATH_ITEM_BYTES,
   type PartSource,
   relIdOf,
   relsPartOf,
@@ -16,18 +18,22 @@ import {
   XML_NODE_BYTES,
 } from './opc.ts';
 import { body, buildDeck, grpSp, imageRel, para, pic, run, scheme, solid, solidBg, sp } from './test-util.ts';
-import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { MAX_PACKED_ELEMENTS_PER_PART, type XNode } from './xml.ts';
+import { budgetMs, cpuMs } from '@ordo/domain/timing.test-util.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
 const IN = 914_400;
 const REL = 'http://schemas.openxmlformats.org/package/2006/relationships';
 const rels = (list: string) => `<Relationships xmlns="${REL}">${list}</Relationships>`;
 
-/** Run `f`, failing when it takes longer than `ms` (design/27 §14: each limit test under 5 s). */
+/**
+ * Run `f`, failing when it uses more than `ms` of CPU time (design/27 §14: each limit test under 5 s). CPU time, not the wall
+ * clock (`cpuMs`): a loaded or niced machine makes a run longer, never the work.
+ */
 function within<T>(ms: number, f: () => T): T {
-  const t0 = performance.now();
+  const t0 = cpuMs();
   const v = f();
-  expect(performance.now() - t0).toBeLessThan(budgetMs(ms));
+  expect(cpuMs() - t0).toBeLessThan(budgetMs(ms));
   return v;
 }
 
@@ -126,12 +132,26 @@ describe('openPackage', () => {
     const pkg = openPackage(
       new Map([
         ['a.xml', utf16],
-        ['big.xml', new Uint8Array(8 * 1024 * 1024 + 1)],
+        ['big.xml', new Uint8Array(32 * 1024 * 1024 + 1)],
       ]),
     );
     expect(pkg.xml('a.xml')?.attrs.x).toBe('é');
-    expect(() => pkg.xml('big.xml')).toThrow(/8 MB/);
+    expect(() => pkg.xml('big.xml')).toThrow(/32 MB/);
     expect(pkg.xml('missing.xml')).toBeUndefined();
+  });
+
+  it('reads a part of 22 MB and one of exactly 32 MiB, and refuses one byte more (design/29 B5: 8 -> 32 MiB)', () => {
+    expect(MAX_XML_PART_BYTES).toBe(32 * 1024 * 1024);
+    const part = (bytes: number) => enc(`<a>${'x'.repeat(bytes - '<a></a>'.length)}</a>`);
+    const parts = new Map([
+      ['a22.xml', part(22 * 1024 * 1024)],
+      ['a32.xml', part(MAX_XML_PART_BYTES)],
+      ['a33.xml', part(MAX_XML_PART_BYTES + 1)],
+    ]);
+    const pkg = openPackage(parts);
+    expect(within(5_000, () => pkg.xml('a22.xml'))?.children[0]?.text.length).toBe(22 * 1024 * 1024 - 7);
+    expect(pkg.xml('a32.xml')?.name).toBe('a');
+    expect(() => pkg.xml('a33.xml')).toThrow('a33.xml is larger than 32 MB');
   });
 
   it('decodes by BOM, by UTF-16 markup, else by the declared encoding, else UTF-8', () => {
@@ -232,8 +252,57 @@ describe('openPackage', () => {
     const a2 = roomy.xml('a.xml');
     roomy.xml('b.xml');
     expect(roomy.xml('a.xml')).toBe(a2);
-    // The default budget holds a slide's working set: its layout, master and theme, each at the tag limit.
-    expect(XML_CACHE_BYTES).toBeGreaterThanOrEqual(3 * (8 * 1024 * 1024 + 250_000 * XML_NODE_BYTES));
+    // The default budget holds the working set of the largest real slide (RESTATED for the packed reader, design/29 X1: the
+    // old assertion held three parts at the OLD hostile bounds, 8 MiB and 250,000 tags each, which no heap the pool has can
+    // hold at 32 MiB and 400,000 nodes; the pool-level test of a hostile deck is what proves a part at the bounds survives):
+    // a Traffic Dark slide (22 MiB, 240,144 nodes, 396,636 points), a Halloween layout (12.5 MiB, 8,554 nodes, 322,417 points),
+    // a master and a theme of 2 MiB each.
+    const part = (bytes: number, nodes: number, points: number) =>
+      bytes + XML_NODE_BYTES * nodes + PATH_ITEM_BYTES * 2 * points;
+    const workingSet =
+      part(22 * 1024 * 1024, 240_144, 396_636) +
+      part(12.5 * 1024 * 1024, 8_554, 322_417) +
+      2 * part(2 * 1024 * 1024, 5_000, 0);
+    expect(workingSet).toBeLessThanOrEqual(XML_CACHE_BYTES);
+    // And a part at the bounds is not what the budget is sized for: it is kept (pinned or newest) over the budget.
+    expect(part(MAX_XML_PART_BYTES, MAX_PACKED_ELEMENTS_PER_PART, 0)).toBeGreaterThan(XML_CACHE_BYTES / 2);
+  });
+
+  describe('traced paths (design/29 X1: the package reads each part with packing on)', () => {
+    const tracedPart = (points: number) =>
+      `<a:custGeom><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="1" y="2"/></a:moveTo>` +
+      `${'<a:lnTo><a:pt x="3" y="4"/></a:lnTo>'.repeat(points - 1)}</a:path></a:pathLst></a:custGeom>`;
+    const pathOf = (root: XNode | undefined) => root?.children[0]?.children[0];
+
+    it('parses a part of 200,000 commands (600,000 tags: the unpacked 250,000-tag bound refused it), as one packed path', () => {
+      const pkg = openPackage(new Map([['a.xml', enc(tracedPart(200_000))]]));
+      const path = pathOf(within(10_000, () => pkg.xml('a.xml')));
+      expect(path?.name).toBe('a:path');
+      expect(path?.children).toEqual([]);
+      expect(path?.packed?.ops.length).toBe(200_000);
+      expect(path?.packed?.nums.length).toBe(400_000);
+    });
+
+    it('charges a packed part its characters, 300 bytes a node and 16 a command or a point, to the cache', () => {
+      const text = tracedPart(1000);
+      const parts = new Map([
+        ['a.xml', enc(text)],
+        ['b.xml', enc(text)],
+      ]);
+      // Three nodes (the geometry, its path list and the path) and 2,000 items (1,000 commands, 1,000 points).
+      const cost = text.length + 3 * XML_NODE_BYTES + 2_000 * PATH_ITEM_BYTES;
+      expect(PATH_ITEM_BYTES).toBe(16);
+      // Room for one part and a bit less than two: the second evicts the first ...
+      const tight = openPackage(parts, undefined, { cacheBytes: 2 * cost - 1 });
+      const a = tight.xml('a.xml');
+      tight.xml('b.xml');
+      expect(tight.xml('a.xml')).not.toBe(a);
+      // ... and room for exactly two keeps both: the cost is that and not a byte less.
+      const roomy = openPackage(parts, undefined, { cacheBytes: 2 * cost });
+      const a2 = roomy.xml('a.xml');
+      roomy.xml('b.xml');
+      expect(roomy.xml('a.xml')).toBe(a2);
+    });
   });
 
   it('never evicts pinned parts; the others go least recently used first', () => {
@@ -636,12 +705,12 @@ describe('hostile packages', () => {
     parts.set('ppt/slides/slide1.xml', enc(bomb));
     const deep = `<p:sld xmlns:p="${NS.p}"><p:cSld><p:spTree>${'<p:grpSp>'.repeat(20_000)}${'</p:grpSp>'.repeat(20_000)}</p:spTree></p:cSld></p:sld>`;
     parts.set('ppt/slides/slide2.xml', enc(deep));
-    parts.set('ppt/slides/slide3.xml', new Uint8Array(9 * 1024 * 1024).fill(0x20));
+    parts.set('ppt/slides/slide3.xml', new Uint8Array(33 * 1024 * 1024).fill(0x20));
     const scene = within(5000, () => parseDeck(parts));
     expect(scene.slides).toHaveLength(3);
     expect(scene.slides[0]!.error).toMatch(/DOCTYPE/);
     expect(scene.slides[1]!.error).toBeUndefined();
-    expect(scene.slides[2]!.error).toMatch(/8 MB/);
+    expect(scene.slides[2]!.error).toMatch(/32 MB/);
     // In the presentation part, the deck cannot be read at all: a clean error.
     const p = buildDeck({ slides: [{}] });
     p.set(

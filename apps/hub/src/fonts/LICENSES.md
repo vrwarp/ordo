@@ -6,8 +6,9 @@ output, and LibreOffice draws art and picture slides with the same files. No fon
 repository.
 
 Every bundled face is licensed under the SIL Open Font License, Version 1.1. The licence text is in
-[OFL-1.1.txt](OFL-1.1.txt), and the image keeps each package's copyright file under
-`/usr/share/doc/<package>/copyright`.
+[OFL-1.1.txt](OFL-1.1.txt), and the image keeps the copyright file of every package it installs, these
+fonts' and every other package's (ffmpeg, Chromium, LibreOffice and the rest), under
+`/usr/share/doc/<package>/copyright`; the pull-request job checks the product's own packages.
 
 | Family                                                                                                        | Faces                                    | Package (bookworm)                 | Copyright                                                                       | Reserved Font Names               |
 | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------- | --------------------------------- |
@@ -38,7 +39,7 @@ The image also installs these packages. `bundled.ts` never registers them: it re
 So no output ever receives them. LibreOffice draws with them where a deck's font names fall back to them, and the
 hub measures table cells in Chinese, Japanese and Korean with Noto Sans CJK where the font library has no face for
 the script (`pptx/systemFaces.ts`, design/27 §10). The image keeps their copyright files under
-`/usr/share/doc/<package>/copyright`.
+`/usr/share/doc/<package>/copyright`, as it does every package's.
 
 | Family                                                                        | Faces                                      | Package (bookworm)                  | Copyright                                                                                            | Licence                                                                      | Reserved Font Names                                                                  |
 | ----------------------------------------------------------------------------- | ------------------------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |

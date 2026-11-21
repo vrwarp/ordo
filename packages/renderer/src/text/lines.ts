@@ -223,8 +223,16 @@ class ClusterCuts {
 /** A piece's widths at the autofit search's reference scale: the linear widths are scaled from them. */
 type BaseWidths = WeakMap<Piece, { w: number; t: number; refPx: number; sw: number; st: number }>;
 
-/** What one layout keeps across its autofit steps: reference widths and cluster boundaries per piece. */
-type Shared = { bases: BaseWidths; clusters: WeakMap<Piece, ClusterCuts> };
+/**
+ * What one layout keeps across its autofit steps: reference widths and cluster boundaries per piece, and the
+ * kerning across the office break after a piece (`kernAfter`) at the reference scale, with the piece that
+ * follows it and the scale it was measured at.
+ */
+type Shared = {
+  bases: BaseWidths;
+  clusters: WeakMap<Piece, ClusterCuts>;
+  kerns: WeakMap<Piece, { q: Piece; ref: FitScale; k: number }>;
+};
 
 type Flowed = {
   /** Lines relative to the inner box's top-left corner. */
@@ -260,7 +268,7 @@ export function layoutBox(
   const innerH = Math.max(1, box.h - ins.t - ins.b);
   // One layout measures each string once, whatever the shared cache evicts during the autofit search.
   const mm = memoMeasurer(m);
-  const shared: Shared = { bases: new WeakMap(), clusters: new WeakMap() };
+  const shared: Shared = { bases: new WeakMap(), clusters: new WeakMap(), kerns: new WeakMap() };
   let exact: { fit: FitScale; flowed: Flowed } | null = null;
   const flowExact = (fit: FitScale): Flowed => {
     if (
@@ -464,8 +472,16 @@ function flowParas(
     const st = c.style;
     const f = base ?? fit;
     const w = (s: number, e: number) => measureAt(st, p.script, 'ltr', segText(text, s, e, st.caps), f);
-    const k = w(p.start, q.end) - w(p.start, p.end) - w(q.start, q.end) - st.letterSpacing;
-    return base ? k * (c.sizePx / drawnPx(size(st.sizePx, base), st.baseline)) : k;
+    const joined = () => w(p.start, q.end) - w(p.start, p.end) - w(q.start, q.end) - st.letterSpacing;
+    if (!base) return joined();
+    // At the search's reference scale the value is the same at every step (only the scaling below changes): it is
+    // measured once per piece and the piece after it, not three strings a step.
+    let kept = shared.kerns.get(p);
+    if (!kept || kept.q !== q || kept.ref !== base) {
+      kept = { q, ref: base, k: joined() };
+      shared.kerns.set(p, kept);
+    }
+    return kept.k * (c.sizePx / drawnPx(size(st.sizePx, base), st.baseline));
   };
 
   const lines: LaidLine[] = [];

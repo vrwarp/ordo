@@ -4,7 +4,7 @@ import { LiveCommand, LiveEvent, type LiveState, type ResolvedPlaylist, Id } fro
 export const PROTOCOL_VERSION = 1;
 
 /** Version of the hub and the browser apps, deployed together from one image. A mismatch on hello means a stale tab. */
-export const APP_VERSION = '0.9.2';
+export const APP_VERSION = '0.10.0';
 
 export const Role = z.enum(['operate', 'edit', 'output', 'stage']);
 export type Role = z.infer<typeof Role>;
@@ -130,6 +130,13 @@ export const Hello = z.object({
   view: z.literal('lectern').optional(),
   appVersion: z.string(),
   lastSeq: z.number().optional(),
+  /**
+   * The id (SHA-256 of its bytes) of the resolved copy of the running service this window holds, if it does
+   * (design/29 §2.3 M2, live-by-ref): a hub that knows it sends the live state without the copy. Lenient on
+   * purpose: a hello that fails its parse is answered with bye 'version' (the window reloads), so a value that is
+   * not a string reads as absent and a string of any shape is kept and only compared for equality.
+   */
+  resolvedId: z.string().optional().catch(undefined),
 });
 export const TimePing = z.object({
   t: z.literal('time.ping'),
@@ -142,7 +149,12 @@ export const LiveEventMsg = z.object({
   id: z.string(),
   event: LiveCommand,
 });
-export const LiveResync = z.object({ t: z.literal('live.resync'), v: z.literal(PROTOCOL_VERSION) });
+export const LiveResync = z.object({
+  t: z.literal('live.resync'),
+  v: z.literal(PROTOCOL_VERSION),
+  /** The resolved copy the window holds (as `Hello.resolvedId`); absent: it holds none. */
+  resolvedId: z.string().optional().catch(undefined),
+});
 export const HealthMsg = z.object({
   t: z.literal('health'),
   v: z.literal(PROTOCOL_VERSION),
@@ -207,7 +219,15 @@ export const HUB_ONLY_EVENTS: readonly LiveEvent['k'][] = ['prerender.add'];
 // ---- hub -> client (trusted, typed only) ----
 export type Welcome = { t: 'welcome'; v: 1; hubMs: number; seq: number; role: Role; appVersion: string };
 export type TimePong = { t: 'time.pong'; v: 1; c: number; s: number };
-export type LiveStateMsg = { t: 'live.state'; v: 1; seq: number; state: LiveState };
+export type LiveStateMsg = {
+  t: 'live.state';
+  v: 1;
+  seq: number;
+  /** `state.resolved` is left out when the socket said it holds the copy named by `resolvedId`. */
+  state: LiveState;
+  /** The id of the running service's resolved copy (SHA-256 of its bytes), while a service is live. */
+  resolvedId?: string;
+};
 export type LiveDeltaMsg = {
   t: 'live.delta';
   v: 1;
@@ -215,6 +235,8 @@ export type LiveDeltaMsg = {
   fromSeq: number;
   event: LiveEvent /** id of the client command that produced it */;
   id?: string;
+  /** A goLive's: the id of the copy `event.resolved` carries (SHA-256 of its bytes). */
+  resolvedId?: string;
 };
 export type LiveAck = { t: 'live.ack'; v: 1; id: string; seq?: number; rejected?: string };
 export type LibraryDelta = {

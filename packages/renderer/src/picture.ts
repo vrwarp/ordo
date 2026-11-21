@@ -295,6 +295,18 @@ export function hasPictureEffects(s: PictureShape | undefined): boolean {
 }
 
 const roundMasks = new Map<string, ShapeGeom>();
+/** The legacy copies (`legacyCopy` 'effects') of round-cornered pictures that had effects: prepared as their originals. */
+const roundKept = new WeakSet<object>();
+
+/**
+ * Marks `copy`, a picture's copy without its shadow and soft edge (`geombudget.ts` `legacyCopy` 'effects'), as keeping
+ * its original's round-corner mask: a picture with effects and round corners is prepared, cut to its corners
+ * (`roundCornerMask`), and its copy past the effect budget is prepared as the very same bitmap (a shadow is no part
+ * of the target) instead of drawn from the source through a clip.
+ */
+export function keepRoundMask(copy: object): void {
+  roundKept.add(copy);
+}
 
 /**
  * The mask a picture with effects is cut to when it has round corners and no mask: the 'roundRect' preset
@@ -310,6 +322,11 @@ export function roundCornerMask(
   s: PictureShape | undefined,
 ): ShapeGeom | undefined {
   if (!s || s.mask || !hasPictureEffects(s)) return undefined;
+  return roundMaskOf(radius, w, h);
+}
+
+/** The 'roundRect' mask of `radius` in a `w` x `h` box (`roundCornerMask`), undefined for square corners. */
+function roundMaskOf(radius: number | undefined, w: number, h: number): ShapeGeom | undefined {
   const ss = Math.min(w, h);
   const r = num(radius, 0, CLAMP.maxRadius, 0);
   if (!(r > 0 && ss > 0)) return undefined;
@@ -356,9 +373,12 @@ export function pictureTarget(o: PictureDraw, scale: number): PictureTarget | un
   if (!(Number.isFinite(scale) && scale > 0)) return undefined;
   const box = clampBox(o.box);
   let effected = pictureShape(o);
-  // Round corners with effects are cut as a mask is (`roundCornerMask`), so such a picture is prepared too.
-  const round = roundCornerMask(o.radius, box.w, box.h, effected);
-  if (round && effected) effected = { ...effected, mask: maskOf(round).mask ?? round };
+  // Round corners with effects are cut as a mask is (`roundCornerMask`), so such a picture is prepared too; so is
+  // its copy without them (`keepRoundMask`).
+  const round =
+    roundCornerMask(o.radius, box.w, box.h, effected) ??
+    (roundKept.has(o) && !effected?.mask ? roundMaskOf(o.radius, box.w, box.h) : undefined);
+  if (round) effected = { ...effected, mask: maskOf(round).mask ?? round };
   const softEdge = effected?.softEdge ?? 0;
   const shape =
     effected && (effected.mask || effected.flipH || effected.flipV) ? cutAndMirror(effected) : undefined;

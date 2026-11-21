@@ -74,6 +74,17 @@ export const PICTURE_LIMITS: PictureLimits = {
   maxPrepared: 32,
 };
 
+/**
+ * What one picture of an underlay frame is prepared within (`prepare/frame.ts`): one file, its one target (the
+ * target's bytes), held for the one draw call that copies it, so a frame of hundreds of pictures never holds more
+ * than one decoded picture. The cue's own limits (`PICTURE_LIMITS`) are the direct part's.
+ */
+export const FRAME_PICTURE_LIMITS: PictureLimits = {
+  maxImages: 1,
+  maxBytes: CLAMP.maxCueBitmapBytes,
+  maxPrepared: 1,
+};
+
 /** How a job runs synchronous work (its turns in the raster lanes) and learns that it was cancelled. */
 export type PreloadSteps = {
   slice<T>(fn: () => T): Promise<T>;

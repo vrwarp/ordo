@@ -12,6 +12,7 @@ import {
   custGeom,
   grpSp,
   imageRel,
+  leanShapes,
   para,
   pic,
   pngHeader,
@@ -22,6 +23,7 @@ import {
   tc,
 } from './test-util.ts';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
+import { MAX_SHAPES_PER_SLIDE } from './walk.ts';
 
 const IN = 914_400;
 const enc = new TextEncoder();
@@ -127,6 +129,19 @@ describe('rescueDeck (M9 ladder)', () => {
     expect(out.slides[1]!.slide.objects).toHaveLength(1_000);
     expect(out.slides[2]!.slide.objects).toEqual([]);
     for (const s of out.slides) expect(Slide.safeParse(s.slide).success).toBe(true);
+  });
+
+  it('reads the same shape cap as the walk: a text past MAX_SHAPES_PER_SLIDE shapes is not read, one before it is', () => {
+    const text = (id: number, t: string) =>
+      sp({ id, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(run(t))) });
+    // Lean shapes first (the cap's shapes), a text among the last ones before the cap and one after it.
+    const shapes =
+      leanShapes(MAX_SHAPES_PER_SLIDE - 3, 10) +
+      text(2, 'inside') +
+      leanShapes(4, 60_000) +
+      text(3, 'outside');
+    const out = rescueDeck(buildDeck({ slides: [{ shapes }] }));
+    expect(texts(out.slides[0]!.slide)).toEqual(['inside']);
   });
 
   it('never throws on mutated slides and stays within its bounds (fuzz)', () => {

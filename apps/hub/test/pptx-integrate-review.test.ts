@@ -33,6 +33,7 @@ import {
   withPart,
 } from '@ordo/pptx-scene/test-util.ts';
 import type { Job } from '@ordo/protocol';
+import { zipDeclared } from '@ordo/importers/zip-declared.test-util.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loStatus } from '../../operator/src/lib/pptxImport.ts';
 import { outputFonts } from '../src/fonts/bundled.ts';
@@ -176,10 +177,20 @@ describe("the 'Pictures (LibreOffice)' import fails closed (design/21, design/27
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path}`;
     try {
-      // One ordinary slide, plus 67.5 MB of unreferenced XML: more than a copy may hold in memory.
-      const parts = buildDeck({ slides: [{ shapes: textBox(2, 'Welcome') }] });
-      for (let i = 0; i < 9; i++) parts.set(`ppt/junk/part${i}.xml`, new Uint8Array(7_500_000).fill(0x61));
-      const hash = await stored(parts);
+      // A deck whose directory declares 300 MiB of XML (ten entries of 30 MiB, which is more than a copy may hold in memory: the
+      // hub reads 256 MiB at most, design/29 B6; the bytes are garbage, so nothing may be read). It was 67.5 MB of real
+      // unreferenced XML while the total was 64 MiB.
+      const file = join(dir, `${newId()}.pptx`);
+      writeFileSync(
+        file,
+        zipDeclared(
+          Array.from({ length: 10 }, (_, i) => ({
+            name: `ppt/junk/part${i}.xml`,
+            declared: 30 * 1024 * 1024,
+          })),
+        ),
+      );
+      const hash = await storeDeck(hub, file);
       const job = await waitJob(hub, hub.imports.queueDocument(hash, 'Big.pptx', 'pptx', 'libreoffice').id);
       expect(job.state).toBe('failed');
       expect(job.error).toMatch(/could not be prepared for LibreOffice, so the deck was not converted/);

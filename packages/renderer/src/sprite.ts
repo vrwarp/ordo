@@ -51,6 +51,7 @@ import {
   lyricTextFor,
   registeredSlideObjectsDrawer,
   stagePreview,
+  type UnderFrame,
 } from './text2d.ts';
 
 /**
@@ -542,6 +543,8 @@ export function slideReach(
     nextSlide?: Slide;
     isSong?: boolean;
     presentationKind?: 'song' | 'slides' | 'loop';
+    /** The slide's underlay frame (`SlideDrawOptions.under`): its rect is reached too once it is ready. */
+    under?: UnderFrame;
   },
 ): Reach {
   const slide = clampSlide(rawSlide);
@@ -554,6 +557,12 @@ export function slideReach(
     // The slide's PowerPoint or page picture covers the frame.
     if (drawn.pictureMediaId) return null;
     let r: Reach = EMPTY;
+    // A ready frame is copied under the objects: a tight sprite must cover it (a frame not ready is left out).
+    const under = opts.under;
+    if (under?.image()) {
+      const u = under.rect;
+      r = { x: u.x / scale, y: u.y / scale, w: u.w / scale, h: u.h / scale };
+    }
     // As `drawSlide2D` draws them: past the slide's drawing budget, as their legacy shapes or without effects;
     // an object past it whose geometry unit is ready (units.ts) as the unit draws it, its original's bounds.
     const units = registeredSlideObjectsDrawer();

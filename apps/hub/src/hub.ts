@@ -6,6 +6,9 @@ import { Auth } from './auth.ts';
 import { Backups } from './backup.ts';
 import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openDb } from './db.ts';
+import { DISK_MEASURE_MS, DiskFloor } from './diskfloor.ts';
+import { Collector, RefBackfill } from './collect.ts';
+import { applyHubEvent } from './hubevents.ts';
 import { errorMessage } from './errors.ts';
 import { outputFonts } from './fonts/bundled.ts';
 import { FontService } from './fonts/service.ts';
@@ -13,12 +16,17 @@ import { createHttpApp, type RouteInfo, withTimeout } from './http.ts';
 import { ImportService } from './imports.ts';
 import { JobQueue } from './jobs.ts';
 import { JobPacing } from './pacing.ts';
+import { cpuPool } from './pool.ts';
+import { PrerenderKeys } from './prerenderkeys.ts';
+import { PrerenderStore } from './prerenders.ts';
+import { SlideFiles } from './slidefiles.ts';
 import { Library, phonesSwitch } from './library.ts';
 import { LiveService, librarySource } from './live.ts';
 import { contextMediaIds, forOutputs } from './librarylink.ts';
 import { LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
+import { RevisionTitleBackfill } from './revisions.ts';
 import {
   cleanupStaleUploads,
   type LibraryApiCtx,
@@ -50,8 +58,18 @@ export type Hub = {
   live: LiveService;
   sockets: SocketHub;
   backups: Backups;
+  /** The one-off summary of the revisions that have none (the History list reads summaries): paced, waits for End service. */
+  revisionTitles: RevisionTitleBackfill;
   log: Logger;
   ring: LogRing;
+  /** The keys of pre-rendered slides (computed at save; the recompute and safety-net jobs). */
+  prerenderKeys: PrerenderKeys;
+  /** The pictures of pre-rendered slides. */
+  prerenders: PrerenderStore;
+  /** The collection of content files nothing names (design/29: mark and sweep, 31 days, report mode by default). */
+  collector: Collector;
+  /** The one-off scan of revisions saved before the references index (two minutes after the start). */
+  backfill: RefBackfill;
   /** The venue time zone: settings.general.timeZone, falling back to ORDO_TZ. Backups and countdowns share it. */
   timeZone(): string;
   /** Listen on cfg.host:cfg.port (or the given port); returns the base URL. */
@@ -105,6 +123,16 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const lib = new Library(db, { timeZone: cfg.timeZone });
   const store = new Store(cfg.dataDir, lib);
   await store.init();
+  // The free-space floor (design/29 A25, W44): the routes that store a file ask it; measured now and every 30 s.
+  if (cfg.minFreeWarning) log.warn(cfg.minFreeWarning);
+  const disk = new DiskFloor(cfg.dataDir, {
+    statfs: cfg.statfs,
+    minFreeBytes: cfg.minFreeBytes,
+    warn: (m) => log.warn(m),
+  });
+  void disk.state();
+  const diskTimer = setInterval(() => void disk.state(), DISK_MEASURE_MS);
+  diskTimer.unref();
   const auth = new Auth(db, lib, log);
   if (cfg.devPin) await auth.devSetup(cfg.devPin);
   // Phones (design/24 "Feature flags are settings"): cached here, followed on the settings change.
@@ -126,9 +154,14 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const imports = new ImportService(lib, store, jobs, media, cfg, log, (id) =>
     live.locks().presentations.has(id),
   );
-  const live = new LiveService(db, librarySource(lib), log, { snapshotIntervalMs: cfg.snapshotIntervalMs });
+  const live = new LiveService(db, librarySource(lib), log, {
+    snapshotIntervalMs: cfg.snapshotIntervalMs,
+    byRef: cfg.liveByRef,
+  });
+  if (cfg.liveByRefWarning) log.warn({}, cfg.liveByRefWarning);
   const timeZone = () => venueTimeZone(lib.getSetting('general').timeZone, cfg.timeZone);
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
+  const revisionTitles = new RevisionTitleBackfill(lib.summaries, { live: () => live.state.mode, log });
   const statics = new StaticApps(cfg.appsDir, cfg.domain);
 
   const http = await createHttpApp({ cfg, log, auth: () => auth, phonesEnabled: phones.enabled });
@@ -137,6 +170,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     domain: cfg.domain,
     healthIntervalMs: cfg.healthIntervalMs,
     clientIp: http.clientIp,
+    byRef: cfg.liveByRef,
   });
   // Outputs hear of what their config holds: settings, fonts and the logo media.
   lib.onChange((changes) => {
@@ -147,8 +181,43 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     sockets.broadcastLibrary(changes, (ch) => forOutputs(ch, ids));
   });
 
+  const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, {
+    live: () => live.state.mode,
+    log,
+  });
+  // One process: the service's state is always known.
+  const liveView = { locks: () => live.locks(), mode: () => live.state.mode, known: () => true };
+  const prerenders = new PrerenderStore(lib, store, liveView, { log });
+  // A picture accepted for a key of the running service goes straight to the live loop (one process).
+  prerenders.onAccepted((e) =>
+    applyHubEvent(
+      live,
+      {
+        k: 'prerender.add',
+        presentationId: e.presentationId,
+        slideId: e.slideId,
+        key: e.key,
+        size: e.size,
+        file: e.file.hash,
+      },
+      log,
+    ),
+  );
+  const backfill = new RefBackfill(lib, { live: () => live.state.mode, log });
+  const collector = new Collector(lib, store, {
+    mode: cfg.collect,
+    live: () => live.state.mode,
+    known: () => true,
+    timeZone,
+    log,
+    schedule: cfg.scheduleBackups,
+  });
   const hub: Hub = {
     app,
+    prerenderKeys,
+    prerenders,
+    collector,
+    backfill,
     routes: http.routes,
     cfg,
     db,
@@ -162,10 +231,14 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     live,
     sockets,
     backups,
+    revisionTitles,
     log,
     ring,
     timeZone,
     async listen(port?: number) {
+      // Every reader of the font list (the route, the live process's context, goLive) answers from the finished
+      // list: the bundled fonts are registered before the first request, at most `fontsWaitMs`.
+      await fonts.settled(cfg.fontsWaitMs);
       await app.listen({ port: port ?? cfg.port, host: cfg.host });
       const addr = app.server.address();
       const p = typeof addr === 'object' && addr ? addr.port : (port ?? cfg.port);
@@ -177,6 +250,11 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
       // die with the abort signal), snapshot the live state, and only then drop the sockets: the clients
       // get a `bye` and are terminated without waiting for a close handshake a stuck client never sends.
       backups.stop();
+      revisionTitles.stop();
+      prerenderKeys.stop();
+      backfill.stop();
+      collector.stop();
+      clearInterval(diskTimer);
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       live.stop();
       const closing = sockets.close().catch((e) => log.warn({ err: errorMessage(e) }, 'socket close failed'));
@@ -200,7 +278,11 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     backups,
     log,
     ring,
-    live: { locks: () => live.locks(), mode: () => live.state.mode },
+    disk,
+    slideFiles: new SlideFiles(lib, store, cpuPool),
+    prerenderKeys,
+    prerenders,
+    live: liveView,
     disconnectOutput: (id, reason) => sockets.disconnectOutput(id, reason),
     liveDiag: async () => liveDiagOf(live, sockets),
   };
@@ -211,7 +293,12 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     auth,
     live,
     log,
-    healthExtra: () => ({ librarySnapshotBytes: libStats.get().snapshotBytes }),
+    healthExtra: () => ({
+      librarySnapshotBytes: libStats.get().snapshotBytes,
+      ...disk.healthFields(),
+      ...collector.healthFields(),
+      ...prerenders.healthFields(),
+    }),
     outputConfig: (outputId) => {
       const s = lib.getSettings();
       const output = s.outputs.find((o) => o.id === outputId);
@@ -258,10 +345,26 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   // Jobs paced while live (design/28 §5.3): the mode at start first, so a restart during a service never
   // relaunches a held job; then every goLive and End service.
   jobs.onLiveMode(live.state.mode);
-  live.onDelta(() => jobs.onLiveMode(live.state.mode));
-  live.onState((s) => jobs.onLiveMode(s.mode));
+  live.onDelta(() => {
+    jobs.onLiveMode(live.state.mode);
+    prerenderKeys.onLiveMode(live.state.mode);
+    backfill.onLiveMode(live.state.mode);
+    collector.onLiveMode(live.state.mode);
+    revisionTitles.onLiveMode(live.state.mode);
+  });
+  live.onState((s) => {
+    jobs.onLiveMode(s.mode);
+    prerenderKeys.onLiveMode(s.mode);
+    backfill.onLiveMode(s.mode);
+    collector.onLiveMode(s.mode);
+    revisionTitles.onLiveMode(s.mode);
+  });
   jobs.start();
+  prerenderKeys.start();
+  backfill.start();
+  collector.start();
   sockets.start();
   if (cfg.scheduleBackups) backups.schedule();
+  revisionTitles.start();
   return hub;
 }

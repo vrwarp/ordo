@@ -587,6 +587,22 @@ export function drawObject(ctx: Ctx2D, o: SlideObject, scale: number, images?: I
   }
 }
 
+/**
+ * The underlay frame a slide is drawn over (`frame.ts`, design 29 R1): what lies under the slide's own objects, made
+ * once as a unit and copied 1:1 under them. A handle, so this file imports nothing of units.ts (which imports it):
+ * `frame.ts`'s `underFrame` makes one over the unit cache.
+ */
+export interface UnderFrame {
+  /** The frame's unit key (what `SlideDrawOptions.late` reports while it is not ready). */
+  readonly key: string;
+  /** Where it is copied, in device px: the frame's rect. */
+  readonly rect: { readonly x: number; readonly y: number; readonly w: number; readonly h: number };
+  /** The frame's picture when it is ready. */
+  image(): CanvasImageSource | undefined;
+  /** Whether it could not be made here: nothing is waited for then (the slide keeps its direct part). */
+  unmade?(): boolean;
+}
+
 export type SlideDrawOptions = {
   /** device px per logical px (canvas width / 1920) */
   scale: number;
@@ -605,6 +621,14 @@ export type SlideDrawOptions = {
    * units not ready keep their cheap legacy copies either way.
    */
   late?: (key: string) => void;
+  /**
+   * The slide's underlay frame (`frame.ts`): `slide` is then its direct part. Copied 1:1 under the objects, after
+   * the slide's own picture, when it is ready; not ready, it is left out and reported through `late` by its key
+   * (never drawn directly in this raster: it is seconds of work), so the late job makes it and it fades in. A
+   * context that cannot copy 1:1 (not a whole-pixel translation) is not given the frame. Without `under` the slide
+   * is drawn as it always was.
+   */
+  under?: UnderFrame;
 };
 
 /**
@@ -753,6 +777,29 @@ export function frameBytes(scale: number): number {
   return Math.round(LOGICAL_WIDTH * scale) * Math.round(LOGICAL_HEIGHT * scale) * 4;
 }
 
+/** Whether `ctx`'s transform is a translation by whole device px (a 1:1 copy is exact under it). */
+function copiesExactly(ctx: Ctx2D): boolean {
+  // A context that cannot say (a test's stand-in) is taken as untransformed, as the units' drawer takes it.
+  const m = typeof ctx.getTransform === 'function' ? ctx.getTransform() : undefined;
+  if (!m) return true;
+  return m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1 && Number.isInteger(m.e) && Number.isInteger(m.f);
+}
+
+/** Copy the ready frame 1:1 at its rect, or report it left out (nothing else is drawn for it). */
+function drawUnder(ctx: Ctx2D, under: UnderFrame, late?: (key: string) => void): void {
+  const img = under.image();
+  if (!img) {
+    if (!under.unmade?.()) late?.(under.key);
+    return;
+  }
+  if (!copiesExactly(ctx)) return;
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(img, under.rect.x, under.rect.y);
+  ctx.restore();
+}
+
 /**
  * Draw the Slide layer of a slide as a look renders it, on a transparent canvas. Backgrounds are not
  * drawn here (they are their own layer). A look that draws slides as authored draws what `slideContent`
@@ -777,6 +824,8 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
     // One raster of the sprite cache (spritecache.ts): the slide's own sprites never evict each other, and the
     // cache holds a few frames at this scale.
     spriteCache.raster(() => {
+      // The underlay frame (frame.ts) lies under every object: copied here, or left out and reported.
+      if (opts.under) drawUnder(ctx, opts.under, opts.late);
       // Units (units.ts): an object past the budget whose unit is ready is copied from it 1:1 in z-order.
       if (slideObjectsDrawer?.draw(ctx, rawSlide, drawn.objects, scale, opts.images, opts.late)) return;
       // Past the slide's drawing budget, later stored geometries draw as their legacy shapes and later effects

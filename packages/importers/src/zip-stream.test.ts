@@ -235,3 +235,32 @@ describe('extractZip filters and caps (design/27 §12)', () => {
     expect(Buffer.from(r.files.get('Sunday.proPlaylist')!).equals(bundle)).toBe(true);
   });
 });
+
+describe('extractZip reads a prefix of an entry (`head`, design/29 B6: slide by slide)', () => {
+  it('returns the first bytes of a deflated and of a stored entry, an entry shorter than the prefix whole, and the others as before', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordo-zs-head-'));
+    try {
+      const big = Buffer.from('abcdefghij'.repeat(200_000)); // 2 MB, deflates to a few KB
+      const zip = new JSZip();
+      zip.file('big.xml', big, { compression: 'DEFLATE' });
+      zip.file('stored.xml', big, { compression: 'STORE' });
+      zip.file('small.xml', 'tiny', { compression: 'DEFLATE' });
+      zip.file('other.xml', 'other whole', { compression: 'DEFLATE' });
+      const file = join(dir, 'h.zip');
+      writeFileSync(file, await zip.generateAsync({ type: 'nodebuffer' }));
+      const out = await extractZip(file, {
+        dir,
+        spill: () => false,
+        head: (path) => (path === 'other.xml' ? undefined : 65_536),
+      });
+      expect(Buffer.from(out.files.get('big.xml')!).equals(big.subarray(0, 65_536))).toBe(true);
+      expect(Buffer.from(out.files.get('stored.xml')!).equals(big.subarray(0, 65_536))).toBe(true);
+      expect(Buffer.from(out.files.get('small.xml')!).toString()).toBe('tiny');
+      expect(Buffer.from(out.files.get('other.xml')!).toString()).toBe('other whole');
+      // Only the prefixes count against the in-memory budget.
+      expect(out.inMemoryBytes).toBe(65_536 * 2 + 4 + 11);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

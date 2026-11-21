@@ -10,12 +10,14 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SIZE_BUDGETS } from '@ordo/domain';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   bundledFontsSettled,
   type DeckRecord,
   equivalenceOf,
   hubEntry,
+  hubEnv,
   hubImportGates,
   hubImportMarkdown,
   type HubImportReport,
@@ -233,5 +235,88 @@ describe('hub-import', () => {
       'no picture slide',
       'sermon decks reach version 1 within 5 s',
     ]);
+  });
+
+  it('holds a presentation to the size budget of @ordo/domain (8 MiB since 2026-11-20), not to a number of its own', () => {
+    const deck = (presentationBytes: number): DeckRecord => ({
+      name: 'd',
+      ext: 'pptx',
+      bytes: 1,
+      state: 'done',
+      v1Ms: 100,
+      classes: { native: 3, hybrid: 1, picture: 0 },
+      pending: 0,
+      slidesOver64k: 0,
+      presentationBytes,
+      manifest: { files: 2, unresolved: 0, degraded: 0 },
+    });
+    const gateOf = (presentationBytes: number) =>
+      hubImportGates(
+        {
+          createdAt: '',
+          dryRun: false,
+          libreoffice: 'hidden',
+          capabilities: { libreoffice: { state: 'absent' } },
+          decks: [deck(presentationBytes)],
+          unreadable: [],
+          rssMaxMb: 900,
+          officeLines: [],
+        },
+        4096,
+      ).find((g) => g.name.startsWith('no presentation over'))!;
+    // 5 MiB: over the old 4 MiB, under the budget.
+    expect(gateOf(5 * 1024 * 1024).pass).toBe(true);
+    expect(gateOf(SIZE_BUDGETS.presentationMax).pass).toBe(true);
+    const over = gateOf(SIZE_BUDGETS.presentationMax + 1);
+    expect(over.pass).toBe(false);
+    expect(over.name).toBe(`no presentation over ${SIZE_BUDGETS.presentationMax / 1024 ** 2} MiB`);
+  });
+});
+
+describe('hubEnv', () => {
+  const parent = { PATH: '/usr/bin:/bin', HOME: '/home/someone', SECRET: 'not passed on' };
+  const o = { dataDir: '/data/hub' };
+
+  it('is the environment a hub child has always had, and none of the tool’s own beyond PATH and HOME', () => {
+    expect(hubEnv(o, 4321, parent)).toEqual({
+      PATH: '/usr/bin:/bin',
+      HOME: '/home/someone',
+      LANG: 'C.UTF-8',
+      ORDO_DATA: '/data/hub',
+      ORDO_DOMAIN: 'localhost',
+      ORDO_PORT: '4321',
+      ORDO_HOST: '127.0.0.1',
+      ORDO_DEV_PIN: '246810',
+      ORDO_TZ: 'UTC',
+      ORDO_FONTS_DIR: '/usr/share/fonts',
+      // the free-space floor off (a volume with less free than the floor would refuse every import)
+      ORDO_MIN_FREE_GB: '0',
+    });
+    // A tools-only PATH replaces the tool's own; with neither, PATH is empty and HOME is the data folder.
+    expect(hubEnv({ ...o, path: '/tools' }, 1, parent).PATH).toBe('/tools');
+    expect(hubEnv(o, 1, {})).toMatchObject({ PATH: '', HOME: '/data/hub' });
+  });
+
+  it('passes TMPDIR on when the tool has one, so the hub’s compile cache and temp files go where the run’s do', () => {
+    // tsx keeps its compile cache in $TMPDIR/tsx-<uid>: with no TMPDIR it is /tmp/tsx-<uid>, on every run.
+    expect(hubEnv(o, 1, { ...parent, TMPDIR: '/dev/shm/run/tmp' }).TMPDIR).toBe('/dev/shm/run/tmp');
+    expect('TMPDIR' in hubEnv(o, 1, parent)).toBe(false);
+    expect('TMPDIR' in hubEnv(o, 1, { ...parent, TMPDIR: '' })).toBe(false);
+  });
+
+  it('lets `env` win over every default', () => {
+    const env = {
+      PATH: '/p',
+      HOME: '/h',
+      LANG: 'en_US.UTF-8',
+      TMPDIR: '/elsewhere',
+      ORDO_PORT: '1',
+      ORDO_TZ: 'Pacific/Auckland',
+      ORDO_FONTS_DIR: '/fonts',
+      ORDO_LIBREOFFICE: 'off',
+    };
+    const e = hubEnv({ ...o, path: '/tools', env }, 4321, { ...parent, TMPDIR: '/dev/shm/run/tmp' });
+    for (const [k, v] of Object.entries(env)) expect(e[k], k).toBe(v);
+    expect(e.ORDO_DATA).toBe('/data/hub');
   });
 });

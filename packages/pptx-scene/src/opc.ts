@@ -20,13 +20,25 @@
  */
 import { type Log, clean } from './log.ts';
 import { isPercentPart, normalizePart, STRICT_ROOT, transitionalUri } from './markup.ts';
-import { parseXml, rootOf, type XNode } from './xml.ts';
+import {
+  MAX_PACKED_ELEMENTS_PER_PART,
+  MAX_PACKED_PATH_ITEMS_PER_PART,
+  type ParseOptions,
+  parseXml,
+  rootOf,
+  type XNode,
+  XmlBoundError,
+} from './xml.ts';
 
 /** A deck's parts by zip entry name (no leading slash), as `extractZip` returns them in `files`. */
 export type PartSource = Map<string, Uint8Array>;
 
-/** An XML part larger than this is refused (design/27 §12). */
-export const MAX_XML_PART_BYTES = 8 * 1024 * 1024;
+/**
+ * An XML part larger than this is refused (design/27 §12; design/29 B5: 8 MiB until the packed tokenizer, which reads traced
+ * artwork as numbers, took the largest real part, 22.3 MB of traced artwork, within a heap the pool can give it). Every reader of
+ * a deck's parts derives its cap from this one constant: the hub, the operator's import worker, the measuring tool and this package.
+ */
+export const MAX_XML_PART_BYTES = 32 * 1024 * 1024;
 /** A relationship target longer than this is ignored (real ones are a few dozen characters). */
 export const MAX_TARGET_CHARS = 2_048;
 /**
@@ -42,6 +54,11 @@ export const MAX_EXTERNAL_NOTES = 20;
  * lets a deck within the §12 part budgets keep gigabytes alive.
  */
 export const XML_NODE_BYTES = 300;
+/**
+ * What a command or a point of a packed path (`xml.ts`: an `a:path` read as two typed arrays) is charged against the cache,
+ * in bytes: a command is one byte of `ops` and a point two doubles of `nums`, so 16 covers both with room.
+ */
+export const PATH_ITEM_BYTES = 16;
 /** What one relationship of a kept list is charged against the cache (its object, strings and indexes). */
 export const REL_BYTES = 300;
 /**
@@ -239,17 +256,27 @@ interface RelList {
 /** A cache entry: a parsed part, or a part's relationships. `part` is the stored name it belongs to. */
 type Entry = { part: string; cost: number } & ({ tree: Cached } | { rels: RelList });
 
-/** Elements of a parsed tree (iterative: the tree is bounded by the parser, not by the stack). */
-function elementCount(root: XNode | undefined): number {
-  let n = 0;
+/**
+ * What a parsed tree holds: its nodes, and the commands and points of its packed paths (iterative: the tree is bounded by
+ * the parser, not by the stack).
+ */
+function treeSize(root: XNode | undefined): { nodes: number; items: number } {
+  let nodes = 0;
+  let items = 0;
   const stack = root ? [root] : [];
   while (stack.length) {
     const x = stack.pop()!;
-    n++;
+    nodes++;
+    if (x.packed) items += x.packed.ops.length + x.packed.nums.length / 2;
     for (const c of x.children) stack.push(c);
   }
-  return n;
+  return { nodes, items };
 }
+
+/** What the package asks of the tokenizer for every part: paths read as numbers, inside the packed reader's bounds. */
+const PACKED: ParseOptions = {
+  pack: { maxElements: MAX_PACKED_ELEMENTS_PER_PART, maxPathItems: MAX_PACKED_PATH_ITEMS_PER_PART },
+};
 
 export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageOptions = {}): Package {
   const cacheBytes = opts.cacheBytes ?? XML_CACHE_BYTES;
@@ -270,7 +297,8 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
     const real = find(name);
     if (real === undefined) return undefined;
     const b = src.get(real)!;
-    if (b.length > MAX_XML_PART_BYTES) throw new Error(`${clean(real)} is larger than 8 MB`);
+    if (b.length > MAX_XML_PART_BYTES)
+      throw new XmlBoundError('bytes', `${clean(real)} is larger than ${MAX_XML_PART_BYTES / 1024 ** 2} MB`);
     return decodeText(b);
   };
 
@@ -307,7 +335,7 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
     try {
       const t = text(real) ?? '';
       chars = t.length;
-      const root = rootOf(parseXml(t, clean(real)));
+      const root = rootOf(parseXml(t, clean(real), PACKED));
       if (root) {
         const strict = t.includes(STRICT_ROOT);
         if (strict && !strictNoted) {
@@ -316,7 +344,8 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
         }
         normalizePart(root, { strict, percents: strict && isPercentPart(real) });
       }
-      return { value: root, cost: chars + XML_NODE_BYTES * elementCount(root) };
+      const size = treeSize(root);
+      return { value: root, cost: chars + XML_NODE_BYTES * size.nodes + PATH_ITEM_BYTES * size.items };
     } catch (e) {
       return { value: e instanceof Error ? e : new Error(String(e)), cost: chars };
     }

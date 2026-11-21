@@ -60,6 +60,7 @@ import {
   type Tier,
 } from '@ordo/pptx-scene';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
+import { MAX_XML_PART_BYTES } from '@ordo/pptx-scene/opc.ts';
 import { M9_WRITES, PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
 import { bakeKey, type PictureBake } from '@ordo/pptx-scene/bake.ts';
 import { sentToArt } from '@ordo/pptx-scene/budget.ts';
@@ -77,9 +78,12 @@ import type { NativePage, ObjectsResult, PageFont, PageMedia, RenderResult } fro
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../..');
 
-/** XML parts kept in memory: at most this much each, and in all (design/27 §2 step 1, §12). */
-export const MAX_XML_PART_BYTES = 8 * 1024 * 1024;
-export const MAX_XML_TOTAL_BYTES = 64 * 1024 * 1024;
+/**
+ * XML parts kept in memory: at most this much each (the converter's own cap: the harness converts what the hub converts) and in
+ * all (design/27 §2 step 1, §12).
+ */
+export { MAX_XML_PART_BYTES };
+export const MAX_XML_TOTAL_BYTES = PPTX_LIMITS.xmlWholeBytes;
 /** Pictures written out per deck (design/27 §12); the rest are left out with a note. */
 export const MAX_PICTURES = 2_000;
 /** The harness's origin in the page; nothing else is reachable. */
@@ -207,7 +211,7 @@ export function clean(s: string, max = 200): string {
 
 const errorText = (e: unknown) => clean(e instanceof Error ? e.message : String(e), 300);
 
-/** Entries kept in memory: XML and relationship parts up to 8 MB; everything else is spilled to disk. */
+/** Entries kept in memory: XML and relationship parts up to the converter's part cap (32 MB); everything else is spilled to disk. */
 export function spillPart(path: string, size: number): boolean {
   return !/\.(xml|rels)$/i.test(path) || size > MAX_XML_PART_BYTES;
 }
@@ -734,6 +738,8 @@ export type RenderedSlide = {
   maxObjectMs?: { '1920': number; '3840': number };
   /** The id of that object at 3840 px. */
   maxObjectId?: string;
+  /** With `frames`, on a slide the underlay frame splits: what it did at each width (`native-page.ts` `FrameInfo`). */
+  frame?: RenderResult['frame'];
   error?: string;
 };
 
@@ -754,6 +760,8 @@ export type RenderOptions = {
   only?: ReadonlySet<number>;
   /** Draw each slide as LibreOffice would (`compatSlide`), and as ordo does next to it (`policyPng`). */
   loCompat?: boolean;
+  /** Draw a slide past a count as an output does, with the underlay frame (`RenderJob.frames`; `--frames`). */
+  frames?: boolean;
   /** Font requests to resolve on the page once its faces are loaded (diagnostics, tests). */
   probe?: FaceRequest[];
   /** Register stand-ins for script fallback families this machine lacks (`fonts.ts`). */
@@ -967,7 +975,7 @@ export class NativeRenderer {
     const offered = new Set(media.map((m) => m.id));
     const draw = async (slide: Slide, name: string, times: number) => {
       const p = page ?? (await open());
-      const job = { slide, rect: deck.slideRect, repeats: times };
+      const job = { slide, rect: deck.slideRect, repeats: times, ...(opts.frames ? { frames: true } : {}) };
       const r: RenderResult = await withTimeout(
         p.evaluate((j) => window.__native.render(j), job),
         SLIDE_TIMEOUT_MS,
@@ -997,6 +1005,7 @@ export class NativeRenderer {
                   coldMs: { '1920': round2(r.cold1920), '3840': round2(r.cold3840) },
                 }
               : {}),
+            ...(r.frame ? { frame: r.frame } : {}),
           });
           if (compat) {
             await draw(s.slide, `${base}.policy.png`, 0);

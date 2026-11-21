@@ -258,6 +258,32 @@ describe('legacyColumns (M9 leaf-legacy)', () => {
     expect(legacyColumns(slide([hostile]))).toEqual({ budgetLegacy: 1, unitsLeft: 1, unitsAlone: 1 });
   });
 
+  it('counts nothing for want of unit area: two full-frame line-art shapes are a direct part and a frame', () => {
+    // At r2b2-base the second one's unit passed the slide's one frame of unit area and was counted `unitsLeft`
+    // (r2a MUST c(2)); outputs now draw the bottom one from a frame, the top one directly, both whole.
+    const art = (id: string, wall: number) =>
+      ({
+        id,
+        type: 'shape',
+        box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+        shape: 'line',
+        opacity: 1,
+        radius: 0,
+        fill: red,
+        geom: {
+          paths: Array.from({ length: 8 }, (_, i) => ({
+            d: lineArtD({ w: 4000, h: 3000, cols: 20, rows: 15, wall: wall + 0.02 * i }),
+            w: 4000,
+            h: 3000,
+          })),
+        },
+      }) as Slide['objects'][number];
+    const cols = legacyColumns(slide([art('a', 0.1), art('b', 0.12)]));
+    expect(cols.budgetLegacy).toBeGreaterThanOrEqual(1);
+    expect(cols).not.toHaveProperty('unitsLeft');
+    expect(cols).not.toHaveProperty('unitsAlone');
+  });
+
   it("counts what the slide budget draws as legacy shapes, and the guard deck's line art draws no fill", async () => {
     const dir = await work();
     const out = join(dir, 'guard.jsonl');
@@ -372,4 +398,36 @@ describe('census', () => {
     expect(noLo.reasons).not.toContain('art:budget:pictures');
     expect(noLo.missing).toEqual(['decoration']);
   }, 120_000);
+});
+
+describe('legacyColumns: the slides the underlay frame splits (M4)', () => {
+  const squares = (n: number) =>
+    Array.from(
+      { length: n },
+      (_, i) =>
+        ({
+          id: `s${i}`,
+          type: 'shape',
+          shape: 'rect',
+          box: { x: (i % 20) * 90, y: Math.floor(i / 20) * 60, w: 80, h: 50, rotation: 0 },
+          radius: 0,
+          opacity: 1,
+          fill: { r: i % 256, g: 7, b: 9, a: 1 },
+        }) as Slide['objects'][number],
+    );
+
+  it('lists a slide of 340 objects: the frame under the 200 the live clamp keeps, at 3840 and at 1920, with its rule', () => {
+    expect(legacyColumns(slide(squares(340)))).toEqual({
+      frame: 140,
+      frame_objects: 1,
+      frameBytes: 3840 * 2160 * 4,
+      frame1080: 140,
+      frame1080_objects: 1,
+    });
+  });
+
+  it('says nothing of a slide the counts hold: 200 objects, and an empty slide', () => {
+    expect(legacyColumns(slide(squares(200)))).toEqual({});
+    expect(legacyColumns(slide([]))).toEqual({});
+  });
 });

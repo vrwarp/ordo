@@ -200,7 +200,99 @@ CREATE INDEX IF NOT EXISTS auth_global_failures_at ON auth_global_failures(at);
 CREATE TABLE IF NOT EXISTS job_paced (job_id TEXT PRIMARY KEY);
 `,
   },
+  {
+    version: 14,
+    name: 'prerender-store',
+    // The tables of the pre-render store (design/29 §1.3, r2b sub-wave 2), all additive and idempotent, nothing
+    // copied: heads and their pages (a slide file's index), the keys a save computes per revision, the pictures
+    // and the failures of a key, the references each presentation's revisions make to content files (intervals),
+    // the backfill's marker and the collector's marks. PR #29's hub (0.9.0) opens a folder at 14 and ignores them:
+    // an update again rescans (`refs_scanned`).
+    sql: `
+CREATE TABLE IF NOT EXISTS slide_heads (
+  hash TEXT PRIMARY KEY, bytes INTEGER NOT NULL, objects INTEGER NOT NULL, uses TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS slide_head_pages (
+  head TEXT NOT NULL, pos INTEGER NOT NULL, page TEXT NOT NULL, PRIMARY KEY (head, pos));
+CREATE INDEX IF NOT EXISTS slide_head_pages_page ON slide_head_pages(page);
+CREATE TABLE IF NOT EXISTS prerender_keys (
+  presentation_id TEXT NOT NULL, rev INTEGER NOT NULL, slide_id TEXT NOT NULL, key TEXT NOT NULL,
+  standby_id TEXT NOT NULL, sig TEXT NOT NULL, created_at INTEGER NOT NULL,
+  PRIMARY KEY (presentation_id, rev, slide_id, key));
+CREATE INDEX IF NOT EXISTS prerender_keys_key ON prerender_keys(presentation_id, key);
+CREATE INDEX IF NOT EXISTS prerender_keys_standby ON prerender_keys(standby_id);
+CREATE TABLE IF NOT EXISTS prerenders (
+  presentation_id TEXT NOT NULL, key TEXT NOT NULL, size INTEGER NOT NULL, slide_id TEXT NOT NULL,
+  standby_id TEXT NOT NULL, version INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'slide', hash TEXT NOT NULL,
+  mime TEXT NOT NULL, bytes INTEGER NOT NULL, w INTEGER NOT NULL, h INTEGER NOT NULL, opaque INTEGER NOT NULL,
+  made_by TEXT, made_role TEXT NOT NULL, last_rev INTEGER NOT NULL, created_at INTEGER NOT NULL,
+  PRIMARY KEY (presentation_id, key, size));
+CREATE INDEX IF NOT EXISTS prerenders_hash ON prerenders(hash);
+CREATE INDEX IF NOT EXISTS prerenders_standby ON prerenders(presentation_id, standby_id);
+CREATE TABLE IF NOT EXISTS prerender_failures (
+  key TEXT PRIMARY KEY, reason TEXT NOT NULL, made_by TEXT, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS file_refs (
+  presentation_id TEXT NOT NULL, hash TEXT NOT NULL, first_rev INTEGER NOT NULL, last_rev INTEGER NOT NULL,
+  PRIMARY KEY (presentation_id, hash, first_rev));
+CREATE INDEX IF NOT EXISTS file_refs_hash ON file_refs(hash);
+CREATE TABLE IF NOT EXISTS refs_scanned (
+  presentation_id TEXT NOT NULL, rev INTEGER NOT NULL, PRIMARY KEY (presentation_id, rev));
+CREATE TABLE IF NOT EXISTS collect_marks (hash TEXT PRIMARY KEY, since INTEGER NOT NULL);
+`,
+  },
+  {
+    // 14 is the pre-render store's (design/29 §1.3): this is the next number after it, so the two lists merge in order.
+    version: 15,
+    name: 'revision-summaries',
+    // One small row per kept presentation revision for the History list (design/28 P2, the title only): a revision is a full
+    // copy of the presentation, up to 8 MiB, and listing them parsed every one (57 of 8 MiB: 5.4 s and 2.2 GiB). A side table
+    // rather than a column, so the migration stays idempotent (the test re-applies every migration's SQL); nothing is copied
+    // here (the library process makes the rows of the revisions that have none, paced: apps/hub/src/revisions.ts). `title_json`
+    // is the title as its JSON string literal, so it comes back exactly. The three triggers delete a summary whenever its
+    // revision row is replaced, edited or deleted, by any hub: one that opens the folder and does not know this table writes
+    // revisions as it always did, and a summary is never wrong or left behind (an INSERT OR REPLACE fires the insert trigger
+    // whatever `recursive_triggers` says). An older hub opens a folder at 15 and ignores the table.
+    sql: `
+CREATE TABLE IF NOT EXISTS revision_summaries (
+  presentation_id TEXT NOT NULL, rev INTEGER NOT NULL, title_json TEXT NOT NULL,
+  saved_by TEXT, saved_at TEXT NOT NULL, PRIMARY KEY (presentation_id, rev));
+CREATE TRIGGER IF NOT EXISTS revision_summaries_replace BEFORE INSERT ON presentation_revisions BEGIN
+  DELETE FROM revision_summaries WHERE presentation_id = NEW.presentation_id AND rev = NEW.rev;
+END;
+CREATE TRIGGER IF NOT EXISTS revision_summaries_delete AFTER DELETE ON presentation_revisions BEGIN
+  DELETE FROM revision_summaries WHERE presentation_id = OLD.presentation_id AND rev = OLD.rev;
+END;
+CREATE TRIGGER IF NOT EXISTS revision_summaries_edit AFTER UPDATE ON presentation_revisions BEGIN
+  DELETE FROM revision_summaries WHERE presentation_id = OLD.presentation_id AND rev = OLD.rev;
+  DELETE FROM revision_summaries WHERE presentation_id = NEW.presentation_id AND rev = NEW.rev;
+END;
+`,
+  },
 ];
+
+/**
+ * The running service's resolved copy, once per id (live-by-ref, design/29 §2.3 M2): the id is the SHA-256 (hex)
+ * of the exact UTF-8 bytes in `json`, kept twice (copy 0 and 1) and verified on every read; snapshots and journal
+ * rows name the copy instead of holding it. Part of LIVE_SCHEMA, and created by the live service itself when it
+ * runs on another database (the one-process hub keeps its live tables in ordo.db, which has a migration list this
+ * table is not in: it has no version, and a hub from before this ignores it).
+ */
+export const LIVE_RESOLVED_SQL = `
+CREATE TABLE IF NOT EXISTS live_resolved (
+  resolved_id TEXT NOT NULL, copy INTEGER NOT NULL, bytes INTEGER NOT NULL, json BLOB NOT NULL, saved_at INTEGER NOT NULL,
+  PRIMARY KEY (resolved_id, copy));
+`;
+
+/**
+ * The running service's cue list, once per id (live-by-ref follow-up, design/29 §2.3 M2): the id is the SHA-256 (hex) of
+ * the exact UTF-8 bytes in `json`, verified on every read. It is built once at the goLive and never changes (the reducer
+ * keeps the array), so the snapshot names it beside the copy instead of writing it again each time it is taken; one
+ * row, because the cue list can be derived from the copy it belongs to when the row is torn (the restore does, with a
+ * warning). Created the way `live_resolved` is.
+ */
+export const LIVE_CUES_SQL = `
+CREATE TABLE IF NOT EXISTS live_cues (
+  cues_id TEXT NOT NULL PRIMARY KEY, bytes INTEGER NOT NULL, json BLOB NOT NULL, saved_at INTEGER NOT NULL);
+`;
 
 /**
  * The live process's own database (design/25): journal, snapshots and the cached copies of library data it
@@ -215,7 +307,7 @@ CREATE TABLE IF NOT EXISTS live_snapshot (
 CREATE TABLE IF NOT EXISTS live_snapshot_prev (
   rowid INTEGER PRIMARY KEY AUTOINCREMENT, seq INTEGER NOT NULL, json TEXT NOT NULL, saved_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS live_kv (key TEXT PRIMARY KEY, json TEXT NOT NULL, saved_at INTEGER NOT NULL);
-`;
+${LIVE_RESOLVED_SQL}${LIVE_CUES_SQL}`;
 
 export function openLiveDb(file: string): DB {
   const db = new Database(file);

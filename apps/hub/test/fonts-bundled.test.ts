@@ -8,8 +8,10 @@ import {
   newId,
   SCRIPT_FALLBACK_FONTS,
 } from '@ordo/domain';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import type { OutputConfigRes } from '@ordo/protocol';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { loadConfig } from '../src/config.ts';
 import {
   BUNDLED_FACES,
   type BundledFace,
@@ -18,7 +20,21 @@ import {
   SCRIPT_RANGES,
 } from '../src/fonts/bundled.ts';
 import { normalizeUnicodeRange } from '../src/fonts/google.ts';
-import { client, EDIT_PIN, login, OPERATE_PIN, song, startHub, type TestHub, tempDir } from './helpers.ts';
+import { FontService } from '../src/fonts/service.ts';
+import { createLibraryProcess, type LibraryProcess } from '../src/libproc.ts';
+import { noSystemFaces } from '../src/pptx/systemFaces.ts';
+import {
+  client,
+  EDIT_PIN,
+  login,
+  OPERATE_PIN,
+  sleep,
+  song,
+  startHub,
+  type TestHub,
+  TEST_TOOLS,
+  tempDir,
+} from './helpers.ts';
 
 let hub: TestHub | undefined;
 const dirs: string[] = [];
@@ -263,5 +279,115 @@ describe('fonts on outputs', () => {
     const look = structuredClone(DEFAULT_LOOKS[1]!);
     if (look.layers.slide.mode === 'lyricOnly') look.layers.slide.style.fontFamily = 'Noto Sans KR';
     expect(outputFonts(all, [look]).map((f) => f.family)).toEqual(['Inter', 'Noto Sans KR', 'Venue Sans']);
+  });
+});
+
+describe('the hub listens once its bundled fonts are registered (design/27 §10)', () => {
+  let lib: LibraryProcess | undefined;
+  const gates: (() => void)[] = [];
+  afterEach(async () => {
+    for (const open of gates.splice(0)) open();
+    vi.restoreAllMocks();
+    await lib?.close();
+    lib = undefined;
+  });
+
+  /**
+   * The registration of the bundled fonts held at a gate, so no timing decides what a test sees: it starts
+   * with the service, as it always does, and finishes when the returned function is called (or at the end of
+   * the test, so no hub is left waiting).
+   */
+  function held(): () => void {
+    const real = FontService.prototype.registerBundled;
+    let open = () => {};
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    gates.push(open);
+    vi.spyOn(FontService.prototype, 'registerBundled').mockImplementation(function (
+      this: FontService,
+      dir: string,
+    ) {
+      return gate.then(() => real.call(this, dir));
+    });
+    return open;
+  }
+  /** Whether `p` settled within `ms`. */
+  const settledIn = (p: Promise<unknown>, ms: number) =>
+    Promise.race([
+      p.then(
+        () => true,
+        () => true,
+      ),
+      sleep(ms).then(() => false),
+    ]);
+  const isBundled = (f: Font) => f.source === 'bundled';
+  const every = BUNDLED_FACES.map(key).sort();
+
+  it('does not listen until the registration is done, then lists every bundled face', async () => {
+    const open = held();
+    const p = startHub({ fontsDir: fontsDir(), fontsWaitMs: 10_000 });
+    expect(await settledIn(p, 300), 'listening before the bundled fonts are registered').toBe(false);
+    open();
+    hub = await p;
+    const ed = await login(hub.url, EDIT_PIN);
+    const rows = await ed.json<Font[]>('/fonts');
+    expect(rows.filter(isBundled).map(key).sort()).toEqual(every);
+  });
+
+  it('waits at most fontsWaitMs, then warns once and answers with the list it has', async () => {
+    const open = held();
+    const t0 = performance.now();
+    hub = await startHub({ fontsDir: fontsDir(), fontsWaitMs: 150 });
+    const waited = performance.now() - t0;
+    expect(waited).toBeGreaterThanOrEqual(100);
+    expect(waited).toBeLessThan(budgetMs(2000));
+    expect(bundledRows(hub)).toHaveLength(0);
+    const warned = hub.ring.snapshot().filter((l) => l.includes('bundled fonts not registered in time'));
+    expect(warned).toHaveLength(1);
+    // The registration still finishes behind the answer.
+    open();
+    await hub.fonts.bundled;
+    expect(bundledRows(hub).map(key).sort()).toEqual(every);
+  });
+
+  it('fontsWaitMs 0 does not wait, and says nothing', async () => {
+    held();
+    const p = startHub({ fontsDir: fontsDir(), fontsWaitMs: 0 });
+    expect(await settledIn(p, budgetMs(5000)), 'startHub waited with fontsWaitMs 0').toBe(true);
+    hub = await p;
+    expect(bundledRows(hub)).toHaveLength(0);
+    expect(
+      hub.ring.snapshot().filter((l) => l.includes('bundled fonts not registered in time')),
+    ).toHaveLength(0);
+  });
+
+  it('the library process says it is ready only once the registration is done', async () => {
+    const open = held();
+    const cfg = {
+      minFreeBytes: 0, // the floor would refuse every upload on a volume with less free than it; it has its own tests (helpers.ts)
+      dataDir: tempDir(),
+      logToStdout: false,
+      logLevel: 'warn',
+      scheduleBackups: false,
+      toolProbe: TEST_TOOLS,
+      systemFaces: noSystemFaces,
+      fontsDir: fontsDir(),
+      fontsWaitMs: 10_000,
+    };
+    const p = createLibraryProcess(cfg, { secret: 's' });
+    expect(await settledIn(p, 300), 'ready before the bundled fonts are registered').toBe(false);
+    open();
+    lib = await p;
+    expect(lib.lib.listFonts().filter(isBundled).map(key).sort()).toEqual(every);
+  });
+
+  it('ORDO_FONTS_WAIT_MS is a whole number of milliseconds from 0 to 30,000, else 2,000', () => {
+    const wait = (v: string | undefined) =>
+      loadConfig(v === undefined ? {} : { ORDO_FONTS_WAIT_MS: v }).fontsWaitMs;
+    expect([undefined, '', '0', '2500', '30000', '30001', '-1', '1.5', 'x'].map(wait)).toEqual([
+      2000, 2000, 0, 2500, 30_000, 2000, 2000, 2000, 2000,
+    ]);
+    expect(loadConfig({ ORDO_FONTS_WAIT_MS: '2500' }, { fontsWaitMs: 5 }).fontsWaitMs).toBe(5);
   });
 });

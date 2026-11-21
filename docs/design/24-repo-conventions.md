@@ -40,17 +40,19 @@ ordo/
   gzip), its CSS, its workers and its lazy chunks (named by their source maps: the PowerPoint `importer`,
   the `table drawer`, the `editor`, the `live view`, the `operate services`, the `renderer`); `--json
   <file>` writes the same. CI runs it with `--check` after `pnpm build`: an app's initial JavaScript may
-  grow at most 4 % over `tools/bundle-baseline.json` (its `budget`: 2 % until wave r2b, doubled by the owner
-  on 2026-11-17 for the native tables, with the baseline kept as recorded). For the operator it also reports
-  the **compact path**, what a phone loads (design/28 §3.1, §7): the compact first load (the initial chunks, the
-  compact shell's start modules of `apps/operator/src/pageSets.ts` with their imports, the core worker and
-  the CSS) at most `compact.firstLoadGzip` (300,000 B gzip, an absolute budget `--write` keeps), with its
-  headroom printed; the compact precache (`FILES_COMPACT` of `dist/sw.js`); and a violation for any file
+  grow at most 8 % over `tools/bundle-baseline.json` (its `budget`: 2 % until wave r2b, 4 % from 2026-11-17 for
+  the native tables, 8 % from 2026-11-20; each step a doubling by the owner, with the baseline kept as
+  recorded). For the operator it also reports the **compact path**, what a phone loads (design/28 §3.1, §7): the
+  compact first load (the initial chunks, the compact shell's start modules of `apps/operator/src/pageSets.ts`
+  with their imports, the core worker and the CSS) at most `compact.firstLoadGzip` (300,000 B gzip until
+  2026-11-20, 600,000 B gzip since: the owner doubled it, an absolute budget `--write` keeps; the 300 KB of
+  design/28 §7 stays the product target), with its headroom printed; the compact precache (`FILES_COMPACT` of
+  `dist/sw.js`); and a violation for any file
   of either set whose source map lists a `COMPACT_FORBIDDEN` source (the canvas editor, Konva, the live
   view, Setup, the settings pages, the output and control-surface services, the preset geometry, the import
   worker) or a worker other than the core and thumbnail workers; `--check` fails on either. The operator's
   regular total (every script but the workers: what the venue PC loads before its Shell mounts, since the code
-  split) is recorded in the baseline (`regularTotal`, `regularTotalGzip`) and held to the same 4 % budget by
+  split) is recorded in the baseline (`regularTotal`, `regularTotalGzip`) and held to the same 8 % budget by
   `--check`; a baseline without it is not checked on it. New code
   the first paint does not need is loaded when first used: pages come from the page registry
   (`apps/operator/src/pages.ts`: one memoized load per module, rendered synchronously once loaded; not

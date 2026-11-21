@@ -1,8 +1,8 @@
 /*
  * The stored-model schema of the previous release, kept verbatim as a test fixture (design/27 §3.2, §14.7;
  * design/29 §1.2, §1.6): packages/domain/src/schemas.ts of main at APP_VERSION 0.8.0 (commit 2a11dc9, PR #28:
- * adaptive stage speaker notes) and, unchanged, at 0.8.1 (14f45b1, PR #30), the release before wave r2b (0.9.0):
- * the build a venue rolls back to from r2b. It knows every M9 field
+ * adaptive stage speaker notes) and, unchanged, at 0.8.1 (14f45b1, PR #30), the release before wave r2b (whose
+ * PR #29 published 0.9.0): the build a venue rolls back to from r2b. It knows every M9 field
  * (look3d, vectorFonts, warp, writing, centerBlock, table, chart, decor, adjWide, SlidePptx.missing), the
  * phones' settings and PR #28's PropsRule.stagePreset and notesScale, and none of r2b's (Slide.prerender,
  * Slide.draw, Slide.cut, Presentation.meta.draw). It imports `chart.ts` and `three-names.ts` of the current

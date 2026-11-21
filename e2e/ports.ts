@@ -191,6 +191,19 @@ export const PORT_TABLE = {
     spec: 'units-live.spec.ts',
     what: '0 hub (a jump to a slide not prepared; a GO 50 ms after its arm), 1 hub (the playlist warmed ahead)',
   },
+  // leaf-editor (sub-wave 2): the editor draws line art, shadows and glows whole, in idle time, never while live.
+  'editor-whole': {
+    offset: 410,
+    count: 1,
+    spec: 'editor-whole.spec.ts',
+    what: 'hub without LibreOffice (a line art deck, two effects slides, a live service)',
+  },
+  'ipad-editor-whole': {
+    offset: 412,
+    count: 3,
+    spec: 'ipad/editor-whole.spec.ts',
+    what: '0 webkit-ipad, 1 webkit-ipad-portrait, 2 chromium-tablet',
+  },
   'editor-table': { offset: 420, count: 1, spec: 'editor-table.spec.ts', what: 'hub' },
   'ipad-table-targets': {
     offset: 421,
@@ -225,6 +238,35 @@ export const PORT_TABLE = {
     count: 2,
     spec: 'golive-prepare.spec.ts',
     what: '0 hub with a slowed library (Go live again during a service), 1 hub (size ceiling)',
+  },
+  // live-frame (sub-wave 2): crowded slides, pictures past a screen's prepared count and effects past one frame of
+  // units drawn whole, from the underlay frame under the live raster.
+  'live-frame': {
+    offset: 470,
+    count: 1,
+    spec: 'live-frame.spec.ts',
+    what: 'hub without LibreOffice (a crowded slide, the late frame, the switches, effects past one frame, an ordinary slide)',
+  },
+  // live-by-ref (design/29 §2.3 M2): a hub killed and restarted during a 6 MiB service kept by reference.
+  'live-by-ref': {
+    offset: 480,
+    count: 1,
+    spec: 'live-by-ref.spec.ts',
+    what: 'hub (restarted)',
+  },
+  // xml-compact (design/29 B3-B6): dense decks through the upload route and the Import tab.
+  'pptx-dense': {
+    offset: 510,
+    count: 2,
+    spec: 'pptx-dense.spec.ts',
+    what: '0 hub without LibreOffice (the upload route: a traced deck, an 80 MB deck, a part and a slide past the bounds, a deck declaring 1.25 GiB), 1 hub without LibreOffice (the Import tab: the browser parses a 12 MB deck, declines an 80 MB one and the hub parses it)',
+  },
+  // sub-wave 2's integration (chore (c)): the seams between the tracks that no single track's spec can see.
+  'sw2-seams': {
+    offset: 630,
+    count: 2,
+    spec: 'sw2-seams.spec.ts',
+    what: '0 hub without LibreOffice (a restarted hub with a crowded service: the screen holding the copy is sent its state by name and still draws the top square), 1 hub without LibreOffice with ORDO_MIN_FREE_GB=10000 (the free-space floor: uploads and imports paused, the service keeps running)',
   },
 } as const satisfies Record<string, Row>;
 

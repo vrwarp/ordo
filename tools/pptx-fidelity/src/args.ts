@@ -34,6 +34,11 @@ export type Args = {
   noLibreOffice: boolean;
   /** `--hub-budget`: draw every slide as the hub stores it once its budgets ran (`withHubBudget`). */
   hubBudget: boolean;
+  /**
+   * `--frames`: draw a slide past a count (more than 200 objects, 16 pictures) or past one frame of unit area as an output
+   * does since the underlay frame (a direct part over the frame made beforehand, renderer `frame.ts`), not cut at 200 objects.
+   */
+  frames: boolean;
   /** `--slides`, in the order given; empty: every slide of every deck. */
   slides: SlideSpec[];
   /** `--ask-hub`, in the order given: slides `--before hub` asks the hub for whatever it stores. */
@@ -98,6 +103,7 @@ export function parseArgs(argv: readonly string[]): Args {
     scriptStandIns: false,
     noLibreOffice: false,
     hubBudget: false,
+    frames: false,
     slides: [],
     askHub: [],
     askHubNoLo: [],
@@ -120,6 +126,7 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (v === '--script-stand-ins') a.scriptStandIns = true;
     else if (v === '--no-libreoffice') a.noLibreOffice = true;
     else if (v === '--hub-budget') a.hubBudget = true;
+    else if (v === '--frames') a.frames = true;
     else if (v === '--hub') {
       const h = value(++i, v);
       if (h !== 'dist' && h !== 'source') throw new Error('--hub takes dist or source');

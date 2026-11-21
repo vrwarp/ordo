@@ -6,6 +6,7 @@
   "scripts": {
     "gen": "tsx src/main.ts",
     "golden": "tsx src/golden/run.ts",
+    "golden:warps": "tsx src/golden/warps-run.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {

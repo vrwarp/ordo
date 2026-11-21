@@ -52,6 +52,90 @@ describe('migrations', () => {
   });
 });
 
+describe('migration 14: the tables of the pre-render store (design/29 §1.3)', () => {
+  const TABLES = [
+    'slide_heads',
+    'slide_head_pages',
+    'prerender_keys',
+    'prerenders',
+    'prerender_failures',
+    'file_refs',
+    'refs_scanned',
+    'collect_marks',
+  ];
+  const INDEXES = [
+    'slide_head_pages_page',
+    'prerender_keys_key',
+    'prerender_keys_standby',
+    'prerenders_hash',
+    'prerenders_standby',
+    'file_refs_hash',
+  ];
+  const names = (db: Database.Database, type: string) =>
+    (db.prepare(`SELECT name FROM sqlite_master WHERE type = ?`).all(type) as { name: string }[]).map(
+      (r) => r.name,
+    );
+
+  it('is migration 14 and creates every table and index, once', () => {
+    expect(MIGRATIONS.find((m) => m.name === 'prerender-store')?.version).toBe(14);
+    const db = new Database(join(tempDir(), 'm14.db'));
+    expect(migrate(db)).toBe(MIGRATIONS.at(-1)!.version);
+    for (const t of TABLES) expect(names(db, 'table'), t).toContain(t);
+    for (const i of INDEXES) expect(names(db, 'index'), i).toContain(i);
+    // twice changes nothing; re-applying the SQL is a no-op
+    const before = db.prepare(`SELECT name, sql FROM sqlite_master ORDER BY name`).all();
+    expect(migrate(db)).toBe(MIGRATIONS.at(-1)!.version);
+    for (const m of MIGRATIONS) db.exec(m.sql);
+    expect(db.prepare(`SELECT name, sql FROM sqlite_master ORDER BY name`).all()).toEqual(before);
+    db.close();
+  });
+
+  it('migrates a database made by migrations 1-13 and keeps its rows', () => {
+    const db = new Database(join(tempDir(), 'm13.db'));
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((m) => m.version <= 13),
+      ),
+    ).toBe(13);
+    db.prepare(
+      `INSERT INTO presentations (id, rev, title, kind, json, created_at, updated_at) VALUES ('p1', 3, 'Old', 'song', '{}', 'a', 'b')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO files (hash, bytes, mime, path, created_at) VALUES ('h1', 5, 'image/png', 'media/h1.png', 'a')`,
+    ).run();
+    for (const t of TABLES) expect(names(db, 'table'), t).not.toContain(t);
+    expect(migrate(db)).toBe(MIGRATIONS.at(-1)!.version);
+    expect(db.prepare(`SELECT rev FROM presentations WHERE id = 'p1'`).get()).toEqual({ rev: 3 });
+    expect(db.prepare(`SELECT bytes FROM files WHERE hash = 'h1'`).get()).toEqual({ bytes: 5 });
+    for (const t of TABLES) expect(names(db, 'table'), t).toContain(t);
+    db.close();
+  });
+
+  it('is a no-op for an older build whose list ends at 13: it opens the folder and ignores the tables', () => {
+    const db = new Database(join(tempDir(), 'older.db'));
+    migrate(db);
+    // PR #29's hub (0.9.0): its list ends at 13, the database is already at 14
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((m) => m.version <= 13),
+      ),
+    ).toBe(MIGRATIONS.at(-1)!.version);
+    expect(names(db, 'table')).toContain('slide_heads');
+    db.close();
+  });
+
+  it('gives Library the DB-only indexes, with nothing in them on a new library', async () => {
+    hub = await startHub();
+    expect(hub.lib.slideFiles).toBeDefined();
+    expect(hub.lib.slideFiles.have(['a'.repeat(64)])).toEqual(new Set());
+    expect(hub.lib.slideFiles.head('a'.repeat(64))).toBeUndefined();
+    expect(hub.lib.prerenderIndex).toBeDefined();
+    expect(hub.lib.prerenderIndex.keySet('p1')).toEqual([]);
+  });
+});
+
 describe('library', () => {
   it('creates, updates with rev check, keeps revisions and restores', async () => {
     hub = await startHub();

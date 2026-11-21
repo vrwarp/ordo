@@ -13,12 +13,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Five jobs side by side, none over about 35 minutes (design/23 "CI"): lint, types, unit tests and the builds
-  # (check); the end-to-end suite in two shards (e2e) and the phone and Android tablet projects (e2e-phones);
-  # the renderer goldens in a pinned container (goldens); the fidelity ratchets (fidelity).
+  # Five jobs side by side (design/23 "CI"): lint, types, unit tests and the builds (check, 45 minutes); the
+  # end-to-end suite in two shards (e2e, 90 minutes: its limit counts the set-up of a slow runner, see there) and
+  # the phone and Android tablet projects (e2e-phones, 60 minutes); the renderer goldens in a pinned container
+  # (goldens); the fidelity ratchets (fidelity).
   check:
     name: Lint, types, unit tests, build
     runs-on: ubuntu-24.04
+    # The whole unit-test run took 478 s on the four CPUs of the integration machine after sub-wave 2 (299 s before it),
+    # typecheck 124 s, the pages build 52 s and the build 19 s; a runner is 1.15 to 1.65 times slower, and the set-up
+    # (system packages, pnpm install, Playwright Chromium) takes 3 to 5 minutes (26 to 34 on the slow mirror the end-to-end
+    # jobs met), so 25 minutes left no room: a timeout fails the required check and the next run starts again. 45 is the
+    # larger of the two limits set for it (40 by the measures above, 45 by main's PR #31, which also moved the system
+    # packages to archive.ubuntu.com, away from the regional mirrors that throttle).
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +47,7 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test
       - run: pnpm build
-      - name: Bundle budget (each app's initial JavaScript against tools/bundle-baseline.json, +4 % at most; the operator's compact first load at most 300 KB gzip, with no editor, live or output code)
+      - name: Bundle budget (each app's initial JavaScript against tools/bundle-baseline.json, +8 % at most; the operator's compact first load at most 600 KB gzip, with no editor, live or output code)
         run: node tools/bundle-report.mjs --check --json test-results/bundle.json
       # The GitHub Pages demo (apps/demo); e2e/pages-demo.spec.ts serves and drives it.
       - run: pnpm build:pages
@@ -54,10 +61,17 @@ jobs:
     name: End-to-end (shard ${{ matrix.shard }} of 2)
     runs-on: ubuntu-24.04
     # The limit counts the job's set-up too (the system packages and both Playwright browsers). On a runner
-    # with a slow mirror that took 16 to 27 minutes on three attempts at one shard (the other shard's runner
-    # needed about one), so a limit of 35 minutes was spent before the first test; the other shard's tests took
-    # 14 minutes.
-    timeout-minutes: 60
+    # with a slow mirror that took 26 to 34 minutes on three attempts at one shard (the other shard's runner
+    # needed about one to three), so a limit of 35 minutes was spent before the first test. Sub-wave 2 of the
+    # follow-up pull request grew the suite to 169 tests in these three projects: Playwright splits them at a
+    # group boundary into 91 (shard 1) and 78 (shard 2), which took 16.6 and 20.1 minutes of test time on the
+    # integration machine (12.2 and 13.3 before; the sw2-seams file, in shard 2, takes 21.5 to 26.8 seconds on two
+    # CPUs (20.8 to 21.5 on four), because it starts its browser without a GPU: a runner of two CPUs took 8 to 12
+    # minutes for it with the GPU process). A runner took 1.65 times that machine's time for shard 2 (21.9 minutes
+    # of tests there, 13.3 here), so shard 2 is about 33 minutes of tests: with the usual 2.5 minutes of set-up the
+    # job ends near 36, with a slow runner's 24 to 34 it is 57 to 67, so a limit of 60 could be spent again. A
+    # retry of a failing test adds its time again.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -100,7 +114,11 @@ jobs:
   e2e-phones:
     name: End-to-end, phones and Android tablet
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # The same two install steps as the e2e shards (the system packages and both Playwright browsers) count against
+    # this limit, and a slow mirror took 26 to 34 minutes of them for a shard; its 61 tests take 5.4 minutes of test
+    # time on the integration machine (about 9 to 10 on a runner), so a slow mirror needs 35 to 44 minutes: 60 (main's
+    # PR #31 set 45; the larger of the two stays).
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

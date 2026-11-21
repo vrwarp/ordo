@@ -141,7 +141,7 @@ export function slideBoxes(s: Pick<EmittedSlide, 'slide' | 'art'>): ExtractedTex
 /**
  * Read a stored deck's text with pptx-scene on the CPU pool (the deck is untrusted: never on the event
  * loop, never inline when the pool cannot start). Only XML and relationship parts are read, into memory
- * (each ≤ 8 MB, ≤ 64 MB in all, `readDeckXml`); every other part is an empty placeholder, since the parser
+ * (each ≤ 32 MiB, ≤ 256 MiB in all, `PPTX_LIMITS.xmlWholeBytes`: a bigger deck is refused first from the directory's declared sizes with one clear line, `readDeckXml`); every other part is an empty placeholder, since the parser
  * needs only its name: nothing is written to disk. Batches of 150 slides, each with the pool's timeout,
  * within the import's 15 minutes of pool time.
  */

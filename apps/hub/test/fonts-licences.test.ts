@@ -74,6 +74,37 @@ function dpkgRulesKept(dockerfile: string): string[] {
   return kept;
 }
 
+/**
+ * The commands of a runtime `RUN` that delete anything under `/usr/share/doc`: `rm`, and `find` with `-delete` or
+ * `-exec rm`. The folder holds each package's copyright file, which the image keeps (OQ-FU2: the notices of
+ * every package it ships, as Debian ships them).
+ */
+function docDeletions(dockerfile: string): string[] {
+  return runtimeRuns(dockerfile)
+    .flat()
+    .filter(
+      (c) =>
+        c.includes('/usr/share/doc') &&
+        (/^rm\s/.test(c) || (/^find\s/.test(c) && /(\s-delete\b|-exec\s+rm\b)/.test(c))),
+    );
+}
+
+/**
+ * Whether a deletion under `/usr/share/doc` leaves every copyright file: it removes the files that are not named
+ * `copyright` (`find … -type f ! -name copyright …`) or empty folders (`find … -type d -empty -delete`), and
+ * nothing else. A `rm` of a folder or a glob, or a `find` that removes whole folders, does not.
+ */
+function sparesNotices(command: string): boolean {
+  if (!/^find\s/.test(command)) return false;
+  const deletes = /\s-delete\b/.test(command);
+  const files =
+    /-type\s+f\b/.test(command) &&
+    /!\s+-name\s+'?copyright'?(\s|$)/.test(command) &&
+    (deletes || /-exec\s+rm\b/.test(command));
+  const emptyFolders = /-type\s+d\b/.test(command) && /-empty\b/.test(command) && deletes;
+  return files || emptyFolders;
+}
+
 /** Each licence table of LICENSES.md: the heading it sits under and the package (first word) of each row. */
 function licenceTables(md: string): { heading: string; packages: string[] }[] {
   const tables: { heading: string; packages: string[] }[] = [];
@@ -150,5 +181,32 @@ describe("the image's dpkg rules (Dockerfile)", () => {
 
   it('removes every dpkg rule the runtime stage writes in the same RUN, so the published image keeps none', () => {
     expect(dpkgRulesKept(read('Dockerfile'))).toEqual([]);
+  });
+});
+
+describe("the image's licence notices (Dockerfile)", () => {
+  const stage = (run: string) => `FROM debian AS build\nFROM debian AS runtime\n${run}\n`;
+
+  it('tells a deletion that takes a notice with it from one that leaves every copyright file', () => {
+    const verdict = (command: string) => docDeletions(stage(`RUN ${command}`)).map(sparesNotices);
+    // The command the image had: it removed whole folders, each with its copyright file.
+    expect(
+      verdict("find /usr/share/doc -mindepth 1 -maxdepth 1 ! -name 'fonts-*' -exec rm -rf {} +"),
+    ).toEqual([false]);
+    expect(verdict('rm -rf /usr/share/doc/*')).toEqual([false]);
+    expect(
+      verdict('find /usr/share/doc -mindepth 1 -maxdepth 1 ! -name copyright -exec rm -rf {} +'),
+    ).toEqual([false]);
+    expect(verdict('find /usr/share/doc -type d -empty -exec rm -rf {} +')).toEqual([false]);
+    // What it may do: remove the files that are not the notice, then the folders left empty.
+    expect(verdict('find /usr/share/doc -mindepth 2 -type f ! -name copyright -delete')).toEqual([true]);
+    expect(verdict("find /usr/share/doc -type f ! -name 'copyright' -exec rm -f {} +")).toEqual([true]);
+    expect(verdict('find /usr/share/doc -mindepth 1 -type d -empty -delete')).toEqual([true]);
+    // Not under /usr/share/doc: not this check's business.
+    expect(docDeletions(stage('RUN rm -rf /var/lib/apt/lists/* /usr/share/man/*'))).toEqual([]);
+  });
+
+  it("the runtime stage deletes no package's copyright file", () => {
+    expect(docDeletions(read('Dockerfile')).filter((c) => !sparesNotices(c))).toEqual([]);
   });
 });

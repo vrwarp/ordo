@@ -1,7 +1,7 @@
 {
-  "budget": 0.04,
+  "budget": 0.08,
   "compact": {
-    "firstLoadGzip": 300000
+    "firstLoadGzip": 600000
   },
   "apps": {
     "operator": {

@@ -227,6 +227,19 @@ async function readXml(
   const oversized: string[] = [];
   let fonts = 0;
   let inMemory = 0;
+  // The XML this read would keep, as the directory declares it: a deck past the browser's total is refused before any part is
+  // read (the hub then reads it, up to its own, bigger total).
+  let declared = 0;
+  for (const e of zip.entries.values())
+    if (
+      !SKIPPED_PART.test(e.path) &&
+      XML_PART.test(e.path) &&
+      !FONT_PART.test(e.path) &&
+      e.uncompressedSize <= L.xmlPartBytes
+    )
+      declared += e.uncompressedSize;
+  if (declared > L.xmlTotalBytes)
+    throw new Error(`The deck holds more than ${L.xmlTotalBytes / MiB} MB of slide XML`);
   for (const e of zip.entries.values()) {
     const path = e.path;
     if (SKIPPED_PART.test(path)) continue;
@@ -556,6 +569,7 @@ export async function assemblePptxScene(
     converted.set(s.index, { s, media, extra: extras.get(s.index), ...(geomLeft ? { geomLeft } : {}) });
   }
   const drafts = core.drafts(scene.listed, converted, scene.scan);
+  core.cutWarnings(drafts);
   const simplified = core.budget(drafts);
   // Clips: not imported by a client assembly (the hub ingests them): each use left out, its poster kept.
   for (const d of drafts) {

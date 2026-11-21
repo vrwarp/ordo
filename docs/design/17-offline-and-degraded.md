@@ -124,6 +124,24 @@ else).
 All are reducer state and work unchanged. Media `ended` events flow over the fallback bus
 from the audio master output.
 
+### What a screen keeps of the running service
+
+Design/29 §2.3 M2, A22 (live-by-ref). An output, the stage and the operator's core no longer clone the whole
+state on every GO. A GO writes a small record: the state without its copy and cue list and the copy's id. The copy
+and the cue list are saved ONCE per service, in pieces (one record per presentation, the cue list, the head, and
+last a marker that names them), a task of their own after the window presented a frame (at the latest 5 s after the
+copy arrived), never inside the task that applies a message; a newer service aborts an older save and removes its
+records. A restart joins what the marker names and paints only a complete copy whose id is the small record's; it
+then tells the hub which copy it holds, so the hub sends the state by name. A copy that did not come from the hub
+(the bus, the operator's own resolve) is saved whole as before and never held. A save that fails (a full disk) is
+one diagnostic line; a restart then waits for the hub, as a window with no cache does. So does a restart in the seconds
+between the GO that named a new copy and the save of its pieces (a window's record names the copy at once, its pieces
+follow a frame or at the latest 5 s later): the window waits for the hub, and a screen whose hub is also down then paints
+nothing, where writing the whole state in that window would put the clone of the whole service (4 to 37 ms at 6 to 20
+MiB) back on the GO that follows a take-over. The operator's core keeps, in that case, the commands the hub had not
+confirmed and the ids of the actions it had processed (only the state is dropped), and as the authority it writes its
+record whole until the copy is saved.
+
 ### Hub returns
 
 1. The operator reconnects and receives `welcome { seq }`.
@@ -148,6 +166,9 @@ from the audio master output.
 
 ## Going live beside the running service
 
+The take-over's own apply holds the hub's live loop only for the parse of the prepared copy and two small writes (the
+copy is written by name, once: design/12 "The running service by reference").
+
 Design/29 §2.3 M8. Pressing Go live while a service runs (to pick up a fixed slide, or the next service)
 never holds the running one: the hub prepares the new playlist beside it (design/13 "Prepare before goLive",
 design/12), and until it is ready the screens keep showing the current service and GO, Next and Clear keep
@@ -161,9 +182,10 @@ it, and then the saved copy is used as before). End service pressed while a Go l
 that Go live. With the hub unreachable, Go live is sent at once and follows "Going live without the hub".
 
 A service too large is refused before anything changes on the screens (W58, above 32 MiB); one past the
-size whose first save on a screen passes the GO lead goes live with W59's critical line in the degraded
-list ("Going live with this service takes a few seconds on the screens. Go live before the service
-starts."). Both sizes are defaults until a venue PC confirms them (design/29 D13, owner question 14).
+size whose first save on a screen passes the GO lead (6 MiB; 3 MiB until the owner's answer of 2026-11-21,
+Q16.b: he wrote "6mb", read as 6 MiB) goes live with W59's critical line in the degraded list ("Going live
+with this service takes a few seconds on the screens. Go live before the service starts."). Both sizes are
+defaults until a venue PC confirms them (design/29 D13, owner question 14).
 
 ## Going live without the hub
 

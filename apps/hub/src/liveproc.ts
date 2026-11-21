@@ -24,6 +24,7 @@ import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openLiveDb, openSharedDb } from './db.ts';
 import { forbidden, notFound } from './errors.ts';
 import { liveDiagOf } from './hub.ts';
+import { applyHubEvent as applyHubEventTo } from './hubevents.ts';
 import { createHttpApp, HEADER_INTERNAL, type RouteInfo, withTimeout } from './http.ts';
 import type { ChildState, LocksMsg, ProcessStatus } from './ipc.ts';
 import type { Change } from './library.ts';
@@ -168,6 +169,8 @@ export type LiveProcess = {
   onLibraryChanges(changes: Change[], seq?: number): void;
   /** The library's size, relayed by the supervisor for `GET /health` (design/27 §3.4). */
   setLibraryStats(s: LibraryStats): void;
+  /** An event only the hub makes (`prerender.add`, relayed from the library process): applied if the service has it. */
+  applyHubEvent(raw: unknown): void;
   /** Resolves once changes up to `seq` were applied (context refreshed, delta broadcast), or after a bound. */
   libraryApplied(seq: number): Promise<void>;
   locks(): LocksMsg;
@@ -222,7 +225,11 @@ export async function createLiveProcess(
   };
   const auth = new Auth(lazyDb, authStore, log, { shared: true });
 
-  const live = new LiveService(liveDb, link, log, { snapshotIntervalMs: cfg.snapshotIntervalMs });
+  const live = new LiveService(liveDb, link, log, {
+    snapshotIntervalMs: cfg.snapshotIntervalMs,
+    byRef: cfg.liveByRef,
+  });
+  if (cfg.liveByRefWarning) log.warn({}, cfg.liveByRefWarning);
   const statics = new StaticApps(cfg.appsDir, cfg.domain);
   let status: ProcessStatus[] = [];
   let libraryStats: LibraryStats | undefined;
@@ -324,6 +331,7 @@ export async function createLiveProcess(
     healthIntervalMs: cfg.healthIntervalMs,
     clientIp: http.clientIp,
     contextReady: () => link.context !== undefined,
+    byRef: cfg.liveByRef,
   });
   // A context refresh that is not part of applying a library delta (the library came back, or this process
   // restarted and fetched it for the first time) may hold settings the outputs have not seen: tell them to
@@ -383,6 +391,13 @@ export async function createLiveProcess(
       library: link.state,
       processes: status.map((p) => ({ name: p.name, state: p.state, restarts: p.restarts })),
       librarySnapshotBytes: libraryStats?.snapshotBytes,
+      diskFreeBytes: libraryStats?.diskFreeBytes,
+      diskFloorBytes: libraryStats?.diskFloorBytes,
+      collectedFiles: libraryStats?.collectedFiles,
+      collectedBytes: libraryStats?.collectedBytes,
+      lastCollectAt: libraryStats?.lastCollectAt,
+      budgetLimitBytes: libraryStats?.budgetLimitBytes,
+      budgetUsedBytes: libraryStats?.budgetUsedBytes,
     }),
   });
   app.route({
@@ -478,6 +493,7 @@ export async function createLiveProcess(
     setLibraryStats(s) {
       libraryStats = s;
     },
+    applyHubEvent: (raw) => void applyHubEventTo(live, raw, log),
     setStatus(p) {
       status = p;
     },

@@ -276,12 +276,45 @@ cells in place of the shape fields).
   density (`nodeCacheRect`: what its drawer reaches, `objectReach`, with its hit area; text has its own
   raster cache; an object whose reach the renderer does not know, or one over 8 M device px, is drawn live)
   and drawn again only when it, its picture or geometry file, the fonts or the density change, so a
-  keystroke or a drag copies the slide's other objects instead of drawing them. The floating bar's and the
+  keystroke or a drag copies the slide's other objects instead of drawing them. A node's cache starts on the
+  stage's device pixel grid (`alignCacheRect`, wholeDraw.ts; a turned node keeps its rectangle), so the copy onto
+  the layer is one pixel to one pixel and the edges in it are not blurred: with the dashed red overflow guides
+  hidden the stage then scores 0.9477 to 0.9829 against the Audience page's drawing (greyscale 960x540 SSIM, a
+  device scale of 2, the 17 survey slides: 0.01 to 0.02 more than with the corner between two device px). The floating bar's and the
   touch tools' sizes are kept by a ResizeObserver (`useMeasuredSize`), not read on every render. On a slide
   of 181 objects (90 shapes with gradients, dashed strokes and shadows, 91 text boxes) an idle caret cost
   192-247 ms of main-thread time per 6 s before (about 20 ms a blink: SlideCanvas re-rendered and the
   objects layer was redrawn) and 32-59 ms after (CDP Performance TaskDuration, headless Chromium, two runs
   of three rounds each).
+- Objects past the slide's drawing budget, drawn whole (SlideCanvas.tsx, `wholeDraw.ts`, `wholeState.ts`; leaf-editor).
+  The slide's budget (`slideBudget`, design/27 §12-13) draws an object past it as a lighter copy: a stored
+  geometry without its geometry, gradient or dash, a shape or picture without its shadow, glow or soft edge. The
+  Audience screens draw such objects whole from units; the editor draws them whole into the node cache it keeps
+  for every object, so the editor and the screens agree. It does so only on a fine pointer, while no service is
+  live (the hub's service as the operator mirrors it, on any computer: the browser cannot tell the computer that
+  runs the service from one that edits, so every computer keeps the lighter drawing, and a GO is never behind a
+  whole drawing), and not with the technician's `?editor=light` on the operator's URL (beside `?profile=`, read
+  once). An iPad with a keyboard and trackpad reports a mouse and is treated as a desktop, as its thumbnails
+  already are. The rule is a function of the slide's objects, its budget, the selection and the last plan
+  (`planWhole`, `drawWhole`, `sameDrawn`): an object goes whole when its own drawing is within one geometry
+  estimate and one slide of effect area (`WHOLE_BOUND`), its cache fits the canvas's 8 M device px node cache at
+  this zoom (past it the node would be drawn live at every redraw) and the whole caches together stay within 32 M
+  device px (`WHOLE_MAX_PX`); otherwise it keeps the copy, counted. The selected object is drawn whole in the plan
+  that finds it (an edit never shows the copy for a frame); the others one a turn in z-order at idle moments
+  (`requestIdleCallback`, timeout 200 ms; 16 ms without it), the next turn asked for only after the last one's
+  frame. A move or a turn keeps a whole object whole (the cache is over the box at the node's origin, unrotated);
+  a changed drawing is the copy until it is made again; a zoom within a tenth keeps the cache, past it every whole
+  node is made again in its turn, drawing from its old cache meanwhile. Going live demotes nothing (a node that is
+  unchanged keeps its bitmap); a node that changes while live draws the copy until End service, when the queue
+  fills again. A stored path past `GEOM_COST.geometry` stays its simple form in the editor (the screens draw it
+  from a sliced unit), and so does an object too big to cache at a high zoom (zooming out draws it whole).
+  Wherever the editor keeps the copy of the selected object for a lasting reason (those two, a live service, a
+  coarse pointer, `?editor=light`), the Object panel says so in one muted line under the object's name, "Too
+  detailed to draw here while you edit; the screens draw it whole." (OQ-LE2, the owner's words of 2026-11-20;
+  `WholeNote.tsx`, fed by the list `planWhole` returns and the canvas hook publishes after each commit): it is
+  gone once the whole drawing has replaced the copy, and an object waiting for its turn has none (the selected one
+  never waits). The counts are on `window.__ordo.editor().whole` (`wanted`, `drawn`, `pending`, `blocked`, `px`,
+  `skipped` by bound, cache and total, `stale`, `live`, `coarse`, `light` and the times of the last whole draws).
 - Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).
@@ -296,8 +329,8 @@ cells in place of the shape fields).
   letters; a plain song stays plain. Every split cuts that raw text through the domain's slide split
   (`splitSlidePieces`, as the slide list's 'Split lyrics' does: the new slides are copies of the slide with
   their piece of the lyric object, runs and paragraph styles kept on both sides; a copy keeps the slide's
-  other objects, background, notes and hidden flag, but its MIDI cues, Bottom-Third Stream text and own sound
-  stay on the first piece only, so a lighting GO fires once and each piece's strap shows its own words,
+  other objects, background, notes and hidden flag, but its MIDI cues and lighting trigger (`Slide.midi`),
+  Bottom-Third Stream text and own sound stay on the first piece only, so a lighting GO fires once and each piece's strap shows its own words,
   `e2e/editor-script.spec.ts`), one undo step, the focus
   then in the first new slide's field: '---' and Enter (the typed value is stored first); ✂ Split at Cursor
   and Alt+Enter (Opt+Enter) at the caret of the field that has the focus only (a field never focused
@@ -405,7 +438,8 @@ cells in place of the shape fields).
   'Save mine anyway'; Cancel has the focus, which goes back where it was when the dialog closes. The
   'Someone else saved' banner says that saving combines the two.
 - Speaker notes (PR #28): the Speaker Notes Dock under the canvas (`SpeakerNotesDock.tsx`; Alt+N opens and
-  closes it, and it opens by itself on a deck with notes in a tall window) edits the slide's `Slide.notes`
+  closes it, and it opens by itself on a deck with notes in a tall window; the first Alt+N closes a dock that
+  opened by itself, as it opens one that did not) edits the slide's `Slide.notes`
   with `**highlights**`, bullets and `[PAUSE]` cues (Ctrl+B in it marks a key phrase) and shows them as the
   stage will; its 'Manuscript Studio' and the slide list's 'Presenter Notes' open the Presenter Notes Studio
   (`DeckNotesEditor.tsx`, lazy), every slide's notes in two columns in place of the canvas (the toolbar's
@@ -865,8 +899,8 @@ of the box, such as Carlito for Calibri, is a library font) with 'Upload font' (
 - 'Reset slide from PowerPoint', for an edited slide or one LibreOffice could not draw: after a
   confirmation it saves unsaved edits and runs the hub's re-import of that slide (`pptx-reimport` with
   `{ slideIds, reset }`), its progress in the card (a live region); the slide gets the deck's objects back,
-  keeping its id, notes, timing, background, Bottom-Third Stream text, MIDI cues and the objects added in
-  ordo on top. History keeps the slide as it was.
+  keeping its id, notes, timing, background, Bottom-Third Stream text, MIDI cues and lighting trigger
+  (`Slide.midi`) and the objects added in ordo on top. History keeps the slide as it was.
 
 'Make editable' on a legacy PowerPoint page (a picture import from before M3) rebuilds the page from the
 stored deck: the hub reroutes it to the re-import of that slide (202 and the job), the editor follows the

@@ -1,7 +1,8 @@
 /**
  * The bundle report's compact section (tools/bundle-report.mjs; design/24 "Bundle budget", design/28 §7) on fake
- * dist trees: the first load's sums, the start chunks and the headroom, a violation, the 300,000 B budget in
- * --check, and --write keeping the compact budget.
+ * dist trees: the first load's sums, the start chunks and the headroom, a violation, the 600,000 B budget and the
+ * 8 % growth budget in --check, their fallbacks, and --write keeping the compact budget. The owner doubled both caps
+ * on 2026-11-20 (300,000 B gzip and 4 % before; 2 % until wave r2b).
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -58,10 +59,17 @@ function tree(entryBody: string | Buffer, extra: Files = {}): Files {
 }
 
 const BASE = {
-  budget: 0.02,
-  compact: { firstLoadGzip: 300_000 },
+  budget: 0.08,
+  compact: { firstLoadGzip: 600_000 },
   apps: { operator: { initial: 1_000_000, initialGzip: 1, css: 1 } },
 };
+
+/** A baseline that records one app size, with the real baseline's two caps unless a test says otherwise. */
+const baselineOf = (initial: number, caps: Record<string, unknown> = {}) => ({
+  ...BASE,
+  ...caps,
+  apps: { operator: { initial, initialGzip: 1, css: 1 } },
+});
 
 function run(root: string, ...args: string[]) {
   const out = join(root, 'out.json');
@@ -94,7 +102,7 @@ describe('bundle report: the compact first load', () => {
     const raw = (f: string) => readFileSync(join(dist, f)).length;
     expect(c.firstLoad.gzip).toBe(c.firstLoad.files.reduce((n: number, f: string) => n + gz(f), 0));
     expect(c.firstLoad.raw).toBe(c.firstLoad.files.reduce((n: number, f: string) => n + raw(f), 0));
-    expect(c.headroomGzip).toBe(300_000 - c.firstLoad.gzip);
+    expect(c.headroomGzip).toBe(600_000 - c.firstLoad.gzip);
     expect(c.chunks).toEqual([]);
     expect(c.precache.files).toEqual([
       'assets/PreviewsView-EEEEEEEE.js',
@@ -163,14 +171,99 @@ describe('bundle report: the compact first load', () => {
     ]);
   });
 
-  it('--check fails over 300,000 B gzip and passes under it', () => {
-    const big = fakeRoot(tree(randomBytes(310_000)), BASE);
+  it('--check fails over 600,000 B gzip and passes under it', () => {
+    const big = fakeRoot(tree(randomBytes(610_000)), BASE);
     const over = run(big, '--check');
-    expect(over.report.operator.compact.firstLoad.gzip).toBeGreaterThan(300_000);
+    expect(over.report.operator.compact.firstLoad.gzip).toBeGreaterThan(600_000);
     expect(over.status).toBe(1);
     expect(over.stderr).toContain('compact first load');
     const small = fakeRoot(tree(randomBytes(100_000)), BASE);
     expect(run(small, '--check').status).toBe(0);
+  });
+
+  it('a compact first load of about 450,000 B gzip passes the 600,000 B cap (it failed the old 300,000 B one)', () => {
+    // Incompressible bytes, so the gzip size is the raw size.
+    const files = tree(randomBytes(450_000));
+    const ok = run(fakeRoot(files, BASE), '--check');
+    const gzip = ok.report.operator.compact.firstLoad.gzip;
+    expect(gzip).toBeGreaterThan(450_000);
+    expect(gzip).toBeLessThan(460_000);
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toContain(
+      `within budget: operator: compact first load ${gzip.toLocaleString('en-US')} B gzip`,
+    );
+    expect(ok.stdout).toContain('against 600,000 B');
+    // The same build against the old cap fails, so the doubled number is what lets it through.
+    const old = run(fakeRoot(files, { ...BASE, compact: { firstLoadGzip: 300_000 } }), '--check');
+    expect(old.status).toBe(1);
+    expect(old.stderr).toContain('over budget: operator: compact first load');
+  });
+
+  it('an app that grew 7 % over its baseline passes the 8 % budget and one that grew 9 % fails', () => {
+    const at = (initial: number, grown: number) =>
+      run(fakeRoot(tree('x'.repeat(grown)), baselineOf(initial)), '--check');
+    const seven = at(100_000, 107_000);
+    expect(seven.status).toBe(0);
+    expect(seven.stdout).toContain('within budget: operator: initial');
+    expect(seven.stdout).toContain('(+7.0 %, budget +8 %)');
+    const nine = at(100_000, 109_000);
+    expect(nine.status).toBe(1);
+    expect(nine.stderr).toContain('over budget: operator: initial');
+    expect(nine.stderr).toContain('(+9.0 %, budget +8 %)');
+    // The limit is floor(baseline * 1.08): the byte on it passes, the next one does not.
+    expect(at(100_000, 108_000).status).toBe(0);
+    expect(at(100_000, 108_001).status).toBe(1);
+    // The 7 % app failed the old 4 % budget, so the doubled number is what lets it through.
+    const old = run(fakeRoot(tree('x'.repeat(107_000)), baselineOf(100_000, { budget: 0.04 })), '--check');
+    expect(old.status).toBe(1);
+    expect(old.stderr).toContain('(+7.0 %, budget +4 %)');
+  });
+
+  it('the operator’s regular total has the same 8 % budget: 7 % passes, 9 % fails', () => {
+    // The entry shrinks against its 1,000,000 B baseline, so only the regular total (every script but the workers)
+    // is near its limit; its baseline is set from the measured size, 7 % and then 9 % below it.
+    const files = tree('x'.repeat(100_000));
+    const measured = run(fakeRoot(files, baselineOf(1_000_000)), '--check');
+    const raw: number = measured.report.operator.regularTotal.raw;
+    const at = (regularTotal: number) =>
+      run(
+        fakeRoot(files, {
+          ...BASE,
+          apps: { operator: { initial: 1_000_000, initialGzip: 1, css: 1, regularTotal } },
+        }),
+        '--check',
+      );
+    const seven = at(Math.round(raw / 1.07));
+    expect(seven.status).toBe(0);
+    expect(seven.stdout).toContain('within budget: operator: regular total');
+    expect(seven.stdout).toContain('(+7.0 %, budget +8 %)');
+    const nine = at(Math.round(raw / 1.09));
+    expect(nine.status).toBe(1);
+    expect(nine.stderr).toContain('over budget: operator: regular total');
+    expect(nine.stderr).toContain('(+9.0 %, budget +8 %)');
+  });
+
+  it('a baseline that names no budget falls back to 4 %, and one that names no compact cap to 600,000 B', () => {
+    const noBudget = (grown: number) =>
+      run(fakeRoot(tree('x'.repeat(grown)), { apps: baselineOf(100_000).apps }), '--check');
+    expect(noBudget(103_000).status).toBe(0);
+    expect(noBudget(103_000).stdout).toContain('budget +4 %');
+    expect(noBudget(105_000).status).toBe(1);
+    // A compact section with no number: the constant of the script.
+    const noCap = (bytes: number) =>
+      run(fakeRoot(tree(randomBytes(bytes)), { ...BASE, compact: {} }), '--check');
+    expect(noCap(450_000).status).toBe(0);
+    const over = noCap(610_000);
+    expect(over.status).toBe(1);
+    expect(over.stderr).toContain('against 600,000 B');
+  });
+
+  it('the repository baseline holds the owner’s caps: budget 0.08 and compact.firstLoadGzip 600,000', () => {
+    // The owner doubled both on 2026-11-20 (from 0.04 and 300,000; the budget was 0.02 until wave r2b), so a later
+    // change of either must be deliberate: it edits this test with it.
+    const real = JSON.parse(readFileSync(join(dirname(SCRIPT), 'bundle-baseline.json'), 'utf8'));
+    expect(real.budget).toBe(0.08);
+    expect(real.compact.firstLoadGzip).toBe(600_000);
   });
 
   it('--write records the sizes and keeps the compact budget', () => {
@@ -178,10 +271,18 @@ describe('bundle report: the compact first load', () => {
     execFileSync(process.execPath, [SCRIPT, '--root', root, '--write'], { encoding: 'utf8' });
     const b = JSON.parse(readFileSync(join(root, 'tools/bundle-baseline.json'), 'utf8'));
     expect(b.compact).toEqual({ firstLoadGzip: 250_000 });
-    expect(b.budget).toBe(0.02);
+    expect(b.budget).toBe(0.08);
     expect(b.apps.operator.initial).toBe(
       readFileSync(join(root, 'apps/operator/dist/assets/index-AAAAAAAA.js')).length,
     );
+  });
+
+  it('--write on a file that names no caps records the fallbacks: budget 0.04, compact 600,000 B gzip', () => {
+    const root = fakeRoot(tree('console.log(1);'), { apps: {} });
+    execFileSync(process.execPath, [SCRIPT, '--root', root, '--write'], { encoding: 'utf8' });
+    const b = JSON.parse(readFileSync(join(root, 'tools/bundle-baseline.json'), 'utf8'));
+    expect(b.budget).toBe(0.04);
+    expect(b.compact).toEqual({ firstLoadGzip: 600_000 });
   });
 
   it('--write records the regular total; --check fails when it grows over the budget (review of P0)', () => {
@@ -192,7 +293,7 @@ describe('bundle report: the compact first load', () => {
     expect(b.apps.operator.regularTotal).toBe(report.operator.regularTotal.raw);
     expect(b.apps.operator.regularTotalGzip).toBe(report.operator.regularTotal.gzip);
     expect(run(root, '--check').status).toBe(0);
-    // A lazy page grows by more than 2 % of the regular total: the entry is unchanged, the check fails.
+    // A lazy page grows by more than the budget (8 %) of the regular total: the entry is unchanged, the check fails.
     const grown = fakeRoot(
       tree('console.log(1);', { 'assets/EditorView-GGGGGGGG.js': 'x'.repeat(5_000) }),
       b,

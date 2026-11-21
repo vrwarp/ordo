@@ -278,6 +278,7 @@ describe('the domain slide split (splitSlidePieces)', () => {
     const cued = {
       ...slide({}, `${LYRIC}\nThat saved a wretch like me`),
       midiCues: [{ id: 'm1', channel: 1, type: 'noteOn', number: 40, value: 127 }],
+      midi: { kind: 'preset', presetId: 'lights-full' },
       bottomThirdText: 'Amazing grace',
       audio: { mediaId: 'snd1', start: 'auto' },
     } as Slide;
@@ -289,11 +290,13 @@ describe('the domain slide split (splitSlidePieces)', () => {
     ]) {
       const [a, ...rest] = slidesOf(out).filter((s) => s.id !== 's2');
       expect(a!.midiCues).toHaveLength(1);
+      expect(a!.midi).toEqual({ kind: 'preset', presetId: 'lights-full' });
       expect(a!.bottomThirdText).toBe('Amazing grace');
       expect(a!.audio?.mediaId).toBe('snd1');
       expect(rest.length).toBeGreaterThan(0);
       for (const b of rest) {
         expect(b.midiCues).toBeUndefined();
+        expect(b.midi).toBeUndefined();
         expect(b.bottomThirdText).toBeUndefined();
         expect(b.audio).toBeUndefined();
         // What a copy keeps: the slide's other objects and its notes.

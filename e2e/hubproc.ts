@@ -65,6 +65,10 @@ export class HubProcess {
     this.proc = spawn(cmd!, args, {
       env: {
         ...process.env,
+        // The free-space floor is off: it would refuse every upload on a CI or dev volume with less free than the
+        // floor (5 % of the volume, 5 to 25 GiB), whatever the spec is about; the floor has its own tests. A spec of
+        // the floor sets its own in `env`.
+        ORDO_MIN_FREE_GB: '0',
         ...this.env,
         ORDO_DATA: this.dataDir,
         ORDO_DOMAIN: 'localhost',

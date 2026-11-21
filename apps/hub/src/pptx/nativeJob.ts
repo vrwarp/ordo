@@ -3,7 +3,7 @@
  * into an editable ordo presentation, version 1, before any LibreOffice process starts.
  *
  * 1. `readDeckXml(store.abs(deck))` (`deckParts.ts`) with the skip filter and caps of §12 (`PPTX_LIMITS`): XML and
- *    relationship parts in memory (≤ 8 MB each, ≤ 64 MB in all; a larger part is left out and its slide
+ *    relationship parts in memory (≤ 32 MB each, ≤ 256 MB in all; a larger part is left out and its slide
  *    becomes picture class); every other part an empty placeholder, so relationships resolve; embeddings,
  *    `vbaProject.bin`, `customXml`, `docProps` and printer settings skipped; no nested zips. Entry names never
  *    become paths.
@@ -22,7 +22,7 @@
  * 3. Classification and the §3.4 size budgets, the budget ladder of M9 (`ladder.ts`): an object naming a
  *    shape file (an outline or an M9 decoration file) past the import's budget is left out (`withoutFiles`); a slide over 64 KB as stored takes
  *    the first level of `fitSlideBudget` that fits (its outlines re-gridded, its text formatting dropped, its
- *    decorations left out), and once the presentation passes 3 MiB the slides from there on are stored
+ *    decorations left out), and once the presentation passes 6 MiB the slides from there on are stored
  *    minimal (text, pictures, background; `planImportSizes`). None becomes a picture; what a level leaves out
  *    is in `Slide.pptx.missing` (class hybrid), each simplified slide noted, logged and counted (`simplified`).
  * 3b. Clips (`clips.ts`): the scan's clip parts were spilled after the pictures and sniffed (the batches
@@ -89,13 +89,14 @@ import { type CpuPool, cpuPool, transferables, WorkerStartError } from '../pool.
 import { type BakeItem, bakeMapKey, storeBakes } from './bakes.ts';
 import type { ClientSceneTaskOutput } from './clientScene.ts';
 import { type ClipFile, ClipImport, spillClips } from './clips.ts';
-import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
+import { type DeckXml, readDeckXml, readSlideParts, spillDeckParts, XmlTotalError } from './deckParts.ts';
 import { sceneFontFiles } from './faces.ts';
 import { SCRIPT_NAMES, type SystemScriptFace, systemOnlyScripts } from './systemFaces.ts';
 import { isShapeFilePlaceholder, nameGeoms, storeGeomFiles } from './geoms.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { importResult, logSafe } from './report.ts';
 import {
+  batchEnds,
   CONVERTER_VERSION,
   enqueuePptx,
   PPTX_JOBS,
@@ -135,6 +136,16 @@ export type NativeJobEnv = {
    * where the merged presentation would pass it.
    */
   reserve?: number;
+  /**
+   * Reads the slide parts of a pool call from the stored deck just before the call, and again for the text rescue of a slide the
+   * call could not convert (the import holds no slide between them): a test seam, `readSlideParts` by default.
+   */
+  readSlideParts?: (
+    deck: string,
+    scratch: string,
+    signal: AbortSignal,
+    names: Iterable<string>,
+  ) => Promise<Map<string, Uint8Array>>;
 };
 
 /**
@@ -234,24 +245,29 @@ export const RESCUE_TOTAL_MS = 2 * 60_000;
 
 type Limits = {
   batchSlides: number;
+  batchXmlBytes: number;
   importPoolMs: number;
   geomFileBytes: number;
   batchGeomBytes: number;
   retrySlideMs: number;
   rescueSlideMs: number;
   rescueTotalMs: number;
+  /** Reads a call's slide parts from the stored deck (`NativeJobEnv.readSlideParts`). */
+  readSlides: NonNullable<NativeJobEnv['readSlideParts']>;
 };
 
 /** The job's limits: `PPTX_LIMITS` and the rescue's, or the smaller ones the env gives (tests). */
 function jobLimits(env: NativeJobEnv): Limits {
   return {
     batchSlides: env.limits?.batchSlides ?? PPTX_LIMITS.batchSlides,
+    batchXmlBytes: env.limits?.batchXmlBytes ?? PPTX_LIMITS.batchXmlBytes,
     importPoolMs: env.limits?.importPoolMs ?? PPTX_LIMITS.importPoolMs,
     geomFileBytes: env.limits?.geomFileBytes ?? PPTX_LIMITS.geomFileBytes,
     batchGeomBytes: env.limits?.batchGeomBytes ?? PPTX_LIMITS.batchGeomBytes,
     retrySlideMs: env.limits?.retrySlideMs ?? RETRY_SLIDE_MS,
     rescueSlideMs: env.limits?.rescueSlideMs ?? RESCUE_SLIDE_MS,
     rescueTotalMs: env.limits?.rescueTotalMs ?? RESCUE_TOTAL_MS,
+    readSlides: env.readSlideParts ?? readSlideParts,
   };
 }
 
@@ -284,34 +300,17 @@ type BatchCall = {
   listed: readonly SlideRef[];
   base: Omit<SceneTaskInput, 'parts' | 'range'>;
   out: Map<number, Converted>;
+  /** The declared bytes of slide `i`'s part (its size in the directory: the slide itself is read only for its call). */
+  bytes: (i: number) => number;
+  /** The own parts of the slides `indexes`, read from the stored deck now (`NativeImport.ownParts`). */
+  own: (indexes: readonly number[]) => Promise<Map<number, SlideParts>>;
 };
 
-/**
- * The own parts of the slides [from, to) taken out of `parts`, by the slide's place in the deck. A part that
- * is a view into a larger inflated buffer gets a buffer of its own, so the larger one is not kept alive.
- */
-function takeParts(
-  parts: Map<string, Uint8Array>,
-  listed: readonly SlideRef[],
-  from: number,
-  to: number,
-): Map<number, SlideParts> {
-  const out = new Map<number, SlideParts>();
-  for (let i = from; i < to; i++) {
-    const part = listed[i]!.part;
-    const own: SlideParts = new Map();
-    for (const k of [part, relsPartOf(part)]) {
-      const v = parts.get(k);
-      if (!v) continue;
-      parts.delete(k);
-      own.set(
-        k,
-        !v.byteLength || (v.byteOffset === 0 && v.byteLength === v.buffer.byteLength) ? v : new Uint8Array(v),
-      );
-    }
-    out.set(i, own);
-  }
-  return out;
+/** `v` in a buffer of its own: a part that is a view into a larger inflated buffer would keep the larger one alive. */
+function ownBuffer(v: Uint8Array): Uint8Array {
+  return !v.byteLength || (v.byteOffset === 0 && v.byteLength === v.buffer.byteLength)
+    ? v
+    : new Uint8Array(v);
 }
 
 class Cancelled extends Error {
@@ -387,6 +386,8 @@ class NativeImport {
   private readonly deps: PptxDeps;
   private readonly pool: Pick<CpuPool, 'run'>;
   private readonly limits: Limits;
+  /** The XML parts the read left out for their size (`readDeckXml`): a slide on one is past the reader's bounds (W9). */
+  private oversized = new Set<string>();
   private readonly ctx: JobCtx<PptxNativePayload>;
   private readonly done: PptxNativeProgress;
   private readonly save: () => void;
@@ -396,6 +397,10 @@ class NativeImport {
   private heapMb = 0;
   private jobLines = new Map<string, number>();
   private scratch = '';
+  /** The stored deck the calls' slides are read from. */
+  private deck = '';
+  /** The slide parts of the deck read slide by slide (`readDeckXml` 'deferred'), with their declared sizes. */
+  private deferred = new Map<string, number>();
   /** Media ids of the deck's clips: queued after version 1 and its follow-up, never the presentation's background. */
   private clipIds = new Set<string>();
   /** The clips this run created (`ClipImport.created`). */
@@ -525,6 +530,7 @@ class NativeImport {
   private async steps(deck: string, scratch: string): Promise<NativeBuild> {
     const { ctx } = this;
     this.scratch = scratch;
+    this.deck = deck;
     // M9: whether anything will draw what ordo cannot (the probes settle within 30 s of the start). Only a
     // LibreOffice known absent or turned off means nothing will: a 'broken' one (its probe timed out on a slow
     // start) is probed again first, and while it does not answer the art still waits for it, the follow-up
@@ -569,6 +575,8 @@ class NativeImport {
     const scan = first.scan!;
     const listed = first.result.listed;
     if (!listed.length) throw new Error('The deck has no slides');
+    // The slides' heads served the slide list; each call reads its own slides from the stored deck.
+    this.dropHeads(parts, listed);
     for (const n of first.result.notes) this.log.add('info', n);
     ctx.log(`${listed.length} slide(s), ${scan.pictures.length} picture(s) referenced`);
     ctx.progress(0.1);
@@ -602,6 +610,7 @@ class NativeImport {
     // 3. Drafts, classes and the size budgets (M9: the budget ladder; with LibreOffice a slide over 64 KB it
     // would simplify keeps its page, `ImportCore.pageForBudget`).
     const drafts = this.core.drafts(want ? listed.filter((r) => want.has(r.index)) : listed, converted, scan);
+    this.core.cutWarnings(drafts);
     const simplified = this.core.budget(drafts);
 
     // 3b. Geometry files the kept slides name (M6 round 2, `geoms.ts`); the objects that name one that could
@@ -726,6 +735,9 @@ class NativeImport {
       const c = converted.get(r.index);
       const reasons = c?.s.classification?.reasons;
       if (c && !(Array.isArray(reasons) && reasons.includes('unreadable'))) return;
+      // A slide past the reader's bounds keeps that reason through the text rescue (W9: its missing entry is `slide:detail`).
+      if ((Array.isArray(reasons) && reasons.includes('detail')) || this.oversized.has(r.part))
+        this.core.pastBounds.add(r.index);
       converted.delete(r.index);
       failed.push(i);
     });
@@ -742,6 +754,7 @@ class NativeImport {
     // The size budgets as for the hub's own parse (M9: the budget ladder; with LibreOffice a slide over 64 KB
     // it would simplify keeps its page).
     const drafts = this.core.drafts(want ? listed.filter((r) => want.has(r.index)) : listed, converted, scan);
+    this.core.cutWarnings(drafts);
     const simplified = this.core.budget(drafts);
 
     await this.storeGeoms(drafts);
@@ -768,26 +781,95 @@ class NativeImport {
     );
   }
 
-  /** Step 1: the deck's XML parts within the caps; other parts as empty placeholders (`readDeckXml`). */
+  /**
+   * Step 1: the deck's structure in memory (every XML part but the slides) and each slide's head, within the caps; other parts as empty
+   * placeholders (`readDeckXml` 'deferred': the slides themselves are read from the stored deck when a call needs them, so a deck of up
+   * to 1 GiB of slide XML imports within the memory of one call).
+   */
   private async readXml(deck: string, scratch: string): Promise<Map<string, Uint8Array>> {
     let xml: DeckXml;
     try {
-      xml = await readDeckXml(deck, scratch, this.ctx.signal);
+      xml = await readDeckXml(deck, scratch, this.ctx.signal, { slides: 'deferred' });
     } catch (e) {
       this.checkCancelled();
+      // W17: a deck whose directory declares more XML than the hub reads, refused before anything was read.
+      if (e instanceof XmlTotalError) {
+        this.warn('size', e.message);
+        throw new Error(logSafe(e.message));
+      }
       const msg = errorMessage(e);
       if (/of documents/.test(msg))
         throw new Error(
-          `The deck holds more than ${PPTX_LIMITS.xmlTotalBytes / 1024 ** 2} MB of slide XML, more than an import may read`,
+          `The deck's designs, charts, drawings and slide heads hold more than ${PPTX_LIMITS.xmlWholeBytes / 1024 ** 2} MB of XML, more than an import may keep at once`,
         );
       throw new Error(`The file is not a readable PowerPoint deck: ${logSafe(msg)}`);
     }
+    this.deferred = xml.deferred ?? new Map();
     // Kept as empty parts: a slide that needs one is quarantined (picture class), never dropped.
+    this.oversized = new Set(xml.oversized);
     for (const path of xml.oversized)
       this.warn('part', `${logSafe(path)} is over ${PPTX_LIMITS.xmlPartBytes / 1024 ** 2} MB: not read`);
     if (xml.fonts)
       this.log.add('info', `${xml.fonts} embedded font part(s) not used (embedded fonts come later)`);
+    // The steps that read a deck whole (the LibreOffice follow-up's render copy, the slide list of PowerPoint's own PDF, the text
+    // repair) refuse a deck past `PPTX_LIMITS.xmlWholeBytes`: a follow-up that cannot run is not waited for.
+    if (xml.declaredTotal > PPTX_LIMITS.xmlWholeBytes) {
+      this.warn(
+        'size',
+        `This deck holds ${Math.round(xml.declaredTotal / 1024 ** 2)} MB of slide data: more slide data than the ${PPTX_LIMITS.xmlWholeBytes / 1024 ** 2} MB that LibreOffice's follow-up, the slide list of PowerPoint's own PDF and the text repair read at once. None of them runs for it, so what ordo cannot draw is listed on its slides.`,
+      );
+      this.core.lo = false;
+    }
     return xml.parts;
+  }
+
+  /**
+   * After the scan: the slides' heads are no longer needed (the call's own parts are read when it is made). A slide the deck does not
+   * list stays as an empty part, so a relationship to it still resolves.
+   */
+  private dropHeads(parts: Map<string, Uint8Array>, listed: readonly SlideRef[]): void {
+    const own = new Set(listed.map((r) => r.part));
+    for (const k of this.deferred.keys()) {
+      if (own.has(k)) parts.delete(k);
+      else parts.set(k, new Uint8Array(0));
+    }
+  }
+
+  /**
+   * The own parts (the slide's XML and its relationships) of the slides `indexes`: a slide part within the part cap is read from the
+   * stored deck now, one past it is the empty placeholder `readXml` left, and the relationships are the structure's.
+   */
+  private async ownParts(
+    parts: Map<string, Uint8Array>,
+    listed: readonly SlideRef[],
+    indexes: readonly number[],
+  ): Promise<Map<number, SlideParts>> {
+    const names = indexes.map((i) => listed[i]!.part).filter((p) => this.deferred.has(p));
+    let read = new Map<string, Uint8Array>();
+    if (names.length) {
+      try {
+        read = await this.limits.readSlides(this.deck, this.scratch, this.ctx.signal, names);
+      } catch (e) {
+        this.checkCancelled();
+        throw new Error(
+          `The deck's slides could not be read again for their conversion: ${logSafe(errorMessage(e))}`,
+        );
+      }
+      this.checkCancelled();
+    }
+    const out = new Map<number, SlideParts>();
+    for (const i of indexes) {
+      const part = listed[i]!.part;
+      const own: SlideParts = new Map();
+      const rels = relsPartOf(part);
+      for (const [k, v] of [
+        [part, read.get(part) ?? parts.get(part)],
+        [rels, parts.get(rels)],
+      ] as const)
+        if (v) own.set(k, ownBuffer(v));
+      out.set(i, own);
+    }
+    return out;
   }
 
   /** Step 2b: the referenced pictures spilled under generated names, within the spill budget. */
@@ -880,9 +962,11 @@ class NativeImport {
   }
 
   /**
-   * Step 2c: every slide through the pool in batches. A batch that fails is converted again slide by slide;
+   * Step 2c: every slide through the pool in batches. Each call's slide parts are read from the stored deck just before it (the import
+   * holds no slide of another call). A batch that fails is converted again slide by slide;
    * a slide that still fails, one the converter could not read, and the slides past the pool-time budget get
-   * the text rescue (`rescue`). A slide nothing could read is left out of the map (`drafts`: empty, hybrid).
+   * the text rescue (`rescue`), which reads the slides it needs again. A slide nothing could read is left out of the map
+   * (`drafts`: empty, hybrid).
    */
   private async convert(
     parts: Map<string, Uint8Array>,
@@ -893,25 +977,30 @@ class NativeImport {
   ): Promise<Map<number, Converted>> {
     const out = new Map<number, Converted>();
     const n = listed.length;
-    const step = this.limits.batchSlides;
+    // The calls: up to `batchSlides` slides and `batchXmlBytes` of slide XML each (a deck of small slides is cut as it always was).
     const call = await this.batchCall(parts, listed, pictureSizes, mediaKinds, out);
-    /** Slides for the rescue, each with its own parts (kept until then). */
-    const failed = new Map<number, SlideParts>();
-    for (let from = 0; from < n; from += step) {
+    const ends = batchEnds(
+      listed.map((_, i) => call.bytes(i)),
+      this.limits.batchSlides,
+      this.limits.batchXmlBytes,
+    );
+    /** Slides for the rescue (their parts are read again then). */
+    const failed = new Set<number>();
+    for (let k = 0, from = 0; k < ends.length; from = ends[k++]!) {
       this.checkCancelled();
-      const to = Math.min(n, from + step);
+      const to = ends[k]!;
       const wanted: number[] = [];
       for (let i = from; i < to; i++) if (!want || want.has(listed[i]!.index)) wanted.push(i);
       if (!wanted.length) continue;
-      const mine = takeParts(parts, listed, from, to);
       if (this.poolMs > this.limits.importPoolMs) {
         this.warn(
           'batch',
           `slides ${from + 1}-${to} were not converted: the import used its ${Math.round(this.limits.importPoolMs / 60_000)} minutes of conversion time, so only their text is kept`,
         );
-        for (const i of wanted) failed.set(i, mine.get(i)!);
+        for (const i of wanted) failed.add(i);
         continue;
       }
+      const mine = await call.own(Array.from({ length: to - from }, (_, j) => from + j));
       try {
         await this.batch(call, mine, from, to);
       } catch (e) {
@@ -919,7 +1008,7 @@ class NativeImport {
         const why = logSafe(errorMessage(e));
         if (to - from === 1) {
           this.warn('batch', `slide ${from + 1} could not be converted (${why}): only its text is kept`);
-          failed.set(from, mine.get(from)!);
+          failed.add(from);
         } else {
           this.warn(
             'batch',
@@ -932,8 +1021,10 @@ class NativeImport {
       for (const i of wanted) {
         const c = out.get(i);
         if (c?.s.classification.reasons.includes('unreadable')) {
+          if (c.s.classification.reasons.includes('detail') || this.oversized.has(listed[i]!.part))
+            this.core.pastBounds.add(listed[i]!.index);
           out.delete(i);
-          failed.set(i, mine.get(i)!);
+          failed.add(i);
         }
       }
       this.ctx.progress(0.1 + (0.5 * to) / n);
@@ -976,14 +1067,21 @@ class NativeImport {
       geomBytes: this.limits.batchGeomBytes,
       ...(this.lo ? {} : { libreoffice: false }),
     };
-    return { shared, listed, base, out };
+    return {
+      shared,
+      listed,
+      base,
+      out,
+      bytes: (i) => this.deferred.get(listed[i]!.part) ?? parts.get(listed[i]!.part)?.byteLength ?? 0,
+      own: (indexes) => this.ownParts(parts, listed, indexes),
+    };
   }
 
   /**
    * The text rescue (`rescue`) of the slides `failed` (places in `listed`) of a client scene: those its
-   * converter could not read (`unreadable`) or did not send. Their own parts are read from the deck here, as
-   * the hub's parse has them (`convert`); what the rescue reads joins `out`, and a slide still unread stays
-   * out of it (an empty slide that says so, `drafts`).
+   * converter could not read (`unreadable`) or did not send. The deck's structure is read here and only the failed slides' own parts,
+   * from the stored deck (`ownParts`), as the hub's parse has them (`convert`); what the rescue reads joins `out`, and a slide
+   * still unread stays out of it (an empty slide that says so, `drafts`).
    */
   private async rescueClientSlides(
     deck: string,
@@ -996,7 +1094,7 @@ class NativeImport {
   ): Promise<void> {
     let xml: DeckXml;
     try {
-      xml = await readDeckXml(deck, scratch, this.ctx.signal);
+      xml = await readDeckXml(deck, scratch, this.ctx.signal, { slides: 'deferred' });
     } catch (e) {
       this.checkCancelled();
       this.warn(
@@ -1005,24 +1103,23 @@ class NativeImport {
       );
       return;
     }
+    this.deferred = xml.deferred ?? new Map();
+    this.dropHeads(xml.parts, listed);
     const call = await this.batchCall(xml.parts, listed, pictureSizes, mediaKinds, out);
-    const mine = new Map<number, SlideParts>();
-    for (const i of failed) mine.set(i, takeParts(xml.parts, listed, i, i + 1).get(i)!);
-    xml.parts.clear();
-    await this.rescue(call, mine);
+    await this.rescue(call, new Set(failed));
   }
 
-  /** The slides `wanted` of a failed batch, each converted alone; those that fail again go to `failed`. */
+  /** The slides `wanted` of a failed batch, each converted alone (`mine`: the call's own parts, still in hand); those that fail again go to `failed`. */
   private async oneByOne(
     call: BatchCall,
     mine: Map<number, SlideParts>,
     wanted: readonly number[],
-    failed: Map<number, SlideParts>,
+    failed: Set<number>,
   ): Promise<void> {
     for (const i of wanted) {
       this.checkCancelled();
       if (this.poolMs > this.limits.importPoolMs) {
-        failed.set(i, mine.get(i)!);
+        failed.add(i);
         continue;
       }
       try {
@@ -1033,25 +1130,38 @@ class NativeImport {
           'batch',
           `slide ${i + 1} could not be converted (${logSafe(errorMessage(e))}): only its text is kept`,
         );
-        failed.set(i, mine.get(i)!);
+        failed.add(i);
       }
     }
   }
 
   /**
    * The text rescue (M9 `ladder`, `@ordo/pptx-scene` `rescueDeck`): each run of consecutive failed slides in one
-   * pool call of `RESCUE_SLIDE_MS` a slide, a run that fails again slide by slide, all within
+   * pool call of `RESCUE_SLIDE_MS` a slide (a run of at most `batchSlides` slides and `batchXmlBytes` of slide XML, read from the stored
+   * deck for the call: the import kept none of them), a run that fails again slide by slide, all within
    * `RESCUE_TOTAL_MS`. A slide still unread stays out of `out` (an empty slide, `drafts`).
    */
-  private async rescue(call: BatchCall, failed: Map<number, SlideParts>): Promise<void> {
+  private async rescue(call: BatchCall, failed: ReadonlySet<number>): Promise<void> {
     const t0 = performance.now();
     const left = () => this.limits.rescueTotalMs - (performance.now() - t0);
-    const indexes = [...failed.keys()].sort((a, b) => a - b);
+    const indexes = [...failed].sort((a, b) => a - b);
     const runs: number[][] = [];
+    let runBytes = 0;
     for (const i of indexes) {
       const last = runs[runs.length - 1];
-      if (last && last[last.length - 1] === i - 1 && last.length < this.limits.batchSlides) last.push(i);
-      else runs.push([i]);
+      const bytes = call.bytes(i);
+      if (
+        last &&
+        last[last.length - 1] === i - 1 &&
+        last.length < this.limits.batchSlides &&
+        runBytes + bytes <= this.limits.batchXmlBytes
+      ) {
+        last.push(i);
+        runBytes += bytes;
+      } else {
+        runs.push([i]);
+        runBytes = bytes;
+      }
     }
     let unread = 0;
     for (const run of runs) {
@@ -1061,7 +1171,14 @@ class NativeImport {
         unread += run.length;
         continue;
       }
-      const mine = new Map(run.map((i) => [i, failed.get(i)!]));
+      let mine: Map<number, SlideParts>;
+      try {
+        mine = await call.own(run);
+      } catch {
+        this.checkCancelled();
+        unread += run.length;
+        continue;
+      }
       try {
         await this.batch(call, mine, run[0]!, run[run.length - 1]! + 1, true, ms);
         continue;
@@ -1080,7 +1197,7 @@ class NativeImport {
           continue;
         }
         try {
-          await this.batch(call, new Map([[i, failed.get(i)!]]), i, i + 1, true, one);
+          await this.batch(call, new Map([[i, mine.get(i)!]]), i, i + 1, true, one);
         } catch {
           this.checkCancelled();
           unread++;

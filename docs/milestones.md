@@ -103,7 +103,8 @@ user accounts.
 closed, capped sign-ins never remembered, the `Origin` and `x-ordo` checks, the LAN out of the hub-wide PIN
 bucket, live fonts locked, the narrower `affectsContext`, jobs paced while live, one stringify per delta; the
 compact shell with its tab bar, sheets and phone sign-in, every compact control at least 44 px, and the editor,
-Setup and settings out of the phone's first load (at most 300 KB gzip). What changes the venue PC with no phone
+Setup and settings out of the phone's first load (a 300 KB gzip target, design/28 §7; the CI gate is 600,000 B
+gzip since 2026-11-20). What changes the venue PC with no phone
 involved (pacing every heavy job while live, `x-ordo` from full sessions) waits behind **Phones are used during
 services** (`settings.phones.enabled`, Settings → PINs, off by default). Its gate is a rehearsal service with
 real outputs and phones (`pnpm soak --phones 20 --upload-video 500 --upload-photo`, design/23 "Soak test") and

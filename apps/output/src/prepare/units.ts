@@ -171,6 +171,7 @@ export const geometryUnits: PrepareStep = {
           ...(host.now ? { now: () => host.now!() } : {}),
         },
         {
+          ...(job.frame ? { frame: job.frame } : {}),
           ...(hold
             ? {
                 pin: (k: string) => {
@@ -201,10 +202,14 @@ export const geometryUnits: PrepareStep = {
     } catch (err) {
       if (!(err instanceof Hurried)) throw err;
     }
-    if (uj)
+    if (uj) {
       uj.left = unitsOfSlide(slide, job.scale, job.look)
         .filter((u) => u.of !== 'prepared' && !unitCache.has('unit', u.key) && !unitUnmade(u.key))
         .map((u) => u.key);
+      // The frame leads the slide's units: not in the cache (and not given up) it is left to the late job.
+      const f = job.frame;
+      if (f && !unitCache.has('unit', f.key) && !unitUnmade(f.key)) uj.left.unshift(f.key);
+    }
     return undefined;
   },
 };

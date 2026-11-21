@@ -1,15 +1,17 @@
 # geom-gen
 
-Compiles the vendored DrawingML preset geometries (`third_party/poi-presets/presetShapeDefinitions.xml`, Apache
-POI 5.2.5) into `packages/renderer/src/geom/presets.gen.ts` (design/27 §1, §15 M6).
+Compiles the vendored DrawingML geometries into `packages/renderer/src/geom/`: the 187 presets
+(`third_party/poi-presets/presetShapeDefinitions.xml`, Apache POI 5.2.5) into `presets.gen.ts` (design/27 §1, §15
+M6), and the 40 WordArt text warps (`third_party/ooxml-textwarps/presetTextWarpDefinitions.xml`, docx4j-core
+11.4.11) into `textwarps.gen.ts`.
 
 ```
-pnpm --filter @ordo/geom-gen gen           # writes presets.gen.ts
-pnpm --filter @ordo/geom-gen gen --check   # exits 1 when the committed file is not the generator's output
+pnpm --filter @ordo/geom-gen gen           # writes presets.gen.ts and textwarps.gen.ts
+pnpm --filter @ordo/geom-gen gen --check   # exits 1 when either committed file is not the generator's output
 ```
 
-`src/gen.test.ts` (in `pnpm test`) fails when the committed file differs from the generator's output, so a change
-to the XML, the fixes, the compiler or the compiled form needs a `gen` run in the same change.
+`src/gen.test.ts` (in `pnpm test`) fails when a committed file differs from the generator's output, so a change
+to an XML file, the fixes, the compiler or the compiled form needs a `gen` run in the same change.
 
 ## What it does
 
@@ -28,6 +30,23 @@ The output (about 127 KB, 32 KB gzipped) is a `Map` from preset name to `Compile
 the text rectangle `r`, paths `p` (command codes and operand slots, the path's own `w`/`h`, fill mode, stroke),
 adjust handles `h` and connection sites `c`. Every operand is a slot index: built-ins first, then the constants,
 then the guides, so the evaluator and the path builder never look a name up.
+
+## Text warps
+
+The second input (`third_party/ooxml-textwarps/`, with its provenance and licence) goes through the same reader,
+the same compiler and the same printer as the first; only what differs is written down here:
+
+- the root element is `presetTextWarpDefinitions` (POI's file spells its root `presetShapeDefinitons`:
+  `readPresets(xml, rootName)`; each generator refuses the other file with 'unexpected root');
+- there are no fixes: the file is compiled as it is, and the output header says so;
+- the file has no text rectangle (`r` is the whole box: slots 2..5), no connection sites and one or two adjust
+  values per preset (`adj`, or `adj1` and `adj2`);
+- the table is `TEXT_WARP_GEOMS` (40 presets; about 17 kB, 4 kB gzipped), which only `geom/textwarp.ts` imports,
+  so a bundle that never builds a warp does not carry it (`apps/operator/src/pageSets.ts` also keeps it off a
+  phone's first load).
+
+`src/gen.test.ts` pins the vendored bytes (SHA-256), the committed output, the 40 names of the domain's
+`TEXT_WARPS`, the path counts the geometry builder reads and the refusals.
 
 ## POI reference values
 
@@ -89,3 +108,47 @@ flowchart boxes 0.968-0.99).
 
 The golden found one drawing difference, fixed in `draw.ts`: LibreOffice strokes the open paths (chartX,
 chartStar and chartPlus's lines, which come before their filled box) after every other path.
+
+## Warp probe golden (r2b sub-wave 2, the geometry leg)
+
+```
+pnpm --filter @ordo/geom-gen golden:warps                 # compare with src/golden/warp-baseline.json; exit 1 on a failure
+pnpm --filter @ordo/geom-gen golden:warps --update        # rewrite the baseline from this run
+pnpm --filter @ordo/geom-gen golden:warps --out DIR       # keep the decks, the pages, report.json and geometry.json
+```
+
+LibreOffice's text of the 40 WordArt warps against the hulls of ordo's shapes (`geom/textwarp.ts`, compiled from
+`third_party/ooxml-textwarps`):
+
+1. `src/golden/warps.ts` writes three decks of ordo's own (no third-party deck), one per box shape: 360 x 240 px in a
+   3 x 2 grid of 640 x 540 px cells, a wide 600 x 120 in a 2 x 3 grid of 960 x 360 and a tall 240 x 300 in a 3 x 2 grid.
+   Each warp is a text box at its default adjust values holding "WordArt Ag" in Liberation Sans 40 pt (regular, black,
+   one line, zero insets, middle-anchored, no autofit, no fill, no outline); the box is centred in its cell with whole
+   pixels and the cell leaves at least 90 px beyond it (LibreOffice's ink overshot a box by at most 38 px). 40 warps are
+   7 slides a deck. `probe.ts`'s deck writer takes the shape writer as a parameter, its default being the preset golden's
+   (that deck's bytes did not change).
+2. LibreOffice draws them as the preset golden's deck is drawn (`soffice --convert-to pdf`, `pdftoppm -r 144`, a private
+   profile; `src/golden/lo.ts`, moved out of `run.ts` unchanged). The ink of a cell is the bounding box of its pixels
+   below grey 250, in px relative to the box, the right and bottom edges exclusive. No browser is needed: ordo's side is
+   pure geometry. The hull of a warp is the bounding box of the points of its arcs (`warpArcs` at the same box); its
+   first-area hull is that of the first area's arcs (`warpAreaArcs`).
+3. `src/golden/warps-score.ts` judges a run (pure, with `warps-score.test.ts`): an unlisted warp whose ink is outside its
+   hull by more than 2 px fails; so does textPlain's ink not filling its hull, Button Pour, Deflate Inflate and Deflate
+   Inflate Deflate outside their first area's hull, Button's ink not Arch Up's (or Button Pour's Arch Up Pour's) within
+   1 px, ink within 8 px of a cell's edge, a baseline that lacks a warp at a box, and a listed warp that the baseline does
+   not show outside its hull; an ink edge more than 2 px from the baseline fails for the unlisted warps, only when
+   LibreOffice is the baseline's version.
+
+Results (LibreOffice 24.2.7.2, Liberation Sans): 35 of the 40 warps are inside their hull within 2 px at all three boxes.
+The five that are not, each listed in `src/golden/warp-exceptions.ts` with its reason, are not a fault of the shapes,
+which follow ECMA-376 (what PowerPoint draws): LibreOffice puts the text of **Arch Up, Arch Down, Circle and Button** on
+the outside of the curve (Button's one-line text is in its first area, so its ink is Arch Up's to the pixel), and its
+text for **Inflate Top** reaches the top of the box where ECMA-376's top path peaks a fifth of the height below it.
+Plain Text fills its hull to the pixel at all three boxes.
+
+The ink numbers are committed (`src/golden/warp-baseline.json`) and `src/golden/warps-baseline.test.ts` (in `pnpm test`)
+judges them against the live geometry with no LibreOffice, so CI checks the shapes against LibreOffice's text. The
+LibreOffice run only refreshes or verifies them; like the preset golden it is not a CI step. Needs LibreOffice (24.2.7
+made the baseline), poppler's `pdftoppm` and ffmpeg; a missing tool skips the run, or fails it under `--strict` or `CI`.
+A run takes about 15 s. A different LibreOffice or Liberation Sans moves the ink of the four path warps (it sits on the
+font's metrics), which is why only the 35 others are drift-checked.

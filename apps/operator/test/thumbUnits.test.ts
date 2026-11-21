@@ -1,6 +1,7 @@
 import type { Slide } from '@ordo/domain';
 import { clearUnits, unitsOfSlide, unitWork } from '@ordo/renderer/units.ts';
 import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';
+import { effectsSlide } from '@ordo/renderer/units.effects.test-util.ts';
 import { lineArtSlide } from '@ordo/renderer/units.test-util.ts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ThumbIn, ThumbJob, ThumbOut } from '../src/workers/thumb.worker.ts';
@@ -18,8 +19,14 @@ describe('thumbnail worker: geometry units only for a fine pointer', () => {
   };
   const done = new Map<number, ThumbOut>();
 
-  function fakeCtx(ops: string[]) {
-    const state: Record<string | symbol, unknown> = { font: '10px x', letterSpacing: '0px', globalAlpha: 1 };
+  function fakeCtx(ops: string[], canvas: unknown) {
+    // `canvas` is the context's own canvas, which an effect unit's layers read to copy and to take its bitmap.
+    const state: Record<string | symbol, unknown> = {
+      font: '10px x',
+      letterSpacing: '0px',
+      globalAlpha: 1,
+      canvas,
+    };
     return new Proxy(state, {
       get(t, k) {
         if (k === 'measureText') return (s: string) => ({ width: s.length * 10 });
@@ -40,7 +47,7 @@ describe('thumbnail worker: geometry units only for a fine pointer', () => {
   }
   class FakeOffscreenCanvas {
     ops: string[] = [];
-    private ctx = fakeCtx(this.ops);
+    private ctx = fakeCtx(this.ops, this);
     width: number;
     height: number;
     constructor(width: number, height: number) {
@@ -115,5 +122,33 @@ describe('thumbnail worker: geometry units only for a fine pointer', () => {
     const ops = await render(job);
     expect(unitWork().made - before.made).toBe(units.length);
     expect(ops.filter((o) => o === 'image:unit')).toHaveLength(units.length);
+  });
+
+  /**
+   * Effects past the budget (design/14 "Effect units"): the shadows the budget leaves out of a slide's last
+   * shapes are drawn from their effect units on a fine pointer, as on the outputs, so a desktop thumbnail shows
+   * what the editor canvas now shows (leaf-editor; effect units came with part 1). A pin, not a change.
+   */
+  describe('effects past the budget', () => {
+    const effects = effectsSlide();
+    const effectsJob: ThumbJob = { slide: effects, isSong: false, images: {}, width: 640, height: 360 };
+
+    it('a coarse pointer keeps the legacy copies of the shapes whose shadows the budget leaves out: no unit', async () => {
+      scope.onmessage!({ data: { t: 'init', finePointer: false } });
+      const before = unitWork();
+      expect((await render(effectsJob)).filter((o) => o === 'image:unit')).toEqual([]);
+      expect(unitWork()).toEqual(before);
+    });
+
+    it('a fine pointer makes the effect units of the last three shapes and draws them', async () => {
+      scope.onmessage!({ data: { t: 'init', finePointer: true } });
+      const units = unitsOfSlide(effects, 640 / 1920);
+      // The budget keeps the first nine shadows and leaves p9, p10 and p11 out (units.effects.test.ts).
+      expect(units.map((u) => u.object.id)).toEqual(['p9', 'p10', 'p11']);
+      const before = unitWork();
+      const ops = await render(effectsJob);
+      expect(unitWork().made - before.made).toBe(units.length);
+      expect(ops.filter((o) => o === 'image:unit')).toHaveLength(units.length);
+    });
   });
 });

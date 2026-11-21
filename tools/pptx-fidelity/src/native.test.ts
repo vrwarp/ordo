@@ -9,6 +9,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Slide, TextObject } from '@ordo/domain';
 import { blankFont } from '@ordo/renderer/text/blankface.ts';
 import { sfntMetrics } from '@ordo/pptx-scene';
+import { MAX_XML_PART_BYTES as converterPartCap } from '@ordo/pptx-scene/opc.ts';
+import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { familiesOf, fcFamily, fcMatch, isStandIn } from './fonts.ts';
@@ -17,6 +19,8 @@ import {
   caseless,
   convertDeck,
   convertDeckIsolated,
+  MAX_XML_PART_BYTES,
+  MAX_XML_TOTAL_BYTES,
   type NativeDeck,
   NativeRenderer,
   picturesNeeded,
@@ -94,7 +98,14 @@ describe('native column helpers', () => {
   it('keeps XML in memory within the per-part budget and spills everything else', () => {
     expect(spillPart('ppt/slides/slide1.xml', 1000)).toBe(false);
     expect(spillPart('ppt/slides/_rels/slide1.xml.rels', 1000)).toBe(false);
-    expect(spillPart('ppt/slides/slide1.xml', 9 * 1024 * 1024)).toBe(true);
+    // The converter's own part cap (32 MiB, `MAX_XML_PART_BYTES` of @ordo/pptx-scene): a 12 MiB part is read, one past it spilled.
+    expect(spillPart('ppt/slides/slide1.xml', 12 * 1024 * 1024)).toBe(false);
+    expect(spillPart('ppt/slides/slide1.xml', 32 * 1024 * 1024)).toBe(false);
+    expect(spillPart('ppt/slides/slide1.xml', 32 * 1024 * 1024 + 1)).toBe(true);
+    expect(MAX_XML_PART_BYTES).toBe(converterPartCap);
+    // ... and the XML it keeps in all is what the hub reads whole (design/29 B6: 256 MiB; the hub's import reads 1 GiB slide by slide,
+    // which the harness's one worker cannot), so the census reads what the hub's whole-deck steps read.
+    expect(MAX_XML_TOTAL_BYTES).toBe(PPTX_LIMITS.xmlWholeBytes);
     expect(spillPart('ppt/media/image1.png', 10)).toBe(true);
     expect(spillPart('ppt/embeddings/oleObject1.bin', 10)).toBe(true);
   });
@@ -670,6 +681,68 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
         const lo = await readFile(join(dir, `slide-${n}.policy.png`));
         expect(ordo.equals(lo), `${c.family} drawn with ${host.family}`).toBe(isStandIn(c.family, host));
       }
+    } finally {
+      await r.close();
+    }
+  }, 120_000);
+
+  it('draws a slide past 200 objects as an output does with `frames` (the frame under the direct part, equal to the whole slide) and cut as before without', async () => {
+    const squares = (n: number, at: string): Slide['objects'] =>
+      Array.from({ length: n }, (_, i) => ({
+        id: `${at}${i}`,
+        type: 'shape' as const,
+        box: { x: 20 + (i % 20) * 90, y: 20 + Math.floor(i / 20) * 60, w: 80, h: 50, rotation: 0 },
+        shape: 'rect' as const,
+        fill: { r: 30 + ((i * 7) % 190), g: 40 + ((i * 13) % 170), b: 50 + ((i * 29) % 150), a: 1 },
+        opacity: 1,
+        radius: 0,
+      }));
+    const entry = (i: number, objects: Slide['objects']) => ({
+      index: i,
+      shown: i,
+      hidden: false,
+      tier: 'T1' as const,
+      class: 'native' as const,
+      reasons: [],
+      convertMs: 0,
+      notes: [],
+      compat: [],
+      slide: { id: `s${i}`, objects },
+      textFeatures: [],
+    });
+    const deck: NativeDeck = {
+      slides: [entry(0, squares(340, 'a')), entry(1, squares(30, 'b'))],
+      slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
+      media: [],
+      notes: [],
+      embeddedFonts: false,
+      textFeatures: [],
+      extractMs: 0,
+      parseMs: 0,
+      emitMs: 0,
+    };
+    const r = await NativeRenderer.start(chromium!);
+    try {
+      const dir = await work();
+      const cut = await r.renderDeck(deck, dir, { repeats: 0 });
+      expect(cut.slides.map((s) => s.frame)).toEqual([undefined, undefined]);
+      const cutPng = await readFile(join(dir, 'slide-0001.png'));
+      const framed = await r.renderDeck(deck, dir, { repeats: 1, frames: true });
+      expect(framed.notes).toEqual([]);
+      const f = framed.slides[0]!.frame!;
+      expect(f['1920']).toMatchObject({
+        under: 140,
+        direct: 200,
+        why: ['objects'],
+        parityMax: 0,
+        parityOver2: 0,
+      });
+      expect(f['3840']).toMatchObject({ under: 140, direct: 200, parityMax: 0, parityOver2: 0 });
+      expect(f['1920']!.makeMs).toBeGreaterThan(0);
+      // The whole slide is on the page: the cut draw left 140 squares out.
+      expect((await readFile(join(dir, 'slide-0001.png'))).equals(cutPng)).toBe(false);
+      // A slide within the counts is drawn as before.
+      expect(framed.slides[1]!.frame).toBeUndefined();
     } finally {
       await r.close();
     }

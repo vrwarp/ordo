@@ -7,6 +7,8 @@
  * Pure TypeScript: no DOM, no zip, no fs, no runtime dependency. The input is the deck's parts by name
  * (`extractZip`'s `files`); media parts may be empty (spilled to disk), only their names are used.
  */
+import { missingEntry } from '@ordo/domain/missing.ts';
+import { XmlBoundError } from './xml.ts';
 import { classifySlide } from './classify.ts';
 import { slideContext } from './context.ts';
 import { type DeckInfo, readDeck, type SlideRef } from './deck.ts';
@@ -300,7 +302,7 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
       ctx.timing = readSlideTiming(ctx.slide);
       const elements = walkSlide(ctx);
       const background = readBackground(ctx);
-      const classification = classifySlide(ctx, elements, background, {
+      const classified = classifySlide(ctx, elements, background, {
         budgetArt: opts.budgetArt === true,
         budget: {
           decorations: (opts.m9Writes ?? ALL_M9_FIELDS).has('decor'),
@@ -309,6 +311,20 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
           tables: (opts.m9Writes ?? ALL_M9_FIELDS).has('table'),
         },
       });
+      // W9 and W10 (design/29 section 3): a design past the reader's bounds and the shapes the walk cut are listed on the slide.
+      const cut = [...(ctx.unread ?? []).map((u) => missingEntry('decoration', u.kind)), ...(ctx.cut ?? [])];
+      const classification: typeof classified = cut.length
+        ? {
+            ...classified,
+            class: classified.class === 'native' ? 'hybrid' : classified.class,
+            reasons: [
+              ...classified.reasons,
+              ...(ctx.unread?.length ? ['detail:design'] : []),
+              ...(ctx.cut?.size ? ['cut:shapes'] : []),
+            ],
+            missing: [...new Set([...(classified.missing ?? []), ...cut])],
+          }
+        : classified;
       return {
         ...base,
         layoutPart: ctx.layoutPart,
@@ -326,7 +342,12 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
         ...base,
         background: { fill: { kind: 'none' }, from: 'none' },
         elements: [],
-        classification: { tier: 'fallback', class: 'picture', reasons: ['unreadable'] },
+        // A part past the reader's bounds adds the reason `detail` (W9): the slide is too detailed to read, not malformed.
+        classification: {
+          tier: 'fallback',
+          class: 'picture',
+          reasons: e instanceof XmlBoundError ? ['unreadable', 'detail'] : ['unreadable'],
+        },
         notes: [...notes, `slide could not be read: ${error}`],
         error,
         ms: performance.now() - t0,

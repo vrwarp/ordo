@@ -42,6 +42,29 @@ export {
  */
 export const PPTX_LIMITS = {
   ...PPTX_IMPORT_LIMITS,
+  /**
+   * The slide XML an IMPORT may take, on the hub: 1 GiB (the owner's answer of 2026-11-20, Q4.b; design/29 B6 asked for 1 GiB read
+   * slide by slide). A deck that DECLARES more is refused from its central directory before any byte is read
+   * (`declaredXml`, W17: "1 GB at most"). The import reads the deck's structure whole and each pool call's slide parts from the stored
+   * file just before the call (`readDeckXml` 'deferred', `readSlideParts`), so what it holds is the structure
+   * (`xmlWholeBytes`), the heads of the slides and one call's slides (`batchXmlBytes`). The browser keeps
+   * `PPTX_IMPORT_LIMITS.xmlTotalBytes` (64 MiB) and hands a bigger deck to the hub.
+   */
+  xmlTotalBytes: 1024 ** 3,
+  /**
+   * The XML a deck read WHOLE may hold: 256 MiB (the number the hub's other documents in memory use, `ZIP_MAX_IN_MEMORY_BYTES`). The
+   * steps that need every part at once keep it, and refuse a bigger deck with one clear line: the render copy of the LibreOffice
+   * follow-up (`extractDeck`), the slide listing of the PowerPoint-PDF reference (`deckListing`) and the text repair
+   * (`readDeckText`). It is also the bound of an import's STRUCTURE (everything but the slides: layouts, masters, themes, charts,
+   * drawings, relationships, notes) and of the slides' heads, which are kept in memory while it imports.
+   */
+  xmlWholeBytes: 256 * 1024 ** 2,
+  /**
+   * XML of slides one `pptx-scene` pool call may carry (`batchEnds`): a call also holds its copies and one worker's share, so a
+   * deck at the total never sends 150 huge slides at once; the import reads these slides from the stored file just before the call
+   * and holds no other slide (design/29 B6).
+   */
+  batchXmlBytes: 64 * 1024 ** 2,
   /** Font parts extracted per deck. */
   fonts: 20,
   /** Slides per `pptx-scene` pool task, and that task's timeout. */
@@ -492,4 +515,23 @@ export type BakeTaskOutput = {
 /** A stub's error: the work item that will implement it (README.md). */
 export function notYet(item: string, what: string): Error {
   return new Error(`${what} is not implemented yet (M3 item ${item})`);
+}
+
+/**
+ * Where the calls of a deck end: `sizes[i]` is the XML of slide i, a call holds at most `maxSlides` slides and at most `maxBytes`
+ * of XML (a slide whose own XML passes it goes alone), and every call has at least one slide. The ends are exclusive indexes, the
+ * last is `sizes.length`. For a deck whose slides are small the ends are the multiples of `maxSlides`, as the fixed step was.
+ */
+export function batchEnds(sizes: readonly number[], maxSlides: number, maxBytes: number): number[] {
+  const ends: number[] = [];
+  let from = 0;
+  while (from < sizes.length) {
+    let to = from + 1;
+    let bytes = sizes[from]!;
+    while (to < sizes.length && to - from < maxSlides && bytes + sizes[to]! <= maxBytes)
+      bytes += sizes[to++]!;
+    ends.push(to);
+    from = to;
+  }
+  return ends;
 }

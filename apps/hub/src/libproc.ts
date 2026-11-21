@@ -19,6 +19,7 @@ import { Auth } from './auth.ts';
 import { Backups } from './backup.ts';
 import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openDb } from './db.ts';
+import { DISK_MEASURE_MS, DiskFloor } from './diskfloor.ts';
 import { errorMessage, notFound } from './errors.ts';
 import { outputFonts } from './fonts/bundled.ts';
 import { FontService } from './fonts/service.ts';
@@ -33,6 +34,11 @@ import { type LibraryStats, LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
 import { cpuPool } from './pool.ts';
+import { RevisionTitleBackfill } from './revisions.ts';
+import { PrerenderKeys } from './prerenderkeys.ts';
+import { Collector, RefBackfill } from './collect.ts';
+import { goLiveExtras, PrerenderStore } from './prerenders.ts';
+import { SlideFiles } from './slidefiles.ts';
 import {
   cleanupStaleUploads,
   type LibraryApiCtx,
@@ -86,8 +92,12 @@ export type LibraryProcess = {
   db: DB;
   lib: Library;
   jobs: JobQueue;
+  /** The one-off summary of the revisions that have none (the History list reads summaries; library process only). */
+  revisionTitles: RevisionTitleBackfill;
   log: Logger;
   url: string;
+  /** The collection of content files nothing names. */
+  collector: Collector;
   /** Apply the live process's locks (relayed by the supervisor). */
   setLocks(m: LocksMsg): void;
   setLiveUrl(url: string | undefined): void;
@@ -102,6 +112,8 @@ export async function createLibraryProcess(
     onChanges?: (changes: Change[], seq: number) => void;
     /** The library's size for hub health (design/27 §3.4): at start, then after changes, every few seconds. */
     onStats?: (s: LibraryStats) => void;
+    /** A picture accepted for a key of the running service, as the `prerender.add` event the live loop applies (step 7). */
+    onPrerenderAdd?: (event: unknown) => void;
     /**
      * The live service's locks as last reported (ORDO_LIVE_LOCKS, set by the supervisor for a restarted
      * library): applied before the job queue starts, so a library restarted during a service holds the
@@ -119,6 +131,13 @@ export async function createLibraryProcess(
   const lib = new Library(db, { timeZone: cfg.timeZone });
   const store = new Store(cfg.dataDir, lib);
   await store.init();
+  // The free-space floor (design/29 A25, W44): only this process stores files, so only this process asks it.
+  if (cfg.minFreeWarning) log.warn(cfg.minFreeWarning);
+  const disk = new DiskFloor(cfg.dataDir, {
+    statfs: cfg.statfs,
+    minFreeBytes: cfg.minFreeBytes,
+    warn: (m) => log.warn(m),
+  });
   const auth = new Auth(db, lib, log);
   if (cfg.devPin) await auth.devSetup(cfg.devPin);
   const phones = phonesSwitch(lib);
@@ -156,11 +175,27 @@ export async function createLibraryProcess(
     fonts: new Set(Array.isArray(m.fonts) ? m.fonts : []),
   });
   let lockSets = setsOf(locks);
+  // Known once the supervisor has said so (a restarted library is told with ORDO_LIVE_LOCKS), not before.
+  let known = !!opts.initialLocks;
   const liveView: LiveView = {
     locks: () => ({ playlistId: locks.playlistId, ...lockSets }),
     mode: () => locks.mode,
+    known: () => known,
   };
   let liveUrl: string | undefined;
+  const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, { live: () => locks.mode, log });
+  const prerenders = new PrerenderStore(lib, store, liveView, { log });
+  const backfill = new RefBackfill(lib, { live: () => locks.mode, log });
+  const collector = new Collector(lib, store, {
+    mode: cfg.collect,
+    live: () => locks.mode,
+    known: () => known,
+    timeZone,
+    log,
+    schedule: cfg.scheduleBackups,
+    onRun: () => reportStats(),
+  });
+  const revisionTitles = new RevisionTitleBackfill(lib.summaries, { live: () => locks.mode, log });
   const libStats = new LibraryStatsCache(lib, log, { minIntervalMs: 0 });
   let status: ProcessStatus[] = [];
 
@@ -184,6 +219,10 @@ export async function createLibraryProcess(
     backups,
     log,
     ring,
+    disk,
+    slideFiles: new SlideFiles(lib, store, cpuPool),
+    prerenderKeys,
+    prerenders,
     live: liveView,
     // The live process notices token changes in its settings copy and closes those sockets itself.
     disconnectOutput: () => undefined,
@@ -205,6 +244,16 @@ export async function createLibraryProcess(
     },
     diagExtra: () => ({ processes: status, cpuPool: cpuPool().stats(), library: libStats.get() }),
   };
+  prerenders.onAccepted((e) =>
+    opts.onPrerenderAdd?.({
+      k: 'prerender.add',
+      presentationId: e.presentationId,
+      slideId: e.slideId,
+      key: e.key,
+      size: e.size,
+      file: e.file.hash,
+    }),
+  );
   registerLibraryApi(app, ctx);
   // Read-your-writes through the live process: every answer to a write carries the library sequence after
   // it, and the live proxy holds that answer until the live process has applied the changes up to it
@@ -254,11 +303,18 @@ export async function createLibraryProcess(
       const f = lib.getFile(hash);
       if (f) files[hash] = f;
     }
+    // Pre-rendered slides (design/29 §1.7): their heads, pages, shape files and pictures, the heads' pages, and the
+    // keys and picture rows of each presentation: DB-only reads, present only when there is something.
+    const extras = goLiveExtras(lib, presentations);
+    Object.assign(files, extras.files);
     return {
       playlist,
       presentations,
       media,
       files,
+      ...(extras.slideHeads ? { slideHeads: extras.slideHeads } : {}),
+      ...(extras.prerenders ? { prerenders: extras.prerenders } : {}),
+      ...(extras.prerenderKeys ? { prerenderKeys: extras.prerenderKeys } : {}),
       fonts: lib.listFonts(),
       looks: settings.looks,
       general: settings.general,
@@ -274,7 +330,12 @@ export async function createLibraryProcess(
   const reportStats = () => {
     statsTimer = undefined;
     try {
-      opts.onStats?.(libStats.get());
+      opts.onStats?.({
+        ...libStats.get(),
+        ...disk.healthFields(),
+        ...collector.healthFields(),
+        ...prerenders.healthFields(),
+      });
     } catch (e) {
       log.warn({ err: errorMessage(e) }, 'library size measurement failed');
     }
@@ -289,19 +350,40 @@ export async function createLibraryProcess(
       backups.schedule();
   });
 
+  // The volume's numbers ride the stats message on their own clock: every DISK_MEASURE_MS and after a refusal
+  // (at most one report every 2 s), never on the library sequence's.
+  let diskReportedAt = 0;
+  const reportDisk = async () => {
+    await disk.state();
+    diskReportedAt = Date.now();
+    reportStats();
+  };
+  disk.onRefused(() => {
+    if (Date.now() - diskReportedAt > 2000) void reportDisk();
+  });
+  const diskTimer = setInterval(() => void reportDisk(), DISK_MEASURE_MS);
+  diskTimer.unref();
   await app.ready();
   await cleanupStaleUploads({ lib, store, cfg }).catch((e) =>
     log.warn({ err: errorMessage(e) }, 'upload cleanup failed'),
   );
   jobs.onLiveMode(locks.mode);
   jobs.start();
+  prerenderKeys.start();
+  backfill.start();
+  collector.start();
+  revisionTitles.start();
   if (cfg.scheduleBackups) backups.schedule();
+  // The library lists its fonts to the live process and the editor: it says ready once the bundled fonts are
+  // registered, at most `fontsWaitMs` (a restart finds every row unchanged and waits for nothing).
+  await fonts.settled(cfg.fontsWaitMs);
   // Loopback only, on a port of the OS's choosing: the live process is the only way in.
   await app.listen({ port: 0, host: '127.0.0.1' });
   const addr = app.server.address();
   const url = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
   log.info({ url, data: cfg.dataDir }, 'library process listening');
   reportStats();
+  void reportDisk();
 
   return {
     app,
@@ -310,12 +392,19 @@ export async function createLibraryProcess(
     db,
     lib,
     jobs,
+    revisionTitles,
     log,
     url,
+    collector,
     setLocks(m) {
       locks = m;
+      known = true;
       lockSets = setsOf(m);
       jobs.onLiveMode(m.mode);
+      prerenderKeys.onLiveMode(m.mode);
+      backfill.onLiveMode(m.mode);
+      collector.onLiveMode(m.mode);
+      revisionTitles.onLiveMode(m.mode);
     },
     setLiveUrl(u) {
       liveUrl = u;
@@ -325,7 +414,12 @@ export async function createLibraryProcess(
     },
     async close() {
       if (statsTimer) clearTimeout(statsTimer);
+      clearInterval(diskTimer);
+      prerenderKeys.stop();
+      backfill.stop();
+      collector.stop();
       backups.stop();
+      revisionTitles.stop();
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       await withTimeout(app.close(), 1000, () => log.warn('http server did not close in time'));
       db.close();

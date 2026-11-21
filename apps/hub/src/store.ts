@@ -345,7 +345,11 @@ export class Store {
     );
     if (exists) {
       if (!opts.copy) await rm(src, { force: true });
-      if (existing) return { hash, bytes: existing.bytes, mime: existing.mime, path: existing.path };
+      if (existing) {
+        // stored again: its collection clock stops (a save names it next)
+        this.lib.refs.unmark([hash]);
+        return { hash, bytes: existing.bytes, mime: existing.mime, path: existing.path };
+      }
     } else {
       await mkdir(dirname(dest), { recursive: true });
       if (opts.copy) await copyFile(src, dest);

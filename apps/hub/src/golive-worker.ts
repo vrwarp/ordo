@@ -25,6 +25,7 @@ import {
   GoLiveRejection,
   type Look,
   type Media,
+  type PrerenderRow,
   resolvePlaylist,
 } from '@ordo/domain';
 
@@ -35,6 +36,13 @@ export type GoLiveBundle = {
   media: Record<string, Media>;
   /** The geometry files the presentations' shapes name (`ShapeGeom.ref`); absent in a copy saved before them. */
   files?: Record<string, FileRef>;
+  /**
+   * Pre-rendered slides (design/29 §1.7), all absent when nothing is in them (and in a copy saved before them):
+   * each head's pages, and per presentation the keys of its current revision and its picture rows.
+   */
+  slideHeads?: Record<string, { pages: string[] }>;
+  prerenders?: Record<string, PrerenderRow[]>;
+  prerenderKeys?: Record<string, string[]>;
   fonts: Font[];
   looks: Look[];
   general: GeneralSettings;
@@ -52,11 +60,20 @@ export function bundleInputs(
   const presentations = obj<unknown>(b.presentations);
   const media = obj<Media>(b.media);
   const files = obj<FileRef>(b.files);
+  const heads = obj<{ pages?: unknown }>(b.slideHeads);
+  const rows = obj<PrerenderRow[]>(b.prerenders);
+  const keys = obj<string[]>(b.prerenderKeys);
   return {
     playlist: b.playlist,
     presentation: (id) => (Object.hasOwn(presentations, id) ? presentations[id] : undefined),
     media: (id) => (Object.hasOwn(media, id) ? media[id] : undefined),
     file: (hash) => (Object.hasOwn(files, hash) ? files[hash] : undefined),
+    slideHead: (ref) => {
+      const pages = Object.hasOwn(heads, ref) ? heads[ref]?.pages : undefined;
+      return Array.isArray(pages) ? { pages: pages as string[] } : undefined;
+    },
+    prerenders: (id) => (Object.hasOwn(rows, id) && Array.isArray(rows[id]) ? rows[id]! : []),
+    prerenderKeys: (id) => (Object.hasOwn(keys, id) && Array.isArray(keys[id]) ? keys[id]! : []),
     fonts: () => (Array.isArray(b.fonts) ? b.fonts : []),
     looks: Array.isArray(b.looks) ? b.looks : [],
     general: b.general && typeof b.general === 'object' ? b.general : {},

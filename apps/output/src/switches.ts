@@ -9,6 +9,8 @@ import type { DrawingSwitches } from '@ordo/renderer';
  *   (`LATE_UNIT` 'fade' otherwise);
  * - `?warm=off`: the live playlist's units are not made ahead;
  * - `?effects=base`: effects and decorations drawn as 62a1c3a drew them (wave r2b's effect units off; C6);
+ * - `?frame=off`: a slide past a count (more than 200 shapes, more than 16 pictures) is drawn cut as before the
+ *   underlay frame (design/14 "The underlay frame"); `?effects=base` implies it;
  * - test mode only, `?unitTurnMs=N`: each turn of unit making is followed by an N ms wait (1-5000), so the e2e
  *   can make units slow; refused (and said in the console) outside test mode.
  */
@@ -28,6 +30,7 @@ export function outputSwitches(q: URLSearchParams, testMode: boolean): OutputSwi
   if (late === 'next' || late === 'fade') drawing.late = late;
   if (q.get('warm') === 'off') drawing.warm = false;
   if (q.get('effects') === 'base') drawing.effects = 'base';
+  if (q.get('frame') === 'off') drawing.frame = 'off';
   const refused: string[] = [];
   const turn = q.get('unitTurnMs');
   if (turn !== null) {

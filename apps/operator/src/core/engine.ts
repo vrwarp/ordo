@@ -9,7 +9,9 @@ import {
   api,
   type ClientMessageBody,
 } from '@ordo/client';
+import { joinSaved, loadCopy, saveCopy, slimState } from '@ordo/client/savedLive.ts';
 import {
+  type Cue,
   formatBytes,
   GOLIVE_ENDED_REASON,
   type LiveCommand,
@@ -22,7 +24,13 @@ import {
   resolvePlaylist,
   type TimerSpec,
 } from '@ordo/domain';
-import { actionToEvent, checkInvariants, isLiveEventShape, isLiveStateShape } from '@ordo/live-state';
+import {
+  actionToEvent,
+  checkInvariants,
+  initialState,
+  isLiveEventShape,
+  isLiveStateShape,
+} from '@ordo/live-state';
 import {
   LIVE_PREPARE_PATH,
   type LibrarySnapshot,
@@ -111,9 +119,20 @@ export type CoreSnapshot = {
   held?: boolean;
   /** A held service the hub has an older copy of: its playlist (`LiveCore.staleOnHub`, design/27 §3.4). */
   staleOnHub?: string;
+  /**
+   * The id of the resolved copy of the service the hub gave this core (live-by-ref): `state` is then written
+   * without its copy and cue list (`slimState`), which are saved once, in pieces, under scope `operate`
+   * (`saveCopy`); the load joins them. Absent: `state` is whole (a service held without the hub, a fallback
+   * authority, a snapshot written before this).
+   */
+  copy?: string;
 };
 
 const OFFLINE_KEY = 'ordo.offline';
+/** The scope of the saved copy of the running service in the core's store (`saveCopy`, packages/client). */
+const COPY_SCOPE = 'operate';
+/** The copy is saved this long after a change names it, in a task of its own (never on the persist path). */
+const COPY_SAVE_AFTER_MS = 1000;
 
 type Post = (m: CoreToMain, transfer?: Transferable[]) => void;
 
@@ -190,6 +209,13 @@ export class CoreEngine {
     lib?: LibraryData;
     libRev: number;
   } = { resolvedRev: 0, cuesRev: 0, libRev: -1 };
+
+  /** The copy of the service saved on this PC (or loaded from it) and the save wanted next (see `slim`). */
+  private copySavedId?: string;
+  private copyWanted?: { id: string; resolved: ResolvedPlaylist; cues: Cue[] };
+  private copyCtl?: AbortController;
+  /** The id whose save is under way: a GO that names it again must not restart (abort) it. */
+  private copySavingId?: string;
 
   private post: Post;
   private store: JsonStore;
@@ -317,6 +343,22 @@ export class CoreEngine {
     try {
       // Validated at entry (design/25): a corrupt record is ignored and the hub state is used instead.
       const s = await withTimeout(this.store.get<CoreSnapshot>(CORE_KEY), 1500);
+      let noCopy = false;
+      if (s && typeof s.copy === 'string') {
+        // A snapshot that names a copy joins it first; an incomplete copy fails validation like a corrupt record.
+        const copy = await withTimeout(loadCopy(this.store, COPY_SCOPE), 5000);
+        if (copy && copy.id === s.copy) {
+          s.state = joinSaved(s.state as never, copy);
+          this.hub.copies.seed(copy.id, copy.resolved);
+          this.copySavedId = copy.id;
+        } else {
+          // The GO that named the copy was seconds old: its pieces were not saved yet (they follow a second after
+          // it). The state cannot be joined and is dropped, the hub gives it again; the commands the hub had not
+          // confirmed and the ids of the actions already processed are this core's own and are kept.
+          s.state = undefined as never;
+          noCopy = true;
+        }
+      }
       if (s && isLiveStateShape(s.state) && checkInvariants(s.state).length === 0)
         return {
           state: s.state,
@@ -327,6 +369,19 @@ export class CoreEngine {
           held: s.held === true && s.authority === 'fallback',
           ...(typeof s.staleOnHub === 'string' ? { staleOnHub: s.staleOnHub.slice(0, 200) } : {}),
         };
+      if (s && noCopy) {
+        this.log(
+          'warn',
+          'the saved service copy is not complete; following the hub, keeping the unconfirmed commands',
+        );
+        return {
+          state: initialState(),
+          authority: 'hub',
+          pending: Array.isArray(s.pending) ? s.pending.filter((p) => p && isLiveEventShape(p.event)) : [],
+          aids: Array.isArray(s.aids) ? s.aids.filter((a) => typeof a === 'string') : [],
+          at: Number(s.at) || 0,
+        };
+      }
       if (s) this.log('warn', 'stored core state failed validation; starting from the hub');
       const legacy = await withTimeout(this.store.get<LiveState>(LEGACY_LIVE_KEY), 1000);
       if (isLiveStateShape(legacy)) return { state: legacy, authority: 'hub', pending: [], aids: [], at: 0 };
@@ -1104,6 +1159,45 @@ export class CoreEngine {
     return this.lastGood ? { ...this.lastGood, at: snap.at } : undefined;
   }
 
+  /**
+   * What is written on every change: the snapshot with its state slim (no copy, no cue list: as big as its other
+   * fields whatever the service) and the copy's id when the state's copy is the one the hub gave this core; the
+   * copy is saved once, in pieces, off this path. A copy that is not the hub's (a service held without the hub, the
+   * operator's own offline resolve) is written whole as before.
+   */
+  private slim(snap: CoreSnapshot): CoreSnapshot {
+    const st = snap.state;
+    const held = this.hub.copies;
+    if (st.mode !== 'live' || !st.resolved || held.id === undefined || st.resolved !== held.value)
+      return snap;
+    if (this.copySavedId !== held.id && this.copyWanted?.id !== held.id && this.copySavingId !== held.id) {
+      this.copyCtl?.abort();
+      this.copyWanted = { id: held.id, resolved: st.resolved, cues: st.cues };
+      setTimeout(() => this.runCopySave(), COPY_SAVE_AFTER_MS);
+    }
+    // The authority's record is the only place its state is kept: whole until the copy is on this PC, then by name.
+    if (snap.authority === 'fallback' && this.copySavedId !== held.id) return snap;
+    return { ...snap, state: slimState(st) as unknown as LiveState, copy: held.id };
+  }
+
+  /** Save the wanted copy (see `slim`): a task of its own; a failure counts like a failed persist. */
+  private runCopySave(): void {
+    const w = this.copyWanted;
+    if (!w) return;
+    this.copyWanted = undefined;
+    const ctl = new AbortController();
+    this.copyCtl = ctl;
+    this.copySavingId = w.id;
+    void saveCopy(this.store, COPY_SCOPE, w.id, w.resolved, w.cues, { signal: ctl.signal }).then((r) => {
+      if (this.copyCtl === ctl) {
+        this.copyCtl = undefined;
+        this.copySavingId = undefined;
+      }
+      if (r === 'saved' || r === 'present') this.copySavedId = w.id;
+      else if (r === 'failed') this.persistFailures++;
+    });
+  }
+
   /** Persist the core snapshot (coalesced per task). Resolves once written. */
   persist(): Promise<void> {
     if (this.role !== 'operate' || !this.core) return Promise.resolve();
@@ -1117,7 +1211,7 @@ export class CoreEngine {
           return;
         }
         this.store
-          .set(CORE_KEY, snap)
+          .set(CORE_KEY, this.slim(snap))
           .catch(() => {
             this.persistFailures++;
           })

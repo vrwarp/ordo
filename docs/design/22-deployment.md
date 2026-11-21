@@ -90,16 +90,29 @@ Multi-stage Dockerfile: `node:22-bookworm-slim` build stage running `pnpm instal
 `libreoffice-impress` (no GUI packages), `chromium` (headless, for the pptx-preview PowerPoint
 renderer; `ORDO_CHROMIUM=/usr/bin/chromium`), `fonts-dejavu`, the bundled fonts of design/27 §10
 (`fonts-liberation2 fonts-crosextra-carlito fonts-crosextra-caladea fonts-noto-core fonts-inter`, about 55 MB,
-registered from `ORDO_FONTS_DIR=/usr/share/fonts`, their copyright files kept in `/usr/share/doc`), in a second
+registered from `ORDO_FONTS_DIR=/usr/share/fonts`), in a second
 layer `fonts-noto-cjk`'s Sans collections (Noto Sans CJK, about 40 MB, a dpkg rule leaving out its Serif
 collections and removed again after the install; for LibreOffice and the hub's measuring of Chinese, Japanese and
 Korean table cells, never registered as library fonts), and copies `apps/hub/dist` and the built browser apps.
+The copyright file of every package the image installs stays in `/usr/share/doc/<package>/copyright` (the
+licence notices of ffmpeg, Chromium, LibreOffice and the rest, as Debian ships them, not only the fonts'; every
+other file of that folder is removed, but the fonts' folders, which stay as they were); the pull-request job lists the packages without one and fails for the
+product's own.
 Runs as a non-root user under tini, entrypoint the supervisor. Health check `GET /api/v1/health` (answered by the live process; it reports the library
 process state too).
-Image size target under 1.5 GB (LibreOffice dominates; Chromium adds about 250 MB). The built image's size has
-not been measured against it; the pull-request job prints the amd64 image's size and warns above the target. The
-pull-request smoke test starts both renderers inside the image and checks its CJK face (fontconfig's face for
-Hangul, and the hub's `system faces` start-log line naming it for Han, Hiragana, Katakana and Hangul).
+Image size target under 2 GB (decimal GB, 2,000,000,000 bytes, uncompressed, linux/amd64). It has been 2 GB since
+2026-11-20, when the owner raised it from 1.5 GB. The first real build (the Docker dry run of PR #29) was
+1,687,519,174 bytes (about 1.69 GB): 188 MB over the old target, and about 312 MB under the present one. By Debian's
+package sizes (an estimate: the pull-request job prints the real numbers) Chromium for the pptx-preview renderer is
+about 440 MB of it, LibreOffice about 320 MB, ffmpeg about 200 MB and the fonts about 100 MB. Chromium serves only
+`renderer=pptx-preview`, which the import screen no longer offers (design/20, 'Two renderers') and design/27 M8
+retires. Dropping it (the image would then be near 1.25 GB) is no longer needed for the target, so Chromium stays and
+nothing is removed from the image for it. The pull-request job prints the amd64 image's size and warns above the
+target, never failing on it (printed, not enforced), and then prints what the image is made of (its layers, its 40
+largest packages, its largest folders and what `/usr/share/doc` keeps). The
+pull-request smoke test starts both renderers inside the image, checks its CJK face (fontconfig's face for
+Hangul, and the hub's `system faces` start-log line naming it for Han, Hiragana, Katakana and Hangul) and checks
+that the product's own packages kept their copyright files.
 
 ## CI and release
 
@@ -113,7 +126,12 @@ Hangul, and the hub's `system faces` start-log line naming it for Han, Hiragana,
   with the changelog.
 - Upgrades at the venue: change the tag in Compose and redeploy, never on a Saturday
   evening or Sunday. The operator top bar shows the hub version; a mismatch with the app
-  bundle (same image, so only possible with a stale tab) reloads the tab.
+  bundle (same image, so only possible with a stale tab) reloads the tab. Update and roll back
+  between services: a hub of 0.10 (the service kept by name, design/12) that is rolled back to
+  an older tag while a service runs does not bring that service back: the older hub reads the
+  new snapshot as invalid, writes an idle one and starts idle, and the service is started again
+  with Go live (the data folder itself opens cleanly; the owner's question OQ-LBR1).
+  `ORDO_LIVE_BYREF=off` writes the older whole form for as long as a roll-back is wanted.
 
 ## Presentation PC setup
 

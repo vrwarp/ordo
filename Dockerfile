@@ -30,14 +30,19 @@ LABEL org.opencontainers.image.title="ordo-hub" org.opencontainers.image.version
 # Fonts (design/27 §10): metric-compatible substitutes (Carlito, Caladea, Liberation), the Noto script
 # fallbacks and Inter. The hub registers them as bundled library fonts (ORDO_FONTS_DIR) and LibreOffice draws
 # with the same files. They are SIL OFL 1.1; DejaVu, a general fallback face that is not served, is under the
-# Bitstream Vera licence (apps/hub/src/fonts/LICENSES.md). Their packages' copyright files stay in
-# /usr/share/doc.
+# Bitstream Vera licence (apps/hub/src/fonts/LICENSES.md). Every package's copyright file stays in
+# /usr/share/doc, not only the fonts' (the last command of this RUN).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ffmpeg poppler-utils libreoffice-impress chromium tini ca-certificates \
       fonts-dejavu fonts-liberation2 fonts-crosextra-carlito fonts-crosextra-caladea fonts-noto-core fonts-inter \
  && rm -rf /var/lib/apt/lists/* /usr/share/man/* \
- && find /usr/share/doc -mindepth 1 -maxdepth 1 ! -name 'fonts-*' -exec rm -rf {} +
+ && find /usr/share/doc -mindepth 2 -type f ! -name copyright ! -path '/usr/share/doc/fonts-*' -delete \
+ && find /usr/share/doc -mindepth 1 -type d -empty -delete
+# The licence notices (OQ-FU2): the copyright file of every package the image installs stays, as Debian ships it
+# (ffmpeg, Chromium, LibreOffice, poppler and tini as much as the fonts). What goes is every other file in
+# /usr/share/doc (changelogs, examples; the fonts' folders are left as they are) and the folders left empty;
+# a link to another package's folder stays. The pull-request job lists the packages without a notice.
 # Chinese, Japanese and Korean (design/27 §10): the Sans collections of fonts-noto-cjk (Noto Sans CJK, SIL OFL
 # 1.1, apps/hub/src/fonts/LICENSES.md), for LibreOffice and for the hub's measuring of table cells in those
 # scripts (apps/hub/src/pptx/systemFaces.ts). Never a library font and never sent to a screen. The dpkg rule

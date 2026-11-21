@@ -30,6 +30,20 @@ describe('output URL switches', () => {
     expect(outputSwitches(q('late=never&warm=maybe&effects=all'), false).drawing).toEqual({});
   });
 
+  it('carries ?frame=off (the cut drawing as before the underlay frame) and nothing else of it; the frame is on by default', () => {
+    expect(outputSwitches(q('frame=off'), false).drawing).toEqual({ frame: 'off' });
+    expect(outputSwitches(q('frame=off&late=next&warm=off&effects=base'), false).drawing).toEqual({
+      late: 'next',
+      warm: false,
+      effects: 'base',
+      frame: 'off',
+    });
+    // on by default: nothing says frame, and no other value is a switch
+    expect(outputSwitches(q(''), false).drawing.frame).toBeUndefined();
+    expect(outputSwitches(q('frame=on'), false).drawing).toEqual({});
+    expect(outputSwitches(q('frame=0'), false).drawing).toEqual({});
+  });
+
   it('takes ?unitTurnMs only in test mode, bounded, and refuses it outside test mode', () => {
     expect(outputSwitches(q('unitTurnMs=40'), true)).toMatchObject({
       drawing: { unitTurnMs: 40 },

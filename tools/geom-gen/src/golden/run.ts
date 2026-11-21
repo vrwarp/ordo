@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -8,26 +8,10 @@ import { run } from '../../../../apps/hub/src/media/tools.ts';
 import { PRESET_GEOMS } from '../../../../packages/renderer/src/geom/presets.gen.ts';
 import { ssim } from '../../../pptx-fidelity/src/ssim.ts';
 import { EXCEPTIONS } from './exceptions.ts';
+import { grey, has, libreOfficePages, skip } from './lo.ts';
 import type { PageJob } from './page.ts';
-import {
-  CELL_H,
-  CELL_W,
-  type PxRect,
-  probeDeck,
-  probeLayout,
-  SLIDE_H,
-  SLIDE_W,
-  slideCount,
-} from './probe.ts';
-import {
-  baselineOf,
-  type GreyPicture,
-  MAX_DROP,
-  MIN_SSIM,
-  type PresetBaseline,
-  scoreRegion,
-  verdict,
-} from './score.ts';
+import { CELL_H, CELL_W, type PxRect, probeDeck, probeLayout, slideCount } from './probe.ts';
+import { baselineOf, MAX_DROP, MIN_SSIM, type PresetBaseline, scoreRegion, verdict } from './score.ts';
 import { findChromium } from '../../../find-chromium.ts';
 
 /*
@@ -56,24 +40,6 @@ const strict = argv.includes('--strict') || !!process.env.CI;
 const outArg = argv.indexOf('--out');
 const outDir = outArg >= 0 ? argv[outArg + 1] : undefined;
 
-function skip(why: string): number {
-  if (strict) {
-    console.error(`preset golden: FAILED, would skip: ${why}`);
-    return 1;
-  }
-  console.log(`preset golden: skipped (${why})`);
-  return 0;
-}
-
-async function has(cmd: string, args: string[]): Promise<boolean> {
-  try {
-    await run(cmd, args, { timeoutMs: 30_000, allowFail: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 type Esbuild = { build(o: Record<string, unknown>): Promise<{ outputFiles: { text: string }[] }> };
 
 /** esbuild is not a dependency here; vite (apps/output) depends on it, so resolve it through vite. */
@@ -85,42 +51,6 @@ async function loadEsbuild(): Promise<Esbuild> {
     const fromOutput = createRequire(join(root, 'apps/output/package.json'));
     return (await import(createRequire(fromOutput.resolve('vite')).resolve(name))) as Esbuild;
   }
-}
-
-/** LibreOffice's pages of the deck: soffice to PDF, then pdftoppm at 144 dpi (as the harness draws them). */
-async function libreOfficePages(deck: string, work: string): Promise<string[]> {
-  const lo = join(work, 'libreoffice');
-  await rm(lo, { recursive: true, force: true });
-  await mkdir(lo, { recursive: true });
-  await run(
-    'soffice',
-    [
-      `-env:UserInstallation=file://${join(work, 'lo-profile')}`,
-      '--headless',
-      '--norestore',
-      '--nolockcheck',
-      '--nodefault',
-      '--nologo',
-      '--convert-to',
-      'pdf',
-      '--outdir',
-      lo,
-      deck,
-    ],
-    { timeoutMs: 300_000, group: true, env: { PATH: process.env.PATH, HOME: work, LANG: 'C.UTF-8' } },
-  );
-  const pdf = (await readdir(lo)).find((f) => f.endsWith('.pdf'));
-  if (!pdf) throw new Error('LibreOffice produced no PDF');
-  await run('pdftoppm', ['-r', '144', '-png', join(lo, pdf), join(lo, 'page')], { timeoutMs: 300_000 });
-  const pages = (await readdir(lo)).filter((f) => /^page-\d+\.png$/.test(f));
-  pages.sort((a, b) => Number(/(\d+)/.exec(a)![1]) - Number(/(\d+)/.exec(b)![1]));
-  const out: string[] = [];
-  for (let i = 0; i < pages.length; i++) {
-    const f = join(lo, `slide-${String(i + 1).padStart(3, '0')}.png`);
-    await rename(join(lo, pages[i]!), f);
-    out.push(f);
-  }
-  return out;
 }
 
 /** ordo's pages: page.ts in headless Chromium. */
@@ -164,30 +94,6 @@ async function ordoPages(job: PageJob, work: string, executablePath: string): Pr
   }
 }
 
-/** A page as greyscale pixels (ffmpeg), cut to the slide (LibreOffice's page is 1921 px wide). */
-async function grey(file: string, work: string): Promise<GreyPicture> {
-  const raw = join(work, 'grey.raw');
-  await run(
-    'ffmpeg',
-    [
-      '-v',
-      'error',
-      '-y',
-      '-i',
-      file,
-      '-vf',
-      `crop=${SLIDE_W}:${SLIDE_H}:0:0,format=gray`,
-      '-f',
-      'rawvideo',
-      raw,
-    ],
-    { timeoutMs: 60_000 },
-  );
-  const px = new Uint8Array(await readFile(raw));
-  if (px.length !== SLIDE_W * SLIDE_H) throw new Error(`${file}: not a ${SLIDE_W}x${SLIDE_H} page`);
-  return { w: SLIDE_W, h: SLIDE_H, px };
-}
-
 /** LibreOffice's and ordo's drawing of one region side by side (ffmpeg), for a preset that needs a look. */
 async function sideBySide(lo: string, ordo: string, region: PxRect, file: string): Promise<void> {
   const cut = `crop=${region.w}:${region.h}:${region.x}:${region.y}`;
@@ -209,9 +115,14 @@ async function main(): Promise<number> {
     ['pdftoppm', ['-v']],
     ['ffmpeg', ['-version']],
   ] as const)
-    if (!(await has(cmd, [...args]))) return skip(`${cmd} is not installed`);
+    if (!(await has(cmd, [...args]))) return skip('preset golden', `${cmd} is not installed`, strict);
   const executablePath = await findChromium({ system: true });
-  if (!executablePath) return skip('no Chromium (npx playwright install chromium, or set ORDO_CHROMIUM)'); // under CI findChromium throws
+  if (!executablePath)
+    return skip(
+      'preset golden',
+      'no Chromium (npx playwright install chromium, or set ORDO_CHROMIUM)',
+      strict,
+    ); // under CI findChromium throws
 
   const work = outDir ? resolve(outDir) : join(tmpdir(), `ordo-preset-golden-${process.pid}`);
   await mkdir(work, { recursive: true });

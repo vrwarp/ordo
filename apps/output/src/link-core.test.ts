@@ -1,4 +1,4 @@
-import { HubConnection, OutputLink } from '@ordo/client';
+import { HubConnection, joinState, OutputLink } from '@ordo/client';
 import { type LiveState, type Media, expandCues, slideContent } from '@ordo/domain';
 import { CONTENT_CASES } from '@ordo/domain/content.test-util.ts';
 import { EMPTY_TELEMETRY, type FromAsset, type ToAsset, type ToRender } from '@ordo/renderer';
@@ -1708,6 +1708,311 @@ describe('link worker core: a GO never waits for drawing (r2b units-live, design
     } satisfies FromAsset);
     await tick(20);
     expect((t.core.introspect() as { units: { warmed: number[] } }).units.warmed).toEqual([2]);
+    t.close();
+  });
+
+  it('counts the units the worker made ahead for its warm-up, with no slide job finished since (unitsMade)', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const w = t.toAsset.find((m) => m.t === 'warmUnits');
+    const key = w!.t === 'warmUnits' ? w!.warm.key : '';
+    // A slide job's last report said 2 made; the warm-up then made two more and says so.
+    done(t, jobOf(t.toAsset, 0)!.job.key, { unitsMade: 2 });
+    await tick(20);
+    expect(t.core.buildHealth()).toMatchObject({ unitsMade: 2 });
+    for (const [cueIndex, unitsMade] of [
+      [1, 3],
+      [2, 4],
+    ] as const)
+      t.asset.port2.postMessage({
+        t: 'unitsWarmed',
+        key,
+        cueIndex,
+        units: 1,
+        ready: 1,
+        unitsMade,
+        unitCacheBytes: 99,
+      } satisfies FromAsset);
+    await tick(20);
+    const state = t.core.introspect() as { units: { warmed: number[]; made: number } };
+    expect(state.units).toMatchObject({ warmed: [1, 2], made: 4 });
+    expect(t.core.buildHealth()).toMatchObject({ unitsMade: 4 });
+    t.close();
+  });
+});
+
+// ---- the service by reference: a small record per GO, the copy once in pieces (live-by-ref) ----
+
+type Set = { key: string; bytes: number };
+function recordingKv() {
+  const map = new Map<string, unknown>();
+  const sets: Set[] = [];
+  let failAt: number | undefined;
+  let copyPuts = 0;
+  let slowMs = 0;
+  const kv = {
+    get: async (k: string) => structuredClone(map.get(k)) as never,
+    set: async (k: string, v: unknown) => {
+      if (k.startsWith('copy:') && slowMs) await new Promise((r) => setTimeout(r, slowMs));
+      if (k.startsWith('copy:') && failAt !== undefined && ++copyPuts === failAt) throw new Error('quota');
+      sets.push({ key: k, bytes: JSON.stringify(v ?? null).length });
+      map.set(k, structuredClone(v));
+    },
+  };
+  return {
+    map,
+    sets,
+    kv,
+    failCopyPutAt: (n: number) => (failAt = n),
+    slowCopyPuts: (ms: number) => (slowMs = ms),
+  };
+}
+
+/** The fixture service padded to about `mib` MiB with unreferenced presentations of `kb` KB each. */
+function padded(mib: number, kb = 100, extra: Record<string, number> = {}): LiveState {
+  const base = liveState();
+  const presentations = { ...base.resolved!.presentations };
+  const add = (id: string, size: number) => {
+    presentations[id] = {
+      id,
+      rev: 1,
+      title: id,
+      kind: 'song',
+      meta: { tags: [] },
+      sections: [],
+      arrangements: [],
+      archived: false,
+      pad: 'x'.repeat(size),
+    } as never;
+  };
+  for (let i = 0; i < Math.ceil((mib * 1024) / kb); i++) add(`pad${i}`, kb * 1024);
+  for (const [id, bytes] of Object.entries(extra)) add(id, bytes);
+  return { ...base, resolved: { ...base.resolved!, presentations } };
+}
+
+const ID = 'a'.repeat(64);
+async function started(kv = recordingKv(), state?: LiveState) {
+  const t = setup({ json: kv.kv });
+  await t.core.start();
+  t.hub.connected = true;
+  t.hub.emit('status', { connected: true });
+  const c = t.core as unknown as { onRender(m: unknown): void; cachedState?: LiveState };
+  if (state) {
+    t.hub.copies.hold(ID, state.resolved!);
+    t.hub.emit('state', stateMsg(state));
+  }
+  const present = (n: number) =>
+    c.onRender({ t: 'telemetry', tel: { ...EMPTY_TELEMETRY, presented: n, compositor: '2d' } });
+  const ticks = async (n: number) => {
+    for (let i = 0; i < n; i++) {
+      vi.advanceTimersByTime(250);
+      await tick(1);
+    }
+  };
+  /** Until the copy's marker is written (the pieces are saved a task at a time: under load, a few real milliseconds). */
+  const saved = async () => {
+    for (let i = 0; i < 200 && !kv.map.has('copy:o1'); i++) {
+      vi.advanceTimersByTime(250);
+      await tick(10);
+    }
+  };
+  return { t, c, kv, present, ticks, saved };
+}
+const records = (kv: ReturnType<typeof recordingKv>) => kv.sets.filter((x) => x.key === 'state:o1');
+const copySets = (kv: ReturnType<typeof recordingKv>) => kv.sets.filter((x) => x.key.startsWith('copy:'));
+
+describe('the saved record of a window (live-by-ref)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a GO writes a small record that is the same at 1.5, 4 and 13 MiB', async () => {
+    const sizes: number[] = [];
+    for (const mib of [1.5, 4, 13]) {
+      const kv = recordingKv();
+      const s = padded(mib);
+      const { t } = await started(kv, s);
+      t.hub.emit('state', stateMsg({ ...s, seq: s.seq + 1 }));
+      await tick(20);
+      const rec = records(kv).at(-1)!;
+      sizes.push(rec.bytes);
+      expect(rec.bytes).toBeLessThan(30_000);
+      const stored = kv.map.get('state:o1') as { state: LiveState; copy?: string };
+      expect(stored.copy).toBe(ID);
+      expect(stored.state.resolved).toBeUndefined();
+      expect(stored.state.cues).toBeUndefined();
+      t.close();
+    }
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(1.1 * Math.min(...sizes));
+  });
+
+  it('across 10 GOs the copy is written once (parts, cue list, head, marker) and later GOs write only the small record', async () => {
+    const kv = recordingKv();
+    const s = padded(2);
+    const { t, present, ticks, saved } = await started(kv, s);
+    for (let i = 1; i <= 10; i++) {
+      t.hub.emit('state', stateMsg({ ...s, seq: s.seq + i }));
+      present(i);
+      await ticks(2);
+    }
+    await saved();
+    await ticks(4);
+    const n = Object.keys(s.resolved!.presentations).length;
+    expect(copySets(kv).length).toBe(n + 3);
+    expect(copySets(kv).at(-1)!.key).toBe('copy:o1');
+    expect(records(kv).length).toBeGreaterThanOrEqual(10);
+    for (const r of records(kv)) expect(r.bytes).toBeLessThan(30_000);
+    t.close();
+  });
+
+  it('a GO while the copy is still being saved does not restart that save', async () => {
+    // a slow store (each piece a few real milliseconds): the 10 GOs below all arrive while the save is under way
+    const kv = recordingKv();
+    kv.slowCopyPuts(4);
+    const s = padded(1);
+    const { t, present, ticks, saved } = await started(kv, s);
+    present(1);
+    await ticks(2);
+    for (let i = 1; i <= 10; i++) {
+      t.hub.emit('state', stateMsg({ ...s, seq: s.seq + i }));
+      await ticks(1);
+    }
+    await saved();
+    await ticks(4);
+    const n = Object.keys(s.resolved!.presentations).length;
+    expect(copySets(kv).length).toBe(n + 3);
+    t.close();
+  });
+
+  it('no single put is larger than the biggest presentation plus the head', async () => {
+    const kv = recordingKv();
+    const s = padded(1, 100, { huge: 1024 * 1024 });
+    const { t, present, ticks, saved } = await started(kv, s);
+    present(1);
+    await ticks(2);
+    await saved();
+    expect(copySets(kv).length).toBeGreaterThan(5);
+    expect(Math.max(...copySets(kv).map((x) => x.bytes))).toBeLessThan(1.1 * 1024 * 1024);
+    t.close();
+  });
+
+  it('the copy is written after the first frame presented, and at the latest 5 s after it arrived', async () => {
+    const kv = recordingKv();
+    const s = padded(1);
+    const t0 = Date.now();
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(t0);
+    try {
+      const { t, present, ticks } = await started(kv, s);
+      await ticks(8);
+      expect(copySets(kv).length).toBe(0); // nothing presented, under 5 s
+      present(1);
+      await ticks(3);
+      expect(copySets(kv).length).toBeGreaterThan(0);
+      t.close();
+      // a window that never presents still saves it 5 s after
+      const kv2 = recordingKv();
+      const b = await started(kv2, padded(1));
+      await b.ticks(4);
+      expect(copySets(kv2).length).toBe(0);
+      now.mockReturnValue(t0 + 5100);
+      await b.ticks(3);
+      expect(copySets(kv2).length).toBeGreaterThan(0);
+      b.t.close();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('a restart over the same store paints the joined state, seeds the copy, and a by-name state keeps that object', async () => {
+    const kv = recordingKv();
+    const s = padded(1);
+    const first = await started(kv, s);
+    first.present(1);
+    await first.ticks(4);
+    first.t.close();
+    const second = await started(kv);
+    const held = second.t.hub.copies;
+    expect(held.id).toBe(ID);
+    expect(held.value).toEqual(s.resolved);
+    expect(second.c.cachedState?.cues).toEqual(s.cues);
+    expect(second.c.cachedState?.resolved).toBe(held.value);
+    // the hub then sends the state by name: the join keeps the object
+    const byName = {
+      t: 'live.state' as const,
+      v: 1 as const,
+      seq: s.seq + 5,
+      resolvedId: ID,
+      state: { ...s, seq: s.seq + 5, resolved: undefined },
+    };
+    const joined = joinState(byName as never, held);
+    expect(joined).not.toBe('need');
+    second.t.hub.emit('state', { ...byName, state: (joined as { state: LiveState }).state });
+    expect(second.t.link.mirror.state.resolved).toBe(held.value);
+    second.t.close();
+  });
+
+  it('a marker with a missing part, a marker of another id, and a store that fails on the 3rd put paint nothing and throw nothing', async () => {
+    const kv = recordingKv();
+    const s = padded(1);
+    const first = await started(kv, s);
+    first.present(1);
+    await first.ticks(4);
+    first.t.close();
+    const keys = [...kv.map.keys()];
+    // a missing part
+    const part = keys.find((k) => k.includes(':p:'))!;
+    const saved = kv.map.get(part);
+    kv.map.delete(part);
+    const a = await started(kv);
+    expect(a.c.cachedState).toBeUndefined();
+    expect(a.t.hub.copies.id).toBeUndefined();
+    a.t.close();
+    kv.map.set(part, saved);
+    // a marker whose id differs from the small record's
+    const rec = kv.map.get('state:o1') as { copy: string };
+    kv.map.set('state:o1', { ...rec, copy: 'b'.repeat(64) });
+    const b = await started(kv);
+    expect(b.c.cachedState).toBeUndefined();
+    b.t.close();
+    // a store that fails on the 3rd copy put: no marker, nothing painted after a restart
+    const bad = recordingKv();
+    bad.failCopyPutAt(3);
+    const c = await started(bad, padded(1));
+    c.present(1);
+    await c.ticks(4);
+    expect(bad.map.has('copy:o1')).toBe(false);
+    c.t.close();
+    const d = await started(bad);
+    expect(d.c.cachedState).toBeUndefined();
+    d.t.close();
+  });
+
+  it('a record in the older whole form is still painted', async () => {
+    const kv = recordingKv();
+    const s = liveState();
+    kv.map.set('state:o1', { state: s, savedAt: Date.now() });
+    const { c, t } = await started(kv);
+    expect(c.cachedState?.resolved).toEqual(s.resolved);
+    t.close();
+  });
+
+  it("a copy that is not the hub's (the fallback bus's, an offline resolve) is saved whole as before and writes no pieces", async () => {
+    const kv = recordingKv();
+    const s = padded(1);
+    const t = setup({ json: kv.kv });
+    await t.core.start();
+    t.hub.emit('state', stateMsg(s)); // nothing held: it did not come from the hub
+    await tick(20);
+    const stored = kv.map.get('state:o1') as { state: LiveState; copy?: string };
+    expect(stored.copy).toBeUndefined();
+    expect(stored.state.resolved).toBeTruthy();
+    expect(copySets(kv).length).toBe(0);
     t.close();
   });
 });

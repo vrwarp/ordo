@@ -36,11 +36,19 @@ export const SIZE_BUDGETS = {
   slideMax: 64 * KiB,
   /**
    * Once an import's running total passes this, the remaining slides are stored minimal: their text, pictures
-   * and background (`minimalSlide`; the compact picture class before M9).
+   * and background (`minimalSlide`; the compact picture class before M9). 6 MiB since the owner's answer of
+   * 2026-11-20 (Q1.c; it was 3 MiB): a deck of traced artwork spent the old mark on its first dense slides and
+   * stored the later ones without their shapes (Traffic Dark 94-98 fell from 0.996 to 0.44-0.72).
    */
-  presentationCompact: 3 * MiB,
-  /** An import stays within this; the editor warns above it but still saves (PUT allows `putMax`). */
-  presentationMax: 4 * MiB,
+  presentationCompact: 6 * MiB,
+  /**
+   * An import stays within this; the editor warns above it but still saves (PUT allows `putMax`). 8 MiB since
+   * the owner's answer of 2026-11-20 (Q1.c; it was 4 MiB), the same ratio as `presentationCompact`. What it
+   * costs is `goLiveSlow`'s business: a service past 6 MiB carries W59's critical line, so one presentation at
+   * this size does; a save, a library sync and each of the (at most 50) kept revisions carry up to this
+   * many bytes (design/27 §3.4).
+   */
+  presentationMax: 8 * MiB,
   /** A `preview` message: only the previewed slide's section is sent (`previewSlice`). */
   previewMax: 1 * MiB,
   /**
@@ -50,10 +58,20 @@ export const SIZE_BUDGETS = {
    */
   goLiveMax: 32 * MiB,
   /**
-   * The size whose first save on a screen passes the 33 ms GO lead (D13; structuredClone 9-12 ms/MiB on this
-   * class of PC): past it the goLive carries W59's critical line. A default until a venue PC confirms it.
+   * The size past which the goLive carries W59's critical line: what a service of this size costs a screen is the
+   * download and parse of its copy at the goLive and its one-time save in pieces (a GO writes a small record whatever
+   * the size: live-by-ref; before it every GO cloned the whole copy, structuredClone 9-12 ms/MiB on this class of PC,
+   * past the 33 ms GO lead from about 3 MiB). A default until a venue PC confirms it. 6 MiB since the owner's answer
+   * of 2026-11-21 (Q16.b; he wrote "6mb", read as 6 MiB, the unit of every budget here; it was 3 MiB): a deck of
+   * 3.13 MiB (Traffic Dark) no longer carries the line. What the size costs, from live-by-ref's measures (design/29
+   * r2b.8; a venue PC confirms them): the one-time save of the copy is each screen's own, on its computer (Chromium's
+   * IndexedDB, 16.7 / 37 / 128 ms at 1.5 / 4 / 13 MiB, about 10 ms a MiB, in pieces off the GO: live-by-ref's M4, which
+   * records no load); a take-over applies the copy in about 100 ms at 6 MiB with 20 screens connected over
+   * real sockets (101 ms, 9 take-overs at loads 8-39; 77 ms with no screen) and in 47 ms with no sockets in the apply
+   * (the live loop's share alone: integrate-2's I8, 2 runs). The 8 MiB save's 1.5 s at p50 (xml-compact-3's measure
+   * at load 12-14, design/27 §3) is another measure.
    */
-  goLiveSlow: 3 * MiB,
+  goLiveSlow: 6 * MiB,
   /**
    * The operator refuses to send `live.adopt` (or a `preview`) above this instead of tripping the socket
    * cap: the hub would close the socket, the operator reconnect and try again, forever.
@@ -377,7 +395,7 @@ export function fitSlideBudget(
  * slide's background colour alone (`plainBackground`: the bottom one, a plain rect in its colour, about 200
  * bytes), so dark text is never drawn on the output's black. What the presentation's tail is stored as
  * (`planImportSizes`, which counts those bytes), and what an import keeps of a slide the schema refuses.
- * `page: false` leaves that shape out too: the hub's last resort for a deck that does not fit 4 MiB even
+ * `page: false` leaves that shape out too: the hub's last resort for a deck that does not fit the presentation budget (8 MiB) even
  * minimal with its pages (about 2,000 slides), where 200 bytes a slide would cut every slide's text. Pure.
  */
 export function minimalSlide(slide: Slide, opts: { page?: boolean } = {}): Slide {

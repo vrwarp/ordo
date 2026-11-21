@@ -36,6 +36,8 @@ export type {
   UnitRect,
   UnitRun,
 } from './units.ts';
+// The underlay frame (frame.ts) imports units.ts, so it is the asset worker's too: `@ordo/renderer/frame.ts`.
+export type { FrameOptions, FrameSplit, FrameWhy } from './frame.ts';
 export {
   clearDecorFiles,
   DECOR_FILE_RETRY_MS,
