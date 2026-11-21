@@ -42,7 +42,7 @@ const TOL = 12;
 // an integration machine's does, it keeps a higher priority than the renderer and the hub), which starves them on two
 // CPUs, a CI runner's: the third screenshot of a long-lived window did not complete there and the file failed in about
 // two of three runs (`taskset -c 0-1`, retries 0: repair 2 of sub-wave 2); it also took 12 minutes when it passed. With
-// this list it takes about 20 seconds in that setting. (`--disable-gpu` beside the config's GPU switches was not
+// this list it takes 21.5 to 26.8 seconds in that setting. (`--disable-gpu` beside the config's GPU switches was not
 // enough: a late flip showed in two of three runs.)
 test.use({ launchOptions: { args: CPU_ONLY_ARGS } });
 

@@ -57,12 +57,12 @@ jobs:
     # needed about one to three), so a limit of 35 minutes was spent before the first test. Sub-wave 2 of the
     # follow-up pull request grew the suite to 169 tests in these three projects: Playwright splits them at a
     # group boundary into 91 (shard 1) and 78 (shard 2), which took 16.6 and 20.1 minutes of test time on the
-    # integration machine (12.2 and 13.3 before; the sw2-seams file, in shard 2, takes about 20 seconds there, on
-    # four CPUs and on two, because it starts its browser without a GPU: a runner of two CPUs took 8 to 12 minutes
-    # for it with the GPU process). A runner took 1.65 times that machine's time for shard 2 (21.9 minutes of tests
-    # there, 13.3 here), so shard 2 is about 33 minutes of tests: with the usual 2.5 minutes of set-up the job ends
-    # near 36, with a slow runner's 24 to 34 it is 57 to 67, so a limit of 60 could be spent again. A retry of a
-    # failing test adds its time again.
+    # integration machine (12.2 and 13.3 before; the sw2-seams file, in shard 2, takes 21.5 to 26.8 seconds on two
+    # CPUs (20.8 to 21.5 on four), because it starts its browser without a GPU: a runner of two CPUs took 8 to 12
+    # minutes for it with the GPU process). A runner took 1.65 times that machine's time for shard 2 (21.9 minutes
+    # of tests there, 13.3 here), so shard 2 is about 33 minutes of tests: with the usual 2.5 minutes of set-up the
+    # job ends near 36, with a slow runner's 24 to 34 it is 57 to 67, so a limit of 60 could be spent again. A
+    # retry of a failing test adds its time again.
     timeout-minutes: 90
     strategy:
       fail-fast: false
