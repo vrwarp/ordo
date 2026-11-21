@@ -201,12 +201,12 @@ export function textPiece<T extends TextObject>(o: T, start: number, end: number
 
 /**
  * A copy of `s` for a later piece of its split (`splitSlidePieces`): `cloneSlide`, without what fires or
- * reads once per slide of the song: its MIDI cues (a lighting cue would fire again on every piece, and a
- * cue-stack GO run ahead), its Bottom-Third Stream text (the strap would show the first piece's words) and
+ * reads once per slide of the song: its MIDI cues and lighting trigger (`midiCues`, `midi`: a lighting cue would fire
+ * again on every piece, and a cue-stack GO run ahead), its Bottom-Third Stream text (the strap would show the first piece's words) and
  * its own sound (it would start again). Those stay on the first piece only.
  */
 function splitCopy(s: Slide): Slide {
-  const { midiCues: _cues, bottomThirdText: _strap, audio: _sound, ...copy } = cloneSlide(s);
+  const { midiCues: _cues, midi: _midi, bottomThirdText: _strap, audio: _sound, ...copy } = cloneSlide(s);
   return copy;
 }
 
