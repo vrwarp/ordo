@@ -165,7 +165,8 @@ fail just as surely as a live command could break the current one, so readiness 
    mounts `SlideCanvas`, #24's floating bar or its Tune drawer.
 6. **The hub caps phone sessions.** A phone signs in with `cap: 'light'` whatever PIN matched: the edit
    role minus deletes, fonts, themes and theme revisions, imports, folders, settings, show-control and
-   playback fields (`Slide.midiCues`; a plan item's `keepBackground`, `audioMediaId` and `countdownTimer`)
+   playback fields (`Slide.midiCues` and the lighting triggers beside it: `Slide.midi`, `Section.midi`, a plan
+   item's and a media item's `midi`; a plan item's `keepBackground`, `audioMediaId` and `countdownTimer`)
    and every operate and live route. A `view` cap refuses every write. Capped sessions are never
    remembered. Every route declares the lowest cap it accepts and new routes refuse capped sessions until
    they say otherwise.
@@ -490,8 +491,9 @@ than an empty state while nothing has loaded.
   which keeps runs and paragraph styles. Textareas are 16 px or larger (no focus zoom) and `dir="auto"`,
   so adding an Arabic translation line under each English line works as typed. The slide menu has "Split
   here" (at the caret) and "Merge with next".
-- **Show control stays put.** A slide with MIDI cues (`Slide.midiCues`, `packages/domain/src/schemas.ts:565`;
-  they fire the lighting desk and the console) keeps them on its first piece when split, and cannot be
+- **Show control stays put.** A slide with MIDI cues or a lighting trigger (`Slide.midiCues` and `Slide.midi`,
+  `packages/domain/src/schemas.ts:565`; they fire the lighting desk and the console) keeps them on its first
+  piece when split, and cannot be
   duplicated or merged away on a phone: a copy would fire twice. Its menu says "This slide sends lighting
   cues. Change it on a computer." The hub enforces the same (§3.2). On main `cloneSlide`
   (`views/editor/ops.ts:100-121`) copies them into every copy, so Duplicate and Split lyrics repeat a slide's
@@ -1433,7 +1435,7 @@ no refused phone request; real phones in the room do the same by hand. A two-min
    passes.
 4. Delete presentations, plans, media or fonts.
 5. Import PowerPoint, PDF or ProPresenter files.
-6. Edit slide layout on a canvas, or change a slide's MIDI cues or an item's music, countdown or background
+6. Edit slide layout on a canvas, or change a slide's MIDI cues or lighting trigger or an item's music, countdown or background
    carry-over.
 7. Send a change the person did not tap, or replay one after a reconnect.
 8. Start a heavy job or a large upload while a service is live, or attach media that is not ready within 12

@@ -329,8 +329,8 @@ cells in place of the shape fields).
   letters; a plain song stays plain. Every split cuts that raw text through the domain's slide split
   (`splitSlidePieces`, as the slide list's 'Split lyrics' does: the new slides are copies of the slide with
   their piece of the lyric object, runs and paragraph styles kept on both sides; a copy keeps the slide's
-  other objects, background, notes and hidden flag, but its MIDI cues, Bottom-Third Stream text and own sound
-  stay on the first piece only, so a lighting GO fires once and each piece's strap shows its own words,
+  other objects, background, notes and hidden flag, but its MIDI cues and lighting trigger (`Slide.midi`),
+  Bottom-Third Stream text and own sound stay on the first piece only, so a lighting GO fires once and each piece's strap shows its own words,
   `e2e/editor-script.spec.ts`), one undo step, the focus
   then in the first new slide's field: '---' and Enter (the typed value is stored first); ✂ Split at Cursor
   and Alt+Enter (Opt+Enter) at the caret of the field that has the focus only (a field never focused
@@ -899,8 +899,8 @@ of the box, such as Carlito for Calibri, is a library font) with 'Upload font' (
 - 'Reset slide from PowerPoint', for an edited slide or one LibreOffice could not draw: after a
   confirmation it saves unsaved edits and runs the hub's re-import of that slide (`pptx-reimport` with
   `{ slideIds, reset }`), its progress in the card (a live region); the slide gets the deck's objects back,
-  keeping its id, notes, timing, background, Bottom-Third Stream text, MIDI cues and the objects added in
-  ordo on top. History keeps the slide as it was.
+  keeping its id, notes, timing, background, Bottom-Third Stream text, MIDI cues and lighting trigger
+  (`Slide.midi`) and the objects added in ordo on top. History keeps the slide as it was.
 
 'Make editable' on a legacy PowerPoint page (a picture import from before M3) rebuilds the page from the
 stored deck: the hub reroutes it to the re-import of that slide (202 and the job), the editor follows the

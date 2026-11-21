@@ -188,8 +188,8 @@ cut?: string[];                                      // what a kept bound left o
   0.5.0) draws after a rollback (today's simplified result, never a blank), what
   every reader reads (search, cue labels, Stage, lyric-only looks, Bottom-Third Stream, live translation) and what a
   screen draws when it has neither file nor picture.
-- Everything not drawn stays in the stand-in, never in the file: notes, timing, transition, MIDI cues, sound,
-  hidden, scripture, PowerPoint provenance. So editing speaker notes changes neither the file nor the picture.
+- Everything not drawn stays in the stand-in, never in the file: notes, timing, transition, MIDI cues and lighting
+  trigger (`Slide.midiCues`, `Slide.midi`), sound, hidden, scripture, PowerPoint provenance. So editing speaker notes changes neither the file nor the picture.
 - `cut` is written by any importer when a kept bound left something out (W5, W9-W14, W64) on a slide that is not
   from PowerPoint; a PowerPoint slide uses `Slide.pptx.missing`, which goLive already lists
   (`MISSING_SLIDE_REASON`, `goLive.ts:396`). Either way the Go-live check repeats the import's critical line.
