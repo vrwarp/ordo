@@ -498,15 +498,22 @@ golden-pptx and the sermons today.
 ## CI
 
 GitHub Actions on every pull request and merge to main (and by hand), `.github/workflows/ci.yml`, in five
-jobs that run side by side so none takes more than about 35 minutes (one job took 30 to 45 minutes before):
+jobs that run side by side (one job took 30 to 45 minutes before); the check job is limited to 25 minutes, the two
+end-to-end jobs to 90 and 40 because their limit counts a slow runner's set-up (below the table):
 
 | Job                                   | Runs                                                                                                                                                                                                                                                                                   | Limit  |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
 | Lint, types, unit tests, build        | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), Playwright Chromium, `pnpm test` (`CI` set: timing bounds ×3, golden runs strict, browser tests run or fail), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                                               | 25 min |
-| End-to-end (2 shards)                 | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2 --project=chromium --project=webkit-ipad --project=webkit-ipad-portrait` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure | 35 min |
-| End-to-end, phones and Android tablet | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --project=webkit-iphone --project=chromium-android --project=chromium-tablet` with `ORDO_CI=1`; uploads `playwright-report-phones` on failure ("Projects" above)                                                | 25 min |
+| End-to-end (2 shards)                 | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2 --project=chromium --project=webkit-ipad --project=webkit-ipad-portrait` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure | 90 min |
+| End-to-end, phones and Android tablet | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --project=webkit-iphone --project=chromium-android --project=chromium-tablet` with `ORDO_CI=1`; uploads `playwright-report-phones` on failure ("Projects" above)                                                | 40 min |
 | Goldens (pinned container)            | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                                                                                                    | 20 min |
 | Fidelity ratchets                     | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                                                                                              | 20 min |
+
+The two end-to-end jobs' limits count their set-up (the system packages and both Playwright browsers), which took 26
+to 34 minutes on a runner with a slow mirror: a shard's tests are about 36 minutes on a runner after sub-wave 2 (shard
+2 of 78 tests took 21.7 minutes on the integration machine, a runner 1.65 times that), so 35 and then 60 minutes were
+spent before the last test; 90 leaves a slow set-up 24 minutes of slack, and the phones job (61 tests, about 9 minutes
+on a runner) has 40.
 
 The end-to-end, goldens and fidelity jobs install the image's bundled font packages (Carlito, Caladea,
 Liberation 2, Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them, not its CJK

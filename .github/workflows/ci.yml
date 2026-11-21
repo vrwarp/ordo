@@ -13,9 +13,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Five jobs side by side, none over about 35 minutes (design/23 "CI"): lint, types, unit tests and the builds
-  # (check); the end-to-end suite in two shards (e2e) and the phone and Android tablet projects (e2e-phones);
-  # the renderer goldens in a pinned container (goldens); the fidelity ratchets (fidelity).
+  # Five jobs side by side (design/23 "CI"): lint, types, unit tests and the builds (check, 25 minutes); the
+  # end-to-end suite in two shards (e2e, 90 minutes: its limit counts the set-up of a slow runner, see there) and
+  # the phone and Android tablet projects (e2e-phones, 40 minutes); the renderer goldens in a pinned container
+  # (goldens); the fidelity ratchets (fidelity).
   check:
     name: Lint, types, unit tests, build
     runs-on: ubuntu-24.04
@@ -52,10 +53,15 @@ jobs:
     name: End-to-end (shard ${{ matrix.shard }} of 2)
     runs-on: ubuntu-24.04
     # The limit counts the job's set-up too (the system packages and both Playwright browsers). On a runner
-    # with a slow mirror that took 16 to 27 minutes on three attempts at one shard (the other shard's runner
-    # needed about one), so a limit of 35 minutes was spent before the first test; the other shard's tests took
-    # 14 minutes.
-    timeout-minutes: 60
+    # with a slow mirror that took 26 to 34 minutes on three attempts at one shard (the other shard's runner
+    # needed about one to three), so a limit of 35 minutes was spent before the first test. Sub-wave 2 of the
+    # follow-up pull request grew the suite to 169 tests in these three projects: Playwright splits them at a
+    # group boundary into 91 (shard 1) and 78 (shard 2), which took 15.7 and 21.7 minutes of test time on the
+    # integration machine (12.2 and 13.3 before). A runner took 1.65 times that machine's time for shard 2
+    # (21.9 minutes of tests there, 13.3 here), so shard 2 is about 36 minutes of tests: with the usual 2.5
+    # minutes of set-up the job ends near 40, with a slow runner's 24 to 34 it is 60 to 70, so a limit of 60
+    # would be spent again. A retry of a failing test adds its time again.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -96,7 +102,10 @@ jobs:
   e2e-phones:
     name: End-to-end, phones and Android tablet
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # The same two install steps as the e2e shards (the system packages and both Playwright browsers) count against
+    # this limit, and a slow mirror took 26 to 34 minutes of them for a shard; its 61 tests take 5.4 minutes of test
+    # time on the integration machine (about 9 on a runner).
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
