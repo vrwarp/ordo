@@ -2464,6 +2464,9 @@ export class LinkCore {
       case 'unitsWarmed':
         if (m.key !== this.warmUnitsSent) return;
         this.unitCacheBytes = m.unitCacheBytes;
+        // The units the warm-up made are the worker's too: a count only a slide job's `done` carried stood still
+        // after the last one (the warmed list grew, `unitsMade` did not).
+        if (m.unitsMade !== undefined) this.unitsMade = m.unitsMade;
         if (m.units && m.ready >= m.units && !this.warmedCues.includes(m.cueIndex))
           this.warmedCues = [...this.warmedCues, m.cueIndex].slice(-64);
         if (m.stopped) {

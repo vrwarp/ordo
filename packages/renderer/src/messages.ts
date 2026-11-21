@@ -366,6 +366,8 @@ export type FromAsset =
       /** Warm-up stopped: at two thirds of the unit cache (`full`), or past the last slide. */
       stopped?: 'full' | 'done';
       unitCacheBytes: number;
+      /** Units this worker has made so far (health `unitsMade`): the warm-up makes units no slide job reports. */
+      unitsMade?: number;
     }
   /** A warm job is done (its pictures are in the cache): its lane timing and the decodes it made. */
   | {

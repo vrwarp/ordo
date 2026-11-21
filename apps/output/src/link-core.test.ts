@@ -1710,6 +1710,37 @@ describe('link worker core: a GO never waits for drawing (r2b units-live, design
     expect((t.core.introspect() as { units: { warmed: number[] } }).units.warmed).toEqual([2]);
     t.close();
   });
+
+  it('counts the units the worker made ahead for its warm-up, with no slide job finished since (unitsMade)', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const w = t.toAsset.find((m) => m.t === 'warmUnits');
+    const key = w!.t === 'warmUnits' ? w!.warm.key : '';
+    // A slide job's last report said 2 made; the warm-up then made two more and says so.
+    done(t, jobOf(t.toAsset, 0)!.job.key, { unitsMade: 2 });
+    await tick(20);
+    expect(t.core.buildHealth()).toMatchObject({ unitsMade: 2 });
+    for (const [cueIndex, unitsMade] of [
+      [1, 3],
+      [2, 4],
+    ] as const)
+      t.asset.port2.postMessage({
+        t: 'unitsWarmed',
+        key,
+        cueIndex,
+        units: 1,
+        ready: 1,
+        unitsMade,
+        unitCacheBytes: 99,
+      } satisfies FromAsset);
+    await tick(20);
+    const state = t.core.introspect() as { units: { warmed: number[]; made: number } };
+    expect(state.units).toMatchObject({ warmed: [1, 2], made: 4 });
+    expect(t.core.buildHealth()).toMatchObject({ unitsMade: 4 });
+    t.close();
+  });
 });
 
 // ---- the service by reference: a small record per GO, the copy once in pieces (live-by-ref) ----

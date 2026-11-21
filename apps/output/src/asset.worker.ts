@@ -933,6 +933,7 @@ async function warmUnits(w: NonNullable<typeof warmList>, steps: Steps): Promise
       ...ready,
       ...(w.stopped ? { stopped: w.stopped } : {}),
       unitCacheBytes: unitCache.bytes('unit'),
+      unitsMade: unitWork().made,
     });
   }
   if (w.stopped === 'full')
@@ -944,6 +945,7 @@ async function warmUnits(w: NonNullable<typeof warmList>, steps: Steps): Promise
       ready: 0,
       stopped: 'full',
       unitCacheBytes: unitCache.bytes('unit'),
+      unitsMade: unitWork().made,
     });
 }
 

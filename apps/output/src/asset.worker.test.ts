@@ -1795,6 +1795,34 @@ describe('asset worker: warming the live playlist’s units (r2b units-live)', (
     expect(unitCache.pinned).toBe(pinned);
   });
 
+  it('carries the units this worker has made so far with each cue it warms, so the health count does not wait for a slide job', async () => {
+    // The link counts `unitsMade` from the worker's reports; a slide job's `done` carried it, a warm-up's
+    // `unitsWarmed` did not, so after the last `done` the count stayed behind what the warm-up made ahead.
+    const slides = [3, 4].map((cueIndex) => ({
+      cueIndex,
+      slide: busy(`warm-made-${cueIndex}`, 110 + cueIndex / 16),
+    }));
+    const fresh = new Set(
+      slides.flatMap(({ slide }) =>
+        unitsOf(slide)
+          .filter((u) => !unitReady(u))
+          .map((u) => u.key),
+      ),
+    );
+    expect(fresh.size).toBeGreaterThan(0);
+    replies.length = 0;
+    const before = unitWork().made;
+    send({ t: 'warmUnits', warm: { key: 'wu|made', slides, look: LOOK_MAIN } });
+    await vi.waitFor(() => expect(warmed().at(-1)?.stopped).toBe('done'));
+    const made = warmed().map((w) => w.unitsMade);
+    expect(made).toHaveLength(2);
+    expect(made.every((n) => typeof n === 'number')).toBe(true);
+    expect(made[0]!).toBeGreaterThan(before);
+    expect(made[1]!).toBeGreaterThanOrEqual(made[0]!);
+    expect(made.at(-1)).toBe(unitWork().made);
+    expect(unitWork().made - before).toBe(fresh.size);
+  });
+
   it('stops at two thirds of the unit cache', async () => {
     // Two stand-in units of 65 MiB: past 128 MiB, two thirds of 192.
     const big = (k: string) => ({ key: k, rect: { x: 0, y: 0, w: 1, h: 1 }, bytes: 65 * 1024 * 1024 });
