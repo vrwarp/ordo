@@ -435,7 +435,7 @@ function shape(sl: Slide): string {
 /**
  * Slide-level settings a re-import keeps from the stored slide (design/27 §11): the volunteer set them in
  * ordo, the deck has no say in them. The Bottom-Third Stream text ('' silences the strap) and the outgoing
- * MIDI cues included.
+ * MIDI cues and lighting trigger (`midiCues`, `midi`) included.
  */
 const KEPT = [
   'clearBackground',
@@ -447,6 +447,7 @@ const KEPT = [
   'scripture',
   'bottomThirdText',
   'midiCues',
+  'midi',
 ] as const;
 
 /**
