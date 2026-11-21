@@ -3292,6 +3292,25 @@ be measured):
   is sent away, 'bye version'), so after the wave's 0.9.0 bump it reaches no earlier build. Re-import and Reset
   slide give 1c's form. Whether `CONVERTER_VERSION` moves is the wave-end decision above (the follow-up pull
   request).
+- **`CONVERTER_VERSION` stays 2 through sub-wave 2** (integrate-2), and what the converter does differently is
+  small and measured. `convertDeck` was run one slide a call over every deck of the fidelity sets (the E shards,
+  the tables set, golden-pptx and the dense list: 435 decks) at the head and at the base: **4,768 slides come out
+  byte for byte the same, with LibreOffice and without it, and 13 slides in 5 public decks differ**, no deck reads
+  differently. The 13 are dense slides that an older build stored as a picture or as a handful of objects and the
+  head stores as a hybrid with their art read: ADMINISTRACION_PASTORAL_CLASE_5_PP slide 35 (0 objects to 279),
+  Best Mom of the World Day slide 42 (0 to 258), ia-engineering-project-proposal slide 28 (0 to 141), Traffic Dark
+  slides 88, 89 and 91 (0 to 609, 1,000 and 87) and the free Halloween theme's slides 1, 2, 4, 5, 6, 8 and 11
+  (3 to 100, 126 to 95, 2 to 91, 3 to 61, 2 to 100, 4 to 93, 3 to 101: its layouts' art). All 13 are in the
+  dense list, which the census does not read; the census of the E sets, the tables set, golden-pptx and the
+  suite moves on none of its slides. New optional entries (`Slide.pptx.missing`: `slide:detail`,
+  `decoration:layout|master|theme`, `element:shapes`) may be on a scene or not; a scene without them is read
+  as before. The reason it stays 2
+  is the reason of 1b and 1c, and the cost is of their kind: an operator tab of an earlier build sends a
+  version-2 scene of such a deck as that build parsed it (a picture and its text, as before) and the hub stores
+  it as sent; Re-import and Reset slide give the head's form. This sub-wave is its own pull request and raises
+  `APP_VERSION` to 0.10.0 as its last commit, so an earlier build's operator is sent away ('bye version') and
+  the cost reaches nobody after it. Whether the constant moves stays the wave-end decision, now with
+  pre-rendering (design/29 §1.11 plans 3); this bullet is its input.
 <!-- /r2b:tables-form -->
 
 <!-- r2b:tables-cells -->
