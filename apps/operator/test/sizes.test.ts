@@ -87,9 +87,11 @@ describe('previewMessage (design/27 §3.4)', () => {
 describe('saveSizeCheck', () => {
   it('saves quietly within 8 MiB, warns above it, and refuses above the hub body limit', () => {
     expect(saveSizeCheck(presentation([slide(0, 1000)]))).toEqual({ bytes: expect.any(Number) });
-    // 4.6 MiB: over the old budget and over the Go-live line (W59 reads `goLiveSlow`), under the budget: quiet.
-    const mid = saveSizeCheck(presentation(Array.from({ length: 300 }, (_, i) => slide(i, 15_000))));
+    // 6.4 MiB: over the old budget (4 MiB) and over the Go-live line (W59 reads `goLiveSlow`: 6 MiB since Q16.b, it
+    // was 3 MiB), under the budget: quiet. (It was 4.6 MiB, 300 slides, which the 6 MiB line no longer passes.)
+    const mid = saveSizeCheck(presentation(Array.from({ length: 420 }, (_, i) => slide(i, 15_000))));
     expect(mid.bytes).toBeGreaterThan(4 * MiB);
+    expect(mid.bytes).toBeGreaterThan(SIZE_BUDGETS.goLiveSlow);
     expect(mid.bytes).toBeLessThan(SIZE_BUDGETS.presentationMax);
     expect(mid).toEqual({ bytes: mid.bytes });
     const big = saveSizeCheck(presentation(Array.from({ length: 600 }, (_, i) => slide(i, 15_000))));

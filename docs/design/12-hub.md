@@ -664,11 +664,12 @@ whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`)
   <!-- /m9:ladder -->
 - The running service at goLive (design/29 D13): a resolved playlist over 32 MiB (`GOLIVE_MAX_BYTES`) is
   refused (W58: "This service is too large to go live (40 MB). Split the longest presentations into smaller
-  ones."); one over 3 MiB (`GOLIVE_SLOW_BYTES`, the size whose first save on a screen passes the 33 ms GO
-  lead) goes live with W59's critical line as a `degraded` entry (`cueIndex` -1): "Going live with this
-  service takes a few seconds on the screens. Go live before the service starts." Both are defaults until a
-  venue PC confirms them (owner question 14). The operator still never sends a hand-back above 15 MiB
-  (design/17 "Hub returns"); the takeover warning above 12 MiB is gone (design/29 A10).
+  ones."); one over 6 MiB (`GOLIVE_SLOW_BYTES`, the size whose first save on a screen passes the 33 ms GO
+  lead; 3 MiB until the owner's answer of 2026-11-21, Q16.b, who wrote "6mb", read as 6 MiB) goes live with
+  W59's critical line as a `degraded` entry (`cueIndex` -1): "Going live with this service takes a few
+  seconds on the screens. Go live before the service starts." Both are defaults until a venue PC confirms
+  them (owner question 14). The operator still never sends a hand-back above 15 MiB (design/17 "Hub
+  returns"); the takeover warning above 12 MiB is gone (design/29 A10).
 - `preview` carries only the previewed slide's section; the editor warns on save above 8 MiB and refuses
   above the 32 MiB body limit.
 - Revisions are full copies (design/11 "Revisions"): an imported presentation of 1 MB edited often costs

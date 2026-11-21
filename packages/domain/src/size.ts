@@ -44,7 +44,7 @@ export const SIZE_BUDGETS = {
   /**
    * An import stays within this; the editor warns above it but still saves (PUT allows `putMax`). 8 MiB since
    * the owner's answer of 2026-11-20 (Q1.c; it was 4 MiB), the same ratio as `presentationCompact`. What it
-   * costs is `goLiveSlow`'s business: a service past 3 MiB carries W59's critical line, so one presentation at
+   * costs is `goLiveSlow`'s business: a service past 6 MiB carries W59's critical line, so one presentation at
    * this size does; a save, a library sync and each of the (at most 50) kept revisions carry up to this
    * many bytes (design/27 §3.4).
    */
@@ -61,9 +61,12 @@ export const SIZE_BUDGETS = {
    * The size past which the goLive carries W59's critical line: what a service of this size costs a screen is the
    * download and parse of its copy at the goLive and its one-time save in pieces (a GO writes a small record whatever
    * the size: live-by-ref; before it every GO cloned the whole copy, structuredClone 9-12 ms/MiB on this class of PC,
-   * past the 33 ms GO lead from about 3 MiB). A default until a venue PC confirms it.
+   * past the 33 ms GO lead from about 3 MiB). A default until a venue PC confirms it. 6 MiB since the owner's answer
+   * of 2026-11-21 (Q16.b; he wrote "6mb", read as 6 MiB, the unit of every budget here; it was 3 MiB): a deck of
+   * 3.13 MiB (Traffic Dark) no longer carries the line. Measured here at load 12-14: a copy costs about 10 ms a MiB
+   * once, a take-over applies in about 100 ms at 6 MiB.
    */
-  goLiveSlow: 3 * MiB,
+  goLiveSlow: 6 * MiB,
   /**
    * The operator refuses to send `live.adopt` (or a `preview`) above this instead of tripping the socket
    * cap: the hub would close the socket, the operator reconnect and try again, forever.

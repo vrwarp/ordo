@@ -182,9 +182,10 @@ it, and then the saved copy is used as before). End service pressed while a Go l
 that Go live. With the hub unreachable, Go live is sent at once and follows "Going live without the hub".
 
 A service too large is refused before anything changes on the screens (W58, above 32 MiB); one past the
-size whose first save on a screen passes the GO lead goes live with W59's critical line in the degraded
-list ("Going live with this service takes a few seconds on the screens. Go live before the service
-starts."). Both sizes are defaults until a venue PC confirms them (design/29 D13, owner question 14).
+size whose first save on a screen passes the GO lead (6 MiB; 3 MiB until the owner's answer of 2026-11-21,
+Q16.b: he wrote "6mb", read as 6 MiB) goes live with W59's critical line in the degraded list ("Going live
+with this service takes a few seconds on the screens. Go live before the service starts."). Both sizes are
+defaults until a venue PC confirms them (design/29 D13, owner question 14).
 
 ## Going live without the hub
 
