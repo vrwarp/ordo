@@ -592,7 +592,10 @@ same bytes, each verified against the id and its length on every read. Everythin
   polled once more (two `setImmediate` hops): a GO pressed during the apply reaches its socket while the loop is
   held, and is read and applied by that poll before the second write, not behind it (measured at 20 MiB with real
   sockets, a GO 10 ms after the take-over: applied 288 ms after its press with the write beside the apply, 223-261 ms
-  after: the apply's own time and nothing more).
+  after: the apply's own time and nothing more). An event whose write fails (the data folder's disk is full) is not
+  applied: every event is one transaction, the state and the copy it had are put back before the error reaches the
+  caller, nothing is sent, and the next event follows with no gap in the seq (a failed goLive leaves the old
+  service running; the operator's adopt that cannot be written is refused and the hub keeps its own state).
 - **The snapshot** (at every goLive, End service and adopt, and every 5 s while the service changes) is the state
   without its copy and without its cue list, ending `,"cuesId":"<id>","resolvedId":"<id>"}`: a few kilobytes at any
   size. The cue list (about 360 bytes a cue: 3.1 MB at 20 MiB) is built once at the goLive and never changes, so it

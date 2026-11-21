@@ -1141,6 +1141,10 @@ export class LiveService {
 
   apply(event: LiveEvent, id?: string, prepared?: { id: string; json: Uint8Array }): number {
     const fromSeq = this.state.seq;
+    // An event whose write fails (the disk is full) is not applied: the state and the copy it had are put back, the
+    // caller gets the error, nothing is sent, and the next event follows `fromSeq` with no gap. The whole write is one
+    // transaction (the journal row, the copy's rows and the snapshot), so nothing of a failed event is half-saved.
+    const prev = { state: this.state, copy: this.copy };
     this.state = reduce(this.state, event);
     const seq = this.state.seq;
     if (event.k === 'goLive')
@@ -1165,8 +1169,13 @@ export class LiveService {
       this.dirty = true;
       if (event.k === 'goLive' || event.k === 'endService') this.snapshot(true);
     };
-    if (copy) this.db.transaction(write)();
-    else write();
+    try {
+      this.db.transaction(write)();
+    } catch (e) {
+      this.state = prev.state;
+      this.copy = prev.copy;
+      throw e;
+    }
     for (const l of this.deltaListeners) l({ seq, fromSeq, event, id, ...(copy ? { copy } : {}) });
     this.scheduleAdvance();
     return seq;
@@ -1191,18 +1200,27 @@ export class LiveService {
       };
     }
     const seq = Math.max(st.seq, hub.seq + 1);
+    const prevCopy = this.copy;
     this.state = { ...st, seq };
     this.copy = undefined;
-    // The adopted copy is named (one serialisation), its rows, the journal row and the snapshot in one transaction.
-    this.db.transaction(() => {
-      if (this.byRef && this.state.mode === 'live') this.resolvedCopy();
-      this.db
-        .prepare(
-          `INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'adopt', ?)`,
-        )
-        .run(seq, this.now(), null, JSON.stringify({ k: 'adopt', fromSeq: hub.seq, force }));
-      this.snapshot(true);
-    })();
+    // The adopted copy is named (one serialisation), its rows, the journal row and the snapshot in one transaction;
+    // when it cannot be written the hub keeps the state it had (and the operator, told so, keeps its own).
+    try {
+      this.db.transaction(() => {
+        if (this.byRef && this.state.mode === 'live') this.resolvedCopy();
+        this.db
+          .prepare(
+            `INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'adopt', ?)`,
+          )
+          .run(seq, this.now(), null, JSON.stringify({ k: 'adopt', fromSeq: hub.seq, force }));
+        this.snapshot(true);
+      })();
+    } catch (e) {
+      this.state = hub;
+      this.copy = prevCopy;
+      this.log.error({ err: (e as Error).message }, 'could not write the operator state; the hub keeps its own');
+      return { ok: false, reason: 'the hub could not save the state' };
+    }
     this.log.info({ fromSeq: hub.seq, seq, force }, 'adopted operator state');
     for (const l of this.stateListeners) l(this.state);
     this.scheduleAdvance();
