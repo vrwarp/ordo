@@ -240,7 +240,23 @@ export class PrerenderIndex {
     );
   }
 
-  replacePicture(p: PictureRow): void {
+  /**
+   * Replace a key's picture with `p`. Returns the hash the row held just before, read in the same transaction as the
+   * update (the caller releases that file: a replacement that raced another released the one the first had made, not
+   * the one both had read before streaming); undefined when the row was gone.
+   */
+  replacePicture(p: PictureRow): string | undefined {
+    return this.db.transaction(() => {
+      const before = this.db
+        .prepare(`SELECT hash FROM prerenders WHERE presentation_id = ? AND key = ? AND size = ?`)
+        .get(p.presentationId, p.key, p.size) as { hash: string } | undefined;
+      if (!before) return undefined;
+      this.updatePicture(p);
+      return before.hash;
+    })();
+  }
+
+  private updatePicture(p: PictureRow): void {
     this.db
       .prepare(
         `UPDATE prerenders SET hash = ?, mime = ?, bytes = ?, w = ?, h = ?, opaque = ?, made_by = ?, made_role = ?, last_rev = ?, created_at = ?
@@ -694,9 +710,9 @@ export class PrerenderStore {
         lastRev: pres.rev,
         createdAt: Date.now(),
       };
-      if (existing) {
-        idx.replacePicture(row);
-        await this.release(existing.hash);
+      const replaced = existing ? idx.replacePicture(row) : undefined;
+      if (replaced) {
+        await this.release(replaced);
       } else if (!idx.insertPicture(row)) {
         await this.release(r.hash);
         return { status: 200, body: { dropped: true } };

@@ -123,7 +123,11 @@ export class SlideFiles {
     if (!out.ok) this.refuse(out);
     if (out.kind !== 'page') throw new Error('unexpected slide-file answer');
     const had = this.lib.getFile(name);
-    if (had) return { status: 200, hash: name, bytes: out.bytes.length };
+    if (had) {
+      // uploaded again: its collection clock stops, as it does when the bytes are stored (the save that names it follows)
+      this.lib.refs.unmark([name]);
+      return { status: 200, hash: name, bytes: out.bytes.length };
+    }
     await this.store.putBytes(out.bytes, { ext: 'json', mime: JSON_MIME });
     return { status: 201, hash: name, bytes: out.bytes.length };
   }
@@ -167,6 +171,8 @@ export class SlideFiles {
         uses: out.uses,
         pages: pageNames,
       });
+    // a head the hub knew is not recorded again, but it is uploaded again: the clocks of the head and its pages stop
+    else this.lib.refs.unmark([name, ...pageNames]);
     return { status: known ? 200 : 201, hash: name, bytes: out.total, count: out.objects };
   }
 

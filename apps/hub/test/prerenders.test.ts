@@ -143,6 +143,27 @@ describe('the picture route (PP1-PP3, PP9)', () => {
     expect(picRows(p.id)).toHaveLength(1);
   });
 
+  it('two replacements of one picture at once leave no picture file that no row names (PP3b)', async () => {
+    const { ed, op, p, key } = await setup();
+    const op2 = await login(hub!.url, OPERATE_PIN);
+    expect((await put(ed, p.id, key, makePng(640, 360, { seed: 1 }))).status).toBe(201);
+    for (let round = 0; round < 6; round++) {
+      const [a, b] = await Promise.all([
+        put(op, p.id, key, makePng(640, 360, { seed: 10 + round * 2 })),
+        put(op2, p.id, key, makePng(640, 360, { seed: 11 + round * 2 })),
+      ]);
+      expect([a.status, b.status]).toEqual([200, 200]);
+    }
+    expect(picRows(p.id)).toHaveLength(1);
+    // the row names one picture file; a replacement that raced the other released the file the first had made
+    const orphans = hub!.db
+      .prepare(
+        `SELECT hash FROM files WHERE mime IN ('image/png', 'image/webp') AND hash NOT IN (SELECT hash FROM prerenders)`,
+      )
+      .all();
+    expect(orphans).toEqual([]);
+  });
+
   it("records what it knows of a picture: opaque from the header, made by, the session's role (PP9)", async () => {
     const { ed, op, p, key } = await setup();
     await put(ed, p.id, key, makePng(640, 360, { alpha: false }), 640, 'image/png', '&madeBy=Venue%20PC');

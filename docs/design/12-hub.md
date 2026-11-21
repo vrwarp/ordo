@@ -349,7 +349,8 @@ more: measured at 1.6 to 1.7 times its quiet 95th percentile in a sweep and 2.1 
 marking pass), never while a service is live, before the backfill is done or
 before it has been told the service's state. Only `application/json` files are candidates (never a media original,
 delivery, poster, font, deck or PDF). A pass marks the unnamed (`collect_marks.since` is the 30-day clock), clears
-the mark of a file named again (a save, a head upload, a file stored again or a pass that finds it named), and
+the mark of a file named again (a save, a page or head upload even of one the hub already has, a file stored again or a
+pass that finds it named), and
 deletes the files marked for the whole delay: heads first (their index rows go in the same transaction as their
 `files` row, then their pages are named by nothing), each after a last check of everything that names a file and of
 unfinished jobs, and of its own mark (still there and old enough: a file stored again since the scan lost it), inside

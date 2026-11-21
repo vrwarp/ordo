@@ -196,6 +196,34 @@ describe('PUT /files/slide/:hash, a head (S3, S4)', () => {
   });
 });
 
+describe('a slide file the hub already has is uploaded again (S5b)', () => {
+  it('stops the collection clocks of its page and of its head and their pages, though the hub answers 200', async () => {
+    hub = await startHub();
+    const ed = await login(hub.url, EDIT_PIN);
+    const f = fullOf();
+    const page = f.pages.pages[0]!;
+    expect((await uploadSlideFile(ed, f.pages)).length).toBeGreaterThan(0);
+    const names = [f.name, ...f.pages.head.pages];
+    const mark = (h: string) =>
+      hub!.db.prepare(`INSERT OR REPLACE INTO collect_marks (hash, since) VALUES (?, 1)`).run(h);
+    const marked = () =>
+      (hub!.db.prepare(`SELECT hash FROM collect_marks ORDER BY hash`).all() as { hash: string }[]).map(
+        (r) => r.hash,
+      );
+    for (const h of names) mark(h);
+    expect(marked().sort()).toEqual([...names].sort());
+    // the page again: its clock stops
+    const again = await ed.fetch(`/files/slide/${page.name}`, { method: 'PUT', json: page.page });
+    expect(again.status).toBe(200);
+    expect(marked()).not.toContain(page.name);
+    // the head again: its own clock and its pages' stop (an old mark would let a sweep take the head before the save)
+    for (const h of names) mark(h);
+    const head = await ed.fetch(`/files/slide/${f.name}`, { method: 'PUT', json: f.pages.head });
+    expect(head.status).toBe(200);
+    expect(marked()).toEqual([]);
+  });
+});
+
 describe('who may PUT a slide file (S6)', () => {
   it('refuses a phone and a view session 403 cap and no session 401; an edit session passes', async () => {
     hub = await startHub();
