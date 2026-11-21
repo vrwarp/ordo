@@ -24,8 +24,8 @@ jobs:
     # typecheck 124 s, the pages build 52 s and the build 19 s; a runner is 1.15 to 1.65 times slower, and the set-up
     # (system packages, pnpm install, Playwright Chromium) takes 3 to 5 minutes (26 to 34 on the slow mirror the end-to-end
     # jobs met), so 25 minutes left no room: a timeout fails the required check and the next run starts again. 45 is the
-    # larger of the two limits set for it (40 by the end-to-end jobs' measures above, 45 by main's PR #31, which also
-    # moved the system packages to archive.ubuntu.com, away from the regional mirrors that throttle).
+    # larger of the two limits set for it (40 by the measures above, 45 by main's PR #31, which also moved the system
+    # packages to archive.ubuntu.com, away from the regional mirrors that throttle).
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
