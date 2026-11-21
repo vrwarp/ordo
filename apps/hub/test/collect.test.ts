@@ -1,7 +1,7 @@
 /**
  * What stored presentations and their saved versions name, and when the hub may let a file go (design/29 §1.3
  * "Collection with revisions", A37, M7): RC1-RC5 (the references index and its backfill), CO1-CO12 (collection:
- * mark and sweep, the 30-day rule, report mode) and BU (the picture budget) in the steps that follow. Time is
+ * mark and sweep, the 31-day rule, report mode) and BU (the picture budget) in the steps that follow. Time is
  * injected, nothing waits.
  */
 import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
@@ -790,8 +790,8 @@ describe('collection: candidates and what names a file (CO1, CO2)', () => {
   });
 });
 
-describe('collection: the 30 days (CO3, CO4)', () => {
-  it('is never shorter than the backups are kept, and deletes at 30 days after the mark, not at 29 (CO3)', async () => {
+describe('collection: the 31 days (CO3, CO4)', () => {
+  it('is never shorter than the backups are kept, and deletes at the delay (31 days) after the mark, not a day earlier (CO3)', async () => {
     expect(COLLECT_DELAY_DAYS).toBeGreaterThanOrEqual(RETENTION_DAYS);
     hub = await startHub();
     ready();
@@ -808,7 +808,7 @@ describe('collection: the 30 days (CO3, CO4)', () => {
     expect(has(u)).toBe(false);
   });
 
-  it('a save, a head upload or a run that finds the file named clears the mark and the 30 days start again (CO3)', async () => {
+  it('a save, a head upload or a run that finds the file named clears the mark and the 31 days start again (CO3)', async () => {
     hub = await startHub();
     ready();
     const ed = await login(hub.url, EDIT_PIN);
@@ -1014,7 +1014,7 @@ describe('collection: manifests and presentations that are deleted (CO6, CO7)', 
     expect(manifests[1]!.files.map((f) => f.hash)).not.toContain(u);
   });
 
-  it('a geometry file of a deleted presentation goes 30 days after the first run that saw it unnamed, and a re-import clears the mark (CO7)', async () => {
+  it('a geometry file of a deleted presentation goes 31 days after the first run that saw it unnamed, and a re-import clears the mark (CO7)', async () => {
     hub = await startHub();
     ready();
     const ed = await login(hub.url, EDIT_PIN);

@@ -66,7 +66,7 @@ export type Hub = {
   prerenderKeys: PrerenderKeys;
   /** The pictures of pre-rendered slides. */
   prerenders: PrerenderStore;
-  /** The collection of content files nothing names (design/29: mark and sweep, 30 days, report mode by default). */
+  /** The collection of content files nothing names (design/29: mark and sweep, 31 days, report mode by default). */
   collector: Collector;
   /** The one-off scan of revisions saved before the references index (two minutes after the start). */
   backfill: RefBackfill;
