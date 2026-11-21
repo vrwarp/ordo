@@ -1390,7 +1390,10 @@ differs from the text above:
   (`SlideDesc.full`, the slide before the live clamp's cut, only for a slide past a count) and no protocol field; c(2)
   is closed by the split at one z-position (the direct part's units fit one frame); the limits that remain are named
   in design/27 §13 (a frame past `FRAME_BUDGET_MS` or 20,000 objects is not made; shapes above a playing video that
-  overlap it are cut at 200, E9); D12's cost figure comes from a synthetic bench, not a venue PC.
+  overlap it are cut at 200, E9); D12's cost figure comes from a synthetic bench, not a venue PC. R1's "the stand-in
+  shows with W46" is not built: a frame past its time budget is dropped, one diagnostics line is written and the
+  `framesOver` health counter counts it (design/14), and no line in owner words says so on the operator's screen yet
+  (W46 is open: part 4).
 - **r2b.11 Hub storage (prerender-store).** The collection's rule is "unnamed by every presentation, saved version,
   running service and queued job for 30 days, the clock starting the first night the hub sees it unnamed" (30 days, built as 31:
   the backups' retention and the night after it, so a restore never lacks a file) and the collector ships in report mode (OQ-PS2); keys are
@@ -1422,7 +1425,7 @@ differs from the text above:
   says so in one line (Q7.b); a tablet or phone with a touch screen keeps the lighter drawing, and an iPad whose browser
   reports a mouse or trackpad (a fine pointer) is treated as a desktop (OQ-LE3: it needs a real iPad to confirm).
 - **r2b.15 The carry-overs (followups-1c).** The hub waits for its bundled fonts before it listens, at most
-  `ORDO_FONTS_WAIT_MS` (2,000 ms; 0 turns the wait off; the live process has none); the image keeps the licence notices
+  `ORDO_FONTS_WAIT_MS` (2,000 ms; 0 turns the wait off; the live process has none of its own, the supervisor starts it once the library process is ready: design/12); the image keeps the licence notices
   of every package (OQ-FU2) and its size target is 2 GB (the owner raised it from design 22's 1.5 GB); kerning is
   measured once per piece (`Shared.kerns`); the first Alt+N closes a notes dock that opened by itself (macOS Option+N is
   not measured, OQ-FU5).

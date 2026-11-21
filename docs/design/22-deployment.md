@@ -126,7 +126,12 @@ that the product's own packages kept their copyright files.
   with the changelog.
 - Upgrades at the venue: change the tag in Compose and redeploy, never on a Saturday
   evening or Sunday. The operator top bar shows the hub version; a mismatch with the app
-  bundle (same image, so only possible with a stale tab) reloads the tab.
+  bundle (same image, so only possible with a stale tab) reloads the tab. Update and roll back
+  between services: a hub of 0.10 (the service kept by name, design/12) that is rolled back to
+  an older tag while a service runs does not bring that service back: the older hub reads the
+  new snapshot as invalid, writes an idle one and starts idle, and the service is started again
+  with Go live (the data folder itself opens cleanly; the owner's question OQ-LBR1).
+  `ORDO_LIVE_BYREF=off` writes the older whole form for as long as a roll-back is wanted.
 
 ## Presentation PC setup
 

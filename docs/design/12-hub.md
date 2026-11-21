@@ -707,7 +707,10 @@ them to be registered as library fonts before it listens (the library process be
 fresh data folder, or after an image with new fonts, that takes a fraction of a second (about 70 ms for the 24 faces
 of a development machine's `/usr/share/fonts`), and a hub that already has them finds every row unchanged and still
 reads and hashes the files (about 50 ms there). Past the bound the hub listens anyway and logs `bundled fonts not registered in
-time`.
+time`. The live process's own code has no such wait, but in the two-process hub the supervisor starts it only after the
+library process says it is ready (the library's wait is before that), so a whole-hub restart in the middle of a service
+delays the live process, and the screens' reconnect, by that wait too: about 50 to 70 ms, up to `ORDO_FONTS_WAIT_MS`
+after an image with new fonts or on a fresh data folder (the technician can set it to 0).
 
 <!-- prerender-store:floor -->
 `ORDO_MIN_FREE_GB` (r2b sub-wave 2, design/29 §1.3 A25, W44): the free-space floor of the data volume, a whole
