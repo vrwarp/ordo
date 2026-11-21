@@ -3289,7 +3289,7 @@ be measured):
   and on a hub with no CJK face for any deck, whose `systemOnlyScripts` is empty so nothing is refused (the Korean
   bulletin's slide 2 is such a table; its Korean rows there also arrive without the 1/4 em). The hub's
   `APP_VERSION` check bounds this to builds that share one `APP_VERSION` (`ws.ts`: an operator of another version
-  is sent away, 'bye version'), so after the wave's 0.9.0 bump it reaches no earlier build. Re-import and Reset
+  is sent away, 'bye version'), so after PR #29's 0.9.0 bump it reaches no earlier build. Re-import and Reset
   slide give 1c's form. Whether `CONVERTER_VERSION` moves is the wave-end decision above (the follow-up pull
   request).
 - **`CONVERTER_VERSION` stays 2 through sub-wave 2** (integrate-2), and what the converter does differently is
