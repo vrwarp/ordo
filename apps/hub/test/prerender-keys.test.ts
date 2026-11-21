@@ -196,6 +196,35 @@ describe('keys at save (PK1-PK5, PK8)', () => {
     expect(after.map((x) => x.key)).toEqual(r.map((x) => x.key));
   });
 
+  it('a save that changes only a slide’s lighting (cues, or the uniform trigger) copies its row: no pool call, the same sig (PK4)', async () => {
+    const ed = await setup();
+    const f = fullOf();
+    await uploadSlideFile(ed, f.pages);
+    const p = await ed.json<Presentation>('/presentations', {
+      method: 'POST',
+      json: presentationOf([f.standIn]),
+    });
+    const r = rows(p.id);
+    const tasks = keyTasks();
+    for (const lighting of [
+      { midiCues: [{ id: 'c1', channel: 1, type: 'noteOn' as const, number: 48, value: 1 }] },
+      { midi: { kind: 'preset' as const, presetId: 'lights-full' } },
+    ]) {
+      const cur = await ed.json<Presentation>(`/presentations/${p.id}`);
+      const lit = {
+        ...cur,
+        sections: [
+          { ...cur.sections[0]!, slides: cur.sections[0]!.slides.map((s) => ({ ...s, ...lighting })) },
+        ],
+      };
+      const saved = await ed.json<Presentation>(`/presentations/${p.id}`, { method: 'PUT', json: lit });
+      expect(tasks()).toBe(0);
+      expect(rows(p.id).filter((x) => x.rev === saved.rev)).toMatchObject([
+        { key: r[0]!.key, sig: r[0]!.sig },
+      ]);
+    }
+  });
+
   it("copies an unchanged slide's row (no pool call), and computes again when its record, a font or a picture's file changed (PK5)", async () => {
     const ed = await setup();
     const f = fullOf();

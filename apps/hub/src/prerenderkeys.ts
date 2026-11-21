@@ -53,7 +53,7 @@ const FALLBACK_FAMILIES: ReadonlySet<string> = new Set(
   [DEFAULT_FONT, ...Object.values(SCRIPT_FALLBACK_FONTS).flat()].map(lower),
 );
 /** Fields of a stand-in that never change a pixel of the picture: left out of `sig`. */
-const UNDRAWN = ['notes', 'durationMs', 'midiCues'] as const;
+const UNDRAWN = ['notes', 'durationMs', 'midiCues', 'midi'] as const;
 
 export class PrerenderKeys {
   private lib: Library;
