@@ -767,6 +767,48 @@ describe('CoreEngine saves by reference (live-by-ref)', () => {
     expect(second.e.core.view.mode).toBe('idle');
   });
 
+  it('a restart before the copy is saved keeps the unconfirmed commands and the processed ids, and drops only the state', async () => {
+    const first = await boot();
+    first.onMessage(wholeState(padded(1)));
+    first.e.handle({ t: 'action', aid: 'x1', action: { id: 'next' }, source: 'keyboard' });
+    await flush();
+    await flush();
+    first.e.dispose();
+    const kept = Object.fromEntries(first.rs.map);
+    // the record of that GO names the copy, whose pieces are not written yet (they follow a second after it)
+    const rec = kept[CORE_KEY] as CoreSnapshot;
+    expect(rec.copy).toBe(BY_ID);
+    expect(Object.keys(kept).filter((k) => k.startsWith('copy:'))).toEqual([]);
+    expect(rec.pending.map((p) => p.id)).toEqual(['x1']);
+    const second = await boot(recStore(kept));
+    expect(second.e.core.view.mode).toBe('idle');
+    const live = second.posts.filter((p): p is ViewModelMsg => p.t === 'vm' && !!p.live).at(-1)!.live!;
+    expect(live.pending).toBe(1);
+    // the id of the action it had processed is still known: a re-sent action is acknowledged, not applied twice
+    second.posts.length = 0;
+    second.e.handle({ t: 'action', aid: 'x1', action: { id: 'next' }, source: 'keyboard' });
+    expect(second.posts).toContainEqual({ t: 'ack', aid: 'x1' });
+  });
+
+  it('a service this PC runs as the authority is written whole until its copy is saved, then by name', async () => {
+    const { e, rs, onMessage } = await boot();
+    onMessage(wholeState(padded(1)));
+    e.core.activateFallback();
+    e.handle({ t: 'action', aid: 'f1', action: { id: 'next' }, source: 'keyboard' });
+    await flush();
+    await flush();
+    const whole = rs.map.get(CORE_KEY) as CoreSnapshot;
+    expect(whole.authority).toBe('fallback');
+    expect(whole.copy).toBeUndefined();
+    expect(whole.state.resolved).toBeTruthy();
+    await settle();
+    e.handle({ t: 'action', aid: 'f2', action: { id: 'next' }, source: 'keyboard' });
+    await settle();
+    const slim = rs.map.get(CORE_KEY) as CoreSnapshot;
+    expect(slim.copy).toBe(BY_ID);
+    expect(slim.state.resolved).toBeUndefined();
+  });
+
   it('20 reconnects that send the state by name post the copy to the UI once', async () => {
     const { e, posts, onMessage } = await boot();
     const r = padded(1);

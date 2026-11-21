@@ -60,7 +60,9 @@ describe('an event whose write fails is not applied', () => {
       const heal = failJournal(db);
       await expect(live.submitQueued({ k: 'goLive', playlistId: 'pl2' }, OP)).rejects.toThrow(/disk is full/);
       await later();
-      expect(live.state === before, `the state advanced from seq ${before.seq} to ${live.state.seq}`).toBe(true);
+      expect(live.state === before, `the state advanced from seq ${before.seq} to ${live.state.seq}`).toBe(
+        true,
+      );
       expect(live.state.resolved?.playlist.id).toBe('pl1');
       expect(live.resolvedCopy()?.id).toBe(copyBefore);
       expect(deltas).toEqual([]);
@@ -83,7 +85,9 @@ describe('an event whose write fails is not applied', () => {
     const before = live.state;
     const heal = failJournal(db);
     expect(() => live.submit({ k: 'next', at: Date.now() }, OP)).toThrow(/disk is full/);
-    expect(live.state === before, `the state advanced from seq ${before.seq} to ${live.state.seq}`).toBe(true);
+    expect(live.state === before, `the state advanced from seq ${before.seq} to ${live.state.seq}`).toBe(
+      true,
+    );
     heal();
     expect(live.submit({ k: 'next', at: Date.now() }, OP)).toBe(before.seq + 1);
   });
@@ -96,7 +100,9 @@ describe('an event whose write fails is not applied', () => {
     const copyBefore = live.resolvedCopy()?.id;
     const heal = failJournal(db);
     expect(() => live.submit({ k: 'endService', at: Date.now() }, OP)).toThrow(/disk is full/);
-    expect(live.state === before, `the state advanced from seq ${before.seq} to ${live.state.seq}`).toBe(true);
+    expect(live.state === before, `the state advanced from seq ${before.seq} to ${live.state.seq}`).toBe(
+      true,
+    );
     expect(live.resolvedCopy()?.id).toBe(copyBefore);
     heal();
   });
@@ -110,7 +116,9 @@ describe('an event whose write fails is not applied', () => {
     const heal = failJournal(db);
     const r = live.adopt(incoming, true);
     expect(r.ok).toBe(false);
-    expect(live.state === before, `the state advanced from seq ${before.seq} to ${live.state.seq}`).toBe(true);
+    expect(live.state === before, `the state advanced from seq ${before.seq} to ${live.state.seq}`).toBe(
+      true,
+    );
     heal();
     expect(live.adopt(incoming, true)).toEqual({ ok: true, seq: before.seq + 1 });
   });

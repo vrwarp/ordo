@@ -672,7 +672,10 @@ export class Collector {
     // be deleting on a wrong date, so the marks start again from now (the delay is then counted in days that passed).
     if (this.clockJumped(at, mono)) {
       const n = this.lib.refs.rebaseMarks(at);
-      this.opts.log.warn({ marks: n }, 'the clock jumped since the last collection run; the 30-day clocks start again');
+      this.opts.log.warn(
+        { marks: n },
+        'the clock jumped since the last collection run; the 30-day clocks start again',
+      );
     }
     this.clock = { wall: at, mono };
 

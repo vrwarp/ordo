@@ -24,7 +24,13 @@ import {
   resolvePlaylist,
   type TimerSpec,
 } from '@ordo/domain';
-import { actionToEvent, checkInvariants, isLiveEventShape, isLiveStateShape } from '@ordo/live-state';
+import {
+  actionToEvent,
+  checkInvariants,
+  initialState,
+  isLiveEventShape,
+  isLiveStateShape,
+} from '@ordo/live-state';
 import {
   LIVE_PREPARE_PATH,
   type LibrarySnapshot,
@@ -337,6 +343,7 @@ export class CoreEngine {
     try {
       // Validated at entry (design/25): a corrupt record is ignored and the hub state is used instead.
       const s = await withTimeout(this.store.get<CoreSnapshot>(CORE_KEY), 1500);
+      let noCopy = false;
       if (s && typeof s.copy === 'string') {
         // A snapshot that names a copy joins it first; an incomplete copy fails validation like a corrupt record.
         const copy = await withTimeout(loadCopy(this.store, COPY_SCOPE), 5000);
@@ -344,7 +351,13 @@ export class CoreEngine {
           s.state = joinSaved(s.state as never, copy);
           this.hub.copies.seed(copy.id, copy.resolved);
           this.copySavedId = copy.id;
-        } else s.state = undefined as never;
+        } else {
+          // The GO that named the copy was seconds old: its pieces were not saved yet (they follow a second after
+          // it). The state cannot be joined and is dropped, the hub gives it again; the commands the hub had not
+          // confirmed and the ids of the actions already processed are this core's own and are kept.
+          s.state = undefined as never;
+          noCopy = true;
+        }
       }
       if (s && isLiveStateShape(s.state) && checkInvariants(s.state).length === 0)
         return {
@@ -356,6 +369,19 @@ export class CoreEngine {
           held: s.held === true && s.authority === 'fallback',
           ...(typeof s.staleOnHub === 'string' ? { staleOnHub: s.staleOnHub.slice(0, 200) } : {}),
         };
+      if (s && noCopy) {
+        this.log(
+          'warn',
+          'the saved service copy is not complete; following the hub, keeping the unconfirmed commands',
+        );
+        return {
+          state: initialState(),
+          authority: 'hub',
+          pending: Array.isArray(s.pending) ? s.pending.filter((p) => p && isLiveEventShape(p.event)) : [],
+          aids: Array.isArray(s.aids) ? s.aids.filter((a) => typeof a === 'string') : [],
+          at: Number(s.at) || 0,
+        };
+      }
       if (s) this.log('warn', 'stored core state failed validation; starting from the hub');
       const legacy = await withTimeout(this.store.get<LiveState>(LEGACY_LIVE_KEY), 1000);
       if (isLiveStateShape(legacy)) return { state: legacy, authority: 'hub', pending: [], aids: [], at: 0 };
@@ -1148,6 +1174,8 @@ export class CoreEngine {
       this.copyWanted = { id: held.id, resolved: st.resolved, cues: st.cues };
       setTimeout(() => this.runCopySave(), COPY_SAVE_AFTER_MS);
     }
+    // The authority's record is the only place its state is kept: whole until the copy is on this PC, then by name.
+    if (snap.authority === 'fallback' && this.copySavedId !== held.id) return snap;
     return { ...snap, state: slimState(st) as unknown as LiveState, copy: held.id };
   }
 

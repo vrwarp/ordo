@@ -134,7 +134,13 @@ copy arrived), never inside the task that applies a message; a newer service abo
 records. A restart joins what the marker names and paints only a complete copy whose id is the small record's; it
 then tells the hub which copy it holds, so the hub sends the state by name. A copy that did not come from the hub
 (the bus, the operator's own resolve) is saved whole as before and never held. A save that fails (a full disk) is
-one diagnostic line; a restart then waits for the hub, as a window with no cache does.
+one diagnostic line; a restart then waits for the hub, as a window with no cache does. So does a restart in the seconds
+between the GO that named a new copy and the save of its pieces (a window's record names the copy at once, its pieces
+follow a frame or at the latest 5 s later): the window waits for the hub, and a screen whose hub is also down then paints
+nothing, where writing the whole state in that window would put the clone of the whole service (4 to 37 ms at 6 to 20
+MiB) back on the GO that follows a take-over. The operator's core keeps, in that case, the commands the hub had not
+confirmed and the ids of the actions it had processed (only the state is dropped), and as the authority it writes its
+record whole until the copy is saved.
 
 ### Hub returns
 

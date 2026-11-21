@@ -1218,7 +1218,10 @@ export class LiveService {
     } catch (e) {
       this.state = hub;
       this.copy = prevCopy;
-      this.log.error({ err: (e as Error).message }, 'could not write the operator state; the hub keeps its own');
+      this.log.error(
+        { err: (e as Error).message },
+        'could not write the operator state; the hub keeps its own',
+      );
       return { ok: false, reason: 'the hub could not save the state' };
     }
     this.log.info({ fromSeq: hub.seq, seq, force }, 'adopted operator state');
