@@ -908,8 +908,8 @@ Storage and transport:
   manifests within retention, and pauses while it cannot read the live process's references; revision summaries at
   save so the list stops parsing every revision (library-light owns the summaries for both lanes; design/28 P2's
   row then only reads them). A23, A24, A37. prerender-store, library-light. _Built (prerender-store, r2b sub-wave 2): the
-references index, the 30-day mark and sweep, the 1 GiB budget; summaries and the revision caps stay with library-light;
-the restore report W66 is deferred._
+references index, the 31-day mark and sweep (the backups' 30 days and the night after them, `COLLECT_DELAY_DAYS`), the
+1 GiB budget; summaries and the revision caps stay with library-light; the restore report W66 is deferred._
 - **M8 Going live prepared beside the running service**: Go live first asks the hub to prepare the playlist (the
   live process fetches the bundle with 1.5 s to the response headers, then a progress timeout of 1.5 s without bytes,
   under a 30 s ceiling); a worker thread checks every presentation (`quarantinePresentation`, `goLive.ts:85`, today on
@@ -1377,9 +1377,10 @@ differs from the text above:
   copy (the same `resolvedId`); the `goLive` delta stays whole (it carries the copy once, parsed once); the state
   without the copy is not tiny, because the cue list stays in it, so the cue list is saved once beside the copy in its
   own row (`live_cues`, named by the snapshot's `cuesId`) and a snapshot writes 1,242 B instead of the whole service;
-  `ORDO_LIVE_BYREF=off` writes the old whole form again. W58 and W59 ship as PR #29 left them (OQ-LBR3); W59's reason
-  now says that a GO no longer costs a screen more with the size (it writes a record of about 1 KB) and that what the
-  size still costs is the download and parse at the goLive and the one-time save in pieces.
+  `ORDO_LIVE_BYREF=off` writes the old whole form again. W58 and W59 ship as PR #29 left them (OQ-LBR3), except that
+  W59's line moved from 3 to 6 MiB (r2b.16); W59's reason now says that a GO no longer costs a screen more with the
+  size (it writes a record of about 1 KB) and that what the size still costs is the download and parse at the goLive
+  and the one-time save in pieces.
 - **r2b.9 What the by-reference path still costs (named, not met).** The take-over's apply holds the live loop 0.25 s
   at 20 MiB with sockets (the gate is 0.2 s; about 50 ms are left to gain by computing the cue list's JSON and hash in
   golive-prepare's worker, which would add a `cuesId` to the worker's result) and a storm of 20 screens saying hello at
