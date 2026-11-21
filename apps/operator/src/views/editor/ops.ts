@@ -213,8 +213,9 @@ function splitCopy(s: Slide): Slide {
 /**
  * Split a slide into slides holding `pieces` of its lyric object's text (in order, not overlapping; at most
  * `MAX_SPLIT_PIECES`). The first piece stays on the slide (its id kept, and everything the slide had); every
- * other goes on a copy of it (`splitCopy`: fresh ids, its other objects copied, but not its MIDI cues,
- * Bottom-Third Stream text or own sound) right after it, the lyric object cut to that piece (`textPiece`).
+ * other goes on a copy of it (`splitCopy`: fresh ids, its other objects copied, but not its MIDI cues and
+ * lighting trigger, Bottom-Third Stream text or own sound) right after it, the lyric object cut to that piece
+ * (`textPiece`).
  * Used by 'Split lyrics' and by the Lyric Script's splits ('---', Split at Cursor, Alt+Enter, Auto-Split).
  * `p` itself, and no ids, without a lyric object or a second piece.
  */
