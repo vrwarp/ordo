@@ -13,14 +13,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Five jobs side by side (design/23 "CI"): lint, types, unit tests and the builds (check, 25 minutes); the
+  # Five jobs side by side (design/23 "CI"): lint, types, unit tests and the builds (check, 40 minutes); the
   # end-to-end suite in two shards (e2e, 90 minutes: its limit counts the set-up of a slow runner, see there) and
-  # the phone and Android tablet projects (e2e-phones, 40 minutes); the renderer goldens in a pinned container
+  # the phone and Android tablet projects (e2e-phones, 60 minutes); the renderer goldens in a pinned container
   # (goldens); the fidelity ratchets (fidelity).
   check:
     name: Lint, types, unit tests, build
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # The whole unit-test run took 478 s on the four CPUs of the integration machine after sub-wave 2 (299 s before it),
+    # typecheck 124 s, the pages build 52 s and the build 19 s; a runner is 1.15 to 1.65 times slower, and the set-up
+    # (system packages, pnpm install, Playwright Chromium) takes 3 to 5 minutes (26 to 34 on the slow mirror the end-to-end
+    # jobs met), so 25 minutes left no room: a timeout fails the required check and the next run starts again.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -106,8 +110,8 @@ jobs:
     runs-on: ubuntu-24.04
     # The same two install steps as the e2e shards (the system packages and both Playwright browsers) count against
     # this limit, and a slow mirror took 26 to 34 minutes of them for a shard; its 61 tests take 5.4 minutes of test
-    # time on the integration machine (about 9 on a runner).
-    timeout-minutes: 40
+    # time on the integration machine (about 9 to 10 on a runner), so a slow mirror needs 35 to 44 minutes: 60.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

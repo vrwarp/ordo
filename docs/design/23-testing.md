@@ -501,14 +501,16 @@ golden-pptx and the sermons today.
 ## CI
 
 GitHub Actions on every pull request and merge to main (and by hand), `.github/workflows/ci.yml`, in five
-jobs that run side by side (one job took 30 to 45 minutes before); the check job is limited to 25 minutes, the two
-end-to-end jobs to 90 and 40 because their limit counts a slow runner's set-up (below the table):
+jobs that run side by side (one job took 30 to 45 minutes before); the check job is limited to 40 minutes (its unit
+tests alone took 478 s on four CPUs after sub-wave 2, 299 s before it, and a runner is 1.15 to 1.65 times slower than
+that machine, with 3 to 5 minutes of set-up before them), the two end-to-end jobs to 90 and 60 because their limit
+counts a slow runner's set-up (below the table):
 
 | Job                                   | Runs                                                                                                                                                                                                                                                                                   | Limit  |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| Lint, types, unit tests, build        | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), Playwright Chromium, `pnpm test` (`CI` set: timing bounds ×3, golden runs strict, browser tests run or fail), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                                               | 25 min |
+| Lint, types, unit tests, build        | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), Playwright Chromium, `pnpm test` (`CI` set: timing bounds ×3, golden runs strict, browser tests run or fail), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                                               | 40 min |
 | End-to-end (2 shards)                 | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2 --project=chromium --project=webkit-ipad --project=webkit-ipad-portrait` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure | 90 min |
-| End-to-end, phones and Android tablet | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --project=webkit-iphone --project=chromium-android --project=chromium-tablet` with `ORDO_CI=1`; uploads `playwright-report-phones` on failure ("Projects" above)                                                | 40 min |
+| End-to-end, phones and Android tablet | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --project=webkit-iphone --project=chromium-android --project=chromium-tablet` with `ORDO_CI=1`; uploads `playwright-report-phones` on failure ("Projects" above)                                                | 60 min |
 | Goldens (pinned container)            | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                                                                                                    | 20 min |
 | Fidelity ratchets                     | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                                                                                              | 20 min |
 
@@ -517,7 +519,8 @@ to 34 minutes on a runner with a slow mirror: a shard's tests are about 33 minut
 2 of 78 tests took 20.1 minutes on the integration machine, a runner 1.65 times that; the `sw2-seams` file in it takes
 21.5 to 26.8 seconds on two CPUs (20.8 to 21.5 on four), as it starts its browser without a GPU, where a runner of two
 CPUs took 8 to 12 minutes for it), so 35 minutes were spent before the last test and 60 could be; 90 leaves a slow
-set-up 23 minutes of slack, and the phones job (61 tests, about 9 minutes on a runner) has 40.
+set-up 23 minutes of slack, and the phones job (61 tests, about 9 to 10 minutes on a runner, so 35 to 44 minutes
+with that slow set-up) has 60.
 
 The end-to-end, goldens and fidelity jobs install the image's bundled font packages (Carlito, Caladea,
 Liberation 2, Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them, not its CJK
