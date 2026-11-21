@@ -2052,6 +2052,102 @@ describe('asset worker: the underlay frame (design 29 R1)', () => {
     expect(copiesOf(armed.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
   });
 
+  // The three hold tests of the geometry-units describe run with `frame: 'off'` (they are about separate units); these are
+  // their counterparts with the frame on: the same subjects (the next arm lets go of a slide's hold, a re-draw takes over
+  // the hold its late job kept, a jump while another cue stays armed) through the frame unit, which goes through the same
+  // pin, hold and outstanding machinery by its key.
+  const nextArm = (id: string) =>
+    runAs(slideJob({ slide: { id, objects: [] }, images: {}, video: undefined, key: `sl|${id}` }), 'armed');
+
+  it('the next arm lets go of a crowded slide’s hold: its GO did no frame work, and under cache pressure its re-draw makes the frame again, once, and ends (frame on)', async () => {
+    const s = textSlide('hold-away', 260);
+    const key = 'sl|hold-away';
+    timed(1);
+    const made0 = unitWork().made;
+    const armed = await runAs(crowdedJob(s, key), 'armed');
+    expect(unitWork().made - made0).toBe(1);
+    expect(copiesOf(armed.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
+    // A GO to it (drawn already: the worker is told nothing) and the next cue armed at once: the layer's armed units
+    // are that cue's now. Memory pressure then takes what nothing holds.
+    await nextArm('hold-away-next');
+    expect(unitWork().made - made0).toBe(1);
+    unitCache.clear('unit');
+    // The re-draw of the slide never waits for the frame: the direct part at once, the frame made by its late job.
+    const again = await runAs(crowdedJob(s, key, { refresh: true, refreshFadeMs: 300 }), 'late');
+    expect(textsOf(again.msg!.bitmap as unknown as FakeBitmap)).toBe(200);
+    await vi.waitFor(() =>
+      expect(ready().some((r) => r.slideKey === key && r.ended && r.left === 0)).toBe(true),
+    );
+    expect(unitWork().made - made0).toBe(2);
+    expect(framesInProgress()).toBe(0);
+    // And it stays: pinned with the slide, a later re-draw copies it and makes nothing.
+    const made1 = unitWork().made;
+    const third = await runAs(crowdedJob(s, key, { refresh: true, refreshFadeMs: 300 }), 'late');
+    expect(copiesOf(third.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
+    expect(unitWork().made).toBe(made1);
+  });
+
+  it('a re-draw of a crowded slide takes over the hold its late job kept: the frame stays pinned while the slide is live, pressure or not (frame on)', async () => {
+    const s = textSlide('hold-kept', 260);
+    const key = 'sl|hold-kept';
+    timed(1);
+    const made0 = unitWork().made;
+    rendered.length = 0;
+    replies.length = 0;
+    // A jump: the direct part at once, the frame made by its late job, then reported.
+    send({ t: 'job', job: crowdedJob(s, key), role: 'live' });
+    await vi.waitFor(() =>
+      expect(ready().some((r) => r.slideKey === key && r.ended && r.left === 0)).toBe(true),
+    );
+    expect(unitWork().made - made0).toBe(1);
+    // On screen: its re-draw copies the frame and takes the hold over from the late job that made it.
+    const redraw = await runAs(crowdedJob(s, key, { refresh: true, refreshFadeMs: 300 }), 'late');
+    expect(copiesOf(redraw.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
+    // Memory pressure takes what is not pinned: the slide's frame stays for the next re-draw.
+    unitCache.clear('unit');
+    const made1 = unitWork().made;
+    const next = await runAs(crowdedJob(s, key, { refresh: true, refreshFadeMs: 300 }), 'late');
+    expect(copiesOf(next.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
+    expect(unitWork().made).toBe(made1);
+  });
+
+  it('a jump while another crowded cue stays armed draws at once: the armed cue keeps its frame on the armed chain and makes it once (frame on)', async () => {
+    const armedSlide = textSlide('jump-armed-c', 260);
+    const armedKey = 'sl|jump-armed-c';
+    timed(1);
+    const made0 = unitWork().made;
+    rendered.length = 0;
+    replies.length = 0;
+    send({ t: 'job', job: crowdedJob(armedSlide, armedKey, { cueIndex: 10 }), role: 'armed' });
+    send({
+      t: 'job',
+      job: slideJob({
+        slide: { id: 'jump-target-c', objects: [] },
+        images: {},
+        video: undefined,
+        key: 'sl|jump-target-c',
+        cueIndex: 9,
+      }),
+      role: 'live',
+    });
+    await vi.waitFor(() => {
+      expect(replies.some((r) => r.t === 'done' && r.key === 'sl|jump-target-c')).toBe(true);
+      expect(replies.some((r) => r.t === 'done' && r.key === armedKey)).toBe(true);
+    });
+    // Its frame is made once, whichever of the two went first, and nothing is left in progress.
+    await vi.waitFor(() => expect(framesInProgress()).toBe(0));
+    expect(unitWork().made - made0).toBe(1);
+    expect(replies.some((r) => r.t === 'unitsReady' && r.stopped)).toBe(false);
+    // Pinned with the armed cue: a GO to it does no frame work.
+    unitCache.clear('unit');
+    const made1 = unitWork().made;
+    const go = await runAs(crowdedJob(armedSlide, armedKey), 'live');
+    expect(go.reply).toMatchObject({ t: 'done' });
+    expect(textsOf(go.msg!.bitmap as unknown as FakeBitmap)).toBe(200);
+    expect(copiesOf(go.msg!.bitmap as unknown as FakeBitmap)).toHaveLength(1);
+    expect(unitWork().made).toBe(made1);
+  });
+
   /** `n` copies of a line art, each moved a little (units are keyed by what they draw: `dx` is the test's own). */
   const artSlide = (id: string, n: number, dx: number): Slide => {
     const art = lineArtSlide().objects.find((o) => o.type === 'shape')!;
