@@ -106,7 +106,7 @@ between 16000 and 32767.
   unchanged);
   `live-by-ref` (480: a 6 MiB service kept by reference, the hub killed and started again on the same data, raw
   screens that hold the copy sent the state without it, a storm of 20 screens beside GOs, a take-over beside a GO); `pptx-dense` (510-511, sub-wave 2's xml-compact: dense decks on a hub without LibreOffice,
-  through the upload route and through the Import tab; the decks are written at run time, `pptxdecks.ts` `denseDeck`); `sw2-seams` (630-631, sub-wave 2's integration: the seams between its tracks that no one track's spec sees, on hubs without LibreOffice: a crowded service held by a screen, the hub killed and started again, the screen sent its state by name and still drawing the topmost square, and a hub whose free-space floor is above any real disk, `ORDO_MIN_FREE_GB=10000`, that pauses uploads and imports while a GO moves the Audience, another saved playlist goes live and a presentation and a playlist are still saved; the file runs with the trace off, captures each window twice after asking the page for a frame, and scales the GO's lead by 3 on CI as `budgetMs` scales a bound, so that it completes on two CPUs, which is what a runner has). The integrations of sub-waves 3 and 4 hold 632-659. An explicit `ORDO_E2E_PORT_BASE` may sit below
+  through the upload route and through the Import tab; the decks are written at run time, `pptxdecks.ts` `denseDeck`); `sw2-seams` (630-631, sub-wave 2's integration: the seams between its tracks that no one track's spec sees, on hubs without LibreOffice: a crowded service held by a screen, the hub killed and started again, the screen sent its state by name and still drawing the topmost square, and a hub whose free-space floor is above any real disk, `ORDO_MIN_FREE_GB=10000`, that pauses uploads and imports while a GO moves the Audience, another saved playlist goes live and a presentation and a playlist are still saved; the file starts its browser with `CPU_ONLY_ARGS` (no GPU switches, no GPU: every window in it is `renderer=2d`), because the config's SwiftShader process takes about 170 % of a CPU for an idle 1920 x 1080 window and starves a machine of two CPUs, which is what a runner has: there the file took 8 to 12 minutes when it completed and failed in about 4 runs in 10 (`taskset -c 0-1`, retries 0), and with the list it takes about 25 seconds, as on four CPUs; its GO lead is the product's 33 ms and it keeps its three captures per window, the trace and the zero-late-flip equality as written). The integrations of sub-waves 3 and 4 hold 632-659. An explicit `ORDO_E2E_PORT_BASE` may sit below
   16000 (design/29 §4; `e2e/ports.ts` says what it must avoid).
   `e2e/table-deck.test.ts` checks the deck still tests what the spec is about (the bulletin past M6's cell cap,
   the reading plan's M6 group past 64 KB, measured with the kill switch, and both table objects through the import
@@ -132,9 +132,12 @@ hub of its own in path mode (`http://localhost:<port>/`):
 
 The three Chromium projects launch with the suite's switches in the top-level `use.launchOptions` (WebGPU on
 SwiftShader, sRGB, `--font-render-hinting=none`, autoplay, no background throttling): a project's `use`
-replaces only the keys it names, and none of them names `launchOptions`. The WebKit projects set
-`launchOptions: {}`, as the switches are Chromium's; no tablet or phone spec compares text against another
-renderer.
+replaces only the keys it names, and none of them names `launchOptions`. The list is `e2e/chromiumargs.ts`
+(`CHROMIUM_ARGS`: the GPU switches, then the common ones). A spec that needs another names its own with
+`test.use({ launchOptions: { args } })`, which replaces the config's `args` whole (Playwright does not merge the two
+lists; the headless shell's defaults are all that stays): `sw2-seams` takes `CPU_ONLY_ARGS`, the common switches and
+`--disable-gpu`. The WebKit projects set `launchOptions: {}`, as the switches are Chromium's; no tablet or phone spec
+compares text against another renderer.
 
 The Chromium tablet and phone model Android Chrome with `e2e/touchdevice.ts` `touchDevice(page)`, which the
 sign-in helpers call before a context's first navigation: an init script deletes `Navigator.prototype.hid`
@@ -233,7 +236,7 @@ screen" prompt (`capture` hides `.fs-prompt`; a test window is never full screen
 the same 0.99: its text lines must be as wide on the outputs as on the page (the spec logs each line's width
 on both sides), and the hub must store the verse object the harness converts (size, runs, fit, box,
 spacing). Both sides keep the fonts' glyph advances on every machine: the suite's browser runs with
-`--font-render-hinting=none` (playwright.config.ts; Playwright's headless shell defaults to full hinting,
+`--font-render-hinting=none` (`e2e/chromiumargs.ts`, used by playwright.config.ts; Playwright's headless shell defaults to full hinting,
 which rounds every advance to a whole pixel and made the CI runner's outputs draw the verse 0.25 % to 0.6 %
 narrower than the page, SSIM 0.971, reproduced here byte for byte with the shell started without the switch),
 and the page's browser draws with glyph hinting off whatever the machine's fontconfig says

@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { defineConfig, devices, webkit } from '@playwright/test';
+import { CHROMIUM_ARGS } from './e2e/chromiumargs.ts';
 import { SHARED_PORT } from './e2e/ports.ts';
 
 // The shared web server's port: ORDO_E2E_PORT, else the port table's row (e2e/ports.ts, design/23 "Ports").
@@ -41,27 +42,7 @@ export default defineConfig({
     ...devices['Desktop Chrome'],
     viewport: { width: 1280, height: 720 },
     trace: 'retain-on-failure',
-    launchOptions: {
-      args: [
-        '--enable-unsafe-webgpu',
-        '--use-angle=swiftshader',
-        '--use-vulkan=swiftshader',
-        '--enable-features=Vulkan',
-        '--force-color-profile=srgb',
-        // Text with the fonts' own advances. Playwright's headless shell defaults to full hinting, which rounds
-        // every glyph advance to a whole pixel: the CI runner's outputs drew a verse line 0.25 % to 0.6 %
-        // narrower than the fidelity harness's page (which draws unhinted, `unhintedFontconfig`), SSIM 0.971
-        // (e2e/pptx-native.spec.ts cue 1), and narrower than Chrome draws it under fontconfig's default, slight
-        // hinting, which keeps the advances. With the switch the outputs keep them on every machine.
-        '--font-render-hinting=none',
-        '--autoplay-policy=no-user-gesture-required',
-        '--disable-background-timer-throttling',
-        '--disable-renderer-backgrounding',
-        '--disable-backgrounding-occluded-windows',
-        '--use-fake-ui-for-media-stream',
-        '--disable-popup-blocking',
-      ],
-    },
+    launchOptions: { args: CHROMIUM_ARGS },
   },
   projects: [
     // The venue PC: Chromium desktop, every spec except the iPad and phone ones.
