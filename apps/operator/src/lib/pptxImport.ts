@@ -17,6 +17,7 @@ import {
 } from '@ordo/domain';
 import type { HubCapabilities, Job } from '@ordo/protocol';
 import { metricCompatible } from '@ordo/renderer';
+import { readRasterCounts, type RasterResult, rasterTotals } from './pptxRaster.ts';
 
 // ── The import screen ───────────────────────────────────────────────────────────────────────────────────
 
@@ -215,6 +216,8 @@ export type NativeImportResult = {
   libreoffice?: boolean;
   /** Q24.b: slides kept whole (each stored with a pre-render record); absent from a hub that keeps none whole. */
   whole?: number;
+  /** Q53: what the picture step of many-point shapes came to (`pptxRaster.ts`); absent from an older hub and for a deck with none. */
+  rasters?: RasterResult;
 };
 /** The `pptx-native` result when the deck went to the picture import instead (the CPU pool could not start). */
 export type NativeImportFallback = { jobId: string; reason: string };
@@ -260,6 +263,7 @@ export function readNativeResult(result: unknown): NativeImportResult | undefine
     ...(result.missing !== undefined ? { missing: count(result.missing) } : {}),
     ...(typeof result.libreoffice === 'boolean' ? { libreoffice: result.libreoffice } : {}),
     ...(result.whole !== undefined ? { whole: count(result.whole) } : {}),
+    ...(readRasterCounts(result.rasters) ? { rasters: readRasterCounts(result.rasters)! } : {}),
   };
 }
 
@@ -593,6 +597,8 @@ export type ImportReport = {
   renderer?: string;
   /** Slides kept whole: those that carry a pre-render record (Q24.b); absent when there are none. */
   whole?: number;
+  /** Q53: the shapes drawn into pictures and the pictures, counted from the slides; absent when there are none. */
+  rasters?: { shapes: number; pictures: number };
   /** `source.log` lines, at most `LOG_LINES` of the newest, each a warning or not. */
   log: { text: string; warn: boolean }[];
   /** Log lines left out (older ones). */
@@ -630,6 +636,7 @@ export function importReport(
       if (slideMissing(sl).length) missing++;
       if (sl.pptx && slideEdited(sl)) edited++;
     }
+  const rasters = rasterTotals(p.sections.flatMap((sec) => sec.slides));
   const all = (src.log ?? '').split('\n').filter((l) => l.trim());
   const lines = texts(all.slice(-LOG_LINES), LOG_LINES, 400);
   const n = src.native;
@@ -650,6 +657,7 @@ export function importReport(
     failed,
     missing,
     ...(whole ? { whole } : {}),
+    ...(rasters ? { rasters } : {}),
     hidden,
     edited,
     ...(src.renderer ? { renderer: src.renderer } : {}),

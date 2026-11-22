@@ -181,6 +181,17 @@ import { type Log, noteList } from './log.ts';
 import { scriptClasses } from './fontmap.ts';
 import { BAKED_EFFECTS, extensionOf, METAFILE_EXTENSIONS } from './picture.ts';
 import { atlasSlide, emitComposite, type EmittedSheet, SHEET_PREFIX } from './sheet.ts';
+import {
+  type EmittedRaster,
+  type EmittedRasterInfo,
+  emitRaster,
+  type RasterGeometry,
+  type RasterRegistry,
+  rasterRegistry,
+  type RegisteredRaster,
+} from './raster-emit.ts';
+import { applyRasterForm, type RasterMode, type RasterRunPlan } from './raster-plan.ts';
+import { RASTER_WORDS_MAX } from './raster.ts';
 import { lockDiagram } from './smartart.ts';
 import { look3dOf } from './three3d.ts';
 
@@ -280,6 +291,16 @@ export interface EmitOptions {
    * render clamp's 200 and 16 as planned by the budgets' guard).
    */
   sheets?: boolean;
+  /**
+   * Q53 (`raster-emit.ts`): write the pictures of shapes the parse planned (`ParseOptions.rasters` 'plan': each run of
+   * `SlideScene.rasters` becomes one locked picture, its recipe in `EmitResult.rasters`, the objects it holds in
+   * `EmittedSlide.rasters`). With anything else every planned run is written as today's shapes. Default 'off'.
+   */
+  rasters?: RasterMode;
+  /** Q53: the renderer's wide compile and build, which the recipe builder reads a shape's geometry with (no default: the hub's pool and the harness inject `WIDE_GEOMETRY`, `raster-wide.ts`; the browser's import worker only ever detects, so it does not carry `raster-wide.ts`). */
+  rasterGeometry?: RasterGeometry;
+  /** Q53, `convertDeck`'s: the recipes of the whole call (its slides are emitted one by one). */
+  rasterRegistry?: RasterRegistry;
   /** Solid backgrounds cover the whole 1920x1080 frame instead of the slide area (default true). */
   extendBackgrounds?: boolean;
   /**
@@ -367,6 +388,16 @@ export interface EmittedSlide {
    */
   sheets?: EmittedSheet[];
   /**
+   * Q53: the pictures of shapes the slide draws (`pptxmedia:raster<16 hex>`), each with the objects drawn from it and
+   * those objects as they are without it, which an importer that cannot make the picture puts back
+   * (`@ordo/importers` `putBackRaster`); `EmitResult.rasters` has each recipe once.
+   */
+  rasters?: EmittedRaster[];
+  /** Q53: what the picture plan came to on this slide (the import report counts it). */
+  rasterInfo?: EmittedRasterInfo;
+  /** Q53: the words of the pictured shapes (bottom first, cut at `RASTER_WORDS_MAX`), for the slide's imported text. */
+  rasterWords?: string;
+  /**
    * M9 (`decor-conv`, decisions.md "Slow-to-draw elements"): what the client bakes into the slide's
    * decoration plates (`decor.ts` `platePlan`: the static decoration stack and the objects above it with
    * effect layers), and `pastBudget`, the objects the slide's drawing budgets draw live past them (as their
@@ -410,6 +441,12 @@ export interface EmitResult {
    * `EmittedSlide.sheets` lists for it.
    */
   sheets: { id: string; bake: SheetBake }[];
+  /**
+   * Q53: the recipes of the pictures of shapes the slides draw, each once in first-use order with its placeholder media
+   * id (`pptxmedia:raster<16 hex>`): an importer that makes the pictures draws each from its recipe (the hub, with its
+   * own browser) and one that cannot puts back the objects `EmittedSlide.rasters` lists for it. Absent without `rasters`.
+   */
+  rasters?: RegisteredRaster[];
 }
 
 export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
@@ -466,6 +503,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
           }
           return f.id;
         };
+  const rasters = opts.rasters === 'plan' ? (opts.rasterRegistry ?? rasterRegistry()) : undefined;
   const sheets = new Map<string, { id: string; bake: SheetBake }>();
   const sheet = (recipe: SheetBake) => {
     const key = sheetKey(recipe);
@@ -511,8 +549,17 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       clipId,
       transitionSounds: opts.transitionSounds ?? false,
       ...(opts.sheets === false ? {} : { sheet, sheets: [] }),
+      ...(rasters
+        ? {
+            raster: (recipe, hash) => rasters.add(recipe, hash),
+            rasters: [],
+            ...(opts.rasterGeometry ? { rasterGeometry: opts.rasterGeometry } : {}),
+          }
+        : {}),
       mediaPart,
     };
+    const rasterFails: string[] = [];
+    if (rasters) ctx.rasterFailed = (reason) => rasterFails.push(reason);
     const spans: [number, number][] = [];
     ctx.metafiles = [];
     ctx.clips = [];
@@ -545,6 +592,12 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     const missing = [...new Set([...left, ...(ctx.cut ?? []), ...(gaps?.missing ?? [])])];
     const plate = ctx.plate;
     ctx.plate = undefined;
+    const rasterInfo = rasterInfoOf(s, ctx.rasters ?? [], rasterFails);
+    const rasterWords = (ctx.rasters ?? [])
+      .map((r) => r.words)
+      .filter((w): w is string => !!w)
+      .join('\n')
+      .slice(0, RASTER_WORDS_MAX);
     return {
       index: s.index,
       ...(s.shown !== undefined ? { shown: s.shown } : {}),
@@ -561,6 +614,9 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       ...(missing.length ? { missing } : {}),
       ...(gaps?.artText ? { artText: gaps.artText } : {}),
       ...(ctx.sheets?.length ? { sheets: ctx.sheets } : {}),
+      ...(ctx.rasters?.length ? { rasters: ctx.rasters } : {}),
+      ...(rasterInfo ? { rasterInfo } : {}),
+      ...(rasterWords ? { rasterWords } : {}),
       ...(plate ? { plate } : {}),
     };
   });
@@ -575,6 +631,35 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     geoms: [...files.values()],
     decors: [...decorFileList.values()],
     sheets: [...sheets.values()],
+    ...(rasters ? { rasters: rasters.list() } : {}),
+  };
+}
+
+/** What a slide's picture plan came to (`EmittedSlide.rasterInfo`); undefined for a slide that planned none. */
+function rasterInfoOf(
+  s: SlideScene,
+  written: readonly EmittedRaster[],
+  failed: readonly string[],
+): EmittedRasterInfo | undefined {
+  const plan = s.rasters;
+  if (!plan?.candidates) return undefined;
+  const byFirst = new Set(written.map((r) => r.members[0]));
+  let pictures = 0;
+  let wordShapes = 0;
+  for (const run of plan.runs) {
+    if (!byFirst.has(run.members[0]?.element.shapeId)) continue;
+    pictures++;
+    wordShapes += run.members.filter((m) => m.text).length;
+  }
+  return {
+    candidates: plan.candidates,
+    shapes: plan.shapes,
+    runs: plan.runs.length,
+    pictures,
+    failed: [...new Set(failed)].slice(0, 16),
+    wordShapes,
+    skipped: plan.skipped,
+    reasons: plan.reasons,
   };
 }
 
@@ -628,16 +713,29 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
     sheetRuns.set(e.sheet, run);
   });
   const composited = new Set<number>();
+  // Q53: runs drawn as one picture of shapes (`SlideScene.rasters`), written at the run's first element when
+  // `emitRaster` writes it; a run it cannot write is emitted member by member, each as today's converter emits it.
+  const rasterRuns = new Map<number, RasterRunPlan>();
+  for (const run of s.rasters?.runs ?? []) rasterRuns.set(run.first, run);
+  const rastered = new Set<number>();
+  ctx.pairGroup = () => (pairs < MAX_GROUP ? ++pairs : undefined);
   // A member of a decoration or a composite, as the single-element emitter writes it.
   const emitOne = (x: Element, sink: SlideObject[]) => emitElement(ctx, x, sink, texts);
   s.elements.forEach((e, i) => {
     const at = objects.length;
     const mf = ctx.metafiles?.length ?? 0;
+    const rasterRun = rasterRuns.get(i);
+    if (rasterRun) {
+      if (ctx.raster && !e.hidden && emitRaster(ctx, rasterRun, objects, emitOne)) rastered.add(i);
+      else for (const m of rasterRun.members) if (m.candidate && m.form) applyRasterForm(m.element, m.form);
+    }
     const decor = e.decor !== undefined && !e.hidden ? decors.get(e.decor) : undefined;
     if (decor && e.decor === i && emitDecor(ctx, decor, objects, emitOne)) decorated.add(i);
     const sheet = e.sheet !== undefined && !e.hidden ? sheetRuns.get(e.sheet) : undefined;
     if (sheet && e.sheet === i && emitComposite(ctx, sheet, objects, emitOne)) composited.add(i);
-    if (decor && e.decor !== undefined && decorated.has(e.decor)) {
+    if (e.kind === 'shape' && e.raster !== undefined && rastered.has(e.raster)) {
+      // Drawn by its run's picture of shapes.
+    } else if (decor && e.decor !== undefined && decorated.has(e.decor)) {
       // Drawn by its run's decoration.
     } else if (sheet && e.sheet !== undefined && composited.has(e.sheet)) {
       // Drawn by its run's composite.

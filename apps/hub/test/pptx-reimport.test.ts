@@ -697,6 +697,20 @@ describe('reimport.ts helpers', () => {
     expect(PPTX_JOB_CLASS['pptx-reimport']).toBe('light');
   });
 
+  it("Reset slide's rasters 'off' travels in the payload only with slide ids (RS5, Q57.d)", () => {
+    const queued: { payload: Record<string, unknown> }[] = [];
+    const jobs = {
+      enqueue: (_k: string, payload: Record<string, unknown>) => {
+        queued.push({ payload });
+        return { id: 'j' } as Job;
+      },
+    };
+    queueReimport({ jobs } as never, 'p1', 'h', { slideIds: ['s1'], reset: ['s1'], rasters: 'off' });
+    queueReimport({ jobs } as never, 'p1', 'h', { rasters: 'off' });
+    expect(queued[0]!.payload.rasters).toBe('off');
+    expect(queued[1]!.payload.rasters).toBeUndefined();
+  });
+
   it('reads the first import’s options and the pictures earlier follow-ups stored', () => {
     const db = (rows: unknown[]) => ({ prepare: () => ({ get: () => rows[0], all: () => rows }) });
     const options = importOptionsOf(
@@ -1053,6 +1067,19 @@ describe("'Re-import from PowerPoint' through the hub", () => {
       body: JSON.stringify({ everything: true }),
     });
     expect(bad.status).toBe(400);
+    // Q57.d: rasters 'off' is for Reset slide: without slide ids it is refused, and only 'off' is a value (RS5).
+    for (const body of [
+      { rasters: 'off' },
+      { slideIds: [], rasters: 'off' },
+      { slideIds: ['x'], rasters: 'on' },
+    ]) {
+      const res = await ed.fetch(`/presentations/${p.id}/pptx-reimport`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(400);
+    }
 
     const op = await login(hub.url, OPERATE_PIN);
     const pl = await ed.json<Playlist>('/playlists', {

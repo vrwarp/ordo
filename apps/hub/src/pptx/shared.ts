@@ -11,6 +11,7 @@ import type { SystemFaces, SystemScriptFace } from './systemFaces.ts';
 import type { ExtractedText, ImageObject, PresentationKind } from '@ordo/domain';
 import type { EasyOptions } from '@ordo/domain/prerender.ts';
 import { WHOLE_BACKGROUND_ANCHORS } from '@ordo/importers/pptx-core.ts';
+import type { RasterCounts } from '@ordo/importers/pptx-raster.ts';
 import type { Job } from '@ordo/protocol';
 import type { ArtInfo, ConvertResult, SlideClass } from '@ordo/pptx-scene';
 import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
@@ -18,6 +19,7 @@ import { PPTX_IMPORT_LIMITS, type SceneScan, type SceneSlideExtra } from '@ordo/
 import type { RenderCopyPage } from '@ordo/pptx-scene/rendercopy.ts';
 import type { Logger } from 'pino';
 import type { HubConfig } from '../config.ts';
+import type { DiskFloor } from '../diskfloor.ts';
 import type { JobClass, JobQueue } from '../jobs.ts';
 import type { Library } from '../library.ts';
 import type { MediaService } from '../media/service.ts';
@@ -105,6 +107,11 @@ export type PptxDeps = {
    * hand in a test): none.
    */
   systemFaces?: SystemFaces;
+  /**
+   * The free-space floor (design/29 A25, W44): a job that stores a file of its own size asks it first
+   * (`assertRoom`: a 507 `disk` fails the job with its usual message). Absent (deps built by hand in a test): nothing is asked.
+   */
+  disk?: Pick<DiskFloor, 'assertRoom'>;
 };
 
 // ── Jobs ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -150,6 +157,11 @@ export type PptxNativePayload = {
   options?: PptxImportOptions;
   /** Pre-parsed `PptxClientScene` JSON stored by SHA-256 when parsed on the client. */
   sceneHash?: string;
+  /**
+   * Times the job found a service live while it planned pictures of shapes and deferred itself (the backoff step, Q53, D4):
+   * the picture step never runs beside a service.
+   */
+  deferrals?: number;
   done?: PptxNativeProgress;
 };
 
@@ -189,6 +201,12 @@ export type PptxNativeResult = {
    * hub keeps heavy slides whole (`wholeSlidesFor`). Absent from older hubs' results and when it does not.
    */
   whole?: number;
+  /**
+   * Q53: what the picture step of shapes came to (`RasterCounts`): shapes drawn into pictures, pictures made, found and put
+   * back, the words in them and why a hub could not draw them. Present only when the deck holds shapes this step looked at
+   * (a hub that cannot draw them still says so). Absent from older hubs' results and for a deck with none.
+   */
+  rasters?: RasterCounts;
 };
 
 /**
@@ -310,6 +328,8 @@ export type PptxReimportPayload = {
   reset?: string[];
   /** Made-editable slides kept as they are. */
   keep?: string[];
+  /** Q57.d ('Reset slide'): convert without the picture step (`PptxReimportReq.rasters`); only with `slideIds`. */
+  rasters?: 'off';
   /**
    * 'Make editable' on a page (`imports.ts` `makeEditableNative`, `reimport.ts` `madeEditable`): a slide of
    * `slideIds` that shows LibreOffice's page and whose deck slide converts to LibreOffice's page again takes
@@ -407,6 +427,13 @@ export type SceneTaskInput = {
    * picture limit (`ParseOptions.wholeSlides`). Absent: false, the plan of before.
    */
   wholeSlides?: boolean;
+  /**
+   * Q53 (`ParseOptions.rasters`): 'plan' writes the pictures of many-point shapes and returns their recipes in
+   * `result.rasters` (at most 32 MiB a call); 'detect' only counts the shapes (a hub that cannot draw them). Absent: 'off'.
+   */
+  rasters?: 'plan' | 'detect';
+  /** Q53 (`ParseOptions.rasterMaker`): who draws the pictures; words are drawn into a picture only by 'page'. */
+  rasterMaker?: 'page' | 'pdf';
   /**
    * M9 `ladder`: the text rescue of slides whose conversion failed (`@ordo/pptx-scene` `rescueDeck`): only their
    * text bodies, no geometry read. Absent: the full conversion.

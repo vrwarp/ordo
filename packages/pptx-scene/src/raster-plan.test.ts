@@ -73,7 +73,7 @@ describe('planRasters: the runs (R2, C-SR3)', () => {
     expect(marked(els)).toEqual([undefined, 1, 1, 1, 1, undefined]);
   });
 
-  it('a text box that overlaps the run is drawn in; one that touches nothing is skipped and stays live text', () => {
+  it('a text box a LATER member lies over is drawn in; one nothing covers stays live text above the picture (the exact z-order rule)', () => {
     resetIds();
     const overlapping = shapeEl({ box: [0.5, 1, 0.5, 0.5], text: textBody('Gulf'), fill: { kind: 'none' } });
     const apart = shapeEl({ box: [6, 5, 1, 0.4], text: textBody('Legend'), fill: { kind: 'none' } });
@@ -84,33 +84,36 @@ describe('planRasters: the runs (R2, C-SR3)', () => {
       candEl({ box: [1.2, 1, 0.5, 0.5] }),
     ];
     const p = run(els);
-    expect(members(p)).toEqual([[0, 1, 3]]);
-    expect(p.runs[0]!.texts).toBe(1);
-    expect(marked(els)).toEqual([0, 0, undefined, 0]);
-  });
-
-  it('a member that overlaps what the run skipped cannot join it: the run ends and another begins', () => {
-    resetIds();
-    const apart = pictureEl({ box: [6, 3, 1, 1] });
-    const els = [candEl({ box: [0.2, 1, 0.5, 0.5] }), apart, candEl({ box: [6.2, 3.2, 0.5, 0.5] })];
-    expect(members(run(els))).toEqual([[0], [2]]);
-    // The same two shapes with the picture clear of both stay one run.
-    const clear = [
+    // The text over the first member is above it and no later member lies over it: it stays live text above the picture.
+    expect(members(p)).toEqual([[0, 3]]);
+    expect(p.runs[0]!.texts).toBe(0);
+    expect(marked(els)).toEqual([0, undefined, undefined, 0]);
+    // A later member that lies over it puts it under that member: it is drawn in, with its words.
+    const covered = [
       candEl({ box: [0.2, 1, 0.5, 0.5] }),
-      pictureEl({ box: [3, 5, 1, 1] }),
-      candEl({ box: [1.2, 1, 0.5, 0.5] }),
+      shapeEl({ box: [0.5, 1, 0.5, 0.5], text: textBody('Gulf'), fill: { kind: 'none' } }),
+      candEl({ box: [0.7, 1, 0.5, 0.5] }),
     ];
-    expect(members(run(clear))).toEqual([[0, 2]]);
+    const q = run(covered);
+    expect(members(q)).toEqual([[0, 1, 2]]);
+    expect(q.runs[0]!.texts).toBe(1);
   });
-
-  it('a picture that overlaps a member ends the run; one that shares no area is skipped (any kind of element is)', () => {
+  it('a picture over a member is skipped when no later member lies over it, and ends the run when one does; one that shares no area is skipped (any kind of element is)', () => {
     resetIds();
     const over = [
       candEl({ box: [1, 1, 1, 1] }),
       pictureEl({ box: [1.5, 1.5, 1, 1] }),
       candEl({ box: [4, 1, 1, 1] }),
     ];
-    expect(members(run(over))).toEqual([[0], [2]]);
+    // Nothing later lies over the picture: it is drawn live above the picture of the run, which is still below it.
+    expect(members(run(over))).toEqual([[0, 2]]);
+    // A later member that lies over it would put it under that member: the run ends at the picture.
+    const under = [
+      candEl({ box: [1, 1, 1, 1] }),
+      pictureEl({ box: [1.5, 1.5, 1, 1] }),
+      candEl({ box: [2, 2, 1, 1] }),
+    ];
+    expect(members(run(under))).toEqual([[0], [2]]);
     // Other kinds: a shape the picture may not hold (a shadow), a text box and a picture, all clear of the run.
     const clear = [
       candEl({ box: [1, 1, 1, 1] }),
@@ -239,12 +242,13 @@ describe('planRasters: the pictures a slide holds and the merge policy (R3)', ()
 
   it('runs the skip rule cannot merge are dropped, the ones with the fewest candidate points first, and said', () => {
     resetIds();
-    // Six runs, each cut off from the next by a picture lying over its members: nothing can merge.
+    // Six runs, each cut off from the next by a picture that the NEXT run's member lies over (the picture bridges the two): nothing
+    // can merge, as the picture could not be drawn live above one run and under the other.
     const els: Element[] = [];
     const costs = [600, 200, 900, 150, 400, 300];
     costs.forEach((cost, k) => {
       const y = 0.3 + k * 1.2;
-      els.push(candEl({ box: [1, y, 0.8, 0.8], cost }), pictureEl({ box: [1.2, y + 0.2, 0.4, 0.4] }));
+      els.push(candEl({ box: [1, y, 0.8, 0.8], cost }), pictureEl({ box: [1.2, y + 0.6, 0.4, 0.9] }));
     });
     const p = run(els);
     expect(p.runs).toHaveLength(RASTER_MAX_PICTURES);
@@ -259,7 +263,8 @@ describe('planRasters: the pictures a slide holds and the merge policy (R3)', ()
     resetIds();
     const els: Element[] = [
       candEl({ box: [1, 1, 4, 3], cost: 900 }),
-      pictureEl({ box: [2, 2, 1, 1] }),
+      // A picture over the first member that the second member lies over too: it cuts the run in two.
+      pictureEl({ box: [4.5, 2, 2, 1] }),
       candEl({ box: [6, 1, 4, 3], cost: 300 }),
     ];
     // Each picture is 576 x 432 logical px = 995,328 device px: one fits under 1,500,000, two do not.

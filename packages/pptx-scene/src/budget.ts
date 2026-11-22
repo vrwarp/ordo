@@ -377,6 +377,7 @@ export function budgetCost(
   const runs = new Set<string>();
   let objects = 0;
   let sheets = 0;
+  let rasters = 0;
   if (background.fill.kind !== 'none') objects++;
   if (background.fill.kind === 'picture') pictures.add(background.fill.picture.part);
   elements.forEach((e, i) => {
@@ -394,6 +395,15 @@ export function budgetCost(
         runs.add(`s${e.sheet}`);
         objects++;
         sheets++;
+      }
+      return;
+    }
+    // Q53: a picture of shapes is ONE object and ONE picture, whatever it holds (`raster-plan.ts`).
+    if (e.kind === 'shape' && e.raster !== undefined) {
+      if (!runs.has(`r${e.raster}`)) {
+        runs.add(`r${e.raster}`);
+        objects++;
+        rasters++;
       }
       return;
     }
@@ -416,7 +426,7 @@ export function budgetCost(
     }
     objects += ownObjects(e, tables);
   });
-  let distinct = pictures.size + sheets + (art ? 1 : 0);
+  let distinct = pictures.size + sheets + rasters + (art ? 1 : 0);
   const packed = atlas.filter((p) => pictures.has(p)).length;
   if (packed > 1) distinct -= packed - 1;
   return { objects, pictures: distinct };
@@ -504,9 +514,15 @@ export function fitBudgets(
   };
   const art = artRange(elements);
   const inArt = new Set(art?.elements);
+  // Q53: the members of a picture of shapes are in no run, never culled, merged, decorated or composited: they are
+  // held out of every step below as the art's elements are (the picture counts once, `budgetCost`).
+  const held = new Set(inArt);
+  elements.forEach((e, i) => {
+    if (e.kind === 'shape' && e.raster !== undefined) held.add(i);
+  });
   const cost = () => budgetCost(elements, background, art, plan.atlas, tables);
   const used = () => {
-    const out = new Set(inArt);
+    const out = new Set(held);
     elements.forEach((e, i) => {
       if (e.decor !== undefined || e.sheet !== undefined) out.add(i);
     });
@@ -514,7 +530,7 @@ export function fitBudgets(
   };
   if (cost().objects > MAX_SLIDE_OBJECTS) {
     // 2: shapes of one look, as M6 merges them.
-    markShapeRuns(elements, frame, inArt);
+    markShapeRuns(elements, frame, held);
     // 3-5 only with what the importer stores (`BudgetOptions`): without either, the merges stand.
     if (cost().objects > MAX_SLIDE_OBJECTS && (decorations || sheets)) {
       // 3-5 plan with the merges left out (a decoration subsumes them), which are worked out again after.
@@ -562,7 +578,7 @@ export function fitBudgets(
           }
       }
       // The shapes of one look left merge again, where the slide still needs it.
-      if (objects > MAX_SLIDE_OBJECTS) markShapeRuns(elements, frame, inArt);
+      if (objects > MAX_SLIDE_OBJECTS) markShapeRuns(elements, frame, held);
     }
   }
   // What the guard and P leave out, with the budget each was past (LibreOffice's art draws it, or it is listed).
@@ -578,7 +594,7 @@ export function fitBudgets(
   // 7: the guard. Elements that are not text first, topmost first; then text. With LibreOffice the art that
   // draws what it leaves out is one more of the render clamp's objects.
   if (!plan.whole && planned > MAX_SLIDE_OBJECTS_TEXT)
-    for (const i of guard(elements, background, art, inArt, lo ? 1 : 0, tables))
+    for (const i of guard(elements, background, art, held, lo ? 1 : 0, tables))
       leftOut.set(i, 'budget:shapes');
   // P: the atlas, then the guard's way for what it cannot hold. Without sheets, the guard's way past what the
   // render clamp draws, where an art new on the slide is one more of its pictures.
@@ -588,10 +604,10 @@ export function fitBudgets(
   if (!plan.whole && pictures > pictureBudget - (leftOut.size ? pictureRoom : 0)) {
     const keep = new Set<string>();
     if (background.fill.kind === 'picture') keep.add(background.fill.picture.part);
-    if (sheets) plan.atlas = atlasParts(elements, frame, pictures, MAX_SLIDE_PICTURES, keep, inArt);
+    if (sheets) plan.atlas = atlasParts(elements, frame, pictures, MAX_SLIDE_PICTURES, keep, held);
     const over = cost().pictures - (pictureBudget - pictureRoom);
     if (over > 0)
-      for (const i of leavePictures(elements, inArt, [...plan.atlas, ...keep], over))
+      for (const i of leavePictures(elements, held, [...plan.atlas, ...keep], over))
         leftOut.set(i, 'budget:pictures');
   }
   // With LibreOffice what is left out is the art's, each for its budget; without it, culled and listed.

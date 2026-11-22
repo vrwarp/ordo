@@ -282,6 +282,13 @@ export const PORT_TABLE = {
     spec: 'bake.spec.ts',
     what: 'hub (seeded heavy slides), ORDO_PRERENDER=on; restarted with ORDO_PRERENDER=off in the last test',
   },
+  // shape-raster (Q53, sub-wave 3): many-point shapes drawn into one picture by the hub's own Chromium; the second hub has none.
+  'pptx-raster': {
+    offset: 550,
+    count: 2,
+    spec: 'pptx-raster.spec.ts',
+    what: '0 hub without LibreOffice with Chromium and ORDO_PRERENDER=on (the picture of shapes, the screen, Reset slide, Re-import), 1 hub without LibreOffice and without Chromium (the same deck as today, and says so)',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;

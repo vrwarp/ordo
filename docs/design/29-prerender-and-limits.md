@@ -1697,3 +1697,36 @@ become pictures and what each picture is made of, is "As built in sub-wave 3 (sh
   picture stops it within about a quarter of a second and the browser's whole process group is killed; the browser runs
   at nice 19, one at a time on the hub; a crashed browser is relaunched once.
 <!-- /raster-maker:as-built -->
+
+<!-- shape-raster:as-built -->
+### As built in sub-wave 3 (shape-raster: pictures of many-point shapes)
+
+The converter and the hub's job side of the picture maker above (the maker, the page and the wide draw are raster-maker's). What
+a custom-path shape with more than 128 points does at import (the owner's Q53, with Q53.e to Q53.g and Q57):
+
+- **What becomes a picture.** On an eligible slide (no animation anchor, no playing video or picture, no step text, no lyric
+  text, no video background: `wholeAnchorKinds`, Q25.c.b) every custom path over `RASTER_POINTS` (128) points, and every shape
+  past a converter limit (more than 8 paths, a sub-path over 4,096 points, the 65,536 slide total), is a candidate. A RUN is
+  the neighbouring candidates and the small shapes between them (the small ones also stop being editable, Q53.e); one picture
+  a run, at most `RASTER_MAX_PICTURES` (4) a slide. A text box over the run is drawn live above the picture unless a LATER
+  member lies over it (the exact z-order rule; then its words are drawn into the picture, Q53.h).
+- **No limit is raised.** The reading bound of the recipe (262,144 points a shape, 1,048,576 a recipe, 64 paths) is import-only:
+  never stored, never drawn live, pinned equal to the maker's validator. 8 paths x 4,096 points a shape and 65,536 points a
+  slide stay as the stored limits.
+- **The job.** `rastersFor` decides the maker once (Chromium first; a hub with LibreOffice keeps LibreOffice's art while
+  `RASTER_WITH_LIBREOFFICE` is false, M-SR5; a hub with neither keeps today's boxes and says so). The picture step is deferred
+  while ANY service is live (`JobDeferred`, `PptxNativePayload.deferrals`) and runs right after the conversion: each recipe is
+  drawn one at a time by the maker's loop and stored as an ordinary ready picture (source hash = the recipe hash, so a
+  re-import finds it); a slide any of whose pictures was not made is converted again with the picture step off, so it is
+  exactly today's slide within every budget. Caps: 200 pictures, 256 MiB of PNG, 300 s of drawing, the import's megapixels
+  and, before each picture, the disk floor.
+- **Reset slide.** `PptxReimportReq.rasters: 'off'` (only with `slideIds`) converts one slide again with the picture step off:
+  its shapes come back as shapes, shapes over a limit as today's boxes; a whole Re-import makes the picture again (Q67).
+- **Measured (Traffic Dark slides 88 / 89 / 91, a real hub, the owner's gate).** Without LibreOffice: 0.727 / 0.422 / 0.753 with
+  whole slides and no picture, 0.9869 / 0.9734 / 0.9895 with the pictures (against LibreOffice's page). 88 is 77 objects and
+  30.6 KB (a picture of 942 shapes, 3 small ones, 21 live texts), 89 67 objects and 23.8 KB (four pictures of 1,816, 87, 17 and
+  4 shapes), 91 18 objects and 8.8 KB; 12 of 12 pictures made. With LibreOffice the own picture scores 0.9869 / 0.9734 / 0.9895
+  against 0.9870 / 0.9946 / 0.9896 for LibreOffice's page in the same run: no change on 88 and 91 (0.0001, 0.0002) and a drop of
+  0.0212 on 89 (the full deck's diagnosis has 0.9987 for 88: a drop of 0.0118 there) that no named later project recovers, so a
+  hub with LibreOffice keeps LibreOffice's page and `RASTER_WITH_LIBREOFFICE` is false (M-SR5, Q53.j, Q51).
+<!-- /shape-raster:as-built -->

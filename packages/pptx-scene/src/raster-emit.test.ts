@@ -34,8 +34,15 @@ import { candEl, custNode, FRAME, IN, polyPathXml, resetIds, smallEl, textBody }
 import { custGeom } from './test-util.ts';
 import { MAX_PACKED_ELEMENTS_PER_PART, MAX_PACKED_PATH_ITEMS_PER_PART, parseXml, type XNode } from './xml.ts';
 
-/** The renderer's own compile and build (this tree's: they ignore the limits, as every caller of today's does). */
-const TODAY: RasterGeometry = { compile: compileGeom, build: buildGeom };
+/**
+ * The renderer's own compile and build CALLED AS EVERY CALLER BEFORE THE LIMITS PARAMETER DID (the limits argument is not
+ * passed: a path past 4,096 points loses points, and says so). The wide compile (`WIDE_GEOMETRY`, `raster-wide.ts`) is the
+ * default of the emitter since step 6-0 and is tested below and in raster-integration.test.ts (E1w).
+ */
+const TODAY: RasterGeometry = {
+  compile: (src, notes) => compileGeom(src, notes),
+  build: (geom, w, h, adj, notes) => buildGeom(geom, w, h, adj, notes),
+};
 
 /** A scene of one slide holding `els`: what the REAL emitter writes for a member is read from it. */
 function sceneOf(els: Element[]): DeckScene {
@@ -253,11 +260,12 @@ describe('emitRaster: one picture and its recipe (C-SR4, C-SR5, C-SR6)', () => {
 
   it('a member with words and nothing to paint has no geometry: the page draws only its text', () => {
     resetIds();
+    // The label lies under the second member (which covers it), so it is drawn into the picture with its words.
     const label = smallEl({ box: [1.1, 1, 0.5, 0.3], text: textBody('Gulf'), fill: { kind: 'none' } });
     const els = [
       candEl({ box: [1, 1, 0.5, 0.5], cost: 300 }),
       label,
-      candEl({ box: [1.6, 1, 0.5, 0.5], cost: 200 }),
+      candEl({ box: [1.3, 1, 0.5, 0.5], cost: 200 }),
     ];
     const p = plan(els);
     expect(p.runs[0]!.members).toHaveLength(3);
@@ -661,9 +669,9 @@ describe('emitRaster: a picture is complete or not made (G6, R9)', () => {
     }
   });
 
-  it("what the screens' own compile drops past its limits cannot be drawn whole in this tree: a 6,000-point path is refused", () => {
+  it("a compile that drops points past the screens' limits cannot draw a picture whole: a 6,000-point path is refused", () => {
     resetIds();
-    // The injected functions are today's (they ignore the limits): a path past 4,096 points loses points, and says so.
+    // The injected functions do not take the limits (a stand-in for a compile without them): a path past 4,096 points loses points, and says so.
     const els = [candEl({ box: [1, 1, 0.5, 0.5], cost: 6_000, node: custNodeOf(6_000) })];
     const r = rig();
     refused('read-bound', r, emitRaster(r.ctx, plan(els).runs[0]!, r.out, r.emitOne), []);

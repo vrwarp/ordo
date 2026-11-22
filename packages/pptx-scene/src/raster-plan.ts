@@ -33,6 +33,7 @@ import { knownPreset, MAX_SLIDE_PATH_POINTS } from './geom.ts';
 import type {
   Background,
   CustomPaths,
+  RasterCandidate,
   Element,
   ElementBase,
   Frame,
@@ -53,7 +54,6 @@ import {
   type RasterMaker,
   type RasterRef,
 } from './raster.ts';
-import type { XNode } from './xml.ts';
 
 /** Whether a slide plans pictures: 'off' plans nothing, 'detect' counts the candidates, 'plan' plans. */
 export type RasterMode = 'off' | 'detect' | 'plan';
@@ -61,25 +61,10 @@ export type RasterMode = 'off' | 'detect' | 'plan';
 /** What a candidate becomes again when its picture cannot be made: its stored paths ('built') or today's box ('box'). */
 export type RasterForm = 'built' | 'box';
 
-/**
- * A custom-path shape the walk marks for a picture (C-SR2): `raw` is the converter's point cost over what the file
- * holds, `why` the rule that made it one ('points': over `RASTER_POINTS`; 'limit': past a geometry limit of the
- * converter; 'total': only the slide's total refused it), `times` the objects that would store it, `today` what
- * `customPaths` gives it (over the limits, a box), and `node` the `a:custGeom` the recipe builder reads.
- */
-export interface RasterCandidate {
-  raw: number;
-  why: 'points' | 'limit' | 'total';
-  times: number;
-  today: CustomPaths;
-  node: XNode;
-}
+export type { RasterCandidate };
 
-/**
- * A shape element with the two fields this release adds to the IR (`rasterOf`, the walk's; `raster`, the planner's:
- * the index of the first element of the run the shape is drawn into). Step 5 of the track moves both into `ir.ts`.
- */
-export type RasterElement = ShapeElement & { rasterOf?: RasterCandidate; raster?: number };
+/** A shape element (the walk's `rasterOf` and the planner's `raster` are fields of `ShapeElement`). */
+export type RasterElement = ShapeElement;
 
 export interface RasterPlanOptions {
   /** Default 'plan'. */
@@ -375,6 +360,9 @@ const open = (c: Cell): RunB => ({
   last: 0,
 });
 
+/** Cells a skip decision looks ahead at most (a slide of thousands of elements stays linear in practice). */
+const LOOKAHEAD = 4_096;
+
 const hitsMember = (r: RunB, box: RectEmu) =>
   overlaps(r.box, box) && r.cells.some((m) => overlaps(m.box, box));
 const hitsSkipped = (r: RunB, box: RectEmu) => r.skipped.some((s) => overlaps(s.box, box));
@@ -424,10 +412,28 @@ function scan(cells: readonly Cell[], from: number, to: number, sameScope: boole
     if (c.hasText) run.texts++;
     if (c.kind === 'candidate') run.last = run.cells.length - 1;
   };
-  /** An element that is not a member: skipped when it shares no area with the run, else it ends the run. */
-  const other = (c: Cell) => {
+  /**
+   * Whether a cell after `k` that could join the run (a candidate or a small shape) shares area with `box`: such an element lies
+   * UNDER a later member, so it cannot be drawn live above the picture (z order). Bounded: past `LOOKAHEAD` cells it answers yes.
+   */
+  const coveredLater = (k: number, box: RectEmu): boolean => {
+    for (let j = k + 1, seen = 0; j <= to; j++) {
+      const m = cells[j]!;
+      if (m.silent || (m.kind !== 'candidate' && m.kind !== 'small')) continue;
+      if (++seen > LOOKAHEAD) return true;
+      if (overlaps(m.box, box)) return true;
+    }
+    return false;
+  };
+  /**
+   * An element that is not a member: skipped when it shares no area with the run, or when it lies over members and no later
+   * member lies over IT (the exact rule of z order: drawn live above the picture, it is still above what it covered), else it
+   * ends the run.
+   */
+  const other = (c: Cell, k: number) => {
     if (!r) return;
-    if (!c.broken && r.skipped.length < RASTER_RUN.skipped && !hitsMember(r, c.box)) r.skipped.push(c);
+    const room = !c.broken && r.skipped.length < RASTER_RUN.skipped;
+    if (room && (!hitsMember(r, c.box) || !coveredLater(k, c.box))) r.skipped.push(c);
     else end();
   };
   for (let k = from; k <= to; k++) {
@@ -441,12 +447,13 @@ function scan(cells: readonly Cell[], from: number, to: number, sameScope: boole
       }
     } else if (c.kind === 'small') {
       if (joins(c)) add(c);
-      else other(c);
+      else other(c, k);
     } else if (c.kind === 'text') {
-      // A text box lies over the run or apart from it: only one that lies over it has to be drawn in.
-      if (r && !c.broken && hitsMember(r, c.box) && joins(c)) add(c);
-      else other(c);
-    } else other(c);
+      // A text box lies over the run or apart from it: only one that a LATER member lies over has to be drawn in (its words
+      // become part of the picture); one nothing covers stays live text above the picture.
+      if (r && !c.broken && hitsMember(r, c.box) && coveredLater(k, c.box) && joins(c)) add(c);
+      else other(c, k);
+    } else other(c, k);
   }
   end();
   return runs;

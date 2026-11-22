@@ -15,6 +15,12 @@ import {
   slideMissing,
 } from '../../lib/pptxImport.ts';
 import { useLibrary } from '../../state/library.ts';
+import {
+  holdsRaster,
+  RASTER_PICTURE_CARD,
+  RASTER_RESET_CONFIRM,
+  RASTER_RESET_HINT,
+} from '../../lib/pptxRaster.ts';
 import { setSlideShows } from './actions.ts';
 import { useEditor } from './editorStore.ts';
 import {
@@ -89,11 +95,19 @@ export function PptxSlideCard({ slide, p, readOnly }: { slide: Slide; p: Present
   const reset = async () => {
     const ok = await confirmDialog(
       'Reset slide from PowerPoint',
-      `The slide becomes again what the PowerPoint file has: the changes made to its text, pictures and shapes in ordo are replaced. Objects you added in ordo stay on top, and its notes, timing and background stay. History keeps the slide as it is now.${savedFirst}`,
+      `The slide becomes again what the PowerPoint file has: the changes made to its text, pictures and shapes in ordo are replaced. Objects you added in ordo stay on top, and its notes, timing and background stay.${holdsRaster(slide) ? ` ${RASTER_RESET_CONFIRM}` : ''} History keeps the slide as it is now.${savedFirst}`,
       'Reset slide',
       true,
     );
-    if (ok) await startReimport(p, { slideIds: [slide.id], reset: [slide.id] }, 'reset', slide.id);
+    // Q57.d: the slide is converted again without the picture step, so its shapes come back as shapes.
+    if (ok)
+      await startReimport(
+        p,
+        { slideIds: [slide.id], reset: [slide.id], rasters: 'off' },
+        'reset',
+        slide.id,
+        holdsRaster(slide),
+      );
   };
   return (
     <PptxSlideCardView
@@ -180,6 +194,7 @@ export function PptxSlideCardView(props: {
     resetHint = `Resetting the slide from the PowerPoint file (${Math.round((reimport?.progress ?? 0) * 100)}%).`;
   else if (props.readOnly) resetHint = 'The slide can be reset after the service.';
   else if (busy) resetHint = 'A re-import of this presentation is running.';
+  else if (holdsRaster(slide)) resetHint = RASTER_RESET_HINT;
   else if (edited || pptx.failed)
     resetHint = 'Brings back the slide as the PowerPoint file has it. Objects you added in ordo stay on top.';
   else resetHint = 'Nothing to reset: the slide is as it was imported.';
@@ -200,6 +215,11 @@ export function PptxSlideCardView(props: {
       {edited && (
         <span className="muted" data-edited>
           Edited in ordo since the import.
+        </span>
+      )}
+      {holdsRaster(slide) && (
+        <span className="muted" data-raster-picture>
+          {RASTER_PICTURE_CARD}
         </span>
       )}
       {pptx.pending && (
@@ -310,7 +330,7 @@ export function PptxSlideCardView(props: {
           <button
             type="button"
             className="small"
-            disabled={props.readOnly || busy || !(edited || pptx.failed)}
+            disabled={props.readOnly || busy || !(edited || pptx.failed || holdsRaster(slide))}
             onClick={props.onReset}
             style={{ alignSelf: 'flex-start' }}
           >

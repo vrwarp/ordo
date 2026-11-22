@@ -89,7 +89,9 @@ describe('the maker ladder (RM-H1)', () => {
 
   it("answers the matrix: Chromium first, LibreOffice as today, else today's boxes", () => {
     expect(rastersFor(base)).toBe('page');
-    expect(rastersFor({ ...base, lo: true })).toBe('page');
+    // A hub with LibreOffice keeps LibreOffice's art while RASTER_WITH_LIBREOFFICE is false (M-SR5), and says so.
+    expect(rastersFor({ ...base, lo: true })).toBe(RASTER_WITH_LIBREOFFICE ? 'page' : 'off');
+    expect(rasterOffReason({ ...base, lo: true })).toBe(RASTER_WITH_LIBREOFFICE ? undefined : 'libreoffice');
     expect(rastersFor({ ...base, poppler: true })).toBe('page');
     // no Chromium: no maker (the PDF route was not built), and the report line depends on LibreOffice
     expect(rastersFor({ ...base, chromium: false, poppler: true })).toBe('off');
@@ -117,7 +119,8 @@ describe('the maker ladder (RM-H1)', () => {
     expect(RASTER_LIMITS_HUB).toEqual({ perImport: 200, importMs: 300_000, importBytes: 268_435_456 });
     expect(RASTER_PAGE_MS).toBe(60_000);
     expect(WATCH_MS).toBe(250);
-    expect(RASTER_WITH_LIBREOFFICE).toBe(true);
+    // shape-raster-2's measure M-SR5 (Q53.j): a hub with LibreOffice keeps LibreOffice's art, the own picture scores lower there.
+    expect(RASTER_WITH_LIBREOFFICE).toBe(false);
     expect(RASTER_PDF_ROUTE).toBe(false);
   });
 

@@ -482,6 +482,19 @@ GPU): a 3840x2160 picture takes 92 to 304 ms in the page and its PNG 0.2 to 3.7 
 soft edge cost two to three times the time and memory (the owner's open Q53.i, default: they stay as today).
 <!-- /raster-maker:ladder -->
 
+<!-- shape-raster:report -->
+**Pictures of shapes in the import report (Q53, Q68).** The import card and the editor's report say what the picture step did, in
+plain words (the owner's words are "picture" and "shape"): "N shapes were drawn into M pictures so the slide shows them whole
+(the pictures can be moved and resized, but the shapes in them cannot be edited; Reset slide from PowerPoint brings back the
+shapes that fit ordo's limits as shapes, and shapes too large stay boxes)", "K of them have words: the words are part of the
+picture now ...", and for what stayed: "this computer cannot draw pictures of shapes (it needs Chromium): these shapes are as
+they were" (a hub with no maker), "the pictures of these shapes come from LibreOffice, as before" (a hub with LibreOffice),
+"N shapes with a shadow, a glow, a soft edge, a 3-D look or a picture fill stay as they were", "N pictures could not be made in
+time / were not made because a service started / ... and the shapes are as before". The counts are `PptxNativeResult.rasters`
+(`apps/operator/src/lib/pptxRaster.ts` builds the lines; a test pins them against jargon). The browser's parse counts the
+many-point shapes (`PptxClientScene.rasterCandidates`, no recipe ever); a hub that draws their pictures parses the deck itself.
+<!-- /shape-raster:report -->
+
 ### Pictures of the native import
 
 The native import stores each picture part its slides use once, prepared for how it is shown (design/27 §4,

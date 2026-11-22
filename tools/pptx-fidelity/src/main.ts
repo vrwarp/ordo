@@ -64,6 +64,9 @@
  *               hub that keeps heavy slides whole stores it: all its objects, the share of 2 MiB of such slides kept
  *               whole and the rest cut to the screens' counts (`selectWhole`); `--whole-anchors own|motion` (default
  *               motion, Q25.c.b: only a video keeps a slide out)
+ * --rasters     (Q53) read the decks with the pictures of many-point shapes planned (`ParseOptions.rasters` 'plan'): the
+ *               converter-alone columns count them (`raster-census.ts`); this page draws none of them (a hub that makes them
+ *               is `--before hub`); `--raster-points N` (implies --rasters) is the census sweep's threshold (default 128)
  * --frames      draw a slide past a count (more than 200 objects or 16 pictures) or past one frame of unit area
  *               as an output does since the underlay frame (a direct part over the frame made beforehand,
  *               renderer `frame.ts`), not cut at 200 objects: the timings are then the copy plus the direct part,
@@ -276,6 +279,8 @@ type NativeOpts = {
   /** `--whole`: the converter's whole option and the ladder's whole model (`wholeAnchors`: `--whole-anchors`). */
   whole?: boolean;
   wholeAnchors?: 'own' | 'motion';
+  /** `--rasters` / `--raster-points N` (Q53): the converter-alone column plans the pictures of many-point shapes (counted, not drawn). */
+  rasters?: { points?: number };
   /** `--frames`: draw a slide the underlay frame splits as an output does (`native-page.ts` `RenderJob.frames`). */
   frames?: boolean;
   /** `--ask-hub`: slides (1-based) the hub is asked for whatever it stores (`askedSet`'s `extra`). */
@@ -309,6 +314,7 @@ async function nativeColumn(
     loCompat: opts.loCompat,
     noLibreOffice: opts.noLibreOffice,
     ...(opts.whole ? { whole: { anchors: opts.wholeAnchors ?? 'motion' } } : {}),
+    ...(opts.rasters ? { rasters: opts.rasters } : {}),
   });
   const notes = [...converted.notes];
   // Each slide's class once the hub's budgets ran (`census.ts`), by deck index, on the slides as emitted.
@@ -664,6 +670,7 @@ async function main(): Promise<void> {
             noLibreOffice: a.noLibreOffice,
             hubBudget: a.hubBudget,
             ...(a.whole ? { whole: true, wholeAnchors: a.wholeAnchors ?? ('motion' as const) } : {}),
+            ...(a.rasters ? { rasters: a.rasterPoints === undefined ? {} : { points: a.rasterPoints } } : {}),
             ...(a.frames ? { frames: true } : {}),
             ...(askHub ? { askHub } : {}),
             ...(askHubNoLo ? { askHubNoLo } : {}),

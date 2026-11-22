@@ -692,3 +692,133 @@ describe('a scene whose table cells need a script face only this computer has (r
     }
   }, 180_000);
 });
+
+describe('the pictures of many-point shapes in a scene (Q53, C-SR10, H4)', () => {
+  const rasterDeck = () => {
+    let path = '<a:moveTo><a:pt x="0" y="0"/></a:moveTo>';
+    for (let i = 1; i < 300; i++)
+      path += `<a:lnTo><a:pt x="${(i * 37) % 1000}" y="${(i * 91) % 1000}"/></a:lnTo>`;
+    path += '<a:close/>';
+    return buildDeck({
+      slides: [
+        {
+          shapes: sp({
+            id: 2,
+            x: IN,
+            y: IN,
+            cx: 3 * IN,
+            cy: 2 * IN,
+            geom: 'none',
+            fill: `${custGeom({ paths: `<a:path w="1000" h="1000">${path}</a:path>` })}${solid('3366AA')}`,
+          }),
+        },
+      ],
+    });
+  };
+  const zipped = async (parts: Map<string, Uint8Array>) => {
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    return z.generateAsync({ type: 'uint8array' });
+  };
+  let withShapes: PptxClientScene;
+  let none: PptxClientScene;
+  beforeAll(async () => {
+    withShapes = (await parsePptxScene(await zipped(rasterDeck()))).scene;
+    none = (
+      await parsePptxScene(
+        await zipped(buildDeck({ slides: [{ shapes: sp({ id: 2, x: IN, y: IN, cx: IN, cy: IN }) }] })),
+      )
+    ).scene;
+  });
+
+  it('the browser parse counts the many-point shapes, holds no plan and no recipe, and a deck with none says nothing', async () => {
+    expect(withShapes.rasterCandidates).toBe(1);
+    // The scene is today's output: no slide carries a plan, a recipe or words of one (the schema has no such field).
+    for (const sl of withShapes.slides) {
+      expect(sl).not.toHaveProperty('rasters');
+      expect(sl).not.toHaveProperty('rasterInfo');
+      expect(sl).not.toHaveProperty('rasterWords');
+    }
+    expect(withShapes).not.toHaveProperty('rasters');
+    expect(none).not.toHaveProperty('rasterCandidates');
+  });
+
+  it('a hub that draws the pictures refuses it and parses the deck itself; one that cannot takes it as it is', () => {
+    expect(checkClientScene(structuredClone(withShapes), { libreoffice: true, rasters: true })).toEqual({
+      refused: 'it holds shapes this hub draws as pictures',
+    });
+    const taken = checkClientScene(structuredClone(withShapes), { libreoffice: true });
+    expect('scene' in taken && taken.scene.rasterCandidates).toBe(1);
+    // A scene with no such shapes is taken by both.
+    expect('scene' in checkClientScene(structuredClone(none), { libreoffice: true, rasters: true })).toBe(
+      true,
+    );
+  });
+
+  it('drops a recipe-like field a hostile scene carries, and refuses a malformed count', () => {
+    const t = structuredClone(withShapes) as unknown as Record<string, unknown>;
+    (t.slides as Record<string, unknown>[])[0]!.rasters = [{ id: 'pptxmedia:rasterx', recipe: { v: 1 } }];
+    t.rasters = [{ recipe: 'x'.repeat(1000) }];
+    const out = checkClientScene(t, { libreoffice: true });
+    expect('scene' in out).toBe(true);
+    if (!('scene' in out)) return;
+    expect(out.scene.slides[0]).not.toHaveProperty('rasters');
+    expect(out.scene).not.toHaveProperty('rasters');
+    for (const bad of [0, -1, 1.5, 'x', 200_000]) {
+      expect(
+        checkClientScene({ ...structuredClone(withShapes), rasterCandidates: bad }, { libreoffice: true }),
+      ).toMatchObject({
+        refused: expect.stringContaining('rasterCandidates'),
+      });
+    }
+  });
+
+  it("the hub's own parse of the deck equals what the scene import stores, byte for byte, when this hub makes no pictures", async () => {
+    const hub = await startHub();
+    try {
+      const parts = rasterDeck();
+      const file = await zipDeck(parts, dir, 'raster-equal.pptx');
+      const hash = await storeDeck(hub, file);
+      const viaScene = await (async () => {
+        const tmp = hub.store.tmpPath('json');
+        writeFileSync(
+          tmp,
+          JSON.stringify((await parsePptxScene(await zipped(parts), { libreoffice: true })).scene),
+        );
+        const sceneHash = (await hub.store.put(tmp, { ext: 'json', mime: 'application/json' })).hash;
+        const job = await hub.imports.pptx.queueNative(hash, 'raster-equal.pptx', {}, sceneHash);
+        return job.id;
+      })();
+      const direct = hub.imports.pptx.queueNative(hash, 'raster-equal-direct.pptx', {});
+      for (const id of [viaScene, direct.id]) {
+        for (;;) {
+          const j = hub.jobs.get(id);
+          if (j.state === 'done' || j.state === 'failed') {
+            expect(j.state, j.error).toBe('done');
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 20));
+        }
+      }
+      const strip = (id: string) => {
+        const r = hub.jobs.get(id).result as PptxNativeResult;
+        const p = hub.lib.presentations.must(r.presentationId);
+        return JSON.stringify(
+          p.sections
+            .flatMap((sec) => sec.slides)
+            .map((sl) => ({
+              ...sl,
+              id: 'x',
+              // The digest hashes the objects with their ids (random per import): everything else is compared.
+              pptx: { ...sl.pptx, digest: 'x' },
+              objects: sl.objects.map((o) => ({ ...o, id: 'x' })),
+            })),
+        );
+      };
+      expect(strip(viaScene)).toBe(strip(direct.id));
+      expect((hub.jobs.get(direct.id).result as PptxNativeResult).rasters).toBeUndefined();
+    } finally {
+      await hub.cleanup();
+    }
+  }, 60_000);
+});

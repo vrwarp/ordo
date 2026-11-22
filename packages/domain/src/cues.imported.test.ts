@@ -100,3 +100,40 @@ describe('the Bottom-Third strap text (strapText)', () => {
     expect(strapText(titled)).not.toBe('');
   });
 });
+
+describe('the words of a picture of shapes (Q53, Q68: a native slide with a raster picture)', () => {
+  const picture = (role: string | undefined) => ({
+    id: 'i1',
+    type: 'image' as const,
+    box,
+    mediaId: 'm',
+    fit: 'stretch' as const,
+    opacity: 1,
+    radius: 0,
+    locked: true,
+    ...(role ? { origin: { src: 'pptx', role } } : {}),
+  });
+  const native = (objects: Slide['objects']): Slide =>
+    ({
+      id: 's',
+      objects,
+      pptx: { fileId: 'f', index: 0, class: 'native', version: 3, artText: 'Praise the Lord' },
+    }) as Slide;
+
+  it('reads the pictured words of a native slide that holds a picture of shapes, and only then', () => {
+    expect(importedText(native([picture('raster')]))).toBe('Praise the Lord');
+    expect(importedText(native([picture('picture')]))).toBe('');
+    expect(importedText(native([picture(undefined)]))).toBe('');
+    expect(importedText(native([]))).toBe('');
+  });
+
+  it('is the label of a slide with no text of its own, and a slide with live text keeps its own', () => {
+    expect(firstText(native([picture('raster')]))).toBe('Praise the Lord');
+    expect(strapText(native([picture('raster')]))).toBe('Praise the Lord');
+    const live = native([
+      picture('raster'),
+      { id: 't1', type: 'text', box, text: 'Live words' } as unknown as Slide['objects'][number],
+    ]);
+    expect(firstText(live)).toBe('Live words');
+  });
+});

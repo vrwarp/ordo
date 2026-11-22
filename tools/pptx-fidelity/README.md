@@ -165,6 +165,17 @@ the ladder that keeps heavy slides whole, through the import core's own `selectW
 `--whole-anchors` too.
 <!-- import-whole:end -->
 
+<!-- shape-raster:begin -->
+`--rasters` (Q53) reads every deck with the pictures of many-point shapes planned (`ParseOptions.rasters` 'plan', the recipes counted and
+never drawn) and adds per slide that has a many-point shape `rasterCandidates`, `rasterRuns`, `rasterPictures`, `rasterShapes` (the shapes
+drawn into pictures), `rasterPoints` (path commands in the recipes), `rasterSkipped` (+ `rasterSkippedWhy`: text, effects, fill, anchored,
+other), `rasterBytes` (canonical recipe bytes), `rasterWords`, and `rasterFailed` / `rasterReasons` when there are any
+(`src/raster-census.ts`). `--raster-points N` (implies `--rasters`) is the threshold of the sweep (64, 128, 256, 512; default 128, the
+product's `RASTER_POINTS`; measure only, `ParseOptions.rasterPoints`). `tsx src/raster-census.ts sweep <today.jsonl> 64=<a.jsonl> 128=<b.jsonl>
+...` prints the sweep as a table. The fidelity harness takes both flags too; its own page draws none of the pictures (a hub that makes them is
+`--before hub` / `--ask-hub-nolo` with `ORDO_PRERENDER=on` and `ORDO_CHROMIUM`).
+<!-- shape-raster:end -->
+
 ### The golden-pptx census ratchet (CI)
 
 ```

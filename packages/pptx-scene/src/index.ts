@@ -9,7 +9,7 @@
  */
 import { missingEntry } from '@ordo/domain/missing.ts';
 import { XmlBoundError } from './xml.ts';
-import type { BudgetPlan } from './budget.ts';
+import { type BudgetPlan, wholeAnchorKinds } from './budget.ts';
 import { classifySlide } from './classify.ts';
 import { slideContext } from './context.ts';
 import { type DeckInfo, readDeck, type SlideRef } from './deck.ts';
@@ -30,6 +30,9 @@ import {
   MEDIA_PREFIX,
 } from './emit.ts';
 import { frameOf, slideRect } from './frame.ts';
+import type { RasterMaker } from './raster.ts';
+import { rasterRegistry } from './raster-emit.ts';
+import { applyUnclaimedForms, planRasters, type RasterMode } from './raster-plan.ts';
 import type { Background, DeckScene, Element, Frame, SectionInfo, SlideScene } from './ir.ts';
 import { clean, type Log, noteList } from './log.ts';
 import { openPackage, type PartSource } from './opc.ts';
@@ -68,6 +71,22 @@ export {
   type WholeAnchorKind,
 } from './budget.ts';
 export { DECOR_PREFIX, type PlatePlan, platePlan } from './decor.ts';
+export type {
+  EmittedRaster,
+  EmittedRasterInfo,
+  RasterGeometry,
+  RasterRegistry,
+  RegisteredRaster,
+} from './raster-emit.ts';
+export {
+  RASTER_MAY_HOLD,
+  RASTER_POINTS,
+  RASTER_PREFIX,
+  RASTER_VERSION,
+  type RasterMaker,
+  type RasterRecipe,
+} from './raster.ts';
+export type { RasterMode, RasterPlan } from './raster-plan.ts';
 export { type EmittedSheet, SHEET_DENSITY, SHEET_PREFIX } from './sheet.ts';
 export type { EmittedClip } from './media.ts';
 export { type PictureHeader, pictureSize } from './picture.ts';
@@ -172,6 +191,21 @@ export interface ParseOptions {
   wholeAnchors?: 'own' | 'motion';
   /** Q24.a's gate (`BudgetOptions.anchored`): the importers pass easy-plan's `PRERENDER_ANCHORED`. */
   wholeAnchored?: boolean;
+  /**
+   * Q53 (the pictures of many-point shapes, `raster-plan.ts`): 'plan' draws the custom-path shapes with more than
+   * `RASTER_POINTS` points, or past a geometry limit, into pictures (`SlideScene.rasters`; each run is written as one
+   * picture and its recipe is in `EmitResult.rasters`), on slides with no animation anchor; 'detect' only counts the
+   * candidates and plans nothing; 'off' (the default) is the converter of before, byte for byte. Parse and emit a
+   * deck with the same value. A caller that plans pictures must be able to make them: the hub decides once per import.
+   */
+  rasters?: RasterMode;
+  /**
+   * Measure only (the census sweep 64 / 128 / 256 / 512 of `tools/pptx-fidelity` `--raster-points`): the point count past which a
+   * custom-path shape is a candidate with `rasters` 'plan' or 'detect'. The product never sets it: `RASTER_POINTS`.
+   */
+  rasterPoints?: number;
+  /** Who draws the pictures (read with 'plan' only): the words of a shape go into a picture only for the 'page'. Default 'page'. */
+  rasterMaker?: RasterMaker;
   /**
    * The fidelity harness's census only (never the hub, never stored): what the slide budgets planned for each
    * slide as it is read (`BudgetPlan`: whole or not and why, the planned objects and pictures, what the guard
@@ -315,6 +349,7 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
   const mediaKind = mediaKinds(opts.mediaKind);
   const fontFace = faceSources(opts.fontFace);
   const range = opts.range;
+  const rasterMode: RasterMode = opts.rasters ?? 'off';
   const refs = range ? deck.slides.filter((r) => r.index >= range.from && r.index < range.to) : deck.slides;
   const readSlide = (ref: SlideRef): SlideScene => {
     const t0 = performance.now();
@@ -330,11 +365,39 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
         ...(pictureSize ? { pictureSize } : {}),
         ...(mediaKind ? { mediaKind } : {}),
         ...(fontFace ? { fontFace } : {}),
+        ...(rasterMode === 'off' ? {} : { rasters: rasterMode }),
+        ...(rasterMode === 'off' || opts.rasterPoints === undefined
+          ? {}
+          : { rasterPoints: opts.rasterPoints }),
       });
       // Clip timing is read before the shape tree, which attaches it to each poster (`media.ts`).
       ctx.timing = readSlideTiming(ctx.slide);
-      const elements = walkSlide(ctx);
+      const used = { points: 0 };
+      const elements = walkSlide(ctx, used);
       const background = readBackground(ctx);
+      // Q53: the pictures of many-point shapes, planned before the budgets (the guard culls by cost, and a picture
+      // holds what it would cull), only on a slide with no animation anchor (Q53.d: the same IR test as the
+      // whole-slide route; a video background counts, a picture background does not: Q25.c.b).
+      const rasterPlan =
+        rasterMode === 'off'
+          ? undefined
+          : planRasters(elements, background, frame, {
+              mode: rasterMode,
+              maker: opts.rasterMaker ?? 'page',
+              anchored:
+                wholeAnchorKinds(elements, background, {
+                  ...(opts.wholeAnchors ? { anchors: opts.wholeAnchors } : {}),
+                  ...(opts.wholeAnchored !== undefined ? { anchored: opts.wholeAnchored } : {}),
+                }).length > 0,
+              pointsUsed: used.points,
+            });
+      if (rasterPlan && rasterMode === 'plan') {
+        applyUnclaimedForms(elements, rasterPlan);
+        // A shape that stays a shape says what the walk would have said about it.
+        for (const e of elements)
+          if (e.kind === 'shape' && e.rasterOf?.notes && e.raster === undefined)
+            for (const n of e.rasterOf.notes) slideLog(n);
+      }
       const classified = classifySlide(ctx, elements, background, {
         budgetArt: opts.budgetArt === true,
         ...(opts.onBudget
@@ -373,6 +436,7 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
         classification,
         notes,
         ms: performance.now() - t0,
+        ...(rasterPlan?.candidates ? { rasters: rasterPlan } : {}),
         ...readSlideSounds(ctx, ctx.timing),
       };
     } catch (e) {
@@ -484,13 +548,25 @@ export function convertDeck(src: PartSource, opts: ConvertOptions = {}): Convert
     }
     return id;
   };
+  // Q53: the recipes of the call, one registry for all its slides (its budget is per call).
+  const rasterReg = opts.rasters === 'plan' ? rasterRegistry() : undefined;
   const geoms = new Map<string, EmitResult['geoms'][number]>();
   const decors = new Map<string, EmitResult['decors'][number]>();
   const sheets = new Map<string, EmitResult['sheets'][number]>();
   const slides: EmittedSlide[] = [];
   for (const ref of r.refs) {
     const scene: DeckScene = { frame: r.frame, slides: [r.readSlide(ref)], sections: [], notes: [] };
-    const one = emitDeck(scene, { ...opts, newId, mediaId, clipId, bakeId, geomId, decorId, sheetId });
+    const one = emitDeck(scene, {
+      ...opts,
+      newId,
+      mediaId,
+      clipId,
+      bakeId,
+      geomId,
+      decorId,
+      sheetId,
+      ...(rasterReg ? { rasterRegistry: rasterReg } : {}),
+    });
     slides.push(one.slides[0]!);
     for (const g of one.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
     for (const d of one.decors) if (!decors.has(d.id)) decors.set(d.id, d);
@@ -507,6 +583,7 @@ export function convertDeck(src: PartSource, opts: ConvertOptions = {}): Convert
     geoms: [...geoms.values()],
     decors: [...decors.values()],
     sheets: [...sheets.values()],
+    ...(rasterReg ? { rasters: rasterReg.list() } : {}),
     frame: r.frame,
     sections: r.deck.sections,
     listed: r.deck.slides,

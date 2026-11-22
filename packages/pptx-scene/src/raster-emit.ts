@@ -61,6 +61,7 @@ import {
   RASTER_DENSITY,
   RASTER_POINTS,
   RASTER_READ,
+  RASTER_RECIPE_BYTES,
   RASTER_RUN,
   RASTER_VERSION,
   type RasterMember,
@@ -75,6 +76,7 @@ import {
   type RasterElement,
   type RasterMemberPlan,
   type RasterRunPlan,
+  type RasterSkipped,
   rasterFormOf,
 } from './raster-plan.ts';
 import { CONVERTER_VERSION } from './version.ts';
@@ -123,6 +125,8 @@ export interface EmittedRaster {
   members: number[];
   /** The words of the members that carry text (the slide's imported text keeps them for search: Q68). */
   words?: string;
+  /** How many of the members carry words (the report counts them). */
+  wordShapes?: number;
 }
 
 /** The part of the emitter's context this file reads (`EmitCtx` has these fields from step 5 of the track). */
@@ -143,6 +147,62 @@ export interface RasterEmitCtx {
   pairGroup?: () => number | undefined;
   /** Told why a run could not be made (a short word: the report counts them). */
   rasterFailed?: (reason: string) => void;
+}
+
+/** A recipe the call registered: its placeholder media id, hash, canonical size and the recipe itself. */
+export interface RegisteredRaster {
+  id: string;
+  hash: string;
+  bytes: number;
+  recipe: RasterRecipe;
+}
+
+/**
+ * The recipes of one call (`EmitResult.rasters`, each once in first-use order) within the call's budget of canonical
+ * bytes (`RASTER_RECIPE_BYTES.call`): a recipe past it is refused (the run stays as today with the reason 'budget').
+ * The per-import budget is the hub's, over the calls.
+ */
+export interface RasterRegistry {
+  add(recipe: RasterRecipe, hash: string): string | undefined;
+  list(): RegisteredRaster[];
+}
+
+export function rasterRegistry(maxBytes: number = RASTER_RECIPE_BYTES.call): RasterRegistry {
+  const byHash = new Map<string, RegisteredRaster>();
+  let total = 0;
+  return {
+    add(recipe, hash) {
+      const known = byHash.get(hash);
+      if (known) return known.id;
+      let bytes: number;
+      try {
+        bytes = canonicalBytes(recipe).length;
+      } catch {
+        return undefined;
+      }
+      if (total + bytes > maxBytes) return undefined;
+      total += bytes;
+      const id = rasterPlaceholder(hash);
+      byHash.set(hash, { id, hash, bytes, recipe });
+      return id;
+    },
+    list: () => [...byHash.values()],
+  };
+}
+
+/** What one slide's planning and writing of pictures came to (`EmittedSlide.rasterInfo`, C-SR11). */
+export interface EmittedRasterInfo {
+  /** Candidates on the slide, and the shapes the plan put into runs. */
+  candidates: number;
+  shapes: number;
+  /** Runs planned, pictures written, and why the others were not written (`RasterEmitCtx.rasterFailed`). */
+  runs: number;
+  pictures: number;
+  failed: string[];
+  /** Pictured shapes that carry words. */
+  wordShapes: number;
+  skipped: RasterSkipped;
+  reasons: string[];
 }
 
 /** The provenance of a picture (C-SR17); `file` and `slide` are added by the importer. */
@@ -573,6 +633,7 @@ export function emitRaster(
     objects: putBack,
     members: run.members.map((m) => m.element.shapeId),
     ...(run.words ? { words: run.words } : {}),
+    ...(run.members.some((m) => m.text) ? { wordShapes: run.members.filter((m) => m.text).length } : {}),
   });
   return true;
 }

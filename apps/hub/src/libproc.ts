@@ -157,8 +157,15 @@ export async function createLibraryProcess(
   phones.onChange((on) => jobs.setPhones(on));
   const media = new MediaService(lib, store, jobs, cfg, log);
   const fonts = new FontService(lib, store, jobs, cfg, log);
-  const imports = new ImportService(lib, store, jobs, media, cfg, log, (id) =>
-    liveView.locks().presentations.has(id),
+  const imports = new ImportService(
+    lib,
+    store,
+    jobs,
+    media,
+    cfg,
+    log,
+    (id) => liveView.locks().presentations.has(id),
+    disk,
   );
   const timeZone = () => venueTimeZone(lib.getSetting('general').timeZone, cfg.timeZone);
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);

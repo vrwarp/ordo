@@ -67,6 +67,8 @@ import {
 } from '@ordo/pptx-scene';
 import { MAX_DRAWN_OBJECTS, MAX_DRAWN_PICTURES } from '@ordo/pptx-scene/budget.ts';
 import { digestOf, SLIDE_BUDGET_NOTE, SLIDE_BYTES_NOTE } from '@ordo/pptx-scene/emit.ts';
+import type { EmittedRaster } from '@ordo/pptx-scene/raster-emit.ts';
+import { putBackRaster } from './pptx-raster.ts';
 import { CONVERTER_VERSION } from '@ordo/pptx-scene/version.ts';
 import type { NamedGeomFile } from './pptx-geoms.ts';
 import {
@@ -287,6 +289,12 @@ export type Draft = {
   /** The clips the slide plays or names (`EmittedSlide.clips`, `clips.ts`). */
   clips?: EmittedClip[];
   /**
+   * Q53: the pictures of shapes the slide draws (`EmittedSlide.rasters`): each is stored by the job (its placeholder is in
+   * `media`) or put back (`putBackRaster`) before the placeholders are mapped, so no picture is ever dropped for want of its
+   * file; the words of a stored one join the slide's imported text (`artText`, Q68).
+   */
+  rasters?: EmittedRaster[];
+  /**
    * M9, without LibreOffice: what nothing draws on the slide (`Slide.pptx.missing` entries). A picture-class
    * slide lists 'slide' instead (`provenance`).
    */
@@ -467,6 +475,7 @@ export class ImportCore {
             notes: own,
             ...(c.s.art && !c.rescued ? { art: c.s.art, artText: c.s.art.text } : {}),
             ...(c.s.clips?.length && !c.rescued ? { clips: c.s.clips } : {}),
+            ...(c.s.rasters?.length && !c.rescued ? { rasters: c.s.rasters } : {}),
           }
         : {
             // Nothing of it could be read, not even its text (M9: never a picture).
@@ -898,6 +907,21 @@ export class ImportCore {
   /** Step 5: remap, assemble, sanitize, digest; the follow-up's plan. */
   assemble(drafts: Draft[], stored: ReadonlyMap<string, string>, a: AssembleInput): Assembled {
     const { hash, slideRect, scan } = a;
+    // Q53: a picture of shapes the job could not make is put back as its shapes BEFORE the placeholders are mapped (the
+    // mapping would drop an image whose picture is not stored); the words of one that was made join the slide's text.
+    for (const d of drafts) {
+      if (!d.rasters?.length) continue;
+      const words: string[] = [];
+      for (const r of d.rasters) {
+        const part = d.media.get(r.id);
+        if (part !== undefined && stored.get(part)) {
+          if (r.words) words.push(r.words);
+          continue;
+        }
+        d.slide = putBackRaster(d.slide, r);
+      }
+      if (words.length) d.artText = [d.artText, ...words].filter(Boolean).join('\n').slice(0, ART_TEXT_CHARS);
+    }
     // Remap each slide with its own batch's placeholders.
     for (const d of drafts) {
       const map = new Map<string, string>();
@@ -911,6 +935,11 @@ export class ImportCore {
         addNote(d.notes, `${before - d.slide.objects.length} picture(s) could not be imported`);
       if (d.slide.lyricObjectId && !d.slide.objects.some((o) => o.id === d.slide.lyricObjectId))
         delete d.slide.lyricObjectId;
+      // Q53, C-SR17: the deck and the place a picture of shapes was made from, written again to tell a transplanted one.
+      for (const o of d.slide.objects)
+        if (o.origin?.role === 'raster' && o.origin.raster) {
+          o.origin = { ...o.origin, raster: { ...o.origin.raster, file: hash, slide: d.ref.index } };
+        }
       const bg = d.slide.backgroundMediaId;
       if (bg && a.hasAlpha(bg)) {
         // A picture with alpha is drawn on white, as PowerPoint lays every background (design/27 §4).

@@ -1560,3 +1560,13 @@ Still to do: the 64 KB slide JSON budget for path data (§3.4: the converter cou
 the hub's `planImportSizes` makes a slide whose stored paths pass it a compact picture, and a traced
 decoration of 6,500 points in 7-digit EMU is 100 KB of path text on its own); kerning and unknown transitions as approx (slide-level, M8); `artText` from `ArtRange.elements`
 (emission, M3).
+
+<!-- shape-raster:readme -->
+### Pictures of many-point shapes (Q53)
+
+`ParseOptions.rasters` ('off' default, 'detect' counts, 'plan' writes) and `rasterMaker`: `planRasters` (raster-plan.ts) marks the
+runs after the walk and before the budgets, `emitRaster` (raster-emit.ts) writes each as one locked image with its recipe in
+`EmitResult.rasters` (raster.ts: the constants, the capability list `RASTER_MAY_HOLD`, the canonical bytes and the hash), the wide
+geometry comes from `raster-wide.ts`. With 'off' and 'detect' the output is byte for byte what it was before (raster-record.test.ts).
+Pure: it imports nothing of the hub; the hub draws the recipes (design 29, `apps/hub/src/pptx/README.md`).
+<!-- /shape-raster:readme -->

@@ -25,6 +25,7 @@ import { WHOLE_PARSE } from '@ordo/importers/pptx-core.ts';
 import { extrasOf, scanDeck } from '@ordo/importers/pptx-scan.ts';
 import { convertDeck, rescueDeck } from '@ordo/pptx-scene';
 import { openPackage } from '@ordo/pptx-scene/opc.ts';
+import { WIDE_GEOMETRY } from '@ordo/pptx-scene/raster-wide.ts';
 import { libraryFaces } from './faces.ts';
 import { M9_WRITES, PPTX_LIMITS, PPTX_SHEETS, type SceneTaskInput, type SceneTaskOutput } from './shared.ts';
 
@@ -58,6 +59,10 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
     ...(input.libreoffice === false ? { libreoffice: false } : {}),
     // Q24.b: heavy, eligible slides kept whole, parsed as a browser parses them for the same hub (`WHOLE_PARSE`).
     ...(input.wholeSlides === true ? WHOLE_PARSE : {}),
+    // Q53: the pictures of many-point shapes are planned here and their recipes come back in `result.rasters`; the hub's job draws
+    // them (`rasterStore.ts`). 'detect' counts the shapes and changes nothing.
+    ...(input.rasters ? { rasters: input.rasters, rasterMaker: input.rasterMaker ?? 'page' } : {}),
+    ...(input.rasters === 'plan' ? { rasterGeometry: WIDE_GEOMETRY } : {}),
     extendBackgrounds: input.options.extendBackgrounds ?? true,
     transitionSounds: input.options.transitionSounds ?? false,
     m9Writes: M9_WRITES,

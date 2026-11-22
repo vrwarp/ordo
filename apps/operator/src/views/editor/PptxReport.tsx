@@ -15,6 +15,7 @@ import {
   wholeLine,
 } from '../../lib/pptxImport.ts';
 import { planSummary, reimportPlan } from '../../lib/pptxReimport.ts';
+import { RASTER_REIMPORT_LINE, rasterDrawnLine, holdsRaster } from '../../lib/pptxRaster.ts';
 import { useLibrary } from '../../state/library.ts';
 import { errorText } from '../../state/toasts.ts';
 import { JobProgress } from '../library/PptxImportCard.tsx';
@@ -155,6 +156,7 @@ export function PptxReportView(props: {
         </span>
       )}
       {r.whole ? <span data-whole>{wholeLine(r.whole, props.deviceCanBake)}</span> : null}
+      {r.rasters ? <span data-rasters>{rasterDrawnLine(r.rasters.shapes, r.rasters.pictures)}</span> : null}
       {r.native && r.pages > 0 && (
         <span>
           {plural(r.pages, 'picture slide')} from an earlier import: a re-import makes them editable.
@@ -337,6 +339,7 @@ function ReimportDialog({ p, onClose }: { p: Presentation; onClose(): void }) {
       }
       onConfirm={() => void confirm()}
       onClose={onClose}
+      pictured={p.sections.some((sec) => sec.slides.some((sl) => holdsRaster(sl)))}
     />
   );
 }
@@ -352,6 +355,8 @@ export function ReimportDialogView(props: {
   onKeep(slideId: string, keep: boolean): void;
   onConfirm(): void;
   onClose(): void;
+  /** Q67: the presentation holds a picture of shapes (or had one before a Reset slide): a whole Re-import draws them again. */
+  pictured?: boolean;
 }) {
   const { plan } = props;
   const sum = plan ? planSummary(plan) : undefined;
@@ -416,6 +421,7 @@ export function ReimportDialogView(props: {
                   {sum.other === 1 ? 'stays as it is' : 'stay as they are'}.
                 </li>
               )}
+              {props.pictured && sum.rebuild > 0 && <li data-rasters>{RASTER_REIMPORT_LINE}</li>}
               <li>
                 Slide notes, timings, backgrounds, sections and arrangements are kept
                 {sum.userObjects > 0

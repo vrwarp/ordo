@@ -650,6 +650,112 @@ export function lineArtDeck(dir: string, variant = 0): string {
   );
 }
 
+// ---- the continents deck (shape-raster, Q53): many-point shapes drawn into one picture ---------------------------------
+
+/**
+ * One slide of many-point shapes (the continents of a map, the owner's Q53) and a plain second slide. In logical px (1920 x 1080):
+ * an outline of 5,000 points, 600 small squares below it (drawn into the same picture, Q53.e), a second outline of 300 points, and a
+ * text box over the first outline that stays live text. Colours are solid so a screen's pixel says whether the picture is drawn.
+ */
+export const CONTINENTS = {
+  slides: 2,
+  /** Points of the two outlines. */
+  points: [5_000, 300] as const,
+  small: 600,
+  /** The shapes the picture holds (the two outlines and the small squares). */
+  shapes: 602,
+  title: 'Continents',
+  /** Where each is, as a logical point inside it, and its colour. */
+  outlineA: { centre: [500, 440] as [number, number], color: [0x33, 0x66, 0xaa] as [number, number, number] },
+  outlineB: {
+    centre: [1350, 410] as [number, number],
+    color: [0xc0, 0x70, 0x20] as [number, number, number],
+  },
+  squares: [
+    { centre: [131, 706] as [number, number], color: [0x33, 0xaa, 0x66] as [number, number, number] },
+    { centre: [163, 706] as [number, number], color: [0xaa, 0x33, 0x66] as [number, number, number] },
+  ],
+  /** The slide's own background, away from every shape. */
+  background: {
+    centre: [1700, 950] as [number, number],
+    color: [0xf4, 0xef, 0xe6] as [number, number, number],
+  },
+} as const;
+
+/** A closed path of `cost` points on an ellipse in a `w` x `h` path box (a many-point outline; `phase` moves the points). */
+function ellipsePath(cost: number, phase: number, w = 100_000, h = 100_000): string {
+  const n = cost - 2;
+  const pt = (i: number) => {
+    const a = (2 * Math.PI * i) / (n + 1) + phase * 0.01;
+    return `<a:pt x="${Math.round(w / 2 + (w / 2) * Math.cos(a))}" y="${Math.round(h / 2 + (h / 2) * Math.sin(a))}"/>`;
+  };
+  let d = `<a:moveTo>${pt(0)}</a:moveTo>`;
+  for (let i = 1; i <= n; i++) d += `<a:lnTo>${pt(i)}</a:lnTo>`;
+  return `<a:path w="${w}" h="${h}">${d}<a:close/></a:path>`;
+}
+
+/** The continents deck (see `CONTINENTS`), zipped into `dir`. */
+export function continentsDeck(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  const EMU = 6_350; // EMU per logical px (12,192,000 / 1,920)
+  const outline = (id: number, cost: number, x: number, y: number, w: number, h: number, color: string) =>
+    sp({
+      id,
+      name: `Outline ${id}`,
+      x: x * EMU,
+      y: y * EMU,
+      cx: w * EMU,
+      cy: h * EMU,
+      geom: 'none',
+      fill: custGeom({ paths: ellipsePath(cost, id) }) + solid(color),
+    });
+  let squares = '';
+  for (let k = 0; k < CONTINENTS.small; k++)
+    squares += sp({
+      id: 10 + k,
+      name: `Square ${k}`,
+      x: (120 + (k % 30) * 32) * EMU,
+      y: (700 + Math.floor(k / 30) * 16) * EMU,
+      cx: 22 * EMU,
+      cy: 12 * EMU,
+      fill: solid(k % 2 ? 'AA3366' : '33AA66'),
+    });
+  const title = sp({
+    id: 700,
+    name: 'Title',
+    x: 240 * EMU,
+    y: 180 * EMU,
+    cx: 520 * EMU,
+    cy: 80 * EMU,
+    txBox: true,
+    txBody: body(para(run(CONTINENTS.title, 'sz="3200"', solid('FFFFFF')))),
+  });
+  const shapes =
+    outline(2, CONTINENTS.points[0], 120, 130, 760, 520, '3366AA') +
+    squares +
+    outline(3, CONTINENTS.points[1], 1000, 160, 700, 500, 'C07020') +
+    title;
+  const second = sp({
+    id: 2,
+    name: 'Second',
+    x: 120 * EMU,
+    y: 120 * EMU,
+    cx: 1600 * EMU,
+    cy: 120 * EMU,
+    txBox: true,
+    txBody: body(para(run('A slide of its own', 'sz="4000"', solid('000000')))),
+  });
+  return zip(
+    buildDeck({
+      slides: [
+        { bg: solidBg('F4EFE6'), shapes },
+        { bg: solidBg('F4EFE6'), shapes: second },
+      ],
+    }),
+    join(dir, 'Continents.pptx'),
+  );
+}
+
 // ---- the crowded deck (M9 decorations, decor-render) ----------------------------------------------------
 
 /** The crowded deck's grid: 230 squares in 10 rows of 23 under a title band, in logical px (1920 x 1080). */

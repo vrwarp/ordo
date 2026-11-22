@@ -231,6 +231,12 @@ export type PptxReimportReq = {
   reset?: string[];
   /** Made-editable slides the dialog was told to keep as they are. */
   keep?: string[];
+  /**
+   * Q57.d ('Reset slide from PowerPoint'): 'off' converts the slide again WITHOUT the picture step, so the shapes of a
+   * slide drawn into pictures come back as shapes (the ones over a converter limit as today's boxes). Accepted only with
+   * `slideIds` (a whole Re-import makes the pictures again, Q67); absent: the import as it is.
+   */
+  rasters?: 'off';
 };
 
 /**
