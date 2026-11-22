@@ -13,6 +13,7 @@ const LITE: HubCapabilities = {
   pdf: true,
   documents: ['pptx', 'ppsx', 'potx', 'pptm', 'pdf'],
   pptx: { pictures: false, reference: false, referencePdf: true, art: false },
+  prerender: { state: 'off' },
 };
 
 beforeEach(() => useHubCapsStore.setState({ caps: undefined, at: undefined }));
@@ -33,6 +34,7 @@ describe('the hub capabilities (design/27 M9)', () => {
       pdf: false,
       documents: ['pptx', 'pdf'],
       pptx: { pictures: false, reference: true, referencePdf: false, art: false },
+      prerender: { state: 'off' },
     });
     expect(
       parseHubCaps({ libreoffice: { state: 'available', version: 'x'.repeat(200) } }).libreoffice,
@@ -43,7 +45,14 @@ describe('the hub capabilities (design/27 M9)', () => {
         pdf: false,
         documents: ['pptx', 'pdf'],
         pptx: { pictures: false, reference: false, referencePdf: false, art: false },
+        prerender: { state: 'off' },
       });
+    // the hub's own answer about pictures of heavy slides is read through the same schema
+    expect(parseHubCaps({ prerender: { state: 'on' } }).prerender.state).toBe('on');
+    expect(parseHubCaps({ prerender: { state: 'on', setting: 'auto' } }).prerender).toEqual({
+      state: 'on',
+      setting: 'auto',
+    });
   });
 
   it('404 means a hub before M9', async () => {

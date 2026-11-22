@@ -297,6 +297,7 @@ const LITE: HubCapabilities = {
   pdf: true,
   documents: ['pptx', 'ppsx', 'potx', 'pptm', 'pdf'],
   pptx: { pictures: false, reference: false, referencePdf: true, art: false },
+  prerender: { state: 'off' },
 };
 
 describe('without LibreOffice on the hub (design/27 M9)', () => {
