@@ -332,3 +332,27 @@ describe('the test hook (BT6)', () => {
     off();
   });
 });
+
+describe('what the first load holds of the bake (BT8)', () => {
+  it('BT8 the press of Go live is a no-op until the boot registers, then reaches it', async () => {
+    const { holdBakesForGoLive, onGoLivePress } = await import('../src/services/bakeHold.ts');
+    expect(() => holdBakesForGoLive()).not.toThrow();
+    const fn = vi.fn();
+    onGoLivePress(fn);
+    holdBakesForGoLive();
+    expect(fn).toHaveBeenCalledTimes(1);
+    onGoLivePress(undefined);
+    holdBakesForGoLive();
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('BT8 the shell and the controller load the boot lazily and never import it (a phone must not fetch it)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const ctl = readFileSync(new URL('../src/services/controller.ts', import.meta.url), 'utf8');
+    expect(app).toContain("import('./services/bakeBoot.ts')");
+    expect(app).not.toMatch(/from '\.\/services\/bake(Boot|Gate|Test)?\.ts'/);
+    expect(ctl).toContain("from './bakeHold.ts'");
+    expect(ctl).not.toMatch(/from '\.\/bake(Boot|Gate|Test)?\.ts'/);
+  });
+});

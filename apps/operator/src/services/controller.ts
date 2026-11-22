@@ -11,7 +11,7 @@ import { toast } from '../state/toasts.ts';
 import { rememberMessage, useUi } from '../state/ui.ts';
 import { deviceProfile } from '../lib/capabilities.ts';
 import { RecoveringGate } from '../lib/recovering.ts';
-import { holdBakesForGoLive } from './bakeBoot.ts';
+import { holdBakesForGoLive } from './bakeHold.ts';
 import { log, logLines } from './log.ts';
 import { thumbs } from './thumbs.ts';
 

@@ -4,6 +4,7 @@ import type { BakeActions } from '../state/bake.ts';
 import type { BakeService } from './bake.ts';
 import { realGate } from './bakeGate.ts';
 import { useLive } from '../state/live.ts';
+import { onGoLivePress } from './bakeHold.ts';
 import { bakeTestMode } from './bakeTest.ts';
 
 /**
@@ -205,6 +206,8 @@ const real = createBakeBoot({
 
 // In test mode the diagnostics exist on every layout (a phone says "unsupported" and never fetches the service).
 real.hook();
+
+onGoLivePress(real.holdBakesForGoLive);
 
 export const installBake = real.installBake;
 export const holdBakesForGoLive = real.holdBakesForGoLive;
