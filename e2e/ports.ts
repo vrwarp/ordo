@@ -275,6 +275,13 @@ export const PORT_TABLE = {
     spec: 'pptx-prerender-import.spec.ts',
     what: '0 hub with LibreOffice and ORDO_PRERENDER=on (then, in a later test, ORDO_PRERENDER=off), 1 hub without LibreOffice and ORDO_PRERENDER=on',
   },
+  // shape-raster (Q53, sub-wave 3): many-point shapes drawn into one picture by the hub's own Chromium; the second hub has none.
+  'pptx-raster': {
+    offset: 550,
+    count: 2,
+    spec: 'pptx-raster.spec.ts',
+    what: '0 hub without LibreOffice with Chromium and ORDO_PRERENDER=on (the picture of shapes, the screen, Reset slide, Re-import), 1 hub without LibreOffice and without Chromium (the same deck as today, and says so)',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;
