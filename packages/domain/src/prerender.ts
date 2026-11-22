@@ -246,7 +246,7 @@ function hasSteps(o: SlideObject): boolean {
 export function liveAnchors(slide: Pick<Slide, 'objects' | 'lyricObjectId'> & Partial<Slide>): string[] {
   const out: string[] = [];
   let playing = 0;
-  for (const o of objectsOf(slide)) {
+  for (const o of slideContent(slide).objects) {
     if (!isObj(o) || out.length >= LIVE_ANCHORS_MAX) continue;
     const id = idOf(o);
     if (!id) continue;
@@ -295,7 +295,7 @@ export function liveSet(
   slide: Pick<Slide, 'objects' | 'lyricObjectId'> & Partial<Slide>,
   reach: Reach = objectReach,
 ): string[] {
-  const objects = objectsOf(slide);
+  const objects = slideContent(slide).objects;
   const anchors = liveAnchors(slide);
   if (!anchors.length) return [];
   const byId = new Map(objects.map((o) => [idOf(o), o]));
