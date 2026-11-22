@@ -8,7 +8,7 @@ import { saveSizeCheck } from '../../lib/sizes.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
-import { fileFormGuard } from './fileForm.ts';
+import { FILE_FORM_REFUSAL, fileFormGuard } from './fileForm.ts';
 import { History } from './history.ts';
 import { type MergeConflict, prepareMerge, same, theirsOf } from './merge.ts';
 import { getSlide } from './ops.ts';
@@ -408,6 +408,11 @@ export async function save(force = false, adopted = false, merges = 0): Promise<
     return true;
   } catch (e) {
     useEditor.setState({ saving: false });
+    // The hub's own check of the same rule (a client that did not guard): not a conflict with someone else's save.
+    if (e instanceof ApiFailure && e.code === 'stand_in_stale') {
+      toast(`Could not save: ${FILE_FORM_REFUSAL}`, 'error');
+      return false;
+    }
     if (e instanceof ApiFailure && e.status === 409) {
       // Saved meanwhile only by the hub's PowerPoint jobs (version 2 of an import): take their work over and
       // save again, instead of offering to overwrite it.

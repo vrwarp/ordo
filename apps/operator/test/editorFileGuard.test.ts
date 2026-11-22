@@ -319,4 +319,25 @@ describe('the editor and a slide kept as a slide file (EG1-EG10)', () => {
     change((p) => setText(p, 'plain', 't1', 'Edited again'));
     expect(compared.calls).toBeGreaterThan(0);
   });
+
+  it("EG11 the hub's own refusal (409 stand_in_stale) shows the owner words and is not offered as a conflict with someone else", async () => {
+    vi.stubGlobal(
+      'fetch',
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'stand_in_stale',
+              message: 'The simple copy of a detailed slide was changed',
+              slides: ['big'],
+            },
+          }),
+          { status: 409, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    change((p) => updateSlide(p, 'big', (s) => ({ ...s, notes: 'a note' })));
+    expect(await save()).toBe(false);
+    expect(toasts()).toEqual([`Could not save: ${FILE_FORM_REFUSAL}`]);
+    expect(useEditor.getState()).toMatchObject({ conflict: false, saving: false, dirty: true });
+  });
 });
