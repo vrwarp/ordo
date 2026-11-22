@@ -8,6 +8,7 @@ import { saveSizeCheck } from '../../lib/sizes.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
+import { fileFormGuard } from './fileForm.ts';
 import { History } from './history.ts';
 import { type MergeConflict, prepareMerge, same, theirsOf } from './merge.ts';
 import { getSlide } from './ops.ts';
@@ -217,6 +218,12 @@ export function change(fn: (p: Presentation) => Presentation, key?: string): voi
   if (!s.draft) return;
   const next = fn(s.draft);
   if (next === s.draft) return;
+  // A slide kept as a file on the hub is not edited shape by shape: its simple copy would then differ from its file.
+  const refusal = fileFormGuard(s.draft, next);
+  if (refusal) {
+    toast(refusal, 'warn');
+    return;
+  }
   history.push(s.draft, key);
   useEditor.setState({ draft: next, dirty: true, canUndo: history.canUndo, canRedo: history.canRedo });
 }
@@ -366,6 +373,12 @@ export async function save(force = false, adopted = false, merges = 0): Promise<
   const size = saveSizeCheck(s.draft);
   if (size.refuse) {
     toast(`Could not save: ${size.refuse}`, 'error');
+    return false;
+  }
+  // The same guard for every way the draft can have changed without `change()` (undo, redo, the hub's job saves, a merge).
+  const refusal = fileFormGuard(s.base, s.draft);
+  if (refusal) {
+    toast(`Could not save: ${refusal}`, 'error');
     return false;
   }
   useEditor.setState({ saving: true });
