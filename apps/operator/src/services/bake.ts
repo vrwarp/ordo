@@ -112,7 +112,18 @@ export type BakeLibrarySlice = {
   data: { presentations: Presentation[]; playlists: Playlist[]; media: Media[]; fonts: Font[] };
   loaded: boolean;
   source: 'none' | 'cache' | 'hub';
+  /** The core's last failure to read the hub's library (cleared by the next good read). */
+  error?: string;
 };
+
+/**
+ * Whether the library on this page is one the service may plan from: it has loaded and the hub's last read did not
+ * fail. The page's `source` is NOT asked: it is the first message's only (the IndexedDB copy of a reloaded page is
+ * `'cache'`, and the hub's own snapshot after it reaches the page as a patch that leaves it so, for ever), and the
+ * hub's listing is the arbiter in any case (a picture is made only for a key the hub lists, and a copy that moves
+ * under a bake drops it).
+ */
+const libraryUsable = (s: Pick<BakeLibrarySlice, 'loaded' | 'error'>): boolean => s.loaded && !s.error;
 
 export type BakeServiceDeps = {
   api(
@@ -316,7 +327,7 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
   function holdNow(): { hold: BakeHold; until?: number } | undefined {
     const now = deps.now();
     const l = live();
-    if (library().source !== 'hub' || !l.hubConnected) return { hold: 'hub' };
+    if (!libraryUsable(library()) || !l.hubConnected) return { hold: 'hub' };
     if (hubUntil > now) return { hold: 'hub', until: hubUntil };
     if (serviceLive()) return { hold: 'service' };
     if (l.goLivePrepare) return { hold: 'go-live' };
@@ -1097,12 +1108,12 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
   function onLibrary(): void {
     const s = library();
     const d = s.data;
-    const sig = { p: d.presentations, m: d.media, f: d.fonts, src: s.source };
+    const sig = { p: d.presentations, m: d.media, f: d.fonts, src: libraryUsable(s) };
     if (libSig && libSig.p === sig.p && libSig.m === sig.m && libSig.f === sig.f && libSig.src === sig.src)
       return;
     libSig = sig;
     showHold();
-    if (s.source !== 'hub') return;
+    if (!libraryUsable(s)) return;
     // a changed library is new facts: a key that was waiting for the hub is looked up again from the start
     unknownTries.clear();
     unknownGaveUp.clear();
@@ -1127,7 +1138,9 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
     started = true;
     stopped = false;
     wasService = serviceLive();
-    firstSweepAt = deps.now() + timings.startDelayMs + Math.floor(deps.random() * 5000);
+    // the start jitter is a third of the start delay at most (5 s of 15 s): a test that shortens the delay shortens it too
+    const jitterMax = Math.min(5000, timings.startDelayMs / 3);
+    firstSweepAt = deps.now() + timings.startDelayMs + Math.floor(deps.random() * jitterMax);
     libSig = undefined;
     offStores = [deps.stores.live.subscribe(onLive), deps.stores.library.subscribe(onLibrary)];
     wakeAt('start', firstSweepAt);
@@ -1170,6 +1183,7 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
       }
       return;
     }
+    setGate(g);
     const have = listings.get(presentationId);
     if (options.force || !have || deps.now() - have.at >= BAKE_LISTING_FRESH_MS)
       await readListing(presentationId);
@@ -1191,7 +1205,7 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
       if (verdict.why === 'off') return { ok: false, why: 'off' };
       if (verdict.why === 'unsupported') return { ok: false, why: 'unsupported' };
     }
-    if (library().source !== 'hub' || !live().hubConnected) return { ok: false, why: 'hub' };
+    if (!libraryUsable(library()) || !live().hubConnected) return { ok: false, why: 'hub' };
     // skips the start delay, the settle wait, the resume wait, the idle callback and the gap, never a service
     firstSweepAt = 0;
     resumeAt = 0;

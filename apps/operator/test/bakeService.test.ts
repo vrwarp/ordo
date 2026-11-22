@@ -35,6 +35,7 @@ import {
 import { type Listing, localKey, slideInputs } from '../src/services/bakePlan.ts';
 import {
   type BakeServiceDeps,
+  type BakeTimings,
   type BakeWorkerLike,
   bakeTestMode,
   bakeTimingsFromUrl,
@@ -164,6 +165,8 @@ function world(
     bitmap?: ImageBitmap;
     /** The worker cannot be built (no Worker in this browser). */
     noWorker?: boolean;
+    /** The waits of test mode. */
+    timings?: Partial<BakeTimings>;
   } = {},
 ) {
   resetBake();
@@ -191,6 +194,7 @@ function world(
     loaded: true,
     attempted: true,
     source: 'hub',
+    error: undefined,
   });
   const inputs = () =>
     slideInputs({ media: useLibrary.getState().data.media, fonts: useLibrary.getState().data.fonts });
@@ -279,6 +283,7 @@ function world(
       svgs.push(blob);
       return opts.bitmap;
     },
+    ...(opts.timings ? { timings: opts.timings } : {}),
     log: (_l, text) => {
       logs.push(text);
     },
@@ -419,18 +424,33 @@ describe('the gate and the holds (B1-B5)', () => {
       stop();
     });
 
-  it('B2 a library that did not come from the hub, or a hub that is not connected, holds: no request', async () => {
+  it('B2 a library that has not loaded or that the hub failed to read, or a hub that is not connected, holds: no request', async () => {
     const w = world();
-    w.library({ source: 'cache' });
+    w.library({ loaded: false });
     await w.begin();
     expect(w.calls).toEqual([]);
     expect(useBake.getState().hold).toBe('hub');
-    w.library({ source: 'hub' });
+    w.library({ loaded: true, error: 'the hub did not answer' });
+    await w.advance(BAKE_SETTLE_MS + 1);
+    expect(w.calls).toEqual([]);
+    expect(useBake.getState().hold).toBe('hub');
+    w.library({ error: undefined });
     w.know('p1', w.presentations[0]?.sections[0]?.slides[0] as Slide);
     await w.advance(BAKE_SETTLE_MS + 1);
     expect(w.gets().length).toBeGreaterThan(0);
     w.live({ hubConnected: false });
     expect(useBake.getState().hold).toBe('hub');
+  });
+
+  it('B2 a reloaded page: the IndexedDB copy was the first message and the hub\'s snapshot after it is a patch, so the page\'s source stays "cache" for ever; the service plans from it all the same (the e2e finding)', async () => {
+    const slide = heavy('s1');
+    const w = world({ slides: [slide] });
+    w.library({ source: 'cache' });
+    w.know('p1', slide);
+    await w.begin();
+    expect(useBake.getState().hold).toBeUndefined();
+    expect(w.gets().length).toBeGreaterThan(0);
+    expect(w.allJobs()).toHaveLength(1);
   });
 
   for (const [name, over, hold] of [
@@ -554,6 +574,16 @@ describe('sweeps and their triggers (B6-B10)', () => {
     await w.advance(BAKE_START_DELAY_MS + 2499);
     expect(w.calls).toEqual([]);
     expect(w.service.snapshot().sweeps).toBe(0);
+    await w.advance(1);
+    expect(w.service.snapshot().sweeps).toBe(1);
+    expect(w.gets()).toHaveLength(1);
+  });
+
+  it('B7 the jitter is a third of the start delay at most: a test that shortens the delay to nothing gets no jitter', async () => {
+    const slide = heavy('s1');
+    const w = world({ slides: [slide], random: 0.99, timings: { startDelayMs: 0, settleMs: 500, gapMs: 0 } });
+    w.know('p1', slide);
+    w.service.start();
     await w.advance(1);
     expect(w.service.snapshot().sweeps).toBe(1);
     expect(w.gets()).toHaveLength(1);
@@ -1202,7 +1232,7 @@ describe('the actions (B27, B28, B33)', () => {
     expect(await w.service.makeNow()).toEqual({ ok: false, why: 'off' });
     // the hub
     const h = world({ slides: [a] });
-    h.library({ source: 'cache' });
+    h.library({ error: 'the hub did not answer' });
     expect(await h.service.makeNow()).toEqual({ ok: false, why: 'hub' });
     // nothing is missing
     const done = world({ slides: [a] });
@@ -1423,6 +1453,7 @@ describe('the store on devices that cannot make pictures, and its upkeep (B34, B
       'failed',
     ]);
     expect(w.workers).toHaveLength(0);
+    expect(useBake.getState().gate).toBe('unsupported');
   });
 
   it('B34 with the hub\'s switch off nothing is listed and the slides say "off"; a phone or the demo does nothing', async () => {

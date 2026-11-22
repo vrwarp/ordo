@@ -20,6 +20,7 @@ import {
   useChunks,
   VENUE_CRITICAL,
 } from './pages.ts';
+import { installBake } from './services/bakeBoot.ts';
 import { controller, startController } from './services/controller.ts';
 import { syncFonts } from './services/fonts.ts';
 import { thumbs } from './services/thumbs.ts';
@@ -201,6 +202,10 @@ function Shell({
   useEffect(() => {
     if (layout === 'regular') thumbs.warm();
   }, [layout]);
+  // The bake service (pictures of heavy slides, design/29 section 1.4): its chunk is fetched only where the gate lets
+  // this computer make pictures (a desktop browser on the regular layout, the hub's switch on), never on a phone, a
+  // tablet or the demo, and it never runs during a service.
+  useEffect(() => (layout === 'regular' && !signedOut ? installBake() : undefined), [layout, signedOut]);
   // Live keys act on operator screens only; the editor uses arrows, Delete and Ctrl+Z itself. A signed-out
   // operator keeps its keys only while it is the fallback authority (the outputs would otherwise be stuck).
   useEffect(() => {
