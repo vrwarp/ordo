@@ -1683,6 +1683,7 @@ a custom-path shape with more than 128 points does at import (the owner's Q53, w
   whole slides and no picture, 0.9869 / 0.9734 / 0.9895 with the pictures (against LibreOffice's page). 88 is 77 objects and
   30.6 KB (a picture of 942 shapes, 3 small ones, 21 live texts), 89 67 objects and 23.8 KB (four pictures of 1,816, 87, 17 and
   4 shapes), 91 18 objects and 8.8 KB; 12 of 12 pictures made. With LibreOffice the own picture scores 0.9869 / 0.9734 / 0.9895
-  against 0.9987 / 0.9946 / 0.9896 for LibreOffice's page: a drop of 0.0118 and 0.0212 on 88 and 89 that no named later
-  project recovers, so `RASTER_WITH_LIBREOFFICE` is false (Q53.j).
+  against 0.9870 / 0.9946 / 0.9896 for LibreOffice's page in the same run: no change on 88 and 91 (0.0001, 0.0002) and a drop of
+  0.0212 on 89 (the full deck's diagnosis has 0.9987 for 88: a drop of 0.0118 there) that no named later project recovers, so a
+  hub with LibreOffice keeps LibreOffice's page and `RASTER_WITH_LIBREOFFICE` is false (M-SR5, Q53.j, Q51).
 <!-- /shape-raster:as-built -->

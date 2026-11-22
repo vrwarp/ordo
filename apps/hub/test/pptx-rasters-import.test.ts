@@ -6,9 +6,11 @@
  * found (ORDO_CHROMIUM, ORDO_TEST_CHROMIUM, Playwright); under CI a missing one fails (find-chromium.ts).
  */
 import { readdirSync, readFileSync } from 'node:fs';
-import type { ImageObject, Slide } from '@ordo/domain';
+import { firstText, type ImageObject, importedText, type Slide, strapText } from '@ordo/domain';
 import { buildDeck, custGeom, body, para, run, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { presentationDoc } from '../../operator/src/lib/search.ts';
+import { slideText } from '../../stage/src/model.ts';
 import { findChromium } from '../../../tools/find-chromium.ts';
 import type { PptxNativeResult } from '../src/pptx/shared.ts';
 import { startHub, type TestHub, tempDir } from './helpers.ts';
@@ -98,6 +100,8 @@ maybe("the native import draws pictures of many-point shapes with the hub's own 
     hub = await startHub({
       prerender: ON,
       chromium: { path: exe!, sandbox: false },
+      // The bundled faces of this computer (Inter, Carlito, ...) are the library's: the page draws the words of a pictured shape with them.
+      fontsDir: '/usr/share/fonts',
       // A hub without LibreOffice (a hub with it keeps LibreOffice's art and plans no pictures, M-SR5): the pictures are planned.
       toolProbe: ((t: string) =>
         t === 'chromium'
@@ -175,6 +179,38 @@ maybe("the native import draws pictures of many-point shapes with the hub's own 
     expect(slide!.objects.some((o) => o.type === 'image')).toBe(false);
     expect(JSON.stringify(slide)).not.toMatch(/pptxmedia:/);
     expect(processesUnder(hub.dir)).toBe(0);
+  }, 240_000);
+
+  it('M-SR8 words arm: the words of six text-bearing shapes drawn into a picture reach artText, the cue label, the Stage and search (Q68)', async () => {
+    const family = hub.lib.listFonts().find((f) => f.family === 'Inter')?.family;
+    expect(family, 'the hub library holds Inter (the bundled default)').toBeDefined();
+    const WORDS = ['Mercy', 'Grace', 'Peace', 'Hope', 'Faith', 'Love'];
+    const six = WORDS.map((w, k) =>
+      blob(
+        20 + k,
+        300,
+        IN + (k % 3) * 3 * IN,
+        IN + Math.floor(k / 3) * 3 * IN,
+        2 * IN,
+        2 * IN,
+        body(para(run(w, 'sz="2400" lang="en-US"', `<a:latin typeface="${family}"/>`))),
+      ),
+    ).join('');
+    const { result, p } = await importDeck(hub, buildDeck({ slides: [{ shapes: six }] }), 'Words.pptx');
+    expect(result.rasters).toMatchObject({ pictures: 1, stored: 1, putBack: 0, candidates: 6, words: 6 });
+    const [slide] = slidesOf(p);
+    // The slide is ONE picture and no text object: the words are in the picture.
+    expect(slide!.objects.some((o) => o.type === 'text')).toBe(false);
+    expect(rasterPictures(slide!)).toHaveLength(1);
+    // Slide.pptx.artText keeps them (bounded), and every reader of a picture slide's text finds them.
+    for (const w of WORDS) expect(slide!.pptx?.artText).toContain(w);
+    for (const read of [importedText, firstText, strapText, slideText]) {
+      const text = read(slide as never);
+      for (const w of WORDS) expect(text, `${read.name} finds ${w}`).toContain(w);
+    }
+    // Search: the presentation's haystack (normalised) holds every word.
+    for (const w of WORDS) expect(presentationDoc(p).h).toContain(w.toLowerCase());
+    expect(JSON.stringify(slide)).not.toMatch(/pptxmedia:/);
   }, 240_000);
 
   it('Reset slide brings the shapes back as shapes (no picture step) and a whole Re-import makes the picture again', async () => {
