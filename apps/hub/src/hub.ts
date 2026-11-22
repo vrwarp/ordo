@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Logger } from 'pino';
 import { Auth } from './auth.ts';
 import { Backups } from './backup.ts';
-import { type HubConfig, loadConfig } from './config.ts';
+import { type HubConfig, loadConfig, logPrerender } from './config.ts';
 import { type DB, openDb } from './db.ts';
 import { DISK_MEASURE_MS, DiskFloor } from './diskfloor.ts';
 import { Collector, RefBackfill } from './collect.ts';
@@ -159,6 +159,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     byRef: cfg.liveByRef,
   });
   if (cfg.liveByRefWarning) log.warn({}, cfg.liveByRefWarning);
+  logPrerender(cfg.prerender, log, true);
   const timeZone = () => venueTimeZone(lib.getSetting('general').timeZone, cfg.timeZone);
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
   const revisionTitles = new RevisionTitleBackfill(lib.summaries, { live: () => live.state.mode, log });

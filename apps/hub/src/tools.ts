@@ -217,8 +217,11 @@ export class HubTools {
     );
   }
 
-  /** What the operator may offer (`GET /capabilities`). */
-  capabilities(): HubCapabilities {
+  /**
+   * What the operator may offer (`GET /capabilities`): the tools' part. The hub's switch for pictures
+   * (`prerender`) is config, not a tool: the route composes it (`capabilitiesAnswer`, routes.ts).
+   */
+  capabilities(): Omit<HubCapabilities, 'prerender'> {
     const lo = this.has('libreoffice');
     const pdf = this.has('pdftoppm');
     return {

@@ -17,7 +17,7 @@ import type { FastifyInstance, RouteHandlerMethod } from 'fastify';
 import type { Logger } from 'pino';
 import { Auth } from './auth.ts';
 import { Backups } from './backup.ts';
-import { type HubConfig, loadConfig } from './config.ts';
+import { type HubConfig, loadConfig, logPrerender } from './config.ts';
 import { type DB, openDb } from './db.ts';
 import { DISK_MEASURE_MS, DiskFloor } from './diskfloor.ts';
 import { errorMessage, notFound } from './errors.ts';
@@ -126,6 +126,8 @@ export async function createLibraryProcess(
   mkdirSync(cfg.dataDir, { recursive: true });
   const ring = new LogRing(2000);
   const log = createLogger({ level: cfg.logLevel, stdout: cfg.logToStdout, ring, proc: 'library' });
+  // The sentence for an explicit off is the library process's; the live process logs the warning only.
+  logPrerender(cfg.prerender, log, true);
 
   const db = openDb(join(cfg.dataDir, 'ordo.db'));
   const lib = new Library(db, { timeZone: cfg.timeZone });

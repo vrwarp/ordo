@@ -20,7 +20,7 @@ import Database from 'better-sqlite3';
 import type { FastifyInstance } from 'fastify';
 import type { Logger } from 'pino';
 import { Auth, type AuthStore } from './auth.ts';
-import { type HubConfig, loadConfig } from './config.ts';
+import { type HubConfig, loadConfig, logPrerender } from './config.ts';
 import { type DB, openLiveDb, openSharedDb } from './db.ts';
 import { forbidden, notFound } from './errors.ts';
 import { liveDiagOf } from './hub.ts';
@@ -230,6 +230,7 @@ export async function createLiveProcess(
     byRef: cfg.liveByRef,
   });
   if (cfg.liveByRefWarning) log.warn({}, cfg.liveByRefWarning);
+  logPrerender(cfg.prerender, log, false);
   const statics = new StaticApps(cfg.appsDir, cfg.domain);
   let status: ProcessStatus[] = [];
   let libraryStats: LibraryStats | undefined;
