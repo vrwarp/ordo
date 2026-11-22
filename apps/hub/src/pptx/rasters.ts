@@ -15,9 +15,9 @@ import {
  * headless Chromium first, LibreOffice's art as today, today's boxes where there is neither), draws a recipe
  * (`renderRecipe`) and draws a list of recipes one at a time with the live-safety rules (`drawRasters`):
  * - no picture starts while ANY service is live or in its grace after End service (`anyServiceLive`);
- * - a LIVE WATCHER (a timer of at most WATCH_MS) looks at that state during every picture and, the moment a service
- *   goes live, kills the browser's whole process group at once: the unfinished picture is 'live' and the rest are
- *   left undrawn;
+ * - a LIVE WATCHER (a timer of at most WATCH_MS) looks at that state from the moment a picture's browser starts
+ *   (the launch hears it too) and during the picture and, the moment a service goes live, kills the browser's whole
+ *   process group at once: the unfinished picture is 'live' and the rest are left undrawn;
  * - one browser at a time hub-wide and one picture at a time (the driver's single flight), niced and in its own
  *   group (rasterPage.ts), a crashed browser relaunched ONCE.
  * Nothing here stores anything: the planner's store step (rasterStore.ts) supplies `accept`, which takes each
@@ -216,9 +216,9 @@ const realTimer = (fn: () => void, ms: number): (() => void) => {
 /**
  * THE LOOP: draws `items` in order, ONE AT A TIME, in one browser session made lazily at the first picture and
  * closed in a `finally`. Before every picture it checks the abort signal, the wall-time budget and
- * `anyServiceLive`; during every picture the live watcher runs; after every picture the PNG goes to `accept`. A
- * failure of one picture never ends the others, except `stop: true` from `accept`, a service going live, an abort,
- * the budget and a second crash. Never throws for one picture.
+ * `anyServiceLive`; from the start of a picture's browser and through the picture the live watcher runs; after every
+ * picture the PNG goes to `accept`. A failure of one picture never ends the others, except `stop: true` from
+ * `accept`, a service going live, an abort, the budget and a second crash. Never throws for one picture.
  */
 export async function drawRasters(
   deps: RasterDeps,
@@ -278,26 +278,13 @@ export async function drawRasters(
       }
       let outcome: RenderOk | RenderFail | undefined;
       for (;;) {
-        if (!session) {
-          try {
-            session = await launch(opts.workDir, opts.signal);
-          } catch (e) {
-            if (opts.signal.aborted) {
-              stopped = 'aborted';
-              break;
-            }
-            // No browser: this picture and every later one.
-            opts.log?.(`picture browser did not start: ${String((e as Error).message).slice(0, 200)}`);
-            for (let k = i; k < items.length; k++) failed.set(items[k]!.hash, 'no-browser');
-            stopped = 'no-browser';
-            break;
-          }
-        }
-        fonts ??= await opts.fonts().catch(() => []);
         const picture = new AbortController();
         const joined = () => picture.abort(opts.signal.reason);
         opts.signal.addEventListener('abort', joined, { once: true });
-        // THE LIVE WATCHER: a service that goes live in the middle of this picture stops it at once.
+        // THE LIVE WATCHER: a service that goes live while this picture's browser is starting or while the picture
+        // is being drawn stops it at once. It is armed BEFORE the launch (a start takes about 0.6 s on a quiet
+        // machine and may wait for the one browser slot of the hub): the launch hears the same signal, so the
+        // browser is killed within one tick of the live flip, not at the end of its start.
         let cancelWatch: () => void = () => undefined;
         const tick = (): void => {
           if (anyServiceLive(deps)) picture.abort(LIVE_ABORT);
@@ -305,6 +292,37 @@ export async function drawRasters(
         };
         cancelWatch = setTimer(tick, WATCH_MS);
         try {
+          if (!session) {
+            try {
+              session = await launch(opts.workDir, picture.signal);
+            } catch (e) {
+              if (opts.signal.aborted) {
+                stopped = 'aborted';
+                break;
+              }
+              // The watcher cut the start: no picture began, so none is called failed.
+              if (picture.signal.aborted) {
+                stopped = 'live';
+                break;
+              }
+              // No browser: this picture and every later one.
+              opts.log?.(`picture browser did not start: ${String((e as Error).message).slice(0, 200)}`);
+              for (let k = i; k < items.length; k++) failed.set(items[k]!.hash, 'no-browser');
+              stopped = 'no-browser';
+              break;
+            }
+          }
+          fonts ??= await opts.fonts().catch(() => []);
+          // A service that went live while the browser was starting (a launch that did not hear the cut, or a flip
+          // after the last tick) begins no picture: the browser that came up is closed by the loop's `finally`.
+          if (opts.signal.aborted) {
+            stopped = 'aborted';
+            break;
+          }
+          if (picture.signal.aborted || anyServiceLive(deps)) {
+            stopped = 'live';
+            break;
+          }
           outcome = await renderRecipe(deps, session, item.recipe, {
             workDir: opts.workDir,
             fonts: fontsFor(item.recipe, fonts, opts.baseFamilies),

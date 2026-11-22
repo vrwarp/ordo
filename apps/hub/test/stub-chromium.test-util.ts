@@ -6,7 +6,8 @@ import { join } from 'node:path';
  * JSON) for the driver's tests: it answers the launch calls, forks a child that sleeps in the same process group
  * (so a group kill can be seen to take the child too) and answers a picture by its mode, read from a file next to
  * the script (the driver gives a browser a fixed environment): 'ok' draws a PNG of the recipe's size, 'hang' never
- * answers, 'crash' exits at the first picture. The child's pid goes to `<script>.pids`.
+ * answers, 'crash' exits at the first picture, 'hang-launch' never answers the first launch call (a browser that is
+ * slow to start, so a launch can be seen to be cut). The child's pid goes to `<script>.pids`.
  */
 
 const SCRIPT = `#!/usr/bin/env node
@@ -39,7 +40,7 @@ input.on('data', (d) => {
 function handle(m) {
   const r = (result) => send({ id: m.id, result });
   switch (m.method) {
-    case 'Browser.getVersion': return r({ product: 'Stub/1' });
+    case 'Browser.getVersion': if (mode() === 'hang-launch') return; return r({ product: 'Stub/1' });
     case 'Target.createTarget': return r({ targetId: 'T' + ++n });
     case 'Target.attachToTarget': return r({ sessionId: 'S' + n });
     case 'Page.navigate': return r({ frameId: 'F' });
@@ -67,7 +68,7 @@ function handle(m) {
 /** Writes the stub into `dir` and returns its path; `setMode` changes how it answers a picture. */
 export function makeStub(dir: string): {
   exe: string;
-  setMode(mode: 'ok' | 'hang' | 'crash'): void;
+  setMode(mode: 'ok' | 'hang' | 'crash' | 'hang-launch'): void;
   pidsFile: string;
 } {
   mkdirSync(dir, { recursive: true });

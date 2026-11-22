@@ -63,6 +63,38 @@ const pacing = (live = false) => {
   return p;
 };
 
+/** Fake time for the live watcher: `setTimer` is the loop's, `advance` runs the due timers in steps of 50 ms. */
+function fakeTime() {
+  const timers: { fn: () => void; at: number }[] = [];
+  let now = 0;
+  return {
+    get now() {
+      return now;
+    },
+    get armed() {
+      return timers.length;
+    },
+    setTimer(fn: () => void, ms: number) {
+      const t = { fn, at: now + ms };
+      timers.push(t);
+      return () => {
+        const i = timers.indexOf(t);
+        if (i >= 0) timers.splice(i, 1);
+      };
+    },
+    advance(ms: number) {
+      for (let left = ms; left > 0; left -= 50) {
+        now += Math.min(50, left);
+        for (const t of [...timers].sort((a, b) => a.at - b.at))
+          if (t.at <= now && timers.includes(t)) {
+            timers.splice(timers.indexOf(t), 1);
+            t.fn();
+          }
+      }
+    },
+  };
+}
+
 /** A fake session and its launch log. */
 function fakeSessions(draw: (call: number, file: string) => Promise<unknown> | unknown = () => 'ok') {
   const log = { launches: 0, closes: 0, draws: 0, files: [] as string[] };
@@ -285,6 +317,88 @@ describe('no picture starts while a service is live (RM-H4)', () => {
   });
 });
 
+describe('a service that goes live while the browser is starting (RM-H4b)', () => {
+  const opts = (over: Partial<Parameters<typeof drawRasters>[2]> = {}) => ({
+    workDir: scratch,
+    signal: new AbortController().signal,
+    fonts,
+    accept: async () => ({ ok: true as const }),
+    ...over,
+  });
+
+  it('the watcher is armed before the launch: a start that takes seconds is cut within one watcher period', async () => {
+    const p = pacing(false);
+    const ft = fakeTime();
+    let killedAt = -1;
+    let launches = 0;
+    // a launch like the driver's: it hears the signal, kills its browser and fails
+    const launch = (_dir: string, signal: AbortSignal) =>
+      new Promise<RasterSession>((_, reject) => {
+        launches++;
+        signal.addEventListener(
+          'abort',
+          () => {
+            killedAt = ft.now;
+            reject(signal.reason);
+          },
+          { once: true },
+        );
+      });
+    const done = drawRasters({ jobs: { pacing: p }, launch }, items(3), opts({ setTimer: ft.setTimer }));
+    expect(launches).toBe(1);
+    expect(ft.armed).toBe(1);
+    // no service live: the launch is left alone
+    ft.advance(200);
+    expect(killedAt).toBe(-1);
+    p.live = true;
+    const liveAt = ft.now;
+    ft.advance(WATCH_MS);
+    expect(killedAt).toBeGreaterThan(liveAt);
+    expect(killedAt - liveAt).toBeLessThanOrEqual(WATCH_MS);
+    // nothing was drawn, no picture is called failed (none began), and the watcher is not left armed
+    expect(await done).toEqual({ made: 0, failed: new Map(), stopped: 'live' });
+    expect(ft.armed).toBe(0);
+  });
+
+  it('a launch that does not hear the cut still ends there: the browser that came up is closed and no picture starts', async () => {
+    const p = pacing(false);
+    const s = fakeSessions();
+    let up: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      up = r;
+    });
+    const launch = async () => {
+      await gate;
+      return s.launch();
+    };
+    const ft = fakeTime();
+    const done = drawRasters({ jobs: { pacing: p }, launch }, items(3), opts({ setTimer: ft.setTimer }));
+    // the service goes live before the next watcher tick, then the browser comes up
+    p.live = true;
+    up();
+    expect(await done).toEqual({ made: 0, failed: new Map(), stopped: 'live' });
+    expect(s.log).toMatchObject({ launches: 1, draws: 0, closes: 1 });
+    expect(ft.armed).toBe(0);
+  });
+
+  it("a job abort while the browser starts is 'aborted', with no picture called failed", async () => {
+    const controller = new AbortController();
+    const ft = fakeTime();
+    const launch = (_dir: string, signal: AbortSignal) =>
+      new Promise<RasterSession>((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    const done = drawRasters(
+      { jobs: {}, launch },
+      items(2),
+      opts({ signal: controller.signal, setTimer: ft.setTimer }),
+    );
+    controller.abort();
+    expect(await done).toEqual({ made: 0, failed: new Map(), stopped: 'aborted' });
+    expect(ft.armed).toBe(0);
+  });
+});
+
 describe('the driver with a stand-in browser (RM-D3, RM-D4, RM-D5, RM-H5)', () => {
   let stub: ReturnType<typeof makeStub>;
   beforeAll(() => {
@@ -463,6 +577,43 @@ describe('the driver with a stand-in browser (RM-D3, RM-D4, RM-D5, RM-H5)', () =
     await until(() => !alive(main) && !alive(child), 3000);
     expect(out.failed.size).toBe(1);
     stub.setMode('ok');
+  });
+
+  it('RM-H5b: a service that goes live while Chromium is still starting kills the whole group at the next watcher tick', async () => {
+    stub.setMode('hang-launch');
+    const p = pacing(false);
+    const ft = fakeTime();
+    const before = pids().length;
+    const controller = new AbortController();
+    const done = drawRasters({ jobs: { pacing: p }, chromium: stub.exe, pageFile: dummyPage() }, items(3), {
+      workDir: scratch,
+      signal: controller.signal,
+      fonts,
+      accept: async () => ({ ok: true }),
+      setTimer: ft.setTimer,
+    });
+    let finished = false;
+    void done.then(() => {
+      finished = true;
+    });
+    try {
+      await until(() => pids().length > before && ft.armed > 0);
+      const { main, child } = pids().at(-1)!;
+      // the browser never answers its first call: the launch is still going on when the ticks look
+      for (let i = 0; i < 4; i++) ft.advance(WATCH_MS);
+      expect(alive(main)).toBe(true);
+      expect(finished).toBe(false);
+      p.live = true;
+      ft.advance(WATCH_MS);
+      await until(() => finished, 3000);
+      expect(await done).toEqual({ made: 0, failed: new Map(), stopped: 'live' });
+      await until(() => !alive(main) && !alive(child), 3000);
+    } finally {
+      // a failure must not leave the hub-wide browser slot held for the tests after this one
+      controller.abort();
+      await done.catch(() => undefined);
+      stub.setMode('ok');
+    }
   });
 
   it("RM-D6: a hung page is stopped by the deadline (fake time): 'timeout', the whole group killed", async () => {

@@ -992,8 +992,8 @@ The hub's own headless Chromium draws the pictures of many-point shapes at impor
   live start, a memory flag, hinting off, no network, one browser at a time hub-wide, one picture at a time, 60 s a
   picture, the profile folder removed on every path.
 - `rasters.ts`: `rastersFor` (the ladder), `renderRecipe` (one picture), `drawRasters` (the loop: no picture starts
-  while ANY service is live, a watcher of at most 250 ms kills the browser's group if one goes live in the middle of a
-  picture, a crash is relaunched once, each finished picture goes to the planner's `accept`).
+  while ANY service is live, a watcher of at most 250 ms (armed before the browser starts, so a start is cut too)
+  kills the browser's group if one goes live in the middle of a picture, a crash is relaunched once, each finished picture goes to the planner's `accept`).
 - `tools.ts`: the 'chromium' entry of the tool list (`has`, `chromium()`, `markMissing`, one start-up line).
 
 `ORDO_CHROMIUM` names the browser (also used by pptx-preview) and `ORDO_CHROMIUM_SANDBOX=1` keeps its sandbox. A hub
