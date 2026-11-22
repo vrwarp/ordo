@@ -11,6 +11,7 @@ import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
 import { useSearch } from '../../services/search.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { setUi, useUi } from '../../state/ui.ts';
+import { useUnsaved } from '../../state/unsaved.ts';
 import { navigate } from '../../useRoute.ts';
 import { NewSongDialog } from './NewSongDialog.tsx';
 
@@ -223,13 +224,15 @@ export function PresentationsTab() {
   }, [docs, folderId, byId]);
   const folders = lib.folders;
 
+  const unsavedItems = useUnsaved((s) => s.items);
   const setArchived = (p: Presentation, archived: boolean) => void savePresentation({ ...p, archived });
   const move = (p: Presentation, fid: string) => void savePresentation({ ...p, folderId: fid || undefined });
   const del = async (p: Presentation) => {
+    const dirtyEntry = useUnsaved.getState().items[`pres:${p.id}`];
     if (
       !(await confirmDialog(
         'Delete presentation',
-        `Delete “${p.title}” and its history? Archive keeps it instead.`,
+        `Delete “${p.title}” and its history?${dirtyEntry ? ' Its unsaved edits will also be discarded.' : ''} Archive keeps it instead.`,
         'Delete',
         true,
       ))
@@ -237,6 +240,7 @@ export function PresentationsTab() {
       return;
     try {
       await api(`/presentations/${p.id}`, { method: 'DELETE' });
+      await dirtyEntry?.discard();
       removeLocal('presentations', p.id);
     } catch (e) {
       toast(`Could not delete: ${explainSaveError(e)}`, 'error');
@@ -408,7 +412,9 @@ export function PresentationsTab() {
                     title={`Click to ${isExpanded ? 'collapse' : 'preview slides'}, double-click to edit`}
                   >
                     <span className="ellipsis">
-                      <b>{p.title}</b> {locked.has(p.id) && <span className="tag red">live · locked</span>}{' '}
+                      <b>{p.title}</b>{' '}
+                      {Boolean(unsavedItems[`pres:${p.id}`]) && <span className="tag amber">unsaved</span>}{' '}
+                      {locked.has(p.id) && <span className="tag red">live · locked</span>}{' '}
                       {p.archived && <span className="tag">archived</span>}
                     </span>
                     <span className="muted small ellipsis">

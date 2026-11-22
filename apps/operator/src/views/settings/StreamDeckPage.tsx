@@ -29,7 +29,7 @@ function keyText(k: StreamDeckKey | undefined): string {
 
 /** Stream Deck connect and page/key mapping editor (prd/07, design/19). */
 export function StreamDeckPage() {
-  const { draft, setDraft, save, revert, saving, dirty } = useSettingsDraft('surfaces');
+  const { draft, setDraft, save, revert, saving, dirty } = useSettingsDraft('surfaces', 'streamdeck');
   const deck = useSurfaces((s) => s.deck);
   const keys = deck?.keys ?? 15;
   const cols = deck?.columns ?? 5;

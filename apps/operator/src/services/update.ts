@@ -7,6 +7,7 @@ import {
   type UpdatePhase,
   updatePhaseOnLoad,
 } from '../lib/update.ts';
+import { journalFlushNow, markBypassBeforeUnload } from '../state/draftJournal.ts';
 import { log } from './log.ts';
 
 const KEY = 'ordo.op.updateAttempts';
@@ -38,7 +39,8 @@ export const useUpdate = create<UpdateStore>(() => {
 
 /**
  * Watch the hub connection: a `bye: version` means this tab is stale and the client reloads in 500 ms.
- * Show "Updating…" meanwhile and count the attempt; a welcome (versions agree) clears the count.
+ * Show "Updating…" meanwhile, flush any unsaved drafts to IndexedDB (`ordo-drafts`), bypass `beforeunload`
+ * so an unattended venue PC is not blocked by a browser prompt, and count the attempt; a welcome clears it.
  */
 export type UpdateSource = Pick<Emitter<{ bye: { reason: string }; welcome: { appVersion: string } }>, 'on'>;
 
@@ -49,6 +51,8 @@ export function installUpdateGuard(hub: UpdateSource): () => void {
     writeAttempts(attempt);
     useUpdate.setState({ phase: exhausted ? 'failed' : 'updating', attempt });
     log('warn', `app version differs from the hub: reloading (attempt ${attempt} of ${UPDATE_RETRY_CAP})`);
+    markBypassBeforeUnload(true);
+    void journalFlushNow();
     // The socket lives in the core worker, which cannot reload the page: the host does it.
     setTimeout(() => location.reload(), 500);
   });

@@ -1,5 +1,7 @@
 import type { Profile } from '../../lib/capabilities.ts';
 import { EDIT_PROFILE_SETTINGS } from '../../lib/route.ts';
+import { useLibrary } from '../../state/library.ts';
+import { dirtySettingsPagesSnapshot, useSettingsDraftStore } from '../../state/settingsDrafts.ts';
 import { AudioSettingsPage } from './AudioSettingsPage.tsx';
 import { BackupsPage } from './BackupsPage.tsx';
 import { DiagnosticsPage } from './DiagnosticsPage.tsx';
@@ -27,6 +29,9 @@ const PAGES: [string, string][] = [
 ];
 
 export function SettingsView({ page, profile = 'full' }: { page: string; profile?: Profile }) {
+  const entries = useSettingsDraftStore((s) => s.entries);
+  const remoteSettings = useLibrary((s) => s.data.settings);
+  const dirtyPages = dirtySettingsPagesSnapshot(entries, remoteSettings);
   // An edit-profile device (an iPad) has no outputs, audio devices, keys, Stream Deck, MIDI or backups.
   const pages = profile === 'edit' ? PAGES.filter(([k]) => EDIT_PROFILE_SETTINGS.includes(k)) : PAGES;
   if (!pages.some(([k]) => k === page)) return null;
@@ -69,11 +74,19 @@ export function SettingsView({ page, profile = 'full' }: { page: string; profile
   return (
     <div className="split" style={{ gridTemplateColumns: '200px 1fr' }}>
       <div className="side col" style={{ gap: 4 }}>
-        {pages.map(([k, label]) => (
-          <a key={k} href={`#/settings/${k}`} className={page === k ? 'active' : ''}>
-            {label}
-          </a>
-        ))}
+        {pages.map(([k, label]) => {
+          const isDirty = dirtyPages.has(k);
+          return (
+            <a key={k} href={`#/settings/${k}`} className={page === k ? 'active' : ''}>
+              <span className="grow">{label}</span>
+              {isDirty && (
+                <span className="unsaved-dot" title="Unsaved changes" aria-label="Unsaved changes">
+                  ●
+                </span>
+              )}
+            </a>
+          );
+        })}
       </div>
       <div style={{ overflow: 'auto', minHeight: 0 }}>
         <div className="settings-body">{body}</div>

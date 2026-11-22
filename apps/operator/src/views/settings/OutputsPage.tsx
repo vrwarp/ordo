@@ -242,8 +242,8 @@ function ensureAudioMaster(list: Output[]): Output[] {
 }
 
 export function OutputsPage() {
-  const outputsDraft = useSettingsDraft('outputs');
-  const looksDraft = useSettingsDraft('looks');
+  const outputsDraft = useSettingsDraft('outputs', 'outputs');
+  const looksDraft = useSettingsDraft('looks', 'outputs');
   const open = useLaunch((s) => s.open);
   const [screens, setScreens] = useState<ScreenInfo[]>([]);
 

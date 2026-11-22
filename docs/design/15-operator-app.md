@@ -249,6 +249,32 @@ are tried:
 Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` is muted,
 `playsInline`, 320x180. Reconnects when the output reconnects.
 
+## Unsaved drafts across tabs and reloads
+
+- **Non-destructive tab switching (`src/state/unsaved.ts`, `editorStore.ts`, `themeDrafts.ts`, `settingsDrafts.ts`, `playlistOutbox.ts`).**
+  Switching top-nav routes, Library sub-tabs, Settings sub-tabs, or opening a second presentation never unmounts or
+  clobbers pending work: `editorStore.ts` keeps a `Map<string, PresentationSession>` of dirty presentations (each
+  with its own 200-step `History<Presentation>` and workspace UI state `tab`, `drawerOpen`, `stageLens`, `songMode`,
+  `deckMode`, `notesDockOpen`, `zoom`), `themeDrafts.ts` keeps dirty Lyric Theme drafts, `settingsDrafts.ts` keeps
+  per-document Settings drafts (sharing `surfaces` across Stage messages, Stream Deck and MIDI), and
+  `playlistOutbox.ts` runs debounced playlist flushes outside component life cycles so an unmount or failed `PUT`
+  retains the draft. Undoing back to `base` clears `dirty` structurally (`lib/jsonEqual.ts`).
+- **Ambient shell indicators and non-editor views.** Every non-editor view (`Library`, `Playlists`, `PreviewsView`,
+  `Live`) strictly reads the saved hub version and marks items that have a background editor draft with an `unsaved`
+  tag (or a banner in `PreviewsView` linking to the editor). Whenever visible unsaved drafts exist, `Nav.tsx`
+  renders a compact `● N unsaved ▾` pill opening a portaled popover (`usePopupOf`) with `Open`, `Save`, `Discard`
+  and `Save all`.
+- **Explicit exit, Go live, Sign out, and crash/update recovery (`draftJournal.ts`, `draftRecovery.ts`).**
+  Clicking `← Library` in `EditorView` or `← Back to Themes` in `ThemesTab` while dirty prompts `Save` / `Discard` /
+  `Keep draft`. `startService` flushes pending playlist edits and prompts `Save & Go live` / `Discard & Go live` /
+  `Cancel` only when drafts affecting that service (presentations in the playlist, their themes, or
+  `outputs`/`looks`/`audio` settings) are dirty, leaving unrelated drafts parked; a live-locked (`423`) presentation
+  keeps its draft parked read-only until `End service`. `Shell` installs a global `beforeunload` listener across all
+  stores, bypassed after flushing `JsonStore('ordo-drafts')` during automated `bye: version` hub updates and explicit
+  `Discard & Sign out`. On startup (once the library has loaded and while no service runs live on this PC),
+  `checkStartupDraftRecovery` drops journal entries that already match the hub and prompts `Restore unsaved drafts?`
+  (`[Restore]` / `[Discard all]`).
+
 ## Editor
 
 <!-- m9:render-seams -->
