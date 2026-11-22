@@ -1637,7 +1637,9 @@ become pictures and what each picture is made of, is "As built in sub-wave 3 (sh
 - **Same pixels as the screens.** Within today's limits a shape drawn by `drawShapeWide` equals `drawGeomShape` to the last
   channel (14 shapes in a browser test; 10 shapes at 3840x2160 through the hub's page against the screens' own
   `drawObject`: maximum difference 0), and the words of a text member equal the screens' text drawing (8 subjects, 0). A
-  character no library face covers fails the whole run: never a picture in another face.
+  character no library face covers fails the whole run: never a picture in another face. The page's font set-up is the bake's
+  (`createBakeEnv`, section 1.2: the library's and the bundled faces only), and a family with no face of its own, which the
+  bake would draw in ordo's default face and list, fails the run too (a picture of a shape never stands in for a face).
 - **Wide shapes are drawn whole.** Traffic Dark slide 88's eight continents (5,464 to 45,056 points), slide 89's thirteen
   over-limit shapes and slide 91's six are each drawn whole: their painted area equals an independent even-odd area
   computed from the built points within 0.06 %, and is larger than the same outline cut at 8 paths x 4,096 points.

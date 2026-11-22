@@ -69,17 +69,17 @@ function decode(png: Uint8Array): { w: number; h: number; type: number; rgba: Ui
   return { w, h, type, rgba: out };
 }
 
-/** A library face for the text member: Carlito from the Debian package, as the bundled faces are. */
-function carlito():
-  | { family: string; weight: number; style: 'normal'; hash: string; url: string }
-  | undefined {
+/** A library face for a text member: a family's regular face from the Debian package, as the bundled faces are. */
+function faceOf(
+  family: string,
+): { family: string; weight: number; style: 'normal'; hash: string; url: string } | undefined {
   try {
-    const file = execSync("fc-match -f '%{file}' 'Carlito:style=Regular'", {
+    const file = execSync(`fc-match -f '%{file}' '${family}:style=Regular'`, {
       stdio: ['ignore', 'pipe', 'ignore'],
     }).toString();
-    if (!/Carlito/i.test(file) || !existsSync(file)) return undefined;
+    if (!file.toLowerCase().includes(family.toLowerCase()) || !existsSync(file)) return undefined;
     return {
-      family: 'Carlito',
+      family,
       weight: 400,
       style: 'normal',
       hash: createHash('sha256').update(readFileSync(file)).digest('hex'),
@@ -89,6 +89,7 @@ function carlito():
     return undefined;
   }
 }
+const carlito = () => faceOf('Carlito');
 
 const groupAlive = (pgid: number): boolean => {
   for (const d of readdirSync('/proc')) {
@@ -189,6 +190,86 @@ describe.skipIf(skipped)('the picture page in a real Chromium', () => {
       await b.close();
     }
   }, 60_000);
+
+  it("RM-D8: text in a family no loaded face provides, or a character no face covers, is reason 'font' and no picture; a list's faces never serve the next list", async () => {
+    const font = carlito();
+    if (!font) {
+      console.warn('RM-D8: no Carlito face here, skipped');
+      return;
+    }
+    const run = { x: 0, y: 0, w: 200, h: 40 };
+    const textBox = { x: 10, y: 5, w: 180, h: 30 };
+    const words = (text: string, family: string) =>
+      memberWire(
+        textBox,
+        builtOf(source([square(0, 1000)]), textBox),
+        { fill: colour(0, 0, 0, 0) },
+        {
+          text: {
+            type: 'text',
+            box: { ...textBox, rotation: 0 },
+            text,
+            style: {
+              fontFamily: family,
+              fontWeight: 400,
+              fontStyle: 'normal',
+              fontSizePx: 18,
+              color: colour(0, 0, 0),
+              align: 'center',
+              valign: 'middle',
+              lineHeight: 1.2,
+              letterSpacing: 0,
+              padding: 0,
+            },
+            opacity: 1,
+          },
+          families: [family],
+        },
+      );
+    const inter = faceOf('Inter');
+    const draw = async (b: RasterBrowser, name: string, text: string, family: string, faces: boolean) => {
+      const recipe = recipeWire(run, [words(text, family)]);
+      const file = join(scratch, `${name}.json`);
+      writeFileSync(file, JSON.stringify(recipe));
+      return await b.draw(file, faces ? fontsFor(recipe, [font]) : []);
+    };
+    // The library's default face is loaded too: a family with no face of its own then has a stand-in to be drawn
+    // in, which a picture of a shape never accepts.
+    const drawWithDefault = async (b: RasterBrowser, name: string, family: string) => {
+      const recipe = recipeWire(run, [words('Amen', family)]);
+      const file = join(scratch, `${name}.json`);
+      writeFileSync(file, JSON.stringify(recipe));
+      return await b.draw(file, fontsFor(recipe, [font, inter!], ['Inter']));
+    };
+    const b = await RasterBrowser.launch(exe!, scratch, { signal: new AbortController().signal });
+    try {
+      // the face is loaded: drawn
+      expect(await draw(b, 'd8a', 'Amen', 'Carlito', true)).toMatchObject({ ok: true });
+      // the same words after the face list changed to none: the old list's face does not serve (a fresh set-up per list)
+      expect(await draw(b, 'd8b', 'Amen', 'Carlito', false)).toMatchObject({ ok: false, reason: 'font' });
+      // a family nothing provides: never drawn in another face
+      expect(await draw(b, 'd8c', 'Amen', 'No Such Family', true)).toMatchObject({
+        ok: false,
+        reason: 'font',
+      });
+      // a character no loaded face covers (Carlito has no Han): the whole run fails
+      expect(await draw(b, 'd8d', 'Amen \u6f22', 'Carlito', true)).toMatchObject({
+        ok: false,
+        reason: 'font',
+      });
+      // a family with no face of its own, the default face loaded: not drawn in the default face
+      if (inter) {
+        expect(await drawWithDefault(b, 'd8f', 'No Such Family')).toMatchObject({
+          ok: false,
+          reason: 'font',
+        });
+      }
+      // and the browser is still good for the next picture
+      expect(await draw(b, 'd8e', 'Amen', 'Carlito', true)).toMatchObject({ ok: true });
+    } finally {
+      await b.close();
+    }
+  }, 90_000);
 
   it('RM-D2: an abort kills the whole group and leaves no process, profile folder or temp file', async () => {
     const run = { x: 0, y: 0, w: 1920, h: 1080 };

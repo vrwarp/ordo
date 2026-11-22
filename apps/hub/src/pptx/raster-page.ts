@@ -1,11 +1,11 @@
 import type { ShapeObject } from '@ordo/domain';
+import { type BakeEnv, createBakeEnv } from '@ordo/renderer/bake.ts';
 import { clampObject } from '@ordo/renderer/clamp.ts';
 import { drawShapeWide } from '@ordo/renderer/geom/wide.ts';
 import type { BuiltGeom, GeomPath } from '@ordo/renderer/geom/path.ts';
 import { drawObject } from '@ordo/renderer/text2d.ts';
-import { registerBlankFace } from '@ordo/renderer/text/blankface.ts';
-import { contextMetrics, GlyphCoverage, shippedStack } from '@ordo/renderer/text/coverage.ts';
-import { type FontHost, FontResolver, installFontEnv } from '@ordo/renderer/text/fonts.ts';
+import { shippedStack } from '@ordo/renderer/text/coverage.ts';
+import type { FontHost } from '@ordo/renderer/text/fonts.ts';
 import { checkRecipe, type RasterFont, type RecipeMemberWire, type RecipeWire } from './raster-recipe.ts';
 
 /*
@@ -47,35 +47,20 @@ function readBytes(url: string): Promise<ArrayBuffer> {
 
 const fontUrls = new Map<string, string>();
 
-/** A resolver over the faces of ONE recipe's font list: a picture never depends on what an earlier one registered. */
-function makeResolver(): FontResolver {
-  const r = new FontResolver({
-    // The hub's tsconfig has no DOM.Iterable, where FontFaceSet gets add and delete: the page has them.
-    set: document.fonts as unknown as FontHost['set'],
-    async data(f) {
-      const url = fontUrls.get(f.hash);
-      if (!url) throw new Error('no such font file');
-      return await readBytes(url);
-    },
-  });
-  installFontEnv(r);
-  return r;
-}
-let resolver = makeResolver();
-
-// Font coverage as the asset worker keeps it (apps/output/src/asset.worker.ts): a character no registered face
-// covers is measured against ordo's blank face, so the verdict never depends on the computer's own fonts.
-const blank = registerBlankFace(document.fonts as unknown as FontHost['set']);
-let probeCtx: ReturnType<typeof contextMetrics> | undefined;
-const coverage = new GlyphCoverage((font, text) => {
-  if (!probeCtx) {
-    const c = new OffscreenCanvas(1, 1).getContext('2d');
-    if (!c) throw new Error('2D context unavailable');
-    probeCtx = contextMetrics(c);
-  }
-  return probeCtx(font, text);
-}, blank);
-let stopWatching = resolver.onChange(() => coverage.reset());
+// The font set-up is the bake's (sub-wave 3, design 29 section 1.2): `createBakeEnv` makes a resolver in the bake
+// profile (the library's and the bundled faces only, never a face of the computer), the blank face, the coverage
+// probe and the wrap that feeds it. A new environment is made for every font list, so a picture never depends on
+// what an earlier recipe registered.
+const host: FontHost = {
+  // The hub's tsconfig has no DOM.Iterable, where FontFaceSet gets add and delete: the page has them.
+  set: document.fonts as unknown as FontHost['set'],
+  async data(f) {
+    const url = fontUrls.get(f.hash);
+    if (!url) throw new Error('no such font file');
+    return await readBytes(url);
+  },
+};
+let env: BakeEnv = createBakeEnv(host);
 
 let png: Uint8Array | undefined;
 
@@ -120,9 +105,8 @@ async function drawRecipe(r: RecipeWire): Promise<PageDraw> {
   const ctx = canvas.getContext('2d');
   if (!ctx) return { ok: false, reason: 'page', detail: '2D context unavailable' };
   const unshipped = new Set<string>();
-  // Every text call is noted for the coverage probe, and a font string with no registered face at all is a run
-  // that would draw in the computer's own font: refused.
-  coverage.instrument(ctx);
+  // Every text call is noted for the coverage probe by the environment's wrap of the context prototype, and a font
+  // string with no registered face at all is a run that would draw in the computer's own font: refused.
   for (const name of ['fillText', 'strokeText'] as const) {
     const orig = ctx[name].bind(ctx) as (text: string, x: number, y: number, maxWidth?: number) => void;
     ctx[name] = ((text: string, x: number, y: number, maxWidth?: number) => {
@@ -131,8 +115,9 @@ async function drawRecipe(r: RecipeWire): Promise<PageDraw> {
       else orig(text, x, y, maxWidth);
     }) as typeof ctx.fillText;
   }
-  await blank.loaded;
-  coverage.begin();
+  if (!(await env.ready())) return { ok: false, reason: 'page', detail: 'the coverage probe is not ready' };
+  env.fonts.bakeReset();
+  env.coverage.begin();
   const D = r.density;
   for (const m of r.members) {
     ctx.setTransform(D, 0, 0, D, -r.box.x * D, -r.box.y * D);
@@ -147,10 +132,15 @@ async function drawRecipe(r: RecipeWire): Promise<PageDraw> {
     }
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  const drawn = coverage.end();
+  const drawn = env.coverage.end();
   if (unshipped.size > 0)
     return { ok: false, reason: 'font', detail: 'text drawn in a font no registered face provides' };
-  const missing = coverage.misses(drawn, 8);
+  // Complete or nothing (the bake profile's report): a family with no face of its own would be drawn in ordo's
+  // default face, and a face that failed to load in none; the picture of a shape never stands in for a face.
+  const report = env.fonts.bakeReport();
+  if (report.empty.size > 0 || report.standIns.size > 0 || env.fonts.failedFamilies().length > 0)
+    return { ok: false, reason: 'font', detail: 'text in a family no loaded face provides' };
+  const missing = env.coverage.misses(drawn, 8);
   if (missing.length > 0)
     return {
       ok: false,
@@ -176,15 +166,12 @@ async function drawRecipe(r: RecipeWire): Promise<PageDraw> {
 const api = {
   /** Registers the faces (a whole list, as `FontResolver.sync` takes it); resolves when loading has settled. */
   async setFonts(list: RasterFont[]): Promise<{ loaded: number; failed: string[] }> {
-    // A new resolver for this list: the faces of an earlier list are dropped with the old one.
-    stopWatching();
-    resolver.dispose();
-    resolver = makeResolver();
-    stopWatching = resolver.onChange(() => coverage.reset());
-    coverage.reset();
+    // A new environment for this list: the faces of an earlier list are dropped with the old one.
+    env.dispose();
+    env = createBakeEnv(host);
     fontUrls.clear();
     for (const f of list) fontUrls.set(f.hash, f.url);
-    const r = await resolver.sync(list.map(({ url: _url, ...file }) => file));
+    const r = await env.fonts.sync(list.map(({ url: _url, ...file }) => file));
     return { loaded: r.loaded, failed: r.failed };
   },
   /** Reads the recipe file, checks it and draws it; the PNG waits in the page for `take`. */
