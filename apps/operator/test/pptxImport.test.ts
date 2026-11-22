@@ -1,7 +1,10 @@
 import type { Presentation, Slide } from '@ordo/domain';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import { type HubCapabilities, type Job, LEGACY_CAPABILITIES } from '@ordo/protocol';
-import { describe, expect, it, vi } from 'vitest';
+import { WHOLE_WITH_LIBREOFFICE, keptWholeLine, wholeSlidesFor } from '@ordo/importers/pptx-core.ts';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
 import {
   approximatedSlides,
   canDrawOriginal,
@@ -16,6 +19,8 @@ import {
   importReport,
   keepsSlidesWhole,
   loStatus,
+  OPERATOR_WHOLE_WITH_LIBREOFFICE,
+  wholeLine,
   onlyJobSaves,
   hubHasLibreOffice,
   picturesOffered,
@@ -32,17 +37,6 @@ import {
   writeImportChoice,
 } from '../src/lib/pptxImport.ts';
 import { followJob, referenceRunning } from '../src/views/editor/original.ts';
-
-/** Q27.b as a test switch: the constant behind `wholeSlidesFor` is true, so the case where it is false is a stand-in answer. */
-const q27 = vi.hoisted(() => ({ keepsWithLibreOffice: true }));
-vi.mock('@ordo/importers/pptx-core.ts', async (importOriginal) => {
-  const real = await importOriginal<typeof import('@ordo/importers/pptx-core.ts')>();
-  return {
-    ...real,
-    wholeSlidesFor: (o: { prerender: boolean; lo: boolean }) =>
-      q27.keepsWithLibreOffice ? real.wholeSlidesFor(o) : o.prerender === true && !o.lo,
-  };
-});
 
 function memoryStore(init: Record<string, string> = {}) {
   const m = new Map(Object.entries(init));
@@ -485,54 +479,43 @@ describe('keepsSlidesWhole: the browser parse keeps heavy slides whole when the 
       expect(keepsSlidesWhole(caps('on', lo)), lo).toBe(true);
   });
 
-  it('follows Q27.b where the constant is false: with LibreOffice the hub follows today\u2019s plan, without it keeps them whole', () => {
-    q27.keepsWithLibreOffice = false;
-    try {
-      expect(keepsSlidesWhole(caps('on', 'available'))).toBe(false);
-      expect(keepsSlidesWhole(caps('on', 'broken'))).toBe(false);
-      expect(keepsSlidesWhole(caps('on', 'absent'))).toBe(true);
-      expect(keepsSlidesWhole(caps('on', 'off'))).toBe(true);
-      expect(keepsSlidesWhole(caps('off', 'absent'))).toBe(false);
-    } finally {
-      q27.keepsWithLibreOffice = true;
-    }
+  it('follows Q27.b where the answer for a hub with LibreOffice is false: with LibreOffice the hub follows today\u2019s plan, without it keeps them whole', () => {
+    expect(keepsSlidesWhole(caps('on', 'available'), false)).toBe(false);
+    expect(keepsSlidesWhole(caps('on', 'broken'), false)).toBe(false);
+    expect(keepsSlidesWhole(caps('on', 'absent'), false)).toBe(true);
+    expect(keepsSlidesWhole(caps('on', 'off'), false)).toBe(true);
+    expect(keepsSlidesWhole(caps('off', 'absent'), false)).toBe(false);
   });
 });
 
-describe('the import card and report read the slides kept whole (Q24.b)', () => {
-  const base = { presentationId: 'p1', slides: 3, native: 3, hybrid: 0, picture: 0, compact: 0, pending: 0 };
+describe('the operator keeps no import core in its main chunks (M7 bundle, Q24.b)', () => {
+  const src = join(import.meta.dirname, '../src');
+  const files = (dir: string): string[] =>
+    readdirSync(dir).flatMap((f) => {
+      const p = join(dir, f);
+      return statSync(p).isDirectory() ? files(p) : /\.(ts|tsx)$/.test(f) && !/\.test\./.test(f) ? [p] : [];
+    });
 
-  it('reads whole from the hub result defensively: a string, a negative or a NaN is 0, and absent stays absent', () => {
-    expect(readNativeResult({ ...base, missingFonts: [], notes: [], whole: 3 })).toMatchObject({ whole: 3 });
-    for (const bad of ['3', -2, Number.NaN, null, {}, [], true])
-      expect(readNativeResult({ ...base, whole: bad }), String(bad)).toMatchObject({ whole: 0 });
-    expect(readNativeResult({ ...base, whole: 1e9 })).toMatchObject({ whole: 100_000 });
-    expect(readNativeResult(base)).not.toHaveProperty('whole');
+  it('no file outside the workers and the lazy parse service imports pptx-core (it carried 138 kB of the import core into the operator\u2019s regular total)', () => {
+    const bad = files(src)
+      .filter((f) => !/\/(workers|services)\//.test(f))
+      .filter((f) => /from '@ordo\/importers\/pptx-core/.test(readFileSync(f, 'utf8')));
+    expect(bad).toEqual([]);
   });
 
-  const slide = (id: string, record?: unknown): Slide =>
-    ({
-      id,
-      objects: [],
-      pptx: { fileId: 'f', index: 0, class: 'native', version: 3 },
-      ...(record ? { prerender: record } : {}),
-    }) as unknown as Slide;
-  const deck = (slides: Slide[]) =>
-    ({
-      kind: 'slides',
-      source: {
-        kind: 'pptx',
-        native: { version: 3, slides: slides.length, native: slides.length, hybrid: 0, picture: 0 },
-      },
-      sections: [{ id: 's', label: 'Slides', short: 'S', slides }],
-    }) as unknown as Presentation;
-
-  it('counts the slides that carry a pre-render record, and says nothing when there are none', () => {
-    const rec = { why: ['bytes'], live: [] };
-    expect(
-      importReport(deck([slide('a', rec), slide('b'), slide('c', { why: ['count'], live: [] })]))?.whole,
-    ).toBe(2);
-    expect(importReport(deck([slide('a'), slide('b')]))).not.toHaveProperty('whole');
-    expect(importReport(deck([]))).not.toHaveProperty('whole');
+  it('the pinned copies equal the originals: the answer for a hub with LibreOffice, wholeSlidesFor and the report line', () => {
+    expect(OPERATOR_WHOLE_WITH_LIBREOFFICE).toBe(WHOLE_WITH_LIBREOFFICE);
+    const c = (p: string, lo: 'available' | 'absent' | 'off' | 'broken') =>
+      ({ ...LEGACY_CAPABILITIES, libreoffice: { state: lo }, prerender: { state: p } }) as unknown as HubCapabilities;
+    for (const p of ['on', 'off'])
+      for (const lo of ['available', 'absent', 'off', 'broken'] as const)
+        expect(keepsSlidesWhole(c(p, lo)), `${p} ${lo}`).toBe(
+          wholeSlidesFor({ prerender: p === 'on', lo: hubHasLibreOffice(c(p, lo)) }),
+        );
+    for (const n of [undefined, 0, -1, 1, 2, 17, Number.NaN, Number.POSITIVE_INFINITY])
+      for (const dev of [undefined, true, false])
+        expect(wholeLine(n, dev), `${n} ${dev}`).toBe(
+          keptWholeLine(n ?? 0, dev === false ? { deviceCanBake: false } : {}),
+        );
   });
 });
