@@ -244,14 +244,28 @@ export class LiveService {
   private db: DB;
   private source: LiveSource;
   private log: Logger;
-  private opts: { snapshotIntervalMs: number; now?: () => number; byRef?: boolean };
+  private opts: {
+    snapshotIntervalMs: number;
+    now?: () => number;
+    byRef?: boolean;
+    prerender?: { on: boolean; store: boolean };
+  };
   /** ORDO_LIVE_BYREF: the snapshot and the journal name the copy instead of holding it (default on). */
   readonly byRef: boolean;
   constructor(
     db: DB,
     source: LiveSource,
     log: Logger,
-    opts: { snapshotIntervalMs: number; now?: () => number; byRef?: boolean },
+    opts: {
+      snapshotIntervalMs: number;
+      now?: () => number;
+      byRef?: boolean;
+      /**
+       * The hub's switch for pictures (store-2, `HubConfig.prerender`): `on` is what the Go-live picture line (W33)
+       * follows, `store` false lists no picture rows and no key set. Absent: as before the switch existed.
+       */
+      prerender?: { on: boolean; store: boolean };
+    },
   ) {
     this.db = db;
     this.source = source;
@@ -767,6 +781,7 @@ export class LiveService {
   resolve(playlistId: string): ResolvedPlaylist {
     try {
       return resolvePlaylist(this.source.goLiveInputs(playlistId), playlistId, {
+        ...this.pictureOptions(),
         digest: (parts) => {
           const h = createHash('sha256');
           for (const p of parts) h.update(p);
@@ -778,6 +793,12 @@ export class LiveService {
       if (e instanceof GoLiveRejection) throw new LiveRejection(e.message);
       throw e;
     }
+  }
+
+  /** What the hub's switch adds to a goLive resolve: nothing when the option was not given. */
+  private pictureOptions(): { prerenderOn?: boolean; pictures?: boolean } {
+    const p = this.opts.prerender;
+    return p ? { prerenderOn: p.on, pictures: p.store } : {};
   }
 
   /**
@@ -1074,6 +1095,7 @@ export class LiveService {
         bundle: bundle.bytes,
         takenAt: bundle.takenAt,
         ...(bundle.cachedCopy ? { cachedCopy: bundle.cachedCopy } : {}),
+        ...this.pictureOptions(),
       });
       if (this.worker.inline)
         this.log.warn('goLive check ran on the live loop: no worker thread could start');

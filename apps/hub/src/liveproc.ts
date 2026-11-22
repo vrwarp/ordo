@@ -228,6 +228,7 @@ export async function createLiveProcess(
   const live = new LiveService(liveDb, link, log, {
     snapshotIntervalMs: cfg.snapshotIntervalMs,
     byRef: cfg.liveByRef,
+    prerender: cfg.prerender,
   });
   if (cfg.liveByRefWarning) log.warn({}, cfg.liveByRefWarning);
   logPrerender(cfg.prerender, log, false);

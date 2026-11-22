@@ -132,7 +132,7 @@ function inputs(presentations: Presentation[], over: Partial<GoLiveInputs> = {})
     ...over,
   };
 }
-const go = (i: GoLiveInputs, opts: { prerenderOn?: boolean } = {}) =>
+const go = (i: GoLiveInputs, opts: { prerenderOn?: boolean; pictures?: boolean } = {}) =>
   resolvePlaylist(i, 'pl', { digest: localDigest, ...opts });
 
 const rows = (slideId: string): PrerenderRow[] => [
@@ -287,5 +287,44 @@ describe('goLive: pre-rendered slides (design/29 §1.7)', () => {
     expect(noHead.files.map((f) => f.hash)).not.toContain(PAGE_A);
     expect(r).not.toHaveProperty('geoms');
     expect(r.degraded).toBeUndefined();
+  });
+});
+
+describe('goLive: a hub that keeps no pictures (ResolveOptions.pictures: false, store-2 PS7)', () => {
+  const withPics = () =>
+    inputs([pres('p', 'Big deck', [standIn('a'), geomSlide('b')])], {
+      prerenders: () => rows('a'),
+      prerenderKeys: () => [KEY],
+    });
+
+  it('lists no rows, no key set and no picture line, even with the switch on', () => {
+    const r = go(withPics(), { pictures: false, prerenderOn: true });
+    expect(r.prerenders).toBeUndefined();
+    expect(r.prerenderKeys).toBeUndefined();
+    expect((r.degraded ?? []).map((d) => degradedKind(d.reason))).not.toContain('picture');
+    // the files the pictures would have added are not in the manifest either
+    expect(r.files.map((f) => f.hash)).not.toContain(PIC_4K);
+    expect(r.files.map((f) => f.hash)).not.toContain(PIC_1080);
+    expect(ResolvedPlaylist.safeParse(r).success).toBe(true);
+  });
+
+  it('is only an explicit false: not given, or true, is as before', () => {
+    for (const opts of [{}, { pictures: true }, { pictures: undefined }]) {
+      const r = go(withPics(), { ...opts, prerenderOn: true });
+      expect(r.prerenderKeys).toEqual([KEY]);
+      expect(r.prerenders?.length).toBe(2);
+    }
+    // without prerenderOn the picture line is off, rows are listed (the 0.10.0 hub)
+    const r = go(withPics());
+    expect(r.prerenders?.length).toBe(2);
+    expect(r.degraded).toBeUndefined();
+  });
+
+  it('keeps everything else of the service: the slides, the head and its pages, the shape files', () => {
+    const on = go(withPics(), { prerenderOn: true });
+    const off = go(withPics(), { pictures: false, prerenderOn: true });
+    const keep = (r: ReturnType<typeof go>) =>
+      r.files.map((f) => f.hash).filter((h) => h !== PIC_4K && h !== PIC_1080);
+    expect(keep(off)).toEqual(keep(on));
   });
 });

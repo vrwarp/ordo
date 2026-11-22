@@ -564,12 +564,25 @@ export class PrerenderStore {
   /** The limit of unique bytes per presentation; a constructor argument, lowered by the tests. */
   budgetBytes: number;
 
-  constructor(lib: Library, store: Store, live: LiveView, opts: { log: Logger; budgetBytes?: number }) {
+  /**
+   * `open`: false while the hub's switch is off (ORDO_PRERENDER=off, `HubConfig.prerender.store`): a picture is refused
+   * 503 `prerender_off`. The listing, the delete and the failure route do not look at it (an operator reads and cleans
+   * them), and nothing stored is touched. Absent: always open.
+   */
+  private open: () => boolean;
+
+  constructor(
+    lib: Library,
+    store: Store,
+    live: LiveView,
+    opts: { log: Logger; budgetBytes?: number; open?: () => boolean },
+  ) {
     this.lib = lib;
     this.store = store;
     this.live = live;
     this.log = opts.log;
     this.budgetBytes = opts.budgetBytes ?? PRERENDER_BUDGET_BYTES;
+    this.open = opts.open ?? (() => true);
   }
 
   /** Called with every picture accepted for a key of the running service (wired to the live loop in step 7). */
@@ -629,7 +642,7 @@ export class PrerenderStore {
     key: string,
     size: number,
     stream: Readable,
-    ctx: { role: 'operate' | 'edit'; madeBy?: string },
+    ctx: { role: 'operate' | 'edit'; madeBy?: string; kind?: string },
   ): Promise<PutResult> {
     const dims = PICTURE_SIZES[size];
     const idx = this.lib.prerenderIndex;
@@ -637,6 +650,13 @@ export class PrerenderStore {
       this.drain(stream);
       throw e;
     };
+    // The refusals in their order (hook H4): the switch, the kind, then the presentation, the size and the key.
+    if (!this.open())
+      return refuse(
+        new HttpError(503, 'prerender_off', 'Pictures of heavy slides are turned off on this hub.'),
+      );
+    if (ctx.kind !== undefined && ctx.kind !== 'slide')
+      return refuse(badRequest('Only pictures of slides are made yet', 'bad_kind'));
     const pres = this.lib.presentations.get(presentationId);
     if (!pres) return refuse(notFound(`presentation ${presentationId} not found`));
     if (!dims) return refuse(badRequest('size is 3840, 1920 or 640', 'bad_size'));
@@ -698,7 +718,7 @@ export class PrerenderStore {
         slideId: info.slideId,
         standbyId: info.standbyId,
         version: PRERENDER_VERSION,
-        kind: 'slide',
+        kind: 'slide', // the one kind made yet (`ctx.kind` is 'slide' or absent)
         hash: r.hash,
         mime,
         bytes: r.bytes,

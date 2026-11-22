@@ -239,6 +239,12 @@ export type ResolveOptions = {
    * does a slide without its picture get a line (design/29 §1.7). Tests set it.
    */
   prerenderOn?: boolean;
+  /**
+   * false: the hub keeps no pictures (ORDO_PRERENDER=off, store-2): the service lists no picture rows, no key set and
+   * no picture line (W33), whatever the inputs carry (a copy saved while the hub was on, a cached bundle). Not given
+   * or true: as before. Only an explicit false changes anything.
+   */
+  pictures?: boolean;
 };
 
 /**
@@ -299,7 +305,12 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
   );
   const fonts: Font[] = inputs.fonts().filter((f) => families.has(f.family.trim().toLowerCase()));
   const files = manifestFiles(Object.values(media), fonts);
-  const geoms = geomFiles({ playlist, presentations, media }, inputs, opts.prerenderOn ?? PRERENDER_ON);
+  const geoms = geomFiles(
+    { playlist, presentations, media },
+    inputs,
+    opts.prerenderOn ?? PRERENDER_ON,
+    opts.pictures !== false,
+  );
   for (const f of geoms.files)
     files.push({ hash: f.hash, bytes: f.bytes, mime: f.mime } satisfies ManifestFile);
   files.push(...geoms.unindexed);
@@ -512,6 +523,7 @@ function geomFiles(
   resolved: Pick<ResolvedPlaylist, 'playlist' | 'presentations' | 'media'>,
   inputs: GoLiveInputs,
   prerenderOn: boolean,
+  pictures = true,
 ): Listed {
   const out: Listed = { files: [], unindexed: [], prerenders: [], keys: [], problems: [] };
   const presentations = resolved.presentations;
@@ -541,10 +553,10 @@ function geomFiles(
   const keys = new Set<string>();
   const rows = new Map<string, Map<string, PrerenderRow[]>>();
   for (const p of Object.values(presentations)) {
-    for (const k of inputs.prerenderKeys?.(p.id) ?? [])
+    for (const k of pictures ? (inputs.prerenderKeys?.(p.id) ?? []) : [])
       if (keys.size < PRERENDERS_MAX && typeof k === 'string' && isGeomFileRef(k)) keys.add(k);
     const bySlide = new Map<string, PrerenderRow[]>();
-    for (const r of inputs.prerenders?.(p.id) ?? []) {
+    for (const r of pictures ? (inputs.prerenders?.(p.id) ?? []) : []) {
       const list = bySlide.get(r.slideId) ?? [];
       list.push(r);
       bySlide.set(r.slideId, list);
@@ -603,7 +615,7 @@ function geomFiles(
           }
         }
       }
-      if (!pictured && inCue && resolveDraw(s, p.meta) === 'picture')
+      if (pictures && !pictured && inCue && resolveDraw(s, p.meta) === 'picture')
         pictureLess.set(p.id, (pictureLess.get(p.id) ?? 0) + 1);
     }
     for (const ref of new Set([...drawnShapeFileRefs(s), ...(pre?.uses?.files ?? [])])) {

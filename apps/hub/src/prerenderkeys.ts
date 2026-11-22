@@ -43,6 +43,13 @@ export type KeysOptions = {
   live: () => 'idle' | 'live';
   log: Logger;
   startDelayMs?: number;
+  /**
+   * false while the hub's switch is off (ORDO_PRERENDER=off, `HubConfig.prerender.store`): `keysFor` returns no row
+   * without looking at the presentation, and the jobs (a font or media change, the start-up scan, `fill`) queue and
+   * do nothing. Rows already stored stay; the start-up scan of the next start that is not off fills what a save made
+   * meanwhile left without rows. Absent: always open.
+   */
+  open?: () => boolean;
 };
 
 type Pool = Pick<CpuPool, 'run'>;
@@ -83,6 +90,7 @@ export class PrerenderKeys {
    * a slide whose key cannot be computed now is left to the safety net.
    */
   async keysFor(p: Presentation): Promise<PrerenderKeyRow[]> {
+    if (!this.isOpen()) return [];
     const out: PrerenderKeyRow[] = [];
     const todo: Work[] = [];
     let prev: Map<string, ReturnType<Library['prerenderIndex']['keysAt']>> | undefined;
@@ -107,6 +115,10 @@ export class PrerenderKeys {
       }
     }
     return out;
+  }
+
+  private isOpen(): boolean {
+    return this.opts.open?.() ?? true;
   }
 
   private previousRows(id: string) {
@@ -249,7 +261,7 @@ export class PrerenderKeys {
   }
 
   private onChanges(changes: Change[]): void {
-    if (this.stopped) return;
+    if (this.stopped || !this.isOpen()) return;
     const ids = new Set<string>();
     let all = false;
     for (const c of changes) {
@@ -282,11 +294,13 @@ export class PrerenderKeys {
   }
 
   private scanAll(): void {
+    if (!this.isOpen()) return;
     const ids = this.lib.prerenderIndex.presentationsMentioningPrerender();
     if (ids.length) this.later(new Set(ids));
   }
 
   private later(ids: Set<string>): void {
+    if (!this.isOpen()) return;
     for (const id of ids) this.pending.add(id);
     if (this.debounce) return;
     this.debounce = setTimeout(() => {
@@ -325,6 +339,7 @@ export class PrerenderKeys {
 
   /** The current revision's missing rows, one slide at a time: a row that exists (same sig) is left alone. */
   private async fill(id: string): Promise<void> {
+    if (!this.isOpen()) return;
     const p = this.lib.presentations.get(id);
     if (!p) return;
     const idx = this.lib.prerenderIndex;

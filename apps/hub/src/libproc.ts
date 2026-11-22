@@ -185,8 +185,12 @@ export async function createLibraryProcess(
     known: () => known,
   };
   let liveUrl: string | undefined;
-  const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, { live: () => locks.mode, log });
-  const prerenders = new PrerenderStore(lib, store, liveView, { log });
+  const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, {
+    live: () => locks.mode,
+    log,
+    open: () => cfg.prerender.store,
+  });
+  const prerenders = new PrerenderStore(lib, store, liveView, { log, open: () => cfg.prerender.store });
   const backfill = new RefBackfill(lib, { live: () => locks.mode, log });
   const collector = new Collector(lib, store, {
     mode: cfg.collect,

@@ -1391,6 +1391,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       const out = await hub.prerenders.put(id!, KEY_RE.test(key!) ? key! : '', Number(q.size), body, {
         role: sessionRole(req.principal) ?? 'edit',
         madeBy,
+        // The optional kind of the picture (hook H4): 'slide' is the only one yet; any other value is refused 400.
+        kind: typeof q.kind === 'string' ? q.kind : undefined,
       });
       return reply.code(out.status).send(out.body);
     } catch (e) {

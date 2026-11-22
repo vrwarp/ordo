@@ -157,6 +157,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const live = new LiveService(db, librarySource(lib), log, {
     snapshotIntervalMs: cfg.snapshotIntervalMs,
     byRef: cfg.liveByRef,
+    prerender: cfg.prerender,
   });
   if (cfg.liveByRefWarning) log.warn({}, cfg.liveByRefWarning);
   logPrerender(cfg.prerender, log, true);
@@ -185,10 +186,11 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, {
     live: () => live.state.mode,
     log,
+    open: () => cfg.prerender.store,
   });
   // One process: the service's state is always known.
   const liveView = { locks: () => live.locks(), mode: () => live.state.mode, known: () => true };
-  const prerenders = new PrerenderStore(lib, store, liveView, { log });
+  const prerenders = new PrerenderStore(lib, store, liveView, { log, open: () => cfg.prerender.store });
   // A picture accepted for a key of the running service goes straight to the live loop (one process).
   prerenders.onAccepted((e) =>
     applyHubEvent(
