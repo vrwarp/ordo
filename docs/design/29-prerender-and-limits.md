@@ -612,6 +612,20 @@ one: the hub applies it through `LiveService.apply` for each accepted upload of 
 (prerender-store, bake-worker), and every client reduces it from `live.delta`. `prerender.use` is an ordinary
 command of the operate role (outputs, Stage and edit sessions are refused as for every command).
 
+<!-- store-2:switch -->
+**As built in sub-wave 3 (the switch).** The one switch is the HUB's `ORDO_PRERENDER` (`auto` | `on` | `off`, read once at start by each
+hub process), told to every operator by `GET /capabilities` (`prerender.{ state, setting }`) and, publicly, by `GET /health`
+(`prerender`); the constant `PRERENDER_ON` is the default of `auto` and is read in the hub in one place, `prerenderConfig`
+(apps/hub/src/config.ts). The table: `auto` is `on` = the constant, `store` open; `on` is on, store open; `off` is off, store closed.
+`on` is what operators are told and what the Go-live picture line (W33) follows; `store` (the picture `PUT`, the keys at save and their
+jobs, and the picture rows and key set of a goLive) is closed ONLY by an explicit `off`. That is why `auto` is not 'closed while the
+constant is false': under auto before the release's switch commit the hub is exactly the 0.10.0 hub (store open, W33 off, operators
+told off), so nothing changes for anyone and no sub-wave 2 test changes meaning at the switch commit; the hub's test helpers pin
+that hub (`testPrerender`) whatever the constant becomes. `off` keeps whatever is stored (Q36.b) and the picture routes' listing, `DELETE` and
+`failed` keep answering. The 503 `prerender_off` and `bad_kind` are the contract the baker reads (`paused_during_service` is the
+one it retries; `prerender_off` is a stop).
+<!-- /store-2:switch -->
+
 **The one pre-render switch.** `PRERENDER_ON` (`packages/domain/src/prerender.ts`, false) is read by every
 pre-render path: the import plan (`prerender` in `M9_HELD_BACK`, tied to the switch by a test), the editor's
 Drawing card (hidden while off, so no slide gets `why: 'chosen'`), the bake triggers (§1.4), the outputs' picture

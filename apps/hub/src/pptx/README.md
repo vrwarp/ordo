@@ -688,8 +688,10 @@ lo-dependencies §4.2-4.4, §4.6-4.11).
   version command failed once) is probed again by the jobs that need it (`HubTools.recheck`, one probe at a time,
   at most once a minute), and becomes `available` without a restart when it answers.
 - **`GET /capabilities`** (edit role; `HubCapabilities` in `@ordo/protocol`; also in the diagnostics zip):
-  LibreOffice's state and version, `pdf` (pdftoppm), the extensions `/import/document` accepts and
-  `pptx.{pictures, reference, referencePdf, art}`. Not in the public `/health`.
+  LibreOffice's state and version, `pdf` (pdftoppm), the extensions `/import/document` accepts,
+  `pptx.{pictures, reference, referencePdf, art}` and `prerender.{state, setting}` (the hub's switch for pictures of heavy
+  slides, `ORDO_PRERENDER`: the hub's own answer, composed by the route from its config, not a tool). Not in the public
+  `/health`, which carries only `prerender: 'on' | 'off'`.
 - **The native import** (`nativeJob.ts`) awaits the tools (a broken LibreOffice probed again first; while it
   does not answer the art is still planned and waits for it), tells the converter (`SceneTaskInput.libreoffice:
   false` → `EmitOptions.libreoffice`) and, without LibreOffice, sets no slide `pending` and queues no
