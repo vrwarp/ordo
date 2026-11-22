@@ -1,6 +1,9 @@
 import { z } from 'zod';
+import { drawnMediaIds } from './content.ts';
+import { drawnShapeFileRefs, extraFontFamilies } from './m9-readers.ts';
 import { canonicalJson } from './palette.ts';
-import { ContentHash, Id, Slide, SlideObject } from './schemas.ts';
+import { slideMediaIds } from './resolve.ts';
+import { ContentHash, Id, isGeomFileRef, Slide, SlideObject } from './schemas.ts';
 import { sha256Text } from './sha256.ts';
 import { utf8Bytes } from './size.ts';
 
@@ -164,4 +167,54 @@ export function slideFromFile(standIn: Slide, head: SlideFileHead, pages: readon
     ...(head.lyricObjectId ? { lyricObjectId: head.lyricObjectId } : {}),
     ...(head.imported ? { imported: head.imported } : {}),
   };
+}
+
+/**
+ * What a head row may name (store-2 step 3b, the Q54 data-safety items): the full lists of a slide of up to 20,000
+ * objects, which is what a slide file may hold (`SLIDE_FILE_LIMITS.objects`): one media id a picture object, plus its
+ * slide picture and its sound; one shape file a shape; and font families up to what 20,000 boxes of a crowded
+ * deck could name at most in practice. A head naming more of any list is REFUSED with a named reason, never cut: a cut
+ * list leaves a file the collector does not see as named and a picture whose key leaves a file out. Not the record's
+ * bounds: `Slide.prerender.uses` keeps `PRERENDER_LIMITS` (1,000 / 1,000 / 64), the schema drops the whole record
+ * past them, so the record is sliced where it is written (`Library.withSlideFiles`).
+ */
+export const HEAD_USES_MAX = { media: 20_002, files: 20_000, fonts: 2_048 } as const;
+
+/**
+ * Every media id, shape-file ref and font family a full slide names, whole: `slideUses` (prerender.ts) with no
+ * cut, for the head row the hub keeps (`slide_heads.uses`), which its collector, its keys job and its goLive
+ * read. Where nothing is past `PRERENDER_LIMITS` the lists equal `slideUses`'s.
+ */
+export function slideUsesAll(full: Slide): { media: string[]; files: string[]; fonts: string[] } {
+  const media = new Set<string>([...drawnMediaIds(full), ...slideMediaIds(full)]);
+  const files = drawnShapeFileRefs(full).filter(isGeomFileRef);
+  const fonts = new Set<string>();
+  for (const o of Array.isArray(full?.objects) ? full.objects : []) {
+    if (o.type === 'text') {
+      for (const f of [
+        o.style?.fontFamily,
+        ...(o.style?.fallbackFonts ?? []),
+        ...(o.runs ?? []).map((r) => r.fontFamily),
+      ])
+        if (typeof f === 'string' && f.trim()) fonts.add(f);
+      for (const p of o.paras ?? []) if (p?.bullet?.fontFamily) fonts.add(p.bullet.fontFamily);
+    } else for (const f of extraFontFamilies(o)) fonts.add(f);
+  }
+  return { media: [...media], files, fonts: [...fonts] };
+}
+
+/** The first list of `uses` that is past `HEAD_USES_MAX`, as a sentence for a refusal; undefined when none is. */
+export function usesTooMany(uses: {
+  media: readonly string[];
+  files: readonly string[];
+  fonts: readonly string[];
+}): string | undefined {
+  for (const [what, list, max] of [
+    ['media items', uses.media, HEAD_USES_MAX.media],
+    ['shape files', uses.files, HEAD_USES_MAX.files],
+    ['font families', uses.fonts, HEAD_USES_MAX.fonts],
+  ] as const)
+    if (list.length > max)
+      return `a slide names more ${what} (${list.length}) than the hub keeps for one (${max})`;
+  return undefined;
 }

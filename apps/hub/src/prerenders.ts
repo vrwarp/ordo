@@ -5,7 +5,7 @@
  */
 import { rm } from 'node:fs/promises';
 import type { Readable } from 'node:stream';
-import type { FileRef, PrerenderRow } from '@ordo/domain';
+import { type FileRef, GOLIVE_SLIDE_PAGES, type PrerenderRow } from '@ordo/domain';
 import { PRERENDER_VERSION } from '@ordo/domain/prerender.ts';
 import type { Logger } from 'pino';
 import type { DB } from './db.ts';
@@ -824,6 +824,7 @@ export class PrerenderStore {
 export function goLiveExtras(
   lib: Library,
   presentations: Record<string, unknown>,
+  opts: { pages?: boolean } = {},
 ): {
   files: Record<string, FileRef>;
   slideHeads?: Record<string, { pages: string[] }>;
@@ -850,7 +851,8 @@ export function goLiveExtras(
         if (!head) continue;
         slideHeads[ref] = { pages: head.pages };
         add(ref);
-        for (const page of head.pages) add(page);
+        // The pages are listed only while GOLIVE_SLIDE_PAGES is on: no screen reads one (the names stay in `slideHeads`).
+        if (opts.pages ?? GOLIVE_SLIDE_PAGES) for (const page of head.pages) add(page);
         for (const used of head.uses.files) add(used);
       }
     }

@@ -13,6 +13,7 @@ import { ResolvedPlaylist } from './live.ts';
 import { type FileRef, type Media, type Presentation, type Slide, Slide as SlideSchema } from './schemas.ts';
 import type { SlideFileHead } from './slidefile.ts';
 import { GOLIVE_SLOW_BYTES, resolvedBytes } from './size.ts';
+import { GOLIVE_SLIDE_PAGES } from './goLive.ts';
 
 /*
  * design/29 §1.7: goLive lists each pre-rendered slide's picture rows and the service's key set, puts slide heads
@@ -132,8 +133,10 @@ function inputs(presentations: Presentation[], over: Partial<GoLiveInputs> = {})
     ...over,
   };
 }
-const go = (i: GoLiveInputs, opts: { prerenderOn?: boolean; pictures?: boolean } = {}) =>
-  resolvePlaylist(i, 'pl', { digest: localDigest, ...opts });
+const go = (
+  i: GoLiveInputs,
+  opts: { prerenderOn?: boolean; pictures?: boolean; slidePages?: boolean } = {},
+) => resolvePlaylist(i, 'pl', { digest: localDigest, ...opts });
 
 const rows = (slideId: string): PrerenderRow[] => [
   { slideId, key: KEY, size: 3840, file: fileRef(PIC_4K, 9_000_000) },
@@ -170,10 +173,14 @@ describe('goLive: pre-rendered slides (design/29 §1.7)', () => {
     expect(ResolvedPlaylist.safeParse(r).success).toBe(true);
   });
 
-  it('puts pictures, the head, its pages and the shape files it uses into files in cue order', () => {
+  // CHANGED EXPECTATION (store-2 step 3b, SU6): the pages of a slide file are listed only while GOLIVE_SLIDE_PAGES is on (it is
+  // off: no screen reads a page). This case keeps today's expectation (pages listed) with the option on; the next one pins the new rule.
+  it('puts pictures, the head, its pages and the shape files it uses into files in cue order (the pages listed: slidePages on)', () => {
     const first = pres('first', 'First', [geomSlide('g1')]);
     const big = pres('big', 'Big deck', [standIn('a')]);
-    const r = go(inputs([first, big], { prerenders: () => rows('a'), prerenderKeys: () => [KEY] }));
+    const r = go(inputs([first, big], { prerenders: () => rows('a'), prerenderKeys: () => [KEY] }), {
+      slidePages: true,
+    });
     const hashes = r.files.map((f) => f.hash);
     const listed = [GEOM, PIC_4K, PIC_1080, HEAD, PAGE_A, PAGE_B, SHAPE];
     expect(hashes.filter((x) => listed.includes(x))).toEqual(listed);
@@ -184,6 +191,25 @@ describe('goLive: pre-rendered slides (design/29 §1.7)', () => {
     // The live process serves every one of them from the bundle while the library is down.
     expect(r.geoms?.map((g) => g.hash)).toEqual(listed);
     expect(r.degraded).toBeUndefined();
+  });
+
+  it('lists no slide pages while GOLIVE_SLIDE_PAGES is off, and everything else as before (SU6)', () => {
+    expect(GOLIVE_SLIDE_PAGES).toBe(false);
+    const first = pres('first', 'First', [geomSlide('g1')]);
+    const big = pres('big', 'Big deck', [standIn('a')]);
+    const i = () => inputs([first, big], { prerenders: () => rows('a'), prerenderKeys: () => [KEY] });
+    const r = go(i());
+    expect(
+      r.files
+        .map((f) => f.hash)
+        .filter((x) => [GEOM, PIC_4K, PIC_1080, HEAD, SHAPE, PAGE_A, PAGE_B].includes(x)),
+    ).toEqual([GEOM, PIC_4K, PIC_1080, HEAD, SHAPE]);
+    expect(r.geoms?.map((g) => g.hash)).toEqual([GEOM, PIC_4K, PIC_1080, HEAD, SHAPE]);
+    expect(r.degraded).toBeUndefined();
+    // the same service with the pages on lists exactly those two more, between the head and the shape file
+    const on = go(i(), { slidePages: true });
+    expect(on.files.map((f) => f.hash).filter((x) => [PAGE_A, PAGE_B].includes(x))).toEqual([PAGE_A, PAGE_B]);
+    expect(on.files.length).toBe(r.files.length + 2);
   });
 
   it('notes a missing use instead of refusing the service', () => {
@@ -277,10 +303,17 @@ describe('goLive: pre-rendered slides (design/29 §1.7)', () => {
 
   it('lists slide pages and shape files from the stand-ins when resolving offline (no file index)', () => {
     const p = pres('p', 'Big deck', [geomSlide('g'), standIn('a')]);
-    const r = go(inputs([p], { file: undefined }));
+    // CHANGED EXPECTATION (SU6): with GOLIVE_SLIDE_PAGES off the pages are not listed; the option on is today's list.
+    const r = go(inputs([p], { file: undefined }), { slidePages: true });
     expect(r.files.filter((f) => f.mime === 'application/json')).toEqual(
       [GEOM, HEAD, PAGE_A, PAGE_B, SHAPE].map((hash) => ({ hash, bytes: 0, mime: 'application/json' })),
     );
+    const none = go(inputs([p], { file: undefined }));
+    expect(none.files.filter((f) => f.mime === 'application/json').map((f) => f.hash)).toEqual([
+      GEOM,
+      HEAD,
+      SHAPE,
+    ]);
     // Without a head at hand the head is still listed, so the operator's download fetches it.
     const noHead = go(inputs([p], { file: undefined, slideHead: undefined }));
     expect(noHead.files.map((f) => f.hash)).toEqual(expect.arrayContaining([GEOM, HEAD, SHAPE]));

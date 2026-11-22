@@ -11,13 +11,7 @@
  *   key can never depend on drawing code (design/29 §1.2).
  */
 import { canonicalJson } from '@ordo/domain/palette.ts';
-import {
-  type PictureInputs,
-  pictureSource,
-  prerenderKey,
-  slideUses,
-  standbyId,
-} from '@ordo/domain/prerender.ts';
+import { type PictureInputs, pictureSource, prerenderKey, standbyId } from '@ordo/domain/prerender.ts';
 import type { Slide } from '@ordo/domain/schemas.ts';
 import { sha256Text } from '@ordo/domain/sha256.ts';
 import {
@@ -27,10 +21,12 @@ import {
   SlideFileRefusal,
   slideFileName,
   slideFromFile,
+  slideUsesAll,
+  usesTooMany,
 } from '@ordo/domain/slidefile.ts';
 
-/** What a slide file draws (`Slide.prerender.uses`): media ids, shape files, font families. */
-export type SlideUses = ReturnType<typeof slideUses>;
+/** What a slide file draws (the head row's `uses`, whole: `slideUsesAll`): media ids, shape files, font families. */
+export type SlideUses = ReturnType<typeof slideUsesAll>;
 
 export type SlideFileTaskInput =
   | { kind: 'page'; name: string; body: unknown }
@@ -113,6 +109,11 @@ export function slideFileTask(input: SlideFileTaskInput): SlideFileTaskOutput {
     throw e;
   }
   const headBytes = enc.encode(canonical);
+  // The head row keeps the whole lists (the collector, the keys job and goLive read them); past what a slide file may name
+  // the head is refused, never cut.
+  const uses = slideUsesAll(full);
+  const many = usesTooMany(uses);
+  if (many) return refuse(413, 'slide_uses_too_many', many);
   return {
     ok: true,
     kind: 'head',
@@ -120,7 +121,7 @@ export function slideFileTask(input: SlideFileTaskInput): SlideFileTaskOutput {
     bytes: headBytes,
     total: total + headBytes.length,
     objects: head.data.count,
-    uses: slideUses(full),
+    uses,
   };
 }
 

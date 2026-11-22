@@ -38,6 +38,12 @@ export const KEYS_START_DELAY_MS = 120_000;
 const DEBOUNCE_MS = 300;
 /** The pause between two slides of a job: it never holds the library's loop. */
 const JOB_PAUSE_MS = 5;
+/**
+ * The most bytes of slide pages one pool task is given (store-2 step 3b, the Q54 data-safety items): a slide file may be
+ * 16 MiB, and a pool worker's heap is 512 MB (pool.ts), so the changed slides of a save are sent in batches of at most
+ * this many bytes of pages, a slide alone when it is bigger than the batch.
+ */
+export const KEYS_PAGES_BYTES_MAX = 32 * 1024 * 1024;
 
 export type KeysOptions = {
   live: () => 'idle' | 'live';
@@ -50,6 +56,8 @@ export type KeysOptions = {
    * meanwhile left without rows. Absent: always open.
    */
   open?: () => boolean;
+  /** The bytes of pages one pool task may be given (tests lower it; default `KEYS_PAGES_BYTES_MAX`). */
+  pagesBytesMax?: number;
 };
 
 type Pool = Pick<CpuPool, 'run'>;
@@ -178,30 +186,51 @@ export class PrerenderKeys {
     return this.faceCache;
   }
 
-  /** The pool's keys for `works`, as rows. */
+  /** The pool's keys for `works`, as rows: the pages of file-form slides go in batches of `pagesBytesMax`. */
   private async compute(works: Work[]): Promise<PrerenderKeyRow[]> {
-    const slides: PrerenderKeysTaskInput['slides'] = [];
+    const max = this.opts.pagesBytesMax ?? KEYS_PAGES_BYTES_MAX;
+    const rows: PrerenderKeyRow[] = [];
+    let batch: PrerenderKeysTaskInput['slides'] = [];
+    let batchWorks: Work[] = [];
+    let bytes = 0;
+    const flush = async () => {
+      if (!batch.length) return;
+      rows.push(...(await this.runKeys(batch, batchWorks)));
+      batch = [];
+      batchWorks = [];
+      bytes = 0;
+    };
     for (const w of works) {
       if (!w.head) {
-        slides.push({ slideId: w.slide.id, standIn: w.slide, media: w.media });
+        batch.push({ slideId: w.slide.id, standIn: w.slide, media: w.media });
+        batchWorks.push(w);
         continue;
       }
       const headFile = this.lib.getFile(w.slide.prerender!.file!.ref);
       const files = w.head.pages.map((h) => this.lib.getFile(h));
       if (!headFile || files.some((f) => !f)) continue;
+      // The size the files are known to have: the pages are read only for a slide that is next in its batch.
+      const size = headFile.bytes + files.reduce((n, f) => n + f!.bytes, 0);
+      if (batch.length && bytes + size > max) await flush();
       const [head, ...pages] = await Promise.all([
         readFile(this.store.abs(headFile.path)),
         ...files.map((f) => readFile(this.store.abs(f!.path))),
       ]);
-      slides.push({
+      batch.push({
         slideId: w.slide.id,
         standIn: w.slide,
         head: new Uint8Array(head!.buffer, head!.byteOffset, head!.byteLength),
         pages: pages.map((b) => new Uint8Array(b.buffer, b.byteOffset, b.byteLength)),
         media: w.media,
       });
+      batchWorks.push(w);
+      bytes += size;
     }
-    if (!slides.length) return [];
+    await flush();
+    return rows;
+  }
+
+  private async runKeys(slides: PrerenderKeysTaskInput['slides'], works: Work[]): Promise<PrerenderKeyRow[]> {
     const out = await this.pool().run('prerender-keys', {
       slides,
       fonts: this.faces(),

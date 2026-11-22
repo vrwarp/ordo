@@ -229,6 +229,15 @@ export function degradedEntries(resolved: ResolvedPlaylist, problems: GoLiveProb
   return out.slice(0, DEGRADED_MAX);
 }
 
+/**
+ * Whether a goLive lists the PAGES of a slide file (store-2 step 3b, the Q54 data-safety items): false, because no
+ * screen reads a page (a slide file is read by the hub and by the computer that makes the picture), so a service of
+ * slides kept in slide files would otherwise make every screen download up to 16 MiB a slide for nothing. The slide's
+ * head and the shape files its head names stay listed. A later release whose screens read pages turns it on together with
+ * its readers.
+ */
+export const GOLIVE_SLIDE_PAGES = false;
+
 export type ResolveOptions = {
   /** Digest of the manifest identity parts (the hub uses SHA-256; the operator PC `localDigest`). */
   digest: (parts: string[]) => string;
@@ -245,6 +254,8 @@ export type ResolveOptions = {
    * or true: as before. Only an explicit false changes anything.
    */
   pictures?: boolean;
+  /** Whether to list the pages of slide files (tests; default `GOLIVE_SLIDE_PAGES`). */
+  slidePages?: boolean;
 };
 
 /**
@@ -310,6 +321,7 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
     inputs,
     opts.prerenderOn ?? PRERENDER_ON,
     opts.pictures !== false,
+    opts.slidePages ?? GOLIVE_SLIDE_PAGES,
   );
   for (const f of geoms.files)
     files.push({ hash: f.hash, bytes: f.bytes, mime: f.mime } satisfies ManifestFile);
@@ -524,6 +536,7 @@ function geomFiles(
   inputs: GoLiveInputs,
   prerenderOn: boolean,
   pictures = true,
+  slidePages = GOLIVE_SLIDE_PAGES,
 ): Listed {
   const out: Listed = { files: [], unindexed: [], prerenders: [], keys: [], problems: [] };
   const presentations = resolved.presentations;
@@ -603,7 +616,7 @@ function geomFiles(
           fileMissing.set(p.id, m);
         } else {
           add(pre.file.ref, head.ref);
-          for (const page of inputs.slideHead?.(pre.file.ref)?.pages ?? []) {
+          for (const page of slidePages ? (inputs.slideHead?.(pre.file.ref)?.pages ?? []) : []) {
             const f = find(page);
             if (f.ok) add(page, f.ref);
             else if (!fileMissing.get(p.id)?.ids.includes(s.id)) {
