@@ -1612,6 +1612,77 @@ describe('a slide kept in a slide file (B-F1, B-F2)', () => {
   });
 });
 
+// ---- the keys are worked out once (B39, B40) ----
+
+describe('a key is worked out once, not at every check (B39, B40)', () => {
+  const four = () => ['s1', 's2', 's3', 's4'].map((id) => heavy(id));
+
+  it("B39 the checks before a bake, before its first upload and at an unrelated library change compute no key, and neither does the editor's refresh", async () => {
+    const slides = four();
+    const w = world({ slides });
+    const counted: string[] = [];
+    w.deps.plan = {
+      keyOf: (slide, inputs) => {
+        counted.push(slide.id);
+        return localKey(slide, inputs);
+      },
+    };
+    for (const s of slides) w.know('p1', s);
+    await w.begin();
+    // the first sweep: each record slide once; the check before the first bake is free
+    expect([...counted].sort()).toEqual(['s1', 's2', 's3', 's4']);
+    // all four pictures are made, one after the other, with the library changing in a way that moves no key
+    for (let i = 0; i < 4; i++) {
+      w.made();
+      await w.flush();
+      w.library({ data: { ...useLibrary.getState().data, playlists: [] } });
+      await w.advance(BAKE_GAP_MS + 100);
+    }
+    await w.service.refresh('p1');
+    expect(w.puts().length).toBeGreaterThanOrEqual(12);
+    expect(counted).toHaveLength(4);
+  });
+
+  it("B40 an edit while a picture is made costs the running slide's key only; the next sweep works the presentation out once", async () => {
+    const slides = four();
+    const w = world({ slides });
+    const counted: string[] = [];
+    w.deps.plan = {
+      keyOf: (slide, inputs) => {
+        counted.push(slide.id);
+        return localKey(slide, inputs);
+      },
+    };
+    for (const s of slides) w.know('p1', s);
+    await w.begin();
+    expect(counted).toHaveLength(4);
+    const running = w.job().key;
+    expect(running).toBe(w.keyOf(slides[0] as Slide));
+    counted.length = 0;
+    // another slide of the same presentation is edited: a new presentation object, rev 2
+    const edited = {
+      ...(slides[2] as Slide),
+      objects: (slides[2] as Slide).objects.map((o) => (o.type === 'text' ? { ...o, text: 'changed' } : o)),
+    } as Slide;
+    w.library({
+      data: {
+        ...useLibrary.getState().data,
+        presentations: [
+          deck('p1', [slides[0] as Slide, slides[1] as Slide, edited, slides[3] as Slide], { rev: 2 }),
+        ],
+      },
+    });
+    // the running slide is checked: its own key and no other
+    expect(counted).toEqual(['s1']);
+    expect(w.worker().terminated).toBe(false);
+    counted.length = 0;
+    w.know('p1', edited);
+    await w.advance(BAKE_SETTLE_MS + 200);
+    // the sweep after the edit works out the other three: each slide of the edited presentation once in all
+    expect([...counted].sort()).toEqual(['s2', 's3', 's4']);
+  });
+});
+
 // ---- the recorded mutations (see before/service-mutations.log) ----
 
 describe('what the cases above are for (the recorded mutations are run against them)', () => {

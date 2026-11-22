@@ -283,12 +283,38 @@ export type PlanCacheEntry = {
 /** Per presentation: what its record slides computed to, valid while its object, rev, media list and font list are the same. */
 export type PlanCache = Map<string, PlanCacheEntry>;
 
+/**
+ * The plan's memory of one presentation: the slides' computed keys, valid while the presentation object, its rev and the
+ * library's media and font lists are the same ones; a fresh (and remembered) map otherwise. A sweep, the checks around a
+ * bake and the editor's refresh all go through it, so a key is worked out once and not at every check.
+ */
+export function cachedSlides(
+  cache: PlanCache | undefined,
+  p: Presentation,
+  library: { media: readonly Media[]; fonts: readonly Font[] },
+): Map<string, Computed> {
+  let entry = cache?.get(p.id);
+  if (
+    !entry ||
+    entry.presentation !== p ||
+    entry.rev !== p.rev ||
+    entry.media !== library.media ||
+    entry.fonts !== library.fonts
+  ) {
+    entry = { presentation: p, rev: p.rev, media: library.media, fonts: library.fonts, slides: new Map() };
+    cache?.set(p.id, entry);
+  }
+  return entry.slides;
+}
+
 export type WantCtx = {
   inputs: PlanInputs;
   listing: Listing | undefined;
   deps?: PlanDeps;
-  /** The per-presentation computed slides (used by `planSweep`; a fresh one otherwise). */
+  /** The per-presentation computed slides (`cachedSlides`: the plan's memory; a fresh one otherwise). */
   slides?: Map<string, Computed>;
+  /** Only this slide: the checks around a bake ask about one slide, never the presentation's every key. */
+  only?: string;
 };
 
 function cut(text: string, max: number): string {
@@ -343,6 +369,7 @@ export function* wantedSteps(
   const items: BakeItem[] = [];
   const known = ctx.slides ?? new Map<string, Computed>();
   for (const slide of recordSlides(p)) {
+    if (ctx.only !== undefined && slide.id !== ctx.only) continue;
     let c = known.get(slide.id);
     if (!c) {
       c = compute(p, slide, ctx.inputs, deps);
@@ -444,25 +471,12 @@ export function* planSweepSteps(input: PlanInput, deps: PlanDeps = {}): Generato
       input.cache?.delete(p.id);
       continue;
     }
-    let entry = input.cache?.get(p.id);
-    if (
-      !entry ||
-      entry.presentation !== p ||
-      entry.rev !== p.rev ||
-      entry.media !== input.library.media ||
-      entry.fonts !== input.library.fonts
-    ) {
-      entry = {
-        presentation: p,
-        rev: p.rev,
-        media: input.library.media,
-        fonts: input.library.fonts,
-        slides: new Map(),
-      };
-      input.cache?.set(p.id, entry);
-    }
     const listing = input.listings[p.id];
-    const got = yield* wantedSteps(p, { inputs, listing, deps, slides: entry.slides }, clock);
+    const got = yield* wantedSteps(
+      p,
+      { inputs, listing, deps, slides: cachedSlides(input.cache, p, input.library) },
+      clock,
+    );
     statuses.push(...got.statuses);
     items.push(...got.items);
     if (

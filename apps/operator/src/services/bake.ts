@@ -50,6 +50,7 @@ import {
   type PlanCache,
   type PlanDeps,
   type PlanInput,
+  cachedSlides,
   planSweepSteps,
   retryDelay,
   type SweepPlan,
@@ -463,10 +464,13 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
     const lib = library().data;
     const p = lib.presentations.find((x) => x?.id === item.presentationId);
     if (!p) return { wanted: false };
+    // this slide alone, from the plan's memory: a presentation that has not changed since the sweep costs no key
     const got = wantedItems(p, {
       inputs: slideInputs({ media: lib.media, fonts: lib.fonts }),
       listing: listings.get(item.presentationId)?.listing,
       deps: deps.plan,
+      slides: cachedSlides(cache, p, lib),
+      only: item.slideId,
     });
     const status = got.statuses.find((s) => s.slideId === item.slideId);
     return { key: status?.key, wanted: !!status && status.state !== 'none' };
@@ -1203,10 +1207,12 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
       await readListing(presentationId);
     const again = library().data.presentations.find((x) => x?.id === presentationId);
     if (!again) return;
+    const now = library().data;
     const got = wantedItems(again, {
-      inputs: slideInputs({ media: lib.media, fonts: lib.fonts }),
+      inputs: slideInputs({ media: now.media, fonts: now.fonts }),
       listing: listings.get(presentationId)?.listing,
       deps: deps.plan,
+      slides: cachedSlides(cache, again, now),
     });
     setSlides(deviceWords(got.statuses, g));
   }

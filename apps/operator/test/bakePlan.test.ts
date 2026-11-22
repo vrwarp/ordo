@@ -23,6 +23,7 @@ import {
 } from '../src/services/bakeConsts.ts';
 import {
   type BakeItem,
+  cachedSlides,
   classify,
   type Listing,
   localKey,
@@ -31,6 +32,7 @@ import {
   type PlanDeps,
   type PlanInput,
   planSweep,
+  type PlanCache,
   planSweepSteps,
   recordSlides,
   retryDelay,
@@ -804,5 +806,54 @@ describe('a slide kept in a slide file (P15-P17, Q54)', () => {
       'ready',
       'ready',
     ]);
+  });
+});
+
+// ---- P18, P19: a key is worked out once (the plan's cache is the one place that holds it) ----
+
+describe('keys are worked out once (P18, P19)', () => {
+  it("P18 cachedSlides is the plan's per-presentation memory: the same map while the presentation, its rev and the media and font lists are the same, a fresh one when any is not", () => {
+    const cache: PlanCache = new Map();
+    const p = deck('p', [heavy('a'), heavy('b')]);
+    const lib = { media: MEDIA, fonts: FONTS };
+    const first = cachedSlides(cache, p, lib);
+    first.set('a', { eligible: false });
+    expect(cachedSlides(cache, p, lib)).toBe(first);
+    expect(cache.get('p')?.slides).toBe(first);
+    // a sweep over the same inputs keeps it, so a sweep and a re-check share what was computed
+    const keyOf = vi.fn(localKey);
+    planSweep({ presentations: [p], library: lib, listings: {}, cache }, { keyOf });
+    expect(keyOf).toHaveBeenCalledTimes(1);
+    expect(cachedSlides(cache, p, lib)).toBe(first);
+    expect(cachedSlides(cache, deck('p', [heavy('a'), heavy('b')]), lib)).not.toBe(first);
+    expect(cachedSlides(cache, p, { media: [...MEDIA], fonts: FONTS })).not.toBe(first);
+    expect(cachedSlides(cache, p, { media: MEDIA, fonts: [...FONTS] })).not.toBe(first);
+    expect(cachedSlides(cache, { ...p, rev: 2 } as Presentation, lib)).not.toBe(first);
+    // with no cache a fresh map every time
+    expect(cachedSlides(undefined, p, lib)).not.toBe(cachedSlides(undefined, p, lib));
+  });
+
+  it("P19 wantedItems with `only` works out that slide alone, and with the plan's memory none the second time", () => {
+    const keyOf = vi.fn(localKey);
+    const slides = ['a', 'b', 'c', 'd'].map((id) => heavy(id));
+    const p = deck('p', slides);
+    const i = inputs();
+    const cache: PlanCache = new Map();
+    const ctx = {
+      inputs: i,
+      listing: undefined,
+      deps: { keyOf },
+      slides: cachedSlides(cache, p, { media: MEDIA, fonts: FONTS }),
+      only: 'c',
+    };
+    const one = wantedItems(p, ctx);
+    expect(one.statuses.map((s) => s.slideId)).toEqual(['c']);
+    expect(keyOf).toHaveBeenCalledTimes(1);
+    expect(keyOf.mock.calls[0]?.[0]).toMatchObject({ id: 'c' });
+    expect(wantedItems(p, ctx).statuses[0]?.key).toBe(one.statuses[0]?.key);
+    expect(keyOf).toHaveBeenCalledTimes(1);
+    // the others are still worked out when asked, once each
+    wantedItems(p, { ...ctx, only: undefined });
+    expect(keyOf).toHaveBeenCalledTimes(4);
   });
 });
