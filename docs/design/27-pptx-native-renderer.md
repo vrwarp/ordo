@@ -1483,6 +1483,23 @@ the cells are measured by estimate as before (until integrate-1c repair 1 the Nu
 - goLive ships a scoped face only with its own presentation (the family filter in `resolvePlaylist` checks `scope`). The resolver uses it only for objects of that presentation, so a deck's subset 'Calibri' never reaches another deck.
 - fsType preview&print faces and subset faces are view-only: the editor warns before new characters are typed.
 
+### The bake profile (sub-wave 3)
+
+The font resolver has a second profile for the pre-rendered picture (design 29 section 1.2): `new FontResolver(host,
+{ profile: 'bake', blank })`. A bake font string holds, in this order, the exact library face, the loaded
+`fallbackFonts`, the loaded script fallbacks, the loaded default face (`DEFAULT_FONT`) and the blank face last; never the
+requested family as the computer might have it and never the legacy chain (Inter, Segoe UI, Arial, sans-serif). A
+character no loaded face covers therefore lands on the blank face and draws as nothing, where it would otherwise be drawn
+by a face of the computer that makes the picture, which is what makes the same slide give the same picture on every
+computer; the coverage probe (`GlyphCoverage`, noted through the prototype of the 2D context, so text inside a shadow, a
+glow, a gradient or a table cell is seen too) turns it into a failed picture rather than a picture with a hole. The
+resolver reports what it could not resolve: `bakeReport()` (the families asked for, the stacks that held no loaded face,
+the requests served by the default face alone, which is the stand-in list of Q31.c) and `failedFamilies()` (wanted faces
+that are not loaded); `bakeReset()` clears the report and advances the generation, so layouts an earlier bake memoised
+are laid out again. One character is outside this: U+3000, which Chromium draws with a system CJK face even when the blank
+face is alone in the stack (the probe skips it); a slide with it is the one known source of a difference between
+computers. The live profile is the default and builds the strings it always did.
+
 ## 11. Editability and editor extensions
 
 ### Mapping

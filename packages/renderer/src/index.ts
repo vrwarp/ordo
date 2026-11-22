@@ -38,6 +38,16 @@ export type {
 } from './units.ts';
 // The underlay frame (frame.ts) imports units.ts, so it is the asset worker's too: `@ordo/renderer/frame.ts`.
 export type { FrameOptions, FrameSplit, FrameWhy } from './frame.ts';
+// The bake (bake.ts) is the bake worker's, imported by subpath like frame.ts; its types only here, so the operator's
+// main thread can type the worker's messages without carrying it.
+export type {
+  BakeFailure,
+  BakeMade,
+  BakeOptions,
+  BakeReason,
+  BakeResult,
+  EncodedPicture,
+} from './bake.ts';
 export {
   clearDecorFiles,
   DECOR_FILE_RETRY_MS,
