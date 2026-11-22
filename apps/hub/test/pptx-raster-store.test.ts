@@ -468,7 +468,11 @@ describe('the job and a live service (H10)', () => {
   });
 
   it('a job that plans pictures finds a service live and goes back to the queue BEFORE any work; with the switch off it imports as today', async () => {
-    const on = await startHub({ prerender: { setting: 'on', on: true, store: true } });
+    const on = await startHub({
+      prerender: { setting: 'on', on: true, store: true },
+      // A hub without LibreOffice (a hub with it keeps LibreOffice's art and plans no pictures, M-SR5): the pictures are planned.
+      toolProbe: ((t: string) => ({ state: t === 'libreoffice' ? 'absent' : 'available' })) as never,
+    });
     try {
       on.jobs.pacing!.onMode('live');
       const job = await queue(on, 'live-on');

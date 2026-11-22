@@ -32,10 +32,13 @@ export type { RasterReason, RasterFont };
 export const RASTER_LIMITS_HUB = { perImport: 200, importMs: 300_000, importBytes: 268_435_456 } as const;
 
 /**
- * Whether a hub WITH LibreOffice takes its own picture when it has a Chromium too (Q53.j, rung 3). True until the
- * planner's measure M-SR5 says otherwise; the planner edits this one line.
+ * Whether a hub WITH LibreOffice takes its own picture when it has a Chromium too (Q53.j, rung 3). FALSE, by the planner's
+ * measure M-SR5 (shape-raster-2, notes.md 'M-SR5'): on Traffic Dark a hub with LibreOffice scores 0.9869 / 0.9734 / 0.9895 on
+ * slides 88 / 89 / 91 with the own pictures against 0.9987 / 0.9946 / 0.9896 with LibreOffice's page (drops of 0.0118 and 0.0212
+ * on 88 and 89, none recovered by a named later project), so a hub with LibreOffice keeps LibreOffice's art as today and says so
+ * (`rasterOffReason` 'libreoffice'). The one line to flip if the owner asks for the own picture there (Q53.j).
  */
-export const RASTER_WITH_LIBREOFFICE = true;
+export const RASTER_WITH_LIBREOFFICE = false;
 
 /** The PDF route (rung 2) exists only if G-SPIKE failed (step 3-alt): it was not built. */
 export const RASTER_PDF_ROUTE = false;

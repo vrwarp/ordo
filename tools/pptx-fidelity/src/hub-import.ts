@@ -67,7 +67,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../..');
 
 /** The tools a hub without LibreOffice may use (the M9 plan §6.3): nothing else is on its PATH. */
-export const LITE_TOOLS = ['node', 'ffmpeg', 'ffprobe', 'pdftoppm', 'pdfinfo', 'prlimit'] as const;
+// `nice` (coreutils, on every hub's PATH) is how the hub starts the picture browser of many-point shapes at the lowest priority (Q53).
+export const LITE_TOOLS = ['node', 'ffmpeg', 'ffprobe', 'pdftoppm', 'pdfinfo', 'prlimit', 'nice'] as const;
 /** What the run must never find on the hub's PATH. */
 export const OFFICE_COMMANDS = ['soffice', 'libreoffice'] as const;
 

@@ -420,6 +420,9 @@ export class BeforeHub {
         return { scores, failed, notes, why };
       }
       reason = 'not drawn';
+      // Q53: what the hub's picture step of many-point shapes came to (the counts of its result), for the run's notes.
+      const drawnShapes = (imp.job.result as { rasters?: unknown } | undefined)?.rasters;
+      if (drawnShapes) notes.push(`pictures of shapes: ${JSON.stringify(drawnShapes).slice(0, 400)}`);
       if (imp.followUp && imp.followUp.state !== 'done')
         notes.push(
           `the hub's LibreOffice follow-up ${imp.followUp.state}: ${(imp.followUp.error ?? '').slice(0, 200)}`,

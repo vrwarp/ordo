@@ -98,8 +98,11 @@ maybe("the native import draws pictures of many-point shapes with the hub's own 
     hub = await startHub({
       prerender: ON,
       chromium: { path: exe!, sandbox: false },
+      // A hub without LibreOffice (a hub with it keeps LibreOffice's art and plans no pictures, M-SR5): the pictures are planned.
       toolProbe: ((t: string) =>
-        t === 'chromium' ? { state: 'available', exe } : { state: 'available' }) as never,
+        t === 'chromium'
+          ? { state: 'available', exe }
+          : { state: t === 'libreoffice' ? 'absent' : 'available' }) as never,
     });
     dir = tempDir('ordo-rasters-import-');
   });
@@ -220,6 +223,8 @@ describe('a hub that cannot draw the pictures imports as today and says why', ()
       (t) => ({ state: t === 'chromium' ? 'absent' : 'available' }),
       'libreoffice',
     ],
+    // Chromium present too: a hub with LibreOffice still keeps LibreOffice's art while RASTER_WITH_LIBREOFFICE is false (M-SR5).
+    ['Chromium and LibreOffice', () => ({ state: 'available' }), 'libreoffice'],
   ];
   for (const [name, probe, off] of matrix) {
     it(`${name}: the report line says so and the slide is today's`, async () => {
