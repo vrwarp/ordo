@@ -60,6 +60,8 @@ export type ClientSceneTaskInput = {
   file: string;
   /** Whether the hub has LibreOffice for this import (`nativeJob.ts` decides it first). */
   libreoffice: boolean;
+  /** Q24.b: whether this hub keeps heavy slides whole (`wholeSlidesFor`, decided once by the job); absent: no. */
+  wholeSlides?: boolean;
   /**
    * Rule H (sub-wave 1c): the scripts the hub measures table cells in with a face only its computer has
    * (`systemFaces.ts` `systemOnlyScripts`); a scene with a table cell in one of them is refused. Absent: none.
@@ -254,7 +256,10 @@ function why(e: z.ZodError): string {
  * A scene as the hub takes it, or why not (see the module comment). Pure: the pool task reads the file and
  * calls it; tests and the fuzz call it directly. Never throws.
  */
-export function checkClientScene(raw: unknown, o: { libreoffice: boolean }): ClientSceneTaskOutput {
+export function checkClientScene(
+  raw: unknown,
+  o: { libreoffice: boolean; wholeSlides?: boolean },
+): ClientSceneTaskOutput {
   try {
     return check(raw, o);
   } catch {

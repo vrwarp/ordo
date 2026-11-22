@@ -182,6 +182,11 @@ export type PptxNativeResult = {
   missing?: number;
   /** M9: whether LibreOffice was there to draw what ordo cannot (`HubTools`). Absent from older results. */
   libreoffice?: boolean;
+  /**
+   * Q24.b: slides kept whole, each with its pre-render record (the import log says how many); present only when this
+   * hub keeps heavy slides whole (`wholeSlidesFor`). Absent from older hubs' results and when it does not.
+   */
+  whole?: number;
 };
 
 /**
@@ -395,6 +400,11 @@ export type SceneTaskInput = {
    * metafile conversion and lists what they would have drawn (`EmittedSlide.missing`). Absent: true.
    */
   libreoffice?: boolean;
+  /**
+   * Q24.b: keep heavy, eligible slides whole (`wholeSlidesFor`): the converter plans them without the guard and the
+   * picture limit (`ParseOptions.wholeSlides`). Absent: false, the plan of before.
+   */
+  wholeSlides?: boolean;
   /**
    * M9 `ladder`: the text rescue of slides whose conversion failed (`@ordo/pptx-scene` `rescueDeck`): only their
    * text bodies, no geometry read. Absent: the full conversion.

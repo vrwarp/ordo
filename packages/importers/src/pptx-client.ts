@@ -106,6 +106,13 @@ export type PptxClientOptions = {
    */
   libreoffice?: boolean;
   /**
+   * Q24.b: keep heavy, eligible slides whole (`wholeSlidesFor`: the hub's `ORDO_PRERENDER` and, with LibreOffice,
+   * Q27): the converter plans them without the guard and the picture limit, the import writes their pre-render
+   * record. The scene says so (`PptxClientScene.wholeSlides`) and the hub uses it only when its own answer is the
+   * same. Absent: false, the plan of before.
+   */
+  wholeSlides?: boolean;
+  /**
    * The library's faces (the operator's font service in the import worker, `fontFace.ts`; the harness's
    * library): table rows grow to their text measured as the hub measures it (`ParseOptions.fontFace`).
    * Absent: widths are estimated, as a hub with no font would.
@@ -155,6 +162,11 @@ export type PptxClientScene = {
    * uses the scene only when this is what it has, else it parses the deck itself.
    */
   libreoffice?: boolean;
+  /**
+   * Q24.b: true when parsed to keep heavy slides whole (`PptxClientOptions.wholeSlides`); absent: the plan of
+   * before. The hub uses the scene only when its own switch is the same (D7).
+   */
+  wholeSlides?: true;
 };
 
 /** A client parse: the scene, and what the assembly reads beside it. */
@@ -192,6 +204,8 @@ export type PptxClientImportResult = {
   compact: number;
   /** Slides the budget ladder simplified. */
   simplified: number;
+  /** Q24.b: slides kept whole, each with its pre-render record (0 without `PptxClientOptions.wholeSlides`). */
+  whole: number;
   pending: number;
   missingFonts: string[];
   /** The import's warnings (the import card's notes). */
@@ -660,6 +674,7 @@ export async function assemblePptxScene(
     classes,
     compact: 0,
     simplified,
+    whole: 0,
     pending: built.lo.length,
     missingFonts: built.missingFonts,
     notes: log.warnings(),

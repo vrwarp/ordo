@@ -590,15 +590,7 @@ async function demoParse(
   if (sent instanceof Blob && sent.size <= CLIENT_SCENE_MAX_BYTES) {
     try {
       const scene = JSON.parse(await sent.text()) as PptxClientScene;
-      const fields = new Set(Array.isArray(scene?.m9Writes) ? scene.m9Writes : []);
-      if (
-        scene?.version === CONVERTER_VERSION &&
-        scene.libreoffice === false &&
-        fields.size === M9_WRITES.size &&
-        [...M9_WRITES].every((f) => fields.has(f)) &&
-        Array.isArray(scene.listed) &&
-        Array.isArray(scene.slides)
-      )
+      if (demoUsesScene(scene))
         return { scene, zip: await BoundedZip.open(zipSource(file)), fromClient: true };
     } catch {
       // not a usable scene: parsed here
@@ -606,6 +598,19 @@ async function demoParse(
   }
   const parse = await parsePptxScene(file, { extendBackgrounds, libreoffice: false });
   return { scene: parse.scene, zip: parse.zip, fromClient: false };
+}
+
+/** Whether the demo builds from a scene as sent: of this converter, its stored fields, parsed without LibreOffice. */
+export function demoUsesScene(scene: PptxClientScene): boolean {
+  const fields = new Set(Array.isArray(scene?.m9Writes) ? scene.m9Writes : []);
+  return (
+    scene?.version === CONVERTER_VERSION &&
+    scene.libreoffice === false &&
+    fields.size === M9_WRITES.size &&
+    [...M9_WRITES].every((f) => fields.has(f)) &&
+    Array.isArray(scene.listed) &&
+    Array.isArray(scene.slides)
+  );
 }
 
 /** The largest scene the demo reads (as a hub's bound, `clientScene.ts`). */
