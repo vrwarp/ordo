@@ -8,7 +8,8 @@ repository.
 Every bundled face is licensed under the SIL Open Font License, Version 1.1. The licence text is in
 [OFL-1.1.txt](OFL-1.1.txt), and the image keeps the copyright file of every package it installs, these
 fonts' and every other package's (ffmpeg, Chromium, LibreOffice and the rest), under
-`/usr/share/doc/<package>/copyright`; the pull-request job checks the product's own packages.
+`/usr/share/doc/<package>/copyright`; the pull-request job checks the product's own packages and the font
+packages recorded here.
 
 | Family                                                                                                        | Faces                                    | Package (bookworm)                 | Copyright                                                                       | Reserved Font Names               |
 | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------- | --------------------------------- |

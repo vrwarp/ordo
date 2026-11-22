@@ -128,15 +128,26 @@ jobs:
         run: |
           # Dockerfile: the runtime stage keeps every package's copyright file under /usr/share/doc (a link to another
           # package's folder counts). Lists the packages without one and fails only when one of the product's own
-          # packages is among them (ffmpeg, LibreOffice, Chromium, poppler and tini): the base image's packages and
-          # their dependencies are listed, not enforced.
+          # packages is among them (ffmpeg, LibreOffice, Chromium, poppler and tini) or one of the font packages
+          # that apps/hub/src/fonts/LICENSES.md records: the base image's packages and their dependencies are
+          # listed, not enforced.
           missing=$(docker exec ordo-smoke sh -c 'dpkg-query -W -f="\${Package}\n" | while read -r p; do [ -e "/usr/share/doc/$p/copyright" ] || echo "$p"; done')
           echo "packages without a copyright file: $(printf '%s\n' "$missing" | grep -c . || true)"
           printf '%s\n' "$missing" | head -50
           fail=0
-          for p in ffmpeg libavcodec59 libreoffice-core libreoffice-common chromium chromium-common poppler-utils tini; do
+          for p in ffmpeg libavcodec59 libreoffice-core libreoffice-common chromium chromium-common poppler-utils tini \
+                   fonts-dejavu fonts-dejavu-core fonts-dejavu-extra fonts-liberation2 fonts-crosextra-carlito \
+                   fonts-crosextra-caladea fonts-noto-core fonts-noto-cjk fonts-inter; do
             if printf '%s\n' "$missing" | grep -qx "$p"; then
               echo "::error::$p has no copyright file in the image (Dockerfile keeps every package's)."
+              fail=1
+            fi
+          done
+          # The copyright files point to the licence texts Debian keeps in base-files ("see
+          # /usr/share/common-licenses/GPL-2"). That folder is not under /usr/share/doc, so the Dockerfile leaves it.
+          for l in GPL-2 GPL-3 LGPL-2.1 LGPL-3 MPL-2.0 Apache-2.0; do
+            if ! docker exec ordo-smoke test -f "/usr/share/common-licenses/$l"; then
+              echo "::error::/usr/share/common-licenses/$l is missing from the image (the copyright files refer to it)."
               fail=1
             fi
           done
