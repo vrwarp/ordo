@@ -1,12 +1,21 @@
 import { DEFAULT_LOOKS, parseLyrics, songFromParsed } from '@ordo/domain';
 import { initialState } from '@ordo/live-state';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  BAKE_MIN_MEMORY_GB,
+  BAKE_ROLES,
+  type BakeInput,
+  bakeEngine,
+  bakeGate,
   type CapabilityEnv,
+  canBake,
   detectCapabilities,
+  forcedBakeOff,
   forcedProfile,
   profileFor,
+  readBakeWorld,
   requestPersistentStorage,
+  useCapabilities,
 } from '../src/lib/capabilities.ts';
 import { flatSlides, lookBackgroundId, previewLooks, slideAndNext } from '../src/lib/lookPreviews.ts';
 import { allowedForRole, parseRoute, routeHash } from '../src/lib/route.ts';
@@ -286,5 +295,254 @@ describe('venue live summary', () => {
     };
     expect(await fetchVenueLive('operate', old)).toEqual({ seq: 7, live: undefined });
     await expect(fetchVenueLive('edit', old)).rejects.toThrow('not found');
+  });
+});
+
+describe('bake gate (who makes the pictures of heavy slides)', () => {
+  const finePointer = mq({ '(pointer: fine)': true, '(hover: hover)': true });
+
+  /** Chrome on a desktop over a plain http LAN address: a secure-context-only API is missing, so none of the three exist. */
+  const chromeOverHttp: CapabilityEnv = {
+    navigator: { storage: { getDirectory: () => undefined } },
+    window: {},
+    document: { fullscreenEnabled: true },
+    matchMedia: finePointer,
+    mediaElementProto: { setSinkId: () => undefined },
+    elementProto: { requestFullscreen: () => undefined },
+  };
+  /** An iPad with a keyboard and trackpad: fine pointer, hover, installed, none of the Chromium APIs. */
+  const ipadWithMouse: CapabilityEnv = { ...ipadSafari, matchMedia: finePointer };
+  const desktopSafari: CapabilityEnv = { ...ipadSafari, navigator: {}, matchMedia: finePointer };
+  const desktopFirefox: CapabilityEnv = {
+    ...desktopSafari,
+    navigator: { requestMIDIAccess: () => undefined },
+  };
+  /** Android Chrome as e2e/touchdevice.ts models it: a coarse pointer, no WebHID, no Window Management, mobile. */
+  const androidChrome: CapabilityEnv = {
+    ...ipadSafari,
+    navigator: { userAgentData: { mobile: true }, storage: { getDirectory: () => undefined } },
+  };
+
+  it('C1 the venue PC is an engine that may bake', () => {
+    expect(bakeEngine(chromeDesktop)).toBe(true);
+  });
+
+  it('C2 Chrome over plain http (a laptop on a LAN address) is not: none of the three secure-context APIs exist', () => {
+    expect(bakeEngine(chromeOverHttp)).toBe(false);
+  });
+
+  it('C3 iPad Safari is not', () => {
+    expect(bakeEngine(ipadSafari)).toBe(false);
+  });
+
+  it('C4 an iPad with a keyboard and trackpad is not (the editor rule of OQ-LE3 is not borrowed here)', () => {
+    const c = detectCapabilities(ipadWithMouse);
+    expect(c.coarsePointer).toBe(false);
+    expect(c.fullscreenPopups).toBe(true);
+    expect(bakeEngine(ipadWithMouse)).toBe(false);
+  });
+
+  it('C5 desktop Safari and desktop Firefox are not', () => {
+    expect(bakeEngine(desktopSafari)).toBe(false);
+    expect(bakeEngine(desktopFirefox)).toBe(false);
+  });
+
+  it('C6 Android Chromium is not, for two reasons: not an engine of ours and a coarse pointer', () => {
+    expect(bakeEngine(androidChrome)).toBe(false);
+    expect(detectCapabilities(androidChrome).coarsePointer).toBe(true);
+    const input = { ...good(), caps: detectCapabilities(androidChrome), engine: bakeEngine(androidChrome) };
+    expect(canBake(input)).toMatchObject({ ok: false, why: 'unsupported' });
+    // the pointer alone is enough, and so is the engine alone
+    expect(canBake({ ...good(), caps: input.caps })).toMatchObject({ ok: false, why: 'unsupported' });
+    expect(canBake({ ...good(), engine: input.engine })).toMatchObject({ ok: false, why: 'unsupported' });
+  });
+
+  it('C7 userAgentData alone counts, unless it says mobile', () => {
+    expect(bakeEngine({ navigator: { userAgentData: { mobile: false } } })).toBe(true);
+    expect(bakeEngine({ navigator: { userAgentData: {} } })).toBe(true);
+    expect(bakeEngine({ navigator: { userAgentData: { mobile: true } } })).toBe(false);
+    expect(bakeEngine({ window: { getScreenDetails: () => undefined } })).toBe(true);
+    expect(bakeEngine({ navigator: { hid: {} } })).toBe(true);
+    expect(bakeEngine({})).toBe(false);
+    expect(bakeEngine({ navigator: null, window: 5 })).toBe(false);
+  });
+
+  /** A computer that may bake: the venue PC, regular layout, the hub's switch on, an operator session. */
+  function good(): BakeInput {
+    return {
+      caps: detectCapabilities(chromeDesktop),
+      engine: true,
+      layout: 'regular',
+      phone: false,
+      demo: false,
+      hub: 'on',
+      secure: true,
+      offscreen: true,
+      worker: true,
+      memoryGb: 8,
+      role: 'operate',
+      forcedOff: false,
+    };
+  }
+
+  it('C8 everything in order bakes, and may list', () => {
+    expect(canBake(good())).toEqual({ ok: true, list: true });
+  });
+
+  it('C9 a coarse pointer does not, C10 a compact layout does not, C11 a phone does not', () => {
+    const coarse = detectCapabilities({
+      ...chromeDesktop,
+      matchMedia: mq({ '(pointer: coarse)': true, '(hover: none)': true }),
+    });
+    expect(canBake({ ...good(), caps: coarse })).toMatchObject({ ok: false, why: 'unsupported' });
+    expect(canBake({ ...good(), layout: 'compact' })).toMatchObject({
+      ok: false,
+      why: 'unsupported',
+      list: false,
+    });
+    expect(canBake({ ...good(), phone: true })).toMatchObject({ ok: false, why: 'unsupported', list: false });
+  });
+
+  it('C12 the demo is off, C13 the hub wins: a switch that is off is off on a capable device, C14 no answer is unknown', () => {
+    expect(canBake({ ...good(), demo: true })).toEqual({ ok: false, why: 'off', list: false });
+    expect(canBake({ ...good(), hub: 'off' })).toEqual({ ok: false, why: 'off', list: false });
+    // even a phone with the hub off says off: nobody makes pictures, whatever this device is
+    expect(canBake({ ...good(), hub: 'off', phone: true })).toMatchObject({ ok: false, why: 'off' });
+    expect(canBake({ ...good(), hub: undefined })).toEqual({ ok: false, why: 'unknown', list: false });
+    // the demo wins over everything
+    expect(canBake({ ...good(), demo: true, hub: undefined })).toMatchObject({ why: 'off' });
+  });
+
+  it('C15 no OffscreenCanvas or no Worker, and a page that is not a secure context, do not bake', () => {
+    expect(canBake({ ...good(), offscreen: false })).toMatchObject({ ok: false, why: 'unsupported' });
+    expect(canBake({ ...good(), worker: false })).toMatchObject({ ok: false, why: 'unsupported' });
+    expect(canBake({ ...good(), secure: false })).toMatchObject({ ok: false, why: 'unsupported' });
+  });
+
+  it('C16 under 4 GB of memory does not bake; 4, 8 and no answer do', () => {
+    expect(BAKE_MIN_MEMORY_GB).toBe(4);
+    expect(canBake({ ...good(), memoryGb: 2 })).toMatchObject({ ok: false, why: 'unsupported' });
+    expect(canBake({ ...good(), memoryGb: 0.5 })).toMatchObject({ ok: false, why: 'unsupported' });
+    expect(canBake({ ...good(), memoryGb: 4 })).toMatchObject({ ok: true });
+    expect(canBake({ ...good(), memoryGb: 8 })).toMatchObject({ ok: true });
+    expect(canBake({ ...good(), memoryGb: undefined })).toMatchObject({ ok: true });
+  });
+
+  it('C17 ?bake=off and localStorage ordo.bake=off make this computer make none (the gate says it)', () => {
+    expect(canBake({ ...good(), forcedOff: true })).toMatchObject({
+      ok: false,
+      why: 'unsupported',
+      list: true,
+    });
+    expect(forcedBakeOff('?bake=off', null)).toBe(true);
+    expect(forcedBakeOff('', 'off')).toBe(true);
+    expect(forcedBakeOff('?bake=on', 'off')).toBe(false);
+    expect(forcedBakeOff('?x=1', 'on')).toBe(false);
+    expect(forcedBakeOff('', null)).toBe(false);
+  });
+
+  it('C18 the roles that bake are a list: both by default, an editor does not when only operators may (Q30.c.b)', () => {
+    expect([...BAKE_ROLES]).toEqual(['operate', 'edit']);
+    expect(canBake({ ...good(), role: 'edit' })).toMatchObject({ ok: true });
+    expect(canBake({ ...good(), role: 'edit' }, ['operate'])).toMatchObject({
+      ok: false,
+      why: 'unsupported',
+      list: true,
+    });
+    expect(canBake({ ...good(), role: 'operate' }, ['operate'])).toMatchObject({ ok: true });
+    // no session yet: not known
+    expect(canBake({ ...good(), role: undefined })).toMatchObject({ ok: false, why: 'unknown', list: false });
+    expect(canBake({ ...good(), role: null })).toMatchObject({ ok: false, why: 'unknown' });
+  });
+
+  it('C19 an iPad may read the listing and never make a picture; a phone and the demo may not read it', () => {
+    const ipad: BakeInput = {
+      ...good(),
+      caps: detectCapabilities(ipadWithMouse),
+      engine: bakeEngine(ipadWithMouse),
+      role: 'edit',
+    };
+    expect(canBake(ipad)).toEqual({ ok: false, why: 'unsupported', list: true });
+    expect(canBake({ ...ipad, phone: true })).toMatchObject({ list: false });
+    expect(canBake({ ...ipad, layout: 'compact' })).toMatchObject({ list: false });
+    expect(canBake({ ...ipad, demo: true })).toMatchObject({ list: false });
+    expect(canBake({ ...ipad, hub: 'off' })).toMatchObject({ list: false });
+    expect(canBake({ ...ipad, hub: undefined })).toMatchObject({ list: false });
+    expect(canBake({ ...ipad, role: undefined })).toMatchObject({ list: false });
+  });
+
+  type Stub = {
+    navigator: unknown;
+    window: Record<string, unknown>;
+    document: unknown;
+    isSecureContext: boolean;
+    search: string;
+  };
+  let stubbed: Stub;
+  function stubBrowser(s: Stub): void {
+    stubbed = s;
+    vi.stubGlobal('navigator', s.navigator);
+    vi.stubGlobal('window', s.window);
+    vi.stubGlobal('document', s.document);
+    vi.stubGlobal('isSecureContext', s.isSecureContext);
+    vi.stubGlobal('location', { search: s.search });
+    vi.stubGlobal('OffscreenCanvas', class {});
+    vi.stubGlobal('Worker', class {});
+  }
+
+  it('bakeGate reads the real environment: stubbed globals of the venue PC, then of an iPad with a mouse', () => {
+    const was = useCapabilities.getState().caps;
+    const parts = { layout: 'regular', phone: false, demo: false, hub: 'on', role: 'operate' } as const;
+    try {
+      stubBrowser({
+        navigator: {
+          ...(chromeDesktop.navigator as object),
+          userAgentData: { mobile: false },
+          deviceMemory: 8,
+        },
+        window: { getScreenDetails: () => undefined, matchMedia: finePointer },
+        document: chromeDesktop.document,
+        isSecureContext: true,
+        search: '',
+      });
+      useCapabilities.setState({ caps: detectCapabilities(chromeDesktop) });
+      expect(bakeGate(parts)).toEqual({ ok: true, list: true });
+      expect(readBakeWorld()).toMatchObject({
+        engine: true,
+        secure: true,
+        offscreen: true,
+        worker: true,
+        memoryGb: 8,
+        forcedOff: false,
+      });
+      // the same page with ?bake=off, with 2 GB, and without a secure context
+      stubBrowser({ ...stubbed, search: '?bake=off' });
+      expect(bakeGate(parts)).toMatchObject({ ok: false, why: 'unsupported', list: true });
+      stubBrowser({
+        ...stubbed,
+        search: '',
+        navigator: { ...(stubbed.navigator as object), deviceMemory: 2 },
+      });
+      expect(bakeGate(parts)).toMatchObject({ ok: false, why: 'unsupported' });
+      stubBrowser({
+        ...stubbed,
+        navigator: { ...(stubbed.navigator as object), deviceMemory: 8 },
+        isSecureContext: false,
+      });
+      expect(bakeGate(parts)).toMatchObject({ ok: false, why: 'unsupported' });
+      // an iPad with a mouse: the same code, other globals
+      stubBrowser({
+        navigator: { standalone: true },
+        window: { matchMedia: finePointer },
+        document: { fullscreenEnabled: true },
+        isSecureContext: true,
+        search: '',
+      });
+      useCapabilities.setState({ caps: detectCapabilities(ipadWithMouse) });
+      expect(bakeGate({ ...parts, role: 'edit' })).toEqual({ ok: false, why: 'unsupported', list: true });
+    } finally {
+      vi.unstubAllGlobals();
+      useCapabilities.setState({ caps: was });
+    }
   });
 });
