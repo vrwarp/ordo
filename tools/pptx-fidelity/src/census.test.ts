@@ -10,12 +10,14 @@ import {
   budgetColumns,
   hubClasses,
   legacyColumns,
+  noLoDraws,
   parseCensusArgs,
   runCensus,
   wholeColumns,
 } from './census.ts';
 import { LINE_ART_HOLES_PATH } from './gen/line-art-holes.ts';
 import { listDecks } from './decks.ts';
+import { type NativeDeck, type NativeSlide, withHubBudget } from './native.ts';
 import { dataUri, testPicture } from './png.ts';
 import { zipStore } from './table-probe.ts';
 
@@ -615,3 +617,55 @@ describe('hubClasses with the whole option (Q24.b, step 8a)', () => {
     expect(on!.slide.objects).toHaveLength(701);
   });
 });
+
+describe('noLoDraws: what a hub without LibreOffice stores of a slide, drawn where it differs (M9, Q24.b)', () => {
+  const rect = (i: number): Slide['objects'][number] =>
+    ({
+      ...outline('r'),
+      id: `r${i}`,
+      geom: undefined,
+      fill: { r: 1, g: 2, b: 3, a: 1 },
+    }) as Slide['objects'][number];
+  const crowded = slide([text('Grace'), ...Array.from({ length: 700 }, (_, i) => rect(i))]);
+  const deck = (): NativeDeck => ({
+    slides: [
+      {
+        index: 0,
+        shown: 0,
+        hidden: false,
+        tier: 'T1',
+        class: 'native',
+        reasons: [],
+        convertMs: 0,
+        notes: [],
+        slide: crowded,
+        textFeatures: [],
+        compat: [],
+      } as unknown as NativeSlide,
+    ],
+    slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
+    media: [],
+    geoms: [],
+    notes: [],
+    embeddedFonts: false,
+    textFeatures: [],
+    extractMs: 0,
+    parseMs: 0,
+    emitMs: 0,
+  });
+
+  it('without the whole option the hub stores the crowded slide simplified, so its draw differs from the converter\u2019s', () => {
+    const d = deck();
+    noLoDraws(d, { loCompat: false, whole: false });
+    expect(d.slides[0]!.noLoDraw).toBeDefined();
+    expect(d.slides[0]!.noLoDraw!.objects.length).toBeLessThan(701);
+  });
+
+  it('with the whole option the hub keeps it whole, so the slide drawn is what it stores: no separate draw', () => {
+    const d = withHubBudget(deck(), undefined, { whole: true });
+    expect(d.slides[0]!.slide.objects).toHaveLength(701);
+    noLoDraws(d, { loCompat: false, whole: true });
+    expect(d.slides[0]!.noLoDraw).toBeUndefined();
+  });
+});
+
