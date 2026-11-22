@@ -15,7 +15,6 @@ import {
   type Slide,
   type SlideObject,
 } from '@ordo/domain';
-import { keptWholeLine, wholeSlidesFor } from '@ordo/importers/pptx-core.ts';
 import type { HubCapabilities, Job } from '@ordo/protocol';
 import { metricCompatible } from '@ordo/renderer';
 
@@ -80,24 +79,41 @@ export function hubHasLibreOffice(caps: HubCapabilities | undefined): boolean {
 }
 
 /**
- * Q24.b (C-IW4): whether the browser parse keeps heavy slides whole, from the hub's last answer: its switch
- * (`caps.prerender.state`, store-2's `HubCapabilities`) and, with LibreOffice, Q27 (`wholeSlidesFor`). An unknown
- * answer (no capabilities yet, a hub from before) is off; a hub that answers otherwise refuses the scene and parses
- * the deck itself (D7).
+ * Q27 (default a): the operator's pinned copy of `WHOLE_WITH_LIBREOFFICE` (@ordo/importers pptx-core.ts), true: a hub WITH
+ * LibreOffice keeps heavy slides whole too. Written here, not imported: pptx-core carries the whole import core, and an
+ * import of it from a main chunk put 138 kB into the operator's regular total (the import worker is the one place that
+ * loads it). `pptxImport.test.ts` pins this equal to the original and scans the main chunks for the import.
  */
-export function keepsSlidesWhole(caps: HubCapabilities | undefined): boolean {
+export const OPERATOR_WHOLE_WITH_LIBREOFFICE = true;
+
+/**
+ * Q24.b (C-IW4): whether the browser parse keeps heavy slides whole, from the hub's last answer: its switch
+ * (`caps.prerender.state`, store-2's `HubCapabilities`) and, on a hub with LibreOffice, Q27 (`withLibreOffice`: the pinned
+ * constant, or the other arm for a test; `wholeSlidesFor` of pptx-core says the same). An unknown answer (no
+ * capabilities yet, a hub from before) is off; a hub that answers otherwise refuses the scene and parses the deck itself (D7).
+ */
+export function keepsSlidesWhole(
+  caps: HubCapabilities | undefined,
+  withLibreOffice: boolean = OPERATOR_WHOLE_WITH_LIBREOFFICE,
+): boolean {
   if (!caps) return false;
   // store-2's `HubCapabilities.prerender.state`, read without trusting its shape: only the string 'on' is a yes.
   const state = (caps as { prerender?: { state?: unknown } }).prerender?.state;
-  return wholeSlidesFor({ prerender: state === 'on', lo: hubHasLibreOffice(caps) });
+  return state === 'on' && (!hubHasLibreOffice(caps) || withLibreOffice);
 }
 
 /**
  * The line of the import card and the report for the slides kept whole (design 29 W1, W4; W2 for a device that cannot make
- * their pictures): static text, empty for none (`keptWholeLine`).
+ * their pictures): static text, empty for none. The pinned copy of `keptWholeLine` (pptx-core.ts; same reason as above).
  */
 export function wholeLine(n: number | undefined, deviceCanBake?: boolean): string {
-  return keptWholeLine(n ?? 0, deviceCanBake === false ? { deviceCanBake: false } : {});
+  const count = n ?? 0;
+  if (!Number.isFinite(count) || count < 1) return '';
+  const one = count === 1;
+  const head = `${count} ${one ? 'slide is' : 'slides are'} very detailed and ${one ? 'was' : 'were'} kept whole`;
+  if (deviceCanBake === false)
+    return `${head}; ${one ? 'its picture is' : 'their pictures are'} made on a computer with Chrome or Edge`;
+  return `${head}; the screens show a picture of ${one ? 'it' : 'each'}, made on this computer`;
 }
 
 /**

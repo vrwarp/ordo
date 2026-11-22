@@ -16,7 +16,6 @@ import {
   lastLogLine,
   hiddenCount,
   importCaps,
-  importReport,
   keepsSlidesWhole,
   loStatus,
   OPERATOR_WHOLE_WITH_LIBREOFFICE,
@@ -506,7 +505,11 @@ describe('the operator keeps no import core in its main chunks (M7 bundle, Q24.b
   it('the pinned copies equal the originals: the answer for a hub with LibreOffice, wholeSlidesFor and the report line', () => {
     expect(OPERATOR_WHOLE_WITH_LIBREOFFICE).toBe(WHOLE_WITH_LIBREOFFICE);
     const c = (p: string, lo: 'available' | 'absent' | 'off' | 'broken') =>
-      ({ ...LEGACY_CAPABILITIES, libreoffice: { state: lo }, prerender: { state: p } }) as unknown as HubCapabilities;
+      ({
+        ...LEGACY_CAPABILITIES,
+        libreoffice: { state: lo },
+        prerender: { state: p },
+      }) as unknown as HubCapabilities;
     for (const p of ['on', 'off'])
       for (const lo of ['available', 'absent', 'off', 'broken'] as const)
         expect(keepsSlidesWhole(c(p, lo)), `${p} ${lo}`).toBe(
