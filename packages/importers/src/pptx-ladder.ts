@@ -134,6 +134,12 @@ export type LadderInput = {
    * presentation's reserve for the plan of the others.
    */
   whole?: true;
+  /**
+   * The slide's bytes as `storedWithin` counts them, when the caller measured this very slide already (`ImportCore.budget`
+   * does, to tell a slide that cannot be heavy): used for the slide as given, never for a form of it the ladder makes, so
+   * the plan is the plan without it and the slide is measured once (Q24.b, M4).
+   */
+  size?: number;
 };
 
 /** What the ladder stores of one slide. */
@@ -246,6 +252,10 @@ function plainCount(before: Slide, after: Slide): number {
   return n;
 }
 
+/** The measure `fitSlideBudget` asks for: the caller's for the slide as given, `storedWithin` for any other form. */
+const measureOf = (x: LadderInput, max: number) => (s: Slide) =>
+  x.size !== undefined && s === x.slide ? x.size : storedWithin(s, max);
+
 /**
  * The ladder over an import's slides, in deck order: each slide fitted to `SIZE_BUDGETS.slideMax`
  * (`fitSlideBudget` against `storedBytes`), then `planImportSizes` over the fitted sizes with each slide's
@@ -259,7 +269,7 @@ export function planLadder(
   const max = SIZE_BUDGETS.slideMax;
   if (inputs.some((x) => x.whole === true && !x.fixed)) return planWithWhole(inputs, reserve, max);
   const fits: (BudgetFit | undefined)[] = inputs.map((x) =>
-    x.fixed ? undefined : fitSlideBudget(x.slide, max, { size: (s) => storedWithin(s, max) }),
+    x.fixed ? undefined : fitSlideBudget(x.slide, max, { size: measureOf(x, max) }),
   );
   const sizes = inputs.map((x, i) => fits[i]?.bytes ?? quickBytes(x.slide));
   const tailOf = (page: boolean) => {
@@ -329,7 +339,7 @@ function planWithWhole(inputs: readonly LadderInput[], reserve: number, max: num
     if (x.whole === true && !x.fixed)
       whole.set(
         i,
-        wholeLevel(x.slide, max, (s) => storedWithin(s, max)),
+        wholeLevel(x.slide, max, measureOf(x, max)),
       );
   });
   let heavy = 0;
