@@ -89,7 +89,8 @@ export const SlideFileHead = /* @__PURE__ */ headSchema();
 export type SlideFileHead = z.infer<typeof SlideFileHead>;
 
 // `Slide` with the object bound of a slide file: every other field is Slide's, so a field refused stays refused.
-const fullSlideSchema = () => Slide.extend({ objects: z.array(SlideObject).max(FILE_OBJECTS_MAX).default([]) });
+const fullSlideSchema = () =>
+  Slide.extend({ objects: z.array(SlideObject).max(FILE_OBJECTS_MAX).default([]) });
 /**
  * A full slide: a `Slide` of up to 20,000 objects, the form a slide file holds (an inline `Slide` holds 1,000). Made by a
  * function called pure for the reason the page and head schemas are. Parsed by the hub's pool for a slide of an import
@@ -262,7 +263,6 @@ export function usesTooMany(uses: {
   return undefined;
 }
 
-
 /** The slides of a presentation that are kept as a slide file: their stand-in names a file in `prerender.file`. */
 export function fileFormSlides(p: Pick<Presentation, 'sections'> | undefined): Slide[] {
   const out: Slide[] = [];
@@ -281,7 +281,8 @@ function sameJson(a: unknown, b: unknown): boolean {
   const stack: [unknown, unknown][] = [[a, b]];
   while (stack.length) {
     const [x, y] = stack.pop()!;
-    if (x === y || (x !== x && y !== y)) continue;
+    if (x === y || (typeof x === 'number' && typeof y === 'number' && Number.isNaN(x) && Number.isNaN(y)))
+      continue;
     if (typeof x !== 'object' || typeof y !== 'object' || x === null || y === null) return false;
     if (Array.isArray(x) !== Array.isArray(y)) return false;
     if (Array.isArray(x)) {

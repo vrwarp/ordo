@@ -15,7 +15,7 @@ import { GEOM_LIMITS } from './geom/ops.ts';
  * says so.
  */
 describe('file bounds (HF12, Q53)', () => {
-  it('the slide-file object bound is the bake clamp\'s and the frame\'s', () => {
+  it("the slide-file object bound is the bake clamp's and the frame's", () => {
     expect(FILE_OBJECTS_MAX).toBe(20_000);
     expect(BAKE_MAX_OBJECTS).toBe(20_000);
     expect(FRAME_MAX_OBJECTS).toBe(20_000);
@@ -65,7 +65,8 @@ describe('file bounds (HF12, Q53)', () => {
     const r = heavyForm({ id: 'big', objects } as Slide, { why: ['count'] });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const texts = (s: Slide) => s.objects.filter((o) => o.type === 'text').map((o) => (o as { text: string }).text);
+    const texts = (s: Slide) =>
+      s.objects.filter((o) => o.type === 'text').map((o) => (o as { text: string }).text);
     const drawn = clampSlide(r.standIn);
     expect(texts(drawn)).toEqual(texts(r.standIn));
     expect(Math.max(...texts(r.standIn).map((t) => t.length))).toBeLessThanOrEqual(CLAMP.maxTextChars);

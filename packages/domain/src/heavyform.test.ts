@@ -1,7 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_LYRIC_STYLE } from './defaults.ts';
-import { type HeavyOk, type HeavyResult, heavyForm } from './heavyform.ts';
+import { boundStandIn, type HeavyOk, type HeavyResult, heavyForm } from './heavyform.ts';
 import { PICTURE_COUNTS, standInOf } from './prerender.ts';
 import * as prev from './schemas.prev.test-util.ts';
 import { PRERENDER_LIMITS, Slide, type SlideObject, type TextObject } from './schemas.ts';
@@ -51,7 +51,15 @@ const textBox = (id: string, text: string, extra: Record<string, unknown> = {}):
     ...extra,
   }) as TextObject;
 const image = (id: string, mediaId: string, w = 10): SlideObject =>
-  ({ id, type: 'image', box: box(0, 0, w, w), mediaId, fit: 'contain', opacity: 1, radius: 0 }) as SlideObject;
+  ({
+    id,
+    type: 'image',
+    box: box(0, 0, w, w),
+    mediaId,
+    fit: 'contain',
+    opacity: 1,
+    radius: 0,
+  }) as SlideObject;
 const bgRect = (): SlideObject =>
   rect(0, {
     id: 'bg',
@@ -67,7 +75,8 @@ function must(r: HeavyResult): HeavyOk {
   return r;
 }
 const jsonBytes = (v: unknown) => Buffer.byteLength(JSON.stringify(v), 'utf8');
-const textsOf = (s: Slide): string[] => s.objects.filter((o) => o.type === 'text').map((o) => (o as TextObject).text);
+const textsOf = (s: Slide): string[] =>
+  s.objects.filter((o) => o.type === 'text').map((o) => (o as TextObject).text);
 const compact = (t: string) => t.replace(/\s+/g, '');
 const REFUSAL_CODES = ['objects', 'bytes', 'object', 'uses', 'standin', 'invalid'];
 
@@ -98,13 +107,17 @@ describe('heavyForm (HF1-HF13)', () => {
   it('HF2 the stand-in: at most 200 objects, 16 pictures, every word, 192 KiB, and the record names the file', () => {
     const objects: SlideObject[] = [bgRect()];
     for (let i = 0; i < 1300; i++) objects.push(rect(i + 1));
-    for (let i = 0; i < 120; i++) objects.push(textBox(`t${i}`, `Words number ${i} of the lyric, line a b c`));
+    for (let i = 0; i < 120; i++)
+      objects.push(textBox(`t${i}`, `Words number ${i} of the lyric, line a b c`));
     for (let i = 0; i < 40; i++) objects.push(image(`p${i}`, `media-${i % 30}`, 10 + i));
     const full = slideOf(objects);
     const r = must(heavyForm(full, { why: ['count'] }));
     const s = r.standIn;
     expect(s.objects.length).toBeLessThanOrEqual(PICTURE_COUNTS.objects);
-    expect(new Set(s.objects.filter((o) => o.type === 'image').map((o) => (o as { mediaId: string }).mediaId)).size).toBeLessThanOrEqual(PICTURE_COUNTS.pictures);
+    expect(
+      new Set(s.objects.filter((o) => o.type === 'image').map((o) => (o as { mediaId: string }).mediaId))
+        .size,
+    ).toBeLessThanOrEqual(PICTURE_COUNTS.pictures);
     expect(jsonBytes(s)).toBeLessThanOrEqual(STAND_IN_BYTES_MAX);
     expect(r.cut).toBe(false);
     // every word, in z order
@@ -116,7 +129,10 @@ describe('heavyForm (HF1-HF13)', () => {
     expect(Slide.safeParse(s).success).toBe(true);
     // and the reasons are the caller's: over 64 KiB says bytes
     expect(must(heavyForm(full, { why: ['bytes'] })).standIn.prerender?.why).toEqual(['bytes']);
-    expect(must(heavyForm(full, { why: ['bytes', 'count'] })).standIn.prerender?.why).toEqual(['bytes', 'count']);
+    expect(must(heavyForm(full, { why: ['bytes', 'count'] })).standIn.prerender?.why).toEqual([
+      'bytes',
+      'count',
+    ]);
   });
 
   it('HF3 refusals: 20,001 objects, 17 MiB, one 300 KiB object; each comes with a plain stand-in and no record', () => {
@@ -124,7 +140,10 @@ describe('heavyForm (HF1-HF13)', () => {
       ['objects', slideOf([bgRect(), ...Array.from({ length: FILE_OBJECTS_MAX }, (_, i) => rect(i + 1))])],
       [
         'bytes',
-        slideOf([bgRect(), ...Array.from({ length: 80 }, (_, i) => rect(i + 1, { pad: 'x'.repeat(220 * KiB) }))]),
+        slideOf([
+          bgRect(),
+          ...Array.from({ length: 80 }, (_, i) => rect(i + 1, { pad: 'x'.repeat(220 * KiB) })),
+        ]),
       ],
       ['object', slideOf([bgRect(), rect(1, { pad: 'x'.repeat(300 * KiB) }), textBox('t', 'Kept words')])],
     ];
@@ -148,7 +167,9 @@ describe('heavyForm (HF1-HF13)', () => {
       bgRect(),
       ...Array.from({ length: 1357 }, (_, i) => rect(i + 1, { geom: { ref: hex(i + 1) } })),
       ...Array.from({ length: 1200 }, (_, i) => image(`i${i}`, `media-${i}`)),
-      ...Array.from({ length: 70 }, (_, i) => textBox(`f${i}`, 'x', { style: { ...DEFAULT_LYRIC_STYLE, fontFamily: `Family ${i}` } })),
+      ...Array.from({ length: 70 }, (_, i) =>
+        textBox(`f${i}`, 'x', { style: { ...DEFAULT_LYRIC_STYLE, fontFamily: `Family ${i}` } }),
+      ),
     ];
     const r = must(heavyForm(slideOf(objects), { why: ['count'] }));
     expect(r.uses.files).toHaveLength(1357);
@@ -189,7 +210,11 @@ describe('heavyForm (HF1-HF13)', () => {
       Array.isArray(v)
         ? v.map(reverseKeys)
         : v && typeof v === 'object'
-          ? Object.fromEntries(Object.entries(v).reverse().map(([k, x]) => [k, reverseKeys(x)]))
+          ? Object.fromEntries(
+              Object.entries(v)
+                .reverse()
+                .map(([k, x]) => [k, reverseKeys(x)]),
+            )
           : v;
     const objects = [bgRect(), ...Array.from({ length: 1500 }, (_, i) => rect(i + 1)), textBox('t', 'Words')];
     const a = must(heavyForm(slideOf(objects, { lyricObjectId: 't' }), { why: ['count'] }));
@@ -242,7 +267,11 @@ describe('heavyForm (HF1-HF13)', () => {
   });
 
   it('HF9 a live set is kept whole in the stand-in and recorded (the hook of Q24.a)', () => {
-    const objects = [bgRect(), ...Array.from({ length: 1100 }, (_, i) => rect(i + 1)), textBox('lyric', 'Lyric words')];
+    const objects = [
+      bgRect(),
+      ...Array.from({ length: 1100 }, (_, i) => rect(i + 1)),
+      textBox('lyric', 'Lyric words'),
+    ];
     const full = slideOf(objects, { lyricObjectId: 'lyric' });
     const live = ['o5', 'o9', 'lyric'];
     const r = must(heavyForm(full, { why: ['count'], live }));
@@ -255,15 +284,17 @@ describe('heavyForm (HF1-HF13)', () => {
     expect(r.file.head.count).toBe(objects.length);
   });
 
-  it('HF10 an empty reason list is nothing to do: no file, no record (eligibility is the caller\'s)', () => {
-    const r = heavyForm(slideOf([bgRect(), ...Array.from({ length: 1100 }, (_, i) => rect(i + 1))]), { why: [] });
+  it("HF10 an empty reason list is nothing to do: no file, no record (eligibility is the caller's)", () => {
+    const r = heavyForm(slideOf([bgRect(), ...Array.from({ length: 1100 }, (_, i) => rect(i + 1))]), {
+      why: [],
+    });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('nothing-to-do');
     expect('file' in r).toBe(false);
   });
 
   it('HF11 property: any slide of 0 to 2,500 random objects gives a round trip or a refusal with a code, and never throws', () => {
-    const kinds = ['rect', 'text', 'image', 'bigtext'] as const;
+    const kinds = ['rect', 'text', 'image'] as const;
     fc.assert(
       fc.property(
         fc.record({
@@ -280,9 +311,11 @@ describe('heavyForm (HF1-HF13)', () => {
           };
           const objects: SlideObject[] = [];
           for (let i = 0; i < n; i++) {
-            const kind = kinds[Math.floor(rnd() * kinds.length)]!;
+            // now and then a box of up to 20,000 characters (the schema's bound), which a screen draws 10,000 of
+            const kind = rnd() < 0.01 ? 'bigtext' : kinds[Math.floor(rnd() * kinds.length)]!;
             if (kind === 'rect') objects.push(rect(i + 1));
-            else if (kind === 'text') objects.push(textBox(`o${i + 1}`, `w${i} `.repeat(1 + Math.floor(rnd() * 30))));
+            else if (kind === 'text')
+              objects.push(textBox(`o${i + 1}`, `w${i} `.repeat(1 + Math.floor(rnd() * 30))));
             else if (kind === 'image') objects.push(image(`o${i + 1}`, `m${Math.floor(rnd() * 40)}`));
             else objects.push(textBox(`o${i + 1}`, 'z'.repeat(Math.floor(rnd() * 20_000))));
           }
@@ -301,7 +334,10 @@ describe('heavyForm (HF1-HF13)', () => {
           expect(back.objects).toEqual(objects);
           expect(r.standIn.prerender?.file?.ref).toBe(r.file.name);
           expect(r.standIn.objects.length).toBeLessThanOrEqual(PICTURE_COUNTS.objects + (live ? 2 : 0));
-          for (const t of textsOf(r.standIn)) expect(t.length).toBeLessThanOrEqual(TEXT_DRAWN_MAX);
+          // a live box is kept whole (drawn live above the picture, clamped there as it ever was); every other box fits a screen
+          for (const o of r.standIn.objects)
+            if (o.type === 'text' && !r.standIn.prerender?.live.includes(o.id))
+              expect(o.text.length).toBeLessThanOrEqual(TEXT_DRAWN_MAX);
         },
       ),
       { numRuns: 100 },
@@ -315,7 +351,12 @@ describe('heavyForm (HF1-HF13)', () => {
     expect(STAND_IN_BYTES_MAX).toBe(192 * KiB);
     expect(TEXT_DRAWN_MAX).toBe(10_000);
     expect(TEXT_DRAWN_MAX).toBe(PICTURE_COUNTS.characters);
-    expect(SLIDE_FILE_LIMITS).toMatchObject({ pageObjects: 500, pageBytes: 256 * KiB, bytes: 16 * MiB, pages: 129 });
+    expect(SLIDE_FILE_LIMITS).toMatchObject({
+      pageObjects: 500,
+      pageBytes: 256 * KiB,
+      bytes: 16 * MiB,
+      pages: 129,
+    });
     expect(PRERENDER_LIMITS).toMatchObject({ media: 1000, files: 1000, fonts: 64, live: 1000 });
     expect(HEAD_USES_MAX).toEqual({ media: 20_002, files: 20_000, fonts: 2_048 });
     // the schema bound did not move: 1,000 pass and 1,001 do not
@@ -328,14 +369,16 @@ describe('heavyForm (HF1-HF13)', () => {
     const lyric = (n: number, len: number) =>
       Array.from({ length: n }, (_, i) => textBox(`t${i}`, `${i}${'w'.repeat(len - 3)}`));
     for (const [n, len] of [
-      [250, 270],
-      [215, 600],
+      [323, 120],
+      [360, 120],
     ] as const) {
       const full = slideOf([bgRect(), ...lyric(n, len)]);
       // the scenario is real: standInOf merges the words into a piece past what a screen draws of one box
       const raw = standInOf(full, []);
+      expect(raw.objects.length).toBe(PICTURE_COUNTS.objects);
       expect(Math.max(...textsOf(raw).map((t) => t.length))).toBeGreaterThan(TEXT_DRAWN_MAX);
       const r = must(heavyForm(full, { why: ['count'] }));
+      // the split needs one more box than the 200 a screen draws: a whole box is merged into the words, none is lost
       expect(r.cut).toBe(false);
       const texts = textsOf(r.standIn);
       for (const t of texts) expect(t.length).toBeLessThanOrEqual(TEXT_DRAWN_MAX);
@@ -344,38 +387,47 @@ describe('heavyForm (HF1-HF13)', () => {
       expect(new Set(ids).size).toBe(ids.length);
       expect(r.standIn.objects.length).toBeLessThanOrEqual(PICTURE_COUNTS.objects);
       expect(Slide.safeParse(r.standIn).success).toBe(true);
+      // the same words in the same order as the slide's
+      expect(texts.join('\n').replace(/\s+/g, '')).toBe(textsOf(full).join('').replace(/\s+/g, ''));
     }
   });
 
-  it('HF13 when the split would pass 200 objects the pieces after the cap are cut from the END and it says so', () => {
-    // 199 whole boxes and one merged piece of 19,000 characters: splitting it needs a 201st object
-    const objects: SlideObject[] = [bgRect()];
-    const texts = Array.from({ length: 330 }, (_, i) => textBox(`t${i}`, `${i}${'w'.repeat(77)}`));
-    objects.push(...texts);
-    const full = slideOf(objects);
-    const raw = standInOf(full, []);
-    expect(raw.objects.length).toBe(PICTURE_COUNTS.objects);
-    expect(Math.max(...textsOf(raw).map((t) => t.length))).toBeGreaterThan(TEXT_DRAWN_MAX);
-    const r = must(heavyForm(full, { why: ['count'] }));
-    expect(r.cut).toBe(true);
-    expect(r.standIn.objects.length).toBeLessThanOrEqual(PICTURE_COUNTS.objects);
-    for (const t of textsOf(r.standIn)) expect(t.length).toBeLessThanOrEqual(TEXT_DRAWN_MAX);
-    // the first words are all there; what is missing is at the end
-    const kept = compact(textsOf(r.standIn).join(''));
-    const all = compact(textsOf(full).join(''));
-    expect(all.startsWith(kept)).toBe(true);
-    expect(kept.length).toBeLessThan(all.length);
+  it('HF13 when no box can be merged the pieces after the cap are cut from the END, the first box stays, and it says so', () => {
+    // 197 live boxes, the background and one merged piece of 25,000 characters: its split needs a 201st object
+    const live = Array.from({ length: 197 }, (_, i) => textBox(`live${i}`, `Live ${i}`));
+    const merged = textBox('big~1', `${'a'.repeat(9_990)}\n${'b'.repeat(9_990)}\n${'c'.repeat(5_000)}`);
+    const standIn = slideOf([bgRect(), ...live, merged]);
+    expect(standIn.objects.length).toBe(199);
+    const whole = new Set(['bg', ...live.map((o) => o.id)]);
+    const r = boundStandIn(
+      standIn,
+      live.map((o) => o.id),
+      whole,
+    );
+    expect(r).toBeDefined();
+    expect(r!.cut).toBe(true);
+    expect(r!.slide.objects.length).toBeLessThanOrEqual(PICTURE_COUNTS.objects);
+    for (const l of live) expect(r!.slide.objects).toContain(l);
+    const pieces = r!.slide.objects.filter((o) => o.id.startsWith('big')) as TextObject[];
+    expect(pieces.map((p) => p.text.length)).toEqual([9_990, 9_990]);
+    expect(pieces[0]!.text.startsWith('aaa')).toBe(true);
+    // the words that were cut are the last ones
+    expect(pieces.map((p) => p.text[0])).toEqual(['a', 'b']);
   });
 
   it('HF13 a stand-in with no text over 10,000 characters comes back as standInOf made it (identity of the objects)', () => {
-    const full = slideOf([bgRect(), ...Array.from({ length: 1100 }, (_, i) => rect(i + 1)), textBox('t', 'Words')]);
+    const full = slideOf([
+      bgRect(),
+      ...Array.from({ length: 1100 }, (_, i) => rect(i + 1)),
+      textBox('t', 'Words'),
+    ]);
     const r = must(heavyForm(full, { why: ['count'] }));
     const plain = standInOf({ ...full, prerender: r.standIn.prerender! }, []);
     expect(r.standIn).toEqual(plain);
     expect(r.cut).toBe(false);
   });
 
-  it('is what slideFileOf made: the head, the pages and their names are the file\'s own', () => {
+  it("is what slideFileOf made: the head, the pages and their names are the file's own", () => {
     const full = slideOf([bgRect(), ...Array.from({ length: 1234 }, (_, i) => rect(i + 1))]);
     const r = must(heavyForm(full, { why: ['count'] }));
     const file = slideFileOf(full);

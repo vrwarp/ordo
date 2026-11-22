@@ -67,12 +67,18 @@ describe('staleStandIns (ST1-ST8)', () => {
     expect(staleStandIns(p, moved)).toEqual([{ slideId: 'a' }]);
     expect(staleStandIns(p, clone(moved))).toEqual([{ slideId: 'a' }]);
     // a deleted object and an added one are changes of the stand-in too
-    expect(staleStandIns(p, withSlide(p, 0, (s) => ({ ...s, objects: s.objects.slice(1) })))).toEqual([
-      { slideId: 'a' },
-    ]);
-    expect(staleStandIns(p, withSlide(p, 0, (s) => ({ ...s, objects: [...s.objects, rect('new')] })))).toEqual([
-      { slideId: 'a' },
-    ]);
+    expect(
+      staleStandIns(
+        p,
+        withSlide(p, 0, (s) => ({ ...s, objects: s.objects.slice(1) })),
+      ),
+    ).toEqual([{ slideId: 'a' }]);
+    expect(
+      staleStandIns(
+        p,
+        withSlide(p, 0, (s) => ({ ...s, objects: [...s.objects, rect('new')] })),
+      ),
+    ).toEqual([{ slideId: 'a' }]);
   });
 
   it('ST3 does not list a slide whose file ref changed together with its objects (a new file was made for it)', () => {
@@ -150,7 +156,9 @@ describe('staleStandIns (ST1-ST8)', () => {
       Object.fromEntries(Object.entries(o).reverse());
     const next = withSlide(p, 0, (s) => ({
       ...s,
-      objects: s.objects.map((o) => ({ ...reorderKeys(o as never), locked: undefined }) as unknown as SlideObject),
+      objects: s.objects.map(
+        (o) => ({ ...reorderKeys(o as never), locked: undefined }) as unknown as SlideObject,
+      ),
     }));
     expect(staleStandIns(p, next)).toEqual([]);
   });

@@ -10,7 +10,7 @@ import { IMPORT_LIMITS, sanitizeObject } from './sanitize.ts';
  * stand-in is at most what the import's sanitizer keeps of one (IMPORT_LIMITS.text), so a stand-in stored and
  * parsed again loses no word. PHASE B adds IF1-IF15 (the tier-2 routing of ImportCore) to this file.
  */
-describe('the stand-in and the import\'s sanitizer (HF13, step 1)', () => {
+describe("the stand-in and the import's sanitizer (HF13, step 1)", () => {
   it('IF0 TEXT_DRAWN_MAX is what the import keeps of one text object', () => {
     expect(IMPORT_LIMITS.text).toBe(10_000);
     expect(TEXT_DRAWN_MAX).toBe(IMPORT_LIMITS.text);
