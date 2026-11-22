@@ -493,13 +493,21 @@ describe('the driver with a stand-in browser (RM-D3, RM-D4, RM-D5, RM-H5)', () =
     stub.setMode('hang');
     const before = pids().length;
     const controller = new AbortController();
+    // The live watcher is armed once the browser is up and the picture begins: that is the moment to abort (an abort
+    // during the launch is a different path, 'aborted' with no picture begun).
+    let armed = 0;
+    const setTimer = (_fn: () => void, _ms: number) => {
+      armed++;
+      return () => undefined;
+    };
     const done = drawRasters({ jobs: {}, chromium: stub.exe, pageFile: dummyPage() }, items(2), {
       workDir: scratch,
       signal: controller.signal,
       fonts,
       accept: async () => ({ ok: true }),
+      setTimer,
     });
-    await until(() => pids().length > before);
+    await until(() => pids().length > before && armed > 0);
     const { main, child } = pids().at(-1)!;
     controller.abort();
     const out = await done;
