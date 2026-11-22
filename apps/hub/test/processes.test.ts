@@ -10,7 +10,7 @@ import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { newId } from '@ordo/domain';
+import { GOLIVE_SLIDE_PAGES, newId } from '@ordo/domain';
 import pino from 'pino';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { HEADER_INTERNAL } from '../src/http.ts';
@@ -589,7 +589,10 @@ describe('two-process hub serving the files of a pre-rendered slide', () => {
     });
     await op.json('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: pl.id } });
     await until(async () => (await health())?.mode === 'live', 20_000, 'service live');
-    const wanted = [f.name, f.pages.head.pages[0]!, pic];
+    // the head and the picture are listed by the service; a slide's PAGE only while a goLive lists pages
+    // (GOLIVE_SLIDE_PAGES: no screen reads one), otherwise it is the library's like any file the service does not list
+    const page = f.pages.head.pages[0]!;
+    const wanted = [f.name, pic, ...(GOLIVE_SLIDE_PAGES ? [page] : [])];
     // while the library is up the live process already answers for the files its service lists
     process.kill(
       (
@@ -606,8 +609,10 @@ describe('two-process hub serving the files of a pre-rendered slide', () => {
       expect(r.status, h).toBe(200);
     }
     // a file the service does not list is the library's, which is down
-    const other = await op.fetch(`/files/${'9'.repeat(64)}`);
-    expect(other.status).toBe(503);
+    for (const h of [...(GOLIVE_SLIDE_PAGES ? [] : [page]), '9'.repeat(64)]) {
+      const other = await op.fetch(`/files/${h}`);
+      expect(other.status, h).toBe(503);
+    }
     proc.kill('SIGTERM');
     await new Promise((r) => proc!.once('exit', r));
   }, 120_000);
