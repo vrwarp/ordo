@@ -61,6 +61,11 @@ export interface SlideCtx {
    * row grows to its text). Undefined: widths are estimated.
    */
   fontFace?: FaceSource;
+  /**
+   * Q53 (`ParseOptions.rasters`): 'plan' marks the custom-path shapes the planner may draw into pictures and keeps
+   * them out of the walk's counters; 'detect' only marks them. Undefined: the walk is today's.
+   */
+  rasters?: 'plan' | 'detect';
 }
 
 /** Where an element comes from in the inheritance chain. */
@@ -83,7 +88,7 @@ export function slideContext(
   frame: Frame,
   ref: SlideRef,
   log: Log,
-  extra: Pick<SlideCtx, 'pictureSize' | 'mediaKind' | 'fontFace'> = {},
+  extra: Pick<SlideCtx, 'pictureSize' | 'mediaKind' | 'fontFace' | 'rasters'> = {},
 ): SlideCtx {
   const parts = slideParts(pkg, ref.part);
   const theme = readTheme(parts.theme);
@@ -116,5 +121,6 @@ export function slideContext(
     ...(extra.pictureSize ? { pictureSize: extra.pictureSize } : {}),
     ...(extra.mediaKind ? { mediaKind: extra.mediaKind } : {}),
     ...(extra.fontFace ? { fontFace: extra.fontFace } : {}),
+    ...(extra.rasters ? { rasters: extra.rasters } : {}),
   };
 }

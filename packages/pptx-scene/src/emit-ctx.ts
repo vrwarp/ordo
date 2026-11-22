@@ -13,6 +13,8 @@ import type { PlatePlan } from './decor.ts';
 import { boxPx } from './frame.ts';
 import type { Affine, Fill, Frame, Rgba } from './ir.ts';
 import type { EmittedClip } from './media.ts';
+import type { EmittedRaster, RasterGeometry } from './raster-emit.ts';
+import type { RasterRecipe } from './raster.ts';
 import type { EmittedSheet } from './sheet.ts';
 
 /** Logical coordinates are bounded by the schema (`coord`). */
@@ -98,6 +100,19 @@ export interface EmitCtx {
   mediaPart?: (id: string) => { part: string; bake?: PictureBake } | undefined;
   /** M9 (`decor-conv`): the slide's plate plan once it is emitted (`EmittedSlide.plate`). */
   plate?: PlatePlan & { pastBudget: string[] };
+  /**
+   * Q53 (`raster-emit.ts`): registers a recipe (one per distinct hash in the call: `EmitResult.rasters`) and answers
+   * its placeholder media id; undefined when a budget refuses it. Absent: no pictures of shapes are written.
+   */
+  raster?: (recipe: RasterRecipe, hash: string) => string | undefined;
+  /** Q53: the pictures of shapes the slide uses so far (`EmittedSlide.rasters`). */
+  rasters?: EmittedRaster[];
+  /** Q53: the wide compile and build the recipe builder reads a shape's geometry with (`EmitOptions.rasterGeometry`). */
+  rasterGeometry?: RasterGeometry;
+  /** Q53: a group number for a shape put back with its text (the emitter's counter of pairs). */
+  pairGroup?: () => number | undefined;
+  /** Q53: told why a run could not be written (a short word; the report counts them). */
+  rasterFailed?: (reason: string) => void;
 }
 
 /** Visible characters of a string (whitespace not counted). */

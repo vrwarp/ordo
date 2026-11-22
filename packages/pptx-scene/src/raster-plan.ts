@@ -33,6 +33,7 @@ import { knownPreset, MAX_SLIDE_PATH_POINTS } from './geom.ts';
 import type {
   Background,
   CustomPaths,
+  RasterCandidate,
   Element,
   ElementBase,
   Frame,
@@ -53,7 +54,6 @@ import {
   type RasterMaker,
   type RasterRef,
 } from './raster.ts';
-import type { XNode } from './xml.ts';
 
 /** Whether a slide plans pictures: 'off' plans nothing, 'detect' counts the candidates, 'plan' plans. */
 export type RasterMode = 'off' | 'detect' | 'plan';
@@ -61,25 +61,10 @@ export type RasterMode = 'off' | 'detect' | 'plan';
 /** What a candidate becomes again when its picture cannot be made: its stored paths ('built') or today's box ('box'). */
 export type RasterForm = 'built' | 'box';
 
-/**
- * A custom-path shape the walk marks for a picture (C-SR2): `raw` is the converter's point cost over what the file
- * holds, `why` the rule that made it one ('points': over `RASTER_POINTS`; 'limit': past a geometry limit of the
- * converter; 'total': only the slide's total refused it), `times` the objects that would store it, `today` what
- * `customPaths` gives it (over the limits, a box), and `node` the `a:custGeom` the recipe builder reads.
- */
-export interface RasterCandidate {
-  raw: number;
-  why: 'points' | 'limit' | 'total';
-  times: number;
-  today: CustomPaths;
-  node: XNode;
-}
+export type { RasterCandidate };
 
-/**
- * A shape element with the two fields this release adds to the IR (`rasterOf`, the walk's; `raster`, the planner's:
- * the index of the first element of the run the shape is drawn into). Step 5 of the track moves both into `ir.ts`.
- */
-export type RasterElement = ShapeElement & { rasterOf?: RasterCandidate; raster?: number };
+/** A shape element (the walk's `rasterOf` and the planner's `raster` are fields of `ShapeElement`). */
+export type RasterElement = ShapeElement;
 
 export interface RasterPlanOptions {
   /** Default 'plan'. */

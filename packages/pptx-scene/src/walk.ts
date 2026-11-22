@@ -47,7 +47,18 @@ import {
   spPrOf,
   styleOf,
 } from './inherit.ts';
-import type { Affine, Element, ElementBase, Fill, Line, ShapeElement, Support } from './ir.ts';
+import type {
+  Affine,
+  Element,
+  ElementBase,
+  CustomPaths,
+  Fill,
+  Line,
+  RasterCandidate,
+  ShapeElement,
+  Support,
+} from './ir.ts';
+import { RASTER_POINTS, rawPointCost } from './raster.ts';
 import { chooseAlternate } from './markup.ts';
 import { CANVAS_H, CANVAS_W } from '@ordo/renderer/geom/bounds.ts';
 import {
@@ -106,7 +117,14 @@ const on = (v: string | undefined) => v === '1' || v === 'true';
 const finite = (v: number | undefined, dflt: number) => (v !== undefined && Number.isFinite(v) ? v : dflt);
 
 /** Mutable state of one slide's walk. */
-export interface WalkState {
+/** The three counters the walk charges a slide's custom geometry and drawing against (`WalkState` is one). */
+export interface Ledger {
+  points?: number;
+  geomCost?: number;
+  floors?: number;
+}
+
+export interface WalkState extends Ledger {
   out: Element[];
   count: number;
   groups: number;
@@ -128,6 +146,16 @@ export interface WalkState {
   /** SmartArt drawings read so far (M6, `smartart.ts`: `ElementBase.diagram` numbers them). */
   diagrams?: number;
   /**
+   * Q53 (`ParseOptions.rasters`): 'plan' marks the shapes the planner may draw into pictures and keeps them out of
+   * the counters above, 'detect' only marks them (the counters stay as today's).
+   */
+  rasters?: 'plan' | 'detect';
+  /**
+   * With 'plan', the counters as TODAY's converter keeps them (every shape charged, the candidates included): what a
+   * candidate gets as its put-back form (`RasterCandidate.today`) is worked out against them, exactly as it is today.
+   */
+  today?: Ledger;
+  /**
    * A shape of the slide's own tree with text and its own `a:spAutoFit` was read: LibreOffice sizes the
    * rows of the tables after it with font-independent line spacing (`tables.ts` `TableReadOptions`).
    */
@@ -142,17 +170,21 @@ const treeOf = (n: XNode | undefined) => path(n, 'p:cSld', 'p:spTree');
  * decorations are walked once per layout and colour map and shared by every slide that shows them (each
  * slide gets shallow copies, which classification may mark), so their cost does not grow with the slides.
  */
-export function walkSlide(ctx: SlideCtx): Element[] {
+export function walkSlide(ctx: SlideCtx, stats?: { points: number }): Element[] {
   const st: WalkState = { out: [], count: 0, groups: 0 };
+  if (ctx.rasters) st.rasters = ctx.rasters;
   // The background is emitted under everything, a full-slide fill laid on white (`emit.ts`
   // `emitBackground`): its pixels are charged first, as every drawer's budget counts them.
   const bg = readBackground(ctx).fill;
   st.geomCost = backgroundCost(bg);
   st.floors = backgroundCost(bg, true);
+  if (st.rasters === 'plan') st.today = { points: 0, geomCost: st.geomCost, floors: st.floors };
   if (shows(ctx.slide)) decorations(ctx, st);
   walkTree(ctx, treeOf(ctx.slide), 'slide', IDENTITY, undefined, 0, st);
   // Connector ends glued to shapes move to their connection sites (M6).
   placeConnectors(st.out);
+  // The path points the shapes that stay shapes use (the planner's put-back forms are worked out after them).
+  if (stats) stats.points = st.points ?? 0;
   return st.out;
 }
 
@@ -185,6 +217,8 @@ interface Decorations {
   points: number;
   geomCost: number;
   floors: number;
+  /** With rasters planned: what the decorations charge the 'today' counters. */
+  today?: { points: number; geomCost: number; floors: number };
 }
 
 /**
@@ -203,7 +237,7 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     return;
   }
   // What the walk of a layout and its master depends on besides them (deck-wide facts aside): the colours.
-  const key = [...ctx.color.map.values()].join(' ');
+  const key = [...ctx.color.map.values()].join(' ') + (st.rasters ? `|rasters:${st.rasters}` : '');
   let byKey = decorationCache.get(ctx.layout);
   if (!byKey) decorationCache.set(ctx.layout, (byKey = new Map()));
   const known = byKey.get(key);
@@ -220,11 +254,17 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     // What the decorations charge on top of this slide's background.
     st.geomCost = (st.geomCost ?? 0) + known.geomCost;
     st.floors = (st.floors ?? 0) + known.floors;
+    if (st.today && known.today) {
+      st.today.points = known.today.points;
+      st.today.geomCost = (st.today.geomCost ?? 0) + known.today.geomCost;
+      st.today.floors = (st.today.floors ?? 0) + known.today.floors;
+    }
     return;
   }
   const notes: string[] = [];
   const before = st.geomCost ?? 0;
   const floorsBefore = st.floors ?? 0;
+  const todayBefore = st.today ? { g: st.today.geomCost ?? 0, f: st.today.floors ?? 0 } : undefined;
   walk({
     ...ctx,
     log: (msg) => {
@@ -245,6 +285,15 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     points: st.points ?? 0,
     geomCost: (st.geomCost ?? 0) - before,
     floors: (st.floors ?? 0) - floorsBefore,
+    ...(st.today && todayBefore
+      ? {
+          today: {
+            points: st.today.points ?? 0,
+            geomCost: (st.today.geomCost ?? 0) - todayBefore.g,
+            floors: (st.today.floors ?? 0) - todayBefore.f,
+          },
+        }
+      : {}),
   });
   for (let i = 0; i < st.out.length; i++) st.out[i] = { ...st.out[i]! };
 }
@@ -427,7 +476,7 @@ export function walkTree(
               // Past the budget it is kept whole, charged as its legacy copy: the emitted slide's own plan
               // (`emit.ts` `fitDrawing`) names it, drawn whole from a geometry unit on outputs and as its
               // legacy shape elsewhere (M9, `decor-conv`).
-              if (!chargeDrawing(st, rate(g), floor)) chargeFloor(st, floor);
+              chargeShape(st, rate(g), floor);
             }
           }
           st.out.push(pic);
@@ -583,9 +632,10 @@ function readShape(
   const rate = (g: DrawnGeom) => drawCost(g, spec) + (pictureFill ? maskCost(g) : 0);
   // What it draws at least, past any budget (`slidePlan`'s floor): its legacy shape.
   const floor = legacyCost(ctx, base.xf, spec);
-  const custom = custNode
-    ? slideCustom(ctx, custNode, base, st, rate, pictureFill && line ? 2 : 1, floor)
+  const read = custNode
+    ? slideCustomR(ctx, custNode, base, st, rate, pictureFill && line ? 2 : 1, floor, true)
     : undefined;
+  const custom = read?.custom;
   if (!custNode && (fill.kind !== 'none' || line)) {
     const p = decompose(base.xf);
     const g = presetDrawn(geom, adj, p.w * ctx.frame.s, p.h * ctx.frame.s);
@@ -595,12 +645,16 @@ function readShape(
     // emitted slide's own plan (`emit.ts` `fitDrawing`) names it: each drawer draws it natively where the
     // slide's plan has room, else the outputs draw it whole from a geometry unit and every other drawer as its
     // legacy shape.
-    if (!chargeDrawing(st, rate(g), floor)) chargeFloor(st, floor);
+    chargeShape(st, rate(g), floor);
   }
   // A shape not drawn natively but still emitted (`emit.ts`: its legacy rect, ellipse or line, under its text)
   // is charged as that legacy shape: every drawer draws it, and no budget refuses it (renderer
   // `geom/cost.ts` `slidePlan` counts it first).
-  if (custom?.over === true && !pictureFill) chargeFloor(st, floor);
+  if (!pictureFill) {
+    // A candidate the pictures may take charges only the 'today' counters (`slideCustomR`).
+    if (custom?.over === true && !(read?.cand && st.today)) chargeFloor(st, floor);
+    if (st.today && read?.shadow?.over === true) chargeFloor(st.today, floor);
+  }
   const reasons: string[] = [];
   let support: Support = 'native';
   // M6: every preset of the table, custom geometry within the bounds, gradients and line styles are drawn;
@@ -646,6 +700,7 @@ function readShape(
     support,
     ...(reasons.length ? { reasons } : {}),
     ...(custom ? { custom } : {}),
+    ...(read?.cand ? { rasterOf: read.cand } : {}),
     ...(fx.glow ? { glow: fx.glow } : {}),
     ...(fx.softEdge ? { softEdge: fx.softEdge } : {}),
     ...(cxn ? { cxn } : {}),
@@ -674,29 +729,120 @@ export function slideCustom(
   times = 1,
   floor?: number,
 ) {
-  const p = decompose(base.xf);
-  const custom = customPaths(node, p.w, p.h, ctx.frame.s, rate);
-  for (const n of custom.notes) ctx.log(`custom geometry: ${n}`);
+  return slideCustomR(ctx, node, base, st, rate, times, floor, false).custom;
+}
+
+/** What `slideCustomR` read: the geometry as the shape gets it, the candidate mark and the 'today' result. */
+export interface CustomRead {
+  custom: CustomPaths;
+  /** Q53: the shape is a picture candidate (`ParseOptions.rasters`). */
+  cand?: RasterCandidate;
+  /** With rasters planned: what today's counters (every shape charged) gave this shape. */
+  shadow?: CustomPaths;
+}
+
+const SAY_NOTHING = (_m: string): void => undefined;
+
+/**
+ * The charges of `slideCustom` on one set of counters: a custom geometry's points (times `times`) against the
+ * slide's 64k (past them it is over the bounds and charges nothing), its drawing against the budgets. `say` hears the
+ * messages the walk logs.
+ */
+function chargeCustom(
+  say: (msg: string) => void,
+  led: Ledger,
+  custom: CustomPaths,
+  times: number,
+  floor: number | undefined,
+): CustomPaths {
   if (custom.over) return custom;
   const points = custom.points * times;
-  if ((st.points ?? 0) + points > MAX_SLIDE_PATH_POINTS) {
-    ctx.log(
-      `more than ${MAX_SLIDE_PATH_POINTS} path points: further custom geometry is drawn by LibreOffice`,
-    );
+  if ((led.points ?? 0) + points > MAX_SLIDE_PATH_POINTS) {
+    say(`more than ${MAX_SLIDE_PATH_POINTS} path points: further custom geometry is drawn by LibreOffice`);
     return { ...custom, over: true };
   }
   // A margin under the renderer's budgets, for the rounding of the stored coordinates.
   const costly = (custom.fillCost ?? 0) > GEOM_COST.geometry * COST_MARGIN;
   if (costly)
-    ctx.log(
+    say(
       "a custom geometry too costly to draw at once (its edges cross the box many times) is drawn as its legacy shape until the slide's decoration plate holds it",
     );
-  st.points = (st.points ?? 0) + points;
-  if (costly || !chargeDrawing(st, (custom.cost ?? 0) + points * GEOM_COST.point, floor)) {
-    chargeFloor(st, floor ?? 0);
+  led.points = (led.points ?? 0) + points;
+  if (costly || !chargeDrawing(led, (custom.cost ?? 0) + points * GEOM_COST.point, floor)) {
+    chargeFloor(led, floor ?? 0);
     return { ...custom, complex: true };
   }
   return custom;
+}
+
+/**
+ * `slideCustom` with the picture candidates of Q53 (`ParseOptions.rasters`, C-SR2). Without rasters it is the one
+ * function it always was. With 'detect' a shape past `RASTER_POINTS` (the raw cost of its commands, an arc 12, before
+ * any cut), past a geometry limit or refused by the slide total is only MARKED: the counters, the notes and the shape
+ * are today's. With 'plan' a marked shape charges NEITHER the slide total NOR the drawing budget (the pictures
+ * take it, so the shapes that stay shapes keep their room); what it is given if no picture takes it is worked out
+ * against 'today' counters that charge every shape, so it is exactly what today's converter gives it, and its notes
+ * wait on the mark (`RasterCandidate.notes`) for the caller to say them if it stays a shape.
+ */
+export function slideCustomR(
+  ctx: SlideCtx,
+  node: XNode,
+  base: ElementBase,
+  st: WalkState,
+  rate: ((g: DrawnGeom) => number) | undefined,
+  times: number,
+  floor: number | undefined,
+  shape: boolean,
+): CustomRead {
+  const p = decompose(base.xf);
+  const custom = customPaths(node, p.w, p.h, ctx.frame.s, rate);
+  const say = (m: string) => ctx.log(m);
+  const mark = shape && st.rasters !== undefined;
+  if (!mark) {
+    for (const n of custom.notes) ctx.log(`custom geometry: ${n}`);
+    const result = chargeCustom(say, st, custom, times, floor);
+    const shadow = st.today ? chargeCustom(SAY_NOTHING, st.today, custom, times, floor) : undefined;
+    return { custom: result, ...(shadow ? { shadow } : {}) };
+  }
+  const raw = rawPointCost(node);
+  const cost = raw.points;
+  if (st.rasters === 'detect') {
+    for (const n of custom.notes) ctx.log(`custom geometry: ${n}`);
+    const result = chargeCustom(say, st, custom, times, floor);
+    const why =
+      raw.capped || cost > RASTER_POINTS
+        ? 'points'
+        : custom.over
+          ? 'limit'
+          : result.over
+            ? 'total'
+            : undefined;
+    return why
+      ? { custom: result, cand: { raw: cost, why, times, today: result, node } }
+      : { custom: result };
+  }
+  const customNotes = custom.notes.map((n) => `custom geometry: ${n}`);
+  const todayNotes: string[] = [];
+  const shadow = chargeCustom((m) => todayNotes.push(m), st.today!, custom, times, floor);
+  const why =
+    raw.capped || cost > RASTER_POINTS ? 'points' : custom.over ? 'limit' : shadow.over ? 'total' : undefined;
+  if (!why) {
+    for (const n of customNotes) ctx.log(n);
+    // A shape the pictures never take is charged for real, with the messages of its own charge.
+    const result = chargeCustom(say, st, custom, times, floor);
+    return { custom: result, shadow };
+  }
+  return {
+    custom: shadow,
+    shadow,
+    cand: { raw: cost, why, times, today: shadow, node, notes: [...customNotes, ...todayNotes] },
+  };
+}
+
+/** `chargeDrawing`, else the floor, on the walk's counters and (with rasters planned) on today's. */
+function chargeShape(st: WalkState, cost: number, floor: number): void {
+  if (!chargeDrawing(st, cost, floor)) chargeFloor(st, floor);
+  if (st.today && !chargeDrawing(st.today, cost, floor)) chargeFloor(st.today, floor);
 }
 
 /**
@@ -704,7 +850,7 @@ export function slideCustom(
  * `GEOM_COST.slide` (within COST_MARGIN of it), and its legacy copy (`floor`, default `cost`) against the
  * floors: false, with nothing charged, past it.
  */
-function chargeDrawing(st: WalkState, cost: number, floor = cost): boolean {
+function chargeDrawing(st: Ledger, cost: number, floor = cost): boolean {
   const total = (st.geomCost ?? 0) + cost;
   if (!(total <= GEOM_COST.slide * COST_MARGIN)) return false;
   st.geomCost = total;
@@ -720,7 +866,7 @@ function chargeDrawing(st: WalkState, cost: number, floor = cost): boolean {
  * geometry unit made in slices (renderer `units.ts`), later from the slide's decoration plate, and every
  * other drawer as its legacy shape, never LibreOffice.
  */
-function chargeFloor(st: WalkState, floor: number): void {
+function chargeFloor(st: Ledger, floor: number): void {
   st.floors = (st.floors ?? 0) + floor;
   st.geomCost = (st.geomCost ?? 0) + floor;
 }
