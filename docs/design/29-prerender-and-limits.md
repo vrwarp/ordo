@@ -1676,7 +1676,9 @@ become pictures and what each picture is made of, is "As built in sub-wave 3 (sh
 - **The route holds (G-SPIKE: page-ok).** The hub's own headless Chromium, running the renderer in a small page, draws a
   3840x2160 picture in 92 to 304 ms (the 45,056-point outline of a Traffic Dark continent 126 ms; 2,000 random shapes
   924 ms), starts in 0.65 s and writes a PNG of 0.2 to 3.7 MB. Measured on a 4-CPU machine with a software canvas and
-  Chrome for Testing 153; the hub image's own Chromium build is the integrator's image smoke step.
+  Chrome for Testing 153; the hub image's own Chromium build is tried by the pull-request job's image step
+  (`docker-pr.yml`, `tools/image-smoke/raster-canvas.mjs`: three 3840x2160 pictures in one browser with the hub's flags in the
+  container's default 64 MB `/dev/shm`), which first runs in this wave's own pull request.
 - **Memory.** The browser's tree (8 processes) peaks at 1,129 MB of resident memory summed per process over 90 pictures in
   one browser (586 MB counting shared pages once, the figure a container charges) and does not grow. Four flags and freeing each
   canvas at once brought it from 1,473 MB; the ceiling written before the first run (1,200 MB) was not changed.

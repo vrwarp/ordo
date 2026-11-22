@@ -90,6 +90,21 @@ jobs:
           docker exec ordo-smoke soffice --version
           docker exec ordo-smoke sh -c 'chromium --headless --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null'
           echo "renderers start"
+      - name: The picture maker's browser draws a 4K picture inside the image
+        run: |
+          # The hub's own picture maker (apps/hub/src/pptx/rasterPage.ts; off until the pre-render switch is on) draws
+          # the pictures of many-point shapes at import in the image's Chromium. Its page ships next to the bundle, and
+          # the browser starts with the hub's flags in the container's default /dev/shm (64 MB: the hub passes no
+          # --disable-dev-shm-usage). tools/image-smoke/raster-canvas.mjs draws three 3840 x 2160 pictures in the one
+          # browser and fails on a crash, a page that does not start or a picture of the wrong size.
+          if ! docker exec ordo-smoke test -s /app/apps/hub/dist/raster-page.js; then
+            echo "::error::The picture page (apps/hub/dist/raster-page.js) is not in the image."; exit 1
+          fi
+          docker cp tools/image-smoke/raster-canvas.mjs ordo-smoke:/tmp/raster-canvas.mjs
+          if ! docker exec ordo-smoke node /tmp/raster-canvas.mjs; then
+            echo "::error::The image's Chromium did not draw a 4K picture the way the hub's picture maker starts it (the lines above say why)."
+            exit 1
+          fi
       - name: The Chinese, Japanese and Korean face inside the image
         run: |
           # fonts-noto-cjk's Sans collection (Dockerfile): fontconfig gives it for Hangul, its Serif collections are
