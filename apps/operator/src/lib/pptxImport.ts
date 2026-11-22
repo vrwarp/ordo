@@ -79,6 +79,16 @@ export function hubHasLibreOffice(caps: HubCapabilities | undefined): boolean {
 }
 
 /**
+ * Q24.b (C-IW4): whether the browser parse keeps heavy slides whole, from the hub's last answer: its switch
+ * (`caps.prerender.state`, store-2's `HubCapabilities`) and, with LibreOffice, Q27 (`wholeSlidesFor`). An unknown
+ * answer (no capabilities yet, a hub from before) is off; a hub that answers otherwise refuses the scene and parses
+ * the deck itself (D7).
+ */
+export function keepsSlidesWhole(_caps: HubCapabilities | undefined): boolean {
+  return false;
+}
+
+/**
  * The form fields `POST /import/document` gets for one file: only a PowerPoint carries the PowerPoint choice
  * (`renderer`; `extendBackgrounds` for the native import). A PDF is always pictures. A stored 'Pictures
  * (LibreOffice)' choice on a hub without LibreOffice, or before the hub said it has it (`picturesOffered`),
@@ -176,6 +186,8 @@ export type NativeImportResult = {
   missing?: number;
   /** M9: whether the hub had LibreOffice; undefined from an older hub (which always had it). */
   libreoffice?: boolean;
+  /** Q24.b: slides kept whole (each stored with a pre-render record); absent from a hub that keeps none whole. */
+  whole?: number;
 };
 /** The `pptx-native` result when the deck went to the picture import instead (the CPU pool could not start). */
 export type NativeImportFallback = { jobId: string; reason: string };
@@ -551,6 +563,8 @@ export type ImportReport = {
   edited: number;
   /** What drew a legacy import's pictures. */
   renderer?: string;
+  /** Slides kept whole: those that carry a pre-render record (Q24.b); absent when there are none. */
+  whole?: number;
   /** `source.log` lines, at most `LOG_LINES` of the newest, each a warning or not. */
   log: { text: string; warn: boolean }[];
   /** Log lines left out (older ones). */

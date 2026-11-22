@@ -8,12 +8,15 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
+  approximatedSlides,
   DEFAULT_PPTX_CHOICE,
   documentAccept,
   documentFields,
+  importReport,
   isPptxName,
   type NativeImportResult,
 } from '../src/lib/pptxImport.ts';
+import { PptxReportView } from '../src/views/editor/PptxReport.tsx';
 import { PptxSlideCardView } from '../src/views/editor/PptxSlideCard.tsx';
 import { PptxImportChoices } from '../src/views/library/ImportTab.tsx';
 import { PptxImportCardView } from '../src/views/library/PptxImportCard.tsx';
@@ -429,5 +432,73 @@ describe('without LibreOffice on the hub (design/27 M9)', () => {
     expect(text(lost)).toContain('Not drawn');
     expect(text(lost)).toContain('only its text is kept, for search');
     expect(text(lost)).toContain('Not drawn: the slide itself.');
+  });
+});
+
+describe('the line for the slides kept whole (Q24.b: static text, W1 and W4; W2 for a device that cannot make pictures)', () => {
+  const ONE =
+    '1 slide is very detailed and was kept whole; the screens show a picture of it, made on this computer';
+  const MANY =
+    '3 slides are very detailed and were kept whole; the screens show a picture of each, made on this computer';
+  const W2_ONE =
+    '1 slide is very detailed and was kept whole; its picture is made on a computer with Chrome or Edge';
+  const W2_MANY =
+    '3 slides are very detailed and were kept whole; their pictures are made on a computer with Chrome or Edge';
+
+  it('the import card shows it under the class counts, singular and plural, and not for none or an older hub', () => {
+    expect(text(card({ result: result({ whole: 1 }) }))).toContain(ONE);
+    expect(text(card({ result: result({ whole: 3 }) }))).toContain(MANY);
+    for (const whole of [0, undefined])
+      expect(text(card({ result: result({ whole }) }))).not.toContain('kept whole');
+    expect(card({ result: result({ whole: 3 }) })).toContain('data-whole');
+    expect(card({ result: result({ whole: 0 }) })).not.toContain('data-whole');
+  });
+
+  it('the import card says where the pictures are made on a device that cannot make them (W2)', () => {
+    expect(text(card({ result: result({ whole: 1 }), deviceCanBake: false }))).toContain(W2_ONE);
+    expect(text(card({ result: result({ whole: 3 }), deviceCanBake: false }))).toContain(W2_MANY);
+    expect(text(card({ result: result({ whole: 3 }), deviceCanBake: true }))).toContain(MANY);
+  });
+
+  const slide = (id: string, whole: boolean) => ({
+    id,
+    objects: [],
+    pptx: { fileId: 'f', index: 0, class: 'native', version: 3 },
+    ...(whole ? { prerender: { why: ['bytes'], live: [] } } : {}),
+  });
+  const view = (n: number, o: Record<string, unknown> = {}) => {
+    const slides = [...Array.from({ length: n }, (_, i) => slide(`w${i}`, true)), slide('plain', false)];
+    const p = {
+      kind: 'slides',
+      source: {
+        kind: 'pptx',
+        native: { version: 3, slides: slides.length, native: slides.length, hybrid: 0, picture: 0 },
+      },
+      sections: [{ id: 's', label: 'Slides', short: 'S', slides }],
+    } as unknown as Parameters<typeof importReport>[0];
+    return renderToStaticMarkup(
+      createElement(PptxReportView, {
+        report: importReport(p)!,
+        approx: approximatedSlides(p as never),
+        missingFonts: [],
+        readOnly: false,
+        onReimport: noop,
+        onOpenSlide: noop,
+        ...o,
+      }),
+    );
+  };
+
+  it("the Presentation panel's report shows the exact line, singular and plural, none for zero", () => {
+    expect(text(view(1))).toContain(ONE);
+    expect(text(view(3))).toContain(MANY);
+    expect(view(3)).toContain('data-whole');
+    expect(text(view(0))).not.toContain('kept whole');
+    expect(view(0)).not.toContain('data-whole');
+  });
+
+  it('the report says where the pictures are made on a device that cannot make them (W2)', () => {
+    expect(text(view(1, { deviceCanBake: false }))).toContain(W2_ONE);
+    expect(text(view(3, { deviceCanBake: false }))).toContain(W2_MANY);
   });
 });

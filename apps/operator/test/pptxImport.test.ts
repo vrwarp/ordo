@@ -1,7 +1,7 @@
 import type { Presentation, Slide } from '@ordo/domain';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
-import { type Job, LEGACY_CAPABILITIES } from '@ordo/protocol';
-import { describe, expect, it } from 'vitest';
+import { type HubCapabilities, type Job, LEGACY_CAPABILITIES } from '@ordo/protocol';
+import { describe, expect, it, vi } from 'vitest';
 import {
   approximatedSlides,
   canDrawOriginal,
@@ -13,6 +13,8 @@ import {
   lastLogLine,
   hiddenCount,
   importCaps,
+  importReport,
+  keepsSlidesWhole,
   loStatus,
   onlyJobSaves,
   hubHasLibreOffice,
@@ -30,6 +32,17 @@ import {
   writeImportChoice,
 } from '../src/lib/pptxImport.ts';
 import { followJob, referenceRunning } from '../src/views/editor/original.ts';
+
+/** Q27.b as a test switch: the constant behind `wholeSlidesFor` is true, so the case where it is false is a stand-in answer. */
+const q27 = vi.hoisted(() => ({ keepsWithLibreOffice: true }));
+vi.mock('@ordo/importers/pptx-core.ts', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@ordo/importers/pptx-core.ts')>();
+  return {
+    ...real,
+    wholeSlidesFor: (o: { prerender: boolean; lo: boolean }) =>
+      q27.keepsWithLibreOffice ? real.wholeSlidesFor(o) : o.prerender === true && !o.lo,
+  };
+});
 
 function memoryStore(init: Record<string, string> = {}) {
   const m = new Map(Object.entries(init));
@@ -445,5 +458,81 @@ describe('following the reference job', () => {
     expect(referenceRunning(undefined)).toBe(false);
     expect(referenceRunning({ id: 'j', state: 'running', progress: 0 })).toBe(true);
     expect(referenceRunning({ id: 'j', state: 'failed', progress: 0 })).toBe(false);
+  });
+});
+
+describe('keepsSlidesWhole: the browser parse keeps heavy slides whole when the hub does (Q24.b, C-IW4)', () => {
+  /** The hub's answer as store-2 writes it (`HubCapabilities.prerender.state`) beside its LibreOffice state. */
+  const caps = (
+    prerender: unknown,
+    libreoffice: 'available' | 'absent' | 'off' | 'broken' = 'available',
+  ): HubCapabilities =>
+    ({
+      ...LEGACY_CAPABILITIES,
+      libreoffice: { state: libreoffice },
+      ...(prerender === undefined ? {} : { prerender: { state: prerender } }),
+    }) as unknown as HubCapabilities;
+
+  it('is off with no answer, a hub from before and a hub whose switch is off', () => {
+    expect(keepsSlidesWhole(undefined)).toBe(false);
+    expect(keepsSlidesWhole(LEGACY_CAPABILITIES)).toBe(false);
+    for (const state of ['off', 'auto', undefined, 'ON', 1, null, true, {}])
+      expect(keepsSlidesWhole(caps(state)), String(state)).toBe(false);
+  });
+
+  it('is on with the switch on, whatever LibreOffice is (Q27.a: a hub with it keeps them whole too)', () => {
+    for (const lo of ['available', 'absent', 'off', 'broken'] as const)
+      expect(keepsSlidesWhole(caps('on', lo)), lo).toBe(true);
+  });
+
+  it('follows Q27.b where the constant is false: with LibreOffice the hub follows today\u2019s plan, without it keeps them whole', () => {
+    q27.keepsWithLibreOffice = false;
+    try {
+      expect(keepsSlidesWhole(caps('on', 'available'))).toBe(false);
+      expect(keepsSlidesWhole(caps('on', 'broken'))).toBe(false);
+      expect(keepsSlidesWhole(caps('on', 'absent'))).toBe(true);
+      expect(keepsSlidesWhole(caps('on', 'off'))).toBe(true);
+      expect(keepsSlidesWhole(caps('off', 'absent'))).toBe(false);
+    } finally {
+      q27.keepsWithLibreOffice = true;
+    }
+  });
+});
+
+describe('the import card and report read the slides kept whole (Q24.b)', () => {
+  const base = { presentationId: 'p1', slides: 3, native: 3, hybrid: 0, picture: 0, compact: 0, pending: 0 };
+
+  it('reads whole from the hub result defensively: a string, a negative or a NaN is 0, and absent stays absent', () => {
+    expect(readNativeResult({ ...base, missingFonts: [], notes: [], whole: 3 })).toMatchObject({ whole: 3 });
+    for (const bad of ['3', -2, Number.NaN, null, {}, [], true])
+      expect(readNativeResult({ ...base, whole: bad }), String(bad)).toMatchObject({ whole: 0 });
+    expect(readNativeResult({ ...base, whole: 1e9 })).toMatchObject({ whole: 100_000 });
+    expect(readNativeResult(base)).not.toHaveProperty('whole');
+  });
+
+  const slide = (id: string, record?: unknown): Slide =>
+    ({
+      id,
+      objects: [],
+      pptx: { fileId: 'f', index: 0, class: 'native', version: 3 },
+      ...(record ? { prerender: record } : {}),
+    }) as unknown as Slide;
+  const deck = (slides: Slide[]) =>
+    ({
+      kind: 'slides',
+      source: {
+        kind: 'pptx',
+        native: { version: 3, slides: slides.length, native: slides.length, hybrid: 0, picture: 0 },
+      },
+      sections: [{ id: 's', label: 'Slides', short: 'S', slides }],
+    }) as unknown as Presentation;
+
+  it('counts the slides that carry a pre-render record, and says nothing when there are none', () => {
+    const rec = { why: ['bytes'], live: [] };
+    expect(
+      importReport(deck([slide('a', rec), slide('b'), slide('c', { why: ['count'], live: [] })]))?.whole,
+    ).toBe(2);
+    expect(importReport(deck([slide('a'), slide('b')]))).not.toHaveProperty('whole');
+    expect(importReport(deck([]))).not.toHaveProperty('whole');
   });
 });

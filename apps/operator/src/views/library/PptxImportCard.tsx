@@ -79,6 +79,8 @@ export function PptxImportCardView(props: {
   fallbackJob?: Job;
   lo?: Job;
   presentation?: Pick<Presentation, 'sections'>;
+  /** W2: false when this device cannot make the pictures of the slides kept whole (the line says where they are made). */
+  deviceCanBake?: boolean;
   showLog: boolean;
   onToggleLog(): void;
   onOpen(presentationId: string): void;

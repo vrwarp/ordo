@@ -122,6 +122,8 @@ export function PptxReportView(props: {
   onOpenSlide(slideId: string): void;
   /** 'Treat as slides' on an announcement loop (`ImportReport.loop`). */
   onTreatAsSlides?(): void;
+  /** W2: false when this device cannot make the pictures of the slides kept whole (the line says where they are made). */
+  deviceCanBake?: boolean;
 }) {
   const { report: r, approx, run } = props;
   const running = reimportRunning(run);

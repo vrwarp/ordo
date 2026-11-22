@@ -87,6 +87,8 @@ export type ParseRequest = {
   name: string;
   extendBackgrounds: boolean;
   libreoffice: boolean;
+  /** Q24.b: keep heavy slides whole (`keepsSlidesWhole`); absent: no. */
+  wholeSlides?: boolean;
   fonts: readonly Font[];
   /** A playlist is live: the deck goes to the hub without a parse here. */
   live: boolean;

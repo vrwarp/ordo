@@ -14,6 +14,8 @@ export type ImportIn = {
   file: Blob;
   extendBackgrounds: boolean;
   libreoffice: boolean;
+  /** Q24.b: keep heavy slides whole (`PptxClientOptions.wholeSlides`); absent: no. */
+  wholeSlides?: boolean;
   /** The library's faces (`Font` rows) with the URLs their files are fetched from. */
   faces: FaceFile[];
 };
