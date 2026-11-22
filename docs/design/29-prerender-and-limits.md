@@ -129,7 +129,7 @@ by the hub, `apps/hub/src/pptx/clientScene.ts:16`), and decor-render's plate sto
    and returns a PNG. The earlier notes that the hub never draws ("it has no Canvas 2D") are superseded: Chromium
    is its Canvas 2D. The import-time browser runs in the light import job, niced and in its own process group, is
    DEFERRED while any service is live and is killed within a quarter of a second if one goes live in the middle
-   of a picture; a screen never waits on a picture. A hub with no Chromium plans no pictures of shapes (LibreOffice's
+   of a picture or while the browser is still starting; a screen never waits on a picture. A hub with no Chromium plans no pictures of shapes (LibreOffice's
    art as today, else today's boxes, and one report line). See "As built in sub-wave 3 (raster-maker: the picture maker)" at the end of this document.
 <!-- /raster-maker:decision-4 -->
 5. **A picture is complete or it is not uploaded.** It is keyed by everything it depends on (slide, live set,
@@ -1695,8 +1695,9 @@ become pictures and what each picture is made of, is "As built in sub-wave 3 (sh
 - **Shapes with effects (the owner's Q53.i).** A shadow, a glow or a soft edge costs two to three times the time and, at 50 such
   shapes in a picture, about twice the memory (2.1 to 2.5 GB peak); a see-through gradient costs little (480 ms, 1.06 GB). They
   stay out of the pictures by default.
-- **Live safety.** No picture starts while any service is live or in its grace; a service going live in the middle of a
-  picture stops it within about a quarter of a second and the browser's whole process group is killed; the browser runs
+- **Live safety.** No picture starts while any service is live or in its grace; a service going live while the browser is
+  starting or in the middle of a picture stops it within about a quarter of a second and the browser's whole process
+  group is killed; the browser runs
   at nice 19, one at a time on the hub; a crashed browser is relaunched once.
 <!-- /raster-maker:as-built -->
 
