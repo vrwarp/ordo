@@ -419,6 +419,8 @@ export function sectionsOfItem(
 export type ImportedTextSource = {
   imported?: { textBoxes?: readonly { text: string }[]; textAligned?: boolean };
   pptx?: { class?: string; artText?: string };
+  /** Q53, Q68: a native slide holding a picture of shapes (an object of origin role 'raster') keeps its words in `pptx.artText`. */
+  objects?: readonly { type?: string; origin?: { role?: string } }[];
 };
 
 /** Longest fallback text: the schema's bound on one text. */
@@ -445,7 +447,13 @@ export function importedText(slide: ImportedTextSource): string {
     if (out) return out;
   }
   const p = slide.pptx;
-  if (p && (p.class === 'hybrid' || p.class === 'picture') && typeof p.artText === 'string')
+  if (
+    p &&
+    (p.class === 'hybrid' ||
+      p.class === 'picture' ||
+      (Array.isArray(slide.objects) && slide.objects.some((o) => o?.origin?.role === 'raster'))) &&
+    typeof p.artText === 'string'
+  )
     return cutText(p.artText.trim(), MAX_IMPORTED_TEXT);
   return '';
 }
