@@ -62,12 +62,7 @@ export type LaunchOptions = {
   pageFile?: string;
   /** Extra arguments after the fixed ones (measures). */
   extraArgs?: string[];
-  /** The page is made again (a fresh renderer) after this many pictures: the renderer's memory drifts up (default RASTER_RECYCLE_EVERY). */
-  recycleEvery?: number;
 };
-
-/** A browser's renderer is replaced after this many pictures, so a long import stays under the memory ceiling. */
-export const RASTER_RECYCLE_EVERY = 100000;
 
 /** The memory flag's default: the page's JS heap holds the recipe's text and arrays, not the canvas. */
 export const RASTER_MEMORY_MB = 1024;
@@ -75,7 +70,7 @@ export const RASTER_MEMORY_MB = 1024;
 /** The arguments Chromium is started with; no `--remote-debugging-port`, ever (a test greps this list). */
 export function rasterArgs(
   profileDir: string,
-  o: Pick<LaunchOptions, 'sandbox' | 'memoryMb' | 'noDevShm' | 'extraArgs' | 'recycleEvery'>,
+  o: Pick<LaunchOptions, 'sandbox' | 'memoryMb' | 'noDevShm' | 'extraArgs'>,
 ): string[] {
   return [
     '--headless',
@@ -133,6 +128,8 @@ export function rasterPageFile(): Promise<string> {
     const out = join(tmpdir(), `ordo-raster-page-${process.pid}`);
     mkdirSync(out, { recursive: true });
     const file = join(out, 'raster-page.js');
+    // The folder goes with the process: a source run (dev, tests) must not leave it in the temp directory.
+    process.once('exit', () => rmSync(out, { recursive: true, force: true }));
     const { build } = await import('esbuild');
     await build({
       entryPoints: [fileURLToPath(url)],
@@ -223,11 +220,8 @@ export class RasterBrowser {
     this.rejectFailed = reject;
   });
   private sessionId?: string;
-  private targetId?: string;
   private fontsKey = '';
   private closed?: Promise<void>;
-  private drawn = 0;
-  private recycleEvery = RASTER_RECYCLE_EVERY;
   private pageFile = '';
 
   private readonly proc: ChildProcess;
@@ -285,7 +279,6 @@ export class RasterBrowser {
         },
       });
       b = new RasterBrowser(proc, proc.stdio[3] as Writable, proc.stdio[4] as Readable, profileDir, release);
-      b.recycleEvery = Math.max(1, Math.floor(o.recycleEvery ?? RASTER_RECYCLE_EVERY));
       let stderr = '';
       proc.stderr?.on('data', (d: Buffer) => {
         stderr = (stderr + d.toString('utf8')).slice(-4000);
@@ -371,7 +364,6 @@ export class RasterBrowser {
       `<!doctype html><meta charset="utf-8"><body><script src="${pathToFileURL(this.pageFile).href}"></script></body>`,
     );
     const { targetId } = await this.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' });
-    this.targetId = targetId;
     const { sessionId } = await this.send<{ sessionId: string }>('Target.attachToTarget', {
       targetId,
       flatten: true,
@@ -391,17 +383,6 @@ export class RasterBrowser {
     );
     if (!ready) throw new Error('the picture page did not start');
     this.fontsKey = '';
-  }
-
-  /** Closes the page and opens a fresh one: the renderer process starts again with none of the old pictures' memory. */
-  private async recycle(): Promise<void> {
-    const old = this.targetId;
-    this.drawn = 0;
-    await this.openPage();
-    if (old) {
-      const r = await this.send('Target.closeTarget', { targetId: old }).catch((e) => ({ err: String(e) }));
-      if (process.env.RASTER_DEBUG) console.log('closeTarget', JSON.stringify(r));
-    }
   }
 
   private async evaluate<T>(expression: string): Promise<T> {
@@ -447,8 +428,6 @@ export class RasterBrowser {
     const onAbort = () => this.fail(new Error('stopped'));
     o.signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      if (this.drawn >= this.recycleEvery) await this.recycle();
-      this.drawn++;
       const key = JSON.stringify(
         fonts.map((f) => [f.hash, f.family, f.weight, f.style, f.unicodeRange ?? '']),
       );

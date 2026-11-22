@@ -24,7 +24,7 @@ if (skipped)
 
 let scratch = '';
 beforeAll(() => {
-  scratch = mkdtempSync(join(tmpdir(), 'ordo-raster-page-'));
+  scratch = mkdtempSync(join(tmpdir(), 'ordo-raster-pagetest-'));
 });
 afterAll(() => {
   rmSync(scratch, { recursive: true, force: true });
