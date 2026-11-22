@@ -267,6 +267,22 @@ CREATE TRIGGER IF NOT EXISTS revision_summaries_edit AFTER UPDATE ON presentatio
 END;
 `,
   },
+  {
+    version: 16,
+    name: 'revision-saved-at',
+    // `Library.pruneRevisions` (run at the end of every save) tests `saved_at` of the revisions of the presentation, and in a row of
+    // `presentation_revisions` that small column is stored after the `json` (up to 8 MiB), so SQLite walked every revision's overflow
+    // pages to read it even when nothing was deleted: 295 to 305 ms of a save of a 2.2 MiB presentation with 653 revisions, growing
+    // with every revision kept (all of the last 30 days are). This index holds `saved_at` and `rev` beside the presentation, so the
+    // test never opens a row: the plan is a COVERING INDEX (apps/hub/test/revision-prune.test.ts). Selecting the 50th newest `rev`
+    // first does not do it: every older row is still a candidate, and its `saved_at` is still read. Building the index reads every
+    // revision once, here (about 0.2 to 0.6 s for 774 MiB of revisions with the folder in the cache, then a disk read of what the
+    // revisions hold); nothing is copied. The index is the database's own, kept by any build's INSERT, REPLACE and DELETE, so an older
+    // hub opens a folder at 16, ignores it and keeps it right (and its own prune statement is served by it too).
+    sql: `
+CREATE INDEX IF NOT EXISTS presentation_revisions_saved ON presentation_revisions(presentation_id, saved_at, rev);
+`,
+  },
 ];
 
 /**
