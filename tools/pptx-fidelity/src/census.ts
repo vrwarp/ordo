@@ -28,7 +28,7 @@
  *   kinds, and with `--no-libreoffice` the converter's);
  * - with `--whole` (Q24.b, `--whole-anchors own|motion`, default motion: Q25.c.b): the deck is read with
  *   `ParseOptions.wholeSlides` and each slide also has `wholeKept` (the converter keeps it whole: `BudgetPlan.whole`),
- *   `anchorKinds` (why not: clip, background, bound), `bgOwn` (its background is a picture), `pictures` (distinct
+ *   `planned` (its planned objects), `anchorKinds` (why not: clip, background, bound), `bgOwn` (its background is a picture), `pictures` (distinct
  *   pictures planned), `heavy` (over 200 objects, 16 pictures or 64 KiB) and `wouldCut`, `wouldCutPictures` (what the
  *   plan without the option leaves out: the guard's and the picture limit's), each only when not 0 or false but
  *   `wholeKept`; the deck has `heavyBytes` (the bytes of its heavy slides). The hub columns (`stored`, `hub`, ...)
@@ -232,7 +232,8 @@ export function legacyColumns(slide: Pick<Slide, 'objects'>): Record<string, num
 
 /**
  * The Q24.b columns of a slide read with the whole option (`--whole`, `NativeSlide.whole`), zeros left out:
- * `wholeKept` (the converter's `BudgetPlan.whole`), `anchorKinds` (why it is not: clip, background, bound),
+ * `wholeKept` (the converter's `BudgetPlan.whole`), `planned` (its planned objects after the reliefs: past 1,000 a slide
+ * is not kept whole, and `objects` is then what the guard left), `anchorKinds` (why it is not: clip, background, bound),
  * `bgOwn` (its background is a picture), `pictures` (distinct pictures planned), `heavy` (over 200 objects, 16
  * pictures or 64 KiB: what the screens cut or the ladder simplifies today) and `wouldCut`/`wouldCutPictures`
  * (the elements and pictures the plan without the option leaves out).
@@ -242,7 +243,7 @@ export function wholeColumns(
   slide: Pick<Slide, 'objects'>,
   bytes: number,
 ): Record<string, unknown> {
-  const out: Record<string, unknown> = { wholeKept: w.kept };
+  const out: Record<string, unknown> = { wholeKept: w.kept, planned: w.objects };
   if (w.anchorKinds.length) out.anchorKinds = [...w.anchorKinds];
   if (w.bgOwn) out.bgOwn = true;
   if (w.pictures > 0) out.pictures = w.pictures;

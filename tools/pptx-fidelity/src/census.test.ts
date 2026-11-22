@@ -473,7 +473,14 @@ describe('the Q24.b columns (step 2 of import-whole)', () => {
         { objects: [] },
         80_000,
       ),
-    ).toEqual({ wholeKept: true, pictures: 30, heavy: true, wouldCut: 222, wouldCutPictures: 14 });
+    ).toEqual({
+      wholeKept: true,
+      planned: 410,
+      pictures: 30,
+      heavy: true,
+      wouldCut: 222,
+      wouldCutPictures: 14,
+    });
     // Kept out: the reason and the background, nothing cut (the slide is planned as today).
     expect(
       wholeColumns(
@@ -481,10 +488,24 @@ describe('the Q24.b columns (step 2 of import-whole)', () => {
         { objects: [] },
         90_000,
       ),
-    ).toEqual({ wholeKept: false, anchorKinds: ['clip'], bgOwn: true, pictures: 3, heavy: true });
+    ).toEqual({
+      wholeKept: false,
+      planned: 230,
+      anchorKinds: ['clip'],
+      bgOwn: true,
+      pictures: 3,
+      heavy: true,
+    });
     // A small slide: only the decision and its pictures; zeros left out.
-    expect(wholeColumns(info(), { objects: [] }, 5_000)).toEqual({ wholeKept: true, pictures: 2 });
-    expect(wholeColumns(info({ pictures: 0 }), { objects: [] }, 5_000)).toEqual({ wholeKept: true });
+    expect(wholeColumns(info(), { objects: [] }, 5_000)).toEqual({
+      wholeKept: true,
+      planned: 20,
+      pictures: 2,
+    });
+    expect(wholeColumns(info({ pictures: 0 }), { objects: [] }, 5_000)).toEqual({
+      wholeKept: true,
+      planned: 20,
+    });
     // Heavy by each of the three bounds alone.
     expect(wholeColumns(info({ objects: 201, pictures: 0 }), { objects: [] }, 100).heavy).toBe(true);
     expect(wholeColumns(info({ objects: 5, pictures: 17 }), { objects: [] }, 100).heavy).toBe(true);
