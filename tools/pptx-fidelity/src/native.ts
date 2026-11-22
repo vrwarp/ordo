@@ -66,6 +66,7 @@ import { M9_WRITES, PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
 import { bakeKey, type PictureBake } from '@ordo/pptx-scene/bake.ts';
 import { MAX_DRAWN_PICTURES, MAX_SLIDE_OBJECTS_TEXT, sentToArt } from '@ordo/pptx-scene/budget.ts';
 import { BAKE_PREFIX, MEDIA_PREFIX } from '@ordo/pptx-scene/emit.ts';
+import { selectWhole } from '@ordo/importers/pptx-core.ts';
 import { planLadder, provenanceStandIn, withoutFiles } from '@ordo/importers/pptx-ladder.ts';
 import { CONVERTER_VERSION, PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import type { Browser, Page } from '@playwright/test';
@@ -1193,7 +1194,7 @@ export function hubLadder(
   slides: readonly HubInput[],
   geoms: readonly { id: string; file: unknown }[] = [],
   geomBudget: number = PPTX_LIMITS.geomFileBytes,
-  _whole = false,
+  whole = false,
 ): HubStored[] {
   const fileBytes = new Map(geoms.map((g) => [g.id, utf8Of(JSON.stringify(g.file))]));
   const admitted = new Set<string>();
@@ -1215,26 +1216,40 @@ export function hubLadder(
     const left = withoutFiles(s.slide, (ref) => keep.has(ref));
     return { slide: left.slide, missing: left.missing as string[], geoms: left.slide !== s.slide };
   });
+  const standIn = (s: HubInput, k: number, cls: SlideClass) =>
+    provenanceStandIn({
+      index: s.index ?? k,
+      ...(s.shown !== undefined ? { shown: s.shown } : {}),
+      cls,
+      version: CONVERTER_VERSION,
+      notes: s.notes,
+    });
+  // Q24.b: which slides the import core keeps whole and which it cuts to the counts (`selectWhole`, its own rule).
+  const sel = whole
+    ? selectWhole(
+        slides.map((s, k) => ({
+          picture: s.class === 'picture',
+          slide: kept[k]!.slide,
+          rec: { ...kept[k]!.slide, pptx: standIn(s, k, s.class) },
+        })),
+      )
+    : undefined;
   const plan = planLadder(
-    slides.map((s, k) => ({
-      slide: {
-        ...kept[k]!.slide,
-        pptx: provenanceStandIn({
-          index: s.index ?? k,
-          ...(s.shown !== undefined ? { shown: s.shown } : {}),
-          cls: s.class,
-          version: CONVERTER_VERSION,
-          notes: s.notes,
-        }),
-      },
-      fixed: s.class === 'picture',
-    })),
+    slides.map((s, k) => {
+      const cut = sel?.cut.get(k);
+      const cls: SlideClass = cut && s.class === 'native' ? 'hybrid' : s.class;
+      return {
+        slide: { ...(cut?.slide ?? kept[k]!.slide), pptx: standIn(s, k, cls) },
+        fixed: s.class === 'picture',
+        ...(sel?.kept.has(k) ? { whole: true as const } : {}),
+      };
+    }),
   );
   return slides.map((s, k): HubStored => {
     const r = plan.slides[k]!;
     // As emitted when the ladder kept it whole (the very slide, without the stand-in provenance).
     const { pptx: _, ...fitted } = r.slide;
-    const slide = r.level === 'full' && !kept[k]!.geoms ? s.slide : fitted;
+    const slide = r.level === 'full' && !kept[k]!.geoms ? (sel?.cut.get(k)?.slide ?? s.slide) : fitted;
     if (s.class === 'picture') {
       const { lyricObjectId: _l, ...rest } = s.slide;
       return {
@@ -1247,9 +1262,12 @@ export function hubLadder(
       };
     }
     const missing = [...kept[k]!.missing];
+    const cut = sel?.cut.get(k);
+    for (const m of cut?.kinds ?? []) if (!missing.includes(m)) missing.push(m);
     for (const m of r.missing) if (!missing.includes(m)) missing.push(m);
     const changed = r.tail || r.dropped > 0 || r.plain > 0;
-    const why: HubWhy | null = r.tail ? 'presentation' : changed ? 'slide' : kept[k]!.geoms ? 'geoms' : null;
+    const why: HubWhy | null =
+      r.tail || cut ? 'presentation' : changed ? 'slide' : kept[k]!.geoms ? 'geoms' : null;
     return {
       stored: r.bytes,
       hub: missing.length && s.class === 'native' ? 'hybrid' : s.class,
@@ -1257,6 +1275,7 @@ export function hubLadder(
       level: r.level,
       missing,
       slide,
+      ...(sel?.kept.has(k) ? { whole: true as const } : {}),
     };
   });
 }
@@ -1284,6 +1303,7 @@ export function hubStoredSlide(slide: Slide, hub: HubClass | Pick<HubStored, 'sl
 export function withHubBudget(
   deck: NativeDeck,
   _hub?: readonly (HubClass | Pick<HubStored, 'slide'>)[],
+  opts: { whole?: boolean } = {},
 ): NativeDeck {
   const geoms = deck.geoms ?? [];
   const ladder = (pick: (s: NativeSlide) => Slide | undefined, cls: (s: NativeSlide) => SlideClass) => {
@@ -1296,6 +1316,8 @@ export function withHubBudget(
         index: deck.slides[k]!.index,
       })),
       geoms,
+      PPTX_LIMITS.geomFileBytes,
+      opts.whole === true,
     );
     return new Map(at.map(([k], i) => [k, out[i]!.slide]));
   };

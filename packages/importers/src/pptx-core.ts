@@ -143,10 +143,30 @@ export type WholeCut = { slide: Slide; kinds: MissingKind[] };
  * the census models what the hub does). Pure.
  */
 export function selectWhole(
-  _items: readonly WholeItem[],
-  _heavyReserve = 0,
+  items: readonly WholeItem[],
+  heavyReserve = 0,
 ): { kept: Set<number>; cut: Map<number, WholeCut> } {
-  return { kept: new Set(), cut: new Map() };
+  const kept = new Set<number>();
+  const cut = new Map<number, WholeCut>();
+  const max = SIZE_BUDGETS.slideMax;
+  let used = Number.isFinite(heavyReserve) && heavyReserve > 0 ? heavyReserve : 0;
+  items.forEach((it, i) => {
+    if (it.picture) return;
+    const heavy = easyPlan(it.rec, {
+      isMotion: (id) => id.startsWith(CLIP_PREFIX),
+      size: (s) => storedWithin(s, max),
+    });
+    if (!heavy.record) return;
+    const bytes = quickBytes(it.rec);
+    if (used + bytes <= WHOLE_SHARE_BYTES) {
+      kept.add(i);
+      used += bytes;
+      return;
+    }
+    const t = trimToCounts(it.slide);
+    if (t.left) cut.set(i, { slide: t.slide, kinds: t.kinds });
+  });
+  return { kept, cut };
 }
 
 /**
@@ -755,39 +775,30 @@ export class ImportCore {
    * report line. A slide that has nothing past the counts stays as the ladder would have it (it is not "cut").
    */
   private keepWhole(drafts: Draft[]): Set<number> {
-    const kept = new Set<number>();
-    const cut: number[] = [];
-    const max = SIZE_BUDGETS.slideMax;
-    let used = this.heavyReserve;
-    drafts.forEach((d, i) => {
-      if (d.cls === 'picture') return;
-      const rec = record(d, DIGEST_STANDIN, this.lo);
-      const heavy = easyPlan(rec, {
-        isMotion: (id) => id.startsWith(CLIP_PREFIX),
-        size: (s) => storedWithin(s, max),
-      });
-      if (!heavy.record) return;
-      const bytes = quickBytes(rec);
-      if (used + bytes <= WHOLE_SHARE_BYTES) {
-        kept.add(i);
-        used += bytes;
-        return;
-      }
-      const t = trimToCounts(d.slide);
-      if (!t.left) return;
-      d.slide = t.slide;
-      for (const k of t.kinds) d.dropped = addMissing(d.dropped, k);
+    const { kept, cut } = selectWhole(
+      drafts.map((d) => ({
+        picture: d.cls === 'picture',
+        slide: d.slide,
+        rec: d.cls === 'picture' ? d.slide : record(d, DIGEST_STANDIN, this.lo),
+      })),
+      this.heavyReserve,
+    );
+    const cutAt: number[] = [];
+    for (const [i, c] of cut) {
+      const d = drafts[i]!;
+      d.slide = c.slide;
+      for (const k of c.kinds) d.dropped = addMissing(d.dropped, k);
       if (d.cls === 'native') d.cls = 'hybrid';
       addNote(
         d.notes,
         `past the ${WHOLE_SHARE_BYTES / 1024 ** 2} MiB of detailed slides a presentation keeps whole: only its first ${MAX_DRAWN_OBJECTS} shapes and ${MAX_DRAWN_PICTURES} pictures are kept`,
       );
-      cut.push(d.ref.index + 1);
-    });
-    if (cut.length)
+      cutAt.push(d.ref.index + 1);
+    }
+    if (cutAt.length)
       this.warn(
         'budget',
-        `${cut.length} slide${cut.length === 1 ? '' : 's'} past the ${WHOLE_SHARE_BYTES / 1024 ** 2} MiB of detailed slides a presentation keeps whole show only ${cut.length === 1 ? 'its' : 'their'} first ${MAX_DRAWN_OBJECTS} shapes and ${MAX_DRAWN_PICTURES} pictures`,
+        `${cutAt.length} slide${cutAt.length === 1 ? '' : 's'} past the ${WHOLE_SHARE_BYTES / 1024 ** 2} MiB of detailed slides a presentation keeps whole show only ${cutAt.length === 1 ? 'its' : 'their'} first ${MAX_DRAWN_OBJECTS} shapes and ${MAX_DRAWN_PICTURES} pictures`,
       );
     return kept;
   }

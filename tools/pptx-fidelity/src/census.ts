@@ -31,8 +31,10 @@
  *   `planned` (its planned objects), `anchorKinds` (why not: clip, background, bound), `bgOwn` (its background is a picture), `pictures` (distinct
  *   pictures planned), `heavy` (over 200 objects, 16 pictures or 64 KiB) and `wouldCut`, `wouldCutPictures` (what the
  *   plan without the option leaves out: the guard's and the picture limit's), each only when not 0 or false but
- *   `wholeKept`; the deck has `heavyBytes` (the bytes of its heavy slides). The hub columns (`stored`, `hub`, ...)
- *   model today's ladder until `hubLadder` takes the whole option (import-whole step 8a);
+ *   `wholeKept`; the deck has `heavyBytes` (the bytes of its heavy slides). The hub columns (`stored`, `hub`, `level`,
+ *   `missing`) model the ladder with the whole option (`hubLadder`, through the import core's own `selectWhole`: the
+ *   heavy slides kept whole within the 2 MiB share, the rest cut to the screens' counts) and `hubWhole` says which
+ *   slides it keeps whole;
  * - `geomFiles`, `geomBytes`: the deck's geometry files; `maxObjects`: the most objects one shown slide has;
  * - `error` when the converter could not read the deck;
  * - `unreadable: 'missing target'` (and no slides) for a link whose deck is gone: listed, never an error.
@@ -102,6 +104,7 @@ export function hubClasses(
     level: h.level,
     missing: h.missing,
     slide: h.slide,
+    ...(h.whole ? { hubWhole: true as const } : {}),
   }));
 }
 
@@ -265,7 +268,7 @@ const WHOLE_HEAVY = { objects: 200, pictures: 16, bytes: 64 * 1024 } as const;
 export function censusRow(
   deck: NativeDeck,
   head: { folder: string; deck: number; name: string; ms: number },
-  opts: { noLibreOffice?: boolean } = {},
+  opts: { noLibreOffice?: boolean; whole?: boolean | { anchors: 'own' | 'motion' } } = {},
 ): Record<string, unknown> {
   // `--no-libreoffice`: each slide as a hub without LibreOffice emits it (`EmitOptions.libreoffice: false`).
   const noLo = opts.noLibreOffice === true;
@@ -275,7 +278,12 @@ export function censusRow(
     notes: s.notes,
     index: s.index,
   }));
-  const hub = hubClasses(input, deck.geoms ?? []);
+  const hub = hubClasses(
+    input,
+    deck.geoms ?? [],
+    undefined,
+    !!opts.whole || deck.slides.some((s) => s.whole),
+  );
   // The deck's geometry files, read as a drawer reads them, for its legacy columns.
   clearGeomFiles();
   for (const g of deck.geoms ?? []) putGeomFile(g.id, g.file);
@@ -306,6 +314,7 @@ export function censusRow(
         hubWhy: h.hubWhy,
         ...(h.level !== 'full' ? { level: h.level } : {}),
         ...(missing.length ? { missing } : {}),
+        ...(h.hubWhole ? { hubWhole: true } : {}),
         ...(s.whole ? wholeColumns(s.whole, x.slide, JSON.stringify(x.slide).length) : {}),
       };
     });

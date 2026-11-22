@@ -60,6 +60,10 @@
  *               `perSlide.missing`), each slide as the hub stores it (a picture slide: no objects)
  * --hub-budget  draw every slide as the hub stores it once its budgets ran (`native.ts` `withHubBudget`:
  *               M9's budget ladder, re-gridded, simplified or minimal, never a picture for its size)
+ * --whole       (Q24.b, implies --hub-budget) read the decks with `ParseOptions.wholeSlides` and draw each slide as a
+ *               hub that keeps heavy slides whole stores it: all its objects, the share of 2 MiB of such slides kept
+ *               whole and the rest cut to the screens' counts (`selectWhole`); `--whole-anchors own|motion` (default
+ *               motion, Q25.c.b: only a video keeps a slide out)
  * --frames      draw a slide past a count (more than 200 objects or 16 pictures) or past one frame of unit area
  *               as an output does since the underlay frame (a direct part over the frame made beforehand,
  *               renderer `frame.ts`), not cut at 200 objects: the timings are then the copy plus the direct part,
@@ -276,6 +280,9 @@ type NativeOpts = {
   before?: 'hub' | 'paste';
   noLibreOffice: boolean;
   hubBudget: boolean;
+  /** `--whole`: the converter's whole option and the ladder's whole model (`wholeAnchors`: `--whole-anchors`). */
+  whole?: boolean;
+  wholeAnchors?: 'own' | 'motion';
   /** `--frames`: draw a slide the underlay frame splits as an output does (`native-page.ts` `RenderJob.frames`). */
   frames?: boolean;
   /** `--ask-hub`: slides (1-based) the hub is asked for whatever it stores (`askedSet`'s `extra`). */
@@ -308,15 +315,17 @@ async function nativeColumn(
   const converted = await convertDeckIsolated(deck, nd, {
     loCompat: opts.loCompat,
     noLibreOffice: opts.noLibreOffice,
+    ...(opts.whole ? { whole: { anchors: opts.wholeAnchors ?? 'motion' } } : {}),
   });
   const notes = [...converted.notes];
   // Each slide's class once the hub's budgets ran (`census.ts`), by deck index, on the slides as emitted.
-  const hub = hubClasses(converted.slides, converted.geoms ?? []);
+  const hub = hubClasses(converted.slides, converted.geoms ?? [], undefined, opts.whole === true);
   const hubOf = new Map(converted.slides.map((s, k) => [s.index, hub[k]!]));
   const conv = opts.hubBudget
     ? withHubBudget(
         converted,
         hub.map((h) => h.hub),
+        { whole: opts.whole === true },
       )
     : converted;
   // Without LibreOffice (M9): what the hub stores of each slide emitted that way, drawn where it differs. A
@@ -570,6 +579,7 @@ async function main(): Promise<void> {
         ? { noLibreOffice: true, noLoMean: mean(counted.map((s) => s.noLoSsim ?? s.nativeSsim!)) }
         : {}),
       ...(nativeOn && a.hubBudget ? { hubBudget: true } : {}),
+      ...(nativeOn && a.whole ? { whole: true, wholeAnchors: a.wholeAnchors ?? 'motion' } : {}),
       ...(nativeOn && a.frames ? { frames: true } : {}),
       ...(hubBefore || hubNoLo
         ? { askedHubs: [hubBefore?.info(), hubNoLo?.info()].filter((h) => h !== undefined) }
@@ -673,6 +683,7 @@ async function main(): Promise<void> {
             ...(a.before ? { before: a.before } : {}),
             noLibreOffice: a.noLibreOffice,
             hubBudget: a.hubBudget,
+            ...(a.whole ? { whole: true, wholeAnchors: a.wholeAnchors ?? ('motion' as const) } : {}),
             ...(a.frames ? { frames: true } : {}),
             ...(askHub ? { askHub } : {}),
             ...(askHubNoLo ? { askHubNoLo } : {}),
