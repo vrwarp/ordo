@@ -16,6 +16,7 @@
     "@ordo/pptx-render": "workspace:*",
     "@ordo/pptx-scene": "workspace:*",
     "@ordo/protocol": "workspace:*",
+    "@ordo/renderer": "workspace:*",
     "@fastify/cookie": "^11.1.5",
     "@fastify/multipart": "^10.1.7",
     "@fastify/static": "^10.1.8",
