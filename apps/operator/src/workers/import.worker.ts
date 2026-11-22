@@ -43,6 +43,7 @@ self.onmessage = async (ev: MessageEvent<ImportIn>) => {
       {
         extendBackgrounds: m.extendBackgrounds,
         libreoffice: m.libreoffice,
+        ...(m.wholeSlides === true ? { wholeSlides: true } : {}),
         loadFaces: (parts) => loadDeckFaces(parts, m.faces, fetchFace),
       },
       (pct) => post({ t: 'progress', pct }),

@@ -15,6 +15,7 @@ import {
   type Slide,
   type SlideObject,
 } from '@ordo/domain';
+import { keptWholeLine, wholeSlidesFor } from '@ordo/importers/pptx-core.ts';
 import type { HubCapabilities, Job } from '@ordo/protocol';
 import { metricCompatible } from '@ordo/renderer';
 
@@ -84,8 +85,19 @@ export function hubHasLibreOffice(caps: HubCapabilities | undefined): boolean {
  * answer (no capabilities yet, a hub from before) is off; a hub that answers otherwise refuses the scene and parses
  * the deck itself (D7).
  */
-export function keepsSlidesWhole(_caps: HubCapabilities | undefined): boolean {
-  return false;
+export function keepsSlidesWhole(caps: HubCapabilities | undefined): boolean {
+  if (!caps) return false;
+  // store-2's `HubCapabilities.prerender.state`, read without trusting its shape: only the string 'on' is a yes.
+  const state = (caps as { prerender?: { state?: unknown } }).prerender?.state;
+  return wholeSlidesFor({ prerender: state === 'on', lo: hubHasLibreOffice(caps) });
+}
+
+/**
+ * The line of the import card and the report for the slides kept whole (design 29 W1, W4; W2 for a device that cannot make
+ * their pictures): static text, empty for none (`keptWholeLine`).
+ */
+export function wholeLine(n: number | undefined, deviceCanBake?: boolean): string {
+  return keptWholeLine(n ?? 0, deviceCanBake === false ? { deviceCanBake: false } : {});
 }
 
 /**
@@ -232,6 +244,7 @@ export function readNativeResult(result: unknown): NativeImportResult | undefine
     notes: texts(result.notes, MAX_NOTES, 300),
     ...(result.missing !== undefined ? { missing: count(result.missing) } : {}),
     ...(typeof result.libreoffice === 'boolean' ? { libreoffice: result.libreoffice } : {}),
+    ...(result.whole !== undefined ? { whole: count(result.whole) } : {}),
   };
 }
 
@@ -589,11 +602,13 @@ export function importReport(
   let pending = 0;
   let failed = 0;
   let missing = 0;
+  let whole = 0;
   let hidden = 0;
   let edited = 0;
   for (const sec of p.sections)
     for (const sl of sec.slides) {
       if (sl.hidden) hidden++;
+      if (sl.prerender) whole++;
       if (sl.imported && !sl.pptx) pages++;
       if (sl.pptx?.pending) pending++;
       if (sl.pptx?.failed) failed++;
@@ -619,6 +634,7 @@ export function importReport(
     pending,
     failed,
     missing,
+    ...(whole ? { whole } : {}),
     hidden,
     edited,
     ...(src.renderer ? { renderer: src.renderer } : {}),

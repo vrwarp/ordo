@@ -12,6 +12,7 @@ import {
   missingSlideFonts,
   plural,
   treatAsSlides,
+  wholeLine,
 } from '../../lib/pptxImport.ts';
 import { planSummary, reimportPlan } from '../../lib/pptxReimport.ts';
 import { useLibrary } from '../../state/library.ts';
@@ -153,6 +154,7 @@ export function PptxReportView(props: {
           not editable. Re-import from PowerPoint to make the slides editable.
         </span>
       )}
+      {r.whole ? <span data-whole>{wholeLine(r.whole, props.deviceCanBake)}</span> : null}
       {r.native && r.pages > 0 && (
         <span>
           {plural(r.pages, 'picture slide')} from an earlier import: a re-import makes them editable.

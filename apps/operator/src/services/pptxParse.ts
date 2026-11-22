@@ -164,6 +164,7 @@ export async function clientScene(
       file: r.file,
       extendBackgrounds: r.extendBackgrounds,
       libreoffice: r.libreoffice,
+      wholeSlides: r.wholeSlides === true,
       faces: faceFiles(r.fonts),
     };
     try {
