@@ -661,6 +661,24 @@ slide as this job stores it. The job (`geoms.ts`):
   no metafile conversion and lists `EmittedSlide.missing` and `artText` instead.
 <!-- /m9:conv-seams -->
 
+<!-- import-whole:begin -->
+## Q24.b (sub-wave 3, import-whole): heavy slides kept whole
+
+- `CONVERTER_VERSION` is 3 since Q24.b (the line above is the version-2 generation's): the converter can keep a slide whole
+  (`ParseOptions.wholeSlides`, the pool task's `SceneTaskInput.wholeSlides`), and the import writes its pre-render record.
+- The job decides ONCE, right after its tools are known (`steps`), `wholeSlidesFor({ prerender: cfg.prerender.on, lo })`
+  (`prerenderOn` in `shared.ts` reads store-2's `HubConfig.prerender`, never the domain constant) and uses it for the pool's batches
+  (`wholeSlides: true`, only when on), the check of a browser scene (`ClientSceneTaskInput.wholeSlides`), the import core
+  (`ImportCore.whole`) and the result (`PptxNativeResult.whole`, only when on).
+- A browser scene records `wholeSlides: true` only when parsed for it; `checkClientScene` refuses one parsed for the other answer
+  ('parsed with another whole-slide option', `WHOLE_REFUSAL`), both ways, after the LibreOffice check, and the hub parses the deck
+  itself. The pool's `pptx-client-scene` input and `pptx-scene` batches carry the key only when it is on (the `libreoffice` pattern).
+- Re-import (`mergeReimport`'s `rebuild`) and the LibreOffice follow-up (`patchSlide`'s `record`) plan the record of the slide
+  they write (`planRecord`) when `FreshDeck.keepsWhole` / `prerenderOn(cfg)`; `recordOptions` and `mediaMotion` (`shared.ts`) give
+  `isMotion` (clips of the import, else the media row's `kind === 'video'`; unknown is an anchor). `keptHeavyBytes` is the
+  re-import's `heavyReserve`. A queued follow-up with a version-2 payload finishes (no version gate).
+<!-- import-whole:end -->
+
 ## Not in this wave
 
 Waiting for M2's second wave to merge: rich text emission (runs and paragraphs) from the converter; bundled

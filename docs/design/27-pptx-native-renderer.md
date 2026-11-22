@@ -547,6 +547,15 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
 | Library snapshot  | its size is reported in hub health; a test keeps a year of weekly 17-slide sermon decks under 6 MB. A summary-only snapshot (bodies fetched on open) is the follow-up if a venue passes 32 MB; it is not part of this design.                             | health, test                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Revisions         | unchanged policy (50 or 30 days); a 1 MB presentation edited often costs ≤ 50 MB, noted in design/12                                                                                                                                                      | docs                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
+<!-- import-whole:begin 3.4 -->
+**Q24.b (sub-wave 3, import-whole): a slide kept whole.** A heavy slide in which nothing plays or steps is stored whole
+instead of being simplified to fit 64 KB: level `full`, or `grid` past 64 KB (`wholeLevel`), at most 1,000 objects
+(`WHOLE_OBJECTS_MAX`, the INLINE bound, Q54; a slide planned past it follows the ladder above), within a 2 MiB share of such
+slides per presentation (`WHOLE_SHARE_BYTES`, Q28.a), the rest cut to the screens' counts. Its bytes join the reserve of the
+presentation's plan and are left out of the 6 MiB mark that starts the tail, so the hard 8 MiB bound still holds. The slide
+carries a pre-render record (design/29 §1.1, §1.9).
+<!-- import-whole:end 3.4 -->
+
 As built in M3 (`packages/domain/src/size.ts`):
 - `planImportSizes(sizes, compact, reserve)` keeps 256 KiB of the 8 MiB for the presentation's own fields, sections, arrangement and `source.log`, and returns the reason per compact slide ('slide' over 64 KB, 'presentation' for the tail) and the tail's first slide: the tail is contiguous, "slide n and later". `compactSlide` is the version-1 compact form (no objects, `pending`, the text in `artText`); `compactSlideBytes` adds version 2's page picture and text boxes, so a compact slide counts its text twice. A 2,000-slide deck of 300-character slides keeps about 200 editable slides that way; if version 2 dropped `artText` once aligned text boxes carry the text, it would keep about 800.
 - `previewSlice` also sends the slide after the previewed one, for the next-slide band. The operator refuses a preview over 15 MiB, warns on save above 8 MiB and refuses above 32 MiB.
@@ -677,6 +686,14 @@ As built in M3 (`packages/domain/src/size.ts`):
 - plain `{}` maps keyed by deck strings.
 
 ## 5. Classification, fallback and LibreOffice
+
+<!-- import-whole:begin 5 -->
+_Since sub-wave 3 (Q24.b, Q27.a):_ on a hub with the whole-slide switch (`wholeSlidesFor`), the guard's left-outs and LibreOffice's
+page for a slide over 64 KB do not apply to a slide kept whole: the slide stays ordo's own editable shapes with their pre-render
+picture, on a hub with LibreOffice as on one without (the constant `WHOLE_WITH_LIBREOFFICE`; Q27.b, false, is today's plan for a
+hub that has LibreOffice). A slide the rule does not keep whole (an anchor, more than 1,000 planned objects, past the share) is
+classified and drawn as before.
+<!-- import-whole:end 5 -->
 
 **Element support**
 - **Residual:**
@@ -3312,6 +3329,13 @@ be measured):
   `APP_VERSION` to 0.10.0 as its last commit, so an earlier build's operator is sent away ('bye version') and
   the cost reaches nobody after it. Whether the constant moves stays the wave-end decision, now with
   pre-rendering (design/29 §1.11 plans 3); this bullet is its input.
+- **`CONVERTER_VERSION` is 3 from sub-wave 3** (import-whole, Q24.b; `version.ts`). What the converter does differently is the
+  whole-slide rule behind the new option `ParseOptions.wholeSlides` (a slide kept whole is planned without the guard and the
+  picture limit, `BudgetPlan.whole`); without the option the plan is byte for byte the version-2 one (pinned by recorded plans).
+  The bump marks the generation that can write a pre-render record: a version-2 scene is refused ('parsed by another converter
+  version'), a stored version-2 slide is rebuilt by a Re-import (the way old decks get whole slides), a queued follow-up written
+  at version 2 still finishes. A scene also says whether it was parsed whole (`wholeSlides: true`) and a hub uses it only when its
+  own answer is the same ('parsed with another whole-slide option').
 <!-- /r2b:tables-form -->
 
 <!-- r2b:tables-cells -->

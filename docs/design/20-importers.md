@@ -207,6 +207,14 @@ presentation while it is live-locked (it re-queues itself with backoff, 30 s dou
 
 ### Native import (editable slides)
 
+<!-- import-whole:begin 20 -->
+_Heavy slides kept whole (Q24.b):_ with the hub's pre-render switch on, the import core keeps a heavy slide whole (no guard
+cut, no simplification, no LibreOffice page for its size) and writes its record (`planRecord`: `{ why, live: [] }`); the report
+says how many ("N slides are very detailed and were kept whole; the screens show a picture of each, made on this computer").
+`ImportCoreOptions.whole` is set by the caller (the hub's job once its tools are known; the browser parse from the scene's
+`wholeSlides`), so the same deck is planned the same on both paths.
+<!-- import-whole:end 20 -->
+
 The native import ([design/27](27-pptx-native-renderer.md), M3) turns a deck into ordinary, editable ordo
 objects instead of page pictures. Its steps are one **import core** in `@ordo/importers`, which runs in Node,
 browsers and Web Workers: the scan (`pptx-scan.ts`: limits, `scanDeck`, `clipParts` with its candidate bound,
