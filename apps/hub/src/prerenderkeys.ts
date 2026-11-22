@@ -102,10 +102,13 @@ export class PrerenderKeys {
     const out: PrerenderKeyRow[] = [];
     const todo: Work[] = [];
     let prev: Map<string, ReturnType<Library['prerenderIndex']['keysAt']>> | undefined;
+    // The library cannot change between the slides of this loop (nothing in it awaits), so a picture that many slides
+    // show is read once: heavy slides share their pictures, and each read is a statement and a parsed row.
+    const files = new Map<string, string | null>();
     for (const sec of p.sections ?? [])
       for (const slide of sec.slides) {
         if (!slide.prerender) continue;
-        const w = this.plan(slide);
+        const w = this.plan(slide, files);
         if (!w) continue;
         prev ??= this.previousRows(p.id);
         const hit = prev.get(slide.id)?.find((r) => r.sig === w.sig);
@@ -143,7 +146,7 @@ export class PrerenderKeys {
   }
 
   /** What one slide's key is made of: its head, the files of its pictures, its font chain, and the sig. */
-  private plan(slide: Slide): Work | undefined {
+  private plan(slide: Slide, files?: Map<string, string | null>): Work | undefined {
     const pre = slide.prerender;
     if (!pre) return undefined;
     let head: HeadRow | undefined;
@@ -156,8 +159,13 @@ export class PrerenderKeys {
     const ids = new Set<string>([...uses.media, ...drawnMediaIds(slide), ...slideMediaIds(slide)]);
     const media: Record<string, string | null> = {};
     for (const id of [...ids].sort()) {
-      const m = this.lib.media.get(id);
-      media[id] = (m && stillFile(m)?.hash) || null;
+      let hash = files?.get(id);
+      if (hash === undefined) {
+        const m = this.lib.media.get(id);
+        hash = (m && stillFile(m)?.hash) || null;
+        files?.set(id, hash);
+      }
+      media[id] = hash;
     }
     const chain = new Set([...uses.fonts.map(lower), ...FALLBACK_FAMILIES]);
     const faces = this.faces()
