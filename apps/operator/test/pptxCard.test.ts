@@ -32,6 +32,13 @@ import {
   showPicture,
   slideEdited,
 } from '../src/lib/pptxImport.ts';
+import {
+  holdsRaster,
+  RASTER_PICTURE_CARD,
+  RASTER_REIMPORT_LINE,
+  RASTER_RESET_CONFIRM,
+  RASTER_RESET_HINT,
+} from '../src/lib/pptxRaster.ts';
 import { planSummary, readReimportResult, reimportMessage } from '../src/lib/pptxReimport.ts';
 import { useToasts } from '../src/state/toasts.ts';
 import { setSlideShows } from '../src/views/editor/actions.ts';
@@ -236,6 +243,34 @@ describe('the PowerPoint card', () => {
     expect(
       button(card(imported([]), { edited: true, readOnly: true }), 'Reset slide from PowerPoint'),
     ).toContain('disabled');
+  });
+
+  it("enables 'Reset slide from PowerPoint' for a slide that holds a picture of shapes, with its own hint (Q57.d)", () => {
+    const withPicture = {
+      ...imported([]),
+      objects: [
+        {
+          id: 'pic',
+          type: 'image',
+          box: { x: 0, y: 0, w: 100, h: 50, rotation: 0 },
+          mediaId: 'm',
+          fit: 'stretch',
+          opacity: 1,
+          radius: 0,
+          locked: true,
+          origin: { src: 'pptx', role: 'raster' },
+        },
+      ],
+    } as unknown as Slide;
+    const c = card(withPicture);
+    expect(button(c, 'Reset slide from PowerPoint')).not.toContain('disabled');
+    expect(text(c)).toContain('Brings the shapes back as shapes. Shapes too large for ordo stay boxes.');
+    expect(text(c)).not.toContain('Nothing to reset');
+    expect(holdsRaster(withPicture)).toBe(true);
+    expect(holdsRaster(imported([]))).toBe(false);
+    // the words are plain: no jargon of the machinery
+    for (const w of [RASTER_RESET_HINT, RASTER_RESET_CONFIRM, RASTER_PICTURE_CARD, RASTER_REIMPORT_LINE])
+      expect(w).not.toMatch(/raster|recipe|converter|put back|chromium|poppler/i);
   });
 
   it('shows a reset running and failing', () => {
