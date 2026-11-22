@@ -736,7 +736,7 @@ warning for a value it does not understand.
 <!-- import-whole:begin config -->
 With `ORDO_PRERENDER` on, a hub that has LibreOffice still imports a heavy PowerPoint slide as before (the guard's cut, and
 LibreOffice's art and page for what ordo cuts): heavy slides are kept whole only on a hub without LibreOffice. That is the
-owner's question Q27 at its default b, which the main session chose while the owner has not answered; the constant
+owner's question Q27 at its default b, which was chosen while the owner has not answered; the constant
 `WHOLE_WITH_LIBREOFFICE` in `packages/importers/src/pptx-core.ts` is false (the operator's pinned copy is equal, a test holds
 them so) and true would keep them whole on such a hub too (Q27.a). With the switch off nothing of this applies.
 <!-- import-whole:end config -->

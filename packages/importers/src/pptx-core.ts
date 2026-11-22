@@ -104,7 +104,7 @@ const COMPACT_TEXT_CHARS = 200;
 const WHITE = { r: 255, g: 255, b: 255, a: 1 };
 
 /**
- * Q27 (default b, the main session's choice while the owner has not answered): a hub WITH LibreOffice follows today's
+ * Q27 (default b, chosen while the owner has not answered): a hub WITH LibreOffice follows today's
  * plan exactly (the guard's cut and LibreOffice's art and page for what ordo cuts), and slides are kept whole only on
  * hubs without LibreOffice. True (Q27.a): such a hub keeps a heavy slide whole as ordo's own editable shapes and shows a
  * picture instead (`wholeSlidesFor`). It matters only when the hub's pre-render switch is on.

@@ -6,7 +6,8 @@ import { hasFileForm, staleStandIns } from '@ordo/domain/slidefile.ts';
  * picture and the key come from the FILE, so a change of that simple copy beside the file would show stale content on
  * the screens. The editor therefore never changes it: `change()` refuses such a change and `save()` refuses to send one
  * (which covers undo, redo, taking over the hub's own saves and merging someone else's, none of which go through
- * `change()`); the hub's `PUT /presentations/:id` refuses it too. What a volunteer CAN change on such a slide is what is
+ * `change()`); `savePresentationById` (the unsaved list's Save and Save & Go live for a presentation that is not the
+ * open one) runs the same guard before its PUT; the hub's `PUT /presentations/:id` refuses it too. What a volunteer CAN change on such a slide is what is
  * not a shape: its notes, timing, transition, hidden flag, MIDI cues, sound and bottom-third words. The pure check is
  * `staleStandIns` (@ordo/domain slidefile.ts); this file is the owner's words and the two calls.
  */

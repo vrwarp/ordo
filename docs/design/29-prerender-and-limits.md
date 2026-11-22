@@ -752,7 +752,7 @@ demand.
 <!-- import-whole:begin 1.9 -->
 **As built in sub-wave 3 (import-whole, Q24.b).** The first release stops at the plan, not at the picture: a heavy slide
 in which nothing plays or steps is KEPT WHOLE as ordo's own editable shapes and gets a pre-render record, on a hub without
-LibreOffice (Q27.b, the default, chosen by the main session while the owner has not answered: `WHOLE_WITH_LIBREOFFICE` is
+LibreOffice (Q27.b, the default, chosen while the owner has not answered: `WHOLE_WITH_LIBREOFFICE` is
 false, so a hub that has LibreOffice follows today's plan exactly, the guard's cut and LibreOffice's art and page; true is
 Q27.a, which keeps heavy slides whole there too; it matters only when the hub's switch is on). `wholeSlidesFor({ prerender, lo })` (`packages/importers/src/pptx-core.ts`) is the one answer the hub's job,
 the operator's parse, the harness and the demo ask; the hub's `prerender` is `HubConfig.prerender.on` (`ORDO_PRERENDER`,
