@@ -26,6 +26,7 @@ import {
   LivePrepareReq,
   type LivePrepareRes,
   LiveSummaryRes,
+  type HubCapabilities,
   type ManifestRes,
   type OutputConfigRes,
   type OutputHealthEntry,
@@ -544,6 +545,8 @@ export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
     uptimeS: Math.round(process.uptime()),
     seq: live.state.seq,
     mode: live.state.mode,
+    // Whether the hub makes use of pictures of heavy slides ('on' | 'off': a state, no tool and no version).
+    prerender: ctx.cfg.prerender.on ? 'on' : 'off',
     ...ctx.healthExtra?.(),
   }));
 }
@@ -615,6 +618,14 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
    * size it declares (0 when unknown).
    */
   const room = (req: FastifyRequest) => hub.disk.assertRoom(Number(req.headers['content-length']) || 0);
+  /**
+   * `GET /capabilities` and the diagnostics file: the tools' answer plus the hub's switch for pictures of heavy slides
+   * (ORDO_PRERENDER, config: `state` is what operators are told, `setting` what was set).
+   */
+  const capabilitiesAnswer = (): HubCapabilities => ({
+    ...hub.imports.tools.capabilities(),
+    prerender: { state: hub.cfg.prerender.on ? 'on' : 'off', setting: hub.cfg.prerender.setting },
+  });
   /** Heavy imports (zip inflate, LibreOffice, ffmpeg) are refused while a playlist is live. */
   const assertNotLive = () => {
     if (live.mode() === 'live')
@@ -1268,7 +1279,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   // works. Not in the public /health: no tool versions to the world.
   route('GET', '/capabilities', 'edit', 'full', async () => {
     await hub.imports.tools.settled();
-    return hub.imports.tools.capabilities();
+    return capabilitiesAnswer();
   });
 
   // ---------------- jobs ----------------
@@ -1380,6 +1391,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       const out = await hub.prerenders.put(id!, KEY_RE.test(key!) ? key! : '', Number(q.size), body, {
         role: sessionRole(req.principal) ?? 'edit',
         madeBy,
+        // The optional kind of the picture (hook H4): 'slide' is the only one yet; any other value is refused 400.
+        kind: typeof q.kind === 'string' ? q.kind : undefined,
       });
       return reply.code(out.status).send(out.body);
     } catch (e) {
@@ -1419,7 +1432,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     zip.file('journal.json', JSON.stringify(d?.journal ?? 'the live process did not answer', null, 1));
     zip.file('settings.json', JSON.stringify(s, null, 1));
     zip.file('health.json', JSON.stringify(d?.health ?? {}, null, 1));
-    zip.file('capabilities.json', JSON.stringify(hub.imports.tools.capabilities(), null, 1));
+    zip.file('capabilities.json', JSON.stringify(capabilitiesAnswer(), null, 1));
     zip.file(
       'hub.json',
       JSON.stringify(

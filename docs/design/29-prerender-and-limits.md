@@ -319,6 +319,21 @@ recompute, never a wrong key), so a presentation PUT adds one pool call only whe
 service pauses all but its own keys: 503 `paused_during_service`), and the goLive bundle lists them
 (`slideHeads`, `prerenders`, `prerenderKeys`, design/12 "HTTP API").
 
+<!-- store-2:costs -->
+_What the store costs a save and a listing, as measured in sub-wave 3 (store-2)._ The same build was started with
+`ORDO_PRERENDER=off` and `on` and their saves alternated one by one (108 per arm and case, on a shared machine: read the
+medians; two `off` hubs measured against each other move a median by up to 20 ms and a p95 of differences by up to 100). A
+save with heavy slides stored whole inline stringifies and hashes each of them once, 3.2-3.4 ms a MB (6 ms for six slides
+of 300 KB, 23 ms for sixty of 121 KB); on minus off the median is +9 ms for six unchanged 300 KB slides and +33 ms for sixty
+unchanged 121 KB slides, and a changed heavy slide adds one pool task (about 10 ms of pool time for 290 KB) and measures +31 ms
+and +72 ms (sub-wave 2: +112 ms). That floor is above the +5 ms the release asked for unchanged slides, which is not met; the only
+exact cheaper test needs the stored revision parsed, which costs more (11 ms and 32 ms). The picture files a save names are
+read once per picture, not once per slide (a third of that work at forty pictures a slide). The picture listing answers 20
+keys in 2 ms, 1,000 in 11 ms (p95 16) and 5,000 in 62 ms (p95 86; the three statements replaced a join that took 70 and 102): the
+answer is 1.1 MB, 21 ms of the 62 are the presentation's budget line, not the listing, and the 20 ms target is met to 1,000 keys.
+
+<!-- /store-2:costs -->
+
 **Keys computed at save.** The pool computes each pre-rendered slide's key and stand-by id when a presentation is
 saved, into `prerender_keys(presentation_id, rev, slide_id, key, standby_id)`; a background job recomputes the rows
 a font or media change affects (never while live). The upload check, the goLive listing and the live process's
@@ -638,6 +653,20 @@ rest; each re-records the digest once, by the integrator (design/24); stale tabs
 one: the hub applies it through `LiveService.apply` for each accepted upload of the live service's keys
 (prerender-store, bake-worker), and every client reduces it from `live.delta`. `prerender.use` is an ordinary
 command of the operate role (outputs, Stage and edit sessions are refused as for every command).
+
+<!-- store-2:switch -->
+**As built in sub-wave 3 (the switch).** The one switch is the HUB's `ORDO_PRERENDER` (`auto` | `on` | `off`, read once at start by each
+hub process), told to every operator by `GET /capabilities` (`prerender.{ state, setting }`) and, publicly, by `GET /health`
+(`prerender`); the constant `PRERENDER_ON` is the default of `auto` and is read in the hub in one place, `prerenderConfig`
+(apps/hub/src/config.ts). The table: `auto` is `on` = the constant, `store` open; `on` is on, store open; `off` is off, store closed.
+`on` is what operators are told and what the Go-live picture line (W33) follows; `store` (the picture `PUT`, the keys at save and their
+jobs, and the picture rows and key set of a goLive) is closed ONLY by an explicit `off`. That is why `auto` is not 'closed while the
+constant is false': under auto before the release's switch commit the hub is exactly the 0.10.0 hub (store open, W33 off, operators
+told off), so nothing changes for anyone and no sub-wave 2 test changes meaning at the switch commit; the hub's test helpers pin
+that hub (`testPrerender`) whatever the constant becomes. `off` keeps whatever is stored (Q36.b) and the picture routes' listing, `DELETE` and
+`failed` keep answering. The 503 `prerender_off` and `bad_kind` are the contract the baker reads (`paused_during_service` is the
+one it retries; `prerender_off` is a stop).
+<!-- /store-2:switch -->
 
 **The one pre-render switch.** `PRERENDER_ON` (`packages/domain/src/prerender.ts`, false) is read by every
 pre-render path: the import plan (`prerender` in `M9_HELD_BACK`, tied to the switch by a test), the editor's

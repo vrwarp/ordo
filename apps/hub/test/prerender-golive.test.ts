@@ -106,8 +106,10 @@ describe('the library process bundle (GL1, GL2, GL3)', () => {
     );
     const b = await bundleOf(tp, s.playlistId);
     const files = Object.keys(b.files ?? {});
-    for (const h of [s.f.name, ...s.f.pages.head.pages, SHAPE_FILE, s.pictures[3840], s.pictures[1920]])
-      expect(files, h).toContain(h);
+    // CHANGED EXPECTATION (store-2 step 3b, SU6): the pages of the slide file are not listed while GOLIVE_SLIDE_PAGES is off
+    // (no screen reads one); `slideHeads` below still names them. Before: the pages were in `files`.
+    for (const h of [s.f.name, SHAPE_FILE, s.pictures[3840], s.pictures[1920]]) expect(files, h).toContain(h);
+    for (const page of s.f.pages.head.pages) expect(files, page).not.toContain(page);
     expect(files).not.toContain(s.pictures[640]);
     expect(b.files![s.f.name]).toMatchObject({ hash: s.f.name, mime: 'application/json' });
     expect(b.slideHeads).toEqual({ [s.f.name]: { pages: s.f.pages.head.pages } });
@@ -152,8 +154,9 @@ describe('the library process bundle (GL1, GL2, GL3)', () => {
     if (!out.ok) throw new Error(out.reason);
     const r = JSON.parse(dec.decode(out.buffer)) as ResolvedPlaylist;
     const listed = (r.geoms ?? []).map((g) => g.hash);
-    for (const h of [s.f.name, ...s.f.pages.head.pages, s.pictures[3840], s.pictures[1920]])
-      expect(listed, h).toContain(h);
+    // CHANGED EXPECTATION (SU6): no pages in the copy's geoms while GOLIVE_SLIDE_PAGES is off (they were listed before).
+    for (const h of [s.f.name, s.pictures[3840], s.pictures[1920]]) expect(listed, h).toContain(h);
+    for (const page of s.f.pages.head.pages) expect(listed, page).not.toContain(page);
     expect(r.prerenderKeys).toEqual([s.key]);
     expect(r.prerenders?.map((p) => [p.slideId, p.key, p.size, p.file]).sort()).toEqual(
       [
@@ -162,9 +165,10 @@ describe('the library process bundle (GL1, GL2, GL3)', () => {
       ].sort(),
     );
     expect((r.degraded ?? []).filter((d) => degradedKind(d.reason) === 'slideFile')).toEqual([]);
-    // a page the hub does not list: the slide's full copy is missing (the list, never the words)
+    // the head the hub does not list: the slide's full copy is missing (the list, never the words). CHANGED EXPECTATION (SU6): a
+    // missing PAGE is no longer noticed here while GOLIVE_SLIDE_PAGES is off (no screen reads a page); before, it said W40.
     const damaged: Bundle = { ...b, files: { ...b.files } };
-    delete damaged.files![s.f.pages.head.pages[0]!];
+    delete damaged.files![s.f.name];
     const bad = prepareGoLive({
       playlistId: s.playlistId,
       bundle: enc.encode(JSON.stringify(damaged)),
@@ -233,8 +237,9 @@ describe('the in-process source (GL5)', () => {
     const st = await op.json<{ state: { resolved: ResolvedPlaylist } }>('/live');
     const r = st.state.resolved;
     const listed = (r.geoms ?? []).map((g) => g.hash);
-    for (const h of [s.f.name, ...s.f.pages.head.pages, s.pictures[3840], s.pictures[1920]])
-      expect(listed, h).toContain(h);
+    // CHANGED EXPECTATION (SU6): no pages while GOLIVE_SLIDE_PAGES is off (they were listed before).
+    for (const h of [s.f.name, s.pictures[3840], s.pictures[1920]]) expect(listed, h).toContain(h);
+    for (const page of s.f.pages.head.pages) expect(listed, page).not.toContain(page);
     expect(listed).not.toContain(s.pictures[640]);
     expect(r.prerenderKeys).toEqual([s.key]);
     expect(r.prerenders).toHaveLength(2);

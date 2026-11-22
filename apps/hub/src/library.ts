@@ -17,6 +17,7 @@ import {
   Output,
   PhoneSettings,
   Playlist,
+  PRERENDER_LIMITS,
   Presentation,
   SurfaceSettings,
   Theme,
@@ -514,10 +515,14 @@ export class Library {
           const pre = s.prerender;
           if (!pre?.file) return s;
           const row = rowOf(pre.file.ref);
-          return {
-            ...s,
-            prerender: { ...pre, file: { ref: pre.file.ref, bytes: row.bytes }, uses: row.uses },
+          // The head row keeps the whole lists (up to HEAD_USES_MAX); the record keeps the first PRERENDER_LIMITS of
+          // each: a longer list fails `Slide.prerender`'s schema, whose `.catch` would drop the whole record, silently.
+          const uses = {
+            media: row.uses.media.slice(0, PRERENDER_LIMITS.media),
+            files: row.uses.files.slice(0, PRERENDER_LIMITS.files),
+            fonts: row.uses.fonts.slice(0, PRERENDER_LIMITS.fonts),
           };
+          return { ...s, prerender: { ...pre, file: { ref: pre.file.ref, bytes: row.bytes }, uses } };
         }),
       })),
     };

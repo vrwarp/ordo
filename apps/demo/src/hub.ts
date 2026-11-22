@@ -639,6 +639,8 @@ export async function handle(req: Request): Promise<Res> {
         pdf: true,
         documents: ['pptx', 'ppsx', 'potx', 'pptm', 'pdf'],
         pptx: { pictures: true, reference: true, referencePdf: false, art: false },
+        // No picture routes in the demo: pictures of heavy slides are never made here.
+        prerender: { state: 'off' },
       } satisfies HubCapabilities);
 
     // ---- the reset button

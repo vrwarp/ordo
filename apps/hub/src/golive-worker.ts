@@ -97,6 +97,12 @@ export type PrepareInput = {
   takenAt: number;
   /** Set when this is a cached copy: the degraded reason naming its time (`cachedCopyReason`). */
   cachedCopy?: string;
+  /**
+   * The hub's switch for pictures (store-2), given only when the hub knows it: `prerenderOn` is what W33 follows,
+   * `pictures: false` lists no picture rows and no key set (a bundle saved while the hub was on may carry them).
+   */
+  prerenderOn?: boolean;
+  pictures?: boolean;
 };
 export type PrepareWarning = { message: string; detail?: Record<string, unknown> };
 export type PrepareOutput =
@@ -143,7 +149,12 @@ export function prepareGoLive(input: PrepareInput): PrepareOutput {
     const resolved = resolvePlaylist(
       bundleInputs(bundle, { takenAt: input.takenAt, cachedCopy: input.cachedCopy }),
       input.playlistId,
-      { digest: manifestDigest, warn: (message, detail) => warnings.push({ message, detail }) },
+      {
+        digest: manifestDigest,
+        warn: (message, detail) => warnings.push({ message, detail }),
+        ...(input.prerenderOn !== undefined ? { prerenderOn: input.prerenderOn } : {}),
+        ...(input.pictures !== undefined ? { pictures: input.pictures } : {}),
+      },
     );
     const t2 = performance.now();
     const buffer = encoder.encode(JSON.stringify(resolved));

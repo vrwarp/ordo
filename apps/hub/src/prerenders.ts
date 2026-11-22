@@ -5,7 +5,7 @@
  */
 import { rm } from 'node:fs/promises';
 import type { Readable } from 'node:stream';
-import type { FileRef, PrerenderRow } from '@ordo/domain';
+import { type FileRef, GOLIVE_SLIDE_PAGES, type PrerenderRow } from '@ordo/domain';
 import { PRERENDER_VERSION } from '@ordo/domain/prerender.ts';
 import type { Logger } from 'pino';
 import type { DB } from './db.ts';
@@ -315,7 +315,14 @@ export class PrerenderIndex {
       .run(key, reason, madeBy ?? null, at);
   }
 
-  /** The presentation's keys with their sizes, the failures of those keys and the picture bytes (at most 5,000 keys). */
+  /**
+   * The presentation's keys with their sizes and the failures of those keys (at most 5,000 keys): what a baker reads at
+   * every sweep. Three small statements instead of one join: the NEWEST row of each key (a window over the key rows, so a
+   * key two slides share names the lower slide id, in the order `rev DESC, slide_id, key`), ONE prefix scan of the
+   * presentation's pictures (at most three rows a key, in the primary key's order), and the failures of the keys by EXISTS.
+   * `prerender-listing.test.ts` keeps the answer equal to the join this replaced, over seeded libraries; the sum of the
+   * picture bytes the join's sibling computed was read by no one and is gone (`list` asks the references index).
+   */
   listing(presentationId: string): {
     keys: {
       slideId: string;
@@ -326,33 +333,34 @@ export class PrerenderIndex {
       at?: number;
     }[];
     failures: { key: string; reason: string; madeBy?: string; at: number }[];
-    usedBytes: number;
   } {
     const rows = this.db
       .prepare(
-        `SELECT k.slide_id, k.key, k.standby_id, p.size, p.made_by, p.created_at
-         FROM prerender_keys k LEFT JOIN prerenders p ON p.presentation_id = k.presentation_id AND p.key = k.key
-         WHERE k.presentation_id = ? ORDER BY k.rev DESC, k.slide_id, k.key LIMIT 40000`,
+        `SELECT key, slide_id, standby_id FROM (
+           SELECT key, slide_id, standby_id, rev, ROW_NUMBER() OVER (PARTITION BY key ORDER BY rev DESC, slide_id) AS rn
+           FROM prerender_keys WHERE presentation_id = ?) WHERE rn = 1 ORDER BY rev DESC, slide_id, key LIMIT ${LISTING_KEYS_MAX}`,
       )
-      .all(presentationId) as {
-      slide_id: string;
-      key: string;
-      standby_id: string;
-      size: number | null;
-      made_by: string | null;
-      created_at: number | null;
-    }[];
+      .all(presentationId) as { key: string; slide_id: string; standby_id: string }[];
     const keys = new Map<
       string,
       { slideId: string; key: string; standbyId: string; sizes: number[]; madeBy?: string; at?: number }
     >();
-    for (const r of rows) {
-      let k = keys.get(r.key);
-      if (!k) {
-        if (keys.size >= LISTING_KEYS_MAX) continue;
-        keys.set(r.key, (k = { slideId: r.slide_id, key: r.key, standbyId: r.standby_id, sizes: [] }));
-      }
-      if (r.size !== null && !k.sizes.includes(r.size)) {
+    for (const r of rows)
+      keys.set(r.key, { slideId: r.slide_id, key: r.key, standbyId: r.standby_id, sizes: [] });
+    if (keys.size) {
+      const pics = this.db
+        .prepare(
+          `SELECT key, size, made_by, created_at FROM prerenders WHERE presentation_id = ? ORDER BY key, size`,
+        )
+        .all(presentationId) as {
+        key: string;
+        size: number;
+        made_by: string | null;
+        created_at: number | null;
+      }[];
+      for (const r of pics) {
+        const k = keys.get(r.key);
+        if (!k) continue;
         k.sizes.push(r.size);
         if (r.made_by && !k.madeBy) k.madeBy = r.made_by;
         if (r.created_at !== null && (k.at === undefined || r.created_at > k.at)) k.at = r.created_at;
@@ -362,18 +370,11 @@ export class PrerenderIndex {
       this.db
         .prepare(
           `SELECT f.key, f.reason, f.made_by, f.at FROM prerender_failures f
-           WHERE f.key IN (SELECT DISTINCT key FROM prerender_keys WHERE presentation_id = ?) ORDER BY f.at DESC LIMIT 5000`,
+           WHERE EXISTS (SELECT 1 FROM prerender_keys k WHERE k.presentation_id = ? AND k.key = f.key) ORDER BY f.at DESC LIMIT 5000`,
         )
         .all(presentationId) as { key: string; reason: string; made_by: string | null; at: number }[]
     ).map((f) => ({ key: f.key, reason: f.reason, ...(f.made_by ? { madeBy: f.made_by } : {}), at: f.at }));
-    const used = this.db
-      .prepare(`SELECT COALESCE(SUM(bytes), 0) AS n FROM prerenders WHERE presentation_id = ?`)
-      .get(presentationId) as { n: number };
-    return {
-      keys: [...keys.values()].map((k) => ({ ...k, sizes: k.sizes.sort((a, b) => a - b) })),
-      failures,
-      usedBytes: used.n,
-    };
+    return { keys: [...keys.values()], failures };
   }
 
   /**
@@ -564,12 +565,25 @@ export class PrerenderStore {
   /** The limit of unique bytes per presentation; a constructor argument, lowered by the tests. */
   budgetBytes: number;
 
-  constructor(lib: Library, store: Store, live: LiveView, opts: { log: Logger; budgetBytes?: number }) {
+  /**
+   * `open`: false while the hub's switch is off (ORDO_PRERENDER=off, `HubConfig.prerender.store`): a picture is refused
+   * 503 `prerender_off`. The listing, the delete and the failure route do not look at it (an operator reads and cleans
+   * them), and nothing stored is touched. Absent: always open.
+   */
+  private open: () => boolean;
+
+  constructor(
+    lib: Library,
+    store: Store,
+    live: LiveView,
+    opts: { log: Logger; budgetBytes?: number; open?: () => boolean },
+  ) {
     this.lib = lib;
     this.store = store;
     this.live = live;
     this.log = opts.log;
     this.budgetBytes = opts.budgetBytes ?? PRERENDER_BUDGET_BYTES;
+    this.open = opts.open ?? (() => true);
   }
 
   /** Called with every picture accepted for a key of the running service (wired to the live loop in step 7). */
@@ -629,7 +643,7 @@ export class PrerenderStore {
     key: string,
     size: number,
     stream: Readable,
-    ctx: { role: 'operate' | 'edit'; madeBy?: string },
+    ctx: { role: 'operate' | 'edit'; madeBy?: string; kind?: string },
   ): Promise<PutResult> {
     const dims = PICTURE_SIZES[size];
     const idx = this.lib.prerenderIndex;
@@ -637,6 +651,13 @@ export class PrerenderStore {
       this.drain(stream);
       throw e;
     };
+    // The refusals in their order (hook H4): the switch, the kind, then the presentation, the size and the key.
+    if (!this.open())
+      return refuse(
+        new HttpError(503, 'prerender_off', 'Pictures of heavy slides are turned off on this hub.'),
+      );
+    if (ctx.kind !== undefined && ctx.kind !== 'slide')
+      return refuse(badRequest('Only pictures of slides are made yet', 'bad_kind'));
     const pres = this.lib.presentations.get(presentationId);
     if (!pres) return refuse(notFound(`presentation ${presentationId} not found`));
     if (!dims) return refuse(badRequest('size is 3840, 1920 or 640', 'bad_size'));
@@ -698,7 +719,7 @@ export class PrerenderStore {
         slideId: info.slideId,
         standbyId: info.standbyId,
         version: PRERENDER_VERSION,
-        kind: 'slide',
+        kind: 'slide', // the one kind made yet (`ctx.kind` is 'slide' or absent)
         hash: r.hash,
         mime,
         bytes: r.bytes,
@@ -804,6 +825,7 @@ export class PrerenderStore {
 export function goLiveExtras(
   lib: Library,
   presentations: Record<string, unknown>,
+  opts: { pages?: boolean } = {},
 ): {
   files: Record<string, FileRef>;
   slideHeads?: Record<string, { pages: string[] }>;
@@ -830,7 +852,8 @@ export function goLiveExtras(
         if (!head) continue;
         slideHeads[ref] = { pages: head.pages };
         add(ref);
-        for (const page of head.pages) add(page);
+        // The pages are listed only while GOLIVE_SLIDE_PAGES is on: no screen reads one (the names stay in `slideHeads`).
+        if (opts.pages ?? GOLIVE_SLIDE_PAGES) for (const page of head.pages) add(page);
         for (const used of head.uses.files) add(used);
       }
     }
