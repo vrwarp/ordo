@@ -668,4 +668,3 @@ describe('noLoDraws: what a hub without LibreOffice stores of a slide, drawn whe
     expect(d.slides[0]!.noLoDraw).toBeUndefined();
   });
 });
-

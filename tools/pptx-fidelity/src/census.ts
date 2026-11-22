@@ -59,8 +59,16 @@ import { slideBudget } from '@ordo/renderer/geombudget.ts';
 import { frameUnitsLeft, splitFrame } from '@ordo/renderer/frame.ts';
 import { slideUnitsLeft } from '@ordo/renderer/units.ts';
 import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
+import { drawingKey } from './compat/index.ts';
 import { listDecks } from './decks.ts';
-import { convertDeckIsolated, type HubWhy, hubLadder, type NativeDeck, type WholeInfo } from './native.ts';
+import {
+  convertDeckIsolated,
+  type HubWhy,
+  hubLadder,
+  hubStoredSlide,
+  type NativeDeck,
+  type WholeInfo,
+} from './native.ts';
 
 export type { HubWhy } from './native.ts';
 
@@ -91,6 +99,26 @@ type HubInput = Pick<NativeDeck['slides'][number], 'class' | 'slide' | 'notes'> 
  * its page for a slide over 64 KB stored plain or minimal, `ImportCore.pageForBudget`, which `--before hub`
  * measures). Slides in deck order, hidden ones included, as the hub plans them.
  */
+/**
+ * Without LibreOffice (M9): what the hub stores of each slide emitted that way, drawn where it differs from what the column
+ * draws (`NativeSlide.noLoDraw`). With the whole option (Q24.b) the ladder keeps the heavy slides whole there too, so a slide
+ * kept whole is drawn as it is and has no separate draw; without it the base ladder cuts it.
+ */
+export function noLoDraws(conv: NativeDeck, o: { loCompat: boolean; whole: boolean }): void {
+  const drawnOf = (s: NativeDeck['slides'][number]) =>
+    (o.loCompat && !s.table ? s.compatSlide : undefined) ?? s.slide;
+  const input = conv.slides.map((s) => ({
+    class: s.noLoClass ?? s.class,
+    slide: s.noLoSlide ?? drawnOf(s),
+    notes: s.notes,
+  }));
+  const stored = hubClasses(input, conv.geoms ?? [], undefined, o.whole);
+  for (const [k, s] of conv.slides.entries()) {
+    const nl = hubStoredSlide(input[k]!.slide, stored[k]!);
+    if (drawingKey(nl) !== drawingKey(drawnOf(s))) s.noLoDraw = nl;
+  }
+}
+
 export function hubClasses(
   slides: readonly HubInput[],
   geoms: readonly { id: string; file: unknown }[] = [],

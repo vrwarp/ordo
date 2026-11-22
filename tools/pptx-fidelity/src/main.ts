@@ -95,20 +95,13 @@ import {
   noLoHubFields,
   pasteSsim,
 } from './beforehub.ts';
-import { hubClasses } from './census.ts';
-import { drawingKey } from './compat/index.ts';
+import { hubClasses, noLoDraws } from './census.ts';
 import { buildCorpus } from './corpus.ts';
 import { DECK_RE, listDecks } from './decks.ts';
 import { deckHash, exceptionMarks } from './exceptions.ts';
 import { hubEntry } from './hub-import.ts';
 import { drawWithLibreOffice } from './libreoffice.ts';
-import {
-  convertDeckIsolated,
-  hubStoredSlide,
-  NativeRenderer,
-  type RenderedDeck,
-  withHubBudget,
-} from './native.ts';
+import { convertDeckIsolated, NativeRenderer, type RenderedDeck, withHubBudget } from './native.ts';
 import { png } from './png.ts';
 import { ssim } from './ssim.ts';
 import {
@@ -330,20 +323,7 @@ async function nativeColumn(
     : converted;
   // Without LibreOffice (M9): what the hub stores of each slide emitted that way, drawn where it differs. A
   // slide holding a table object is drawn as stored (`NativeSlide.table`), never in LibreOffice's form.
-  if (opts.noLibreOffice) {
-    const drawnOf = (s: (typeof conv.slides)[number]) =>
-      (opts.loCompat && !s.table ? s.compatSlide : undefined) ?? s.slide;
-    const input = conv.slides.map((s) => ({
-      class: s.noLoClass ?? s.class,
-      slide: s.noLoSlide ?? drawnOf(s),
-      notes: s.notes,
-    }));
-    const stored = hubClasses(input, conv.geoms ?? []);
-    for (const [k, s] of conv.slides.entries()) {
-      const nl = hubStoredSlide(input[k]!.slide, stored[k]!);
-      if (drawingKey(nl) !== drawingKey(drawnOf(s))) s.noLoDraw = nl;
-    }
-  }
+  if (opts.noLibreOffice) noLoDraws(conv, { loCompat: opts.loCompat === true, whole: opts.whole === true });
   const shown = conv.slides.filter((s) => s.shown !== undefined).sort((a, b) => a.shown! - b.shown!);
   // `--slides` numbers are 1-based; the renderer's are shown indexes.
   const only = opts.only ? new Set([...opts.only].map((n) => n - 1)) : undefined;
