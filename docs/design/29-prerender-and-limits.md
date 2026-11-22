@@ -271,17 +271,17 @@ key       = sha256(canonicalJson({ v: PRERENDER_VERSION, source }))
   computes it too) runs in the editor, the bake worker and the hub's pool. Outputs never compute keys: goLive and the live
   events tell them which file is which slide's picture.
 
-**As built in sub-wave 3 (bake-render), section 1.2.** *Fonts.* The picture is drawn with the bake font profile (design
+**As built in sub-wave 3 (bake-render), section 1.2.** _Fonts._ The picture is drawn with the bake font profile (design
 27 section 10): the library's and the bundled faces and a blank face, never a face of the computer; a family with no
 face of its own is drawn in the default face and listed (`standIns`, Q31.c, the default; `standIns: 'abort'` makes it no
 picture), and a character no loaded face has is no picture (Q31.d, the default: this is stricter than the W30 text below,
-which makes the picture and reports the miss). *The version guard.* `packages/renderer/src/prerender-version.test.ts`
+which makes the picture and reports the miss). _The version guard._ `packages/renderer/src/prerender-version.test.ts`
 records `PRERENDER_VERSION` (1) and a digest of every non-test source of the renderer except 13 files no picture reads,
 the output's decoders and picture provider, the domain files whose code decides pixels, the domain limits the drawing
 reads and the renderer's dependencies: a change of the drawing code fails it until the digest is recorded at the same
 version (the same pixels) or `PRERENDER_VERSION` is raised and both recorded (different pixels). A guard proves that no
 excluded file is imported by the bake's closure; guard (c) found that scene.ts, raster.ts and the table's edit.ts and
-hit.ts are reachable through the table drawer module, so they are digested. *Opacity.* The hub's `opaque` flag is the PNG
+hit.ts are reachable through the table drawer module, so they are digested. _Opacity._ The hub's `opaque` flag is the PNG
 header's colour type, not the pixels': an opaque picture is written as an RGB PNG (colour type 2) by a small writer in
 bake.ts, because Chromium writes RGBA for every canvas, an opaque one included.
 
