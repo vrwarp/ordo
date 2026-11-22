@@ -354,12 +354,75 @@ export function easyPlan(slide: Slide, opts: EasyOptions = {}): EasyPlan {
   }
 }
 
-/** STUB. */
+/**
+ * The `Slide.pptx.missing` entry of a slide the slide-file form could not hold (Q54: past 20,000 objects or 16 MiB,
+ * W18): it keeps a plain bounded stand-in and never gets a record. Written by the importer's refused-slide path,
+ * read here so that no later save, re-import or follow-up can give it one: a record without a file looks exactly
+ * like an inline whole slide, and a baker would draw a picture of the stand-in as if it were the slide.
+ */
 export const PRERENDER_REFUSED_MISSING = 'slide:too-large';
 
-/** STUB. */
-export function planRecord(slide: Slide, _opts: EasyOptions = {}): Slide {
-  return slide;
+/**
+ * Whether a slide's record is this release's to write, refresh or remove: none yet, or `{ why, live }` with only
+ * `bytes` and `count` for reasons, no slide file and no `uses`, and a live set only while the gate is on (a
+ * record with a live set belongs to Q24.a, `tail` and `chosen` to the editor, a file to the slide-file form).
+ */
+function recordIsOurs(pre: unknown, gateOn: boolean): boolean {
+  if (pre === undefined) return true;
+  if (!isObj(pre) || !Array.isArray(pre.why) || !Array.isArray(pre.live)) return false;
+  if (pre.file !== undefined || pre.uses !== undefined) return false;
+  return pre.why.every((w) => w === 'bytes' || w === 'count') && (pre.live.length === 0 || gateOn);
+}
+
+const sameList = (a: readonly unknown[], b: readonly unknown[]) =>
+  a.length === b.length && a.every((v, i) => v === b[i]);
+
+/**
+ * The one writer of the inline record of this release (the PowerPoint import, its re-import and follow-ups, the
+ * editor's save): the slide with `prerender: { why, live: [] }` added when `easyPlan` says it gets one, refreshed
+ * when its reasons changed, removed when it no longer needs one (it shrank, or something now moves in it).
+ *
+ * - IDENTITY: the SAME object when nothing changes (callers compare by identity, as the editor store does);
+ *   otherwise a shallow copy that shares `objects` and every other field. Pure; never throws; the input is never
+ *   mutated.
+ * - OURS ONLY: a record that is not this release's (a slide file, `tail`, `chosen`, `uses`, a live set while
+ *   `PRERENDER_ANCHORED` is off, a damaged record) and a slide the slide file refused (`PRERENDER_REFUSED_MISSING`)
+ *   come back untouched, whatever the plan says. The file form and `tail`/`chosen` have their own writers
+ *   (`withFullSlide`, the editor); this one only maintains the inline record, so the two never fight.
+ * - IDEMPOTENT, and the record never changes the plan: `easyPlan` measures the slide without its record, so
+ *   `planRecord(planRecord(s)) === planRecord(s)` and `easyPlan(planRecord(s))` equals `easyPlan(s)`.
+ * - `live` is `[]` in this release and written explicitly, never absent; with the gate on it is
+ *   `liveSet(slide, reach)` and is refreshed. Pass the same options as the other writer (`kind`, `isMotion`).
+ */
+export function planRecord(slide: Slide, opts: EasyOptions = {}): Slide {
+  try {
+    if (!isObj(slide)) return slide;
+    const o: EasyOptions = isObj(opts) ? opts : {};
+    const missing: unknown = slide.pptx?.missing;
+    if (Array.isArray(missing) && missing.includes(PRERENDER_REFUSED_MISSING)) return slide;
+    const gateOn = (o.anchored ?? PRERENDER_ANCHORED) === true;
+    const pre: unknown = slide.prerender;
+    if (!recordIsOurs(pre, gateOn)) return slide;
+    const plan = easyPlan(slide, o);
+    if (!plan.record) {
+      if (pre === undefined) return slide;
+      const { prerender: _, ...rest } = slide;
+      return rest;
+    }
+    let live: string[] = [];
+    if (gateOn) {
+      try {
+        live = liveSet(slide, o.reach);
+      } catch {
+        live = [];
+      }
+    }
+    if (isObj(pre) && sameList(pre.why as unknown[], plan.why) && sameList(pre.live as unknown[], live))
+      return slide;
+    return { ...slide, prerender: { why: plan.why, live } };
+  } catch {
+    return slide;
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------

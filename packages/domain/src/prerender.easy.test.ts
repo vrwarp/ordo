@@ -925,7 +925,9 @@ describe('planRecord: the property suite (idempotent, ours only, valid, the plan
         const refused = (slide.pptx?.missing ?? []).includes(PRERENDER_REFUSED_MISSING);
         if (refused || !isOurs(slide.prerender, gateOn)) expect(out).toBe(slide);
         // (c)
-        if (out.prerender) expect(SlidePrerender.safeParse(out.prerender).success).toBe(true);
+        // A record planRecord wrote parses (a record it left alone, a damaged one included, is not its to judge).
+        if (out !== slide && out.prerender)
+          expect(SlidePrerender.safeParse(out.prerender).success).toBe(true);
         if (Slide.safeParse(slide).success) expect(Slide.safeParse(out).success).toBe(true);
         // (d)
         expect(easyPlan(out, opts)).toEqual(easyPlan(slide, opts));
