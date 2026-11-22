@@ -24,7 +24,7 @@ export type BakeBenchCase = {
   detail?: string;
   /** Milliseconds by phase: draw, compose, alpha, png3840, copy1920, png1920, webp640, verify, total (bake + encode). */
   ms: Record<string, number>;
-  bytes: { png3840?: number; png1920?: number; webp640?: number };
+  bytes: { png3840?: number; png1920?: number; webp640?: number; rgba3840?: number };
   opaque?: boolean;
   longestTurn: number;
   wallMs: number;
@@ -227,6 +227,8 @@ export async function runBake(
       out.detail = r.detail;
     } else {
       out.opaque = r.opaque;
+      // what the browser's own RGBA encoder writes for the same opaque canvas (what the RGB header rule saves)
+      if (r.opaque) out.bytes.rgba3840 = (await r.canvas.convertToBlob({ type: 'image/png' })).size;
       const e = await encodePicture(r);
       if (e.ok) {
         Object.assign(out.ms, e.stats.ms);

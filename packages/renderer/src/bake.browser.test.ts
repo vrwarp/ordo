@@ -48,6 +48,7 @@ type Pic = { size: number; type: string; bytes: number; head: Head; mime: string
 describe.skipIf(!executablePath)('the bake in headless Chromium', () => {
   let browser: Browser;
   let page: Page;
+  let script = '';
   const errors: string[] = [];
 
   beforeAll(async () => {
@@ -66,7 +67,8 @@ describe.skipIf(!executablePath)('the bake in headless Chromium', () => {
     page = await browser.newPage();
     page.on('pageerror', (e) => errors.push(e.message));
     await page.setContent('<!doctype html><html><body></body></html>');
-    await page.addScriptTag({ content: built.outputFiles[0]!.text });
+    script = built.outputFiles[0]!.text;
+    await page.addScriptTag({ content: script });
   }, 120_000);
 
   afterAll(async () => {
@@ -339,6 +341,31 @@ describe.skipIf(!executablePath)('the bake in headless Chromium', () => {
       const r = await run<Record<string, number[][]>>('determinism');
       for (const [name, runs] of Object.entries(r)) expect(runs[0], name).toEqual(runs[1]);
     }, 600_000);
+
+    it('E6b determinism (G17, M8): five fresh pages give identical bytes for the three pictures', async () => {
+      const first: Record<string, number[]> = {};
+      for (let page_ = 0; page_ < 5; page_++) {
+        const fresh = await browser.newPage();
+        try {
+          await fresh.setContent('<!doctype html><html><body></body></html>');
+          await fresh.addScriptTag({ content: script });
+          for (const subject of ['p1', 'text']) {
+            const sums = (await fresh.evaluate(
+              ([n, a]) =>
+                (window as unknown as { __bake: (n: string, a?: unknown) => Promise<unknown> }).__bake(
+                  n as string,
+                  a,
+                ),
+              ['fingerprint', { subject }] as const,
+            )) as number[];
+            if (page_ === 0) first[subject] = sums;
+            else expect(sums, `${subject} in fresh page ${page_ + 1}`).toEqual(first[subject]);
+          }
+        } finally {
+          await fresh.close();
+        }
+      }
+    }, 900_000);
 
     it('E7 hygiene: every canvas the encoder made is zeroed, and the decoded bitmap is closed', async () => {
       const r = await run<Encoded>('encode', { subject: 'p5' });

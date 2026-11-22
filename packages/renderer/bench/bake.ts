@@ -156,7 +156,7 @@ async function main(): Promise<number> {
             const row = { ...r, peakMb: Math.round((peak - idle) / 1024), hwmMb: Math.round(hwm / 1024) };
             rows.push(row);
             console.log(
-              `  ${name} @${scale * 1920} run ${run}: ${r.objects} objects, ${r.ok ? 'made' : `NOT MADE (${r.reason}: ${r.detail})`}, total ${f(r.ms.total ?? 0)} ms (draw ${f(r.ms.draw ?? 0)}, compose ${f(r.ms.compose ?? 0)}, alpha ${f(r.ms.alpha ?? 0)}, png3840 ${f(r.ms.png3840 ?? 0)}, copy1920 ${f(r.ms.copy1920 ?? 0)}, png1920 ${f(r.ms.png1920 ?? 0)}, webp640 ${f(r.ms.webp640 ?? 0)}, verify ${f(r.ms.verify ?? 0)}), turns longest ${f(r.longestTurn)} ms, bytes ${r.bytes.png3840 ?? '-'} / ${r.bytes.png1920 ?? '-'} / ${r.bytes.webp640 ?? '-'}${r.opaque === undefined ? '' : r.opaque ? ' opaque' : ' alpha'}, decodes ${r.decodes}, browser memory peak +${row.peakMb} MB, renderer VmHWM ${row.hwmMb} MB`,
+              `  ${name} @${scale * 1920} run ${run}: ${r.objects} objects, ${r.ok ? 'made' : `NOT MADE (${r.reason}: ${r.detail})`}, total ${f(r.ms.total ?? 0)} ms (draw ${f(r.ms.draw ?? 0)}, compose ${f(r.ms.compose ?? 0)}, alpha ${f(r.ms.alpha ?? 0)}, png3840 ${f(r.ms.png3840 ?? 0)}, copy1920 ${f(r.ms.copy1920 ?? 0)}, png1920 ${f(r.ms.png1920 ?? 0)}, webp640 ${f(r.ms.webp640 ?? 0)}, verify ${f(r.ms.verify ?? 0)}), turns longest ${f(r.longestTurn)} ms, bytes ${r.bytes.png3840 ?? '-'} / ${r.bytes.png1920 ?? '-'} / ${r.bytes.webp640 ?? '-'}${r.bytes.rgba3840 ? ` (RGBA ${r.bytes.rgba3840})` : ''}${r.opaque === undefined ? '' : r.opaque ? ' opaque' : ' alpha'}, decodes ${r.decodes}, browser memory peak +${row.peakMb} MB, renderer VmHWM ${row.hwmMb} MB`,
             );
           } finally {
             await page.close();

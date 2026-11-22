@@ -1054,32 +1054,31 @@ async function bitmapClosed() {
   });
 }
 
+/** The picture of one bake, as a checksum and a length per file (the three blobs in upload order). */
+async function fingerprint(a: { subject: string }) {
+  return withEnv({}, async (s) => {
+    const slide = a.subject === 'text' ? textHeavy() : subject(a.subject);
+    const made = await bake(s, slide, provider(), { scale: 2 });
+    if (!made.ok) throw new Error(`${a.subject}: ${made.reason} ${made.detail}`);
+    const enc = await encodePicture(made);
+    if (!enc.ok) throw new Error(`${a.subject}: encode ${enc.reason}`);
+    const sums: number[] = [];
+    for (const p of enc.pictures) {
+      const u = new Uint8Array(await p.blob.arrayBuffer());
+      let h = 2166136261;
+      for (let k = 0; k < u.length; k++) h = Math.imul(h ^ u[k]!, 16777619);
+      sums.push(h >>> 0, u.length);
+    }
+    return sums;
+  });
+}
+
 /** E6 and G17: two bakes in one browser give identical bytes. */
 async function determinism() {
-  return withEnv({}, async (s) => {
-    const out: Record<string, number[][]> = {};
-    for (const name of ['p1', 'text']) {
-      const slides = name === 'text' ? textHeavy() : subject('p1');
-      const runs: number[][] = [];
-      for (let i = 0; i < 2; i++) {
-        const pv = provider();
-        const made = await bake(s, slides, pv, { scale: 2 });
-        if (!made.ok) throw new Error(`${name}: ${made.reason} ${made.detail}`);
-        const enc = await encodePicture(made);
-        if (!enc.ok) throw new Error(`${name}: encode ${enc.reason}`);
-        const sums: number[] = [];
-        for (const p of enc.pictures) {
-          const u = new Uint8Array(await p.blob.arrayBuffer());
-          let h = 2166136261;
-          for (let k = 0; k < u.length; k++) h = Math.imul(h ^ u[k]!, 16777619);
-          sums.push(h >>> 0, u.length);
-        }
-        runs.push(sums);
-      }
-      out[name] = runs;
-    }
-    return out;
-  });
+  const out: Record<string, number[][]> = {};
+  for (const name of ['p1', 'text'])
+    out[name] = [await fingerprint({ subject: name }), await fingerprint({ subject: name })];
+  return out;
 }
 
 // ── The slides of bakeSlides ─────────────────────────────────────────────────────────────────────────────
@@ -1107,6 +1106,7 @@ export const SCENARIOS = {
   roundTrip,
   bitmapClosed,
   determinism,
+  fingerprint,
   prepareSlides,
 };
 
