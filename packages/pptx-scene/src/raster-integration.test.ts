@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { convertDeck, emitSlides, parseDeck } from './index.ts';
 import type { RasterGeometry } from './raster-emit.ts';
 import { RASTER_POINTS, RASTER_PREFIX, encodeRefs } from './raster.ts';
+import { WIDE_GEOMETRY } from './raster-wide.ts';
 import { body, buildDeck, custGeom, para, run, solid, sp } from './test-util.ts';
 import type { ShapeElement } from './ir.ts';
 import { MAX_SLIDE_PATH_POINTS } from './geom.ts';
@@ -103,11 +104,24 @@ describe('the converter hooks of the shape pictures', () => {
     expect(MAX_SLIDE_PATH_POINTS).toBe(65_536);
   });
 
-  it("E1w: with no injected geometry the renderer's own wide compile draws a 5,464-point outline of ONE path into a picture", () => {
+  it("E1w-0: with no geometry injected the run is not made: the converter itself carries no compile of the renderer's (the browser's import worker never plans a picture)", () => {
+    const parts = slideOf(blob(2, 300, IN, IN, 2 * IN, 2 * IN));
+    const out = emitSlides(parseDeck(parts, { rasters: 'plan' }), { rasters: 'plan' });
+    const s = out.slides[0]!;
+    expect(s.rasterInfo?.failed).toEqual(['no-compile']);
+    expect(out.rasters ?? []).toHaveLength(0);
+    // The slide is today's: the shape is a shape.
+    expect(s.slide.objects.some((o) => o.type === 'shape' && o.origin?.role === 'shape')).toBe(true);
+  });
+
+  it("E1w: with the renderer's own wide compile (WIDE_GEOMETRY, which the hub's pool and the harness inject) a 5,464-point outline of ONE path is drawn into a picture", () => {
     // One path of 5,464 points: past the screens' 4,096 a path, so the compile that stores or draws would cut it. The picture
     // is made from the wide read (`RASTER_READ`), never from a cut outline, so its recipe holds every point.
     const parts = slideOf(blob(2, 5_464, IN, IN, 4 * IN, 3 * IN));
-    const out = emitSlides(parseDeck(parts, { rasters: 'plan' }), { rasters: 'plan' });
+    const out = emitSlides(parseDeck(parts, { rasters: 'plan' }), {
+      rasters: 'plan',
+      rasterGeometry: WIDE_GEOMETRY,
+    });
     const s = out.slides[0]!;
     expect(s.rasterInfo?.failed ?? []).toEqual([]);
     expect(s.rasters).toHaveLength(1);

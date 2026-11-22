@@ -15,6 +15,7 @@ import {
   recipeHash,
 } from '@ordo/pptx-scene/raster.ts';
 import { convertDeck } from '@ordo/pptx-scene';
+import { WIDE_GEOMETRY } from '@ordo/pptx-scene/raster-wide.ts';
 import { buildDeck, custGeom, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HttpError } from '../src/errors.ts';
@@ -69,7 +70,7 @@ function plannedRecipes(): { id: string; hash: string; bytes: number; recipe: Ra
       { shapes: blob(2, 400, IN, IN, 3 * IN, 2 * IN) + blob(3, 350, 5 * IN, IN, 2 * IN, 2 * IN) },
     ],
   });
-  return convertDeck(parts, { rasters: 'plan' }).rasters ?? [];
+  return convertDeck(parts, { rasters: 'plan', rasterGeometry: WIDE_GEOMETRY }).rasters ?? [];
 }
 
 /** A PNG of the recipe's size: one opaque pixel in transparent ones (it compresses to a few hundred bytes). */

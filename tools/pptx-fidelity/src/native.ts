@@ -62,6 +62,7 @@ import {
 } from '@ordo/pptx-scene';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import { MAX_XML_PART_BYTES } from '@ordo/pptx-scene/opc.ts';
+import { WIDE_GEOMETRY } from '@ordo/pptx-scene/raster-wide.ts';
 import { M9_WRITES, PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
 import { bakeKey, type PictureBake } from '@ordo/pptx-scene/bake.ts';
 import { MAX_DRAWN_PICTURES, MAX_SLIDE_OBJECTS_TEXT, sentToArt } from '@ordo/pptx-scene/budget.ts';
@@ -448,7 +449,7 @@ export async function convertDeck(
       ...ids,
       m9Writes: M9_WRITES,
       sheets: PPTX_SHEETS,
-      ...(opts.rasters ? { rasters: 'plan' as const } : {}),
+      ...(opts.rasters ? { rasters: 'plan' as const, rasterGeometry: WIDE_GEOMETRY } : {}),
     });
     const rasterBytes = new Map((emitted.rasters ?? []).map((r) => [r.id, r] as const));
     out.emitMs = performance.now() - t0;
