@@ -8,7 +8,9 @@
  */
 import type { SceneFontFile } from './faces.ts';
 import type { SystemFaces, SystemScriptFace } from './systemFaces.ts';
-import type { ExtractedText, ImageObject } from '@ordo/domain';
+import type { ExtractedText, ImageObject, PresentationKind } from '@ordo/domain';
+import type { EasyOptions } from '@ordo/domain/prerender.ts';
+import { WHOLE_BACKGROUND_ANCHORS } from '@ordo/importers/pptx-core.ts';
 import type { Job } from '@ordo/protocol';
 import type { ArtInfo, ConvertResult, SlideClass } from '@ordo/pptx-scene';
 import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
@@ -544,4 +546,38 @@ export function batchEnds(sizes: readonly number[], maxSlides: number, maxBytes:
     from = to;
   }
   return ends;
+}
+
+// ── Q24.b: the pre-render record (the one writer is `planRecord`) ───────────────────────────────────────
+
+/**
+ * Whether this hub's switch keeps heavy slides whole (`HubConfig.prerender.on`, ORDO_PRERENDER: store-2's C-S2-1), read
+ * from the configuration and never from the domain constant (`PRERENDER_ON`), so one hub answers one way for every job:
+ * the import, a re-import and the LibreOffice follow-up.
+ */
+export function prerenderOn(cfg: HubConfig): boolean {
+  return (cfg as { prerender?: { on?: unknown } }).prerender?.on === true;
+}
+
+/** Whether a media file moves, as the hub's media row says (a video); undefined for a file it does not know. */
+export function mediaMotion(lib: Pick<Library, 'media'>): (mediaId: string) => boolean | undefined {
+  return (id) => {
+    const kind = lib.media.get(id)?.kind;
+    return kind === undefined ? undefined : kind === 'video';
+  };
+}
+
+/**
+ * The options of `planRecord` at a site with no import core of its own (a re-import's merge, the LibreOffice follow-up's
+ * patch): the kind of presentation and, where the importer's side passes it (`WHOLE_BACKGROUND_ANCHORS` 'motion', Q25.c.b),
+ * `isMotion` (every site passes it, or every own background is an anchor and the record of such a slide is removed).
+ * `clipIds`: the clips of the import the slide was just built by, a motion whatever the media row says.
+ */
+export function recordOptions(
+  kind: PresentationKind | undefined,
+  motion: (mediaId: string) => boolean | undefined,
+  clipIds?: ReadonlySet<string>,
+): EasyOptions {
+  const isMotion = (id: string) => (clipIds?.has(id) ? true : motion(id));
+  return { ...(kind ? { kind } : {}), ...(WHOLE_BACKGROUND_ANCHORS === 'motion' ? { isMotion } : {}) };
 }

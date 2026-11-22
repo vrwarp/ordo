@@ -103,6 +103,7 @@ import {
   PPTX_JOBS,
   PPTX_LIMITS,
   type PptxDeps,
+  prerenderOn,
   type PptxImportOptions,
   type PptxLoSlide,
   type PptxNativeFallback,
@@ -209,7 +210,17 @@ export async function buildNative(
     if (!done.presentationId) throw new Error('no presentation to build for');
     const file = deps.lib.getFile(pl.hash);
     if (!file) throw new Error('The PowerPoint file is no longer stored');
-    const job = new NativeImport(deps, env.pool ?? cpuPool(), limits, ctx, done, save, env.only, env.reserve);
+    const job = new NativeImport(
+      deps,
+      env.pool ?? cpuPool(),
+      limits,
+      ctx,
+      done,
+      save,
+      env.only,
+      env.reserve,
+      env.heavyReserve,
+    );
     const scratch = await deps.store.tmpDir();
     try {
       return await job.buildOnly(deps.store.abs(file.path), scratch);
@@ -384,14 +395,6 @@ async function releaseScene(deps: PptxDeps, sceneHash: string | undefined): Prom
   }
 }
 
-/**
- * Whether this hub's switch keeps heavy slides whole (`HubConfig.prerender.on`, ORDO_PRERENDER: store-2's C-S2-1): read
- * from the configuration, never from the domain constant (`PRERENDER_ON`), so one hub answers one way for every import.
- */
-function prerenderOn(cfg: PptxDeps['cfg']): boolean {
-  return (cfg as { prerender?: { on?: unknown } }).prerender?.on === true;
-}
-
 /** One run of the job (state shared by its steps). */
 class NativeImport {
   /** The import core's steps 3-5 and their state (`@ordo/importers` `pptx-core.ts`): `source.log` and outline files. */
@@ -434,6 +437,7 @@ class NativeImport {
     save: () => void,
     only?: NativeJobEnv['only'],
     reserve = 0,
+    heavyReserve = 0,
   ) {
     this.deps = deps;
     this.pool = pool;
@@ -452,6 +456,7 @@ class NativeImport {
       warn: (kind, msg) => this.warn(kind, msg),
       geomFileBytes: limits.geomFileBytes,
       reserve,
+      heavyReserve,
     });
   }
 

@@ -52,7 +52,7 @@ import {
   Slide,
   type SlideObject,
 } from '@ordo/domain';
-import type { EasyOptions } from '@ordo/domain/prerender.ts';
+import { type EasyOptions, planRecord } from '@ordo/domain/prerender.ts';
 import { addNote, type SlideRef } from '@ordo/pptx-scene';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
 import { digestMatches, importDigest } from './digest.ts';
@@ -77,6 +77,9 @@ import {
   type PptxLoSlide,
   type PptxReferencePayload,
   type RenderCopyTaskOutput,
+  mediaMotion,
+  prerenderOn,
+  recordOptions,
 } from './shared.ts';
 
 /** soffice's address-space cap (`prlimit --as`), in MB: a large deck converts within 1 GiB in the container. */
@@ -350,7 +353,7 @@ export function patchSlide(
   lo: PptxLoSlide,
   work: SlideWork,
   hash: string,
-  _record?: EasyOptions,
+  record?: EasyOptions,
 ): Slide {
   // Unedited: the import's objects (those with an origin) as the plan's digest has them; objects added in
   // ordo meanwhile do not count (`digest.ts`).
@@ -427,7 +430,9 @@ export function patchSlide(
   // An unedited slide stays unedited: its digest follows what the converter wrote (the objects with an
   // origin: the art and metafiles carry one, objects added in ordo do not).
   if (unedited && parsed.pptx) parsed.pptx.digest = importDigest(parsed.objects);
-  return parsed;
+  // Q24.b: the record of the slide as it is now, the art added (`planRecord` is its one writer): the slide may have become
+  // heavy, or lost what made it so; only on a hub that keeps heavy slides whole (`record` absent otherwise).
+  return record ? planRecord(parsed, record) : parsed;
 }
 
 // ── Jobs ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -767,6 +772,9 @@ export function loJob(deps: PptxDeps, env: LoJobEnv = {}): JobHandler<PptxLoPayl
     let patched = 0;
     let budget = presentationBytes(p);
     let boxesLeftOut = 0;
+    // Q24.b: where the hub keeps heavy slides whole, a patched slide gets the record it is now due (with `isMotion` from the
+    // hub's media row: this job has no import core and no clips of its own).
+    const record = prerenderOn(deps.cfg) ? recordOptions(p.kind, mediaMotion(deps.lib)) : undefined;
     const counts = { art: 0, pages: 0, metafiles: 0, edited: 0, failed: 0 };
     const sections = p.sections.map((sec) => ({
       ...sec,
@@ -799,7 +807,7 @@ export function loJob(deps: PptxDeps, env: LoJobEnv = {}): JobHandler<PptxLoPayl
         }
         if (mf.size) work.metafiles = mf;
         try {
-          const next = patchSlide(sl, lo, work, pl.hash);
+          const next = patchSlide(sl, lo, work, pl.hash, record);
           patched++;
           if (work.art) counts.art++;
           if (work.page) counts.pages++;
