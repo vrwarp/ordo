@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { type APIRequestContext, type BrowserContext, expect, type Page, test } from '@playwright/test';
 import { findChromium } from '../tools/find-chromium.ts';
@@ -43,6 +43,7 @@ import { portOf } from './ports.ts';
 const PORT = portOf('pptx-raster', 0);
 const NONE_PORT = portOf('pptx-raster', 1);
 const OUT = 'test-results/pptx-raster';
+const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 /** Channel difference allowed between a shape's colour and what the screen draws. */
 const TOL = 14;
 
@@ -202,6 +203,7 @@ test('many-point shapes come in as one picture: stored, drawn on the screen, res
 
     // The Audience screen draws the picture: both outlines' colours and the colours of two squares, each at its own place.
     let waiting: string | undefined;
+    let mediaWhileLive = -1;
     await audienceColours(
       a,
       context,
@@ -211,11 +213,20 @@ test('many-point shapes come in as one picture: stored, drawn on the screen, res
       'live',
       [CONTINENTS.outlineA, CONTINENTS.outlineB, ...CONTINENTS.squares, CONTINENTS.background],
       async () => {
-        // Live safety (design/29): while a service is live the picture step never starts. A whole Re-import queued now goes back to the
-        // queue before it does any work and says why; it runs after End service (and its short grace).
-        const queued = await a.post(`presentations/${p.id}/pptx-reimport`, { data: {} });
-        expect(queued.status(), await queued.text()).toBe(202);
-        waiting = ((await queued.json()) as { id: string }).id;
+        // Live safety (design/29): while a service is live the picture step never starts. The same deck uploaded now (a presentation of its
+        // own: the live one is locked) goes back to the queue before it does any work and says why; it runs after End service (and its
+        // short grace) and finds the picture the first import made.
+        const res = await a.post('import/document', {
+          multipart: {
+            file: {
+              name: 'Continents again.pptx',
+              mimeType: PPTX_MIME,
+              buffer: readFileSync(deck),
+            },
+          },
+        });
+        expect(res.status(), await res.text()).toBe(202);
+        waiting = ((await res.json()) as { id: string }).id;
         await expect
           .poll(async () => JSON.stringify(await (await a.get(`jobs/${waiting}`)).json()), {
             timeout: 60_000,
@@ -223,10 +234,18 @@ test('many-point shapes come in as one picture: stored, drawn on the screen, res
           .toContain('a service is live');
         const held = (await (await a.get(`jobs/${waiting}`)).json()) as Job;
         expect(held.state).toBe('queued');
+        expect(held.result).toBeUndefined();
+        mediaWhileLive = (await apiJson<unknown[]>(a, 'media')).length;
       },
     );
-    await waitJob(a, waiting!);
-    // It found the picture the import had made: no new picture, the slide as it was.
+    const second = await waitJob(a, waiting!);
+    // It found the picture the first import had made: no new picture was drawn or stored, and the slide is the same.
+    expect((second.result as { rasters?: Raster }).rasters).toMatchObject({
+      reused: 1,
+      stored: 0,
+      putBack: 0,
+    });
+    expect((await apiJson<unknown[]>(a, 'media')).length).toBe(mediaWhileLive);
     const settledDeck = await stored(a, p.id);
     expect(pictures(objectsOf(settledDeck, 0))).toHaveLength(1);
     expect(objectsOf(settledDeck, 0).map((o) => o.type)).toEqual(['shape', 'image', 'text']);
