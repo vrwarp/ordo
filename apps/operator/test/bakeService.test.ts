@@ -830,6 +830,11 @@ describe('the queue and the upload (B14-B16)', () => {
       bytes: 1930 + 3850 + 650,
     });
     expect(slideEntry('p1', 's1')?.ms).toBeDefined();
+    // the snapshot says what the last picture cost, by phase and size, and never holds the bytes
+    const last = w.service.snapshot().lastMade;
+    expect(last?.pictures.map((p) => p.size)).toEqual([1920, 3840, 640]);
+    expect(last?.pictures.every((p) => typeof p.bytes === 'number' && !('blob' in p))).toBe(true);
+    expect(JSON.stringify(w.service.snapshot())).not.toContain('pic1920');
     expect(w.gets().length).toBe(getsBefore + 1);
     expect(useBake.getState().totals).toMatchObject({ heavy: 1, ready: 1 });
     expect(useBake.getState().running).toBeUndefined();

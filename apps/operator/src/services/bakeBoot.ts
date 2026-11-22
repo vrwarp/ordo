@@ -85,6 +85,7 @@ export function createBakeBoot(deps: BakeBootDeps) {
     field('timings', undefined);
     field('sweeps', 0);
     field('requests', []);
+    field('lastMade', undefined);
     Object.defineProperty(o, 'loaded', { value: () => !!service });
     Object.defineProperty(o, 'actions', { value: bakeActions });
     deps.win.__ordo ??= {};

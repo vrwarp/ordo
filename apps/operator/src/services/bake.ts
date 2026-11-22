@@ -173,6 +173,13 @@ export type BakeSnapshot = {
   sweeps: number;
   /** The last 20 hub calls the service made. */
   requests: { method: string; path: string; status: number }[];
+  /** The last picture made: the worker's milliseconds by phase, the bytes by size, the stand-in faces; never the bytes. */
+  lastMade?: {
+    ms: Record<string, number>;
+    pictures: { size: number; type: string; bytes: number }[];
+    opaque: boolean;
+    standIns: number;
+  };
 };
 
 export type BakeService = {
@@ -292,6 +299,7 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
   /** What the last picture of a key cost (the hub's listing has the sizes, not the time): shown on the ready row. */
   const madeFacts = new Map<string, { ms: number; bytes: number }>();
   const requests: BakeSnapshot['requests'] = [];
+  let lastMade: BakeSnapshot['lastMade'];
   let libSig: { p: unknown; m: unknown; f: unknown; src: unknown } | undefined;
 
   const note = (method: string, path: string, status: number) => {
@@ -856,6 +864,12 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
         return;
       }
       case 'made':
+        lastMade = {
+          ms: { ...m.ms },
+          pictures: m.pictures.map((p) => ({ size: p.size, type: p.type, bytes: p.bytes })),
+          opaque: m.opaque,
+          standIns: m.standIns.length,
+        };
         void onMade(a, m).finally(() => {
           finish(a);
           a.done();
@@ -1281,6 +1295,7 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
         timings: { ...timings },
         sweeps,
         requests: [...requests],
+        ...(lastMade ? { lastMade } : {}),
       };
     },
     get timings() {
