@@ -163,6 +163,31 @@ Every writer runs the plan: the PowerPoint import on both paths, the ProPresente
 pictures is cut silently by the screens' clamp), re-import, Reset slide, the LibreOffice follow-up, Make editable
 and every editor operation (§1.8, §1.12).
 
+**As built in sub-wave 3 (Q24.b, the first pre-render release).** The first release gives a picture only to a slide
+in which nothing moves, and decides it with `easyPlan(slide, opts)` and `planRecord(slide, opts)` in
+`packages/domain/src/prerender.ts`, one pair of pure functions that the PowerPoint import and the editor's save both
+call with the same options, so a slide never flips between "has a picture" and "has none" because of who looked.
+A slide gets a record when it is heavy for a reason a flat picture can fix: `bytes` (stored over 64 KiB, Q26.c) or
+`count` (more than 200 drawn objects or 16 distinct pictures, Q26.a, the slides the screens cut today). A slide that
+is only slow to draw gets none (Q26.b: there is no cost reason), and nor does one whose only excess is a box over
+10,000 characters, 16 font families or 64 size scales: a bake draws under the same per-object clamps, so a picture
+would not help. What keeps a slide out (an anchor, "an anchored slide stays exactly as today", Q24.b) is a playing
+picture or video, step-by-step text, a moving background and, in a song only, the lyric box (Q25.a: ordo marks the
+main text of nearly every PowerPoint slide as its lyric box, and a picture is used only where a screen shows the
+slide as drawn, never in the lyric-only looks, so that mark does not count in a PowerPoint deck). Only a video counts
+as a moving background (Q25.c.b): a slide's own background picture, which the converter stores as the slide's own
+when a deck's slides differ, keeps nothing out; every caller passes `isMotion` (the import from its clips, the editor
+and the baker from the media kind), and a caller that cannot tell gets the safe answer, an anchor. Everything is
+read from the drawn content (`slideContent`), so the imported objects of a slide set to show its PowerPoint picture,
+which no screen draws, are not counted and are not anchors. The size is measured on the slide as drawn and without
+its own record: a record adds about 40 bytes, and within that band of 64 KiB the importer (no record yet) and the
+editor (a record already) would otherwise answer differently. A slide of any size the slide-file form can hold is
+planned (Q54); one the file refused carries `slide:too-large` in `pptx.missing` (`PRERENDER_REFUSED_MISSING`) and
+never gets a record. The record the release writes is `{ why, live: [] }`, with no `file` and no `uses`, and
+`planRecord` leaves alone any record that is not its own (a slide file, `tail`, `chosen`, a live set). No picture key
+moved: `liveAnchors` and `liveSet` now read the drawn content, which changes nothing for a slide that is not set to
+show its PowerPoint picture, and the keys of three fixture slides are pinned.
+
 ### 1.2 Data model
 
 **The stand-in** (inline, new optional `Slide` fields; an older build strips them):
@@ -423,7 +448,9 @@ measure 2 passes on a venue-class PC.
 
 - **Anchors**: the lyric box (`lyricObjectId`); text with build steps (`TextPara.hidden`, `schemas.ts:417`); every
   picture that plays (`ImageObject.play`, :561: in-slide video, a motion background inside the slide); the props
-  layer (clock, countdown) is already a layer of its own.
+  layer (clock, countdown) is already a layer of its own. In sub-wave 3 an anchor keeps a slide out of the first
+  release (§1.1 "As built in sub-wave 3"); `PRERENDER_ANCHORED` is the one gate Q24.a flips to give such a slide a
+  picture under its live set.
 - **Live set** = the anchors plus every object above an anchor that overlaps it, or overlaps an object already live,
   with shadows and glows in its reach: `splitScene`'s rule (`packages/renderer/src/scene.ts:441`), built and
   golden-tested for in-slide video. Everything else is in the picture, under the live set. That is exact for

@@ -497,7 +497,8 @@ objects whole (the lyric box, step-by-step text, playing pictures and what lies 
 (`minimalSlide`), within the live-raster bounds. The fields are optional, each with `.catch(undefined)`; older
 builds (0.8.1, whose schema is 0.8.0's, and 0.5.0, `schemas.prev.test-util.ts` and `schemas.prev05.test-util.ts`)
 strip them and draw the stand-in. Nothing writes them in sub-wave 1, and every path that would use them reads
-`PRERENDER_ON` (false).
+`PRERENDER_ON` (false). Sub-wave 3 (Q24.b) writes the inline record `{ why, live: [] }` of a heavy slide in which
+nothing moves, through `planRecord` (below).
 
 ```ts
 type Slide += {
@@ -525,13 +526,37 @@ file: notes, timing, transition, cues, sound and provenance stay on the stand-in
 in):
 
 - `PRERENDER_ON` (false): the one switch every pre-render path reads (design/29 §4); `PRERENDER_VERSION` (1) and
-  `FALLBACK_FACES_DIGEST` (the default face and the script fallbacks) are part of every key.
+  `FALLBACK_FACES_DIGEST` (the default face and the script fallbacks) are part of every key. Two more constants
+  (sub-wave 3, both false): `PRERENDER_ANCHORED` is the one gate Q24.a flips (a heavy slide with something that
+  moves in it: `easyPlan` then ignores anchors and `planRecord` writes `liveSet`), and `PRERENDER_FILES` is the one
+  gate of slide files, read only by the importer's `wholeFilesFor` (the release that turns slide files on flips it
+  with `PRERENDER_ON`). `PRERENDER_REFUSED_MISSING` (`'slide:too-large'`) is the `Slide.pptx.missing` entry of a
+  slide the slide-file form could not hold; such a slide never gets a record.
 - `pictureUnits(slide, cost?)`: `bytes` past 64 KiB stored, `count` past a live count (`PICTURE_COUNTS`: 200
   objects, 16 distinct pictures, 10,000 characters a box other than the lyric box, 16 families and 64 size scales
   a box, equal to the renderer's `CLAMP` by `prerender-counts.test.ts`) or a cost reason, asked at the fixed
   3840 × 2160 reference (`PRERENDER_FRAME`) so every view plans the same.
+- `easyPlan(slide, opts?)` (the first release, Q24.b: a heavy slide in which nothing moves or steps gets a record):
+  `{ eligible, record, anchors, why, over, counts }`. It reads the DRAWN content (`slideContent(slide).objects`),
+  never the raw objects. The anchors, in drawn order and the background last: a playing picture or video (`play`),
+  step-by-step text (a hidden paragraph), the lyric box in a `song` only (Q25.a; `lyric: 'any'` reads it literally),
+  and the slide's own background media unless the caller's `isMotion` says it is a still (Q25.c.b: only a video
+  counts, so a background picture keeps nothing out; with no callback an own background is an anchor). An anchor
+  is a gate, never a stored reason: `why`, `over` and `counts` are computed for an anchored slide too. `why` is
+  only what a flat picture can fix: `bytes` (stored over 64 KiB, measured on the slide as drawn and without its own
+  record, so the answer is a pure function of the content, or by the writer's `size` hook) and `count` (more than
+  200 drawn objects or 16 distinct pictures); a box over 10,000 characters, 16 families or 64 size scales stay in
+  `over` and give no reason, and no cost reason is asked (Q26.b). `record` is `eligible && why.length > 0`.
+  Pure, never throws, works on a draft of any size the slide file can hold (one `jsonBytes`).
+- `planRecord(slide, opts?)`: the one writer of the inline record (the import, its re-import and follow-ups, the
+  editor's save): `prerender: { why, live: [] }` added, refreshed or removed. The SAME object when nothing changes,
+  otherwise a shallow copy sharing `objects`; idempotent; the record never changes the plan. It never touches a
+  record that is not this release's (a slide file, `tail`, `chosen`, `uses`, a live set while `PRERENDER_ANCHORED`
+  is off, a damaged one) and never a slide the slide file refused. The release writes the inline record through it
+  and the file form through `withFullSlide`.
 - `liveSet(slide, reach?)`: the anchors (`liveAnchors`: the lyric box, text with build steps, playing pictures, at
-  most 16 playing and 200 in all) and every object above that overlaps them or an object already live, bottom
+  most 16 playing and 200 in all; read from the drawn content, so the imported objects of a slide set to show its
+  PowerPoint picture are not anchors) and every object above that overlaps them or an object already live, bottom
   first, by `reach` (the renderer's `objectBounds`, else `objectReach`: the turned box and its effects' reach).
 - `standInOf(full, live)`: the live objects whole, the rest `minimalSlide`, capped to 200 objects and 16 pictures
   (live, then text, then pictures by area, in z order); text that does not fit is merged into plain boxes of at
@@ -544,7 +569,8 @@ in):
   own switch is live unless its estimate passes 0.3 s at 4K; a slide without a record is live unless set to
   Pre-rendered.
 - `withFullSlide(full, fn, inputs)` → `{ full, standIn, pages?, key?, standbyId?, refused? }`: the one way every
-  writer changes a pre-rendered slide (prerender-editor, editor-slideops, hub-writers): plans the result again,
+  writer changes a slide kept in a slide file (prerender-editor, editor-slideops, hub-writers; the inline record
+  of the first release is `planRecord`'s): plans the result again,
   writes its pages, rebuilds the stand-in and the key; inline whole when it needs no picture, inline with its
   record when only `chosen`, stand-in only when the store cannot hold it (W18).
 
