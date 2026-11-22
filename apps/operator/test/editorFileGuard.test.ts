@@ -16,7 +16,9 @@ import {
   change,
   openPresentation,
   redo,
+  resetEditorSessionsForTests,
   save,
+  savePresentationById,
   undo,
   useEditor,
 } from '../src/views/editor/editorStore.ts';
@@ -31,6 +33,7 @@ import {
 } from '../src/views/editor/ops.ts';
 import { findReplace } from '../src/views/editor/ops/slides.ts';
 import { useToasts } from '../src/state/toasts.ts';
+import { clearUnsavedRegistryForTests, visibleUnsavedItems } from '../src/state/unsaved.ts';
 
 // A spy on the one comparison, to show that an ordinary presentation never pays for it (EG10).
 const compared = vi.hoisted(() => ({ calls: 0 }));
@@ -161,7 +164,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('the editor and a slide kept as a slide file (EG1-EG10)', () => {
+describe('the editor and a slide kept as a slide file (EG1-EG13)', () => {
   it('EG1 change() refuses a move, a delete, an add, a text edit and a Find and Replace that reach the stand-in, with the owner words, and keeps the draft and the history', () => {
     const before = useEditor.getState().draft;
     const attempts: [string, (p: Presentation) => Presentation][] = [
@@ -339,5 +342,58 @@ describe('the editor and a slide kept as a slide file (EG1-EG10)', () => {
     expect(await save()).toBe(false);
     expect(toasts()).toEqual([`Could not save: ${FILE_FORM_REFUSAL}`]);
     expect(useEditor.getState()).toMatchObject({ conflict: false, saving: false, dirty: true });
+  });
+
+  // The owner's drafts across tabs (PR #43) saves a PARKED presentation by id (the unsaved list's Save, Save & Go live):
+  // a draft that was parked can have changed without `change()` (undo, the hub's job saves, a merge), so it meets the
+  // same guard as `save()`, and the hub's refusal is not shown as a conflict with someone else.
+  it('EG12 a parked presentation whose stand-in differs from its base is not sent by savePresentationById, and stays unsaved', async () => {
+    resetEditorSessionsForTests();
+    clearUnsavedRegistryForTests();
+    openPresentation(deck());
+    // a door change() does not guard: the draft set directly, then parked by opening another presentation
+    useEditor.setState({
+      draft: setText(useEditor.getState().draft!, 'big', 'g1', 'Changed beside the file'),
+      dirty: true,
+    });
+    openPresentation({ ...ordinaryDeck(), id: 'p2', title: 'Other' });
+    expect(useEditor.getState().id).toBe('p2');
+    expect(visibleUnsavedItems().map((i) => i.key)).toEqual(['pres:p1']);
+    useToasts.setState({ list: [] });
+    expect(await savePresentationById('p1')).toBe(false);
+    expect(hub.puts).toHaveLength(0);
+    expect(toasts()).toEqual([`Could not save “Sunday”: ${FILE_FORM_REFUSAL}`]);
+    // refused is not saved: the draft is still in the unsaved list and the open presentation is the one it was
+    expect(visibleUnsavedItems().map((i) => i.key)).toEqual(['pres:p1']);
+    expect(useEditor.getState().id).toBe('p2');
+    resetEditorSessionsForTests();
+  });
+
+  it("EG13 the hub's refusal (409 stand_in_stale) of a parked save shows the owner words, opens no conflict dialog and keeps the draft unsaved", async () => {
+    resetEditorSessionsForTests();
+    clearUnsavedRegistryForTests();
+    openPresentation(deck());
+    change((p) => updateSlide(p, 'big', (s) => ({ ...s, notes: 'a note' })));
+    openPresentation({ ...ordinaryDeck(), id: 'p2', title: 'Other' });
+    vi.stubGlobal(
+      'fetch',
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'stand_in_stale',
+              message: 'The simple copy of a detailed slide was changed',
+              slides: ['big'],
+            },
+          }),
+          { status: 409, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    useToasts.setState({ list: [] });
+    expect(await savePresentationById('p1')).toBe(false);
+    expect(toasts()).toEqual([`Could not save “Sunday”: ${FILE_FORM_REFUSAL}`]);
+    expect(useEditor.getState()).toMatchObject({ id: 'p2', conflict: false });
+    expect(visibleUnsavedItems().map((i) => i.key)).toEqual(['pres:p1']);
+    resetEditorSessionsForTests();
   });
 });

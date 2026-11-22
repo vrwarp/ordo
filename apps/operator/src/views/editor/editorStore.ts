@@ -744,6 +744,13 @@ export async function savePresentationById(
     toast(`Could not save “${sess.draft.title}”: ${size.refuse}`, 'error');
     return false;
   }
+  // The same guard as `save()`: a parked draft can have changed without `change()` too (the hub's job saves, a merge).
+  // Refused is not saved: the session stays dirty, so the unsaved list and the draft journal still hold it.
+  const refusal = fileFormGuard(sess.base, sess.draft);
+  if (refusal) {
+    toast(`Could not save “${sess.draft.title}”: ${refusal}`, 'error');
+    return false;
+  }
   sess.saving = true;
   syncRegistryForSession(sess, id);
   try {
@@ -764,6 +771,11 @@ export async function savePresentationById(
   } catch (e) {
     sess.saving = false;
     syncRegistryForSession(sess, id);
+    // The hub's own check of the same rule: not a conflict with someone else's save, so no conflict dialog.
+    if (e instanceof ApiFailure && e.code === 'stand_in_stale') {
+      toast(`Could not save “${sess.draft.title}”: ${FILE_FORM_REFUSAL}`, 'error');
+      return false;
+    }
     if (e instanceof ApiFailure && e.status === 409) {
       if (!force && !adopted && (await adoptParkedJobSaves(sess).catch(() => 'other')) === 'adopted') {
         return savePresentationById(id, false, true, merges);
