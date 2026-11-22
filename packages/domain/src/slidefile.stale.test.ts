@@ -102,7 +102,7 @@ describe('staleStandIns (ST1-ST8)', () => {
       ...s,
       notes: 'a new note',
       durationMs: 5000,
-      transition: { kind: 'fade', ms: 300 },
+      transition: { kind: 'crossfade', ms: 300 },
       hidden: true,
       midiCues: [],
       audio: { mediaId: 'sound' },
