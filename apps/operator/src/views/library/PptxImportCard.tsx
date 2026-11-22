@@ -15,6 +15,7 @@ import {
   readNativeResult,
   wholeLine,
 } from '../../lib/pptxImport.ts';
+import { rasterLines } from '../../lib/pptxRaster.ts';
 import { jobResultPresentationId, useJob } from '../../services/jobs.ts';
 import { useLibrary } from '../../state/library.ts';
 import { navigate } from '../../useRoute.ts';
@@ -180,6 +181,11 @@ function NativeSummary(props: {
           {wholeLine(r.whole, props.deviceCanBake)}
         </span>
       ) : null}
+      {rasterLines(r.rasters).map((line) => (
+        <span key={line} className="muted small" data-rasters>
+          {line}
+        </span>
+      ))}
       {r.hybrid > 0 &&
         (noLo ? (
           <span className="muted small">

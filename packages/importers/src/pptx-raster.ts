@@ -27,6 +27,8 @@ export function putBackRaster(slide: Slide, raster: Pick<EmittedRaster, 'uses' |
 
 /** What an import's picture step came to (`PptxNativeResult.rasters`, C-SR11), the operator's report reads it. */
 export interface RasterCounts {
+  /** Many-point shapes (and shapes past a converter limit) the deck holds on slides that may take a picture. */
+  candidates: number;
   /** Shapes drawn into pictures (the many-point shapes and the small ones drawn with them). */
   shapes: number;
   /** Pictures planned, stored (made here), reused (found already stored) and put back (not made). */

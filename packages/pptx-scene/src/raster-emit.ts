@@ -125,6 +125,8 @@ export interface EmittedRaster {
   members: number[];
   /** The words of the members that carry text (the slide's imported text keeps them for search: Q68). */
   words?: string;
+  /** How many of the members carry words (the report counts them). */
+  wordShapes?: number;
 }
 
 /** The part of the emitter's context this file reads (`EmitCtx` has these fields from step 5 of the track). */
@@ -631,6 +633,7 @@ export function emitRaster(
     objects: putBack,
     members: run.members.map((m) => m.element.shapeId),
     ...(run.words ? { words: run.words } : {}),
+    ...(run.members.some((m) => m.text) ? { wordShapes: run.members.filter((m) => m.text).length } : {}),
   });
   return true;
 }

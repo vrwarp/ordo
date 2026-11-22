@@ -168,6 +168,12 @@ export type PptxClientScene = {
    * before. The hub uses the scene only when its own switch is the same (D7).
    */
   wholeSlides?: true;
+  /**
+   * Q53 (C-SR10): how many many-point shapes (or shapes past a converter limit) the parse found on slides that may take a picture
+   * (the browser's parse always runs the converter's 'detect' mode, which changes nothing it stores); absent: none. A hub that draws
+   * the pictures of such shapes itself does not use the scene (`clientScene.ts`); one that cannot takes it as it is. Never a recipe.
+   */
+  rasterCandidates?: number;
 };
 
 /** A client parse: the scene, and what the assembly reads beside it. */
@@ -415,6 +421,8 @@ export async function parsePptxScene(
     sheets: PPTX_SHEETS,
     ...(withLo ? {} : { libreoffice: false }),
     ...(whole ? WHOLE_PARSE : {}),
+    // Q53: count the shapes a hub may draw as pictures (the output is today's: the planner is not run).
+    rasters: 'detect' as const,
     newId,
   };
   const first = convertDeck(parts, { ...base, range: { from: 0, to: 0 } });
@@ -466,7 +474,10 @@ export async function parsePptxScene(
   const named = nameShapeFiles(result.slides, emittedShapeFiles(result), L.batchGeomBytes);
   const names = new Map(named.files.map((f) => [f.id, f.hash]));
   const over = new Set(named.over);
-  const slides = result.slides.map((s) => {
+  // The scene holds no plan of pictures: only the count of shapes it found (`rasterCandidates`).
+  let candidates = 0;
+  for (const s of result.slides) candidates += s.rasterInfo?.candidates ?? 0;
+  const slides = result.slides.map(({ rasterInfo: _plan, rasters: _recipes, rasterWords: _words, ...s }) => {
     if (!over.has(s.index)) return { ...s, slide: nameGeoms(s.slide, names) };
     const keep = new Map(names);
     for (const o of s.slide.objects) {
@@ -495,6 +506,7 @@ export async function parsePptxScene(
     ...(over.size ? { geomOver: [...over] } : {}),
     ...(withLo ? {} : { libreoffice: false }),
     ...(whole ? { wholeSlides: true as const } : {}),
+    ...(candidates > 0 ? { rasterCandidates: Math.min(100_000, candidates) } : {}),
   };
   onProgress?.(1);
   return { scene, zip, sizes, ms: performance.now() - t0 };

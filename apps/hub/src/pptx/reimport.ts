@@ -1067,6 +1067,7 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
           hash: pl.hash,
           name: p0.title,
           ...(pl.options ? { options: pl.options } : {}),
+          ...(pl.deferrals ? { deferrals: pl.deferrals } : {}),
           done: { media: [], ...pl.done, presentationId: p0.id },
         },
         signal: ctx.signal,
@@ -1074,20 +1075,27 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
         progress: (f) => ctx.progress(0.9 * f),
         setPayload: (np) => {
           nctx.payload = np;
-          ctx.setPayload({ ...ctx.payload, ...(np.done ? { done: np.done } : {}) });
+          ctx.setPayload({
+            ...ctx.payload,
+            ...(np.done ? { done: np.done } : {}),
+            // Q53: the deferral count of the picture step (a service is live) is this job's too.
+            ...(np.deferrals !== undefined ? { deferrals: np.deferrals } : {}),
+          });
         },
       };
       let build: NativeBuild;
       try {
         build = await buildNative(deps, nctx, {
           ...env,
+          // Q57.d: 'Reset slide' asks for no picture step (`PptxReimportReq.rasters`).
+          ...(pl.rasters === 'off' ? { rasters: 'off' as const } : {}),
           only: scopeOf(p0, req, tags, names),
           reserve: keptBytes(p0, plan, !!req.slideIds),
           // Q28.a: the slides it keeps that are kept whole share the share with the heavy slides it builds.
           heavyReserve: keptHeavyBytes(p0, plan, !!req.slideIds),
         });
       } catch (e) {
-        if (ctx.signal.aborted) throw e;
+        if (ctx.signal.aborted || e instanceof JobDeferred) throw e;
         throw new Error(`The PowerPoint file could not be converted again: ${logSafe(errorMessage(e), 300)}`);
       }
       fresh = freshOf(build, !req.slideIds);

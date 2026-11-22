@@ -96,7 +96,13 @@ export function PptxSlideCard({ slide, p, readOnly }: { slide: Slide; p: Present
     );
     // Q57.d: the slide is converted again without the picture step, so its shapes come back as shapes.
     if (ok)
-      await startReimport(p, { slideIds: [slide.id], reset: [slide.id], rasters: 'off' }, 'reset', slide.id);
+      await startReimport(
+        p,
+        { slideIds: [slide.id], reset: [slide.id], rasters: 'off' },
+        'reset',
+        slide.id,
+        holdsRaster(slide),
+      );
   };
   return (
     <PptxSlideCardView

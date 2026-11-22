@@ -117,11 +117,15 @@ const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : 
 export function reimportMessage(
   what: ReimportWhat,
   r: PptxReimportResult | undefined,
+  /** Reset slide of a slide that held a picture of shapes (`holdsRaster`): its shapes are shapes again (Q57.d). */
+  heldPicture = false,
 ): { text: string; tone: 'ok' | 'warn' } {
   if (!r) return { text: 'The re-import is done. Reload the presentation to see it.', tone: 'warn' };
   if (what === 'reset')
     return r.regenerated
-      ? { text: 'The slide is as the PowerPoint file has it again.', tone: 'ok' }
+      ? heldPicture
+        ? { text: "The slide's shapes are shapes again; shapes too large for ordo stay boxes.", tone: 'ok' }
+        : { text: 'The slide is as the PowerPoint file has it again.', tone: 'ok' }
       : { text: 'Nothing to reset: the slide is as the PowerPoint file has it.', tone: 'ok' };
   if (what === 'make-editable')
     return r.replaced

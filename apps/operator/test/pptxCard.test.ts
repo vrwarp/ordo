@@ -578,6 +578,13 @@ describe('the re-import job in the editor', () => {
     expect(reimportMessage('reset', r({ rev: 4, regenerated: 1 })).text).toBe(
       'The slide is as the PowerPoint file has it again.',
     );
+    // Q57.d: a Reset slide of a slide that held a picture of shapes says its shapes are shapes again.
+    expect(reimportMessage('reset', r({ rev: 4, regenerated: 1 }), true).text).toBe(
+      "The slide's shapes are shapes again; shapes too large for ordo stay boxes.",
+    );
+    expect(reimportMessage('reset', r({ rev: 4, regenerated: 1 }), false).text).toBe(
+      'The slide is as the PowerPoint file has it again.',
+    );
     expect(reimportMessage('make-editable', r({ rev: 4, replaced: 1 })).tone).toBe('ok');
     expect(reimportMessage('make-editable', r({})).text).toContain('it stays a picture');
     expect(reimportMessage('reimport', undefined).tone).toBe('warn');

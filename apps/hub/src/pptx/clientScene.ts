@@ -63,6 +63,12 @@ export type ClientSceneTaskInput = {
   /** Q24.b: whether this hub keeps heavy slides whole (`wholeSlidesFor`, decided once by the job); absent: no. */
   wholeSlides?: boolean;
   /**
+   * Q53: whether this hub draws the pictures of many-point shapes itself (`rastersFor` is not 'off', decided once by the job): a scene
+   * that holds such shapes (`rasterCandidates`) is then refused, and the hub parses the deck itself and plans the pictures. A hub that
+   * cannot draw them takes the scene (today's output). Absent: no.
+   */
+  rasters?: boolean;
+  /**
    * Rule H (sub-wave 1c): the scripts the hub measures table cells in with a face only its computer has
    * (`systemFaces.ts` `systemOnlyScripts`); a scene with a table cell in one of them is refused. Absent: none.
    */
@@ -73,6 +79,9 @@ export type ClientSceneTaskInput = {
 
 /** Why a scene parsed for the other answer of the whole-slide switch is not used (Q24.b, D7). */
 export const WHOLE_REFUSAL = 'parsed with another whole-slide option';
+
+/** Why a scene that holds many-point shapes is not used by a hub that draws their pictures (Q53, C-SR10). */
+export const RASTER_REFUSAL = 'it holds shapes this hub draws as pictures';
 
 /** Why a scene whose table cells need a script face only the hub's computer has is not used (rule H). */
 export const SCRIPT_FACE_REFUSAL = 'its tables need a script face only this computer has';
@@ -248,6 +257,8 @@ export const PptxClientSceneSchema = z.object({
   geomOver: z.array(int(MAX_SLIDES)).max(MAX_SLIDES).optional(),
   libreoffice: z.literal(false).optional(),
   wholeSlides: z.literal(true).optional(),
+  // Q53 (C-SR10): the many-point shapes the browser's parse found (a count, never a recipe: the schema has no such field).
+  rasterCandidates: int(100_000).min(1).optional(),
 });
 
 /** The first problem of a refused parse, in a few words for the job log (no deck string in it). */
@@ -262,7 +273,7 @@ function why(e: z.ZodError): string {
  */
 export function checkClientScene(
   raw: unknown,
-  o: { libreoffice: boolean; wholeSlides?: boolean },
+  o: { libreoffice: boolean; wholeSlides?: boolean; rasters?: boolean },
 ): ClientSceneTaskOutput {
   try {
     return check(raw, o);
@@ -271,9 +282,18 @@ export function checkClientScene(
   }
 }
 
-function check(raw: unknown, o: { libreoffice: boolean; wholeSlides?: boolean }): ClientSceneTaskOutput {
+function check(
+  raw: unknown,
+  o: { libreoffice: boolean; wholeSlides?: boolean; rasters?: boolean },
+): ClientSceneTaskOutput {
   if (!raw || typeof raw !== 'object') return { refused: 'not a scene' };
-  const head = raw as { version?: unknown; m9Writes?: unknown; libreoffice?: unknown; wholeSlides?: unknown };
+  const head = raw as {
+    version?: unknown;
+    m9Writes?: unknown;
+    libreoffice?: unknown;
+    wholeSlides?: unknown;
+    rasterCandidates?: unknown;
+  };
   if (head.version !== CONVERTER_VERSION) return { refused: 'parsed by another converter version' };
   const fields = Array.isArray(head.m9Writes) ? new Set(head.m9Writes) : undefined;
   if (!fields || fields.size !== M9_WRITES.size || [...M9_WRITES].some((f) => !fields.has(f)))
@@ -286,6 +306,11 @@ function check(raw: unknown, o: { libreoffice: boolean; wholeSlides?: boolean })
   // Q24.b: so is the plan of heavy slides (kept whole, or cut by the ladder): a scene parsed for the other answer is
   // not used, either way (D7). Only `true` is the scene's answer; the schema refuses any other value of the field.
   if ((head.wholeSlides === true) !== (o.wholeSlides === true)) return { refused: WHOLE_REFUSAL };
+  // Q53: a scene with many-point shapes is not used by a hub that draws their pictures (it would store them as today's boxes);
+  // it parses the deck itself. A hub that cannot draw them takes the scene as it is. A recipe-like field never passes: the schema
+  // has none, and the parse below drops any field it does not name.
+  if (o.rasters === true && typeof head.rasterCandidates === 'number' && head.rasterCandidates > 0)
+    return { refused: RASTER_REFUSAL };
   const parsed = PptxClientSceneSchema.safeParse(raw);
   if (!parsed.success) return { refused: why(parsed.error) };
   const s = parsed.data;
@@ -359,6 +384,7 @@ export function clientSceneTask(input: ClientSceneTaskInput): ClientSceneTaskOut
   const checked = checkClientScene(raw, {
     libreoffice: input.libreoffice,
     wholeSlides: input.wholeSlides === true,
+    rasters: input.rasters === true,
   });
   // Rule H: decided on the parsed scene, here in the pool (the deck is not read for it).
   if ('scene' in checked && tablesNeedScripts(checked.scene.slides, input.systemOnlyScripts ?? []))

@@ -151,8 +151,15 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   phones.onChange((on) => jobs.setPhones(on));
   const media = new MediaService(lib, store, jobs, cfg, log);
   const fonts = new FontService(lib, store, jobs, cfg, log);
-  const imports = new ImportService(lib, store, jobs, media, cfg, log, (id) =>
-    live.locks().presentations.has(id),
+  const imports = new ImportService(
+    lib,
+    store,
+    jobs,
+    media,
+    cfg,
+    log,
+    (id) => live.locks().presentations.has(id),
+    disk,
   );
   const live = new LiveService(db, librarySource(lib), log, {
     snapshotIntervalMs: cfg.snapshotIntervalMs,

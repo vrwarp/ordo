@@ -58,6 +58,9 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
     ...(input.libreoffice === false ? { libreoffice: false } : {}),
     // Q24.b: heavy, eligible slides kept whole, parsed as a browser parses them for the same hub (`WHOLE_PARSE`).
     ...(input.wholeSlides === true ? WHOLE_PARSE : {}),
+    // Q53: the pictures of many-point shapes are planned here and their recipes come back in `result.rasters`; the hub's job draws
+    // them (`rasterStore.ts`). 'detect' counts the shapes and changes nothing.
+    ...(input.rasters ? { rasters: input.rasters, rasterMaker: input.rasterMaker ?? 'page' } : {}),
     extendBackgrounds: input.options.extendBackgrounds ?? true,
     transitionSounds: input.options.transitionSounds ?? false,
     m9Writes: M9_WRITES,
