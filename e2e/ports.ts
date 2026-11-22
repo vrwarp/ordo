@@ -269,6 +269,27 @@ export const PORT_TABLE = {
     spec: 'sw2-seams.spec.ts',
     what: '0 hub without LibreOffice (a restarted hub with a crowded service: the screen holding the copy is sent its state by name and still draws the top square), 1 hub without LibreOffice with ORDO_MIN_FREE_GB=10000 (the free-space floor: uploads and imports paused, the service keeps running)',
   },
+  // import-whole (Q24.b, sub-wave 3): heavy slides come in whole through the upload route; the off hub reuses port 0 after the first hub ends.
+  'pptx-prerender-import': {
+    offset: 540,
+    count: 2,
+    spec: 'pptx-prerender-import.spec.ts',
+    what: '0 hub with LibreOffice and ORDO_PRERENDER=on (then, in a later test, ORDO_PRERENDER=off), 1 hub without LibreOffice and ORDO_PRERENDER=on',
+  },
+  // bake-worker (Q24.b, sub-wave 3): the operator page makes, keeps and holds the pictures of heavy slides.
+  bake: {
+    offset: 520,
+    count: 1,
+    spec: 'bake.spec.ts',
+    what: 'hub (seeded heavy slides), ORDO_PRERENDER=on; restarted with ORDO_PRERENDER=off in the last test',
+  },
+  // shape-raster (Q53, sub-wave 3): many-point shapes drawn into one picture by the hub's own Chromium; the second hub has none.
+  'pptx-raster': {
+    offset: 550,
+    count: 2,
+    spec: 'pptx-raster.spec.ts',
+    what: '0 hub without LibreOffice with Chromium and ORDO_PRERENDER=on (the picture of shapes, the screen, Reset slide, Re-import), 1 hub without LibreOffice and without Chromium (the same deck as today, and says so)',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;

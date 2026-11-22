@@ -17,7 +17,7 @@ import type { FastifyInstance, RouteHandlerMethod } from 'fastify';
 import type { Logger } from 'pino';
 import { Auth } from './auth.ts';
 import { Backups } from './backup.ts';
-import { type HubConfig, loadConfig } from './config.ts';
+import { type HubConfig, loadConfig, logPrerender } from './config.ts';
 import { type DB, openDb } from './db.ts';
 import { DISK_MEASURE_MS, DiskFloor } from './diskfloor.ts';
 import { errorMessage, notFound } from './errors.ts';
@@ -126,6 +126,8 @@ export async function createLibraryProcess(
   mkdirSync(cfg.dataDir, { recursive: true });
   const ring = new LogRing(2000);
   const log = createLogger({ level: cfg.logLevel, stdout: cfg.logToStdout, ring, proc: 'library' });
+  // The sentence for an explicit off is the library process's; the live process logs the warning only.
+  logPrerender(cfg.prerender, log, true);
 
   const db = openDb(join(cfg.dataDir, 'ordo.db'));
   const lib = new Library(db, { timeZone: cfg.timeZone });
@@ -155,8 +157,15 @@ export async function createLibraryProcess(
   phones.onChange((on) => jobs.setPhones(on));
   const media = new MediaService(lib, store, jobs, cfg, log);
   const fonts = new FontService(lib, store, jobs, cfg, log);
-  const imports = new ImportService(lib, store, jobs, media, cfg, log, (id) =>
-    liveView.locks().presentations.has(id),
+  const imports = new ImportService(
+    lib,
+    store,
+    jobs,
+    media,
+    cfg,
+    log,
+    (id) => liveView.locks().presentations.has(id),
+    disk,
   );
   const timeZone = () => venueTimeZone(lib.getSetting('general').timeZone, cfg.timeZone);
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
@@ -183,8 +192,12 @@ export async function createLibraryProcess(
     known: () => known,
   };
   let liveUrl: string | undefined;
-  const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, { live: () => locks.mode, log });
-  const prerenders = new PrerenderStore(lib, store, liveView, { log });
+  const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, {
+    live: () => locks.mode,
+    log,
+    open: () => cfg.prerender.store,
+  });
+  const prerenders = new PrerenderStore(lib, store, liveView, { log, open: () => cfg.prerender.store });
   const backfill = new RefBackfill(lib, { live: () => locks.mode, log });
   const collector = new Collector(lib, store, {
     mode: cfg.collect,

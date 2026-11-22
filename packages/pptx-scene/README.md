@@ -994,6 +994,19 @@ cells, '1년차' and '２년차', 24 pt in a 46.6 pt column, each over 4 rows, a
   `e2e/ipad/table-targets.spec.ts` (`verticalTableDeck`).
 <!-- /r2b:vert-cells -->
 
+## Q24.b (sub-wave 3): a slide kept whole (`budget.ts`, `version.ts`)
+
+<!-- import-whole:begin -->
+- `CONVERTER_VERSION` is 3. `ParseOptions.wholeSlides` (with `wholeAnchors` 'motion' | 'own' and `wholeAnchored`) turns the rule on;
+  absent, the plan is the version-2 one, byte for byte (recorded plans pin it).
+- The rule (`wholeSlide`, `wholeAnchorKinds`, `BudgetPlan.whole` and `anchorKinds`): an eligible slide is kept whole, planned without the
+  guard and the picture limit, when no anchor stops it (a visible video clip with a part from the slide: 'clip'; a picture
+  background only under 'own': 'background') and its planned objects after the reliefs are at most `WHOLE_OBJECTS_MAX` (1,000,
+  pinned equal to `MAX_OBJECTS` and `Slide.objects`; past it: 'bound', today's plan). `WHOLE_ANCHORED` (false) is pinned equal to
+  the domain's `PRERENDER_ANCHORED`; this package cannot import it (purity), so the importer passes it (`wholeAnchored`).
+- `ParseOptions.onBudget` reports each slide's plan to the caller (the census's window), never stored.
+<!-- import-whole:end -->
+
 ## Module map
 
 | File            | What                                                                                                                                                 | Owner         |
@@ -1547,3 +1560,13 @@ Still to do: the 64 KB slide JSON budget for path data (§3.4: the converter cou
 the hub's `planImportSizes` makes a slide whose stored paths pass it a compact picture, and a traced
 decoration of 6,500 points in 7-digit EMU is 100 KB of path text on its own); kerning and unknown transitions as approx (slide-level, M8); `artText` from `ArtRange.elements`
 (emission, M3).
+
+<!-- shape-raster:readme -->
+### Pictures of many-point shapes (Q53)
+
+`ParseOptions.rasters` ('off' default, 'detect' counts, 'plan' writes) and `rasterMaker`: `planRasters` (raster-plan.ts) marks the
+runs after the walk and before the budgets, `emitRaster` (raster-emit.ts) writes each as one locked image with its recipe in
+`EmitResult.rasters` (raster.ts: the constants, the capability list `RASTER_MAY_HOLD`, the canonical bytes and the hash), the wide
+geometry comes from `raster-wide.ts`. With 'off' and 'detect' the output is byte for byte what it was before (raster-record.test.ts).
+Pure: it imports nothing of the hub; the hub draws the recipes (design 29, `apps/hub/src/pptx/README.md`).
+<!-- /shape-raster:readme -->

@@ -113,10 +113,25 @@ by the hub, `apps/hub/src/pptx/clientScene.ts:16`), and decor-render's plate sto
    converter's guard and the screens' clamp stop leaving content out.
 3. **One picture store.** Pre-rendered slides and, later, decoration plates (bake-on-save P3/P4) share one table,
    key format, upload route, collection and goLive listing, grown from `add91d9`'s plates, not forked.
-4. **Only ordo draws pictures, only on a desktop.** A bake worker of the operator app on a desktop Chromium
-   (fine pointer, not a compact layout); iPads only after a WebKit parity probe; never a phone, the hub, an output
-   window or the Pages demo. While any service is live, only the go-live bake runs, on the computer that went
-   live, throttled; every other computer waits until the service ends (the owner's rule of 2026-11-13).
+<!-- raster-maker:decision-4 -->
+4. **Only ordo draws pictures; whole slides on a desktop, the pictures of many-point shapes in the hub's own
+   Chromium.** CHANGED in sub-wave 3 by the owner's Q56.a and Q56.d ("the hub should be able to use the different
+   tools instead of a pure-javascript rasterizer and on the browser, it should leverage the browser where
+   possible"). The pre-render pictures of whole slides stay a desktop browser's: a bake worker of the operator app
+   on a desktop Chromium (fine pointer, not a compact layout); iPads only after a WebKit parity probe; never a
+   phone, an output window or the Pages demo. While any service is live, only the go-live bake runs, on the
+   computer that went live, throttled; every other computer waits until the service ends (the owner's rule of
+   2026-11-13). What is NEW: a custom-path shape with more points than the screens may draw (Q53) is drawn as a
+   picture AT IMPORT by the hub's own headless Chromium running the same renderer in a small page
+   (`apps/hub/src/pptx/raster-page.ts`, its driver `rasterPage.ts`, the loop and the ladder `rasters.ts`): it
+   reads a written recipe (`raster-recipe.ts`), draws each shape with `drawShapeWide` (a geometry the converter
+   built, never clamped to the stored limits) and each text member's words with the screens' own text drawing,
+   and returns a PNG. The earlier notes that the hub never draws ("it has no Canvas 2D") are superseded: Chromium
+   is its Canvas 2D. The import-time browser runs in the light import job, niced and in its own process group, is
+   DEFERRED while any service is live and is killed within a quarter of a second if one goes live in the middle
+   of a picture or while the browser is still starting; a screen never waits on a picture. A hub with no Chromium plans no pictures of shapes (LibreOffice's
+   art as today, else today's boxes, and one report line). See "As built in sub-wave 3 (raster-maker: the picture maker)" at the end of this document.
+<!-- /raster-maker:decision-4 -->
 5. **A picture is complete or it is not uploaded.** It is keyed by everything it depends on (slide, live set,
    media files, every font face of the resolution chain, renderer version) and drawn only with library and
    bundled fonts, so two computers make the same pixels for one key and a stale picture is never shown as current.
@@ -162,6 +177,31 @@ Every writer runs the plan: the PowerPoint import on both paths, the ProPresente
 (today only the PowerPoint import and the editor's add refusal look at counts, so a ProPresenter slide with 20
 pictures is cut silently by the screens' clamp), re-import, Reset slide, the LibreOffice follow-up, Make editable
 and every editor operation (§1.8, §1.12).
+
+**As built in sub-wave 3 (Q24.b, the first pre-render release).** The first release gives a picture only to a slide
+in which nothing moves, and decides it with `easyPlan(slide, opts)` and `planRecord(slide, opts)` in
+`packages/domain/src/prerender.ts`, one pair of pure functions that the PowerPoint import and the editor's save both
+call with the same options, so a slide never flips between "has a picture" and "has none" because of who looked.
+A slide gets a record when it is heavy for a reason a flat picture can fix: `bytes` (stored over 64 KiB, Q26.c) or
+`count` (more than 200 drawn objects or 16 distinct pictures, Q26.a, the slides the screens cut today). A slide that
+is only slow to draw gets none (Q26.b: there is no cost reason), and nor does one whose only excess is a box over
+10,000 characters, 16 font families or 64 size scales: a bake draws under the same per-object clamps, so a picture
+would not help. What keeps a slide out (an anchor, "an anchored slide stays exactly as today", Q24.b) is a playing
+picture or video, step-by-step text, a moving background and, in a song only, the lyric box (Q25.a: ordo marks the
+main text of nearly every PowerPoint slide as its lyric box, and a picture is used only where a screen shows the
+slide as drawn, never in the lyric-only looks, so that mark does not count in a PowerPoint deck). Only a video counts
+as a moving background (Q25.c.b): a slide's own background picture, which the converter stores as the slide's own
+when a deck's slides differ, keeps nothing out; every caller passes `isMotion` (the import from its clips, the editor
+and the baker from the media kind), and a caller that cannot tell gets the safe answer, an anchor. Everything is
+read from the drawn content (`slideContent`), so the imported objects of a slide set to show its PowerPoint picture,
+which no screen draws, are not counted and are not anchors. The size is measured on the slide as drawn and without
+its own record: a record adds about 40 bytes, and within that band of 64 KiB the importer (no record yet) and the
+editor (a record already) would otherwise answer differently. A slide of any size the slide-file form can hold is
+planned (Q54); one the file refused carries `slide:too-large` in `pptx.missing` (`PRERENDER_REFUSED_MISSING`) and
+never gets a record. The record the release writes is `{ why, live: [] }`, with no `file` and no `uses`, and
+`planRecord` leaves alone any record that is not its own (a slide file, `tail`, `chosen`, a live set). No picture key
+moved: `liveAnchors` and `liveSet` now read the drawn content, which changes nothing for a slide that is not set to
+show its PowerPoint picture, and the keys of three fixture slides are pinned.
 
 ### 1.2 Data model
 
@@ -271,6 +311,20 @@ key       = sha256(canonicalJson({ v: PRERENDER_VERSION, source }))
   computes it too) runs in the editor, the bake worker and the hub's pool. Outputs never compute keys: goLive and the live
   events tell them which file is which slide's picture.
 
+**As built in sub-wave 3 (bake-render), section 1.2.** _Fonts._ The picture is drawn with the bake font profile (design
+27 section 10): the library's and the bundled faces and a blank face, never a face of the computer; a family with no
+face of its own is drawn in the default face and listed (`standIns`, Q31.c, the default; `standIns: 'abort'` makes it no
+picture), and a character no loaded face has is no picture (Q31.d, the default: this is stricter than the W30 text below,
+which makes the picture and reports the miss). _The version guard._ `packages/renderer/src/prerender-version.test.ts`
+records `PRERENDER_VERSION` (1) and a digest of every non-test source of the renderer except 13 files no picture reads,
+the output's decoders and picture provider, the domain files whose code decides pixels, the domain limits the drawing
+reads and the renderer's dependencies: a change of the drawing code fails it until the digest is recorded at the same
+version (the same pixels) or `PRERENDER_VERSION` is raised and both recorded (different pixels). A guard proves that no
+excluded file is imported by the bake's closure; guard (c) found that scene.ts, raster.ts and the table's edit.ts and
+hit.ts are reachable through the table drawer module, so they are digested. _Opacity._ The hub's `opaque` flag is the PNG
+header's colour type, not the pixels': an opaque picture is written as an RGB PNG (colour type 2) by a small writer in
+bake.ts, because Chromium writes RGBA for every canvas, an opaque one included.
+
 ### 1.3 Storage on the hub
 
 **Slide files.** `PUT /files/slide/<hash>` (edit role; refused for capped phone sessions) takes a head or a page,
@@ -293,6 +347,55 @@ own key order, taken natively because every save looks at every stand-in; the sa
 recompute, never a wrong key), so a presentation PUT adds one pool call only when a pre-rendered slide changed; pictures are `prerenders` rows (first upload wins, the operator's replaces, a live
 service pauses all but its own keys: 503 `paused_during_service`), and the goLive bundle lists them
 (`slideHeads`, `prerenders`, `prerenderKeys`, design/12 "HTTP API").
+
+<!-- import-files:begin 1.3 -->
+**As built in sub-wave 3 (import-files, the data-safety half, merged first whatever the route's gate says).** Nothing at the
+base wrote a slide file at import, and five guards cut a slide over 1,000 objects before one could be made; the route that
+writes them is import-files' second half (Q54, the pool kind, `SlideFiles.storeBytes`, the files stored before the one
+synchronous save, the byte cap, the disk floor). What is built before it, so that nothing can go stale or unbounded when the
+first file is written:
+
+- **The pure code** (`packages/domain/src/slidefile.ts`, additions only; `heavyform.ts`, new; neither is in the version
+  digest): `FullSlide` (a `Slide` of up to 20,000 objects, never stored inline), `INLINE_OBJECTS_MAX` 1,000 (the schema bound),
+  `FILE_OBJECTS_MAX` (`SLIDE_FILE_LIMITS.objects`, the bake clamp's and the frame's bound: pinned equal by
+  `packages/renderer/src/file-bounds.test.ts`, which also pins `GEOM_LIMITS`: no limit is raised), `STAND_IN_BYTES_MAX` 192 KiB,
+  `TEXT_DRAWN_MAX` 10,000 (what a screen draws and the import keeps of one box; `standInOf` merges up to 20,000), a code on the
+  three refusals of `slideFileOf`, and `heavyForm(full, { why, live })`: the slide file, the bounded stand-in with the record that
+  names it (`why` as the caller's `easyPlan` said, `live` as given: `[]` in this release, so Q24.a needs no change here) and the
+  head row's whole `uses`; or a named refusal (`objects`, `bytes`, `object`, `uses`, `standin`) with a plain stand-in and NO
+  record. The stand-in's text is laid out again within 10,000 characters a box and the 200 objects of a screen with every word
+  kept (a long box is split in place; whole boxes from the end are merged into the plain words before any word is cut); past
+  192 KiB the text from the end is cut (the first box and the background stay), then the smallest pictures.
+- **The refused slide gets no record.** A slide the file cannot hold is stored as its plain stand-in with the
+  `Slide.pptx.missing` entry `slide:too-large` (`PRERENDER_REFUSED_MISSING`) and no `prerender`: a record without a file looks
+  exactly like an inline whole slide, and a baker would draw a picture of the stand-in as if it were the slide. `planRecord`
+  returns such a slide unchanged.
+- **A stand-in is never changed beside its file** (`staleStandIns(prev, next)`): the picture and its key come from the file, so
+  a changed stand-in would leave both as they were while the screens drew something else. The editor refuses it in `change()`
+  and in `save()` (which also covers undo, redo, the hub's job saves and merging someone else's: none go through `change()`)
+  with "This slide is too detailed to edit shape by shape: it is kept whole on the hub. Its notes, timing and transition can
+  be changed; Reset slide builds it again from the PowerPoint file." (a change across slides adds "change the other slides one by
+  one"); the hub's `PUT /presentations/:id` answers 409 `stand_in_stale`. A slide's notes, timing, transition, hidden flag, MIDI
+  cues, sound and bottom-third words are not objects and stay editable. The hub's own writers are pinned never to be doors:
+  `patchSlide` returns such a slide unchanged, Make editable answers 400 `not_imported`, the text repair changes only
+  `imported.textBoxes` and `textAligned`, which the key's drawn part leaves out. A writer that changes a stand-in's objects must
+  call `staleStandIns`.
+<!-- import-files:end 1.3 -->
+
+<!-- store-2:costs -->
+_What the store costs a save and a listing, as measured in sub-wave 3 (store-2)._ The same build was started with
+`ORDO_PRERENDER=off` and `on` and their saves alternated one by one (108 per arm and case, on a shared machine: read the
+medians; two `off` hubs measured against each other move a median by up to 20 ms and a p95 of differences by up to 100). A
+save with heavy slides stored whole inline stringifies and hashes each of them once, 3.2-3.4 ms a MB (6 ms for six slides
+of 300 KB, 23 ms for sixty of 121 KB); on minus off the median is +9 ms for six unchanged 300 KB slides and +33 ms for sixty
+unchanged 121 KB slides, and a changed heavy slide adds one pool task (about 10 ms of pool time for 290 KB) and measures +31 ms
+and +72 ms (sub-wave 2: +112 ms). That floor is above the +5 ms the release asked for unchanged slides, which is not met; the only
+exact cheaper test needs the stored revision parsed, which costs more (11 ms and 32 ms). The picture files a save names are
+read once per picture, not once per slide (a third of that work at forty pictures a slide). The picture listing answers 20
+keys in 2 ms, 1,000 in 11 ms (p95 16) and 5,000 in 62 ms (p95 86; the three statements replaced a join that took 70 and 102): the
+answer is 1.1 MB, 21 ms of the 62 are the presentation's budget line, not the listing, and the 20 ms target is met to 1,000 keys.
+
+<!-- /store-2:costs -->
 
 **Keys computed at save.** The pool computes each pre-rendered slide's key and stand-by id when a presentation is
 saved, into `prerender_keys(presentation_id, rev, slide_id, key, standby_id)`; a background job recomputes the rows
@@ -419,11 +522,74 @@ with `prerender.add`.
 It ships switched off on Setup ("Make missing pictures during the service", W45; owner question 13) until §1.13
 measure 2 passes on a venue-class PC.
 
+**As built in sub-wave 3 (bake-render), section 1.4.** `bakeSlide` (packages/renderer/src/bake.ts) draws the slide whole
+through the underlay frame's step machine and is complete or nothing: a picture is made only when every object was drawn,
+and each of these ends it with a named reason and leaves nothing behind (no frame in progress, no work bytes, no
+unit-cache entry): `coverage` (a character no loaded face covers, also in shadowed, glowing, gradient and table text),
+`font` (a face that failed to load, a family with no face at all, a stand-in under `standIns: 'abort'`), `media` (a
+picture file that is not there), `files` (a geometry or decoration file not read), `draw` (an object whose draw threw: the
+live frame leaves it out and goes on, the bake does not), `animated` (a playing picture or a hidden paragraph, unless
+its id is in the live set), `cut` (more than 20,000 objects), `fonts` (the font set changed while it ran), `time` (over
+`BAKE_DEADLINE_MS`, 60 s, at most 180 s: Q38.a), `cancelled`, `busy`, `frame`, `canvas`, `blank`, `profile`, and from the
+encoder `size` (a file over 32 MiB) and `verify` (the round trip). The encoders write an exact 3840x2160 PNG, a 1920x1080
+copy made once from the canvas with high-quality smoothing and a 640x360 WebP preview (the only picture that is slightly
+compressed), in upload order 1920, 3840, 640; the 3840 PNG is decoded and compared with the canvas in 64 sampled tiles
+(exactly for an opaque picture, within 2 levels where there is alpha) before anything is returned, because the hub checks
+only the header and the first upload wins.
+
+**As built in sub-wave 3 (bake-worker), section 1.4.** The service is `apps/operator/src/services/bake.ts`, the plan
+`bakePlan.ts`, the status store `state/bake.ts` (what the editor and the Go-live check read), the worker
+`workers/bake.worker.ts` with `bakeJob.ts`, and the first-load part `bakeBoot.ts` (the gate, the press of Go live, the
+actions). _Who:_ `canBake` (lib/capabilities.ts) admits a Chromium on a desktop by three Chromium-only secure-context
+APIs (`navigator.userAgentData` that is not mobile, `navigator.hid`, `getScreenDetails`: Q30.c, so a page over plain http by
+a LAN address and an iPad with a mouse do not), a regular layout, a fine pointer, not a phone, not the demo, 4 GB where
+reported, `OffscreenCanvas`, `Worker`, an operate or edit session (`BAKE_ROLES`), the hub's switch on and no `?bake=off`.
+_Asks the hub:_ the boot reads `GET /capabilities` at its start and on each reconnect only where `mayReadCaps` holds (not a phone, even
+on the regular layout, and a session whose cap is `full`), because the hub answers 403 `cap` to a capped session and a phone's gate is `unsupported` whatever it says.
+_When:_ 15 s after start plus up to a third of that as jitter, 3 s after the last change of a burst of library changes,
+2 minutes after End service (the hub's `PAUSED_RETRY_S`, a test reads both), every 5 minutes only while something is
+pending, and after a save the hub has not keyed yet at 2, 5, 15, 60 and 120 s. _Never during a service:_ the
+Controller's three Go live calls stop a running picture on the spot, right after the GO is posted (the worker is terminated; a
+hold that throws is logged and never stops the GO), the
+stores' `mode`, `held`, `authority` and `goLivePrepare` hold the sweep, and the hub's 503 `paused_during_service` is a hold
+of 10 minutes or until End service plus 2 minutes, never a failure. _Which:_ the key is computed with
+the domain's own `pictureSource` and `prerenderKey`: on the main thread in slices of 8 ms for a slide of fewer than 300
+objects, and by a tiny keys worker (`workers/bakeKeys.worker.ts`, the same function over a message of slides) for a heavy one,
+because a slide of 600 KB costs the main thread about 30 ms (canonical JSON and a plain-JavaScript SHA-256) and 5 to 8 ms
+to hand to a worker; a keys worker that is absent, breaks or does not answer in 15 s is not a failure, the plan works the key
+out as before. A slide kept in a slide file is keyed by the hub: the worker rebuilds it, computes the key and uploads only if
+it equals the listed one. A picture is made only for a key the hub LISTS. A key is worked out once: the plan keeps what it
+computed for a presentation (`cachedSlides`) while its object, rev and the media and font lists are the same, and the
+re-reads of the slide before each bake and before the first upload, at a library change and in the editor's refresh ask that
+memory for the one slide, so a presentation that has not changed costs no key and an edit costs the running slide's key
+once (on the main thread) and the others in the next sweep. Only the sizes the listing lacks go up, 1920,
+3840, 640, never a replace. _Failures:_ the slide's own (`coverage`, `time`, `size`, `animated`, `cut`, `draw`, `frame`,
+`canvas`, `blank`, `verify`, `profile`, and `font` after two tries) are posted once with `reasonFor` (at most 200 characters);
+`cancelled`, `busy`, `fonts`, `media`, `files` are retried after 10 s and 60 s and posted the third time; a worker that broke or
+never answered, a service, the network, the hub's budget (507 `budget`: the presentation is skipped, shown failed here only)
+and disk (507 `disk`: ten minutes' hold) are never posted; a `stale` answer of a file-form slide is a key mismatch and lists
+the presentation once more. _A finding of the browser tests:_ a reloaded page's library `source` stays `'cache'` for ever (the
+IndexedDB copy is the first message and the hub's snapshot after it is a patch that does not carry the source), so the service
+reads `loaded` and the absence of a read error instead; the hub's listing is the arbiter in any case.
+
+_Measured_ (a 4-core machine that draws 4K on the CPU, software canvases, other work running: loadavg 6 to 10; a venue PC
+decides; median of five at 3840 x 2160, service = the worker from the job to the blobs): a 340-object slide 0.42 s, 1,000
+objects 0.46 s, 300 pictures 0.74 s, two 10,000-character boxes 1.6 s, 300 distinct 1600 x 1200 photographs 2.9 s, a
+1,357-shape slide kept in a slide file 0.53 s and one of 20,000 objects 1.8 s (900 ms of it reading the pages); the browser
+tree 130 to 230 MB above an idle page, back to the idle figure 30 s after the last picture; the biggest PNG 5.4 MB (text),
+the photograph slide's 3840 PNG 2.97 MB against the 32 MiB bound. The press of Go live to the worker's end 1 to 13 ms and no
+upload after it; End service to the next sweep 120.03 s on the real timer; a quiet library sent no request in 10 minutes;
+a hidden tab made the same picture 1.17 times slower; two computers opened within 2 s of each other both made the picture
+and the second one's uploads were all answered `dropped` (the cost of a claim route would be one bake, 0.4 to 3 s of one
+core, a follow-up and not a defect).
+
 ### 1.5 What stays live above the picture
 
 - **Anchors**: the lyric box (`lyricObjectId`); text with build steps (`TextPara.hidden`, `schemas.ts:417`); every
   picture that plays (`ImageObject.play`, :561: in-slide video, a motion background inside the slide); the props
-  layer (clock, countdown) is already a layer of its own.
+  layer (clock, countdown) is already a layer of its own. In sub-wave 3 an anchor keeps a slide out of the first
+  release (§1.1 "As built in sub-wave 3"); `PRERENDER_ANCHORED` is the one gate Q24.a flips to give such a slide a
+  picture under its live set.
 - **Live set** = the anchors plus every object above an anchor that overlaps it, or overlaps an object already live,
   with shadows and glows in its reach: `splitScene`'s rule (`packages/renderer/src/scene.ts:441`), built and
   golden-tested for in-slide video. Everything else is in the picture, under the live set. That is exact for
@@ -585,6 +751,27 @@ demand.
 - No LibreOffice stand-by (owner question 12, default no): a big slide whose picture no computer has made yet is
   drawn by the screens themselves, not shown as LibreOffice's page meanwhile.
 
+<!-- import-whole:begin 1.9 -->
+**As built in sub-wave 3 (import-whole, Q24.b).** The first release stops at the plan, not at the picture: a heavy slide
+in which nothing plays or steps is KEPT WHOLE as ordo's own editable shapes and gets a pre-render record, on a hub without
+LibreOffice (Q27.b, the default, chosen while the owner has not answered: `WHOLE_WITH_LIBREOFFICE` is
+false, so a hub that has LibreOffice follows today's plan exactly, the guard's cut and LibreOffice's art and page; true is
+Q27.a, which keeps heavy slides whole there too; it matters only when the hub's switch is on). `wholeSlidesFor({ prerender, lo })` (`packages/importers/src/pptx-core.ts`) is the one answer the hub's job,
+the operator's parse, the harness and the demo ask; the hub's `prerender` is `HubConfig.prerender.on` (`ORDO_PRERENDER`,
+never the domain constant) and the job decides it once, after its tools are known. The converter (`budget.ts`
+`BudgetOptions.whole`) keeps an eligible slide whole (no guard, no picture limit) when no anchor stops it, a visible video
+clip with a part from the slide (Q25.c.b: only a video counts; a picture background is an anchor only under the arm 'own')
+and its planned objects after the reliefs are at most `WHOLE_OBJECTS_MAX` (1,000, the INLINE bound, Q54: a slide past it
+follows today's plan until the slide-file route keeps it whole out of line). `ImportCore` plans the heavy slides first
+(`easyPlan(...).record`: over 200 drawn objects, 16 pictures or 64 KiB stored), each at level `full` or `grid`
+(`wholeLevel`), their bytes counted against the presentation's reserve but not its 6 MiB mark, within a 2 MiB share
+(`WHOLE_SHARE_BYTES`, Q28.a, counted as `quickBytes` counts them); a heavy slide past the share is cut to the screens'
+counts (`trimToCounts`: 200 objects, 16 pictures from the bottom, what is left out listed as missing, one report line).
+LibreOffice's page for size and the guard's art never apply to a slide kept whole; the LibreOffice follow-up plans the
+record again after its art is added (`patchSlide`'s `record`), and a queued follow-up written before this still finishes
+(there is no version gate).
+<!-- import-whole:end 1.9 -->
+
 ### 1.10 Import report
 
 The report (`PptxReport.tsx`; `importReport`, `apps/operator/src/lib/pptxImport.ts:569`) and the import card
@@ -594,6 +781,17 @@ the slide's own line. Each critical line also writes a slide note (`Slide.pptx.m
 not from PowerPoint) that the Go-live check repeats. The ProPresenter report gains W4 for its count slides, W64 and
 W65. The texts that go: "slide n is over 64 KB: LibreOffice draws its page" (`pptx-core.ts:496`), "simplified to
 fit the slide budget: … left out" (:528), the tail and 200-character notes (:537-576).
+
+<!-- import-whole:begin 1.10 -->
+**As built in sub-wave 3 (import-whole).** One static line says how many slides were kept whole (W1, W4): "N slides are very
+detailed and were kept whole; the screens show a picture of each, made on this computer" (singular and plural; W2 says
+"made on a computer with Chrome or Edge" for a device that cannot make the pictures: the props `deviceCanBake` of
+`PptxReportView` and `PptxImportCardView`, default true, wait for the device test of bake-worker). The text is
+`keptWholeLine` (`pptx-core.ts`); the hub writes it once into `source.log`, the result carries the count
+(`PptxNativeResult.whole`, present only when this hub keeps heavy slides whole), `importReport(p).whole` counts the slides
+that carry a record (absent for none), and the report and the import card show the line under the class counts. The
+progress line ("Making pictures: 5 of 12") is golive-lines'.
+<!-- import-whole:end 1.10 -->
 
 ### 1.11 Protocol and version
 
@@ -611,6 +809,20 @@ rest; each re-records the digest once, by the integrator (design/24); stale tabs
 one: the hub applies it through `LiveService.apply` for each accepted upload of the live service's keys
 (prerender-store, bake-worker), and every client reduces it from `live.delta`. `prerender.use` is an ordinary
 command of the operate role (outputs, Stage and edit sessions are refused as for every command).
+
+<!-- store-2:switch -->
+**As built in sub-wave 3 (the switch).** The one switch is the HUB's `ORDO_PRERENDER` (`auto` | `on` | `off`, read once at start by each
+hub process), told to every operator by `GET /capabilities` (`prerender.{ state, setting }`) and, publicly, by `GET /health`
+(`prerender`); the constant `PRERENDER_ON` is the default of `auto` and is read in the hub in one place, `prerenderConfig`
+(apps/hub/src/config.ts). The table: `auto` is `on` = the constant, `store` open; `on` is on, store open; `off` is off, store closed.
+`on` is what operators are told and what the Go-live picture line (W33) follows; `store` (the picture `PUT`, the keys at save and their
+jobs, and the picture rows and key set of a goLive) is closed ONLY by an explicit `off`. That is why `auto` is not 'closed while the
+constant is false': under auto before the release's switch commit the hub is exactly the 0.10.0 hub (store open, W33 off, operators
+told off), so nothing changes for anyone and no sub-wave 2 test changes meaning at the switch commit; the hub's test helpers pin
+that hub (`testPrerender`) whatever the constant becomes. `off` keeps whatever is stored (Q36.b) and the picture routes' listing, `DELETE` and
+`failed` keep answering. The 503 `prerender_off` and `bad_kind` are the contract the baker reads (`paused_during_service` is the
+one it retries; `prerender_off` is a stop).
+<!-- /store-2:switch -->
 
 **The one pre-render switch.** `PRERENDER_ON` (`packages/domain/src/prerender.ts`, false) is read by every
 pre-render path: the import plan (`prerender` in `M9_HELD_BACK`, tied to the switch by a test), the editor's
@@ -638,6 +850,19 @@ imports keep today's ladder. `CONVERTER_VERSION` becomes 3 with the plan change 
   `reimport.ts:932-934` only logs), and the requesting app bakes the changed slides when the job ends.
 - Rollback to 0.8.1 or 0.5.0: the stand-in draws; a save there drops the link to the file, which collection keeps while a
   revision names it, so restoring the version from before the rollback brings it back (design/27 §3.2 rule).
+
+<!-- import-whole:begin 1.12 -->
+**As built in sub-wave 3 (import-whole).** `CONVERTER_VERSION` is 3 (step 4): a version-2 scene is refused with the existing
+text and a slide an older converter stored is rebuilt by a re-import. A re-import and Reset slide plan the record of the
+slide they rebuild with `planRecord` (the operator's kept objects counted; `isMotion` from the clips of the fresh import and
+the hub's media rows, a file the hub does not know counting as an anchor), and the heavy bytes of the slides a re-import
+keeps (`keptHeavyBytes`) share the whole-slide share with the ones it builds (`NativeJobEnv.heavyReserve`). All of it only on
+a hub that keeps heavy slides whole; with `ORDO_PRERENDER` off or `auto` (the constant false), or on a hub with LibreOffice
+(Q27.b), every path takes today's plan.
+The browser parse takes the same answer from the hub's last capabilities (`keepsSlidesWhole`, unknown is off) and records
+`wholeSlides` in its scene; a hub that answers otherwise refuses the scene ("parsed with another whole-slide option") and
+parses the deck itself; the Pages demo answers off and parses again.
+<!-- import-whole:end 1.12 -->
 
 ### 1.13 Tests and measures
 
@@ -1443,3 +1668,73 @@ differs from the text above:
   2026-11-21 (he wrote "6mb", read as 6 MiB, the unit of every budget in `size.ts`); it was 3 MiB, so every presentation
   of 3 to 8 MiB, which the 8 MiB budget allows, carried it (Traffic Dark, 3.13 MiB, did). The words are unchanged and it
   is still a default until a venue PC confirms it (D13, owner question 14).
+
+<!-- raster-maker:as-built -->
+### As built in sub-wave 3 (raster-maker: the picture maker)
+
+What the maker half of the shape-picture work built and measured (the planner's half, which decides which shapes
+become pictures and what each picture is made of, is "As built in sub-wave 3 (shape-raster)"):
+
+- **The route holds (G-SPIKE: page-ok).** The hub's own headless Chromium, running the renderer in a small page, draws a
+  3840x2160 picture in 92 to 304 ms (the 45,056-point outline of a Traffic Dark continent 126 ms; 2,000 random shapes
+  924 ms), starts in 0.65 s and writes a PNG of 0.2 to 3.7 MB. Measured on a 4-CPU machine with a software canvas and
+  Chrome for Testing 153; the hub image's own Chromium build is tried by the pull-request job's image step
+  (`docker-pr.yml`, `tools/image-smoke/raster-canvas.mjs`: three 3840x2160 pictures in one browser with the hub's flags in the
+  container's default 64 MB `/dev/shm`), which first runs in this wave's own pull request.
+- **Memory.** The browser's tree (8 processes) peaks at 1,129 MB of resident memory summed per process over 90 pictures in
+  one browser (586 MB counting shared pages once, the figure a container charges) and does not grow. Four flags and freeing each
+  canvas at once brought it from 1,473 MB; the ceiling written before the first run (1,200 MB) was not changed.
+- **Same pixels as the screens.** Within today's limits a shape drawn by `drawShapeWide` equals `drawGeomShape` to the last
+  channel (14 shapes in a browser test; 10 shapes at 3840x2160 through the hub's page against the screens' own
+  `drawObject`: maximum difference 0), and the words of a text member equal the screens' text drawing (8 subjects, 0). A
+  character no library face covers fails the whole run: never a picture in another face. The page's font set-up is the bake's
+  (`createBakeEnv`, section 1.2: the library's and the bundled faces only), and a family with no face of its own, which the
+  bake would draw in ordo's default face and list, fails the run too (a picture of a shape never stands in for a face).
+- **Wide shapes are drawn whole.** Traffic Dark slide 88's eight continents (5,464 to 45,056 points), slide 89's thirteen
+  over-limit shapes and slide 91's six are each drawn whole: their painted area equals an independent even-odd area
+  computed from the built points within 0.06 %, and is larger than the same outline cut at 8 paths x 4,096 points.
+  No stored or live limit moved (`limits.test.ts` pins every number).
+- **Low-alpha colour.** The page's canvas stores 8-bit premultiplied colour as the screens' does, so the straight colour of a
+  semi-transparent edge pixel (alpha 32 to 49) can be off by up to 8, which composites to the screens' result exactly. A
+  float16 canvas would make the colour exact and the picture differ from the live draw by up to 3 levels: not used.
+- **Shapes with effects (the owner's Q53.i).** A shadow, a glow or a soft edge costs two to three times the time and, at 50 such
+  shapes in a picture, about twice the memory (2.1 to 2.5 GB peak); a see-through gradient costs little (480 ms, 1.06 GB). They
+  stay out of the pictures by default.
+- **Live safety.** No picture starts while any service is live or in its grace; a service going live while the browser is
+  starting or in the middle of a picture stops it within about a quarter of a second and the browser's whole process
+  group is killed; the browser runs
+  at nice 19, one at a time on the hub; a crashed browser is relaunched once.
+<!-- /raster-maker:as-built -->
+
+<!-- shape-raster:as-built -->
+### As built in sub-wave 3 (shape-raster: pictures of many-point shapes)
+
+The converter and the hub's job side of the picture maker above (the maker, the page and the wide draw are raster-maker's). What
+a custom-path shape with more than 128 points does at import (the owner's Q53, with Q53.e to Q53.g and Q57):
+
+- **What becomes a picture.** On an eligible slide (no animation anchor, no playing video or picture, no step text, no lyric
+  text, no video background: `wholeAnchorKinds`, Q25.c.b) every custom path over `RASTER_POINTS` (128) points, and every shape
+  past a converter limit (more than 8 paths, a sub-path over 4,096 points, the 65,536 slide total), is a candidate. A RUN is
+  the neighbouring candidates and the small shapes between them (the small ones also stop being editable, Q53.e); one picture
+  a run, at most `RASTER_MAX_PICTURES` (4) a slide. A text box over the run is drawn live above the picture unless a LATER
+  member lies over it (the exact z-order rule; then its words are drawn into the picture, Q53.h).
+- **No limit is raised.** The reading bound of the recipe (262,144 points a shape, 1,048,576 a recipe, 64 paths) is import-only:
+  never stored, never drawn live, pinned equal to the maker's validator. 8 paths x 4,096 points a shape and 65,536 points a
+  slide stay as the stored limits.
+- **The job.** `rastersFor` decides the maker once (Chromium first; a hub with LibreOffice keeps LibreOffice's art while
+  `RASTER_WITH_LIBREOFFICE` is false, M-SR5; a hub with neither keeps today's boxes and says so). The picture step is deferred
+  while ANY service is live (`JobDeferred`, `PptxNativePayload.deferrals`) and runs right after the conversion: each recipe is
+  drawn one at a time by the maker's loop and stored as an ordinary ready picture (source hash = the recipe hash, so a
+  re-import finds it); a slide any of whose pictures was not made is converted again with the picture step off, so it is
+  exactly today's slide within every budget. Caps: 200 pictures, 256 MiB of PNG, 300 s of drawing, the import's megapixels
+  and, before each picture, the disk floor.
+- **Reset slide.** `PptxReimportReq.rasters: 'off'` (only with `slideIds`) converts one slide again with the picture step off:
+  its shapes come back as shapes, shapes over a limit as today's boxes; a whole Re-import makes the picture again (Q67).
+- **Measured (Traffic Dark slides 88 / 89 / 91, a real hub, the owner's gate).** Without LibreOffice: 0.727 / 0.422 / 0.753 with
+  whole slides and no picture, 0.9869 / 0.9734 / 0.9895 with the pictures (against LibreOffice's page). 88 is 77 objects and
+  30.6 KB (a picture of 942 shapes, 3 small ones, 21 live texts), 89 67 objects and 23.8 KB (four pictures of 1,816, 87, 17 and
+  4 shapes), 91 18 objects and 8.8 KB; 12 of 12 pictures made. With LibreOffice the own picture scores 0.9869 / 0.9734 / 0.9895
+  against 0.9870 / 0.9946 / 0.9896 for LibreOffice's page in the same run: no change on 88 and 91 (0.0001, 0.0002) and a drop of
+  0.0212 on 89 (the full deck's diagnosis has 0.9987 for 88: a drop of 0.0118 there) that no named later project recovers, so a
+  hub with LibreOffice keeps LibreOffice's page and `RASTER_WITH_LIBREOFFICE` is false (M-SR5, Q53.j, Q51).
+<!-- /shape-raster:as-built -->

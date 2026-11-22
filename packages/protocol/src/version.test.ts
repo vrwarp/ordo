@@ -70,9 +70,15 @@ import { APP_VERSION } from './index.ts';
 // schemas.ts is as 0.9.2 has it (the sub-wave stores no new field), so a rollback to 0.9.2 reads every stored
 // presentation and look 0.10.0 writes, and the older-build fixtures (0.8.1 and 0.5.0) stand. A rollback does not restore
 // a service that was running: an older hub reads the by-name snapshot as invalid and starts idle (design/29 r2b.9, Q6.a).
+// shape-raster (Q53, Q66, Q68), recorded on its branch at the UNCHANGED version 0.10.0: schemas.ts gains the optional
+// `ObjectOrigin.raster` (the provenance of a picture of shapes, written only for an object of origin role 'raster': an older
+// build strips the key on a re-save and draws an ordinary picture, and the older-build fixtures stand) and cues.ts reads a
+// native slide's `pptx.artText` for a slide that holds such a picture (`importedText`: the words of the picture for the cue
+// label, the Stage and search). The sub-wave's one bump to 0.11.0, the last commit of the pull request, covers it, and the
+// integrator records the merged digest once after the last merge.
 const RECORDED = {
-  version: '0.10.0',
-  digest: 'b80fba978e638b215a719602e0653722870a98011ae2d360b5e9a7396724d174',
+  version: '0.11.0',
+  digest: '4b9621ec4ea2e1d4ce6ef5b4220487fcd8d1e29bd7fd86831e444022e50511c6',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

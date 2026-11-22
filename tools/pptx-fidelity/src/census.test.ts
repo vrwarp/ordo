@@ -6,9 +6,18 @@ import { extractZip } from '@ordo/importers/zip-stream.ts';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { lineArtD } from '@ordo/renderer/units.test-util.ts';
-import { budgetColumns, hubClasses, legacyColumns, parseCensusArgs, runCensus } from './census.ts';
+import {
+  budgetColumns,
+  hubClasses,
+  legacyColumns,
+  noLoDraws,
+  parseCensusArgs,
+  runCensus,
+  wholeColumns,
+} from './census.ts';
 import { LINE_ART_HOLES_PATH } from './gen/line-art-holes.ts';
 import { listDecks } from './decks.ts';
+import { type NativeDeck, type NativeSlide, withHubBudget } from './native.ts';
 import { dataUri, testPicture } from './png.ts';
 import { zipStore } from './table-probe.ts';
 
@@ -429,5 +438,233 @@ describe('legacyColumns: the slides the underlay frame splits (M4)', () => {
   it('says nothing of a slide the counts hold: 200 objects, and an empty slide', () => {
     expect(legacyColumns(slide(squares(200)))).toEqual({});
     expect(legacyColumns(slide([]))).toEqual({});
+  });
+});
+
+describe('the Q24.b columns (step 2 of import-whole)', () => {
+  const info = (o: Partial<Parameters<typeof wholeColumns>[0]> = {}) => ({
+    kept: true,
+    anchorKinds: [] as ('clip' | 'background' | 'bound')[],
+    bgOwn: false,
+    objects: 20,
+    pictures: 2,
+    ...o,
+  });
+
+  it('reads --whole and --whole-anchors (own | motion, default motion) and leaves the old options as they were', () => {
+    expect(parseCensusArgs(['--whole', '--out', 'c.jsonl', 'a'])).toMatchObject({
+      whole: true,
+      wholeAnchors: 'motion',
+    });
+    expect(parseCensusArgs(['--whole', '--whole-anchors', 'own', '--out', 'c.jsonl', 'a'])).toMatchObject({
+      whole: true,
+      wholeAnchors: 'own',
+    });
+    expect(parseCensusArgs(['--out', 'c.jsonl', 'a']).whole).toBeUndefined();
+    expect(() => parseCensusArgs(['--whole', '--whole-anchors', 'all', '--out', 'c.jsonl', 'a'])).toThrow(
+      /own|motion/,
+    );
+    expect(() => parseCensusArgs(['--whole-anchors', 'own', '--out', 'c.jsonl', 'a'])).toThrow(/--whole/);
+  });
+
+  it('names the decision per slide: kept or not and why, the picture background, the pictures, heavy, and what the base plan cuts', () => {
+    // Kept whole and heavy: what the guard and the picture limit cut today is named.
+    expect(
+      wholeColumns(
+        info({ objects: 410, pictures: 30, cut: { elements: 222, pictures: 14 } }),
+        { objects: [] },
+        80_000,
+      ),
+    ).toEqual({
+      wholeKept: true,
+      planned: 410,
+      pictures: 30,
+      heavy: true,
+      wouldCut: 222,
+      wouldCutPictures: 14,
+    });
+    // Kept out: the reason and the background, nothing cut (the slide is planned as today).
+    expect(
+      wholeColumns(
+        info({ kept: false, anchorKinds: ['clip'], bgOwn: true, objects: 230, pictures: 3 }),
+        { objects: [] },
+        90_000,
+      ),
+    ).toEqual({
+      wholeKept: false,
+      planned: 230,
+      anchorKinds: ['clip'],
+      bgOwn: true,
+      pictures: 3,
+      heavy: true,
+    });
+    // A small slide: only the decision and its pictures; zeros left out.
+    expect(wholeColumns(info(), { objects: [] }, 5_000)).toEqual({
+      wholeKept: true,
+      planned: 20,
+      pictures: 2,
+    });
+    expect(wholeColumns(info({ pictures: 0 }), { objects: [] }, 5_000)).toEqual({
+      wholeKept: true,
+      planned: 20,
+    });
+    // Heavy by each of the three bounds alone.
+    expect(wholeColumns(info({ objects: 201, pictures: 0 }), { objects: [] }, 100).heavy).toBe(true);
+    expect(wholeColumns(info({ objects: 5, pictures: 17 }), { objects: [] }, 100).heavy).toBe(true);
+    expect(wholeColumns(info({ objects: 5, pictures: 1 }), { objects: [] }, 65_537).heavy).toBe(true);
+    expect(wholeColumns(info({ objects: 200, pictures: 16 }), { objects: [] }, 65_536).heavy).toBeUndefined();
+    // Both reasons of a slide kept out are named, in the converter's order.
+    expect(
+      wholeColumns(
+        info({ kept: false, anchorKinds: ['clip', 'bound'], objects: 1_200 }),
+        { objects: [] },
+        400_000,
+      ).anchorKinds,
+    ).toEqual(['clip', 'bound']);
+  });
+
+  /** A deck of three slides: 230 text boxes; 20 pictures of their own; one line of text. */
+  async function crowdedDeck(dir: string, bgPicture = false): Promise<string> {
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    const crowd = p.addSlide();
+    for (let i = 0; i < 230; i++)
+      crowd.addText(`Word ${i}`, {
+        x: (i % 10) * 0.9,
+        y: Math.floor(i / 10) * 0.2,
+        w: 0.8,
+        h: 0.18,
+        fontSize: 8,
+      });
+    const pics = p.addSlide();
+    if (bgPicture) pics.background = { data: dataUri(testPicture(64, 36, 0.3)) };
+    for (let i = 0; i < 20; i++)
+      pics.addImage({
+        data: dataUri(testPicture(40 + i, 30, i / 20)),
+        x: (i % 5) * 2,
+        y: Math.floor(i / 5),
+        w: 1.5,
+        h: 0.8,
+      });
+    p.addSlide().addText('Amazing grace', { x: 1, y: 1, w: 6, h: 1, fontSize: 40 });
+    const file = join(dir, bgPicture ? 'crowded-bg.pptx' : 'crowded.pptx');
+    await writeFile(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    return file;
+  }
+  async function rowsOf(file: string, dir: string, opts: Parameters<typeof runCensus>[3]) {
+    const out = join(dir, `${Math.random().toString(36).slice(2)}.jsonl`);
+    await runCensus([file], out, () => {}, opts);
+    return JSON.parse(await readFile(out, 'utf8')) as Record<string, unknown> & {
+      slides: Record<string, unknown>[];
+    };
+  }
+
+  it('with --whole a crowded deck says what the converter keeps whole and what the base plan would cut; without it, nothing changes', async () => {
+    const dir = await work();
+    const file = await crowdedDeck(dir);
+    const row = await rowsOf(file, dir, { whole: { anchors: 'motion' } });
+    const [crowd, pics, plain] = row.slides;
+    expect(crowd).toMatchObject({ wholeKept: true, heavy: true });
+    expect(crowd!.objects as number).toBeGreaterThanOrEqual(230);
+    expect(crowd!.wouldCut as number).toBeGreaterThan(0);
+    expect(pics).toMatchObject({ wholeKept: true, pictures: 20, heavy: true });
+    expect(pics!.wouldCut as number).toBeGreaterThan(0);
+    expect(pics!.wouldCutPictures as number).toBeGreaterThan(0);
+    expect(plain).toMatchObject({ wholeKept: true });
+    expect(plain!.heavy).toBeUndefined();
+    expect(plain!.wouldCut).toBeUndefined();
+    // The deck's bytes of heavy slides, summed.
+    expect(row.heavyBytes as number).toBe((crowd!.bytes as number) + (pics!.bytes as number));
+    // Without the option none of the columns is written, and the slides are as they were.
+    const off = await rowsOf(file, dir, {});
+    for (const s of off.slides) {
+      expect(s.wholeKept).toBeUndefined();
+      expect(s.wouldCut).toBeUndefined();
+      expect(s.heavy).toBeUndefined();
+    }
+    expect(off.heavyBytes).toBeUndefined();
+    expect(off.slides[0]!.objects as number).toBeLessThan(crowd!.objects as number);
+  }, 180_000);
+
+  it("the picture background is counted either way (bgOwn) and keeps a slide out only under the arm 'own'", async () => {
+    const dir = await work();
+    const file = await crowdedDeck(dir, true);
+    const motion = await rowsOf(file, dir, { whole: { anchors: 'motion' } });
+    expect(motion.slides[1]).toMatchObject({ bgOwn: true, wholeKept: true });
+    expect(motion.slides[1]!.anchorKinds).toBeUndefined();
+    const own = await rowsOf(file, dir, { whole: { anchors: 'own' } });
+    expect(own.slides[1]).toMatchObject({ bgOwn: true, wholeKept: false, anchorKinds: ['background'] });
+    expect(own.slides[0]).toMatchObject({ wholeKept: true });
+  }, 180_000);
+});
+
+describe('hubClasses with the whole option (Q24.b, step 8a)', () => {
+  const rect = (i: number): Slide['objects'][number] =>
+    ({
+      ...outline('r'),
+      id: `r${i}`,
+      geom: undefined,
+      fill: { r: 1, g: 2, b: 3, a: 1 },
+    }) as Slide['objects'][number];
+  const crowded = slide([text('Grace'), ...Array.from({ length: 700 }, (_, i) => rect(i))]);
+
+  it('models the ladder that keeps a heavy slide whole: hub native, level grid, hubWhole, nothing left out', () => {
+    const [off] = hubClasses([{ class: 'native', slide: crowded, notes: [] }]);
+    expect(off).not.toHaveProperty('hubWhole');
+    expect(off!.level).not.toBe('full');
+    const [on] = hubClasses([{ class: 'native', slide: crowded, notes: [] }], [], undefined, true);
+    expect(on).toMatchObject({ hub: 'native', level: 'grid', hubWhole: true, missing: [] });
+    expect(on!.slide.objects).toHaveLength(701);
+  });
+});
+
+describe('noLoDraws: what a hub without LibreOffice stores of a slide, drawn where it differs (M9, Q24.b)', () => {
+  const rect = (i: number): Slide['objects'][number] =>
+    ({
+      ...outline('r'),
+      id: `r${i}`,
+      geom: undefined,
+      fill: { r: 1, g: 2, b: 3, a: 1 },
+    }) as Slide['objects'][number];
+  const crowded = slide([text('Grace'), ...Array.from({ length: 700 }, (_, i) => rect(i))]);
+  const deck = (): NativeDeck => ({
+    slides: [
+      {
+        index: 0,
+        shown: 0,
+        hidden: false,
+        tier: 'T1',
+        class: 'native',
+        reasons: [],
+        convertMs: 0,
+        notes: [],
+        slide: crowded,
+        textFeatures: [],
+        compat: [],
+      } as unknown as NativeSlide,
+    ],
+    slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
+    media: [],
+    geoms: [],
+    notes: [],
+    embeddedFonts: false,
+    textFeatures: [],
+    extractMs: 0,
+    parseMs: 0,
+    emitMs: 0,
+  });
+
+  it('without the whole option the hub stores the crowded slide simplified, so its draw differs from the converter\u2019s', () => {
+    const d = deck();
+    noLoDraws(d, { loCompat: false, whole: false });
+    expect(d.slides[0]!.noLoDraw).toBeDefined();
+    expect(d.slides[0]!.noLoDraw!.objects.length).toBeLessThan(701);
+  });
+
+  it('with the whole option the hub keeps it whole, so the slide drawn is what it stores: no separate draw', () => {
+    const d = withHubBudget(deck(), undefined, { whole: true });
+    expect(d.slides[0]!.slide.objects).toHaveLength(701);
+    noLoDraws(d, { loCompat: false, whole: true });
+    expect(d.slides[0]!.noLoDraw).toBeUndefined();
   });
 });

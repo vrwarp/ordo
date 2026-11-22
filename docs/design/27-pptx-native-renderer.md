@@ -547,6 +547,15 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
 | Library snapshot  | its size is reported in hub health; a test keeps a year of weekly 17-slide sermon decks under 6 MB. A summary-only snapshot (bodies fetched on open) is the follow-up if a venue passes 32 MB; it is not part of this design.                             | health, test                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Revisions         | unchanged policy (50 or 30 days); a 1 MB presentation edited often costs ≤ 50 MB, noted in design/12                                                                                                                                                      | docs                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
+<!-- import-whole:begin 3.4 -->
+**Q24.b (sub-wave 3, import-whole): a slide kept whole.** A heavy slide in which nothing plays or steps is stored whole
+instead of being simplified to fit 64 KB: level `full`, or `grid` past 64 KB (`wholeLevel`), at most 1,000 objects
+(`WHOLE_OBJECTS_MAX`, the INLINE bound, Q54; a slide planned past it follows the ladder above), within a 2 MiB share of such
+slides per presentation (`WHOLE_SHARE_BYTES`, Q28.a), the rest cut to the screens' counts. Its bytes join the reserve of the
+presentation's plan and are left out of the 6 MiB mark that starts the tail, so the hard 8 MiB bound still holds. The slide
+carries a pre-render record (design/29 §1.1, §1.9).
+<!-- import-whole:end 3.4 -->
+
 As built in M3 (`packages/domain/src/size.ts`):
 - `planImportSizes(sizes, compact, reserve)` keeps 256 KiB of the 8 MiB for the presentation's own fields, sections, arrangement and `source.log`, and returns the reason per compact slide ('slide' over 64 KB, 'presentation' for the tail) and the tail's first slide: the tail is contiguous, "slide n and later". `compactSlide` is the version-1 compact form (no objects, `pending`, the text in `artText`); `compactSlideBytes` adds version 2's page picture and text boxes, so a compact slide counts its text twice. A 2,000-slide deck of 300-character slides keeps about 200 editable slides that way; if version 2 dropped `artText` once aligned text boxes carry the text, it would keep about 800.
 - `previewSlice` also sends the slide after the previewed one, for the next-slide band. The operator refuses a preview over 15 MiB, warns on save above 8 MiB and refuses above 32 MiB.
@@ -677,6 +686,15 @@ As built in M3 (`packages/domain/src/size.ts`):
 - plain `{}` maps keyed by deck strings.
 
 ## 5. Classification, fallback and LibreOffice
+
+<!-- import-whole:begin 5 -->
+_Since sub-wave 3 (Q24.b, Q27.b):_ on a hub with the whole-slide switch (`wholeSlidesFor`) and without LibreOffice, the guard's
+left-outs and LibreOffice's page for a slide over 64 KB do not apply to a slide kept whole: the slide stays ordo's own editable
+shapes with their pre-render picture. A hub that has LibreOffice follows today's plan (the constant `WHOLE_WITH_LIBREOFFICE` is
+false, Q27.b, the default while the owner has not answered; true, Q27.a, keeps heavy slides whole there as on a hub without
+LibreOffice). A slide the rule does not keep whole (an anchor, more than 1,000 planned objects, past the share) is
+classified and drawn as before.
+<!-- import-whole:end 5 -->
 
 **Element support**
 - **Residual:**
@@ -1465,6 +1483,23 @@ the cells are measured by estimate as before (until integrate-1c repair 1 the Nu
 - Never upserted over a library face (`library.ts:467-480`).
 - goLive ships a scoped face only with its own presentation (the family filter in `resolvePlaylist` checks `scope`). The resolver uses it only for objects of that presentation, so a deck's subset 'Calibri' never reaches another deck.
 - fsType preview&print faces and subset faces are view-only: the editor warns before new characters are typed.
+
+### The bake profile (sub-wave 3)
+
+The font resolver has a second profile for the pre-rendered picture (design 29 section 1.2): `new FontResolver(host,
+{ profile: 'bake', blank })`. A bake font string holds, in this order, the exact library face, the loaded
+`fallbackFonts`, the loaded script fallbacks, the loaded default face (`DEFAULT_FONT`) and the blank face last; never the
+requested family as the computer might have it and never the legacy chain (Inter, Segoe UI, Arial, sans-serif). A
+character no loaded face covers therefore lands on the blank face and draws as nothing, where it would otherwise be drawn
+by a face of the computer that makes the picture, which is what makes the same slide give the same picture on every
+computer; the coverage probe (`GlyphCoverage`, noted through the prototype of the 2D context, so text inside a shadow, a
+glow, a gradient or a table cell is seen too) turns it into a failed picture rather than a picture with a hole. The
+resolver reports what it could not resolve: `bakeReport()` (the families asked for, the stacks that held no loaded face,
+the requests served by the default face alone, which is the stand-in list of Q31.c) and `failedFamilies()` (wanted faces
+that are not loaded); `bakeReset()` clears the report and advances the generation, so layouts an earlier bake memoised
+are laid out again. One character is outside this: U+3000, which Chromium draws with a system CJK face even when the blank
+face is alone in the stack (the probe skips it); a slide with it is the one known source of a difference between
+computers. The live profile is the default and builds the strings it always did.
 
 ## 11. Editability and editor extensions
 
@@ -3312,6 +3347,13 @@ be measured):
   `APP_VERSION` to 0.10.0 as its last commit, so an earlier build's operator is sent away ('bye version') and
   the cost reaches nobody after it. Whether the constant moves stays the wave-end decision, now with
   pre-rendering (design/29 §1.11 plans 3); this bullet is its input.
+- **`CONVERTER_VERSION` is 3 from sub-wave 3** (import-whole, Q24.b; `version.ts`). What the converter does differently is the
+  whole-slide rule behind the new option `ParseOptions.wholeSlides` (a slide kept whole is planned without the guard and the
+  picture limit, `BudgetPlan.whole`); without the option the plan is byte for byte the version-2 one (pinned by recorded plans).
+  The bump marks the generation that can write a pre-render record: a version-2 scene is refused ('parsed by another converter
+  version'), a stored version-2 slide is rebuilt by a Re-import (the way old decks get whole slides), a queued follow-up written
+  at version 2 still finishes. A scene also says whether it was parsed whole (`wholeSlides: true`) and a hub uses it only when its
+  own answer is the same ('parsed with another whole-slide option').
 <!-- /r2b:tables-form -->
 
 <!-- r2b:tables-cells -->
@@ -3611,3 +3653,22 @@ The `PptxRenderer` enum values stay forever, so stored presentations validate. A
   - 4:3 guides and the extend option;
   - the overflow indicator;
   - the M3 exit is made consistent with M2.
+
+<!-- shape-raster:doc27 -->
+### Pictures of shapes (sub-wave 3, shape-raster)
+
+A candidate is a custom-path shape over 128 points (or past a converter limit) on an eligible slide. `planRasters`
+(`packages/pptx-scene/src/raster-plan.ts`, pure) groups candidates into runs bottom up within one scope and source, takes the
+small shapes between two candidates, skips an element over the run unless a later member lies over it (the exact z-order rule)
+and keeps a text box live above the picture unless a later member covers it; caps: 2,048 members, 1,048,576 recipe points,
+4 pictures and `RASTER_SLIDE_PIXELS` a slide, equal to the maker's validator (a test pins it). `emitRaster` writes each run as one
+locked picture (`origin.role` 'raster' with the optional provenance field `ObjectOrigin.raster`: versions, rule, recipe hash,
+members, the deck and the slide; about 1 KB; the protocol digest is re-recorded) and registers its recipe (canonical bytes,
+SHA-256, `EmitResult.rasters`): the recipe is never stored and never sent to a screen. The geometry is the renderer's own wide
+compile (`compileGeom`/`buildGeom` with the `limits` parameter): the reading bound (262,144 points a shape) is import-only; the
+stored (8 x 4,096), drawn and 65,536-point limits did not move. Not built: member-level "make editable" and recolouring (the named
+later project Q62), a browser at upload (Q64), a poppler rung (Q65), the folding of runs of ordinary shapes (Q59.d), anchored
+slides and plates (Q24.a, Q24.c). The hub's side (`rasterStore.ts`, the page, the loop and the live-safety rules) is in design 29
+and `apps/hub/src/pptx/README.md`. A whole Re-import makes the pictures again for slides you did not edit; Reset slide does not
+(Q57.d, Q67). The words of a pictured shape stay in the slide's imported text (`pptx.artText`) while it is bounded (Q68).
+<!-- /shape-raster:doc27 -->

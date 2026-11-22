@@ -110,10 +110,23 @@ Image size target under 2 GB (decimal GB, 2,000,000,000 bytes, uncompressed, lin
 2026-11-20, when the owner raised it from 1.5 GB. The first real build (the Docker dry run of PR #29) was
 1,687,519,174 bytes (about 1.69 GB): 188 MB over the old target, and about 312 MB under the present one. By Debian's
 package sizes (an estimate: the pull-request job prints the real numbers) Chromium for the pptx-preview renderer is
-about 440 MB of it, LibreOffice about 320 MB, ffmpeg about 200 MB and the fonts about 100 MB. Chromium serves only
-`renderer=pptx-preview`, which the import screen no longer offers (design/20, 'Two renderers') and design/27 M8
-retires. Dropping it (the image would then be near 1.25 GB) is no longer needed for the target, so Chromium stays and
-nothing is removed from the image for it. The pull-request job prints the amd64 image's size and warns above the
+about 440 MB of it, LibreOffice about 320 MB, ffmpeg about 200 MB and the fonts about 100 MB. <!-- raster-maker:chromium -->
+Chromium serves `renderer=pptx-preview`, which the import screen no longer offers (design/20, 'Two renderers') and
+design/27 M8 retires, and, since sub-wave 3, it has a second user that stays: the hub's own picture maker draws the
+pictures of many-point shapes at import in it (design/29 decision 4, design/20 'Pictures of many-point shapes'; the
+hub gets its own copy of the driver, so M8's deletion of `packages/pptx-render` does not touch it). Dropping it
+would remove the only maker of those pictures, so Chromium stays for good (the owner's Q63, default yes) and nothing is
+removed from the image for it. Its load at import is new: one browser at a time, niced, up to about 1.1 GB of
+resident memory counted per process (about 0.6 GB counting shared pages once) for one 4K picture, measured on this
+machine; the container's memory ceiling is not measured here, and the image's own Chromium build is tried by the
+pull-request job (`docker-pr.yml`, the step "The picture maker's browser draws a 4K picture inside the image":
+`tools/image-smoke/raster-canvas.mjs` starts the image's Chromium with the hub's flags in the container's default 64 MB
+`/dev/shm`, loads the picture page the image ships and draws three 3840 x 2160 pictures in one browser, and fails on a
+crash; the step runs for the first time in this wave's own pull request, not on the machine that wrote it). It runs without its own sandbox, as the image sets
+it (`ORDO_CHROMIUM_SANDBOX=1` keeps it where user namespaces exist), has no network and no port, and reads only the
+library's font files, uploaded ones included, and a recipe file the hub writes (Q63.b: the default is the library's faces, so
+the words in a picture look as on the screens; the override is a list of bundled faces only).
+<!-- /raster-maker:chromium --> The pull-request job prints the amd64 image's size and warns above the
 target, never failing on it (printed, not enforced), and then prints what the image is made of (its layers, its 40
 largest packages, its largest folders and what `/usr/share/doc` keeps). The
 pull-request smoke test starts both renderers inside the image, checks its CJK face (fontconfig's face for
@@ -126,7 +139,8 @@ that the product's own packages kept their copyright files.
   runs too but never fails the build (`continue-on-error`); a weekly scheduled workflow
   (`audit.yml`, Mondays) reports advisories on its own.
 - Every pull request (`docker-pr.yml`): the image is built for amd64 and arm64 without
-  pushing, and the amd64 image is started and must pass its health check.
+  pushing, and the amd64 image is started and must pass its health check, start the PowerPoint renderers, draw
+  the picture maker's 4K pictures (above), name the CJK face and carry every package's copyright notice.
 - Merge to `main` (`docker-publish.yml`): push `edge` and `sha-<commit>`.
 - Tag `vX.Y.Z` (`docker-publish.yml`): push `vX.Y.Z` and `latest`; create a GitHub release
   with the changelog.

@@ -1809,7 +1809,8 @@ Where this differs from the text above, this is what the code does. Three lanes 
   asks for the cap, and every expectation is hard.
 - **Refusals watched**: `phonehelpers.watchRefusals` lists every 403 `cap`, `x_ordo_required` or `origin` and
   every 429 in a phone's browser context; the shell and split specs fail on any (the lockout test allows its own
-  429s), and the live-boundary spec checks that it sees the eight refusals it provokes.
+  429s), and the live-boundary spec checks that it sees the eight refusals it provokes. A phone on the regular layout
+  (Request Desktop Website) makes none either: its bake boot does not read `/capabilities` (`mayReadCaps`, design/15).
 - **The venue PC with Phones on**: `e2e/phones-writes.spec.ts` also runs a service through the code-split live
   view (Go live, Next, End service) with the switch on.
 - **Found on the merged build**: the hub's scan of the clients' writes (`phones-clients.test.ts`) could not

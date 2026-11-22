@@ -7,7 +7,16 @@ import type { HubConfig } from '../src/config.ts';
 import { createLibraryProcess, type LibraryProcess } from '../src/libproc.ts';
 import { createLiveProcess, type LiveProcess } from '../src/liveproc.ts';
 import { noSystemFaces } from '../src/pptx/systemFaces.ts';
-import { type Client, client, EDIT_PIN, OPERATE_PIN, TEST_TOOLS, tempDir, testFloor } from './helpers.ts';
+import {
+  type Client,
+  client,
+  EDIT_PIN,
+  OPERATE_PIN,
+  TEST_TOOLS,
+  tempDir,
+  testFloor,
+  testPrerender,
+} from './helpers.ts';
 
 export type TwoProcesses = {
   base: string;
@@ -26,6 +35,7 @@ export async function twoProcesses(
   const secret = 'test-secret';
   const cfg: Partial<HubConfig> = {
     minFreeBytes: testFloor(overrides), // the floor is off unless the test gives the hub a volume (helpers.ts)
+    prerender: testPrerender(overrides), // the 0.10.0 hub unless the test gives its own (helpers.ts)
     dataDir: dir,
     domain: 'localhost',
     devPin: `${OPERATE_PIN}:${EDIT_PIN}`,

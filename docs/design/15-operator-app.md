@@ -928,6 +928,16 @@ of the box, such as Carlito for Calibri, is a library font) with 'Upload font' (
   keeping its id, notes, timing, background, Bottom-Third Stream text, MIDI cues and lighting trigger
   (`Slide.midi`) and the objects added in ordo on top. History keeps the slide as it was.
 
+<!-- shape-raster:reset -->
+'Reset slide from PowerPoint' on a slide that holds a picture of shapes (an object of origin role `raster`) is enabled even when
+the slide is unedited, with its own hint ("Brings the shapes back as shapes. Shapes too large for ordo stay boxes. The changes
+you made to imported objects are replaced.") and a confirm that says the pictures become shapes again. Every Reset slide
+request carries `rasters: 'off'` (the hub converts that slide again with no picture step) and the done message says "The slide's
+shapes are shapes again; shapes too large for ordo stay boxes." The Re-import dialog says that a whole Re-import draws the
+pictures again, also for the slides you reset (Q67). The picture is locked (move, resize, delete and z-order only); the words in
+it are no longer text (search, the cue label and the Stage still find them, Q68).
+<!-- /shape-raster:reset -->
+
 'Make editable' on a legacy PowerPoint page (a picture import from before M3) rebuilds the page from the
 stored deck: the hub reroutes it to the re-import of that slide (202 and the job), the editor follows the
 job and takes it over, and the page becomes the native slide with the objects added over it on top and its
@@ -1124,6 +1134,53 @@ and changes the measured width in an `OffscreenCanvas`). The worker, the editor 
 previews resolve families through the same font resolver as the outputs (design/27 §10): faces under
 internal names, so a face that loads late is used by the next draw; the worker then tells its client,
 which drops the cached thumbnails, and the editor redraws.
+
+### Pictures of heavy slides: the bake service
+
+A desktop computer with ordo open makes the missing pictures of heavy slides, quietly, so the screens can draw them
+from one picture each (design/29 section 1.4). Four small pieces, every one of them a lazy chunk: `services/bakeBoot.ts`
+(fetched by the regular layout only: the gate, the actions, the diagnostics), `services/bake.ts` (the service: sweeps,
+queue, upload, holds), `services/bakePlan.ts` (what is wanted: pure) and `workers/bake.worker.ts` (one picture of one
+slide, with the renderer's own `bakeSlide`). The only code in the first load of every layout is the gate's decision
+(`canBake` and the engine probe in `lib/capabilities.ts`; what reads the real browser for it is `lib/bakeWorld.ts`, in the
+boot's chunk) and the press of Go live (`services/bakeHold.ts`: a call that does nothing until the boot has registered
+itself). The editor and the Go-live check read `state/bake.ts` (a store; its words are theirs).
+
+- **Who bakes** (`lib/capabilities.ts` `canBake`): a Chromium on a desktop (`navigator.userAgentData` that is not
+  mobile, `navigator.hid` or `getScreenDetails`: all three Chromium-only and secure-context-only, so a page opened over
+  plain http by a LAN address does not bake), a regular layout, a fine pointer, not a phone, not the Pages demo, 4 GB or
+  more where the browser says, `OffscreenCanvas` and `Worker`, an operate or edit session, the hub's own switch
+  (`ORDO_PRERENDER`, from `GET /capabilities`) on, and no `?bake=off` (or `localStorage` `ordo.bake` = `off`). An iPad
+  with a mouse has none of the three APIs and does not bake; it still LISTS (`list`), so the editor can say "pictures
+  are made on the venue PC". A phone and the demo do nothing at all and never fetch the service's chunk; the boot reads
+  `GET /capabilities` (the gate needs the hub's switch) at its start and on each reconnect of the hub link only where the page
+  may, so a phone on the regular layout (Request Desktop Website) and a session capped below `full` ask nothing, as the hub
+  would refuse the question with 403 `cap`.
+- **When**: the first sweep 15 s after the page has its library (plus up to 5 s of jitter), one sweep 3 s after the last
+  change of a burst of library changes (a presentation, a media file or a font), 2 minutes after End service, every 5
+  minutes ONLY while something is still pending (a library whose pictures are all made or failed arms no timer and sends
+  no request), and when the hub's keys catch up (2, 5, 15, 60 and 120 s after a save the hub has not keyed yet, then at
+  the next change). "Make the pictures now" skips every wait but a service.
+- **Never during a service**: three holds, in this order: the Controller's first line of `goLive`, `goLiveFromSaved` and
+  `goLiveLocal` stops a running picture on the spot (the worker is TERMINATED, not asked); the stores (`mode` live, a
+  held service, the fallback authority, a Go live the hub is preparing); and the hub's own 503 on every upload. A
+  picture that is stopped is dropped: nothing is uploaded and nothing is posted.
+- **Which pictures**: only for a key the hub LISTS (`GET /presentations/:id/prerenders`): the local key is computed
+  with the domain's own `pictureSource` and `prerenderKey` over this page's library, and equal keys prove the same slide,
+  the same media files and the same faces. A key is worked out once (the plan keeps it per presentation), and for a slide
+  of 300 objects or more by a tiny keys worker rather than on the main thread. A key the hub does not list yet waits; before each picture and before its first
+  upload the slide is read again, so a copy that moved under the bake drops it. Only the sizes the hub lacks are sent,
+  1920 then 3840 then 640, never a replace; a key with 1920 and 3840 is ready. A slide kept in a slide file is keyed by
+  the hub (the page never loads or keys a 16 MiB slide): the worker rebuilds the full slide, computes the key itself and
+  uploads only if it equals the listed one.
+- **A failure** of the slide itself (a character no face has, a file past the limit, 60 s, an object that would not
+  draw) is posted once with its one-line reason and not tried again until the slide changes or someone presses "Make
+  picture again". A cause that is not the slide's (a service, the network, the hub's budget or disk, a worker that
+  broke) is never posted: it is retried after 10 s and 60 s, or held.
+- **Cost** (measured on a 4-core machine that draws 4K on the CPU, software canvases; a venue PC decides): from 0.4 s
+  (a 340-object slide) to 2.9 s (300 distinct 1600 x 1200 photographs) of one core a picture, 130 to 230 MB above an
+  idle page while it runs, only after an idle callback and a one-second gap, the worker released 30 seconds after its
+  last picture and a hard stop at 65 s.
 
 ### Installable web app and lifecycle
 

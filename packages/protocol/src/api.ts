@@ -231,6 +231,12 @@ export type PptxReimportReq = {
   reset?: string[];
   /** Made-editable slides the dialog was told to keep as they are. */
   keep?: string[];
+  /**
+   * Q57.d ('Reset slide from PowerPoint'): 'off' converts the slide again WITHOUT the picture step, so the shapes of a
+   * slide drawn into pictures come back as shapes (the ones over a converter limit as today's boxes). Accepted only with
+   * `slideIds` (a whole Re-import makes the pictures again, Q67); absent: the import as it is.
+   */
+  rasters?: 'off';
 };
 
 /**
@@ -288,6 +294,10 @@ export const HUB_TOOL_STATES = ['checking', 'available', 'absent', 'off', 'broke
  *   'broken' (installed but its version command fails), 'checking' (the hub is still asking, just after start).
  * - `pdf`: pdftoppm (poppler-utils) is there: PDF import.
  * - `documents`: the extensions `POST /import/document` accepts.
+ * - `prerender`: the hub's EFFECTIVE answer about pictures of heavy slides (store-2): `state` 'on' or 'off' (an
+ *   operator never reads the domain constant to decide for the hub: a tab of another build would disagree) and the
+ *   hub's `setting` (ORDO_PRERENDER: 'auto', 'on' or 'off'). A hub from before gives no field, which reads as
+ *   `{ state: 'off' }`. The picture PUT is closed (503 `prerender_off`) only for `setting` 'off'.
  * - `pptx.pictures`: 'Pictures (LibreOffice)'; `pptx.reference`: 'Show original' drawn by LibreOffice;
  *   `pptx.referencePdf`: reference pictures from PowerPoint's own PDF export (poppler-utils only);
  *   `pptx.art`: LibreOffice draws what ordo cannot (the `pptx-lo` follow-up). Without it the import lists
@@ -318,6 +328,12 @@ export const HubCapabilities = z.object({
       art: z.boolean().catch(false),
     })
     .catch({ pictures: false, reference: false, referencePdf: false, art: false }),
+  prerender: z
+    .object({
+      state: z.enum(['on', 'off']).catch('off'),
+      setting: z.enum(['auto', 'on', 'off']).optional().catch(undefined),
+    })
+    .catch({ state: 'off' }),
 });
 export type HubCapabilities = z.infer<typeof HubCapabilities>;
 
@@ -327,6 +343,7 @@ export const LEGACY_CAPABILITIES: HubCapabilities = {
   pdf: true,
   documents: ['pptx', 'pdf'],
   pptx: { pictures: true, reference: true, referencePdf: false, art: true },
+  prerender: { state: 'off' },
 };
 
 export const ROUTES = {

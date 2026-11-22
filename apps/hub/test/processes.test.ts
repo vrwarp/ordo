@@ -10,7 +10,7 @@ import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { newId } from '@ordo/domain';
+import { GOLIVE_SLIDE_PAGES, newId } from '@ordo/domain';
 import pino from 'pino';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { HEADER_INTERNAL } from '../src/http.ts';
@@ -589,7 +589,10 @@ describe('two-process hub serving the files of a pre-rendered slide', () => {
     });
     await op.json('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: pl.id } });
     await until(async () => (await health())?.mode === 'live', 20_000, 'service live');
-    const wanted = [f.name, f.pages.head.pages[0]!, pic];
+    // the head and the picture are listed by the service; a slide's PAGE only while a goLive lists pages
+    // (GOLIVE_SLIDE_PAGES: no screen reads one), otherwise it is the library's like any file the service does not list
+    const page = f.pages.head.pages[0]!;
+    const wanted = [f.name, pic, ...(GOLIVE_SLIDE_PAGES ? [page] : [])];
     // while the library is up the live process already answers for the files its service lists
     process.kill(
       (
@@ -606,8 +609,10 @@ describe('two-process hub serving the files of a pre-rendered slide', () => {
       expect(r.status, h).toBe(200);
     }
     // a file the service does not list is the library's, which is down
-    const other = await op.fetch(`/files/${'9'.repeat(64)}`);
-    expect(other.status).toBe(503);
+    for (const h of [...(GOLIVE_SLIDE_PAGES ? [] : [page]), '9'.repeat(64)]) {
+      const other = await op.fetch(`/files/${h}`);
+      expect(other.status, h).toBe(503);
+    }
     proc.kill('SIGTERM');
     await new Promise((r) => proc!.once('exit', r));
   }, 120_000);
@@ -711,4 +716,82 @@ describe('two-process hub announcing a picture to the live loop', () => {
     proc.kill('SIGTERM');
     await new Promise((r) => proc!.once('exit', r));
   }, 120_000);
+});
+
+/** ORDO_PRERENDER in the real processes (store-2 PS8): each process reads the variable itself, so all three answers agree. */
+describe('two-process hub with ORDO_PRERENDER', () => {
+  let proc: ChildProcess | undefined;
+  afterEach(async () => {
+    if (proc && proc.exitCode === null) {
+      proc.kill('SIGTERM');
+      await new Promise((r) => proc!.once('exit', r));
+    }
+    proc = undefined;
+  });
+
+  async function startWith(setting: string) {
+    const dir = tempDir();
+    const port = await new Promise<number>((resolve) => {
+      const srv = createServer();
+      srv.listen(0, '127.0.0.1', () => {
+        const p = (srv.address() as AddressInfo).port;
+        srv.close(() => resolve(p));
+      });
+    });
+    const base = `http://localhost:${port}`;
+    const tsx = pathToFileURL(
+      join(dirname(createRequire(import.meta.url).resolve('tsx/package.json')), 'dist', 'loader.mjs'),
+    ).href;
+    proc = spawn(process.execPath, ['--import', tsx, join(here, '../src/main.ts')], {
+      env: {
+        ...process.env,
+        ORDO_DATA: dir,
+        ORDO_DOMAIN: 'localhost',
+        ORDO_PORT: String(port),
+        ORDO_HOST: '127.0.0.1',
+        ORDO_DEV_PIN: '111111:222222',
+        ORDO_LOG_LEVEL: 'warn',
+        ORDO_SINGLE_PROCESS: '',
+        ORDO_MIN_FREE_GB: '0',
+        ORDO_PRERENDER: setting,
+      },
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+    const health = async () => {
+      try {
+        const r = await fetch(`${base}/api/v1/health`);
+        return r.ok ? ((await r.json()) as Record<string, unknown>) : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    await until(async () => (await health())?.library === 'up', 30_000, 'hub up');
+    return { base, health };
+  }
+
+  for (const [setting, state, store] of [
+    ['off', 'off', false],
+    ['on', 'on', true],
+  ] as const) {
+    it(`says ${state} in the library's capabilities, the live process's health and the picture route (setting ${setting})`, async () => {
+      const { base, health } = await startWith(setting);
+      const ed = await login(base, '222222');
+      // answered by the library process through the live process's proxy
+      expect(await ed.json('/capabilities')).toMatchObject({ prerender: { state, setting } });
+      // answered by the live process
+      expect((await health())?.prerender).toBe(state);
+      // the picture route (library process, through the proxy): refused only when the store is closed
+      const put = await ed.fetch(`/presentations/nope/prerenders/${'a'.repeat(64)}?size=1920`, {
+        method: 'PUT',
+        headers: { 'content-type': 'image/png' },
+        body: new Uint8Array(makePng(8, 8)),
+      });
+      const err = ((await put.json()) as { error?: { code?: string } }).error;
+      if (store) expect(err?.code).toBe('not_found');
+      else {
+        expect(put.status).toBe(503);
+        expect(err?.code).toBe('prerender_off');
+      }
+    }, 90_000);
+  }
 });

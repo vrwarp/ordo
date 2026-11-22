@@ -289,12 +289,19 @@ export async function hubSessionOptions(o: {
   dir: string;
   libreoffice: boolean;
   from?: string;
+  /** The environment the two settings below are read from (default: this process's). */
+  parent?: NodeJS.ProcessEnv;
 }): Promise<{ path?: string; env?: Record<string, string> }> {
-  if (o.libreoffice) return {};
+  // Q53: a measure asks a hub that draws the pictures of many-point shapes (`ORDO_PRERENDER=on`, `ORDO_CHROMIUM` the browser): these
+  // two settings pass through when this tool's own environment has them, and change nothing when it has not.
+  const parent = o.parent ?? process.env;
+  const pass: Record<string, string> = {};
+  for (const k of ['ORDO_PRERENDER', 'ORDO_CHROMIUM'] as const) if (parent[k]) pass[k] = parent[k] as string;
+  if (o.libreoffice) return Object.keys(pass).length ? { env: pass } : {};
   const { path } = await toolsOnlyPath(join(o.dir, 'path'), undefined, o.from);
   for (const c of OFFICE_COMMANDS)
     if (await findOnPath(c, path)) throw new Error(`${c} is on the PATH of the hub without LibreOffice`);
-  return { path, env: { ORDO_LIBREOFFICE: 'off' } };
+  return { path, env: { ORDO_LIBREOFFICE: 'off', ...pass } };
 }
 
 /** Past this much data, the hub is replaced by a fresh one before the next deck (disk is the limit). */
@@ -413,6 +420,9 @@ export class BeforeHub {
         return { scores, failed, notes, why };
       }
       reason = 'not drawn';
+      // Q53: what the hub's picture step of many-point shapes came to (the counts of its result), for the run's notes.
+      const drawnShapes = (imp.job.result as { rasters?: unknown } | undefined)?.rasters;
+      if (drawnShapes) notes.push(`pictures of shapes: ${JSON.stringify(drawnShapes).slice(0, 400)}`);
       if (imp.followUp && imp.followUp.state !== 'done')
         notes.push(
           `the hub's LibreOffice follow-up ${imp.followUp.state}: ${(imp.followUp.error ?? '').slice(0, 200)}`,

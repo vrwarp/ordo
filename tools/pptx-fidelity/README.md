@@ -156,6 +156,26 @@ to `M9_WRITES` in a scratch checkout.
 
 A census line names its deck. Tables made from a census of private decks print counts only.
 
+<!-- import-whole:begin -->
+`--whole` (Q24.b; `--whole-anchors own|motion`, default motion, Q25.c.b) reads every deck with `ParseOptions.wholeSlides` and adds per
+slide `wholeKept` (the converter keeps it whole), `planned` (its planned objects), `anchorKinds`, `bgOwn`, `pictures`, `heavy`,
+`wouldCut` and `wouldCutPictures`, per deck `heavyBytes`; the hub columns (`stored`, `hub`, `level`, `missing`, `hubWhy`) then model
+the ladder that keeps heavy slides whole, through the import core's own `selectWhole` (the 2 MiB share, the cut past it), and
+`hubWhole` says which slides it keeps whole. The fidelity harness takes `--whole` (it implies `--hub-budget`) and
+`--whole-anchors` too.
+<!-- import-whole:end -->
+
+<!-- shape-raster:begin -->
+`--rasters` (Q53) reads every deck with the pictures of many-point shapes planned (`ParseOptions.rasters` 'plan', the recipes counted and
+never drawn) and adds per slide that has a many-point shape `rasterCandidates`, `rasterRuns`, `rasterPictures`, `rasterShapes` (the shapes
+drawn into pictures), `rasterPoints` (path commands in the recipes), `rasterSkipped` (+ `rasterSkippedWhy`: text, effects, fill, anchored,
+other), `rasterBytes` (canonical recipe bytes), `rasterWords`, and `rasterFailed` / `rasterReasons` when there are any
+(`src/raster-census.ts`). `--raster-points N` (implies `--rasters`) is the threshold of the sweep (64, 128, 256, 512; default 128, the
+product's `RASTER_POINTS`; measure only, `ParseOptions.rasterPoints`). `tsx src/raster-census.ts sweep <today.jsonl> 64=<a.jsonl> 128=<b.jsonl>
+...` prints the sweep as a table. The fidelity harness takes both flags too; its own page draws none of the pictures (a hub that makes them is
+`--before hub` / `--ask-hub-nolo` with `ORDO_PRERENDER=on` and `ORDO_CHROMIUM`).
+<!-- shape-raster:end -->
+
 ### The golden-pptx census ratchet (CI)
 
 ```

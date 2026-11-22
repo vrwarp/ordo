@@ -18,6 +18,7 @@
  * vertical text and diagonals). Until the work that reads a field lands, nothing sets it.
  */
 import type { ChartData } from '@ordo/domain';
+import type { RasterPlan } from './raster-plan.ts';
 import type { XNode } from './xml.ts';
 
 /** English Metric Units. */
@@ -454,6 +455,34 @@ export interface ShapeElement extends ElementBase {
   merge?: number;
   /** M9: the shape's 3-D (`walk.ts` `read3d`, `three-model`). */
   look3d?: Look3dIR;
+  /**
+   * Q53 (`raster.ts`, `raster-plan.ts`): a custom-path shape with more than `RASTER_POINTS` points, or past a
+   * geometry limit of the converter, marked by the walk when the parse plans pictures (`ParseOptions.rasters`).
+   * The planner claims it for a picture or leaves it as the converter leaves such a shape today.
+   */
+  rasterOf?: RasterCandidate;
+  /**
+   * Q53: drawn with its z-neighbours as one picture of shapes (`raster-plan.ts`): the index in
+   * `SlideScene.elements` of the run's first (lowest) element, which writes it; the others write nothing once it
+   * is written (as `decor`).
+   */
+  raster?: number;
+}
+
+/**
+ * A custom-path shape the walk marks for a picture (C-SR2): `raw` is the converter's point cost over what the file
+ * holds, `why` the rule that made it one ('points': over `RASTER_POINTS`; 'limit': past a geometry limit of the
+ * converter; 'total': only the slide's total refused it), `times` the objects that would store it, `today` what
+ * `customPaths` gives it (over the limits, a box), `node` the `a:custGeom` the recipe builder reads and `notes`
+ * what the walk would have said about the shape (said by the caller only if no picture takes it).
+ */
+export interface RasterCandidate {
+  raw: number;
+  why: 'points' | 'limit' | 'total';
+  times: number;
+  today: CustomPaths;
+  node: XNode;
+  notes?: string[];
 }
 
 /** One end of a connector glued to a shape's connection site. */
@@ -763,6 +792,12 @@ export interface SlideScene {
   transitionSound?: { part?: string; external?: string; loop: boolean };
   /** Sounds of animation effects (`p:sndTgt`): never imported (counted for a note). */
   animationSounds?: number;
+  /**
+   * Q53: the slide's picture plan (`planRasters`: the runs, the put-back forms, what stayed and why, the words),
+   * present only when the parse planned pictures and the slide holds a candidate. The emitter writes each run
+   * as one picture.
+   */
+  rasters?: RasterPlan;
 }
 
 /** A `p14:sectionLst` section. */

@@ -55,6 +55,8 @@ import {
   type TextObject,
   type Theme,
 } from '@ordo/domain';
+import { type EasyOptions, planRecord } from '@ordo/domain/prerender.ts';
+import { quickBytes } from '@ordo/importers/pptx-ladder.ts';
 import type {
   Job,
   PptxReimportAction,
@@ -81,6 +83,8 @@ import {
   type PptxLoSlide,
   type PptxNativePayload,
   type PptxReimportPayload,
+  mediaMotion,
+  recordOptions,
 } from './shared.ts';
 import { storedPagesOf } from './textRepair.ts';
 
@@ -288,7 +292,14 @@ export type FreshDeck = {
   lo?: PptxLoSlide[];
   /** Whether every deck slide was converted (a whole re-import): its log replaces the presentation's. */
   whole?: boolean;
+  /** Q24.b: this hub keeps heavy slides whole, so a rebuilt slide gets the pre-render record it is due (`planRecord`). */
+  keepsWhole?: boolean;
+  /** The clips the fresh import made (its media ids): a motion for the record's anchors, whatever the media row says. */
+  clipIds?: string[];
 };
+
+/** Whether a media file moves, as the hub's media row says (a video): undefined when it does not know the file. */
+export type MediaMotion = (mediaId: string) => boolean | undefined;
 
 /** The fresh deck of a native build (`buildNative`). */
 export function freshOf(b: NativeBuild, whole: boolean): FreshDeck {
@@ -314,6 +325,7 @@ export function freshOf(b: NativeBuild, whole: boolean): FreshDeck {
     ...(b.p.source ? { source: b.p.source } : {}),
     lo: b.lo,
     whole,
+    ...(b.keepsWhole ? { keepsWhole: true, clipIds: [...b.clipIds] } : {}),
   };
 }
 
@@ -497,6 +509,7 @@ function rebuild(
   keep: SlideObject[],
   legacy: boolean,
   background: string | undefined,
+  record?: EasyOptions,
 ): Slide | undefined {
   const next: Slide = { id: cur.id, objects: [...f.objects, ...keep] };
   const lyric = lyricOf(cur, f, keep);
@@ -520,10 +533,13 @@ function rebuild(
   }
   const parsed = Slide.safeParse(next);
   if (!parsed.success) return undefined;
+  // Q24.b: the pre-render record of the slide as it is now, the operator's kept objects counted (`planRecord` is its one
+  // writer: it adds, refreshes or removes it); only on a hub that keeps heavy slides whole.
+  const out = record ? planRecord(parsed.data, record) : parsed.data;
   // The digest of the import's objects (those with an origin, `digest.ts`): the operator's kept on top are
   // left out, so moving, editing or deleting them later does not make the slide edited.
-  if (parsed.data.pptx) parsed.data.pptx.digest = importDigest(parsed.data.objects);
-  return parsed.data;
+  if (out.pptx) out.pptx.digest = importDigest(out.objects);
+  return out;
 }
 
 /** `log` with `line` appended, the oldest lines dropped past `SOURCE_LOG_CHARS`. */
@@ -558,8 +574,14 @@ export function mergeReimport(
   req: PptxReimportReq,
   tags: MediaTags,
   names?: MediaNames,
+  motion?: MediaMotion,
 ): { p: Presentation; counts: ReimportCounts; lo: PptxLoSlide[] } {
   const counts: ReimportCounts = { regenerated: 0, keptEdited: 0, replaced: 0, userObjects: 0 };
+  // Q24.b: where the hub keeps heavy slides whole, a rebuilt slide gets the record it is due. The clips of the fresh import
+  // are motions; any other file answers from the hub's media row (a file it does not know counts as an anchor).
+  const record = fresh.keepsWhole
+    ? recordOptions(current.kind, motion ?? (() => undefined), new Set(fresh.clipIds ?? []))
+    : undefined;
   const deck = deckOf(current);
   if (!deck) return { p: current, counts, lo: [] };
   const sets = requestSets(req);
@@ -635,7 +657,7 @@ export function mergeReimport(
           if (!f.slide.backgroundMediaId) tookBackground.add(sl.id);
         }
       }
-      const next = rebuild(sl, f.slide, keep, legacy, background);
+      const next = rebuild(sl, f.slide, keep, legacy, background, record);
       if (!next || shape(next) === shape(sl)) continue;
       out.set(sl.id, next);
       if (legacy) counts.replaced++;
@@ -782,6 +804,7 @@ export function queueReimport(
     ...(req.slideIds ? { slideIds: req.slideIds } : {}),
     ...(req.reset ? { reset: req.reset } : {}),
     ...(req.keep ? { keep: req.keep } : {}),
+    ...(req.rasters === 'off' && req.slideIds?.length ? { rasters: 'off' as const } : {}),
     ...(options && Object.keys(options).length ? { options } : {}),
     ...(pageBoxes ? { pageBoxes: true } : {}),
   });
@@ -968,6 +991,23 @@ export function keptBytes(p: Presentation, plan: PptxReimportPlan, scoped: boole
   return n;
 }
 
+/**
+ * The bytes of the kept slides that carry a pre-render record (the same slides `keptBytes` counts, as `quickBytes` counts
+ * them): they use up the whole-slide share (`WHOLE_SHARE_BYTES`, Q28.a), so the heavy slides a re-import builds keep
+ * only what is left (`NativeJobEnv.heavyReserve`).
+ */
+export function keptHeavyBytes(p: Presentation, plan: PptxReimportPlan, scoped: boolean): number {
+  const action = new Map(plan.slides.map((s) => [s.slideId, s]));
+  let n = 0;
+  for (const sec of p.sections)
+    for (const sl of sec.slides) {
+      const a = action.get(sl.id);
+      const rebuilt = a?.action === 'regenerate' || a?.action === 'replace';
+      if (sl.prerender && (scoped ? !rebuilt : a?.kind === 'other')) n += quickBytes(sl);
+    }
+  return n;
+}
+
 const zero = (presentationId: string, keptEdited = 0): PptxReimportResult => ({
   presentationId,
   regenerated: 0,
@@ -1027,6 +1067,7 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
           hash: pl.hash,
           name: p0.title,
           ...(pl.options ? { options: pl.options } : {}),
+          ...(pl.deferrals ? { deferrals: pl.deferrals } : {}),
           done: { media: [], ...pl.done, presentationId: p0.id },
         },
         signal: ctx.signal,
@@ -1034,18 +1075,27 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
         progress: (f) => ctx.progress(0.9 * f),
         setPayload: (np) => {
           nctx.payload = np;
-          ctx.setPayload({ ...ctx.payload, ...(np.done ? { done: np.done } : {}) });
+          ctx.setPayload({
+            ...ctx.payload,
+            ...(np.done ? { done: np.done } : {}),
+            // Q53: the deferral count of the picture step (a service is live) is this job's too.
+            ...(np.deferrals !== undefined ? { deferrals: np.deferrals } : {}),
+          });
         },
       };
       let build: NativeBuild;
       try {
         build = await buildNative(deps, nctx, {
           ...env,
+          // Q57.d: 'Reset slide' asks for no picture step (`PptxReimportReq.rasters`).
+          ...(pl.rasters === 'off' ? { rasters: 'off' as const } : {}),
           only: scopeOf(p0, req, tags, names),
           reserve: keptBytes(p0, plan, !!req.slideIds),
+          // Q28.a: the slides it keeps that are kept whole share the share with the heavy slides it builds.
+          heavyReserve: keptHeavyBytes(p0, plan, !!req.slideIds),
         });
       } catch (e) {
-        if (ctx.signal.aborted) throw e;
+        if (ctx.signal.aborted || e instanceof JobDeferred) throw e;
         throw new Error(`The PowerPoint file could not be converted again: ${logSafe(errorMessage(e), 300)}`);
       }
       fresh = freshOf(build, !req.slideIds);
@@ -1076,7 +1126,7 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
         );
       const m = boxes.length
         ? madeEditable(cur, fresh, req, boxes, themeOf(deps.lib, cur), tags, names)
-        : mergeReimport(cur, fresh, req, tags, names);
+        : mergeReimport(cur, fresh, req, tags, names, mediaMotion(deps.lib));
       if (m.p === cur) {
         for (const id of clips) deps.media.queue(id);
         ctx.log('nothing changed: every slide is as the PowerPoint file and this converter make it');

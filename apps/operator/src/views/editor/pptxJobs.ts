@@ -91,6 +91,8 @@ export function followReimport(
   job: Pick<Job, 'id' | 'state' | 'progress' | 'error'>,
   what: ReimportWhat,
   slideId?: string,
+  /** Reset slide of a slide that held a picture of shapes: the done message says its shapes are shapes again (Q57.d). */
+  heldPicture = false,
 ): Promise<Job | undefined> {
   track(pid, job, what, slideId);
   return followJob(job.id, {
@@ -110,7 +112,7 @@ export function followReimport(
         toast(`The re-import is done; reload the presentation to see it (${errorText(e)}).`, 'warn');
         return;
       }
-      const m = reimportMessage(what, r);
+      const m = reimportMessage(what, r, heldPicture);
       if (taken) toast(m.text, m.tone, 8000);
       else toast(`${m.text} ${REIMPORT_HELD}`, 'warn', 12_000);
     },
@@ -126,6 +128,7 @@ export async function startReimport(
   req: PptxReimportReq,
   what: ReimportWhat,
   slideId?: string,
+  heldPicture = false,
 ): Promise<boolean> {
   if (reimportRunning(useReimport.getState().runs[p.id])) {
     toast('A re-import of this presentation is already running.', 'warn');
@@ -139,7 +142,7 @@ export async function startReimport(
     toast(`Could not re-import from PowerPoint: ${errorText(e)}`, 'error');
     return false;
   }
-  void followReimport(p.id, job, what, slideId);
+  void followReimport(p.id, job, what, slideId, heldPicture);
   return true;
 }
 

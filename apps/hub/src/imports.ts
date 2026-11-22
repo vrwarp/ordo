@@ -27,6 +27,7 @@ import { ToolError } from './media/tools.ts';
 import { baseName, type MediaService } from './media/service.ts';
 import { cpuPool, transferables, WorkerStartError } from './pool.ts';
 import { renderCopyForDocument, sofficeToPdf } from './pptx/fallback.ts';
+import type { DiskFloor } from './diskfloor.ts';
 import { PptxImports } from './pptx/index.ts';
 import { boxesOverPage, rebuildsFromDeck, themeOf } from './pptx/reimport.ts';
 import { mediaForFile } from './pptx/mediaParts.ts';
@@ -165,6 +166,7 @@ export class ImportService {
     cfg: HubConfig,
     log: Logger,
     locked: (presentationId: string) => boolean,
+    disk?: Pick<DiskFloor, 'assertRoom'>,
   ) {
     this.lib = lib;
     this.store = store;
@@ -188,6 +190,8 @@ export class ImportService {
       locked,
       tools: this.tools,
       systemFaces: this.systemFaces,
+      // Q53: the picture step asks the free-space floor before each picture it stores.
+      ...(disk ? { disk } : {}),
     });
     // Legacy PowerPoint text boxes are re-keyed once, in the background (design/27 §11): checked at every
     // start, it queues nothing once the library is repaired.
@@ -787,7 +791,8 @@ export class ImportService {
       }),
     }));
     if (!found) throw badRequest(`Slide ${slideId} not found`, 'not_found');
-    if (!found.imported) throw badRequest('Not an imported slide', 'not_imported');
+    // A slide kept as a slide file is not a door: laying boxes over its page would change its simple copy beside its file.
+    if (!found.imported || found.prerender?.file) throw badRequest('Not an imported slide', 'not_imported');
     const saved = this.lib.savePresentation({ ...p, sections }, { expectedRev: p.rev, by });
     this.lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
     return saved;

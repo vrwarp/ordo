@@ -74,7 +74,8 @@ describe('hub-import', () => {
     expect(readdirSync(p.path).sort()).toEqual(['ffmpeg', 'node', 'pdftoppm']);
     expect(readlinkSync(join(p.path, 'ffmpeg'))).toBe(join(bin, 'ffmpeg'));
     expect(readlinkSync(join(p.path, 'node'))).toBe(process.execPath);
-    expect(p.missing).toEqual(['ffprobe', 'pdfinfo', 'prlimit']);
+    // `nice` is a lite tool since the picture browser of many-point shapes is started with it (Q53): this fake folder has none.
+    expect(p.missing).toEqual(['ffprobe', 'pdfinfo', 'prlimit', 'nice']);
   });
 
   it('starts the sources unless the bundle is asked for, even where a built bundle exists (sub-wave 1c)', () => {

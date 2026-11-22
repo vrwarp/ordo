@@ -51,6 +51,13 @@ import { EFFECT_STEP_PIXELS } from './effects.ts';
  * the topmost objects, usually the words, are the ones on screen at once.
  *
  * This file holds the pure split and its constants; the frame unit's key and making follow below it.
+ *
+ * The whole-under variant (`wholeSplit`, sub-wave 3 bake-render): the pre-rendered picture of a slide (`bake.ts`) is
+ * the whole slide drawn once, so its split holds EVERY drawn object under and nothing direct, whatever the counts and
+ * whatever `setFrames` says. It is a `FrameSplit` like the live one, driven by the same step machine (`makeFrame`),
+ * kept and keyed in the same unit cache, and `splitFrame`, `frameKey`, `makeFrame` and `underSlides` are exactly what
+ * they were (bake.pins.test.ts pins them): the variant adds a second constructor beside the first, never a change
+ * of the live frame's output or key.
  */
 
 /** Objects the direct part holds at most: the live clamp's (`CLAMP.maxObjects`). */
@@ -391,6 +398,11 @@ export interface FrameMakeOptions {
   readonly epoch?: number;
   /** The turn time a frame may take before it is dropped (default `FRAME_BUDGET_MS`): the bench measures past it. */
   readonly budgetMs?: number;
+  /**
+   * Told when one object's draw threw. The live frame passes none: it leaves the object out and goes on (a frame
+   * that must not lose a slide). The bake passes one, because a picture must not be made with an object missing.
+   */
+  readonly onError?: (o: SlideObject, err: unknown) => void;
 }
 
 type FrameStep =
@@ -562,11 +574,13 @@ function drawStep(
   o: SlideObject,
   scale: number,
   images?: ImageLookup,
+  onError?: (o: SlideObject, err: unknown) => void,
 ): void {
   try {
     drawObject(c as never, o, scale, images);
   } catch (err) {
     console.warn('[ordo frame] an object could not be drawn', err);
+    onError?.(o, err);
   }
 }
 
@@ -664,7 +678,7 @@ export async function makeFrame(
       try {
         const t0 = now();
         await run.slice(() => {
-          if (pic) drawStep(work.c, st.object, scale, pic.lookup);
+          if (pic) drawStep(work.c, st.object, scale, pic.lookup, opts.onError);
           work.c.getImageData(0, 0, 1, 1);
         });
         work.longestStep = Math.max(work.longestStep, now() - t0);
@@ -682,7 +696,7 @@ export async function makeFrame(
       if (!made) {
         // Not drawable here: its legacy copy, never left out.
         await run.slice(() => {
-          drawStep(work.c, withinDrawBudget([st.object])[0] ?? st.object, scale);
+          drawStep(work.c, withinDrawBudget([st.object])[0] ?? st.object, scale, undefined, opts.onError);
           work.c.getImageData(0, 0, 1, 1);
         });
       } else {
@@ -707,7 +721,13 @@ export async function makeFrame(
       await run.slice(() => {
         do {
           const t1 = now();
-          drawStep(work.c, (steps[work.index] as { object: SlideObject }).object, scale);
+          drawStep(
+            work.c,
+            (steps[work.index] as { object: SlideObject }).object,
+            scale,
+            undefined,
+            opts.onError,
+          );
           work.index++;
           work.steps++;
           work.longestStep = Math.max(work.longestStep, now() - t1);
@@ -842,4 +862,87 @@ export function underSlides(split: FrameSplit): readonly Slide[] {
 /** The pictures the frame under `key` was made without because their files were not there (a hash or `media:id`). */
 export function frameMissing(key: string): readonly string[] {
   return incomplete.get(key) ?? [];
+}
+
+// ── The whole-under variant (the bake's) ────────────────────────────────────────────────────────────────
+
+/** How `wholeSplit` is asked for. */
+export interface WholeOptions {
+  /**
+   * Ids of objects left out of the picture (the live set drawn above it: design 29 `liveSet`, the hook of Q24.a).
+   * Default: the RAW slide's `prerender.live` (the clamped slide has no record: `clampSlide` builds it field by
+   * field), else none. This release always passes `[]`.
+   */
+  readonly live?: readonly string[];
+}
+
+const wholeMemo = new WeakMap<object, Map<string, FrameSplit>>();
+
+/** The ids of the raw slide's live set (`Slide.prerender.live`), strings only. */
+function recordedLive(slide: Slide): string[] {
+  const live = (slide as { prerender?: { live?: unknown } }).prerender?.live;
+  return Array.isArray(live) ? live.filter((id): id is string => typeof id === 'string') : [];
+}
+
+/**
+ * The whole-under split of `slide` at `scale` (device px per logical px): every drawn object of the slide under
+ * (`slideContent` of its bake clamp, bottom first, without the live set), nothing direct, the whole frame as its
+ * rect. Unlike `splitFrame` it never returns nothing: a slide within the counts, an empty slide and a slide when
+ * frames are off (`setFrames`) all have one, because the picture is the whole slide made once. At most
+ * `FRAME_MAX_OBJECTS` objects (the bake clamp's: a raw slide past it is cut there and counted, `bakeCuts`; the
+ * bake refuses it before it gets here). Pure and memoised by (slide, scale, live), at most 8 a slide as
+ * `splitFrame`'s.
+ */
+export function wholeSplit(slide: Slide, scale: number, opts: WholeOptions = {}): FrameSplit {
+  if (!(Number.isFinite(scale) && scale > 0))
+    throw new RangeError('wholeSplit: scale must be a positive number');
+  const bake = clampSlide(slide, 'bake');
+  const live = opts.live ?? recordedLive(slide);
+  const at = `${scale}|${JSON.stringify(live)}`;
+  let m = wholeMemo.get(bake);
+  if (!m) wholeMemo.set(bake, (m = new Map()));
+  const hit = m.get(at);
+  if (hit) return hit;
+  const left = new Set(live);
+  const under = slideContent(bake).objects.filter((o) => !left.has(o.id));
+  const frame = frameSize(scale);
+  const out: FrameSplit = {
+    slide: bake,
+    direct: clampSlide({ ...bake, objects: [] }),
+    under,
+    scale,
+    rect: { x: 0, y: 0, w: frame.w, h: frame.h },
+    bytes: frame.w * frame.h * 4,
+    why: { objects: false, images: false, targets: false, bytes: false, area: false },
+    cut: 0,
+  };
+  if (m.size >= 8) m.clear();
+  m.set(at, out);
+  return out;
+}
+
+/**
+ * The indexes (into `split.under`) of the objects that wait for a geometry, mask or decoration file that is not read
+ * yet: they draw nothing until it is, so a picture made now would lack them. The bake refuses to start while any
+ * is (`files`); the frame's own key already carries them (`frameKey`), so one that arrives gives a new key.
+ */
+export function awaitedFiles(split: FrameSplit): readonly number[] {
+  const out: number[] = [];
+  split.under.forEach((o, i) => {
+    if (awaited(o)) out.push(i);
+  });
+  return out;
+}
+
+/**
+ * Forget everything the frame under `key` left: its work in progress, its incomplete mark, its unmade mark and its
+ * unit-cache entry (the cache closes the bitmap). A bake calls it after every bake, made or not: a picture is a
+ * one-off, and a stale frame under the same key would give back the same pixels without drawing (`makeFrame` returns
+ * at once for a key that is in the cache).
+ */
+export function forgetFrame(key: string): void {
+  works.delete(key);
+  incomplete.delete(key);
+  clearUnitUnmade(key);
+  unitCache.delete('unit', key);
 }

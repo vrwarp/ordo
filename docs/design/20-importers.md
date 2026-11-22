@@ -207,6 +207,15 @@ presentation while it is live-locked (it re-queues itself with backoff, 30 s dou
 
 ### Native import (editable slides)
 
+<!-- import-whole:begin 20 -->
+_Heavy slides kept whole (Q24.b):_ with the hub's pre-render switch on and no LibreOffice on the hub (Q27.b: a hub that has
+it follows today's plan), the import core keeps a heavy slide whole (no guard
+cut, no simplification, no LibreOffice page for its size) and writes its record (`planRecord`: `{ why, live: [] }`); the report
+says how many ("N slides are very detailed and were kept whole; the screens show a picture of each, made on this computer").
+`ImportCoreOptions.whole` is set by the caller (the hub's job once its tools are known; the browser parse from the scene's
+`wholeSlides`), so the same deck is planned the same on both paths.
+<!-- import-whole:end 20 -->
+
 The native import ([design/27](27-pptx-native-renderer.md), M3) turns a deck into ordinary, editable ordo
 objects instead of page pictures. Its steps are one **import core** in `@ordo/importers`, which runs in Node,
 browsers and Web Workers: the scan (`pptx-scan.ts`: limits, `scanDeck`, `clipParts` with its candidate bound,
@@ -448,6 +457,44 @@ only with 'Import transition sounds'; animation sounds never. Test decks
 for this: the `media` deck of the fidelity corpus, and LibreOffice's own test documents (`sd/qa/unit/data/
 pptx`: `video-loop-mute`, `tdf106867`, `bnc591147`, `narration`, `tdf44223`, `tdf148478_transitionMusic`,
 `animation-sound-*`), which are real-world decks attached to bug reports.
+
+### Pictures of many-point shapes (the picture maker)
+
+<!-- raster-maker:ladder -->
+A custom-path shape with more points than the screens may draw (more than 128 points, or past any converter limit:
+8 paths, 4,096 points a path, 65,536 a slide) is not cut to a box or left out: the owner's Q53 draws it as a picture
+at import and raises no limit. WHO DRAWS the picture is decided once per import by `rastersFor` (apps/hub/src/pptx/
+rasters.ts), a ladder over the tools the hub has:
+
+1. the hub's own headless Chromium running ordo's renderer in a small page (`ORDO_CHROMIUM`; `has('chromium')` of the
+   tool list, which probes `<chromium> --version`): the picture is made from a written recipe (the shapes' built
+   geometry and, for a shape with text, the text object), shape by shape with `drawShapeWide` and the words by the
+   screens' own text drawing, so a shape within today's limits comes out pixel for pixel as the screens draw it;
+2. (a PDF route through poppler is NOT built: only if the Chromium test had failed; the owner's Q65, default no);
+3. LibreOffice's art as today, on a hub that has LibreOffice and no Chromium (the report says the pictures of these
+   shapes come from LibreOffice, as before);
+4. today's boxes, on a hub with neither (the report says this computer cannot draw pictures of shapes: it needs Chromium).
+
+The picture step runs in the light import jobs only, is deferred while any service is live, runs niced in its own
+process group and never on a GO path (a stand-in rule of design/29 decision 4). The report lines and the converter's
+use of the maker are the converter track's (design/15 and design/27). The words inside a picture are no longer text
+(the owner's Q53.h); a later project makes pictured shapes editable (Q62). Measured on this machine (4 shared CPUs, no
+GPU): a 3840x2160 picture takes 92 to 304 ms in the page and its PNG 0.2 to 3.7 MB; shapes with a shadow, a glow or a
+soft edge cost two to three times the time and memory (the owner's open Q53.i, default: they stay as today).
+<!-- /raster-maker:ladder -->
+
+<!-- shape-raster:report -->
+**Pictures of shapes in the import report (Q53, Q68).** The import card and the editor's report say what the picture step did, in
+plain words (the owner's words are "picture" and "shape"): "N shapes were drawn into M pictures so the slide shows them whole
+(the pictures can be moved and resized, but the shapes in them cannot be edited; Reset slide from PowerPoint brings back the
+shapes that fit ordo's limits as shapes, and shapes too large stay boxes)", "K of them have words: the words are part of the
+picture now ...", and for what stayed: "this computer cannot draw pictures of shapes (it needs Chromium): these shapes are as
+they were" (a hub with no maker), "the pictures of these shapes come from LibreOffice, as before" (a hub with LibreOffice),
+"N shapes with a shadow, a glow, a soft edge, a 3-D look or a picture fill stay as they were", "N pictures could not be made in
+time / were not made because a service started / ... and the shapes are as before". The counts are `PptxNativeResult.rasters`
+(`apps/operator/src/lib/pptxRaster.ts` builds the lines; a test pins them against jargon). The browser's parse counts the
+many-point shapes (`PptxClientScene.rasterCandidates`, no recipe ever); a hub that draws their pictures parses the deck itself.
+<!-- /shape-raster:report -->
 
 ### Pictures of the native import
 

@@ -46,6 +46,7 @@ import {
   type PptxLoSlide,
   sweep,
   unplace,
+  WHOLE_PARSE,
   wanted,
 } from './pptx-core.ts';
 import {
@@ -106,6 +107,13 @@ export type PptxClientOptions = {
    */
   libreoffice?: boolean;
   /**
+   * Q24.b: keep heavy, eligible slides whole (`wholeSlidesFor`: the hub's `ORDO_PRERENDER` and, with LibreOffice,
+   * Q27): the converter plans them without the guard and the picture limit, the import writes their pre-render
+   * record. The scene says so (`PptxClientScene.wholeSlides`) and the hub uses it only when its own answer is the
+   * same. Absent: false, the plan of before.
+   */
+  wholeSlides?: boolean;
+  /**
    * The library's faces (the operator's font service in the import worker, `fontFace.ts`; the harness's
    * library): table rows grow to their text measured as the hub measures it (`ParseOptions.fontFace`).
    * Absent: widths are estimated, as a hub with no font would.
@@ -155,6 +163,17 @@ export type PptxClientScene = {
    * uses the scene only when this is what it has, else it parses the deck itself.
    */
   libreoffice?: boolean;
+  /**
+   * Q24.b: true when parsed to keep heavy slides whole (`PptxClientOptions.wholeSlides`); absent: the plan of
+   * before. The hub uses the scene only when its own switch is the same (D7).
+   */
+  wholeSlides?: true;
+  /**
+   * Q53 (C-SR10): how many many-point shapes (or shapes past a converter limit) the parse found on slides that may take a picture
+   * (the browser's parse always runs the converter's 'detect' mode, which changes nothing it stores); absent: none. A hub that draws
+   * the pictures of such shapes itself does not use the scene (`clientScene.ts`); one that cannot takes it as it is. Never a recipe.
+   */
+  rasterCandidates?: number;
 };
 
 /** A client parse: the scene, and what the assembly reads beside it. */
@@ -192,6 +211,8 @@ export type PptxClientImportResult = {
   compact: number;
   /** Slides the budget ladder simplified. */
   simplified: number;
+  /** Q24.b: slides kept whole, each with its pre-render record (0 without `PptxClientOptions.wholeSlides`). */
+  whole: number;
   pending: number;
   missingFonts: string[];
   /** The import's warnings (the import card's notes). */
@@ -391,12 +412,17 @@ export async function parsePptxScene(
 
   // 2a. The deck facts and the scan, as the hub's first pool call.
   const withLo = options.libreoffice !== false;
+  // Q24.b: heavy, eligible slides kept whole, as the hub's pool task parses them (`WHOLE_PARSE`).
+  const whole = options.wholeSlides === true;
   const base = {
     extendBackgrounds: options.extendBackgrounds ?? true,
     transitionSounds: options.transitionSounds ?? false,
     m9Writes: M9_WRITES,
     sheets: PPTX_SHEETS,
     ...(withLo ? {} : { libreoffice: false }),
+    ...(whole ? WHOLE_PARSE : {}),
+    // Q53: count the shapes a hub may draw as pictures (the output is today's: the planner is not run).
+    rasters: 'detect' as const,
     newId,
   };
   const first = convertDeck(parts, { ...base, range: { from: 0, to: 0 } });
@@ -448,7 +474,10 @@ export async function parsePptxScene(
   const named = nameShapeFiles(result.slides, emittedShapeFiles(result), L.batchGeomBytes);
   const names = new Map(named.files.map((f) => [f.id, f.hash]));
   const over = new Set(named.over);
-  const slides = result.slides.map((s) => {
+  // The scene holds no plan of pictures: only the count of shapes it found (`rasterCandidates`).
+  let candidates = 0;
+  for (const s of result.slides) candidates += s.rasterInfo?.candidates ?? 0;
+  const slides = result.slides.map(({ rasterInfo: _plan, rasters: _recipes, rasterWords: _words, ...s }) => {
     if (!over.has(s.index)) return { ...s, slide: nameGeoms(s.slide, names) };
     const keep = new Map(names);
     for (const o of s.slide.objects) {
@@ -476,6 +505,8 @@ export async function parsePptxScene(
     geomFiles: [...files].map(([hash, json]) => ({ hash, json })),
     ...(over.size ? { geomOver: [...over] } : {}),
     ...(withLo ? {} : { libreoffice: false }),
+    ...(whole ? { wholeSlides: true as const } : {}),
+    ...(candidates > 0 ? { rasterCandidates: Math.min(100_000, candidates) } : {}),
   };
   onProgress?.(1);
   return { scene, zip, sizes, ms: performance.now() - t0 };
@@ -531,6 +562,8 @@ export async function assemblePptxScene(
     log,
     warn: (_kind, msg) => log.add('warn', msg),
     geomFileBytes: L.geomFileBytes,
+    // Q24.b: what the scene was parsed for, not what the caller of this assembly means (D7: one plan per import).
+    whole: scene.wholeSlides === true,
   });
   for (const p of scene.oversized)
     core.warn('part', `${logSafe(p)} is over ${L.xmlPartBytes / MiB} MB: not read`);
@@ -660,6 +693,7 @@ export async function assemblePptxScene(
     classes,
     compact: 0,
     simplified,
+    whole: built.whole,
     pending: built.lo.length,
     missingFonts: built.missingFonts,
     notes: log.warnings(),

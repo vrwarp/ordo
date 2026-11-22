@@ -11,6 +11,7 @@ import {
   importJobTitle,
   isImportJob,
   isPptxName,
+  keepsSlidesWhole,
   PPTX_NATIVE_JOB,
   type PptxImportChoice,
   picturesOffered,
@@ -248,6 +249,8 @@ export function ImportTab() {
             name: f.name,
             extendBackgrounds: choice.extendBackgrounds,
             libreoffice: hubHasLibreOffice(known),
+            // Q24.b: heavy slides kept whole when the hub does (its last answer; unknown is no).
+            wholeSlides: keepsSlidesWhole(known),
             fonts,
             live,
             onProgress: (pct) => setProgress(pct * 0.5),

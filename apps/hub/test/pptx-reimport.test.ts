@@ -22,6 +22,8 @@ import {
 } from '@ordo/domain';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
 import { importDigest } from '@ordo/importers/pptx-core.ts';
+import { quickBytes } from '@ordo/importers/pptx-ladder.ts';
+import { pictureGuardDeck } from '@ordo/importers/pptx-guard.test-util.ts';
 import {
   body,
   buildDeck,
@@ -39,13 +41,15 @@ import {
   tc,
 } from '@ordo/pptx-scene/test-util.ts';
 import type { Job, PptxReimportPlan, PptxReimportResult } from '@ordo/protocol';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   deckIndexes,
   earlierWork,
   type FreshDeck,
   importOptionsOf,
   keptBytes,
+  keptHeavyBytes,
+  type MediaMotion,
   type MediaTags,
   mergeReimport,
   pageFromName,
@@ -58,7 +62,16 @@ import {
   unedited,
 } from '../src/pptx/reimport.ts';
 import { patchSlide } from '../src/pptx/fallback.ts';
-import { CONVERTER_VERSION, PPTX_JOB_CLASS, PPTX_JOBS, type PptxLoSlide } from '../src/pptx/shared.ts';
+import { buildNative } from '../src/pptx/nativeJob.ts';
+import { prerenderConfig } from '../src/config.ts';
+import type { JobCtx } from '../src/jobs.ts';
+import {
+  CONVERTER_VERSION,
+  PPTX_JOB_CLASS,
+  PPTX_JOBS,
+  type PptxLoPayload,
+  type PptxLoSlide,
+} from '../src/pptx/shared.ts';
 import { ffmpeg } from './fixtures.ts';
 import {
   type Client,
@@ -653,6 +666,7 @@ describe('the merge', () => {
 describe('reimport.ts helpers', () => {
   it("tells the pages 'Make editable' rebuilds from the deck by their class, never their note", () => {
     const imported = { fileId: DECK, page: 1, imageMediaId: 'm' };
+    // Version 2 on purpose: slides as an older converter (before Q24.b) stored them, the ones a rebuild may replace.
     const v2 = (cls: 'native' | 'hybrid' | 'picture', fileId = DECK) =>
       native(0, [], { imported }, { class: cls, fileId, version: 2, notes: ['anything'] });
     // LibreOffice's page a native import stored (version 2), and a legacy page, of the stored deck.
@@ -681,6 +695,20 @@ describe('reimport.ts helpers', () => {
     ]);
     expect(PPTX_JOBS.reimport).toBe('pptx-reimport');
     expect(PPTX_JOB_CLASS['pptx-reimport']).toBe('light');
+  });
+
+  it("Reset slide's rasters 'off' travels in the payload only with slide ids (RS5, Q57.d)", () => {
+    const queued: { payload: Record<string, unknown> }[] = [];
+    const jobs = {
+      enqueue: (_k: string, payload: Record<string, unknown>) => {
+        queued.push({ payload });
+        return { id: 'j' } as Job;
+      },
+    };
+    queueReimport({ jobs } as never, 'p1', 'h', { slideIds: ['s1'], reset: ['s1'], rasters: 'off' });
+    queueReimport({ jobs } as never, 'p1', 'h', { rasters: 'off' });
+    expect(queued[0]!.payload.rasters).toBe('off');
+    expect(queued[1]!.payload.rasters).toBeUndefined();
   });
 
   it('reads the first import’s options and the pictures earlier follow-ups stored', () => {
@@ -1039,6 +1067,19 @@ describe("'Re-import from PowerPoint' through the hub", () => {
       body: JSON.stringify({ everything: true }),
     });
     expect(bad.status).toBe(400);
+    // Q57.d: rasters 'off' is for Reset slide: without slide ids it is refused, and only 'off' is a value (RS5).
+    for (const body of [
+      { rasters: 'off' },
+      { slideIds: [], rasters: 'off' },
+      { slideIds: ['x'], rasters: 'on' },
+    ]) {
+      const res = await ed.fetch(`/presentations/${p.id}/pptx-reimport`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(400);
+    }
 
     const op = await login(hub.url, OPERATE_PIN);
     const pl = await ed.json<Playlist>('/playlists', {
@@ -1411,4 +1452,334 @@ describe("a table with East Asian vertical cells an older import stored as Libre
       ]);
       expect(unedited(one!)).toBe(true);
     }, 180_000);
+});
+
+// ── Q24.b: the pre-render record stays true through a re-import, Reset slide and the follow-up (D11) ───────────
+
+/** 'n' imported shapes (each carries its origin, as the converter writes it). */
+const crowd = (prefix: string, n: number) =>
+  Array.from({ length: n }, (_, i) =>
+    shape(`${prefix}${i}`, {
+      origin: { ...PPTX },
+      box: { x: (i % 40) * 40, y: Math.floor(i / 40) * 40, w: 30, h: 30, rotation: 0 },
+    }),
+  );
+const recordOf = (s: Slide) => (s as { prerender?: { why: string[]; live: string[] } }).prerender;
+const withRecord = (why: string[]): Partial<Slide> =>
+  ({ prerender: { why, live: [] } }) as unknown as Partial<Slide>;
+
+describe('the pre-render record through a re-import, Reset slide and the LibreOffice follow-up (Q24.b, D11)', () => {
+  /** A fresh deck slide as the version-3 converter stores it. */
+  const fresh3 = (
+    objects: SlideObject[],
+    extra: Partial<Slide> = {},
+    pptx: Partial<NonNullable<Slide['pptx']>> = {},
+  ) => {
+    const f = fresh([[0, objects, extra]], { whole: true, keepsWhole: true, clipIds: [] });
+    f.slides[0]!.slide.pptx = { ...f.slides[0]!.slide.pptx!, version: 3, ...pptx };
+    return f;
+  };
+  const motion = (videos: string[] = [], stills: string[] = []): MediaMotion & ReturnType<typeof vi.fn> =>
+    vi.fn((id: string) => (videos.includes(id) ? true : stills.includes(id) ? false : undefined)) as never;
+
+  it('regenerates a crowded slide an older converter stored whole with its record (T1), an edited one is kept and named', () => {
+    const old = native(0, crowd('o', 210), {}, { version: 2 });
+    const edited = native(1, crowd('e', 210), {}, { version: 2 });
+    edited.objects[0] = { ...edited.objects[0]!, box: { ...BOX, x: 1 } };
+    const p = presentation([[old, edited]], {
+      native: { version: 2, slides: 2, native: 2, hybrid: 0, picture: 0 },
+    });
+    const f = fresh(
+      [
+        [0, crowd('n', 210)],
+        [1, crowd('m', 210)],
+      ],
+      { whole: true, keepsWhole: true, clipIds: [] },
+    );
+    for (const x of f.slides) x.slide.pptx = { ...x.slide.pptx!, version: 3 };
+    const m = mergeReimport(p, f, {}, noTags, undefined, motion());
+    expect(m.counts).toMatchObject({ regenerated: 1, keptEdited: 1 });
+    const [a, b] = slidesIn(m.p);
+    expect(recordOf(a!)).toEqual({ why: ['count'], live: [] });
+    expect(b).toBe(edited);
+    // A re-import of what is stored changes nothing (the record is already the plan's).
+    expect(mergeReimport(m.p, f, {}, noTags, undefined, motion()).p).toBe(m.p);
+  });
+
+  it('writes no record when the hub keeps nothing whole (T7: the flag off)', () => {
+    const old = native(0, crowd('o', 210), {}, { version: 2 });
+    const p = presentation([[old]], { native: { version: 2, slides: 1, native: 1, hybrid: 0, picture: 0 } });
+    const f = fresh([[0, crowd('n', 210)]], { whole: true });
+    const m = mergeReimport(p, f, {}, noTags, undefined, motion());
+    expect(recordOf(slidesIn(m.p)[0]!)).toBeUndefined();
+  });
+
+  it("Reset slide counts the operator's objects on top: 195 fresh and 10 added make 205 (T2)", () => {
+    const cur = native(0, crowd('o', 195), {}, { version: 3 });
+    cur.objects.push(
+      ...Array.from({ length: 10 }, (_, i) =>
+        shape(`mine${i}`, { box: { x: i * 10, y: 900, w: 8, h: 8, rotation: 0 } }),
+      ),
+    );
+    const p = presentation([[cur]], { native: { version: 3, slides: 1, native: 1, hybrid: 0, picture: 0 } });
+    const f = fresh3(crowd('n', 195));
+    const m = mergeReimport(p, f, { slideIds: [cur.id], reset: [cur.id] }, noTags, undefined, motion());
+    const next = slidesIn(m.p)[0]!;
+    expect(next.objects).toHaveLength(205);
+    expect(recordOf(next)).toEqual({ why: ['count'], live: [] });
+    // Without the 10 the fresh slide alone is not heavy: no record.
+    const bare = presentation([[native(0, crowd('o', 195), {}, { version: 2 })]], {
+      native: { version: 2, slides: 1, native: 1, hybrid: 0, picture: 0 },
+    });
+    expect(recordOf(slidesIn(mergeReimport(bare, f, {}, noTags, undefined, motion()).p)[0]!)).toBeUndefined();
+  });
+
+  it('skips a slide its LibreOffice work is done on when the converter is the same, and rebuilds one an older converter wrote (T3)', () => {
+    const waiting = (version: number) => {
+      const cur = native(0, crowd('o', 30), {}, { version, class: 'hybrid' });
+      return presentation([[cur]], { native: { version, slides: 1, native: 0, hybrid: 1, picture: 0 } });
+    };
+    const f = fresh3(crowd('n', 30), {}, { class: 'hybrid', pending: true });
+    expect(mergeReimport(waiting(3), f, {}, noTags, undefined, motion()).counts.regenerated).toBe(0);
+    expect(mergeReimport(waiting(2), f, {}, noTags, undefined, motion()).counts.regenerated).toBe(1);
+  });
+
+  it('counts the bytes of the kept slides that carry a record against the share of the slides it builds (T4)', () => {
+    const big = (n: number, prefix: string) =>
+      native(n, crowd(prefix, 210), withRecord(['bytes']), { version: 3 });
+    const a = big(0, 'a');
+    const b = big(1, 'b');
+    const plain = native(2, crowd('c', 210), {}, { version: 3 });
+    const c = native(3, crowd('d', 30), {}, { version: 3 });
+    const p = presentation([[a, b, plain, c]], {
+      native: { version: 3, slides: 4, native: 4, hybrid: 0, picture: 0 },
+    });
+    // A partial re-import of the plain slide: every other slide is kept, and a and b carry records.
+    const plan = planReimport(p, { slideIds: [plain.id] }, noTags);
+    expect(keptHeavyBytes(p, plan, true)).toBe(quickBytes(a) + quickBytes(b));
+    // The slide it rebuilds is not counted (the build counts it), and a whole one counts only the slides of no deck.
+    const planA = planReimport(p, { slideIds: [a.id] }, noTags);
+    expect(keptHeavyBytes(p, planA, true)).toBe(quickBytes(b));
+    expect(keptHeavyBytes(p, plan, false)).toBe(0);
+  });
+
+  /** A hybrid slide waiting for LibreOffice's art: `n` imported shapes, the art replacing none and added on top. */
+  const waitingSlide = (n: number, extra: Partial<Slide> = {}) => {
+    const slide: Slide = Slide.parse({
+      id: 's1',
+      objects: crowd('w', n),
+      pptx: { fileId: 'deck', index: 1, shown: 1, class: 'hybrid', version: 3, pending: true, digest: '' },
+      ...extra,
+    });
+    slide.pptx!.digest = digestOf(slide.objects);
+    const lo: PptxLoSlide = {
+      slideId: 's1',
+      index: 1,
+      shown: 1,
+      class: 'hybrid',
+      digest: slide.pptx!.digest!,
+      art: {
+        elements: [{ from: 'slide', shapeId: 4, nth: 0 }],
+        box: { x: 1, y: 1, w: 9, h: 9 },
+        at: n,
+        replaces: [],
+        text: '',
+      },
+    };
+    return { slide, lo, work: { art: { mediaId: 'art1', box: { x: 1, y: 1, w: 9, h: 9 } } } };
+  };
+  const stills = { isMotion: () => false };
+
+  it('patchSlide plans the record of the slide with its art added: 200 objects and the art make 201 (T5)', () => {
+    const { slide, lo, work } = waitingSlide(200);
+    expect(recordOf(patchSlide(slide, lo, work, 'deck', stills))).toEqual({ why: ['count'], live: [] });
+    // Without the option (a hub that keeps nothing whole) no record is written.
+    expect(recordOf(patchSlide(slide, lo, work, 'deck'))).toBeUndefined();
+    // A slide that is not heavy stays without one.
+    const small = waitingSlide(20);
+    expect(recordOf(patchSlide(small.slide, small.lo, small.work, 'deck', stills))).toBeUndefined();
+  });
+
+  it('patchSlide refreshes the record a slide already had, on an unedited slide and on an edited one (T5)', () => {
+    for (const edit of [false, true]) {
+      const { slide, lo, work } = waitingSlide(200, withRecord(['bytes']));
+      const cur = edit
+        ? {
+            ...slide,
+            objects: slide.objects.map((o, i) => (i === 0 ? { ...o, box: { ...o.box, x: 5 } } : o)),
+          }
+        : slide;
+      const next = patchSlide(cur, lo, work, 'deck', stills);
+      expect(recordOf(next), `edited ${edit}`).toEqual({ why: ['count'], live: [] });
+    }
+  });
+
+  it('a slide with its own background PICTURE keeps its record, one with a background VIDEO has none, an unknown media is an anchor (T5b, Q25.c.b)', () => {
+    const run = (bg: string, record?: unknown) => {
+      const { slide, lo, work } = waitingSlide(200, {
+        backgroundMediaId: bg,
+        ...(record ? { prerender: record } : {}),
+      } as Partial<Slide>);
+      const spy = motion(['vid'], ['pic']);
+      const patched = patchSlide(slide, lo, work, 'deck', { isMotion: spy });
+      // The same slide through a re-import.
+      const cur = native(
+        0,
+        crowd('o', 210),
+        { backgroundMediaId: bg, ...(record ? { prerender: record } : {}) } as Partial<Slide>,
+        { version: 2 },
+      );
+      const p = presentation([[cur]], {
+        native: { version: 2, slides: 1, native: 1, hybrid: 0, picture: 0 },
+      });
+      const spy2 = motion(['vid'], ['pic']);
+      const merged = slidesIn(mergeReimport(p, fresh3(crowd('n', 210)), {}, noTags, undefined, spy2).p)[0]!;
+      return { patched, merged, spy, spy2 };
+    };
+    const pic = run('pic');
+    expect(recordOf(pic.patched)).toEqual({ why: ['count'], live: [] });
+    expect(recordOf(pic.merged)).toEqual({ why: ['count'], live: [] });
+    // The accessor was asked at both sites.
+    expect(pic.spy).toHaveBeenCalledWith('pic');
+    expect(pic.spy2).toHaveBeenCalledWith('pic');
+    const vid = run('vid', { why: ['count'], live: [] });
+    expect(recordOf(vid.patched)).toBeUndefined();
+    expect(recordOf(vid.merged)).toBeUndefined();
+    const unknown = run('who');
+    expect(recordOf(unknown.patched)).toBeUndefined();
+    expect(recordOf(unknown.merged)).toBeUndefined();
+  });
+
+  it('a clip of the fresh import is a motion whatever the hub knows of it (the rebuild has the import core)', () => {
+    const cur = native(0, crowd('o', 210), {}, { version: 2 });
+    const p = presentation([[cur]], { native: { version: 2, slides: 1, native: 1, hybrid: 0, picture: 0 } });
+    const f = fresh3(crowd('n', 210), { backgroundMediaId: 'clip1' } as Partial<Slide>);
+    const withBg = presentation(
+      [[native(0, crowd('o', 210), { backgroundMediaId: 'clip1' } as Partial<Slide>, { version: 2 })]],
+      { native: { version: 2, slides: 1, native: 1, hybrid: 0, picture: 0 } },
+    );
+    const known = mergeReimport(withBg, { ...f, clipIds: ['clip1'] }, {}, noTags, undefined, () => false);
+    expect(recordOf(slidesIn(known.p)[0]!)).toBeUndefined();
+    const stillPicture = mergeReimport(withBg, f, {}, noTags, undefined, () => false);
+    expect(recordOf(slidesIn(stillPicture.p)[0]!)).toEqual({ why: ['count'], live: [] });
+    expect(p).toBeDefined();
+  });
+});
+
+describe("the pre-render record through the hub's re-import and the follow-up (Q24.b)", () => {
+  let hub2: TestHub;
+  let dir2: string;
+  beforeAll(async () => {
+    // LibreOffice off: the follow-up of a hybrid slide would outlive the test.
+    hub2 = await startHub({ libreoffice: { mode: 'off', exe: '' } });
+    dir2 = tempDir('ordo-reimport-whole-');
+  }, 60_000);
+  afterAll(async () => {
+    await hub2?.cleanup();
+    if (dir2) rmSync(dir2, { recursive: true, force: true });
+  });
+  /** The switch of store-2 (`HubConfig.prerender`), flipped on the running hub: read at each job. */
+  const setSwitch = (on: boolean) =>
+    Object.assign(hub2.imports.pptx.deps.cfg, { prerender: prerenderConfig(on ? 'on' : 'off') });
+
+  it('a crowded slide stored before the switch is regenerated whole with its record by a re-import, and the next one changes nothing (T1)', async () => {
+    setSwitch(false);
+    const hash2 = await storeDeck(hub2, await zipDeck(pictureGuardDeck(24), dir2, 'crowd.pptx'));
+    const job = await waitJob(hub2, hub2.imports.pptx.queueNative(hash2, 'Crowd.pptx').id, 120_000);
+    expect(job.state, `${job.error}`).toBe('done');
+    const id = (job.result as { presentationId: string }).presentationId;
+    const before = slidesOf(hub2.lib.presentations.must(id))[0]!;
+    expect(before.objects.filter((o) => o.type === 'image')).toHaveLength(16);
+    expect(recordOf(before)).toBeUndefined();
+    setSwitch(true);
+    const ed2 = await login(hub2.url, EDIT_PIN);
+    const post = async () => {
+      const res = await ed2.fetch(`/presentations/${id}/pptx-reimport`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(res.status, await res.clone().text()).toBe(202);
+      const done = await waitJob(hub2, ((await res.json()) as Job).id, 120_000);
+      expect(done.state, `${done.error}\n${done.log.join('\n')}`).toBe('done');
+      return done.result as PptxReimportResult;
+    };
+    const first = await post();
+    expect(first).toMatchObject({ regenerated: 1 });
+    const after = slidesOf(hub2.lib.presentations.must(id))[0]!;
+    expect(after.objects.filter((o) => o.type === 'image')).toHaveLength(24);
+    expect(recordOf(after)?.why.length).toBeGreaterThan(0);
+    expect(recordOf(after)?.live).toEqual([]);
+    // Again: nothing to change, nothing saved.
+    expect((await post()).rev).toBeUndefined();
+  }, 240_000);
+
+  it('buildNative hands heavyReserve to the import core: with the share nearly used the next heavy slide is cut to the counts (T4)', async () => {
+    setSwitch(true);
+    const hash3 = await storeDeck(hub2, await zipDeck(pictureGuardDeck(24), dir2, 'reserve.pptx'));
+    const build = async (heavyReserve?: number) => {
+      const pid = newId();
+      const nctx: JobCtx<{
+        hash: string;
+        name: string;
+        done: { media: [string, string][]; presentationId: string };
+      }> = {
+        id: `build-${pid}`,
+        payload: { hash: hash3, name: 'Reserve.pptx', done: { media: [], presentationId: pid } },
+        signal: new AbortController().signal,
+        log: () => undefined,
+        progress: () => undefined,
+        setPayload: (pl: unknown) => {
+          nctx.payload = pl as never;
+        },
+      } as never;
+      return buildNative(hub2.imports.pptx.deps, nctx as never, {
+        ...(heavyReserve !== undefined ? { heavyReserve } : {}),
+      });
+    };
+    const free = await build();
+    expect(free.keepsWhole).toBe(true);
+    expect(free.whole).toBe(1);
+    expect(slidesOf(free.p)[0]!.objects.filter((o) => o.type === 'image')).toHaveLength(24);
+    const used = await build(2 * 1024 * 1024 - 10);
+    expect(slidesOf(used.p)[0]!.objects.filter((o) => o.type === 'image')).toHaveLength(16);
+    expect(used.whole).toBe(0);
+  }, 240_000);
+
+  it('a queued pptx-lo job whose payload says version 2 (written before this track) finishes at the head: no version gate (T6)', async () => {
+    setSwitch(true);
+    // A hybrid slide waiting for LibreOffice's art, as a version-2 import left it; LibreOffice is off here, so the job only clears `pending`.
+    const slide = Slide.parse({
+      id: newId(),
+      objects: crowd('p', 5),
+      pptx: { fileId: DECK, index: 0, shown: 0, class: 'hybrid', version: 2, pending: true },
+    });
+    slide.pptx!.digest = digestOf(slide.objects);
+    const p = hub2.lib.savePresentation(
+      presentation([[slide]], { native: { version: 2, slides: 1, native: 0, hybrid: 1, picture: 0 } }),
+      {
+        create: true,
+        by: 'pptx-import',
+      },
+    );
+    const { loJob } = await import('../src/pptx/fallback.ts');
+    const ctx: JobCtx<PptxLoPayload> = {
+      id: 'lo-v2',
+      payload: {
+        presentationId: p.id,
+        hash: DECK,
+        version: 2,
+        slides: [{ slideId: slide.id, index: 0, shown: 0, class: 'hybrid', digest: slide.pptx!.digest! }],
+      },
+      signal: new AbortController().signal,
+      log: () => undefined,
+      progress: () => undefined,
+      setPayload: (pl: PptxLoPayload) => {
+        ctx.payload = pl;
+      },
+    } as never;
+    const out = (await loJob(hub2.imports.pptx.deps)(ctx)) as { cleared?: number };
+    expect(out.cleared).toBe(1);
+    expect(slidesOf(hub2.lib.presentations.must(p.id))[0]!.pptx!.pending).toBeUndefined();
+  }, 120_000);
 });

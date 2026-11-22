@@ -38,5 +38,20 @@ await build({
   logLevel: 'info',
 });
 
+// The FOURTH entry: the picture page (src/pptx/raster-page.ts), a browser iife that the hub's own headless
+// Chromium loads from a file: URL to draw the pictures of many-point shapes with ordo's renderer at import
+// (rasterPage.ts finds it next to the bundle). It is a hub file, not one of the apps' bundles.
+await build({
+  entryPoints: [join(here, 'src/pptx/raster-page.ts')],
+  outfile: join(here, 'dist/raster-page.js'),
+  bundle: true,
+  platform: 'browser',
+  format: 'iife',
+  target: 'es2022',
+  sourcemap: false,
+  legalComments: 'none',
+  logLevel: 'info',
+});
+
 // Keep the Google Fonts list next to the bundle for reference (it is also inlined).
 cpSync(join(here, 'src/fonts/google-fonts.json'), join(here, 'dist/google-fonts.json'));

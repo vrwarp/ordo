@@ -8,7 +8,10 @@
  */
 import type { SceneFontFile } from './faces.ts';
 import type { SystemFaces, SystemScriptFace } from './systemFaces.ts';
-import type { ExtractedText, ImageObject } from '@ordo/domain';
+import type { ExtractedText, ImageObject, PresentationKind } from '@ordo/domain';
+import type { EasyOptions } from '@ordo/domain/prerender.ts';
+import { WHOLE_BACKGROUND_ANCHORS } from '@ordo/importers/pptx-core.ts';
+import type { RasterCounts } from '@ordo/importers/pptx-raster.ts';
 import type { Job } from '@ordo/protocol';
 import type { ArtInfo, ConvertResult, SlideClass } from '@ordo/pptx-scene';
 import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
@@ -16,6 +19,7 @@ import { PPTX_IMPORT_LIMITS, type SceneScan, type SceneSlideExtra } from '@ordo/
 import type { RenderCopyPage } from '@ordo/pptx-scene/rendercopy.ts';
 import type { Logger } from 'pino';
 import type { HubConfig } from '../config.ts';
+import type { DiskFloor } from '../diskfloor.ts';
 import type { JobClass, JobQueue } from '../jobs.ts';
 import type { Library } from '../library.ts';
 import type { MediaService } from '../media/service.ts';
@@ -103,6 +107,11 @@ export type PptxDeps = {
    * hand in a test): none.
    */
   systemFaces?: SystemFaces;
+  /**
+   * The free-space floor (design/29 A25, W44): a job that stores a file of its own size asks it first
+   * (`assertRoom`: a 507 `disk` fails the job with its usual message). Absent (deps built by hand in a test): nothing is asked.
+   */
+  disk?: Pick<DiskFloor, 'assertRoom'>;
 };
 
 // ── Jobs ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -148,6 +157,11 @@ export type PptxNativePayload = {
   options?: PptxImportOptions;
   /** Pre-parsed `PptxClientScene` JSON stored by SHA-256 when parsed on the client. */
   sceneHash?: string;
+  /**
+   * Times the job found a service live while it planned pictures of shapes and deferred itself (the backoff step, Q53, D4):
+   * the picture step never runs beside a service.
+   */
+  deferrals?: number;
   done?: PptxNativeProgress;
 };
 
@@ -182,6 +196,17 @@ export type PptxNativeResult = {
   missing?: number;
   /** M9: whether LibreOffice was there to draw what ordo cannot (`HubTools`). Absent from older results. */
   libreoffice?: boolean;
+  /**
+   * Q24.b: slides kept whole, each with its pre-render record (the import log says how many); present only when this
+   * hub keeps heavy slides whole (`wholeSlidesFor`). Absent from older hubs' results and when it does not.
+   */
+  whole?: number;
+  /**
+   * Q53: what the picture step of shapes came to (`RasterCounts`): shapes drawn into pictures, pictures made, found and put
+   * back, the words in them and why a hub could not draw them. Present only when the deck holds shapes this step looked at
+   * (a hub that cannot draw them still says so). Absent from older hubs' results and for a deck with none.
+   */
+  rasters?: RasterCounts;
 };
 
 /**
@@ -303,6 +328,8 @@ export type PptxReimportPayload = {
   reset?: string[];
   /** Made-editable slides kept as they are. */
   keep?: string[];
+  /** Q57.d ('Reset slide'): convert without the picture step (`PptxReimportReq.rasters`); only with `slideIds`. */
+  rasters?: 'off';
   /**
    * 'Make editable' on a page (`imports.ts` `makeEditableNative`, `reimport.ts` `madeEditable`): a slide of
    * `slideIds` that shows LibreOffice's page and whose deck slide converts to LibreOffice's page again takes
@@ -395,6 +422,18 @@ export type SceneTaskInput = {
    * metafile conversion and lists what they would have drawn (`EmittedSlide.missing`). Absent: true.
    */
   libreoffice?: boolean;
+  /**
+   * Q24.b: keep heavy, eligible slides whole (`wholeSlidesFor`): the converter plans them without the guard and the
+   * picture limit (`ParseOptions.wholeSlides`). Absent: false, the plan of before.
+   */
+  wholeSlides?: boolean;
+  /**
+   * Q53 (`ParseOptions.rasters`): 'plan' writes the pictures of many-point shapes and returns their recipes in
+   * `result.rasters` (at most 32 MiB a call); 'detect' only counts the shapes (a hub that cannot draw them). Absent: 'off'.
+   */
+  rasters?: 'plan' | 'detect';
+  /** Q53 (`ParseOptions.rasterMaker`): who draws the pictures; words are drawn into a picture only by 'page'. */
+  rasterMaker?: 'page' | 'pdf';
   /**
    * M9 `ladder`: the text rescue of slides whose conversion failed (`@ordo/pptx-scene` `rescueDeck`): only their
    * text bodies, no geometry read. Absent: the full conversion.
@@ -534,4 +573,38 @@ export function batchEnds(sizes: readonly number[], maxSlides: number, maxBytes:
     from = to;
   }
   return ends;
+}
+
+// ── Q24.b: the pre-render record (the one writer is `planRecord`) ───────────────────────────────────────
+
+/**
+ * Whether this hub's switch keeps heavy slides whole (`HubConfig.prerender.on`, ORDO_PRERENDER: store-2's C-S2-1), read
+ * from the configuration and never from the domain constant (`PRERENDER_ON`), so one hub answers one way for every job:
+ * the import, a re-import and the LibreOffice follow-up.
+ */
+export function prerenderOn(cfg: HubConfig): boolean {
+  return cfg.prerender.on === true;
+}
+
+/** Whether a media file moves, as the hub's media row says (a video); undefined for a file it does not know. */
+export function mediaMotion(lib: Pick<Library, 'media'>): (mediaId: string) => boolean | undefined {
+  return (id) => {
+    const kind = lib.media.get(id)?.kind;
+    return kind === undefined ? undefined : kind === 'video';
+  };
+}
+
+/**
+ * The options of `planRecord` at a site with no import core of its own (a re-import's merge, the LibreOffice follow-up's
+ * patch): the kind of presentation and, where the importer's side passes it (`WHOLE_BACKGROUND_ANCHORS` 'motion', Q25.c.b),
+ * `isMotion` (every site passes it, or every own background is an anchor and the record of such a slide is removed).
+ * `clipIds`: the clips of the import the slide was just built by, a motion whatever the media row says.
+ */
+export function recordOptions(
+  kind: PresentationKind | undefined,
+  motion: (mediaId: string) => boolean | undefined,
+  clipIds?: ReadonlySet<string>,
+): EasyOptions {
+  const isMotion = (id: string) => (clipIds?.has(id) ? true : motion(id));
+  return { ...(kind ? { kind } : {}), ...(WHOLE_BACKGROUND_ANCHORS === 'motion' ? { isMotion } : {}) };
 }

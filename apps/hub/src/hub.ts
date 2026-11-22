@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Logger } from 'pino';
 import { Auth } from './auth.ts';
 import { Backups } from './backup.ts';
-import { type HubConfig, loadConfig } from './config.ts';
+import { type HubConfig, loadConfig, logPrerender } from './config.ts';
 import { type DB, openDb } from './db.ts';
 import { DISK_MEASURE_MS, DiskFloor } from './diskfloor.ts';
 import { Collector, RefBackfill } from './collect.ts';
@@ -151,14 +151,23 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   phones.onChange((on) => jobs.setPhones(on));
   const media = new MediaService(lib, store, jobs, cfg, log);
   const fonts = new FontService(lib, store, jobs, cfg, log);
-  const imports = new ImportService(lib, store, jobs, media, cfg, log, (id) =>
-    live.locks().presentations.has(id),
+  const imports = new ImportService(
+    lib,
+    store,
+    jobs,
+    media,
+    cfg,
+    log,
+    (id) => live.locks().presentations.has(id),
+    disk,
   );
   const live = new LiveService(db, librarySource(lib), log, {
     snapshotIntervalMs: cfg.snapshotIntervalMs,
     byRef: cfg.liveByRef,
+    prerender: cfg.prerender,
   });
   if (cfg.liveByRefWarning) log.warn({}, cfg.liveByRefWarning);
+  logPrerender(cfg.prerender, log, true);
   const timeZone = () => venueTimeZone(lib.getSetting('general').timeZone, cfg.timeZone);
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
   const revisionTitles = new RevisionTitleBackfill(lib.summaries, { live: () => live.state.mode, log });
@@ -184,10 +193,11 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const prerenderKeys = new PrerenderKeys(lib, store, cpuPool, {
     live: () => live.state.mode,
     log,
+    open: () => cfg.prerender.store,
   });
   // One process: the service's state is always known.
   const liveView = { locks: () => live.locks(), mode: () => live.state.mode, known: () => true };
-  const prerenders = new PrerenderStore(lib, store, liveView, { log });
+  const prerenders = new PrerenderStore(lib, store, liveView, { log, open: () => cfg.prerender.store });
   // A picture accepted for a key of the running service goes straight to the live loop (one process).
   prerenders.onAccepted((e) =>
     applyHubEvent(

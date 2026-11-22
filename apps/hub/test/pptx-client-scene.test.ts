@@ -327,6 +327,102 @@ describe("a slide past the guard (lo-forms: the guard's left-outs to LibreOffice
   });
 });
 
+describe('the whole-slide option of a scene (Q24.b, D7)', () => {
+  const REFUSAL = 'parsed with another whole-slide option';
+  const zipped = async (parts: Map<string, Uint8Array>) => {
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    return z.generateAsync({ type: 'uint8array' });
+  };
+  let whole: PptxClientScene;
+  beforeAll(async () => {
+    const parts = buildDeck({
+      slides: [
+        { shapes: sp({ id: 2, x: IN, y: IN, cx: 4 * IN, cy: IN, txBody: body(para(run('Amazing grace'))) }) },
+      ],
+    });
+    whole = (await parsePptxScene(await zipped(parts), { wholeSlides: true })).scene;
+  });
+
+  it('is written only by a parse that was asked for it, and a hub with the same answer takes the scene', () => {
+    expect(whole.wholeSlides).toBe(true);
+    expect(scene).not.toHaveProperty('wholeSlides');
+    const taken = checkClientScene(structuredClone(whole), { libreoffice: true, wholeSlides: true });
+    expect('scene' in taken).toBe(true);
+    // The field is the scene's own: it stays on the checked scene, as `libreoffice` does.
+    if ('scene' in taken) expect(taken.scene.wholeSlides).toBe(true);
+    for (const o of [{ libreoffice: true }, { libreoffice: true, wholeSlides: false }])
+      expect('scene' in checkClientScene(copy(), o), JSON.stringify(o)).toBe(true);
+  });
+
+  it(`refuses with '${REFUSAL}' both ways: a whole scene on a hub that keeps nothing whole, and the reverse`, () => {
+    expect(checkClientScene(structuredClone(whole), { libreoffice: true })).toEqual({ refused: REFUSAL });
+    expect(checkClientScene(structuredClone(whole), { libreoffice: true, wholeSlides: false })).toEqual({
+      refused: REFUSAL,
+    });
+    expect(checkClientScene(copy(), { libreoffice: true, wholeSlides: true })).toEqual({ refused: REFUSAL });
+    // Whichever the LibreOffice state: the whole option is read on its own.
+    const noLo = structuredClone(whole);
+    noLo.libreoffice = false;
+    expect(checkClientScene(noLo, { libreoffice: false })).toEqual({ refused: REFUSAL });
+    expect('scene' in checkClientScene(noLo, { libreoffice: false, wholeSlides: true })).toBe(true);
+  });
+
+  it('keeps the older refusals first: another converter version, other stored fields, the other LibreOffice state', () => {
+    expect(
+      checkClientScene({ ...structuredClone(whole), version: 2 }, { libreoffice: true, wholeSlides: true }),
+    ).toEqual({
+      refused: 'parsed by another converter version',
+    });
+    expect(
+      checkClientScene(
+        { ...structuredClone(whole), m9Writes: ['vectorFonts'] },
+        { libreoffice: true, wholeSlides: true },
+      ),
+    ).toEqual({ refused: 'parsed with other stored fields' });
+    expect(checkClientScene(structuredClone(whole), { libreoffice: false, wholeSlides: true })).toEqual({
+      refused: 'parsed for a hub with LibreOffice',
+    });
+  });
+
+  it('takes only true (the schema: a scene that says false, 1 or anything else is malformed, never trusted)', () => {
+    for (const bad of [false, 1, 'true', null, {}, []])
+      for (const hubWhole of [true, false]) {
+        const out = checkClientScene(
+          { ...structuredClone(whole), wholeSlides: bad },
+          { libreoffice: true, wholeSlides: hubWhole },
+        );
+        // `false` is not 'true': refused for its value (or by the head's rule), never read as 'off'.
+        expect('scene' in out, `${JSON.stringify(bad)} on ${hubWhole}`).toBe(false);
+      }
+  });
+
+  it('is read by the pool task from its input, and an input without it means no', () => {
+    const file = join(dir, 'whole-scene.json');
+    writeFileSync(file, JSON.stringify(whole));
+    expect('scene' in clientSceneTask({ file, libreoffice: true, wholeSlides: true })).toBe(true);
+    expect(clientSceneTask({ file, libreoffice: true })).toEqual({ refused: REFUSAL });
+    expect(clientSceneTask({ file, libreoffice: true, wholeSlides: false })).toEqual({ refused: REFUSAL });
+  });
+
+  it('never throws, whatever the option and the scene: the fuzz of the base with the new head field', () => {
+    fc.assert(
+      fc.property(
+        fc.oneof(fc.constant(undefined), fc.constant(true), fc.constant(false), fc.string(), fc.integer()),
+        fc.boolean(),
+        fc.boolean(),
+        (field, lo, on) => {
+          const s = structuredClone(scene) as Record<string, unknown>;
+          if (field !== undefined) s.wholeSlides = field;
+          const out = checkClientScene(s, { libreoffice: lo, wholeSlides: on });
+          expect('scene' in out || typeof out.refused === 'string').toBe(true);
+        },
+      ),
+      { numRuns: 200, seed: 13 },
+    );
+  });
+});
+
 describe('a dense table slide (M9: every table is the table object, on every hub)', () => {
   it("an older operator's scene with tableGroupBytes is accepted, the field dropped: the table object on a hub with LibreOffice", async () => {
     // An operator of the interim rule's build (M9 tables-conv) sent, with LibreOffice, what the slide's tables
@@ -392,8 +488,8 @@ describe('a dense table slide (M9: every table is the table object, on every hub
 
   for (const lo of [false, true])
     it(`an r2b-sw1m operator's scene with tables in the grow form is stored as sent, on a hub ${lo ? 'with' : 'without'} LibreOffice`, async () => {
-      // CONVERTER_VERSION stays 2 through sub-wave 1b (plan section 11), so a hub of 1b takes the scene of an
-      // operator of sub-wave 1: its table objects carry the deck's a:tr rows and no rowRule (the drawer grows
+      // CONVERTER_VERSION stayed 2 through sub-wave 1b (plan section 11, 3 since Q24.b), so a hub of 1b took the scene
+      // of an operator of sub-wave 1: its table objects carry the deck's a:tr rows and no rowRule (the drawer grows
       // them). Nothing re-lays them out: the rows and the grow rule stay as sent (review 1b, lens 4).
       const grow = structuredClone(await denseScene(lo));
       const t = tableIn(grow.slides[0]!.slide.objects);
@@ -408,7 +504,7 @@ describe('a dense table slide (M9: every table is the table object, on every hub
       expect(st.table!.rows).toEqual(t.table.rows);
       // The box as the schema rounds it (0.01 px).
       expect(Math.abs(st.box.h - t.box.h)).toBeLessThan(0.01);
-      expect(slide.pptx!.version).toBe(2);
+      expect(slide.pptx!.version).toBe(3);
     });
 
   it("an older operator's scene with tableGroupBytes is accepted on a hub without LibreOffice too: the table object", async () => {
@@ -595,4 +691,134 @@ describe('a scene whose table cells need a script face only this computer has (r
       await hub.cleanup();
     }
   }, 180_000);
+});
+
+describe('the pictures of many-point shapes in a scene (Q53, C-SR10, H4)', () => {
+  const rasterDeck = () => {
+    let path = '<a:moveTo><a:pt x="0" y="0"/></a:moveTo>';
+    for (let i = 1; i < 300; i++)
+      path += `<a:lnTo><a:pt x="${(i * 37) % 1000}" y="${(i * 91) % 1000}"/></a:lnTo>`;
+    path += '<a:close/>';
+    return buildDeck({
+      slides: [
+        {
+          shapes: sp({
+            id: 2,
+            x: IN,
+            y: IN,
+            cx: 3 * IN,
+            cy: 2 * IN,
+            geom: 'none',
+            fill: `${custGeom({ paths: `<a:path w="1000" h="1000">${path}</a:path>` })}${solid('3366AA')}`,
+          }),
+        },
+      ],
+    });
+  };
+  const zipped = async (parts: Map<string, Uint8Array>) => {
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    return z.generateAsync({ type: 'uint8array' });
+  };
+  let withShapes: PptxClientScene;
+  let none: PptxClientScene;
+  beforeAll(async () => {
+    withShapes = (await parsePptxScene(await zipped(rasterDeck()))).scene;
+    none = (
+      await parsePptxScene(
+        await zipped(buildDeck({ slides: [{ shapes: sp({ id: 2, x: IN, y: IN, cx: IN, cy: IN }) }] })),
+      )
+    ).scene;
+  });
+
+  it('the browser parse counts the many-point shapes, holds no plan and no recipe, and a deck with none says nothing', async () => {
+    expect(withShapes.rasterCandidates).toBe(1);
+    // The scene is today's output: no slide carries a plan, a recipe or words of one (the schema has no such field).
+    for (const sl of withShapes.slides) {
+      expect(sl).not.toHaveProperty('rasters');
+      expect(sl).not.toHaveProperty('rasterInfo');
+      expect(sl).not.toHaveProperty('rasterWords');
+    }
+    expect(withShapes).not.toHaveProperty('rasters');
+    expect(none).not.toHaveProperty('rasterCandidates');
+  });
+
+  it('a hub that draws the pictures refuses it and parses the deck itself; one that cannot takes it as it is', () => {
+    expect(checkClientScene(structuredClone(withShapes), { libreoffice: true, rasters: true })).toEqual({
+      refused: 'it holds shapes this hub draws as pictures',
+    });
+    const taken = checkClientScene(structuredClone(withShapes), { libreoffice: true });
+    expect('scene' in taken && taken.scene.rasterCandidates).toBe(1);
+    // A scene with no such shapes is taken by both.
+    expect('scene' in checkClientScene(structuredClone(none), { libreoffice: true, rasters: true })).toBe(
+      true,
+    );
+  });
+
+  it('drops a recipe-like field a hostile scene carries, and refuses a malformed count', () => {
+    const t = structuredClone(withShapes) as unknown as Record<string, unknown>;
+    (t.slides as Record<string, unknown>[])[0]!.rasters = [{ id: 'pptxmedia:rasterx', recipe: { v: 1 } }];
+    t.rasters = [{ recipe: 'x'.repeat(1000) }];
+    const out = checkClientScene(t, { libreoffice: true });
+    expect('scene' in out).toBe(true);
+    if (!('scene' in out)) return;
+    expect(out.scene.slides[0]).not.toHaveProperty('rasters');
+    expect(out.scene).not.toHaveProperty('rasters');
+    for (const bad of [0, -1, 1.5, 'x', 200_000]) {
+      expect(
+        checkClientScene({ ...structuredClone(withShapes), rasterCandidates: bad }, { libreoffice: true }),
+      ).toMatchObject({
+        refused: expect.stringContaining('rasterCandidates'),
+      });
+    }
+  });
+
+  it("the hub's own parse of the deck equals what the scene import stores, byte for byte, when this hub makes no pictures", async () => {
+    const hub = await startHub();
+    try {
+      const parts = rasterDeck();
+      const file = await zipDeck(parts, dir, 'raster-equal.pptx');
+      const hash = await storeDeck(hub, file);
+      const viaScene = await (async () => {
+        const tmp = hub.store.tmpPath('json');
+        writeFileSync(
+          tmp,
+          JSON.stringify((await parsePptxScene(await zipped(parts), { libreoffice: true })).scene),
+        );
+        const sceneHash = (await hub.store.put(tmp, { ext: 'json', mime: 'application/json' })).hash;
+        const job = await hub.imports.pptx.queueNative(hash, 'raster-equal.pptx', {}, sceneHash);
+        return job.id;
+      })();
+      const direct = hub.imports.pptx.queueNative(hash, 'raster-equal-direct.pptx', {});
+      for (const id of [viaScene, direct.id]) {
+        for (;;) {
+          const j = hub.jobs.get(id);
+          if (j.state === 'done' || j.state === 'failed') {
+            expect(j.state, j.error).toBe('done');
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 20));
+        }
+      }
+      const strip = (id: string) => {
+        const r = hub.jobs.get(id).result as PptxNativeResult;
+        const p = hub.lib.presentations.must(r.presentationId);
+        return JSON.stringify(
+          p.sections
+            .flatMap((sec) => sec.slides)
+            .map((sl) => ({
+              ...sl,
+              id: 'x',
+              // The digest hashes the objects with their ids (random per import): everything else is compared.
+              pptx: { ...sl.pptx, digest: 'x' },
+              objects: sl.objects.map((o) => ({ ...o, id: 'x' })),
+            })),
+        );
+      };
+      expect(strip(viaScene)).toBe(strip(direct.id));
+      expect((hub.jobs.get(direct.id).result as PptxNativeResult).rasters).toBeUndefined();
+    } finally {
+      await hub.cleanup();
+    }
+  }, 60_000);
 });

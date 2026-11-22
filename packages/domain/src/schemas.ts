@@ -497,6 +497,40 @@ export const Writing = z.object({
 });
 export type Writing = z.infer<typeof Writing>;
 
+/**
+ * Q53, Q66 (the provenance of the owner's named later project Q62): the picture of shapes an import drew many-point shapes
+ * into (an image object of origin role 'raster'). `file` is the deck's SHA-256 and `slide` its place in the deck (the
+ * containing slide's `pptx.fileId` and `pptx.index`, written again to detect a transplanted picture; the importer adds them),
+ * `from` the scope the members came from, `cv`, `rv` and `pts` the converter version, the picture's version and the point
+ * rule that planned the run, `h` the recipe hash's first 16 hex characters (the placeholder's tail), `n` the members, and
+ * `refs` the members as [shapeId, nth, count] runs in z order (`nth` is the place among the elements of that scope with
+ * that id, from 0, because ids repeat in real decks; absent when more than 32 runs are needed). About 1 KB at most.
+ */
+export const RasterOrigin = z.object({
+  file: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
+  slide: z.number().int().min(0).max(100_000).optional(),
+  from: z.enum(['slide', 'layout', 'master']).catch('slide'),
+  cv: z.number().int().min(1).max(1_000_000),
+  rv: z.number().int().min(1).max(1_000),
+  pts: z.number().int().min(1).max(1_000_000),
+  h: z.string().regex(/^[0-9a-f]{16}$/),
+  n: z.number().int().min(1).max(2_048),
+  refs: z
+    .array(
+      z.tuple([
+        z.number().int().min(0).max(2_147_483_647),
+        z.number().int().min(0).max(100_000),
+        z.number().int().min(1).max(2_048),
+      ]),
+    )
+    .max(32)
+    .optional(),
+});
+export type RasterOrigin = z.infer<typeof RasterOrigin>;
+
 /** Where an object came from (an imported PowerPoint shape), for grouping, re-import and 'apply to similar'. */
 export const ObjectOrigin = z.object({
   /** 'pptx' */
@@ -514,6 +548,8 @@ export const ObjectOrigin = z.object({
   role: z.string().max(20).optional(),
   /** A flattened group or a shape+text pair: selected together. */
   group: z.number().int().min(0).max(100_000).optional(),
+  /** Q53, Q66: what a picture of shapes (role 'raster') was made of, for the named later project Q62. Only that role carries it. */
+  raster: RasterOrigin.optional(),
 });
 export type ObjectOrigin = z.infer<typeof ObjectOrigin>;
 

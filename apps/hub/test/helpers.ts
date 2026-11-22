@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { lyricSlide, newId, type Presentation } from '@ordo/domain';
 import { APP_VERSION } from '@ordo/protocol';
 import WebSocket from 'ws';
-import type { HubConfig } from '../src/config.ts';
+import { type HubConfig, type PrerenderConfig, prerenderConfig } from '../src/config.ts';
 import { afterAll } from 'vitest';
 import { createHub, type Hub } from '../src/hub.ts';
 import { noSystemFaces } from '../src/pptx/systemFaces.ts';
@@ -56,10 +56,22 @@ export function testFloor(overrides: Partial<HubConfig> = {}): number | undefine
   return overrides.statfs ? undefined : 0;
 }
 
+/**
+ * The pre-render state of a hub a test starts (store-2, C-S2-5): the hub of 0.10.0, independent of the process
+ * environment (ORDO_PRERENDER) and of the domain constant PRERENDER_ON, so flipping the constant at the release's
+ * switch commit changes no hub test: the setting auto, the constant read as false (operators told off, no picture line
+ * W33), the store open (a picture is accepted, keys are computed). A test that wants another state gives `prerender`
+ * itself (`prerenderConfig('on')`, `prerenderConfig('off')`) and keeps it (`...overrides` comes after).
+ */
+export function testPrerender(overrides: Partial<HubConfig> = {}): PrerenderConfig {
+  return overrides.prerender ?? prerenderConfig(undefined, false);
+}
+
 export async function startHub(overrides: Partial<HubConfig> = {}): Promise<TestHub> {
   const dir = overrides.dataDir ?? tempDir();
   const hub = await createHub({
     minFreeBytes: testFloor(overrides),
+    prerender: testPrerender(overrides),
     dataDir: dir,
     domain: 'localhost',
     devPin: `${OPERATE_PIN}:${EDIT_PIN}`,

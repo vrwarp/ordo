@@ -35,6 +35,20 @@ export type Args = {
   /** `--hub-budget`: draw every slide as the hub stores it once its budgets ran (`withHubBudget`). */
   hubBudget: boolean;
   /**
+   * `--whole` (Q24.b; implies `--hub-budget`): read every deck with `ParseOptions.wholeSlides` and draw each slide as a hub that
+   * keeps heavy slides whole stores it (the ladder's `whole` model, `selectWhole`). `--whole-anchors own|motion`: which
+   * backgrounds keep a slide out (Q25.c.b: 'motion', the default, only a video).
+   */
+  whole: boolean;
+  wholeAnchors?: 'own' | 'motion';
+  /**
+   * `--rasters` (Q53): read every deck with the pictures of many-point shapes planned (`ParseOptions.rasters` 'plan'; the converter-alone
+   * columns count them, `raster-census.ts`, and the harness's own page draws none: a hub that makes them is `--before hub`);
+   * `--raster-points N` (implies `--rasters`): the census sweep's threshold (default 128).
+   */
+  rasters: boolean;
+  rasterPoints?: number;
+  /**
    * `--frames`: draw a slide past a count (more than 200 objects, 16 pictures) or past one frame of unit area as an output
    * does since the underlay frame (a direct part over the frame made beforehand, renderer `frame.ts`), not cut at 200 objects.
    */
@@ -103,6 +117,8 @@ export function parseArgs(argv: readonly string[]): Args {
     scriptStandIns: false,
     noLibreOffice: false,
     hubBudget: false,
+    whole: false,
+    rasters: false,
     frames: false,
     slides: [],
     askHub: [],
@@ -126,7 +142,21 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (v === '--script-stand-ins') a.scriptStandIns = true;
     else if (v === '--no-libreoffice') a.noLibreOffice = true;
     else if (v === '--hub-budget') a.hubBudget = true;
-    else if (v === '--frames') a.frames = true;
+    else if (v === '--whole') {
+      a.whole = true;
+      a.hubBudget = true;
+    } else if (v === '--whole-anchors') {
+      const w = value(++i, v);
+      if (w !== 'own' && w !== 'motion') throw new Error('--whole-anchors takes own or motion');
+      a.wholeAnchors = w;
+    } else if (v === '--rasters') a.rasters = true;
+    else if (v === '--raster-points') {
+      const n = Number(value(++i, v));
+      if (!Number.isInteger(n) || n < 1)
+        throw new Error('--raster-points takes a whole number of points from 1');
+      a.rasterPoints = n;
+      a.rasters = true;
+    } else if (v === '--frames') a.frames = true;
     else if (v === '--hub') {
       const h = value(++i, v);
       if (h !== 'dist' && h !== 'source') throw new Error('--hub takes dist or source');

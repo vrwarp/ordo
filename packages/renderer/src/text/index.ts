@@ -31,6 +31,7 @@ export {
   registerGlyphPainter,
 } from './paint.ts';
 export type { FaceLike, FontChange, FontFile, FontHost, FontSyncResult } from './fonts.ts';
+export type { BakeFontReport, FontProfile, FontResolverOptions } from './fonts.ts';
 export {
   FontResolver,
   LEGACY_FONT_ENV,

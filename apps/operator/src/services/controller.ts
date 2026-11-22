@@ -7,10 +7,11 @@ import type { CallName, Source, ViewModelMsg } from '../core/protocol.ts';
 import { applyCoreLibrary, connectLibrary, saveSettings, settings } from '../state/library.ts';
 import { useLive } from '../state/live.ts';
 import { refreshSession, useSession } from '../state/session.ts';
-import { toast } from '../state/toasts.ts';
+import { errorText, toast } from '../state/toasts.ts';
 import { rememberMessage, useUi } from '../state/ui.ts';
 import { deviceProfile } from '../lib/capabilities.ts';
 import { RecoveringGate } from '../lib/recovering.ts';
+import { holdBakesForGoLive } from './bakeHold.ts';
 import { log, logLines } from './log.ts';
 import { thumbs } from './thumbs.ts';
 
@@ -283,15 +284,30 @@ export class Controller {
   goLive(playlistId: string): void {
     useLive.setState({ goLiveError: undefined });
     this.call('goLive', playlistId);
+    this.holdBakes();
   }
   /** W41's button: go live from the hub's saved copy of the playlist being prepared (design/29 M8). */
   goLiveFromSaved(playlistId: string): void {
     this.call('goLiveSaved', playlistId);
+    this.holdBakes();
   }
   /** Go live from this PC with the hub unreachable (after the operator confirmed; design/17). */
   goLiveLocal(playlistId: string): void {
     useLive.setState({ goLiveError: undefined });
     this.call('goLiveLocal', playlistId);
+    this.holdBakes();
+  }
+  /**
+   * The picture maker stops on the spot, in the same tick as the press: a bake never runs into a Go live. It runs
+   * AFTER the GO has been posted to the core and can never stop, delay or hide it: a throw is logged and swallowed
+   * (the bake service also reads the live state itself, so a hold that failed half way still ends in a held bake).
+   */
+  private holdBakes(): void {
+    try {
+      holdBakesForGoLive();
+    } catch (e) {
+      log('error', `the bake hold on Go live failed (the GO was sent): ${errorText(e)}`);
+    }
   }
   /** Ask whether a playlist can run from this PC; the answer lands in `useLive().offlineChecks`. */
   offlineCheck(playlistId: string): void {

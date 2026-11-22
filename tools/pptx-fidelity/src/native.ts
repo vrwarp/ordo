@@ -56,20 +56,24 @@ import {
   parseDeck,
   type PictureHeader,
   pictureSize,
+  type SlideBudget,
   type SlideClass,
   type Tier,
 } from '@ordo/pptx-scene';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import { MAX_XML_PART_BYTES } from '@ordo/pptx-scene/opc.ts';
+import { WIDE_GEOMETRY } from '@ordo/pptx-scene/raster-wide.ts';
 import { M9_WRITES, PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
 import { bakeKey, type PictureBake } from '@ordo/pptx-scene/bake.ts';
-import { sentToArt } from '@ordo/pptx-scene/budget.ts';
+import { MAX_DRAWN_PICTURES, MAX_SLIDE_OBJECTS_TEXT, sentToArt } from '@ordo/pptx-scene/budget.ts';
 import { BAKE_PREFIX, MEDIA_PREFIX } from '@ordo/pptx-scene/emit.ts';
+import { selectWhole } from '@ordo/importers/pptx-core.ts';
 import { planLadder, provenanceStandIn, withoutFiles } from '@ordo/importers/pptx-ladder.ts';
 import { CONVERTER_VERSION, PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import type { Browser, Page } from '@playwright/test';
 import { bakePicture } from './bake.ts';
 import { hostFace } from './faces.ts';
+import { type NativeRasters, rasterInfoOf } from './raster-census.ts';
 import { type CompatRule, compatRules, drawingKey } from './compat/index.ts';
 import { deckFeatures, type Features, featureSource, partFeatures } from './features/index.ts';
 import { type HarnessFont, hostFonts, type ScriptFace } from './fonts.ts';
@@ -110,6 +114,10 @@ export type NativeSlide = {
   notes: string[];
   /** The slide as ordo draws it. */
   slide: Slide;
+  /** With `ConvertOptions.whole`: the converter's decision for the slide (Q24.b). */
+  whole?: WholeInfo;
+  /** With `ConvertOptions.rasters`: what the planner and the emitter made of the slide's many-point shapes (`raster-census.ts`). */
+  rasters?: NativeRasters;
   /** Text features of the slide's own XML (`features/text.ts`). */
   textFeatures: string[];
   /** The other registered families' features (`features/index.ts`; none before the M9 tracks add theirs). */
@@ -158,12 +166,38 @@ export function holdsTable(slide: Slide): boolean {
   return slide.objects.some((o) => o.type === 'shape' && o.table !== undefined);
 }
 
+/**
+ * Q24.b, read with the whole option (`ConvertOptions.whole`): the converter's decision for a slide
+ * (`BudgetPlan`), its planned objects and pictures, and what the plan without the option leaves out.
+ */
+export type WholeInfo = {
+  /** `BudgetPlan.whole`. */
+  kept: boolean;
+  /** `BudgetPlan.anchorKinds`: why it is not (clip, background, bound). */
+  anchorKinds: ('clip' | 'background' | 'bound')[];
+  /** The slide's background is a picture (the reading Q25.c's arm 'own' would count). */
+  bgOwn: boolean;
+  /** `BudgetPlan.objects` and `.pictures`: planned. */
+  objects: number;
+  pictures: number;
+  /** The plan without the option: the elements and the pictures it leaves out (the guard, the picture limit). */
+  cut?: { elements: number; pictures: number };
+};
+
 /** What `convertDeck` is asked for besides the slides. */
 export type ConvertOptions = {
+  /** Q24.b: read every slide with `ParseOptions.wholeSlides` and report the converter's decision (`NativeSlide.whole`). */
+  whole?: { anchors: 'own' | 'motion' };
   /** Keep each slide as LibreOffice draws it as well (`--lo-compat`). */
   loCompat?: boolean;
   /** Emit the deck as a hub without LibreOffice does as well (`--no-libreoffice`, `NativeSlide.noLoSlide`). */
   noLibreOffice?: boolean;
+  /**
+   * Q53 (`--rasters`, `--raster-points N`): read and emit every slide with `rasters: 'plan'`, so each run of many-point shapes is one
+   * picture whose recipe is counted (`NativeSlide.rasters`); nothing draws it (the census and the gates count, a hub draws).
+   * `points` is the census sweep's threshold (`ParseOptions.rasterPoints`; default `RASTER_POINTS`).
+   */
+  rasters?: { points?: number };
 };
 
 export type NativeMedia = {
@@ -275,6 +309,52 @@ export function spilledPictureSize(file: string | undefined): PictureHeader | un
 }
 
 /**
+ * The converter's decision for each slide read with the whole option (`NativeSlide.whole`): from the plans
+ * `ParseOptions.onBudget` reported, and, when a slide the option keeps whole is one the base plan would have cut (more
+ * planned objects than the guard keeps or more pictures than the screens draw), the deck read once more without it
+ * for what that plan leaves out (the guard's and the picture limit's: LibreOffice's art or listed).
+ */
+function wholeInfos(
+  files: Parameters<typeof parseDeck>[0],
+  parsing: NonNullable<Parameters<typeof parseDeck>[1]>,
+  plans: ReadonlyMap<number, SlideBudget>,
+): Map<number, WholeInfo> {
+  const out = new Map<number, WholeInfo>();
+  for (const [index, b] of plans)
+    out.set(index, {
+      kept: b.plan.whole,
+      anchorKinds: [...b.plan.anchorKinds],
+      bgOwn: b.background?.fill?.kind === 'picture',
+      objects: b.plan.objects,
+      pictures: b.plan.pictures,
+    });
+  const touched = [...out.values()].some(
+    (w) => w.kept && (w.objects > MAX_SLIDE_OBJECTS_TEXT || w.pictures > MAX_DRAWN_PICTURES - 1),
+  );
+  if (!touched) return out;
+  const base = new Map<number, SlideBudget>();
+  parseDeck(files, { ...parsing, onBudget: (b) => void base.set(b.index, b) });
+  for (const [index, b] of base) {
+    const w = out.get(index);
+    if (!w?.kept) continue;
+    const left = b.elements.filter((e) => e.culled === 'budget' || sentToArt(e));
+    if (!left.length) continue;
+    const parts = new Set<string>();
+    for (const e of left) {
+      const part =
+        e.kind === 'picture'
+          ? e.picture.part
+          : e.kind === 'shape' && e.fill.kind === 'picture'
+            ? e.fill.picture.part
+            : undefined;
+      if (part !== undefined) parts.add(part);
+    }
+    w.cut = { elements: b.plan.art + b.plan.left, pictures: parts.size };
+  }
+  return out;
+}
+
+/**
  * Convert one deck into `dir` (which must exist): `slides.json` and `media/`. Never throws; a deck that
  * cannot be read comes back with `error` and no slides.
  */
@@ -326,7 +406,28 @@ export async function convertDeck(
       // Table rows grow to their text measured with the faces the page draws it with.
       fontFace: hostFace,
     };
-    let scene = parseDeck(zip.files, parsing);
+    // Q24.b (`ConvertOptions.whole`): the deck is read with the whole option, and what the converter decided
+    // for each slide is kept (`ParseOptions.onBudget`), with what the plan without the option leaves out.
+    const plans = new Map<number, SlideBudget>();
+    const rasterOpts = opts.rasters
+      ? {
+          rasters: 'plan' as const,
+          ...(opts.rasters.points === undefined ? {} : { rasterPoints: opts.rasters.points }),
+        }
+      : {};
+    let scene = parseDeck(
+      zip.files,
+      opts.whole
+        ? {
+            ...parsing,
+            ...rasterOpts,
+            wholeSlides: true,
+            wholeAnchors: opts.whole.anchors,
+            onBudget: (b) => void plans.set(b.index, b),
+          }
+        : { ...parsing, ...rasterOpts },
+    );
+    const wholeInfo = opts.whole ? wholeInfos(zip.files, parsing, plans) : undefined;
     out.parseMs = performance.now() - t0;
     t0 = performance.now();
     // One placeholder per shape file over every emission (the slides as LibreOffice draws them below):
@@ -344,7 +445,13 @@ export async function convertDeck(
       return id;
     };
     const ids = { geomId, decorId };
-    const emitted: EmitResult = emitSlides(scene, { ...ids, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
+    const emitted: EmitResult = emitSlides(scene, {
+      ...ids,
+      m9Writes: M9_WRITES,
+      sheets: PPTX_SHEETS,
+      ...(opts.rasters ? { rasters: 'plan' as const, rasterGeometry: WIDE_GEOMETRY } : {}),
+    });
+    const rasterBytes = new Map((emitted.rasters ?? []).map((r) => [r.id, r] as const));
     out.emitMs = performance.now() - t0;
     const geoms = new Map<string, { id: string; file: GeomFile | DecorFile }>(
       [...emitted.geoms, ...emitted.decors].map((g) => [g.id, g]),
@@ -381,7 +488,11 @@ export async function convertDeck(
     const noLoReasons = new Map<number, string[]>();
     if (opts.noLibreOffice && scene.slides.some((s) => s.elements.some(sentToArt))) {
       const lo = new Map(scene.slides.map((s) => [s.index, JSON.stringify(s.classification.reasons)]));
-      scene = parseDeck(zip.files, { ...parsing, libreoffice: false });
+      scene = parseDeck(zip.files, {
+        ...parsing,
+        libreoffice: false,
+        ...(opts.whole ? { wholeSlides: true, wholeAnchors: opts.whole.anchors } : {}),
+      });
       for (const s of scene.slides)
         if (lo.get(s.index) !== JSON.stringify(s.classification.reasons))
           noLoReasons.set(s.index, s.classification.reasons);
@@ -465,6 +576,8 @@ export async function convertDeck(
         convertMs: (sceneMs.get(s.index) ?? 0) + s.ms,
         notes: s.notes,
         slide,
+        ...(wholeInfo?.has(s.index) ? { whole: wholeInfo.get(s.index) } : {}),
+        ...(opts.rasters && s.rasterInfo ? { rasters: rasterInfoOf(s, rasterBytes) } : {}),
         textFeatures: f?.textFeatures ?? [],
         xmlFeatures: f?.xmlFeatures ?? [],
         compat: rules,
@@ -644,7 +757,12 @@ async function convertInWorker(
     worker.postMessage({
       deckFile,
       dir,
-      opts: { loCompat: limits.loCompat === true, noLibreOffice: limits.noLibreOffice === true },
+      opts: {
+        loCompat: limits.loCompat === true,
+        noLibreOffice: limits.noLibreOffice === true,
+        ...(limits.whole ? { whole: limits.whole } : {}),
+        ...(limits.rasters ? { rasters: limits.rasters } : {}),
+      },
     });
   });
   if (typeof result !== 'string') return result;
@@ -1084,6 +1202,8 @@ export type HubStored = {
   missing: string[];
   /** The slide as stored, without its provenance (a picture slide: no objects). */
   slide: Slide;
+  /** Q24.b: the slide is kept whole (`hubLadder`'s `whole` option: heavy and eligible, within the share). */
+  whole?: true;
 };
 
 type HubInput = { class: SlideClass; slide: Slide; notes: readonly string[]; index?: number; shown?: number };
@@ -1099,6 +1219,7 @@ export function hubLadder(
   slides: readonly HubInput[],
   geoms: readonly { id: string; file: unknown }[] = [],
   geomBudget: number = PPTX_LIMITS.geomFileBytes,
+  whole = false,
 ): HubStored[] {
   const fileBytes = new Map(geoms.map((g) => [g.id, utf8Of(JSON.stringify(g.file))]));
   const admitted = new Set<string>();
@@ -1120,26 +1241,40 @@ export function hubLadder(
     const left = withoutFiles(s.slide, (ref) => keep.has(ref));
     return { slide: left.slide, missing: left.missing as string[], geoms: left.slide !== s.slide };
   });
+  const standIn = (s: HubInput, k: number, cls: SlideClass) =>
+    provenanceStandIn({
+      index: s.index ?? k,
+      ...(s.shown !== undefined ? { shown: s.shown } : {}),
+      cls,
+      version: CONVERTER_VERSION,
+      notes: s.notes,
+    });
+  // Q24.b: which slides the import core keeps whole and which it cuts to the counts (`selectWhole`, its own rule).
+  const sel = whole
+    ? selectWhole(
+        slides.map((s, k) => ({
+          picture: s.class === 'picture',
+          slide: kept[k]!.slide,
+          rec: { ...kept[k]!.slide, pptx: standIn(s, k, s.class) },
+        })),
+      )
+    : undefined;
   const plan = planLadder(
-    slides.map((s, k) => ({
-      slide: {
-        ...kept[k]!.slide,
-        pptx: provenanceStandIn({
-          index: s.index ?? k,
-          ...(s.shown !== undefined ? { shown: s.shown } : {}),
-          cls: s.class,
-          version: CONVERTER_VERSION,
-          notes: s.notes,
-        }),
-      },
-      fixed: s.class === 'picture',
-    })),
+    slides.map((s, k) => {
+      const cut = sel?.cut.get(k);
+      const cls: SlideClass = cut && s.class === 'native' ? 'hybrid' : s.class;
+      return {
+        slide: { ...(cut?.slide ?? kept[k]!.slide), pptx: standIn(s, k, cls) },
+        fixed: s.class === 'picture',
+        ...(sel?.kept.has(k) ? { whole: true as const } : {}),
+      };
+    }),
   );
   return slides.map((s, k): HubStored => {
     const r = plan.slides[k]!;
     // As emitted when the ladder kept it whole (the very slide, without the stand-in provenance).
     const { pptx: _, ...fitted } = r.slide;
-    const slide = r.level === 'full' && !kept[k]!.geoms ? s.slide : fitted;
+    const slide = r.level === 'full' && !kept[k]!.geoms ? (sel?.cut.get(k)?.slide ?? s.slide) : fitted;
     if (s.class === 'picture') {
       const { lyricObjectId: _l, ...rest } = s.slide;
       return {
@@ -1152,9 +1287,12 @@ export function hubLadder(
       };
     }
     const missing = [...kept[k]!.missing];
+    const cut = sel?.cut.get(k);
+    for (const m of cut?.kinds ?? []) if (!missing.includes(m)) missing.push(m);
     for (const m of r.missing) if (!missing.includes(m)) missing.push(m);
     const changed = r.tail || r.dropped > 0 || r.plain > 0;
-    const why: HubWhy | null = r.tail ? 'presentation' : changed ? 'slide' : kept[k]!.geoms ? 'geoms' : null;
+    const why: HubWhy | null =
+      r.tail || cut ? 'presentation' : changed ? 'slide' : kept[k]!.geoms ? 'geoms' : null;
     return {
       stored: r.bytes,
       hub: missing.length && s.class === 'native' ? 'hybrid' : s.class,
@@ -1162,6 +1300,7 @@ export function hubLadder(
       level: r.level,
       missing,
       slide,
+      ...(sel?.kept.has(k) ? { whole: true as const } : {}),
     };
   });
 }
@@ -1189,6 +1328,7 @@ export function hubStoredSlide(slide: Slide, hub: HubClass | Pick<HubStored, 'sl
 export function withHubBudget(
   deck: NativeDeck,
   _hub?: readonly (HubClass | Pick<HubStored, 'slide'>)[],
+  opts: { whole?: boolean } = {},
 ): NativeDeck {
   const geoms = deck.geoms ?? [];
   const ladder = (pick: (s: NativeSlide) => Slide | undefined, cls: (s: NativeSlide) => SlideClass) => {
@@ -1201,6 +1341,8 @@ export function withHubBudget(
         index: deck.slides[k]!.index,
       })),
       geoms,
+      PPTX_LIMITS.geomFileBytes,
+      opts.whole === true,
     );
     return new Map(at.map(([k], i) => [k, out[i]!.slide]));
   };

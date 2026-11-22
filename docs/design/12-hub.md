@@ -194,6 +194,15 @@ export, ≤ 256 MB, field `showPicture` a JSON array): the reference pictures th
 without LibreOffice. The diagnostics zip holds `capabilities.json`.
 <!-- /m9:lo-detect -->
 
+<!-- store-2:capabilities -->
+_The pre-render switch (r2b sub-wave 3, track `store-2`)._ `GET /capabilities` also carries `prerender: { state, setting }`
+(`HubCapabilities` in `@ordo/protocol`): `state` is the hub's EFFECTIVE answer about pictures of heavy slides, `'on'` or
+`'off'`, and `setting` is what `ORDO_PRERENDER` said (`'auto'`, `'on'`, `'off'`: Configuration). An operator reads the
+state, never the domain constant (a tab of another build would disagree); a hub from before the field gives none, which
+reads as off, and the Pages demo answers off. The public `GET /health` carries `prerender: 'on' | 'off'` (a state: no
+tool name, no version); the diagnostics zip's `capabilities.json` carries the field too.
+<!-- /store-2:capabilities -->
+
 <!-- prerender-store:routes -->
 _Pre-rendered slides (r2b sub-wave 2, design/29 §1.3), all edit role, `full` cap (a capped phone session gets 403
 `cap`), each of the storing ones first checked against the free-space floor (507 `disk`, "Storage" below)._
@@ -211,7 +220,21 @@ otherwise, naming the missing hashes) and computes the keys of the saved revisio
 written (`prerender_keys`, with the signature that lets a font or media change recompute only what it affects). The
 goLive bundle lists each slide's head, pages and shape files, the keys of the presentation's current revision and its
 pictures (`slideHeads`, `prerenderKeys`, `prerenders`): the fields are absent when nothing is pre-rendered.
+A save that changes the simple copy of a slide kept as a slide file (the same `prerender.file.ref`, other objects) answers
+409 `stand_in_stale` with the first 20 `slides`: the picture and its key come from the file, so a changed copy would show
+stale content (checked against the stored version only for a save that holds such a slide and whose `rev` is the stored one;
+its notes, timing and the other slides stay savable).
 <!-- /prerender-store:routes -->
+
+<!-- store-2:routes -->
+With `ORDO_PRERENDER=off` the picture `PUT` answers 503 `prerender_off` ("Pictures of heavy slides are turned off on this hub.",
+no `Retry-After`, the body drained) before any other refusal, and the listing, the `DELETE` and the `failed` route keep
+answering. The `PUT` reads an optional `kind` query: `slide` (the default, and the only one made yet) or nothing; any other
+value answers 400 `bad_kind` ("Only pictures of slides are made yet") before the presentation, the size and the key are looked
+at. A slide file's head naming more media, shape files or font families than a head row keeps (20,002, 20,000 and 2,048: what a
+20,000-object slide can name) is refused 413 `slide_uses_too_many`, never cut; the head row holds the whole lists, and
+a goLive lists the head and its shape files but no slide pages while `GOLIVE_SLIDE_PAGES` is false (no screen reads one).
+<!-- /store-2:routes -->
 
 ## WebSocket
 
@@ -696,6 +719,27 @@ whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`)
 
 `ORDO_LIVE_BYREF` (`on` by default and when unset; `off`; any other value is on with a start-up warning): the
 running service is kept and sent by reference ("The running service by reference" above). Read once at start.
+
+<!-- store-2:config -->
+`ORDO_PRERENDER` (`auto` by default and when unset; `on`; `off`; `1`, `true` and `yes` are on, `0`, `false` and `no` are off; any
+other value is auto with a start-up warning): the release's one switch for pictures of heavy slides, read once at start by
+each hub process (a change needs a restart). `auto` follows the release's own switch, the domain constant `PRERENDER_ON`; before
+the release's switch commit it is the 0.10.0 hub (operators are told off, the picture line of a Go-live check is not judged, and
+the store stays open: a picture is accepted and keys are computed). `on` turns the release's pictures on whatever the build
+says. `off` closes what the release adds: a picture is refused (503 `prerender_off`), no key is computed (a save writes no key
+row; the start-up scan of the next start that is not off fills what was saved meanwhile, two minutes after it starts), a
+goLive lists no picture rows and no key set and judges no 'not pre-rendered yet' line, and operators are told off, so they
+make no pictures. Nothing stored is deleted by off: records, picture rows and picture files stay, unused; each presentation's
+1 GiB picture budget and the collection in report mode apply as before. The hub logs one plain sentence at start for off, and the
+warning for a value it does not understand.
+<!-- /store-2:config -->
+<!-- import-whole:begin config -->
+With `ORDO_PRERENDER` on, a hub that has LibreOffice still imports a heavy PowerPoint slide as before (the guard's cut, and
+LibreOffice's art and page for what ordo cuts): heavy slides are kept whole only on a hub without LibreOffice. That is the
+owner's question Q27 at its default b, which was chosen while the owner has not answered; the constant
+`WHOLE_WITH_LIBREOFFICE` in `packages/importers/src/pptx-core.ts` is false (the operator's pinned copy is equal, a test holds
+them so) and true would keep them whole on such a hub too (Q27.a). With the switch off nothing of this applies.
+<!-- import-whole:end config -->
 
 Environment variables: `ORDO_DOMAIN` (`<venue>.synology.me`), `ORDO_DATA=/data`,
 `ORDO_TRUSTED_PROXY` (DSM's address), `ORDO_TZ`, `ORDO_PORT=8080`,

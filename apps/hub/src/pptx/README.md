@@ -661,6 +661,24 @@ slide as this job stores it. The job (`geoms.ts`):
   no metafile conversion and lists `EmittedSlide.missing` and `artText` instead.
 <!-- /m9:conv-seams -->
 
+<!-- import-whole:begin -->
+## Q24.b (sub-wave 3, import-whole): heavy slides kept whole
+
+- `CONVERTER_VERSION` is 3 since Q24.b (the line above is the version-2 generation's): the converter can keep a slide whole
+  (`ParseOptions.wholeSlides`, the pool task's `SceneTaskInput.wholeSlides`), and the import writes its pre-render record.
+- The job decides ONCE, right after its tools are known (`steps`), `wholeSlidesFor({ prerender: cfg.prerender.on, lo })`
+  (`prerenderOn` in `shared.ts` reads store-2's `HubConfig.prerender`, never the domain constant) and uses it for the pool's batches
+  (`wholeSlides: true`, only when on), the check of a browser scene (`ClientSceneTaskInput.wholeSlides`), the import core
+  (`ImportCore.whole`) and the result (`PptxNativeResult.whole`, only when on).
+- A browser scene records `wholeSlides: true` only when parsed for it; `checkClientScene` refuses one parsed for the other answer
+  ('parsed with another whole-slide option', `WHOLE_REFUSAL`), both ways, after the LibreOffice check, and the hub parses the deck
+  itself. The pool's `pptx-client-scene` input and `pptx-scene` batches carry the key only when it is on (the `libreoffice` pattern).
+- Re-import (`mergeReimport`'s `rebuild`) and the LibreOffice follow-up (`patchSlide`'s `record`) plan the record of the slide
+  they write (`planRecord`) when `FreshDeck.keepsWhole` / `prerenderOn(cfg)`; `recordOptions` and `mediaMotion` (`shared.ts`) give
+  `isMotion` (clips of the import, else the media row's `kind === 'video'`; unknown is an anchor). `keptHeavyBytes` is the
+  re-import's `heavyReserve`. A queued follow-up with a version-2 payload finishes (no version gate).
+<!-- import-whole:end -->
+
 ## Not in this wave
 
 Waiting for M2's second wave to merge: rich text emission (runs and paragraphs) from the converter; bundled
@@ -688,8 +706,10 @@ lo-dependencies §4.2-4.4, §4.6-4.11).
   version command failed once) is probed again by the jobs that need it (`HubTools.recheck`, one probe at a time,
   at most once a minute), and becomes `available` without a restart when it answers.
 - **`GET /capabilities`** (edit role; `HubCapabilities` in `@ordo/protocol`; also in the diagnostics zip):
-  LibreOffice's state and version, `pdf` (pdftoppm), the extensions `/import/document` accepts and
-  `pptx.{pictures, reference, referencePdf, art}`. Not in the public `/health`.
+  LibreOffice's state and version, `pdf` (pdftoppm), the extensions `/import/document` accepts,
+  `pptx.{pictures, reference, referencePdf, art}` and `prerender.{state, setting}` (the hub's switch for pictures of heavy
+  slides, `ORDO_PRERENDER`: the hub's own answer, composed by the route from its config, not a tool). Not in the public
+  `/health`, which carries only `prerender: 'on' | 'off'`.
 - **The native import** (`nativeJob.ts`) awaits the tools (a broken LibreOffice probed again first; while it
   does not answer the art is still planned and waits for it), tells the converter (`SceneTaskInput.libreoffice:
   false` → `EmitOptions.libreoffice`) and, without LibreOffice, sets no slide `pending` and queues no
@@ -950,3 +970,47 @@ A table whose vertical cells are all East Asian vertical (`eaVert`) is the table
   the Import tab on a hub without it; where the hub names a Hangul face, the browser's scene refused) and
   `e2e/ipad/table-targets.spec.ts` (a tap and typing in the narrow vertical cell, its vert kept).
 <!-- /r2b:vert-cells -->
+
+<!-- raster-maker:readme -->
+## The picture maker (raster-maker, sub-wave 3)
+
+The hub's own headless Chromium draws the pictures of many-point shapes at import (design/29 decision 4, design/20
+'Pictures of many-point shapes'). Four new files and one tool, none of them on a live path:
+
+- `raster-recipe.ts`: the written wire format of one picture (a run of shapes in z order: each shape's stored fields
+  without its geometry, its geometry built at its box as command bytes and little-endian float32 points, a text
+  member's text object and font families) and its validator `checkRecipe`: pure, refuses a hostile recipe (every cap,
+  every unknown key, a NaN, a wrong length) before anything is drawn, runs in node before the browser and again in the page.
+  The golden vector `test/data/raster-recipe-v1.json` and its hash `.sha256` tie it to the planner's TypeScript type.
+- `raster-page.ts`: the page, built by `build.mjs` as a fourth esbuild entry to `dist/raster-page.js` (a hub file, not
+  one of the apps' bundles). It draws each member with the renderer's `drawShapeWide` (packages/renderer/src/geom/
+  wide.ts) and the words with `drawObject`, over a canvas at 2 device px per logical px, and returns a PNG. Fonts are
+  the library's and the bundled faces only, as file URLs; a character no face covers, or text in a font no registered
+  face provides, fails the whole run with the reason 'font'.
+- `rasterPage.ts`: the driver, a hardened copy of the old preview driver (design 27 M8 deletes that package): Chromium
+  started over the DevTools pipe (never a port), `nice -n 19` in its own process group killed whole on close, abort and
+  live start, a memory flag, hinting off, no network, one browser at a time hub-wide, one picture at a time, 60 s a
+  picture, the profile folder removed on every path.
+- `rasters.ts`: `rastersFor` (the ladder), `renderRecipe` (one picture), `drawRasters` (the loop: no picture starts
+  while ANY service is live, a watcher of at most 250 ms (armed before the browser starts, so a start is cut too)
+  kills the browser's group if one goes live in the middle of a picture, a crash is relaunched once, each finished picture goes to the planner's `accept`).
+- `tools.ts`: the 'chromium' entry of the tool list (`has`, `chromium()`, `markMissing`, one start-up line).
+
+`ORDO_CHROMIUM` names the browser (also used by pptx-preview) and `ORDO_CHROMIUM_SANDBOX=1` keeps its sandbox. A hub
+with no Chromium that answers plans no pictures of shapes. Nothing here stores anything: the planner's store step does.
+<!-- /raster-maker:readme -->
+
+<!-- shape-raster:readme -->
+### The pictures of many-point shapes (shape-raster, the job's side)
+
+`rasterStore.ts` stores each recipe the converter returns (`storeRasters`): resume pairs under the key prefix `\u0000raster:` +
+the recipe hash, dedupe by that hash (the item's `source`), at most `RASTER_LIMITS_HUB.perImport` pictures, `importBytes`
+of PNG, the import's megapixel budget and, before each picture, `deps.disk.assertRoom` (a 507 fails the import); the maker's
+loop (`drawRasters`) draws one picture at a time and this file supplies its `accept`. `nativeJob.ts` decides the maker once
+(`rastersFor`), defers the whole job while any service is live (`deferForService`, `PptxNativePayload.deferrals`), asks the pool
+for `rasters: 'plan'` (the recipes come back in the task output, at most 32 MiB a call and 128 MiB an import) and runs
+`rasterStep` right after the conversion: a slide any of whose pictures was not made is converted again with the picture step
+off (`reconvertWithoutPictures`), so it is today's slide. `PptxNativeResult.rasters` carries the counts. 'Reset slide' sets
+`NativeJobEnv.rasters = 'off'`. A browser-parsed scene with many-point shapes (`rasterCandidates`) is refused by a hub that
+draws their pictures (`RASTER_REFUSAL`), taken by one that cannot. Never imported by a live path.
+<!-- /shape-raster:readme -->

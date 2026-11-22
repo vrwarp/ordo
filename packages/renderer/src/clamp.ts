@@ -719,6 +719,45 @@ function clampOrigin(v: unknown): ObjectOrigin | undefined {
   if (typeof o.ph === 'string') out.ph = o.ph.slice(0, 40);
   if (typeof o.role === 'string') out.role = o.role.slice(0, 20);
   if (o.group !== undefined) out.group = Math.round(num(o.group, 0, 100_000, 0));
+  const r = clampRasterOrigin(o.raster);
+  if (r) out.raster = r;
+  return out;
+}
+
+/** The provenance of a picture of shapes (`@ordo/domain` `RasterOrigin`), within the same bounds; undefined when it is not one. */
+function clampRasterOrigin(v: unknown): NonNullable<ObjectOrigin['raster']> | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as Record<string, unknown>;
+  const int = (x: unknown, lo: number, hi: number) =>
+    Number.isFinite(x) ? Math.round(num(x, lo, hi, lo)) : undefined;
+  const cv = int(o.cv, 1, 1_000_000);
+  const rv = int(o.rv, 1, 1_000);
+  const pts = int(o.pts, 1, 1_000_000);
+  const n = int(o.n, 1, 2_048);
+  if (cv === undefined || rv === undefined || pts === undefined || n === undefined) return undefined;
+  if (typeof o.h !== 'string' || !/^[0-9a-f]{16}$/.test(o.h)) return undefined;
+  const out: NonNullable<ObjectOrigin['raster']> = {
+    from: o.from === 'layout' || o.from === 'master' ? o.from : 'slide',
+    cv,
+    rv,
+    pts,
+    h: o.h,
+    n,
+  };
+  if (typeof o.file === 'string' && /^[0-9a-f]{64}$/.test(o.file)) out.file = o.file;
+  const slide = int(o.slide, 0, 100_000);
+  if (slide !== undefined) out.slide = slide;
+  if (Array.isArray(o.refs)) {
+    const refs: [number, number, number][] = [];
+    for (const r of o.refs.slice(0, 32)) {
+      if (!Array.isArray(r)) continue;
+      const a = int(r[0], 0, 2_147_483_647);
+      const b = int(r[1], 0, 100_000);
+      const c = int(r[2], 1, 2_048);
+      if (a !== undefined && b !== undefined && c !== undefined) refs.push([a, b, c]);
+    }
+    if (refs.length) out.refs = refs;
+  }
   return out;
 }
 

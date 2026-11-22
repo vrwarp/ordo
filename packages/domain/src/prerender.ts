@@ -8,6 +8,7 @@ import {
   isGeomFileRef,
   PRERENDER_LIMITS,
   PRERENDER_WHY,
+  type PresentationKind,
   type PrerenderWhy,
   type Slide,
   type SlideObject,
@@ -24,9 +25,11 @@ import { type SlideFile, SlideFileRefusal, slideFileOf } from './slidefile.ts';
  * (`count`) or set to Pre-rendered by hand (`chosen`) keeps its full form in a slide file (`slidefile.ts`); the
  * presentation stores its stand-in (`standInOf`); a desktop draws a picture of what does not move
  * (`drawnPart`), keyed by everything it depends on (`prerenderKey`), and the screens show it under the live set
- * (`liveSet`). Every writer of a pre-rendered slide goes through `withFullSlide`. Pure: the editor, the bake
- * worker, the import worker and the hub's pool share it, and the hub cannot import `@ordo/renderer`, so what
- * needs the renderer (the cost reasons, an object's exact reach) is passed in.
+ * (`liveSet`). Every writer of a slide kept in a slide file goes through `withFullSlide`; the inline record of a
+ * heavy slide in which nothing moves (the first release, Q24.b) is decided by `easyPlan` and written by
+ * `planRecord`. Pure: the editor, the bake worker, the import worker and the hub's pool share it, and the hub
+ * cannot import `@ordo/renderer`, so what needs the renderer (the cost reasons, an object's exact reach) is
+ * passed in.
  */
 
 /**
@@ -177,6 +180,254 @@ export function pictureUnits(slide: Slide, cost?: CostReasons): PicturePlan {
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Which slides get a record in the first release (design/29 §1.1, Q24.b)
+
+/**
+ * The one gate Q24.a (a heavy slide with something that moves in it) flips. Off: a slide with an anchor is not
+ * eligible, `planRecord` writes `live: []` and leaves a record that has a live set alone. On: `easyPlan` ignores
+ * anchors and `planRecord` writes and refreshes `live: liveSet(slide)`. Nothing in this release turns it on; the
+ * `anchored` option of `easyPlan` and `planRecord` exercises the other arm in tests, and no production caller
+ * passes it.
+ */
+export const PRERENDER_ANCHORED = false;
+
+/**
+ * The one gate for slide files (design/29 §1.2): a heavy slide kept as a head and pages with a bounded stand-in.
+ * Read by one place, the importer's `wholeFilesFor` (a slide over 1,000 objects, Q54), and by nothing in this
+ * module: `withFullSlide` keeps the file branch whatever it says, so its tests and the hub's helper stay as they
+ * are. The release that turns slide files on flips it with `PRERENDER_ON`.
+ */
+export const PRERENDER_FILES = false;
+
+/** What stops a slide from getting a picture in this release: something in it that moves or steps. */
+export type EasyAnchorKind = 'play' | 'steps' | 'lyric' | 'background';
+/** An anchor: an object id, or for a background the media id. */
+export type EasyAnchor = { id: string; kind: EasyAnchorKind };
+
+/** What `easyPlan` and `planRecord` read besides the slide. */
+export type EasyOptions = {
+  /** The kind of presentation the slide is in: the lyric box is an anchor in a `song` only (Q25.a). */
+  kind?: PresentationKind;
+  /**
+   * Whether a media file moves (a video). Every production caller passes it (Q25.c.b, decided: only a video counts
+   * as a moving background, so a slide's own background picture keeps nothing out). Without it, or when it answers
+   * `undefined` or throws, an own background is an anchor: only a media the caller knows to be a still passes.
+   */
+  isMotion?: (mediaId: string) => boolean | undefined;
+  /**
+   * The slide's size as its store counts it, for a writer whose copy is not yet in the stored form (the client's
+   * `pptxgeom:<n>` placeholders are shorter than the hub's names). Given the slide as drawn and without its own
+   * record; an answer that is not a finite number of at least 0, or a throw, counts as the JSON size.
+   */
+  size?: (slide: Slide) => number;
+  /** 'song' (the default): the lyric box is an anchor in a song only; 'any': in every deck (Q25.b). */
+  lyric?: 'song' | 'any';
+  /** The gate of `PRERENDER_ANCHORED`, for tests, the census and Q24.a; no production caller passes it. */
+  anchored?: boolean;
+  /** Where an object can draw, for the live set under the gate (the renderer's `objectBounds` where at hand). */
+  reach?: Reach;
+};
+
+/** Which slides get a record, and why: `pictureUnits`' counts, cut down to what a flat picture can fix. */
+export type EasyPlan = {
+  /** No anchor (or the gate is on): the slide may get a picture. */
+  eligible: boolean;
+  /** `eligible` and heavy: the slide gets a record (what both writers need). */
+  record: boolean;
+  /** Everything in the slide that moves or steps, in drawn order, the background last; listed even when the gate is on. */
+  anchors: EasyAnchor[];
+  /** `bytes` (stored over 64 KiB) and `count` (over 200 drawn objects or 16 distinct pictures), in that order. */
+  why: ('bytes' | 'count')[];
+  /** Every bound passed, the unfixable ones included (a box over 10,000 characters, 16 families, 64 size scales). */
+  over: PictureOver[];
+  counts: PicturePlan['counts'];
+};
+
+const NO_COUNTS: PicturePlan['counts'] = {
+  objects: 0,
+  pictures: 0,
+  bytes: 0,
+  characters: 0,
+  families: 0,
+  sizeScales: 0,
+};
+
+/** The anchors of the drawn objects, then the slide's own background. */
+function easyAnchors(slide: Slide, drawn: readonly SlideObject[], opts: EasyOptions): EasyAnchor[] {
+  const out: EasyAnchor[] = [];
+  const lyricRule = (opts.lyric ?? 'song') === 'any' || opts.kind === 'song';
+  for (const o of drawn) {
+    if (!isObj(o)) continue;
+    const id = idOf(o);
+    if (!id) continue;
+    if (lyricRule && id === slide.lyricObjectId) out.push({ id, kind: 'lyric' });
+    else if (o.type === 'image' && isObj(o.play)) out.push({ id, kind: 'play' });
+    else if (hasSteps(o)) out.push({ id, kind: 'steps' });
+  }
+  const bg = slide.backgroundMediaId;
+  if (typeof bg === 'string' && bg) {
+    let still = false;
+    try {
+      still = opts.isMotion?.(bg) === false;
+    } catch {
+      // A callback that cannot tell is no proof that the media does not move.
+    }
+    if (!still) out.push({ id: bg, kind: 'background' });
+  }
+  return out;
+}
+
+/**
+ * Which slides get a record in the first release (Q24.b): a heavy slide in which nothing moves or steps. Both
+ * writers, the PowerPoint import and the editor's save, ask this one function (through `planRecord`), so a slide
+ * never flips between "has a picture" and "has none" because of who looked. Pure; never throws; no I/O.
+ *
+ * - DRAWN: everything is read from `slideContent(slide).objects`, what the screens draw, never from the raw
+ *   objects (a slide set to show its PowerPoint picture stores its imported objects and draws the operator's).
+ * - ANCHORS (design/29 §1.5), one entry per object in drawn order, the precedence of `liveAnchors` (lyric box,
+ *   then playing picture, then step-by-step text): an in-slide picture with `play` (a playing video or picture);
+ *   text with a hidden paragraph (`TextPara.hidden`); the lyric box, in a `song` only (Q25.a: ordo marks the main
+ *   text of nearly every PowerPoint slide as its lyric box, and a picture is only used where a screen shows the
+ *   slide as drawn, never in the lyric-only looks); and, last, the slide's own `backgroundMediaId` unless the
+ *   caller says it is a still (Q25.c.b: only a video counts as moving). The presentation's shared background is
+ *   not a slide's own and is never read. An anchor keeps the slide out of this release ("an anchored slide stays
+ *   exactly as today", Q24.b); it is a gate, never a stored reason, so an anchored slide still gets its `why`,
+ *   `over` and `counts` (the census and Q24.a/Q24.c read them). No cap on the number of anchors.
+ * - WHY: only what a flat picture can fix. `bytes`: stored over 64 KiB (Q26.c), measured on the slide as drawn
+ *   and WITHOUT its own record, so the answer is a pure function of the content: a record adds about 40 bytes,
+ *   and within that band of 64 KiB a slide would otherwise answer differently with it and without it, so the
+ *   importer (no record yet) and the editor (a record already) could disagree. `count`: more than 200 drawn
+ *   objects or 16 distinct pictures (Q26.a: what the screens cut today). The other bounds `pictureUnits` knows (a
+ *   box over 10,000 characters, 16 families, 64 size scales) stay in `over` and give no reason: a bake draws
+ *   under the same per-object clamps. No cost reason (Q26.b: a slide that is only slow to draw gets none).
+ * - A slide of any size the slide-file form can hold is judged by the same rules (Q54): the cost is one
+ *   `jsonBytes` of the slide.
+ */
+export function easyPlan(slide: Slide, opts: EasyOptions = {}): EasyPlan {
+  const none = (): EasyPlan => ({
+    eligible: true,
+    record: false,
+    anchors: [],
+    why: [],
+    over: [],
+    counts: { ...NO_COUNTS },
+  });
+  try {
+    if (!isObj(slide)) return none();
+    const o: EasyOptions = isObj(opts) ? opts : {};
+    const drawn = slideContent(slide).objects;
+    const anchors = easyAnchors(slide, drawn, o);
+    const eligible = anchors.length === 0 || (o.anchored ?? PRERENDER_ANCHORED) === true;
+    const base: Slide =
+      slide.prerender === undefined && drawn === slide.objects
+        ? slide
+        : { ...slide, objects: drawn, prerender: undefined };
+    let plan: PicturePlan;
+    try {
+      plan = pictureUnits(base);
+    } catch {
+      // A slide that cannot be measured (a cycle, a BigInt) is not planned.
+      return { ...none(), eligible, anchors };
+    }
+    let bytes = plan.counts.bytes;
+    if (o.size) {
+      try {
+        const n = o.size(base);
+        if (typeof n === 'number' && Number.isFinite(n) && n >= 0) bytes = n;
+      } catch {
+        // The writer's own measure failed: the JSON size stands.
+      }
+    }
+    const rest = plan.over.filter((r) => r !== 'bytes');
+    const over: PictureOver[] = bytes > SIZE_BUDGETS.slideMax ? ['bytes', ...rest] : rest;
+    const why: EasyPlan['why'] = [];
+    if (over.includes('bytes')) why.push('bytes');
+    if (over.includes('objects') || over.includes('pictures')) why.push('count');
+    return {
+      eligible,
+      record: eligible && why.length > 0,
+      anchors,
+      why,
+      over,
+      counts: { ...plan.counts, bytes },
+    };
+  } catch {
+    return none();
+  }
+}
+
+/**
+ * The `Slide.pptx.missing` entry of a slide the slide-file form could not hold (Q54: past 20,000 objects or 16 MiB,
+ * W18): it keeps a plain bounded stand-in and never gets a record. Written by the importer's refused-slide path,
+ * read here so that no later save, re-import or follow-up can give it one: a record without a file looks exactly
+ * like an inline whole slide, and a baker would draw a picture of the stand-in as if it were the slide.
+ */
+export const PRERENDER_REFUSED_MISSING = 'slide:too-large';
+
+/**
+ * Whether a slide's record is this release's to write, refresh or remove: none yet, or `{ why, live }` with only
+ * `bytes` and `count` for reasons, no slide file and no `uses`, and a live set only while the gate is on (a
+ * record with a live set belongs to Q24.a, `tail` and `chosen` to the editor, a file to the slide-file form).
+ */
+function recordIsOurs(pre: unknown, gateOn: boolean): boolean {
+  if (pre === undefined) return true;
+  if (!isObj(pre) || !Array.isArray(pre.why) || !Array.isArray(pre.live)) return false;
+  if (pre.file !== undefined || pre.uses !== undefined) return false;
+  return pre.why.every((w) => w === 'bytes' || w === 'count') && (pre.live.length === 0 || gateOn);
+}
+
+const sameList = (a: readonly unknown[], b: readonly unknown[]) =>
+  a.length === b.length && a.every((v, i) => v === b[i]);
+
+/**
+ * The one writer of the inline record of this release (the PowerPoint import, its re-import and follow-ups, the
+ * editor's save): the slide with `prerender: { why, live: [] }` added when `easyPlan` says it gets one, refreshed
+ * when its reasons changed, removed when it no longer needs one (it shrank, or something now moves in it).
+ *
+ * - IDENTITY: the SAME object when nothing changes (callers compare by identity, as the editor store does);
+ *   otherwise a shallow copy that shares `objects` and every other field. Pure; never throws; the input is never
+ *   mutated.
+ * - OURS ONLY: a record that is not this release's (a slide file, `tail`, `chosen`, `uses`, a live set while
+ *   `PRERENDER_ANCHORED` is off, a damaged record) and a slide the slide file refused (`PRERENDER_REFUSED_MISSING`)
+ *   come back untouched, whatever the plan says. The file form and `tail`/`chosen` have their own writers
+ *   (`withFullSlide`, the editor); this one only maintains the inline record, so the two never fight.
+ * - IDEMPOTENT, and the record never changes the plan: `easyPlan` measures the slide without its record, so
+ *   `planRecord(planRecord(s)) === planRecord(s)` and `easyPlan(planRecord(s))` equals `easyPlan(s)`.
+ * - `live` is `[]` in this release and written explicitly, never absent; with the gate on it is
+ *   `liveSet(slide, reach)` and is refreshed. Pass the same options as the other writer (`kind`, `isMotion`).
+ */
+export function planRecord(slide: Slide, opts: EasyOptions = {}): Slide {
+  try {
+    if (!isObj(slide)) return slide;
+    const o: EasyOptions = isObj(opts) ? opts : {};
+    const missing: unknown = slide.pptx?.missing;
+    if (Array.isArray(missing) && missing.includes(PRERENDER_REFUSED_MISSING)) return slide;
+    const gateOn = (o.anchored ?? PRERENDER_ANCHORED) === true;
+    const pre: unknown = slide.prerender;
+    if (!recordIsOurs(pre, gateOn)) return slide;
+    const plan = easyPlan(slide, o);
+    if (!plan.record) {
+      if (pre === undefined) return slide;
+      const { prerender: _, ...rest } = slide;
+      return rest;
+    }
+    let live: string[] = [];
+    if (gateOn) {
+      try {
+        live = liveSet(slide, o.reach);
+      } catch {
+        live = [];
+      }
+    }
+    if (isObj(pre) && sameList(pre.why as unknown[], plan.why) && sameList(pre.live as unknown[], live))
+      return slide;
+    return { ...slide, prerender: { why: plan.why, live } };
+  } catch {
+    return slide;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // What stays live above the picture (design/29 §1.5)
 
 /** An axis-aligned rect in logical px. */
@@ -246,7 +497,7 @@ function hasSteps(o: SlideObject): boolean {
 export function liveAnchors(slide: Pick<Slide, 'objects' | 'lyricObjectId'> & Partial<Slide>): string[] {
   const out: string[] = [];
   let playing = 0;
-  for (const o of objectsOf(slide)) {
+  for (const o of slideContent(slide).objects) {
     if (!isObj(o) || out.length >= LIVE_ANCHORS_MAX) continue;
     const id = idOf(o);
     if (!id) continue;
@@ -295,7 +546,7 @@ export function liveSet(
   slide: Pick<Slide, 'objects' | 'lyricObjectId'> & Partial<Slide>,
   reach: Reach = objectReach,
 ): string[] {
-  const objects = objectsOf(slide);
+  const objects = slideContent(slide).objects;
   const anchors = liveAnchors(slide);
   if (!anchors.length) return [];
   const byId = new Map(objects.map((o) => [idOf(o), o]));

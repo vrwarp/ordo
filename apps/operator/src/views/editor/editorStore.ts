@@ -11,6 +11,7 @@ import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { removeUnsaved, upsertUnsaved } from '../../state/unsaved.ts';
 import { navigate } from '../../useRoute.ts';
+import { FILE_FORM_REFUSAL, fileFormGuard } from './fileForm.ts';
 import { History } from './history.ts';
 import { type MergeConflict, prepareMerge, same, theirsOf } from './merge.ts';
 import { getSlide } from './ops.ts';
@@ -453,6 +454,12 @@ export function change(fn: (p: Presentation) => Presentation, key?: string): voi
   if (!s.draft) return;
   const next = fn(s.draft);
   if (next === s.draft) return;
+  // A slide kept as a file on the hub is not edited shape by shape: its simple copy would then differ from its file.
+  const refusal = fileFormGuard(s.draft, next);
+  if (refusal) {
+    toast(refusal, 'warn');
+    return;
+  }
   history.push(s.draft, key);
   const dirty = isDraftDirty(s.base, next);
   useEditor.setState({ draft: next, dirty, canUndo: history.canUndo, canRedo: history.canRedo });
@@ -617,6 +624,12 @@ export async function save(force = false, adopted = false, merges = 0): Promise<
     toast(`Could not save: ${size.refuse}`, 'error');
     return false;
   }
+  // The same guard for every way the draft can have changed without `change()` (undo, redo, the hub's job saves, a merge).
+  const refusal = fileFormGuard(s.base, s.draft);
+  if (refusal) {
+    toast(`Could not save: ${refusal}`, 'error');
+    return false;
+  }
   useEditor.setState({ saving: true });
   syncActiveToSessions();
   try {
@@ -672,6 +685,12 @@ export async function save(force = false, adopted = false, merges = 0): Promise<
         syncRegistryForSession(parked, parked.id);
       }
     }
+    // The hub's own check of the same rule (a client that did not guard): not a conflict with someone else's save.
+    // The draft stays unsaved (dirty), so the unsaved list and the draft journal still hold it.
+    if (e instanceof ApiFailure && e.code === 'stand_in_stale') {
+      toast(`Could not save: ${FILE_FORM_REFUSAL}`, 'error');
+      return false;
+    }
     if (e instanceof ApiFailure && e.status === 409) {
       // Saved meanwhile only by the hub's PowerPoint jobs (version 2 of an import): take their work over and
       // save again, instead of offering to overwrite it.
@@ -725,6 +744,13 @@ export async function savePresentationById(
     toast(`Could not save “${sess.draft.title}”: ${size.refuse}`, 'error');
     return false;
   }
+  // The same guard as `save()`: a parked draft can have changed without `change()` too (the hub's job saves, a merge).
+  // Refused is not saved: the session stays dirty, so the unsaved list and the draft journal still hold it.
+  const refusal = fileFormGuard(sess.base, sess.draft);
+  if (refusal) {
+    toast(`Could not save “${sess.draft.title}”: ${refusal}`, 'error');
+    return false;
+  }
   sess.saving = true;
   syncRegistryForSession(sess, id);
   try {
@@ -745,6 +771,11 @@ export async function savePresentationById(
   } catch (e) {
     sess.saving = false;
     syncRegistryForSession(sess, id);
+    // The hub's own check of the same rule: not a conflict with someone else's save, so no conflict dialog.
+    if (e instanceof ApiFailure && e.code === 'stand_in_stale') {
+      toast(`Could not save “${sess.draft.title}”: ${FILE_FORM_REFUSAL}`, 'error');
+      return false;
+    }
     if (e instanceof ApiFailure && e.status === 409) {
       if (!force && !adopted && (await adoptParkedJobSaves(sess).catch(() => 'other')) === 'adopted') {
         return savePresentationById(id, false, true, merges);

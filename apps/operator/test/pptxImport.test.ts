@@ -1,6 +1,9 @@
 import type { Presentation, Slide } from '@ordo/domain';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
-import { type Job, LEGACY_CAPABILITIES } from '@ordo/protocol';
+import { type HubCapabilities, type Job, LEGACY_CAPABILITIES } from '@ordo/protocol';
+import { WHOLE_WITH_LIBREOFFICE, keptWholeLine, wholeSlidesFor } from '@ordo/importers/pptx-core.ts';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   approximatedSlides,
@@ -13,7 +16,10 @@ import {
   lastLogLine,
   hiddenCount,
   importCaps,
+  keepsSlidesWhole,
   loStatus,
+  OPERATOR_WHOLE_WITH_LIBREOFFICE,
+  wholeLine,
   onlyJobSaves,
   hubHasLibreOffice,
   picturesOffered,
@@ -445,5 +451,81 @@ describe('following the reference job', () => {
     expect(referenceRunning(undefined)).toBe(false);
     expect(referenceRunning({ id: 'j', state: 'running', progress: 0 })).toBe(true);
     expect(referenceRunning({ id: 'j', state: 'failed', progress: 0 })).toBe(false);
+  });
+});
+
+describe('keepsSlidesWhole: the browser parse keeps heavy slides whole when the hub does (Q24.b, C-IW4)', () => {
+  /** The hub's answer as store-2 writes it (`HubCapabilities.prerender.state`) beside its LibreOffice state. */
+  const caps = (
+    prerender: unknown,
+    libreoffice: 'available' | 'absent' | 'off' | 'broken' = 'available',
+  ): HubCapabilities =>
+    ({
+      ...LEGACY_CAPABILITIES,
+      libreoffice: { state: libreoffice },
+      ...(prerender === undefined ? {} : { prerender: { state: prerender } }),
+    }) as unknown as HubCapabilities;
+
+  it('is off with no answer, a hub from before and a hub whose switch is off', () => {
+    expect(keepsSlidesWhole(undefined)).toBe(false);
+    expect(keepsSlidesWhole(LEGACY_CAPABILITIES)).toBe(false);
+    for (const state of ['off', 'auto', undefined, 'ON', 1, null, true, {}])
+      expect(keepsSlidesWhole(caps(state)), String(state)).toBe(false);
+  });
+
+  it('by default (Q27.b, the pinned constant false) follows today\u2019s plan on a hub with LibreOffice and keeps them whole on one without', () => {
+    expect(OPERATOR_WHOLE_WITH_LIBREOFFICE).toBe(false);
+    for (const lo of ['available', 'broken'] as const)
+      expect(keepsSlidesWhole(caps('on', lo)), lo).toBe(false);
+    for (const lo of ['absent', 'off'] as const) expect(keepsSlidesWhole(caps('on', lo)), lo).toBe(true);
+  });
+
+  it('is on with the switch on, whatever LibreOffice is, where the answer for a hub with LibreOffice is true (Q27.a: the other arm)', () => {
+    for (const lo of ['available', 'absent', 'off', 'broken'] as const)
+      expect(keepsSlidesWhole(caps('on', lo), true), lo).toBe(true);
+  });
+
+  it('follows Q27.b where the answer for a hub with LibreOffice is false: with LibreOffice the hub follows today\u2019s plan, without it keeps them whole', () => {
+    expect(keepsSlidesWhole(caps('on', 'available'), false)).toBe(false);
+    expect(keepsSlidesWhole(caps('on', 'broken'), false)).toBe(false);
+    expect(keepsSlidesWhole(caps('on', 'absent'), false)).toBe(true);
+    expect(keepsSlidesWhole(caps('on', 'off'), false)).toBe(true);
+    expect(keepsSlidesWhole(caps('off', 'absent'), false)).toBe(false);
+  });
+});
+
+describe('the operator keeps no import core in its main chunks (M7 bundle, Q24.b)', () => {
+  const src = join(import.meta.dirname, '../src');
+  const files = (dir: string): string[] =>
+    readdirSync(dir).flatMap((f) => {
+      const p = join(dir, f);
+      return statSync(p).isDirectory() ? files(p) : /\.(ts|tsx)$/.test(f) && !/\.test\./.test(f) ? [p] : [];
+    });
+
+  it('no file outside the workers and the lazy parse service imports pptx-core (it carried 138 kB of the import core into the operator\u2019s regular total)', () => {
+    const bad = files(src)
+      .filter((f) => !/\/(workers|services)\//.test(f))
+      .filter((f) => /from '@ordo\/importers\/pptx-core/.test(readFileSync(f, 'utf8')));
+    expect(bad).toEqual([]);
+  });
+
+  it('the pinned copies equal the originals: the answer for a hub with LibreOffice, wholeSlidesFor and the report line', () => {
+    expect(OPERATOR_WHOLE_WITH_LIBREOFFICE).toBe(WHOLE_WITH_LIBREOFFICE);
+    const c = (p: string, lo: 'available' | 'absent' | 'off' | 'broken') =>
+      ({
+        ...LEGACY_CAPABILITIES,
+        libreoffice: { state: lo },
+        prerender: { state: p },
+      }) as unknown as HubCapabilities;
+    for (const p of ['on', 'off'])
+      for (const lo of ['available', 'absent', 'off', 'broken'] as const)
+        expect(keepsSlidesWhole(c(p, lo)), `${p} ${lo}`).toBe(
+          wholeSlidesFor({ prerender: p === 'on', lo: hubHasLibreOffice(c(p, lo)) }),
+        );
+    for (const n of [undefined, 0, -1, 1, 2, 17, Number.NaN, Number.POSITIVE_INFINITY])
+      for (const dev of [undefined, true, false])
+        expect(wholeLine(n, dev), `${n} ${dev}`).toBe(
+          keptWholeLine(n ?? 0, dev === false ? { deviceCanBake: false } : {}),
+        );
   });
 });

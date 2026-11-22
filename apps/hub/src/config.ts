@@ -1,5 +1,7 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PRERENDER_ON } from '@ordo/domain/prerender.ts';
+import type { Logger } from 'pino';
 import { minFreeConfig, type StatFsFn } from './diskfloor.ts';
 import type { SystemFaceLookup } from './pptx/systemFaces.ts';
 import type { ToolProbe } from './tools.ts';
@@ -83,6 +85,13 @@ export type HubConfig = {
   /** Why the value given was not understood (logged once at start; on applies). */
   liveByRefWarning?: string;
   /**
+   * ORDO_PRERENDER (store-2, design/29 §1.11): the release's one switch for pictures of heavy slides, read once at
+   * start by each hub process (`prerenderConfig` has the table). `on` is what operators are told
+   * (`GET /capabilities` `prerender.state`, the public health) and what the Go-live picture line (W33) follows;
+   * `store` (the picture PUT, the keys job, the picture rows of a goLive) is closed only by an explicit `off`.
+   */
+  prerender: PrerenderConfig;
+  /**
    * Tests only: decides each server tool's state instead of looking for it on the PATH and running its version
    * command (`tools.ts` `HubTools`). `libreoffice.mode: 'off'` still wins.
    */
@@ -142,6 +151,59 @@ export function liveByRefConfig(v: string | undefined): { on: boolean; warning?:
   };
 }
 
+export type PrerenderSetting = 'auto' | 'on' | 'off';
+export type PrerenderConfig = {
+  /** What was set (`auto` when unset or not understood). */
+  setting: PrerenderSetting;
+  /** What operators are told, and what W33 follows: auto follows the domain constant, on and off say so. */
+  on: boolean;
+  /** Whether the store works: the picture PUT, the keys job and the picture rows of a goLive. False only for `off`. */
+  store: boolean;
+  /** Why the value given was not understood (logged once at start; auto applies). */
+  warning?: string;
+};
+
+/**
+ * `ORDO_PRERENDER` read (`HubConfig.prerender`), never throws. The table (C-S2-1):
+ *
+ *   setting  on        store
+ *   auto     constant  true     (unset, empty, `auto`; before the release's switch commit the constant is false:
+ *                                the hub is exactly the 0.10.0 hub, so nothing changes for anyone)
+ *   on       true      true     (`on`, `1`, `true`, `yes`)
+ *   off      false     false    (`off`, `0`, `false`, `no`: no picture is accepted, no key is computed, a goLive
+ *                                lists no picture rows and judges no W33; whatever is stored stays)
+ *
+ * Any other value is auto with a warning. `constant` is `PRERENDER_ON`, injected by the tests (the hub's test helpers
+ * pin `false`, so a hub test means the same before and after the switch commit). This is the one place the hub reads
+ * the constant.
+ */
+export function prerenderConfig(v: string | undefined, constant: boolean = PRERENDER_ON): PrerenderConfig {
+  const t = (v ?? '').trim();
+  if (!t || /^auto$/i.test(t)) return { setting: 'auto', on: constant, store: true };
+  if (/^(1|on|true|yes)$/i.test(t)) return { setting: 'on', on: true, store: true };
+  if (/^(0|off|false|no)$/i.test(t)) return { setting: 'off', on: false, store: false };
+  return {
+    setting: 'auto',
+    on: constant,
+    store: true,
+    warning: `ORDO_PRERENDER is neither auto, on nor off (${JSON.stringify(t.slice(0, 100))}): auto`,
+  };
+}
+
+/**
+ * The start-up lines of the switch, once per process: the warning for a value that is not understood, and (`says`)
+ * one plain sentence when the setting is `off`. The library process (or the one-process hub) says it; the live process
+ * gives the warning only, so the sentence is in the log once per start.
+ */
+export function logPrerender(c: PrerenderConfig, log: Pick<Logger, 'info' | 'warn'>, says: boolean): void {
+  if (c.warning) log.warn({}, c.warning);
+  if (says && c.setting === 'off')
+    log.info(
+      {},
+      'Pictures of heavy slides are turned off (ORDO_PRERENDER=off): heavy slides are drawn live and whole, and nothing already stored is deleted.',
+    );
+}
+
 /** apps/ of this repo: src/ and dist/ both sit two levels below it. */
 export function defaultAppsDir(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -190,6 +252,7 @@ export function loadConfig(
     libreoffice: libreofficeConfig(env.ORDO_LIBREOFFICE),
     liveByRef: liveByRefConfig(env.ORDO_LIVE_BYREF).on,
     liveByRefWarning: liveByRefConfig(env.ORDO_LIVE_BYREF).warning,
+    prerender: prerenderConfig(env.ORDO_PRERENDER),
     fontsDir: env.ORDO_FONTS_DIR ? resolve(env.ORDO_FONTS_DIR) : undefined,
     fontsWaitMs: fontsWait(env.ORDO_FONTS_WAIT_MS),
     ...overrides,

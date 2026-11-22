@@ -31,7 +31,15 @@
  * never used as plain-object keys.
  */
 import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
-import { type BudgetOptions, cullElements, fitBudgets, leftKinds, m6TableCap, sentToArt } from './budget.ts';
+import {
+  type BudgetOptions,
+  type BudgetPlan,
+  cullElements,
+  fitBudgets,
+  leftKinds,
+  m6TableCap,
+  sentToArt,
+} from './budget.ts';
 import { rootOf, type SlideCtx } from './context.ts';
 import { endsOf, MAX_PATH_CHARS, mergedChars, type ShapePiece, shapePiece } from './geom.ts';
 import { bodyPrChain, chainOf, firstAttr, firstChildOf, nvOf } from './inherit.ts';
@@ -1233,6 +1241,8 @@ export interface ClassifyOptions {
   budgetArt?: boolean;
   /** What the importer stores and draws, so the budgets plan only reliefs that draw (`budget.ts` `BudgetOptions`). */
   budget?: BudgetOptions;
+  /** The census's window on the budgets (`ParseOptions.onBudget`): the plan of each slide, after `fitBudgets`. */
+  onBudget?: (plan: BudgetPlan, elements: readonly Element[]) => void;
 }
 
 /**
@@ -1261,6 +1271,11 @@ export function classifySlide(
   if (opts.budgetArt) return classifyWithArt(ctx, elements, background, residual, tier, reasons);
   wholeDiagrams(ctx, elements, background, residual, false);
   const plan = fitBudgets(ctx, elements, background, opts.budget);
+  try {
+    opts.onBudget?.(plan, elements);
+  } catch {
+    // The census's window never changes a parse.
+  }
   // With LibreOffice what the guard left out is the art's, for its budget (`budget.ts` `toArt`); a SmartArt
   // drawing the art now touches goes with it whole, as at M9 wave 1 (its render copy prints the drawing whole).
   if (plan.art) {

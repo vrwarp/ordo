@@ -27,6 +27,7 @@
  * LibreOffice only, when its slide budget would store it plain or minimal and it holds no table object; no
  * failure makes one (M9, plan decision 3; the before-hub gate of decision 2 for hubs with LibreOffice).
  */
+import { easyPlan, PRERENDER_ANCHORED, planRecord } from '@ordo/domain/prerender.ts';
 import {
   type Box,
   compactSlideBytes,
@@ -64,10 +65,20 @@ import {
   type SlideClass,
   type SlideRef,
 } from '@ordo/pptx-scene';
+import { MAX_DRAWN_OBJECTS, MAX_DRAWN_PICTURES } from '@ordo/pptx-scene/budget.ts';
 import { digestOf, SLIDE_BUDGET_NOTE, SLIDE_BYTES_NOTE } from '@ordo/pptx-scene/emit.ts';
+import type { EmittedRaster } from '@ordo/pptx-scene/raster-emit.ts';
+import { putBackRaster } from './pptx-raster.ts';
 import { CONVERTER_VERSION } from '@ordo/pptx-scene/version.ts';
 import type { NamedGeomFile } from './pptx-geoms.ts';
-import { type LadderSlide, planLadder, withoutFiles } from './pptx-ladder.ts';
+import {
+  type LadderSlide,
+  planLadder,
+  quickBytes,
+  storedWithin,
+  trimToCounts,
+  withoutFiles,
+} from './pptx-ladder.ts';
 import { type ImportLog, logSafe, missingFonts } from './pptx-report.ts';
 import type { SceneScan, SceneSlideExtra } from './pptx-scan.ts';
 import { remapMediaIds } from './remap.ts';
@@ -91,6 +102,146 @@ const ART_TEXT_CHARS = 20_000;
 /** That text on a deck too large for its budget even with every slide compact (§3.4). */
 const COMPACT_TEXT_CHARS = 200;
 const WHITE = { r: 255, g: 255, b: 255, a: 1 };
+
+/**
+ * Q27 (default b, chosen while the owner has not answered): a hub WITH LibreOffice follows today's
+ * plan exactly (the guard's cut and LibreOffice's art and page for what ordo cuts), and slides are kept whole only on
+ * hubs without LibreOffice. True (Q27.a): such a hub keeps a heavy slide whole as ordo's own editable shapes and shows a
+ * picture instead (`wholeSlidesFor`). It matters only when the hub's pre-render switch is on.
+ */
+export const WHOLE_WITH_LIBREOFFICE = false;
+/**
+ * Q28.a (default): how much heavy slide one presentation keeps whole, in bytes as `quickBytes` counts them. The
+ * next heavy slides are cut to the screens' counts (`trimToCounts`) and named in the report.
+ */
+export const WHOLE_SHARE_BYTES = 2 * 1024 * 1024;
+/**
+ * The INLINE bound of a slide kept whole (Q28.c, Q54): the converter's (`@ordo/pptx-scene` `WHOLE_OBJECTS_MAX`, which
+ * equals its `MAX_OBJECTS` and `Slide.objects`); a slide planned past it follows today's plan until the slide-file
+ * route (import-files) keeps it whole out of line.
+ */
+export { WHOLE_OBJECTS_MAX } from '@ordo/pptx-scene/budget.ts';
+/**
+ * Which backgrounds keep a slide out of this release (Q25.c.b, decided 2026-11-21): 'motion', only a video. The one
+ * switch of the importer's side: read by the converter's option (`ParseOptions.wholeAnchors`) and by every caller of
+ * `planRecord` (`isMotion`); 'own' (any picture background is an anchor) is built and tested, not the default.
+ */
+export const WHOLE_BACKGROUND_ANCHORS: 'own' | 'motion' = 'motion';
+
+/**
+ * Whether an import keeps heavy slides whole: the hub's switch (`ORDO_PRERENDER`: `prerender`) and, on a hub with
+ * LibreOffice, Q27. The one answer the hub's job, the operator's parse, the demo and the harness all ask.
+ */
+export function wholeSlidesFor(o: { prerender: boolean; lo: boolean }): boolean {
+  return o.prerender === true && (!o.lo || WHOLE_WITH_LIBREOFFICE);
+}
+
+/**
+ * One slide as `selectWhole` reads it: the slide to cut, and the slide as the hub stores it (its provenance included),
+ * with its bytes as `storedWithin` counts them when the caller measured it already.
+ */
+export type WholeItem = { picture: boolean; slide: Slide; rec: Slide; size?: number };
+/** A slide `selectWhole` cut to the screens' counts: what is left, and the kinds of what was left out. */
+export type WholeCut = { slide: Slide; kinds: MissingKind[] };
+
+/** How far under the slide budget a light slide stays: room for the ids and refs the hub writes longer than the quick count pads. */
+const LIGHT_HEADROOM_BYTES = 8 * 1024;
+
+/**
+ * A slide that no bound of the record can reach (Q24.b, M4): at most `MAX_DRAWN_OBJECTS` objects and `MAX_DRAWN_PICTURES`
+ * distinct pictures, and `size` (its bytes as `storedWithin` counts them) at least 8 KiB under the slide budget. `easyPlan`
+ * gives such a slide no record whatever else is in it (anchors, kind, motion: all only decide who may have one), so
+ * neither `selectWhole` nor `assemble` plans it: the common slide is measured once, by the ladder. Pure; never throws;
+ * what is not a slide is not light.
+ */
+export function isLight(rec: Slide, size: number, max: number = SIZE_BUDGETS.slideMax): boolean {
+  try {
+    if (!rec || typeof rec !== 'object' || !Array.isArray(rec.objects)) return false;
+    if (!(size + LIGHT_HEADROOM_BYTES <= max)) return false;
+    if (rec.objects.length > MAX_DRAWN_OBJECTS) return false;
+    const pictures = new Set<string>();
+    for (const o of rec.objects) {
+      if (o && o.type === 'image' && typeof o.mediaId === 'string') {
+        pictures.add(o.mediaId);
+        if (pictures.size > MAX_DRAWN_PICTURES) return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Q24.b: which slides stay whole and which are cut to the counts (the rule of `ImportCore.keepWhole`, one function so
+ * the census models what the hub does), with the slides that cannot be heavy (`isLight`) and the bytes it measured.
+ * Pure.
+ */
+export function selectWhole(
+  items: readonly WholeItem[],
+  heavyReserve = 0,
+): { kept: Set<number>; cut: Map<number, WholeCut>; light: Set<number>; sizes: Map<number, number> } {
+  const kept = new Set<number>();
+  const cut = new Map<number, WholeCut>();
+  const light = new Set<number>();
+  const sizes = new Map<number, number>();
+  const max = SIZE_BUDGETS.slideMax;
+  let used = Number.isFinite(heavyReserve) && heavyReserve > 0 ? heavyReserve : 0;
+  items.forEach((it, i) => {
+    if (it.picture) return;
+    let size: number;
+    try {
+      size = it.size ?? storedWithin(it.rec, max);
+    } catch {
+      // A slide that cannot be measured (a cycle, a BigInt) is not planned, as `easyPlan` leaves it.
+      return;
+    }
+    sizes.set(i, size);
+    if (isLight(it.rec, size, max)) {
+      light.add(i);
+      return;
+    }
+    const heavy = easyPlan(it.rec, {
+      isMotion: (id) => id.startsWith(CLIP_PREFIX),
+      size: (s) => (s === it.rec ? size : storedWithin(s, max)),
+    });
+    if (!heavy.record) return;
+    const bytes = quickBytes(it.rec);
+    if (used + bytes <= WHOLE_SHARE_BYTES) {
+      kept.add(i);
+      used += bytes;
+      return;
+    }
+    const t = trimToCounts(it.slide);
+    if (t.left) cut.set(i, { slide: t.slide, kinds: t.kinds });
+  });
+  return { kept, cut, light, sizes };
+}
+
+/**
+ * The converter's options for a parse that keeps heavy slides whole (`ParseOptions`): the option itself, the arm of
+ * the anchor rule (`WHOLE_BACKGROUND_ANCHORS`) and Q24.a's gate (`PRERENDER_ANCHORED`, which the converter cannot
+ * import: it is pure). The hub's pool task and the browser parse both spread it, so the two parse alike (D7).
+ */
+export const WHOLE_PARSE = {
+  wholeSlides: true,
+  wholeAnchors: WHOLE_BACKGROUND_ANCHORS,
+  wholeAnchored: PRERENDER_ANCHORED,
+} as const;
+
+/**
+ * The report's line for the slides an import keeps whole (design 29 W1, W4; W2 for a device that cannot make pictures):
+ * one line in the import log, counted from the slides that carry a pre-render record. Empty for none. `deviceCanBake`
+ * false says where the pictures will be made instead of 'on this computer' (the operator's phone or iPad).
+ */
+export function keptWholeLine(n: number, o: { deviceCanBake?: boolean } = {}): string {
+  if (!Number.isFinite(n) || n < 1) return '';
+  const one = n === 1;
+  const head = `${n} ${one ? 'slide is' : 'slides are'} very detailed and ${one ? 'was' : 'were'} kept whole`;
+  if (o.deviceCanBake === false)
+    return `${head}; ${one ? 'its picture is' : 'their pictures are'} made on a computer with Chrome or Edge`;
+  return `${head}; the screens show a picture of ${one ? 'it' : 'each'}, made on this computer`;
+}
 
 /** One converted slide, with its media map (placeholder → part) and what the import reads beside it. */
 export type Converted = {
@@ -138,6 +289,12 @@ export type Draft = {
   metafiles?: { part: string; object: ImageObject; before?: string }[];
   /** The clips the slide plays or names (`EmittedSlide.clips`, `clips.ts`). */
   clips?: EmittedClip[];
+  /**
+   * Q53: the pictures of shapes the slide draws (`EmittedSlide.rasters`): each is stored by the job (its placeholder is in
+   * `media`) or put back (`putBackRaster`) before the placeholders are mapped, so no picture is ever dropped for want of its
+   * file; the words of a stored one join the slide's imported text (`artText`, Q68).
+   */
+  rasters?: EmittedRaster[];
   /**
    * M9, without LibreOffice: what nothing draws on the slide (`Slide.pptx.missing` entries). A picture-class
    * slide lists 'slide' instead (`provenance`).
@@ -204,6 +361,8 @@ export type Assembled = {
   /** The LibreOffice follow-up of its slides that wait (`pptx.pending`). */
   lo: PptxLoSlide[];
   missingFonts: string[];
+  /** Q24.b: slides stored with a pre-render record, which is every slide kept whole (0 when `whole` is off). */
+  whole: number;
 };
 
 export type ImportCoreOptions = {
@@ -220,6 +379,20 @@ export type ImportCoreOptions = {
    * budget with the slides it builds (§3.4).
    */
   reserve?: number;
+  /**
+   * Q24.b: keep heavy, eligible slides whole (`wholeSlidesFor`): the ladder stops at 'full' or 'grid' for them, at
+   * most `WHOLE_SHARE_BYTES` of them are kept, and `assemble` writes their pre-render record. Default false: the
+   * ladder and the stored slides are today's.
+   */
+  whole?: boolean;
+  /** A re-import: the bytes of the kept slides that carry a pre-render record, counted against the share. */
+  heavyReserve?: number;
+  /**
+   * Which backgrounds keep a slide from getting a record (default `WHOLE_BACKGROUND_ANCHORS`, Q25.c.b): 'motion', only
+   * a video: `assemble` passes `isMotion` (the deck's clips) to `planRecord`; 'own': it passes none, so any own background
+   * keeps a slide out. An option so that both arms are tested; every caller leaves the constant's answer.
+   */
+  wholeAnchors?: 'own' | 'motion';
 };
 
 /** One import's steps 3-5 and the state they share (see the module comment). */
@@ -236,6 +409,15 @@ export class ImportCore {
   private readonly warnTo: (kind: string, msg: string) => void;
   private readonly geomFileBytes: number;
   private readonly reserve: number;
+  /**
+   * Q24.b: heavy, eligible slides stay whole (`ImportCoreOptions.whole`). Decided by the caller once (the hub's job sets
+   * it with `lo`, when its tools are known) before the slides are drafted.
+   */
+  whole: boolean;
+  private readonly heavyReserve: number;
+  private readonly wholeAnchors: 'own' | 'motion';
+  /** The drafts `budget` found light (`isLight`): `assemble` does not plan their records. */
+  private readonly light = new WeakSet<Draft>();
 
   constructor(o: ImportCoreOptions) {
     this.log = o.log;
@@ -243,6 +425,9 @@ export class ImportCore {
     this.warnTo = o.warn;
     this.geomFileBytes = o.geomFileBytes;
     this.reserve = Number.isFinite(o.reserve) && (o.reserve ?? 0) > 0 ? o.reserve! : 0;
+    this.whole = o.whole === true;
+    this.heavyReserve = Number.isFinite(o.heavyReserve) && (o.heavyReserve ?? 0) > 0 ? o.heavyReserve! : 0;
+    this.wholeAnchors = o.wholeAnchors ?? WHOLE_BACKGROUND_ANCHORS;
   }
 
   /** A warning (`ImportCoreOptions.warn`). */
@@ -291,6 +476,7 @@ export class ImportCore {
             notes: own,
             ...(c.s.art && !c.rescued ? { art: c.s.art, artText: c.s.art.text } : {}),
             ...(c.s.clips?.length && !c.rescued ? { clips: c.s.clips } : {}),
+            ...(c.s.rasters?.length && !c.rescued ? { rasters: c.s.rasters } : {}),
           }
         : {
             // Nothing of it could be read, not even its text (M9: never a picture).
@@ -518,10 +704,23 @@ export class ImportCore {
       d.slide = left.slide;
       this.leftOut(d, left, 'import');
     }
+    // Q24.b: the heavy, eligible slides within the presentation's share stay whole; the rest of them are cut.
+    const recs = drafts.map((d) => record(d, DIGEST_STANDIN, this.lo));
+    const sel = this.whole ? this.keepWhole(drafts, recs) : undefined;
+    const whole = sel?.kept ?? new Set<number>();
     // Each slide fitted, then the presentation's tail (a re-import's kept slides take their part, `reserve`).
     const max = SIZE_BUDGETS.slideMax;
     const { slides, plan } = planLadder(
-      drafts.map((d) => ({ slide: record(d, DIGEST_STANDIN, this.lo), fixed: d.cls === 'picture' })),
+      drafts.map((d, i) => {
+        // A slide `keepWhole` cut was changed: its record is made again, and its measure is not the one taken.
+        const cut = sel?.cut.has(i) === true;
+        return {
+          slide: cut ? record(d, DIGEST_STANDIN, this.lo) : recs[i]!,
+          fixed: d.cls === 'picture',
+          ...(whole.has(i) ? { whole: true as const } : {}),
+          ...(!cut && sel?.sizes.has(i) ? { size: sel.sizes.get(i)! } : {}),
+        };
+      }),
       IMPORT_RESERVE_BYTES + this.reserve,
     );
     let simplified = 0;
@@ -532,6 +731,13 @@ export class ImportCore {
       const r = slides[i]!;
       if (d.cls === 'picture' || r.level === 'full') return;
       const n = d.ref.index + 1;
+      if (r.whole) {
+        // Kept whole (Q24.b): its outlines re-gridded, nothing left out, nothing said but the log: it is not simplified.
+        const { pptx: _, ...slide } = r.slide;
+        d.slide = slide;
+        this.log.add('info', `slide ${n}: its outlines were redrawn on a 1/16 px grid, and it is kept whole`);
+        return;
+      }
       const page = this.pageForBudget(d, r, room);
       if (page !== undefined) {
         // The slide as converted (not the ladder's form): its whole text is kept for search.
@@ -625,9 +831,98 @@ export class ImportCore {
     return simplified;
   }
 
+  /**
+   * Q24.b: which slides stay whole. `easyPlan` (not a copy of its rule) says which are heavy and eligible (`record`:
+   * over 200 objects, 16 pictures or 64 KiB with nothing playing or stepping), the clips as their placeholders say
+   * (`isMotion`: only a video counts, Q25.c.b). In deck order they are kept whole while their bytes, with a re-import's
+   * kept ones (`heavyReserve`), stay within `WHOLE_SHARE_BYTES` (Q28.a); one past it is cut to the screens' counts
+   * (`trimToCounts`: what is left out is listed as missing, the slide is hybrid and says so), and the cuts are one
+   * report line. A slide that has nothing past the counts stays as the ladder would have it (it is not "cut").
+   */
+  private keepWhole(
+    drafts: Draft[],
+    recs: readonly Slide[],
+  ): { kept: Set<number>; cut: Map<number, WholeCut>; sizes: Map<number, number> } {
+    const { kept, cut, light, sizes } = selectWhole(
+      drafts.map((d, i) => ({
+        picture: d.cls === 'picture',
+        slide: d.slide,
+        rec: d.cls === 'picture' ? d.slide : recs[i]!,
+      })),
+      this.heavyReserve,
+    );
+    for (const i of light) this.light.add(drafts[i]!);
+    const cutAt: number[] = [];
+    for (const [i, c] of cut) {
+      const d = drafts[i]!;
+      d.slide = c.slide;
+      for (const k of c.kinds) d.dropped = addMissing(d.dropped, k);
+      if (d.cls === 'native') d.cls = 'hybrid';
+      addNote(
+        d.notes,
+        `past the ${WHOLE_SHARE_BYTES / 1024 ** 2} MiB of detailed slides a presentation keeps whole: only its first ${MAX_DRAWN_OBJECTS} shapes and ${MAX_DRAWN_PICTURES} pictures are kept`,
+      );
+      cutAt.push(d.ref.index + 1);
+    }
+    if (cutAt.length)
+      this.warn(
+        'budget',
+        `${cutAt.length} slide${cutAt.length === 1 ? '' : 's'} past the ${WHOLE_SHARE_BYTES / 1024 ** 2} MiB of detailed slides a presentation keeps whole show only ${cutAt.length === 1 ? 'its' : 'their'} first ${MAX_DRAWN_OBJECTS} shapes and ${MAX_DRAWN_PICTURES} pictures`,
+      );
+    return { kept, cut, sizes };
+  }
+
+  /**
+   * Q24.b: the slides that are heavy and eligible get their record, the others none, from `planRecord`, the one writer
+   * (contract C-IW1): the slide as it is stored, the presentation's kind, the deck's own size measure (a slide the hub has
+   * not stored yet is measured as the hub will), and `isMotion` from the deck's clips (only a video is a moving
+   * background, Q25.c.b: under the arm 'own' none is passed and any own background keeps a slide out). Never fails an
+   * import: a slide that cannot be planned is stored without a record. Returns how many slides carry one.
+   */
+  private writeRecords(p: Presentation, a: AssembleInput, light: ReadonlySet<string>): number {
+    const opts = {
+      kind: p.kind,
+      size: (s: Slide) => storedWithin(s, SIZE_BUDGETS.slideMax),
+      ...(this.wholeAnchors === 'motion' ? { isMotion: (id: string) => a.clipIds.has(id) } : {}),
+    };
+    let n = 0;
+    for (const sec of p.sections)
+      sec.slides = sec.slides.map((sl) => {
+        // A light slide (`budget` measured it far from every bound) needs no record and is not planned.
+        if (light.has(sl.id)) return sl;
+        let next = sl;
+        try {
+          next = planRecord(sl, opts);
+        } catch {
+          this.log.add(
+            'info',
+            `slide ${(sl.pptx?.index ?? 0) + 1}: its pre-render record could not be planned`,
+          );
+        }
+        if (next.prerender) n++;
+        return next;
+      });
+    return n;
+  }
+
   /** Step 5: remap, assemble, sanitize, digest; the follow-up's plan. */
   assemble(drafts: Draft[], stored: ReadonlyMap<string, string>, a: AssembleInput): Assembled {
     const { hash, slideRect, scan } = a;
+    // Q53: a picture of shapes the job could not make is put back as its shapes BEFORE the placeholders are mapped (the
+    // mapping would drop an image whose picture is not stored); the words of one that was made join the slide's text.
+    for (const d of drafts) {
+      if (!d.rasters?.length) continue;
+      const words: string[] = [];
+      for (const r of d.rasters) {
+        const part = d.media.get(r.id);
+        if (part !== undefined && stored.get(part)) {
+          if (r.words) words.push(r.words);
+          continue;
+        }
+        d.slide = putBackRaster(d.slide, r);
+      }
+      if (words.length) d.artText = [d.artText, ...words].filter(Boolean).join('\n').slice(0, ART_TEXT_CHARS);
+    }
     // Remap each slide with its own batch's placeholders.
     for (const d of drafts) {
       const map = new Map<string, string>();
@@ -641,6 +936,11 @@ export class ImportCore {
         addNote(d.notes, `${before - d.slide.objects.length} picture(s) could not be imported`);
       if (d.slide.lyricObjectId && !d.slide.objects.some((o) => o.id === d.slide.lyricObjectId))
         delete d.slide.lyricObjectId;
+      // Q53, C-SR17: the deck and the place a picture of shapes was made from, written again to tell a transplanted one.
+      for (const o of d.slide.objects)
+        if (o.origin?.role === 'raster' && o.origin.raster) {
+          o.origin = { ...o.origin, raster: { ...o.origin.raster, file: hash, slide: d.ref.index } };
+        }
       const bg = d.slide.backgroundMediaId;
       if (bg && a.hasAlpha(bg)) {
         // A picture with alpha is drawn on white, as PowerPoint lays every background (design/27 §4).
@@ -712,8 +1012,14 @@ export class ImportCore {
     const parsed = Presentation.parse(p);
     // The digest of the import's objects (every object here has an origin, `imported`): the "unedited" test
     // of the follow-up and re-import (`digest.ts`).
+    for (const sl of parsed.sections.flatMap((s) => s.slides))
+      if (sl.pptx) sl.pptx.digest = importDigest(sl.objects);
+    // Q24.b: the pre-render record of each slide in its final stored form, written by `planRecord` alone.
+    const lightIds = new Set(
+      drafts.filter((d) => this.light.has(d) && d.cls !== 'picture').map((d) => d.slide.id),
+    );
+    const kept = this.whole ? this.writeRecords(parsed, a, lightIds) : 0;
     const slides = parsed.sections.flatMap((s) => s.slides);
-    for (const sl of slides) if (sl.pptx) sl.pptx.digest = importDigest(sl.objects);
     const classes = slides.map((sl) => sl.pptx?.class ?? 'native');
     const counts = {
       native: classes.filter((c) => c === 'native').length,
@@ -729,6 +1035,8 @@ export class ImportCore {
       'info',
       `${slides.length} slide(s): ${counts.native} native, ${counts.hybrid} hybrid, ${counts.picture} picture`,
     );
+    const line = keptWholeLine(kept);
+    if (line) this.log.add('info', line);
     const lo = loSlides(drafts, slides);
     if (lo.length) this.log.add('info', `${lo.length} slide(s) wait for LibreOffice`);
     const gaps = slides.filter((sl) => sl.pptx?.missing?.length).length;
@@ -737,7 +1045,7 @@ export class ImportCore {
     const fonts = missingFonts(fontFamilies(slides), a.libraryFamilies);
     for (const f of fonts) this.log.add('info', `font not available: ${f}`);
     parsed.source.log = this.log.toString();
-    return { p: parsed, lo, missingFonts: fonts };
+    return { p: parsed, lo, missingFonts: fonts, whole: kept };
   }
 }
 

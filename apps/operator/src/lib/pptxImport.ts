@@ -17,6 +17,7 @@ import {
 } from '@ordo/domain';
 import type { HubCapabilities, Job } from '@ordo/protocol';
 import { metricCompatible } from '@ordo/renderer';
+import { readRasterCounts, type RasterResult, rasterTotals } from './pptxRaster.ts';
 
 // ── The import screen ───────────────────────────────────────────────────────────────────────────────────
 
@@ -76,6 +77,44 @@ export function picturesOffered(caps: HubCapabilities | undefined): boolean {
 export function hubHasLibreOffice(caps: HubCapabilities | undefined): boolean {
   const state = caps?.libreoffice.state;
   return state !== 'absent' && state !== 'off';
+}
+
+/**
+ * Q27 (default b): the operator's pinned copy of `WHOLE_WITH_LIBREOFFICE` (@ordo/importers pptx-core.ts), false: a hub
+ * WITH LibreOffice follows today's plan and keeps heavy slides whole only where it has none (true is Q27.a). Written
+ * here, not imported: pptx-core carries the whole import core, and an import of it from a main chunk put 138 kB into the
+ * operator's regular total (the import worker is the one place that loads it). `pptxImport.test.ts` pins this equal to
+ * the original and scans the main chunks for the import.
+ */
+export const OPERATOR_WHOLE_WITH_LIBREOFFICE = false;
+
+/**
+ * Q24.b (C-IW4): whether the browser parse keeps heavy slides whole, from the hub's last answer: its switch
+ * (`caps.prerender.state`, store-2's `HubCapabilities`) and, on a hub with LibreOffice, Q27 (`withLibreOffice`: the pinned
+ * constant, or the other arm for a test; `wholeSlidesFor` of pptx-core says the same). An unknown answer (no
+ * capabilities yet, a hub from before) is off; a hub that answers otherwise refuses the scene and parses the deck itself (D7).
+ */
+export function keepsSlidesWhole(
+  caps: HubCapabilities | undefined,
+  withLibreOffice: boolean = OPERATOR_WHOLE_WITH_LIBREOFFICE,
+): boolean {
+  if (!caps) return false;
+  // `prerender` is in every parsed answer (store-2); the `?.` is for one kept from a hub before it: only 'on' is a yes.
+  return caps.prerender?.state === 'on' && (!hubHasLibreOffice(caps) || withLibreOffice);
+}
+
+/**
+ * The line of the import card and the report for the slides kept whole (design 29 W1, W4; W2 for a device that cannot make
+ * their pictures): static text, empty for none. The pinned copy of `keptWholeLine` (pptx-core.ts; same reason as above).
+ */
+export function wholeLine(n: number | undefined, deviceCanBake?: boolean): string {
+  const count = n ?? 0;
+  if (!Number.isFinite(count) || count < 1) return '';
+  const one = count === 1;
+  const head = `${count} ${one ? 'slide is' : 'slides are'} very detailed and ${one ? 'was' : 'were'} kept whole`;
+  if (deviceCanBake === false)
+    return `${head}; ${one ? 'its picture is' : 'their pictures are'} made on a computer with Chrome or Edge`;
+  return `${head}; the screens show a picture of ${one ? 'it' : 'each'}, made on this computer`;
 }
 
 /**
@@ -176,6 +215,10 @@ export type NativeImportResult = {
   missing?: number;
   /** M9: whether the hub had LibreOffice; undefined from an older hub (which always had it). */
   libreoffice?: boolean;
+  /** Q24.b: slides kept whole (each stored with a pre-render record); absent from a hub that keeps none whole. */
+  whole?: number;
+  /** Q53: what the picture step of many-point shapes came to (`pptxRaster.ts`); absent from an older hub and for a deck with none. */
+  rasters?: RasterResult;
 };
 /** The `pptx-native` result when the deck went to the picture import instead (the CPU pool could not start). */
 export type NativeImportFallback = { jobId: string; reason: string };
@@ -220,6 +263,8 @@ export function readNativeResult(result: unknown): NativeImportResult | undefine
     notes: texts(result.notes, MAX_NOTES, 300),
     ...(result.missing !== undefined ? { missing: count(result.missing) } : {}),
     ...(typeof result.libreoffice === 'boolean' ? { libreoffice: result.libreoffice } : {}),
+    ...(result.whole !== undefined ? { whole: count(result.whole) } : {}),
+    ...(readRasterCounts(result.rasters) ? { rasters: readRasterCounts(result.rasters)! } : {}),
   };
 }
 
@@ -551,6 +596,10 @@ export type ImportReport = {
   edited: number;
   /** What drew a legacy import's pictures. */
   renderer?: string;
+  /** Slides kept whole: those that carry a pre-render record (Q24.b); absent when there are none. */
+  whole?: number;
+  /** Q53: the shapes drawn into pictures and the pictures, counted from the slides; absent when there are none. */
+  rasters?: { shapes: number; pictures: number };
   /** `source.log` lines, at most `LOG_LINES` of the newest, each a warning or not. */
   log: { text: string; warn: boolean }[];
   /** Log lines left out (older ones). */
@@ -575,17 +624,20 @@ export function importReport(
   let pending = 0;
   let failed = 0;
   let missing = 0;
+  let whole = 0;
   let hidden = 0;
   let edited = 0;
   for (const sec of p.sections)
     for (const sl of sec.slides) {
       if (sl.hidden) hidden++;
+      if (sl.prerender) whole++;
       if (sl.imported && !sl.pptx) pages++;
       if (sl.pptx?.pending) pending++;
       if (sl.pptx?.failed) failed++;
       if (slideMissing(sl).length) missing++;
       if (sl.pptx && slideEdited(sl)) edited++;
     }
+  const rasters = rasterTotals(p.sections.flatMap((sec) => sec.slides));
   const all = (src.log ?? '').split('\n').filter((l) => l.trim());
   const lines = texts(all.slice(-LOG_LINES), LOG_LINES, 400);
   const n = src.native;
@@ -605,6 +657,8 @@ export function importReport(
     pending,
     failed,
     missing,
+    ...(whole ? { whole } : {}),
+    ...(rasters ? { rasters } : {}),
     hidden,
     edited,
     ...(src.renderer ? { renderer: src.renderer } : {}),

@@ -38,11 +38,26 @@ export const KEYS_START_DELAY_MS = 120_000;
 const DEBOUNCE_MS = 300;
 /** The pause between two slides of a job: it never holds the library's loop. */
 const JOB_PAUSE_MS = 5;
+/**
+ * The most bytes of slide pages one pool task is given (store-2 step 3b, the Q54 data-safety items): a slide file may be
+ * 16 MiB, and a pool worker's heap is 512 MB (pool.ts), so the changed slides of a save are sent in batches of at most
+ * this many bytes of pages, a slide alone when it is bigger than the batch.
+ */
+export const KEYS_PAGES_BYTES_MAX = 32 * 1024 * 1024;
 
 export type KeysOptions = {
   live: () => 'idle' | 'live';
   log: Logger;
   startDelayMs?: number;
+  /**
+   * false while the hub's switch is off (ORDO_PRERENDER=off, `HubConfig.prerender.store`): `keysFor` returns no row
+   * without looking at the presentation, and the jobs (a font or media change, the start-up scan, `fill`) queue and
+   * do nothing. Rows already stored stay; the start-up scan of the next start that is not off fills what a save made
+   * meanwhile left without rows. Absent: always open.
+   */
+  open?: () => boolean;
+  /** The bytes of pages one pool task may be given (tests lower it; default `KEYS_PAGES_BYTES_MAX`). */
+  pagesBytesMax?: number;
 };
 
 type Pool = Pick<CpuPool, 'run'>;
@@ -83,13 +98,17 @@ export class PrerenderKeys {
    * a slide whose key cannot be computed now is left to the safety net.
    */
   async keysFor(p: Presentation): Promise<PrerenderKeyRow[]> {
+    if (!this.isOpen()) return [];
     const out: PrerenderKeyRow[] = [];
     const todo: Work[] = [];
     let prev: Map<string, ReturnType<Library['prerenderIndex']['keysAt']>> | undefined;
+    // The library cannot change between the slides of this loop (nothing in it awaits), so a picture that many slides
+    // show is read once: heavy slides share their pictures, and each read is a statement and a parsed row.
+    const files = new Map<string, string | null>();
     for (const sec of p.sections ?? [])
       for (const slide of sec.slides) {
         if (!slide.prerender) continue;
-        const w = this.plan(slide);
+        const w = this.plan(slide, files);
         if (!w) continue;
         prev ??= this.previousRows(p.id);
         const hit = prev.get(slide.id)?.find((r) => r.sig === w.sig);
@@ -109,6 +128,10 @@ export class PrerenderKeys {
     return out;
   }
 
+  private isOpen(): boolean {
+    return this.opts.open?.() ?? true;
+  }
+
   private previousRows(id: string) {
     const idx = this.lib.prerenderIndex;
     const rev = idx.latestKeyRev(id);
@@ -123,7 +146,7 @@ export class PrerenderKeys {
   }
 
   /** What one slide's key is made of: its head, the files of its pictures, its font chain, and the sig. */
-  private plan(slide: Slide): Work | undefined {
+  private plan(slide: Slide, files?: Map<string, string | null>): Work | undefined {
     const pre = slide.prerender;
     if (!pre) return undefined;
     let head: HeadRow | undefined;
@@ -136,8 +159,13 @@ export class PrerenderKeys {
     const ids = new Set<string>([...uses.media, ...drawnMediaIds(slide), ...slideMediaIds(slide)]);
     const media: Record<string, string | null> = {};
     for (const id of [...ids].sort()) {
-      const m = this.lib.media.get(id);
-      media[id] = (m && stillFile(m)?.hash) || null;
+      let hash = files?.get(id);
+      if (hash === undefined) {
+        const m = this.lib.media.get(id);
+        hash = (m && stillFile(m)?.hash) || null;
+        files?.set(id, hash);
+      }
+      media[id] = hash;
     }
     const chain = new Set([...uses.fonts.map(lower), ...FALLBACK_FAMILIES]);
     const faces = this.faces()
@@ -166,30 +194,51 @@ export class PrerenderKeys {
     return this.faceCache;
   }
 
-  /** The pool's keys for `works`, as rows. */
+  /** The pool's keys for `works`, as rows: the pages of file-form slides go in batches of `pagesBytesMax`. */
   private async compute(works: Work[]): Promise<PrerenderKeyRow[]> {
-    const slides: PrerenderKeysTaskInput['slides'] = [];
+    const max = this.opts.pagesBytesMax ?? KEYS_PAGES_BYTES_MAX;
+    const rows: PrerenderKeyRow[] = [];
+    let batch: PrerenderKeysTaskInput['slides'] = [];
+    let batchWorks: Work[] = [];
+    let bytes = 0;
+    const flush = async () => {
+      if (!batch.length) return;
+      rows.push(...(await this.runKeys(batch, batchWorks)));
+      batch = [];
+      batchWorks = [];
+      bytes = 0;
+    };
     for (const w of works) {
       if (!w.head) {
-        slides.push({ slideId: w.slide.id, standIn: w.slide, media: w.media });
+        batch.push({ slideId: w.slide.id, standIn: w.slide, media: w.media });
+        batchWorks.push(w);
         continue;
       }
       const headFile = this.lib.getFile(w.slide.prerender!.file!.ref);
       const files = w.head.pages.map((h) => this.lib.getFile(h));
       if (!headFile || files.some((f) => !f)) continue;
+      // The size the files are known to have: the pages are read only for a slide that is next in its batch.
+      const size = headFile.bytes + files.reduce((n, f) => n + f!.bytes, 0);
+      if (batch.length && bytes + size > max) await flush();
       const [head, ...pages] = await Promise.all([
         readFile(this.store.abs(headFile.path)),
         ...files.map((f) => readFile(this.store.abs(f!.path))),
       ]);
-      slides.push({
+      batch.push({
         slideId: w.slide.id,
         standIn: w.slide,
         head: new Uint8Array(head!.buffer, head!.byteOffset, head!.byteLength),
         pages: pages.map((b) => new Uint8Array(b.buffer, b.byteOffset, b.byteLength)),
         media: w.media,
       });
+      batchWorks.push(w);
+      bytes += size;
     }
-    if (!slides.length) return [];
+    await flush();
+    return rows;
+  }
+
+  private async runKeys(slides: PrerenderKeysTaskInput['slides'], works: Work[]): Promise<PrerenderKeyRow[]> {
     const out = await this.pool().run('prerender-keys', {
       slides,
       fonts: this.faces(),
@@ -249,7 +298,7 @@ export class PrerenderKeys {
   }
 
   private onChanges(changes: Change[]): void {
-    if (this.stopped) return;
+    if (this.stopped || !this.isOpen()) return;
     const ids = new Set<string>();
     let all = false;
     for (const c of changes) {
@@ -282,11 +331,13 @@ export class PrerenderKeys {
   }
 
   private scanAll(): void {
+    if (!this.isOpen()) return;
     const ids = this.lib.prerenderIndex.presentationsMentioningPrerender();
     if (ids.length) this.later(new Set(ids));
   }
 
   private later(ids: Set<string>): void {
+    if (!this.isOpen()) return;
     for (const id of ids) this.pending.add(id);
     if (this.debounce) return;
     this.debounce = setTimeout(() => {
@@ -325,6 +376,7 @@ export class PrerenderKeys {
 
   /** The current revision's missing rows, one slide at a time: a row that exists (same sig) is left alone. */
   private async fill(id: string): Promise<void> {
+    if (!this.isOpen()) return;
     const p = this.lib.presentations.get(id);
     if (!p) return;
     const idx = this.lib.prerenderIndex;

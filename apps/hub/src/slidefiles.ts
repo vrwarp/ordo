@@ -9,8 +9,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { canonicalJson } from '@ordo/domain/palette.ts';
-import { slideUses } from '@ordo/domain/prerender.ts';
-import { type SlideFile, SLIDE_FILE_LIMITS } from '@ordo/domain/slidefile.ts';
+import { type SlideFile, SLIDE_FILE_LIMITS, slideUsesAll, usesTooMany } from '@ordo/domain/slidefile.ts';
 import type { DB } from './db.ts';
 import { HttpError } from './errors.ts';
 import type { Library } from './library.ts';
@@ -181,6 +180,15 @@ export class SlideFiles {
    * is not asked (the file was just made by the domain's own `slideFileOf`). Returns what the slide records.
    */
   async storeFile(file: SlideFile): Promise<{ ref: string; bytes: number }> {
+    // What the file draws, whole, before anything is written: a head that names more than a head row keeps is refused
+    // (413 `slide_uses_too_many`), never cut, and leaves no file behind.
+    const uses = slideUsesAll({
+      id: 'file',
+      objects: file.pages.flatMap((p) => p.page.objects),
+      ...(file.head.imported ? { imported: file.head.imported } : {}),
+    } as never);
+    const many = usesTooMany(uses);
+    if (many) throw new HttpError(413, 'slide_uses_too_many', many);
     for (const p of file.pages)
       if (!this.lib.getFile(p.name))
         await this.store.putBytes(Buffer.from(canonicalJson(p.page), 'utf8'), {
@@ -192,12 +200,6 @@ export class SlideFiles {
         ext: 'json',
         mime: JSON_MIME,
       });
-    const objects = file.pages.flatMap((p) => p.page.objects);
-    const uses = slideUses({
-      id: 'file',
-      objects,
-      ...(file.head.imported ? { imported: file.head.imported } : {}),
-    } as never);
     this.lib.slideFiles.record({
       hash: file.name,
       bytes: file.bytes,

@@ -31,7 +31,7 @@ import { run, ToolError } from './media/tools.ts';
 import { SOFFICE_ADDRESS_SPACE_MB, sofficeCommand } from './pptx/fallback.ts';
 import { logSafe } from './pptx/report.ts';
 
-export type ToolName = 'libreoffice' | 'pdftoppm';
+export type ToolName = 'libreoffice' | 'pdftoppm' | 'chromium';
 export type ToolState = 'checking' | 'available' | 'absent' | 'off' | 'broken';
 export type ToolInfo = {
   state: ToolState;
@@ -58,6 +58,8 @@ export const RECHECK_MS = 60_000;
 const WITHOUT_LIBREOFFICE =
   "ordo draws PowerPoint slides itself; 'Pictures (LibreOffice)' and LibreOffice reference pictures are off";
 const WITHOUT_PDFTOPPM = 'PDF import and PDF reference pictures are off (install poppler-utils)';
+/** Chromium draws the pictures of many-point shapes at import (design/29 decision 4: the hub's own headless browser). */
+const WITHOUT_CHROMIUM = 'pictures of many-point shapes are off';
 
 /** An executable regular file of that name on `path` (or the absolute path itself); no process is started. */
 export function findOnPath(cmd: string, path = process.env.PATH ?? ''): string | undefined {
@@ -87,6 +89,11 @@ function tail(stderr: string): string {
   return logSafe(stderr.trim().split('\n').slice(-3).join(' | '), 300);
 }
 
+/** What a tool's absence turns off, for the start-up line. */
+function what(t: ToolName): string {
+  return t === 'libreoffice' ? WITHOUT_LIBREOFFICE : t === 'chromium' ? WITHOUT_CHROMIUM : WITHOUT_PDFTOPPM;
+}
+
 type Log = { info(obj: object, msg: string): void; warn(obj: object, msg: string): void };
 
 export class HubTools {
@@ -94,6 +101,7 @@ export class HubTools {
   readonly ready: Promise<void>;
   private lo: ToolInfo;
   private pdf: ToolInfo;
+  private chrome: ToolInfo;
   private pdfinfo = false;
   /** Tools whose loss a run already logged (`markMissing`). */
   private readonly lost = new Set<ToolName>();
@@ -102,12 +110,12 @@ export class HubTools {
   /** When `recheck` last probed (ms since the epoch). */
   private recheckedAt = 0;
 
-  private readonly cfg: Pick<HubConfig, 'libreoffice' | 'toolProbe'>;
+  private readonly cfg: Pick<HubConfig, 'libreoffice' | 'toolProbe'> & Partial<Pick<HubConfig, 'chromium'>>;
   private readonly log: Log;
   private readonly opts: { tmpDir?: () => Promise<string>; probeMs?: number; recheckMs?: number };
 
   constructor(
-    cfg: Pick<HubConfig, 'libreoffice' | 'toolProbe'>,
+    cfg: Pick<HubConfig, 'libreoffice' | 'toolProbe'> & Partial<Pick<HubConfig, 'chromium'>>,
     log: Log,
     opts: { tmpDir?: () => Promise<string>; probeMs?: number; recheckMs?: number } = {},
   ) {
@@ -117,29 +125,41 @@ export class HubTools {
     const off = cfg.libreoffice.mode === 'off';
     this.lo = off ? { state: 'off', reason: 'ORDO_LIBREOFFICE=off' } : { state: 'checking' };
     this.pdf = { state: 'checking' };
+    this.chrome = { state: 'checking' };
     if (cfg.libreoffice.warning) log.warn({}, logSafe(cfg.libreoffice.warning, 300));
     this.ready = Promise.all([
       off ? Promise.resolve() : this.settle('libreoffice', () => this.probeLibreOffice()),
       this.settle('pdftoppm', () => this.probePdftoppm()),
+      this.settle('chromium', () => this.probeChromium()),
     ]).then(() => {
       this.announce('libreoffice', this.lo);
       this.announce('pdftoppm', this.pdf);
+      this.announce('chromium', this.chrome);
     });
   }
 
   /** A detector with these states and no probing (tests that build `PptxDeps` by hand). */
   static fixed(
-    states: { libreoffice?: ToolState; pdftoppm?: ToolState; pdfinfo?: boolean; exe?: string } = {},
+    states: {
+      libreoffice?: ToolState;
+      pdftoppm?: ToolState;
+      /** Absent unless a test declares one: no picture maker is assumed. */
+      chromium?: ToolState;
+      pdfinfo?: boolean;
+      exe?: string;
+    } = {},
   ): HubTools {
     const t = new HubTools(
       {
         libreoffice: { mode: states.libreoffice === 'off' ? 'off' : 'auto', exe: states.exe ?? 'soffice' },
         toolProbe: (tool) =>
-          tool === 'libreoffice'
-            ? { state: states.libreoffice ?? 'available', exe: states.exe ?? 'soffice' }
-            : tool === 'pdfinfo'
-              ? { state: (states.pdfinfo ?? true) ? 'available' : 'absent' }
-              : { state: states.pdftoppm ?? 'available', exe: 'pdftoppm' },
+          tool === 'chromium'
+            ? { state: states.chromium ?? 'absent', exe: 'chromium' }
+            : tool === 'libreoffice'
+              ? { state: states.libreoffice ?? 'available', exe: states.exe ?? 'soffice' }
+              : tool === 'pdfinfo'
+                ? { state: (states.pdfinfo ?? true) ? 'available' : 'absent' }
+                : { state: states.pdftoppm ?? 'available', exe: 'pdftoppm' },
       },
       { info: () => undefined, warn: () => undefined },
     );
@@ -170,10 +190,15 @@ export class HubTools {
     return { ...this.pdf };
   }
 
+  /** Headless Chromium, which draws the pictures of many-point shapes at import (`pptx/rasters.ts`). */
+  chromium(): ToolInfo {
+    return { ...this.chrome };
+  }
+
   /** Whether the tool can be used now (its state is 'available'). False while it is still being checked. */
   has(t: ToolName | 'pdfinfo'): boolean {
     if (t === 'pdfinfo') return this.pdf.state === 'available' && this.pdfinfo;
-    return (t === 'libreoffice' ? this.lo : this.pdf).state === 'available';
+    return (t === 'libreoffice' ? this.lo : t === 'chromium' ? this.chrome : this.pdf).state === 'available';
   }
 
   /**
@@ -205,20 +230,21 @@ export class HubTools {
   markMissing(t: ToolName, reason: string): void {
     const why = logSafe(reason, 300);
     if (t === 'libreoffice') this.lo = { state: 'absent', reason: why };
+    else if (t === 'chromium') this.chrome = { state: 'absent', reason: why };
     else {
       this.pdf = { state: 'absent', reason: why };
       this.pdfinfo = false;
     }
     if (this.lost.has(t)) return;
     this.lost.add(t);
-    this.log.warn(
-      { tool: t, reason: why },
-      `${t}: gone (${why}): ${t === 'libreoffice' ? WITHOUT_LIBREOFFICE : WITHOUT_PDFTOPPM}`,
-    );
+    this.log.warn({ tool: t, reason: why }, `${t}: gone (${why}): ${what(t)}`);
   }
 
-  /** What the operator may offer (`GET /capabilities`). */
-  capabilities(): HubCapabilities {
+  /**
+   * What the operator may offer (`GET /capabilities`): the tools' part. The hub's switch for pictures
+   * (`prerender`) is config, not a tool: the route composes it (`capabilitiesAnswer`, routes.ts).
+   */
+  capabilities(): Omit<HubCapabilities, 'prerender'> {
     const lo = this.has('libreoffice');
     const pdf = this.has('pdftoppm');
     return {
@@ -236,22 +262,23 @@ export class HubTools {
     } catch (e) {
       const info: ToolInfo = { state: 'broken', reason: logSafe(errorMessage(e), 300) };
       if (t === 'libreoffice') this.lo = info;
+      else if (t === 'chromium') this.chrome = info;
       else this.pdf = info;
     }
   }
 
   private announce(t: ToolName, info: ToolInfo): void {
-    const what = t === 'libreoffice' ? WITHOUT_LIBREOFFICE : WITHOUT_PDFTOPPM;
     const fields = { tool: t, state: info.state, ...(info.version ? { version: info.version } : {}) };
     if (info.state === 'available') {
-      const v = info.version ? ` (${t === 'libreoffice' ? 'LibreOffice ' : ''}${info.version})` : '';
+      const label = t === 'libreoffice' ? 'LibreOffice ' : t === 'chromium' ? 'Chromium ' : '';
+      const v = info.version ? ` (${label}${info.version})` : '';
       this.log.info(fields, `${t}: available${v}`);
     } else if (info.state === 'broken')
       this.log.warn(
         { ...fields, reason: info.reason },
-        `${t}: broken (${info.reason ?? 'unknown'}): ${what}`,
+        `${t}: broken (${info.reason ?? 'unknown'}): ${what(t)}`,
       );
-    else this.log.info(fields, `${t}: ${info.state}${info.reason ? ` (${info.reason})` : ''}: ${what}`);
+    else this.log.info(fields, `${t}: ${info.state}${info.reason ? ` (${info.reason})` : ''}: ${what(t)}`);
   }
 
   private async probeLibreOffice(): Promise<void> {
@@ -291,6 +318,42 @@ export class HubTools {
       }
     } finally {
       await rm(home, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Headless Chromium (ORDO_CHROMIUM, default `chromium` on the PATH): found on the PATH or by its absolute path
+   * and asked its version, the pattern of pdftoppm's probe. A hub where it is not installed or answers nothing
+   * plans no pictures of many-point shapes (`rastersFor`).
+   */
+  private async probeChromium(): Promise<void> {
+    if (this.cfg.toolProbe) {
+      this.chrome = { exe: 'chromium', ...(await this.cfg.toolProbe('chromium')) };
+      return;
+    }
+    const cmd = this.cfg.chromium?.path ?? 'chromium';
+    const exe = findOnPath(cmd);
+    if (!exe) {
+      this.chrome = { state: 'absent', reason: `${logSafe(cmd, 200)} is not installed` };
+      return;
+    }
+    try {
+      const r = await run(exe, ['--version'], {
+        timeoutMs: this.opts.probeMs ?? TOOL_PROBE_MS,
+        group: true,
+        allowFail: true,
+      });
+      const version = /(?:Chromium|Chrome(?: for Testing)?)\s+(\d+(?:\.\d+){1,5})/.exec(
+        `${r.stdout}\n${r.stderr}`,
+      )?.[1];
+      this.chrome = version
+        ? { state: 'available', exe, version }
+        : { state: 'broken', exe, reason: 'it did not say its version' };
+    } catch (e) {
+      this.chrome =
+        e instanceof ToolError && e.missing
+          ? { state: 'absent', reason: logSafe(errorMessage(e), 300) }
+          : { state: 'broken', exe, reason: logSafe(errorMessage(e), 300) };
     }
   }
 
