@@ -178,42 +178,180 @@ export function pictureUnits(slide: Slide, cost?: CostReasons): PicturePlan {
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Which slides get a record in the first release (Q24.b)
+// Which slides get a record in the first release (design/29 §1.1, Q24.b)
 
-/** The one gate Q24.a (anchored slides) flips. STUB: the rules come with the next commit. */
+/**
+ * The one gate Q24.a (a heavy slide with something that moves in it) flips. Off: a slide with an anchor is not
+ * eligible, `planRecord` writes `live: []` and leaves a record that has a live set alone. On: `easyPlan` ignores
+ * anchors and `planRecord` writes and refreshes `live: liveSet(slide)`. Nothing in this release turns it on; the
+ * `anchored` option of `easyPlan` and `planRecord` exercises the other arm in tests, and no production caller
+ * passes it.
+ */
 export const PRERENDER_ANCHORED = false;
-/** The one gate for slide files. STUB. */
+
+/**
+ * The one gate for slide files (design/29 §1.2): a heavy slide kept as a head and pages with a bounded stand-in.
+ * Read by one place, the importer's `wholeFilesFor` (a slide over 1,000 objects, Q54), and by nothing in this
+ * module: `withFullSlide` keeps the file branch whatever it says, so its tests and the hub's helper stay as they
+ * are. The release that turns slide files on flips it with `PRERENDER_ON`.
+ */
 export const PRERENDER_FILES = false;
 
+/** What stops a slide from getting a picture in this release: something in it that moves or steps. */
 export type EasyAnchorKind = 'play' | 'steps' | 'lyric' | 'background';
+/** An anchor: an object id, or for a background the media id. */
 export type EasyAnchor = { id: string; kind: EasyAnchorKind };
+
+/** What `easyPlan` and `planRecord` read besides the slide. */
 export type EasyOptions = {
+  /** The kind of presentation the slide is in: the lyric box is an anchor in a `song` only (Q25.a). */
   kind?: PresentationKind;
+  /**
+   * Whether a media file moves (a video). Every production caller passes it (Q25.c.b, decided: only a video counts
+   * as a moving background, so a slide's own background picture keeps nothing out). Without it, or when it answers
+   * `undefined` or throws, an own background is an anchor: only a media the caller knows to be a still passes.
+   */
   isMotion?: (mediaId: string) => boolean | undefined;
+  /**
+   * The slide's size as its store counts it, for a writer whose copy is not yet in the stored form (the client's
+   * `pptxgeom:<n>` placeholders are shorter than the hub's names). Given the slide as drawn and without its own
+   * record; an answer that is not a finite number of at least 0, or a throw, counts as the JSON size.
+   */
   size?: (slide: Slide) => number;
+  /** 'song' (the default): the lyric box is an anchor in a song only; 'any': in every deck (Q25.b). */
   lyric?: 'song' | 'any';
+  /** The gate of `PRERENDER_ANCHORED`, for tests, the census and Q24.a; no production caller passes it. */
   anchored?: boolean;
+  /** Where an object can draw, for the live set under the gate (the renderer's `objectBounds` where at hand). */
   reach?: Reach;
 };
+
+/** Which slides get a record, and why: `pictureUnits`' counts, cut down to what a flat picture can fix. */
 export type EasyPlan = {
+  /** No anchor (or the gate is on): the slide may get a picture. */
   eligible: boolean;
+  /** `eligible` and heavy: the slide gets a record (what both writers need). */
   record: boolean;
+  /** Everything in the slide that moves or steps, in drawn order, the background last; listed even when the gate is on. */
   anchors: EasyAnchor[];
+  /** `bytes` (stored over 64 KiB) and `count` (over 200 drawn objects or 16 distinct pictures), in that order. */
   why: ('bytes' | 'count')[];
+  /** Every bound passed, the unfixable ones included (a box over 10,000 characters, 16 families, 64 size scales). */
   over: PictureOver[];
   counts: PicturePlan['counts'];
 };
 
-/** STUB. */
-export function easyPlan(_slide: Slide, _opts: EasyOptions = {}): EasyPlan {
-  return {
+const NO_COUNTS: PicturePlan['counts'] = {
+  objects: 0,
+  pictures: 0,
+  bytes: 0,
+  characters: 0,
+  families: 0,
+  sizeScales: 0,
+};
+
+/** The anchors of the drawn objects, then the slide's own background. */
+function easyAnchors(slide: Slide, drawn: readonly SlideObject[], opts: EasyOptions): EasyAnchor[] {
+  const out: EasyAnchor[] = [];
+  const lyricRule = (opts.lyric ?? 'song') === 'any' || opts.kind === 'song';
+  for (const o of drawn) {
+    if (!isObj(o)) continue;
+    const id = idOf(o);
+    if (!id) continue;
+    if (lyricRule && id === slide.lyricObjectId) out.push({ id, kind: 'lyric' });
+    else if (o.type === 'image' && isObj(o.play)) out.push({ id, kind: 'play' });
+    else if (hasSteps(o)) out.push({ id, kind: 'steps' });
+  }
+  const bg = slide.backgroundMediaId;
+  if (typeof bg === 'string' && bg) {
+    let still = false;
+    try {
+      still = opts.isMotion?.(bg) === false;
+    } catch {
+      // A callback that cannot tell is no proof that the media does not move.
+    }
+    if (!still) out.push({ id: bg, kind: 'background' });
+  }
+  return out;
+}
+
+/**
+ * Which slides get a record in the first release (Q24.b): a heavy slide in which nothing moves or steps. Both
+ * writers, the PowerPoint import and the editor's save, ask this one function (through `planRecord`), so a slide
+ * never flips between "has a picture" and "has none" because of who looked. Pure; never throws; no I/O.
+ *
+ * - DRAWN: everything is read from `slideContent(slide).objects`, what the screens draw, never from the raw
+ *   objects (a slide set to show its PowerPoint picture stores its imported objects and draws the operator's).
+ * - ANCHORS (design/29 §1.5), one entry per object in drawn order, the precedence of `liveAnchors` (lyric box,
+ *   then playing picture, then step-by-step text): an in-slide picture with `play` (a playing video or picture);
+ *   text with a hidden paragraph (`TextPara.hidden`); the lyric box, in a `song` only (Q25.a: ordo marks the main
+ *   text of nearly every PowerPoint slide as its lyric box, and a picture is only used where a screen shows the
+ *   slide as drawn, never in the lyric-only looks); and, last, the slide's own `backgroundMediaId` unless the
+ *   caller says it is a still (Q25.c.b: only a video counts as moving). The presentation's shared background is
+ *   not a slide's own and is never read. An anchor keeps the slide out of this release ("an anchored slide stays
+ *   exactly as today", Q24.b); it is a gate, never a stored reason, so an anchored slide still gets its `why`,
+ *   `over` and `counts` (the census and Q24.a/Q24.c read them). No cap on the number of anchors.
+ * - WHY: only what a flat picture can fix. `bytes`: stored over 64 KiB (Q26.c), measured on the slide as drawn
+ *   and WITHOUT its own record, so the answer is a pure function of the content: a record adds about 40 bytes,
+ *   and within that band of 64 KiB a slide would otherwise answer differently with it and without it, so the
+ *   importer (no record yet) and the editor (a record already) could disagree. `count`: more than 200 drawn
+ *   objects or 16 distinct pictures (Q26.a: what the screens cut today). The other bounds `pictureUnits` knows (a
+ *   box over 10,000 characters, 16 families, 64 size scales) stay in `over` and give no reason: a bake draws
+ *   under the same per-object clamps. No cost reason (Q26.b: a slide that is only slow to draw gets none).
+ * - A slide of any size the slide-file form can hold is judged by the same rules (Q54): the cost is one
+ *   `jsonBytes` of the slide.
+ */
+export function easyPlan(slide: Slide, opts: EasyOptions = {}): EasyPlan {
+  const none = (): EasyPlan => ({
     eligible: true,
     record: false,
     anchors: [],
     why: [],
     over: [],
-    counts: { objects: 0, pictures: 0, bytes: 0, characters: 0, families: 0, sizeScales: 0 },
-  };
+    counts: { ...NO_COUNTS },
+  });
+  try {
+    if (!isObj(slide)) return none();
+    const o: EasyOptions = isObj(opts) ? opts : {};
+    const drawn = slideContent(slide).objects;
+    const anchors = easyAnchors(slide, drawn, o);
+    const eligible = anchors.length === 0 || (o.anchored ?? PRERENDER_ANCHORED) === true;
+    const base: Slide =
+      slide.prerender === undefined && drawn === slide.objects
+        ? slide
+        : { ...slide, objects: drawn, prerender: undefined };
+    let plan: PicturePlan;
+    try {
+      plan = pictureUnits(base);
+    } catch {
+      // A slide that cannot be measured (a cycle, a BigInt) is not planned.
+      return { ...none(), eligible, anchors };
+    }
+    let bytes = plan.counts.bytes;
+    if (o.size) {
+      try {
+        const n = o.size(base);
+        if (typeof n === 'number' && Number.isFinite(n) && n >= 0) bytes = n;
+      } catch {
+        // The writer's own measure failed: the JSON size stands.
+      }
+    }
+    const rest = plan.over.filter((r) => r !== 'bytes');
+    const over: PictureOver[] = bytes > SIZE_BUDGETS.slideMax ? ['bytes', ...rest] : rest;
+    const why: EasyPlan['why'] = [];
+    if (over.includes('bytes')) why.push('bytes');
+    if (over.includes('objects') || over.includes('pictures')) why.push('count');
+    return {
+      eligible,
+      record: eligible && why.length > 0,
+      anchors,
+      why,
+      over,
+      counts: { ...plan.counts, bytes },
+    };
+  } catch {
+    return none();
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------
