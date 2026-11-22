@@ -83,7 +83,7 @@ const RECORDED = {
   // shape-raster-2 (same pixels, PRERENDER_VERSION unchanged): clamp.ts `clampOrigin` copies the optional provenance field `raster` of
   // an object's origin; an origin is never drawn, so no pixel moves (the renderer, text and clamp tests pass unchanged). The
   // branch's own recorded value yielded to the integrator's at the merge; the integrator records the merged digest right after.
-  digest: '26530fd7065c8553b56b1c208c91d9737bb15bbab212f021b6fa80692aaf5b16',
+  digest: '8cb9ffc05ad266f977abf9f3f2628b36c2de3696100c90560337d21efbff894f',
 };
 
 /** The source without comments and layout. */
