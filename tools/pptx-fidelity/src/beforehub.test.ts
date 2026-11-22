@@ -346,3 +346,26 @@ describe.skipIf(!chromium)('--ask-hub-nolo through a real hub without LibreOffic
     }
   }, 300_000);
 });
+
+describe('the settings a measure passes to the hub it asks (Q53)', () => {
+  it('passes ORDO_PRERENDER and ORDO_CHROMIUM through when the tool has them, and nothing otherwise', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordo-hubopts-'));
+    try {
+      expect(await hubSessionOptions({ dir, libreoffice: true, parent: {} })).toEqual({});
+      expect(
+        await hubSessionOptions({
+          dir,
+          libreoffice: true,
+          parent: { ORDO_PRERENDER: 'on', ORDO_CHROMIUM: '/x/chrome', OTHER: 'no' },
+        }),
+      ).toEqual({ env: { ORDO_PRERENDER: 'on', ORDO_CHROMIUM: '/x/chrome' } });
+      const lite = await hubSessionOptions({ dir, libreoffice: false, parent: { ORDO_PRERENDER: 'on' } });
+      expect(lite.env).toEqual({ ORDO_LIBREOFFICE: 'off', ORDO_PRERENDER: 'on' });
+      expect((await hubSessionOptions({ dir, libreoffice: false, parent: {} })).env).toEqual({
+        ORDO_LIBREOFFICE: 'off',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

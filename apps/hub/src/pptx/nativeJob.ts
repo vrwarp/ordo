@@ -451,6 +451,12 @@ class NativeImport {
   private rasterRecipeBytes = 0;
   /** Q53: what the picture step came to, once it ran (`PptxNativeResult.rasters`). */
   private rasterCounts: RasterCounts | undefined;
+  /** Q53: the stored pictures of shapes by their key (`rasterMapKey`), read by step 4's maps. */
+  private rasterKept = new Map<string, string>();
+  /** Q53: a slide converted again without the picture step (`rasterOptions` then asks for none). */
+  private reconverting = false;
+  /** The decoded-megapixel budget of the import: the pictures of shapes and the bakes and prepared pictures share it. */
+  private readonly pictureBudget = new PictureBudget();
   /** Q53: what the slides' plans said, summed (`EmittedSlide.rasterInfo`). */
   private readonly rasterStats = {
     candidates: 0,
@@ -518,6 +524,7 @@ class NativeImport {
    * that cannot (it counts the shapes so the report can say so, and changes nothing), none otherwise (today's call).
    */
   private rasterOptions(): Pick<SceneTaskInput, 'rasters' | 'rasterMaker'> {
+    if (this.reconverting) return {};
     if (this.maker !== 'off' && this.maker !== undefined) return { rasters: 'plan', rasterMaker: this.maker };
     return this.makerOff ? { rasters: 'detect' } : {};
   }
@@ -703,6 +710,10 @@ class NativeImport {
     ctx.log(
       `converted in ${Math.round(this.poolMs)} ms of pool time, worker heap ${Math.round(this.heapMb)} MB`,
     );
+    // Q53: the pictures of many-point shapes are drawn now, BEFORE the slides are budgeted and stored: a slide whose picture could
+    // not be made is converted again without the picture step, so it is exactly the slide an import made before (never a slide
+    // that holds a run's hundreds of shapes put back past every budget).
+    await this.rasterStep(deck, scratch, listed, pictureSizes, mediaKinds, converted);
     const texts = new Map([...converted].map(([index, c]) => [index, bodyTexts(c.s)]));
     const textBoxes = new Map([...converted].map(([index, c]) => [index, bodyBoxes(c.s)]));
 
@@ -1486,7 +1497,7 @@ class NativeImport {
         this.warn('picture', `a picture is missing from the deck (${logSafe(b ? b.part : part)})`);
     }
     // M6: recoloured pictures and tiled fills, baked; one that cannot be shows its source picture as it is.
-    const budget = new PictureBudget();
+    const budget = this.pictureBudget;
     const baked = await this.storeBakes(bakeItems, budget);
     for (const [key] of baked.failed) {
       const b = bakeItems.find((i) => i.key === key)!;
@@ -1494,11 +1505,9 @@ class NativeImport {
       if (plain) plain.need = Math.max(plain.need, b.need);
       else items.push({ part: b.part, file: b.file, need: b.need });
     }
-    // Q53: the pictures of many-point shapes, drawn by the hub's own browser one at a time and stored as ready pictures; one that
-    // cannot be made is put back as its shapes when the slides are assembled (`assemble`).
-    const drawn = await this.rasterPictures(drafts, budget, bakeItems.length);
+    // Q53: the pictures of many-point shapes were drawn and stored before (`rasterStep`): their keys stand in the part maps.
     const withBakes = (m: Map<string, string>) => {
-      for (const [key, id] of drawn.media) m.set(key, id);
+      for (const [key, id] of this.rasterKept) m.set(key, id);
       for (const [key, id] of baked.media) m.set(key, id);
       for (const [key] of baked.failed) {
         const id = m.get(bakeItems.find((i) => i.key === key)!.part);
@@ -1537,23 +1546,28 @@ class NativeImport {
   }
 
   /**
-   * Step 4, the pictures of many-point shapes (Q53, `rasterStore.ts`): the distinct recipes the kept slides use, each drawn by the
-   * hub's own headless Chromium and stored once (resume pairs in `done.media`, the recipe's hash is the dedupe key). Never fails the
-   * import for one picture: what is not made is put back as its shapes. Returns the stored ones by key.
+   * Step 2d, the pictures of many-point shapes (Q53, `rasterStore.ts`): the distinct recipes the converted slides use, each drawn by
+   * the hub's own headless Chromium and stored once (resume pairs in `done.media`, the recipe's hash is the dedupe key). Never
+   * fails the import for one picture. A slide any of whose pictures was not made (no browser, a font no face covers, a service
+   * that started, a cap) is converted again with the picture step off: it comes out exactly as an import made it before, within
+   * every budget, instead of holding the hundreds of shapes a run drew into its picture.
    */
-  private async rasterPictures(
-    drafts: Draft[],
-    budget: PictureBudget,
-    bakes: number,
-  ): Promise<{ media: Map<string, string> }> {
+  private async rasterStep(
+    deck: string,
+    scratch: string,
+    listed: readonly SlideRef[],
+    pictureSizes: [string, PictureHeader][],
+    mediaKinds: [string, 'video' | 'audio'][],
+    converted: Map<number, Converted>,
+  ): Promise<void> {
     const stats = this.rasterStats;
     const wanted = new Set<string>();
-    for (const d of drafts)
-      for (const r of d.rasters ?? []) {
-        const part = d.media.get(r.id);
+    for (const c of converted.values())
+      for (const r of c.s.rasters ?? []) {
+        const part = c.media.get(r.id);
         if (part?.startsWith(RASTER_KEY_PREFIX)) wanted.add(part.slice(RASTER_KEY_PREFIX.length));
       }
-    const kept = new Map<string, string>();
+    if (!wanted.size && !stats.candidates && !this.makerOff) return;
     const items = [...wanted].flatMap((hash) => {
       const r = this.rasterRecipes.get(hash);
       return r ? [{ key: rasterMapKey(hash), hash, recipe: r.recipe }] : [];
@@ -1561,55 +1575,98 @@ class NativeImport {
     let res: Awaited<ReturnType<typeof storeRasters>> | undefined;
     if (items.length) {
       res = await storeRasters(this.deps, items, {
-        dir: this.scratch,
+        dir: scratch,
         signal: this.ctx.signal,
-        budget,
+        budget: this.pictureBudget,
         done: this.done.media,
         save: this.save,
         name: () => `${this.title} – shapes`.slice(0, 200),
         tags: ['pptx'],
-        already: bakes,
         log: (msg) => {
           if (msg.startsWith('[warn] ')) this.warn('picture', logSafe(msg.slice(7), 400));
           else this.log.add('info', msg);
         },
       });
-      for (const [key, id] of res.media) kept.set(key, id);
+      for (const [key, id] of res.media) this.rasterKept.set(key, id);
     }
     this.rasterRecipes.clear();
-    // The counts the report reads (`PptxNativeResult.rasters`).
+    // The slides one of whose pictures was not made are converted again, without the picture step.
+    const again: number[] = [];
+    for (const [index, c] of converted) {
+      const rs = c.s.rasters ?? [];
+      if (rs.some((r) => !this.rasterKept.has(c.media.get(r.id) ?? ''))) again.push(index);
+    }
+    if (again.length) {
+      this.ctx.log(
+        `${again.length} slide(s) whose pictures of shapes were not made are converted again as before`,
+      );
+      await this.reconvertWithoutPictures(deck, scratch, listed, again, pictureSizes, mediaKinds, converted);
+    }
+    // The counts the report reads (`PptxNativeResult.rasters`): what the slides that kept their pictures drew into them.
     let shapes = 0;
     let words = 0;
-    for (const d of drafts)
-      for (const r of d.rasters ?? []) {
-        const part = d.media.get(r.id);
-        if (part && kept.has(part)) {
+    for (const c of converted.values())
+      for (const r of c.s.rasters ?? []) {
+        if (this.rasterKept.has(c.media.get(r.id) ?? '')) {
           shapes += r.members.length;
           words += r.wordShapes ?? 0;
         }
       }
     const reasons = new Set(stats.reasons);
     for (const [, why] of res?.failed ?? []) reasons.add(why);
-    const putBack = wanted.size - kept.size;
-    if (stats.candidates || wanted.size || this.makerOff) {
-      this.rasterCounts = {
-        candidates: stats.candidates,
-        shapes,
-        pictures: wanted.size,
-        stored: res?.made ?? 0,
-        reused: (res?.reused ?? 0) + (res?.resumed ?? 0),
-        putBack,
-        words,
-        ...(this.makerOff && this.maker === 'off' ? { off: this.makerOff } : {}),
-        skipped: { ...stats.skipped },
-        reasons: [...reasons].slice(0, 8),
-      };
-      if (wanted.size)
-        this.ctx.log(
-          `${kept.size} of ${wanted.size} picture(s) of shapes stored (${res?.made ?? 0} drawn, ${(res?.reused ?? 0) + (res?.resumed ?? 0)} found already, ${putBack} put back as shapes)`,
+    const kept = wanted.size ? [...wanted].filter((h) => this.rasterKept.has(rasterMapKey(h))).length : 0;
+    this.rasterCounts = {
+      candidates: stats.candidates,
+      shapes,
+      pictures: wanted.size,
+      stored: res?.made ?? 0,
+      reused: (res?.reused ?? 0) + (res?.resumed ?? 0),
+      putBack: wanted.size - kept,
+      words,
+      ...(this.makerOff && this.maker === 'off' ? { off: this.makerOff } : {}),
+      skipped: { ...stats.skipped },
+      reasons: [...reasons].slice(0, 8),
+    };
+    if (wanted.size)
+      this.ctx.log(
+        `${kept} of ${wanted.size} picture(s) of shapes stored (${res?.made ?? 0} drawn, ${(res?.reused ?? 0) + (res?.resumed ?? 0)} found already, ${wanted.size - kept} not made: their slides are as before)`,
+      );
+  }
+
+  /** Slides `indexes` of the stored deck converted again with the picture step off, replacing their entries in `out`. */
+  private async reconvertWithoutPictures(
+    deck: string,
+    scratch: string,
+    listed: readonly SlideRef[],
+    indexes: readonly number[],
+    pictureSizes: [string, PictureHeader][],
+    mediaKinds: [string, 'video' | 'audio'][],
+    out: Map<number, Converted>,
+  ): Promise<void> {
+    this.reconverting = true;
+    try {
+      let xml: DeckXml;
+      try {
+        xml = await readDeckXml(deck, scratch, this.ctx.signal, { slides: 'deferred' });
+      } catch (e) {
+        this.checkCancelled();
+        throw new Error(
+          `the deck could not be read again for the slides without pictures (${logSafe(errorMessage(e))})`,
         );
+      }
+      this.deferred = xml.deferred ?? new Map();
+      this.dropHeads(xml.parts, listed);
+      const call = await this.batchCall(xml.parts, listed, pictureSizes, mediaKinds, out);
+      for (const index of indexes) {
+        this.checkCancelled();
+        const i = listed.findIndex((r) => r.index === index);
+        if (i < 0) continue;
+        const mine = await call.own([i]);
+        await this.batch(call, mine, i, i + 1, false, this.limits.retrySlideMs);
+      }
+    } finally {
+      this.reconverting = false;
     }
-    return { media: kept };
   }
 
   /** Step 4, baked pictures (M6, `bakes.ts`): each stored once, with resume pairs in `done.media`. */

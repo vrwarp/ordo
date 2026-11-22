@@ -260,11 +260,12 @@ describe('emitRaster: one picture and its recipe (C-SR4, C-SR5, C-SR6)', () => {
 
   it('a member with words and nothing to paint has no geometry: the page draws only its text', () => {
     resetIds();
+    // The label lies under the second member (which covers it), so it is drawn into the picture with its words.
     const label = smallEl({ box: [1.1, 1, 0.5, 0.3], text: textBody('Gulf'), fill: { kind: 'none' } });
     const els = [
       candEl({ box: [1, 1, 0.5, 0.5], cost: 300 }),
       label,
-      candEl({ box: [1.6, 1, 0.5, 0.5], cost: 200 }),
+      candEl({ box: [1.3, 1, 0.5, 0.5], cost: 200 }),
     ];
     const p = plan(els);
     expect(p.runs[0]!.members).toHaveLength(3);
