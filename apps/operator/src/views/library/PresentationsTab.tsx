@@ -4,7 +4,7 @@ import type { Folder } from '@ordo/protocol';
 import { useMemo, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
-import { SlidePreviewRoll } from '../../components/SlidePreviewRoll.tsx';
+import { SlidePreviewRoll, slidePreviewRollHeight } from '../../components/SlidePreviewRoll.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLivePlaylistId, useLockedIds } from '../../hooks.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
@@ -310,7 +310,7 @@ export function PresentationsTab() {
         </div>
         <VirtualList
           items={results}
-          rowHeight={(p) => (expandedId === p.id ? 420 : 52)}
+          rowHeight={(p) => (expandedId === p.id ? slidePreviewRollHeight(p, false) : 52)}
           rowClass={(p) => (expandedId === p.id ? 'expanded' : '')}
           keyOf={(p) => p.id}
           onRowContextMenu={(e, p) => {
