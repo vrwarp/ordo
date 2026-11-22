@@ -750,9 +750,10 @@ demand.
 
 <!-- import-whole:begin 1.9 -->
 **As built in sub-wave 3 (import-whole, Q24.b).** The first release stops at the plan, not at the picture: a heavy slide
-in which nothing plays or steps is KEPT WHOLE as ordo's own editable shapes and gets a pre-render record, on a hub with
-LibreOffice and on one without (Q27.a, `WHOLE_WITH_LIBREOFFICE` true; false is Q27.b, today's plan for a hub that has
-LibreOffice). `wholeSlidesFor({ prerender, lo })` (`packages/importers/src/pptx-core.ts`) is the one answer the hub's job,
+in which nothing plays or steps is KEPT WHOLE as ordo's own editable shapes and gets a pre-render record, on a hub without
+LibreOffice (Q27.b, the default, chosen by the main session while the owner has not answered: `WHOLE_WITH_LIBREOFFICE` is
+false, so a hub that has LibreOffice follows today's plan exactly, the guard's cut and LibreOffice's art and page; true is
+Q27.a, which keeps heavy slides whole there too; it matters only when the hub's switch is on). `wholeSlidesFor({ prerender, lo })` (`packages/importers/src/pptx-core.ts`) is the one answer the hub's job,
 the operator's parse, the harness and the demo ask; the hub's `prerender` is `HubConfig.prerender.on` (`ORDO_PRERENDER`,
 never the domain constant) and the job decides it once, after its tools are known. The converter (`budget.ts`
 `BudgetOptions.whole`) keeps an eligible slide whole (no guard, no picture limit) when no anchor stops it, a visible video
@@ -853,7 +854,8 @@ text and a slide an older converter stored is rebuilt by a re-import. A re-impor
 slide they rebuild with `planRecord` (the operator's kept objects counted; `isMotion` from the clips of the fresh import and
 the hub's media rows, a file the hub does not know counting as an anchor), and the heavy bytes of the slides a re-import
 keeps (`keptHeavyBytes`) share the whole-slide share with the ones it builds (`NativeJobEnv.heavyReserve`). All of it only on
-a hub that keeps heavy slides whole; with `ORDO_PRERENDER` off or `auto` (the constant false) every path takes today's plan.
+a hub that keeps heavy slides whole; with `ORDO_PRERENDER` off or `auto` (the constant false), or on a hub with LibreOffice
+(Q27.b), every path takes today's plan.
 The browser parse takes the same answer from the hub's last capabilities (`keepsSlidesWhole`, unknown is off) and records
 `wholeSlides` in its scene; a hub that answers otherwise refuses the scene ("parsed with another whole-slide option") and
 parses the deck itself; the Pages demo answers off and parses again.

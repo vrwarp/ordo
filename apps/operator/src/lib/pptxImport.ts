@@ -80,12 +80,13 @@ export function hubHasLibreOffice(caps: HubCapabilities | undefined): boolean {
 }
 
 /**
- * Q27 (default a): the operator's pinned copy of `WHOLE_WITH_LIBREOFFICE` (@ordo/importers pptx-core.ts), true: a hub WITH
- * LibreOffice keeps heavy slides whole too. Written here, not imported: pptx-core carries the whole import core, and an
- * import of it from a main chunk put 138 kB into the operator's regular total (the import worker is the one place that
- * loads it). `pptxImport.test.ts` pins this equal to the original and scans the main chunks for the import.
+ * Q27 (default b): the operator's pinned copy of `WHOLE_WITH_LIBREOFFICE` (@ordo/importers pptx-core.ts), false: a hub
+ * WITH LibreOffice follows today's plan and keeps heavy slides whole only where it has none (true is Q27.a). Written
+ * here, not imported: pptx-core carries the whole import core, and an import of it from a main chunk put 138 kB into the
+ * operator's regular total (the import worker is the one place that loads it). `pptxImport.test.ts` pins this equal to
+ * the original and scans the main chunks for the import.
  */
-export const OPERATOR_WHOLE_WITH_LIBREOFFICE = true;
+export const OPERATOR_WHOLE_WITH_LIBREOFFICE = false;
 
 /**
  * Q24.b (C-IW4): whether the browser parse keeps heavy slides whole, from the hub's last answer: its switch

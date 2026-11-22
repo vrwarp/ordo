@@ -31,12 +31,15 @@ import {
  * Heavy slides come in whole (design/29 1.9, 1.10; Q24.b, the first pre-render release): a deck of an ordinary slide, a slide of 300
  * pictures, a slide of about 108 KB of text and a slide with a video behind 40 pictures (`pptxdecks.ts` `wholeDeck`) goes through the
  * upload route to hubs of their own, started with `ORDO_PRERENDER=on`:
- * - **with LibreOffice** (port 0 of the 'pptx-prerender-import' row) and **without** (port 1, `ORDO_LIBREOFFICE=off`): the picture
+ * - **without LibreOffice** (port 1 of the 'pptx-prerender-import' row, `ORDO_LIBREOFFICE=off`): the picture
  *   slide keeps all 300 pictures and the text slide all of its text, each with the pre-render record the editor and the go-live
  *   check read; the ordinary slide has none; the video slide is stored as before (a video anchors a slide: no record, the guard's
  *   pictures); the import says how many slides it kept whole; nothing waits for LibreOffice or is listed missing for them; the
  *   go-live check names the two kept-whole slides as slides without a picture yet (W33) and the Audience screen draws the
  *   slide itself meanwhile (through the render clamp: a part of the 300 pictures, no error; the picture, a later track, draws all);
+ * - **with LibreOffice** (port 0, the switch on): Q27.b, the default while the owner has not answered, so the same deck stores
+ *   what it stored before this release: no record, the guard's pictures, nothing kept whole (Q27.a, the other arm, is held by
+ *   the hub's own test, apps/hub/test/pptx-whole-import.test.ts, with a test switch);
  * - **off** (`ORDO_PRERENDER=off`, port 0 again): the same deck stores what it stored before this release: no record, the guard's pictures.
  */
 const PORT = portOf('pptx-prerender-import', 0);
@@ -220,9 +223,7 @@ function expectWhole({ slides, log }: { slides: StoredSlide[]; log: string }, jo
   expect(log).toMatch(/2 slides are very detailed and were kept whole/);
 }
 
-test('on a hub with LibreOffice the heavy slides come in whole, with their records, the go-live check names them and the Audience draws them', async ({
-  context,
-}) => {
+test('on a hub with LibreOffice the heavy slides keep today\u2019s plan (Q27.b, the default): the guard\u2019s pictures, no record, nothing kept whole', async () => {
   test.setTimeout(480_000);
   const hub = await hubWith(PORT, { ORDO_PRERENDER: 'on' });
   try {
@@ -236,13 +237,14 @@ test('on a hub with LibreOffice the heavy slides come in whole, with their recor
     const job = await importPptx(a, deck);
     const jobs = await settled(a);
     expect(jobs.filter((j) => j.state === 'failed')).toEqual([]);
-    const stored = await slidesOfDeck(a, job.result!.presentationId);
-    expectWhole(stored, job as Job);
-    const { degraded, drawn } = await audienceDraws(a, context, PORT, job.result!.presentationId, 1, 'lo');
-    expectPictureLine(degraded);
-    test
-      .info()
-      .annotations.push({ type: 'pictures drawn by the Audience (of 300)', description: String(drawn) });
+    const { slides, log } = await slidesOfDeck(a, job.result!.presentationId);
+    for (const s of slides)
+      expect(s.prerender, 'no record on a hub with LibreOffice (Q27.b)').toBeUndefined();
+    expect(log).not.toMatch(/kept whole/);
+    // The picture slide is cut to the guard's pictures (15 with the art LibreOffice draws): never the 300.
+    expect(distinct(slides[1]!)).toBeLessThanOrEqual(16);
+    expect(images(slides[1]!).length).toBeLessThan(WHOLE.pictures);
+    expect((job as Job).result?.whole ?? 0).toBe(0);
   } finally {
     hub.kill();
   }

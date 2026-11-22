@@ -199,11 +199,12 @@ const bytesOf = (s: Slide) => quickBytes(s);
 
 describe('the constants and the one switch (step 3)', () => {
   it('wholeSlidesFor: the hub switch, and on a hub with LibreOffice the constant of Q27', () => {
-    expect(WHOLE_WITH_LIBREOFFICE).toBe(true);
+    expect(WHOLE_WITH_LIBREOFFICE).toBe(false); // Q27.b, the default: a hub with LibreOffice follows today's plan
     expect(WHOLE_SHARE_BYTES).toBe(2 * MiB);
     expect(WHOLE_OBJECTS_MAX).toBe(1_000);
     expect(WHOLE_BACKGROUND_ANCHORS).toBe('motion');
     expect(wholeSlidesFor({ prerender: true, lo: false })).toBe(true);
+    expect(wholeSlidesFor({ prerender: true, lo: true })).toBe(false);
     expect(wholeSlidesFor({ prerender: true, lo: true })).toBe(WHOLE_WITH_LIBREOFFICE);
     expect(wholeSlidesFor({ prerender: false, lo: false })).toBe(false);
     expect(wholeSlidesFor({ prerender: false, lo: true })).toBe(false);
@@ -538,7 +539,8 @@ describe('LibreOffice: the page for size no longer applies to a slide kept whole
     expect(d.slide.objects.every((o) => o.type !== 'text' || o.runs !== undefined)).toBe(true);
     expect(whole.log).not.toMatch(PAGE);
     expect(whole.warns).toEqual([]);
-    // Q27.b (the constant false makes `wholeSlidesFor` false, so the importer passes no option): the base.
+    // Q27.b, the default (the constant false makes `wholeSlidesFor` false for a hub with LibreOffice, so the importer
+    // passes no option): the base.
     expect(wholeSlidesFor({ prerender: true, lo: true })).toBe(WHOLE_WITH_LIBREOFFICE);
     const q27b = budgeted([formatted70()], { lo: true, whole: false });
     expect(q27b.drafts[0]!.cls).toBe('picture');

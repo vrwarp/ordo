@@ -5,7 +5,8 @@
  * - T2 the pool: `sceneTask` with `wholeSlides: true` keeps all the pictures of a slide, without keeps 16.
  * - T3 equivalence: the hub's own parse and a browser scene of the same decks store the same presentation.
  * - T4 `nativeJob` end to end: the switch (`cfg.prerender.on`, store-2's `HubConfig.prerender`, `prerenderConfig('on' | 'off')`)
- *   times LibreOffice present and absent times Q27 (`WHOLE_WITH_LIBREOFFICE`, a test switch below):
+ *   times LibreOffice present and absent times Q27 (`WHOLE_WITH_LIBREOFFICE`, false by default = Q27.b; a test switch below
+ *   runs the other arm, Q27.a):
  *   the job decides once, passes it to the pool, the scene check and ImportCore, and says it in its result.
  * - T5 the demo builds only from a scene that does not record the option; T6 callers without it get the base plan.
  */
@@ -13,7 +14,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Presentation, SIZE_BUDGETS, type Slide } from '@ordo/domain';
 import { parsePptxScene, type PptxClientScene } from '@ordo/importers';
-import { WHOLE_OBJECTS_MAX, WHOLE_SHARE_BYTES } from '@ordo/importers/pptx-core.ts';
+import { WHOLE_OBJECTS_MAX, WHOLE_SHARE_BYTES, WHOLE_WITH_LIBREOFFICE } from '@ordo/importers/pptx-core.ts';
 import { pictureGuardDeck, solidPng } from '@ordo/importers/pptx-guard.test-util.ts';
 import { body, buildDeck, imageRel, para, pic, run, sp } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
@@ -31,16 +32,19 @@ import { startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf, storeDeck, zipDeck } from './pptx-helpers.ts';
 
 /**
- * Q27.b as a test switch: `WHOLE_WITH_LIBREOFFICE` is a constant (true), so the case where it is false is run with the
- * job's own question (`wholeSlidesFor`) answered the other way for LibreOffice; every other call is the real one.
+ * The other arm of Q27 as a test switch: `WHOLE_WITH_LIBREOFFICE` is a constant (false, Q27.b, the default), so the case
+ * where it is true (Q27.a) is run with the job's own question (`wholeSlidesFor`) answered the other way for LibreOffice;
+ * with the switch left `undefined` every call is the real one, the default included.
  */
-const q27 = vi.hoisted(() => ({ keepsWithLibreOffice: true }));
+const q27 = vi.hoisted(() => ({ keepsWithLibreOffice: undefined as boolean | undefined }));
 vi.mock('@ordo/importers/pptx-core.ts', async (importOriginal) => {
   const real = await importOriginal<typeof import('@ordo/importers/pptx-core.ts')>();
   return {
     ...real,
     wholeSlidesFor: (o: { prerender: boolean; lo: boolean }) =>
-      q27.keepsWithLibreOffice ? real.wholeSlidesFor(o) : o.prerender === true && !o.lo,
+      q27.keepsWithLibreOffice === undefined
+        ? real.wholeSlidesFor(o)
+        : o.prerender === true && (!o.lo || q27.keepsWithLibreOffice),
   };
 });
 
@@ -214,20 +218,25 @@ describe('the job decides once and passes it on (T4: the switch, LibreOffice pre
     expect(asked(r.calls, 'pptx-scene')).toEqual([true]);
   });
 
-  it('on, LibreOffice present (Q27.a, the default): the same, and no art waits for LibreOffice', async () => {
-    const hub = await hubOf(prerender(true));
-    const r = await runNative(hub, pictureGuardDeck(24), 'on-lo', { quiet: true });
-    expect(imagesOf(r.slide)).toHaveLength(24);
-    expect(r.slide.pptx?.pending).toBeUndefined();
-    expect(r.slide.prerender?.live).toEqual([]);
-    expect(r.result.whole).toBe(1);
-    expect(r.result.pending).toBe(0);
-    expect(r.result.loJobId).toBeUndefined();
-    expect(asked(r.calls, 'pptx-scene')).toEqual([true]);
+  it('on, LibreOffice present, Q27.a (the other arm, the test switch): the same, and no art waits for LibreOffice', async () => {
+    q27.keepsWithLibreOffice = true;
+    try {
+      const hub = await hubOf(prerender(true));
+      const r = await runNative(hub, pictureGuardDeck(24), 'on-lo', { quiet: true });
+      expect(imagesOf(r.slide)).toHaveLength(24);
+      expect(r.slide.pptx?.pending).toBeUndefined();
+      expect(r.slide.prerender?.live).toEqual([]);
+      expect(r.result.whole).toBe(1);
+      expect(r.result.pending).toBe(0);
+      expect(r.result.loJobId).toBeUndefined();
+      expect(asked(r.calls, 'pptx-scene')).toEqual([true]);
+    } finally {
+      q27.keepsWithLibreOffice = undefined;
+    }
   });
 
-  it('on, LibreOffice present, Q27.b: today’s plan exactly, as an off hub stores it', async () => {
-    q27.keepsWithLibreOffice = false;
+  it('on, LibreOffice present, Q27.b (the default, the constant): today’s plan exactly, as an off hub stores it', async () => {
+    expect(WHOLE_WITH_LIBREOFFICE).toBe(false);
     try {
       const hub = await hubOf(prerender(true));
       const parts = pictureGuardDeck(24);
@@ -254,7 +263,7 @@ describe('the job decides once and passes it on (T4: the switch, LibreOffice pre
       expect(imagesOf(lite.slide)).toHaveLength(24);
       expect(lite.result.whole).toBe(1);
     } finally {
-      q27.keepsWithLibreOffice = true;
+      q27.keepsWithLibreOffice = undefined;
     }
   });
 
@@ -332,29 +341,47 @@ describe('the hub’s own parse and a browser scene store the same presentation 
     ['crowded-pictures.pptx', await zipped(pictureGuardDeck(24))] as const,
   ];
 
-  for (const lo of [false, true])
-    it(`on a hub ${lo ? 'with' : 'without'} LibreOffice: the crowded deck and three golden decks (modulo ids, times, the log)`, async () => {
-      const hub = await hubOf({ ...prerender(true), ...(lo ? {} : NO_LO) });
-      let recorded = 0;
-      for (const [name, bytes] of await decks()) {
-        const scene = (
-          await parsePptxScene(bytes, { wholeSlides: true, ...(lo ? {} : { libreoffice: false }) })
-        ).scene;
-        const parts = new Map<string, Uint8Array>();
-        const z = await JSZip.loadAsync(bytes);
-        for (const [k, f] of Object.entries(z.files)) if (!f.dir) parts.set(k, await f.async('uint8array'));
-        const deckFile = await zipDeck(parts, dir, `${lo}-${name}`);
-        const own = await runNative(hub, parts, `own-${name}-${lo}`, { quiet: true, deckFile });
-        const client = await runNative(hub, parts, `client-${name}-${lo}`, { scene, quiet: true, deckFile });
-        expect(client.logs.join('\n'), name).toMatch(/parsed in the browser: the hub checked its scene/);
-        const fileOf = (id: string) => hub.lib.media.get(id)?.original.hash;
-        const same = (p: Presentation) => comparable({ ...p, title: '' }, fileOf);
-        expect(diffJson(same(own.p), same(client.p)), name).toEqual([]);
-        expect(client.result.whole, name).toBe(own.result.whole);
-        recorded += slidesOf(own.p).filter((s) => s.prerender).length;
+  // Without LibreOffice slides are kept whole; with it that is Q27.a only (the test switch), and under Q27.b (the default)
+  // the browser parse and the hub both follow today's plan: nothing is kept whole, and the two still store the same.
+  const arms: [label: string, lo: boolean, keeps: boolean, switchOn: boolean][] = [
+    ['without LibreOffice', false, true, false],
+    ['with LibreOffice (Q27.b, the default)', true, false, false],
+    ['with LibreOffice (Q27.a, the test switch)', true, true, true],
+  ];
+  for (const [label, lo, keeps, switchOn] of arms)
+    it(`on a hub ${label}: the crowded deck and three golden decks (modulo ids, times, the log)`, async () => {
+      q27.keepsWithLibreOffice = switchOn ? true : undefined;
+      const tag = label.replace(/\W+/g, '-');
+      try {
+        const hub = await hubOf({ ...prerender(true), ...(lo ? {} : NO_LO) });
+        let recorded = 0;
+        for (const [name, bytes] of await decks()) {
+          const scene = (
+            await parsePptxScene(bytes, { wholeSlides: keeps, ...(lo ? {} : { libreoffice: false }) })
+          ).scene;
+          const parts = new Map<string, Uint8Array>();
+          const z = await JSZip.loadAsync(bytes);
+          for (const [k, f] of Object.entries(z.files)) if (!f.dir) parts.set(k, await f.async('uint8array'));
+          const deckFile = await zipDeck(parts, dir, `${tag}-${name}`);
+          const own = await runNative(hub, parts, `own-${name}-${tag}`, { quiet: true, deckFile });
+          const client = await runNative(hub, parts, `client-${name}-${tag}`, {
+            scene,
+            quiet: true,
+            deckFile,
+          });
+          expect(client.logs.join('\n'), name).toMatch(/parsed in the browser: the hub checked its scene/);
+          const fileOf = (id: string) => hub.lib.media.get(id)?.original.hash;
+          const same = (p: Presentation) => comparable({ ...p, title: '' }, fileOf);
+          expect(diffJson(same(own.p), same(client.p)), name).toEqual([]);
+          expect(client.result.whole, name).toBe(own.result.whole);
+          recorded += slidesOf(own.p).filter((s) => s.prerender).length;
+        }
+        // The crowded deck is the case that exercises the option: it was kept whole on both paths, or on neither (Q27.b).
+        if (keeps) expect(recorded).toBeGreaterThanOrEqual(1);
+        else expect(recorded).toBe(0);
+      } finally {
+        q27.keepsWithLibreOffice = undefined;
       }
-      // The crowded deck is the case that exercises the option: it was kept whole on both paths.
-      expect(recorded).toBeGreaterThanOrEqual(1);
     }, 240_000);
 });
 

@@ -688,10 +688,11 @@ As built in M3 (`packages/domain/src/size.ts`):
 ## 5. Classification, fallback and LibreOffice
 
 <!-- import-whole:begin 5 -->
-_Since sub-wave 3 (Q24.b, Q27.a):_ on a hub with the whole-slide switch (`wholeSlidesFor`), the guard's left-outs and LibreOffice's
-page for a slide over 64 KB do not apply to a slide kept whole: the slide stays ordo's own editable shapes with their pre-render
-picture, on a hub with LibreOffice as on one without (the constant `WHOLE_WITH_LIBREOFFICE`; Q27.b, false, is today's plan for a
-hub that has LibreOffice). A slide the rule does not keep whole (an anchor, more than 1,000 planned objects, past the share) is
+_Since sub-wave 3 (Q24.b, Q27.b):_ on a hub with the whole-slide switch (`wholeSlidesFor`) and without LibreOffice, the guard's
+left-outs and LibreOffice's page for a slide over 64 KB do not apply to a slide kept whole: the slide stays ordo's own editable
+shapes with their pre-render picture. A hub that has LibreOffice follows today's plan (the constant `WHOLE_WITH_LIBREOFFICE` is
+false, Q27.b, the default while the owner has not answered; true, Q27.a, keeps heavy slides whole there as on a hub without
+LibreOffice). A slide the rule does not keep whole (an anchor, more than 1,000 planned objects, past the share) is
 classified and drawn as before.
 <!-- import-whole:end 5 -->
 

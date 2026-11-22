@@ -473,9 +473,16 @@ describe('keepsSlidesWhole: the browser parse keeps heavy slides whole when the 
       expect(keepsSlidesWhole(caps(state)), String(state)).toBe(false);
   });
 
-  it('is on with the switch on, whatever LibreOffice is (Q27.a: a hub with it keeps them whole too)', () => {
+  it('by default (Q27.b, the pinned constant false) follows today\u2019s plan on a hub with LibreOffice and keeps them whole on one without', () => {
+    expect(OPERATOR_WHOLE_WITH_LIBREOFFICE).toBe(false);
+    for (const lo of ['available', 'broken'] as const)
+      expect(keepsSlidesWhole(caps('on', lo)), lo).toBe(false);
+    for (const lo of ['absent', 'off'] as const) expect(keepsSlidesWhole(caps('on', lo)), lo).toBe(true);
+  });
+
+  it('is on with the switch on, whatever LibreOffice is, where the answer for a hub with LibreOffice is true (Q27.a: the other arm)', () => {
     for (const lo of ['available', 'absent', 'off', 'broken'] as const)
-      expect(keepsSlidesWhole(caps('on', lo)), lo).toBe(true);
+      expect(keepsSlidesWhole(caps('on', lo), true), lo).toBe(true);
   });
 
   it('follows Q27.b where the answer for a hub with LibreOffice is false: with LibreOffice the hub follows today\u2019s plan, without it keeps them whole', () => {

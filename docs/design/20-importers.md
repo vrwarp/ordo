@@ -208,7 +208,8 @@ presentation while it is live-locked (it re-queues itself with backoff, 30 s dou
 ### Native import (editable slides)
 
 <!-- import-whole:begin 20 -->
-_Heavy slides kept whole (Q24.b):_ with the hub's pre-render switch on, the import core keeps a heavy slide whole (no guard
+_Heavy slides kept whole (Q24.b):_ with the hub's pre-render switch on and no LibreOffice on the hub (Q27.b: a hub that has
+it follows today's plan), the import core keeps a heavy slide whole (no guard
 cut, no simplification, no LibreOffice page for its size) and writes its record (`planRecord`: `{ why, live: [] }`); the report
 says how many ("N slides are very detailed and were kept whole; the screens show a picture of each, made on this computer").
 `ImportCoreOptions.whole` is set by the caller (the hub's job once its tools are known; the browser parse from the scene's
