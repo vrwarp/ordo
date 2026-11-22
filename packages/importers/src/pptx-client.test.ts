@@ -55,7 +55,8 @@ describe('importPptxClient', () => {
     expect(result.deckHash).toMatch(/^[0-9a-f]{64}$/);
     expect(result.loSlides.length).toBe(0);
     expect(result.clientScene.version).toBe(CONVERTER_VERSION);
-    expect(CONVERTER_VERSION).toBe(2);
+    // 3 since Q24.b: the converter keeps a heavy slide whole and the import writes its pre-render record.
+    expect(CONVERTER_VERSION).toBe(3);
     expect(result.clientScene.libreoffice).toBeUndefined();
     expect(result.clientScene.slides.length).toBe(1);
   });

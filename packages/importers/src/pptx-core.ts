@@ -133,6 +133,15 @@ export function wholeSlidesFor(o: { prerender: boolean; lo: boolean }): boolean 
   return o.prerender === true && (!o.lo || WHOLE_WITH_LIBREOFFICE);
 }
 
+/**
+ * The report's line for the slides an import keeps whole (design 29 W1, W4; W2 for a device that cannot make pictures):
+ * one line in the import log, counted from the slides that carry a pre-render record. Empty for none. `deviceCanBake`
+ * false says where the pictures will be made instead of 'on this computer' (the operator's phone or iPad).
+ */
+export function keptWholeLine(_n: number, _o: { deviceCanBake?: boolean } = {}): string {
+  return '';
+}
+
 /** One converted slide, with its media map (placeholder → part) and what the import reads beside it. */
 export type Converted = {
   s: EmittedSlide;
@@ -269,6 +278,12 @@ export type ImportCoreOptions = {
   whole?: boolean;
   /** A re-import: the bytes of the kept slides that carry a pre-render record, counted against the share. */
   heavyReserve?: number;
+  /**
+   * Which backgrounds keep a slide from getting a record (default `WHOLE_BACKGROUND_ANCHORS`, Q25.c.b): 'motion', only
+   * a video: `assemble` passes `isMotion` (the deck's clips) to `planRecord`; 'own': it passes none, so any own background
+   * keeps a slide out. An option so that both arms are tested; every caller leaves the constant's answer.
+   */
+  wholeAnchors?: 'own' | 'motion';
 };
 
 /** One import's steps 3-5 and the state they share (see the module comment). */

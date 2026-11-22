@@ -392,8 +392,8 @@ describe('a dense table slide (M9: every table is the table object, on every hub
 
   for (const lo of [false, true])
     it(`an r2b-sw1m operator's scene with tables in the grow form is stored as sent, on a hub ${lo ? 'with' : 'without'} LibreOffice`, async () => {
-      // CONVERTER_VERSION stays 2 through sub-wave 1b (plan section 11), so a hub of 1b takes the scene of an
-      // operator of sub-wave 1: its table objects carry the deck's a:tr rows and no rowRule (the drawer grows
+      // CONVERTER_VERSION stayed 2 through sub-wave 1b (plan section 11, 3 since Q24.b), so a hub of 1b took the scene
+      // of an operator of sub-wave 1: its table objects carry the deck's a:tr rows and no rowRule (the drawer grows
       // them). Nothing re-lays them out: the rows and the grow rule stay as sent (review 1b, lens 4).
       const grow = structuredClone(await denseScene(lo));
       const t = tableIn(grow.slides[0]!.slide.objects);
@@ -408,7 +408,7 @@ describe('a dense table slide (M9: every table is the table object, on every hub
       expect(st.table!.rows).toEqual(t.table.rows);
       // The box as the schema rounds it (0.01 px).
       expect(Math.abs(st.box.h - t.box.h)).toBeLessThan(0.01);
-      expect(slide.pptx!.version).toBe(2);
+      expect(slide.pptx!.version).toBe(3);
     });
 
   it("an older operator's scene with tableGroupBytes is accepted on a hub without LibreOffice too: the table object", async () => {

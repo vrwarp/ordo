@@ -25,6 +25,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type Draft,
   ImportCore,
+  keptWholeLine,
   WHOLE_BACKGROUND_ANCHORS,
   WHOLE_OBJECTS_MAX,
   WHOLE_SHARE_BYTES,
@@ -660,5 +661,211 @@ describe('determinism and the tail line (T8, T9)', () => {
     // The heavy slide at the front and the one at the end are whole, the tail is ordinary slides.
     expect(r.drafts[0]!.slide.objects.some((o) => o.type === 'text' && o.runs)).toBe(true);
     expect(jsonBytes(r.drafts[0]!.slide)).toBeGreaterThan(MAX);
+  });
+});
+
+describe('the record at assemble (step 4)', () => {
+  const FILE = 'f'.repeat(64);
+  const rec = (sl: Slide) =>
+    (sl as Slide & { prerender?: { why: string[]; live: string[]; file?: string } }).prerender;
+  /** Slides through the core's budgets and `assemble`, as the hub's job and the client assembly run them. */
+  function assembled(
+    slides: readonly (Slide | Draft)[],
+    o: {
+      lo?: boolean;
+      whole?: boolean;
+      anchors?: 'own' | 'motion';
+      clipIds?: string[];
+      shown?: boolean;
+    } = {},
+  ) {
+    const log = new ImportLog();
+    const warns: [string, string][] = [];
+    const core = new ImportCore({
+      lo: o.lo ?? false,
+      log,
+      warn: (k, m) => warns.push([k, m]),
+      geomFileBytes: 1 << 20,
+      ...(o.whole !== undefined ? { whole: o.whole } : {}),
+      ...(o.anchors ? { wholeAnchors: o.anchors } : {}),
+    } as ConstructorParameters<typeof ImportCore>[0]);
+    const drafts = slides.map((s, i) => ('ref' in s ? (s as Draft) : draft(s as Slide, i)));
+    core.budget(drafts);
+    const out = core.assemble(drafts, new Map(), {
+      id: oid('X', 1),
+      title: 'Deck',
+      hash: FILE,
+      sections: [],
+      slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
+      scan: { loop: false },
+      hasAlpha: () => false,
+      clipIds: new Set(o.clipIds ?? []),
+      libraryFamilies: [],
+    });
+    return {
+      p: out.p,
+      slides: out.p.sections.flatMap((s) => s.slides),
+      log: out.p.source?.log ?? '',
+      warns,
+      core,
+    };
+  }
+  const withText = (i: number, n: number, bytes: number, runs: number) => [
+    ...pictureObjects(n, i),
+    ...textObjects(Math.max(1, Math.ceil(bytes / 9_000)), 8_000, i, runs),
+  ];
+  const countSlide = (i: number) => slideOf(i, pictureObjects(210, i));
+  const bytesSlide = () => slideOf(0, textObjects(6, 500, 1, 150));
+  const bothSlide = () => slideOf(0, withText(3, 210, 40 * KiB, 100));
+  const plainSlide = (i: number) => slideOf(i, textObjects(2, 200, i));
+  const playSlide = (): Slide => {
+    const play = {
+      ...pictureObjects(1, 7)[0]!,
+      play: { mediaId: 'clip-1', start: 'auto', loop: false, muted: false },
+    } as ImageObject;
+    return slideOf(5, [...pictureObjects(210, 5), play]);
+  };
+
+  it('T1: a heavy slide carries { why, live: [] } exactly, an ordinary, an animated and a picture-class slide carry none', () => {
+    const r = assembled(
+      [
+        countSlide(0),
+        bytesSlide(),
+        bothSlide(),
+        plainSlide(3),
+        playSlide(),
+        draft(slideOf(6, []), 6, { cls: 'picture' }),
+      ],
+      { whole: true },
+    );
+    const [count, bytes, both, plain, play, picture] = r.slides;
+    expect(rec(count!)).toEqual({ why: ['count'], live: [] });
+    expect(rec(bytes!)).toEqual({ why: ['bytes'], live: [] });
+    expect(rec(both!)).toEqual({ why: ['bytes', 'count'], live: [] });
+    expect(rec(plain!)).toBeUndefined();
+    expect('prerender' in plain!).toBe(false);
+    expect(rec(play!)).toBeUndefined();
+    expect(rec(picture!)).toBeUndefined();
+    // Never a file, a stand-in or a use: the whole form is inline only (PRERENDER_FILES stays off).
+    for (const s of [count, bytes, both]) expect(Object.keys(rec(s!)!).sort()).toEqual(['live', 'why']);
+    // The slides keep every object: nothing was cut for the record.
+    expect(count!.objects).toHaveLength(210);
+    expect(both!.pptx?.digest).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('T2: with the option off no slide of the same decks carries a record', () => {
+    const r = assembled([countSlide(0), bytesSlide(), bothSlide(), plainSlide(3)], { whole: false });
+    for (const s of r.slides) expect(s).not.toHaveProperty('prerender');
+    const none = assembled([countSlide(0), bytesSlide()], {});
+    for (const s of none.slides) expect(s).not.toHaveProperty('prerender');
+    expect(r.log).not.toMatch(/kept whole/);
+  });
+
+  describe('T3: Q25.c.b, only a video counts, through assemble', () => {
+    const heavyWithBackground = (i: number, bg: string): Slide => ({
+      ...slideOf(i, pictureObjects(210, i)),
+      backgroundMediaId: bg,
+    });
+
+    it("a background picture every slide shares is the presentation's: heavy slides are recorded under both arms", () => {
+      for (const anchors of ['motion', 'own'] as const) {
+        const r = assembled([heavyWithBackground(0, 'bg-shared'), heavyWithBackground(1, 'bg-shared')], {
+          whole: true,
+          anchors,
+        });
+        expect(r.p.backgroundMediaId, anchors).toBe('bg-shared');
+        for (const s of r.slides) expect(rec(s), anchors).toEqual({ why: ['count'], live: [] });
+      }
+    });
+
+    it('a background picture of the slide\'s own: recorded by default; none under the arm "own"', () => {
+      const slides = () => [heavyWithBackground(0, 'bg-a'), heavyWithBackground(1, 'bg-b')];
+      const motion = assembled(slides(), { whole: true });
+      expect(motion.slides.map((s) => s.backgroundMediaId)).toEqual(['bg-a', 'bg-b']);
+      for (const s of motion.slides) expect(rec(s)).toEqual({ why: ['count'], live: [] });
+      const own = assembled(slides(), { whole: true, anchors: 'own' });
+      for (const s of own.slides) expect(rec(s)).toBeUndefined();
+    });
+
+    it('a background that is a video clip keeps a slide out under both arms', () => {
+      for (const anchors of ['motion', 'own'] as const) {
+        const r = assembled([heavyWithBackground(0, 'clip-bg'), heavyWithBackground(1, 'bg-b')], {
+          whole: true,
+          anchors,
+          clipIds: ['clip-bg'],
+        });
+        expect(rec(r.slides[0]!), anchors).toBeUndefined();
+        expect(rec(r.slides[1]!), anchors).toEqual(
+          anchors === 'motion' ? { why: ['count'], live: [] } : undefined,
+        );
+      }
+    });
+  });
+
+  it('T4: what assemble stores is what the editor would plan: planRecord(stored, { kind, isMotion }) is the same slide', async () => {
+    const { planRecord } = await import('@ordo/domain/prerender.ts');
+    const decks = [
+      [countSlide(0), bytesSlide(), bothSlide(), plainSlide(3), playSlide()],
+      [
+        { ...countSlide(1), backgroundMediaId: 'bg-x' },
+        { ...bytesSlide(), backgroundMediaId: 'bg-y' },
+        plainSlide(4),
+      ],
+    ];
+    let n = 0;
+    for (const slides of decks) {
+      const r = assembled(slides, { whole: true, clipIds: [] });
+      for (const s of r.slides) {
+        expect(planRecord(s, { kind: r.p.kind, isMotion: (id) => id === 'never' })).toBe(s);
+        n++;
+      }
+    }
+    expect(n).toBe(8);
+  });
+
+  it('T5: around 64 KiB the importer and the editor agree on bytes, a byte at a time', async () => {
+    const { planRecord } = await import('@ordo/domain/prerender.ts');
+    const rows: [number, boolean][] = [];
+    for (let pad = 0; pad <= 70; pad++) {
+      const base = textSlide(0, MAX - 420, 3);
+      const first = base.objects[0] as TextObject;
+      const slide = slideOf(0, [
+        { ...first, text: `${first.text}${'z'.repeat(pad)}` },
+        ...base.objects.slice(1),
+      ]);
+      const r = assembled([slide], { whole: true });
+      const stored = r.slides[0]!;
+      expect(planRecord(stored, { kind: r.p.kind }), `pad ${pad}`).toBe(stored);
+      rows.push([pad, rec(stored) !== undefined]);
+    }
+    // The boundary is crossed inside the series: some stored slides carry the record, some do not.
+    expect(rows.some(([, has]) => has)).toBe(true);
+    expect(rows.some(([, has]) => !has)).toBe(true);
+    process.stdout.write(`T5: first padded slide with a record at pad ${rows.find(([, has]) => has)?.[0]}\n`);
+  });
+
+  it('T7: the report line, singular and plural, none, and the wording for a device that cannot make pictures', () => {
+    expect(keptWholeLine(0)).toBe('');
+    expect(keptWholeLine(1)).toBe(
+      '1 slide is very detailed and was kept whole; the screens show a picture of it, made on this computer',
+    );
+    expect(keptWholeLine(3)).toBe(
+      '3 slides are very detailed and were kept whole; the screens show a picture of each, made on this computer',
+    );
+    expect(keptWholeLine(1, { deviceCanBake: false })).toBe(
+      '1 slide is very detailed and was kept whole; its picture is made on a computer with Chrome or Edge',
+    );
+    expect(keptWholeLine(2, { deviceCanBake: false })).toBe(
+      '2 slides are very detailed and were kept whole; their pictures are made on a computer with Chrome or Edge',
+    );
+    expect(keptWholeLine(2, { deviceCanBake: true })).toBe(keptWholeLine(2));
+    expect(keptWholeLine(-1)).toBe('');
+    expect(keptWholeLine(Number.NaN)).toBe('');
+    // In the import log, once, from the slides that carry a record; nothing when there is none.
+    const r = assembled([countSlide(0), bytesSlide(), plainSlide(3)], { whole: true });
+    expect(r.log.split('\n').filter((l) => /kept whole/.test(l))).toHaveLength(1);
+    expect(r.log).toMatch(/2 slides are very detailed and were kept whole/);
+    const none = assembled([plainSlide(0)], { whole: true });
+    expect(none.log).not.toMatch(/kept whole/);
   });
 });
