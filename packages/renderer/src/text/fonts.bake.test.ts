@@ -90,26 +90,26 @@ describe('the bake profile: what could not be resolved', () => {
     r.font({ ...base, family: 'Acme' });
     r.font({ ...base, family: 'ACME', weight: 700 });
     r.font({ ...base, family: 'Other' });
-    expect(r.bakeReport().empty).toEqual(['acme', 'other']);
+    expect([...r.bakeReport().empty].sort()).toEqual(['acme', 'other']);
   });
 
   it('a request served only by the default face is a stand-in; a metric substitute or a script fallback is not', () => {
     const r = bake();
     r.font({ ...base, family: 'Garamond' });
-    expect(r.bakeReport().standIns).toEqual(['garamond']);
+    expect([...r.bakeReport().standIns]).toEqual(['garamond']);
     r.bakeReset();
     // the exact face, a listed fallback (Carlito for Calibri is the converter's choice), a script fallback, the default itself
     r.font(base);
     r.font({ ...base, family: 'Calibri', fallbacks: ['Carlito'] });
     r.font({ ...base, family: 'Garamond', script: 'Hani' });
     r.font({ ...base, family: DEFAULT_FONT });
-    expect(r.bakeReport().standIns).toEqual([]);
+    expect([...r.bakeReport().standIns]).toEqual([]);
   });
 
   it('the chain is every family a request looked at, lower-cased', () => {
     const r = bake();
     r.font({ ...base, family: 'Garamond', fallbacks: ['Carlito', 'Ghost'], script: 'Hani' });
-    expect(r.bakeReport().chain).toEqual(
+    expect([...r.bakeReport().chain].sort()).toEqual(
       [
         'garamond',
         'carlito',
@@ -123,9 +123,9 @@ describe('the bake profile: what could not be resolved', () => {
   it('bakeReset empties the report', () => {
     const r = bake();
     r.font({ ...base, family: 'Garamond' });
-    expect(r.bakeReport().chain.length).toBeGreaterThan(0);
+    expect(r.bakeReport().chain.size).toBeGreaterThan(0);
     r.bakeReset();
-    expect(r.bakeReport()).toEqual({ chain: [], empty: [], standIns: [] });
+    expect(r.bakeReport()).toEqual({ chain: new Set(), empty: new Set(), standIns: new Set() });
   });
 
   it("bakeReset advances the generation of a bake resolver (memoised layouts are laid out again) and not a live one's", () => {
@@ -142,7 +142,7 @@ describe('the bake profile: what could not be resolved', () => {
   it('a live resolver reports nothing and records nothing', () => {
     const r = loadedResolver(undefined);
     r.font({ ...base, family: 'Garamond' });
-    expect(r.bakeReport()).toEqual({ chain: [], empty: [], standIns: [] });
+    expect(r.bakeReport()).toEqual({ chain: new Set(), empty: new Set(), standIns: new Set() });
     expect(r.failedFamilies()).toEqual([]);
   });
 });

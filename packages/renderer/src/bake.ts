@@ -459,11 +459,20 @@ async function bake(
   const missed = env.coverage.misses(text, 32);
   if (missed) return drop(failure('coverage', missed));
   const report = env.fonts.bakeReport();
-  if (report.empty.length) return drop(failure('font', `no face for ${names(report.empty)}`));
-  const failed = env.fonts.failedFamilies().filter((f) => report.chain.includes(f));
+  if (report.empty.size) return drop(failure('font', `no face for ${names([...report.empty].sort())}`));
+  const failed = env.fonts
+    .failedFamilies()
+    .filter((f) => report.chain.has(f))
+    .sort();
   if (failed.length) return drop(failure('font', `a face did not load for ${names(failed)}`));
-  if (options.standIns === 'abort' && report.standIns.length)
-    return drop(failure('font', `not in the library: ${names(report.standIns)}`, report.standIns));
+  if (options.standIns === 'abort' && report.standIns.size)
+    return drop(
+      failure(
+        'font',
+        `not in the library: ${names([...report.standIns].sort())}`,
+        [...report.standIns].sort(),
+      ),
+    );
   if ((made.c as { isContextLost?: () => boolean }).isContextLost?.())
     return drop(failure('canvas', 'the canvas was lost'));
   const t3 = now();
@@ -476,7 +485,7 @@ async function bake(
     opaque: alpha.opaque,
     width: canvas.width,
     height: canvas.height,
-    standIns: report.standIns,
+    standIns: [...report.standIns].sort(),
     dropped: Math.max(0, raw - split.slide.objects.length),
     stats: done(),
   };

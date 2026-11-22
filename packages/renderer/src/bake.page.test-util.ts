@@ -483,7 +483,7 @@ async function onlyRegistered() {
       stray,
       libraryFamilies: libraryFamilies.map((f) => f.toLowerCase()),
       chainKeys,
-      reportChain: report.chain,
+      reportChain: [...report.chain],
       liveStrings: live,
       liveFamilies: live.flatMap(familiesOf),
     };

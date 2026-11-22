@@ -213,15 +213,17 @@ export type FontResolverOptions = {
   blank?: { family: string };
 };
 
-/** What the bake profile could not resolve, since the last `bakeReset`; families lower-cased, sorted. */
+/** What the bake profile could not resolve, since the last `bakeReset`; families lower-cased. */
 export type BakeFontReport = {
   /** Every family a request looked at: its own, its fallbacks, its script fallbacks and the default. */
-  chain: string[];
+  chain: Set<string>;
   /** Families of requests whose stack held no loaded face at all (their text would draw as nothing). */
-  empty: string[];
+  empty: Set<string>;
   /** Families of requests served by the default face alone (no face of theirs, no listed fallback loaded). */
-  standIns: string[];
+  standIns: Set<string>;
 };
+
+const bakeState = (): BakeFontReport => ({ chain: new Set(), empty: new Set(), standIns: new Set() });
 
 /** A change of the resolved faces: these families (lower-case) draw differently from now on. */
 export type FontChange = {
@@ -321,23 +323,22 @@ export class FontResolver implements FontEnv {
   readonly #used = new Set<string>();
   readonly #listeners = new Set<(c: FontChange) => void>();
   #disposed = false;
-  readonly #profile: FontProfile;
-  /** The blank face's quoted family: the last entry of every bake font string. */
-  readonly #blank: string;
+  /** The blank face's quoted family, last in every bake font string: set only in the bake profile. */
+  readonly #blank: string = '';
   /** What the bake profile's `font` looked at since `bakeReset`. */
-  readonly #bake = { chain: new Set<string>(), empty: new Set<string>(), standIns: new Set<string>() };
+  #bake: BakeFontReport = bakeState();
 
   constructor(host?: FontHost, options: FontResolverOptions = {}) {
     this.#host = host;
-    this.#profile = options.profile === 'bake' ? 'bake' : 'live';
-    this.#blank = options.blank?.family ?? '';
-    if (this.#profile === 'bake' && !this.#blank.trim())
-      throw new Error('the bake font profile needs the blank face last in every stack');
+    if (options.profile === 'bake') {
+      if (!options.blank?.family.trim()) throw new Error('no blank face');
+      this.#blank = options.blank.family;
+    }
   }
 
   /** The profile this resolver builds font strings for (`FontProfile`). */
   get profile(): FontProfile {
-    return this.#profile;
+    return this.#blank ? 'bake' : 'live';
   }
 
   get generation(): number {
@@ -459,7 +460,7 @@ export class FontResolver implements FontEnv {
   }
 
   font(req: FaceRequest): string {
-    if (this.#profile === 'bake') return this.#bakeFont(req);
+    if (this.#blank) return this.#bakeFont(req);
     const out: string[] = [];
     const seen = new Set<string>();
     const push = (css: string) => {
@@ -490,44 +491,32 @@ export class FontResolver implements FontEnv {
    */
   #bakeFont(req: FaceRequest): string {
     const out: string[] = [];
-    const seen = new Set<string>();
     const rec = this.#bake;
-    const loaded: string[] = [];
-    const take = (family: string): string | undefined => {
-      const k = typeof family === 'string' ? family.trim().toLowerCase() : '';
-      if (!k) return undefined;
+    let own = 0;
+    const take = (f: string): boolean => {
+      const k = f.trim().toLowerCase();
+      if (!k) return false;
       rec.chain.add(k);
-      const name = this.#name(family, '');
-      if (name && !seen.has(name)) {
-        seen.add(name);
-        out.push(quoteFamily(name));
-      }
-      return name;
+      const n = this.#name(f, '');
+      if (!n) return false;
+      const q = quoteFamily(n);
+      if (!out.includes(q)) out.push(q);
+      return true;
     };
-    const exact = req.family ? take(req.family) : undefined;
-    if (exact) loaded.push(exact);
-    for (const f of req.fallbacks) {
-      const n = take(f);
-      if (n) loaded.push(n);
-    }
+    own += +take(req.family);
+    for (const f of req.fallbacks) own += +take(f);
     if (req.script && Object.hasOwn(SCRIPT_FALLBACK_FONTS, req.script))
-      for (const f of SCRIPT_FALLBACK_FONTS[req.script]!) {
-        const n = take(f);
-        if (n) loaded.push(n);
-      }
-    const fallback = take(DEFAULT_FONT);
-    const family = (req.family ?? '').trim().toLowerCase();
-    if (!out.length) rec.empty.add(family || DEFAULT_FONT.toLowerCase());
-    else if (!loaded.length && fallback && family && family !== DEFAULT_FONT.toLowerCase())
-      rec.standIns.add(family);
-    out.push(this.#blank);
-    return cssFont(req, out.join(', '));
+      for (const f of SCRIPT_FALLBACK_FONTS[req.script]!) own += +take(f);
+    const dflt = take(DEFAULT_FONT);
+    const fam = req.family.trim().toLowerCase();
+    if (!out.length) rec.empty.add(fam || '-');
+    else if (!own && dflt && fam) rec.standIns.add(fam);
+    return cssFont(req, [...out, this.#blank].join(', '));
   }
 
   /** What the bake profile's font strings could not resolve since the last `bakeReset` (empty for a live resolver). */
   bakeReport(): BakeFontReport {
-    const r = this.#bake;
-    return { chain: [...r.chain].sort(), empty: [...r.empty].sort(), standIns: [...r.standIns].sort() };
+    return this.#bake;
   }
 
   /**
@@ -536,28 +525,20 @@ export class FontResolver implements FontEnv {
    * strings again: the report is then complete whatever was cached. Nothing for a live resolver.
    */
   bakeReset(): void {
-    if (this.#profile !== 'bake') return;
-    this.#bake.chain.clear();
-    this.#bake.empty.clear();
-    this.#bake.standIns.clear();
+    if (!this.#blank) return;
+    this.#bake = bakeState();
     this.#generation++;
   }
 
   /**
-   * Families (lower-cased, sorted) with a wanted face that is not loaded: a face that failed to read or parse and
-   * is backing off, or a family none of whose faces has loaded. A picture whose chain meets one is not made
-   * (`bake.ts`), because the face it would have drawn with is not the face a screen will.
+   * Families (lower-cased) with a wanted face that is not loaded: a face that failed to read or parse and is backing
+   * off, or a family none of whose faces has loaded. A picture whose chain meets one is not made (`bake.ts`), because
+   * the face it would have drawn with is not the face a screen will.
    */
   failedFamilies(): string[] {
-    const out: string[] = [];
-    for (const fam of this.#families.values()) {
-      for (const k of fam.want.keys())
-        if (!fam.active?.keys.includes(k)) {
-          out.push(fam.family.toLowerCase());
-          break;
-        }
-    }
-    return out.sort();
+    return [...this.#families.values()]
+      .filter((f) => [...f.want.keys()].some((k) => !f.active?.keys.includes(k)))
+      .map((f) => f.family.toLowerCase());
   }
 
   /**
