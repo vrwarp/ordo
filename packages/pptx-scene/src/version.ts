@@ -9,9 +9,13 @@ import { ALL_M9_FIELDS, type M9Field } from './emit-ctx.ts';
 /**
  * The converter version written to `Slide.pptx.version`, `source.native.version` and a client scene
  * (`PptxClientScene.version`). 2 since M9 (design/27 §15 M9, decisions.md 1): the converter that writes the
- * M9 fields (`M9_WRITES`) and draws 3-D flat. A hub uses a client scene only from its own version.
+ * M9 fields (`M9_WRITES`) and draws 3-D flat. 3 since Q24.b (the first pre-render release): the converter keeps a
+ * heavy, eligible slide whole instead of cutting it (`budget.ts` `wholeSlide`), the import's ladder stops such a slide
+ * at 'full' or 'grid' and writes its pre-render record (`@ordo/importers` `ImportCore`), so a slide stored by this
+ * version differs from one stored by 2 even for the same deck. A hub uses a client scene only from its own version,
+ * and a slide of version 2 is rebuilt whole by a Re-import or a Reset slide (`reimport.ts`), never by itself.
  */
-export const CONVERTER_VERSION = 2;
+export const CONVERTER_VERSION = 3;
 
 /**
  * M9 fields that stay off until what reads them is on main (design/27 §15 M9 "Rollout"), the per-field kill

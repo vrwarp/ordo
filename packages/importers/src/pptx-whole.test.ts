@@ -825,23 +825,38 @@ describe('the record at assemble (step 4)', () => {
 
   it('T5: around 64 KiB the importer and the editor agree on bytes, a byte at a time', async () => {
     const { planRecord } = await import('@ordo/domain/prerender.ts');
-    const rows: [number, boolean][] = [];
-    for (let pad = 0; pad <= 70; pad++) {
-      const base = textSlide(0, MAX - 420, 3);
-      const first = base.objects[0] as TextObject;
-      const slide = slideOf(0, [
-        { ...first, text: `${first.text}${'z'.repeat(pad)}` },
-        ...base.objects.slice(1),
-      ]);
-      const r = assembled([slide], { whole: true });
-      const stored = r.slides[0]!;
-      expect(planRecord(stored, { kind: r.p.kind }), `pad ${pad}`).toBe(stored);
-      rows.push([pad, rec(stored) !== undefined]);
+    const withLength = (chars: number) =>
+      assembled(
+        [
+          slideOf(0, [
+            { ...textObjects(1, chars, 9)[0]!, id: oid('T', 1) },
+            ...textObjects(8, 8_000, 9).slice(1),
+          ]),
+        ],
+        {
+          whole: true,
+        },
+      );
+    // The text length at which the stored slide first passes 64 KiB (the record's `bytes`), found by bisection.
+    let lo = 1_000;
+    let hi = 8_000;
+    expect(withLength(lo).slides[0]!.prerender).toBeUndefined();
+    expect(withLength(hi).slides[0]!.prerender).toBeDefined();
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (withLength(mid).slides[0]!.prerender) hi = mid;
+      else lo = mid;
     }
-    // The boundary is crossed inside the series: some stored slides carry the record, some do not.
-    expect(rows.some(([, has]) => has)).toBe(true);
-    expect(rows.some(([, has]) => !has)).toBe(true);
-    process.stdout.write(`T5: first padded slide with a record at pad ${rows.find(([, has]) => has)?.[0]}\n`);
+    const rows: [number, boolean][] = [];
+    for (let chars = hi - 35; chars <= hi + 35; chars++) {
+      const r = withLength(chars);
+      const stored = r.slides[0]!;
+      expect(planRecord(stored, { kind: r.p.kind }), `${chars} characters`).toBe(stored);
+      rows.push([chars, stored.prerender !== undefined]);
+    }
+    expect(rows.slice(0, 35).every(([, has]) => !has)).toBe(true);
+    expect(rows.slice(35).every(([, has]) => has)).toBe(true);
+    process.stdout.write(`T5: the record starts at ${hi} characters of ${rows.length} measured\n`);
   });
 
   it('T7: the report line, singular and plural, none, and the wording for a device that cannot make pictures', () => {
@@ -863,7 +878,9 @@ describe('the record at assemble (step 4)', () => {
     expect(keptWholeLine(Number.NaN)).toBe('');
     // In the import log, once, from the slides that carry a record; nothing when there is none.
     const r = assembled([countSlide(0), bytesSlide(), plainSlide(3)], { whole: true });
-    expect(r.log.split('\n').filter((l) => /kept whole/.test(l))).toHaveLength(1);
+    expect(r.log.split('\n').filter((l) => /very detailed and (was|were) kept whole/.test(l))).toHaveLength(
+      1,
+    );
     expect(r.log).toMatch(/2 slides are very detailed and were kept whole/);
     const none = assembled([plainSlide(0)], { whole: true });
     expect(none.log).not.toMatch(/kept whole/);

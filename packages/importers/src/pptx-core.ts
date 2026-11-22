@@ -27,7 +27,7 @@
  * LibreOffice only, when its slide budget would store it plain or minimal and it holds no table object; no
  * failure makes one (M9, plan decision 3; the before-hub gate of decision 2 for hubs with LibreOffice).
  */
-import { easyPlan } from '@ordo/domain/prerender.ts';
+import { easyPlan, planRecord } from '@ordo/domain/prerender.ts';
 import {
   type Box,
   compactSlideBytes,
@@ -138,8 +138,13 @@ export function wholeSlidesFor(o: { prerender: boolean; lo: boolean }): boolean 
  * one line in the import log, counted from the slides that carry a pre-render record. Empty for none. `deviceCanBake`
  * false says where the pictures will be made instead of 'on this computer' (the operator's phone or iPad).
  */
-export function keptWholeLine(_n: number, _o: { deviceCanBake?: boolean } = {}): string {
-  return '';
+export function keptWholeLine(n: number, o: { deviceCanBake?: boolean } = {}): string {
+  if (!Number.isFinite(n) || n < 1) return '';
+  const one = n === 1;
+  const head = `${n} ${one ? 'slide is' : 'slides are'} very detailed and ${one ? 'was' : 'were'} kept whole`;
+  if (o.deviceCanBake === false)
+    return `${head}; ${one ? 'its picture is' : 'their pictures are'} made on a computer with Chrome or Edge`;
+  return `${head}; the screens show a picture of ${one ? 'it' : 'each'}, made on this computer`;
 }
 
 /** One converted slide, with its media map (placeholder → part) and what the import reads beside it. */
@@ -303,6 +308,7 @@ export class ImportCore {
   /** Q24.b: heavy, eligible slides stay whole (`ImportCoreOptions.whole`). */
   readonly whole: boolean;
   private readonly heavyReserve: number;
+  private readonly wholeAnchors: 'own' | 'motion';
 
   constructor(o: ImportCoreOptions) {
     this.log = o.log;
@@ -312,6 +318,7 @@ export class ImportCore {
     this.reserve = Number.isFinite(o.reserve) && (o.reserve ?? 0) > 0 ? o.reserve! : 0;
     this.whole = o.whole === true;
     this.heavyReserve = Number.isFinite(o.heavyReserve) && (o.heavyReserve ?? 0) > 0 ? o.heavyReserve! : 0;
+    this.wholeAnchors = o.wholeAnchors ?? WHOLE_BACKGROUND_ANCHORS;
   }
 
   /** A warning (`ImportCoreOptions.warn`). */
@@ -753,6 +760,37 @@ export class ImportCore {
     return kept;
   }
 
+  /**
+   * Q24.b: the slides that are heavy and eligible get their record, the others none, from `planRecord`, the one writer
+   * (contract C-IW1): the slide as it is stored, the presentation's kind, the deck's own size measure (a slide the hub has
+   * not stored yet is measured as the hub will), and `isMotion` from the deck's clips (only a video is a moving
+   * background, Q25.c.b: under the arm 'own' none is passed and any own background keeps a slide out). Never fails an
+   * import: a slide that cannot be planned is stored without a record. Returns how many slides carry one.
+   */
+  private writeRecords(p: Presentation, a: AssembleInput): number {
+    const opts = {
+      kind: p.kind,
+      size: (s: Slide) => storedWithin(s, SIZE_BUDGETS.slideMax),
+      ...(this.wholeAnchors === 'motion' ? { isMotion: (id: string) => a.clipIds.has(id) } : {}),
+    };
+    let n = 0;
+    for (const sec of p.sections)
+      sec.slides = sec.slides.map((sl) => {
+        let next = sl;
+        try {
+          next = planRecord(sl, opts);
+        } catch {
+          this.log.add(
+            'info',
+            `slide ${(sl.pptx?.index ?? 0) + 1}: its pre-render record could not be planned`,
+          );
+        }
+        if (next.prerender) n++;
+        return next;
+      });
+    return n;
+  }
+
   /** Step 5: remap, assemble, sanitize, digest; the follow-up's plan. */
   assemble(drafts: Draft[], stored: ReadonlyMap<string, string>, a: AssembleInput): Assembled {
     const { hash, slideRect, scan } = a;
@@ -840,8 +878,11 @@ export class ImportCore {
     const parsed = Presentation.parse(p);
     // The digest of the import's objects (every object here has an origin, `imported`): the "unedited" test
     // of the follow-up and re-import (`digest.ts`).
+    for (const sl of parsed.sections.flatMap((s) => s.slides))
+      if (sl.pptx) sl.pptx.digest = importDigest(sl.objects);
+    // Q24.b: the pre-render record of each slide in its final stored form, written by `planRecord` alone.
+    const kept = this.whole ? this.writeRecords(parsed, a) : 0;
     const slides = parsed.sections.flatMap((s) => s.slides);
-    for (const sl of slides) if (sl.pptx) sl.pptx.digest = importDigest(sl.objects);
     const classes = slides.map((sl) => sl.pptx?.class ?? 'native');
     const counts = {
       native: classes.filter((c) => c === 'native').length,
@@ -857,6 +898,8 @@ export class ImportCore {
       'info',
       `${slides.length} slide(s): ${counts.native} native, ${counts.hybrid} hybrid, ${counts.picture} picture`,
     );
+    const line = keptWholeLine(kept);
+    if (line) this.log.add('info', line);
     const lo = loSlides(drafts, slides);
     if (lo.length) this.log.add('info', `${lo.length} slide(s) wait for LibreOffice`);
     const gaps = slides.filter((sl) => sl.pptx?.missing?.length).length;

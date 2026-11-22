@@ -318,6 +318,7 @@ describe('documents', () => {
               {
                 id: pptxSlideId,
                 objects: [],
+                // Version 2 on purpose: a page that an older converter (before Q24.b) stored, which a rebuild may replace.
                 pptx: { fileId: 'f', index: 0, shown: 0, class: 'picture', version: 2 },
                 imported: {
                   fileId: 'f',

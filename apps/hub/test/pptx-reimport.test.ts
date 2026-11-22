@@ -653,6 +653,7 @@ describe('the merge', () => {
 describe('reimport.ts helpers', () => {
   it("tells the pages 'Make editable' rebuilds from the deck by their class, never their note", () => {
     const imported = { fileId: DECK, page: 1, imageMediaId: 'm' };
+    // Version 2 on purpose: slides as an older converter (before Q24.b) stored them, the ones a rebuild may replace.
     const v2 = (cls: 'native' | 'hybrid' | 'picture', fileId = DECK) =>
       native(0, [], { imported }, { class: cls, fileId, version: 2, notes: ['anything'] });
     // LibreOffice's page a native import stored (version 2), and a legacy page, of the stored deck.

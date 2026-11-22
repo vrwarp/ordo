@@ -364,6 +364,7 @@ describe('without LibreOffice on the hub (design/27 M9)', () => {
         fileId: 'f',
         index,
         class: missing ? 'hybrid' : 'native',
+        // Version 2 on purpose: a slide an older converter (before Q24.b) stored, which a Re-import would rebuild whole.
         version: 2,
         ...(missing ? { missing } : {}),
       },
