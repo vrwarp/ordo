@@ -294,6 +294,21 @@ recompute, never a wrong key), so a presentation PUT adds one pool call only whe
 service pauses all but its own keys: 503 `paused_during_service`), and the goLive bundle lists them
 (`slideHeads`, `prerenders`, `prerenderKeys`, design/12 "HTTP API").
 
+<!-- store-2:costs -->
+_What the store costs a save and a listing, as measured in sub-wave 3 (store-2)._ The same build was started with
+`ORDO_PRERENDER=off` and `on` and their saves alternated one by one (108 per arm and case, on a shared machine: read the
+medians; two `off` hubs measured against each other move a median by up to 20 ms and a p95 of differences by up to 100). A
+save with heavy slides stored whole inline stringifies and hashes each of them once, 3.2-3.4 ms a MB (6 ms for six slides
+of 300 KB, 23 ms for sixty of 121 KB); on minus off the median is +9 ms for six unchanged 300 KB slides and +33 ms for sixty
+unchanged 121 KB slides, and a changed heavy slide adds one pool task (about 10 ms of pool time for 290 KB) and measures +31 ms
+and +72 ms (sub-wave 2: +112 ms). That floor is above the +5 ms the release asked for unchanged slides, which is not met; the only
+exact cheaper test needs the stored revision parsed, which costs more (11 ms and 32 ms). The picture files a save names are
+read once per picture, not once per slide (a third of that work at forty pictures a slide). The picture listing answers 20
+keys in 2 ms, 1,000 in 11 ms (p95 16) and 5,000 in 62 ms (p95 86; the three statements replaced a join that took 70 and 102): the
+answer is 1.1 MB, 21 ms of the 62 are the presentation's budget line, not the listing, and the 20 ms target is met to 1,000 keys.
+
+<!-- /store-2:costs -->
+
 **Keys computed at save.** The pool computes each pre-rendered slide's key and stand-by id when a presentation is
 saved, into `prerender_keys(presentation_id, rev, slide_id, key, standby_id)`; a background job recomputes the rows
 a font or media change affects (never while live). The upload check, the goLive listing and the live process's
