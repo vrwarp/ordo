@@ -106,4 +106,25 @@ describe('the keys at save read each picture once per call', () => {
       expect(r.key).not.toBe(was.key);
     }
   });
+
+  it('a picture of shapes (origin role raster, Q53) is an ordinary picture to the key: a new file for it re-keys its slide (C-SR13)', async () => {
+    hub = await startHub();
+    for (let i = 0; i < PICTURES; i++) addMedia(hub, `m${i}`, hashOf(`shared-${i}`));
+    const slide = heavy('h0');
+    const pic = slide.objects.find((o) => o.id === 'img0') as unknown as { origin?: unknown };
+    pic.origin = {
+      src: 'pptx',
+      role: 'raster',
+      raster: { cv: 3, rv: 1, pts: 128, h: 'a'.repeat(64), n: 12, from: 'slide' },
+    };
+    const p = await saved([slide]);
+    const before = hub.lib.prerenderIndex.keysAt(p.id, p.rev);
+    const keys = keysOf();
+    expect((await keys.keysFor(p)).map((r) => r.sig)).toEqual(before.map((r) => r.sig));
+    // The same recipe drawn into another file (a new maker, a new font): the slide's key and sig move.
+    addMedia(hub, 'm0', hashOf('shared-0-drawn-again'));
+    const [after] = await keys.keysFor(p);
+    expect(after!.sig).not.toBe(before[0]!.sig);
+    expect(after!.key).not.toBe(before[0]!.key);
+  });
 });

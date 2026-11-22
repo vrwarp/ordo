@@ -311,12 +311,19 @@ export async function storeRasters(
 
 /**
  * Defer the job while a service is live (Q53, D4): the picture step never runs beside a service, so the job goes back to the
- * queue with the backoff of the other deferrals, before it does any work. The count lives in the payload (`deferrals`).
+ * queue before it does any work. The count lives in the payload (`deferrals`). While the service is live the wait is the backoff
+ * of the other deferrals; once it has ended, the pacing rule still holds for its grace, and the job waits for the END of the grace
+ * (`pacing.wakeAt`) instead of the next step of the backoff, which would keep it waiting up to twice the grace.
  */
-export function deferForService(ctx: Pick<JobCtx<{ deferrals?: number }>, 'payload' | 'setPayload'>): never {
+export function deferForService(
+  ctx: Pick<JobCtx<{ deferrals?: number }>, 'payload' | 'setPayload'>,
+  pacing?: { wakeAt(now?: number): number | undefined },
+): never {
   const n = ctx.payload.deferrals ?? 0;
   ctx.setPayload({ ...ctx.payload, deferrals: n + 1 });
-  const ms = deferDelay(n);
+  const now = Date.now();
+  const end = pacing?.wakeAt(now);
+  const ms = end === undefined ? deferDelay(n) : Math.max(1_000, end - now + 500);
   throw new JobDeferred(
     ms,
     `waiting: a service is live; the pictures of shapes wait for it, so the import tries again in ${Math.round(ms / 1000)} s`,

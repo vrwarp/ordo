@@ -467,6 +467,29 @@ describe('the job and a live service (H10)', () => {
     expect((thrown as JobDeferred).delayMs).toBeGreaterThan(0);
   });
 
+  it('deferForService after End service waits for the end of the grace, not for the next step of the backoff', () => {
+    // 11 s after End service with a 120 s grace: the next try is at the end of the grace (about 109 s), not at 30 s, 90 s, 210 s...
+    const grace = { wakeAt: () => Date.now() + 109_000 };
+    let payload: { deferrals?: number } = { deferrals: 1 };
+    const ctx = { payload, setPayload: (p: { deferrals?: number }) => (payload = p) };
+    let thrown: unknown;
+    try {
+      deferForService(ctx, grace);
+    } catch (e) {
+      thrown = e;
+    }
+    expect((thrown as JobDeferred).delayMs).toBeGreaterThanOrEqual(109_000);
+    expect((thrown as JobDeferred).delayMs).toBeLessThanOrEqual(111_000);
+    // A service still live has no end to wait for (`wakeAt` undefined): the backoff of the other deferrals.
+    let live: unknown;
+    try {
+      deferForService({ payload: {}, setPayload: () => {} }, { wakeAt: () => undefined });
+    } catch (e) {
+      live = e;
+    }
+    expect((live as JobDeferred).delayMs).toBe(30_000);
+  });
+
   it('a job that plans pictures finds a service live and goes back to the queue BEFORE any work; with the switch off it imports as today', async () => {
     const on = await startHub({
       prerender: { setting: 'on', on: true, store: true },

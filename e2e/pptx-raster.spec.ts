@@ -86,6 +86,8 @@ async function rasterHub(port: number, chromium: string): Promise<HubProcess> {
   hub.env.ORDO_LIBREOFFICE = 'off';
   hub.env.ORDO_PRERENDER = 'on';
   hub.env.ORDO_CHROMIUM = chromium;
+  // The pictures wait for the grace after End service too (design/28 5.3); a short one keeps the spec's waits short and its order fixed.
+  hub.env.ORDO_PACE_GRACE_MS = '3000';
   await hub.start();
   return hub;
 }
@@ -128,6 +130,7 @@ async function audienceColours(
   cue: number,
   name: string,
   points: { centre: [number, number]; color: readonly [number, number, number] }[],
+  whileLive?: () => Promise<void>,
 ): Promise<void> {
   const pl = await apiJson<{ id: string }>(a, 'playlists', {
     post: { name: 'Continents', items: [{ id: 'deck', kind: 'presentation', presentationId }] },
@@ -150,6 +153,7 @@ async function audienceColours(
       )
       .toBe(points.length);
     expect((await telemetryOf(w)).error ?? '').toBe('');
+    await whileLive?.();
   } finally {
     await w.close();
   }
@@ -197,12 +201,35 @@ test('many-point shapes come in as one picture: stored, drawn on the screen, res
     expect(media.find((m) => m.id === picture!.mediaId)).toMatchObject({ kind: 'image', state: 'ready' });
 
     // The Audience screen draws the picture: both outlines' colours and the colours of two squares, each at its own place.
-    await audienceColours(a, context, PORT, p.id, 0, 'live', [
-      CONTINENTS.outlineA,
-      CONTINENTS.outlineB,
-      ...CONTINENTS.squares,
-      CONTINENTS.background,
-    ]);
+    let waiting: string | undefined;
+    await audienceColours(
+      a,
+      context,
+      PORT,
+      p.id,
+      0,
+      'live',
+      [CONTINENTS.outlineA, CONTINENTS.outlineB, ...CONTINENTS.squares, CONTINENTS.background],
+      async () => {
+        // Live safety (design/29): while a service is live the picture step never starts. A whole Re-import queued now goes back to the
+        // queue before it does any work and says why; it runs after End service (and its short grace).
+        const queued = await a.post(`presentations/${p.id}/pptx-reimport`, { data: {} });
+        expect(queued.status(), await queued.text()).toBe(202);
+        waiting = ((await queued.json()) as { id: string }).id;
+        await expect
+          .poll(async () => JSON.stringify(await (await a.get(`jobs/${waiting}`)).json()), {
+            timeout: 60_000,
+          })
+          .toContain('a service is live');
+        const held = (await (await a.get(`jobs/${waiting}`)).json()) as Job;
+        expect(held.state).toBe('queued');
+      },
+    );
+    await waitJob(a, waiting!);
+    // It found the picture the import had made: no new picture, the slide as it was.
+    const settledDeck = await stored(a, p.id);
+    expect(pictures(objectsOf(settledDeck, 0))).toHaveLength(1);
+    expect(objectsOf(settledDeck, 0).map((o) => o.type)).toEqual(['shape', 'image', 'text']);
 
     // The editor: the Presentation panel says how many shapes were drawn into pictures; the slide card says what the picture is.
     await openEditor(page, PORT, p.id);
@@ -231,7 +258,7 @@ test('many-point shapes come in as one picture: stored, drawn on the screen, res
     await reset.click();
     await expect(page.getByRole('dialog')).toContainText('Pictures drawn from shapes become shapes again');
     await page.getByRole('dialog').getByRole('button', { name: 'Reset slide' }).click();
-    await editorAt(page, p.rev + 1);
+    await editorAt(page, settledDeck.rev + 1);
 
     // Reset slide: the shapes are shapes (or today's boxes) again and no picture was made; the other slide is as it was.
     const afterReset = await stored(a, p.id);

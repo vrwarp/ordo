@@ -642,7 +642,7 @@ class NativeImport {
     this.maker = rastersFor(makerArgs);
     this.makerOff = rasterOffReason(makerArgs);
     // The picture step is DEFERRED while ANY service is live (D4): before any work, the job goes back to the queue.
-    if (this.maker !== 'off' && anyServiceLive(this.deps)) deferForService(ctx);
+    if (this.maker !== 'off' && anyServiceLive(this.deps)) deferForService(ctx, this.deps.jobs.pacing);
     if (this.lo && lo !== 'available') {
       ctx.log(
         '[warn] LibreOffice does not answer yet: what ordo cannot draw waits for it, tried again later',
