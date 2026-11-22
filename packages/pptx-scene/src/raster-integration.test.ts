@@ -103,6 +103,24 @@ describe('the converter hooks of the shape pictures', () => {
     expect(MAX_SLIDE_PATH_POINTS).toBe(65_536);
   });
 
+  it("E1w: with no injected geometry the renderer's own wide compile draws a 5,464-point outline of ONE path into a picture", () => {
+    // One path of 5,464 points: past the screens' 4,096 a path, so the compile that stores or draws would cut it. The picture
+    // is made from the wide read (`RASTER_READ`), never from a cut outline, so its recipe holds every point.
+    const parts = slideOf(blob(2, 5_464, IN, IN, 4 * IN, 3 * IN));
+    const out = emitSlides(parseDeck(parts, { rasters: 'plan' }), { rasters: 'plan' });
+    const s = out.slides[0]!;
+    expect(s.rasterInfo?.failed ?? []).toEqual([]);
+    expect(s.rasters).toHaveLength(1);
+    expect(out.rasters).toHaveLength(1);
+    const member = out.rasters![0]!.recipe.members[0]!;
+    // 5,464 points in the recipe: one move, 5,462 lines and a close, one byte a command.
+    expect(Buffer.from(member.geom.paths[0]!.cmds, 'base64')).toHaveLength(5_464);
+    // The picture says what it is made of, and the slide holds no stored outline past the screens' limits.
+    const image = s.slide.objects.find((o) => o.type === 'image' && o.origin?.role === 'raster');
+    expect(image?.origin?.raster).toMatchObject({ pts: RASTER_POINTS, n: 1 });
+    expect(s.slide.objects.some((o) => o.type === 'shape' && o.origin?.role === 'shape')).toBe(false);
+  });
+
   it("E2: rasters 'off', 'detect' and no option emit what the converter emitted before", () => {
     const shapes =
       blob(2, 300, IN, IN, 2 * IN, 2 * IN) + multi(3, 9, 20, 3 * IN, IN, 2 * IN, 2 * IN) + small(4, IN);

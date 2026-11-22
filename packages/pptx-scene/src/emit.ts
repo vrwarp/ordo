@@ -191,6 +191,7 @@ import {
   type RegisteredRaster,
 } from './raster-emit.ts';
 import { applyRasterForm, type RasterMode, type RasterRunPlan } from './raster-plan.ts';
+import { WIDE_GEOMETRY } from './raster-wide.ts';
 import { RASTER_WORDS_MAX } from './raster.ts';
 import { lockDiagram } from './smartart.ts';
 import { look3dOf } from './three3d.ts';
@@ -297,7 +298,7 @@ export interface EmitOptions {
    * `EmittedSlide.rasters`). With anything else every planned run is written as today's shapes. Default 'off'.
    */
   rasters?: RasterMode;
-  /** Q53: the renderer's wide compile and build, which the recipe builder reads a shape's geometry with. */
+  /** Q53: the renderer's wide compile and build, which the recipe builder reads a shape's geometry with (default `WIDE_GEOMETRY`, `raster-wide.ts`). */
   rasterGeometry?: RasterGeometry;
   /** Q53, `convertDeck`'s: the recipes of the whole call (its slides are emitted one by one). */
   rasterRegistry?: RasterRegistry;
@@ -553,7 +554,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
         ? {
             raster: (recipe, hash) => rasters.add(recipe, hash),
             rasters: [],
-            ...(opts.rasterGeometry ? { rasterGeometry: opts.rasterGeometry } : {}),
+            rasterGeometry: opts.rasterGeometry ?? WIDE_GEOMETRY,
           }
         : {}),
       mediaPart,
