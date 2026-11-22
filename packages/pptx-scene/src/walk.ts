@@ -150,6 +150,8 @@ export interface WalkState extends Ledger {
    * the counters above, 'detect' only marks them (the counters stay as today's).
    */
   rasters?: 'plan' | 'detect';
+  /** The threshold of the census sweep (`ParseOptions.rasterPoints`); undefined: `RASTER_POINTS`. */
+  rasterPoints?: number;
   /**
    * With 'plan', the counters as TODAY's converter keeps them (every shape charged, the candidates included): what a
    * candidate gets as its put-back form (`RasterCandidate.today`) is worked out against them, exactly as it is today.
@@ -173,6 +175,7 @@ const treeOf = (n: XNode | undefined) => path(n, 'p:cSld', 'p:spTree');
 export function walkSlide(ctx: SlideCtx, stats?: { points: number }): Element[] {
   const st: WalkState = { out: [], count: 0, groups: 0 };
   if (ctx.rasters) st.rasters = ctx.rasters;
+  if (ctx.rasters && ctx.rasterPoints !== undefined) st.rasterPoints = ctx.rasterPoints;
   // The background is emitted under everything, a full-slide fill laid on white (`emit.ts`
   // `emitBackground`): its pixels are charged first, as every drawer's budget counts them.
   const bg = readBackground(ctx).fill;
@@ -237,7 +240,9 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     return;
   }
   // What the walk of a layout and its master depends on besides them (deck-wide facts aside): the colours.
-  const key = [...ctx.color.map.values()].join(' ') + (st.rasters ? `|rasters:${st.rasters}` : '');
+  const key =
+    [...ctx.color.map.values()].join(' ') +
+    (st.rasters ? `|rasters:${st.rasters}${st.rasterPoints !== undefined ? `:${st.rasterPoints}` : ''}` : '');
   let byKey = decorationCache.get(ctx.layout);
   if (!byKey) decorationCache.set(ctx.layout, (byKey = new Map()));
   const known = byKey.get(key);
@@ -806,17 +811,12 @@ export function slideCustomR(
   }
   const raw = rawPointCost(node);
   const cost = raw.points;
+  const limit = st.rasterPoints ?? RASTER_POINTS;
   if (st.rasters === 'detect') {
     for (const n of custom.notes) ctx.log(`custom geometry: ${n}`);
     const result = chargeCustom(say, st, custom, times, floor);
     const why =
-      raw.capped || cost > RASTER_POINTS
-        ? 'points'
-        : custom.over
-          ? 'limit'
-          : result.over
-            ? 'total'
-            : undefined;
+      raw.capped || cost > limit ? 'points' : custom.over ? 'limit' : result.over ? 'total' : undefined;
     return why
       ? { custom: result, cand: { raw: cost, why, times, today: result, node } }
       : { custom: result };
@@ -825,7 +825,7 @@ export function slideCustomR(
   const todayNotes: string[] = [];
   const shadow = chargeCustom((m) => todayNotes.push(m), st.today!, custom, times, floor);
   const why =
-    raw.capped || cost > RASTER_POINTS ? 'points' : custom.over ? 'limit' : shadow.over ? 'total' : undefined;
+    raw.capped || cost > limit ? 'points' : custom.over ? 'limit' : shadow.over ? 'total' : undefined;
   if (!why) {
     for (const n of customNotes) ctx.log(n);
     // A shape the pictures never take is charged for real, with the messages of its own charge.

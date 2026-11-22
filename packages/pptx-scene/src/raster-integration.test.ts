@@ -285,6 +285,22 @@ describe('the converter hooks of the shape pictures', () => {
     expect(s.rasterWords).toContain('second words');
   });
 
+  it('E12: ParseOptions.rasterPoints moves the threshold of the census sweep (64, 128, 256, 512); the default is RASTER_POINTS', () => {
+    // Points 100, 200, 300 and 600: a shape is a candidate when its cost is MORE than the threshold.
+    const parts = slideOf(
+      [100, 200, 300, 600].map((cost, k) => blob(2 + k, cost, IN + k * 2 * IN, IN, IN, IN)).join(''),
+    );
+    const count = (rasterPoints?: number) =>
+      parseDeck(parts, { rasters: 'detect', ...(rasterPoints === undefined ? {} : { rasterPoints }) })
+        .slides[0]!.rasters?.candidates ?? 0;
+    expect(count()).toBe(3);
+    expect(count(RASTER_POINTS)).toBe(3);
+    expect(count(64)).toBe(4);
+    expect(count(256)).toBe(2);
+    expect(count(512)).toBe(1);
+    expect(count(1_024)).toBe(0);
+  });
+
   it('convertDeck shares one registry across a call and lists each recipe once', () => {
     const parts = buildDeck({
       slides: [

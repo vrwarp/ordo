@@ -61,6 +61,7 @@ import { slideUnitsLeft } from '@ordo/renderer/units.ts';
 import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import { drawingKey } from './compat/index.ts';
 import { listDecks } from './decks.ts';
+import { rasterColumns } from './raster-census.ts';
 import {
   convertDeckIsolated,
   type HubWhy,
@@ -344,6 +345,7 @@ export function censusRow(
         ...(missing.length ? { missing } : {}),
         ...(h.hubWhole ? { hubWhole: true } : {}),
         ...(s.whole ? wholeColumns(s.whole, x.slide, JSON.stringify(x.slide).length) : {}),
+        ...rasterColumns(s.rasters),
       };
     });
   clearGeomFiles();
@@ -382,6 +384,11 @@ export type CensusArgs = {
   whole?: true;
   /** `--whole-anchors own|motion` (Q25.c.b: 'motion', the default, only a video counts; 'own' a picture background too). */
   wholeAnchors?: 'own' | 'motion';
+  /**
+   * `--rasters` (Q53): read every deck with the pictures of many-point shapes planned and write the picture columns
+   * (`raster-census.ts`); `--raster-points N` (implies `--rasters`) sets the threshold of the sweep (64, 128, 256, 512; default 128).
+   */
+  rasters?: { points?: number };
 };
 
 export function parseCensusArgs(argv: readonly string[]): CensusArgs {
@@ -391,12 +398,20 @@ export function parseCensusArgs(argv: readonly string[]): CensusArgs {
   let noLibreOffice = false;
   let whole = false;
   let wholeAnchors: 'own' | 'motion' | undefined;
+  let rasters = false;
+  let rasterPoints: number | undefined;
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i]!;
     if (v === '--hub-budget') hubBudget = true;
     else if (v === '--no-libreoffice') noLibreOffice = true;
     else if (v === '--whole') whole = true;
-    else if (v === '--whole-anchors') {
+    else if (v === '--rasters') rasters = true;
+    else if (v === '--raster-points') {
+      rasterPoints = Number(argv[++i]);
+      if (!Number.isInteger(rasterPoints) || rasterPoints < 1)
+        throw new Error('--raster-points needs a whole number of points from 1');
+      rasters = true;
+    } else if (v === '--whole-anchors') {
       const a = argv[++i];
       if (a !== 'own' && a !== 'motion') throw new Error('--whole-anchors needs own or motion');
       wholeAnchors = a;
@@ -409,7 +424,7 @@ export function parseCensusArgs(argv: readonly string[]): CensusArgs {
   }
   if (!out)
     throw new Error(
-      'usage: census.ts [--hub-budget] [--no-libreoffice] [--whole [--whole-anchors own|motion]] --out census.jsonl <deck | folder>...',
+      'usage: census.ts [--hub-budget] [--no-libreoffice] [--whole [--whole-anchors own|motion]] [--rasters] [--raster-points N] --out census.jsonl <deck | folder>...',
     );
   if (!paths.length) throw new Error('no decks: pass decks or folders');
   if (wholeAnchors && !whole) throw new Error('--whole-anchors needs --whole');
@@ -419,6 +434,7 @@ export function parseCensusArgs(argv: readonly string[]): CensusArgs {
     hubBudget,
     noLibreOffice,
     ...(whole ? { whole: true as const, wholeAnchors: wholeAnchors ?? ('motion' as const) } : {}),
+    ...(rasters ? { rasters: rasterPoints === undefined ? {} : { points: rasterPoints } } : {}),
   };
 }
 
@@ -430,7 +446,11 @@ export async function runCensus(
   paths: readonly string[],
   out: string,
   log: (line: string) => void = () => {},
-  opts: { noLibreOffice?: boolean; whole?: { anchors: 'own' | 'motion' } } = {},
+  opts: {
+    noLibreOffice?: boolean;
+    whole?: { anchors: 'own' | 'motion' };
+    rasters?: { points?: number };
+  } = {},
 ): Promise<{ decks: number; unreadable: number; errors: number; slides: number }> {
   const decks = await listDecks(paths);
   await writeFile(out, '');
@@ -452,6 +472,7 @@ export async function runCensus(
       const deck = await convertDeckIsolated(d.file, dir, {
         ...(opts.noLibreOffice ? { noLibreOffice: true } : {}),
         ...(opts.whole ? { whole: opts.whole } : {}),
+        ...(opts.rasters ? { rasters: opts.rasters } : {}),
       });
       const row = censusRow(deck, { ...head, ms: Math.round(performance.now() - t0) }, opts);
       if (deck.error) counts.errors++;
@@ -471,6 +492,7 @@ async function main(): Promise<void> {
   const c = await runCensus(a.paths, resolve(a.out), () => {}, {
     noLibreOffice: a.noLibreOffice,
     ...(a.whole ? { whole: { anchors: a.wholeAnchors ?? 'motion' } } : {}),
+    ...(a.rasters ? { rasters: a.rasters } : {}),
   });
   console.log(
     `census: ${c.decks} deck(s), ${c.slides} shown slide(s), ${c.unreadable} unreadable (missing target), ${c.errors} the converter could not read; ${resolve(a.out)}`,

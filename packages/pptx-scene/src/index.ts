@@ -199,6 +199,11 @@ export interface ParseOptions {
    * deck with the same value. A caller that plans pictures must be able to make them: the hub decides once per import.
    */
   rasters?: RasterMode;
+  /**
+   * Measure only (the census sweep 64 / 128 / 256 / 512 of `tools/pptx-fidelity` `--raster-points`): the point count past which a
+   * custom-path shape is a candidate with `rasters` 'plan' or 'detect'. The product never sets it: `RASTER_POINTS`.
+   */
+  rasterPoints?: number;
   /** Who draws the pictures (read with 'plan' only): the words of a shape go into a picture only for the 'page'. Default 'page'. */
   rasterMaker?: RasterMaker;
   /**
@@ -361,6 +366,9 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
         ...(mediaKind ? { mediaKind } : {}),
         ...(fontFace ? { fontFace } : {}),
         ...(rasterMode === 'off' ? {} : { rasters: rasterMode }),
+        ...(rasterMode === 'off' || opts.rasterPoints === undefined
+          ? {}
+          : { rasterPoints: opts.rasterPoints }),
       });
       // Clip timing is read before the shape tree, which attaches it to each poster (`media.ts`).
       ctx.timing = readSlideTiming(ctx.slide);

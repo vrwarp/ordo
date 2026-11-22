@@ -72,6 +72,7 @@ import { CONVERTER_VERSION, PPTX_LIMITS } from '../../../apps/hub/src/pptx/share
 import type { Browser, Page } from '@playwright/test';
 import { bakePicture } from './bake.ts';
 import { hostFace } from './faces.ts';
+import { type NativeRasters, rasterInfoOf } from './raster-census.ts';
 import { type CompatRule, compatRules, drawingKey } from './compat/index.ts';
 import { deckFeatures, type Features, featureSource, partFeatures } from './features/index.ts';
 import { type HarnessFont, hostFonts, type ScriptFace } from './fonts.ts';
@@ -114,6 +115,8 @@ export type NativeSlide = {
   slide: Slide;
   /** With `ConvertOptions.whole`: the converter's decision for the slide (Q24.b). */
   whole?: WholeInfo;
+  /** With `ConvertOptions.rasters`: what the planner and the emitter made of the slide's many-point shapes (`raster-census.ts`). */
+  rasters?: NativeRasters;
   /** Text features of the slide's own XML (`features/text.ts`). */
   textFeatures: string[];
   /** The other registered families' features (`features/index.ts`; none before the M9 tracks add theirs). */
@@ -188,6 +191,12 @@ export type ConvertOptions = {
   loCompat?: boolean;
   /** Emit the deck as a hub without LibreOffice does as well (`--no-libreoffice`, `NativeSlide.noLoSlide`). */
   noLibreOffice?: boolean;
+  /**
+   * Q53 (`--rasters`, `--raster-points N`): read and emit every slide with `rasters: 'plan'`, so each run of many-point shapes is one
+   * picture whose recipe is counted (`NativeSlide.rasters`); nothing draws it (the census and the gates count, a hub draws).
+   * `points` is the census sweep's threshold (`ParseOptions.rasterPoints`; default `RASTER_POINTS`).
+   */
+  rasters?: { points?: number };
 };
 
 export type NativeMedia = {
@@ -399,16 +408,23 @@ export async function convertDeck(
     // Q24.b (`ConvertOptions.whole`): the deck is read with the whole option, and what the converter decided
     // for each slide is kept (`ParseOptions.onBudget`), with what the plan without the option leaves out.
     const plans = new Map<number, SlideBudget>();
+    const rasterOpts = opts.rasters
+      ? {
+          rasters: 'plan' as const,
+          ...(opts.rasters.points === undefined ? {} : { rasterPoints: opts.rasters.points }),
+        }
+      : {};
     let scene = parseDeck(
       zip.files,
       opts.whole
         ? {
             ...parsing,
+            ...rasterOpts,
             wholeSlides: true,
             wholeAnchors: opts.whole.anchors,
             onBudget: (b) => void plans.set(b.index, b),
           }
-        : parsing,
+        : { ...parsing, ...rasterOpts },
     );
     const wholeInfo = opts.whole ? wholeInfos(zip.files, parsing, plans) : undefined;
     out.parseMs = performance.now() - t0;
@@ -428,7 +444,13 @@ export async function convertDeck(
       return id;
     };
     const ids = { geomId, decorId };
-    const emitted: EmitResult = emitSlides(scene, { ...ids, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
+    const emitted: EmitResult = emitSlides(scene, {
+      ...ids,
+      m9Writes: M9_WRITES,
+      sheets: PPTX_SHEETS,
+      ...(opts.rasters ? { rasters: 'plan' as const } : {}),
+    });
+    const rasterBytes = new Map((emitted.rasters ?? []).map((r) => [r.id, r] as const));
     out.emitMs = performance.now() - t0;
     const geoms = new Map<string, { id: string; file: GeomFile | DecorFile }>(
       [...emitted.geoms, ...emitted.decors].map((g) => [g.id, g]),
@@ -554,6 +576,7 @@ export async function convertDeck(
         notes: s.notes,
         slide,
         ...(wholeInfo?.has(s.index) ? { whole: wholeInfo.get(s.index) } : {}),
+        ...(opts.rasters && s.rasterInfo ? { rasters: rasterInfoOf(s, rasterBytes) } : {}),
         textFeatures: f?.textFeatures ?? [],
         xmlFeatures: f?.xmlFeatures ?? [],
         compat: rules,
@@ -737,6 +760,7 @@ async function convertInWorker(
         loCompat: limits.loCompat === true,
         noLibreOffice: limits.noLibreOffice === true,
         ...(limits.whole ? { whole: limits.whole } : {}),
+        ...(limits.rasters ? { rasters: limits.rasters } : {}),
       },
     });
   });
