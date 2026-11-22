@@ -1,5 +1,6 @@
 import { DEMO } from '@ordo/client';
-import { BAKE_ROLES, type BakeVerdict, bakeGate, readBakeWorld } from '../lib/capabilities.ts';
+import { BAKE_ROLES, type BakeVerdict } from '../lib/capabilities.ts';
+import { bakeGate, readBakeWorld } from '../lib/bakeWorld.ts';
 import { useHubCapsStore } from '../lib/hubCaps.ts';
 import { currentLayout, thisIsPhone } from '../lib/layout.ts';
 import { currentRole } from '../state/session.ts';

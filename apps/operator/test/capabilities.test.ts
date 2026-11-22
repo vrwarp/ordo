@@ -6,17 +6,15 @@ import {
   BAKE_ROLES,
   type BakeInput,
   bakeEngine,
-  bakeGate,
   type CapabilityEnv,
   canBake,
   detectCapabilities,
-  forcedBakeOff,
   forcedProfile,
   profileFor,
-  readBakeWorld,
   requestPersistentStorage,
   useCapabilities,
 } from '../src/lib/capabilities.ts';
+import { bakeGate, forcedBakeOff, readBakeWorld } from '../src/lib/bakeWorld.ts';
 import { flatSlides, lookBackgroundId, previewLooks, slideAndNext } from '../src/lib/lookPreviews.ts';
 import { allowedForRole, parseRoute, routeHash } from '../src/lib/route.ts';
 import { fetchVenueLive, fromSummary, summarize } from '../src/lib/venueLive.ts';

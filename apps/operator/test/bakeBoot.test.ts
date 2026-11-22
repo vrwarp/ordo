@@ -355,4 +355,17 @@ describe('what the first load holds of the bake (BT8)', () => {
     expect(ctl).toContain("from './bakeHold.ts'");
     expect(ctl).not.toMatch(/from '\.\/bake(Boot|Gate|Test)?\.ts'/);
   });
+
+  it('BT9 lib/capabilities.ts (in the first load of every layout) holds the gate decision only; what reads the browser for it is lazy', async () => {
+    const { readFileSync } = await import('node:fs');
+    const caps = readFileSync(new URL('../src/lib/capabilities.ts', import.meta.url), 'utf8');
+    expect(caps).toContain('export function canBake');
+    expect(caps).not.toMatch(/readBakeWorld|bakeGate|forcedBakeOff|ordo\.bake/);
+    const world = readFileSync(new URL('../src/lib/bakeWorld.ts', import.meta.url), 'utf8');
+    expect(world).toContain('export function readBakeWorld');
+    expect(world).toContain('export function bakeGate');
+    // the one module that imports it is the lazy gate of the boot
+    const gate = readFileSync(new URL('../src/services/bakeGate.ts', import.meta.url), 'utf8');
+    expect(gate).toContain("from '../lib/bakeWorld.ts'");
+  });
 });
