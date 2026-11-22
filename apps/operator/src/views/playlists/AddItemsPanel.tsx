@@ -1,7 +1,8 @@
-import { type ActionId, newId, type PlaylistItem } from '@ordo/domain';
+import { type ActionId, newId, type PlaylistItem, type Presentation } from '@ordo/domain';
 import { useMemo, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
-import { SlidePreviewRoll } from '../../components/SlidePreviewRoll.tsx';
+import { Dialog } from '../../components/Dialog.tsx';
+import { SlidePreviewRoll, slidePreviewRollHeight } from '../../components/SlidePreviewRoll.tsx';
 import { Select } from '../../components/fields.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { navigate } from '../../useRoute.ts';
@@ -28,10 +29,31 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
   const [label, setLabel] = useState('');
   const [action, setAction] = useState<ActionId>('clearAll');
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [previewArrId, setPreviewArrId] = useState<string>('');
+  const [pickerPresId, setPickerPresId] = useState<string | null>(null);
   const pres = useMemo(() => new Map(lib.presentations.map((p) => [p.id, p])), [lib.presentations]);
   const media = useMemo(() => new Map(lib.media.map((m) => [m.id, m])), [lib.media]);
   const results = useSearch(q, { kind, limit: 500 });
+  const pickerPres = pickerPresId ? (pres.get(pickerPresId) ?? null) : null;
+
+  const addPresentation = (p: Presentation, arrangementId?: string) => {
+    onAdd([
+      {
+        id: newId(),
+        kind: 'presentation',
+        presentationId: p.id,
+        arrangementId: arrangementId ?? p.arrangements[0]?.id,
+      },
+    ]);
+  };
+
+  const handleAddPresentation = (p: Presentation) => {
+    if (p.arrangements.length > 1) {
+      setPickerPresId(p.id);
+    } else {
+      addPresentation(p, p.arrangements[0]?.id);
+    }
+  };
+
   return (
     <div className="add-items" style={{ display: 'grid', gridTemplateRows: 'auto 1fr auto', height: '100%' }}>
       <div className="col" style={{ padding: 10, borderBottom: '1px solid var(--line)' }}>
@@ -60,7 +82,9 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
       </div>
       <VirtualList
         items={results}
-        rowHeight={(d) => (d.kind === 'presentation' && expandedId === d.id ? 390 : 46)}
+        rowHeight={(d) =>
+          d.kind === 'presentation' && expandedId === d.id ? slidePreviewRollHeight(pres.get(d.id), true) : 46
+        }
         rowClass={(d) => (d.kind === 'presentation' && expandedId === d.id ? 'expanded' : '')}
         keyOf={(d) => d.id}
         onRowContextMenu={(e, d) => {
@@ -73,32 +97,16 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
               [
                 {
                   label: 'Add to playlist',
-                  onSelect: () =>
-                    onAdd([
-                      {
-                        id: newId(),
-                        kind: 'presentation',
-                        presentationId: p.id,
-                        arrangementId: p.arrangements[0]?.id,
-                      },
-                    ]),
+                  onSelect: () => handleAddPresentation(p),
                 },
-                ...(p.arrangements.length > 0
+                ...(p.arrangements.length > 1
                   ? [
                       {
                         kind: 'submenu' as const,
                         label: 'Add with arrangement',
                         items: p.arrangements.map((a) => ({
                           label: a.name,
-                          onSelect: () =>
-                            onAdd([
-                              {
-                                id: newId(),
-                                kind: 'presentation',
-                                presentationId: p.id,
-                                arrangementId: a.id,
-                              },
-                            ]),
+                          onSelect: () => addPresentation(p, a.id),
                         })),
                       },
                     ]
@@ -106,10 +114,7 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
                 { kind: 'separator' },
                 {
                   label: isExpanded ? 'Collapse slide preview' : 'Preview slides',
-                  onSelect: () => {
-                    setExpandedId(isExpanded ? null : p.id);
-                    setPreviewArrId(p.arrangements[0]?.id ?? '');
-                  },
+                  onSelect: () => setExpandedId(isExpanded ? null : p.id),
                 },
                 {
                   label: 'Edit presentation…',
@@ -156,7 +161,6 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
                     onClick={(e) => {
                       e.stopPropagation();
                       setExpandedId(isExpanded ? null : p.id);
-                      setPreviewArrId(p.arrangements[0]?.id ?? '');
                     }}
                     title={isExpanded ? 'Collapse preview' : 'Preview slides'}
                   >
@@ -165,54 +169,18 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
                   <span
                     className="col grow"
                     style={{ gap: 0, cursor: 'pointer' }}
-                    onClick={() => {
-                      setExpandedId(isExpanded ? null : p.id);
-                      setPreviewArrId(p.arrangements[0]?.id ?? '');
-                    }}
+                    onClick={() => setExpandedId(isExpanded ? null : p.id)}
                     title={isExpanded ? 'Collapse preview' : 'Click to preview slides'}
                   >
                     <span className="ellipsis">{p.title}</span>
                     <span className="muted small">{p.kind}</span>
                   </span>
-                  <select
-                    defaultValue=""
-                    title="Arrangement"
-                    style={{ maxWidth: 110 }}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => {
-                      onAdd([
-                        {
-                          id: newId(),
-                          kind: 'presentation',
-                          presentationId: p.id,
-                          arrangementId: e.target.value || undefined,
-                        },
-                      ]);
-                      e.target.value = '';
-                    }}
-                  >
-                    <option value="" disabled>
-                      Add with…
-                    </option>
-                    {p.arrangements.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
                   <button
                     type="button"
                     className="small primary"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onAdd([
-                        {
-                          id: newId(),
-                          kind: 'presentation',
-                          presentationId: p.id,
-                          arrangementId: p.arrangements[0]?.id,
-                        },
-                      ]);
+                      handleAddPresentation(p);
                     }}
                   >
                     Add
@@ -236,13 +204,12 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
                     <SlidePreviewRoll
                       p={p}
                       compact={true}
-                      selectedArrangementId={previewArrId || p.arrangements[0]?.id}
-                      onSelectArrangement={(arrId) => setPreviewArrId(arrId)}
+                      onAddArrangement={(arrId) => addPresentation(p, arrId)}
                     />
                     <div
                       className="row"
                       style={{
-                        justifyContent: 'space-between',
+                        justifyContent: 'flex-start',
                         alignItems: 'center',
                         paddingTop: 6,
                         borderTop: '1px solid var(--line)',
@@ -251,22 +218,6 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
                     >
                       <button type="button" className="small" onClick={() => setExpandedId(null)}>
                         Close
-                      </button>
-                      <button
-                        type="button"
-                        className="small primary"
-                        onClick={() => {
-                          onAdd([
-                            {
-                              id: newId(),
-                              kind: 'presentation',
-                              presentationId: p.id,
-                              arrangementId: previewArrId || p.arrangements[0]?.id,
-                            },
-                          ]);
-                        }}
-                      >
-                        + Add to Playlist
                       </button>
                     </div>
                   </div>
@@ -351,6 +302,26 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
           </button>
         </div>
       </div>
+      {pickerPres && (
+        <Dialog
+          title={`Choose arrangement — ${pickerPres.title}`}
+          width={860}
+          onClose={() => setPickerPresId(null)}
+          footer={
+            <button type="button" className="small" onClick={() => setPickerPresId(null)}>
+              Close
+            </button>
+          }
+        >
+          <SlidePreviewRoll
+            p={pickerPres}
+            onAddArrangement={(arrId) => {
+              addPresentation(pickerPres, arrId);
+              setPickerPresId(null);
+            }}
+          />
+        </Dialog>
+      )}
     </div>
   );
 }
