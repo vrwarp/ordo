@@ -77,7 +77,7 @@ import { APP_VERSION } from './index.ts';
 // label, the Stage and search). The sub-wave's one bump to 0.11.0, the last commit of the pull request, covers it, and the
 // integrator records the merged digest once after the last merge.
 const RECORDED = {
-  version: '0.10.0',
+  version: '0.11.0',
   digest: '4b9621ec4ea2e1d4ce6ef5b4220487fcd8d1e29bd7fd86831e444022e50511c6',
 };
 
