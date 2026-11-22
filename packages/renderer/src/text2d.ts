@@ -6,6 +6,7 @@ import {
   LOGICAL_HEIGHT,
   LOGICAL_WIDTH,
   type Look,
+  parseStageNoteLine,
   type PropBox,
   type Rgba,
   type Slide,
@@ -870,7 +871,7 @@ export type StageCard = {
 /** What the stage preview draws: the current and next cards, then the notes box (clipped to it). */
 export type StagePreview = {
   cards: StageCard[];
-  notes: { box: Box; fill: TextStyle['fill']; style: PropBox; text: string } | null;
+  notes: { box: Box; fill: TextStyle['fill']; style: PropBox; text: string; rawText: string } | null;
 };
 
 /**
@@ -881,6 +882,11 @@ export type StagePreview = {
 export function stageNotesText(rawSlide: Pick<Slide, 'notes'>, look: Look | undefined): string {
   if (!look || !stageNotesEnabled(look) || typeof rawSlide.notes !== 'string') return '';
   return formatStageNotesPlain(rawSlide.notes.slice(0, 4000));
+}
+
+function stageNotesRaw(rawSlide: Pick<Slide, 'notes'>, look: Look | undefined): string {
+  if (!look || !stageNotesEnabled(look) || typeof rawSlide.notes !== 'string') return '';
+  return rawSlide.notes.slice(0, 4000).replace(/\r\n?/g, '\n').trim();
 }
 
 /**
@@ -901,6 +907,7 @@ export function stagePreview(
   const rule = look?.layers.slide;
   if (!look || rule?.mode !== 'lyricOnly' || !stageNotesEnabled(look)) return null;
   const notesText = stageNotesText(rawSlide, look);
+  const rawNotes = stageNotesRaw(rawSlide, look);
   const preset = look.layers.props.stagePreset;
   if (!(notesText.length > 0 || preset === 'split' || preset === 'prompter')) return null;
   const isSong = kind === true || kind === 'song';
@@ -952,9 +959,157 @@ export function stagePreview(
     });
   const notes =
     adapted.notes && notesText
-      ? { box: adapted.notes.box, fill: adapted.notes.fill, style: adapted.notes, text: notesText }
+      ? {
+          box: adapted.notes.box,
+          fill: adapted.notes.fill,
+          style: adapted.notes,
+          text: notesText,
+          rawText: rawNotes,
+        }
       : null;
   return { cards, notes };
+}
+
+type RichNotePiece =
+  | { kind: 'text'; text: string; width: number; isSpace: boolean }
+  | { kind: 'highlight'; text: string; width: number; padX: number; isSpace: boolean }
+  | { kind: 'cue'; text: string; width: number; padX: number; marginX: number };
+
+/**
+ * Draw speaker notes with the same stage emphasis tokens as `apps/stage` (`parseStageNoteLine`):
+ * amber hanging bullets, yellow `**highlight**` spans, and solid amber `[CUE]` / `[PAUSE]` pills.
+ */
+function drawRichStageNotes2D(ctx: Ctx2D, rawText: string, style: PropBox, box: Box, scale: number): void {
+  const pad = style.padding * scale;
+  const x0 = box.x * scale + pad;
+  const maxW = Math.max(1, box.w * scale - 2 * pad);
+  const fontSize = style.fontSizePx * scale;
+  const lineH = fontSize * style.lineHeight;
+  const maxY = (box.y + box.h) * scale;
+  const script = legacyScript(rawText);
+  const baseFont = fontString(style, scale, undefined, script);
+  const boldFont = fontString({ ...style, fontWeight: 700 }, scale, undefined, script);
+  const cueFont = fontString({ ...style, fontWeight: 700 }, scale, style.fontSizePx * 0.68, script);
+  const baseColor = rgbaCss(style.color);
+  const hlPadX = fontSize * 0.16;
+  const cuePadX = fontSize * 0.42;
+  const cueMarginX = fontSize * 0.14;
+
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  setLetterSpacing(ctx, style.letterSpacing * scale);
+
+  let y = box.y * scale + pad;
+  for (const para of rawText.split('\n')) {
+    if (y > maxY) break;
+    if (!para.trim()) {
+      y += lineH;
+      continue;
+    }
+    const parsed = parseStageNoteLine(para);
+    const indent = parsed.bullet ? fontSize * 1.05 : 0;
+    const availW = Math.max(1, maxW - indent);
+
+    // Flatten tokens into measurable inline pieces for greedy word wrapping.
+    const pieces: RichNotePiece[] = [];
+    for (const tok of parsed.tokens) {
+      if (tok.kind === 'cue') {
+        const label = tok.text.toUpperCase();
+        ctx.font = cueFont;
+        const textW = ctx.measureText(label).width;
+        pieces.push({
+          kind: 'cue',
+          text: label,
+          width: textW + 2 * cuePadX + 2 * cueMarginX,
+          padX: cuePadX,
+          marginX: cueMarginX,
+        });
+      } else {
+        ctx.font = tok.kind === 'highlight' ? boldFont : baseFont;
+        const parts = tok.text.match(/\S+|\s+/g) ?? [];
+        for (const part of parts) {
+          const isSpace = /^\s+$/.test(part);
+          const textW = ctx.measureText(part).width;
+          if (tok.kind === 'highlight') {
+            pieces.push({ kind: 'highlight', text: part, width: textW, padX: hlPadX, isSpace });
+          } else {
+            pieces.push({ kind: 'text', text: part, width: textW, isSpace });
+          }
+        }
+      }
+    }
+
+    const lines: RichNotePiece[][] = [];
+    let curLine: RichNotePiece[] = [];
+    let curW = 0;
+    for (const piece of pieces) {
+      if (piece.kind !== 'cue' && piece.isSpace && curLine.length === 0) continue;
+      if (curLine.length > 0 && curW + piece.width > availW) {
+        lines.push(curLine);
+        curLine = [];
+        curW = 0;
+        if (piece.kind !== 'cue' && piece.isSpace) continue;
+      }
+      curLine.push(piece);
+      curW += piece.width;
+    }
+    if (curLine.length > 0) lines.push(curLine);
+
+    if (parsed.bullet) {
+      ctx.font = boldFont;
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillText('•', x0, y + lineH / 2);
+    }
+
+    for (const line of lines) {
+      if (y > maxY) break;
+      const cy = y + lineH / 2;
+      let cx = x0 + indent;
+      // Merge adjacent highlight pieces on the same line so a multi-word **highlight** gets one pill.
+      for (let i = 0; i < line.length; i++) {
+        const p = line[i]!;
+        if (p.kind === 'highlight') {
+          let runText = p.text;
+          let runW = p.width;
+          while (i + 1 < line.length && line[i + 1]!.kind === 'highlight') {
+            i++;
+            runText += line[i]!.text;
+            runW += line[i]!.width;
+          }
+          const bgH = fontSize * 1.14;
+          ctx.fillStyle = 'rgba(250, 204, 21, 0.16)';
+          ctx.beginPath();
+          roundRect(ctx, cx - hlPadX, cy - bgH / 2, runW + 2 * hlPadX, bgH, fontSize * 0.16);
+          ctx.fill();
+          ctx.font = boldFont;
+          ctx.fillStyle = '#fef08a';
+          ctx.fillText(runText, cx, cy);
+          cx += runW;
+        } else if (p.kind === 'cue') {
+          const pillW = p.width - 2 * p.marginX;
+          const pillH = fontSize * 0.92;
+          const px = cx + p.marginX;
+          ctx.fillStyle = '#fbbf24';
+          ctx.beginPath();
+          roundRect(ctx, px, cy - pillH / 2, pillW, pillH, fontSize * 0.3);
+          ctx.fill();
+          ctx.font = cueFont;
+          ctx.fillStyle = '#111827';
+          ctx.fillText(p.text, px + p.padX, cy);
+          cx += p.width;
+        } else {
+          ctx.font = baseFont;
+          ctx.fillStyle = baseColor;
+          ctx.fillText(p.text, cx, cy);
+          cx += p.width;
+        }
+      }
+      y += lineH;
+    }
+    if (parsed.bullet) y += fontSize * 0.22;
+  }
+  ctx.restore();
 }
 
 function drawStagePreview2D(ctx: Ctx2D, preview: StagePreview, scale: number): void {
@@ -970,7 +1125,7 @@ function drawStagePreview2D(ctx: Ctx2D, preview: StagePreview, scale: number): v
     ctx.beginPath();
     roundRect(ctx, nb.x * scale, nb.y * scale, nb.w * scale, nb.h * scale, (n.fill?.radius ?? 0) * scale);
     ctx.clip();
-    drawText(ctx, n.text, { ...n.style, fill: undefined, valign: 'top' }, nb, scale, { fit: false });
+    drawRichStageNotes2D(ctx, n.rawText, n.style, nb, scale);
     ctx.restore();
   }
 }
