@@ -544,6 +544,8 @@ actions). _Who:_ `canBake` (lib/capabilities.ts) admits a Chromium on a desktop 
 APIs (`navigator.userAgentData` that is not mobile, `navigator.hid`, `getScreenDetails`: Q30.c, so a page over plain http by
 a LAN address and an iPad with a mouse do not), a regular layout, a fine pointer, not a phone, not the demo, 4 GB where
 reported, `OffscreenCanvas`, `Worker`, an operate or edit session (`BAKE_ROLES`), the hub's switch on and no `?bake=off`.
+_Asks the hub:_ the boot reads `GET /capabilities` at its start and on each reconnect only where `mayReadCaps` holds (not a phone, even
+on the regular layout, and a session whose cap is `full`), because the hub answers 403 `cap` to a capped session and a phone's gate is `unsupported` whatever it says.
 _When:_ 15 s after start plus up to a third of that as jitter, 3 s after the last change of a burst of library changes,
 2 minutes after End service (the hub's `PAUSED_RETRY_S`, a test reads both), every 5 minutes only while something is
 pending, and after a save the hub has not keyed yet at 2, 5, 15, 60 and 120 s. _Never during a service:_ the

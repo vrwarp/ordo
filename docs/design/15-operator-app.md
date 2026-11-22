@@ -1152,7 +1152,10 @@ itself). The editor and the Go-live check read `state/bake.ts` (a store; its wor
   more where the browser says, `OffscreenCanvas` and `Worker`, an operate or edit session, the hub's own switch
   (`ORDO_PRERENDER`, from `GET /capabilities`) on, and no `?bake=off` (or `localStorage` `ordo.bake` = `off`). An iPad
   with a mouse has none of the three APIs and does not bake; it still LISTS (`list`), so the editor can say "pictures
-  are made on the venue PC". A phone and the demo do nothing at all and never fetch the boot's or the service's chunk.
+  are made on the venue PC". A phone and the demo do nothing at all and never fetch the service's chunk; the boot reads
+  `GET /capabilities` (the gate needs the hub's switch) at its start and on each reconnect of the hub link only where the page
+  may, so a phone on the regular layout (Request Desktop Website) and a session capped below `full` ask nothing, as the hub
+  would refuse the question with 403 `cap`.
 - **When**: the first sweep 15 s after the page has its library (plus up to 5 s of jitter), one sweep 3 s after the last
   change of a burst of library changes (a presentation, a media file or a font), 2 minutes after End service, every 5
   minutes ONLY while something is still pending (a library whose pictures are all made or failed arms no timer and sends

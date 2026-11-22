@@ -7,7 +7,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BakeVerdict } from '../src/lib/capabilities.ts';
 import type { BakeService } from '../src/services/bake.ts';
-import { createBakeBoot } from '../src/services/bakeBoot.ts';
+import { createBakeBoot, mayAskHubForCaps } from '../src/services/bakeBoot.ts';
+import { capOf } from '../src/state/session.ts';
 
 type Fake = {
   start: ReturnType<typeof vi.fn>;
@@ -29,6 +30,8 @@ const state: {
   clock: number;
   caps: Set<() => void>;
   capsAsked: boolean[];
+  /** This page may ask the hub for its capabilities (not a phone, a session that is not capped below full). */
+  mayReadCaps: boolean;
   reconnect: Set<() => void>;
   win: { __ordo?: Record<string, unknown> };
 } = {
@@ -40,6 +43,7 @@ const state: {
   clock: 0,
   caps: new Set(),
   capsAsked: [],
+  mayReadCaps: true,
   reconnect: new Set(),
   win: {},
 };
@@ -88,6 +92,7 @@ const boot = async () =>
     loadCaps: async (force) => {
       state.capsAsked.push(force);
     },
+    mayReadCaps: () => state.mayReadCaps,
     onReconnect: (fn) => {
       state.reconnect.add(fn);
       return () => state.reconnect.delete(fn);
@@ -104,6 +109,7 @@ beforeEach(() => {
   state.clock = 1_000_000;
   state.caps.clear();
   state.capsAsked = [];
+  state.mayReadCaps = true;
   state.reconnect.clear();
   state.win = {};
 });
@@ -168,6 +174,52 @@ describe('when the chunk is fetched (BT1-BT3)', () => {
     expect(state.caps.size).toBe(0);
   });
 
+  it('BT10 a page that may not ask the hub for its capabilities (a phone on the regular layout, a session capped below full) asks nothing: not at the start, not when the link comes back', async () => {
+    // the hub refuses `GET /capabilities` (403 cap) to a capped session, and a phone's gate says 'unsupported' whatever
+    // the hub answers: the question is a refusal the hub counts, for an answer no one reads
+    state.mayReadCaps = false;
+    const { installBake } = await boot();
+    const off = installBake();
+    await flush();
+    expect(state.capsAsked).toEqual([]);
+    // the reconnect callback is installed anyway (the page is not told apart from another at install time) and does nothing
+    expect(state.reconnect.size).toBe(1);
+    for (const fn of [...state.reconnect]) fn();
+    await flush();
+    expect(state.capsAsked).toEqual([]);
+    // the gate still decides and the chunk is never fetched for a phone
+    expect(state.loads).toBe(0);
+    off();
+    expect(state.reconnect.size).toBe(0);
+    expect(state.caps.size).toBe(0);
+  });
+
+  it('BT10 the question is put when it is asked, not once when the boot is installed: a page that may ask again (the session changed) asks on the next reconnect', async () => {
+    state.mayReadCaps = false;
+    const { installBake } = await boot();
+    const off = installBake();
+    await flush();
+    expect(state.capsAsked).toEqual([]);
+    state.mayReadCaps = true;
+    for (const fn of [...state.reconnect]) fn();
+    expect(state.capsAsked).toEqual([true]);
+    state.mayReadCaps = false;
+    for (const fn of [...state.reconnect]) fn();
+    expect(state.capsAsked).toEqual([true]);
+    off();
+  });
+
+  it('BT10 a page that may not ask still starts the service when the gate says ok (the gate decides, the question only feeds it)', async () => {
+    state.mayReadCaps = false;
+    state.verdict = OK;
+    const { installBake } = await boot();
+    const off = installBake();
+    await flush();
+    expect(state.capsAsked).toEqual([]);
+    expect(state.fake.start).toHaveBeenCalledTimes(1);
+    off();
+  });
+
   it('BT3 a cleanup before the chunk arrives starts nothing', async () => {
     state.verdict = OK;
     const { installBake } = await boot();
@@ -188,6 +240,23 @@ describe('when the chunk is fetched (BT1-BT3)', () => {
     await flush();
     expect(state.fake.start).toHaveBeenCalledTimes(1);
     off();
+  });
+});
+
+describe('who may ask the hub for its capabilities (BT11)', () => {
+  it('BT11 the venue PC and an iPad (not a phone, a full session) may; a phone or a capped session may not', () => {
+    // a hub before caps and an uncapped session answer no cap: `full`; an unknown cap is the narrowest, `view`
+    const full = capOf({ cap: 'full' } as never);
+    expect(capOf(undefined)).toBe('full');
+    expect(mayAskHubForCaps(false, full)).toBe(true);
+    expect(mayAskHubForCaps(false, capOf(undefined))).toBe(true);
+    // a phone, whatever its session (a phone that has not signed in again is still uncapped): its gate is 'unsupported'
+    expect(mayAskHubForCaps(true, 'full')).toBe(false);
+    expect(mayAskHubForCaps(true, 'light')).toBe(false);
+    // a capped session on any device: the hub refuses the route (403 cap)
+    expect(mayAskHubForCaps(false, 'light')).toBe(false);
+    expect(mayAskHubForCaps(false, 'view')).toBe(false);
+    expect(mayAskHubForCaps(false, capOf({ cap: 'bogus' } as never))).toBe(false);
   });
 });
 

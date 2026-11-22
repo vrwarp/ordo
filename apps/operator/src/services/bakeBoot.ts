@@ -3,7 +3,9 @@ import { loadHubCaps, useHubCapsStore } from '../lib/hubCaps.ts';
 import type { BakeActions } from '../state/bake.ts';
 import type { BakeService } from './bake.ts';
 import { realGate } from './bakeGate.ts';
+import { thisIsPhone } from '../lib/layout.ts';
 import { useLive } from '../state/live.ts';
+import { capOf, type SessionCap, useSession } from '../state/session.ts';
 import { onGoLivePress } from './bakeHold.ts';
 import { bakeTestMode } from './bakeTest.ts';
 
@@ -13,6 +15,9 @@ import { bakeTestMode } from './bakeTest.ts';
  * only a desktop computer with the hub's switch on ever fetches. This module decides that from the gate, loads the
  * chunk once, starts the service, passes the press of Go live to it, and gives the editor and the Go-live check the
  * actions of the contract (`BakeActions`, state/bake.ts). It holds no state of the pictures: those are the store's.
+ * It reads the hub's capabilities (the gate needs the hub's switch) only where this page may: a phone, even on the
+ * regular layout (Request Desktop Website), and a session capped below `full` never ask, because the hub refuses
+ * the question (403 `cap`) and the gate says `unsupported` for a phone whatever the hub would answer.
  */
 
 /** A press of Go live seen while the chunk was still on its way is passed on if it is this fresh, ms. */
@@ -28,11 +33,23 @@ export type BakeBootDeps = {
   onCaps(fn: () => void): () => void;
   /** Reads the hub's capabilities (`GET /capabilities`; `force`: even when the last answer is fresh). Never rejects. */
   loadCaps(force: boolean): Promise<unknown>;
+  /**
+   * This page may ask the hub for its capabilities: the hub refuses the question (403 `cap`, which it counts) for a
+   * session capped below `full`, and a phone-class device never uses the answer (the gate says `unsupported` for it
+   * whatever the hub says). Asked each time before the question is put, so a page that signs in again is read anew.
+   */
+  mayReadCaps(): boolean;
   /** The hub link coming back: the hub may have been replaced, so its capabilities are read again. */
   onReconnect(fn: () => void): () => void;
   /** `window`, where there is one (test mode puts `window.__ordo.bake` on it). */
   win?: { __ordo?: Record<string, unknown> };
 };
+
+/**
+ * Whether this page may ask the hub for its capabilities (`BakeBootDeps.mayReadCaps`): not a phone-class device, and a
+ * session whose cap is `full`. The venue PC and an iPad qualify (the iPad still reads the hub's switch and lists).
+ */
+export const mayAskHubForCaps = (phone: boolean, cap: SessionCap): boolean => !phone && cap === 'full';
 
 /** The gate's word for a verdict (state/bake.ts BAKE_GATES): what the store says once the service is loaded. */
 const gateWord = (v: BakeVerdict) => (v.ok ? 'ready' : v.why);
@@ -117,12 +134,13 @@ export function createBakeBoot(deps: BakeBootDeps) {
       );
     };
     hook();
-    // Nothing else on the first screens reads the capabilities: the gate needs the hub's switch, so ask for it here.
-    void deps.loadCaps(false);
+    // Nothing else on the first screens reads the capabilities: the gate needs the hub's switch, so ask for it here,
+    // unless this page may not (mayReadCaps): then nothing is asked, now or when the hub link comes back.
+    if (deps.mayReadCaps()) void deps.loadCaps(false);
     check();
     const off = deps.onCaps(check);
     const offLink = deps.onReconnect(() => {
-      void deps.loadCaps(true);
+      if (deps.mayReadCaps()) void deps.loadCaps(true);
     });
     return () => {
       cancelled = true;
@@ -197,6 +215,7 @@ const real = createBakeBoot({
   testMode: bakeTestMode,
   onCaps: (fn) => useHubCapsStore.subscribe(fn),
   loadCaps: (force) => loadHubCaps(undefined, force),
+  mayReadCaps: () => mayAskHubForCaps(thisIsPhone(), capOf(useSession.getState().me)),
   onReconnect: (fn) =>
     useLive.subscribe((now, prev) => {
       if (now.hubConnected && !prev.hubConnected) fn();
