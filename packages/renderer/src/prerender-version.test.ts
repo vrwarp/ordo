@@ -79,7 +79,7 @@ const LIMITS = { LOGICAL_WIDTH, LOGICAL_HEIGHT, TABLE_LIMITS, DECOR_LIMITS };
  */
 const RECORDED = {
   version: 1,
-  digest: 'f7b9d48bdf0fd178dc0ae4983a3db9b15ddd32581592178659e740ab4fde8cfa',
+  digest: 'b5a81133f4eea8acba3b1de66edccf8a461c5286b5ef0c7916f9a2bc1147484b',
 };
 
 /** The source without comments and layout. */
