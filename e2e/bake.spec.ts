@@ -163,15 +163,17 @@ test('E1 a heavy slide the hub keys is made by an open operator page: 1920, 3840
       { size: 3840, key },
       { size: 640, key },
     ]);
-    // the service's own request list: a listing before, the three PUTs, a listing after, nothing else
-    expect(done.requests.map((r) => `${r.method} ${r.path.split('/').pop()}`)).toEqual([
+    // the service's own request list: a listing before, the three PUTs, a listing after, nothing else (the listing
+    // after is read once the state is written: wait for it)
+    const after = await until(page, 'the listing is read once more', (q) => q.requests.length >= 5, 30_000);
+    expect(after.requests.map((r) => `${r.method} ${r.path.split('/').pop()}`)).toEqual([
       'GET prerenders',
       `PUT ${key}`,
       `PUT ${key}`,
       `PUT ${key}`,
       'GET prerenders',
     ]);
-    expect(done.requests.every((r) => r.status === 200 || r.status === 201)).toBe(true);
+    expect(after.requests.every((r) => r.status === 200 || r.status === 201)).toBe(true);
     expect(done.running).toBeUndefined();
     await expect.poll(async () => (await snap(page))?.workers, { timeout: 60_000 }).toBe(0);
   } finally {
