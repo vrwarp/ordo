@@ -15,7 +15,12 @@ import {
   slideMissing,
 } from '../../lib/pptxImport.ts';
 import { useLibrary } from '../../state/library.ts';
-import { holdsRaster, RASTER_RESET_CONFIRM, RASTER_RESET_HINT } from '../../lib/pptxRaster.ts';
+import {
+  holdsRaster,
+  RASTER_PICTURE_CARD,
+  RASTER_RESET_CONFIRM,
+  RASTER_RESET_HINT,
+} from '../../lib/pptxRaster.ts';
 import { setSlideShows } from './actions.ts';
 import { useEditor } from './editorStore.ts';
 import {
@@ -210,6 +215,11 @@ export function PptxSlideCardView(props: {
       {edited && (
         <span className="muted" data-edited>
           Edited in ordo since the import.
+        </span>
+      )}
+      {holdsRaster(slide) && (
+        <span className="muted" data-raster-picture>
+          {RASTER_PICTURE_CARD}
         </span>
       )}
       {pptx.pending && (

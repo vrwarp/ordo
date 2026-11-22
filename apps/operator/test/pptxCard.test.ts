@@ -266,6 +266,9 @@ describe('the PowerPoint card', () => {
     expect(button(c, 'Reset slide from PowerPoint')).not.toContain('disabled');
     expect(text(c)).toContain('Brings the shapes back as shapes. Shapes too large for ordo stay boxes.');
     expect(text(c)).not.toContain('Nothing to reset');
+    // The slide panel says what the picture is and what editing it can do; a slide without one does not.
+    expect(text(c)).toContain('A picture of shapes made when the file was imported.');
+    expect(text(card(imported([])))).not.toContain('A picture of shapes');
     expect(holdsRaster(withPicture)).toBe(true);
     expect(holdsRaster(imported([]))).toBe(false);
     // the words are plain: no jargon of the machinery
