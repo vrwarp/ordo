@@ -9,7 +9,15 @@ import {
   RASTER_RUN,
   RASTER_WORDS_MAX,
 } from './raster.ts';
-import { type RasterElement, type RasterPlan, type RasterPlanOptions, planRasters } from './raster-plan.ts';
+import {
+  applyRasterForm,
+  applyUnclaimedForms,
+  type RasterElement,
+  type RasterPlan,
+  type RasterPlanOptions,
+  planRasters,
+  rasterFormOf,
+} from './raster-plan.ts';
 import {
   asElements,
   builtCustom,
@@ -707,5 +715,81 @@ describe('planRasters: the node a candidate keeps', () => {
     const p = run([noNode, candEl({ box: [3, 1, 0.5, 0.5], node: custNode(200) })]);
     expect(members(p)).toEqual([[1]]);
     expect(p.skipped.other).toBe(1);
+  });
+});
+
+describe('leaving a shape as today leaves it (the forms applied)', () => {
+  const shadow = { dist: 1, blur: 1, dir: 0, color: { r: 0, g: 0, b: 0, a: 1 } };
+
+  it('a candidate no run claims is left exactly as the converter leaves it today: a shape past a limit is a residual box', () => {
+    resetIds();
+    const kept = candEl({ box: [1, 1, 0.5, 0.5], cost: 9_000, limit: true, shadow });
+    const before = JSON.stringify({ support: kept.support, reasons: kept.reasons, over: kept.custom?.over });
+    const els = [kept];
+    const p = run(els);
+    expect(p.runs).toEqual([]);
+    applyUnclaimedForms(els, p);
+    expect(kept.custom?.over).toBe(true);
+    expect(kept.support).toBe('residual');
+    expect(kept.reasons).toEqual(['custGeom']);
+    expect(JSON.stringify({ support: kept.support, reasons: kept.reasons, over: kept.custom?.over })).toBe(
+      before,
+    );
+  });
+
+  it('one only the slide total refused is its stored shape again when the real total has room, a box when it has not', () => {
+    resetIds();
+    const mk = () =>
+      candEl({
+        box: [1, 1, 0.5, 0.5],
+        why: 'total',
+        cost: 600,
+        todayPoints: 4_096,
+        support: 'residual',
+        reasons: ['custGeom'],
+        shadow,
+      });
+    const roomy = [mk()];
+    applyUnclaimedForms(roomy, run(roomy, { pointsUsed: 1_000 }));
+    expect(roomy[0]!.custom?.over).toBeUndefined();
+    expect(roomy[0]!.custom?.paths).toHaveLength(1);
+    expect(roomy[0]!.support).toBe('native');
+    expect(roomy[0]!.reasons).toBeUndefined();
+    const full = [mk()];
+    applyUnclaimedForms(full, run(full, { pointsUsed: 65_000 }));
+    expect(full[0]!.custom).toMatchObject({ over: true, points: 4_096 });
+    expect(full[0]!.support).toBe('residual');
+    expect(full[0]!.reasons).toEqual(['custGeom']);
+  });
+
+  it('the shapes of a run are not touched by the unclaimed forms; those of a run whose picture failed take theirs by hand', () => {
+    resetIds();
+    const els = [
+      candEl({ box: [1, 1, 0.5, 0.5], cost: 300 }),
+      candEl({ box: [1.6, 1, 0.5, 0.5], cost: 9_000, limit: true }),
+    ];
+    const p = run(els);
+    const stored = els.map((e) => e.custom);
+    applyUnclaimedForms(els, p);
+    expect(els.map((e) => e.custom)).toEqual(stored);
+    expect(els.every((e) => e.raster === 0)).toBe(true);
+    // The picture could not be made: each member is put back in its form and the mark goes.
+    for (const m of p.runs[0]!.members) applyRasterForm(m.element, m.form!);
+    expect(els.map((e) => e.raster)).toEqual([undefined, undefined]);
+    expect(els[0]!.support).toBe('native');
+    expect(els[1]!.custom?.over).toBe(true);
+    expect(els[1]!.support).toBe('residual');
+    expect(els[1]!.reasons).toEqual(['custGeom']);
+  });
+
+  it("rasterFormOf is pure: the stored form is the shape's own, the box form is a copy with the over mark", () => {
+    resetIds();
+    const el = candEl({ cost: 300 });
+    const cand = el.rasterOf!;
+    expect(rasterFormOf(cand, 'built')).toBe(cand.today);
+    const box = rasterFormOf(cand, 'box');
+    expect(box).toMatchObject({ over: true, points: cand.today.points });
+    expect(box).not.toBe(cand.today);
+    expect(cand.today.over).toBeUndefined();
   });
 });

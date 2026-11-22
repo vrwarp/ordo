@@ -69,7 +69,12 @@ import {
   rasterPlaceholder,
   rawPointCost,
 } from './raster.ts';
-import type { RasterElement, RasterMemberPlan, RasterRunPlan } from './raster-plan.ts';
+import {
+  type RasterElement,
+  type RasterMemberPlan,
+  type RasterRunPlan,
+  rasterFormOf,
+} from './raster-plan.ts';
 import { CONVERTER_VERSION } from './version.ts';
 import { child, type PathCommand, pathCommands, type XNode } from './xml.ts';
 
@@ -371,9 +376,8 @@ function recipeForm(e: RasterElement): ShapeElement {
 /** The element in the form it has without its picture (D5): a candidate comes back as the planner worked out. */
 function putBackForm(m: RasterMemberPlan): ShapeElement {
   const e = m.element;
-  if (!m.candidate || !e.rasterOf) return e;
-  const today = e.rasterOf.today;
-  return { ...e, custom: m.form === 'box' ? { ...today, over: true } : today };
+  if (!m.candidate || !e.rasterOf || !m.form) return e;
+  return { ...e, custom: rasterFormOf(e.rasterOf, m.form) };
 }
 
 const ORIGIN_SRC = 'pptx';

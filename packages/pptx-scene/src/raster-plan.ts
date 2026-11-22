@@ -702,3 +702,40 @@ export function planRasters(
     wordsCut,
   };
 }
+
+// ── Leaving a shape as today leaves it ─────────────────────────────────────────────────────────────────────────
+
+/** The `custom` a candidate has in a form (D5): its stored paths as `customPaths` built them, or today's box. */
+export function rasterFormOf(cand: RasterCandidate, form: RasterForm): CustomPaths {
+  return form === 'box' ? { ...cand.today, over: true } : cand.today;
+}
+
+/**
+ * Leave a candidate as the converter leaves a shape of that form today: its `custom` as `rasterFormOf` says, its
+ * `support` and `reasons` as the walk sets them (a box is residual with the reason 'custGeom': the art draws it, or
+ * its legacy shape; a shape drawn as its stored paths is native again), and the run mark gone. For the candidates
+ * no run claims (`applyUnclaimedForms`, before the slide is classified) and for the members of a run whose picture
+ * could not be made, which the job puts back and the emitter writes by hand.
+ */
+export function applyRasterForm(e: RasterElement, form: RasterForm): void {
+  const cand = e.rasterOf;
+  if (!cand) return;
+  e.custom = rasterFormOf(cand, form);
+  delete e.raster;
+  const reasons = (e.reasons ?? []).filter((r) => r !== 'custGeom');
+  if (form === 'box') {
+    e.support = 'residual';
+    reasons.push('custGeom');
+  } else if (e.support === 'residual') e.support = reasons.length ? 'approx' : 'native';
+  if (reasons.length) e.reasons = reasons;
+  else delete e.reasons;
+}
+
+/** Apply the put-back form of every candidate the plan left out of a run (see `applyRasterForm`). */
+export function applyUnclaimedForms(elements: readonly Element[], plan: RasterPlan): void {
+  elements.forEach((e, i) => {
+    const form = plan.forms[i];
+    if (form && e.kind === 'shape' && (e as RasterElement).raster === undefined)
+      applyRasterForm(e as RasterElement, form);
+  });
+}
