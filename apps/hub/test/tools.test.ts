@@ -252,3 +252,94 @@ describe('pdftoppm and the capabilities (design/27 M9)', () => {
     }
   });
 });
+
+describe("Chromium, the hub's picture maker (RM-H7, design/29 decision 4)", () => {
+  const noOffice = { libreoffice: { mode: 'off' as const, exe: '' } };
+
+  it('a Chromium that says its version is available, with the start-up line and no change to the capabilities', async () => {
+    const exe = script(
+      'chromium-ok',
+      'chromium',
+      'echo "Chromium 126.0.6478.182 built on Debian GNU/Linux 12 (bookworm)"',
+    );
+    const l = lines();
+    const tools = new HubTools({ ...noOffice, chromium: { path: exe, sandbox: false } }, l.log);
+    expect(tools.chromium().state).toBe('checking');
+    expect(tools.has('chromium')).toBe(false);
+    await tools.ready;
+    expect(tools.chromium()).toMatchObject({ state: 'available', exe, version: '126.0.6478.182' });
+    expect(tools.has('chromium')).toBe(true);
+    expect(l.out.map((x) => x.msg)).toContain('chromium: available (Chromium 126.0.6478.182)');
+    // The capabilities answer is not changed by it.
+    const without = new HubTools(
+      { ...noOffice, chromium: { path: join(dir, 'nowhere', 'chromium'), sandbox: false } },
+      lines().log,
+    );
+    await without.ready;
+    expect(without.has('chromium')).toBe(false);
+    expect(tools.capabilities()).toEqual(without.capabilities());
+    expect(Object.keys(tools.capabilities())).not.toContain('chromium');
+  });
+
+  it('Chrome for Testing answers too', async () => {
+    const exe = script('chromium-cft', 'chrome', 'echo "Google Chrome for Testing 153.0.8010.12 "');
+    const tools = new HubTools({ ...noOffice, chromium: { path: exe, sandbox: false } }, lines().log);
+    await tools.ready;
+    expect(tools.chromium()).toMatchObject({ state: 'available', version: '153.0.8010.12' });
+  });
+
+  it('a Chromium that is not installed is absent and the line says what is off', async () => {
+    const l = lines();
+    const tools = new HubTools(
+      { ...noOffice, chromium: { path: join(dir, 'nowhere', 'chromium'), sandbox: false } },
+      l.log,
+    );
+    await tools.ready;
+    expect(tools.chromium().state).toBe('absent');
+    expect(tools.has('chromium')).toBe(false);
+    expect(l.out.find((x) => /^chromium: absent/.test(x.msg))?.msg).toMatch(
+      /is not installed\): pictures of many-point shapes are off$/,
+    );
+  });
+
+  it('a Chromium that says nothing, or exits at once, or hangs past the probe is broken (not absent)', async () => {
+    const quiet = script('chromium-quiet', 'chromium', 'exit 0');
+    const hang = script('chromium-hang', 'chromium', 'sleep 5');
+    const quietTools = new HubTools({ ...noOffice, chromium: { path: quiet, sandbox: false } }, lines().log);
+    await quietTools.ready;
+    expect(quietTools.chromium()).toMatchObject({ state: 'broken', exe: quiet });
+    const l = lines();
+    const hangTools = new HubTools({ ...noOffice, chromium: { path: hang, sandbox: false } }, l.log, {
+      probeMs: 200,
+    });
+    await hangTools.ready;
+    expect(hangTools.chromium().state).toBe('broken');
+    expect(hangTools.has('chromium')).toBe(false);
+    expect(l.out.find((x) => /^chromium: broken/.test(x.msg))?.level).toBe('warn');
+  });
+
+  it('a run that finds the browser gone marks it absent, logged once', async () => {
+    const exe = script('chromium-gone', 'chromium', 'echo "Chromium 126.0.6478.182"');
+    const l = lines();
+    const tools = new HubTools({ ...noOffice, chromium: { path: exe, sandbox: false } }, l.log);
+    await tools.ready;
+    tools.markMissing('chromium', 'chromium: spawn chromium ENOENT');
+    tools.markMissing('chromium', 'again');
+    expect(tools.chromium().state).toBe('absent');
+    expect(tools.has('chromium')).toBe(false);
+    expect(l.out.filter((x) => /^chromium: gone/.test(x.msg))).toHaveLength(1);
+  });
+
+  it('a hub built by hand has no Chromium unless a test says so', async () => {
+    const none = HubTools.fixed();
+    await none.ready;
+    expect(none.has('chromium')).toBe(false);
+    const some = HubTools.fixed({ chromium: 'available' });
+    await some.ready;
+    expect(some.has('chromium')).toBe(true);
+    expect(some.chromium()).toMatchObject({ state: 'available' });
+    // the other tools are as they were
+    expect(some.has('libreoffice')).toBe(true);
+    expect(some.has('pdftoppm')).toBe(true);
+  });
+});

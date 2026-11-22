@@ -9,7 +9,10 @@ import {
   CMD_MOVE,
   CMD_QUAD,
   type CompiledGeom,
+  GEOM_COMPILE,
   GEOM_LIMITS,
+  type GeomLimitsOverride,
+  limitOr,
   PATH_FILLS,
   PATH_OP_ARITY,
   type PathFill,
@@ -119,13 +122,17 @@ function note(notes: GeomNotes | undefined, msg: string): void {
   if (notes.messages.length < 32 && !notes.messages.includes(msg)) notes.messages.push(msg);
 }
 
-/** Builds one compiled path from its evaluated slots; `sx`, `sy` scale its space to the box. */
+/**
+ * Builds one compiled path from its evaluated slots; `sx`, `sy` scale its space to the box; `limit` is the most
+ * points it keeps (GEOM_COMPILE.points unless the caller of `buildGeom` gave its own).
+ */
 function buildPath(
   c: readonly number[],
   vals: Float64Array,
   sx: number,
   sy: number,
   notes: GeomNotes | undefined,
+  limit: number = GEOM_COMPILE.points,
 ): { cmds: number[]; pts: number[] } {
   const cmds: number[] = [];
   const pts: number[] = [];
@@ -138,7 +145,6 @@ function buildPath(
   let sy0 = 0;
   let last = -1;
   let points = 0;
-  const limit = GEOM_LIMITS.points;
   const push = (x: number, y: number): void => {
     pts.push(coord(x * sx), coord(y * sy));
   };
@@ -243,7 +249,9 @@ function buildPath(
 
 /**
  * Builds a compiled geometry at a w x h box (the caller's units). `adj` overrides adjust values by name (a
- * shape's a:avLst, ShapeGeom.adj); `notes` collects what was dropped.
+ * shape's a:avLst, ShapeGeom.adj); `notes` collects what was dropped. `limits`, when given, replaces the points
+ * of a path and the number of paths GEOM_COMPILE holds for this call only: the builder enforces the same two
+ * numbers a second time, so a geometry compiled wide (`compileGeom`'s own `limits`) is built with the same ones.
  */
 export function buildGeom(
   geom: CompiledGeom,
@@ -251,7 +259,10 @@ export function buildGeom(
   h: number,
   adj?: AdjustPairs,
   notes?: GeomNotes,
+  limits?: GeomLimitsOverride,
 ): BuiltGeom {
+  const maxPaths = limitOr(limits?.paths, GEOM_COMPILE.paths);
+  const maxPoints = limitOr(limits?.points, GEOM_COMPILE.points);
   const bw = side(w);
   const bh = side(h);
   const shapeVals = evalGuides(geom, { w: bw, h: bh }, adj);
@@ -266,10 +277,9 @@ export function buildGeom(
   };
 
   const src = geom.p;
-  if (src.length > GEOM_LIMITS.paths)
-    note(notes, `${src.length - GEOM_LIMITS.paths} paths over the limit dropped`);
+  if (src.length > maxPaths) note(notes, `${src.length - maxPaths} paths over the limit dropped`);
   const paths: GeomPath[] = [];
-  for (let i = 0; i < Math.min(src.length, GEOM_LIMITS.paths); i++) {
+  for (let i = 0; i < Math.min(src.length, maxPaths); i++) {
     const p = src[i]!;
     const pw = space(p.w);
     const ph = space(p.h);
@@ -280,6 +290,7 @@ export function buildGeom(
       pw > 0 ? bw / pw : 1,
       ph > 0 ? bh / ph : 1,
       notes,
+      maxPoints,
     );
     paths.push({
       cmds: built.cmds,

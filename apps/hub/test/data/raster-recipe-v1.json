@@ -1,0 +1,115 @@
+{
+  "v": 1,
+  "w": 80,
+  "h": 60,
+  "box": {
+    "x": 0,
+    "y": 0,
+    "w": 40,
+    "h": 30
+  },
+  "density": 2,
+  "members": [
+    {
+      "shape": {
+        "type": "shape",
+        "box": {
+          "x": 2,
+          "y": 2,
+          "w": 20,
+          "h": 20,
+          "rotation": 0
+        },
+        "shape": "rect",
+        "fill": {
+          "r": 30,
+          "g": 120,
+          "b": 200,
+          "a": 1
+        },
+        "opacity": 1,
+        "radius": 0,
+        "stroke": {
+          "width": 1,
+          "color": {
+            "r": 0,
+            "g": 0,
+            "b": 0,
+            "a": 1
+          }
+        }
+      },
+      "geom": {
+        "paths": [
+          {
+            "cmds": "AAEBAQUAAQEBBQ==",
+            "pts": "AAAAAAAAAAAAAKBBAAAAAAAAoEEAAKBBAAAAAAAAoEEAAKBAAACgQAAAcEEAAKBAAABwQQAAcEEAAKBAAABwQQ==",
+            "fill": "norm",
+            "stroke": true
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "type": "shape",
+        "box": {
+          "x": 22,
+          "y": 4,
+          "w": 16,
+          "h": 12,
+          "rotation": 0
+        },
+        "shape": "rect",
+        "fill": {
+          "r": 240,
+          "g": 220,
+          "b": 40,
+          "a": 0.5
+        },
+        "opacity": 1,
+        "radius": 0
+      },
+      "geom": {
+        "paths": [
+          {
+            "cmds": "AAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEF",
+            "pts": "SOF6QQAAwECgwXpB+kTIQKpiekG6hdBAl8R5Qey92EC853hBV+ngQI7Md0HaA+lAo3N2QTkJ8UCl3XRBPPX4QGsLc0H6YQBB0v1wQaA4BEEHtm5BmPwHQSY1bEH3qwtBcHxpQdRED0FljWZBUMUSQXdpY0GZKxZBSRJgQfd1GUGPiVxBvqIcQTHRWEE2sB9B8upUQeWcIkH92FBBLGclQUmdTEG3DShBITpIQRmPKkHAsUNBDOosQXAGP0FUHS9Bnzo6Qd0nMUHKUDVBhQgzQX9LMEFevjRBTS0rQZFINkHT+CVBO6Y3QdGwIEG71jhB5lcbQWrZOUHl8BVBza06QZ5+EEFyUztB0QMLQQDKO0FRgwVBOBE8QQAAAEH2KDxBXfn0QDgRPEFd+OlAAMo7QcUC30ByUztBNh7UQM2tOkEzUMlAatk5QV6evkC71jhBWg60QDumN0FlpalAkUg2QQFpn0BevjRBbF6VQIUIM0HCiotA3ScxQR/zgUBUHS9BADlxQAzqLEF6F19AGY8qQduKTUC3DShBC5w8QCxnJUE3VCxA5ZwiQT27HEA2sB9BwtkNQL6iHEG5bf8/93UZQUq05D+ZKxZB2ZTLP1DFEkGCHLQ/1EQPQc1Wnj/3qwtByk+KP5j8B0HdInA/oDgEQUlJTz/6YQBBtyUyPzz1+EDKxRg/OQnxQCI3Az/aA+lAeAjjPlfp4EARbcc+7L3YQL2qsz66hdBA98unPvpEyEAK16M+AADAQPfLpz4Gu7dAvaqzPkZ6r0ARbcc+FEKnQHgI4z6pFp9AIjcDPyb8lkDKxRg/x/aOQLclMj/ECodASUlPPxh4fkDdInA/gh1vQMpPij+iDWBAzVaePyJQUUCCHLQ/r+xCQNmUyz/A6jRASrTkP5xRJ0C5bf8/JCgaQMLZDUAIdQ1APbscQCk/AUA3VCxA2xjrPwucPECkxtQ/24pNQEuSvz96F19AOIerPwA5cUCjr5g/H/OBQGIVhz/CiotANIJtP2xelUCvd08/AWmfQCYaND9lpalA93YbP1oOtEBJnAU/Xp6+QK4o5T4zUMlAs9LEPjYe1EBaRqo+xQLfQM2RlT5d+OlADsCGPl359EDysXs+AAAAQY/CdT5RgwVB8rF7PtEDC0EOwIY+nn4QQc2RlT7l8BVBWkaqPuZXG0Gz0sQ+0bAgQa4o5T7T+CVBSZwFP00tK0H3dhs/f0swQSYaND/KUDVBr3dPP586OkE0gm0/cAY/QWIVhz/AsUNBo6+YPyE6SEE4h6s/SZ1MQUuSvz/92FBBpMbUP/LqVEHbGOs/MdFYQSk/AUCPiVxBCHUNQEkSYEEkKBpAd2ljQZxRJ0BljWZBwOo0QHB8aUGv7EJAJjVsQSJQUUAHtm5Bog1gQNL9cEGCHW9AawtzQRh4fkCl3XRBxAqHQKNzdkHH9o5Ajsx3QSb8lkC853hBqRafQJfEeUEUQqdAqmJ6QUZ6r0CgwXpBBru3QA==",
+            "fill": "norm",
+            "stroke": true
+          }
+        ]
+      },
+      "text": {
+        "type": "text",
+        "box": {
+          "x": 22,
+          "y": 4,
+          "w": 16,
+          "h": 12,
+          "rotation": 0
+        },
+        "text": "Amen",
+        "style": {
+          "fontFamily": "Carlito",
+          "fontWeight": 400,
+          "fontStyle": "normal",
+          "fontSizePx": 6,
+          "color": {
+            "r": 20,
+            "g": 20,
+            "b": 60,
+            "a": 1
+          },
+          "align": "center",
+          "valign": "middle",
+          "lineHeight": 1.2,
+          "letterSpacing": 0,
+          "padding": 0
+        },
+        "opacity": 1
+      },
+      "families": ["Carlito"]
+    }
+  ]
+}

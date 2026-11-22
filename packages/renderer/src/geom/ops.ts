@@ -206,6 +206,35 @@ export const GEOM_LIMITS = {
   pathSpace: 1e9,
 } as const;
 
+/**
+ * GEOM_LIMITS, one name per use (the owner's Q53: a wide outline is drawn as a picture and NO limit is raised).
+ * Each holds today's numbers and `limits.test.ts` pins every one of them and that they are pairwise equal; a
+ * caller that must read more than the screens draw passes its own `{ points, paths }` to `compileGeom` and
+ * `buildGeom` (`GeomLimitsOverride`) for that one call and never moves a number here:
+ * - GEOM_READ: what the converter may read from a deck (a picture of a wide outline is made from it),
+ * - GEOM_COMPILE: what `compileGeom` and `buildGeom` keep when no override is given,
+ * - GEOM_STORE: what a stored geometry keeps (ShapeGeom.paths and `stored.ts`),
+ * - GEOM_CLAMP: what the screens draw (`clamp.ts`).
+ */
+export const GEOM_READ = { ...GEOM_LIMITS } as const;
+export const GEOM_COMPILE = { ...GEOM_LIMITS } as const;
+export const GEOM_STORE = { ...GEOM_LIMITS } as const;
+export const GEOM_CLAMP = { ...GEOM_LIMITS } as const;
+
+/**
+ * The points and paths one `compileGeom` or `buildGeom` call keeps in place of GEOM_COMPILE's, read only when
+ * given (every existing caller passes none). A value that is not a positive whole number is ignored.
+ */
+export interface GeomLimitsOverride {
+  readonly points?: number;
+  readonly paths?: number;
+}
+
+/** A limit override's number: the given one if it is a positive whole number, else the default. */
+export function limitOr(given: number | undefined, fallback: number): number {
+  return typeof given === 'number' && Number.isSafeInteger(given) && given >= 1 ? given : fallback;
+}
+
 /** One compiled path of a geometry. */
 export interface CompiledPath {
   /** The path's own coordinate space, scaled to the box; absent or 0 means the box itself. */

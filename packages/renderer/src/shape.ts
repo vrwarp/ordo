@@ -93,7 +93,19 @@ const plans = new WeakMap<ShapeObject, { ctx: Ctx2D; plan: Plan; pending: boolea
 function planOf(ctx: Ctx2D, o: ShapeObject): Plan {
   const hit = plans.get(o);
   if (hit && hit.ctx === ctx && !(hit.pending && !geomPending(o.geom))) return hit.plan;
-  const built = shapeGeometry(o);
+  const plan = planFrom(ctx, o, shapeGeometry(o));
+  plans.set(o, { ctx, plan, pending: geomPending(o.geom) });
+  return plan;
+}
+
+export type { Plan as ShapePlan };
+
+/**
+ * The plan of a shape over a geometry the caller built: its fill, stroke and drawn bounds (the tail of `planOf`,
+ * which builds its geometry from the stored one and memoises). Exported for `geom/wide.ts`, which draws a wide
+ * outline built by the caller and so cannot go through `shapeGeometry`; no memo, no behaviour of its own.
+ */
+export function planFrom(ctx: Ctx2D, o: ShapeObject, built: BuiltGeom): Plan {
   const line = o.shape === 'line' && !o.geom;
   const g = o.gradient;
   let fill: GeomFill | null = null;
@@ -122,9 +134,7 @@ function planOf(ctx: Ctx2D, o: ShapeObject): Plan {
   // What the effect layers are made over: the geometry grown by its outline's joins, caps and arrowheads
   // (geom/bounds.ts, the same bounds the effect budget sizes them by).
   const bounds = drawnBounds(built, stroke ? outline : undefined);
-  const plan = { built, fill, stroke, bounds };
-  plans.set(o, { ctx, plan, pending: geomPending(o.geom) });
-  return plan;
+  return { built, fill, stroke, bounds };
 }
 
 /**
@@ -154,7 +164,8 @@ export function placeBox(ctx: Ctx2D, box: Box, scale: number, flipH = false, fli
   ctx.translate(-box.w / 2, -box.h / 2);
 }
 
-function styleLines(c: Ctx2D, o: ShapeObject): void {
+/** The join, miter limit and cap a shape's outline is stroked with (exported for `geom/wide.ts`). */
+export function styleLines(c: Ctx2D, o: ShapeObject): void {
   const { join, cap } = lineStyleOf(o);
   c.lineJoin = join;
   c.miterLimit = SHAPE_MITER_LIMIT;

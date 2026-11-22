@@ -6,13 +6,16 @@ import {
   CMD_QUAD,
   type CompiledGeom,
   type CompiledPath,
+  GEOM_COMPILE,
   GEOM_LIMITS,
+  type GeomLimitsOverride,
   GUIDE_OP_ARITY,
   GUIDE_STRIDE,
   GUIDE_OPS,
   HANDLE_POLAR,
   HANDLE_STRIDE,
   HANDLE_XY,
+  limitOr,
   OP_VAL,
   PATH_FILLS,
   PATH_OP_ARITY,
@@ -220,9 +223,13 @@ function pointCost(op: number): number {
 
 /**
  * Compiles a geometry. `notes`, when given, collects what was replaced by 0 or dropped (the generator passes
- * one and requires it to stay empty).
+ * one and requires it to stay empty). `limits`, when given, replaces the points of a path and the number of
+ * paths GEOM_COMPILE holds for this call only (the converter reads a wide outline whole to draw a picture of
+ * it); every other caller passes none and gets today's result.
  */
-export function compileGeom(src: GeomSource, notes?: GeomNotes): CompiledGeom {
+export function compileGeom(src: GeomSource, notes?: GeomNotes, limits?: GeomLimitsOverride): CompiledGeom {
+  const maxPaths = limitOr(limits?.paths, GEOM_COMPILE.paths);
+  const maxPoints = limitOr(limits?.points, GEOM_COMPILE.points);
   const k: number[] = [];
   const kIndex = new Map<number, number>();
   // Slots are numbered once the constants are known; operands hold provisional references until then: a
@@ -295,10 +302,9 @@ export function compileGeom(src: GeomSource, notes?: GeomNotes): CompiledGeom {
   ];
 
   const pathsIn = src.paths ?? [];
-  if (pathsIn.length > GEOM_LIMITS.paths)
-    note(notes, `${pathsIn.length - GEOM_LIMITS.paths} paths over the limit dropped`);
+  if (pathsIn.length > maxPaths) note(notes, `${pathsIn.length - maxPaths} paths over the limit dropped`);
   const paths: { w: number; h: number; f: number; s: boolean; e: boolean; c: number[] }[] = [];
-  for (const ps of pathsIn.slice(0, GEOM_LIMITS.paths)) {
+  for (const ps of pathsIn.slice(0, maxPaths)) {
     const fill = ps.fill === undefined ? 0 : PATH_FILLS.indexOf(ps.fill as (typeof PATH_FILLS)[number]);
     if (fill < 0) note(notes, `unknown path fill '${printable(ps.fill!)}' read as norm`);
     const c: number[] = [];
@@ -306,7 +312,7 @@ export function compileGeom(src: GeomSource, notes?: GeomNotes): CompiledGeom {
     for (const cmd of ps.cmds) {
       const op = PATH_OPS.indexOf(cmd.op as (typeof PATH_OPS)[number]);
       points += op < 0 ? 1 : pointCost(op);
-      if (points > GEOM_LIMITS.points) {
+      if (points > maxPoints) {
         note(notes, 'path points over the limit dropped');
         break;
       }

@@ -970,3 +970,32 @@ A table whose vertical cells are all East Asian vertical (`eaVert`) is the table
   the Import tab on a hub without it; where the hub names a Hangul face, the browser's scene refused) and
   `e2e/ipad/table-targets.spec.ts` (a tap and typing in the narrow vertical cell, its vert kept).
 <!-- /r2b:vert-cells -->
+
+<!-- raster-maker:readme -->
+## The picture maker (raster-maker, sub-wave 3)
+
+The hub's own headless Chromium draws the pictures of many-point shapes at import (design/29 decision 4, design/20
+'Pictures of many-point shapes'). Four new files and one tool, none of them on a live path:
+
+- `raster-recipe.ts`: the written wire format of one picture (a run of shapes in z order: each shape's stored fields
+  without its geometry, its geometry built at its box as command bytes and little-endian float32 points, a text
+  member's text object and font families) and its validator `checkRecipe`: pure, refuses a hostile recipe (every cap,
+  every unknown key, a NaN, a wrong length) before anything is drawn, runs in node before the browser and again in the page.
+  The golden vector `test/data/raster-recipe-v1.json` and its hash `.sha256` tie it to the planner's TypeScript type.
+- `raster-page.ts`: the page, built by `build.mjs` as a fourth esbuild entry to `dist/raster-page.js` (a hub file, not
+  one of the apps' bundles). It draws each member with the renderer's `drawShapeWide` (packages/renderer/src/geom/
+  wide.ts) and the words with `drawObject`, over a canvas at 2 device px per logical px, and returns a PNG. Fonts are
+  the library's and the bundled faces only, as file URLs; a character no face covers, or text in a font no registered
+  face provides, fails the whole run with the reason 'font'.
+- `rasterPage.ts`: the driver, a hardened copy of the old preview driver (design 27 M8 deletes that package): Chromium
+  started over the DevTools pipe (never a port), `nice -n 19` in its own process group killed whole on close, abort and
+  live start, a memory flag, hinting off, no network, one browser at a time hub-wide, one picture at a time, 60 s a
+  picture, the profile folder removed on every path.
+- `rasters.ts`: `rastersFor` (the ladder), `renderRecipe` (one picture), `drawRasters` (the loop: no picture starts
+  while ANY service is live, a watcher of at most 250 ms kills the browser's group if one goes live in the middle of a
+  picture, a crash is relaunched once, each finished picture goes to the planner's `accept`).
+- `tools.ts`: the 'chromium' entry of the tool list (`has`, `chromium()`, `markMissing`, one start-up line).
+
+`ORDO_CHROMIUM` names the browser (also used by pptx-preview) and `ORDO_CHROMIUM_SANDBOX=1` keeps its sandbox. A hub
+with no Chromium that answers plans no pictures of shapes. Nothing here stores anything: the planner's store step does.
+<!-- /raster-maker:readme -->

@@ -457,6 +457,31 @@ for this: the `media` deck of the fidelity corpus, and LibreOffice's own test do
 pptx`: `video-loop-mute`, `tdf106867`, `bnc591147`, `narration`, `tdf44223`, `tdf148478_transitionMusic`,
 `animation-sound-*`), which are real-world decks attached to bug reports.
 
+### Pictures of many-point shapes (the picture maker)
+
+<!-- raster-maker:ladder -->
+A custom-path shape with more points than the screens may draw (more than 128 points, or past any converter limit:
+8 paths, 4,096 points a path, 65,536 a slide) is not cut to a box or left out: the owner's Q53 draws it as a picture
+at import and raises no limit. WHO DRAWS the picture is decided once per import by `rastersFor` (apps/hub/src/pptx/
+rasters.ts), a ladder over the tools the hub has:
+
+1. the hub's own headless Chromium running ordo's renderer in a small page (`ORDO_CHROMIUM`; `has('chromium')` of the
+   tool list, which probes `<chromium> --version`): the picture is made from a written recipe (the shapes' built
+   geometry and, for a shape with text, the text object), shape by shape with `drawShapeWide` and the words by the
+   screens' own text drawing, so a shape within today's limits comes out pixel for pixel as the screens draw it;
+2. (a PDF route through poppler is NOT built: only if the Chromium test had failed; the owner's Q65, default no);
+3. LibreOffice's art as today, on a hub that has LibreOffice and no Chromium (the report says the pictures of these
+   shapes come from LibreOffice, as before);
+4. today's boxes, on a hub with neither (the report says this computer cannot draw pictures of shapes: it needs Chromium).
+
+The picture step runs in the light import jobs only, is deferred while any service is live, runs niced in its own
+process group and never on a GO path (a stand-in rule of design/29 decision 4). The report lines and the converter's
+use of the maker are the converter track's (design/15 and design/27). The words inside a picture are no longer text
+(the owner's Q53.h); a later project makes pictured shapes editable (Q62). Measured on this machine (4 shared CPUs, no
+GPU): a 3840x2160 picture takes 92 to 304 ms in the page and its PNG 0.2 to 3.7 MB; shapes with a shadow, a glow or a
+soft edge cost two to three times the time and memory (the owner's open Q53.i, default: they stay as today).
+<!-- /raster-maker:ladder -->
+
 ### Pictures of the native import
 
 The native import stores each picture part its slides use once, prepared for how it is shown (design/27 §4,
