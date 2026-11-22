@@ -220,7 +220,7 @@ function expectWhole({ slides, log }: { slides: StoredSlide[]; log: string }, jo
   expect(log).toMatch(/2 slides are very detailed and were kept whole/);
 }
 
-test('on a hub with LibreOffice the heavy slides come in whole, with their records, and the Audience draws past 200 objects', async ({
+test('on a hub with LibreOffice the heavy slides come in whole, with their records, the go-live check names them and the Audience draws them', async ({
   context,
 }) => {
   test.setTimeout(480_000);
