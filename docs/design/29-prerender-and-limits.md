@@ -319,6 +319,40 @@ recompute, never a wrong key), so a presentation PUT adds one pool call only whe
 service pauses all but its own keys: 503 `paused_during_service`), and the goLive bundle lists them
 (`slideHeads`, `prerenders`, `prerenderKeys`, design/12 "HTTP API").
 
+<!-- import-files:begin 1.3 -->
+**As built in sub-wave 3 (import-files, the data-safety half, merged first whatever the route's gate says).** Nothing at the
+base wrote a slide file at import, and five guards cut a slide over 1,000 objects before one could be made; the route that
+writes them is import-files' second half (Q54, the pool kind, `SlideFiles.storeBytes`, the files stored before the one
+synchronous save, the byte cap, the disk floor). What is built before it, so that nothing can go stale or unbounded when the
+first file is written:
+
+- **The pure code** (`packages/domain/src/slidefile.ts`, additions only; `heavyform.ts`, new; neither is in the version
+  digest): `FullSlide` (a `Slide` of up to 20,000 objects, never stored inline), `INLINE_OBJECTS_MAX` 1,000 (the schema bound),
+  `FILE_OBJECTS_MAX` (`SLIDE_FILE_LIMITS.objects`, the bake clamp's and the frame's bound: pinned equal by
+  `packages/renderer/src/file-bounds.test.ts`, which also pins `GEOM_LIMITS`: no limit is raised), `STAND_IN_BYTES_MAX` 192 KiB,
+  `TEXT_DRAWN_MAX` 10,000 (what a screen draws and the import keeps of one box; `standInOf` merges up to 20,000), a code on the
+  three refusals of `slideFileOf`, and `heavyForm(full, { why, live })`: the slide file, the bounded stand-in with the record that
+  names it (`why` as the caller's `easyPlan` said, `live` as given: `[]` in this release, so Q24.a needs no change here) and the
+  head row's whole `uses`; or a named refusal (`objects`, `bytes`, `object`, `uses`, `standin`) with a plain stand-in and NO
+  record. The stand-in's text is laid out again within 10,000 characters a box and the 200 objects of a screen with every word
+  kept (a long box is split in place; whole boxes from the end are merged into the plain words before any word is cut); past
+  192 KiB the text from the end is cut (the first box and the background stay), then the smallest pictures.
+- **The refused slide gets no record.** A slide the file cannot hold is stored as its plain stand-in with the
+  `Slide.pptx.missing` entry `slide:too-large` (`PRERENDER_REFUSED_MISSING`) and no `prerender`: a record without a file looks
+  exactly like an inline whole slide, and a baker would draw a picture of the stand-in as if it were the slide. `planRecord`
+  returns such a slide unchanged.
+- **A stand-in is never changed beside its file** (`staleStandIns(prev, next)`): the picture and its key come from the file, so
+  a changed stand-in would leave both as they were while the screens drew something else. The editor refuses it in `change()`
+  and in `save()` (which also covers undo, redo, the hub's job saves and merging someone else's: none go through `change()`)
+  with "This slide is too detailed to edit shape by shape: it is kept whole on the hub. Its notes, timing and transition can
+  be changed; Reset slide builds it again from the PowerPoint file." (a change across slides adds "change the other slides one by
+  one"); the hub's `PUT /presentations/:id` answers 409 `stand_in_stale`. A slide's notes, timing, transition, hidden flag, MIDI
+  cues, sound and bottom-third words are not objects and stay editable. The hub's own writers are pinned never to be doors:
+  `patchSlide` returns such a slide unchanged, Make editable answers 400 `not_imported`, the text repair changes only
+  `imported.textBoxes` and `textAligned`, which the key's drawn part leaves out. A writer that changes a stand-in's objects must
+  call `staleStandIns`.
+<!-- import-files:end 1.3 -->
+
 <!-- store-2:costs -->
 _What the store costs a save and a listing, as measured in sub-wave 3 (store-2)._ The same build was started with
 `ORDO_PRERENDER=off` and `on` and their saves alternated one by one (108 per arm and case, on a shared machine: read the
