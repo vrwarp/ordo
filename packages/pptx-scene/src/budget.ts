@@ -118,7 +118,24 @@ export interface BudgetOptions {
    * (the kill switch): its M6 group, counted as the objects it emits, and M6's cell cap (`m6TableCap`).
    */
   tables?: boolean;
+  /**
+   * Q24.b (the first pre-render release): keep an ELIGIBLE slide whole (`wholeSlide`): the guard and the picture
+   * limit are skipped for a slide with no anchor and at most `WHOLE_OBJECTS_MAX` planned objects. Default false:
+   * the plan is today's.
+   */
+  whole?: boolean;
+  /**
+   * Which backgrounds are anchors (Q25.c.b, decided: 'motion', only a video counts): 'motion' (the default) a
+   * background picture is none; 'own' (built and tested, not the default) any picture background is one. A
+   * background that is a video is a clip (`wholeAnchorKinds`) under both.
+   */
+  anchors?: 'own' | 'motion';
+  /** Q24.a's gate (`WHOLE_ANCHORED`): true lifts every anchor, for the tests and the census. */
+  anchored?: boolean;
 }
+
+/** Why a slide is not kept whole: a clip that plays or loops, a picture background ('own' only), the object bound. */
+export type WholeAnchorKind = 'clip' | 'background' | 'bound';
 
 /** What the budgets did to a slide (its notes say it; the census counts it). */
 export interface BudgetPlan {
@@ -140,6 +157,41 @@ export interface BudgetPlan {
   /** The slide's objects and distinct pictures once planned. */
   objects: number;
   pictures: number;
+  /** Kept whole (`wholeSlide`): no guard and no picture limit. Never true without `BudgetOptions.whole`. */
+  whole: boolean;
+  /** With `BudgetOptions.whole`, why the slide is NOT kept whole (the census, Q24.a and Q24.c read it); else empty. */
+  anchorKinds: WholeAnchorKind[];
+}
+
+/**
+ * The inline bound of a slide kept whole (Q28.c, Q54): the most objects one stored slide holds
+ * (`@ordo/domain` `Slide.objects`, `emit.ts` `MAX_OBJECTS`: `budget.whole.test.ts` pins them equal; this module
+ * cannot import `emit.ts`, which imports it). A slide planned past it follows today's plan.
+ */
+export const WHOLE_OBJECTS_MAX = 1_000;
+/**
+ * Easy-plan's `PRERENDER_ANCHORED` (`@ordo/domain` `prerender.ts`; false), written out: this package imports
+ * no domain module but the pure tables (`purity.test.ts`). `budget.whole.test.ts` pins the two equal, so
+ * flipping Q24.a's gate fails there until both change in one commit.
+ */
+export const WHOLE_ANCHORED = false;
+
+/** STUB (red first): `wholeSlide` is not written yet. */
+export function wholeSlide(
+  _elements: readonly Element[],
+  _background: Background,
+  _opts: BudgetOptions = {},
+): boolean {
+  return false;
+}
+
+/** STUB (red first): the anchors are not read yet. */
+export function wholeAnchorKinds(
+  _elements: readonly Element[],
+  _background: Background,
+  _opts: BudgetOptions = {},
+): WholeAnchorKind[] {
+  return [];
 }
 
 // ── Culling ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -388,6 +440,8 @@ export function fitBudgets(
     art: 0,
     objects: 0,
     pictures: 0,
+    whole: false,
+    anchorKinds: [],
   };
   const art = artRange(elements);
   const inArt = new Set(art?.elements);

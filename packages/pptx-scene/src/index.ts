@@ -62,6 +62,9 @@ export {
   MAX_DRAWN_OBJECTS,
   MAX_DRAWN_PICTURES,
   MAX_SLIDE_OBJECTS_TEXT,
+  WHOLE_ANCHORED,
+  WHOLE_OBJECTS_MAX,
+  type WholeAnchorKind,
 } from './budget.ts';
 export { DECOR_PREFIX, type PlatePlan, platePlan } from './decor.ts';
 export { type EmittedSheet, SHEET_DENSITY, SHEET_PREFIX } from './sheet.ts';
@@ -154,6 +157,20 @@ export interface ParseOptions {
    * (`BudgetOptions.libreoffice`). Parse and emit a deck with the same flag.
    */
   libreoffice?: boolean;
+  /**
+   * Q24.b (the first pre-render release): keep an eligible slide whole instead of cutting it (`budget.ts`
+   * `BudgetOptions.whole`): no guard, no picture limit, within `WHOLE_OBJECTS_MAX` planned objects. Default
+   * false: the converter plans as before. Parse and emit a deck with the same flag.
+   */
+  wholeSlides?: boolean;
+  /**
+   * Which backgrounds keep a slide out of `wholeSlides` (Q25.c.b, decided: 'motion', the default: only a video
+   * counts; 'own': a picture background counts too). The converter cannot import the importers' constant
+   * (`WHOLE_BACKGROUND_ANCHORS`), so every caller passes it.
+   */
+  wholeAnchors?: 'own' | 'motion';
+  /** Q24.a's gate (`BudgetOptions.anchored`): the importers pass easy-plan's `PRERENDER_ANCHORED`. */
+  wholeAnchored?: boolean;
 }
 
 /** Families, weights and slants `ParseOptions.fontFace` is asked for per call (a deck can name thousands). */
@@ -309,6 +326,9 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
           sheets: opts.sheets !== false,
           libreoffice: opts.libreoffice !== false,
           tables: (opts.m9Writes ?? ALL_M9_FIELDS).has('table'),
+          ...(opts.wholeSlides === true ? { whole: true } : {}),
+          ...(opts.wholeAnchors ? { anchors: opts.wholeAnchors } : {}),
+          ...(opts.wholeAnchored !== undefined ? { anchored: opts.wholeAnchored } : {}),
         },
       });
       // W9 and W10 (design/29 section 3): a design past the reader's bounds and the shapes the walk cut are listed on the slide.
