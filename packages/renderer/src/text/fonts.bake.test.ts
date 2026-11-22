@@ -128,6 +128,17 @@ describe('the bake profile: what could not be resolved', () => {
     expect(r.bakeReport()).toEqual({ chain: [], empty: [], standIns: [] });
   });
 
+  it("bakeReset advances the generation of a bake resolver (memoised layouts are laid out again) and not a live one's", () => {
+    const b = bake();
+    const g = b.generation;
+    b.bakeReset();
+    expect(b.generation).toBe(g + 1);
+    const live = loadedResolver(undefined);
+    const gl = live.generation;
+    live.bakeReset();
+    expect(live.generation).toBe(gl);
+  });
+
   it('a live resolver reports nothing and records nothing', () => {
     const r = loadedResolver(undefined);
     r.font({ ...base, family: 'Garamond' });

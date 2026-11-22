@@ -530,11 +530,17 @@ export class FontResolver implements FontEnv {
     return { chain: [...r.chain].sort(), empty: [...r.empty].sort(), standIns: [...r.standIns].sort() };
   }
 
-  /** Forget the bake profile's report (a bake starts with a clean one). */
+  /**
+   * Forget the bake profile's report: a bake starts with a clean one. A bake resolver also advances `generation`, so
+   * the layouts an earlier bake of the same objects memoised (rich.ts) are laid out again and ask for their font
+   * strings again: the report is then complete whatever was cached. Nothing for a live resolver.
+   */
   bakeReset(): void {
+    if (this.#profile !== 'bake') return;
     this.#bake.chain.clear();
     this.#bake.empty.clear();
     this.#bake.standIns.clear();
+    this.#generation++;
   }
 
   /**

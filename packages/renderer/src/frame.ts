@@ -398,6 +398,11 @@ export interface FrameMakeOptions {
   readonly epoch?: number;
   /** The turn time a frame may take before it is dropped (default `FRAME_BUDGET_MS`): the bench measures past it. */
   readonly budgetMs?: number;
+  /**
+   * Told when one object's draw threw. The live frame passes none: it leaves the object out and goes on (a frame
+   * that must not lose a slide). The bake passes one, because a picture must not be made with an object missing.
+   */
+  readonly onError?: (o: SlideObject, err: unknown) => void;
 }
 
 type FrameStep =
@@ -569,11 +574,13 @@ function drawStep(
   o: SlideObject,
   scale: number,
   images?: ImageLookup,
+  onError?: (o: SlideObject, err: unknown) => void,
 ): void {
   try {
     drawObject(c as never, o, scale, images);
   } catch (err) {
     console.warn('[ordo frame] an object could not be drawn', err);
+    onError?.(o, err);
   }
 }
 
@@ -671,7 +678,7 @@ export async function makeFrame(
       try {
         const t0 = now();
         await run.slice(() => {
-          if (pic) drawStep(work.c, st.object, scale, pic.lookup);
+          if (pic) drawStep(work.c, st.object, scale, pic.lookup, opts.onError);
           work.c.getImageData(0, 0, 1, 1);
         });
         work.longestStep = Math.max(work.longestStep, now() - t0);
@@ -689,7 +696,7 @@ export async function makeFrame(
       if (!made) {
         // Not drawable here: its legacy copy, never left out.
         await run.slice(() => {
-          drawStep(work.c, withinDrawBudget([st.object])[0] ?? st.object, scale);
+          drawStep(work.c, withinDrawBudget([st.object])[0] ?? st.object, scale, undefined, opts.onError);
           work.c.getImageData(0, 0, 1, 1);
         });
       } else {
@@ -714,7 +721,13 @@ export async function makeFrame(
       await run.slice(() => {
         do {
           const t1 = now();
-          drawStep(work.c, (steps[work.index] as { object: SlideObject }).object, scale);
+          drawStep(
+            work.c,
+            (steps[work.index] as { object: SlideObject }).object,
+            scale,
+            undefined,
+            opts.onError,
+          );
           work.index++;
           work.steps++;
           work.longestStep = Math.max(work.longestStep, now() - t1);
