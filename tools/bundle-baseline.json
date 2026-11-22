@@ -5,20 +5,20 @@
   },
   "apps": {
     "operator": {
-      "initial": 515847,
-      "initialGzip": 163866,
-      "css": 65992,
-      "regularTotal": 2024570,
-      "regularTotalGzip": 657656
+      "initial": 558385,
+      "initialGzip": 177039,
+      "css": 69851,
+      "regularTotal": 2232981,
+      "regularTotalGzip": 732357
     },
     "output": {
-      "initial": 184068,
-      "initialGzip": 55658,
+      "initial": 185256,
+      "initialGzip": 55888,
       "css": 1599
     },
     "stage": {
-      "initial": 399942,
-      "initialGzip": 124184,
+      "initial": 401164,
+      "initialGzip": 124466,
       "css": 8343
     }
   }
