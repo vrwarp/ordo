@@ -485,7 +485,7 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
     keysWorker = k;
     k.onmessage = (ev) => {
       const m = ev?.data;
-      if (!m || m.t !== 'keys') return;
+      if (m?.t !== 'keys') return;
       const done = keysPending.get(m.id);
       if (!done) return;
       keysPending.delete(m.id);
