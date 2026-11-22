@@ -78,7 +78,7 @@ import { APP_VERSION } from './index.ts';
 // integrator records the merged digest once after the last merge.
 const RECORDED = {
   version: '0.10.0',
-  digest: '32f8d3acabe004d7dd5f527f07dd446a95e6a5d86f18c6dcf3e5e408b6652f1e',
+  digest: '4b9621ec4ea2e1d4ce6ef5b4220487fcd8d1e29bd7fd86831e444022e50511c6',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */
