@@ -27,9 +27,11 @@ import {
   type BudgetFit,
   type BudgetLevel,
   fitSlideBudget,
+  gridSlide,
   IMPORT_RESERVE_BYTES,
   type ImportSizePlan,
   jsonBytes,
+  MISSING_LIMITS,
   type MissingKind,
   minimalSlide,
   planImportSizes,
@@ -39,6 +41,7 @@ import {
   type SlideObject,
   type SlidePptx,
 } from '@ordo/domain';
+import { MAX_DRAWN_OBJECTS, MAX_DRAWN_PICTURES } from '@ordo/pptx-scene/budget.ts';
 import { sanitizePresentation } from './sanitize.ts';
 
 /** Characters of an id as the hub writes it (a ULID) and of a stored file's name (a SHA-256 in hex). */
@@ -149,22 +152,69 @@ export type LadderSlide = {
   plain: number;
   /** What the left-out objects drew ('decoration', 'chart'), each once. */
   missing: MissingKind[];
+  /** Q24.b: the slide was planned whole (`LadderInput.whole`): level 'full' or 'grid', never simplified, never in the tail. */
+  whole?: true;
 };
 
 export type LadderPlan = { slides: LadderSlide[]; plan: ImportSizePlan };
 
-/** STUB (red first): what a slide kept whole is stored as. */
+/**
+ * What a slide KEPT WHOLE is stored as (Q24.b, D9): as it is within `max`, else its outlines re-gridded
+ * (`gridSlide`: lossless on screen, no point moves by more than 1/32 px) and then STOPPED: nothing is left out and
+ * no formatting is dropped (`fitSlideBudget` is not called), so the slide stays over `max` and its record says
+ * `bytes`. `size` is the caller's measure (`storedWithin`). Pure; never throws.
+ */
 export function wholeLevel(
   slide: Slide,
-  _max: number,
+  max: number,
   size: (s: Slide) => number,
 ): { slide: Slide; level: 'full' | 'grid'; bytes: number } {
-  return { slide, level: 'full', bytes: size(slide) };
+  const full = size(slide);
+  if (full <= max) return { slide, level: 'full', bytes: full };
+  const grid = gridSlide(slide);
+  return { slide: grid, level: 'grid', bytes: grid === slide ? full : size(grid) };
 }
 
-/** STUB (red first): a slide cut to the screens' counts. */
+/**
+ * A slide cut to what the screens draw (the live clamp's rule, `@ordo/renderer` `clampSlide`): the first
+ * `MAX_DRAWN_OBJECTS` objects from the bottom, and no picture of a 17th distinct image (`MAX_DRAWN_PICTURES`). What
+ * a presentation does to a heavy slide past its share of whole ones (`ImportCore.budget`, Q28.a), and nothing else
+ * does: the objects it keeps are the objects the screens draw today. `left` counts the objects left out; `kinds`
+ * says what they drew as `Slide.pptx.missing` kinds do ('decoration' for shapes and pictures, 'element' for text
+ * and tables), each once. A lyric id that is gone is cleared. The same slide object comes back when nothing is
+ * left; junk (a slide without a list of objects) is returned as it is. Pure; never throws.
+ */
 export function trimToCounts(slide: Slide): { slide: Slide; left: number; kinds: MissingKind[] } {
-  return { slide, left: 0, kinds: [] };
+  try {
+    const src: readonly SlideObject[] = Array.isArray(slide?.objects) ? slide.objects : [];
+    const kept: SlideObject[] = [];
+    const images = new Set<string>();
+    const kinds: MissingKind[] = [];
+    let left = 0;
+    for (const o of src) {
+      let keep = kept.length < MAX_DRAWN_OBJECTS;
+      if (keep && o?.type === 'image') {
+        if (!images.has(o.mediaId) && images.size >= MAX_DRAWN_PICTURES) keep = false;
+        else images.add(o.mediaId);
+      }
+      if (keep) {
+        kept.push(o);
+        continue;
+      }
+      left++;
+      const k: MissingKind =
+        o?.type === 'text' || (o?.type === 'shape' && (o.table !== undefined || o.chart !== undefined))
+          ? 'element'
+          : 'decoration';
+      if (!kinds.includes(k) && kinds.length < MISSING_LIMITS.entries) kinds.push(k);
+    }
+    if (!left) return { slide, left: 0, kinds: [] };
+    const out: Slide = { ...slide, objects: kept };
+    if (out.lyricObjectId && !kept.some((o) => o.id === out.lyricObjectId)) delete out.lyricObjectId;
+    return { slide: out, left, kinds };
+  } catch {
+    return { slide, left: 0, kinds: [] };
+  }
 }
 
 /** The kinds a left-out object drew: a chart's, else decoration. */
@@ -207,6 +257,7 @@ export function planLadder(
   reserve: number = IMPORT_RESERVE_BYTES,
 ): LadderPlan {
   const max = SIZE_BUDGETS.slideMax;
+  if (inputs.some((x) => x.whole === true && !x.fixed)) return planWithWhole(inputs, reserve, max);
   const fits: (BudgetFit | undefined)[] = inputs.map((x) =>
     x.fixed ? undefined : fitSlideBudget(x.slide, max, { size: (s) => storedWithin(s, max) }),
   );
@@ -259,6 +310,68 @@ export function planLadder(
       missing: gone.missing,
     };
   });
+  return { slides, plan };
+}
+
+/**
+ * `planLadder` with slides kept whole (Q24.b, D9): they are planned FIRST. Each is stored by `wholeLevel` (never
+ * fitted, simplified or tailed) and its bytes join the presentation's reserve for the plan of the others, so they
+ * count against the 8 MiB bound but never push an ordinary slide over the 6 MiB mark (`planImportSizes` measures that
+ * mark on the running total of the slides it plans, which excludes the reserve): a heavy slide late in a deck does not
+ * make the slides after it minimal, and an early one does not make the later ones tail sooner. The returned plan is
+ * over the whole deck: `compact` and `reasons` hold nothing for a whole slide, `tailFrom` is the place in the deck of
+ * the first tailed ordinary slide, and `total` includes the whole slides' bytes (what `ImportCore.budget` weighs the
+ * LibreOffice pages against).
+ */
+function planWithWhole(inputs: readonly LadderInput[], reserve: number, max: number): LadderPlan {
+  const whole = new Map<number, ReturnType<typeof wholeLevel>>();
+  inputs.forEach((x, i) => {
+    if (x.whole === true && !x.fixed)
+      whole.set(
+        i,
+        wholeLevel(x.slide, max, (s) => storedWithin(s, max)),
+      );
+  });
+  let heavy = 0;
+  for (const w of whole.values()) heavy += w.bytes;
+  const rest = inputs.map((_, i) => i).filter((i) => !whole.has(i));
+  const sub = planLadder(
+    rest.map((i) => inputs[i]!),
+    reserve + heavy,
+  );
+  const slides: LadderSlide[] = [];
+  const compact: boolean[] = [];
+  const reasons: ImportSizePlan['reasons'] = [];
+  let r = 0;
+  inputs.forEach((_, i) => {
+    const w = whole.get(i);
+    if (w) {
+      slides.push({
+        slide: w.slide,
+        level: w.level,
+        tail: false,
+        bytes: w.bytes,
+        dropped: 0,
+        plain: 0,
+        missing: [],
+        whole: true,
+      });
+      compact.push(false);
+      reasons.push(null);
+    } else {
+      slides.push(sub.slides[r]!);
+      compact.push(sub.plan.compact[r]!);
+      reasons.push(sub.plan.reasons[r]!);
+      r++;
+    }
+  });
+  const plan: ImportSizePlan = {
+    ...sub.plan,
+    compact,
+    reasons,
+    total: sub.plan.total + heavy,
+    tailFrom: sub.plan.tailFrom < 0 ? -1 : rest[sub.plan.tailFrom]!,
+  };
   return { slides, plan };
 }
 
