@@ -275,6 +275,13 @@ export const PORT_TABLE = {
     spec: 'pptx-prerender-import.spec.ts',
     what: '0 hub with LibreOffice and ORDO_PRERENDER=on (then, in a later test, ORDO_PRERENDER=off), 1 hub without LibreOffice and ORDO_PRERENDER=on',
   },
+  // bake-worker (Q24.b, sub-wave 3): the operator page makes, keeps and holds the pictures of heavy slides.
+  bake: {
+    offset: 520,
+    count: 1,
+    spec: 'bake.spec.ts',
+    what: 'hub (seeded heavy slides), ORDO_PRERENDER=on; restarted with ORDO_PRERENDER=off in the last test',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;
