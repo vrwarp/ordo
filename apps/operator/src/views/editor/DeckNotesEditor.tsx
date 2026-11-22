@@ -17,7 +17,6 @@ import {
 import {
   type CSSProperties,
   Fragment,
-  type KeyboardEvent,
   type ReactNode,
   useEffect,
   useLayoutEffect,
@@ -30,8 +29,8 @@ import { useMediaLookup, useVisible } from '../../hooks.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
 import { change, selectSlide, useEditor } from './editorStore.ts';
+import { applyNoteFormatting, handleSpeakerNoteKeyDown, type NoteFormatAction } from './noteEditing.ts';
 import { addSection, addSlide, themeOf, updateSlide } from './ops.ts';
-import { applyNoteFormatting, type NoteFormatAction } from './SpeakerNotesDock.tsx';
 
 function slideStageText(slide: Slide): string {
   const parts: string[] = [];
@@ -240,9 +239,12 @@ function ManuscriptSlideRow(props: {
     setOverflows(Boolean(notes.trim()) && inner.scrollHeight > clip.clientHeight + 2);
   }, [notes, adapted.notes]);
 
-  const setNotes = (val: string) => {
+  const setNotes = (val: string, discrete = false) => {
     if (readOnly) return;
-    change((q) => updateSlide(q, slide.id, (s) => ({ ...s, notes: val || undefined })), `notes:${slide.id}`);
+    change(
+      (q) => updateSlide(q, slide.id, (s) => ({ ...s, notes: val || undefined })),
+      discrete ? undefined : `notes:${slide.id}`,
+    );
   };
 
   const format = (action: NoteFormatAction) => {
@@ -250,21 +252,15 @@ function ManuscriptSlideRow(props: {
     applyNoteFormatting(taRef.current, notes, action, setNotes);
   };
 
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
-      e.preventDefault();
-      format('highlight');
-      return;
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      taRef.current?.blur();
-      return;
-    }
-    if (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-      e.preventDefault();
-      props.onStepSlide(e.key === 'ArrowDown' ? 1 : -1);
-    }
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    handleSpeakerNoteKeyDown(e, {
+      el: taRef.current,
+      notes,
+      readOnly,
+      commit: setNotes,
+      onEscape: () => taRef.current?.blur(),
+      onStepSlide: props.onStepSlide,
+    });
   };
 
   const openCardMenu = (e: React.MouseEvent) => {
@@ -386,7 +382,7 @@ function ManuscriptSlideRow(props: {
                 className="small ghost"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => format('highlight')}
-                title="Highlight key phrase (**bold**)"
+                title="Toggle **highlight** (Cmd/Ctrl+B)"
               >
                 ★ Highlight
               </button>
@@ -395,7 +391,7 @@ function ManuscriptSlideRow(props: {
                 className="small ghost"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => format('bullet')}
-                title="Toggle bullet list"
+                title="Toggle bullet on current line"
               >
                 • Bullet
               </button>
@@ -403,19 +399,10 @@ function ManuscriptSlideRow(props: {
                 type="button"
                 className="small ghost"
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => format('pause')}
-                title="Insert [PAUSE] cue"
-              >
-                + [PAUSE]
-              </button>
-              <button
-                type="button"
-                className="small ghost"
-                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => format('cue')}
-                title="Insert [CUE: ...] badge"
+                title="Toggle [cue] badge"
               >
-                + [CUE]
+                [Cue]
               </button>
             </div>
           )}

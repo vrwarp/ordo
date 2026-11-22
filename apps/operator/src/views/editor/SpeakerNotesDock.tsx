@@ -1,7 +1,10 @@
 import type { Presentation, Slide } from '@ordo/domain';
-import { type KeyboardEvent, type PointerEvent as ReactPointerEvent, useRef, useState } from 'react';
+import { type PointerEvent as ReactPointerEvent, useRef, useState } from 'react';
 import { change } from './editorStore.ts';
+import { applyNoteFormatting, handleSpeakerNoteKeyDown, type NoteFormatAction } from './noteEditing.ts';
 import { updateSlide } from './ops.ts';
+
+export { applyNoteFormatting, type NoteFormatAction };
 
 const LS_DOCK_H = 'ordo.editor.notesDockH';
 
@@ -13,60 +16,6 @@ function initialDockHeight(): number {
     /* private mode */
   }
   return 118;
-}
-
-export type NoteFormatAction = 'highlight' | 'bullet' | 'pause' | 'cue';
-
-export function applyNoteFormatting(
-  el: HTMLTextAreaElement | null,
-  current: string,
-  action: NoteFormatAction,
-  commit: (next: string) => void,
-): void {
-  const start = el ? el.selectionStart : current.length;
-  const end = el ? el.selectionEnd : current.length;
-  let next = current;
-  let selStart = start;
-  let selEnd = end;
-
-  if (action === 'highlight') {
-    const picked = current.slice(start, end);
-    if (picked.startsWith('**') && picked.endsWith('**') && picked.length >= 4) {
-      const inner = picked.slice(2, -2);
-      next = `${current.slice(0, start)}${inner}${current.slice(end)}`;
-      selStart = start;
-      selEnd = start + inner.length;
-    } else {
-      const inner = picked || 'key phrase';
-      next = `${current.slice(0, start)}**${inner}**${current.slice(end)}`;
-      selStart = start + 2;
-      selEnd = selStart + inner.length;
-    }
-  } else if (action === 'bullet') {
-    const lineStart = current.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
-    const lineEndIdx = current.indexOf('\n', end);
-    const lineEnd = lineEndIdx < 0 ? current.length : lineEndIdx;
-    const block = current.slice(lineStart, lineEnd);
-    const lines = block.split('\n');
-    const allBulleted = lines.every((l) => /^(?:[-*•])\s+/.test(l));
-    const updated = lines.map((l) => (allBulleted ? l.replace(/^(?:[-*•])\s+/, '') : `• ${l}`)).join('\n');
-    next = `${current.slice(0, lineStart)}${updated}${current.slice(lineEnd)}`;
-    selStart = lineStart;
-    selEnd = lineStart + updated.length;
-  } else {
-    const tag = action === 'pause' ? '[PAUSE] ' : '[CUE: ]';
-    next = `${current.slice(0, start)}${tag}${current.slice(end)}`;
-    selStart = action === 'cue' ? start + 6 : start + tag.length;
-    selEnd = selStart;
-  }
-
-  commit(next);
-  if (el) {
-    requestAnimationFrame(() => {
-      el.focus();
-      el.setSelectionRange(selStart, selEnd);
-    });
-  }
 }
 
 export function SpeakerNotesDock(props: {
@@ -85,9 +34,12 @@ export function SpeakerNotesDock(props: {
   const trimmed = notes.trim();
   const wordCount = trimmed ? trimmed.split(/\s+/).length : 0;
 
-  const setNotes = (val: string) => {
+  const setNotes = (val: string, discrete = false) => {
     if (readOnly) return;
-    change((q) => updateSlide(q, slide.id, (s) => ({ ...s, notes: val || undefined })), `notes:${slide.id}`);
+    change(
+      (q) => updateSlide(q, slide.id, (s) => ({ ...s, notes: val || undefined })),
+      discrete ? undefined : `notes:${slide.id}`,
+    );
   };
 
   const onResizeStart = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -109,13 +61,6 @@ export function SpeakerNotesDock(props: {
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
-  };
-
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
-      e.preventDefault();
-      applyNoteFormatting(textareaRef.current, notes, 'highlight', setNotes);
-    }
   };
 
   if (!open) {
@@ -184,7 +129,8 @@ export function SpeakerNotesDock(props: {
               <button
                 type="button"
                 className="small ghost"
-                title="Highlight key phrase in yellow on Stage & Lectern (Cmd/Ctrl+B)"
+                title="Toggle **highlight** on selected text (Cmd/Ctrl+B)"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => applyNoteFormatting(textareaRef.current, notes, 'highlight', setNotes)}
               >
                 ★ Highlight
@@ -192,7 +138,8 @@ export function SpeakerNotesDock(props: {
               <button
                 type="button"
                 className="small ghost"
-                title="Toggle bullet points"
+                title="Toggle bullet on current line"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => applyNoteFormatting(textareaRef.current, notes, 'bullet', setNotes)}
               >
                 • Bullet
@@ -200,10 +147,11 @@ export function SpeakerNotesDock(props: {
               <button
                 type="button"
                 className="small ghost"
-                title="Insert [PAUSE] cue badge"
-                onClick={() => applyNoteFormatting(textareaRef.current, notes, 'pause', setNotes)}
+                title="Toggle [cue] badge"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyNoteFormatting(textareaRef.current, notes, 'cue', setNotes)}
               >
-                + [PAUSE]
+                [Cue]
               </button>
             </div>
           )}
@@ -235,7 +183,14 @@ export function SpeakerNotesDock(props: {
         className="ed-notes-textarea"
         value={notes}
         disabled={readOnly}
-        onKeyDown={onKeyDown}
+        onKeyDown={(e) =>
+          handleSpeakerNoteKeyDown(e, {
+            el: textareaRef.current,
+            notes,
+            readOnly,
+            commit: setNotes,
+          })
+        }
         onChange={(e) => setNotes(e.target.value)}
         placeholder={
           p.kind === 'song'
