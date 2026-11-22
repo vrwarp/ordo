@@ -297,7 +297,7 @@ export interface EmitOptions {
    * `EmittedSlide.rasters`). With anything else every planned run is written as today's shapes. Default 'off'.
    */
   rasters?: RasterMode;
-  /** Q53: the renderer's wide compile and build, which the recipe builder reads a shape's geometry with (no default: the hub's pool and the harness inject `WIDE_GEOMETRY`, `raster-wide.ts`; the browser's import worker only ever detects, so it never carries the renderer's compile). */
+  /** Q53: the renderer's wide compile and build, which the recipe builder reads a shape's geometry with (no default: the hub's pool and the harness inject `WIDE_GEOMETRY`, `raster-wide.ts`; the browser's import worker only ever detects, so it does not carry `raster-wide.ts`). */
   rasterGeometry?: RasterGeometry;
   /** Q53, `convertDeck`'s: the recipes of the whole call (its slides are emitted one by one). */
   rasterRegistry?: RasterRegistry;

@@ -104,7 +104,7 @@ describe('the converter hooks of the shape pictures', () => {
     expect(MAX_SLIDE_PATH_POINTS).toBe(65_536);
   });
 
-  it("E1w-0: with no geometry injected the run is not made: the converter itself carries no compile of the renderer's (the browser's import worker never plans a picture)", () => {
+  it("E1w-0: with no geometry injected the run is not made: the converter itself does not import the wide geometry (the browser's import worker never plans a picture)", () => {
     const parts = slideOf(blob(2, 300, IN, IN, 2 * IN, 2 * IN));
     const out = emitSlides(parseDeck(parts, { rasters: 'plan' }), { rasters: 'plan' });
     const s = out.slides[0]!;
