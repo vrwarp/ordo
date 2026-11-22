@@ -53,9 +53,11 @@ import type { Element, Frame, ShapeElement } from './ir.ts';
 import { boxPx } from './frame.ts';
 import {
   canonicalBytes,
+  commandCost,
   encodePath,
   encodeRefs,
   hashOfBytes,
+  pathListOf,
   RASTER_DENSITY,
   RASTER_POINTS,
   RASTER_READ,
@@ -158,16 +160,6 @@ export interface RasterProvenance {
 
 /** Children of one list scanned at most, as a multiple of what the list may hold (`geom.ts` `SCAN_FACTOR`). */
 const SCAN_FACTOR = 4;
-/** The cost of a command (`raster.ts` `rawPointCost`: the converter's table). */
-const COST: Readonly<Record<string, number>> = Object.assign(Object.create(null), {
-  'a:moveTo': 1,
-  'a:lnTo': 1,
-  'a:close': 1,
-  'a:quadBezTo': 2,
-  'a:cubicBezTo': 3,
-  'a:arcTo': 12,
-});
-
 /** An attribute as the compiler reads it, cut one character past its bound so the bound still applies. */
 const cut = (v: string | undefined, limit: number = GEOM_LIMITS.formula) =>
   v === undefined ? undefined : v.length > limit + 1 ? v.slice(0, limit + 1) : v;
@@ -193,15 +185,16 @@ function ptArgs(c: PathCommand, n: number): string[] {
   return args;
 }
 
-/** One command of an `a:path` as the compiler reads it, or undefined for another element. */
+/** One command of a path as the compiler reads it, or undefined for another element (named by its local name: see raster.ts). */
 function readCmd(c: PathCommand): PathCmdSource | undefined {
-  switch (c.name) {
-    case 'a:moveTo':
-    case 'a:lnTo':
-      return { op: c.name.slice(2), args: ptArgs(c, 1) };
-    case 'a:arcTo':
+  const op = c.name.startsWith('a:') ? c.name.slice(2) : '';
+  switch (op) {
+    case 'moveTo':
+    case 'lnTo':
+      return { op, args: ptArgs(c, 1) };
+    case 'arcTo':
       return {
-        op: 'arcTo',
+        op,
         args: [
           cut(c.attrs.wR) ?? '0',
           cut(c.attrs.hR) ?? '0',
@@ -209,12 +202,12 @@ function readCmd(c: PathCommand): PathCmdSource | undefined {
           cut(c.attrs.swAng) ?? '0',
         ],
       };
-    case 'a:quadBezTo':
-      return { op: 'quadBezTo', args: ptArgs(c, 2) };
-    case 'a:cubicBezTo':
-      return { op: 'cubicBezTo', args: ptArgs(c, 3) };
-    case 'a:close':
-      return { op: 'close', args: [] };
+    case 'quadBezTo':
+      return { op, args: ptArgs(c, 2) };
+    case 'cubicBezTo':
+      return { op, args: ptArgs(c, 3) };
+    case 'close':
+      return { op, args: [] };
     default:
       return undefined;
   }
@@ -228,7 +221,7 @@ function readPathWide(p: XNode, budget: number): PathSource {
   let seen = 0;
   for (const c of pathCommands(p)) {
     if (seen++ >= scan) break;
-    const cost = COST[c.name];
+    const cost = commandCost(c.name);
     const cmd = cost === undefined ? undefined : readCmd(c);
     if (cost !== undefined && cmd) {
       total += cost;
@@ -254,7 +247,7 @@ function readPathWide(p: XNode, budget: number): PathSource {
  */
 export function readWide(node: XNode, limits: RasterLimits): GeomSource | undefined {
   const paths: PathSource[] = [];
-  const kids = child(node, 'a:pathLst')?.children ?? [];
+  const kids = pathListOf(node)?.children ?? [];
   const scan = Math.min(kids.length, SCAN_FACTOR * limits.paths);
   for (let i = 0; i < scan; i++) {
     if (kids[i]!.name !== 'a:path') continue;

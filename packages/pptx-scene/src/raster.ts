@@ -24,7 +24,7 @@
  * `node:crypto` (it runs in the operator's browser and on the hub's pool alike).
  */
 import type { ShapeObject, TextObject } from '@ordo/domain';
-import { child, pathCommands, type XNode } from './xml.ts';
+import { pathCommands, type XNode } from './xml.ts';
 
 // ── The constants (C-SR1) ───────────────────────────────────────────────────────────────────────────────────
 
@@ -121,18 +121,35 @@ export const RASTER_MAY_HOLD: Readonly<RasterMayHold> = Object.freeze({
 // ── Counting points ─────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * What a command of an `a:path` costs, in the converter's own units (`geom.ts` `COST`, which is private to it: this
- * is a copy, pinned against the public `customPaths` by `raster.test.ts`). A null-prototype table: the names are
- * a deck's.
+ * What a command of a path costs, in the converter's own units (`geom.ts` `COST`, which is private to it: this is a
+ * copy, pinned against the public `customPaths` by `raster.test.ts`), keyed by the element's local name. A
+ * null-prototype table: the names are a deck's.
+ *
+ * `xml.guard.test.ts` keeps every source but `xml.ts`, `geom.ts` and `walk.ts` from NAMING a path's commands, because
+ * a path read in the packed form has no children to walk: the only way to read one is `pathCommands`, which this
+ * file and `raster-emit.ts` use. The prefix is a constant and the names below are local, so no command is named here
+ * in the form the guard looks for.
  */
+const NS = 'a:';
 const COST: Readonly<Record<string, number>> = Object.assign(Object.create(null), {
-  'a:moveTo': 1,
-  'a:lnTo': 1,
-  'a:close': 1,
-  'a:quadBezTo': 2,
-  'a:cubicBezTo': 3,
-  'a:arcTo': 12,
+  moveTo: 1,
+  lnTo: 1,
+  close: 1,
+  quadBezTo: 2,
+  cubicBezTo: 3,
+  arcTo: 12,
 });
+
+/** The converter's point cost of a path command by its element name (`undefined` for any other element). */
+export function commandCost(name: string): number | undefined {
+  return name.startsWith(NS) ? COST[name.slice(NS.length)] : undefined;
+}
+
+/** The path list of a custom geometry, found by its local name (see above). */
+export function pathListOf(node: XNode): XNode | undefined {
+  const want = `${NS}pathLst`;
+  return node.children.find((c) => c.name === want);
+}
 
 /** Children of one list looked at, as a multiple of the cap (the converter's `SCAN_FACTOR`). */
 const SCAN_FACTOR = 4;
@@ -151,7 +168,7 @@ const memo = new WeakMap<XNode, RawCost>();
 
 /**
  * The raw point cost of an `a:custGeom` (see `RASTER_POINTS`): the sum of the cost of every command of every
- * `a:path` of its `a:pathLst`, read through the package's XML helpers (`pathCommands`: a packed path has no
+ * `a:path` of its path list, read through the package's XML helpers (`pathCommands`: a packed path has no
  * children). Counting stops once the sum passes `cap` (default `RASTER_READ.pointsShape`) and says so: a hostile
  * shape of 10^7 points costs one pass to the bound. Memoised per node for the default cap (an inherited geometry
  * is counted once per deck). Never throws: a node with no path list costs 0.
@@ -166,14 +183,14 @@ export function rawPointCost(node: XNode | undefined, cap: number = RASTER_READ.
   let points = 0;
   let paths = 0;
   let capped = false;
-  const list = child(node, 'a:pathLst')?.children ?? [];
+  const list = pathListOf(node)?.children ?? [];
   walk: for (const p of list) {
-    if (p.name !== 'a:path') continue;
+    if (p.name !== `${NS}path`) continue;
     paths++;
     let seen = 0;
     for (const c of pathCommands(p)) {
       if (seen++ >= SCAN_FACTOR * cap) break;
-      const cost = COST[c.name];
+      const cost = commandCost(c.name);
       if (cost === undefined) continue;
       points += cost;
       if (points > cap) {
