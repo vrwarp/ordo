@@ -56,6 +56,7 @@ import {
   parseDeck,
   type PictureHeader,
   pictureSize,
+  type SlideBudget,
   type SlideClass,
   type Tier,
 } from '@ordo/pptx-scene';
@@ -63,7 +64,7 @@ import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import { MAX_XML_PART_BYTES } from '@ordo/pptx-scene/opc.ts';
 import { M9_WRITES, PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
 import { bakeKey, type PictureBake } from '@ordo/pptx-scene/bake.ts';
-import { sentToArt } from '@ordo/pptx-scene/budget.ts';
+import { MAX_DRAWN_PICTURES, MAX_SLIDE_OBJECTS_TEXT, sentToArt } from '@ordo/pptx-scene/budget.ts';
 import { BAKE_PREFIX, MEDIA_PREFIX } from '@ordo/pptx-scene/emit.ts';
 import { planLadder, provenanceStandIn, withoutFiles } from '@ordo/importers/pptx-ladder.ts';
 import { CONVERTER_VERSION, PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
@@ -297,6 +298,52 @@ export function spilledPictureSize(file: string | undefined): PictureHeader | un
 }
 
 /**
+ * The converter's decision for each slide read with the whole option (`NativeSlide.whole`): from the plans
+ * `ParseOptions.onBudget` reported, and, when a slide the option keeps whole is one the base plan would have cut (more
+ * planned objects than the guard keeps or more pictures than the screens draw), the deck read once more without it
+ * for what that plan leaves out (the guard's and the picture limit's: LibreOffice's art or listed).
+ */
+function wholeInfos(
+  files: Parameters<typeof parseDeck>[0],
+  parsing: NonNullable<Parameters<typeof parseDeck>[1]>,
+  plans: ReadonlyMap<number, SlideBudget>,
+): Map<number, WholeInfo> {
+  const out = new Map<number, WholeInfo>();
+  for (const [index, b] of plans)
+    out.set(index, {
+      kept: b.plan.whole,
+      anchorKinds: [...b.plan.anchorKinds],
+      bgOwn: b.background?.fill?.kind === 'picture',
+      objects: b.plan.objects,
+      pictures: b.plan.pictures,
+    });
+  const touched = [...out.values()].some(
+    (w) => w.kept && (w.objects > MAX_SLIDE_OBJECTS_TEXT || w.pictures > MAX_DRAWN_PICTURES - 1),
+  );
+  if (!touched) return out;
+  const base = new Map<number, SlideBudget>();
+  parseDeck(files, { ...parsing, onBudget: (b) => void base.set(b.index, b) });
+  for (const [index, b] of base) {
+    const w = out.get(index);
+    if (!w || !w.kept) continue;
+    const left = b.elements.filter((e) => e.culled === 'budget' || sentToArt(e));
+    if (!left.length) continue;
+    const parts = new Set<string>();
+    for (const e of left) {
+      const part =
+        e.kind === 'picture'
+          ? e.picture.part
+          : e.kind === 'shape' && e.fill.kind === 'picture'
+            ? e.fill.picture.part
+            : undefined;
+      if (part !== undefined) parts.add(part);
+    }
+    w.cut = { elements: b.plan.art + b.plan.left, pictures: parts.size };
+  }
+  return out;
+}
+
+/**
  * Convert one deck into `dir` (which must exist): `slides.json` and `media/`. Never throws; a deck that
  * cannot be read comes back with `error` and no slides.
  */
@@ -348,7 +395,21 @@ export async function convertDeck(
       // Table rows grow to their text measured with the faces the page draws it with.
       fontFace: hostFace,
     };
-    let scene = parseDeck(zip.files, parsing);
+    // Q24.b (`ConvertOptions.whole`): the deck is read with the whole option, and what the converter decided
+    // for each slide is kept (`ParseOptions.onBudget`), with what the plan without the option leaves out.
+    const plans = new Map<number, SlideBudget>();
+    let scene = parseDeck(
+      zip.files,
+      opts.whole
+        ? {
+            ...parsing,
+            wholeSlides: true,
+            wholeAnchors: opts.whole.anchors,
+            onBudget: (b) => void plans.set(b.index, b),
+          }
+        : parsing,
+    );
+    const wholeInfo = opts.whole ? wholeInfos(zip.files, parsing, plans) : undefined;
     out.parseMs = performance.now() - t0;
     t0 = performance.now();
     // One placeholder per shape file over every emission (the slides as LibreOffice draws them below):
@@ -403,7 +464,11 @@ export async function convertDeck(
     const noLoReasons = new Map<number, string[]>();
     if (opts.noLibreOffice && scene.slides.some((s) => s.elements.some(sentToArt))) {
       const lo = new Map(scene.slides.map((s) => [s.index, JSON.stringify(s.classification.reasons)]));
-      scene = parseDeck(zip.files, { ...parsing, libreoffice: false });
+      scene = parseDeck(zip.files, {
+        ...parsing,
+        libreoffice: false,
+        ...(opts.whole ? { wholeSlides: true, wholeAnchors: opts.whole.anchors } : {}),
+      });
       for (const s of scene.slides)
         if (lo.get(s.index) !== JSON.stringify(s.classification.reasons))
           noLoReasons.set(s.index, s.classification.reasons);
@@ -487,6 +552,7 @@ export async function convertDeck(
         convertMs: (sceneMs.get(s.index) ?? 0) + s.ms,
         notes: s.notes,
         slide,
+        ...(wholeInfo?.has(s.index) ? { whole: wholeInfo.get(s.index) } : {}),
         textFeatures: f?.textFeatures ?? [],
         xmlFeatures: f?.xmlFeatures ?? [],
         compat: rules,
@@ -666,7 +732,11 @@ async function convertInWorker(
     worker.postMessage({
       deckFile,
       dir,
-      opts: { loCompat: limits.loCompat === true, noLibreOffice: limits.noLibreOffice === true },
+      opts: {
+        loCompat: limits.loCompat === true,
+        noLibreOffice: limits.noLibreOffice === true,
+        ...(limits.whole ? { whole: limits.whole } : {}),
+      },
     });
   });
   if (typeof result !== 'string') return result;

@@ -9,6 +9,7 @@
  */
 import { missingEntry } from '@ordo/domain/missing.ts';
 import { XmlBoundError } from './xml.ts';
+import type { BudgetPlan } from './budget.ts';
 import { classifySlide } from './classify.ts';
 import { slideContext } from './context.ts';
 import { type DeckInfo, readDeck, type SlideRef } from './deck.ts';
@@ -336,6 +337,9 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
       const background = readBackground(ctx);
       const classified = classifySlide(ctx, elements, background, {
         budgetArt: opts.budgetArt === true,
+        ...(opts.onBudget
+          ? { onBudget: (plan, els) => opts.onBudget!({ index: ref.index, plan, elements: els, background }) }
+          : {}),
         budget: {
           decorations: (opts.m9Writes ?? ALL_M9_FIELDS).has('decor'),
           sheets: opts.sheets !== false,

@@ -26,6 +26,13 @@
  *   ladder changed it: `slide` over 64 KB, `presentation` for the tail, `geoms` for its outline files; null
  *   otherwise), `level` (the ladder's level when not `full`) and `missing` (what nothing draws: the ladder's
  *   kinds, and with `--no-libreoffice` the converter's);
+ * - with `--whole` (Q24.b, `--whole-anchors own|motion`, default motion: Q25.c.b): the deck is read with
+ *   `ParseOptions.wholeSlides` and each slide also has `wholeKept` (the converter keeps it whole: `BudgetPlan.whole`),
+ *   `anchorKinds` (why not: clip, background, bound), `bgOwn` (its background is a picture), `pictures` (distinct
+ *   pictures planned), `heavy` (over 200 objects, 16 pictures or 64 KiB) and `wouldCut`, `wouldCutPictures` (what the
+ *   plan without the option leaves out: the guard's and the picture limit's), each only when not 0 or false but
+ *   `wholeKept`; the deck has `heavyBytes` (the bytes of its heavy slides). The hub columns (`stored`, `hub`, ...)
+ *   model today's ladder until `hubLadder` takes the whole option (import-whole step 8a);
  * - `geomFiles`, `geomBytes`: the deck's geometry files; `maxObjects`: the most objects one shown slide has;
  * - `error` when the converter could not read the deck;
  * - `unreadable: 'missing target'` (and no slides) for a link whose deck is gone: listed, never an error.
@@ -231,12 +238,24 @@ export function legacyColumns(slide: Pick<Slide, 'objects'>): Record<string, num
  * (the elements and pictures the plan without the option leaves out).
  */
 export function wholeColumns(
-  _w: WholeInfo,
-  _slide: Pick<Slide, 'objects'>,
-  _bytes: number,
+  w: WholeInfo,
+  slide: Pick<Slide, 'objects'>,
+  bytes: number,
 ): Record<string, unknown> {
-  return {};
+  const out: Record<string, unknown> = { wholeKept: w.kept };
+  if (w.anchorKinds.length) out.anchorKinds = [...w.anchorKinds];
+  if (w.bgOwn) out.bgOwn = true;
+  if (w.pictures > 0) out.pictures = w.pictures;
+  const objects = Math.max(w.objects, slide.objects?.length ?? 0);
+  if (objects > WHOLE_HEAVY.objects || w.pictures > WHOLE_HEAVY.pictures || bytes > WHOLE_HEAVY.bytes)
+    out.heavy = true;
+  if (w.cut?.elements) out.wouldCut = w.cut.elements;
+  if (w.cut?.pictures) out.wouldCutPictures = w.cut.pictures;
+  return out;
 }
+
+/** What makes a slide heavy: more than the screens draw (200 objects, 16 pictures) or the ladder keeps (64 KiB). */
+const WHOLE_HEAVY = { objects: 200, pictures: 16, bytes: 64 * 1024 } as const;
 
 /** One deck's line of the census. */
 export function censusRow(
@@ -283,6 +302,7 @@ export function censusRow(
         hubWhy: h.hubWhy,
         ...(h.level !== 'full' ? { level: h.level } : {}),
         ...(missing.length ? { missing } : {}),
+        ...(s.whole ? wholeColumns(s.whole, x.slide, JSON.stringify(x.slide).length) : {}),
       };
     });
   clearGeomFiles();
@@ -294,6 +314,14 @@ export function censusRow(
     geomFiles: files.length,
     geomBytes: files.reduce((a, b) => a + b, 0),
     maxObjects: slides.reduce((m, s) => Math.max(m, s.objects), 0),
+    ...(deck.slides.some((s) => s.whole)
+      ? {
+          heavyBytes: slides.reduce(
+            (n, s) => n + ((s as { heavy?: true }).heavy ? (s as { bytes: number }).bytes : 0),
+            0,
+          ),
+        }
+      : {}),
     ...(deck.error ? { error: deck.error } : {}),
   };
 }
@@ -304,18 +332,34 @@ export function censusRow(
  * stores them, with its parse's reasons where they differ (`NativeSlide.noLoReasons`: the guard's left-outs,
  * LibreOffice's art with it, are `missing:<kind>` without it).
  */
-export type CensusArgs = { out: string; paths: string[]; hubBudget: boolean; noLibreOffice: boolean };
+export type CensusArgs = {
+  out: string;
+  paths: string[];
+  hubBudget: boolean;
+  noLibreOffice: boolean;
+  /** `--whole` (Q24.b): read every deck with `ParseOptions.wholeSlides` and write the whole-slide columns. */
+  whole?: true;
+  /** `--whole-anchors own|motion` (Q25.c.b: 'motion', the default, only a video counts; 'own' a picture background too). */
+  wholeAnchors?: 'own' | 'motion';
+};
 
 export function parseCensusArgs(argv: readonly string[]): CensusArgs {
   let out: string | undefined;
   const paths: string[] = [];
   let hubBudget = false;
   let noLibreOffice = false;
+  let whole = false;
+  let wholeAnchors: 'own' | 'motion' | undefined;
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i]!;
     if (v === '--hub-budget') hubBudget = true;
     else if (v === '--no-libreoffice') noLibreOffice = true;
-    else if (v === '--out') {
+    else if (v === '--whole') whole = true;
+    else if (v === '--whole-anchors') {
+      const a = argv[++i];
+      if (a !== 'own' && a !== 'motion') throw new Error('--whole-anchors needs own or motion');
+      wholeAnchors = a;
+    } else if (v === '--out') {
       out = argv[++i];
       if (!out || out.startsWith('--')) throw new Error('--out needs a file');
     } else if (v === '--') continue;
@@ -324,10 +368,17 @@ export function parseCensusArgs(argv: readonly string[]): CensusArgs {
   }
   if (!out)
     throw new Error(
-      'usage: census.ts [--hub-budget] [--no-libreoffice] --out census.jsonl <deck | folder>...',
+      'usage: census.ts [--hub-budget] [--no-libreoffice] [--whole [--whole-anchors own|motion]] --out census.jsonl <deck | folder>...',
     );
   if (!paths.length) throw new Error('no decks: pass decks or folders');
-  return { out, paths, hubBudget, noLibreOffice };
+  if (wholeAnchors && !whole) throw new Error('--whole-anchors needs --whole');
+  return {
+    out,
+    paths,
+    hubBudget,
+    noLibreOffice,
+    ...(whole ? { whole: true as const, wholeAnchors: wholeAnchors ?? ('motion' as const) } : {}),
+  };
 }
 
 /**
@@ -357,7 +408,10 @@ export async function runCensus(
       const dir = join(scratch, String(k + 1));
       await mkdir(dir, { recursive: true });
       const t0 = performance.now();
-      const deck = await convertDeckIsolated(d.file, dir, opts.noLibreOffice ? { noLibreOffice: true } : {});
+      const deck = await convertDeckIsolated(d.file, dir, {
+        ...(opts.noLibreOffice ? { noLibreOffice: true } : {}),
+        ...(opts.whole ? { whole: opts.whole } : {}),
+      });
       const row = censusRow(deck, { ...head, ms: Math.round(performance.now() - t0) }, opts);
       if (deck.error) counts.errors++;
       counts.slides += (row.slides as unknown[]).length;
@@ -373,7 +427,10 @@ export async function runCensus(
 
 async function main(): Promise<void> {
   const a = parseCensusArgs(process.argv.slice(2));
-  const c = await runCensus(a.paths, resolve(a.out), () => {}, { noLibreOffice: a.noLibreOffice });
+  const c = await runCensus(a.paths, resolve(a.out), () => {}, {
+    noLibreOffice: a.noLibreOffice,
+    ...(a.whole ? { whole: { anchors: a.wholeAnchors ?? 'motion' } } : {}),
+  });
   console.log(
     `census: ${c.decks} deck(s), ${c.slides} shown slide(s), ${c.unreadable} unreadable (missing target), ${c.errors} the converter could not read; ${resolve(a.out)}`,
   );
