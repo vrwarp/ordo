@@ -113,10 +113,25 @@ by the hub, `apps/hub/src/pptx/clientScene.ts:16`), and decor-render's plate sto
    converter's guard and the screens' clamp stop leaving content out.
 3. **One picture store.** Pre-rendered slides and, later, decoration plates (bake-on-save P3/P4) share one table,
    key format, upload route, collection and goLive listing, grown from `add91d9`'s plates, not forked.
-4. **Only ordo draws pictures, only on a desktop.** A bake worker of the operator app on a desktop Chromium
-   (fine pointer, not a compact layout); iPads only after a WebKit parity probe; never a phone, the hub, an output
-   window or the Pages demo. While any service is live, only the go-live bake runs, on the computer that went
-   live, throttled; every other computer waits until the service ends (the owner's rule of 2026-11-13).
+<!-- raster-maker:decision-4 -->
+4. **Only ordo draws pictures; whole slides on a desktop, the pictures of many-point shapes in the hub's own
+   Chromium.** CHANGED in sub-wave 3 by the owner's Q56.a and Q56.d ("the hub should be able to use the different
+   tools instead of a pure-javascript rasterizer and on the browser, it should leverage the browser where
+   possible"). The pre-render pictures of whole slides stay a desktop browser's: a bake worker of the operator app
+   on a desktop Chromium (fine pointer, not a compact layout); iPads only after a WebKit parity probe; never a
+   phone, an output window or the Pages demo. While any service is live, only the go-live bake runs, on the
+   computer that went live, throttled; every other computer waits until the service ends (the owner's rule of
+   2026-11-13). What is NEW: a custom-path shape with more points than the screens may draw (Q53) is drawn as a
+   picture AT IMPORT by the hub's own headless Chromium running the same renderer in a small page
+   (`apps/hub/src/pptx/raster-page.ts`, its driver `rasterPage.ts`, the loop and the ladder `rasters.ts`): it
+   reads a written recipe (`raster-recipe.ts`), draws each shape with `drawShapeWide` (a geometry the converter
+   built, never clamped to the stored limits) and each text member's words with the screens' own text drawing,
+   and returns a PNG. The earlier notes that the hub never draws ("it has no Canvas 2D") are superseded: Chromium
+   is its Canvas 2D. The import-time browser runs in the light import job, niced and in its own process group, is
+   DEFERRED while any service is live and is killed within a quarter of a second if one goes live in the middle
+   of a picture; a screen never waits on a picture. A hub with no Chromium plans no pictures of shapes (LibreOffice's
+   art as today, else today's boxes, and one report line). See "As built in sub-wave 3 (raster-maker: the picture maker)" at the end of this document.
+<!-- /raster-maker:decision-4 -->
 5. **A picture is complete or it is not uploaded.** It is keyed by everything it depends on (slide, live set,
    media files, every font face of the resolution chain, renderer version) and drawn only with library and
    bundled fonts, so two computers make the same pixels for one key and a stale picture is never shown as current.
@@ -1605,3 +1620,35 @@ differs from the text above:
   2026-11-21 (he wrote "6mb", read as 6 MiB, the unit of every budget in `size.ts`); it was 3 MiB, so every presentation
   of 3 to 8 MiB, which the 8 MiB budget allows, carried it (Traffic Dark, 3.13 MiB, did). The words are unchanged and it
   is still a default until a venue PC confirms it (D13, owner question 14).
+
+<!-- raster-maker:as-built -->
+### As built in sub-wave 3 (raster-maker: the picture maker)
+
+What the maker half of the shape-picture work built and measured (the planner's half, which decides which shapes
+become pictures and what each picture is made of, is "As built in sub-wave 3 (shape-raster)"):
+
+- **The route holds (G-SPIKE: page-ok).** The hub's own headless Chromium, running the renderer in a small page, draws a
+  3840x2160 picture in 92 to 304 ms (the 45,056-point outline of a Traffic Dark continent 126 ms; 2,000 random shapes
+  924 ms), starts in 0.65 s and writes a PNG of 0.2 to 3.7 MB. Measured on a 4-CPU machine with a software canvas and
+  Chrome for Testing 153; the hub image's own Chromium build is the integrator's image smoke step.
+- **Memory.** The browser's tree (8 processes) peaks at 1,129 MB of resident memory summed per process over 90 pictures in
+  one browser (586 MB counting shared pages once, the figure a container charges) and does not grow. Four flags and freeing each
+  canvas at once brought it from 1,473 MB; the ceiling written before the first run (1,200 MB) was not changed.
+- **Same pixels as the screens.** Within today's limits a shape drawn by `drawShapeWide` equals `drawGeomShape` to the last
+  channel (14 shapes in a browser test; 10 shapes at 3840x2160 through the hub's page against the screens' own
+  `drawObject`: maximum difference 0), and the words of a text member equal the screens' text drawing (8 subjects, 0). A
+  character no library face covers fails the whole run: never a picture in another face.
+- **Wide shapes are drawn whole.** Traffic Dark slide 88's eight continents (5,464 to 45,056 points), slide 89's thirteen
+  over-limit shapes and slide 91's six are each drawn whole: their painted area equals an independent even-odd area
+  computed from the built points within 0.06 %, and is larger than the same outline cut at 8 paths x 4,096 points.
+  No stored or live limit moved (`limits.test.ts` pins every number).
+- **Low-alpha colour.** The page's canvas stores 8-bit premultiplied colour as the screens' does, so the straight colour of a
+  semi-transparent edge pixel (alpha 32 to 49) can be off by up to 8, which composites to the screens' result exactly. A
+  float16 canvas would make the colour exact and the picture differ from the live draw by up to 3 levels: not used.
+- **Shapes with effects (the owner's Q53.i).** A shadow, a glow or a soft edge costs two to three times the time and, at 50 such
+  shapes in a picture, about twice the memory (2.1 to 2.5 GB peak); a see-through gradient costs little (480 ms, 1.06 GB). They
+  stay out of the pictures by default.
+- **Live safety.** No picture starts while any service is live or in its grace; a service going live in the middle of a
+  picture stops it within about a quarter of a second and the browser's whole process group is killed; the browser runs
+  at nice 19, one at a time on the hub; a crashed browser is relaunched once.
+<!-- /raster-maker:as-built -->
