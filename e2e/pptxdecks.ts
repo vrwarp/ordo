@@ -18,6 +18,7 @@ import {
   NS_P,
   NS_R,
   para,
+  pic,
   type RelSpec,
   run,
   type SlideSpec,
@@ -1111,4 +1112,115 @@ export function denseDeck(
   const out: string[] = [];
   for (let i = 0; i < 52_000; i++) out.push(one(2 + i));
   return zip(buildDeck({ slides: [{ shapes: out.join('') }] }), file);
+}
+
+// ---- the whole-slide deck (import-whole, Q24.b) -----------------------------------------------------------
+
+/**
+ * What the whole-slide deck holds (`wholeDeck`): an ordinary slide, a slide of 300 pictures from 24 files, a slide of 12 text boxes of
+ * 9,000 characters (about 108 KB of text, past the 64 KiB a slide keeps inline), and a slide with a looping video behind 40 pictures.
+ * The second and third are heavy and carry no clip, so a hub that keeps heavy slides whole stores them whole with a record; the fourth is
+ * heavy too but a video anchors it, so it keeps today's plan.
+ */
+export const WHOLE = {
+  pictures: 300,
+  files: 24,
+  cols: 25,
+  textBoxes: 12,
+  textChars: 9_000,
+  videoPictures: 40,
+  slides: ['ordinary', 'pictures', 'text', 'video'],
+} as const;
+
+/** The centre of picture `i` of the whole deck's picture slide, in logical px (a grid of 25 columns, 70 px apart, 56 px a side). */
+export function wholeCentre(i: number): [number, number] {
+  return [40 + (i % WHOLE.cols) * 70 + 28, 200 + Math.floor(i / WHOLE.cols) * 70 + 28];
+}
+
+/** The colour of picture `i`: one of 24 files. */
+export const wholeColor = (i: number): [number, number, number] => guardColor(i % WHOLE.files);
+
+/** The text of box `b` of the whole deck's text slide: `WHOLE.textChars` characters, each box its own words. */
+export function wholeText(b: number): string {
+  const word = `verse${b}word`;
+  let t = '';
+  for (let k = 0; t.length < WHOLE.textChars; k++) t += `${word}${k} `;
+  return t.slice(0, WHOLE.textChars);
+}
+
+/**
+ * The whole-slide deck (see `WHOLE`), written with the converter's raw-XML test helpers; `m` is the media probe's folder (the video
+ * of the fourth slide and its poster). Zipped into `dir`.
+ */
+export function wholeDeck(dir: string, m: ProbeMedia): string {
+  mkdirSync(dir, { recursive: true });
+  const EMU = 6_350; // EMU per logical px (12,192,000 / 1,920)
+  const media: Record<string, Uint8Array> = {};
+  for (let f = 0; f < WHOLE.files; f++) media[`ppt/media/w${f}.png`] = solidPng(8, 8, guardColor(f));
+  const fileRels = (): RelSpec[] =>
+    Array.from({ length: WHOLE.files }, (_, f) => imageRel(`rIdW${f}`, `../media/w${f}.png`));
+  const title = (id: number, text: string) =>
+    sp({
+      id,
+      x: 60 * EMU,
+      y: 30 * EMU,
+      cx: 1800 * EMU,
+      cy: 130 * EMU,
+      txBox: true,
+      txBody: body(para(run(text, 'sz="4400"', solid('FFFFFF')))),
+    });
+  const pictures = (n: number, first: number) => {
+    let xml = '';
+    for (let i = 0; i < n; i++) {
+      const [cx, cy] = wholeCentre(i);
+      xml += pic({
+        id: first + i,
+        x: (cx - 28) * EMU,
+        y: (cy - 28) * EMU,
+        cx: 56 * EMU,
+        cy: 56 * EMU,
+        rId: `rIdW${i % WHOLE.files}`,
+      });
+    }
+    return xml;
+  };
+  let texts = '';
+  for (let b = 0; b < WHOLE.textBoxes; b++)
+    texts += sp({
+      id: 10 + b,
+      x: 60 * EMU,
+      y: (190 + b * 70) * EMU,
+      cx: 1800 * EMU,
+      cy: 60 * EMU,
+      txBox: true,
+      txBody: body(para(run(wholeText(b), 'sz="600"', solid('FFFFFF'))), 'wrap="square"'),
+    });
+  const video = clipSlide(
+    [
+      {
+        id: 4,
+        kind: 'video',
+        part: 'motion.mp4',
+        box: { x: 0, y: 0, cx: W, cy: H },
+        timing: { start: 'auto', loop: true, mute: true },
+      },
+    ],
+    title(2, 'A video behind 40 pictures') + pictures(WHOLE.videoPictures, 100),
+  );
+  video.rels = [...(video.rels ?? []), ...fileRels()];
+  const slides: SlideSpec[] = [
+    { bg: solidBg('282828'), shapes: title(2, 'An ordinary slide') },
+    {
+      bg: solidBg('282828'),
+      shapes: title(2, 'Three hundred pictures') + pictures(WHOLE.pictures, 100),
+      rels: fileRels(),
+    },
+    { bg: solidBg('282828'), shapes: title(2, 'A long text slide') + texts },
+    video,
+  ];
+  media['ppt/media/poster.png'] = readFileSync(m.poster);
+  media['ppt/media/motion.mp4'] = readFileSync(m.motion);
+  const file = join(dir, 'Whole slides.pptx');
+  writeFileSync(file, zipParts(buildDeck({ slides, media })));
+  return file;
 }

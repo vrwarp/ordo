@@ -268,6 +268,13 @@ export const PORT_TABLE = {
     spec: 'sw2-seams.spec.ts',
     what: '0 hub without LibreOffice (a restarted hub with a crowded service: the screen holding the copy is sent its state by name and still draws the top square), 1 hub without LibreOffice with ORDO_MIN_FREE_GB=10000 (the free-space floor: uploads and imports paused, the service keeps running)',
   },
+  // import-whole (Q24.b, sub-wave 3): heavy slides come in whole through the upload route; the off hub reuses port 0 after the first hub ends.
+  'pptx-prerender-import': {
+    offset: 540,
+    count: 2,
+    spec: 'pptx-prerender-import.spec.ts',
+    what: '0 hub with LibreOffice and ORDO_PRERENDER=on (then, in a later test, ORDO_PRERENDER=off), 1 hub without LibreOffice and ORDO_PRERENDER=on',
+  },
 } as const satisfies Record<string, Row>;
 
 export type PortRow = keyof typeof PORT_TABLE;
