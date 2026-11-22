@@ -994,6 +994,19 @@ cells, '1년차' and '２년차', 24 pt in a 46.6 pt column, each over 4 rows, a
   `e2e/ipad/table-targets.spec.ts` (`verticalTableDeck`).
 <!-- /r2b:vert-cells -->
 
+## Q24.b (sub-wave 3): a slide kept whole (`budget.ts`, `version.ts`)
+
+<!-- import-whole:begin -->
+- `CONVERTER_VERSION` is 3. `ParseOptions.wholeSlides` (with `wholeAnchors` 'motion' | 'own' and `wholeAnchored`) turns the rule on;
+  absent, the plan is the version-2 one, byte for byte (recorded plans pin it).
+- The rule (`wholeSlide`, `wholeAnchorKinds`, `BudgetPlan.whole` and `anchorKinds`): an eligible slide is kept whole, planned without the
+  guard and the picture limit, when no anchor stops it (a visible video clip with a part from the slide: 'clip'; a picture
+  background only under 'own': 'background') and its planned objects after the reliefs are at most `WHOLE_OBJECTS_MAX` (1,000,
+  pinned equal to `MAX_OBJECTS` and `Slide.objects`; past it: 'bound', today's plan). `WHOLE_ANCHORED` (false) is pinned equal to
+  the domain's `PRERENDER_ANCHORED`; this package cannot import it (purity), so the importer passes it (`wholeAnchored`).
+- `ParseOptions.onBudget` reports each slide's plan to the caller (the census's window), never stored.
+<!-- import-whole:end -->
+
 ## Module map
 
 | File            | What                                                                                                                                                 | Owner         |

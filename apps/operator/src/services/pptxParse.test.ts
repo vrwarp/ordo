@@ -1,5 +1,5 @@
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ImportIn, ImportOut } from '../workers/import.worker.ts';
 import { logLines } from './log.ts';
 import {
@@ -10,6 +10,16 @@ import {
   useImportParse,
   type WorkerFactory,
 } from './pptxParse.ts';
+
+/** The worker's parse, replaced: what it is asked for is what this file reads (the scene itself is the importers' own). */
+const parsed = vi.hoisted(() => ({ calls: [] as unknown[][] }));
+vi.mock('@ordo/importers/pptx-client.ts', () => ({
+  parsePptxScene: async (...args: unknown[]) => {
+    parsed.calls.push(args);
+    return { scene: { listed: [{}] }, ms: 1 };
+  },
+}));
+vi.mock('@ordo/importers/pptx-faces.ts', () => ({ loadDeckFaces: async () => undefined }));
 
 type Fake = ReturnType<WorkerFactory> & { posted: ImportIn[]; terminated: boolean; send(m: ImportOut): void };
 
@@ -126,5 +136,65 @@ describe('the browser parse of a PowerPoint import (design/27 §2)', () => {
     expect(
       logLines().some((l) => /could not read it: The deck holds more than 64 MB of slide XML/.test(l.text)),
     ).toBe(true);
+  });
+});
+
+describe('the whole-slide option through the four hops (Q24.b, C-IW4): the import tab, the request, the worker message, the parse', () => {
+  it('puts wholeSlides in the worker message when the request has it, and false when it does not', async () => {
+    for (const [wholeSlides, expected] of [
+      [true, true],
+      [false, false],
+      [undefined, false],
+    ] as const) {
+      const { factory, workers } = fake((w) => {
+        w.send({ t: 'done', scene: new ArrayBuffer(2), ms: 1, slides: 1 });
+      });
+      await clientScene(req(wholeSlides === undefined ? {} : { wholeSlides }), { worker: factory });
+      expect(workers[0]!.posted[0], String(wholeSlides)).toMatchObject({
+        t: 'parse',
+        extendBackgrounds: true,
+        libreoffice: false,
+        wholeSlides: expected,
+      });
+    }
+  });
+
+  describe('the import worker', () => {
+    const posted: unknown[] = [];
+    const self = { postMessage: (m: unknown) => void posted.push(m), onmessage: undefined as unknown };
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      posted.length = 0;
+      parsed.calls.length = 0;
+    });
+    /** The worker as the browser starts it: its `self` stubbed, its handler called with one parse message. */
+    async function post(message: Partial<ImportIn>) {
+      vi.stubGlobal('self', self);
+      vi.resetModules();
+      await import('../workers/import.worker.ts');
+      const handler = self.onmessage as (ev: { data: ImportIn }) => Promise<void>;
+      await handler({
+        data: {
+          t: 'parse',
+          file: new Blob([]),
+          extendBackgrounds: true,
+          libreoffice: true,
+          faces: [],
+          ...message,
+        },
+      });
+    }
+
+    it('hands the option to the parse of the deck: true when the message says so, nothing otherwise', async () => {
+      await post({ wholeSlides: true });
+      expect(posted.at(-1)).toMatchObject({ t: 'done' });
+      expect(parsed.calls[0]![1]).toMatchObject({
+        extendBackgrounds: true,
+        libreoffice: true,
+        wholeSlides: true,
+      });
+      await post({});
+      expect(parsed.calls[1]![1]).not.toMatchObject({ wholeSlides: true });
+    });
   });
 });

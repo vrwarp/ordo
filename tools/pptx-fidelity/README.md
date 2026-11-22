@@ -156,6 +156,15 @@ to `M9_WRITES` in a scratch checkout.
 
 A census line names its deck. Tables made from a census of private decks print counts only.
 
+<!-- import-whole:begin -->
+`--whole` (Q24.b; `--whole-anchors own|motion`, default motion, Q25.c.b) reads every deck with `ParseOptions.wholeSlides` and adds per
+slide `wholeKept` (the converter keeps it whole), `planned` (its planned objects), `anchorKinds`, `bgOwn`, `pictures`, `heavy`,
+`wouldCut` and `wouldCutPictures`, per deck `heavyBytes`; the hub columns (`stored`, `hub`, `level`, `missing`, `hubWhy`) then model
+the ladder that keeps heavy slides whole, through the import core's own `selectWhole` (the 2 MiB share, the cut past it), and
+`hubWhole` says which slides it keeps whole. The fidelity harness takes `--whole` (it implies `--hub-budget`) and
+`--whole-anchors` too.
+<!-- import-whole:end -->
+
 ### The golden-pptx census ratchet (CI)
 
 ```

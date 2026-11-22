@@ -27,6 +27,8 @@ export function importResult(input: {
   simplified?: number;
   /** M9: slides with something nothing draws (`Slide.pptx.missing`). */
   missing?: number;
+  /** Q24.b: slides kept whole (absent: this hub keeps none whole, `PptxNativeResult.whole`). */
+  whole?: number;
   pending: number;
   loJobId?: string;
   missingFonts: readonly string[];
@@ -46,5 +48,6 @@ export function importResult(input: {
     missingFonts: input.missingFonts.slice(0, RESULT_FONTS).map((f) => logSafe(f, 100)),
     notes: input.notes.slice(0, RESULT_NOTES).map((n) => logSafe(n, 300)),
     ...(input.missing !== undefined ? { missing: input.missing } : {}),
+    ...(input.whole !== undefined ? { whole: input.whole } : {}),
   };
 }

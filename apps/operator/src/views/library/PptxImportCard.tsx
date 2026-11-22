@@ -13,6 +13,7 @@ import {
   plural,
   readNativeFallback,
   readNativeResult,
+  wholeLine,
 } from '../../lib/pptxImport.ts';
 import { jobResultPresentationId, useJob } from '../../services/jobs.ts';
 import { useLibrary } from '../../state/library.ts';
@@ -79,6 +80,8 @@ export function PptxImportCardView(props: {
   fallbackJob?: Job;
   lo?: Job;
   presentation?: Pick<Presentation, 'sections'>;
+  /** W2: false when this device cannot make the pictures of the slides kept whole (the line says where they are made). */
+  deviceCanBake?: boolean;
   showLog: boolean;
   onToggleLog(): void;
   onOpen(presentationId: string): void;
@@ -103,7 +106,14 @@ export function PptxImportCardView(props: {
           {job.error}
         </div>
       )}
-      {result && <NativeSummary result={result} lo={props.lo} presentation={props.presentation} />}
+      {result && (
+        <NativeSummary
+          result={result}
+          lo={props.lo}
+          presentation={props.presentation}
+          deviceCanBake={props.deviceCanBake}
+        />
+      )}
       {fallback && (
         <div className="banner small" role="status">
           The slides could not be made editable here
@@ -135,6 +145,7 @@ function NativeSummary(props: {
   result: NativeImportResult;
   lo?: Job;
   presentation?: Pick<Presentation, 'sections'>;
+  deviceCanBake?: boolean;
 }) {
   const r = props.result;
   const lo = loStatus(r.pending, props.lo);
@@ -164,6 +175,11 @@ function NativeSummary(props: {
           ))}
         </ul>
       </div>
+      {r.whole ? (
+        <span className="muted small" data-whole>
+          {wholeLine(r.whole, props.deviceCanBake)}
+        </span>
+      ) : null}
       {r.hybrid > 0 &&
         (noLo ? (
           <span className="muted small">

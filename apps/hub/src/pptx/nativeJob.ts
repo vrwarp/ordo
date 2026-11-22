@@ -75,6 +75,7 @@ import {
   ImportCore,
   missingSlides,
   usedPlaceholders,
+  wholeSlidesFor,
 } from '@ordo/importers/pptx-core.ts';
 import { withoutFiles } from '@ordo/importers/pptx-ladder.ts';
 import { ImportLog } from '@ordo/importers/pptx-report.ts';
@@ -102,6 +103,7 @@ import {
   PPTX_JOBS,
   PPTX_LIMITS,
   type PptxDeps,
+  prerenderOn,
   type PptxImportOptions,
   type PptxLoSlide,
   type PptxNativeFallback,
@@ -136,6 +138,8 @@ export type NativeJobEnv = {
    * where the merged presentation would pass it.
    */
   reserve?: number;
+  /** A re-import: the bytes of the kept slides that carry a pre-render record, which share the whole-slide share (Q28.a). */
+  heavyReserve?: number;
   /**
    * Reads the slide parts of a pool call from the stored deck just before the call, and again for the text rescue of a slide the
    * call could not convert (the import holds no slide between them): a test seam, `readSlideParts` by default.
@@ -181,6 +185,10 @@ export type NativeBuild = {
   /** Slides the budget ladder simplified (formatting or decorations left out, or stored minimal). */
   simplified: number;
   missingFonts: string[];
+  /** Q24.b: slides stored with a pre-render record, every one kept whole (0 when this hub keeps none whole). */
+  whole: number;
+  /** Q24.b: whether this build kept heavy slides whole (the job's one decision, `wholeSlidesFor`). */
+  keepsWhole: boolean;
 };
 
 /**
@@ -202,7 +210,17 @@ export async function buildNative(
     if (!done.presentationId) throw new Error('no presentation to build for');
     const file = deps.lib.getFile(pl.hash);
     if (!file) throw new Error('The PowerPoint file is no longer stored');
-    const job = new NativeImport(deps, env.pool ?? cpuPool(), limits, ctx, done, save, env.only, env.reserve);
+    const job = new NativeImport(
+      deps,
+      env.pool ?? cpuPool(),
+      limits,
+      ctx,
+      done,
+      save,
+      env.only,
+      env.reserve,
+      env.heavyReserve,
+    );
     const scratch = await deps.store.tmpDir();
     try {
       return await job.buildOnly(deps.store.abs(file.path), scratch);
@@ -419,6 +437,7 @@ class NativeImport {
     save: () => void,
     only?: NativeJobEnv['only'],
     reserve = 0,
+    heavyReserve = 0,
   ) {
     this.deps = deps;
     this.pool = pool;
@@ -437,6 +456,7 @@ class NativeImport {
       warn: (kind, msg) => this.warn(kind, msg),
       geomFileBytes: limits.geomFileBytes,
       reserve,
+      heavyReserve,
     });
   }
 
@@ -448,6 +468,15 @@ class NativeImport {
   /** Whether LibreOffice draws what ordo cannot (the core's). */
   private get lo(): boolean {
     return this.core.lo;
+  }
+
+  /**
+   * Q24.b: whether this import keeps heavy, eligible slides whole (the core's): decided once, when the tools are known
+   * (`steps`, C-IW3), and used for the pool's parse, the check of a browser scene, the import core and the result,
+   * so one import never mixes two plans.
+   */
+  private get whole(): boolean {
+    return this.core.whole;
   }
 
   /** A warning in the job log (at most `JOB_LOG_LINES` per kind) and in `source.log`. */
@@ -537,6 +566,7 @@ class NativeImport {
     // probing it again before it gives up (`fallback.ts` `loJob`, `LO_PROBE_RETRIES`).
     const lo = await this.deps.tools.recheck();
     this.core.lo = lo !== 'absent' && lo !== 'off';
+    this.core.whole = wholeSlidesFor({ prerender: prerenderOn(this.deps.cfg), lo: this.lo });
     if (this.lo && lo !== 'available') {
       ctx.log(
         '[warn] LibreOffice does not answer yet: what ordo cannot draw waits for it, tried again later',
@@ -660,6 +690,7 @@ class NativeImport {
         {
           file: this.deps.store.abs(sf.path),
           libreoffice: this.lo,
+          ...(this.whole ? { wholeSlides: true } : {}),
           ...(only.length ? { systemOnlyScripts: only } : {}),
         },
         { signal: ctx.signal },
@@ -1066,6 +1097,7 @@ class NativeImport {
       ...(system.length ? { systemScriptFaces: system.map((f) => [...f] as SystemScriptFace) } : {}),
       geomBytes: this.limits.batchGeomBytes,
       ...(this.lo ? {} : { libreoffice: false }),
+      ...(this.whole ? { wholeSlides: true } : {}),
     };
     return {
       shared,
@@ -1461,7 +1493,7 @@ class NativeImport {
       clipIds: this.clipIds,
       libraryFamilies: deps.lib.listFonts().map((f) => f.family),
     });
-    return { ...built, clipIds: this.clipIds, clipsCreated: this.clipsCreated };
+    return { ...built, clipIds: this.clipIds, clipsCreated: this.clipsCreated, keepsWhole: this.whole };
   }
 
   /** Step 6: save version 1 and queue the LibreOffice follow-up, then the clips' media jobs. */
@@ -1502,6 +1534,7 @@ class NativeImport {
         compact,
         simplified,
         missing: missingSlides(parsed),
+        ...(this.whole ? { whole: b.whole } : {}),
         pending: loJobId ? lo.length : 0,
         ...(loJobId ? { loJobId } : {}),
         missingFonts: fonts,
@@ -1549,6 +1582,7 @@ function resumedResult(
       classes: slides.map((s) => s.pptx?.class ?? 'native'),
       compact: 0,
       missing: missingSlides(saved),
+      ...(prerenderOn(deps.cfg) ? { whole: slides.filter((s) => s.prerender).length } : {}),
       pending: pending.length,
       ...(done.loJobId ? { loJobId: done.loJobId } : {}),
       missingFonts: [],

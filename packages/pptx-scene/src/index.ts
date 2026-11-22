@@ -9,6 +9,7 @@
  */
 import { missingEntry } from '@ordo/domain/missing.ts';
 import { XmlBoundError } from './xml.ts';
+import type { BudgetPlan } from './budget.ts';
 import { classifySlide } from './classify.ts';
 import { slideContext } from './context.ts';
 import { type DeckInfo, readDeck, type SlideRef } from './deck.ts';
@@ -29,7 +30,7 @@ import {
   MEDIA_PREFIX,
 } from './emit.ts';
 import { frameOf, slideRect } from './frame.ts';
-import type { DeckScene, Frame, SectionInfo, SlideScene } from './ir.ts';
+import type { Background, DeckScene, Element, Frame, SectionInfo, SlideScene } from './ir.ts';
 import { clean, type Log, noteList } from './log.ts';
 import { openPackage, type PartSource } from './opc.ts';
 import { readSlideSounds } from './media.ts';
@@ -62,6 +63,9 @@ export {
   MAX_DRAWN_OBJECTS,
   MAX_DRAWN_PICTURES,
   MAX_SLIDE_OBJECTS_TEXT,
+  WHOLE_ANCHORED,
+  WHOLE_OBJECTS_MAX,
+  type WholeAnchorKind,
 } from './budget.ts';
 export { DECOR_PREFIX, type PlatePlan, platePlan } from './decor.ts';
 export { type EmittedSheet, SHEET_DENSITY, SHEET_PREFIX } from './sheet.ts';
@@ -154,6 +158,35 @@ export interface ParseOptions {
    * (`BudgetOptions.libreoffice`). Parse and emit a deck with the same flag.
    */
   libreoffice?: boolean;
+  /**
+   * Q24.b (the first pre-render release): keep an eligible slide whole instead of cutting it (`budget.ts`
+   * `BudgetOptions.whole`): no guard, no picture limit, within `WHOLE_OBJECTS_MAX` planned objects. Default
+   * false: the converter plans as before. Parse and emit a deck with the same flag.
+   */
+  wholeSlides?: boolean;
+  /**
+   * Which backgrounds keep a slide out of `wholeSlides` (Q25.c.b, decided: 'motion', the default: only a video
+   * counts; 'own': a picture background counts too). The converter cannot import the importers' constant
+   * (`WHOLE_BACKGROUND_ANCHORS`), so every caller passes it.
+   */
+  wholeAnchors?: 'own' | 'motion';
+  /** Q24.a's gate (`BudgetOptions.anchored`): the importers pass easy-plan's `PRERENDER_ANCHORED`. */
+  wholeAnchored?: boolean;
+  /**
+   * The fidelity harness's census only (never the hub, never stored): what the slide budgets planned for each
+   * slide as it is read (`BudgetPlan`: whole or not and why, the planned objects and pictures, what the guard
+   * left out), with its elements and background. Called once per slide, after its budgets; a throw is ignored.
+   */
+  onBudget?: (slide: SlideBudget) => void;
+}
+
+/** One slide's budgets as `ParseOptions.onBudget` reports them. */
+export interface SlideBudget {
+  /** `SlideRef.index`: the slide in the deck. */
+  index: number;
+  plan: BudgetPlan;
+  elements: readonly Element[];
+  background: Background;
 }
 
 /** Families, weights and slants `ParseOptions.fontFace` is asked for per call (a deck can name thousands). */
@@ -304,11 +337,17 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
       const background = readBackground(ctx);
       const classified = classifySlide(ctx, elements, background, {
         budgetArt: opts.budgetArt === true,
+        ...(opts.onBudget
+          ? { onBudget: (plan, els) => opts.onBudget!({ index: ref.index, plan, elements: els, background }) }
+          : {}),
         budget: {
           decorations: (opts.m9Writes ?? ALL_M9_FIELDS).has('decor'),
           sheets: opts.sheets !== false,
           libreoffice: opts.libreoffice !== false,
           tables: (opts.m9Writes ?? ALL_M9_FIELDS).has('table'),
+          ...(opts.wholeSlides === true ? { whole: true } : {}),
+          ...(opts.wholeAnchors ? { anchors: opts.wholeAnchors } : {}),
+          ...(opts.wholeAnchored !== undefined ? { anchored: opts.wholeAnchored } : {}),
         },
       });
       // W9 and W10 (design/29 section 3): a design past the reader's bounds and the shapes the walk cut are listed on the slide.

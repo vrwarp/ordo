@@ -14,6 +14,8 @@ export type ImportIn = {
   file: Blob;
   extendBackgrounds: boolean;
   libreoffice: boolean;
+  /** Q24.b: keep heavy slides whole (`PptxClientOptions.wholeSlides`); absent: no. */
+  wholeSlides?: boolean;
   /** The library's faces (`Font` rows) with the URLs their files are fetched from. */
   faces: FaceFile[];
 };
@@ -41,6 +43,7 @@ self.onmessage = async (ev: MessageEvent<ImportIn>) => {
       {
         extendBackgrounds: m.extendBackgrounds,
         libreoffice: m.libreoffice,
+        ...(m.wholeSlides === true ? { wholeSlides: true } : {}),
         loadFaces: (parts) => loadDeckFaces(parts, m.faces, fetchFace),
       },
       (pct) => post({ t: 'progress', pct }),

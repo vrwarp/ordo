@@ -11,8 +11,15 @@ import {
   sp,
 } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
-import { CONVERTER_VERSION, importPptxClient, LOOP_IMPORT_NOTE, parsePptxScene } from './pptx-client.ts';
-import { pictureGuardDeck } from './pptx-guard.test-util.ts';
+import {
+  assemblePptxScene,
+  CONVERTER_VERSION,
+  importPptxClient,
+  LOOP_IMPORT_NOTE,
+  parsePptxScene,
+} from './pptx-client.ts';
+import { WHOLE_BACKGROUND_ANCHORS } from './pptx-core.ts';
+import { pictureGuardDeck, solidPng } from './pptx-guard.test-util.ts';
 import { remapMediaIds } from './remap.ts';
 import { zipDeclared } from './zip-declared.test-util.ts';
 
@@ -55,7 +62,8 @@ describe('importPptxClient', () => {
     expect(result.deckHash).toMatch(/^[0-9a-f]{64}$/);
     expect(result.loSlides.length).toBe(0);
     expect(result.clientScene.version).toBe(CONVERTER_VERSION);
-    expect(CONVERTER_VERSION).toBe(2);
+    // 3 since Q24.b: the converter keeps a heavy slide whole and the import writes its pre-render record.
+    expect(CONVERTER_VERSION).toBe(3);
     expect(result.clientScene.libreoffice).toBeUndefined();
     expect(result.clientScene.slides.length).toBe(1);
   });
@@ -153,6 +161,108 @@ describe('importPptxClient', () => {
     expect(result.loSlides[0]!.class).toBe('hybrid');
     expect(result.loSlides[0]!.art).toBeDefined();
     expect(result.pending).toBe(1);
+  });
+});
+
+describe('heavy slides kept whole in the browser parse (Q24.b, step 5)', () => {
+  const zipped = async (parts: Map<string, Uint8Array>) => {
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    return z.generateAsync({ type: 'uint8array' });
+  };
+  /** One slide of `n` distinct small pictures, all on the slide (a grid of 25 columns), each its own colour. */
+  const manyPictures = (n: number) => {
+    let shapes = '';
+    const media: Record<string, Uint8Array> = {};
+    for (let i = 0; i < n; i++) {
+      shapes += pic({
+        id: 2 + i,
+        x: (i % 25) * 0.5 * IN,
+        y: Math.floor(i / 25) * 0.4 * IN,
+        cx: 0.4 * IN,
+        cy: 0.3 * IN,
+        rId: `rId${2 + i}`,
+      });
+      media[`ppt/media/m${i}.png`] = solidPng(8, 8, [(i * 37) % 256, (i * 91) % 256, (i * 53) % 256]);
+    }
+    const rels = Array.from({ length: n }, (_, i) => imageRel(`rId${2 + i}`, `../media/m${i}.png`));
+    return buildDeck({ slides: [{ rels, shapes }], media });
+  };
+  const images = (s: { objects: readonly { type: string }[] }) => s.objects.filter((o) => o.type === 'image');
+  const keysOf = (o: object) => Object.keys(o).sort();
+
+  it('writes wholeSlides: true into the scene only when the option is on (the libreoffice pattern)', async () => {
+    const bytes = await makeDeck();
+    const off = (await parsePptxScene(bytes)).scene;
+    const falsy = (await parsePptxScene(bytes, { wholeSlides: false })).scene;
+    const on = (await parsePptxScene(bytes, { wholeSlides: true })).scene;
+    expect(keysOf(off)).not.toContain('wholeSlides');
+    expect(keysOf(falsy)).not.toContain('wholeSlides');
+    expect(on.wholeSlides).toBe(true);
+    // Nothing else of the scene's head moves with it for a deck that has nothing heavy.
+    const { wholeSlides: _, ...rest } = on;
+    expect(keysOf(rest)).toEqual(keysOf(off));
+    expect(rest.version).toBe(off.version);
+    expect(rest.m9Writes).toEqual(off.m9Writes);
+    expect(rest.slides.map((s) => s.slide.objects.length)).toEqual(
+      off.slides.map((s) => s.slide.objects.length),
+    );
+  });
+
+  it('keeps a slide of 400 pictures whole when asked, the guard\u2019s 15 (16 without LibreOffice) when not (the converter option reaches convertDeck)', async () => {
+    const bytes = await zipped(manyPictures(400));
+    const base = (await parsePptxScene(bytes)).scene.slides[0]!.slide;
+    const lite = (await parsePptxScene(bytes, { libreoffice: false })).scene.slides[0]!.slide;
+    const whole = (await parsePptxScene(bytes, { wholeSlides: true })).scene.slides[0]!.slide;
+    const wholeLite = (await parsePptxScene(bytes, { wholeSlides: true, libreoffice: false })).scene
+      .slides[0]!.slide;
+    expect(images(base)).toHaveLength(15);
+    expect(images(lite)).toHaveLength(16);
+    expect(images(whole)).toHaveLength(400);
+    expect(images(wholeLite)).toHaveLength(400);
+  });
+
+  it('builds the record and counts the slide: the assembly reads the scene, not the options of the call', async () => {
+    const bytes = await zipped(pictureGuardDeck(24));
+    const on = await importPptxClient(bytes, 'pictures.pptx', { wholeSlides: true });
+    const s = on.presentation.sections[0]!.slides[0]!;
+    // All 24 pictures, no art waiting for LibreOffice, and the record (the slide is stored inline: no file).
+    expect(images(s)).toHaveLength(24);
+    expect(s.pptx).toMatchObject({ class: 'native' });
+    expect(s.pptx?.pending).toBeUndefined();
+    expect(on.loSlides).toEqual([]);
+    expect(s.prerender?.why.length).toBeGreaterThan(0);
+    expect(s.prerender?.live).toEqual([]);
+    expect(keysOf(s.prerender!)).toEqual(['live', 'why']);
+    expect(on.whole).toBe(1);
+    expect(on.log.join('\n')).toMatch(/1 slide is very detailed and was kept whole/);
+    expect(on.clientScene.wholeSlides).toBe(true);
+    // The same scene assembled apart from its parse is the same import (ids aside).
+    const parse = await parsePptxScene(bytes, { wholeSlides: true });
+    const apart = await assemblePptxScene(parse, bytes, { fileName: 'pictures.pptx' });
+    expect(apart.whole).toBe(1);
+    expect(images(apart.presentation.sections[0]!.slides[0]!)).toHaveLength(24);
+    // A scene that does not say it was parsed whole is assembled by the plan of before, whatever the caller meant.
+    const plain = await parsePptxScene(bytes);
+    const base = await assemblePptxScene(plain, bytes, { fileName: 'pictures.pptx' });
+    expect(base.whole).toBe(0);
+    expect(base.presentation.sections[0]!.slides[0]!.prerender).toBeUndefined();
+    expect(base.log.join('\n')).not.toMatch(/kept whole/);
+  });
+
+  it('keeps the base plan for a caller that passes no option (T6): nothing recorded, 15 pictures and the art', async () => {
+    const bytes = await zipped(pictureGuardDeck(24));
+    const base = await importPptxClient(bytes, 'pictures.pptx');
+    const s = base.presentation.sections[0]!.slides[0]!;
+    expect(images(s)).toHaveLength(15);
+    expect(s.pptx).toMatchObject({ class: 'hybrid', pending: true });
+    expect(s.prerender).toBeUndefined();
+    expect(base.whole).toBe(0);
+    expect(base.clientScene).not.toHaveProperty('wholeSlides');
+  });
+
+  it('uses the decided anchor answer: a video background keeps a slide out, a picture background does not (Q25.c.b)', () => {
+    expect(WHOLE_BACKGROUND_ANCHORS).toBe('motion');
   });
 });
 

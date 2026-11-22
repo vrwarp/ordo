@@ -627,6 +627,26 @@ demand.
 - No LibreOffice stand-by (owner question 12, default no): a big slide whose picture no computer has made yet is
   drawn by the screens themselves, not shown as LibreOffice's page meanwhile.
 
+<!-- import-whole:begin 1.9 -->
+**As built in sub-wave 3 (import-whole, Q24.b).** The first release stops at the plan, not at the picture: a heavy slide
+in which nothing plays or steps is KEPT WHOLE as ordo's own editable shapes and gets a pre-render record, on a hub with
+LibreOffice and on one without (Q27.a, `WHOLE_WITH_LIBREOFFICE` true; false is Q27.b, today's plan for a hub that has
+LibreOffice). `wholeSlidesFor({ prerender, lo })` (`packages/importers/src/pptx-core.ts`) is the one answer the hub's job,
+the operator's parse, the harness and the demo ask; the hub's `prerender` is `HubConfig.prerender.on` (`ORDO_PRERENDER`,
+never the domain constant) and the job decides it once, after its tools are known. The converter (`budget.ts`
+`BudgetOptions.whole`) keeps an eligible slide whole (no guard, no picture limit) when no anchor stops it, a visible video
+clip with a part from the slide (Q25.c.b: only a video counts; a picture background is an anchor only under the arm 'own')
+and its planned objects after the reliefs are at most `WHOLE_OBJECTS_MAX` (1,000, the INLINE bound, Q54: a slide past it
+follows today's plan until the slide-file route keeps it whole out of line). `ImportCore` plans the heavy slides first
+(`easyPlan(...).record`: over 200 drawn objects, 16 pictures or 64 KiB stored), each at level `full` or `grid`
+(`wholeLevel`), their bytes counted against the presentation's reserve but not its 6 MiB mark, within a 2 MiB share
+(`WHOLE_SHARE_BYTES`, Q28.a, counted as `quickBytes` counts them); a heavy slide past the share is cut to the screens'
+counts (`trimToCounts`: 200 objects, 16 pictures from the bottom, what is left out listed as missing, one report line).
+LibreOffice's page for size and the guard's art never apply to a slide kept whole; the LibreOffice follow-up plans the
+record again after its art is added (`patchSlide`'s `record`), and a queued follow-up written before this still finishes
+(there is no version gate).
+<!-- import-whole:end 1.9 -->
+
 ### 1.10 Import report
 
 The report (`PptxReport.tsx`; `importReport`, `apps/operator/src/lib/pptxImport.ts:569`) and the import card
@@ -636,6 +656,17 @@ the slide's own line. Each critical line also writes a slide note (`Slide.pptx.m
 not from PowerPoint) that the Go-live check repeats. The ProPresenter report gains W4 for its count slides, W64 and
 W65. The texts that go: "slide n is over 64 KB: LibreOffice draws its page" (`pptx-core.ts:496`), "simplified to
 fit the slide budget: … left out" (:528), the tail and 200-character notes (:537-576).
+
+<!-- import-whole:begin 1.10 -->
+**As built in sub-wave 3 (import-whole).** One static line says how many slides were kept whole (W1, W4): "N slides are very
+detailed and were kept whole; the screens show a picture of each, made on this computer" (singular and plural; W2 says
+"made on a computer with Chrome or Edge" for a device that cannot make the pictures: the props `deviceCanBake` of
+`PptxReportView` and `PptxImportCardView`, default true, wait for the device test of bake-worker). The text is
+`keptWholeLine` (`pptx-core.ts`); the hub writes it once into `source.log`, the result carries the count
+(`PptxNativeResult.whole`, present only when this hub keeps heavy slides whole), `importReport(p).whole` counts the slides
+that carry a record (absent for none), and the report and the import card show the line under the class counts. The
+progress line ("Making pictures: 5 of 12") is golive-lines'.
+<!-- import-whole:end 1.10 -->
 
 ### 1.11 Protocol and version
 
@@ -694,6 +725,18 @@ imports keep today's ladder. `CONVERTER_VERSION` becomes 3 with the plan change 
   `reimport.ts:932-934` only logs), and the requesting app bakes the changed slides when the job ends.
 - Rollback to 0.8.1 or 0.5.0: the stand-in draws; a save there drops the link to the file, which collection keeps while a
   revision names it, so restoring the version from before the rollback brings it back (design/27 §3.2 rule).
+
+<!-- import-whole:begin 1.12 -->
+**As built in sub-wave 3 (import-whole).** `CONVERTER_VERSION` is 3 (step 4): a version-2 scene is refused with the existing
+text and a slide an older converter stored is rebuilt by a re-import. A re-import and Reset slide plan the record of the
+slide they rebuild with `planRecord` (the operator's kept objects counted; `isMotion` from the clips of the fresh import and
+the hub's media rows, a file the hub does not know counting as an anchor), and the heavy bytes of the slides a re-import
+keeps (`keptHeavyBytes`) share the whole-slide share with the ones it builds (`NativeJobEnv.heavyReserve`). All of it only on
+a hub that keeps heavy slides whole; with `ORDO_PRERENDER` off or `auto` (the constant false) every path takes today's plan.
+The browser parse takes the same answer from the hub's last capabilities (`keepsSlidesWhole`, unknown is off) and records
+`wholeSlides` in its scene; a hub that answers otherwise refuses the scene ("parsed with another whole-slide option") and
+parses the deck itself; the Pages demo answers off and parses again.
+<!-- import-whole:end 1.12 -->
 
 ### 1.13 Tests and measures
 

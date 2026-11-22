@@ -60,6 +60,8 @@ export type ClientSceneTaskInput = {
   file: string;
   /** Whether the hub has LibreOffice for this import (`nativeJob.ts` decides it first). */
   libreoffice: boolean;
+  /** Q24.b: whether this hub keeps heavy slides whole (`wholeSlidesFor`, decided once by the job); absent: no. */
+  wholeSlides?: boolean;
   /**
    * Rule H (sub-wave 1c): the scripts the hub measures table cells in with a face only its computer has
    * (`systemFaces.ts` `systemOnlyScripts`); a scene with a table cell in one of them is refused. Absent: none.
@@ -68,6 +70,9 @@ export type ClientSceneTaskInput = {
   /** Tests set less. */
   maxBytes?: number;
 };
+
+/** Why a scene parsed for the other answer of the whole-slide switch is not used (Q24.b, D7). */
+export const WHOLE_REFUSAL = 'parsed with another whole-slide option';
 
 /** Why a scene whose table cells need a script face only the hub's computer has is not used (rule H). */
 export const SCRIPT_FACE_REFUSAL = 'its tables need a script face only this computer has';
@@ -242,6 +247,7 @@ export const PptxClientSceneSchema = z.object({
   geomFiles: z.array(z.object({ hash: z.string().regex(/^[0-9a-f]{64}$/), json: z.string() })).max(100_000),
   geomOver: z.array(int(MAX_SLIDES)).max(MAX_SLIDES).optional(),
   libreoffice: z.literal(false).optional(),
+  wholeSlides: z.literal(true).optional(),
 });
 
 /** The first problem of a refused parse, in a few words for the job log (no deck string in it). */
@@ -254,7 +260,10 @@ function why(e: z.ZodError): string {
  * A scene as the hub takes it, or why not (see the module comment). Pure: the pool task reads the file and
  * calls it; tests and the fuzz call it directly. Never throws.
  */
-export function checkClientScene(raw: unknown, o: { libreoffice: boolean }): ClientSceneTaskOutput {
+export function checkClientScene(
+  raw: unknown,
+  o: { libreoffice: boolean; wholeSlides?: boolean },
+): ClientSceneTaskOutput {
   try {
     return check(raw, o);
   } catch {
@@ -262,9 +271,9 @@ export function checkClientScene(raw: unknown, o: { libreoffice: boolean }): Cli
   }
 }
 
-function check(raw: unknown, o: { libreoffice: boolean }): ClientSceneTaskOutput {
+function check(raw: unknown, o: { libreoffice: boolean; wholeSlides?: boolean }): ClientSceneTaskOutput {
   if (!raw || typeof raw !== 'object') return { refused: 'not a scene' };
-  const head = raw as { version?: unknown; m9Writes?: unknown; libreoffice?: unknown };
+  const head = raw as { version?: unknown; m9Writes?: unknown; libreoffice?: unknown; wholeSlides?: unknown };
   if (head.version !== CONVERTER_VERSION) return { refused: 'parsed by another converter version' };
   const fields = Array.isArray(head.m9Writes) ? new Set(head.m9Writes) : undefined;
   if (!fields || fields.size !== M9_WRITES.size || [...M9_WRITES].some((f) => !fields.has(f)))
@@ -274,6 +283,9 @@ function check(raw: unknown, o: { libreoffice: boolean }): ClientSceneTaskOutput
   const sceneLo = head.libreoffice !== false;
   if (sceneLo !== o.libreoffice)
     return { refused: `parsed for a hub ${sceneLo ? 'with' : 'without'} LibreOffice` };
+  // Q24.b: so is the plan of heavy slides (kept whole, or cut by the ladder): a scene parsed for the other answer is
+  // not used, either way (D7). Only `true` is the scene's answer; the schema refuses any other value of the field.
+  if ((head.wholeSlides === true) !== (o.wholeSlides === true)) return { refused: WHOLE_REFUSAL };
   const parsed = PptxClientSceneSchema.safeParse(raw);
   if (!parsed.success) return { refused: why(parsed.error) };
   const s = parsed.data;
@@ -344,7 +356,10 @@ export function clientSceneTask(input: ClientSceneTaskInput): ClientSceneTaskOut
   } catch {
     return { refused: 'not JSON' };
   }
-  const checked = checkClientScene(raw, { libreoffice: input.libreoffice });
+  const checked = checkClientScene(raw, {
+    libreoffice: input.libreoffice,
+    wholeSlides: input.wholeSlides === true,
+  });
   // Rule H: decided on the parsed scene, here in the pool (the deck is not read for it).
   if ('scene' in checked && tablesNeedScripts(checked.scene.slides, input.systemOnlyScripts ?? []))
     return { refused: SCRIPT_FACE_REFUSAL };

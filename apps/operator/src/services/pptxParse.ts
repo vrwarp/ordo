@@ -87,6 +87,8 @@ export type ParseRequest = {
   name: string;
   extendBackgrounds: boolean;
   libreoffice: boolean;
+  /** Q24.b: keep heavy slides whole (`keepsSlidesWhole`); absent: no. */
+  wholeSlides?: boolean;
   fonts: readonly Font[];
   /** A playlist is live: the deck goes to the hub without a parse here. */
   live: boolean;
@@ -162,6 +164,7 @@ export async function clientScene(
       file: r.file,
       extendBackgrounds: r.extendBackgrounds,
       libreoffice: r.libreoffice,
+      wholeSlides: r.wholeSlides === true,
       faces: faceFiles(r.fonts),
     };
     try {

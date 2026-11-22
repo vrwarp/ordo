@@ -115,3 +115,17 @@ describe('slidesFor', () => {
     expect(() => parseArgs(['--hub', 'docker'])).toThrow(/dist or source/);
   });
 });
+
+describe('--whole and --whole-anchors (Q24.b)', () => {
+  it('--whole implies --hub-budget; the anchors default to motion and take own', () => {
+    expect(parseArgs(['d'])).toMatchObject({ whole: false });
+    expect(parseArgs(['d'])).not.toHaveProperty('wholeAnchors');
+    expect(parseArgs(['--whole', 'd'])).toMatchObject({ whole: true, hubBudget: true });
+    expect(parseArgs(['--whole', '--whole-anchors', 'own', 'd'])).toMatchObject({
+      whole: true,
+      wholeAnchors: 'own',
+    });
+    expect(() => parseArgs(['--whole-anchors', 'x', 'd'])).toThrow(/own or motion/);
+    expect(() => parseArgs(['--whole-anchors'])).toThrow(/needs a value/);
+  });
+});

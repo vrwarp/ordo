@@ -21,6 +21,7 @@
 import { getHeapStatistics } from 'node:v8';
 import { newId } from '@ordo/domain';
 import { emittedShapeFiles, nameShapeFiles } from '@ordo/importers/pptx-geoms.ts';
+import { WHOLE_PARSE } from '@ordo/importers/pptx-core.ts';
 import { extrasOf, scanDeck } from '@ordo/importers/pptx-scan.ts';
 import { convertDeck, rescueDeck } from '@ordo/pptx-scene';
 import { openPackage } from '@ordo/pptx-scene/opc.ts';
@@ -55,6 +56,8 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
       ? { fontFace: libraryFaces(input.fonts ?? [], system, used) }
       : {}),
     ...(input.libreoffice === false ? { libreoffice: false } : {}),
+    // Q24.b: heavy, eligible slides kept whole, parsed as a browser parses them for the same hub (`WHOLE_PARSE`).
+    ...(input.wholeSlides === true ? WHOLE_PARSE : {}),
     extendBackgrounds: input.options.extendBackgrounds ?? true,
     transitionSounds: input.options.transitionSounds ?? false,
     m9Writes: M9_WRITES,

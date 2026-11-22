@@ -4,6 +4,7 @@
  */
 import { DEFAULT_LYRIC_STYLE, type Slide } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
+import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import { hubLadder, hubStoredSlide, type NativeDeck, type NativeSlide, withHubBudget } from './native.ts';
 
 const box = { x: 0, y: 0, w: 100, h: 100, rotation: 0 };
@@ -87,5 +88,54 @@ describe('--hub-budget (M9 ladder)', () => {
     expect(hubStoredSlide(crowded('x'), h!)).toBe(h!.slide);
     expect(hubStoredSlide(small, 'native')).toBe(small);
     expect(hubStoredSlide(small, 'picture').objects).toEqual([]);
+  });
+});
+
+describe('--hub-budget with the whole option (Q24.b, step 8a)', () => {
+  const whole = (slides: Slide[]) =>
+    hubLadder(
+      slides.map((slide) => ({ class: 'native' as const, slide, notes: [] })),
+      [],
+      PPTX_LIMITS.geomFileBytes,
+      true,
+    );
+
+  it('stores a crowded slide whole where the base ladder simplifies it: every object, its bytes counted, the level grid', () => {
+    const base = hubLadder([{ class: 'native', slide: crowded('x'), notes: [] }]);
+    expect(base[0]!.level).not.toBe('full');
+    const [h] = whole([crowded('x')]);
+    expect(h).toMatchObject({ hub: 'native', why: null, missing: [], whole: true });
+    expect(h!.slide.objects).toHaveLength(701);
+    expect(h!.stored).toBeGreaterThan(64 * 1024);
+    expect(h!.level).toBe('grid');
+  });
+
+  it('is the base for a slide that is not heavy, and without the option', () => {
+    const small: Slide = { id: 'a', objects: [text('t', 'Welcome')] };
+    const [h] = whole([small]);
+    expect(h).not.toHaveProperty('whole');
+    expect(h!.level).toBe('full');
+    const off = hubLadder(
+      [{ class: 'native', slide: crowded('x'), notes: [] }],
+      [],
+      PPTX_LIMITS.geomFileBytes,
+      false,
+    );
+    expect(off[0]).not.toHaveProperty('whole');
+    expect(off[0]!.slide.objects.length).toBeLessThan(701);
+  });
+
+  it('keeps whole only what the 2 MiB share holds: the later heavy slides are cut to the counts and listed', () => {
+    const slides = Array.from({ length: 30 }, (_, i) => crowded(`s${i}`));
+    const out = whole(slides);
+    const flags = out.map((h) => h.whole === true);
+    const firstCut = flags.indexOf(false);
+    expect(firstCut).toBeGreaterThan(5);
+    expect(flags.slice(firstCut).every((f) => !f)).toBe(true);
+    for (const h of out.slice(firstCut)) {
+      expect(h.slide.objects.length).toBeLessThanOrEqual(200);
+      expect(h.hub).toBe('hybrid');
+      expect(h.missing.length).toBeGreaterThan(0);
+    }
   });
 });
