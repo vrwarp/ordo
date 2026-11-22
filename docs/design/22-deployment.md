@@ -96,8 +96,14 @@ collections and removed again after the install; for LibreOffice and the hub's m
 Korean table cells, never registered as library fonts), and copies `apps/hub/dist` and the built browser apps.
 The copyright file of every package the image installs stays in `/usr/share/doc/<package>/copyright` (the
 licence notices of ffmpeg, Chromium, LibreOffice and the rest, as Debian ships them, not only the fonts'; every
-other file of that folder is removed, but the fonts' folders, which stay as they were); the pull-request job lists the packages without one and fails for the
-product's own.
+other file of that folder is removed, but the fonts' folders, which stay as they were; the licence texts the notices
+point to, `/usr/share/common-licenses`, are outside the folder and stay); the pull-request job lists the packages
+without one and fails for the product's own and for the font packages `apps/hub/src/fonts/LICENSES.md` records, and
+for a missing `common-licenses` text. In the Docker dry run of PR #40 (the 0.10.0 sub-wave 2 tree, amd64) no
+package lacked a copyright file, `/usr/share/doc` held 16,396 KiB (`du -sk`, which counts each small file as a whole
+4 KiB block; the fonts' folders and the base image's are in it) and the image was 1,702,499,184 bytes: the notices
+cost at most 16 MB of the image, about 1 % of it (the earlier command kept the fonts' folders too, and the job
+did not print the folder's size before, so the exact difference is not known).
 Runs as a non-root user under tini, entrypoint the supervisor. Health check `GET /api/v1/health` (answered by the live process; it reports the library
 process state too).
 Image size target under 2 GB (decimal GB, 2,000,000,000 bytes, uncompressed, linux/amd64). It has been 2 GB since

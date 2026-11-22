@@ -1,13 +1,16 @@
-import { api, ApiFailure } from '@ordo/client';
+import { ApiFailure, api } from '@ordo/client';
 import type { Presentation, SlideObject } from '@ordo/domain';
 import type { RevisionInfo } from '@ordo/protocol';
 import { create } from 'zustand';
 import { deviceProfile } from '../../lib/capabilities.ts';
 import { onlyJobSaves, rebaseOnJobs } from '../../lib/pptxImport.ts';
 import { saveSizeCheck } from '../../lib/sizes.ts';
+import { type EditorUiPersist, journalPut, journalRemove } from '../../state/draftJournal.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
+import { removeUnsaved, upsertUnsaved } from '../../state/unsaved.ts';
+import { navigate } from '../../useRoute.ts';
 import { FILE_FORM_REFUSAL, fileFormGuard } from './fileForm.ts';
 import { History } from './history.ts';
 import { type MergeConflict, prepareMerge, same, theirsOf } from './merge.ts';
@@ -26,6 +29,28 @@ export type CanvasTextSelection = {
  * index in `TableData.cells`), edited as the cell's text object view and written back through `setCell`.
  */
 export type TextTarget = { objectId: string; cell?: number };
+
+export type EditorUiState = {
+  tab: 'object' | 'slide' | 'presentation';
+  drawerOpen: boolean;
+  stageLens: 'canvas' | string;
+  keepLoop: boolean;
+  songMode: 'reflow' | 'canvas' | null;
+  deckMode: 'canvas' | 'notes';
+  notesDockOpen: boolean | null;
+  zoom: 'fit' | 0.5 | 0.75 | 1;
+};
+
+export const DEFAULT_EDITOR_UI: EditorUiState = {
+  tab: 'slide',
+  drawerOpen: false,
+  stageLens: 'canvas',
+  keepLoop: false,
+  songMode: null,
+  deckMode: 'canvas',
+  notesDockOpen: null,
+  zoom: 'fit',
+};
 
 export type EditorState = {
   id?: string;
@@ -70,9 +95,28 @@ export type EditorState = {
   inlineEditingCell?: number;
   textRange: CanvasTextSelection;
   loadError?: string;
+  ui: EditorUiState;
+};
+
+type PresentationSession = {
+  id: string;
+  base: Presentation;
+  draft: Presentation;
+  history: History<Presentation>;
+  slideId?: string;
+  objectId?: string;
+  objectIds: string[];
+  dirty: boolean;
+  saving: boolean;
+  conflict: boolean;
+  mergeConflicts: MergeConflict[];
+  cell?: number;
+  cellRange?: TableRange;
+  ui: EditorUiState;
 };
 
 const EMPTY_TEXT_RANGE: CanvasTextSelection = { start: 0, end: 0, caret: 0 };
+const EMPTY_GUIDES: Guides = { x: [], y: [] };
 
 export const useEditor = create<EditorState>(() => ({
   objectIds: [],
@@ -80,12 +124,167 @@ export const useEditor = create<EditorState>(() => ({
   saving: false,
   conflict: false,
   mergeConflicts: [],
-  guides: { x: [], y: [] },
+  guides: EMPTY_GUIDES,
   canUndo: false,
   canRedo: false,
   inlineEditingId: undefined,
   textRange: EMPTY_TEXT_RANGE,
+  ui: { ...DEFAULT_EDITOR_UI },
 }));
+
+/** Active undo/redo stack for the presentation currently mounted in `useEditor`. */
+let history = new History<Presentation>(200, 800);
+/** Dirty (or conflicted / saving) presentation sessions kept across tab and presentation switches. */
+const sessions = new Map<string, PresentationSession>();
+/** Lightweight workspace state remembered for clean presentations visited during this session. */
+const uiMemory = new Map<string, { slideId?: string; ui: EditorUiState }>();
+/** Monotonic target id for `enterPresentation` so an earlier presentation's slow GET cannot clobber a newer one. */
+let wantedPresentationId: string | undefined;
+
+/** Presentations already warned about this session for passing the presentation budget (8 MiB, design/27 §3.4). */
+const warnedLarge = new Set<string>();
+
+const content = (p: Presentation) => {
+  const { rev: _rev, createdAt: _c, updatedAt: _u, ...rest } = p;
+  return rest;
+};
+
+function isDraftDirty(base: Presentation | undefined, draft: Presentation | undefined): boolean {
+  if (!base || !draft || draft === base) return false;
+  return !same(content(draft), content(base));
+}
+
+function toUiPersist(ui: EditorUiState): EditorUiPersist {
+  return {
+    tab: ui.tab,
+    drawerOpen: ui.drawerOpen,
+    stageLens: ui.stageLens,
+    songMode: ui.songMode,
+    deckMode: ui.deckMode,
+    notesDockOpen: ui.notesDockOpen,
+    zoom: ui.zoom,
+  };
+}
+
+function fromUiPersist(p?: EditorUiPersist): EditorUiState {
+  return {
+    tab: p?.tab ?? DEFAULT_EDITOR_UI.tab,
+    drawerOpen: p?.drawerOpen ?? DEFAULT_EDITOR_UI.drawerOpen,
+    stageLens: p?.stageLens ?? DEFAULT_EDITOR_UI.stageLens,
+    keepLoop: false,
+    songMode: p?.songMode ?? DEFAULT_EDITOR_UI.songMode,
+    deckMode: p?.deckMode ?? DEFAULT_EDITOR_UI.deckMode,
+    notesDockOpen: p?.notesDockOpen ?? DEFAULT_EDITOR_UI.notesDockOpen,
+    zoom: p?.zoom ?? DEFAULT_EDITOR_UI.zoom,
+  };
+}
+
+function syncRegistryForSession(sess: PresentationSession | undefined, id: string): void {
+  const regKey = `pres:${id}`;
+  if (!sess?.dirty) {
+    removeUnsaved(regKey);
+    journalRemove(regKey);
+    return;
+  }
+  upsertUnsaved({
+    key: regKey,
+    kind: 'presentation',
+    id,
+    label: sess.draft.title || 'Untitled presentation',
+    route: { name: 'edit', id },
+    saving: sess.saving,
+    save: () => savePresentationById(id),
+    discard: () => discardPresentationById(id),
+  });
+  journalPut(regKey, {
+    kind: 'presentation',
+    id,
+    base: sess.base,
+    draft: sess.draft,
+    slideId: sess.slideId,
+    ui: toUiPersist(sess.ui),
+    updatedAt: Date.now(),
+  });
+}
+
+/** Snapshot the active `useEditor` state into `sessions` (when dirty/saving/conflicted) and `unsaved` / `draftJournal`. */
+function syncActiveToSessions(): void {
+  const s = useEditor.getState();
+  if (!s.id || !s.base || !s.draft) return;
+  uiMemory.set(s.id, { slideId: s.slideId, ui: { ...s.ui } });
+  if (s.dirty || s.saving || s.conflict) {
+    const sess: PresentationSession = {
+      id: s.id,
+      base: s.base,
+      draft: s.draft,
+      history,
+      slideId: s.slideId,
+      objectId: s.objectId,
+      objectIds: [...s.objectIds],
+      dirty: s.dirty,
+      saving: s.saving,
+      conflict: s.conflict,
+      mergeConflicts: [...s.mergeConflicts],
+      cell: s.cell,
+      cellRange: s.cellRange,
+      ui: { ...s.ui },
+    };
+    sessions.set(s.id, sess);
+    syncRegistryForSession(sess, s.id);
+  } else {
+    sessions.delete(s.id);
+    syncRegistryForSession(undefined, s.id);
+  }
+}
+
+/** Park the currently active presentation in `sessions` (if dirty) before switching to another presentation. */
+export function parkActivePresentation(): void {
+  syncActiveToSessions();
+}
+
+function activateSession(sess: PresentationSession): void {
+  history = sess.history;
+  useEditor.setState({
+    id: sess.id,
+    base: sess.base,
+    draft: sess.draft,
+    slideId: sess.slideId ?? firstSlideId(sess.draft),
+    objectId: sess.objectId,
+    objectIds: [...sess.objectIds],
+    dirty: sess.dirty,
+    saving: sess.saving,
+    conflict: sess.conflict,
+    mergeConflicts: [...sess.mergeConflicts],
+    guides: EMPTY_GUIDES,
+    canUndo: history.canUndo,
+    canRedo: history.canRedo,
+    cell: sess.cell,
+    cellRange: sess.cellRange,
+    inlineEditingId: undefined,
+    inlineEditingCell: undefined,
+    textRange: EMPTY_TEXT_RANGE,
+    loadError: undefined,
+    ui: { ...sess.ui },
+  });
+  fixSelection();
+}
+
+export function setEditorUi(
+  patch: Partial<EditorUiState> | ((prev: EditorUiState) => Partial<EditorUiState>),
+): void {
+  const cur = useEditor.getState();
+  const delta = typeof patch === 'function' ? patch(cur.ui) : patch;
+  const nextUi: EditorUiState = { ...cur.ui, ...delta };
+  useEditor.setState({ ui: nextUi });
+  if (cur.id) {
+    uiMemory.set(cur.id, { slideId: cur.slideId, ui: nextUi });
+    const sess = sessions.get(cur.id);
+    if (sess) {
+      sess.ui = nextUi;
+      if (sess.dirty) syncRegistryForSession(sess, cur.id);
+    }
+  }
+}
 
 export function setTextRange(range: { start: number; end: number; caret?: number }): void {
   const start = Math.max(0, Math.min(range.start, range.end));
@@ -137,7 +336,7 @@ export function inlineTarget(s: EditorState = useEditor.getState()): TextTarget 
  */
 export function selectCell(objectId: string, cell: number | undefined): void {
   useEditor.setState((s) => {
-    const same = s.objectId === objectId && s.cell === cell && !s.cellRange;
+    const sameCell = s.objectId === objectId && s.cell === cell && !s.cellRange;
     const editing = s.inlineEditingId === objectId && s.inlineEditingCell === cell && cell !== undefined;
     return {
       objectId,
@@ -146,9 +345,10 @@ export function selectCell(objectId: string, cell: number | undefined): void {
       cellRange: undefined,
       inlineEditingId: editing ? s.inlineEditingId : undefined,
       inlineEditingCell: editing ? s.inlineEditingCell : undefined,
-      textRange: same ? s.textRange : EMPTY_TEXT_RANGE,
+      textRange: sameCell ? s.textRange : EMPTY_TEXT_RANGE,
     };
   });
+  syncActiveToSessions();
 }
 
 /**
@@ -165,21 +365,31 @@ export function selectCellRange(objectId: string, anchorCell: number, range: Tab
     inlineEditingCell: undefined,
     textRange: EMPTY_TEXT_RANGE,
   });
+  syncActiveToSessions();
 }
-
-const history = new History<Presentation>(200, 800);
-/** Presentations already warned about this session for passing the presentation budget (8 MiB, design/27 §3.4). */
-const warnedLarge = new Set<string>();
 
 function firstSlideId(p: Presentation): string | undefined {
   for (const s of p.sections) if (s.slides[0]) return s.slides[0].id;
   return undefined;
 }
 
+/**
+ * Open presentation `p` cleanly as the active presentation (clearing any prior draft/history for `p.id`).
+ * Any *other* presentation that was active and dirty is parked in `sessions` first so its edits are never lost.
+ */
 export function openPresentation(p: Presentation): void {
-  history.clear();
   const prev = useEditor.getState();
-  const keepSlide = prev.id === p.id && prev.slideId && getSlide(p, prev.slideId) ? prev.slideId : undefined;
+  if (prev.id && prev.id !== p.id) {
+    syncActiveToSessions();
+  }
+  wantedPresentationId = p.id;
+  sessions.delete(p.id);
+  syncRegistryForSession(undefined, p.id);
+  history = new History<Presentation>(200, 800);
+  const remembered = uiMemory.get(p.id);
+  const candidateSlide = prev.id === p.id && prev.slideId ? prev.slideId : remembered?.slideId;
+  const keepSlide = candidateSlide && getSlide(p, candidateSlide) ? candidateSlide : undefined;
+  const nextUi = remembered ? { ...remembered.ui } : { ...DEFAULT_EDITOR_UI };
   useEditor.setState({
     id: p.id,
     base: p,
@@ -191,6 +401,7 @@ export function openPresentation(p: Presentation): void {
     saving: false,
     conflict: false,
     mergeConflicts: [],
+    guides: EMPTY_GUIDES,
     canUndo: false,
     canRedo: false,
     cell: undefined,
@@ -199,17 +410,42 @@ export function openPresentation(p: Presentation): void {
     inlineEditingCell: undefined,
     textRange: EMPTY_TEXT_RANGE,
     loadError: undefined,
+    ui: nextUi,
   });
 }
 
 export async function loadPresentation(id: string, fallback?: Presentation): Promise<void> {
+  wantedPresentationId = id;
   try {
     const p = await api<Presentation>(`/presentations/${id}`);
+    if (wantedPresentationId !== id) return;
     openPresentation(p);
   } catch (e) {
+    if (wantedPresentationId !== id) return;
     if (fallback) openPresentation(fallback);
     else useEditor.setState({ loadError: errorText(e) });
   }
+}
+
+/**
+ * Enter `#/edit/:id` from `EditorView`: parks any previous presentation's edits, restores a parked dirty
+ * session for `id` immediately with its full undo stack and workspace UI, or loads fresh from the hub when clean.
+ */
+export async function enterPresentation(id: string, fallback?: Presentation): Promise<void> {
+  const cur = useEditor.getState();
+  if (cur.id === id && (cur.dirty || cur.saving || cur.conflict) && cur.draft) {
+    wantedPresentationId = id;
+    syncActiveToSessions();
+    return;
+  }
+  syncActiveToSessions();
+  wantedPresentationId = id;
+  const parked = sessions.get(id);
+  if (parked && (parked.dirty || parked.saving || parked.conflict)) {
+    activateSession(parked);
+    return;
+  }
+  await loadPresentation(id, fallback);
 }
 
 /** Apply an edit to the draft and record undo. `key` coalesces rapid edits (typing, nudges). */
@@ -225,25 +461,33 @@ export function change(fn: (p: Presentation) => Presentation, key?: string): voi
     return;
   }
   history.push(s.draft, key);
-  useEditor.setState({ draft: next, dirty: true, canUndo: history.canUndo, canRedo: history.canRedo });
+  const dirty = isDraftDirty(s.base, next);
+  useEditor.setState({ draft: next, dirty, canUndo: history.canUndo, canRedo: history.canRedo });
+  syncActiveToSessions();
 }
 
 export function undo(): void {
   const s = useEditor.getState();
   if (!s.draft) return;
   const prev = history.undo(s.draft);
-  if (prev)
-    useEditor.setState({ draft: prev, dirty: true, canUndo: history.canUndo, canRedo: history.canRedo });
+  if (prev) {
+    const dirty = isDraftDirty(s.base, prev);
+    useEditor.setState({ draft: prev, dirty, canUndo: history.canUndo, canRedo: history.canRedo });
+  }
   fixSelection();
+  syncActiveToSessions();
 }
 
 export function redo(): void {
   const s = useEditor.getState();
   if (!s.draft) return;
   const next = history.redo(s.draft);
-  if (next)
-    useEditor.setState({ draft: next, dirty: true, canUndo: history.canUndo, canRedo: history.canRedo });
+  if (next) {
+    const dirty = isDraftDirty(s.base, next);
+    useEditor.setState({ draft: next, dirty, canUndo: history.canUndo, canRedo: history.canRedo });
+  }
   fixSelection();
+  syncActiveToSessions();
 }
 
 function fixSelection(): void {
@@ -302,23 +546,27 @@ export function selectSlide(slideId: string | undefined): void {
     inlineEditingCell: undefined,
     textRange: EMPTY_TEXT_RANGE,
   });
+  syncActiveToSessions();
 }
+
 /** Select one object (or none): it is the whole selection. The object already selected keeps its cell. */
 export function selectObject(objectId: string | undefined): void {
   useEditor.setState((s) => {
-    const same = !!objectId && objectId === s.objectId;
+    const sameObj = !!objectId && objectId === s.objectId;
     const editing = !!objectId && objectId === s.inlineEditingId;
     return {
       objectId,
       objectIds: objectId ? [objectId] : [],
-      cell: same ? s.cell : undefined,
-      cellRange: same ? s.cellRange : undefined,
+      cell: sameObj ? s.cell : undefined,
+      cellRange: sameObj ? s.cellRange : undefined,
       inlineEditingId: editing ? s.inlineEditingId : undefined,
       inlineEditingCell: editing ? s.inlineEditingCell : undefined,
-      textRange: same ? s.textRange : EMPTY_TEXT_RANGE,
+      textRange: sameObj ? s.textRange : EMPTY_TEXT_RANGE,
     };
   });
+  syncActiveToSessions();
 }
+
 /**
  * Select several objects (a group, design/27 §11 item 5): `ids` kept in the open slide's z order, `primary`
  * (default: the first of `ids`) the one the Object panel edits. Ids not on the open slide are left out.
@@ -337,6 +585,7 @@ export function selectObjects(ids: readonly string[], primary?: string): void {
     inlineEditingCell: undefined,
     textRange: first && first === s.objectId ? s.textRange : EMPTY_TEXT_RANGE,
   }));
+  syncActiveToSessions();
 }
 
 export function currentSlide() {
@@ -382,6 +631,7 @@ export async function save(force = false, adopted = false, merges = 0): Promise<
     return false;
   }
   useEditor.setState({ saving: true });
+  syncActiveToSessions();
   try {
     let rev = s.base.rev;
     if (force) rev = (await api<Presentation>(`/presentations/${s.draft.id}`)).rev;
@@ -391,24 +641,52 @@ export async function save(force = false, adopted = false, merges = 0): Promise<
     });
     upsertLocal('presentations', saved);
     const cur = useEditor.getState();
-    // Keep edits made while the save was in flight.
-    const stillDirty = cur.draft !== s.draft;
-    useEditor.setState({
-      base: saved,
-      draft: stillDirty ? { ...cur.draft!, rev: saved.rev } : saved,
-      dirty: stillDirty,
-      saving: false,
-      conflict: false,
-      mergeConflicts: [],
-    });
+    if (cur.id === saved.id) {
+      // Keep edits made while the save was in flight.
+      const stillDirty = Boolean(cur.draft && cur.draft !== s.draft && isDraftDirty(saved, cur.draft));
+      useEditor.setState({
+        base: saved,
+        draft: stillDirty ? { ...cur.draft!, rev: saved.rev } : saved,
+        dirty: stillDirty,
+        saving: false,
+        conflict: false,
+        mergeConflicts: [],
+      });
+      syncActiveToSessions();
+    } else {
+      // User switched to another presentation while PUT was in flight: clean up the parked session.
+      const parked = sessions.get(saved.id);
+      if (parked && parked.draft !== s.draft && isDraftDirty(saved, parked.draft)) {
+        parked.base = saved;
+        parked.draft = { ...parked.draft, rev: saved.rev };
+        parked.dirty = true;
+        parked.saving = false;
+        parked.conflict = false;
+        parked.mergeConflicts = [];
+        syncRegistryForSession(parked, saved.id);
+      } else {
+        sessions.delete(saved.id);
+        syncRegistryForSession(undefined, saved.id);
+      }
+    }
     if (size.warn && !warnedLarge.has(saved.id)) {
       warnedLarge.add(saved.id);
       toast(size.warn, 'warn');
     }
     return true;
   } catch (e) {
-    useEditor.setState({ saving: false });
+    if (useEditor.getState().id === s.id) {
+      useEditor.setState({ saving: false });
+      syncActiveToSessions();
+    } else {
+      const parked = s.id ? sessions.get(s.id) : undefined;
+      if (parked) {
+        parked.saving = false;
+        syncRegistryForSession(parked, parked.id);
+      }
+    }
     // The hub's own check of the same rule (a client that did not guard): not a conflict with someone else's save.
+    // The draft stays unsaved (dirty), so the unsaved list and the draft journal still hold it.
     if (e instanceof ApiFailure && e.code === 'stand_in_stale') {
       toast(`Could not save: ${FILE_FORM_REFUSAL}`, 'error');
       return false;
@@ -416,8 +694,9 @@ export async function save(force = false, adopted = false, merges = 0): Promise<
     if (e instanceof ApiFailure && e.status === 409) {
       // Saved meanwhile only by the hub's PowerPoint jobs (version 2 of an import): take their work over and
       // save again, instead of offering to overwrite it.
-      if (!force && !adopted && (await adoptJobSaves().catch(() => 'other')) === 'adopted')
-        return save(false, true, merges);
+      if (!force && !adopted && useEditor.getState().id === s.id) {
+        if ((await adoptJobSaves().catch(() => 'other')) === 'adopted') return save(false, true, merges);
+      }
       // Saved by someone else: their version merged with the draft and saved again (design/27 §11 item 17).
       const merged = force || merges >= MAX_MERGES ? undefined : mergeTheirs(s, theirsOf(e));
       if (merged === 'same') return true;
@@ -426,7 +705,10 @@ export async function save(force = false, adopted = false, merges = 0): Promise<
         if (ok && merges === 0) toast('Saved together with the changes someone else saved meanwhile.', 'ok');
         return ok;
       }
-      useEditor.setState({ conflict: true, mergeConflicts: merged ?? [] });
+      if (useEditor.getState().id === s.id) {
+        useEditor.setState({ conflict: true, mergeConflicts: merged ?? [] });
+        syncActiveToSessions();
+      }
       return false;
     }
     if (e instanceof ApiFailure && e.status === 423)
@@ -441,10 +723,141 @@ export async function save(force = false, adopted = false, merges = 0): Promise<
   }
 }
 
-const content = (p: Presentation) => {
-  const { rev: _rev, createdAt: _c, updatedAt: _u, ...rest } = p;
-  return rest;
-};
+/**
+ * Save any dirty presentation by `id` (active or parked in `sessions`, e.g. from the Nav unsaved popover or
+ * `Save & Go live`). If a parked presentation hits an unmergeable 409 conflict, activates it and opens `#/edit/:id`
+ * so the ConflictDialog can resolve it.
+ */
+export async function savePresentationById(
+  id: string,
+  force = false,
+  adopted = false,
+  merges = 0,
+): Promise<boolean> {
+  if (useEditor.getState().id === id) {
+    return save(force, adopted, merges);
+  }
+  const sess = sessions.get(id);
+  if (!sess || sess.saving) return false;
+  const size = saveSizeCheck(sess.draft);
+  if (size.refuse) {
+    toast(`Could not save “${sess.draft.title}”: ${size.refuse}`, 'error');
+    return false;
+  }
+  sess.saving = true;
+  syncRegistryForSession(sess, id);
+  try {
+    let rev = sess.base.rev;
+    if (force) rev = (await api<Presentation>(`/presentations/${id}`)).rev;
+    const saved = await api<Presentation>(`/presentations/${id}`, {
+      method: 'PUT',
+      json: { ...sess.draft, rev },
+    });
+    upsertLocal('presentations', saved);
+    sessions.delete(id);
+    syncRegistryForSession(undefined, id);
+    if (size.warn && !warnedLarge.has(saved.id)) {
+      warnedLarge.add(saved.id);
+      toast(size.warn, 'warn');
+    }
+    return true;
+  } catch (e) {
+    sess.saving = false;
+    syncRegistryForSession(sess, id);
+    if (e instanceof ApiFailure && e.status === 409) {
+      if (!force && !adopted && (await adoptParkedJobSaves(sess).catch(() => 'other')) === 'adopted') {
+        return savePresentationById(id, false, true, merges);
+      }
+      const theirs = theirsOf(e);
+      if (
+        !force &&
+        merges < MAX_MERGES &&
+        theirs &&
+        theirs.id === sess.base.id &&
+        theirs.rev > sess.base.rev
+      ) {
+        const merge = prepareMerge(sess.base, theirs);
+        const r = merge(sess.draft, true);
+        if (r.merged) {
+          const nothingLeft = same(content(r.merged), content(theirs));
+          sess.history.rebase((snapshot) => merge(snapshot).merged);
+          if (nothingLeft) {
+            const lib = useLibrary.getState().data.presentations.find((x) => x.id === theirs.id);
+            if (!lib || lib.rev < theirs.rev) upsertLocal('presentations', theirs);
+            sessions.delete(id);
+            syncRegistryForSession(undefined, id);
+            return true;
+          }
+          sess.base = theirs;
+          sess.draft = r.merged;
+          sess.dirty = true;
+          syncRegistryForSession(sess, id);
+          const ok = await savePresentationById(id, false, adopted, merges + 1);
+          if (ok && merges === 0)
+            toast('Saved together with the changes someone else saved meanwhile.', 'ok');
+          return ok;
+        }
+        sess.conflict = true;
+        sess.mergeConflicts = r.conflicts;
+      } else {
+        sess.conflict = true;
+        sess.mergeConflicts = [];
+      }
+      syncRegistryForSession(sess, id);
+      syncActiveToSessions();
+      activateSession(sess);
+      navigate({ name: 'edit', id });
+      return false;
+    }
+    if (e instanceof ApiFailure && e.status === 423)
+      toast(
+        deviceProfile(currentRole()) === 'edit'
+          ? `“${sess.draft.title}” is in the playlist that is live at the venue. It can be edited again after the service.`
+          : `“${sess.draft.title}” is in the live playlist and locked until End service.`,
+        'warn',
+      );
+    else toast(`Could not save “${sess.draft.title}”: ${errorText(e)}`, 'error');
+    return false;
+  }
+}
+
+async function adoptParkedJobSaves(sess: PresentationSession): Promise<'adopted' | 'other' | 'none'> {
+  const [latest, revisions] = await Promise.all([
+    api<Presentation>(`/presentations/${sess.id}`),
+    api<RevisionInfo[]>(`/presentations/${sess.id}/revisions`),
+  ]);
+  if (latest.rev <= sess.base.rev) return 'none';
+  if (!onlyJobSaves(revisions, sess.base.rev, latest.rev)) return 'other';
+  upsertLocal('presentations', latest);
+  const oldBase = sess.base;
+  const reimported = revisions.some(
+    (r) => r.rev > oldBase.rev && r.rev <= latest.rev && r.savedBy === 'pptx-reimport',
+  );
+  if (reimported) {
+    const merge = prepareMerge(oldBase, latest);
+    const r = merge(sess.draft, true);
+    if (!r.merged) return 'other';
+    sess.draft = r.merged;
+    sess.history.rebase((snapshot) => merge(snapshot).merged);
+  } else {
+    sess.draft = rebaseOnJobs(oldBase, sess.draft, latest);
+    sess.history.rebase((snapshot) => rebaseOnJobs(oldBase, snapshot, latest));
+  }
+  sess.base = latest;
+  sess.dirty = isDraftDirty(latest, sess.draft);
+  syncRegistryForSession(sess.dirty ? sess : undefined, sess.id);
+  return 'adopted';
+}
+
+/** Discard unsaved changes for presentation `id` (active or parked). */
+export async function discardPresentationById(id: string): Promise<void> {
+  sessions.delete(id);
+  syncRegistryForSession(undefined, id);
+  if (useEditor.getState().id === id) {
+    const libP = useLibrary.getState().data.presentations.find((p) => p.id === id);
+    await loadPresentation(id, libP);
+  }
+}
 
 /**
  * Merge `theirs` (the version that won a 409, `theirsOf`) with the draft over the base (M4 item H, `merge.ts`).
@@ -477,6 +890,7 @@ function mergeTheirs(
     canRedo: history.canRedo,
   });
   fixSelection();
+  syncActiveToSessions();
   // Nothing to save: the library takes theirs over (unless it already holds a newer one).
   const lib = useLibrary.getState().data.presentations.find((x) => x.id === theirs.id);
   if (nothingLeft && (!lib || lib.rev < theirs.rev)) upsertLocal('presentations', theirs);
@@ -486,13 +900,7 @@ function mergeTheirs(
 /**
  * When only the hub's PowerPoint jobs saved the open presentation since it was opened (`onlyJobSaves`: its
  * LibreOffice follow-up, reference pictures, the text repair, a re-import), take their revision over: the
- * whole of it when nothing is unsaved, else with the unsaved edits kept. The follow-ups' revisions are taken
- * slide by slide (`rebaseOnJobs`); a re-import's, which rebuilds whole slides, through the three-way merge
- * (`merge.ts`), so a slide the volunteer changed while the re-import rebuilt it is a conflict ('other': the
- * banner and, at the next save, the conflict dialog say so) instead of the rebuild being dropped silently.
- * The undo and redo steps move with the draft, so an undo never takes the job's work back out. 'other' when
- * someone else saved (the usual banner and conflict dialog apply); 'none' when there is nothing newer or the
- * editor moved on.
+ * whole of it when nothing is unsaved, else with the unsaved edits kept.
  */
 export async function adoptJobSaves(): Promise<'adopted' | 'other' | 'none'> {
   const s = useEditor.getState();
@@ -530,8 +938,10 @@ export async function adoptJobSaves(): Promise<'adopted' | 'other' | 'none'> {
     move = (snapshot) => rebaseOnJobs(oldBase, snapshot, latest);
   }
   history.rebase(move);
-  useEditor.setState({ base: latest, draft, canUndo: history.canUndo, canRedo: history.canRedo });
+  const dirty = isDraftDirty(latest, draft);
+  useEditor.setState({ base: latest, draft, dirty, canUndo: history.canUndo, canRedo: history.canRedo });
   fixSelection();
+  syncActiveToSessions();
   return 'adopted';
 }
 
@@ -539,10 +949,98 @@ export async function adoptJobSaves(): Promise<'adopted' | 'other' | 'none'> {
 export async function reloadLatest(): Promise<void> {
   const s = useEditor.getState();
   if (!s.id) return;
+  sessions.delete(s.id);
+  syncRegistryForSession(undefined, s.id);
   await loadPresentation(s.id);
 }
 
 export function replaceBase(p: Presentation): void {
   openPresentation(p);
   upsertLocal('presentations', p);
+}
+
+/** Restore a persisted presentation draft from the IndexedDB recovery journal (`ordo-drafts`). */
+export function restorePresentationDraftFromJournal(
+  id: string,
+  base: Presentation,
+  draft: Presentation,
+  slideId?: string,
+  ui?: EditorUiPersist,
+): void {
+  const remote = useLibrary.getState().data.presentations.find((p) => p.id === id);
+  if (!remote || same(content(draft), content(remote))) {
+    journalRemove(`pres:${id}`);
+    return;
+  }
+  if (!isDraftDirty(base, draft)) {
+    journalRemove(`pres:${id}`);
+    return;
+  }
+  const h = new History<Presentation>(200, 800);
+  h.push(base);
+  const resolvedUi = fromUiPersist(ui);
+  const validSlide = slideId && getSlide(draft, slideId) ? slideId : firstSlideId(draft);
+  const sess: PresentationSession = {
+    id,
+    base,
+    draft,
+    history: h,
+    slideId: validSlide,
+    objectId: undefined,
+    objectIds: [],
+    dirty: true,
+    saving: false,
+    conflict: false,
+    mergeConflicts: [],
+    ui: resolvedUi,
+  };
+  sessions.set(id, sess);
+  uiMemory.set(id, { slideId: validSlide, ui: resolvedUi });
+  syncRegistryForSession(sess, id);
+  // If the editor is already mounted on this presentation id, swap the restored draft in at once.
+  if (useEditor.getState().id === id && !useEditor.getState().dirty) {
+    activateSession(sess);
+  }
+}
+
+export function getParkedSessionIds(): string[] {
+  return [...sessions.keys()];
+}
+
+export function resetEditorSessionsForTests(): void {
+  for (const id of sessions.keys()) {
+    removeUnsaved(`pres:${id}`);
+    journalRemove(`pres:${id}`);
+  }
+  const curId = useEditor.getState().id;
+  if (curId) {
+    removeUnsaved(`pres:${curId}`);
+    journalRemove(`pres:${curId}`);
+  }
+  sessions.clear();
+  uiMemory.clear();
+  wantedPresentationId = undefined;
+  history = new History<Presentation>(200, 800);
+  useEditor.setState({
+    id: undefined,
+    base: undefined,
+    draft: undefined,
+    slideId: undefined,
+    objectId: undefined,
+    objectIds: [],
+    dirty: false,
+    saving: false,
+    conflict: false,
+    mergeConflicts: [],
+    guides: EMPTY_GUIDES,
+    canUndo: false,
+    canRedo: false,
+    cell: undefined,
+    cellRange: undefined,
+    inlineEditingId: undefined,
+    inlineEditingCell: undefined,
+    textRange: EMPTY_TEXT_RANGE,
+    loadError: undefined,
+    ui: { ...DEFAULT_EDITOR_UI },
+  });
 }

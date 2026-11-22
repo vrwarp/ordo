@@ -5,6 +5,7 @@ import { useMediaLookup, useVisible } from '../../hooks.ts';
 import { flatSlides } from '../../lib/lookPreviews.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
+import { useUnsaved } from '../../state/unsaved.ts';
 import { navigate } from '../../useRoute.ts';
 import { LookPreviews } from './LookPreviews.tsx';
 
@@ -40,6 +41,7 @@ function StripSlide(props: { p: Presentation; slide: Slide; index: number; selec
  */
 export function PreviewsView({ id, slideId }: { id?: string; slideId?: string }) {
   const presentations = useLibrary((s) => s.data.presentations);
+  const unsavedItems = useUnsaved((s) => s.items);
   const [filter, setFilter] = useState('');
   const list = useMemo(() => {
     const f = filter.trim().toLowerCase();
@@ -50,6 +52,7 @@ export function PreviewsView({ id, slideId }: { id?: string; slideId?: string })
   const current = presentations.find((p) => p.id === id);
   const slides = current ? flatSlides(current) : [];
   const sel = slides.find((s) => s.id === slideId) ?? slides[0];
+  const currentHasUnsaved = Boolean(current && unsavedItems[`pres:${current.id}`]);
   return (
     <div className="split previews-view">
       <div className="side col" style={{ gap: 4 }}>
@@ -67,7 +70,12 @@ export function PreviewsView({ id, slideId }: { id?: string; slideId?: string })
             href={`#/previews/${encodeURIComponent(p.id)}`}
             className={p.id === id ? 'active' : ''}
           >
-            <span className="ellipsis">{p.title}</span>
+            <span className="ellipsis grow">{p.title}</span>
+            {Boolean(unsavedItems[`pres:${p.id}`]) && (
+              <span className="unsaved-dot" title="Unsaved edits in editor" aria-label="Unsaved edits">
+                ●
+              </span>
+            )}
           </a>
         ))}
         {!list.length && <span className="muted small">No presentations.</span>}
@@ -75,6 +83,20 @@ export function PreviewsView({ id, slideId }: { id?: string; slideId?: string })
       <div className="col previews-main" style={{ minHeight: 0, overflow: 'auto', padding: 16, gap: 12 }}>
         {current ? (
           <>
+            {currentHasUnsaved && (
+              <div className="banner row" data-unsaved-preview-banner>
+                <span className="grow">
+                  Showing the last saved version (rev {current.rev}). Unsaved edits are open in the editor.
+                </span>
+                <button
+                  type="button"
+                  className="small primary"
+                  onClick={() => navigate({ name: 'edit', id: current.id })}
+                >
+                  Open in editor
+                </button>
+              </div>
+            )}
             <div className="row">
               <h3 style={{ margin: 0 }} className="grow ellipsis">
                 {current.title}

@@ -528,7 +528,13 @@ export class Library {
     };
   }
 
-  /** Keep the newest 50 revisions or everything from the last 30 days, whichever is more. */
+  /**
+   * Keep the newest 50 revisions or everything from the last 30 days, whichever is more. A revision is deleted only when it is older
+   * than 30 days AND not among the newest 50. The DELETE reads no revision body: `saved_at` and `rev` come from the covering index
+   * `presentation_revisions_saved` (migration 16), because in the row `saved_at` follows the `json` and reading it walks the body's
+   * overflow pages (about 0.5 ms per 2.4 MiB revision, on every save). Keep the statement's plan a covering index
+   * (apps/hub/test/revision-prune.test.ts checks it).
+   */
   pruneRevisions(id: string, now = Date.now()): void {
     const cutoff = new Date(now - 30 * 86400_000).toISOString();
     this.db

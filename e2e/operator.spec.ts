@@ -37,11 +37,10 @@ test('a volunteer builds a service in the UI, goes live, launches outputs and ru
     await page.getByPlaceholder('New playlist name').fill('Sunday');
     await page.getByPlaceholder('New playlist name').press('Enter');
     // Add the song by its own row: search runs in the core worker, so the song's row can render after the
-    // action rows, and "the first Add button" would then add an action. The song row is the one with an
-    // Arrangement picker; its Add button follows the picker.
-    const arrangement = page.getByRole('combobox', { name: 'Arrangement' }).first();
-    await expect(arrangement).toBeVisible({ timeout: 15_000 });
-    await arrangement.locator('xpath=following-sibling::button[1]').click();
+    // action rows, and "the first Add button" would then add an action.
+    const songRow = page.locator('.add-items .vrow', { hasText: 'Amazing Test Song' }).first();
+    await expect(songRow).toBeVisible({ timeout: 15_000 });
+    await songRow.getByRole('button', { name: 'Add', exact: true }).click();
     await page.getByRole('button', { name: 'Go live' }).click();
     await expect(page.getByRole('button', { name: 'End service' })).toBeVisible({ timeout: 15_000 });
 

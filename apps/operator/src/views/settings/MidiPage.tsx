@@ -83,7 +83,7 @@ function formatLogLine(ev: MidiActivityEvent): string {
 
 /** MIDI inputs, outputs, QuickQ 20 soundcheck, mappings, and live activity monitor (prd/07). */
 export function MidiPage() {
-  const { draft, setDraft, save, revert, saving, dirty } = useSettingsDraft('surfaces');
+  const { draft, setDraft, save, revert, saving, dirty } = useSettingsDraft('surfaces', 'midi');
   const { midiReady, midiError, midiInputs, midiOutputs, lastMidiMessage, midiLog } = useSurfaces();
   const [learning, setLearning] = useState<string | null>(null);
   const [newAction, setNewAction] = useState<ActionId>('next');

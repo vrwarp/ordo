@@ -1,6 +1,6 @@
-import { api, ApiFailure, DEMO } from '@ordo/client';
+import { api, DEMO } from '@ordo/client';
 import { type Arrangement, newId, type Playlist, type PlaylistItem } from '@ordo/domain';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { midiTriggerBadge } from '../../components/MidiTriggerPicker.tsx';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
@@ -9,8 +9,10 @@ import { deviceProfile } from '../../lib/capabilities.ts';
 import { navigate } from '../../useRoute.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
+import { flushPlaylist, updatePlaylistDraft, usePlaylistOutbox } from '../../state/playlistOutbox.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
+import { useUnsaved } from '../../state/unsaved.ts';
 import { itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
 import { AddItemsPanel } from './AddItemsPanel.tsx';
 import { ItemSettings } from './ItemSettings.tsx';
@@ -30,76 +32,18 @@ export function PlaylistEditor(props: {
 }) {
   const lib = useLibrary((s) => s.data);
   const isLive = useLive((s) => s.state.mode === 'live');
-  const [draft, setDraft] = useState<Playlist>(props.playlist);
+  const outboxEntry = usePlaylistOutbox((s) => s.entries[props.playlist.id]);
+  const unsavedItems = useUnsaved((s) => s.items);
+  const draft = outboxEntry ? outboxEntry.draft : props.playlist;
+  const saving = outboxEntry ? outboxEntry.status : 'idle';
   const [sel, setSel] = useState<string | undefined>(draft.items[0]?.id);
-  const [saving, setSaving] = useState<'idle' | 'pending' | 'saving' | 'error'>('idle');
-  const latest = useRef(draft);
-  const rev = useRef(props.playlist.rev);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const dirty = useRef(false);
 
-  // Follow remote changes when we have nothing unsaved.
-  useEffect(() => {
-    if (!dirty.current && props.playlist.rev !== rev.current) {
-      rev.current = props.playlist.rev;
-      setDraft(props.playlist);
-      latest.current = props.playlist;
-    }
-  }, [props.playlist]);
-
-  const flush = async () => {
-    clearTimeout(timer.current);
-    if (!dirty.current) return;
-    dirty.current = false;
-    setSaving('saving');
-    try {
-      const saved = await api<Playlist>(`/playlists/${latest.current.id}`, {
-        method: 'PUT',
-        json: { ...latest.current, rev: rev.current },
-      });
-      rev.current = saved.rev;
-      upsertLocal('playlists', saved);
-      setSaving(dirty.current ? 'pending' : 'idle');
-    } catch (e) {
-      setSaving('error');
-      if (e instanceof ApiFailure && e.status === 423)
-        toast(
-          deviceProfile(currentRole()) === 'edit'
-            ? 'This playlist is live at the venue. It can be edited again after the service.'
-            : 'This playlist is live and locked until End service.',
-          'warn',
-        );
-      else if (e instanceof ApiFailure && e.status === 409) {
-        toast(
-          'The playlist was changed elsewhere. Reloaded the latest version; redo your last change.',
-          'warn',
-          8000,
-        );
-        try {
-          const fresh = await api<Playlist>(`/playlists/${latest.current.id}`);
-          rev.current = fresh.rev;
-          latest.current = fresh;
-          setDraft(fresh);
-          upsertLocal('playlists', fresh);
-          setSaving('idle');
-        } catch {
-          /* keep error */
-        }
-      } else toast(`Could not save the playlist: ${errorText(e)}`, 'error');
-    }
-  };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
-  useEffect(() => () => void flush(), []);
+  // Flush any debounced playlist save immediately when switching away from this playlist.
+  useEffect(() => () => void flushPlaylist(props.playlist.id), [props.playlist.id]);
 
   const update = (fn: (p: Playlist) => Playlist) => {
     if (props.locked) return;
-    const next = fn(latest.current);
-    latest.current = next;
-    setDraft(next);
-    dirty.current = true;
-    setSaving('pending');
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => void flush(), 600);
+    updatePlaylistDraft(props.playlist, fn);
   };
   const sort = useSortable({
     group: 'playlist-items',
@@ -197,9 +141,9 @@ export function PlaylistEditor(props: {
               disabled={isLive || draft.items.length === 0}
               title={isLive ? 'Another playlist is live: End service first' : undefined}
               onClick={async () => {
-                await flush();
-                startService(draft.id);
-                location.hash = '#/live';
+                if (await startService(draft.id)) {
+                  location.hash = '#/live';
+                }
               }}
             >
               Go live
@@ -331,6 +275,15 @@ export function PlaylistEditor(props: {
               <span className="col grow" style={{ gap: 0 }}>
                 <span className="ellipsis row" style={{ gap: 6, alignItems: 'center' }}>
                   <span className="ellipsis">{itemTitle(it, op)}</span>
+                  {it.kind === 'presentation' && Boolean(unsavedItems[`pres:${it.presentationId}`]) && (
+                    <span
+                      className="tag amber"
+                      style={{ fontSize: 10, padding: '1px 5px' }}
+                      title="Unsaved edits in editor"
+                    >
+                      unsaved
+                    </span>
+                  )}
                   {it.kind === 'presentation' &&
                     (() => {
                       const p = op.presentation(it.presentationId);

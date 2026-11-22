@@ -3,7 +3,7 @@ import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { SaveBar, useSettingsDraft } from './useSettingsDraft.tsx';
 
 export function MessagesPage() {
-  const { draft, setDraft, save, revert, saving, dirty } = useSettingsDraft('surfaces');
+  const { draft, setDraft, save, revert, saving, dirty } = useSettingsDraft('surfaces', 'messages');
   const [text, setText] = useState('');
   const list = draft.messagePresets;
   const set = (messagePresets: string[]) => setDraft({ ...draft, messagePresets });

@@ -1,7 +1,7 @@
 import { api } from '@ordo/client';
 import { type Presentation, type Slide, strapText } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { NumberField, TextField } from '../../components/fields.tsx';
 import { useLibrary } from '../../state/library.ts';
@@ -14,10 +14,10 @@ import {
   shouldShowMidiUi,
   slideMidiTrigger,
 } from '../../components/MidiTriggerPicker.tsx';
+import { applyNoteFormatting, handleSpeakerNoteKeyDown } from './noteEditing.ts';
 import { resetSlideToTheme, themeOf, updateSlide } from './ops.ts';
 import { PptxSlideCard } from './PptxSlideCard.tsx';
 import { followReimport, isJob, rebuildsFromPptx } from './pptxJobs.ts';
-import { applyNoteFormatting } from './SpeakerNotesDock.tsx';
 
 export async function makeSlideEditable(
   slide: Slide,
@@ -65,8 +65,11 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
   const dirty = useEditor((s) => s.dirty);
   const [busy, setBusy] = useState(false);
   const [editingStrapFor, setEditingStrapFor] = useState<string | null>(null);
+  const notesRef = useRef<HTMLTextAreaElement>(null);
   const set = (fn: (s: Slide) => Slide, key?: string) =>
     !readOnly && change((q) => updateSlide(q, slide.id, fn), key);
+  const setNotes = (notes: string, discrete = false) =>
+    set((s) => ({ ...s, notes: notes || undefined }), discrete ? undefined : `notes:${slide.id}`);
   const texts = slide.objects.filter((o) => o.type === 'text');
   const defaultStrap = slide.scripture
     ? `${slide.scripture.ref.book} ${slide.scripture.ref.chapter}:${slide.scripture.ref.verseFrom}${slide.scripture.ref.verseTo ? `-${slide.scripture.ref.verseTo}` : ''}\n${slide.scripture.text}`
@@ -197,11 +200,10 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
                 type="button"
                 className="small ghost"
                 style={{ padding: '1px 6px', fontSize: 11 }}
-                title="Highlight phrase on Stage (**bold**)"
+                title="Toggle **highlight** (Cmd/Ctrl+B)"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() =>
-                  applyNoteFormatting(null, slide.notes ?? '', 'highlight', (notes) =>
-                    set((s) => ({ ...s, notes: notes || undefined }), `notes:${slide.id}`),
-                  )
+                  applyNoteFormatting(notesRef.current, slide.notes ?? '', 'highlight', setNotes)
                 }
               >
                 ★ Highlight
@@ -210,26 +212,43 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
                 type="button"
                 className="small ghost"
                 style={{ padding: '1px 6px', fontSize: 11 }}
-                title="Insert [PAUSE] cue"
-                onClick={() =>
-                  applyNoteFormatting(null, slide.notes ?? '', 'pause', (notes) =>
-                    set((s) => ({ ...s, notes: notes || undefined }), `notes:${slide.id}`),
-                  )
-                }
+                title="Toggle bullet on current line"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyNoteFormatting(notesRef.current, slide.notes ?? '', 'bullet', setNotes)}
               >
-                + [PAUSE]
+                • Bullet
+              </button>
+              <button
+                type="button"
+                className="small ghost"
+                style={{ padding: '1px 6px', fontSize: 11 }}
+                title="Toggle [cue] badge"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyNoteFormatting(notesRef.current, slide.notes ?? '', 'cue', setNotes)}
+              >
+                [Cue]
               </button>
             </div>
           )}
         </div>
-        <TextField
-          label="Notes"
-          multiline
-          rows={4}
-          value={slide.notes ?? ''}
-          disabled={readOnly}
-          onChange={(notes) => set((s) => ({ ...s, notes: notes || undefined }), `notes:${slide.id}`)}
-        />
+        <label className="field">
+          <span>Notes</span>
+          <textarea
+            ref={notesRef}
+            rows={4}
+            value={slide.notes ?? ''}
+            disabled={readOnly}
+            onKeyDown={(e) =>
+              handleSpeakerNoteKeyDown(e, {
+                el: notesRef.current,
+                notes: slide.notes ?? '',
+                readOnly,
+                commit: setNotes,
+              })
+            }
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </label>
       </div>
       {p.kind === 'song' && slide.overrides && slide.overrides.length > 0 && (
         <div className="col">

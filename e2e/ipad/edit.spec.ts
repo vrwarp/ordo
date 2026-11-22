@@ -131,16 +131,14 @@ test('the worship lead builds a service on the iPad: search, new song, edit, pre
     await page.getByRole('button', { name: '+', exact: true }).tap();
     await expect(page.locator('[data-go-live-note]')).toHaveText('Go live from the venue PC.');
     await expect(page.getByRole('button', { name: 'Go live' })).toHaveCount(0);
-    const songRow = page
-      .getByText('Tablet Test Song', { exact: true })
-      .locator('xpath=ancestor::*[.//select[@title="Arrangement"]][1]');
-    const arrangement = songRow.locator('select[title="Arrangement"]').first();
-    await expect(arrangement).toBeVisible({ timeout: 15_000 });
+    const songRow = page.locator('.add-items .vrow', { hasText: 'Tablet Test Song' }).first();
+    const addBtn = songRow.getByRole('button', { name: 'Add', exact: true });
+    await expect(addBtn).toBeVisible({ timeout: 15_000 });
     const song = await json<Pres & { arrangements: { id: string; name: string }[] }>(
       api.get(`presentations/${songId}`),
     );
     expect(song.arrangements.length).toBeGreaterThan(0);
-    await arrangement.selectOption(song.arrangements[0]!.id);
+    await addBtn.tap();
     await shot(page, 'playlist');
     await expect
       .poll(

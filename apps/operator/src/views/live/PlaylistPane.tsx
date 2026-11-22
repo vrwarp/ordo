@@ -8,6 +8,7 @@ import { startService } from '../../lib/startService.ts';
 import { controller } from '../../services/controller.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
+import { useUnsaved } from '../../state/unsaved.ts';
 import { requestScrollToPlaylistItem, setUi, useUi } from '../../state/ui.ts';
 import { navigate } from '../../useRoute.ts';
 import type { OperatorPlaylist } from './useOperatorPlaylist.ts';
@@ -27,6 +28,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
   const playlists = useLibrary((s) => s.data.playlists);
   const live = useLive((s) => s.state);
   const selectedId = useUi((s) => s.selectedPlaylistId);
+  const unsavedItems = useUnsaved((s) => s.items);
   const items = op.playlist?.items ?? [];
   const liveItem = live.live !== undefined ? live.cues[live.live]?.itemIndex : undefined;
   const firstCueOf = (itemIndex: number) => (op.live ? itemGoTarget(op.cues, itemIndex) : undefined);
@@ -68,7 +70,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
             type="button"
             className="primary big"
             style={{ width: '100%' }}
-            onClick={() => startService(op.playlist!.id)}
+            onClick={() => void startService(op.playlist!.id)}
           >
             Go live with this playlist
           </button>
@@ -162,6 +164,15 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
                 <span className="ellipsis row" style={{ gap: 6, alignItems: 'center' }}>
                   <span className="ellipsis">{itemTitle(it, op)}</span>
                   {isItemLive && <span className="live-pill-mini">ON AIR</span>}
+                  {it.kind === 'presentation' && Boolean(unsavedItems[`pres:${it.presentationId}`]) && (
+                    <span
+                      className="tag amber"
+                      style={{ fontSize: 9.5, padding: '1px 4px' }}
+                      title="Unsaved edits in editor"
+                    >
+                      unsaved
+                    </span>
+                  )}
                   {bgBadge && (
                     <span
                       className="tag"

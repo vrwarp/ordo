@@ -89,9 +89,9 @@ test('with Phones on, every venue PC write path sends x-ordo (no 403 x_ordo_requ
   await page.getByRole('link', { name: 'Playlists' }).click();
   await page.getByPlaceholder('New playlist name').fill('Sunday');
   await page.getByPlaceholder('New playlist name').press('Enter');
-  const arrangement = page.getByRole('combobox', { name: 'Arrangement' }).first();
-  await expect(arrangement).toBeVisible({ timeout: 15_000 });
-  await arrangement.locator('xpath=following-sibling::button[1]').click();
+  const songRow = page.locator('.add-items .vrow', { hasText: 'Amazing Test Song' }).first();
+  await expect(songRow).toBeVisible({ timeout: 15_000 });
+  await songRow.getByRole('button', { name: 'Add', exact: true }).click();
   await expect
     .poll(async () => {
       const pls = (await (await api.get('playlists')).json()) as { name: string; items: unknown[] }[];

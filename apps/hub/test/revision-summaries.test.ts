@@ -93,17 +93,16 @@ const body = (title: string, pad = '') =>
 // ── migration 15 ───────────────────────────────────────────────────────────────────────────────────────────────
 
 describe('migration 15: revision summaries', () => {
-  it('is the last migration, makes the table and its three triggers once, and re-applying it changes nothing', () => {
+  it('is migration 15, makes the table and its three triggers once, and re-applying it changes nothing', () => {
     const m = SUMMARY_MIGRATION();
     expect(m, 'a migration named revision-summaries').toBeDefined();
     expect(m!.version).toBe(15);
-    expect(MIGRATIONS.at(-1)!.version).toBe(15);
     const db = new Database(join(tempDir(), 'm15.db'));
-    expect(migrate(db)).toBe(15);
+    expect(migrate(db)).toBe(MIGRATIONS.at(-1)!.version);
     expect(names(db, 'table')).toContain('revision_summaries');
     for (const t of TRIGGERS) expect(names(db, 'trigger'), t).toContain(t);
     const before = db.prepare(`SELECT name, sql FROM sqlite_master ORDER BY name`).all();
-    expect(migrate(db)).toBe(15);
+    expect(migrate(db)).toBe(MIGRATIONS.at(-1)!.version);
     for (const x of MIGRATIONS) db.exec(x.sql);
     expect(db.prepare(`SELECT name, sql FROM sqlite_master ORDER BY name`).all()).toEqual(before);
     db.close();
@@ -119,7 +118,7 @@ describe('migration 15: revision summaries', () => {
       `INSERT INTO presentation_revisions (presentation_id, rev, json, saved_by, saved_at) VALUES ('p1', 3, ?, 'edit@1', '2026-01-01T00:00:00.000Z')`,
     ).run(body('Old'));
     expect(names(db, 'table')).not.toContain('revision_summaries');
-    expect(migrate(db)).toBe(15);
+    expect(migrate(db)).toBe(MIGRATIONS.at(-1)!.version);
     expect(
       db.prepare(`SELECT rev, saved_by FROM presentation_revisions WHERE presentation_id = 'p1'`).get(),
     ).toEqual({
@@ -138,7 +137,7 @@ describe('migration 15: revision summaries', () => {
     migrate(db);
     db.pragma('foreign_keys = ON');
     const older = MIGRATIONS.filter((x) => x.version < m!.version);
-    expect(migrate(db, older)).toBe(15);
+    expect(migrate(db, older)).toBe(MIGRATIONS.at(-1)!.version);
     // what an older hub writes: its own statements, on a database that has the table and the triggers
     db.prepare(
       `INSERT OR REPLACE INTO presentation_revisions (presentation_id, rev, json, saved_by, saved_at) VALUES ('p1', 1, ?, NULL, 'a')`,

@@ -1,12 +1,62 @@
-import { useState } from 'react';
 import { DEMO } from '@ordo/client';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { choiceDialog, confirmDialog } from '../components/Confirm.tsx';
 import { DemoDialog } from '../components/DemoBanner.tsx';
+import { usePopupOf } from '../components/popupOf.ts';
+import { useLockedIds } from '../hooks.ts';
 import type { Profile } from '../lib/capabilities.ts';
 import type { Route } from '../lib/route.ts';
 import { useVenueLive } from '../lib/venueLive.ts';
+import { journalClearAll, markBypassBeforeUnload } from '../state/draftJournal.ts';
 import { useLibrary } from '../state/library.ts';
 import { useLive } from '../state/live.ts';
 import { logout, useSession } from '../state/session.ts';
+import { focusThemeDraft } from '../state/themeDrafts.ts';
+import {
+  flushDebouncedItems,
+  type UnsavedItem,
+  useAnyLibraryDraftDirty,
+  useAnySettingsDirty,
+  useUnsaved,
+  visibleUnsavedItems,
+} from '../state/unsaved.ts';
+import { navigate } from '../useRoute.ts';
+
+/**
+ * Guard explicit Sign out when unsaved drafts exist: prompts "Save all & Sign out" / "Discard & Sign out" / "Cancel",
+ * clearing the IndexedDB draft journal on Discard & Sign out so a shared device starts clean for the next volunteer.
+ */
+export async function guardedLogout(): Promise<void> {
+  await flushDebouncedItems();
+  const items = visibleUnsavedItems();
+  if (items.length > 0) {
+    const choice = await choiceDialog<'save' | 'discard' | 'cancel'>({
+      title: 'Unsaved changes',
+      text: `You have unsaved changes:\n${items.map((it) => `• ${it.label}`).join('\n')}\n\nSave them before signing out?`,
+      cancelValue: 'cancel',
+      choices: [
+        { value: 'cancel', label: 'Cancel' },
+        { value: 'discard', label: 'Discard & Sign out', tone: 'danger' },
+        { value: 'save', label: 'Save all & Sign out', tone: 'primary', autoFocus: true },
+      ],
+    });
+    if (choice === 'cancel') return;
+    if (choice === 'save') {
+      for (const it of items) {
+        if (!(await it.save())) return;
+      }
+      await journalClearAll();
+    } else {
+      for (const it of items) {
+        await it.discard();
+      }
+      await journalClearAll();
+    }
+  }
+  markBypassBeforeUnload(true);
+  await logout();
+}
 
 /**
  * "Live now: <playlist>, <cue>" on an edit-profile device, so the worship lead knows which playlist is
@@ -33,6 +83,189 @@ function LiveChip() {
   );
 }
 
+/**
+ * Compact "● N unsaved ▾" pill in the top Nav with a popover listing every background draft
+ * (Open, Save, Discard per item + Save all). Hidden when nothing is unsaved.
+ */
+function UnsavedNavControl() {
+  const rawItems = useUnsaved((s) => s.items);
+  const items = visibleUnsavedItems(rawItems);
+  const locked = useLockedIds();
+  const [open, setOpen] = useState(false);
+  const [savingAll, setSavingAll] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number }>({ left: -9999, top: -9999 });
+
+  usePopupOf(popRef, trigger, open, () => setOpen(false));
+
+  useEffect(() => {
+    if (items.length === 0 && open) setOpen(false);
+  }, [items.length, open]);
+
+  useLayoutEffect(() => {
+    if (!open || !trigger.current || !popRef.current) return;
+    const place = () => {
+      if (!trigger.current || !popRef.current) return;
+      const tr = trigger.current.getBoundingClientRect();
+      const pr = popRef.current.getBoundingClientRect();
+      const left = Math.max(8, Math.min(tr.right - pr.width, window.innerWidth - pr.width - 8));
+      const top = Math.max(8, Math.min(tr.bottom + 6, window.innerHeight - pr.height - 8));
+      setPos({ left: Math.round(left), top: Math.round(top) });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onOutside = (e: Event) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (!trigger.current?.contains(target) && !popRef.current?.contains(target)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setOpen(false);
+      trigger.current?.focus();
+    };
+    document.addEventListener('pointerdown', onOutside, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onOutside, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  if (items.length === 0) return null;
+
+  const isLocked = (it: UnsavedItem) => it.kind === 'presentation' && locked.has(it.id);
+  const saveableItems = items.filter((it) => !isLocked(it) && !it.saving);
+
+  const openItem = (it: UnsavedItem) => {
+    setOpen(false);
+    if (it.kind === 'theme') {
+      focusThemeDraft(it.id);
+    } else {
+      navigate(it.route);
+    }
+  };
+
+  const discardItem = async (it: UnsavedItem) => {
+    setOpen(false);
+    if (
+      !(await confirmDialog(
+        'Discard unsaved changes',
+        `Discard unsaved changes to “${it.label}”?`,
+        'Discard',
+        true,
+      ))
+    )
+      return;
+    await it.discard();
+  };
+
+  const saveAll = async () => {
+    setSavingAll(true);
+    try {
+      for (const it of saveableItems) {
+        if (!(await it.save())) break;
+      }
+    } finally {
+      setSavingAll(false);
+    }
+  };
+
+  const popover = open ? (
+    <div
+      ref={popRef}
+      className="unsaved-popover"
+      role="dialog"
+      aria-label="Unsaved changes"
+      data-unsaved-popover
+      style={{ position: 'fixed', left: pos.left, top: pos.top }}
+    >
+      <div className="row unsaved-popover-head">
+        <b>Unsaved changes ({items.length})</b>
+        <button
+          type="button"
+          className="small primary"
+          disabled={savingAll || saveableItems.length === 0}
+          onClick={() => void saveAll()}
+        >
+          {savingAll ? 'Saving…' : 'Save all'}
+        </button>
+      </div>
+      <div className="col unsaved-popover-list">
+        {items.map((it) => {
+          const itemLocked = isLocked(it);
+          return (
+            <div key={it.key} className="row unsaved-popover-item" data-unsaved-item={it.key}>
+              <div className="col grow" style={{ minWidth: 0, gap: 2 }}>
+                <span className="ellipsis" style={{ fontWeight: 500 }}>
+                  {it.label}
+                </span>
+                {itemLocked && <span className="muted small">Locked until End service</span>}
+                {it.error && <span className="muted small">{it.error}</span>}
+              </div>
+              <div className="row" style={{ gap: 4, flexShrink: 0 }}>
+                <button type="button" className="small ghost" onClick={() => openItem(it)}>
+                  Open
+                </button>
+                <button
+                  type="button"
+                  className="small primary"
+                  disabled={Boolean(it.saving) || itemLocked || savingAll}
+                  title={itemLocked ? 'Locked while in the live playlist' : undefined}
+                  onClick={() => void it.save()}
+                >
+                  {it.saving ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  type="button"
+                  className="small danger ghost"
+                  disabled={Boolean(it.saving) || savingAll}
+                  onClick={() => void discardItem(it)}
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <button
+        ref={trigger}
+        type="button"
+        className={`unsaved-nav-pill${open ? ' on' : ''}`}
+        data-unsaved-pill
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="unsaved-dot" aria-hidden="true">
+          ●
+        </span>
+        <span>{items.length} unsaved ▾</span>
+      </button>
+      {popover && (typeof document !== 'undefined' ? createPortal(popover, document.body) : popover)}
+    </>
+  );
+}
+
 export function Nav({
   role,
   route,
@@ -46,9 +279,16 @@ export function Nav({
   const venue = useLibrary((s) => s.data.settings.general.venueName);
   const offline = useSession((s) => s.status === 'offline');
   const live = useLive((s) => s.state.mode === 'live');
-  const link = (href: string, label: string, active: boolean) => (
+  const libDirty = useAnyLibraryDraftDirty();
+  const settingsDirty = useAnySettingsDirty();
+  const link = (href: string, label: string, active: boolean, dirty = false) => (
     <a href={href} className={active ? 'active' : ''}>
       {label}
+      {dirty && (
+        <span className="unsaved-dot" title="Unsaved changes" aria-label="Unsaved changes">
+          ●
+        </span>
+      )}
     </a>
   );
 
@@ -79,10 +319,12 @@ export function Nav({
         <nav className="nav no-print" data-profile="edit">
           {brandElement}
           {link('#/playlists', 'Playlists', route.name === 'playlists')}
-          {link('#/library', 'Library', route.name === 'library' || route.name === 'edit')}
+          {link('#/library', 'Library', route.name === 'library' || route.name === 'edit', libDirty)}
           {link('#/previews', 'Previews', route.name === 'previews')}
-          {role === 'operate' && link('#/settings/general', 'Settings', route.name === 'settings')}
+          {role === 'operate' &&
+            link('#/settings/general', 'Settings', route.name === 'settings', settingsDirty)}
           <span className="spacer" />
+          <UnsavedNavControl />
           <LiveChip />
           {offline && <span className="tag amber">offline: hub unreachable</span>}
           {role === 'operate' && (
@@ -93,7 +335,7 @@ export function Nav({
           <span className="tag" title="User profile role">
             Role: {role === 'operate' ? 'Operator' : 'Editor'}
           </span>
-          <button type="button" className="ghost small" onClick={() => void logout()}>
+          <button type="button" className="ghost small" onClick={() => void guardedLogout()}>
             Sign out
           </button>
         </nav>
@@ -106,17 +348,19 @@ export function Nav({
       <nav className="nav no-print">
         {brandElement}
         {link('#/playlists', 'Playlists', route.name === 'playlists')}
-        {link('#/library', 'Library', route.name === 'library' || route.name === 'edit')}
-        {role === 'operate' && link('#/settings/outputs', 'Settings', route.name === 'settings')}
+        {link('#/library', 'Library', route.name === 'library' || route.name === 'edit', libDirty)}
+        {role === 'operate' &&
+          link('#/settings/outputs', 'Settings', route.name === 'settings', settingsDirty)}
         {role === 'operate' && <span className="nav-divider" aria-hidden="true" />}
         {role === 'operate' && link('#/setup', 'Setup', route.name === 'setup' || route.name === 'checklist')}
         {role === 'operate' && link('#/live', live ? '● Live' : 'Live', route.name === 'live')}
         <span className="spacer" />
+        <UnsavedNavControl />
         {offline && <span className="tag amber">offline: hub unreachable</span>}
         <span className="tag" title="User profile role">
           Role: {role === 'operate' ? 'Operator' : 'Editor'}
         </span>
-        <button type="button" className="ghost small" onClick={() => void logout()}>
+        <button type="button" className="ghost small" onClick={() => void guardedLogout()}>
           Sign out
         </button>
       </nav>

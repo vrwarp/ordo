@@ -116,6 +116,7 @@ export const PORT_TABLE = {
   'editor-script': { offset: 110, count: 1, spec: 'editor-script.spec.ts', what: 'hub' },
   'editor-canvas-first': { offset: 111, count: 1, spec: 'editor-canvas-first.spec.ts', what: 'hub' },
   'editor-fit': { offset: 112, count: 1, spec: 'editor-fit.spec.ts', what: 'hub' },
+  'editor-unsaved': { offset: 113, count: 1, spec: 'editor-unsaved.spec.ts', what: 'hub' },
   // The iPad specs run three times (landscape, portrait and the Android tablet projects), one test at a time: a
   // test that runs in each takes one port per project where they would otherwise reuse each other's hub data.
   'ipad-edit': { offset: 200, count: 4, spec: 'ipad/edit.spec.ts', what: 'one hub per test' },
