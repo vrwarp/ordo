@@ -6,7 +6,7 @@ import { Dialog } from './Dialog.tsx';
  * of the operator core, the output and the stage link workers. Listed for browsers without
  * `indexedDB.databases()`, which otherwise only see the demo hub's stores cleared.
  */
-const KNOWN_DATABASES = ['ordo-demo-hub', 'ordo-operator', 'ordo-output', 'ordo-stage'];
+const KNOWN_DATABASES = ['ordo-demo-hub', 'ordo-operator', 'ordo-output', 'ordo-stage', 'ordo-drafts'];
 
 /** Forget everything this browser stored for the demo (the demo hub re-seeds on the next request). */
 export async function resetDemo(): Promise<void> {

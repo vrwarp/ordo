@@ -24,9 +24,12 @@ import { controller, startController } from './services/controller.ts';
 import { syncFonts } from './services/fonts.ts';
 import { thumbs } from './services/thumbs.ts';
 import { installUpdateGuard, useUpdate } from './services/update.ts';
+import { shouldBypassBeforeUnload } from './state/draftJournal.ts';
+import { checkStartupDraftRecovery } from './state/draftRecovery.ts';
 import { useLibrary } from './state/library.ts';
 import { useLive } from './state/live.ts';
 import { capOf, HUB_UNREACHABLE, refreshSession, useSession } from './state/session.ts';
+import { hasAnyPendingWork } from './state/unsaved.ts';
 import { navigate, useRoute } from './useRoute.ts';
 import { LoginView } from './views/auth/LoginView.tsx';
 import { SetupView } from './views/auth/SetupView.tsx';
@@ -165,15 +168,27 @@ function Shell({
   const coreRole = profile === 'edit' ? 'edit' : role;
   // The core worker posts the library once it has tried its IndexedDB copy (and the hub snapshot).
   const attempted = useLibrary((s) => s.attempted);
+  const loaded = useLibrary((s) => s.loaded);
   const [timedOut, setTimedOut] = useState(false);
   const ready = attempted || timedOut;
   const fonts = useLibrary((s) => s.data.fonts);
   // Signed out while this PC runs the outputs (the hub refused the session after the fallback took over):
   // the service must stay operable from the keys and surfaces, so the sign-in is a card, not a wall.
   const fallback = useLive((s) => s.authority === 'fallback');
+  const liveRunning = useLive((s) => s.state.mode === 'live');
   useEffect(() => {
     const t = setTimeout(() => setTimedOut(true), 3000);
     return () => clearTimeout(t);
+  }, []);
+  // Global unload guard across every editor, theme, settings page, and in-flight playlist save, regardless of active tab.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!shouldBypassBeforeUnload() && hasAnyPendingWork()) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, []);
   useEffect(() => {
     const ctl = startController(coreRole);
@@ -216,6 +231,16 @@ function Shell({
   // nothing and is pushed to the library, as before.
   const cap = useSession((s) => capOf(s.me));
   const restricted = thisIsPhone() || cap !== 'full';
+  // Offer to restore persisted drafts once the library has loaded and no live service is actively running on this PC.
+  const canPromptRecovery =
+    loaded &&
+    layout === 'regular' &&
+    !restricted &&
+    !signedOut &&
+    !(coreRole === 'operate' && (liveRunning || fallback));
+  useEffect(() => {
+    if (canPromptRecovery) void checkStartupDraftRecovery(role);
+  }, [canPromptRecovery, role]);
   const decision = pageFor(route, { role, profile, layout, restricted });
   // The compact layout's frame and views (src/pages.ts PAGES.compact): loaded only on the compact layout, so the
   // venue PC and the iPad's regular layout never fetch them.

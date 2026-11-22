@@ -6,6 +6,7 @@ import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { useLivePlaylistId } from '../../hooks.ts';
 import { useProfile } from '../../lib/capabilities.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
+import { discardPlaylistDraft } from '../../state/playlistOutbox.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { navigate } from '../../useRoute.ts';
@@ -59,6 +60,7 @@ export function PlaylistsView({ id }: { id?: string }) {
     if (!(await confirmDialog('Delete playlist', `Delete “${p.name}”?`, 'Delete', true))) return;
     try {
       await api(`/playlists/${p.id}`, { method: 'DELETE' });
+      discardPlaylistDraft(p.id);
       removeLocal('playlists', p.id);
       navigate({ name: 'playlists' });
     } catch (e) {

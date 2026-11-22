@@ -7,7 +7,7 @@ import { Dialog } from '../../components/Dialog.tsx';
 import { useMediaLookup } from '../../hooks.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
 import { errorText, toast } from '../../state/toasts.ts';
-import { replaceBase, useEditor } from './editorStore.ts';
+import { discardPresentationById, replaceBase, save, useEditor } from './editorStore.ts';
 
 function RevisionSlideThumb({ slide, p }: { slide: Slide; p: Presentation }) {
   const media = useMediaLookup();
@@ -35,6 +35,9 @@ export function RevisionsDialog({
   readOnly: boolean;
 }) {
   const draft = useEditor((s) => s.draft);
+  const baseRev = useEditor((s) => (s.id === id ? s.base?.rev : undefined));
+  const dirty = useEditor((s) => s.id === id && s.dirty);
+  const saving = useEditor((s) => s.id === id && s.saving);
   const [list, setList] = useState<RevisionInfo[]>();
   const [selectedRev, setSelectedRev] = useState<number>();
   const [preview, setPreview] = useState<Presentation>();
@@ -98,12 +101,54 @@ export function RevisionsDialog({
     }
   };
 
+  const discardUnsaved = async () => {
+    if (
+      !(await confirmDialog(
+        'Discard unsaved changes',
+        `Discard unsaved changes to “${draft?.title ?? 'this presentation'}” and revert to revision #${baseRev ?? list?.[0]?.rev ?? 1}?`,
+        'Discard',
+        true,
+      ))
+    )
+      return;
+    await discardPresentationById(id);
+    toast('Discarded unsaved changes.', 'ok');
+    onClose();
+  };
+
   const previewSections = Array.isArray(preview?.sections) ? preview.sections : [];
   const previewSlides = previewSections.flatMap((sec) => (Array.isArray(sec.slides) ? sec.slides : []));
   const isCurrent = list?.[0]?.rev === selectedRev;
 
   return (
     <Dialog title="Revision history" onClose={onClose} width={760}>
+      {dirty && (
+        <div className="banner row" style={{ marginBottom: 10 }} data-unsaved-revisions-banner>
+          <span className="grow">
+            You have unsaved changes since revision #{baseRev ?? list?.[0]?.rev ?? 1}.
+          </span>
+          <button
+            type="button"
+            className="small danger"
+            disabled={saving}
+            onClick={() => void discardUnsaved()}
+          >
+            Discard changes
+          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              className="small primary"
+              disabled={saving}
+              onClick={async () => {
+                if (await save()) onClose();
+              }}
+            >
+              {saving ? 'Saving…' : 'Save now'}
+            </button>
+          )}
+        </div>
+      )}
       {err && <div className="banner red">{err}</div>}
       {!list && !err && <span className="muted">Loading…</span>}
       {list && list.length === 0 && <span className="muted">No prior revisions recorded yet.</span>}

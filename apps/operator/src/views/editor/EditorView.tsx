@@ -52,6 +52,7 @@ import { uploadFiles } from '../library/MediaTab.tsx';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { ConflictDialog } from './ConflictDialog.tsx';
 import { buildCanvasContextMenu } from './editorContextMenu.ts';
+import { choiceDialog } from '../../components/Confirm.tsx';
 import { canEditorClipboard, historyKey, keyPlace, slideNavKey, stepSlide } from './editorKeys.ts';
 import { FloatingContextBar } from './FloatingContextBar.tsx';
 import { LookPreviews, SingleLookStagePreview } from './LookPreviews.tsx';
@@ -60,12 +61,15 @@ import {
   adoptJobSaves,
   change,
   currentObject,
-  loadPresentation,
+  discardPresentationById,
+  enterPresentation,
+  parkActivePresentation,
   redo,
   reloadLatest,
   save,
   selectObject,
   selectSlide,
+  setEditorUi,
   setTextRange,
   startInlineEditing,
   stopInlineEditing,
@@ -74,6 +78,7 @@ import {
 } from './editorStore.ts';
 // `window.__ordo.editor`, read by the end-to-end specs (e2e/editorhelpers.ts).
 import './inspect.ts';
+import { navigate } from '../../useRoute.ts';
 import { ObjectPanel } from './ObjectPanel.tsx';
 import { getSlide, newImage, newShape, newText, themeOf, updateObject, type ZOrder } from './ops.ts';
 import { hasGroup, htmlToRichText, newTable, parseTableClipboard, pasteRichText } from './ops/index.ts';
@@ -118,6 +123,18 @@ function storedLooksOpen(): boolean | null {
   }
 }
 
+const setTab = (next: 'object' | 'slide' | 'presentation') => setEditorUi({ tab: next });
+const setDrawerOpen = (next: boolean) => setEditorUi({ drawerOpen: next });
+const setStageLens = (next: 'canvas' | string) => setEditorUi({ stageLens: next });
+const setKeepLoop = (next: boolean) => setEditorUi({ keepLoop: next });
+const setSongMode = (next: 'reflow' | 'canvas' | null) => setEditorUi({ songMode: next });
+const setDeckMode = (next: 'canvas' | 'notes') => setEditorUi({ deckMode: next });
+const setNotesDockOpen = (next: boolean | null | ((prev: boolean | null) => boolean | null)) =>
+  setEditorUi((prev) => ({
+    notesDockOpen: typeof next === 'function' ? next(prev.notesDockOpen) : next,
+  }));
+const setZoom = (next: 'fit' | 0.5 | 0.75 | 1) => setEditorUi({ zoom: next });
+
 /** The full slide editor (prd/03, design/15). */
 export function EditorView({ id }: { id: string }) {
   const ed = useEditor();
@@ -126,17 +143,9 @@ export function EditorView({ id }: { id: string }) {
   const allLooks = useLibrary((s) => s.data.settings.looks);
   const locked = useLockedIds();
   const media = useMediaLookup();
-  const [tab, setTab] = useState<'object' | 'slide' | 'presentation'>('slide');
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [stageLens, setStageLens] = useState<'canvas' | string>('canvas');
-  // 'Keep as a loop' on the loop deck's stage line (`LoopDeckBanner`): hidden for this visit.
-  const [keepLoop, setKeepLoop] = useState(false);
+  const { tab, drawerOpen, stageLens, keepLoop, songMode, deckMode, notesDockOpen, zoom } = ed.ui;
   const [bgPick, setBgPick] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
-  const [songMode, setSongMode] = useState<'reflow' | 'canvas' | null>(null);
-  const [deckMode, setDeckMode] = useState<'canvas' | 'notes'>('canvas');
-  const [notesDockOpen, setNotesDockOpen] = useState<boolean | null>(null);
-  const [zoom, setZoom] = useState<'fit' | 0.5 | 0.75 | 1>('fit');
   // The paint pickers' deck swatches: components/deckSwatches.ts reads the deck from this context, so the
   // shared components never import the editor's store.
   const swatchSource = useMemo<SwatchSource>(
@@ -234,9 +243,8 @@ export function EditorView({ id }: { id: string }) {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   useEffect(() => {
-    setDeckMode('canvas');
-    setNotesDockOpen(null);
-    void loadPresentation(id, libP);
+    void enterPresentation(id, libP);
+    return () => parkActivePresentation();
   }, [id]);
   useEffect(() => {
     if (ed.objectId) setTab('object');
@@ -623,13 +631,43 @@ export function EditorView({ id }: { id: string }) {
     }
   };
 
-  useEffect(() => {
-    const h = (e: BeforeUnloadEvent) => {
-      if (useEditor.getState().dirty) e.preventDefault();
-    };
-    window.addEventListener('beforeunload', h);
-    return () => window.removeEventListener('beforeunload', h);
-  }, []);
+  const onBackToLibraryClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    if (!ed.dirty || !p) return;
+    e.preventDefault();
+    void (async () => {
+      const choice = await choiceDialog<'save' | 'discard' | 'keep' | 'cancel'>({
+        title: 'Unsaved changes',
+        text: readOnly
+          ? `“${p.title}” is in the live playlist and cannot be saved until End service. Keep your draft or discard changes?`
+          : `Save changes to “${p.title}” before returning to the library?`,
+        cancelValue: 'cancel',
+        choices: readOnly
+          ? [
+              { value: 'cancel', label: 'Cancel' },
+              { value: 'discard', label: 'Discard', tone: 'danger' },
+              { value: 'keep', label: 'Keep draft', tone: 'primary', autoFocus: true },
+            ]
+          : [
+              { value: 'cancel', label: 'Cancel' },
+              { value: 'discard', label: 'Discard', tone: 'danger' },
+              { value: 'keep', label: 'Keep draft' },
+              { value: 'save', label: 'Save', tone: 'primary', autoFocus: true },
+            ],
+      });
+      if (choice === 'cancel') return;
+      if (choice === 'save') {
+        if (await save()) navigate({ name: 'library', tab: 'presentations' });
+        return;
+      }
+      if (choice === 'discard') {
+        await discardPresentationById(p.id);
+        navigate({ name: 'library', tab: 'presentations' });
+        return;
+      }
+      navigate({ name: 'library', tab: 'presentations' });
+    })();
+  };
 
   if (ed.loadError && ed.id !== id)
     return (
@@ -738,7 +776,7 @@ export function EditorView({ id }: { id: string }) {
     >
       {coarse ? (
         <div className="toolbar ed-toolbar-touch">
-          <a className="btn small ghost" href="#/library">
+          <a className="btn small ghost" href="#/library" onClick={onBackToLibraryClick}>
             ← Library
           </a>
           <b className="ellipsis ed-title">{p.title}</b>
@@ -834,7 +872,7 @@ export function EditorView({ id }: { id: string }) {
       ) : (
         <div className={`toolbar ed-toolbar-calm${p.kind === 'song' || deckNotesStudio ? ' has-modes' : ''}`}>
           {/* Left Zone: Back, Inline-Editable Title, Unified Save + Revision History Pill, Undo/Redo */}
-          <a className="btn small ghost" href="#/library">
+          <a className="btn small ghost" href="#/library" onClick={onBackToLibraryClick}>
             ← Library
           </a>
           <input

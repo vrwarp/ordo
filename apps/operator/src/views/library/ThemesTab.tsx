@@ -1,11 +1,20 @@
 import { api } from '@ordo/client';
 import { type Box, DEFAULT_THEME, newId, type Theme } from '@ordo/domain';
 import { useState } from 'react';
-import { confirmDialog } from '../../components/Confirm.tsx';
+import { choiceDialog, confirmDialog } from '../../components/Confirm.tsx';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { FontPicker } from '../../components/FontPicker.tsx';
 import { AlignIcon, VAlignIcon, hexToRgb, rgbToHex } from '../../components/AlignIcons.tsx';
 import { removeLocal, saveSettings, upsertLocal, useLibrary } from '../../state/library.ts';
+import {
+  closeThemeEditor,
+  discardThemeDraft,
+  openThemeEditor,
+  replaceThemeBase,
+  saveThemeDraft,
+  updateThemeDraft,
+  useThemeDrafts,
+} from '../../state/themeDrafts.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { ThemeCanvas, ThemeThumbnail } from './ThemeCanvas.tsx';
 import { ThemeRevisionsDialog } from './ThemeRevisionsDialog.tsx';
@@ -80,16 +89,52 @@ export function ThemesTab() {
   const general = useLibrary((s) => s.data.settings.general);
   const defaultThemeId = general.defaultThemeId ?? DEFAULT_THEME.id;
 
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const editingId = useThemeDrafts((s) => s.editingId);
+  const entries = useThemeDrafts((s) => s.entries);
   const [historyTheme, setHistoryTheme] = useState<Theme | null>(null);
 
   const editingTheme = themes.find((t) => t.id === editingId);
-  const [draft, setDraft] = useState<Theme | null>(null);
+  const activeEntry = editingId ? entries[editingId] : undefined;
+  const draft = activeEntry?.draft ?? null;
+  const dirty = Boolean(activeEntry?.dirty);
+  const saving = Boolean(activeEntry?.saving);
   const [scenarioId, setScenarioId] = useState('chorus');
 
+  const setDraft = (next: Theme) => {
+    if (editingId) updateThemeDraft(editingId, next);
+  };
+
   const onStartEdit = (t: Theme) => {
-    setDraft({ ...t });
-    setEditingId(t.id);
+    openThemeEditor(t);
+  };
+
+  const onBackToThemes = async () => {
+    if (!editingId || !draft || !dirty) {
+      closeThemeEditor();
+      return;
+    }
+    const choice = await choiceDialog<'save' | 'discard' | 'keep' | 'cancel'>({
+      title: 'Unsaved theme changes',
+      text: `Save changes to “${draft.name || 'Untitled'}” before returning to Lyric Themes?`,
+      cancelValue: 'cancel',
+      choices: [
+        { value: 'cancel', label: 'Cancel' },
+        { value: 'discard', label: 'Discard', tone: 'danger' },
+        { value: 'keep', label: 'Keep draft' },
+        { value: 'save', label: 'Save', tone: 'primary', autoFocus: true },
+      ],
+    });
+    if (choice === 'cancel') return;
+    if (choice === 'save') {
+      if (await saveThemeDraft(editingId)) closeThemeEditor();
+      return;
+    }
+    if (choice === 'discard') {
+      discardThemeDraft(editingId);
+      closeThemeEditor();
+      return;
+    }
+    closeThemeEditor();
   };
 
   const makeDefault = async (themeId: string) => {
@@ -109,8 +154,7 @@ export function ThemesTab() {
         json: { ...base, id: newId(), name: 'New Lyric Theme' },
       });
       upsertLocal('themes', t);
-      setDraft({ ...t });
-      setEditingId(t.id);
+      openThemeEditor(t);
       toast('Created new lyric theme.', 'ok');
     } catch (e) {
       toast(errorText(e), 'error');
@@ -132,14 +176,21 @@ export function ThemesTab() {
 
   const saveTheme = async () => {
     if (!draft) return;
-    try {
-      const updated = await api<Theme>(`/themes/${draft.id}`, { method: 'PUT', json: draft });
-      upsertLocal('themes', updated);
-      setDraft(updated);
-      toast(`Theme saved (v${updated.rev ?? 1}).`, 'ok');
-    } catch (e) {
-      toast(errorText(e), 'error');
-    }
+    await saveThemeDraft(draft.id);
+  };
+
+  const revertTheme = async () => {
+    if (!draft || !dirty) return;
+    if (
+      !(await confirmDialog(
+        'Discard theme changes',
+        `Discard unsaved changes to “${draft.name || 'Untitled'}”?`,
+        'Discard',
+        true,
+      ))
+    )
+      return;
+    discardThemeDraft(draft.id);
   };
 
   const deleteTheme = async (t: Theme) => {
@@ -147,10 +198,11 @@ export function ThemesTab() {
       toast('The built-in default theme cannot be deleted.', 'error');
       return;
     }
+    const hasUnsaved = Boolean(entries[t.id]?.dirty);
     if (
       !(await confirmDialog(
         'Delete theme',
-        `Delete lyric theme “${t.name}”? Any existing songs using this theme will keep their current styling.`,
+        `Delete lyric theme “${t.name}”?${hasUnsaved ? ' Its unsaved changes will also be discarded.' : ''} Any existing songs using this theme will keep their current styling.`,
         'Delete',
         true,
       ))
@@ -160,10 +212,8 @@ export function ThemesTab() {
     try {
       await api(`/themes/${t.id}`, { method: 'DELETE' });
       removeLocal('themes', t.id);
-      if (editingId === t.id) {
-        setEditingId(null);
-        setDraft(null);
-      }
+      discardThemeDraft(t.id);
+      if (editingId === t.id) closeThemeEditor();
       toast('Theme deleted.', 'ok');
     } catch (e) {
       toast(errorText(e), 'error');
@@ -189,7 +239,7 @@ export function ThemesTab() {
           themeName={historyTheme.name}
           onClose={() => setHistoryTheme(null)}
           onRestored={(restored) => {
-            if (editingId === restored.id) setDraft(restored);
+            replaceThemeBase(restored);
           }}
         />
       )}
@@ -273,9 +323,16 @@ export function ThemesTab() {
                           </span>
                         )}
                       </div>
-                      <span className="tag" style={{ fontSize: 11 }}>
-                        v{t.rev ?? 1}
-                      </span>
+                      <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                        {entries[t.id]?.dirty && (
+                          <span className="tag amber" style={{ fontSize: 11 }}>
+                            unsaved
+                          </span>
+                        )}
+                        <span className="tag" style={{ fontSize: 11 }}>
+                          v{t.rev ?? 1}
+                        </span>
+                      </div>
                     </div>
 
                     {/* Live 16:9 Thumbnail Preview */}
@@ -367,14 +424,7 @@ export function ThemesTab() {
             }}
           >
             <div className="row wrap" style={{ gap: 12, alignItems: 'center' }}>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => {
-                  setEditingId(null);
-                  setDraft(null);
-                }}
-              >
+              <button type="button" className="ghost" onClick={() => void onBackToThemes()}>
                 ← Back to Themes
               </button>
 
@@ -427,8 +477,18 @@ export function ThemesTab() {
               >
                 Delete
               </button>
-              <button type="button" className="primary big" onClick={() => void saveTheme()}>
-                Save Theme
+              {dirty && (
+                <button type="button" className="ghost" disabled={saving} onClick={() => void revertTheme()}>
+                  Revert
+                </button>
+              )}
+              <button
+                type="button"
+                className="primary big"
+                disabled={!dirty || saving}
+                onClick={() => void saveTheme()}
+              >
+                {saving ? 'Saving…' : dirty ? 'Save Theme' : 'Saved'}
               </button>
             </div>
           </div>
