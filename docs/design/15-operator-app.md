@@ -902,6 +902,16 @@ of the box, such as Carlito for Calibri, is a library font) with 'Upload font' (
   keeping its id, notes, timing, background, Bottom-Third Stream text, MIDI cues and lighting trigger
   (`Slide.midi`) and the objects added in ordo on top. History keeps the slide as it was.
 
+<!-- shape-raster:reset -->
+'Reset slide from PowerPoint' on a slide that holds a picture of shapes (an object of origin role `raster`) is enabled even when
+the slide is unedited, with its own hint ("Brings the shapes back as shapes. Shapes too large for ordo stay boxes. The changes
+you made to imported objects are replaced.") and a confirm that says the pictures become shapes again. Every Reset slide
+request carries `rasters: 'off'` (the hub converts that slide again with no picture step) and the done message says "The slide's
+shapes are shapes again; shapes too large for ordo stay boxes." The Re-import dialog says that a whole Re-import draws the
+pictures again, also for the slides you reset (Q67). The picture is locked (move, resize, delete and z-order only); the words in
+it are no longer text (search, the cue label and the Stage still find them, Q68).
+<!-- /shape-raster:reset -->
+
 'Make editable' on a legacy PowerPoint page (a picture import from before M3) rebuilds the page from the
 stored deck: the hub reroutes it to the re-import of that slide (202 and the job), the editor follows the
 job and takes it over, and the page becomes the native slide with the objects added over it on top and its

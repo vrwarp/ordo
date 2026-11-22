@@ -79,7 +79,9 @@ const LIMITS = { LOGICAL_WIDTH, LOGICAL_HEIGHT, TABLE_LIMITS, DECOR_LIMITS };
  */
 const RECORDED = {
   version: 1,
-  digest: 'b5a81133f4eea8acba3b1de66edccf8a461c5286b5ef0c7916f9a2bc1147484b',
+  // shape-raster-2 (same pixels, PRERENDER_VERSION unchanged): clamp.ts `clampOrigin` copies the optional provenance field `raster` of
+  // an object's origin; an origin is never drawn, so no pixel moves (the renderer, text and clamp tests pass unchanged).
+  digest: 'f67b37fc469f01491e611656bd1b6600797d8f25f0f61451aad2b1cce198e8e3',
 };
 
 /** The source without comments and layout. */

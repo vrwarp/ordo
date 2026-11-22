@@ -999,3 +999,18 @@ The hub's own headless Chromium draws the pictures of many-point shapes at impor
 `ORDO_CHROMIUM` names the browser (also used by pptx-preview) and `ORDO_CHROMIUM_SANDBOX=1` keeps its sandbox. A hub
 with no Chromium that answers plans no pictures of shapes. Nothing here stores anything: the planner's store step does.
 <!-- /raster-maker:readme -->
+
+<!-- shape-raster:readme -->
+### The pictures of many-point shapes (shape-raster, the job's side)
+
+`rasterStore.ts` stores each recipe the converter returns (`storeRasters`): resume pairs under the key prefix `\u0000raster:` +
+the recipe hash, dedupe by that hash (the item's `source`), at most `RASTER_LIMITS_HUB.perImport` pictures, `importBytes`
+of PNG, the import's megapixel budget and, before each picture, `deps.disk.assertRoom` (a 507 fails the import); the maker's
+loop (`drawRasters`) draws one picture at a time and this file supplies its `accept`. `nativeJob.ts` decides the maker once
+(`rastersFor`), defers the whole job while any service is live (`deferForService`, `PptxNativePayload.deferrals`), asks the pool
+for `rasters: 'plan'` (the recipes come back in the task output, at most 32 MiB a call and 128 MiB an import) and runs
+`rasterStep` right after the conversion: a slide any of whose pictures was not made is converted again with the picture step
+off (`reconvertWithoutPictures`), so it is today's slide. `PptxNativeResult.rasters` carries the counts. 'Reset slide' sets
+`NativeJobEnv.rasters = 'off'`. A browser-parsed scene with many-point shapes (`rasterCandidates`) is refused by a hub that
+draws their pictures (`RASTER_REFUSAL`), taken by one that cannot. Never imported by a live path.
+<!-- /shape-raster:readme -->

@@ -3652,3 +3652,22 @@ The `PptxRenderer` enum values stay forever, so stored presentations validate. A
   - 4:3 guides and the extend option;
   - the overflow indicator;
   - the M3 exit is made consistent with M2.
+
+<!-- shape-raster:doc27 -->
+### Pictures of shapes (sub-wave 3, shape-raster)
+
+A candidate is a custom-path shape over 128 points (or past a converter limit) on an eligible slide. `planRasters`
+(`packages/pptx-scene/src/raster-plan.ts`, pure) groups candidates into runs bottom up within one scope and source, takes the
+small shapes between two candidates, skips an element over the run unless a later member lies over it (the exact z-order rule)
+and keeps a text box live above the picture unless a later member covers it; caps: 2,048 members, 1,048,576 recipe points,
+4 pictures and `RASTER_SLIDE_PIXELS` a slide, equal to the maker's validator (a test pins it). `emitRaster` writes each run as one
+locked picture (`origin.role` 'raster' with the optional provenance field `ObjectOrigin.raster`: versions, rule, recipe hash,
+members, the deck and the slide; about 1 KB; the protocol digest is re-recorded) and registers its recipe (canonical bytes,
+SHA-256, `EmitResult.rasters`): the recipe is never stored and never sent to a screen. The geometry is the renderer's own wide
+compile (`compileGeom`/`buildGeom` with the `limits` parameter): the reading bound (262,144 points a shape) is import-only; the
+stored (8 x 4,096), drawn and 65,536-point limits did not move. Not built: member-level "make editable" and recolouring (the named
+later project Q62), a browser at upload (Q64), a poppler rung (Q65), the folding of runs of ordinary shapes (Q59.d), anchored
+slides and plates (Q24.a, Q24.c). The hub's side (`rasterStore.ts`, the page, the loop and the live-safety rules) is in design 29
+and `apps/hub/src/pptx/README.md`. A whole Re-import makes the pictures again for slides you did not edit; Reset slide does not
+(Q57.d, Q67). The words of a pictured shape stay in the slide's imported text (`pptx.artText`) while it is bounded (Q68).
+<!-- /shape-raster:doc27 -->
