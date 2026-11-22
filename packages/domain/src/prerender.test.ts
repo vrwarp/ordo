@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CONTENT_CASES } from './content.test-util.ts';
 import { DEFAULT_LYRIC_STYLE } from './defaults.ts';
 import { canonicalJson } from './palette.ts';
 import {
@@ -326,6 +327,30 @@ describe('liveSet (design/29 §1.5)', () => {
       picture(`v${i}`, `p${i}`, box(i * 100, 0, 50, 50), { play: { mediaId: `c${i}` } }),
     );
     expect(liveAnchors({ id: 's', objects: videos })).toHaveLength(LIVE_PLAYING_MAX);
+  });
+
+  it('reads what the slide draws: the imported objects of a slide set to show its PowerPoint picture are not anchors, an object the operator added is', () => {
+    // content.test-util.ts "shows its PowerPoint picture": it draws the reference picture and the operator's own
+    // objects ('mine-o', 'added'); the imported ones ('bg', 'photo-o', 'title') are stored and not drawn.
+    const found = CONTENT_CASES.find((c) => c.name.startsWith('shows its PowerPoint picture'));
+    expect(found).toBeDefined();
+    const withPlay = (id: string): Slide => {
+      const s = structuredClone(found!.slide);
+      s.objects = s.objects.map((o) =>
+        o.id === id && o.type === 'image' ? { ...o, play: { mediaId: 'clip' } } : o,
+      );
+      return s;
+    };
+    // (a) the imported picture plays and the imported text is the lyric box: neither is drawn, so neither is an anchor.
+    const imported = { ...withPlay('photo-o'), lyricObjectId: 'title' };
+    expect(liveAnchors(imported)).toEqual([]);
+    expect(liveSet(imported)).toEqual([]);
+    // (c) a stand-in's live set holds only objects the screens draw.
+    expect(standInOf(imported, liveSet(imported)).prerender?.live).toEqual([]);
+    // (b) the control: the operator's own picture plays and is an anchor.
+    const own = withPlay('mine-o');
+    expect(liveAnchors(own)).toEqual(['mine-o']);
+    expect(liveSet(own)).toContain('mine-o');
   });
 });
 
