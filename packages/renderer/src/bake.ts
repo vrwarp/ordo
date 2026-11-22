@@ -476,7 +476,14 @@ async function bake(
   if ((made.c as { isContextLost?: () => boolean }).isContextLost?.())
     return drop(failure('canvas', 'the canvas was lost'));
   const t3 = now();
-  const alpha = await scanAlpha(made.c, canvas.width, canvas.height, run);
+  let alpha: { painted: boolean; opaque: boolean };
+  try {
+    alpha = await scanAlpha(made.c, canvas.width, canvas.height, run);
+  } catch (err) {
+    // The scan is a turn like the others: cancelled, over time or the font set changed between its bands.
+    if (err instanceof BakeStop) return drop(failure(err.reason, err.detail));
+    return drop(failure('draw', String((err as Error)?.message ?? err).slice(0, 100)));
+  }
   stats.ms.alpha = Math.round(now() - t3);
   if (!alpha.painted) return drop(failure('blank', 'nothing is drawn'));
   const result: BakeMade = {

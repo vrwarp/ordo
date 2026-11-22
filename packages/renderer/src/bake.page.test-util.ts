@@ -681,6 +681,28 @@ async function abort(a: { name: string }) {
   });
 }
 
+/** A cancel that comes after the frame is made, while the alpha scan reads its bands: the bake ends `cancelled`, never throws. */
+async function cancelledInScan() {
+  return withEnv({}, async (s) => {
+    const slide = slideOf([...squares(5), textBox('a', 'Alpha')], 'scan');
+    let calls = 0;
+    const first = await bake(s, slide, provider(), { cancelled: () => (calls++, false) });
+    if (first.ok) first.canvas.width = 0;
+    const total = calls;
+    let n = 0;
+    const pv = provider();
+    let out: Summary;
+    try {
+      const r = await bake(s, slide, pv, { cancelled: () => ++n > total - 8 });
+      out = summary(r, pv);
+      if (r.ok) r.canvas.width = 0;
+    } catch (err) {
+      return { threw: String((err as Error).message) };
+    }
+    return { total, ...out };
+  });
+}
+
 /** `profile`: the installed environment is not the bake resolver, so nothing is drawn. */
 async function profileRefusal() {
   return withEnv({}, async (s) => {
@@ -1095,6 +1117,7 @@ export const SCENARIOS = {
   onlyRegistered,
   abort,
   profileRefusal,
+  cancelledInScan,
   busy,
   oneAtATime,
   liveSet,

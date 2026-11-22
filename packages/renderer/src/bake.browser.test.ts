@@ -217,6 +217,15 @@ describe.skipIf(!executablePath)('the bake in headless Chromium', () => {
       }
     }, 120_000);
 
+    it('cancelled while the alpha scan reads its bands: `cancelled`, nothing thrown, nothing left behind', async () => {
+      const r = await run<Aborted & { threw?: string; total?: number }>('cancelledInScan');
+      expect(r.threw).toBeUndefined();
+      expect(r.total).toBeGreaterThan(20);
+      expect(r.ok).toBe(false);
+      expect(r.reason).toBe('cancelled');
+      expect(r.leftovers).toEqual({ inProgress: 0, workBytes: 0, cacheBytes: 0 });
+    }, 120_000);
+
     it('busy: a second concurrent call is refused and the first is not disturbed', async () => {
       const r = await run<{ first: Aborted; second: Aborted; after: boolean }>('busy');
       expect(r.first.ok).toBe(true);
