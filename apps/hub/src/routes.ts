@@ -144,8 +144,17 @@ const PptxReferenceBody = z
 /** 'Re-import from PowerPoint' (`PptxReimportReq`; M4 item F): slide ids, each list at most 5,000. */
 const SlideIds = z.array(z.string().min(1).max(200)).max(5_000);
 const PptxReimportBody = z
-  .object({ slideIds: SlideIds.optional(), reset: SlideIds.optional(), keep: SlideIds.optional() })
-  .strict();
+  .object({
+    slideIds: SlideIds.optional(),
+    reset: SlideIds.optional(),
+    keep: SlideIds.optional(),
+    // Q57.d: 'Reset slide' converts the slide again without the picture step (`PptxReimportReq.rasters`).
+    rasters: z.literal('off').optional(),
+  })
+  .strict()
+  .refine((b) => b.rasters === undefined || (b.slideIds !== undefined && b.slideIds.length > 0), {
+    message: 'rasters is for Reset slide: it needs slideIds',
+  });
 
 /**
  * What `POST /import/document` does with a PowerPoint (design/27 §2, §3.2): 'native' (the default) imports

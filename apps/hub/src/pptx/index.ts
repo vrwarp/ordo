@@ -169,9 +169,18 @@ export class PptxImports {
 }
 
 /** A re-import request compared by what it asks (the order of the ids does not matter). */
-function requestKey(r: Pick<PptxReimportPayload, 'slideIds' | 'reset' | 'keep' | 'pageBoxes'>): string {
+function requestKey(
+  r: Pick<PptxReimportPayload, 'slideIds' | 'reset' | 'keep' | 'pageBoxes' | 'rasters'>,
+): string {
   const ids = (v: unknown) => (Array.isArray(v) ? [...new Set(v.map(String))].sort() : null);
-  return JSON.stringify([ids(r.slideIds), ids(r.reset), ids(r.keep), r.pageBoxes === true]);
+  // A queued Reset slide (rasters 'off') is never returned for a whole Re-import, nor the other way round (Q57.d, Q67).
+  return JSON.stringify([
+    ids(r.slideIds),
+    ids(r.reset),
+    ids(r.keep),
+    r.pageBoxes === true,
+    r.rasters === 'off',
+  ]);
 }
 
 /** Slides a reference job switches, merged: absent (every slide) wins; ids at most the route's 5,000. */

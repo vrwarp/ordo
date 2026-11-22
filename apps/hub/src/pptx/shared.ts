@@ -310,6 +310,8 @@ export type PptxReimportPayload = {
   reset?: string[];
   /** Made-editable slides kept as they are. */
   keep?: string[];
+  /** Q57.d ('Reset slide'): convert without the picture step (`PptxReimportReq.rasters`); only with `slideIds`. */
+  rasters?: 'off';
   /**
    * 'Make editable' on a page (`imports.ts` `makeEditableNative`, `reimport.ts` `madeEditable`): a slide of
    * `slideIds` that shows LibreOffice's page and whose deck slide converts to LibreOffice's page again takes

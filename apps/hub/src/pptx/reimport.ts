@@ -804,6 +804,7 @@ export function queueReimport(
     ...(req.slideIds ? { slideIds: req.slideIds } : {}),
     ...(req.reset ? { reset: req.reset } : {}),
     ...(req.keep ? { keep: req.keep } : {}),
+    ...(req.rasters === 'off' && req.slideIds?.length ? { rasters: 'off' as const } : {}),
     ...(options && Object.keys(options).length ? { options } : {}),
     ...(pageBoxes ? { pageBoxes: true } : {}),
   });
