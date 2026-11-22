@@ -326,7 +326,7 @@ function wholeInfos(
   parseDeck(files, { ...parsing, onBudget: (b) => void base.set(b.index, b) });
   for (const [index, b] of base) {
     const w = out.get(index);
-    if (!w || !w.kept) continue;
+    if (!w?.kept) continue;
     const left = b.elements.filter((e) => e.culled === 'budget' || sentToArt(e));
     if (!left.length) continue;
     const parts = new Set<string>();
