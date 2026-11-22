@@ -110,6 +110,8 @@ export type NativeSlide = {
   notes: string[];
   /** The slide as ordo draws it. */
   slide: Slide;
+  /** With `ConvertOptions.whole`: the converter's decision for the slide (Q24.b). */
+  whole?: WholeInfo;
   /** Text features of the slide's own XML (`features/text.ts`). */
   textFeatures: string[];
   /** The other registered families' features (`features/index.ts`; none before the M9 tracks add theirs). */
@@ -158,8 +160,28 @@ export function holdsTable(slide: Slide): boolean {
   return slide.objects.some((o) => o.type === 'shape' && o.table !== undefined);
 }
 
+/**
+ * Q24.b, read with the whole option (`ConvertOptions.whole`): the converter's decision for a slide
+ * (`BudgetPlan`), its planned objects and pictures, and what the plan without the option leaves out.
+ */
+export type WholeInfo = {
+  /** `BudgetPlan.whole`. */
+  kept: boolean;
+  /** `BudgetPlan.anchorKinds`: why it is not (clip, background, bound). */
+  anchorKinds: ('clip' | 'background' | 'bound')[];
+  /** The slide's background is a picture (the reading Q25.c's arm 'own' would count). */
+  bgOwn: boolean;
+  /** `BudgetPlan.objects` and `.pictures`: planned. */
+  objects: number;
+  pictures: number;
+  /** The plan without the option: the elements and the pictures it leaves out (the guard, the picture limit). */
+  cut?: { elements: number; pictures: number };
+};
+
 /** What `convertDeck` is asked for besides the slides. */
 export type ConvertOptions = {
+  /** Q24.b: read every slide with `ParseOptions.wholeSlides` and report the converter's decision (`NativeSlide.whole`). */
+  whole?: { anchors: 'own' | 'motion' };
   /** Keep each slide as LibreOffice draws it as well (`--lo-compat`). */
   loCompat?: boolean;
   /** Emit the deck as a hub without LibreOffice does as well (`--no-libreoffice`, `NativeSlide.noLoSlide`). */

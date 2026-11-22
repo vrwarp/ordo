@@ -29,7 +29,7 @@ import {
   MEDIA_PREFIX,
 } from './emit.ts';
 import { frameOf, slideRect } from './frame.ts';
-import type { DeckScene, Frame, SectionInfo, SlideScene } from './ir.ts';
+import type { Background, DeckScene, Element, Frame, SectionInfo, SlideScene } from './ir.ts';
 import { clean, type Log, noteList } from './log.ts';
 import { openPackage, type PartSource } from './opc.ts';
 import { readSlideSounds } from './media.ts';
@@ -171,6 +171,21 @@ export interface ParseOptions {
   wholeAnchors?: 'own' | 'motion';
   /** Q24.a's gate (`BudgetOptions.anchored`): the importers pass easy-plan's `PRERENDER_ANCHORED`. */
   wholeAnchored?: boolean;
+  /**
+   * The fidelity harness's census only (never the hub, never stored): what the slide budgets planned for each
+   * slide as it is read (`BudgetPlan`: whole or not and why, the planned objects and pictures, what the guard
+   * left out), with its elements and background. Called once per slide, after its budgets; a throw is ignored.
+   */
+  onBudget?: (slide: SlideBudget) => void;
+}
+
+/** One slide's budgets as `ParseOptions.onBudget` reports them. */
+export interface SlideBudget {
+  /** `SlideRef.index`: the slide in the deck. */
+  index: number;
+  plan: BudgetPlan;
+  elements: readonly Element[];
+  background: Background;
 }
 
 /** Families, weights and slants `ParseOptions.fontFace` is asked for per call (a deck can name thousands). */

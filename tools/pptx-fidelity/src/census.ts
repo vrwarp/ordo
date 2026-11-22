@@ -51,7 +51,7 @@ import { frameUnitsLeft, splitFrame } from '@ordo/renderer/frame.ts';
 import { slideUnitsLeft } from '@ordo/renderer/units.ts';
 import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import { listDecks } from './decks.ts';
-import { convertDeckIsolated, type HubWhy, hubLadder, type NativeDeck } from './native.ts';
+import { convertDeckIsolated, type HubWhy, hubLadder, type NativeDeck, type WholeInfo } from './native.ts';
 
 export type { HubWhy } from './native.ts';
 
@@ -223,6 +223,21 @@ export function legacyColumns(slide: Pick<Slide, 'objects'>): Record<string, num
   return out;
 }
 
+/**
+ * The Q24.b columns of a slide read with the whole option (`--whole`, `NativeSlide.whole`), zeros left out:
+ * `wholeKept` (the converter's `BudgetPlan.whole`), `anchorKinds` (why it is not: clip, background, bound),
+ * `bgOwn` (its background is a picture), `pictures` (distinct pictures planned), `heavy` (over 200 objects, 16
+ * pictures or 64 KiB: what the screens cut or the ladder simplifies today) and `wouldCut`/`wouldCutPictures`
+ * (the elements and pictures the plan without the option leaves out).
+ */
+export function wholeColumns(
+  _w: WholeInfo,
+  _slide: Pick<Slide, 'objects'>,
+  _bytes: number,
+): Record<string, unknown> {
+  return {};
+}
+
 /** One deck's line of the census. */
 export function censusRow(
   deck: NativeDeck,
@@ -323,7 +338,7 @@ export async function runCensus(
   paths: readonly string[],
   out: string,
   log: (line: string) => void = () => {},
-  opts: { noLibreOffice?: boolean } = {},
+  opts: { noLibreOffice?: boolean; whole?: { anchors: 'own' | 'motion' } } = {},
 ): Promise<{ decks: number; unreadable: number; errors: number; slides: number }> {
   const decks = await listDecks(paths);
   await writeFile(out, '');
