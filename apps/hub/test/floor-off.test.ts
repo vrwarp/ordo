@@ -10,8 +10,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GIB, type StatFsFn } from '../src/diskfloor.ts';
+import { prerenderConfig } from '../src/config.ts';
 import { type Client, EDIT_PIN, login, sleep, startHub, testFloor } from './helpers.ts';
 import { twoProcesses } from './phones-helpers.ts';
+import { fullOf, makePng, presentationOf, uploadSlideFile } from './prerender-helpers.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -78,6 +80,56 @@ describe('the floor of a test hub', () => {
     const hub = await startHub({ minFreeBytes: 7 * GIB });
     expect(hub.cfg.minFreeBytes).toBe(7 * GIB);
     expect((await health(hub.url)).diskFloorBytes).toBe(7 * GIB);
+  });
+});
+
+/**
+ * The pre-render state of a hub a test starts (store-2, C-S2-5): the hub of 0.10.0, whatever ORDO_PRERENDER says in the
+ * process environment and whatever PRERENDER_ON becomes at the release's switch commit: the setting auto, the constant
+ * read as false (operators told off, no picture line), the store open. A test that wants another state gives
+ * `prerender` itself.
+ */
+describe('the pre-render state of a test hub', () => {
+  /** PUT a 640 picture for the slide's key: refused 503 only when the store is closed. */
+  async function putPicture(base: string) {
+    const ed = await login(base, EDIT_PIN);
+    const f = fullOf();
+    await uploadSlideFile(ed, f.pages);
+    const p = await ed.json<{ id: string }>('/presentations', {
+      method: 'POST',
+      json: presentationOf([f.standIn]),
+    });
+    return ed.fetch(`/presentations/${p.id}/prerenders/${f.key}?size=640`, {
+      method: 'PUT',
+      headers: { 'content-type': 'image/png' },
+      body: new Uint8Array(makePng(640, 360)),
+    });
+  }
+
+  it('is the 0.10.0 hub in the hub startHub makes, whatever the process environment says', async () => {
+    vi.stubEnv('ORDO_PRERENDER', 'off');
+    const hub = await startHub();
+    expect(hub.cfg.prerender).toEqual({ setting: 'auto', on: false, store: true });
+    expect((await putPicture(hub.url)).status).toBe(201);
+  });
+
+  it('is the same in both processes twoProcesses makes', async () => {
+    vi.stubEnv('ORDO_PRERENDER', 'off');
+    const tp = await twoProcesses();
+    try {
+      expect(tp.lib.cfg.prerender).toEqual({ setting: 'auto', on: false, store: true });
+      expect((await putPicture(tp.base)).status).toBe(201);
+    } finally {
+      await tp.close();
+    }
+  });
+
+  it("is the test's own value when it gives one", async () => {
+    const hub = await startHub({ prerender: prerenderConfig('off') });
+    expect(hub.cfg.prerender.store).toBe(false);
+    expect((await putPicture(hub.url)).status).toBe(503);
+    const on = await startHub({ prerender: prerenderConfig('on') });
+    expect(on.cfg.prerender).toEqual({ setting: 'on', on: true, store: true });
   });
 });
 
