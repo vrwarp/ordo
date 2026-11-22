@@ -115,7 +115,7 @@ beforeEach(() => {
 });
 afterEach(() => {});
 
-describe('when the chunk is fetched (BT1-BT3)', () => {
+describe('when the chunk is fetched and when the hub is asked (BT1-BT3, BT10)', () => {
   for (const [name, v] of [
     ['a phone, the demo or a tablet', { ok: false, why: 'unsupported', list: false }],
     ['a hub with the switch off', { ok: false, why: 'off', list: false }],

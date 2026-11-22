@@ -217,9 +217,10 @@ function Shell({
     if (layout === 'regular') thumbs.warm();
   }, [layout]);
   // The bake service (pictures of heavy slides, design/29 section 1.4). Its boot is a lazy chunk of a few kilobytes that
-  // only the regular layout fetches (a phone never does; test mode fetches it everywhere, for window.__ordo.bake); the
-  // boot's gate then lets only a desktop browser with the hub's switch on fetch the service itself, and the service
-  // never runs during a service.
+  // only the regular layout fetches (a phone on the compact layout never does; a phone on the regular layout, Request
+  // Desktop Website, does, but its boot asks the hub for nothing: bakeBoot's mayReadCaps; test mode fetches it
+  // everywhere, for window.__ordo.bake); the boot's gate then lets only a desktop browser with the hub's switch on
+  // fetch the service itself, and the service never runs during a service.
   useEffect(() => {
     if (layout !== 'regular' && !testMode()) return;
     let gone = false;
