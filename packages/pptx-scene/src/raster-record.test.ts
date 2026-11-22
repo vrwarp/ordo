@@ -1,6 +1,20 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { emitSlides, parseDeck } from './index.ts';
+import {
+  RASTER_CANDIDATES_MAX,
+  RASTER_DENSITY,
+  RASTER_MAX_PICTURES,
+  RASTER_MAY_HOLD,
+  RASTER_POINTS,
+  RASTER_READ,
+  RASTER_RECIPE_BYTES,
+  RASTER_RUN,
+  RASTER_SLIDE_PIXELS,
+  RASTER_VERSION,
+  RASTER_WORDS_MAX,
+} from './raster.ts';
+import { CONVERTER_VERSION } from './version.ts';
 import { body, buildDeck, custGeom, para, run, solid, sp } from './test-util.ts';
 
 /**
@@ -12,7 +26,8 @@ import { body, buildDeck, custGeom, para, run, solid, sp } from './test-util.ts'
  *   SHA-256 of what is emitted for each (the slide's JSON, its notes and its missing list) recorded as
  *   literals. It was green at the unchanged base and stays green at every commit: with `rasters: 'off'`
  *   (gate G1, and a Reset slide) and with 'detect' the converter's output must not move by one byte.
- * - part 2 (the constants and the capability list) is added with the planner (step 3).
+ * - part 2 (the constants and the capability list, `RASTER_MAY_HOLD` among them) records every number a picture's
+ *   plan and hash depend on, beside the converter version they were recorded at.
  *
  * A changed literal here is a change of the converter's output: it moves with CONVERTER_VERSION and a note in
  * the track's report, never silently.
@@ -208,5 +223,84 @@ describe("the pin of today's converter output (gate G1, step 1)", () => {
 
   it('and on a hub without LibreOffice', () => {
     expect(pinOf({ libreoffice: false })).toEqual(TODAY.withoutLibreOffice);
+  });
+});
+
+/**
+ * PART 2: THE RECORD. Every constant a picture's plan, its recipe and its hash depend on, with the capability list,
+ * recorded beside the converter version at which each set took effect. A change of the threshold, the run rule's
+ * numbers, the drawing version or an entry of `RASTER_MAY_HOLD` (the owner's Q53.i: a yes-to-draw answer flips
+ * entries of that one list) changes what an import stores for the same deck, so it is a NEW entry of this history
+ * at the converter version that ships it, and the converter version must have reached it: the test below fails
+ * until `CONVERTER_VERSION` has moved (and a Re-import prompt goes with it, the owner's Q33). The history is
+ * appended to, never edited.
+ */
+const RECORDED = [
+  {
+    cv: 2,
+    constants: {
+      points: 128,
+      version: 1,
+      maxPictures: 4,
+      density: 2,
+      slidePixels: 24_883_200,
+      read: { pointsShape: 262_144, pointsSlide: 1_048_576 },
+      wordsMax: 4_000,
+      candidatesMax: 20_000,
+      run: {
+        members: 2_048,
+        paths: 64,
+        pointsMember: 262_144,
+        points: 1_048_576,
+        texts: 256,
+        pixels: 8_294_400,
+        bytes: 33_554_432,
+        skipped: 256,
+      },
+      recipeBytes: { call: 33_554_432, import: 134_217_728 },
+      mayHold: {
+        text: true,
+        shadow: false,
+        glow: false,
+        softEdge: false,
+        alphaGradient: false,
+        pictureFill: false,
+        threeD: false,
+        pattern: false,
+      },
+    },
+  },
+] as const;
+
+const current = () => ({
+  points: RASTER_POINTS,
+  version: RASTER_VERSION,
+  maxPictures: RASTER_MAX_PICTURES,
+  density: RASTER_DENSITY,
+  slidePixels: RASTER_SLIDE_PIXELS,
+  read: { ...RASTER_READ },
+  wordsMax: RASTER_WORDS_MAX,
+  candidatesMax: RASTER_CANDIDATES_MAX,
+  run: { ...RASTER_RUN },
+  recipeBytes: { ...RASTER_RECIPE_BYTES },
+  mayHold: { ...RASTER_MAY_HOLD },
+});
+
+describe('the record of the raster constants (C-SR1, C-SR12)', () => {
+  it('the constants and the capability list are the latest recorded set, and the converter version has reached it', () => {
+    const last = RECORDED[RECORDED.length - 1]!;
+    expect(current()).toEqual(last.constants);
+    expect(CONVERTER_VERSION).toBeGreaterThanOrEqual(last.cv);
+  });
+
+  it('the history only grows: converter versions strictly ascend', () => {
+    for (let i = 1; i < RECORDED.length; i++) expect(RECORDED[i]!.cv).toBeGreaterThan(RECORDED[i - 1]!.cv);
+  });
+
+  it("the first entry is what the briefs and the owner's answers say: 128 points, four pictures, only text on", () => {
+    const first = RECORDED[0]!.constants;
+    expect(first.points).toBe(128);
+    expect(first.maxPictures).toBe(4);
+    expect(Object.entries(first.mayHold).filter(([, v]) => v)).toEqual([['text', true]]);
   });
 });
