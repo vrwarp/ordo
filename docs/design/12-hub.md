@@ -220,6 +220,10 @@ otherwise, naming the missing hashes) and computes the keys of the saved revisio
 written (`prerender_keys`, with the signature that lets a font or media change recompute only what it affects). The
 goLive bundle lists each slide's head, pages and shape files, the keys of the presentation's current revision and its
 pictures (`slideHeads`, `prerenderKeys`, `prerenders`): the fields are absent when nothing is pre-rendered.
+A save that changes the simple copy of a slide kept as a slide file (the same `prerender.file.ref`, other objects) answers
+409 `stand_in_stale` with the first 20 `slides`: the picture and its key come from the file, so a changed copy would show
+stale content (checked against the stored version only for a save that holds such a slide and whose `rev` is the stored one;
+its notes, timing and the other slides stay savable).
 <!-- /prerender-store:routes -->
 
 <!-- store-2:routes -->

@@ -15,6 +15,7 @@ import {
   Presentation,
   Theme,
 } from '@ordo/domain';
+import { hasFileForm, staleStandIns } from '@ordo/domain/slidefile.ts';
 import { actionToEvent } from '@ordo/live-state';
 import {
   API_PREFIX,
@@ -402,6 +403,10 @@ function isCapped(p: Principal | null): boolean {
   return p?.kind === 'session' && p.cap !== 'full';
 }
 
+/** What `PUT /presentations/:id` says to a save that changes the simple copy of a slide kept as a slide file. */
+const STAND_IN_STALE_WORDS =
+  'The simple copy of a detailed slide was changed beside its full copy; reload the presentation. The shapes of a detailed slide cannot be edited, its notes and timing can.';
+
 /** Throw the per-field refusal for a capped session's save, if any. */
 function refuseFields(req: FastifyRequest, check: () => FieldRefusal | undefined): void {
   if (!isCapped(req.principal)) return;
@@ -603,6 +608,23 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const token = auth.createSession(role, ua, remembered);
     reply.setCookie(COOKIE_SESSION, token, cookieOpts(req, (remembered ? 12 : 1) * 3600));
   };
+  /**
+   * A slide kept as a slide file (import-files, Q54) keeps its simple copy as it is beside its file: the picture and the
+   * key come from the FILE, so a changed copy would leave both as they were while the screens drew something else. A
+   * save that changes one answers 409 `stand_in_stale` (its notes, timing and the other slides stay savable). The stored
+   * presentation is read only for a save that holds such a slide, and only when its rev is the stored one (a stale rev
+   * answers its own 409 first, as the field check does): an ordinary presentation costs no parse.
+   */
+  const refuseStaleStandIns = (id: string, p: Presentation, rev: unknown) => {
+    if (!hasFileForm(p)) return;
+    const stored = lib.presentations.get(id);
+    if (!stored || stored.rev !== rev) return;
+    const stale = staleStandIns(stored, p);
+    if (stale.length)
+      throw new HttpError(409, 'stand_in_stale', STAND_IN_STALE_WORDS, {
+        slides: stale.slice(0, 20).map((s) => s.slideId),
+      });
+  };
   const assertPresentationUnlocked = (id: string) => {
     if (live.locks().presentations.has(id))
       throw locked('This presentation is in the live playlist and is locked until the service ends');
@@ -720,6 +742,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       const stored = lib.presentations.get(id);
       return !stored || stored.rev === body.rev ? presentationRefusal(stored, p) : undefined;
     });
+    refuseStaleStandIns(id, p, body.rev);
     const keys = await hub.prerenderKeys.keysFor(p);
     const saved = lib.savePresentation(p, { expectedRev: body.rev, by: by(req), keys });
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);

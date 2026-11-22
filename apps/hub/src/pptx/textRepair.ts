@@ -391,6 +391,8 @@ async function repairOne(
       aligned++;
       const boxes = slide !== undefined && slide >= 0 ? (t.boxes.get(slide) ?? []) : [];
       const { textBoxes: _legacy, ...rest } = imp;
+      // Only `imported.textBoxes` and `textAligned` change: `drawnPart` leaves them out, so a slide kept as a slide file
+      // keeps its key and its simple copy (import-files, pinned by slidefile-put-guard.test.ts).
       return {
         ...sl,
         imported: { ...rest, ...(boxes.length ? { textBoxes: boxes } : {}), textAligned: true },

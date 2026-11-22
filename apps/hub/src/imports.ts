@@ -787,7 +787,8 @@ export class ImportService {
       }),
     }));
     if (!found) throw badRequest(`Slide ${slideId} not found`, 'not_found');
-    if (!found.imported) throw badRequest('Not an imported slide', 'not_imported');
+    // A slide kept as a slide file is not a door: laying boxes over its page would change its simple copy beside its file.
+    if (!found.imported || found.prerender?.file) throw badRequest('Not an imported slide', 'not_imported');
     const saved = this.lib.savePresentation({ ...p, sections }, { expectedRev: p.rev, by });
     this.lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
     return saved;

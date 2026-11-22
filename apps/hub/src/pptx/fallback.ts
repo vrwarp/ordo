@@ -355,6 +355,9 @@ export function patchSlide(
   hash: string,
   record?: EasyOptions,
 ): Slide {
+  // A slide kept as a slide file is never patched: its simple copy would change beside its file (import-files, C-IF5).
+  // It never gets here (`loSlides` skips it: its parts are drawn by ordo and nothing waits for LibreOffice); this is the defence.
+  if (slide.prerender?.file) return slide;
   // Unedited: the import's objects (those with an origin) as the plan's digest has them; objects added in
   // ordo meanwhile do not count (`digest.ts`).
   const unedited = digestMatches(slide.objects, lo.digest);
