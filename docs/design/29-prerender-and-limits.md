@@ -537,6 +537,49 @@ compressed), in upload order 1920, 3840, 640; the 3840 PNG is decoded and compar
 (exactly for an opaque picture, within 2 levels where there is alpha) before anything is returned, because the hub checks
 only the header and the first upload wins.
 
+**As built in sub-wave 3 (bake-worker), section 1.4.** The service is `apps/operator/src/services/bake.ts`, the plan
+`bakePlan.ts`, the status store `state/bake.ts` (what the editor and the Go-live check read), the worker
+`workers/bake.worker.ts` with `bakeJob.ts`, and the first-load part `bakeBoot.ts` (the gate, the press of Go live, the
+actions). _Who:_ `canBake` (lib/capabilities.ts) admits a Chromium on a desktop by three Chromium-only secure-context
+APIs (`navigator.userAgentData` that is not mobile, `navigator.hid`, `getScreenDetails`: Q30.c, so a page over plain http by
+a LAN address and an iPad with a mouse do not), a regular layout, a fine pointer, not a phone, not the demo, 4 GB where
+reported, `OffscreenCanvas`, `Worker`, an operate or edit session (`BAKE_ROLES`), the hub's switch on and no `?bake=off`.
+_When:_ 15 s after start plus up to a third of that as jitter, 3 s after the last change of a burst of library changes,
+2 minutes after End service (the hub's `PAUSED_RETRY_S`, a test reads both), every 5 minutes only while something is
+pending, and after a save the hub has not keyed yet at 2, 5, 15, 60 and 120 s. _Never during a service:_ the
+Controller's first line of the three Go live calls stops a running picture on the spot (the worker is terminated), the
+stores' `mode`, `held`, `authority` and `goLivePrepare` hold the sweep, and the hub's 503 `paused_during_service` is a hold
+of 10 minutes or until End service plus 2 minutes, never a failure. _Which:_ the key is computed with
+the domain's own `pictureSource` and `prerenderKey`: on the main thread in slices of 8 ms for a slide of fewer than 300
+objects, and by a tiny keys worker (`workers/bakeKeys.worker.ts`, the same function over a message of slides) for a heavy one,
+because a slide of 600 KB costs the main thread about 30 ms (canonical JSON and a plain-JavaScript SHA-256) and 5 to 8 ms
+to hand to a worker; a keys worker that is absent, breaks or does not answer in 15 s is not a failure, the plan works the key
+out as before. A slide kept in a slide file is keyed by the hub: the worker rebuilds it, computes the key and uploads only if
+it equals the listed one. A picture is made only for a key the hub LISTS. A key is worked out once: the plan keeps what it
+computed for a presentation (`cachedSlides`) while its object, rev and the media and font lists are the same, and the
+re-reads of the slide before each bake and before the first upload, at a library change and in the editor's refresh ask that
+memory for the one slide, so a presentation that has not changed costs no key and an edit costs the running slide's key
+once (on the main thread) and the others in the next sweep. Only the sizes the listing lacks go up, 1920,
+3840, 640, never a replace. _Failures:_ the slide's own (`coverage`, `time`, `size`, `animated`, `cut`, `draw`, `frame`,
+`canvas`, `blank`, `verify`, `profile`, and `font` after two tries) are posted once with `reasonFor` (at most 200 characters);
+`cancelled`, `busy`, `fonts`, `media`, `files` are retried after 10 s and 60 s and posted the third time; a worker that broke or
+never answered, a service, the network, the hub's budget (507 `budget`: the presentation is skipped, shown failed here only)
+and disk (507 `disk`: ten minutes' hold) are never posted; a `stale` answer of a file-form slide is a key mismatch and lists
+the presentation once more. _A finding of the browser tests:_ a reloaded page's library `source` stays `'cache'` for ever (the
+IndexedDB copy is the first message and the hub's snapshot after it is a patch that does not carry the source), so the service
+reads `loaded` and the absence of a read error instead; the hub's listing is the arbiter in any case.
+
+_Measured_ (a 4-core machine that draws 4K on the CPU, software canvases, other work running: loadavg 6 to 10; a venue PC
+decides; median of five at 3840 x 2160, service = the worker from the job to the blobs): a 340-object slide 0.42 s, 1,000
+objects 0.46 s, 300 pictures 0.74 s, two 10,000-character boxes 1.6 s, 300 distinct 1600 x 1200 photographs 2.9 s, a
+1,357-shape slide kept in a slide file 0.53 s and one of 20,000 objects 1.8 s (900 ms of it reading the pages); the browser
+tree 130 to 230 MB above an idle page, back to the idle figure 30 s after the last picture; the biggest PNG 5.4 MB (text),
+the photograph slide's 3840 PNG 2.97 MB against the 32 MiB bound. The press of Go live to the worker's end 1 to 13 ms and no
+upload after it; End service to the next sweep 120.03 s on the real timer; a quiet library sent no request in 10 minutes;
+a hidden tab made the same picture 1.17 times slower; two computers opened within 2 s of each other both made the picture
+and the second one's uploads were all answered `dropped` (the cost of a claim route would be one bake, 0.4 to 3 s of one
+core, a follow-up and not a defect).
+
 ### 1.5 What stays live above the picture
 
 - **Anchors**: the lyric box (`lyricObjectId`); text with build steps (`TextPara.hidden`, `schemas.ts:417`); every
