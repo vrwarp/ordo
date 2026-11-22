@@ -686,7 +686,12 @@ async function cancelledInScan() {
   return withEnv({}, async (s) => {
     const slide = slideOf([...squares(5), textBox('a', 'Alpha')], 'scan');
     let calls = 0;
-    const first = await bake(s, slide, provider(), { cancelled: () => (calls++, false) });
+    const first = await bake(s, slide, provider(), {
+      cancelled: () => {
+        calls++;
+        return false;
+      },
+    });
     if (first.ok) first.canvas.width = 0;
     const total = calls;
     let n = 0;
