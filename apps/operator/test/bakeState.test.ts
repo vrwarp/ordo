@@ -350,9 +350,13 @@ describe('the closed lists (S7)', () => {
     expect([...BAKE_CODES]).toEqual([...REASONS, 'budget', 'disk', 'kind', 'unknown']);
   });
 
-  it.todo(
-    "BAKE_CODES equals the renderer's BakeReason list plus budget, disk, kind and unknown (read from packages/renderer/src/bake.ts once bake-render has merged: turned on by the plan's commit)",
-  );
+  it("the codes equal the renderer's own BakeReason list (read from its source) plus budget, disk, kind and unknown", () => {
+    const src = readFileSync(new URL('../../../packages/renderer/src/bake.ts', import.meta.url), 'utf8');
+    const union = /export type BakeReason =([^;]*);/.exec(src)?.[1] ?? '';
+    const reasons = [...union.matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+    expect(reasons.length).toBe(17);
+    expect([...BAKE_CODES]).toEqual([...reasons, 'budget', 'disk', 'kind', 'unknown']);
+  });
 });
 
 describe('plates and the id (S8)', () => {
