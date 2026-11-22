@@ -336,11 +336,7 @@ export function planLadder(
 function planWithWhole(inputs: readonly LadderInput[], reserve: number, max: number): LadderPlan {
   const whole = new Map<number, ReturnType<typeof wholeLevel>>();
   inputs.forEach((x, i) => {
-    if (x.whole === true && !x.fixed)
-      whole.set(
-        i,
-        wholeLevel(x.slide, max, measureOf(x, max)),
-      );
+    if (x.whole === true && !x.fixed) whole.set(i, wholeLevel(x.slide, max, measureOf(x, max)));
   });
   let heavy = 0;
   for (const w of whole.values()) heavy += w.bytes;

@@ -1030,7 +1030,8 @@ describe('the planning cost (M4): a slide that cannot be heavy is measured once,
     expect(asked.easy).toBe(2);
     expect(asked.record).toBe(2);
     // Whatever was skipped needs no record: the one writer agrees on every stored slide.
-    for (const sl of slides) expect(planRecord(sl, { kind: 'slides', size: (s) => storedWithin(s, MAX) })).toBe(sl);
+    for (const sl of slides)
+      expect(planRecord(sl, { kind: 'slides', size: (s) => storedWithin(s, MAX) })).toBe(sl);
   });
 
   it('the ladder takes the measure it is given for the slide as given and plans exactly what it plans without it', () => {
