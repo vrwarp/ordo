@@ -16,15 +16,16 @@ import {
   type TextObject,
 } from '@ordo/domain';
 import { budgetMs } from '@ordo/domain/timing.test-util.ts';
-import { easyPlan } from '@ordo/domain/prerender.ts';
+import { easyPlan, planRecord } from '@ordo/domain/prerender.ts';
 import type { SlideClass, SlideRef } from '@ordo/pptx-scene';
 import { MAX_DRAWN_OBJECTS, MAX_DRAWN_PICTURES } from '@ordo/pptx-scene/budget.ts';
 import { MAX_OBJECTS } from '@ordo/pptx-scene/emit.ts';
 import fc from 'fast-check';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   type Draft,
   ImportCore,
+  isLight,
   keptWholeLine,
   selectWhole,
   WHOLE_BACKGROUND_ANCHORS,
@@ -38,10 +39,28 @@ import {
   planLadder,
   provenanceStandIn,
   quickBytes,
+  storedWithin,
   trimToCounts,
   wholeLevel,
 } from './pptx-ladder.ts';
 import { ImportLog } from './pptx-report.ts';
+
+/** How often the core asks `easyPlan` (`selectWhole`) and `planRecord` (`assemble`): through the module the core imports (M4). */
+const asked = vi.hoisted(() => ({ easy: 0, record: 0 }));
+vi.mock('@ordo/domain/prerender.ts', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@ordo/domain/prerender.ts')>();
+  return {
+    ...real,
+    easyPlan: (...a: Parameters<typeof real.easyPlan>) => {
+      asked.easy++;
+      return real.easyPlan(...a);
+    },
+    planRecord: (...a: Parameters<typeof real.planRecord>) => {
+      asked.record++;
+      return real.planRecord(...a);
+    },
+  };
+});
 
 const KiB = 1024;
 const MiB = 1024 * KiB;
@@ -934,5 +953,96 @@ describe('selectWhole: the one rule of the import core and the census model (ste
 
   it('never throws on what is not a slide', () => {
     expect(() => selectWhole(items([{ id: 'x' } as unknown as Slide]))).not.toThrow();
+  });
+});
+
+describe('the planning cost (M4): a slide that cannot be heavy is measured once, not planned twice', () => {
+  const FILE = 'e'.repeat(64);
+  const stored = (slides: Slide[], lo = false) => {
+    const log = new ImportLog();
+    const core = new ImportCore({
+      lo,
+      log,
+      warn: () => undefined,
+      geomFileBytes: 1 << 20,
+      whole: true,
+    } as ConstructorParameters<typeof ImportCore>[0]);
+    const drafts = slides.map((sl, i) => draft(sl, i));
+    core.budget(drafts);
+    const out = core.assemble(drafts, new Map(), {
+      id: oid('X', 2),
+      title: 'Deck',
+      hash: FILE,
+      sections: [],
+      slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
+      scan: { loop: false },
+      hasAlpha: () => false,
+      clipIds: new Set<string>(),
+      libraryFamilies: [],
+    });
+    return out.p.sections.flatMap((x) => x.slides);
+  };
+  /** Pictures from `files` different files, `n` objects in all (the ones past `files` repeat a file). */
+  const repeated = (n: number, files: number, seed: number): ImageObject[] =>
+    pictureObjects(n, seed).map((o, k) => ({ ...o, mediaId: `media-${seed}-${k % Math.max(1, files)}` }));
+
+  it('isLight is never true for a slide that easyPlan gives a record (objects, pictures and bytes around every bound)', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 260 }),
+        fc.integer({ min: 0, max: 24 }),
+        fc.integer({ min: 0, max: 9_000 }),
+        fc.integer({ min: 0, max: 14 }),
+        (n, files, chars, boxes) => {
+          const rec = slideOf(1, [...repeated(n, files, 2), ...textObjects(boxes, chars, 3)]);
+          const size = storedWithin(rec, MAX);
+          const record = easyPlan(rec, { size: (s) => storedWithin(s, MAX) }).record;
+          if (isLight(rec, size)) expect(record).toBe(false);
+          // And the common slide is light: a handful of objects, a few pictures, a few KB.
+          if (n <= 120 && files <= 12 && size <= 40 * KiB) expect(isLight(rec, size)).toBe(true);
+        },
+      ),
+      { numRuns: 400 },
+    );
+  });
+
+  it('isLight keeps 8 KiB of headroom under 64 KiB, and the counts of the record bounds exactly', () => {
+    const at = (bytes: number) => textSlide(1, bytes, 4);
+    expect(isLight(at(30 * KiB), quickBytes(at(30 * KiB)))).toBe(true);
+    expect(isLight(at(58 * KiB), quickBytes(at(58 * KiB)))).toBe(false);
+    expect(isLight(at(70 * KiB), quickBytes(at(70 * KiB)))).toBe(false);
+    const objects = (n: number) => slideOf(1, shapeObjects(n));
+    expect(isLight(objects(200), 10 * KiB)).toBe(true);
+    expect(isLight(objects(201), 10 * KiB)).toBe(false);
+    expect(isLight(slideOf(1, repeated(40, 16, 4)), 10 * KiB)).toBe(true);
+    expect(isLight(slideOf(1, repeated(40, 17, 4)), 10 * KiB)).toBe(false);
+    expect(isLight({ id: 'x' } as unknown as Slide, 0)).toBe(false);
+  });
+
+  it('400 ordinary slides and two heavy ones: easyPlan is asked for the heavy ones only, planRecord likewise, and the records are the same', () => {
+    const ordinary = Array.from({ length: 400 }, (_, i) => textSlide(i, 6 * KiB, 4, 3));
+    const heavy = [slideOf(500, pictureObjects(210, 5)), slideOf(501, pictureObjects(230, 6))];
+    asked.easy = 0;
+    asked.record = 0;
+    const slides = stored([...ordinary, ...heavy]);
+    expect(slides).toHaveLength(402);
+    expect(slides.filter((s) => (s as Slide & { prerender?: unknown }).prerender)).toHaveLength(2);
+    expect(asked.easy).toBe(2);
+    expect(asked.record).toBe(2);
+    // Whatever was skipped needs no record: the one writer agrees on every stored slide.
+    for (const sl of slides) expect(planRecord(sl, { kind: 'slides', size: (s) => storedWithin(s, MAX) })).toBe(sl);
+  });
+
+  it('the ladder takes the measure it is given for the slide as given and plans exactly what it plans without it', () => {
+    const slides = [
+      textSlide(0, 6 * KiB),
+      textSlide(1, 30 * KiB, 4, 5),
+      slideOf(2, [...shapeObjects(120), ...textObjects(3, 400, 9)]),
+      textSlide(3, 72 * KiB, 6, 30),
+      slideOf(4, tracedObjects(40, 200, 2)),
+    ];
+    const plain = planLadder(slides.map((slide) => ({ slide })));
+    const hinted = planLadder(slides.map((slide) => ({ slide, size: storedWithin(slide, MAX) })));
+    expect(JSON.stringify(hinted)).toBe(JSON.stringify(plain));
   });
 });
