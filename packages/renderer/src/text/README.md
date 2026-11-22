@@ -361,3 +361,11 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   empty glyph of no advance) and with the blank face alone; they differ where a shipped face has the glyph.
   The computer's own fonts are never asked, so the verdict is the same on every computer
   (`coverage.browser.test.ts`, `coverage.fonts.browser.test.ts`).
+
+**The bake profile (sub-wave 3).** `FontResolver` takes `{ profile: 'bake', blank }` as its second argument (default
+`live`, which builds today's strings): a bake string is the exact face, the loaded fallbacks, the loaded script fallbacks,
+the loaded default face and the blank face (blankface.ts) last, never the raw requested family and never the legacy tail.
+`bakeReport()` lists the families a request looked at, the stacks that held no loaded face and the requests served by the
+default face alone; `failedFamilies()` the families with a wanted face that is not loaded; `bakeReset()` clears the report
+and advances the generation so memoised layouts are laid out again. `bake.ts` (`createBakeEnv`) builds the environment and
+turns a miss into a failed picture.

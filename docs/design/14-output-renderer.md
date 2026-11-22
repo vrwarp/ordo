@@ -1105,6 +1105,20 @@ output: slide drawing p50 / p95 and upload per frame against their budgets (ambe
 uploads, GPU memory against its budget (for information), the fonts, and the issues with their details. The
 output's own diagnostics overlay (Ctrl+Shift+D) shows the same figures.
 
+**The whole-under variant (sub-wave 3).** The pre-rendered picture of a slide (design 29 section 1.4) is the whole slide
+drawn once, so `wholeSplit(slide, scale, { live? })` gives a `FrameSplit` with every drawn object under (the slide's live
+set, which this release leaves empty, aside) and nothing direct, whatever the counts and whether or not frames are on.
+`splitFrame` cannot give one: it always keeps the top object direct and gives nothing for a slide within the counts. The
+whole variant is a second constructor beside the first and shares everything else: the same step machine (`makeFrame`),
+the same unit cache and key (`frameKey`), the same `underSlides`; `splitFrame`, `frameKey`, `makeFrame` and `underSlides`
+are unchanged and their keys, splits and font strings are pinned as literals (`bake.pins.test.ts`). `bake.ts` drives it:
+the slide's own picture (a reference picture or an imported page) is the frame's first object, so every object is drawn
+over it one after the other as the whole draw draws them (a layer composited over the picture instead differs by up to 3
+levels on a few pixels of a partly transparent edge), and the finished frame is copied through `drawSlide2D(ctx, empty
+slide, { under })`. `FrameMakeOptions.onError` tells the bake of an object whose draw threw (the live frame passes none
+and leaves the object out, as before); `awaitedFiles` lists the objects that wait for a file and `forgetFrame` drops a
+frame's work, marks and cache entry after every bake, so a picture is never made from a frame kept from an earlier one.
+
 ### Measuring on venue machines
 
 The container this is built in has no GPU: WebGPU runs on SwiftShader, which checks correctness (the

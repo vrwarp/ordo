@@ -271,6 +271,20 @@ key       = sha256(canonicalJson({ v: PRERENDER_VERSION, source }))
   computes it too) runs in the editor, the bake worker and the hub's pool. Outputs never compute keys: goLive and the live
   events tell them which file is which slide's picture.
 
+**As built in sub-wave 3 (bake-render), section 1.2.** *Fonts.* The picture is drawn with the bake font profile (design
+27 section 10): the library's and the bundled faces and a blank face, never a face of the computer; a family with no
+face of its own is drawn in the default face and listed (`standIns`, Q31.c, the default; `standIns: 'abort'` makes it no
+picture), and a character no loaded face has is no picture (Q31.d, the default: this is stricter than the W30 text below,
+which makes the picture and reports the miss). *The version guard.* `packages/renderer/src/prerender-version.test.ts`
+records `PRERENDER_VERSION` (1) and a digest of every non-test source of the renderer except 13 files no picture reads,
+the output's decoders and picture provider, the domain files whose code decides pixels, the domain limits the drawing
+reads and the renderer's dependencies: a change of the drawing code fails it until the digest is recorded at the same
+version (the same pixels) or `PRERENDER_VERSION` is raised and both recorded (different pixels). A guard proves that no
+excluded file is imported by the bake's closure; guard (c) found that scene.ts, raster.ts and the table's edit.ts and
+hit.ts are reachable through the table drawer module, so they are digested. *Opacity.* The hub's `opaque` flag is the PNG
+header's colour type, not the pixels': an opaque picture is written as an RGB PNG (colour type 2) by a small writer in
+bake.ts, because Chromium writes RGBA for every canvas, an opaque one included.
+
 ### 1.3 Storage on the hub
 
 **Slide files.** `PUT /files/slide/<hash>` (edit role; refused for capped phone sessions) takes a head or a page,
@@ -418,6 +432,21 @@ flips (`OutputHealth.lateFlips`, which reacts only after a GO was late); the hub
 with `prerender.add`.
 It ships switched off on Setup ("Make missing pictures during the service", W45; owner question 13) until §1.13
 measure 2 passes on a venue-class PC.
+
+**As built in sub-wave 3 (bake-render), section 1.4.** `bakeSlide` (packages/renderer/src/bake.ts) draws the slide whole
+through the underlay frame's step machine and is complete or nothing: a picture is made only when every object was drawn,
+and each of these ends it with a named reason and leaves nothing behind (no frame in progress, no work bytes, no
+unit-cache entry): `coverage` (a character no loaded face covers, also in shadowed, glowing, gradient and table text),
+`font` (a face that failed to load, a family with no face at all, a stand-in under `standIns: 'abort'`), `media` (a
+picture file that is not there), `files` (a geometry or decoration file not read), `draw` (an object whose draw threw: the
+live frame leaves it out and goes on, the bake does not), `animated` (a playing picture or a hidden paragraph, unless
+its id is in the live set), `cut` (more than 20,000 objects), `fonts` (the font set changed while it ran), `time` (over
+`BAKE_DEADLINE_MS`, 60 s, at most 180 s: Q38.a), `cancelled`, `busy`, `frame`, `canvas`, `blank`, `profile`, and from the
+encoder `size` (a file over 32 MiB) and `verify` (the round trip). The encoders write an exact 3840x2160 PNG, a 1920x1080
+copy made once from the canvas with high-quality smoothing and a 640x360 WebP preview (the only picture that is slightly
+compressed), in upload order 1920, 3840, 640; the 3840 PNG is decoded and compared with the canvas in 64 sampled tiles
+(exactly for an opaque picture, within 2 levels where there is alpha) before anything is returned, because the hub checks
+only the header and the first upload wins.
 
 ### 1.5 What stays live above the picture
 
