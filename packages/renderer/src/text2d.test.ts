@@ -3,6 +3,7 @@ import {
   DEFAULT_LYRIC_STYLE,
   firstText,
   LOOK_LOWER_THIRD,
+  LOOK_MAIN,
   LOOK_STAGE,
   LOOK_STREAM,
   type Look,
@@ -372,5 +373,45 @@ describe('stage preview rich notes', () => {
     expect(cueText?.fillStyle).toBe('#111827');
     expect(textOps.some((o) => String(o.args[0]).includes('[PAUSE]'))).toBe(false);
     expect(fillOps.some((o) => o.fillStyle === '#fbbf24')).toBe(true);
+  });
+});
+
+describe('stage notes reach only a stage look whose notes are on (the picture path draws none)', () => {
+  // A pre-rendered picture and the shape pictures are drawn by `drawSlide2D` with no look (the slide's own objects),
+  // so the stage preview's rich notes (PR #41) must never change what such a draw records: the picture digest in
+  // prerender-version.test.ts was re-recorded at the same version on this ground.
+  const withNotes: Slide = {
+    id: 'sermon-2',
+    objects: [
+      {
+        id: 't1',
+        type: 'text',
+        box: { x: 100, y: 100, w: 1700, h: 200, rotation: 0 },
+        text: 'Kingdom Humility',
+        style: DEFAULT_LYRIC_STYLE,
+        opacity: 1,
+      },
+    ],
+    notes: 'Intro line\n**aoeu**\n• bullet item\n[PAUSE]',
+  };
+  const withoutNotes: Slide = { ...withNotes, notes: undefined };
+  const drawn = (slide: Slide, look: Look | undefined) => {
+    const ctx = recordingCtx();
+    drawSlide2D(ctx, slide, { scale: 0.5, look, presentationKind: 'slides' });
+    return JSON.stringify(ctx.ops);
+  };
+
+  it('a slide with notes records the same draw as the slide without them: no look, and every look that is not a stage look', () => {
+    for (const look of [undefined, LOOK_MAIN, LOOK_LOWER_THIRD, LOOK_STREAM])
+      expect(drawn(withNotes, look), look?.name ?? 'no look').toBe(drawn(withoutNotes, look));
+  });
+
+  it('a stage look with its notes off draws the same, and one with them on draws the notes', () => {
+    const off: Look = {
+      ...LOOK_STAGE,
+      layers: { ...LOOK_STAGE.layers, props: { ...LOOK_STAGE.layers.props, notes: false } },
+    };
+    expect(drawn(withNotes, off)).toBe(drawn(withoutNotes, off));
+    expect(drawn(withNotes, LOOK_STAGE)).not.toBe(drawn(withoutNotes, LOOK_STAGE));
   });
 });

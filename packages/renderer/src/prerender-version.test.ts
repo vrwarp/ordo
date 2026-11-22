@@ -83,7 +83,14 @@ const RECORDED = {
   // shape-raster-2 (same pixels, PRERENDER_VERSION unchanged): clamp.ts `clampOrigin` copies the optional provenance field `raster` of
   // an object's origin; an origin is never drawn, so no pixel moves (the renderer, text and clamp tests pass unchanged). The
   // branch's own recorded value yielded to the integrator's at the merge; the integrator records the merged digest right after.
-  digest: '8cb9ffc05ad266f977abf9f3f2628b36c2de3696100c90560337d21efbff894f',
+  // Main's PR #41 merged in (same pixels, PRERENDER_VERSION unchanged): text2d.ts draws the Stage Display's speaker notes
+  // with highlights, amber bullets and cue pills (`drawRichStageNotes2D`, reached only from `drawStagePreview2D`, which
+  // `drawSlide2D` calls only for a lyric-only look whose stage notes are on). A picture is drawn with no look, so it takes
+  // the authored branch that returns before that code: text2d.test.ts ('stage notes reach only a stage look whose notes are
+  // on') holds that a slide's notes change nothing a draw records without a look or with any look but such a stage look,
+  // and a comparison of the canvas calls of the code before and after (72 cases: 6 slides, 6 looks, 2 kinds) found them
+  // equal except the 4 cases of a stage look with notes on.
+  digest: 'e57f4547f29487cf46e933ab44fc60b79a978d156d202af7996ce67cedff9cfa',
 };
 
 /** The source without comments and layout. */
