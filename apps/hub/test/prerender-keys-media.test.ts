@@ -115,7 +115,7 @@ describe('the keys at save read each picture once per call', () => {
     pic.origin = {
       src: 'pptx',
       role: 'raster',
-      raster: { cv: 3, rv: 1, pts: 128, h: 'a'.repeat(64), n: 12, from: 'slide' },
+      raster: { cv: 3, rv: 1, pts: 128, h: 'a1b2c3d4e5f60718', n: 12, from: 'slide' },
     };
     const p = await saved([slide]);
     const before = hub.lib.prerenderIndex.keysAt(p.id, p.rev);
