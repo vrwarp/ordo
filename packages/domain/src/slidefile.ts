@@ -3,7 +3,7 @@ import { drawnMediaIds } from './content.ts';
 import { drawnShapeFileRefs, extraFontFamilies } from './m9-readers.ts';
 import { canonicalJson } from './palette.ts';
 import { slideMediaIds } from './resolve.ts';
-import { ContentHash, Id, isGeomFileRef, Slide, SlideObject } from './schemas.ts';
+import { ContentHash, Id, isGeomFileRef, type Presentation, Slide, SlideObject } from './schemas.ts';
 import { sha256Text } from './sha256.ts';
 import { utf8Bytes } from './size.ts';
 
@@ -217,4 +217,15 @@ export function usesTooMany(uses: {
     if (list.length > max)
       return `a slide names more ${what} (${list.length}) than the hub keeps for one (${max})`;
   return undefined;
+}
+
+// STUBS (red first, step 1): the names exist and do nothing useful until their commits.
+export const INLINE_OBJECTS_MAX = 0;
+export const FILE_OBJECTS_MAX = 0;
+export const STAND_IN_BYTES_MAX = 0;
+export const TEXT_DRAWN_MAX = 0;
+export const FullSlide = Slide;
+export type FullSlide = Slide;
+export function staleStandIns(_prev: Presentation | undefined, _next: Presentation): { slideId: string }[] {
+  return [];
 }
