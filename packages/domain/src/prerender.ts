@@ -8,6 +8,7 @@ import {
   isGeomFileRef,
   PRERENDER_LIMITS,
   PRERENDER_WHY,
+  type PresentationKind,
   type PrerenderWhy,
   type Slide,
   type SlideObject,
@@ -174,6 +175,45 @@ export function pictureUnits(slide: Slide, cost?: CostReasons): PicturePlan {
   if (over.includes('bytes')) why.push('bytes');
   if (over.some((r) => r !== 'bytes')) why.push('count');
   return { why, over, counts };
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Which slides get a record in the first release (Q24.b)
+
+/** The one gate Q24.a (anchored slides) flips. STUB: the rules come with the next commit. */
+export const PRERENDER_ANCHORED = false;
+/** The one gate for slide files. STUB. */
+export const PRERENDER_FILES = false;
+
+export type EasyAnchorKind = 'play' | 'steps' | 'lyric' | 'background';
+export type EasyAnchor = { id: string; kind: EasyAnchorKind };
+export type EasyOptions = {
+  kind?: PresentationKind;
+  isMotion?: (mediaId: string) => boolean | undefined;
+  size?: (slide: Slide) => number;
+  lyric?: 'song' | 'any';
+  anchored?: boolean;
+  reach?: Reach;
+};
+export type EasyPlan = {
+  eligible: boolean;
+  record: boolean;
+  anchors: EasyAnchor[];
+  why: ('bytes' | 'count')[];
+  over: PictureOver[];
+  counts: PicturePlan['counts'];
+};
+
+/** STUB. */
+export function easyPlan(_slide: Slide, _opts: EasyOptions = {}): EasyPlan {
+  return {
+    eligible: true,
+    record: false,
+    anchors: [],
+    why: [],
+    over: [],
+    counts: { objects: 0, pictures: 0, bytes: 0, characters: 0, families: 0, sizeScales: 0 },
+  };
 }
 
 // ---------------------------------------------------------------------------------------------------------

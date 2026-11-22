@@ -11,6 +11,8 @@ import {
   liveSet,
   objectReach,
   PICTURE_COUNTS,
+  PRERENDER_ANCHORED,
+  PRERENDER_FILES,
   PRERENDER_FRAME,
   PRERENDER_ON,
   PRERENDER_VERSION,
@@ -111,6 +113,16 @@ const standbyOf = (s: Slide, i: PictureInputs = inputs(), live = liveSet(s)) =>
 describe('PRERENDER_ON (design/29 §4: the one pre-render switch)', () => {
   it('is off until the gate of sub-wave 4 passes', () => {
     expect(PRERENDER_ON).toBe(false);
+  });
+});
+
+describe('the Q24.b hooks (design/29 §1.5)', () => {
+  it('PRERENDER_ANCHORED is the one gate Q24.a (anchored slides) flips; it stays off in sub-wave 3', () => {
+    expect(PRERENDER_ANCHORED).toBe(false);
+  });
+
+  it('PRERENDER_FILES is the one gate of slide files, read by the importer only; off in sub-wave 3 until the switch commit', () => {
+    expect(PRERENDER_FILES).toBe(false);
   });
 });
 
