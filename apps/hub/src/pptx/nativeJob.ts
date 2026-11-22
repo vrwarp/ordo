@@ -137,6 +137,8 @@ export type NativeJobEnv = {
    * where the merged presentation would pass it.
    */
   reserve?: number;
+  /** A re-import: the bytes of the kept slides that carry a pre-render record, which share the whole-slide share (Q28.a). */
+  heavyReserve?: number;
   /**
    * Reads the slide parts of a pool call from the stored deck just before the call, and again for the text rescue of a slide the
    * call could not convert (the import holds no slide between them): a test seam, `readSlideParts` by default.
@@ -184,6 +186,8 @@ export type NativeBuild = {
   missingFonts: string[];
   /** Q24.b: slides stored with a pre-render record, every one kept whole (0 when this hub keeps none whole). */
   whole: number;
+  /** Q24.b: whether this build kept heavy slides whole (the job's one decision, `wholeSlidesFor`). */
+  keepsWhole: boolean;
 };
 
 /**
@@ -1484,7 +1488,7 @@ class NativeImport {
       clipIds: this.clipIds,
       libraryFamilies: deps.lib.listFonts().map((f) => f.family),
     });
-    return { ...built, clipIds: this.clipIds, clipsCreated: this.clipsCreated };
+    return { ...built, clipIds: this.clipIds, clipsCreated: this.clipsCreated, keepsWhole: this.whole };
   }
 
   /** Step 6: save version 1 and queue the LibreOffice follow-up, then the clips' media jobs. */

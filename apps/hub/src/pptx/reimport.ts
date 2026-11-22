@@ -288,7 +288,14 @@ export type FreshDeck = {
   lo?: PptxLoSlide[];
   /** Whether every deck slide was converted (a whole re-import): its log replaces the presentation's. */
   whole?: boolean;
+  /** Q24.b: this hub keeps heavy slides whole, so a rebuilt slide gets the pre-render record it is due (`planRecord`). */
+  keepsWhole?: boolean;
+  /** The clips the fresh import made (its media ids): a motion for the record's anchors, whatever the media row says. */
+  clipIds?: string[];
 };
+
+/** Whether a media file moves, as the hub's media row says (a video): undefined when it does not know the file. */
+export type MediaMotion = (mediaId: string) => boolean | undefined;
 
 /** The fresh deck of a native build (`buildNative`). */
 export function freshOf(b: NativeBuild, whole: boolean): FreshDeck {
@@ -558,6 +565,7 @@ export function mergeReimport(
   req: PptxReimportReq,
   tags: MediaTags,
   names?: MediaNames,
+  _motion?: MediaMotion,
 ): { p: Presentation; counts: ReimportCounts; lo: PptxLoSlide[] } {
   const counts: ReimportCounts = { regenerated: 0, keptEdited: 0, replaced: 0, userObjects: 0 };
   const deck = deckOf(current);
@@ -956,6 +964,10 @@ function scopeOf(
  * slide') keeps every other slide; a whole one keeps the slides that do not come from the deck (the deck's
  * own are all converted and counted by the build, the edited ones' stored copies standing in for them).
  */
+export function keptHeavyBytes(_p: Presentation, _plan: PptxReimportPlan, _scoped: boolean): number {
+  return 0;
+}
+
 export function keptBytes(p: Presentation, plan: PptxReimportPlan, scoped: boolean): number {
   const action = new Map(plan.slides.map((s) => [s.slideId, s]));
   let n = 0;

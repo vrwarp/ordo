@@ -52,6 +52,7 @@ import {
   Slide,
   type SlideObject,
 } from '@ordo/domain';
+import type { EasyOptions } from '@ordo/domain/prerender.ts';
 import { addNote, type SlideRef } from '@ordo/pptx-scene';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
 import { digestMatches, importDigest } from './digest.ts';
@@ -344,7 +345,13 @@ function insertUnder(
  * art still shows them as they were (without `lo.replaced`, an older plan: the art goes on top, noted).
  * `pending` is cleared; `failed` is set when part of the work failed (`work.failed`).
  */
-export function patchSlide(slide: Slide, lo: PptxLoSlide, work: SlideWork, hash: string): Slide {
+export function patchSlide(
+  slide: Slide,
+  lo: PptxLoSlide,
+  work: SlideWork,
+  hash: string,
+  _record?: EasyOptions,
+): Slide {
   // Unedited: the import's objects (those with an origin) as the plan's digest has them; objects added in
   // ordo meanwhile do not count (`digest.ts`).
   const unedited = digestMatches(slide.objects, lo.digest);
