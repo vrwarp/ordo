@@ -354,6 +354,14 @@ export function easyPlan(slide: Slide, opts: EasyOptions = {}): EasyPlan {
   }
 }
 
+/** STUB. */
+export const PRERENDER_REFUSED_MISSING = 'slide:too-large';
+
+/** STUB. */
+export function planRecord(slide: Slide, _opts: EasyOptions = {}): Slide {
+  return slide;
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // What stays live above the picture (design/29 §1.5)
 

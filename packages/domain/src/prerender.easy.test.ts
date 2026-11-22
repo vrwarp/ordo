@@ -7,14 +7,26 @@ import {
   drawnPart,
   type EasyOptions,
   easyPlan,
+  liveSet,
   PRERENDER_ANCHORED,
+  PRERENDER_REFUSED_MISSING,
   type PictureInputs,
   pictureSource,
   pictureUnits,
+  planRecord,
   prerenderKey,
   standbyId,
 } from './prerender.ts';
-import { type ImageObject, Presentation, type ShapeObject, type Slide, type TextObject } from './schemas.ts';
+import * as prev from './schemas.prev.test-util.ts';
+import * as prev05 from './schemas.prev05.test-util.ts';
+import {
+  type ImageObject,
+  Presentation,
+  type ShapeObject,
+  Slide,
+  SlidePrerender,
+  type TextObject,
+} from './schemas.ts';
 import { sha256Text } from './sha256.ts';
 import { jsonBytes, SIZE_BUDGETS } from './size.ts';
 
@@ -620,5 +632,329 @@ describe('easyPlan: which slides get a record (design/29 §1.1, Q24.b)', () => {
     const ref = deepFreeze(referenceSlide(5));
     expect(easyPlan(ref).counts.objects).toBe(2);
     expect(Object.isFrozen(ref)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// planRecord
+
+const FILE = 'f'.repeat(64);
+const pptxOf = (extra: Partial<NonNullable<Slide['pptx']>> = {}): NonNullable<Slide['pptx']> => ({
+  fileId: FILE,
+  index: 0,
+  shown: 0,
+  class: 'native',
+  version: 1,
+  ...extra,
+});
+const withRecord = (s: Slide, prerender: Slide['prerender']): Slide => ({ ...s, prerender });
+/** A slide with more than 200 shapes and nothing that moves: the one that gets a record. */
+const heavy = (): Slide => crowdedSlide(201);
+
+describe('planRecord: add, refresh or remove the record (design/29 §1.1, Q24.b)', () => {
+  it('T19 adds the record: a new object that shares the objects and changes nothing else', () => {
+    const s = heavy();
+    const before = canonicalJson(s);
+    const out = planRecord(s);
+    expect(out).not.toBe(s);
+    expect(out.prerender).toEqual({ why: ['count'], live: [] });
+    expect(out.objects).toBe(s.objects);
+    expect({ ...out, prerender: undefined }).toEqual({ ...s, prerender: undefined });
+    expect(canonicalJson(s)).toBe(before);
+  });
+
+  it('T20 returns the same object when nothing changes (callers compare by identity)', () => {
+    const once = planRecord(heavy());
+    expect(once.prerender).toBeDefined();
+    expect(planRecord(once)).toBe(once);
+    const plain = plainSlide();
+    expect(planRecord(plain)).toBe(plain);
+    // A slide that already carries exactly the right record, built by the schema.
+    const parsed = Slide.parse({ ...crowdedSlide(300), prerender: { why: ['count'], live: [] } });
+    expect(planRecord(parsed)).toBe(parsed);
+  });
+
+  it('T21 refreshes the reasons', () => {
+    const count = { why: ['count' as const], live: [] };
+    // The slide now also needs bytes: 300 shapes and a stored size past 64 KiB.
+    const both = slideOf([
+      ...many(300),
+      ...Array.from({ length: 8 }, (_, i) => text(`t${i}`, 'x'.repeat(9_000))),
+    ]);
+    expect(planRecord(withRecord(both, count)).prerender?.why).toEqual(['bytes', 'count']);
+    // Only bytes now: nine objects, past 64 KiB.
+    const bytes = slideOfBytes(70_000);
+    expect(planRecord(withRecord(bytes, count)).prerender?.why).toEqual(['bytes']);
+  });
+
+  it('T22 removes the record of a slide that shrank or gained an anchor; a background picture keeps it', () => {
+    const rec = { why: ['count' as const], live: [] };
+    const shrank = withRecord(plainSlide(), rec);
+    const out = planRecord(shrank);
+    expect('prerender' in out).toBe(false);
+    expect(out.objects).toBe(shrank.objects);
+    // An anchor: a playing picture, a hidden paragraph, a background video.
+    const playing = withRecord(slideOf([...many(300), video()]), rec);
+    const stepped = withRecord(
+      slideOf([
+        ...many(300),
+        text('steps', 'a\nb', box(0, 0, 100, 100), { paras: [null, { hidden: true }] }),
+      ]),
+      rec,
+    );
+    const moving = withRecord(slideOf(many(300), { backgroundMediaId: 'm' }), rec);
+    for (const s of [playing, stepped]) expect('prerender' in planRecord(s)).toBe(false);
+    expect('prerender' in planRecord(moving, { isMotion: () => true })).toBe(false);
+    // A background picture is no anchor: the record stays, and a heavy slide gets one.
+    expect(planRecord(moving, { isMotion: () => false })).toBe(moving);
+    const still = slideOf(many(300), { backgroundMediaId: 'm' });
+    expect(planRecord(still, { isMotion: () => false }).prerender).toEqual({ why: ['count'], live: [] });
+  });
+
+  it("T23 never touches a record that is not this release's", () => {
+    const objects = many(300);
+    const records: [string, Slide['prerender']][] = [
+      ['a slide file', { why: ['bytes'], file: { ref: 'a'.repeat(64), bytes: 1000 }, live: [] }],
+      ['uses', { why: ['count'], live: [], uses: { media: [], files: [], fonts: [] } }],
+      ['tail', { why: ['tail'], live: [] }],
+      ['tail with bytes', { why: ['bytes', 'tail'], live: [] }],
+      ['chosen', { why: ['chosen'], live: [] }],
+      ['a live set while the gate is off', { why: ['count'], live: ['r1'] }],
+    ];
+    for (const [, rec] of records)
+      for (const s of [slideOf(objects, { prerender: rec }), withRecord(plainSlide(), rec)])
+        expect(planRecord(s)).toBe(s);
+    // With the gate on, a record with a live set is this release's again and is refreshed to the live set.
+    const withLive = slideOf([video(), ...many(300)], { prerender: { why: ['count'], live: ['stale'] } });
+    expect(planRecord(withLive, { anchored: true }).prerender).toEqual({
+      why: ['count'],
+      live: liveSet(withLive),
+    });
+  });
+
+  it('T24 the gate writes and refreshes the live set; with it off the same slide gets no record', () => {
+    const s = slideOf([...many(250), video(), ...many(49, 250)]);
+    const on = planRecord(s, { anchored: true });
+    expect(on.prerender?.why).toEqual(['count']);
+    expect(on.prerender?.live).toEqual(liveSet(s));
+    expect(on.prerender?.live).toContain('video');
+    // Moving the video changes what lies above it: the live set is computed again.
+    const moved = {
+      ...on,
+      objects: on.objects.map((o) => (o.id === 'video' ? { ...o, box: box(1500, 800, 200, 100) } : o)),
+    };
+    const again = planRecord(moved, { anchored: true });
+    expect(again.prerender?.live).toEqual(liveSet(moved));
+    expect(again.prerender?.live).not.toEqual(on.prerender?.live);
+    expect(planRecord(s)).toBe(s);
+  });
+
+  it('T25 the options reach the plan: kind, size and isMotion act as in easyPlan', () => {
+    const lyric = crowdedSlide(300);
+    expect(planRecord(lyric, { kind: 'song' })).toBe(lyric);
+    expect(planRecord(lyric, { kind: 'slides' }).prerender?.why).toEqual(['count']);
+    // `size` is the writer's measure of the stored form.
+    const bytes = slideOfBytes(40_000);
+    expect(planRecord(bytes)).toBe(bytes);
+    expect(planRecord(bytes, { size: () => 70_000 }).prerender?.why).toEqual(['bytes']);
+    const bg = slideOf(many(300), { backgroundMediaId: 'm' });
+    expect(planRecord(bg)).toBe(bg);
+    expect(planRecord(bg, { isMotion: () => false }).prerender?.why).toEqual(['count']);
+  });
+
+  it('T27 does not mutate its input: a recursively frozen slide goes in, a different object only when something changed', () => {
+    const s = deepFreeze(heavy());
+    const out = planRecord(s);
+    expect(out).not.toBe(s);
+    expect(s.prerender).toBeUndefined();
+    const frozenOnce = deepFreeze(out);
+    expect(planRecord(frozenOnce)).toBe(frozenOnce);
+    const plain = deepFreeze(plainSlide());
+    expect(planRecord(plain)).toBe(plain);
+    const stale = deepFreeze(withRecord(plainSlide(), { why: ['count'], live: [] }));
+    expect('prerender' in planRecord(stale)).toBe(false);
+    expect(stale.prerender).toEqual({ why: ['count'], live: [] });
+  });
+
+  it('T28 older builds (0.8.x and 0.5.0) strip the record and draw every object', () => {
+    const out = planRecord(crowdedSlide(300));
+    expect(out.prerender).toBeDefined();
+    for (const old of [prev, prev05]) {
+      const r = old.Slide.safeParse(out);
+      expect(r.success).toBe(true);
+      const parsed = r.data as unknown as Record<string, unknown>;
+      expect(parsed).not.toHaveProperty('prerender');
+      expect((parsed.objects as unknown[]).length).toBe(out.objects.length);
+      expect(parsed.lyricObjectId).toBe('lyric');
+    }
+  });
+
+  it('T29 a slide the slide file refused is not ours: no later save, re-import or follow-up gives it a record', () => {
+    expect(PRERENDER_REFUSED_MISSING).toBe('slide:too-large');
+    const refused = slideOf(many(300), { pptx: pptxOf({ missing: ['chart', PRERENDER_REFUSED_MISSING] }) });
+    expect(planRecord(refused)).toBe(refused);
+    // The entry as the only difference: the same slide without it gets its record.
+    const without = slideOf(many(300), { pptx: pptxOf({ missing: ['chart'] }) });
+    expect(planRecord(without).prerender).toEqual({ why: ['count'], live: [] });
+    // A stale record on a refused slide is left alone too.
+    const stale = withRecord(refused, { why: ['count'], live: [] });
+    expect(planRecord(stale)).toBe(stale);
+  });
+
+  it('T30 a draft of 1,357 and of 20,000 objects is planned: count, a record, no throw, size honoured, no mutation', () => {
+    for (const n of [1_357, 20_000]) {
+      const s = deepFreeze(slideOf(many(n)));
+      const out = planRecord(s, { size: () => 1_000 });
+      expect(out.prerender).toEqual({ why: ['count'], live: [] });
+      expect(out.objects).toBe(s.objects);
+      // Without the writer's measure the JSON size of the draft is read: past 64 KiB it is `bytes` too.
+      expect(planRecord(s).prerender?.why).toEqual(['bytes', 'count']);
+      expect(easyPlan(s).counts.objects).toBe(n);
+    }
+  });
+});
+
+describe('planRecord: the property suite (idempotent, ours only, valid, the plan never changes)', () => {
+  const SLIDE_MAX = SIZE_BUDGETS.slideMax;
+  type Case = {
+    rects: number;
+    pics: number;
+    anchor: 'none' | 'play' | 'steps' | 'lyric' | 'background';
+    reference: boolean;
+    bytes: number | undefined;
+    record: 'none' | 'ours' | 'file' | 'uses' | 'live' | 'chosen' | 'tail' | 'junk' | 'refused';
+    why: ('bytes' | 'count')[];
+    kind: 'song' | 'slides' | 'loop' | undefined;
+    motion: boolean | undefined;
+    lyric: 'song' | 'any' | undefined;
+    anchored: boolean;
+  };
+  const arb: fc.Arbitrary<Case> = fc.record({
+    rects: fc.integer({ min: 0, max: 260 }),
+    pics: fc.integer({ min: 0, max: 20 }),
+    anchor: fc.constantFrom('none', 'play', 'steps', 'lyric', 'background'),
+    reference: fc.boolean(),
+    bytes: fc.constantFrom(
+      undefined,
+      20_000,
+      SLIDE_MAX - 60,
+      SLIDE_MAX - 1,
+      SLIDE_MAX,
+      SLIDE_MAX + 1,
+      SLIDE_MAX + 60,
+      90_000,
+    ),
+    record: fc.constantFrom('none', 'ours', 'file', 'uses', 'live', 'chosen', 'tail', 'junk', 'refused'),
+    why: fc.constantFrom<('bytes' | 'count')[]>(['bytes'], ['count'], ['bytes', 'count'], []),
+    kind: fc.constantFrom('song', 'slides', 'loop', undefined),
+    motion: fc.constantFrom(true, false, undefined),
+    lyric: fc.constantFrom('song', 'any', undefined),
+    anchored: fc.boolean(),
+  });
+
+  /** The rule of ours, written again here as the oracle. */
+  const isOurs = (pre: unknown, gateOn: boolean): boolean => {
+    if (pre === undefined) return true;
+    if (!pre || typeof pre !== 'object') return false;
+    const r = pre as { why?: unknown; live?: unknown; file?: unknown; uses?: unknown };
+    if (!Array.isArray(r.why) || !Array.isArray(r.live) || r.file !== undefined || r.uses !== undefined)
+      return false;
+    return r.why.every((w) => w === 'bytes' || w === 'count') && (r.live.length === 0 || gateOn);
+  };
+
+  function build(c: Case): { slide: Slide; opts: EasyOptions } {
+    const objects: Slide['objects'] = [
+      ...many(c.rects).map((r, i) =>
+        c.reference && i % 3 === 0 ? ({ ...r, origin: { src: 'pptx', role: 'shape' } } as ShapeObject) : r,
+      ),
+      ...Array.from({ length: c.pics }, (_, i) => picture(`p${i}`, `m${i}`)),
+    ];
+    const extra: Partial<Slide> = {};
+    if (c.anchor === 'play') objects.splice(Math.floor(objects.length / 2), 0, video());
+    if (c.anchor === 'steps')
+      objects.push(text('steps', 'a\nb', box(0, 0, 100, 100), { paras: [null, { hidden: true }] }));
+    if (c.anchor === 'lyric') {
+      objects.push(text('lyric', 'Amazing grace'));
+      extra.lyricObjectId = 'lyric';
+    }
+    if (c.anchor === 'background') extra.backgroundMediaId = 'bgm';
+    if (c.reference) extra.pptx = pptxOf({ show: 'picture', refMediaId: 'ref' });
+    if (c.record === 'refused')
+      extra.pptx = pptxOf({ ...(extra.pptx ?? {}), missing: [PRERENDER_REFUSED_MISSING] });
+    if (c.bytes !== undefined) {
+      // Pad with boxes of at most 9,000 characters to land the stored size at `bytes` (plus the record, if any).
+      const room = c.bytes - jsonBytes(slideOf(objects, extra)) - 60;
+      for (let n = 0, left = room; left > 200; n++, left -= 9_300)
+        objects.push(text(`pad${n}`, 'p'.repeat(Math.max(1, Math.min(9_000, left - 200)))));
+    }
+    const records: Record<Case['record'], Slide['prerender']> = {
+      none: undefined,
+      refused: undefined,
+      ours: { why: c.why, live: [] },
+      live: { why: c.why, live: ['r1'] },
+      file: { why: ['bytes'], file: { ref: 'a'.repeat(64), bytes: 9 }, live: [] },
+      uses: { why: ['count'], live: [], uses: { media: [], files: [], fonts: [] } },
+      chosen: { why: ['chosen'], live: [] },
+      tail: { why: ['tail', ...c.why], live: [] },
+      junk: { why: ['count'] } as unknown as Slide['prerender'],
+    };
+    const slide: Slide = {
+      id: 's',
+      objects,
+      ...extra,
+      ...(records[c.record] ? { prerender: records[c.record] } : {}),
+    };
+    const opts: EasyOptions = {
+      kind: c.kind,
+      lyric: c.lyric,
+      anchored: c.anchored,
+      ...(c.motion === undefined ? {} : { isMotion: () => c.motion }),
+    };
+    return { slide, opts };
+  }
+
+  it('T26 over generated slides: (a) idempotent, (b) not ours comes back untouched, (c) valid, (d) the record never changes the plan, (e) only `prerender` differs, (f) never throws', () => {
+    fc.assert(
+      fc.property(arb, (c) => {
+        const { slide, opts } = build(c);
+        const gateOn = opts.anchored === true;
+        const out = planRecord(slide, opts);
+        // (a)
+        expect(planRecord(out, opts)).toBe(out);
+        // (b)
+        const refused = (slide.pptx?.missing ?? []).includes(PRERENDER_REFUSED_MISSING);
+        if (refused || !isOurs(slide.prerender, gateOn)) expect(out).toBe(slide);
+        // (c)
+        if (out.prerender) expect(SlidePrerender.safeParse(out.prerender).success).toBe(true);
+        if (Slide.safeParse(slide).success) expect(Slide.safeParse(out).success).toBe(true);
+        // (d)
+        expect(easyPlan(out, opts)).toEqual(easyPlan(slide, opts));
+        // (e)
+        expect(out.objects).toBe(slide.objects);
+        expect({ ...out, prerender: undefined }).toEqual({ ...slide, prerender: undefined });
+        // The record written is the plan's.
+        const plan = easyPlan(slide, opts);
+        if (!refused && isOurs(slide.prerender, gateOn))
+          expect(out.prerender?.why).toEqual(plan.record ? plan.why : undefined);
+      }),
+      { numRuns: 400 },
+    );
+  });
+
+  it('T26f never throws on junk slides and options', () => {
+    fc.assert(
+      fc.property(fc.anything({ withBigInt: true, withNullPrototype: true }), (junk) => {
+        expect(() => planRecord(junk as unknown as Slide)).not.toThrow();
+        const s = { id: 's', objects: many(300), prerender: junk } as unknown as Slide;
+        expect(() => planRecord(s)).not.toThrow();
+        expect(() => planRecord(s, junk as unknown as EasyOptions)).not.toThrow();
+      }),
+      { numRuns: 300 },
+    );
+    // A slide that cannot be measured (a cycle) is left as it is; the same slide without the cycle is planned.
+    const cyclic = slideOf(many(300));
+    (cyclic as unknown as Record<string, unknown>).self = cyclic;
+    expect(planRecord(cyclic)).toBe(cyclic);
+    expect(planRecord(slideOf(many(300))).prerender).toEqual({ why: ['count'], live: [] });
   });
 });
