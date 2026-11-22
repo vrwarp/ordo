@@ -4,8 +4,8 @@
  *
  * - T2 the pool: `sceneTask` with `wholeSlides: true` keeps all the pictures of a slide, without keeps 16.
  * - T3 equivalence: the hub's own parse and a browser scene of the same decks store the same presentation.
- * - T4 `nativeJob` end to end: the switch (`cfg.prerender.on`, store-2's `HubConfig.prerender`; a test-local stand-in
- *   here until it merges) times LibreOffice present and absent times Q27 (`WHOLE_WITH_LIBREOFFICE`, a test switch below):
+ * - T4 `nativeJob` end to end: the switch (`cfg.prerender.on`, store-2's `HubConfig.prerender`, `prerenderConfig('on' | 'off')`)
+ *   times LibreOffice present and absent times Q27 (`WHOLE_WITH_LIBREOFFICE`, a test switch below):
  *   the job decides once, passes it to the pool, the scene check and ImportCore, and says it in its result.
  * - T5 the demo builds only from a scene that does not record the option; T6 callers without it get the base plan.
  */
@@ -20,7 +20,7 @@ import JSZip from 'jszip';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { comparable, diffJson } from '../../../tools/pptx-fidelity/src/equivalence.ts';
 import { demoUsesScene } from '../../demo/src/hub.ts';
-import type { HubConfig } from '../src/config.ts';
+import { type HubConfig, prerenderConfig } from '../src/config.ts';
 import type { JobCtx, JobQueue } from '../src/jobs.ts';
 import type { CpuPool } from '../src/pool.ts';
 import { type ClientSceneTaskInput, clientSceneTask } from '../src/pptx/clientScene.ts';
@@ -45,8 +45,8 @@ vi.mock('@ordo/importers/pptx-core.ts', async (importOriginal) => {
 });
 
 const IN = 914_400;
-/** store-2's switch (`HubConfig.prerender`, ORDO_PRERENDER) as a stand-in until it is merged. */
-const prerender = (on: boolean) => ({ prerender: { on } }) as unknown as Partial<HubConfig>;
+/** store-2's switch (`HubConfig.prerender`, ORDO_PRERENDER) as the hub reads it: `on` or `off`. */
+const prerender = (on: boolean): Partial<HubConfig> => ({ prerender: prerenderConfig(on ? 'on' : 'off') });
 const NO_LO = { libreoffice: { mode: 'off', exe: '' } } as Partial<HubConfig>;
 
 let dir: string;
@@ -362,7 +362,8 @@ describe('a hostile deck on the hub (design 25: the bound, the share and the sce
   /** `slides` slides of `n` pictures each from 20 distinct files, every picture on the slide (a grid of 40 columns). */
   function crowdedSlides(slides: number, n: number) {
     const media: Record<string, Uint8Array> = {};
-    for (let f = 0; f < 20; f++) media[`ppt/media/m${f}.png`] = solidPng(8, 8, [(f * 37) % 256, (f * 91) % 256, (f * 53) % 256]);
+    for (let f = 0; f < 20; f++)
+      media[`ppt/media/m${f}.png`] = solidPng(8, 8, [(f * 37) % 256, (f * 91) % 256, (f * 53) % 256]);
     const rels = Array.from({ length: 20 }, (_, f) => imageRel(`rId${2 + f}`, `../media/m${f}.png`));
     let shapes = '';
     for (let i = 0; i < n; i++)
@@ -399,7 +400,9 @@ describe('a hostile deck on the hub (design 25: the bound, the share and the sce
       expect(s.objects.length).toBeLessThanOrEqual(200);
       expect(new Set(imagesOf(s).map((o) => o.mediaId)).size).toBeLessThanOrEqual(16);
     }
-    expect(new TextEncoder().encode(JSON.stringify(r.p)).length).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
+    expect(new TextEncoder().encode(JSON.stringify(r.p)).length).toBeLessThanOrEqual(
+      SIZE_BUDGETS.presentationMax,
+    );
     process.stdout.write(`T7 hub: ${ms.toFixed(0)} ms, ${whole.length} of 10 slides kept whole\n`);
   }, 240_000);
 

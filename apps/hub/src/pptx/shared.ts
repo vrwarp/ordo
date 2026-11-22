@@ -556,7 +556,7 @@ export function batchEnds(sizes: readonly number[], maxSlides: number, maxBytes:
  * the import, a re-import and the LibreOffice follow-up.
  */
 export function prerenderOn(cfg: HubConfig): boolean {
-  return (cfg as { prerender?: { on?: unknown } }).prerender?.on === true;
+  return cfg.prerender.on === true;
 }
 
 /** Whether a media file moves, as the hub's media row says (a video); undefined for a file it does not know. */

@@ -97,9 +97,8 @@ export function keepsSlidesWhole(
   withLibreOffice: boolean = OPERATOR_WHOLE_WITH_LIBREOFFICE,
 ): boolean {
   if (!caps) return false;
-  // store-2's `HubCapabilities.prerender.state`, read without trusting its shape: only the string 'on' is a yes.
-  const state = (caps as { prerender?: { state?: unknown } }).prerender?.state;
-  return state === 'on' && (!hubHasLibreOffice(caps) || withLibreOffice);
+  // `prerender` is in every parsed answer (store-2); the `?.` is for one kept from a hub before it: only 'on' is a yes.
+  return caps.prerender?.state === 'on' && (!hubHasLibreOffice(caps) || withLibreOffice);
 }
 
 /**

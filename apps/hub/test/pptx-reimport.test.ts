@@ -63,7 +63,7 @@ import {
 } from '../src/pptx/reimport.ts';
 import { patchSlide } from '../src/pptx/fallback.ts';
 import { buildNative } from '../src/pptx/nativeJob.ts';
-import type { HubConfig } from '../src/config.ts';
+import { prerenderConfig } from '../src/config.ts';
 import type { JobCtx } from '../src/jobs.ts';
 import {
   CONVERTER_VERSION,
@@ -1643,7 +1643,7 @@ describe("the pre-render record through the hub's re-import and the follow-up (Q
   let hub2: TestHub;
   let dir2: string;
   beforeAll(async () => {
-    // LibreOffice off: the follow-up of a hybrid slide would outlive the test; the switch of store-2 as a stand-in.
+    // LibreOffice off: the follow-up of a hybrid slide would outlive the test.
     hub2 = await startHub({ libreoffice: { mode: 'off', exe: '' } });
     dir2 = tempDir('ordo-reimport-whole-');
   }, 60_000);
@@ -1653,7 +1653,7 @@ describe("the pre-render record through the hub's re-import and the follow-up (Q
   });
   /** The switch of store-2 (`HubConfig.prerender`), flipped on the running hub: read at each job. */
   const setSwitch = (on: boolean) =>
-    Object.assign(hub2.imports.pptx.deps.cfg, { prerender: { on } }) as unknown as HubConfig;
+    Object.assign(hub2.imports.pptx.deps.cfg, { prerender: prerenderConfig(on ? 'on' : 'off') });
 
   it('a crowded slide stored before the switch is regenerated whole with its record by a re-import, and the next one changes nothing (T1)', async () => {
     setSwitch(false);
