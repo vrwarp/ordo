@@ -28,6 +28,8 @@ export const BAKE_ATTEMPTS = 3;
 export const BAKE_HARD_GRACE_MS = 5_000;
 /** The worker is released this long after its last picture. */
 export const BAKE_WORKER_IDLE_MS = 30_000;
+/** A lost request (a network error, a 401 or 403) holds this long when the hub's link says it is still up. */
+export const BAKE_HUB_HOLD_MS = 15_000;
 /** After a 507 `disk` every computer that sees it holds this long. */
 export const BAKE_DISK_HOLD_MS = 600_000;
 /** A listing read this recently is reused (`refresh` without `force`). */
