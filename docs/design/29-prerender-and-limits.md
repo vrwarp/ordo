@@ -547,7 +547,8 @@ reported, `OffscreenCanvas`, `Worker`, an operate or edit session (`BAKE_ROLES`)
 _When:_ 15 s after start plus up to a third of that as jitter, 3 s after the last change of a burst of library changes,
 2 minutes after End service (the hub's `PAUSED_RETRY_S`, a test reads both), every 5 minutes only while something is
 pending, and after a save the hub has not keyed yet at 2, 5, 15, 60 and 120 s. _Never during a service:_ the
-Controller's first line of the three Go live calls stops a running picture on the spot (the worker is terminated), the
+Controller's three Go live calls stop a running picture on the spot, right after the GO is posted (the worker is terminated; a
+hold that throws is logged and never stops the GO), the
 stores' `mode`, `held`, `authority` and `goLivePrepare` hold the sweep, and the hub's 503 `paused_during_service` is a hold
 of 10 minutes or until End service plus 2 minutes, never a failure. _Which:_ the key is computed with
 the domain's own `pictureSource` and `prerenderKey`: on the main thread in slices of 8 ms for a slide of fewer than 300

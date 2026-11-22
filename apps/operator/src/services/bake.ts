@@ -88,7 +88,7 @@ export { type BakeTimings, bakeTestMode, bakeTimingsFromUrl };
  *
  * THE RULES THAT DECIDE (each has cases in apps/operator/test/bakeService.test.ts):
  * - NEVER DURING A SERVICE: the holds are read from the main-thread stores (`mode`, `held`, `authority`,
- *   `goLivePrepare`) and from the press of Go live (`holdForGoLive`, the Controller's first line); a running bake's
+ *   `goLivePrepare`) and from the press of Go live (`holdForGoLive`, called by the Controller right after it posts the GO); a running bake's
  *   worker is TERMINATED, not asked, and nothing is uploaded or posted. The hub refuses the uploads too (503).
  * - NEVER A PICTURE FOR A KEY THE HUB DOES NOT LIST, or that is no longer the slide's: the local key is looked up in
  *   the hub's listing (equal keys prove the same slide, media and faces); before each bake and before the first

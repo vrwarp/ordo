@@ -133,7 +133,7 @@ export function createBakeBoot(deps: BakeBootDeps) {
     };
   }
 
-  /** The press of Go live (the Controller's first line): a service that is running stops its bake on the spot. */
+  /** The press of Go live (the Controller calls it right after posting the GO): a running service stops its bake on the spot. */
   function holdBakesForGoLive(): void {
     pressedAt = deps.now();
     service?.holdForGoLive();
