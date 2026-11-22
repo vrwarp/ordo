@@ -45,6 +45,7 @@ type Snap = {
   running?: { presentationId: string; slideId: string; key: string };
   slides: Record<string, { state: string; key?: string; sizes?: number[]; waiting?: string }>;
   workers: number;
+  keysByWorker: number;
   sweeps: number;
   requests: { method: string; path: string; status: number }[];
 };
@@ -175,6 +176,8 @@ test('E1 a heavy slide the hub keys is made by an open operator page: 1920, 3840
     ]);
     expect(after.requests.every((r) => r.status === 200 || r.status === 201)).toBe(true);
     expect(done.running).toBeUndefined();
+    // the slide has 312 objects: its key was worked out by the keys worker (a broken one would fall back silently)
+    expect(done.keysByWorker).toBe(1);
     await expect.poll(async () => (await snap(page))?.workers, { timeout: 60_000 }).toBe(0);
   } finally {
     await context.close();

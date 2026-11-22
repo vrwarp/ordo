@@ -60,7 +60,7 @@ export function createBakeBoot(deps: BakeBootDeps) {
 
   /**
    * Test mode only: `window.__ordo.bake` (C-BW8), read by the end-to-end specs and the technician:
-   * `{ gate, hold, running, totals, slides, presentations, workers, timings, sweeps, requests }`, live getters over the
+   * `{ gate, hold, running, totals, slides, presentations, workers, keysByWorker, timings, sweeps, requests, lastMade }`, live getters over the
    * service's own `snapshot()`; before the chunk is fetched the gate is the real one (a phone says "unsupported" without
    * ever fetching the service) and the rest is empty. No picture bytes, no slide text.
    */
@@ -83,6 +83,7 @@ export function createBakeBoot(deps: BakeBootDeps) {
     field('slides', {});
     field('presentations', {});
     field('workers', 0);
+    field('keysByWorker', 0);
     field('timings', undefined);
     field('sweeps', 0);
     field('requests', []);

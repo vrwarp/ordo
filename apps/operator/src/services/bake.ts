@@ -1,5 +1,13 @@
 import { ApiFailure, api, fileUrl } from '@ordo/client';
-import type { Font, LiveState, Media, Playlist, Presentation } from '@ordo/domain';
+import {
+  drawnMediaIds,
+  type Font,
+  type LiveState,
+  type Media,
+  type Playlist,
+  type Presentation,
+  type Slide,
+} from '@ordo/domain';
 import { APP_VERSION } from '@ordo/protocol';
 import type { BakeVerdict } from '../lib/capabilities.ts';
 import { parseRoute } from '../lib/route.ts';
@@ -26,6 +34,7 @@ import { useLibrary } from '../state/library.ts';
 import { useLive } from '../state/live.ts';
 import { currentRole } from '../state/session.ts';
 import type { BakeIn, BakeJobIn, BakeOut } from '../workers/bakeJob.ts';
+import type { KeysIn, KeysOut } from '../workers/bakeKeys.ts';
 import {
   BAKE_ATTEMPTS,
   BAKE_DISK_HOLD_MS,
@@ -34,6 +43,9 @@ import {
   BAKE_HUB_HOLD_MS,
   BAKE_IDLE_SWEEP_MS,
   BAKE_JOB_DEADLINE_MS,
+  BAKE_KEYS_DEADLINE_MS,
+  BAKE_KEYS_IDLE_MS,
+  BAKE_KEYS_MIN_OBJECTS,
   BAKE_LISTING_FRESH_MS,
   BAKE_PAUSED_MAX_MS,
   BAKE_RESUME_MS,
@@ -47,11 +59,13 @@ import {
 import {
   type BakeItem,
   type Listing,
+  localKey,
   type PlanCache,
   type PlanDeps,
   type PlanInput,
   cachedSlides,
   planSweepSteps,
+  recordSlides,
   retryDelay,
   type SweepPlan,
   slideInputs,
@@ -100,6 +114,14 @@ export type BakeWorkerLike = {
   onerror: ((ev: unknown) => void) | null;
 };
 
+/** The keys worker (workers/bakeKeys.worker.ts): one message of slides in, one of keys out. */
+export type KeysWorkerLike = {
+  postMessage(m: KeysIn): void;
+  terminate(): void;
+  onmessage: ((ev: { data: KeysOut }) => void) | null;
+  onerror: ((ev: unknown) => void) | null;
+};
+
 type StoreLike<T> = { getState(): T; subscribe(fn: (state: T, prev: T) => void): () => void };
 
 export type BakeLiveSlice = {
@@ -132,6 +154,8 @@ export type BakeServiceDeps = {
     init?: { method?: string; body?: Blob; json?: unknown; headers?: Record<string, string> },
   ): Promise<unknown>;
   createWorker(): BakeWorkerLike | undefined;
+  /** The worker that works out the keys of heavy slides (absent or undefined: they are worked out on the main thread). */
+  createKeysWorker?(): KeysWorkerLike | undefined;
   now(): number;
   setTimer(fn: () => void, ms: number): unknown;
   clearTimer(t: unknown): void;
@@ -168,6 +192,8 @@ export type BakeSnapshot = {
   presentations: StoreSnapshot['presentations'];
   /** Workers alive (at most one). */
   workers: number;
+  /** Keys the keys worker has worked out in this page's life (heavy slides; the main thread worked out none of them). */
+  keysByWorker: number;
   /** Timers armed (none for a library with nothing pending). */
   timers: number;
   timings: BakeTimings;
@@ -279,6 +305,11 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
   let active: Active | undefined;
   let worker: BakeWorkerLike | undefined;
   let workerIdle: unknown;
+  let keysWorker: KeysWorkerLike | undefined;
+  let keysIdle: unknown;
+  let keysSeq = 0;
+  let keysByWorker = 0;
+  const keysPending = new Map<number, (keys: (string | null)[] | undefined) => void>();
   let postedFonts: readonly Font[] | undefined;
   let queue: BakeItem[] = [];
   let planned: SweepPlan | undefined;
@@ -426,6 +457,109 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
     }
   }
 
+  // ---- the keys worker ----
+
+  /** The keys worker ends (a hold, a stop, its idle time): every question it had is answered "nothing", so the sweep goes on. */
+  function killKeys(): void {
+    if (keysIdle !== undefined) clearTimer(keysIdle);
+    keysIdle = undefined;
+    const k = keysWorker;
+    keysWorker = undefined;
+    if (k) {
+      k.onmessage = null;
+      k.onerror = null;
+      k.terminate();
+    }
+    for (const [id, done] of [...keysPending]) {
+      keysPending.delete(id);
+      done(undefined);
+    }
+  }
+
+  function ensureKeysWorker(): KeysWorkerLike | undefined {
+    if (keysIdle !== undefined) clearTimer(keysIdle);
+    keysIdle = undefined;
+    if (keysWorker) return keysWorker;
+    const k = deps.createKeysWorker?.();
+    if (!k) return undefined;
+    keysWorker = k;
+    k.onmessage = (ev) => {
+      const m = ev?.data;
+      if (!m || m.t !== 'keys') return;
+      const done = keysPending.get(m.id);
+      if (!done) return;
+      keysPending.delete(m.id);
+      done(Array.isArray(m.keys) ? m.keys : undefined);
+    };
+    // a worker that broke is the key maker's fault: the main thread does the keys, and nothing is posted to the hub
+    k.onerror = () => killKeys();
+    return k;
+  }
+
+  /**
+   * The keys of the record slides this sweep would work out and that are heavy (`BAKE_KEYS_MIN_OBJECTS` objects or
+   * more, no slide file), worked out by the keys worker with the plan's own function. A slide the worker could not key
+   * (a worker that is absent, broke, answered null or did not answer within `BAKE_KEYS_DEADLINE_MS`) is not in the map:
+   * the plan then works it out on the main thread, as it always could.
+   */
+  async function heavyKeys(input: PlanInput): Promise<Map<Slide, string> | undefined> {
+    if (!deps.createKeysWorker) return undefined;
+    const lib = input.library;
+    const wanted: Slide[] = [];
+    const inputs = slideInputs(lib);
+    for (const p of input.presentations) {
+      if (!p || typeof p !== 'object' || recordSlides(p).length === 0) continue;
+      const known = cachedSlides(cache, p, lib);
+      for (const slide of recordSlides(p)) {
+        if (known.has(slide.id) || slide.prerender?.file) continue;
+        if (!Array.isArray(slide.objects) || slide.objects.length < BAKE_KEYS_MIN_OBJECTS) continue;
+        wanted.push(slide);
+      }
+    }
+    if (wanted.length === 0) return undefined;
+    const k = ensureKeysWorker();
+    if (!k) return undefined;
+    const id = ++keysSeq;
+    const answer = new Promise<(string | null)[] | undefined>((resolve) => {
+      keysPending.set(id, resolve);
+    });
+    const give = setTimer(() => killKeys(), BAKE_KEYS_DEADLINE_MS);
+    try {
+      k.postMessage({
+        t: 'keys',
+        id,
+        slides: wanted.map((slide) => ({
+          slide,
+          files: Object.fromEntries(
+            drawnMediaIds(slide)
+              .map((m) => [m, inputs.mediaFile(m)] as const)
+              .filter((e): e is [string, string] => typeof e[1] === 'string'),
+          ),
+        })),
+        fonts: inputs.fonts.map((f) => ({ family: f.family, file: { hash: f.file.hash } })),
+      });
+    } catch {
+      killKeys();
+    }
+    const keys = await answer;
+    clearTimer(give);
+    if (keysWorker === k && keys) {
+      keysIdle = setTimer(() => {
+        keysIdle = undefined;
+        killKeys();
+      }, BAKE_KEYS_IDLE_MS);
+    }
+    if (!keys || keys.length !== wanted.length) return undefined;
+    const out = new Map<Slide, string>();
+    keys.forEach((key, i) => {
+      if (typeof key === 'string') {
+        out.set(wanted[i] as Slide, key);
+        keysByWorker++;
+      }
+    });
+    return out;
+  }
+
   function releaseSoon(): void {
     if (workerIdle !== undefined) clearTimer(workerIdle);
     workerIdle = setTimer(() => {
@@ -489,7 +623,15 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
       openId: deps.openId(),
       cache,
     };
-    const g = planSweepSteps(input, deps.plan);
+    const keyed = await heavyKeys(input);
+    const own = deps.plan?.keyOf;
+    const planDeps: PlanDeps | undefined = keyed
+      ? {
+          ...deps.plan,
+          keyOf: (slide, inputs) => keyed.get(slide) ?? (own ? own(slide, inputs) : localKey(slide, inputs)),
+        }
+      : deps.plan;
+    const g = planSweepSteps(input, planDeps);
     for (;;) {
       const r = g.next();
       if (r.done) return r.value;
@@ -923,6 +1065,7 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
     queue = [];
     dropActive(why);
     killWorker();
+    killKeys();
     setHold(undefined, undefined);
   }
 
@@ -1111,6 +1254,7 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
       wasService = true;
       goLiveUntil = 0;
       dropActive('a service started');
+      killKeys();
     } else if (!sl && wasService) {
       // End service: the computers resume after the hub's own wait
       wasService = false;
@@ -1118,7 +1262,10 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
       resumeAt = deps.now() + timings.resumeMs;
       wakeAt('resume', resumeAt);
     }
-    if (l.goLivePrepare) dropActive('Go live was pressed');
+    if (l.goLivePrepare) {
+      dropActive('Go live was pressed');
+      killKeys();
+    }
     if (!l.hubConnected) dropActive('the hub went away');
     showHold();
   }
@@ -1175,6 +1322,7 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
       queue = [];
       dropActive('the service stopped');
       killWorker();
+      killKeys();
     };
   }
 
@@ -1285,6 +1433,7 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
     holdForGoLive() {
       goLiveUntil = deps.now() + BAKE_GO_LIVE_HOLD_MAX_MS;
       dropActive('Go live was pressed');
+      killKeys();
       showHold();
     },
     snapshot() {
@@ -1297,6 +1446,7 @@ export function createBakeService(deps: BakeServiceDeps): BakeService {
         slides: { ...s.slides },
         presentations: { ...s.presentations },
         workers: worker ? 1 : 0,
+        keysByWorker,
         timers: timersArmed.size,
         timings: { ...timings },
         sweeps,
@@ -1325,6 +1475,16 @@ function realDeps(): BakeServiceDeps {
           type: 'module',
           name: 'ordo-bake',
         }) as unknown as BakeWorkerLike;
+      } catch {
+        return undefined;
+      }
+    },
+    createKeysWorker: () => {
+      try {
+        return new Worker(new URL('../workers/bakeKeys.worker.ts', import.meta.url), {
+          type: 'module',
+          name: 'ordo-bake-keys',
+        }) as unknown as KeysWorkerLike;
       } catch {
         return undefined;
       }

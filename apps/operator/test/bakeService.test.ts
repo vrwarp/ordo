@@ -26,6 +26,8 @@ import {
   BAKE_HARD_GRACE_MS,
   BAKE_IDLE_SWEEP_MS,
   BAKE_JOB_DEADLINE_MS,
+  BAKE_KEYS_DEADLINE_MS,
+  BAKE_KEYS_IDLE_MS,
   BAKE_PAUSED_MAX_MS,
   BAKE_RESUME_MS,
   BAKE_SETTLE_MS,
@@ -37,6 +39,7 @@ import {
   type BakeServiceDeps,
   type BakeTimings,
   type BakeWorkerLike,
+  type KeysWorkerLike,
   bakeTestMode,
   bakeTimingsFromUrl,
   createBakeService,
@@ -44,6 +47,7 @@ import {
 } from '../src/services/bake.ts';
 import { bakeId, resetBake, useBake } from '../src/state/bake.ts';
 import type { BakeIn, BakeJobIn, BakeOut } from '../src/workers/bakeJob.ts';
+import { type KeysIn, type KeysOut, keysOf } from '../src/workers/bakeKeys.ts';
 
 // ---- fixtures ----
 
@@ -145,6 +149,30 @@ class FakeWorker implements BakeWorkerLike {
   }
 }
 
+/** The keys worker: answers with the real `keysOf` (`auto`), never (`silent`), or breaks (`broken`), or answers null for every slide (`nulls`). */
+class FakeKeysWorker implements KeysWorkerLike {
+  posted: KeysIn[] = [];
+  terminated = false;
+  onmessage: ((ev: { data: KeysOut }) => void) | null = null;
+  onerror: ((ev: unknown) => void) | null = null;
+  readonly mode: 'auto' | 'silent' | 'broken' | 'nulls';
+  constructor(mode: 'auto' | 'silent' | 'broken' | 'nulls') {
+    this.mode = mode;
+  }
+  postMessage(m: KeysIn): void {
+    this.posted.push(m);
+    if (this.mode === 'auto') queueMicrotask(() => this.onmessage?.({ data: keysOf(m) }));
+    if (this.mode === 'nulls')
+      queueMicrotask(() =>
+        this.onmessage?.({ data: { t: 'keys', id: m.id, keys: m.slides.map(() => null) } }),
+      );
+    if (this.mode === 'broken') queueMicrotask(() => this.onerror?.({}));
+  }
+  terminate(): void {
+    this.terminated = true;
+  }
+}
+
 type Call = {
   method: string;
   path: string;
@@ -167,12 +195,15 @@ function world(
     noWorker?: boolean;
     /** The waits of test mode. */
     timings?: Partial<BakeTimings>;
+    /** The keys worker (heavy slides are keyed in it): how it answers; `none`: this browser cannot build one. */
+    keys?: 'auto' | 'silent' | 'broken' | 'nulls' | 'none';
   } = {},
 ) {
   resetBake();
   let t = 1_000_000;
   const timers: { at: number; fn: () => void; dead: boolean }[] = [];
   const workers: FakeWorker[] = [];
+  const keyWorkers: FakeKeysWorker[] = [];
   const logs: string[] = [];
   const svgs: Blob[] = [];
   const idles: (() => void)[] = [];
@@ -262,6 +293,12 @@ function world(
       state.madeWorkers++;
       return w;
     },
+    createKeysWorker: () => {
+      if (opts.keys === 'none') return undefined;
+      const k = new FakeKeysWorker(opts.keys ?? 'auto');
+      keyWorkers.push(k);
+      return k;
+    },
     now: () => t,
     setTimer: (fn, ms) => {
       const tm = { at: t + ms, fn, dead: false };
@@ -310,6 +347,7 @@ function world(
     service,
     deps,
     workers,
+    keyWorkers,
     calls,
     keys,
     failures,
@@ -1386,6 +1424,7 @@ describe("hooks and the worker's life (B29-B32)", () => {
       [
         'gate',
         'hold',
+        'keysByWorker',
         'presentations',
         'requests',
         'running',
@@ -1680,6 +1719,136 @@ describe('a key is worked out once, not at every check (B39, B40)', () => {
     await w.advance(BAKE_SETTLE_MS + 200);
     // the sweep after the edit works out the other three: each slide of the edited presentation once in all
     expect([...counted].sort()).toEqual(['s2', 's3', 's4']);
+  });
+});
+
+// ---- heavy slides are keyed in a worker (B41-B46) ----
+
+describe('a heavy slide is keyed away from the main thread (B41-B46)', () => {
+  /** A slide with 400 objects: past the number from which its key is worked out in the keys worker. */
+  const big = (id: string): Slide =>
+    heavy(id, {
+      objects: [
+        ...Array.from({ length: 400 }, (_, i) => rect(i)),
+        ...(heavy(id).objects.slice(250) as Slide['objects']),
+      ],
+    });
+  const counting = (w: ReturnType<typeof world>) => {
+    const counted: string[] = [];
+    w.deps.plan = {
+      keyOf: (slide, inputs) => {
+        counted.push(slide.id);
+        return localKey(slide, inputs);
+      },
+    };
+    return counted;
+  };
+
+  it("B41 the key of a slide of 400 objects is worked out by the keys worker and equals the main thread's; a small one stays on the main thread", async () => {
+    const a = big('a');
+    const b = heavy('b');
+    const w = world({ slides: [a, b] });
+    const counted = counting(w);
+    w.know('p1', a);
+    w.know('p1', b);
+    await w.begin();
+    expect(w.keyWorkers).toHaveLength(1);
+    const posted = (w.keyWorkers[0] as FakeKeysWorker).posted;
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.slides.map((x) => x.slide.id)).toEqual(['a']);
+    expect(posted[0]?.slides[0]?.files).toEqual({ photo: 'photo-orig' });
+    expect(counted).toEqual(['b']);
+    // the picture is made for the key the main thread would have worked out
+    expect(w.job().key).toBe(w.keyOf(a));
+    expect(w.service.snapshot().keysByWorker).toBe(1);
+    // the keys worker goes 5 s after its answer
+    expect((w.keyWorkers[0] as FakeKeysWorker).terminated).toBe(false);
+    await w.advance(BAKE_KEYS_IDLE_MS + 100);
+    expect((w.keyWorkers[0] as FakeKeysWorker).terminated).toBe(true);
+  });
+
+  it('B42 a sweep over what has not changed asks the keys worker for nothing, and an edit asks for the slides the checks have not worked out', async () => {
+    const a = big('a');
+    const c = big('c');
+    const w = world({ slides: [a, c] });
+    w.know('p1', a);
+    w.know('p1', c);
+    await w.begin();
+    const kw = () => w.keyWorkers.flatMap((k) => k.posted);
+    expect(kw()).toHaveLength(1);
+    expect(kw()[0]?.slides.map((x) => x.slide.id)).toEqual(['a', 'c']);
+    w.library({ data: { ...useLibrary.getState().data, playlists: [] } });
+    await w.advance(BAKE_SETTLE_MS + 200);
+    expect(kw()).toHaveLength(1);
+    // an edit of c: a new presentation object; both slides are worked out again, once, by the worker
+    const edited = {
+      ...c,
+      objects: c.objects.map((o) => (o.type === 'text' ? { ...o, text: 'changed' } : o)),
+    } as Slide;
+    w.library({
+      data: { ...useLibrary.getState().data, presentations: [deck('p1', [a, edited], { rev: 2 })] },
+    });
+    await w.advance(BAKE_SETTLE_MS + 200);
+    expect(kw()).toHaveLength(2);
+    // the running slide (a) was checked at the edit, on the main thread, from the new copy; the worker keys the other
+    expect(kw()[1]?.slides.map((x) => x.slide.id)).toEqual(['c']);
+  });
+
+  it('B43 a keys worker that breaks, answers null or says nothing is not the end of the picture: the key is worked out on the main thread, and nothing is posted to the hub', async () => {
+    for (const mode of ['broken', 'nulls', 'silent'] as const) {
+      const a = big('a');
+      const w = world({ slides: [a], keys: mode });
+      const counted = counting(w);
+      w.know('p1', a);
+      w.service.start();
+      await w.advance(BAKE_START_DELAY_MS);
+      if (mode === 'silent') {
+        // the sweep waits for the answer, then gives it up
+        expect(w.workers).toHaveLength(0);
+        await w.advance(BAKE_KEYS_DEADLINE_MS + 100);
+      }
+      expect(counted, mode).toEqual(['a']);
+      expect(w.job().key, mode).toBe(w.keyOf(a));
+      expect((w.keyWorkers[0] as FakeKeysWorker).terminated, mode).toBe(mode !== 'nulls');
+      expect(w.service.snapshot().keysByWorker, mode).toBe(0);
+      expect(w.posts(), mode).toEqual([]);
+    }
+  });
+
+  it('B44 the press of Go live ends the wait for the keys at once: the keys worker is terminated and no picture worker is built', async () => {
+    const a = big('a');
+    const w = world({ slides: [a], keys: 'silent' });
+    w.know('p1', a);
+    w.service.start();
+    await w.advance(BAKE_START_DELAY_MS);
+    const kw = w.keyWorkers[0] as FakeKeysWorker;
+    expect(kw.posted).toHaveLength(1);
+    expect(kw.terminated).toBe(false);
+    w.service.holdForGoLive();
+    expect(kw.terminated).toBe(true);
+    await w.advance(BAKE_KEYS_DEADLINE_MS + 1000);
+    expect(w.workers).toHaveLength(0);
+    expect(w.puts()).toEqual([]);
+  });
+
+  it('B45 a browser that cannot build the keys worker keys on the main thread, as before', async () => {
+    const a = big('a');
+    const w = world({ slides: [a], keys: 'none' });
+    const counted = counting(w);
+    w.know('p1', a);
+    await w.begin();
+    expect(counted).toEqual(['a']);
+    expect(w.keyWorkers).toHaveLength(0);
+    expect(w.job().key).toBe(w.keyOf(a));
+  });
+
+  it('B46 a library of small slides never builds a keys worker', async () => {
+    const slides = [heavy('a'), heavy('b'), heavy('c')];
+    const w = world({ slides });
+    for (const s of slides) w.know('p1', s);
+    await w.begin();
+    expect(w.keyWorkers).toHaveLength(0);
+    expect(w.service.snapshot().keysByWorker).toBe(0);
   });
 });
 

@@ -52,3 +52,13 @@ export const BAKE_MAX_PICTURE_BYTES = 32 * 1024 * 1024;
 export const BAKE_SLICE_MS = 8;
 /** The file-form arm (Q54): the whole of a slide file's pages and head is read inside this limit, apart from the bake's. */
 export const FILE_READ_DEADLINE_MS = 30_000;
+/**
+ * A record slide with at least this many objects has its key worked out in a worker of its own (a 600 KB slide costs
+ * the main thread about 30 ms to key: the domain's canonical JSON and a plain-JavaScript SHA-256), and a smaller one on
+ * the main thread, which a worker round trip would not beat.
+ */
+export const BAKE_KEYS_MIN_OBJECTS = 300;
+/** The keys worker that does not answer within this is given up: the keys are worked out on the main thread, one slide a slice. */
+export const BAKE_KEYS_DEADLINE_MS = 15_000;
+/** The keys worker is released this long after its last answer. */
+export const BAKE_KEYS_IDLE_MS = 5_000;

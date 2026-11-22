@@ -293,6 +293,7 @@ describe('the test hook (BT6)', () => {
     expect(Object.keys(hook).sort()).toEqual([
       'gate',
       'hold',
+      'keysByWorker',
       'lastMade',
       'presentations',
       'requests',
