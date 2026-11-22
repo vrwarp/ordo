@@ -13,8 +13,8 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Presentation, Slide } from '@ordo/domain';
 import { parsePptxScene, type PptxClientScene } from '@ordo/importers';
-import { pictureGuardDeck } from '@ordo/importers/pptx-guard.test-util.ts';
-import { body, buildDeck, para, run, sp } from '@ordo/pptx-scene/test-util.ts';
+import { pictureGuardDeck, solidPng } from '@ordo/importers/pptx-guard.test-util.ts';
+import { body, buildDeck, imageRel, para, pic, run, sp } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { comparable, diffJson } from '../../../tools/pptx-fidelity/src/equivalence.ts';
@@ -69,6 +69,24 @@ const zipped = async (parts: Map<string, Uint8Array>) => {
   for (const [k, v] of parts) z.file(k, v);
   return z.generateAsync({ type: 'uint8array' });
 };
+/** One slide of `n` distinct small pictures, all on the slide (a grid of 25 columns), each its own colour. */
+function manyPictures(n: number) {
+  let shapes = '';
+  const media: Record<string, Uint8Array> = {};
+  for (let i = 0; i < n; i++) {
+    shapes += pic({
+      id: 2 + i,
+      x: (i % 25) * 0.5 * IN,
+      y: Math.floor(i / 25) * 0.4 * IN,
+      cx: 0.4 * IN,
+      cy: 0.3 * IN,
+      rId: `rId${2 + i}`,
+    });
+    media[`ppt/media/m${i}.png`] = solidPng(8, 8, [(i * 37) % 256, (i * 91) % 256, (i * 53) % 256]);
+  }
+  const rels = Array.from({ length: n }, (_, i) => imageRel(`rId${2 + i}`, `../media/m${i}.png`));
+  return buildDeck({ slides: [{ rels, shapes }], media });
+}
 const textDeck = () =>
   buildDeck({
     slides: [
@@ -91,14 +109,25 @@ function poolOf(calls: Call[]): Pick<CpuPool, 'run'> {
 /** The follow-up queue of a hub with LibreOffice, kept from starting a real soffice: it only records. */
 const quietJobs = { enqueue: () => ({ id: 'lo-follow-up' }) } as unknown as JobQueue;
 
+/** What the job did with the pool and the scene check: each task's `wholeSlides`, only where it was written. */
+const asked = (calls: Call[], kind: string) => [
+  ...new Set(
+    calls
+      // The scan reads no slide and the rescue no geometry: neither is told (`nativeJob.ts`).
+      .filter((c) => c.kind === kind && !c.input.scan && !c.input.rescue)
+      .map((c) => ('wholeSlides' in c.input ? c.input.wholeSlides : undefined)),
+  ),
+];
+
 /** One run of the job, as the queue runs it (`nativeJob`), over a fake pool; the deck stored first, the scene beside it. */
 async function runNative(
   hub: TestHub,
   parts: Map<string, Uint8Array>,
   name: string,
-  o: { scene?: PptxClientScene; quiet?: boolean } = {},
+  o: { scene?: PptxClientScene; quiet?: boolean; deckFile?: string } = {},
 ) {
-  const hash = await storeDeck(hub, await zipDeck(parts, dir, `${name}.pptx`));
+  // A deck zipped once and stored on two hubs has one hash (a zip carries its time: two zips of the same parts may not).
+  const hash = await storeDeck(hub, o.deckFile ?? (await zipDeck(parts, dir, `${name}.pptx`)));
   let sceneHash: string | undefined;
   if (o.scene) {
     const tmp = hub.store.tmpPath('json');
@@ -136,7 +165,7 @@ describe('the pool task (T2: the converter option reaches convertDeck)', () => {
       .result.slides[0]!;
 
   it('keeps all 400 pictures of a slide with wholeSlides; without it the guard\u2019s 15, or 16 without LibreOffice', () => {
-    const parts = pictureGuardDeck(400);
+    const parts = manyPictures(400);
     expect(imagesOf(convert(parts, { wholeSlides: true }).slide)).toHaveLength(400);
     expect(imagesOf(convert(parts, { wholeSlides: true, libreoffice: false }).slide)).toHaveLength(400);
     expect(imagesOf(convert(parts).slide)).toHaveLength(15);
@@ -168,16 +197,6 @@ describe('the pool task (T2: the converter option reaches convertDeck)', () => {
 });
 
 describe('the job decides once and passes it on (T4: the switch, LibreOffice present and absent, Q27)', () => {
-  /** What the job did with the pool and the scene check: each task's `wholeSlides`, only where it was written. */
-  const asked = (calls: Call[], kind: string) => [
-    ...new Set(
-      calls
-        // The scan reads no slide and the rescue no geometry: neither is told (`nativeJob.ts`).
-        .filter((c) => c.kind === kind && !c.input.scan && !c.input.rescue)
-        .map((c) => ('wholeSlides' in c.input ? c.input.wholeSlides : undefined)),
-    ),
-  ];
-
   it('on, no LibreOffice: the slide is whole, has its record, the log says it and result.whole counts it', async () => {
     const hub = await hubOf({ ...prerender(true), ...NO_LO });
     const r = await runNative(hub, pictureGuardDeck(24), 'on-nolo');
@@ -210,7 +229,9 @@ describe('the job decides once and passes it on (T4: the switch, LibreOffice pre
     q27.keepsWithLibreOffice = false;
     try {
       const hub = await hubOf(prerender(true));
-      const r = await runNative(hub, pictureGuardDeck(24), 'on-lo-b', { quiet: true });
+      const parts = pictureGuardDeck(24);
+      const deckFile = await zipDeck(parts, dir, 'q27b.pptx');
+      const r = await runNative(hub, parts, 'on-lo-b', { quiet: true, deckFile });
       expect(imagesOf(r.slide)).toHaveLength(15);
       expect(r.slide.pptx).toMatchObject({ class: 'hybrid', pending: true });
       expect(r.slide.prerender).toBeUndefined();
@@ -218,7 +239,7 @@ describe('the job decides once and passes it on (T4: the switch, LibreOffice pre
       expect(asked(r.calls, 'pptx-scene')).toEqual([undefined]);
       // And the same presentation a hub with the switch off stores (modulo ids, times, the log).
       const off = await hubOf(prerender(false));
-      const base = await runNative(off, pictureGuardDeck(24), 'off-lo-b', { quiet: true });
+      const base = await runNative(off, parts, 'off-lo-b', { quiet: true, deckFile });
       const fileOf = (h: TestHub) => (id: string) => h.lib.media.get(id)?.original.hash;
       expect(
         diffJson(
@@ -256,11 +277,12 @@ describe('the job decides once and passes it on (T4: the switch, LibreOffice pre
   it('writes the option into the pool inputs only when it is on (the libreoffice pattern)', async () => {
     const hub = await hubOf({ ...prerender(true), ...NO_LO });
     const r = await runNative(hub, textDeck(), 'keys-on');
-    for (const c of r.calls.filter((x) => x.kind === 'pptx-scene')) expect(c.input.wholeSlides).toBe(true);
+    expect(asked(r.calls, 'pptx-scene')).toEqual([true]);
     const off = await hubOf({ ...prerender(false), ...NO_LO });
     const q = await runNative(off, textDeck(), 'keys-off');
-    for (const c of q.calls.filter((x) => x.kind === 'pptx-scene'))
-      expect(Object.keys(c.input)).not.toContain('wholeSlides');
+    const batches = q.calls.filter((x) => x.kind === 'pptx-scene' && !x.input.scan);
+    expect(batches.length).toBeGreaterThan(0);
+    for (const c of batches) expect(Object.keys(c.input)).not.toContain('wholeSlides');
   });
 
   it('asks the scene check the same question, and a scene parsed the other way is not used: the hub parses the deck itself', async () => {
@@ -320,8 +342,9 @@ describe('the hub’s own parse and a browser scene store the same presentation 
         const parts = new Map<string, Uint8Array>();
         const z = await JSZip.loadAsync(bytes);
         for (const [k, f] of Object.entries(z.files)) if (!f.dir) parts.set(k, await f.async('uint8array'));
-        const own = await runNative(hub, parts, `own-${name}-${lo}`, { quiet: true });
-        const client = await runNative(hub, parts, `client-${name}-${lo}`, { scene, quiet: true });
+        const deckFile = await zipDeck(parts, dir, `${lo}-${name}`);
+        const own = await runNative(hub, parts, `own-${name}-${lo}`, { quiet: true, deckFile });
+        const client = await runNative(hub, parts, `client-${name}-${lo}`, { scene, quiet: true, deckFile });
         expect(client.logs.join('\n'), name).toMatch(/parsed in the browser: the hub checked its scene/);
         const fileOf = (id: string) => hub.lib.media.get(id)?.original.hash;
         const same = (p: Presentation) => comparable({ ...p, title: '' }, fileOf);

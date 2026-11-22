@@ -600,12 +600,17 @@ async function demoParse(
   return { scene: parse.scene, zip: parse.zip, fromClient: false };
 }
 
-/** Whether the demo builds from a scene as sent: of this converter, its stored fields, parsed without LibreOffice. */
+/**
+ * Whether the demo builds from a scene as sent: of this converter, its stored fields, parsed without LibreOffice, and
+ * not for a hub that keeps heavy slides whole (`wholeSlides`, Q24.b): the demo answers prerender off, so such a scene is
+ * parsed again here.
+ */
 export function demoUsesScene(scene: PptxClientScene): boolean {
   const fields = new Set(Array.isArray(scene?.m9Writes) ? scene.m9Writes : []);
   return (
     scene?.version === CONVERTER_VERSION &&
     scene.libreoffice === false &&
+    scene.wholeSlides === undefined &&
     fields.size === M9_WRITES.size &&
     [...M9_WRITES].every((f) => fields.has(f)) &&
     Array.isArray(scene.listed) &&

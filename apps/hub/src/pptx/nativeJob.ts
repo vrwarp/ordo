@@ -75,6 +75,7 @@ import {
   ImportCore,
   missingSlides,
   usedPlaceholders,
+  wholeSlidesFor,
 } from '@ordo/importers/pptx-core.ts';
 import { withoutFiles } from '@ordo/importers/pptx-ladder.ts';
 import { ImportLog } from '@ordo/importers/pptx-report.ts';
@@ -181,6 +182,8 @@ export type NativeBuild = {
   /** Slides the budget ladder simplified (formatting or decorations left out, or stored minimal). */
   simplified: number;
   missingFonts: string[];
+  /** Q24.b: slides stored with a pre-render record, every one kept whole (0 when this hub keeps none whole). */
+  whole: number;
 };
 
 /**
@@ -377,6 +380,14 @@ async function releaseScene(deps: PptxDeps, sceneHash: string | undefined): Prom
   }
 }
 
+/**
+ * Whether this hub's switch keeps heavy slides whole (`HubConfig.prerender.on`, ORDO_PRERENDER: store-2's C-S2-1): read
+ * from the configuration, never from the domain constant (`PRERENDER_ON`), so one hub answers one way for every import.
+ */
+function prerenderOn(cfg: PptxDeps['cfg']): boolean {
+  return (cfg as { prerender?: { on?: unknown } }).prerender?.on === true;
+}
+
 /** One run of the job (state shared by its steps). */
 class NativeImport {
   /** The import core's steps 3-5 and their state (`@ordo/importers` `pptx-core.ts`): `source.log` and outline files. */
@@ -448,6 +459,15 @@ class NativeImport {
   /** Whether LibreOffice draws what ordo cannot (the core's). */
   private get lo(): boolean {
     return this.core.lo;
+  }
+
+  /**
+   * Q24.b: whether this import keeps heavy, eligible slides whole (the core's): decided once, when the tools are known
+   * (`steps`, C-IW3), and used for the pool's parse, the check of a browser scene, the import core and the result,
+   * so one import never mixes two plans.
+   */
+  private get whole(): boolean {
+    return this.core.whole;
   }
 
   /** A warning in the job log (at most `JOB_LOG_LINES` per kind) and in `source.log`. */
@@ -537,6 +557,7 @@ class NativeImport {
     // probing it again before it gives up (`fallback.ts` `loJob`, `LO_PROBE_RETRIES`).
     const lo = await this.deps.tools.recheck();
     this.core.lo = lo !== 'absent' && lo !== 'off';
+    this.core.whole = wholeSlidesFor({ prerender: prerenderOn(this.deps.cfg), lo: this.lo });
     if (this.lo && lo !== 'available') {
       ctx.log(
         '[warn] LibreOffice does not answer yet: what ordo cannot draw waits for it, tried again later',
@@ -660,6 +681,7 @@ class NativeImport {
         {
           file: this.deps.store.abs(sf.path),
           libreoffice: this.lo,
+          ...(this.whole ? { wholeSlides: true } : {}),
           ...(only.length ? { systemOnlyScripts: only } : {}),
         },
         { signal: ctx.signal },
@@ -1066,6 +1088,7 @@ class NativeImport {
       ...(system.length ? { systemScriptFaces: system.map((f) => [...f] as SystemScriptFace) } : {}),
       geomBytes: this.limits.batchGeomBytes,
       ...(this.lo ? {} : { libreoffice: false }),
+      ...(this.whole ? { wholeSlides: true } : {}),
     };
     return {
       shared,
@@ -1502,6 +1525,7 @@ class NativeImport {
         compact,
         simplified,
         missing: missingSlides(parsed),
+        ...(this.whole ? { whole: b.whole } : {}),
         pending: loJobId ? lo.length : 0,
         ...(loJobId ? { loJobId } : {}),
         missingFonts: fonts,
@@ -1549,6 +1573,7 @@ function resumedResult(
       classes: slides.map((s) => s.pptx?.class ?? 'native'),
       compact: 0,
       missing: missingSlides(saved),
+      ...(prerenderOn(deps.cfg) ? { whole: slides.filter((s) => s.prerender).length } : {}),
       pending: pending.length,
       ...(done.loJobId ? { loJobId: done.loJobId } : {}),
       missingFonts: [],

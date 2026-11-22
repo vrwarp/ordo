@@ -27,7 +27,7 @@
  * LibreOffice only, when its slide budget would store it plain or minimal and it holds no table object; no
  * failure makes one (M9, plan decision 3; the before-hub gate of decision 2 for hubs with LibreOffice).
  */
-import { easyPlan, planRecord } from '@ordo/domain/prerender.ts';
+import { easyPlan, PRERENDER_ANCHORED, planRecord } from '@ordo/domain/prerender.ts';
 import {
   type Box,
   compactSlideBytes,
@@ -132,6 +132,17 @@ export const WHOLE_BACKGROUND_ANCHORS: 'own' | 'motion' = 'motion';
 export function wholeSlidesFor(o: { prerender: boolean; lo: boolean }): boolean {
   return o.prerender === true && (!o.lo || WHOLE_WITH_LIBREOFFICE);
 }
+
+/**
+ * The converter's options for a parse that keeps heavy slides whole (`ParseOptions`): the option itself, the arm of
+ * the anchor rule (`WHOLE_BACKGROUND_ANCHORS`) and Q24.a's gate (`PRERENDER_ANCHORED`, which the converter cannot
+ * import: it is pure). The hub's pool task and the browser parse both spread it, so the two parse alike (D7).
+ */
+export const WHOLE_PARSE = {
+  wholeSlides: true,
+  wholeAnchors: WHOLE_BACKGROUND_ANCHORS,
+  wholeAnchored: PRERENDER_ANCHORED,
+} as const;
 
 /**
  * The report's line for the slides an import keeps whole (design 29 W1, W4; W2 for a device that cannot make pictures):
@@ -259,6 +270,8 @@ export type Assembled = {
   /** The LibreOffice follow-up of its slides that wait (`pptx.pending`). */
   lo: PptxLoSlide[];
   missingFonts: string[];
+  /** Q24.b: slides stored with a pre-render record, which is every slide kept whole (0 when `whole` is off). */
+  whole: number;
 };
 
 export type ImportCoreOptions = {
@@ -305,8 +318,11 @@ export class ImportCore {
   private readonly warnTo: (kind: string, msg: string) => void;
   private readonly geomFileBytes: number;
   private readonly reserve: number;
-  /** Q24.b: heavy, eligible slides stay whole (`ImportCoreOptions.whole`). */
-  readonly whole: boolean;
+  /**
+   * Q24.b: heavy, eligible slides stay whole (`ImportCoreOptions.whole`). Decided by the caller once (the hub's job sets
+   * it with `lo`, when its tools are known) before the slides are drafted.
+   */
+  whole: boolean;
   private readonly heavyReserve: number;
   private readonly wholeAnchors: 'own' | 'motion';
 
@@ -908,7 +924,7 @@ export class ImportCore {
     const fonts = missingFonts(fontFamilies(slides), a.libraryFamilies);
     for (const f of fonts) this.log.add('info', `font not available: ${f}`);
     parsed.source.log = this.log.toString();
-    return { p: parsed, lo, missingFonts: fonts };
+    return { p: parsed, lo, missingFonts: fonts, whole: kept };
   }
 }
 

@@ -46,6 +46,7 @@ import {
   type PptxLoSlide,
   sweep,
   unplace,
+  WHOLE_PARSE,
   wanted,
 } from './pptx-core.ts';
 import {
@@ -405,12 +406,15 @@ export async function parsePptxScene(
 
   // 2a. The deck facts and the scan, as the hub's first pool call.
   const withLo = options.libreoffice !== false;
+  // Q24.b: heavy, eligible slides kept whole, as the hub's pool task parses them (`WHOLE_PARSE`).
+  const whole = options.wholeSlides === true;
   const base = {
     extendBackgrounds: options.extendBackgrounds ?? true,
     transitionSounds: options.transitionSounds ?? false,
     m9Writes: M9_WRITES,
     sheets: PPTX_SHEETS,
     ...(withLo ? {} : { libreoffice: false }),
+    ...(whole ? WHOLE_PARSE : {}),
     newId,
   };
   const first = convertDeck(parts, { ...base, range: { from: 0, to: 0 } });
@@ -490,6 +494,7 @@ export async function parsePptxScene(
     geomFiles: [...files].map(([hash, json]) => ({ hash, json })),
     ...(over.size ? { geomOver: [...over] } : {}),
     ...(withLo ? {} : { libreoffice: false }),
+    ...(whole ? { wholeSlides: true as const } : {}),
   };
   onProgress?.(1);
   return { scene, zip, sizes, ms: performance.now() - t0 };
@@ -545,6 +550,8 @@ export async function assemblePptxScene(
     log,
     warn: (_kind, msg) => log.add('warn', msg),
     geomFileBytes: L.geomFileBytes,
+    // Q24.b: what the scene was parsed for, not what the caller of this assembly means (D7: one plan per import).
+    whole: scene.wholeSlides === true,
   });
   for (const p of scene.oversized)
     core.warn('part', `${logSafe(p)} is over ${L.xmlPartBytes / MiB} MB: not read`);
@@ -674,7 +681,7 @@ export async function assemblePptxScene(
     classes,
     compact: 0,
     simplified,
-    whole: 0,
+    whole: built.whole,
     pending: built.lo.length,
     missingFonts: built.missingFonts,
     notes: log.warnings(),

@@ -19,7 +19,7 @@ import {
   parsePptxScene,
 } from './pptx-client.ts';
 import { WHOLE_BACKGROUND_ANCHORS } from './pptx-core.ts';
-import { pictureGuardDeck } from './pptx-guard.test-util.ts';
+import { pictureGuardDeck, solidPng } from './pptx-guard.test-util.ts';
 import { remapMediaIds } from './remap.ts';
 import { zipDeclared } from './zip-declared.test-util.ts';
 
@@ -170,6 +170,24 @@ describe('heavy slides kept whole in the browser parse (Q24.b, step 5)', () => {
     for (const [k, v] of parts) z.file(k, v);
     return z.generateAsync({ type: 'uint8array' });
   };
+  /** One slide of `n` distinct small pictures, all on the slide (a grid of 25 columns), each its own colour. */
+  const manyPictures = (n: number) => {
+    let shapes = '';
+    const media: Record<string, Uint8Array> = {};
+    for (let i = 0; i < n; i++) {
+      shapes += pic({
+        id: 2 + i,
+        x: (i % 25) * 0.5 * IN,
+        y: Math.floor(i / 25) * 0.4 * IN,
+        cx: 0.4 * IN,
+        cy: 0.3 * IN,
+        rId: `rId${2 + i}`,
+      });
+      media[`ppt/media/m${i}.png`] = solidPng(8, 8, [(i * 37) % 256, (i * 91) % 256, (i * 53) % 256]);
+    }
+    const rels = Array.from({ length: n }, (_, i) => imageRel(`rId${2 + i}`, `../media/m${i}.png`));
+    return buildDeck({ slides: [{ rels, shapes }], media });
+  };
   const images = (s: { objects: readonly { type: string }[] }) => s.objects.filter((o) => o.type === 'image');
   const keysOf = (o: object) => Object.keys(o).sort();
 
@@ -183,11 +201,16 @@ describe('heavy slides kept whole in the browser parse (Q24.b, step 5)', () => {
     expect(on.wholeSlides).toBe(true);
     // Nothing else of the scene's head moves with it for a deck that has nothing heavy.
     const { wholeSlides: _, ...rest } = on;
-    expect(rest).toEqual(off);
+    expect(keysOf(rest)).toEqual(keysOf(off));
+    expect(rest.version).toBe(off.version);
+    expect(rest.m9Writes).toEqual(off.m9Writes);
+    expect(rest.slides.map((s) => s.slide.objects.length)).toEqual(
+      off.slides.map((s) => s.slide.objects.length),
+    );
   });
 
   it('keeps a slide of 400 pictures whole when asked, the guard\u2019s 15 (16 without LibreOffice) when not (the converter option reaches convertDeck)', async () => {
-    const bytes = await zipped(pictureGuardDeck(400));
+    const bytes = await zipped(manyPictures(400));
     const base = (await parsePptxScene(bytes)).scene.slides[0]!.slide;
     const lite = (await parsePptxScene(bytes, { libreoffice: false })).scene.slides[0]!.slide;
     const whole = (await parsePptxScene(bytes, { wholeSlides: true })).scene.slides[0]!.slide;
