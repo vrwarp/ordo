@@ -104,7 +104,7 @@ export function forcedProfile(search: string, stored: string | null): Profile | 
   return v === 'edit' || v === 'full' ? v : null;
 }
 
-function browserEnv(): CapabilityEnv {
+export function browserEnv(): CapabilityEnv {
   if (typeof window === 'undefined') return {};
   return {
     navigator,
@@ -206,4 +206,89 @@ export async function requestPersistentStorage(
     }
   }
   return granted;
+}
+
+// ---- who may make the pictures of heavy slides (the bake service: design/29 section 1.4, design/15) ----
+
+/** The session roles that may make pictures (Q30.c: an operator's or an editor's computer; the venue computer only is `['operate']`). */
+export type BakeRole = 'operate' | 'edit';
+export const BAKE_ROLES: readonly BakeRole[] = ['operate', 'edit'];
+
+/** A 4K canvas, its copy and a decoded photograph are about 200 MB: a computer that says it has less than this does not make pictures. */
+export const BAKE_MIN_MEMORY_GB = 4;
+
+/**
+ * This browser is desktop Chromium on a secure page (https or localhost): `navigator.userAgentData` (not mobile),
+ * `navigator.hid` or `window.getScreenDetails`. All three are Chromium-only AND secure-context-only, so a page that a
+ * laptop opens by a plain http LAN address does not qualify (it also lacks the `ImageDecoder` the screens decode
+ * pictures with: the picture must be made with what the screens draw with, Q30.c), and neither does an iPad with a
+ * mouse (a fine pointer, but Safari: OQ-LE3 must not be borrowed here), desktop Safari or Firefox. Read from the same
+ * environment object as `detectCapabilities`, never from the user-agent string.
+ */
+export function bakeEngine(env: CapabilityEnv): boolean {
+  const nav = env.navigator;
+  const data = has(nav, 'userAgentData') ? (nav as { userAgentData: unknown }).userAgentData : undefined;
+  const desktopData = !!data && typeof data === 'object' && (data as { mobile?: unknown }).mobile !== true;
+  return desktopData || has(nav, 'hid') || fn(env.window, 'getScreenDetails');
+}
+
+/** Everything the decision reads: the rest of the file's detection plus the page's layout, its hub and its session. */
+export type BakeInput = {
+  caps: Capabilities;
+  /** `bakeEngine` of this browser. */
+  engine: boolean;
+  layout: 'compact' | 'regular';
+  /** The phone class of this device (`thisIsPhone`). */
+  phone: boolean;
+  /** The GitHub Pages demo (no hub). */
+  demo: boolean;
+  /** The hub's answer about pictures (`prerender.state` of `GET /capabilities`); undefined until it answers. */
+  hub: 'on' | 'off' | undefined;
+  /** `isSecureContext`. */
+  secure: boolean;
+  /** `OffscreenCanvas` and `Worker` exist. */
+  offscreen: boolean;
+  worker: boolean;
+  /** `navigator.deviceMemory` where the browser says. */
+  memoryGb: number | undefined;
+  /** The session's role; undefined or null before the page knows it. */
+  role: 'operate' | 'edit' | null | undefined;
+  /** The support switch that turns pictures off on this computer (read in `bakeWorld.ts`). */
+  forcedOff: boolean;
+};
+
+/**
+ * Whether this computer makes pictures and may read the hub's listing. `ok`: it makes them; `why` otherwise:
+ * `off` (the hub's switch is off, or this is the Pages demo: the hub wins whatever the device is), `unsupported`
+ * (this device cannot, or `?bake=off`), `unknown` (the hub or the session has not answered yet). `list` is true when
+ * this device may READ the listing (a regular layout, not a phone, not the demo, a session, the hub's switch on):
+ * an iPad qualifies and shows "Picture ready" without ever making one.
+ */
+export type BakeVerdict =
+  | { ok: true; list: true }
+  | { ok: false; why: 'off' | 'unsupported' | 'unknown'; list: boolean };
+
+export function canBake(input: BakeInput, roles: readonly BakeRole[] = BAKE_ROLES): BakeVerdict {
+  if (input.demo) return { ok: false, why: 'off', list: false };
+  if (input.hub === 'off') return { ok: false, why: 'off', list: false };
+  const list =
+    input.hub === 'on' &&
+    input.layout === 'regular' &&
+    !input.phone &&
+    (input.role === 'operate' || input.role === 'edit');
+  const unsupported =
+    input.forcedOff ||
+    !input.engine ||
+    input.caps.coarsePointer ||
+    input.layout === 'compact' ||
+    input.phone ||
+    !input.secure ||
+    !input.offscreen ||
+    !input.worker ||
+    (input.memoryGb !== undefined && input.memoryGb < BAKE_MIN_MEMORY_GB) ||
+    ((input.role === 'operate' || input.role === 'edit') && !roles.includes(input.role));
+  if (unsupported) return { ok: false, why: 'unsupported', list };
+  if (input.hub === undefined || (input.role !== 'operate' && input.role !== 'edit'))
+    return { ok: false, why: 'unknown', list };
+  return { ok: true, list: true };
 }

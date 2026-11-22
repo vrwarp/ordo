@@ -57,6 +57,7 @@ const EXTRA = [
   'apps/output/src/decode.ts',
   'apps/output/src/pictures.ts',
   'apps/output/src/prepare/frame.ts',
+  'apps/operator/src/workers/bakeJob.ts',
   'packages/domain/src/bullets.ts',
   'packages/domain/src/cellstyle.ts',
   'packages/domain/src/color.ts',
@@ -79,7 +80,7 @@ const LIMITS = { LOGICAL_WIDTH, LOGICAL_HEIGHT, TABLE_LIMITS, DECOR_LIMITS };
  */
 const RECORDED = {
   version: 1,
-  digest: 'b5a81133f4eea8acba3b1de66edccf8a461c5286b5ef0c7916f9a2bc1147484b',
+  digest: '26530fd7065c8553b56b1c208c91d9737bb15bbab212f021b6fa80692aaf5b16',
 };
 
 /** The source without comments and layout. */

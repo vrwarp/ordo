@@ -20,7 +20,7 @@ import {
   useChunks,
   VENUE_CRITICAL,
 } from './pages.ts';
-import { controller, startController } from './services/controller.ts';
+import { controller, startController, testMode } from './services/controller.ts';
 import { syncFonts } from './services/fonts.ts';
 import { thumbs } from './services/thumbs.ts';
 import { installUpdateGuard, useUpdate } from './services/update.ts';
@@ -201,6 +201,25 @@ function Shell({
   useEffect(() => {
     if (layout === 'regular') thumbs.warm();
   }, [layout]);
+  // The bake service (pictures of heavy slides, design/29 section 1.4). Its boot is a lazy chunk of a few kilobytes that
+  // only the regular layout fetches (a phone never does; test mode fetches it everywhere, for window.__ordo.bake); the
+  // boot's gate then lets only a desktop browser with the hub's switch on fetch the service itself, and the service
+  // never runs during a service.
+  useEffect(() => {
+    if (layout !== 'regular' && !testMode()) return;
+    let gone = false;
+    let off: (() => void) | undefined;
+    import('./services/bakeBoot.ts').then(
+      (m) => {
+        if (!gone && layout === 'regular' && !signedOut) off = m.installBake();
+      },
+      () => undefined,
+    );
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, [layout, signedOut]);
   // Live keys act on operator screens only; the editor uses arrows, Delete and Ctrl+Z itself. A signed-out
   // operator keeps its keys only while it is the fallback authority (the outputs would otherwise be stuck).
   useEffect(() => {

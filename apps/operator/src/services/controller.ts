@@ -11,6 +11,7 @@ import { toast } from '../state/toasts.ts';
 import { rememberMessage, useUi } from '../state/ui.ts';
 import { deviceProfile } from '../lib/capabilities.ts';
 import { RecoveringGate } from '../lib/recovering.ts';
+import { holdBakesForGoLive } from './bakeHold.ts';
 import { log, logLines } from './log.ts';
 import { thumbs } from './thumbs.ts';
 
@@ -281,15 +282,21 @@ export class Controller {
     else this.call('clear', layer);
   }
   goLive(playlistId: string): void {
+    // the picture maker stops on the spot, before anything else: a bake never runs into a Go live
+    holdBakesForGoLive();
     useLive.setState({ goLiveError: undefined });
     this.call('goLive', playlistId);
   }
   /** W41's button: go live from the hub's saved copy of the playlist being prepared (design/29 M8). */
   goLiveFromSaved(playlistId: string): void {
+    // the picture maker stops on the spot, before anything else: a bake never runs into a Go live
+    holdBakesForGoLive();
     this.call('goLiveSaved', playlistId);
   }
   /** Go live from this PC with the hub unreachable (after the operator confirmed; design/17). */
   goLiveLocal(playlistId: string): void {
+    // the picture maker stops on the spot, before anything else: a bake never runs into a Go live
+    holdBakesForGoLive();
     useLive.setState({ goLiveError: undefined });
     this.call('goLiveLocal', playlistId);
   }

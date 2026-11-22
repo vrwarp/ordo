@@ -91,6 +91,19 @@ supervisor of the core worker                    health aggregation, action disp
   Stream Deck and MIDI have the same constraint. This is why `mainThreadStallMs` is reported for the
   operator too, and why the checklist tells the volunteer to use the Stream Deck as the second route.
 
+- **Bake worker** (`workers/bake.worker.ts`, design/29 section 1.4): a one-shot worker that draws and encodes ONE
+  picture of one heavy slide with the renderer's own `bakeSlide` and `encodePicture`, from library fonts only, and hands
+  the blobs back; the main thread never rasterizes and never keys a slide file. It is not under the supervisor (a restart
+  by missed heartbeats would race its deadline): the service creates it for a sweep, terminates it at its 65 s hard
+  deadline (60 s plus 5), at Go live, when a service starts, when the slide changes under it, and 30 s after its last
+  picture. A worker that breaks or never answers is the picture maker's fault, not the slide's, and is never posted to
+  the hub.
+
+- **Keys worker** (`workers/bakeKeys.worker.ts`, design/29 section 1.4): a second, tiny one-shot worker that works out the
+  keys of heavy slides with the plan's own function (no renderer, no file, no network). It is created for a sweep that has
+  such a slide, answers once, goes 5 s later and at every hold (a service, the press of Go live, a stop); one that is absent,
+  breaks or says nothing in 15 s is given up and the main thread works the key out, never a failure of the slide.
+
 ### Stage window
 
 Same shape as the output in miniature: a link worker owning the socket, mirror, fonts and timers; the main
