@@ -11,8 +11,9 @@
  */
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Presentation, Slide } from '@ordo/domain';
+import { type Presentation, SIZE_BUDGETS, type Slide } from '@ordo/domain';
 import { parsePptxScene, type PptxClientScene } from '@ordo/importers';
+import { WHOLE_OBJECTS_MAX, WHOLE_SHARE_BYTES } from '@ordo/importers/pptx-core.ts';
 import { pictureGuardDeck, solidPng } from '@ordo/importers/pptx-guard.test-util.ts';
 import { body, buildDeck, imageRel, para, pic, run, sp } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
@@ -355,6 +356,65 @@ describe('the hub’s own parse and a browser scene store the same presentation 
       // The crowded deck is the case that exercises the option: it was kept whole on both paths.
       expect(recorded).toBeGreaterThanOrEqual(1);
     }, 240_000);
+});
+
+describe('a hostile deck on the hub (design 25: the bound, the share and the scene check; the 100-slide deck of the gate is measured by the track\u2019s script, this one is its size for a test)', () => {
+  /** `slides` slides of `n` pictures each from 20 distinct files, every picture on the slide (a grid of 40 columns). */
+  function crowdedSlides(slides: number, n: number) {
+    const media: Record<string, Uint8Array> = {};
+    for (let f = 0; f < 20; f++) media[`ppt/media/m${f}.png`] = solidPng(8, 8, [(f * 37) % 256, (f * 91) % 256, (f * 53) % 256]);
+    const rels = Array.from({ length: 20 }, (_, f) => imageRel(`rId${2 + f}`, `../media/m${f}.png`));
+    let shapes = '';
+    for (let i = 0; i < n; i++)
+      shapes += pic({
+        id: 2 + i,
+        x: (i % 40) * 0.25 * IN,
+        y: Math.floor(i / 40) * 0.3 * IN,
+        cx: 0.2 * IN,
+        cy: 0.25 * IN,
+        rId: `rId${2 + (i % 20)}`,
+      });
+    return buildDeck({ slides: Array.from({ length: slides }, () => ({ rels, shapes })), media });
+  }
+
+  it('10 slides of 999 pictures: the scene is used, the share holds, every other slide shows the screens\u2019 counts (200 objects, 16 distinct pictures), the presentation stays in its bound', async () => {
+    // 999 pictures and the slide\u2019s one other object are the 1,000 the bound lets a slide keep whole.
+    const parts = crowdedSlides(10, WHOLE_OBJECTS_MAX - 1);
+    const bytes = await zipped(parts);
+    const scene = (await parsePptxScene(bytes, { libreoffice: false, wholeSlides: true })).scene;
+    const hub = await hubOf({ ...prerender(true), ...NO_LO });
+    const t0 = performance.now();
+    const r = await runNative(hub, parts, 'hostile-999', { scene, quiet: true });
+    const ms = performance.now() - t0;
+    expect(r.logs.join('\n')).toMatch(/parsed in the browser: the hub checked its scene/);
+    const slides = slidesOf(r.p);
+    expect(slides).toHaveLength(10);
+    const whole = slides.filter((s) => s.prerender);
+    const bytesOf = (s: Slide) => new TextEncoder().encode(JSON.stringify(s)).length;
+    expect(whole.length).toBeGreaterThan(0);
+    expect(whole.length).toBeLessThan(10);
+    expect(whole.reduce((n, s) => n + bytesOf(s), 0)).toBeLessThanOrEqual(WHOLE_SHARE_BYTES);
+    expect(r.result.whole).toBe(whole.length);
+    for (const s of slides.filter((x) => !x.prerender)) {
+      expect(s.objects.length).toBeLessThanOrEqual(200);
+      expect(new Set(imagesOf(s).map((o) => o.mediaId)).size).toBeLessThanOrEqual(16);
+    }
+    expect(new TextEncoder().encode(JSON.stringify(r.p)).length).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
+    process.stdout.write(`T7 hub: ${ms.toFixed(0)} ms, ${whole.length} of 10 slides kept whole\n`);
+  }, 240_000);
+
+  it('10 slides of 1,000 pictures (one over the bound): none is kept whole, the plan of before, no record', async () => {
+    const parts = crowdedSlides(10, WHOLE_OBJECTS_MAX);
+    const bytes = await zipped(parts);
+    const scene = (await parsePptxScene(bytes, { libreoffice: false, wholeSlides: true })).scene;
+    const hub = await hubOf({ ...prerender(true), ...NO_LO });
+    const r = await runNative(hub, parts, 'hostile-1000', { scene, quiet: true });
+    expect(r.result.whole ?? 0).toBe(0);
+    for (const s of slidesOf(r.p)) {
+      expect(s.prerender).toBeUndefined();
+      expect(new Set(imagesOf(s).map((o) => o.mediaId)).size).toBeLessThanOrEqual(16);
+    }
+  }, 240_000);
 });
 
 describe('the demo (T5) and callers without the option (T6)', () => {
