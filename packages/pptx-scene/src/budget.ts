@@ -28,7 +28,9 @@
  *    `MAX_SLIDE_OBJECTS_TEXT` (190);
  * 7. **the guard** (rarely reached in the corpus): past that, the topmost elements that are not text are
  *    left out until at most 190 such objects and `MAX_DRAWN_OBJECTS` (200, the render clamp) in all remain,
- *    then the topmost text;
+ *    then the topmost text. NOT for a slide kept whole (`wholeSlide`, Q24.b, `BudgetOptions.whole`): with no
+ *    anchor (a clip that plays or loops) and at most `WHOLE_OBJECTS_MAX` objects planned after the reliefs
+ *    above, the guard and P are skipped and nothing is left out; the screens draw a picture of the whole slide;
  * P. **the atlas** (`sheet.ts` `atlasParts`): past `MAX_SLIDE_PICTURES` distinct pictures the fewest
  *    smallest are packed into one (`Classification.atlas`); a slide an atlas cannot bring within it leaves
  *    its topmost pictures out (the guard's way).
@@ -176,22 +178,79 @@ export const WHOLE_OBJECTS_MAX = 1_000;
  */
 export const WHOLE_ANCHORED = false;
 
-/** STUB (red first): `wholeSlide` is not written yet. */
-export function wholeSlide(
-  _elements: readonly Element[],
-  _background: Background,
-  _opts: BudgetOptions = {},
-): boolean {
-  return false;
+/**
+ * Why a slide cannot be kept whole, apart from its size (`BudgetOptions.whole`): a CLIP, or a picture
+ * background under `anchors: 'own'`. Easy-plan's rule (`@ordo/domain` `easyPlan`) is the judge of what is
+ * stored; this one reads the IR, before the slide is emitted, and is a SUPERSET of it, so a slide kept whole
+ * is never one that `easyPlan` then calls animated (the converse, judged eligible later, is harmless: the
+ * slide was cut as today). Pure; never throws (a junk element is no anchor).
+ *
+ * - **clip**: a visible picture that is the poster of a video the slide itself holds in the package (`media`
+ *   kind 'video' with a `part`, `from` 'slide'): it plays, or it is the motion background (a looping,
+ *   muted video over the whole slide, `media.ts`). An audio clip, a clip that is only linked or whose file
+ *   is missing, and a video of the layout or the master (shown as its poster, never played) are none.
+ * - **background**: only under `anchors: 'own'` (not the default): a background whose fill is a picture,
+ *   whichever of the slide, its layout or its master gave it (the importer stores it as the slide's own until
+ *   it finds that every slide shares it). Under 'motion', the default (Q25.c.b, decided: only a video
+ *   counts), a picture background keeps nothing out, and a background that is a video is a clip.
+ * - `anchored` (default `WHOLE_ANCHORED`, false) lifts every anchor: Q24.a's gate, for the tests and the census.
+ *
+ * The size bound ('bound') is not read here: it is the plan's, after the reliefs (`wholeSlide`).
+ */
+export function wholeAnchorKinds(
+  elements: readonly Element[],
+  background: Background,
+  opts: BudgetOptions = {},
+): WholeAnchorKind[] {
+  try {
+    if ((opts.anchored ?? WHOLE_ANCHORED) === true) return [];
+    const kinds: WholeAnchorKind[] = [];
+    for (const e of elements) {
+      if (
+        e !== null &&
+        typeof e === 'object' &&
+        e.kind === 'picture' &&
+        !e.hidden &&
+        e.from === 'slide' &&
+        e.media?.kind === 'video' &&
+        e.media.part !== undefined
+      ) {
+        kinds.push('clip');
+        break;
+      }
+    }
+    if ((opts.anchors ?? 'motion') === 'own' && background?.fill?.kind === 'picture')
+      kinds.push('background');
+    return kinds;
+  } catch {
+    return [];
+  }
 }
 
-/** STUB (red first): the anchors are not read yet. */
-export function wholeAnchorKinds(
-  _elements: readonly Element[],
-  _background: Background,
-  _opts: BudgetOptions = {},
-): WholeAnchorKind[] {
-  return [];
+/**
+ * Whether a slide is kept WHOLE (Q24.b, the first pre-render release): `BudgetOptions.whole` is asked, no anchor
+ * (`wholeAnchorKinds`) keeps it out and its planned objects, the cost after the reliefs, are within
+ * `WHOLE_OBJECTS_MAX`. A slide kept whole skips the guard and the picture limit (`fitBudgets`): nothing of it is
+ * left out for the screens' counts, because a picture of the whole slide is what the screens will draw and the
+ * live draw (the underlay frame) draws all of it meanwhile. `planned` is that cost when the caller has it
+ * (`fitBudgets` does); else it is worked out here with no atlas. Pure; never throws; false when it cannot tell.
+ */
+export function wholeSlide(
+  elements: readonly Element[],
+  background: Background,
+  opts: BudgetOptions = {},
+  planned?: number,
+): boolean {
+  try {
+    if (opts.whole !== true) return false;
+    if (wholeAnchorKinds(elements, background, opts).length) return false;
+    const objects =
+      planned ??
+      budgetCost(elements, background, artRange(elements as Element[]), [], opts.tables !== false).objects;
+    return Number.isFinite(objects) && objects <= WHOLE_OBJECTS_MAX;
+  } catch {
+    return false;
+  }
 }
 
 // ── Culling ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -508,9 +567,17 @@ export function fitBudgets(
   }
   // What the guard and P leave out, with the budget each was past (LibreOffice's art draws it, or it is listed).
   const leftOut = new Map<number, 'budget:shapes' | 'budget:pictures'>();
+  // Q24.b: a slide kept whole (no anchor, within the inline bound once the reliefs ran) skips the guard and P: a
+  // picture of the whole slide is what the screens draw, never a cut of it.
+  const planned = cost().objects;
+  plan.whole = wholeSlide(elements, background, opts, planned);
+  if (opts.whole === true && !plan.whole) {
+    plan.anchorKinds = wholeAnchorKinds(elements, background, opts);
+    if (planned > WHOLE_OBJECTS_MAX) plan.anchorKinds.push('bound');
+  }
   // 7: the guard. Elements that are not text first, topmost first; then text. With LibreOffice the art that
   // draws what it leaves out is one more of the render clamp's objects.
-  if (cost().objects > MAX_SLIDE_OBJECTS_TEXT)
+  if (!plan.whole && planned > MAX_SLIDE_OBJECTS_TEXT)
     for (const i of guard(elements, background, art, inArt, lo ? 1 : 0, tables))
       leftOut.set(i, 'budget:shapes');
   // P: the atlas, then the guard's way for what it cannot hold. Without sheets, the guard's way past what the
@@ -518,7 +585,7 @@ export function fitBudgets(
   const pictureBudget = sheets ? MAX_SLIDE_PICTURES : MAX_DRAWN_PICTURES;
   const pictureRoom = lo && !sheets && !art ? 1 : 0;
   const pictures = cost().pictures;
-  if (pictures > pictureBudget - (leftOut.size ? pictureRoom : 0)) {
+  if (!plan.whole && pictures > pictureBudget - (leftOut.size ? pictureRoom : 0)) {
     const keep = new Set<string>();
     if (background.fill.kind === 'picture') keep.add(background.fill.picture.part);
     if (sheets) plan.atlas = atlasParts(elements, frame, pictures, MAX_SLIDE_PICTURES, keep, inArt);

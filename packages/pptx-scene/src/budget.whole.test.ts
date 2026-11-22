@@ -487,9 +487,12 @@ describe('anchors keep a slide out (T5, T6, T8)', () => {
       from: 'slide',
     };
     expect(plan(crowd(), { whole: true, anchors: 'own' }, solidBg2).whole).toBe(true);
-    // A background from the layout or master is not the slide's own.
+    // The importer stores a picture background as the slide's own whichever of the slide, its layout or its
+    // master gave it (it moves one that every slide shares to the presentation only after the slides are
+    // planned): 'own' counts it too, the superset of what is stored.
     const layoutBg: Background = { ...pictureBg, from: 'layout' };
-    expect(plan(crowd(), { whole: true, anchors: 'own' }, layoutBg).whole).toBe(true);
+    expect(plan(crowd(), { whole: true, anchors: 'own' }, layoutBg).whole).toBe(false);
+    expect(plan(crowd(), { whole: true, anchors: 'motion' }, layoutBg).whole).toBe(true);
     // A motion background (a video over the whole slide) is a clip: out under both arms.
     const motion = [...crowd(), clip({ kind: 'video', part: 'ppt/media/loop.mp4' })];
     for (const anchors of ['motion', 'own'] as const)
