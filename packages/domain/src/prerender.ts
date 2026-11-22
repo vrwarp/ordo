@@ -25,9 +25,11 @@ import { type SlideFile, SlideFileRefusal, slideFileOf } from './slidefile.ts';
  * (`count`) or set to Pre-rendered by hand (`chosen`) keeps its full form in a slide file (`slidefile.ts`); the
  * presentation stores its stand-in (`standInOf`); a desktop draws a picture of what does not move
  * (`drawnPart`), keyed by everything it depends on (`prerenderKey`), and the screens show it under the live set
- * (`liveSet`). Every writer of a pre-rendered slide goes through `withFullSlide`. Pure: the editor, the bake
- * worker, the import worker and the hub's pool share it, and the hub cannot import `@ordo/renderer`, so what
- * needs the renderer (the cost reasons, an object's exact reach) is passed in.
+ * (`liveSet`). Every writer of a slide kept in a slide file goes through `withFullSlide`; the inline record of a
+ * heavy slide in which nothing moves (the first release, Q24.b) is decided by `easyPlan` and written by
+ * `planRecord`. Pure: the editor, the bake worker, the import worker and the hub's pool share it, and the hub
+ * cannot import `@ordo/renderer`, so what needs the renderer (the cost reasons, an object's exact reach) is
+ * passed in.
  */
 
 /**
