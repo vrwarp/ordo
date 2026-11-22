@@ -125,6 +125,12 @@ export type LadderInput = {
    * never made minimal.
    */
   fixed?: boolean;
+  /**
+   * Q24.b: a slide kept whole (`ImportCore.budget`: heavy and eligible, within the share): never fitted, simplified
+   * or put in the tail; its level is 'full', or 'grid' past 64 KiB (`wholeLevel`), and its bytes are the
+   * presentation's reserve for the plan of the others.
+   */
+  whole?: true;
 };
 
 /** What the ladder stores of one slide. */
@@ -146,6 +152,20 @@ export type LadderSlide = {
 };
 
 export type LadderPlan = { slides: LadderSlide[]; plan: ImportSizePlan };
+
+/** STUB (red first): what a slide kept whole is stored as. */
+export function wholeLevel(
+  slide: Slide,
+  _max: number,
+  size: (s: Slide) => number,
+): { slide: Slide; level: 'full' | 'grid'; bytes: number } {
+  return { slide, level: 'full', bytes: size(slide) };
+}
+
+/** STUB (red first): a slide cut to the screens' counts. */
+export function trimToCounts(slide: Slide): { slide: Slide; left: number; kinds: MissingKind[] } {
+  return { slide, left: 0, kinds: [] };
+}
 
 /** The kinds a left-out object drew: a chart's, else decoration. */
 function droppedKinds(before: Slide, after: Slide): { dropped: number; missing: MissingKind[] } {

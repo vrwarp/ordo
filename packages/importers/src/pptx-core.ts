@@ -92,6 +92,38 @@ const ART_TEXT_CHARS = 20_000;
 const COMPACT_TEXT_CHARS = 200;
 const WHITE = { r: 255, g: 255, b: 255, a: 1 };
 
+/**
+ * Q27 (default a): a hub WITH LibreOffice keeps a heavy slide whole as ordo's own editable shapes and shows a
+ * picture, instead of LibreOffice's art and page for what ordo cuts (`wholeSlidesFor`). False: such a hub follows
+ * today's plan exactly, and slides are kept whole only on hubs without LibreOffice.
+ */
+export const WHOLE_WITH_LIBREOFFICE = true;
+/**
+ * Q28.a (default): how much heavy slide one presentation keeps whole, in bytes as `quickBytes` counts them. The
+ * next heavy slides are cut to the screens' counts (`trimToCounts`) and named in the report.
+ */
+export const WHOLE_SHARE_BYTES = 2 * 1024 * 1024;
+/**
+ * The INLINE bound of a slide kept whole (Q28.c, Q54): the converter's (`@ordo/pptx-scene` `WHOLE_OBJECTS_MAX`, which
+ * equals its `MAX_OBJECTS` and `Slide.objects`); a slide planned past it follows today's plan until the slide-file
+ * route (import-files) keeps it whole out of line.
+ */
+export { WHOLE_OBJECTS_MAX } from '@ordo/pptx-scene/budget.ts';
+/**
+ * Which backgrounds keep a slide out of this release (Q25.c.b, decided 2026-11-21): 'motion', only a video. The one
+ * switch of the importer's side: read by the converter's option (`ParseOptions.wholeAnchors`) and by every caller of
+ * `planRecord` (`isMotion`); 'own' (any picture background is an anchor) is built and tested, not the default.
+ */
+export const WHOLE_BACKGROUND_ANCHORS: 'own' | 'motion' = 'motion';
+
+/**
+ * Whether an import keeps heavy slides whole: the hub's switch (`ORDO_PRERENDER`: `prerender`) and, on a hub with
+ * LibreOffice, Q27. The one answer the hub's job, the operator's parse, the demo and the harness all ask.
+ */
+export function wholeSlidesFor(_o: { prerender: boolean; lo: boolean }): boolean {
+  return false;
+}
+
 /** One converted slide, with its media map (placeholder → part) and what the import reads beside it. */
 export type Converted = {
   s: EmittedSlide;
@@ -220,6 +252,14 @@ export type ImportCoreOptions = {
    * budget with the slides it builds (§3.4).
    */
   reserve?: number;
+  /**
+   * Q24.b: keep heavy, eligible slides whole (`wholeSlidesFor`): the ladder stops at 'full' or 'grid' for them, at
+   * most `WHOLE_SHARE_BYTES` of them are kept, and `assemble` writes their pre-render record. Default false: the
+   * ladder and the stored slides are today's.
+   */
+  whole?: boolean;
+  /** A re-import: the bytes of the kept slides that carry a pre-render record, counted against the share. */
+  heavyReserve?: number;
 };
 
 /** One import's steps 3-5 and the state they share (see the module comment). */
