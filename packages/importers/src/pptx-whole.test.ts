@@ -26,13 +26,21 @@ import {
   type Draft,
   ImportCore,
   keptWholeLine,
+  selectWhole,
   WHOLE_BACKGROUND_ANCHORS,
   WHOLE_OBJECTS_MAX,
   WHOLE_SHARE_BYTES,
   WHOLE_WITH_LIBREOFFICE,
   wholeSlidesFor,
 } from './pptx-core.ts';
-import { type LadderInput, planLadder, quickBytes, trimToCounts, wholeLevel } from './pptx-ladder.ts';
+import {
+  type LadderInput,
+  planLadder,
+  provenanceStandIn,
+  quickBytes,
+  trimToCounts,
+  wholeLevel,
+} from './pptx-ladder.ts';
 import { ImportLog } from './pptx-report.ts';
 
 const KiB = 1024;
@@ -884,5 +892,47 @@ describe('the record at assemble (step 4)', () => {
     expect(r.log).toMatch(/2 slides are very detailed and were kept whole/);
     const none = assembled([plainSlide(0)], { whole: true });
     expect(none.log).not.toMatch(/kept whole/);
+  });
+});
+
+describe('selectWhole: the one rule of the import core and the census model (step 8a)', () => {
+  const big = (i: number) => slideOf(i, textObjects(400, 1_100, i));
+  const items = (slides: Slide[], picture: number[] = []) =>
+    slides.map((slide, i) => ({
+      picture: picture.includes(i),
+      slide,
+      rec: { ...slide, pptx: provenanceStandIn({ index: i, cls: 'native', version: 3 }) },
+    }));
+
+  it('keeps the first three of five 600 KB slides and cuts the rest to the screens\u2019 counts, as the import core does', () => {
+    const slides = [0, 1, 2, 3, 4].map(big);
+    const sel = selectWhole(items(slides));
+    expect([...sel.kept]).toEqual([0, 1, 2]);
+    expect([...sel.cut.keys()]).toEqual([3, 4]);
+    for (const c of sel.cut.values()) {
+      expect(c.slide.objects.length).toBeLessThanOrEqual(MAX_DRAWN_OBJECTS);
+      expect(c.kinds).toContain('element');
+    }
+    // The import core cuts exactly those slides.
+    const r = budgeted(slides, { lo: false, whole: true });
+    r.drafts.forEach((d, i) => {
+      expect(d.dropped?.includes('element') === true, `slide ${i}`).toBe(sel.cut.has(i));
+      if (sel.cut.has(i)) expect(d.slide.objects).toHaveLength(sel.cut.get(i)!.slide.objects.length);
+    });
+  });
+
+  it('leaves a picture-class slide and a slide that is not heavy alone, and counts a re-import\u2019s kept bytes first', () => {
+    const slides = [slideOf(0, textObjects(3, 100)), big(1), big(2)];
+    const sel = selectWhole(items(slides, [2]));
+    expect([...sel.kept]).toEqual([1]);
+    expect(sel.cut.size).toBe(0);
+    // With the share nearly used by the slides a re-import keeps, the first heavy slide is cut.
+    const used = selectWhole(items([big(0)]), WHOLE_SHARE_BYTES - 10);
+    expect(used.kept.size).toBe(0);
+    expect(used.cut.has(0)).toBe(true);
+  });
+
+  it('never throws on what is not a slide', () => {
+    expect(() => selectWhole(items([{ id: 'x' } as unknown as Slide]))).not.toThrow();
   });
 });

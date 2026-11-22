@@ -133,6 +133,22 @@ export function wholeSlidesFor(o: { prerender: boolean; lo: boolean }): boolean 
   return o.prerender === true && (!o.lo || WHOLE_WITH_LIBREOFFICE);
 }
 
+/** One slide as `selectWhole` reads it: the slide to cut, and the slide as the hub stores it (its provenance included). */
+export type WholeItem = { picture: boolean; slide: Slide; rec: Slide };
+/** A slide `selectWhole` cut to the screens' counts: what is left, and the kinds of what was left out. */
+export type WholeCut = { slide: Slide; kinds: MissingKind[] };
+
+/**
+ * Q24.b: which slides stay whole and which are cut to the counts (the rule of `ImportCore.keepWhole`, one function so
+ * the census models what the hub does). Pure.
+ */
+export function selectWhole(
+  _items: readonly WholeItem[],
+  _heavyReserve = 0,
+): { kept: Set<number>; cut: Map<number, WholeCut> } {
+  return { kept: new Set(), cut: new Map() };
+}
+
 /**
  * The converter's options for a parse that keeps heavy slides whole (`ParseOptions`): the option itself, the arm of
  * the anchor rule (`WHOLE_BACKGROUND_ANCHORS`) and Q24.a's gate (`PRERENDER_ANCHORED`, which the converter cannot

@@ -595,3 +595,23 @@ describe('the Q24.b columns (step 2 of import-whole)', () => {
     expect(own.slides[0]).toMatchObject({ wholeKept: true });
   }, 180_000);
 });
+
+describe('hubClasses with the whole option (Q24.b, step 8a)', () => {
+  const rect = (i: number): Slide['objects'][number] =>
+    ({
+      ...outline('r'),
+      id: `r${i}`,
+      geom: undefined,
+      fill: { r: 1, g: 2, b: 3, a: 1 },
+    }) as Slide['objects'][number];
+  const crowded = slide([text('Grace'), ...Array.from({ length: 700 }, (_, i) => rect(i))]);
+
+  it('models the ladder that keeps a heavy slide whole: hub native, level grid, hubWhole, nothing left out', () => {
+    const [off] = hubClasses([{ class: 'native', slide: crowded, notes: [] }]);
+    expect(off).not.toHaveProperty('hubWhole');
+    expect(off!.level).not.toBe('full');
+    const [on] = hubClasses([{ class: 'native', slide: crowded, notes: [] }], [], undefined, true);
+    expect(on).toMatchObject({ hub: 'native', level: 'grid', hubWhole: true, missing: [] });
+    expect(on!.slide.objects).toHaveLength(701);
+  });
+});

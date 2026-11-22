@@ -1176,6 +1176,8 @@ export type HubStored = {
   missing: string[];
   /** The slide as stored, without its provenance (a picture slide: no objects). */
   slide: Slide;
+  /** Q24.b: the slide is kept whole (`hubLadder`'s `whole` option: heavy and eligible, within the share). */
+  whole?: true;
 };
 
 type HubInput = { class: SlideClass; slide: Slide; notes: readonly string[]; index?: number; shown?: number };
@@ -1191,6 +1193,7 @@ export function hubLadder(
   slides: readonly HubInput[],
   geoms: readonly { id: string; file: unknown }[] = [],
   geomBudget: number = PPTX_LIMITS.geomFileBytes,
+  _whole = false,
 ): HubStored[] {
   const fileBytes = new Map(geoms.map((g) => [g.id, utf8Of(JSON.stringify(g.file))]));
   const admitted = new Set<string>();

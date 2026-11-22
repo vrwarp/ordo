@@ -75,6 +75,8 @@ export type HubSlide = {
   missing: string[];
   /** The slide as stored. */
   slide: Slide;
+  /** Q24.b: the hub's ladder keeps it whole (heavy, eligible, within the share; `--whole`). */
+  hubWhole?: true;
 };
 
 type HubInput = Pick<NativeDeck['slides'][number], 'class' | 'slide' | 'notes'> & { index?: number };
@@ -91,8 +93,9 @@ export function hubClasses(
   slides: readonly HubInput[],
   geoms: readonly { id: string; file: unknown }[] = [],
   geomBudget: number = PPTX_LIMITS.geomFileBytes,
+  whole = false,
 ): HubSlide[] {
-  return hubLadder(slides, geoms, geomBudget).map((h) => ({
+  return hubLadder(slides, geoms, geomBudget, whole).map((h) => ({
     stored: h.stored,
     hub: h.hub,
     hubWhy: h.why,
