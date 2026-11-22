@@ -336,3 +336,41 @@ describe('legacy layout memo (design/27 §7.3)', () => {
     expect(new Set(glyphFonts(ctx))).toEqual(new Set([a.font]));
   });
 });
+
+describe('stage preview rich notes', () => {
+  it('draws highlights, amber bullets, and uppercase cue pills matching the live Stage display', () => {
+    const slide: Slide = {
+      id: 'sermon-1',
+      objects: [
+        {
+          id: 't1',
+          type: 'text',
+          box: { x: 100, y: 100, w: 1700, h: 200, rotation: 0 },
+          text: 'Kingdom Humility',
+          style: DEFAULT_LYRIC_STYLE,
+          opacity: 1,
+        },
+      ],
+      notes: 'Intro line\n**aoeu**\n• bullet item\n[PAUSE]',
+    };
+    const ctx = recordingCtx();
+    drawSlide2D(ctx, slide, { scale: 0.5, look: LOOK_STAGE, presentationKind: 'slides' });
+    const textOps = ctx.ops.filter((o) => o.op === 'fillText');
+    const fillOps = ctx.ops.filter((o) => o.op === 'fill');
+
+    // Highlight renders without asterisks in warm yellow text over a subtle yellow pill.
+    const hlText = textOps.find((o) => o.args[0] === 'aoeu');
+    expect(hlText?.fillStyle).toBe('#fef08a');
+    expect(fillOps.some((o) => o.fillStyle === 'rgba(250, 204, 21, 0.16)')).toBe(true);
+
+    // Bullet dot renders in amber.
+    const dot = textOps.find((o) => o.args[0] === '•');
+    expect(dot?.fillStyle).toBe('#fbbf24');
+
+    // [PAUSE] renders as an uppercase PAUSE cue pill (no brackets) in dark text over solid amber.
+    const cueText = textOps.find((o) => o.args[0] === 'PAUSE');
+    expect(cueText?.fillStyle).toBe('#111827');
+    expect(textOps.some((o) => String(o.args[0]).includes('[PAUSE]'))).toBe(false);
+    expect(fillOps.some((o) => o.fillStyle === '#fbbf24')).toBe(true);
+  });
+});

@@ -59,9 +59,10 @@ export function timerText(t: Timer, now: number, timeZone: string): string {
   return formatDuration(t.elapsedMs ?? 0);
 }
 
-/** Live & Next Speaker Notes / Cues card for the booth operator's right rail. */
+/** Live & Next Speaker Notes card for the booth operator's right rail. */
 export function LiveSpeakerNotesCard() {
   const state = useLive((s) => s.state);
+  const [collapsed, setCollapsed] = useState(false);
   const liveSlide = cueSlide(state, state.live);
   const nextIdx = nextVisibleCueIndex(state);
   const nextSlide = cueSlide(state, nextIdx);
@@ -69,65 +70,84 @@ export function LiveSpeakerNotesCard() {
   const nextNotes = nextSlide?.notes?.trim() ?? '';
   if (!liveNotes && !nextNotes) return null;
 
+  const parsedLines = liveNotes
+    ? liveNotes.split('\n').map((line) => ({ line, parsed: parseStageNoteLine(line) }))
+    : [];
+  const hasCue = parsedLines.some(({ parsed }) => parsed.tokens.some((t) => t.kind === 'cue'));
+
   return (
     <div
       className="card col live-notes-card"
       data-live-speaker-notes
       style={{ padding: 10, gap: 6, margin: '8px 8px 2px' }}
     >
-      <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
-        <h4 style={{ margin: 0 }}>Speaker Notes &amp; Cues</h4>
-        <span className="tag notes" style={{ fontSize: 10 }}>
-          Live Cue
-        </span>
+      <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+        <button
+          type="button"
+          className="small ghost"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-expanded={!collapsed}
+          style={{ padding: '1px 4px', marginLeft: -4, fontWeight: 700, fontSize: 12 }}
+          title={collapsed ? 'Expand current slide notes' : 'Collapse current slide notes'}
+        >
+          {collapsed ? '▸' : '▾'} Current Slide Notes
+        </button>
+        {hasCue && (
+          <span className="tag notes" style={{ fontSize: 10 }}>
+            Has Cue
+          </span>
+        )}
       </div>
-      {liveNotes ? (
-        <div className="live-notes-body" dir="auto">
-          {(() => {
-            let linePos = 0;
-            return liveNotes.split('\n').map((line) => {
-              const key = `ln-${linePos}`;
-              linePos += line.length + 1;
-              if (!line.trim()) return <div key={key} style={{ height: 4 }} />;
-              const parsed = parseStageNoteLine(line);
-              let tokPos = 0;
-              return (
-                <div key={key} className={parsed.bullet ? 'live-note-line bullet' : 'live-note-line'}>
-                  {parsed.bullet && <span className="live-note-bullet">•</span>}
-                  <span>
-                    {parsed.tokens.map((r) => {
-                      const tokKey = `tk-${tokPos}`;
-                      tokPos += r.text.length + 1;
-                      if (r.kind === 'highlight') {
-                        return (
-                          <mark key={tokKey} className="live-note-hl">
-                            {r.text}
-                          </mark>
-                        );
-                      }
-                      if (r.kind === 'cue') {
-                        return (
-                          <span key={tokKey} className="live-note-cue">
-                            {r.text}
-                          </span>
-                        );
-                      }
-                      return <Fragment key={tokKey}>{r.text}</Fragment>;
-                    })}
-                  </span>
-                </div>
-              );
-            });
-          })()}
-        </div>
-      ) : (
-        <div className="muted small">No speaker notes on current live slide.</div>
-      )}
-      {nextNotes && (
-        <div className="live-notes-next" dir="auto">
-          <span className="live-notes-next-lbl">UP NEXT:</span>{' '}
-          <span>{formatStageNotesPlain(nextNotes).replace(/\s+/g, ' ').slice(0, 140)}</span>
-        </div>
+      {!collapsed && (
+        <>
+          {liveNotes ? (
+            <div className="live-notes-body" dir="auto">
+              {(() => {
+                let linePos = 0;
+                return parsedLines.map(({ line, parsed }) => {
+                  const key = `ln-${linePos}`;
+                  linePos += line.length + 1;
+                  if (!line.trim()) return <div key={key} style={{ height: 4 }} />;
+                  let tokPos = 0;
+                  return (
+                    <div key={key} className={parsed.bullet ? 'live-note-line bullet' : 'live-note-line'}>
+                      {parsed.bullet && <span className="live-note-bullet">•</span>}
+                      <span>
+                        {parsed.tokens.map((r) => {
+                          const tokKey = `tk-${tokPos}`;
+                          tokPos += r.text.length + 1;
+                          if (r.kind === 'highlight') {
+                            return (
+                              <mark key={tokKey} className="live-note-hl">
+                                {r.text}
+                              </mark>
+                            );
+                          }
+                          if (r.kind === 'cue') {
+                            return (
+                              <span key={tokKey} className="live-note-cue">
+                                {r.text}
+                              </span>
+                            );
+                          }
+                          return <Fragment key={tokKey}>{r.text}</Fragment>;
+                        })}
+                      </span>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          ) : (
+            <div className="muted small">No speaker notes on current live slide.</div>
+          )}
+          {nextNotes && (
+            <div className="live-notes-next" dir="auto">
+              <span className="live-notes-next-lbl">UP NEXT:</span>{' '}
+              <span>{formatStageNotesPlain(nextNotes).replace(/\s+/g, ' ').slice(0, 140)}</span>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
