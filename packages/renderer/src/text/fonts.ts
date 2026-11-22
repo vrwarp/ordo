@@ -41,6 +41,18 @@ import type { FaceRequest, FontEnv } from './types.ts';
  * substitute of the family. Only then does PowerPoint's stored autofit scale hold (design/27 §6 step 10):
  * PowerPoint computed it with the family's own widths, and a face of other widths (Aptos drawn with Inter)
  * breaks the lines elsewhere, so the box is fitted again from full size, as LibreOffice fits it.
+ *
+ * The bake profile (`new FontResolver(host, { profile: 'bake', blank })`, sub-wave 3; design 29 section 1.2): the
+ * pre-rendered picture of a slide is made with the library's and the bundled faces ONLY, so the same slide gives the
+ * same picture on every computer and no screen ever sees a face the picture did not use. A bake font string holds,
+ * in this order, the exact library face, the loaded `fallbackFonts`, the loaded script fallbacks, the loaded
+ * default face (`DEFAULT_FONT`) and the BLANK face (blankface.ts) last. It never holds the requested family as the
+ * computer might have it and never the legacy chain (Inter, Segoe UI, Arial, sans-serif): a character no loaded
+ * face covers lands on the blank face and draws as nothing, where it would otherwise be drawn by a face of the
+ * computer that makes the picture. The resolver reports what the bake could not resolve (`bakeReport`: the
+ * families asked for, the stacks that held no loaded face, the requests served by the default face alone;
+ * `failedFamilies`: wanted faces that are not loaded); `bake.ts` turns them into a failed picture or a list of
+ * stand-in names. The live profile, the default, is byte for byte what it was (bake.pins.test.ts).
  */
 
 /**
@@ -192,6 +204,25 @@ export type FontHost = {
   timeoutMs?: number;
 };
 
+/** Which font strings a resolver builds: `live` (the default: today's) or `bake` (the picture's, see the header). */
+export type FontProfile = 'live' | 'bake';
+
+/** Options of a resolver. A `bake` profile needs the blank face's family (`BlankFace.family`, already quoted). */
+export type FontResolverOptions = {
+  profile?: FontProfile;
+  blank?: { family: string };
+};
+
+/** What the bake profile could not resolve, since the last `bakeReset`; families lower-cased, sorted. */
+export type BakeFontReport = {
+  /** Every family a request looked at: its own, its fallbacks, its script fallbacks and the default. */
+  chain: string[];
+  /** Families of requests whose stack held no loaded face at all (their text would draw as nothing). */
+  empty: string[];
+  /** Families of requests served by the default face alone (no face of theirs, no listed fallback loaded). */
+  standIns: string[];
+};
+
 /** A change of the resolved faces: these families (lower-case) draw differently from now on. */
 export type FontChange = {
   families: string[];
@@ -290,9 +321,23 @@ export class FontResolver implements FontEnv {
   readonly #used = new Set<string>();
   readonly #listeners = new Set<(c: FontChange) => void>();
   #disposed = false;
+  readonly #profile: FontProfile;
+  /** The blank face's quoted family: the last entry of every bake font string. */
+  readonly #blank: string;
+  /** What the bake profile's `font` looked at since `bakeReset`. */
+  readonly #bake = { chain: new Set<string>(), empty: new Set<string>(), standIns: new Set<string>() };
 
-  constructor(host?: FontHost) {
+  constructor(host?: FontHost, options: FontResolverOptions = {}) {
     this.#host = host;
+    this.#profile = options.profile === 'bake' ? 'bake' : 'live';
+    this.#blank = options.blank?.family ?? '';
+    if (this.#profile === 'bake' && !this.#blank.trim())
+      throw new Error('the bake font profile needs the blank face last in every stack');
+  }
+
+  /** The profile this resolver builds font strings for (`FontProfile`). */
+  get profile(): FontProfile {
+    return this.#profile;
   }
 
   get generation(): number {
@@ -414,6 +459,7 @@ export class FontResolver implements FontEnv {
   }
 
   font(req: FaceRequest): string {
+    if (this.#profile === 'bake') return this.#bakeFont(req);
     const out: string[] = [];
     const seen = new Set<string>();
     const push = (css: string) => {
@@ -435,6 +481,77 @@ export class FontResolver implements FontEnv {
     pushLoaded(DEFAULT_FONT);
     for (const t of LEGACY_TAIL) push(t);
     return cssFont(req, out.join(', '));
+  }
+
+  /**
+   * The bake profile's font string (see the header): the exact face, the loaded fallbacks, the loaded script
+   * fallbacks, the loaded default face and the blank face last; never the raw family, never the legacy tail.
+   * Records what it looked at (`bakeReport`).
+   */
+  #bakeFont(req: FaceRequest): string {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const rec = this.#bake;
+    const loaded: string[] = [];
+    const take = (family: string): string | undefined => {
+      const k = typeof family === 'string' ? family.trim().toLowerCase() : '';
+      if (!k) return undefined;
+      rec.chain.add(k);
+      const name = this.#name(family, '');
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        out.push(quoteFamily(name));
+      }
+      return name;
+    };
+    const exact = req.family ? take(req.family) : undefined;
+    if (exact) loaded.push(exact);
+    for (const f of req.fallbacks) {
+      const n = take(f);
+      if (n) loaded.push(n);
+    }
+    if (req.script && Object.hasOwn(SCRIPT_FALLBACK_FONTS, req.script))
+      for (const f of SCRIPT_FALLBACK_FONTS[req.script]!) {
+        const n = take(f);
+        if (n) loaded.push(n);
+      }
+    const fallback = take(DEFAULT_FONT);
+    const family = (req.family ?? '').trim().toLowerCase();
+    if (!out.length) rec.empty.add(family || DEFAULT_FONT.toLowerCase());
+    else if (!loaded.length && fallback && family && family !== DEFAULT_FONT.toLowerCase())
+      rec.standIns.add(family);
+    out.push(this.#blank);
+    return cssFont(req, out.join(', '));
+  }
+
+  /** What the bake profile's font strings could not resolve since the last `bakeReset` (empty for a live resolver). */
+  bakeReport(): BakeFontReport {
+    const r = this.#bake;
+    return { chain: [...r.chain].sort(), empty: [...r.empty].sort(), standIns: [...r.standIns].sort() };
+  }
+
+  /** Forget the bake profile's report (a bake starts with a clean one). */
+  bakeReset(): void {
+    this.#bake.chain.clear();
+    this.#bake.empty.clear();
+    this.#bake.standIns.clear();
+  }
+
+  /**
+   * Families (lower-cased, sorted) with a wanted face that is not loaded: a face that failed to read or parse and
+   * is backing off, or a family none of whose faces has loaded. A picture whose chain meets one is not made
+   * (`bake.ts`), because the face it would have drawn with is not the face a screen will.
+   */
+  failedFamilies(): string[] {
+    const out: string[] = [];
+    for (const fam of this.#families.values()) {
+      for (const k of fam.want.keys())
+        if (!fam.active?.keys.includes(k)) {
+          out.push(fam.family.toLowerCase());
+          break;
+        }
+    }
+    return out.sort();
   }
 
   /**
