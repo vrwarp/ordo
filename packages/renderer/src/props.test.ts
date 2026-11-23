@@ -161,3 +161,63 @@ describe('video remaining time on the stage look (prd/04)', () => {
     expect(propBox('videoRemaining', LOOK_STAGE).box.y).toBeGreaterThan(900);
   });
 });
+
+describe('countdown presets and corners', () => {
+  const withPreset = (
+    countdownPreset: 'cornerCircle' | 'cornerPill' | 'centerHero',
+    countdownCorner?: 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight',
+  ) => ({
+    ...LOOK_MAIN,
+    layers: {
+      ...LOOK_MAIN.layers,
+      props: { ...LOOK_MAIN.layers.props, countdownPreset, countdownCorner },
+    },
+  });
+
+  it('defaults non-stage looks to cornerCircle in the bottom-right with a progress ring', () => {
+    const m = propsModel(withCountdown('Service starts'), LOOK_MAIN, ctx);
+    expect(m.ring).toBeDefined();
+    expect(m.ring?.box).toEqual({ x: 1672, y: 832, w: 200, h: 200, rotation: 0 });
+    expect(m.ring?.progress).toBeGreaterThan(0.9);
+    expect(m.ring?.progress).toBeLessThanOrEqual(1);
+    const cd = m.items.find((i) => i.id === 'countdown');
+    expect(cd?.box.x).toBeGreaterThan(1600);
+    expect(cd?.box.y).toBeGreaterThan(800);
+  });
+
+  it('places cornerCircle and cornerPill in the requested corner and compacts cornerPill without a label', () => {
+    const tlCircle = propsModel(withCountdown(), withPreset('cornerCircle', 'topLeft'), ctx);
+    expect(tlCircle.ring?.box).toEqual({ x: 48, y: 48, w: 200, h: 200, rotation: 0 });
+
+    const trPillWithLabel = propsModel(
+      withCountdown('Starting soon'),
+      withPreset('cornerPill', 'topRight'),
+      ctx,
+    );
+    expect(trPillWithLabel.ring).toBeUndefined();
+    const cdWithLabel = trPillWithLabel.items.find((i) => i.id === 'countdown');
+    expect(cdWithLabel?.box).toEqual({ x: 1452, y: 48, w: 420, h: 72, rotation: 0 });
+    expect(cdWithLabel?.style.fill).toBeDefined();
+
+    const blPillCompact = propsModel(withCountdown(), withPreset('cornerPill', 'bottomLeft'), ctx);
+    const cdCompact = blPillCompact.items.find((i) => i.id === 'countdown');
+    expect(cdCompact?.box).toEqual({ x: 48, y: 960, w: 200, h: 72, rotation: 0 });
+    expect(cdCompact?.style.align).toBe('center');
+  });
+
+  it('supports centerHero and keeps stage looks on the top strip', () => {
+    const hero = propsModel(withCountdown(), withPreset('centerHero'), ctx);
+    expect(hero.ring).toBeUndefined();
+    expect(hero.items.find((i) => i.id === 'countdown')?.style.fontSizePx).toBe(180);
+
+    const stage = propsModel(withCountdown(), LOOK_STAGE, ctx);
+    expect(stage.ring).toBeUndefined();
+    expect(stage.items.find((i) => i.id === 'countdown')?.box).toEqual({
+      x: 660,
+      y: 16,
+      w: 600,
+      h: 110,
+      rotation: 0,
+    });
+  });
+});

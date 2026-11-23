@@ -9,6 +9,7 @@ import {
   type TextStyle,
   extraFontFamilies,
   isSymbolFont,
+  rgbaCss,
 } from '@ordo/domain';
 import { clampLook } from './clamp.ts';
 import { drawableContent } from './content.ts';
@@ -99,6 +100,36 @@ export function rasterProps(
     fillColor(ctx, clearColor, LOGICAL_WIDTH * scale, LOGICAL_HEIGHT * scale);
     const img = images(model.logo.mediaId);
     if (img) drawImageFit(ctx, img, model.logo.box, scale, 'contain');
+  }
+  if (model.ring) {
+    const { box: b, progress, fillColor, trackColor, strokeColor } = model.ring;
+    const cx = (b.x + b.w / 2) * scale;
+    const cy = (b.y + b.h / 2) * scale;
+    const outerR = (Math.min(b.w, b.h) / 2) * scale;
+    const lineW = Math.max(1, 8 * scale);
+    const ringR = Math.max(1, outerR - lineW);
+    ctx.save();
+    ctx.fillStyle = rgbaCss(fillColor);
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.lineWidth = lineW;
+    ctx.strokeStyle = rgbaCss(trackColor);
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (progress > 0) {
+      const start = -Math.PI / 2;
+      const end = start + Math.PI * 2 * Math.max(0, Math.min(1, progress));
+      ctx.strokeStyle = rgbaCss(strokeColor);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(cx, cy, ringR, start, end);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
   for (const it of model.items) drawText(ctx, it.text, it.style, it.box, scale, { fit: true });
 }

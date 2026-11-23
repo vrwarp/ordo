@@ -1394,6 +1394,12 @@ export type StagePreset = z.infer<typeof StagePreset>;
 export const StageNotesScale = z.enum(['sm', 'md', 'lg', 'xl']);
 export type StageNotesScale = z.infer<typeof StageNotesScale>;
 
+export const CountdownPreset = z.enum(['cornerCircle', 'cornerPill', 'centerHero']);
+export type CountdownPreset = z.infer<typeof CountdownPreset>;
+
+export const CountdownCorner = z.enum(['topLeft', 'topRight', 'bottomLeft', 'bottomRight']);
+export type CountdownCorner = z.infer<typeof CountdownCorner>;
+
 export const PropsRule = z.object({
   logo: z.boolean().default(false),
   countdown: z.boolean().default(false),
@@ -1416,6 +1422,10 @@ export const PropsRule = z.object({
   stagePreset: StagePreset.catch('auto').optional(),
   /** Stage notes font size tier when `style['notes']` is not customized; absent means `'lg'`. */
   notesScale: StageNotesScale.catch('lg').optional(),
+  /** Visual preset for the countdown timer on non-stage looks; absent means `'cornerCircle'`. */
+  countdownPreset: CountdownPreset.catch('cornerCircle').optional(),
+  /** Corner placement when `countdownPreset` is `'cornerCircle'` or `'cornerPill'`; absent means `'bottomRight'`. */
+  countdownCorner: CountdownCorner.catch('bottomRight').optional(),
 });
 export type PropsRule = z.infer<typeof PropsRule>;
 
