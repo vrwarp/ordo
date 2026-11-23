@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LOOK_MAIN, LOOK_STAGE, LOOK_STREAM } from '@ordo/domain';
+import { type LiveState, LOOK_MAIN, LOOK_STAGE, LOOK_STREAM } from '@ordo/domain';
 import { countdownText, elapsedTimer, propBox, propsModel, topMessage, videoRemainingText } from './props.ts';
 import { liveState } from './fixtures.test-util.ts';
 
@@ -219,5 +219,27 @@ describe('countdown presets and corners', () => {
       h: 110,
       rotation: 0,
     });
+  });
+
+  it('allows per-timer preset and corner overrides on non-stage looks', () => {
+    const s: LiveState = withCountdown('Intermission');
+    s.timers.cd = {
+      id: 'cd',
+      running: true,
+      startedAt: NOW - 60_000,
+      spec: {
+        kind: 'countdownTo',
+        timeOfDay: '10:30',
+        label: 'Intermission',
+        preset: 'centerHero',
+        corner: 'topLeft',
+      },
+    };
+    const m = propsModel(s, withPreset('cornerCircle', 'bottomRight'), ctx);
+    expect(m.ring).toBeUndefined();
+    expect(m.items.find((i) => i.id === 'countdown')?.style.fontSizePx).toBe(180);
+
+    const stage = propsModel(s, LOOK_STAGE, ctx);
+    expect(stage.items.find((i) => i.id === 'countdown')?.box.y).toBe(16);
   });
 });

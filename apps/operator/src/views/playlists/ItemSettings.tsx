@@ -1,6 +1,19 @@
 import { api } from '@ordo/client';
-import { type ActionId, type Arrangement, newId, type PlaylistItem, type Section } from '@ordo/domain';
-import { useState } from 'react';
+import {
+  type ActionId,
+  type Arrangement,
+  type CountdownCorner,
+  type CountdownPreset,
+  type LiveState,
+  LOOK_MAIN,
+  type Look,
+  newId,
+  type PlaylistItem,
+  type Section,
+  type TimerSpec,
+} from '@ordo/domain';
+import { effectiveCountdownPreset, propsModel, rasterProps } from '@ordo/renderer';
+import { useEffect, useRef, useState } from 'react';
 import { ArrangementEditor } from '../../components/ArrangementEditor.tsx';
 import { Check, Field, NumberField, Select, TextField, TransitionEditor } from '../../components/fields.tsx';
 import {
@@ -14,6 +27,100 @@ import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { BackgroundPicker } from '../editor/BackgroundPicker.tsx';
 import { ACTIONS } from './AddItemsPanel.tsx';
+
+const COUNTDOWN_PRESETS: readonly { id: CountdownPreset; label: string }[] = [
+  { id: 'cornerCircle', label: 'Corner Circle' },
+  { id: 'cornerPill', label: 'Corner Pill' },
+  { id: 'centerHero', label: 'Center Hero' },
+];
+
+const COUNTDOWN_CORNERS: readonly { id: CountdownCorner; label: string }[] = [
+  { id: 'topLeft', label: 'Top Left' },
+  { id: 'topRight', label: 'Top Right' },
+  { id: 'bottomLeft', label: 'Bottom Left' },
+  { id: 'bottomRight', label: 'Bottom Right' },
+];
+
+const PREVIEW_NOW = Date.UTC(2026, 10, 1, 9, 55, 0);
+
+function TimerPreviewCanvas({ timer, baseLook }: { timer: TimerSpec; baseLook: Look }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const c = ref.current;
+    const ctx = c?.getContext('2d');
+    if (!c || !ctx) return;
+
+    const g = ctx.createLinearGradient(0, 0, c.width, c.height);
+    g.addColorStop(0, '#1e3a8a');
+    g.addColorStop(1, '#4c1d95');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, c.width, c.height);
+
+    // Subtle welcome-slide frame so corner vs center placement is immediately clear.
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(24, 22, c.width - 48, c.height - 44);
+    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    ctx.font = '600 13px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Welcome Slide Content', c.width / 2, c.height / 2);
+    ctx.restore();
+
+    const spec: TimerSpec =
+      timer.kind === 'countdownTo'
+        ? { ...timer, timeOfDay: '10:00' }
+        : { kind: 'countdownTo', timeOfDay: '10:00', label: timer.label };
+
+    const state: LiveState = {
+      seq: 1,
+      mode: 'live',
+      cues: [],
+      audio: { content: null, seq: 0, at: 0 },
+      layers: {
+        background: { content: null, seq: 0, at: 0 },
+        slide: { content: null, seq: 0, at: 0 },
+        lowerThird: { content: null, seq: 0, at: 0 },
+        media: { content: null, seq: 0, at: 0 },
+      },
+      black: false,
+      props: { logo: false, countdownTimerId: 'preview', seq: 1, at: 0 },
+      timers: {
+        preview: {
+          id: 'preview',
+          spec,
+          running: true,
+          startedAt: PREVIEW_NOW - 5 * 60_000,
+        },
+      },
+      messages: [],
+    };
+
+    const model = propsModel(state, baseLook, {
+      now: PREVIEW_NOW,
+      timeZone: 'UTC',
+      clock24h: false,
+    });
+    rasterProps(ctx, model, c.width / 1920, () => undefined, baseLook.clearColor);
+  }, [timer, baseLook]);
+
+  return (
+    <canvas
+      ref={ref}
+      width={320}
+      height={180}
+      style={{
+        width: 320,
+        maxWidth: '100%',
+        aspectRatio: '16 / 9',
+        borderRadius: 6,
+        border: '1px solid var(--line)',
+      }}
+    />
+  );
+}
 
 /** Settings for one playlist item, by kind. */
 export function ItemSettings(props: {
@@ -246,31 +353,110 @@ export function ItemSettings(props: {
               </select>
             </label>
             <label className="field">
-              <span>Service countdown</span>
-              <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+              <span>Countdown timer</span>
+              <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
                 <input
                   type="time"
                   value={it.countdownTimer?.kind === 'countdownTo' ? it.countdownTimer.timeOfDay : ''}
                   disabled={props.disabled}
                   onChange={(e) => {
                     const val = e.target.value.slice(0, 5);
+                    const prev = it.countdownTimer?.kind === 'countdownTo' ? it.countdownTimer : undefined;
                     props.onChange({
                       ...it,
                       countdownTimer: /^\d{2}:\d{2}$/.test(val)
-                        ? { kind: 'countdownTo', timeOfDay: val, label: 'Service starts in' }
+                        ? {
+                            kind: 'countdownTo',
+                            timeOfDay: val,
+                            label: prev?.label ?? 'Service starts in',
+                            preset: prev?.preset,
+                            corner: prev?.corner,
+                          }
                         : undefined,
                     });
                   }}
                 />
-                {it.countdownTimer && (
-                  <button
-                    type="button"
-                    className="small ghost"
-                    disabled={props.disabled}
-                    onClick={() => props.onChange({ ...it, countdownTimer: undefined })}
-                  >
-                    Clear
-                  </button>
+                {it.countdownTimer?.kind === 'countdownTo' && (
+                  <>
+                    <input
+                      type="text"
+                      placeholder="Label (e.g. Service starts in)"
+                      value={it.countdownTimer.label ?? ''}
+                      disabled={props.disabled}
+                      style={{ minWidth: 150, flex: '1 1 150px' }}
+                      onChange={(e) =>
+                        props.onChange({
+                          ...it,
+                          countdownTimer: {
+                            ...it.countdownTimer!,
+                            label: e.target.value || undefined,
+                          },
+                        })
+                      }
+                    />
+                    <select
+                      aria-label="Countdown style"
+                      value={it.countdownTimer.preset ?? ''}
+                      disabled={props.disabled}
+                      onChange={(e) =>
+                        props.onChange({
+                          ...it,
+                          countdownTimer: {
+                            ...it.countdownTimer!,
+                            kind: 'countdownTo',
+                            timeOfDay:
+                              it.countdownTimer!.kind === 'countdownTo'
+                                ? it.countdownTimer!.timeOfDay
+                                : '10:00',
+                            preset: (e.target.value || undefined) as CountdownPreset | undefined,
+                          },
+                        })
+                      }
+                    >
+                      <option value="">Look default</option>
+                      {COUNTDOWN_PRESETS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                    {it.countdownTimer.preset !== 'centerHero' && (
+                      <select
+                        aria-label="Countdown corner"
+                        value={it.countdownTimer.corner ?? ''}
+                        disabled={props.disabled}
+                        onChange={(e) =>
+                          props.onChange({
+                            ...it,
+                            countdownTimer: {
+                              ...it.countdownTimer!,
+                              kind: 'countdownTo',
+                              timeOfDay:
+                                it.countdownTimer!.kind === 'countdownTo'
+                                  ? it.countdownTimer!.timeOfDay
+                                  : '10:00',
+                              corner: (e.target.value || undefined) as CountdownCorner | undefined,
+                            },
+                          })
+                        }
+                      >
+                        <option value="">Look corner</option>
+                        {COUNTDOWN_CORNERS.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <button
+                      type="button"
+                      className="small ghost"
+                      disabled={props.disabled}
+                      onClick={() => props.onChange({ ...it, countdownTimer: undefined })}
+                    >
+                      Clear
+                    </button>
+                  </>
                 )}
               </div>
             </label>
@@ -345,52 +531,120 @@ export function ItemSettings(props: {
   }
   if (it.kind === 'timer') {
     const t = it.timer;
+    const baseLook = lib.settings.looks.find((l) => l.kind === 'main') ?? LOOK_MAIN;
+    const effectivePreset =
+      t.kind === 'countdownTo' ? (t.preset ?? effectiveCountdownPreset(baseLook)) : 'cornerCircle';
     return (
-      <div className="col">
-        <h3>Timer</h3>
-        <Select
-          label="Kind"
-          value={t.kind}
-          disabled={props.disabled}
-          options={[
-            { value: 'countdownTo', label: 'Countdown to a time of day' },
-            { value: 'elapsed', label: 'Elapsed (starts when this item goes live)' },
-          ]}
-          onChange={(k) =>
-            props.onChange({
-              ...it,
-              timer:
-                k === 'elapsed'
-                  ? { kind: 'elapsed', label: t.label }
-                  : { kind: 'countdownTo', timeOfDay: '10:00', label: t.label },
-            })
-          }
-        />
+      <div className="row wrap" style={{ alignItems: 'flex-start', gap: 16 }}>
+        <div className="col grow" style={{ gap: 10, minWidth: 280 }}>
+          <h3 style={{ margin: 0 }}>Timer</h3>
+          <div className="grid2">
+            <Select
+              label="Kind"
+              value={t.kind}
+              disabled={props.disabled}
+              options={[
+                { value: 'countdownTo', label: 'Countdown to a time of day' },
+                { value: 'elapsed', label: 'Elapsed (starts when live)' },
+              ]}
+              onChange={(k) =>
+                props.onChange({
+                  ...it,
+                  timer:
+                    k === 'elapsed'
+                      ? { kind: 'elapsed', label: t.label }
+                      : { kind: 'countdownTo', timeOfDay: '10:00', label: t.label },
+                })
+              }
+            />
+            {t.kind === 'countdownTo' ? (
+              <Field label="Time (venue time zone)">
+                <input
+                  type="time"
+                  value={t.timeOfDay}
+                  disabled={props.disabled}
+                  onChange={(e) => props.onChange({ ...it, timer: { ...t, timeOfDay: e.target.value } })}
+                />
+              </Field>
+            ) : (
+              <div />
+            )}
+          </div>
+          <TextField
+            label="Label"
+            value={t.label ?? ''}
+            placeholder="e.g. Service starts in, Baptism, Intermission"
+            disabled={props.disabled}
+            onChange={(label) => props.onChange({ ...it, timer: { ...t, label: label || undefined } })}
+          />
+          {t.kind === 'countdownTo' && (
+            <>
+              <Field label="Audience style">
+                <div className="ed-seg-bar">
+                  <button
+                    type="button"
+                    className={`small ${t.preset === undefined ? 'on' : ''}`}
+                    disabled={props.disabled}
+                    onClick={() => props.onChange({ ...it, timer: { ...t, preset: undefined } })}
+                  >
+                    Look default
+                  </button>
+                  {COUNTDOWN_PRESETS.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`small ${t.preset === p.id ? 'on' : ''}`}
+                      disabled={props.disabled}
+                      onClick={() => props.onChange({ ...it, timer: { ...t, preset: p.id } })}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+              {effectivePreset !== 'centerHero' && (
+                <Field label="Corner">
+                  <div className="ed-seg-bar">
+                    <button
+                      type="button"
+                      className={`small ${t.corner === undefined ? 'on' : ''}`}
+                      disabled={props.disabled}
+                      onClick={() => props.onChange({ ...it, timer: { ...t, corner: undefined } })}
+                    >
+                      Look default
+                    </button>
+                    {COUNTDOWN_CORNERS.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className={`small ${t.corner === c.id ? 'on' : ''}`}
+                        disabled={props.disabled}
+                        onClick={() => props.onChange({ ...it, timer: { ...t, corner: c.id } })}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+              )}
+            </>
+          )}
+          {shouldShowMidiUi(lib.settings.surfaces, Boolean(it.midi)) && (
+            <Field label="Lighting / MIDI on start">
+              <MidiTriggerPicker
+                value={it.midi}
+                disabled={props.disabled}
+                onChange={(midi) => props.onChange({ ...it, midi })}
+                hint="Fires once when this timer goes live."
+              />
+            </Field>
+          )}
+        </div>
         {t.kind === 'countdownTo' && (
-          <Field label="Time (venue time zone)">
-            <input
-              type="time"
-              value={t.timeOfDay}
-              disabled={props.disabled}
-              onChange={(e) => props.onChange({ ...it, timer: { ...t, timeOfDay: e.target.value } })}
-            />
-          </Field>
-        )}
-        <TextField
-          label="Label"
-          value={t.label ?? ''}
-          disabled={props.disabled}
-          onChange={(label) => props.onChange({ ...it, timer: { ...t, label: label || undefined } })}
-        />
-        {shouldShowMidiUi(lib.settings.surfaces, Boolean(it.midi)) && (
-          <Field label="Lighting / MIDI on start">
-            <MidiTriggerPicker
-              value={it.midi}
-              disabled={props.disabled}
-              onChange={(midi) => props.onChange({ ...it, midi })}
-              hint="Fires once when this timer goes live."
-            />
-          </Field>
+          <div className="col" style={{ gap: 4 }}>
+            <span className="muted small">Audience preview</span>
+            <TimerPreviewCanvas timer={t} baseLook={baseLook} />
+          </div>
         )}
       </div>
     );

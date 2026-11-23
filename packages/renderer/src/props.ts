@@ -221,7 +221,14 @@ export function countdownText(
   state: LiveState,
   ctx: PropsContext,
   look?: Look,
-): { text: string; label?: string; remainingMs: number; progress: number } | null {
+): {
+  text: string;
+  label?: string;
+  remainingMs: number;
+  progress: number;
+  preset?: CountdownPreset;
+  corner?: CountdownCorner;
+} | null {
   const id = state.props.countdownTimerId;
   const t = id ? state.timers[id] : undefined;
   if (!t?.running || t.spec.kind !== 'countdownTo') return null;
@@ -234,7 +241,14 @@ export function countdownText(
   const roundedMs = Math.ceil(remainingMs / 1000) * 1000;
   const totalMs = t.startedAt !== undefined ? Math.max(1000, target - t.startedAt) : 0;
   const progress = totalMs > 0 ? Math.max(0, Math.min(1, roundedMs / totalMs)) : 0;
-  return { text: formatDuration(roundedMs), label: t.spec.label, remainingMs, progress };
+  return {
+    text: formatDuration(roundedMs),
+    label: t.spec.label,
+    remainingMs,
+    progress,
+    preset: t.spec.preset,
+    corner: t.spec.corner,
+  };
 }
 
 /** The newest stage message that has not expired. */
@@ -266,16 +280,32 @@ export function propsModel(state: LiveState, look: Look, ctx: PropsContext): Pro
   const items: PropTextItem[] = [];
   let ring: CountdownRing | undefined;
   let logo: PropsModel['logo'];
+  let cdSig = '';
   if (state.mode === 'live' && !state.black) {
     if (rule.logo && state.props.logo && ctx.logoMediaId)
       logo = { mediaId: ctx.logoMediaId, box: propBox('logo', look).box };
     if (rule.countdown) {
       const cd = countdownText(state, ctx, look);
       if (cd) {
+        const effectiveLook =
+          look.kind !== 'stage' && (cd.preset || cd.corner)
+            ? {
+                ...look,
+                layers: {
+                  ...look.layers,
+                  props: {
+                    ...rule,
+                    countdownPreset: cd.preset ?? rule.countdownPreset,
+                    countdownCorner: cd.corner ?? rule.countdownCorner,
+                  },
+                },
+              }
+            : look;
         const customCountdown = Boolean(rule.style.countdown);
-        const preset = effectiveCountdownPreset(look);
-        const corner = effectiveCountdownCorner(look);
-        let cdBox = propBox('countdown', look);
+        const preset = effectiveCountdownPreset(effectiveLook);
+        const corner = effectiveCountdownCorner(effectiveLook);
+        if (cd.preset || cd.corner) cdSig = `${preset}:${corner}`;
+        let cdBox = propBox('countdown', effectiveLook);
         if (look.kind !== 'stage' && !customCountdown) {
           if (preset === 'cornerCircle') {
             const { x, y } = cornerOrigin(corner, CIRCLE_SIZE, CIRCLE_SIZE);
@@ -296,7 +326,11 @@ export function propsModel(state: LiveState, look: Look, ctx: PropsContext): Pro
         }
         items.push({ id: 'countdown', text: cd.text, ...split(cdBox) });
         if (cd.label)
-          items.push({ id: 'countdownLabel', text: cd.label, ...split(propBox('countdownLabel', look)) });
+          items.push({
+            id: 'countdownLabel',
+            text: cd.label,
+            ...split(propBox('countdownLabel', effectiveLook)),
+          });
       }
     }
     if (rule.elapsed) {
@@ -326,6 +360,6 @@ export function propsModel(state: LiveState, look: Look, ctx: PropsContext): Pro
   const empty = !logo && !ring && items.length === 0;
   const key = empty
     ? ''
-    : `pr|${ctx.lookSig ?? look.id}|${logo ? `L:${logo.mediaId}` : ''}|${ring ? `R:${Math.round(ring.progress * 360)}` : ''}|${items.map((i) => `${i.id}=${i.text}`).join('|')}`;
+    : `pr|${ctx.lookSig ?? look.id}|${cdSig}|${logo ? `L:${logo.mediaId}` : ''}|${ring ? `R:${Math.round(ring.progress * 360)}` : ''}|${items.map((i) => `${i.id}=${i.text}`).join('|')}`;
   return { key, items, ring, logo, empty };
 }

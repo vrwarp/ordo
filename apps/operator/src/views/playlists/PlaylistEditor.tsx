@@ -81,6 +81,8 @@ function SelectedItemSlidePreview({
     return undefined;
   };
 
+  if (item.kind === 'timer' || item.kind === 'action') return null;
+
   return (
     <div className="card col" style={{ gap: 8, padding: 0, overflow: 'hidden' }} data-playlist-slide-preview>
       <div

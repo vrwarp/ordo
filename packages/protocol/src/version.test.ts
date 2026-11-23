@@ -81,11 +81,11 @@ import { APP_VERSION } from './index.ts';
 // sections/hiddenSlides/skipped and steps over skipped items in nextShownCue/prevShownCue; live.ts and
 // live-state add item.skip, item.arrange, item.hideSlides, and slide.editText events, skipNextItem action
 // mapping, and auto-unskip on explicit go.
-// 0.12.1 for countdown timer presets (PropsRule.countdownPreset and PropsRule.countdownCorner in
-// schemas.ts, which a stale client would strip when saving looks).
+// 0.12.1 for countdown timer presets (PropsRule.countdownPreset, PropsRule.countdownCorner, and
+// TimerSpec.preset/corner in schemas.ts, which a stale client would strip when saving looks or playlists).
 const RECORDED = {
   version: '0.12.1',
-  digest: '04e356210a7e8038d991f0684fec000cdbb07cddfab2bf391b5ce970a2999cea',
+  digest: 'fbcfa60b2877504f7c63f9260a84fcdbe9fe49b151dafbb92ba2a48d32721a76',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */
