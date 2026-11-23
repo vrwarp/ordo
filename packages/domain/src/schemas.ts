@@ -1282,6 +1282,7 @@ export const ActionId = z.enum([
   'lastSlide',
   'nextItem',
   'prevItem',
+  'skipNextItem',
   'goToSection',
   'goToSlide',
   'goToItem',

@@ -366,8 +366,10 @@ export function PlaylistEditor(props: {
           presentations={lib.presentations}
           media={lib.media}
           unsavedItems={unsavedItems}
+          offlineSlot={
+            props.canOperate && !DEMO ? <OfflineControl playlistId={draft.id} rev={draft.rev} /> : undefined
+          }
         />
-        {props.canOperate && !DEMO && <OfflineControl playlistId={draft.id} rev={draft.rev} />}
         <div
           ref={sort.ref}
           className="col pl-list"

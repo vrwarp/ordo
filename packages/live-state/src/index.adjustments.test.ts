@@ -10,6 +10,7 @@ import {
   type ResolvedPlaylist,
   type Slide,
 } from '@ordo/domain';
+import { actionToEvent } from './actions.ts';
 import { initialState, isLiveEventShape, reduce, reduceAll } from './index.ts';
 import { checkInvariants } from './invariants.ts';
 
@@ -247,6 +248,20 @@ describe('ADR 0015 closed-manifest live adjustments', () => {
         text: 'Hi',
       }),
     ).toBe(true);
+  });
+
+  it('actionToEvent maps skipNextItem to item.skip for the next upcoming non-skipped item', () => {
+    let s = reduceAll(initialState(), [
+      { k: 'goLive', resolved: makeFixture() },
+      { k: 'go', cueIndex: 0, at: 100 }, // i0 is ON AIR
+    ]);
+    const ev1 = actionToEvent(s, { id: 'skipNextItem' }, 200);
+    expect(ev1).toEqual({ k: 'item.skip', itemId: 'i1', skipped: true });
+    s = reduce(s, ev1!);
+    const ev2 = actionToEvent(s, { id: 'skipNextItem' }, 300);
+    expect(ev2).toEqual({ k: 'item.skip', itemId: 'i2', skipped: true });
+    s = reduce(s, ev2!);
+    expect(actionToEvent(s, { id: 'skipNextItem' }, 400)).toBeNull();
   });
 
   it('preserves all invariants across arbitrary sequences of navigation and live adjustments', () => {

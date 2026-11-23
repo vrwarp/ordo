@@ -53,6 +53,16 @@ export function actionToEvent(
       return { k: 'nextItem', at };
     case 'prevItem':
       return { k: 'prevItem', at };
+    case 'skipNextItem': {
+      if (s.mode !== 'live' || !s.resolved) return null;
+      const curItem = s.live !== undefined ? s.cues[s.live]?.itemIndex : -1;
+      const items = s.resolved.playlist.items;
+      for (let i = (curItem ?? -1) + 1; i < items.length; i++) {
+        const it = items[i]!;
+        if (!it.skipped) return { k: 'item.skip', itemId: it.id, skipped: true };
+      }
+      return null;
+    }
     case 'goToItem': {
       const n = Number(action.arg ?? 1);
       const itemCues = s.cues.filter((c) => c.itemIndex === n - 1 && !c.hidden);

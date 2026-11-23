@@ -77,12 +77,13 @@ import { APP_VERSION } from './index.ts';
 // label, the Stage and search). The sub-wave's one bump to 0.11.0, the last commit of the pull request, covers it, and the
 // integrator records the merged digest once after the last merge.
 // 0.12.0 for ADR 0015 (closed-manifest live adjustments and PlaylistItem overrides): schemas.ts adds optional
-// PlaylistItem.sections, hiddenSlides, and skipped; cues.ts applies sections/hiddenSlides/skipped and steps over
-// skipped items in nextShownCue/prevShownCue; live.ts and live-state add item.skip, item.arrange, item.hideSlides,
-// and slide.editText events and auto-unskip on explicit go.
+// PlaylistItem.sections, hiddenSlides, and skipped plus ActionId 'skipNextItem'; cues.ts applies
+// sections/hiddenSlides/skipped and steps over skipped items in nextShownCue/prevShownCue; live.ts and
+// live-state add item.skip, item.arrange, item.hideSlides, and slide.editText events, skipNextItem action
+// mapping, and auto-unskip on explicit go.
 const RECORDED = {
   version: '0.12.0',
-  digest: '41b0dddf02dfb74cd1216d881f5b229fef243d616c5b1f22ab1f80ca9a2cba50',
+  digest: 'bf95749fb52fb5e8a2e25337e744a9a20d8466141b9dc283e2bd322e91ec874c',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

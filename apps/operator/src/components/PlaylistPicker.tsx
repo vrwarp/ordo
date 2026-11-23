@@ -67,8 +67,8 @@ export function PlaylistPicker({
           )}
           {trailing}
         </div>
-        {current && (current.serviceDate || pastSelected) && (
-          <div className="row" style={{ gap: 6, alignItems: 'center', fontSize: 11 }}>
+        {current && (current.serviceDate || pastSelected || (!locked && (onCreate || onDuplicate))) && (
+          <div className="row wrap" style={{ gap: 6, alignItems: 'center', fontSize: 11 }}>
             {current.serviceDate && <span className="muted">{current.serviceDate}</span>}
             <span className="muted">· {current.items.length} items</span>
             {pastSelected && (
@@ -81,6 +81,44 @@ export function PlaylistPicker({
                 Past date
               </span>
             )}
+            <span className="spacer" />
+            {!locked && onDuplicate && (
+              <button
+                type="button"
+                className="ghost small"
+                style={{ fontSize: 11, padding: '1px 5px' }}
+                onClick={() => onDuplicate(current)}
+                title="Duplicate this playlist for next service"
+                data-compact-duplicate-playlist
+              >
+                Duplicate
+              </button>
+            )}
+            {!locked && onCreate && (
+              <button
+                type="button"
+                className="ghost small"
+                style={{ fontSize: 11, padding: '1px 5px' }}
+                onClick={() => onCreate('')}
+                title="Create a new service playlist"
+                data-compact-new-playlist
+              >
+                + New
+              </button>
+            )}
+          </div>
+        )}
+        {!current && !locked && onCreate && (
+          <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+            <button
+              type="button"
+              className="ghost small"
+              style={{ fontSize: 11, padding: '1px 5px' }}
+              onClick={() => onCreate('')}
+              data-compact-new-playlist
+            >
+              + New playlist
+            </button>
           </div>
         )}
       </div>

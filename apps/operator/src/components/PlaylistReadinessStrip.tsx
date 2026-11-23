@@ -1,9 +1,11 @@
 import type { Media, Playlist, Presentation } from '@ordo/domain';
+import type { ReactNode } from 'react';
 import { computePlaylistReadiness } from '../lib/playlists.ts';
 
 /**
- * Unified pre-service readiness summary shown on both Playlists and Live (Preview).
- * Compact-safe: imports no live controller.
+ * Unified pre-service readiness summary shown on both Playlists and Live (Preview), with an optional
+ * `offlineSlot` for `OfflineControl` so both screens share one readiness surface while keeping this
+ * component compact-safe (no live controller imports).
  */
 export function PlaylistReadinessStrip({
   playlist,
@@ -11,55 +13,49 @@ export function PlaylistReadinessStrip({
   media,
   unsavedItems,
   compact,
+  offlineSlot,
 }: {
   playlist: Playlist;
   presentations: readonly Presentation[];
   media: readonly Media[];
   unsavedItems: Record<string, unknown>;
   compact?: boolean;
+  offlineSlot?: ReactNode;
 }) {
   const issues = computePlaylistReadiness(playlist, presentations, media, unsavedItems);
-  if (issues.length === 0) {
-    return (
-      <div
-        className="row"
-        style={{
-          gap: 6,
-          alignItems: 'center',
-          padding: compact ? '5px 10px' : '6px 10px',
-          fontSize: 11.5,
-          borderBottom: compact ? '1px solid var(--line)' : undefined,
-          border: compact ? undefined : '1px solid var(--line)',
-          borderRadius: compact ? undefined : 6,
-          background: 'var(--bg2)',
-        }}
-        data-readiness="ok"
-      >
-        <span className="dot green" />
-        <span className="muted">Ready · {playlist.items.length} items</span>
-      </div>
-    );
-  }
   const hasError = issues.some((i) => i.level === 'error');
+  const status = issues.length === 0 ? 'ok' : hasError ? 'error' : 'warn';
+
   return (
     <div
-      className="row wrap"
+      className="col"
       style={{
         gap: 6,
-        alignItems: 'center',
-        padding: compact ? '6px 10px' : '6px 10px',
+        padding: compact ? '6px 10px' : '8px 10px',
         fontSize: 11.5,
         borderBottom: compact ? '1px solid var(--line)' : undefined,
         border: compact
           ? undefined
-          : `1px solid ${hasError ? 'var(--red, #ef4444)' : 'var(--amber, #f59e0b)'}`,
+          : `1px solid ${status === 'error' ? 'var(--red, #ef4444)' : status === 'warn' ? 'var(--amber, #f59e0b)' : 'var(--line)'}`,
         borderRadius: compact ? undefined : 6,
-        background: hasError ? 'rgba(239, 68, 68, 0.08)' : 'rgba(245, 158, 11, 0.08)',
+        background:
+          status === 'error'
+            ? 'rgba(239, 68, 68, 0.08)'
+            : status === 'warn'
+              ? 'rgba(245, 158, 11, 0.08)'
+              : 'var(--bg2)',
       }}
-      data-readiness={hasError ? 'error' : 'warn'}
+      data-readiness={status}
     >
-      <span className={`dot ${hasError ? 'red' : 'amber'}`} />
-      <span className="grow">{issues.map((i) => i.text).join(' · ')}</span>
+      <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
+        <span className={`dot ${status === 'ok' ? 'green' : status === 'error' ? 'red' : 'amber'}`} />
+        {status === 'ok' ? (
+          <span className="muted">Ready · {playlist.items.length} items</span>
+        ) : (
+          <span className="grow">{issues.map((i) => i.text).join(' · ')}</span>
+        )}
+      </div>
+      {offlineSlot}
     </div>
   );
 }

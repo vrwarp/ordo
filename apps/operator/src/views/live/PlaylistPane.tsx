@@ -1,4 +1,5 @@
-import type { Playlist, PlaylistItem } from '@ordo/domain';
+import { api, DEMO } from '@ordo/client';
+import { newId, type Playlist, type PlaylistItem } from '@ordo/domain';
 import { useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { PlaylistItemRowContent } from '../../components/PlaylistItemRow.tsx';
@@ -8,16 +9,19 @@ import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { moveItem } from '../../lib/arrangement.ts';
 import { KIND_ICON, itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
+import { duplicatePlaylistPayload, nextSundayIso } from '../../lib/playlists.ts';
 import { itemGoTarget } from '../../lib/sections.ts';
 import { startService } from '../../lib/startService.ts';
 import { controller } from '../../services/controller.ts';
-import { useLibrary } from '../../state/library.ts';
+import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import { flushPlaylist, updatePlaylistDraft } from '../../state/playlistOutbox.ts';
+import { errorText, toast } from '../../state/toasts.ts';
 import { useUnsaved } from '../../state/unsaved.ts';
 import { requestScrollToPlaylistItem, setUi, useUi } from '../../state/ui.ts';
 import { navigate } from '../../useRoute.ts';
 import { AddItemsPanel } from '../playlists/AddItemsPanel.tsx';
+import { OfflineControl } from '../playlists/OfflineControl.tsx';
 import type { OperatorPlaylist } from './useOperatorPlaylist.ts';
 
 // Re-exported from their own module (lib/playlistItems.ts), which the playlist editor imports without the
@@ -159,6 +163,35 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
     );
   };
 
+  const createPlaylist = async (rawName: string) => {
+    const n = rawName.trim() || `Service ${nextSundayIso()}`;
+    try {
+      const p = await api<Playlist>('/playlists', {
+        method: 'POST',
+        json: { id: newId(), rev: 1, name: n, items: [], serviceDate: nextSundayIso() },
+      });
+      upsertLocal('playlists', p);
+      setUi({ selectedPlaylistId: p.id, followLive: true });
+      requestScrollToPlaylistItem(0);
+    } catch (e) {
+      toast(`Could not create playlist: ${errorText(e)}`, 'error');
+    }
+  };
+
+  const duplicatePlaylist = async (p: Playlist) => {
+    try {
+      const copy = await api<Playlist>('/playlists', {
+        method: 'POST',
+        json: duplicatePlaylistPayload(p),
+      });
+      upsertLocal('playlists', copy);
+      setUi({ selectedPlaylistId: copy.id, followLive: true });
+      requestScrollToPlaylistItem(0);
+    } catch (e) {
+      toast(`Could not duplicate playlist: ${errorText(e)}`, 'error');
+    }
+  };
+
   return (
     <div className="pane" style={{ display: 'flex', flexDirection: 'column', position: 'relative' }}>
       <div className="pane-head" style={{ alignItems: 'flex-start' }}>
@@ -172,6 +205,8 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
             setUi({ selectedPlaylistId: id, followLive: true });
             requestScrollToPlaylistItem(0);
           }}
+          onCreate={(rawName) => void createPlaylist(rawName)}
+          onDuplicate={(p) => void duplicatePlaylist(p)}
           trailing={
             op.playlist && (
               <button
@@ -209,6 +244,9 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
             media={lib.media}
             unsavedItems={unsavedItems}
             compact
+            offlineSlot={
+              !DEMO ? <OfflineControl playlistId={op.playlist.id} rev={op.playlist.rev} /> : undefined
+            }
           />
         </>
       )}
