@@ -106,7 +106,7 @@ export function PlaylistPicker({
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && submitCreate()}
           />
-          <button type="button" className="primary" onClick={submitCreate} aria-label="Create playlist">
+          <button type="button" className="primary" onClick={submitCreate} title="Create playlist">
             +
           </button>
         </div>
