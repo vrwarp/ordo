@@ -1133,6 +1133,19 @@ export function clampLook(look: unknown): Look {
     props.stagePreset = pr.stagePreset;
   if (pr.notesScale === 'sm' || pr.notesScale === 'md' || pr.notesScale === 'lg' || pr.notesScale === 'xl')
     props.notesScale = pr.notesScale;
+  if (
+    pr.countdownPreset === 'cornerCircle' ||
+    pr.countdownPreset === 'cornerPill' ||
+    pr.countdownPreset === 'centerHero'
+  )
+    props.countdownPreset = pr.countdownPreset;
+  if (
+    pr.countdownCorner === 'topLeft' ||
+    pr.countdownCorner === 'topRight' ||
+    pr.countdownCorner === 'bottomLeft' ||
+    pr.countdownCorner === 'bottomRight'
+  )
+    props.countdownCorner = pr.countdownCorner;
   const tr = l.transition as Look['transition'] | undefined;
   const transition: Look['transition'] =
     tr && typeof tr === 'object' && (tr.kind === 'cut' || tr.kind === 'crossfade')

@@ -1,10 +1,13 @@
 import {
   type Box,
+  type CountdownCorner,
+  type CountdownPreset,
   DEFAULT_LYRIC_STYLE,
   type LiveState,
   type Look,
   MANUAL_ELAPSED_TIMER_ID,
   type PropBox,
+  type Rgba,
   type TextStyle,
   type Timer,
   WHITE,
@@ -20,9 +23,18 @@ import {
 
 export type PropTextItem = { id: PropId; text: string; style: TextStyle; box: Box };
 export type PropId = 'countdown' | 'countdownLabel' | 'clock' | 'elapsed' | 'message' | 'videoRemaining';
+export type CountdownRing = {
+  box: Box;
+  /** Remaining fraction in [0, 1]. */
+  progress: number;
+  fillColor: Rgba;
+  trackColor: Rgba;
+  strokeColor: Rgba;
+};
 export type PropsModel = {
   key: string;
   items: PropTextItem[];
+  ring?: CountdownRing;
   logo?: { mediaId: string; box: Box };
   /** True when the logo toggled on or off (the change uses the look's transition, others cut). */
   empty: boolean;
@@ -46,6 +58,29 @@ const base: TextStyle = {
   padding: 12,
 };
 
+export function effectiveCountdownPreset(look: Look): CountdownPreset {
+  return look.layers.props.countdownPreset ?? 'cornerCircle';
+}
+
+export function effectiveCountdownCorner(look: Look): CountdownCorner {
+  return look.layers.props.countdownCorner ?? (look.kind === 'stream' ? 'topRight' : 'bottomRight');
+}
+
+const CORNER_MARGIN = 48;
+const CIRCLE_SIZE = 200;
+const PILL_W = 420;
+const PILL_COMPACT_W = 200;
+const PILL_H = 72;
+
+function cornerOrigin(corner: CountdownCorner, w: number, h: number): { x: number; y: number } {
+  const right = corner === 'topRight' || corner === 'bottomRight';
+  const bottom = corner === 'bottomLeft' || corner === 'bottomRight';
+  return {
+    x: right ? 1920 - CORNER_MARGIN - w : CORNER_MARGIN,
+    y: bottom ? 1080 - CORNER_MARGIN - h : CORNER_MARGIN,
+  };
+}
+
 /** Default prop placement in logical 1920x1080 space. Stage-like looks keep the top and bottom strips. */
 export function defaultPropBox(id: PropId | 'logo', look: Look): PropBox {
   const stage = look.kind === 'stage';
@@ -54,28 +89,88 @@ export function defaultPropBox(id: PropId | 'logo', look: Look): PropBox {
       return { ...base, fontSizePx: 64, align: 'right', valign: 'middle', box: box(1400, 16, 500, 110) };
     case 'elapsed':
       return { ...base, fontSizePx: 64, align: 'left', valign: 'middle', box: box(20, 16, 500, 110) };
-    case 'countdown':
-      return stage
-        ? { ...base, fontSizePx: 64, align: 'center', valign: 'middle', box: box(660, 16, 600, 110) }
-        : { ...base, fontSizePx: 180, align: 'center', valign: 'middle', box: box(410, 330, 1100, 260) };
-    case 'countdownLabel':
-      return stage
-        ? {
-            ...base,
-            fontSizePx: 30,
-            fontWeight: 400,
-            align: 'center',
-            valign: 'top',
-            box: box(660, 116, 600, 50),
-          }
-        : {
-            ...base,
-            fontSizePx: 56,
-            fontWeight: 400,
-            align: 'center',
-            valign: 'top',
-            box: box(260, 600, 1400, 120),
-          };
+    case 'countdown': {
+      if (stage)
+        return { ...base, fontSizePx: 64, align: 'center', valign: 'middle', box: box(660, 16, 600, 110) };
+      const preset = effectiveCountdownPreset(look);
+      if (preset === 'centerHero') {
+        return { ...base, fontSizePx: 180, align: 'center', valign: 'middle', box: box(410, 330, 1100, 260) };
+      }
+      const corner = effectiveCountdownCorner(look);
+      if (preset === 'cornerPill') {
+        const { x, y } = cornerOrigin(corner, PILL_W, PILL_H);
+        return {
+          ...base,
+          fontSizePx: 36,
+          outline: undefined,
+          fill: { color: { r: 15, g: 23, b: 42, a: 0.78 }, radius: 36 },
+          padding: 20,
+          align: 'right',
+          valign: 'middle',
+          box: box(x, y, PILL_W, PILL_H),
+        };
+      }
+      const { x, y } = cornerOrigin(corner, CIRCLE_SIZE, CIRCLE_SIZE);
+      return {
+        ...base,
+        fontSizePx: 50,
+        outline: undefined,
+        padding: 8,
+        align: 'center',
+        valign: 'middle',
+        box: box(x + 18, y + 48, CIRCLE_SIZE - 36, 84),
+      };
+    }
+    case 'countdownLabel': {
+      if (stage) {
+        return {
+          ...base,
+          fontSizePx: 30,
+          fontWeight: 400,
+          align: 'center',
+          valign: 'top',
+          box: box(660, 116, 600, 50),
+        };
+      }
+      const preset = effectiveCountdownPreset(look);
+      if (preset === 'centerHero') {
+        return {
+          ...base,
+          fontSizePx: 56,
+          fontWeight: 400,
+          align: 'center',
+          valign: 'top',
+          box: box(260, 600, 1400, 120),
+        };
+      }
+      const corner = effectiveCountdownCorner(look);
+      if (preset === 'cornerPill') {
+        const { x, y } = cornerOrigin(corner, PILL_W, PILL_H);
+        return {
+          ...base,
+          fontSizePx: 22,
+          fontWeight: 500,
+          color: { r: 226, g: 232, b: 240, a: 0.95 },
+          outline: undefined,
+          padding: 20,
+          align: 'left',
+          valign: 'middle',
+          box: box(x, y, 250, PILL_H),
+        };
+      }
+      const { x, y } = cornerOrigin(corner, CIRCLE_SIZE, CIRCLE_SIZE);
+      return {
+        ...base,
+        fontSizePx: 18,
+        fontWeight: 600,
+        color: { r: 210, g: 220, b: 235, a: 0.92 },
+        outline: undefined,
+        padding: 4,
+        align: 'center',
+        valign: 'top',
+        box: box(x + 22, y + 128, CIRCLE_SIZE - 44, 34),
+      };
+    }
     case 'message':
       return {
         ...base,
@@ -126,7 +221,14 @@ export function countdownText(
   state: LiveState,
   ctx: PropsContext,
   look?: Look,
-): { text: string; label?: string; remainingMs: number } | null {
+): {
+  text: string;
+  label?: string;
+  remainingMs: number;
+  progress: number;
+  preset?: CountdownPreset;
+  corner?: CountdownCorner;
+} | null {
   const id = state.props.countdownTimerId;
   const t = id ? state.timers[id] : undefined;
   if (!t?.running || t.spec.kind !== 'countdownTo') return null;
@@ -136,7 +238,17 @@ export function countdownText(
   if (look && look.kind !== 'stage' && diff < -3500) return null;
   const remainingMs = Math.max(0, diff);
   // Round up so the display reaches 00:00 exactly at the target second.
-  return { text: formatDuration(Math.ceil(remainingMs / 1000) * 1000), label: t.spec.label, remainingMs };
+  const roundedMs = Math.ceil(remainingMs / 1000) * 1000;
+  const totalMs = t.startedAt !== undefined ? Math.max(1000, target - t.startedAt) : 0;
+  const progress = totalMs > 0 ? Math.max(0, Math.min(1, roundedMs / totalMs)) : 0;
+  return {
+    text: formatDuration(roundedMs),
+    label: t.spec.label,
+    remainingMs,
+    progress,
+    preset: t.spec.preset,
+    corner: t.spec.corner,
+  };
 }
 
 /** The newest stage message that has not expired. */
@@ -166,16 +278,59 @@ export function showsVideoRemaining(look: Look): boolean {
 export function propsModel(state: LiveState, look: Look, ctx: PropsContext): PropsModel {
   const rule = look.layers.props;
   const items: PropTextItem[] = [];
+  let ring: CountdownRing | undefined;
   let logo: PropsModel['logo'];
+  let cdSig = '';
   if (state.mode === 'live' && !state.black) {
     if (rule.logo && state.props.logo && ctx.logoMediaId)
       logo = { mediaId: ctx.logoMediaId, box: propBox('logo', look).box };
     if (rule.countdown) {
       const cd = countdownText(state, ctx, look);
       if (cd) {
-        items.push({ id: 'countdown', text: cd.text, ...split(propBox('countdown', look)) });
+        const effectiveLook =
+          look.kind !== 'stage' && (cd.preset || cd.corner)
+            ? {
+                ...look,
+                layers: {
+                  ...look.layers,
+                  props: {
+                    ...rule,
+                    countdownPreset: cd.preset ?? rule.countdownPreset,
+                    countdownCorner: cd.corner ?? rule.countdownCorner,
+                  },
+                },
+              }
+            : look;
+        const customCountdown = Boolean(rule.style.countdown);
+        const preset = effectiveCountdownPreset(effectiveLook);
+        const corner = effectiveCountdownCorner(effectiveLook);
+        if (cd.preset || cd.corner) cdSig = `${preset}:${corner}`;
+        let cdBox = propBox('countdown', effectiveLook);
+        if (look.kind !== 'stage' && !customCountdown) {
+          if (preset === 'cornerCircle') {
+            const { x, y } = cornerOrigin(corner, CIRCLE_SIZE, CIRCLE_SIZE);
+            ring = {
+              box: box(x, y, CIRCLE_SIZE, CIRCLE_SIZE),
+              progress: cd.progress,
+              fillColor: { r: 15, g: 23, b: 42, a: 0.78 },
+              trackColor: { r: 255, g: 255, b: 255, a: 0.18 },
+              strokeColor: { r: 255, g: 255, b: 255, a: 0.95 },
+            };
+            if (!cd.label) {
+              cdBox = { ...cdBox, box: box(x + 18, y + 56, CIRCLE_SIZE - 36, 88) };
+            }
+          } else if (preset === 'cornerPill' && !cd.label) {
+            const { x, y } = cornerOrigin(corner, PILL_COMPACT_W, PILL_H);
+            cdBox = { ...cdBox, align: 'center', box: box(x, y, PILL_COMPACT_W, PILL_H) };
+          }
+        }
+        items.push({ id: 'countdown', text: cd.text, ...split(cdBox) });
         if (cd.label)
-          items.push({ id: 'countdownLabel', text: cd.label, ...split(propBox('countdownLabel', look)) });
+          items.push({
+            id: 'countdownLabel',
+            text: cd.label,
+            ...split(propBox('countdownLabel', effectiveLook)),
+          });
       }
     }
     if (rule.elapsed) {
@@ -202,9 +357,9 @@ export function propsModel(state: LiveState, look: Look, ctx: PropsContext): Pro
       text: formatClock(ctx.now, ctx.timeZone, ctx.clock24h),
       ...split(propBox('clock', look)),
     });
-  const empty = !logo && items.length === 0;
+  const empty = !logo && !ring && items.length === 0;
   const key = empty
     ? ''
-    : `pr|${ctx.lookSig ?? look.id}|${logo ? `L:${logo.mediaId}` : ''}|${items.map((i) => `${i.id}=${i.text}`).join('|')}`;
-  return { key, items, logo, empty };
+    : `pr|${ctx.lookSig ?? look.id}|${cdSig}|${logo ? `L:${logo.mediaId}` : ''}|${ring ? `R:${Math.round(ring.progress * 360)}` : ''}|${items.map((i) => `${i.id}=${i.text}`).join('|')}`;
+  return { key, items, ring, logo, empty };
 }

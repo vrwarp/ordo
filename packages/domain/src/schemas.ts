@@ -1263,12 +1263,22 @@ export const Font = z.object({
 });
 export type Font = z.infer<typeof Font>;
 
+export const CountdownPreset = z.enum(['cornerCircle', 'cornerPill', 'centerHero']);
+export type CountdownPreset = z.infer<typeof CountdownPreset>;
+
+export const CountdownCorner = z.enum(['topLeft', 'topRight', 'bottomLeft', 'bottomRight']);
+export type CountdownCorner = z.infer<typeof CountdownCorner>;
+
 export const TimerSpec = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('countdownTo'),
     /** HH:MM in the venue's time zone. */
     timeOfDay: z.string().regex(/^\d{2}:\d{2}$/),
     label: z.string().max(200).optional(),
+    /** Optional per-timer visual preset override on non-stage looks; absent inherits from the Look. */
+    preset: CountdownPreset.optional().catch(undefined),
+    /** Optional per-timer corner override on non-stage looks; absent inherits from the Look. */
+    corner: CountdownCorner.optional().catch(undefined),
   }),
   z.object({ kind: z.literal('elapsed'), label: z.string().max(200).optional() }),
 ]);
@@ -1416,6 +1426,10 @@ export const PropsRule = z.object({
   stagePreset: StagePreset.catch('auto').optional(),
   /** Stage notes font size tier when `style['notes']` is not customized; absent means `'lg'`. */
   notesScale: StageNotesScale.catch('lg').optional(),
+  /** Visual preset for the countdown timer on non-stage looks; absent means `'cornerCircle'`. */
+  countdownPreset: CountdownPreset.catch('cornerCircle').optional(),
+  /** Corner placement when `countdownPreset` is `'cornerCircle'` or `'cornerPill'`; absent means `'bottomRight'`. */
+  countdownCorner: CountdownCorner.catch('bottomRight').optional(),
 });
 export type PropsRule = z.infer<typeof PropsRule>;
 

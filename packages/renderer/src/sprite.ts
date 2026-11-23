@@ -616,6 +616,10 @@ export function lowerThirdReach(ctx: Ctx2D, text: string, look: Look, scale: num
 export function propsReach(ctx: Ctx2D, model: PropsModel, scale: number): Reach {
   if (model.logo) return null;
   let r: Reach = EMPTY;
+  if (model.ring) {
+    const b = model.ring.box;
+    r = union(r, { x: b.x * scale, y: b.y * scale, w: b.w * scale, h: b.h * scale });
+  }
   for (const it of model.items) r = union(r, legacyTextReach(ctx, it.text, it.style, it.box, scale, true));
   return r;
 }

@@ -90,7 +90,10 @@ const RECORDED = {
   // on') holds that a slide's notes change nothing a draw records without a look or with any look but such a stage look,
   // and a comparison of the canvas calls of the code before and after (72 cases: 6 slides, 6 looks, 2 kinds) found them
   // equal except the 4 cases of a stage look with notes on.
-  digest: 'e57f4547f29487cf46e933ab44fc60b79a978d156d202af7996ce67cedff9cfa',
+  // Countdown presets (same slide pixels, PRERENDER_VERSION unchanged): clamp.ts preserves optional `countdownPreset`
+  // and `countdownCorner` on `PropsRule`, and raster.ts draws the progress ring in `rasterProps` (props layer only;
+  // slide prerendering does not call `rasterProps` or read `PropsRule`).
+  digest: '96f567ff4456cad8cfe4e19dc6660e92427bd683be8fed7a3fd6b32fdda7ab1a',
 };
 
 /** The source without comments and layout. */

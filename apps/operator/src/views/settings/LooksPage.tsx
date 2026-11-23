@@ -1,6 +1,9 @@
 import {
+  type CountdownCorner,
+  type CountdownPreset,
   DEFAULT_LYRIC_STYLE,
   KEY_GREEN,
+  type LiveState,
   type Look,
   nearColor,
   newId,
@@ -11,7 +14,13 @@ import {
   songFromParsed,
   stageNotesEnabled,
 } from '@ordo/domain';
-import { drawSlide2D } from '@ordo/renderer';
+import {
+  drawSlide2D,
+  effectiveCountdownCorner,
+  effectiveCountdownPreset,
+  propsModel,
+  rasterProps,
+} from '@ordo/renderer';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ColorField } from '../../components/ColorField.tsx';
 import { confirmDialog } from '../../components/Confirm.tsx';
@@ -67,6 +76,44 @@ const SAMPLE_SERMON_NEXT: Slide = {
   ],
 };
 
+const SAMPLE_COUNTDOWN_NOW = Date.UTC(2026, 10, 1, 9, 55, 0);
+const SAMPLE_COUNTDOWN_STATE: LiveState = {
+  seq: 1,
+  mode: 'live',
+  cues: [],
+  audio: { content: null, seq: 0, at: 0 },
+  layers: {
+    background: { content: null, seq: 0, at: 0 },
+    slide: { content: null, seq: 0, at: 0 },
+    lowerThird: { content: null, seq: 0, at: 0 },
+    media: { content: null, seq: 0, at: 0 },
+  },
+  black: false,
+  props: { logo: false, countdownTimerId: 'preview-cd', seq: 1, at: 0 },
+  timers: {
+    'preview-cd': {
+      id: 'preview-cd',
+      spec: { kind: 'countdownTo', timeOfDay: '10:00', label: 'Service starts' },
+      running: true,
+      startedAt: SAMPLE_COUNTDOWN_NOW - 5 * 60_000,
+    },
+  },
+  messages: [],
+};
+
+const COUNTDOWN_PRESETS: readonly { id: CountdownPreset; label: string }[] = [
+  { id: 'cornerCircle', label: 'Corner Circle' },
+  { id: 'cornerPill', label: 'Corner Pill' },
+  { id: 'centerHero', label: 'Center Hero' },
+];
+
+const COUNTDOWN_CORNERS: readonly { id: CountdownCorner; label: string }[] = [
+  { id: 'topLeft', label: 'Top Left' },
+  { id: 'topRight', label: 'Top Right' },
+  { id: 'bottomLeft', label: 'Bottom Left' },
+  { id: 'bottomRight', label: 'Bottom Right' },
+];
+
 function LookPreview({ look }: { look: Look }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const fontGen = useFontGeneration();
@@ -94,13 +141,22 @@ function LookPreview({ look }: { look: Look }) {
         ? SAMPLE_SONG_SLIDE
         : SAMPLE.sections[0]!.slides[0]!;
     const s1 = useSermon ? SAMPLE_SERMON_NEXT : SAMPLE.sections[1]!.slides[0]!;
+    const scale = c.width / 1920;
     drawSlide2D(ctx, s0, {
-      scale: c.width / 1920,
+      scale,
       look,
       isSong: !useSermon,
       presentationKind: useSermon ? 'slides' : 'song',
       nextSlide: s1,
     });
+    if (look.layers.props.countdown && look.kind !== 'stage') {
+      const model = propsModel(SAMPLE_COUNTDOWN_STATE, look, {
+        now: SAMPLE_COUNTDOWN_NOW,
+        timeZone: 'UTC',
+        clock24h: false,
+      });
+      rasterProps(ctx, model, scale, () => undefined, look.clearColor);
+    }
   }, [look, fontGen, hasStageNotes, sampleKind]);
 
   return (
@@ -399,6 +455,50 @@ export function LooksPage() {
                 />
               ))}
             </div>
+            {look.layers.props.countdown && look.kind !== 'stage' && (
+              <>
+                <Field label="Countdown style">
+                  <div className="ed-seg-bar">
+                    {COUNTDOWN_PRESETS.map((p) => {
+                      const active = effectiveCountdownPreset(look) === p.id;
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className={`small ${active ? 'on' : ''}`}
+                          onClick={() =>
+                            setLayers({ props: { ...look.layers.props, countdownPreset: p.id } })
+                          }
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
+                {effectiveCountdownPreset(look) !== 'centerHero' && (
+                  <Field label="Countdown corner">
+                    <div className="ed-seg-bar">
+                      {COUNTDOWN_CORNERS.map((c) => {
+                        const active = effectiveCountdownCorner(look) === c.id;
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            className={`small ${active ? 'on' : ''}`}
+                            onClick={() =>
+                              setLayers({ props: { ...look.layers.props, countdownCorner: c.id } })
+                            }
+                          >
+                            {c.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </Field>
+                )}
+              </>
+            )}
           </div>
           {(look.kind === 'stage' || look.layers.props.notes) && (
             <StageNotesOptions look={look} onChange={(props) => setLayers({ props })} />

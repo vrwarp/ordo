@@ -54,6 +54,13 @@ describe("a stage look's notes region (design/27 §3.1 PropsRule.notes, §11 ite
     expect(parsed.notesScale).toBe('xl');
     expect(PropsRule.parse({ stagePreset: 'bogus', notesScale: 'huge' }).stagePreset).toBe('auto');
 
+    const cd = PropsRule.parse({ countdownPreset: 'cornerPill', countdownCorner: 'topLeft' });
+    expect(cd.countdownPreset).toBe('cornerPill');
+    expect(cd.countdownCorner).toBe('topLeft');
+    const cdFallback = PropsRule.parse({ countdownPreset: 'bogus', countdownCorner: 'middle' });
+    expect(cdFallback.countdownPreset).toBe('cornerCircle');
+    expect(cdFallback.countdownCorner).toBe('bottomRight');
+
     const legacyStage = Look.parse({
       ...LOOK_STAGE,
       layers: {
