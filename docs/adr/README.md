@@ -19,3 +19,4 @@ earlier one supersedes it and says so.
 | [0012](0012-import-strategy.md)                  | ProPresenter 7 via vendored proto; SongSelect via files; PPTX via LibreOffice render plus XML text extraction                                                              |
 | [0013](0013-implementation-adjustments.md)       | Adjustments made while implementing: API on every host, health outside the reducer, *.localhost origins, fullscreen popups, full-frame slide bitmaps, Canvas 2D safety net |
 | [0014](0014-supervised-isolation.md)             | Supervised isolation: main threads host only, workers with supervisors and heartbeats, MessagePort fallback bus, strict validation and quarantine, two hub processes       |
+| [0015](0015-closed-manifest-live-adjustments.md) | Closed-manifest live adjustments: asset/font manifest stays closed on go-live; booth operator may skip items, arrange off-air songs, skip slides, and hotfix off-air text  |

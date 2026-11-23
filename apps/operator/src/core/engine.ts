@@ -728,6 +728,37 @@ export class CoreEngine {
       case 'goLiveLocal':
         this.core.submit({ k: 'goLive', playlistId: String(args[0]) }, aid, { local: true });
         return;
+      case 'skipItem':
+        this.submit({ k: 'item.skip', itemId: String(args[0]), skipped: Boolean(args[1]) }, aid);
+        return;
+      case 'arrangeItem':
+        this.submit(
+          {
+            k: 'item.arrange',
+            itemId: String(args[0]),
+            sections: args[1] === null ? null : (args[1] as string[]),
+          },
+          aid,
+        );
+        return;
+      case 'hideItemSlides':
+        this.submit(
+          { k: 'item.hideSlides', itemId: String(args[0]), hiddenSlides: args[1] as string[] },
+          aid,
+        );
+        return;
+      case 'editSlideText':
+        this.submit(
+          {
+            k: 'slide.editText',
+            presentationId: String(args[0]),
+            slideId: String(args[1]),
+            objectId: String(args[2]),
+            text: String(args[3] ?? ''),
+          },
+          aid,
+        );
+        return;
       case 'offlineCheck':
         void this.offlineCheck(String(args[0])).then((result) =>
           this.post({ t: 'ui', e: { k: 'offlineCheck', result } }),

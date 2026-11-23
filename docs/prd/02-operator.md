@@ -23,11 +23,15 @@ data at small sizes. Program thumbnails are video streamed from the outputs
   media item (video, image, audio), timer item, or action item (clear, logo).
 - Playlists are built in the operator view or from home. Drag to reorder, insert from
   the library search, remove.
-- "Go live" on a playlist makes it the live playlist: the hub freezes it, builds the
-  service cache manifest, and every connected output and the operator prefetch it. The
-  top bar shows caching progress and turns green at 100 %. Editing the playlist and any
-  presentation it references is locked until "End service".
-- Only one playlist is live at a time. "End service" releases the lock and clears all layers.
+- "Go live" on a playlist makes it the live playlist: the hub freezes its asset and font
+  manifest, builds the service cache manifest, and every connected output and the operator
+  prefetch it. The top bar shows caching progress and turns green at 100 %. Adding new items,
+  presentations, media, or fonts requires "End service" and "Go live" again; remote/edit
+  sessions see the live playlist as read-only. Inside the closed manifest, the booth operator
+  may skip/unskip items, adjust song section order (`sections`) and skipped slides
+  (`hiddenSlides`) on off-air items, and hotfix native text on off-air slides (ADR 0015).
+- Only one playlist is live at a time. "End service" releases the lock and clears all layers
+  in a single confirmation click; live playlist adjustments are kept on that service's playlist.
 - A presentation item can keep the running background, play music on its slides (the pre-service loop's)
   and run a service countdown. Entering the item clears the running background when the slide has none
   and the item does not keep it, and starts its countdown, whichever slide the item is entered on: past a

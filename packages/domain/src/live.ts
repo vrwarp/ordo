@@ -154,10 +154,16 @@ export type Cue = {
   /** Loop presentations auto-advance after this many ms. */
   autoAdvanceMs?: number;
   /**
-   * A hidden PowerPoint slide (design/27 §9): Next, Prev, the cue a GO arms, auto-advance, onEnd 'advance',
-   * Next item and Previous item skip it; a GO with its index shows it. Only ever `true` on a slide cue.
+   * A hidden PowerPoint slide (design/27 §9) or per-service hidden slide (ADR 0015): Next, Prev, the cue a GO
+   * arms, auto-advance, onEnd 'advance', Next item and Previous item skip it; a GO with its index shows it.
+   * Only ever `true` on a slide cue.
    */
   hidden?: boolean;
+  /**
+   * The cue belongs to a skipped playlist item (ADR 0015): sequential navigation steps over it; an explicit GO
+   * into the item auto-unskips it.
+   */
+  skipped?: true;
   /*
    * A slide cue's own media (design/27 §3.3, §8), set by expandCues only for media in `resolved.media`.
    * The playing video also fills mediaId, mediaKind 'video', loop, onEnd and audio above.
@@ -312,6 +318,22 @@ const CLIENT_EVENTS = [
   z.object({ k: z.literal('message.clear') }).strict(),
   /** design/29 §1.7: the operator's "Use the picture for this slide during this service" (operate role). */
   z.object({ k: z.literal('prerender.use'), presentationId: Id, slideId: Id }).strict(),
+  /** ADR 0015: skip or unskip an off-air playlist item while live. */
+  z.object({ k: z.literal('item.skip'), itemId: Id, skipped: z.boolean() }).strict(),
+  /** ADR 0015: set or clear per-service section order on an off-air presentation item while live. */
+  z.object({ k: z.literal('item.arrange'), itemId: Id, sections: z.array(Id).max(500).nullable() }).strict(),
+  /** ADR 0015: set per-service hidden slides on an off-air presentation item while live. */
+  z.object({ k: z.literal('item.hideSlides'), itemId: Id, hiddenSlides: z.array(Id).max(2000) }).strict(),
+  /** ADR 0015: text-only typo hotfix on an off-air native text slide while live. */
+  z
+    .object({
+      k: z.literal('slide.editText'),
+      presentationId: Id,
+      slideId: Id,
+      objectId: Id,
+      text: z.string().max(20_000),
+    })
+    .strict(),
 ] as const;
 /**
  * design/29 §1.7, §1.11: a picture of a key of the live service the hub accepted during it (the go-live bake).

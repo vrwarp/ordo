@@ -40,11 +40,14 @@ export function ItemSettings(props: {
       <div className="col">
         <h3>{p.title}</h3>
         <Field label="Arrangement">
-          <div className="row">
+          <div className="row wrap">
             <select
               value={it.arrangementId ?? ''}
               disabled={props.disabled}
-              onChange={(e) => props.onChange({ ...it, arrangementId: e.target.value || undefined })}
+              onChange={(e) => {
+                const { sections: _s, ...rest } = it;
+                props.onChange({ ...rest, arrangementId: e.target.value || undefined });
+              }}
             >
               <option value="">
                 {p.arrangements[0] ? `${p.arrangements[0].name} (default)` : 'Authoring order'}
@@ -55,6 +58,19 @@ export function ItemSettings(props: {
                 </option>
               ))}
             </select>
+            {it.sections && !props.disabled && (
+              <button
+                type="button"
+                className="small"
+                onClick={() => {
+                  const { sections: _s, ...rest } = it;
+                  props.onChange(rest);
+                }}
+                title="Clear per-service custom section order"
+              >
+                Clear custom order
+              </button>
+            )}
             {!props.disabled && (
               <>
                 <button type="button" className="small" onClick={() => setEditing({ ...current })}>
@@ -70,13 +86,18 @@ export function ItemSettings(props: {
                       name: `${lib.playlists.find((x) => x.items.some((y) => y.id === it.id))?.name ?? 'This service'}`,
                     })
                   }
-                  title="A new arrangement for this service only"
+                  title="A new arrangement saved on the song"
                 >
                   New for this service
                 </button>
               </>
             )}
           </div>
+          {it.sections && (
+            <span className="muted small">
+              Using a custom section order for this service ({it.sections.length} sections).
+            </span>
+          )}
         </Field>
         {editing && (
           <div className="card col">

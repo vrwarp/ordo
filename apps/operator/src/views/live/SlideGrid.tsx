@@ -1,31 +1,143 @@
+import { api } from '@ordo/client';
 import {
+  type Arrangement,
   type Cue,
   firstText,
+  type Playlist,
   type PlaylistItem,
   type Slide,
+  type TextObject,
   isHiddenCue,
   withoutBackdrops,
 } from '@ordo/domain';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { InlineArrangementStrip } from '../../components/InlineArrangementStrip.tsx';
 import { armDot, waitingForLive } from '../../lib/health.ts';
+import { KIND_ICON, itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
 import { type CueGroup, groupCues, sectionGoTarget } from '../../lib/sections.ts';
 import { slideMediaTags } from '../../lib/slideMedia.ts';
-import { navigate } from '../../useRoute.ts';
 import { controller, dispatch } from '../../services/controller.ts';
-import { useLibrary } from '../../state/library.ts';
+import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
-import { setUi, useUi } from '../../state/ui.ts';
-import { KIND_ICON, itemSubtitle, itemTitle } from './PlaylistPane.tsx';
+import { updatePlaylistDraft } from '../../state/playlistOutbox.ts';
+import { errorText, toast } from '../../state/toasts.ts';
+import { requestScrollToPlaylistItem, setUi, useUi } from '../../state/ui.ts';
+import { navigate } from '../../useRoute.ts';
+import { ItemSettings } from '../playlists/ItemSettings.tsx';
 import { SlideThumb, type ThumbMarks } from './SlideThumb.tsx';
 import type { OperatorPlaylist } from './useOperatorPlaylist.ts';
 
 /** What the tag of a hidden slide says to a pointer or a screen reader. */
 const HIDDEN_TITLE = 'Hidden slide: Next skips it; click it to show it';
 
+type HotfixTarget = {
+  presentationId: string;
+  slideId: string;
+  objectId: string;
+  label: string;
+  initialText: string;
+};
+
+/** Primary editable text object on a native slide (excludes whole-slide pre-rendered pictures). */
+function editableTextObject(slide: Slide | undefined): TextObject | undefined {
+  if (!slide || slide.pptx?.class === 'picture') return undefined;
+  if (slide.lyricObjectId) {
+    const o = slide.objects.find((x): x is TextObject => x.id === slide.lyricObjectId && x.type === 'text');
+    if (o) return o;
+  }
+  return slide.objects.find((x): x is TextObject => x.type === 'text');
+}
+
+/**
+ * Keyboard-safe inline typo hotfix card (ADR 0015).
+ * `data-keys="off"` plus capture-phase Escape handling guarantees pressing Esc only closes the text box
+ * and never fires Clear slide, while warning the volunteer that Space types inside the field.
+ */
+function SlideTextHotfixCard({
+  target,
+  onSave,
+  onClose,
+}: {
+  target: HotfixTarget;
+  onSave: (text: string) => void;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState(target.initialText);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    const onKeyCapture = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyCapture, true);
+    return () => window.removeEventListener('keydown', onKeyCapture, true);
+  }, [onClose]);
+
+  return (
+    <div
+      className="card col"
+      data-keys="off"
+      data-hotfix-card
+      style={{
+        gap: 8,
+        marginBottom: 12,
+        border: '1px solid var(--amber, #f59e0b)',
+        background: 'var(--bg2)',
+      }}
+    >
+      <div
+        className="row"
+        style={{
+          gap: 8,
+          alignItems: 'center',
+          padding: '6px 8px',
+          borderRadius: 6,
+          background: 'rgba(245, 158, 11, 0.14)',
+          fontSize: 12,
+        }}
+      >
+        <span className="dot amber" />
+        <span className="grow">
+          <b>Typing in slide hotfix</b> ({target.label}) — Space types here; press <b>Esc</b> or <b>Done</b>{' '}
+          to restore slide keys (Stream Deck still works).
+        </span>
+      </div>
+      <textarea
+        ref={inputRef}
+        rows={3}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        style={{ width: '100%', fontFamily: 'inherit', fontSize: 14, resize: 'vertical' }}
+      />
+      <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
+        <button type="button" className="small" onClick={onClose}>
+          Cancel (Esc)
+        </button>
+        <button
+          type="button"
+          className="primary small"
+          onClick={() => {
+            onSave(text);
+            onClose();
+          }}
+        >
+          Save &amp; Done
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * A single playlist item in the continuous playlist scroll view (ProPresenter-style).
- * Displays an item header bar with title, kind, subtitle, on-air badge and actions, followed by its sections and slides.
+ * Displays an item header bar with title, kind, subtitle, on-air badge and actions, optional song
+ * arrangement strip, collapsible item settings popover, and its sections and slides.
  */
 function PlaylistItemSection({
   item,
@@ -33,12 +145,18 @@ function PlaylistItemSection({
   op,
   cues,
   liveHere,
+  clickToGo,
   thumbSize,
   isLiveItem,
+  isActiveItem,
   slideOf,
   marksFor,
   onClick,
   onDouble,
+  onUpdatePreviewItem,
+  onSaveArrangement,
+  onArrangeOpenChange,
+  onStartHotfix,
   headerRef,
 }: {
   item: PlaylistItem;
@@ -46,32 +164,83 @@ function PlaylistItemSection({
   op: OperatorPlaylist;
   cues: Cue[];
   liveHere: boolean;
+  clickToGo: boolean;
   thumbSize: number;
   isLiveItem: boolean;
+  isActiveItem: boolean;
   slideOf: (c: Cue) => Slide | undefined;
   marksFor: (c: Cue) => ThumbMarks;
   onClick: (c: Cue) => void;
   onDouble: (c: Cue) => void;
+  onUpdatePreviewItem: (fn: (it: PlaylistItem) => PlaylistItem) => void;
+  onSaveArrangement: (presentationId: string, a: Arrangement) => Promise<boolean>;
+  onArrangeOpenChange: (open: boolean) => void;
+  onStartHotfix: (target: HotfixTarget) => void;
   headerRef: (el: HTMLElement | null) => void;
 }) {
+  const [showSettings, setShowSettings] = useState(false);
   const groups: CueGroup[] = useMemo(() => groupCues(cues), [cues]);
   const presentation = item.kind === 'presentation' ? op.presentation(item.presentationId) : undefined;
   const isSong = presentation?.kind === 'song';
   const subtitle = itemSubtitle(item, op);
   const ctl = controller();
+  const skipped = item.skipped === true;
+
+  const toggleHiddenSlide = (slideId: string) => {
+    if (item.kind !== 'presentation') return;
+    const cur = item.hiddenSlides ?? [];
+    const next = cur.includes(slideId) ? cur.filter((id) => id !== slideId) : [...cur, slideId];
+    if (liveHere) {
+      ctl?.hideItemSlides(item.id, next);
+    } else {
+      onUpdatePreviewItem((it) => {
+        if (it.kind !== 'presentation') return it;
+        if (!next.length) {
+          const { hiddenSlides: _h, ...rest } = it;
+          return rest;
+        }
+        return { ...it, hiddenSlides: next };
+      });
+    }
+  };
 
   return (
-    <div className="playlist-item-section" data-playlist-item-index={itemIndex} ref={headerRef}>
+    <div
+      className="playlist-item-section"
+      data-playlist-item-index={itemIndex}
+      ref={headerRef}
+      style={skipped ? { opacity: 0.6 } : undefined}
+    >
       <div className={`playlist-item-head ${isLiveItem ? 'live-item' : ''}`}>
         <div className="row" style={{ alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+          <span className="muted small" style={{ minWidth: 18 }}>
+            {itemIndex + 1}
+          </span>
           <span className="kind-badge" title={item.kind}>
             {KIND_ICON[item.kind]}
           </span>
-          <span className="bold ellipsis">{itemTitle(item, op)}</span>
+          <span className="bold ellipsis" style={skipped ? { textDecoration: 'line-through' } : undefined}>
+            {itemTitle(item, op)}
+          </span>
           {subtitle && <span className="muted small ellipsis">{subtitle}</span>}
           {isLiveItem && <span className="live-pill-mini">ON AIR</span>}
+          {skipped && (
+            <span className="tag" style={{ fontSize: 10 }}>
+              Skipped
+            </span>
+          )}
         </div>
         <div className="row" style={{ alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            className={showSettings ? 'primary small' : 'ghost small'}
+            onClick={() => setShowSettings((v) => !v)}
+            title={liveHere ? 'View item settings (read-only while live)' : 'Item settings'}
+            aria-label={`Settings for ${itemTitle(item, op)}`}
+            data-item-settings-toggle={item.id}
+          >
+            ⚙
+          </button>
           {presentation && (
             <a className="btn small" href={`#/edit/${presentation.id}`}>
               Edit
@@ -79,6 +248,57 @@ function PlaylistItemSection({
           )}
         </div>
       </div>
+
+      {isSong && presentation && presentation.sections.length > 0 && item.kind === 'presentation' && (
+        <InlineArrangementStrip
+          presentation={presentation}
+          arrangementId={item.arrangementId}
+          sectionsOverride={item.sections}
+          liveMode={liveHere}
+          locked={liveHere && isActiveItem}
+          onArrangeOpenChange={onArrangeOpenChange}
+          onChangeSections={(sections) => {
+            if (liveHere) {
+              ctl?.arrangeItem(item.id, sections);
+            } else {
+              onUpdatePreviewItem((it) => {
+                if (it.kind !== 'presentation') return it;
+                if (sections === null) {
+                  const { sections: _s, ...rest } = it;
+                  return rest;
+                }
+                return { ...it, sections };
+              });
+            }
+          }}
+        />
+      )}
+
+      {showSettings && (
+        <div
+          className="card"
+          style={{ margin: '8px 0 12px', border: '1px solid var(--line)' }}
+          data-item-settings-popover={item.id}
+        >
+          <div
+            className="row"
+            style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}
+          >
+            <span className="muted small">
+              {liveHere ? 'Item settings (read-only while live)' : 'Item settings'}
+            </span>
+            <button type="button" className="ghost small" onClick={() => setShowSettings(false)}>
+              Close
+            </button>
+          </div>
+          <ItemSettings
+            item={item}
+            disabled={liveHere}
+            onChange={(next) => onUpdatePreviewItem(() => next)}
+            onSaveArrangement={onSaveArrangement}
+          />
+        </div>
+      )}
 
       {groups.map((g) => (
         <div key={g.pos}>
@@ -123,11 +343,24 @@ function PlaylistItemSection({
                 className="small"
                 disabled={!liveHere}
                 onClick={() => {
-                  // GO by cue index: the section shown may belong to an item that is not live.
+                  const i = sectionGoTarget(g);
+                  if (!liveHere || i === undefined) return;
+                  // Volunteer safety: single-click fires GO immediately only on the currently ON AIR item
+                  // (or when Click = GO is enabled); on other items single-click arms to avoid accidental output.
+                  if (isLiveItem || clickToGo) ctl?.go(i);
+                  else ctl?.select(i);
+                }}
+                onDoubleClick={() => {
                   const i = sectionGoTarget(g);
                   if (liveHere && i !== undefined) ctl?.go(i);
                 }}
-                title="Go to the first slide of this section"
+                title={
+                  !liveHere
+                    ? 'Go live to jump to sections'
+                    : isLiveItem || clickToGo
+                      ? 'Go to the first slide of this section'
+                      : 'Click to arm this section; double-click to go live'
+                }
               >
                 {g.short || g.label}
               </button>
@@ -141,17 +374,17 @@ function PlaylistItemSection({
             {g.cues.map((c) => {
               const marks = marksFor(c);
               if (c.kind === 'slide') {
-                // Over the item's Background override the slide shows without the colour it was imported
-                // on, as the screens draw it (`Cue.backgroundOverride`).
                 const own = slideOf(c);
                 const slide = c.backgroundOverride && own ? withoutBackdrops(own) : own;
-                // A slide that plays a video in place or its own sound says so (design/27 §11 item 14).
                 const tags = slideMediaTags(slide, op.media);
-                // A hidden slide (design/27 §9) is dimmed and tagged, and a click still shows it.
                 const hidden = isHiddenCue(c);
+                const hiddenByService =
+                  item.kind === 'presentation' &&
+                  Boolean(c.slideId && item.hiddenSlides?.includes(c.slideId));
                 const notesText = slide?.notes?.trim() ?? '';
                 const hasNotes = notesText.length > 0;
                 const slideText = slide ? firstText(slide).trim() : '';
+                const editObj = liveHere && !marks.live ? editableTextObject(own) : undefined;
                 return (
                   <SlideThumb
                     key={c.index}
@@ -180,6 +413,32 @@ function PlaylistItemSection({
                             disabled: !liveHere,
                             onSelect: () => ctl?.select(c.index),
                           },
+                          ...(c.slideId && item.kind === 'presentation'
+                            ? [
+                                { kind: 'separator' as const },
+                                {
+                                  label: hiddenByService
+                                    ? 'Include slide in this service'
+                                    : 'Skip slide in this service',
+                                  onSelect: () => toggleHiddenSlide(c.slideId!),
+                                },
+                              ]
+                            : []),
+                          ...(editObj && c.presentationId && c.slideId
+                            ? [
+                                {
+                                  label: 'Edit words (typo hotfix)…',
+                                  onSelect: () =>
+                                    onStartHotfix({
+                                      presentationId: c.presentationId!,
+                                      slideId: c.slideId!,
+                                      objectId: editObj.id,
+                                      label: c.label,
+                                      initialText: editObj.text,
+                                    }),
+                                },
+                              ]
+                            : []),
                           ...(marks.live
                             ? [
                                 { kind: 'separator' as const },
@@ -217,7 +476,7 @@ function PlaylistItemSection({
                         <>
                           {hidden && (
                             <span className="tag" title={HIDDEN_TITLE} data-hidden-slide>
-                              hidden
+                              {hiddenByService ? 'skipped' : 'hidden'}
                             </span>
                           )}
                           {hasNotes && (
@@ -301,12 +560,16 @@ function PlaylistItemSection({
 export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: number }) {
   const state = useLive((s) => s.state);
   const health = useLive((s) => s.health);
-  const outputs = useLibrary((s) => s.data.settings.outputs);
+  const lib = useLibrary((s) => s.data);
+  const outputs = lib.settings.outputs;
   const { thumbSize, clickToGo, followLive } = useUi();
   const audienceOutputs = outputs.filter((o) => o.enabled);
   const ctl = controller();
   const liveHere = op.live;
   const items = op.playlist?.items ?? [];
+
+  const [arrangingOpenCount, setArrangingOpenCount] = useState(0);
+  const [hotfix, setHotfix] = useState<HotfixTarget | null>(null);
 
   const scrollPaneRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLElement | null)[]>([]);
@@ -317,6 +580,28 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
     const i = s.state.live ?? s.state.armed;
     return i !== undefined ? s.state.cues[i]?.itemIndex : undefined;
   });
+
+  const activeItemIndices = useMemo(() => {
+    const set = new Set<number>();
+    if (!op.live) return set;
+    const add = (idx: number | undefined) => {
+      if (idx === undefined) return;
+      const itemIdx = state.cues[idx]?.itemIndex;
+      if (itemIdx !== undefined) set.add(itemIdx);
+    };
+    add(state.live);
+    add(state.layers.slide.content?.cueIndex);
+    add(state.layers.media.content?.cueIndex);
+    add(state.audio.content?.cueIndex);
+    return set;
+  }, [
+    op.live,
+    state.cues,
+    state.live,
+    state.layers.slide.content,
+    state.layers.media.content,
+    state.audio.content,
+  ]);
 
   // Group cues by itemIndex
   const cuesByItem = useMemo(() => {
@@ -381,15 +666,56 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
     }
   }, [items.length]);
 
-  // If followLive is on, scroll the live slide thumbnail into view
+  // If followLive is on (and operator is not actively arranging or typing a hotfix), scroll the live slide into view
   useEffect(() => {
-    if (followLive && op.live && state.live !== undefined) {
+    if (followLive && op.live && state.live !== undefined && arrangingOpenCount === 0 && !hotfix) {
       const el = scrollPaneRef.current?.querySelector('.thumb.live');
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     }
-  }, [followLive, op.live, state.live]);
+  }, [followLive, op.live, state.live, arrangingOpenCount, hotfix]);
+
+  const storedBase: Playlist | undefined = op.playlist
+    ? (lib.playlists.find((p) => p.id === op.playlist!.id) ?? op.playlist)
+    : undefined;
+
+  const updatePreviewItem = useCallback(
+    (itemId: string, fn: (it: PlaylistItem) => PlaylistItem) => {
+      if (liveHere || !storedBase) return;
+      updatePlaylistDraft(storedBase, (p) => ({
+        ...p,
+        items: p.items.map((it) => (it.id === itemId ? fn(it) : it)),
+      }));
+    },
+    [liveHere, storedBase],
+  );
+
+  const saveArrangement = useCallback(
+    async (presentationId: string, a: Arrangement): Promise<boolean> => {
+      const p = lib.presentations.find((x) => x.id === presentationId);
+      if (!p) return false;
+      const i = p.arrangements.findIndex((x) => x.id === a.id);
+      const arrangements =
+        i >= 0 ? p.arrangements.map((x) => (x.id === a.id ? a : x)) : [...p.arrangements, a];
+      try {
+        const saved = await api<typeof p>(`/presentations/${p.id}`, {
+          method: 'PUT',
+          json: { ...p, arrangements },
+        });
+        upsertLocal('presentations', saved);
+        return true;
+      } catch (e) {
+        toast(`Could not save the arrangement: ${errorText(e)}`, 'error');
+        return false;
+      }
+    },
+    [lib.presentations],
+  );
+
+  const handleArrangeOpenChange = useCallback((open: boolean) => {
+    setArrangingOpenCount((c) => Math.max(0, c + (open ? 1 : -1)));
+  }, []);
 
   const marksFor = useCallback(
     (c: Cue): ThumbMarks => {
@@ -436,6 +762,9 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
     [op],
   );
 
+  const showBackToOnAir =
+    op.live && liveItem !== undefined && (!followLive || viewItem !== liveItem || arrangingOpenCount > 0);
+
   if (items.length === 0)
     return (
       <div className="pane" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -443,7 +772,9 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
           <b className="grow ellipsis">{op.playlist?.name ?? 'Live'}</b>
         </div>
         <div className="muted" style={{ padding: 20 }}>
-          {op.playlist ? 'This playlist is empty.' : 'Select a playlist.'}
+          {op.playlist
+            ? 'This playlist is empty. Use "+ Add" on the left to add items.'
+            : 'Select a playlist.'}
         </div>
       </div>
     );
@@ -458,6 +789,20 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
     >
       <div className="pane-head">
         <b className="grow ellipsis">{op.playlist?.name ?? 'Playlist'}</b>
+        {showBackToOnAir && (
+          <button
+            type="button"
+            className="primary small"
+            onClick={() => {
+              setUi({ followLive: true });
+              if (liveItem !== undefined) requestScrollToPlaylistItem(liveItem);
+              setUi({ followLive: true });
+            }}
+            data-back-to-on-air
+          >
+            Back to ON AIR ↑
+          </button>
+        )}
         <label className="check small" title="Single click goes live instead of arming">
           <input
             type="checkbox"
@@ -489,8 +834,17 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
       <div className="slides">
         {!liveHere && (
           <div className="banner blue" style={{ marginBottom: 12 }}>
-            Preview. Go live with this playlist to control the outputs.
+            Preview. Arrange songs, adjust settings (⚙), or add items on the left, then press Go live.
           </div>
+        )}
+        {hotfix && liveHere && (
+          <SlideTextHotfixCard
+            target={hotfix}
+            onSave={(text) =>
+              ctl?.editSlideText(hotfix.presentationId, hotfix.slideId, hotfix.objectId, text)
+            }
+            onClose={() => setHotfix(null)}
+          />
         )}
         {items.map((it, itemIdx) => (
           <PlaylistItemSection
@@ -500,12 +854,18 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
             op={op}
             cues={cuesByItem.get(itemIdx) ?? []}
             liveHere={liveHere}
+            clickToGo={clickToGo}
             thumbSize={thumbSize}
             isLiveItem={op.live && liveItem === itemIdx}
+            isActiveItem={activeItemIndices.has(itemIdx)}
             slideOf={slideOf}
             marksFor={marksFor}
             onClick={onClick}
             onDouble={onDouble}
+            onUpdatePreviewItem={(fn) => updatePreviewItem(it.id, fn)}
+            onSaveArrangement={saveArrangement}
+            onArrangeOpenChange={handleArrangeOpenChange}
+            onStartHotfix={setHotfix}
             headerRef={(el) => {
               itemRefs.current[itemIdx] = el;
             }}

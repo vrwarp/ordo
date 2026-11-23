@@ -7,9 +7,11 @@ import {
   type LiveState,
   type MediaContent,
   PRERENDERED_MAX,
+  type ResolvedPlaylist,
   type ActionId,
   expandCues,
   isHiddenCue,
+  isSkippedCue,
   nextShownCue,
   prevShownCue,
   sectionsOfItem,
@@ -45,9 +47,10 @@ export function initialState(): LiveState {
  * Pure: never reads a clock or random source. Every event increments `seq`, even a no-op,
  * so that all clients agree on sequence numbers.
  *
- * Hidden cues (design/27 §9, `Cue.hidden`): `next`, `prev`, the cue a GO arms, onEnd 'advance', `nextItem`
- * and `prevItem` skip them (`autoAdvance` too); `goToSection` lands on its section's first cue that is not
- * hidden; `go` and `select` reach any cue.
+ * Hidden cues (design/27 §9, `Cue.hidden`) and skipped items (ADR 0015, `Cue.skipped`): `next`, `prev`,
+ * the cue a GO arms, onEnd 'advance', `nextItem` and `prevItem` skip them (`autoAdvance` too); `goToSection`
+ * lands on its section's first cue that is not hidden; `go` and `select` reach any cue (and `go` into a
+ * skipped item auto-unskips it).
  */
 export function reduce(prev: LiveState, e: LiveEvent): LiveState {
   const seq = prev.seq + 1;
@@ -90,13 +93,15 @@ export function reduce(prev: LiveState, e: LiveEvent): LiveState {
       return target === undefined ? s : goTo(s, target, e.at);
     }
     case 'nextItem': {
-      // The first cue that is not hidden of the next item that has one.
+      // The first cue that is neither hidden nor skipped of the next item that has one.
       const cur = s.live === undefined ? undefined : s.cues[s.live]?.itemIndex;
-      const target = s.cues.find((c) => (cur === undefined || c.itemIndex > cur) && !isHiddenCue(c));
+      const target = s.cues.find(
+        (c) => (cur === undefined || c.itemIndex > cur) && !isHiddenCue(c) && !isSkippedCue(c),
+      );
       return target === undefined ? s : goTo(s, target.index, e.at);
     }
     case 'prevItem': {
-      // The first cue that is not hidden of the previous item that has one, else of the live item.
+      // The first cue that is neither hidden nor skipped of the previous item that has one, else of the live item.
       if (s.live === undefined) return s;
       const cur = s.cues[s.live]?.itemIndex;
       if (cur === undefined) return s;
@@ -105,7 +110,7 @@ export function reduce(prev: LiveState, e: LiveEvent): LiveState {
         s.cues.findIndex((c) => c.itemIndex === cur),
       );
       const item = before === undefined ? cur : s.cues[before]!.itemIndex;
-      const target = s.cues.find((c) => c.itemIndex === item && !isHiddenCue(c));
+      const target = s.cues.find((c) => c.itemIndex === item && !isHiddenCue(c) && !isSkippedCue(c));
       return target === undefined ? s : goTo(s, target.index, e.at);
     }
     case 'goToSection': {
@@ -218,19 +223,228 @@ export function reduce(prev: LiveState, e: LiveEvent): LiveState {
       if (list.some((d) => d.presentationId === e.presentationId && d.slideId === e.slideId)) return s;
       return { ...s, drawOverride: [...list, { presentationId: e.presentationId, slideId: e.slideId }] };
     }
+    case 'item.skip':
+      return applyItemSkip(s, e.itemId, e.skipped);
+    case 'item.arrange':
+      return applyItemArrange(s, e.itemId, e.sections);
+    case 'item.hideSlides':
+      return applyItemHideSlides(s, e.itemId, e.hiddenSlides);
+    case 'slide.editText':
+      return applySlideEditText(s, e.presentationId, e.slideId, e.objectId, e.text);
   }
 }
 
-function goTo(s: LiveState, index: number, at: number): LiveState {
-  const cue = s.cues[index];
-  if (!cue) return s;
-  const seq = s.seq;
-  let out: LiveState = {
+/** Whether any active layer or live cursor currently points into playlist item `itemIndex`. */
+function isItemActive(s: LiveState, itemIndex: number): boolean {
+  if (s.live !== undefined && s.cues[s.live]?.itemIndex === itemIndex) return true;
+  if (s.layers.slide.content && s.cues[s.layers.slide.content.cueIndex]?.itemIndex === itemIndex) return true;
+  if (s.layers.media.content && s.cues[s.layers.media.content.cueIndex]?.itemIndex === itemIndex) return true;
+  if (s.audio.content && s.cues[s.audio.content.cueIndex]?.itemIndex === itemIndex) return true;
+  return false;
+}
+
+function applyItemSkip(s: LiveState, itemId: string, skipped: boolean): LiveState {
+  if (s.mode !== 'live' || !s.resolved) return s;
+  const items = s.resolved.playlist.items;
+  const itemIndex = items.findIndex((it) => it.id === itemId);
+  if (itemIndex < 0) return s;
+  if (skipped && isItemActive(s, itemIndex)) return s;
+  const cur = items[itemIndex]!;
+  if (Boolean(cur.skipped) === skipped) return s;
+  const nextItem = skipped ? { ...cur, skipped: true } : { ...cur, skipped: undefined };
+  if (!skipped) delete nextItem.skipped;
+  const nextResolved: ResolvedPlaylist = {
+    ...s.resolved,
+    playlist: {
+      ...s.resolved.playlist,
+      items: items.map((it, i) => (i === itemIndex ? nextItem : it)),
+    },
+  };
+  const cues = expandCues(nextResolved);
+  const armed =
+    s.armed !== undefined && cues[s.armed]?.skipped
+      ? s.live !== undefined
+        ? nextShownCue(cues, s.live)
+        : nextShownCue(cues, -1)
+      : s.armed;
+  return { ...s, resolved: nextResolved, cues, armed };
+}
+
+function applyItemArrange(s: LiveState, itemId: string, sections: string[] | null): LiveState {
+  if (s.mode !== 'live' || !s.resolved) return s;
+  const items = s.resolved.playlist.items;
+  const itemIndex = items.findIndex((it) => it.id === itemId);
+  if (itemIndex < 0) return s;
+  const cur = items[itemIndex]!;
+  if (cur.kind !== 'presentation') return s;
+  if (!s.resolved.presentations[cur.presentationId]) return s;
+  if (isItemActive(s, itemIndex)) return s;
+  const nextItem = sections === null ? { ...cur, sections: undefined } : { ...cur, sections: [...sections] };
+  if (sections === null) delete nextItem.sections;
+  const nextResolved: ResolvedPlaylist = {
+    ...s.resolved,
+    playlist: {
+      ...s.resolved.playlist,
+      items: items.map((it, i) => (i === itemIndex ? nextItem : it)),
+    },
+  };
+  const newCues = expandCues(nextResolved);
+  const oldCount = s.cues.filter((c) => c.itemIndex === itemIndex).length;
+  const newCount = newCues.filter((c) => c.itemIndex === itemIndex).length;
+  const delta = newCount - oldCount;
+  const remap = (idx: number): number => {
+    const oldItem = s.cues[idx]?.itemIndex;
+    if (oldItem === undefined || oldItem < itemIndex) return idx;
+    return idx + delta;
+  };
+  const live = s.live !== undefined ? remap(s.live) : undefined;
+  const armed =
+    s.armed !== undefined && s.cues[s.armed]?.itemIndex !== itemIndex
+      ? remap(s.armed)
+      : live !== undefined
+        ? nextShownCue(newCues, live)
+        : nextShownCue(newCues, -1);
+  const slideContent = s.layers.slide.content
+    ? { ...s.layers.slide.content, cueIndex: remap(s.layers.slide.content.cueIndex) }
+    : null;
+  const mediaContent = s.layers.media.content
+    ? { ...s.layers.media.content, cueIndex: remap(s.layers.media.content.cueIndex) }
+    : null;
+  const audioContent = s.audio.content
+    ? {
+        ...s.audio.content,
+        cueIndex: remap(s.audio.content.cueIndex),
+        ...(s.audio.content.untilCue !== undefined ? { untilCue: remap(s.audio.content.untilCue) } : {}),
+      }
+    : null;
+  return {
     ...s,
+    resolved: nextResolved,
+    cues: newCues,
+    live,
+    armed,
+    layers: {
+      ...s.layers,
+      slide: slideContent ? { ...s.layers.slide, content: slideContent } : s.layers.slide,
+      media: mediaContent ? { ...s.layers.media, content: mediaContent } : s.layers.media,
+    },
+    audio: audioContent ? { ...s.audio, content: audioContent } : s.audio,
+  };
+}
+
+function applyItemHideSlides(s: LiveState, itemId: string, hiddenSlides: string[]): LiveState {
+  if (s.mode !== 'live' || !s.resolved) return s;
+  const items = s.resolved.playlist.items;
+  const itemIndex = items.findIndex((it) => it.id === itemId);
+  if (itemIndex < 0) return s;
+  const cur = items[itemIndex]!;
+  if (cur.kind !== 'presentation') return s;
+  // Avoid shifting slide-owned audio untilCue while that item's slide sound is playing.
+  if (s.audio.content?.slideOwned && s.cues[s.audio.content.cueIndex]?.itemIndex === itemIndex) return s;
+  const nextItem = hiddenSlides.length
+    ? { ...cur, hiddenSlides: [...hiddenSlides] }
+    : { ...cur, hiddenSlides: undefined };
+  if (!hiddenSlides.length) delete nextItem.hiddenSlides;
+  const nextResolved: ResolvedPlaylist = {
+    ...s.resolved,
+    playlist: {
+      ...s.resolved.playlist,
+      items: items.map((it, i) => (i === itemIndex ? nextItem : it)),
+    },
+  };
+  const cues = expandCues(nextResolved);
+  const armed =
+    s.armed !== undefined && cues[s.armed]?.hidden
+      ? s.live !== undefined
+        ? nextShownCue(cues, s.live)
+        : nextShownCue(cues, -1)
+      : s.armed;
+  return { ...s, resolved: nextResolved, cues, armed };
+}
+
+function applySlideEditText(
+  s: LiveState,
+  presentationId: string,
+  slideId: string,
+  objectId: string,
+  text: string,
+): LiveState {
+  if (s.mode !== 'live' || !s.resolved) return s;
+  // Never mutate a slide that is currently on air.
+  if (
+    s.layers.slide.content?.presentationId === presentationId &&
+    s.layers.slide.content?.slideId === slideId
+  )
+    return s;
+  if (
+    s.live !== undefined &&
+    s.cues[s.live]?.presentationId === presentationId &&
+    s.cues[s.live]?.slideId === slideId
+  )
+    return s;
+  const pres = s.resolved.presentations[presentationId];
+  if (!pres) return s;
+  let found = false;
+  const sections = pres.sections.map((sec) => {
+    let secChanged = false;
+    const slides = sec.slides.map((sl) => {
+      if (sl.id !== slideId) return sl;
+      if (sl.pptx?.class === 'picture') return sl;
+      const objIdx = sl.objects.findIndex((o) => o.id === objectId && o.type === 'text');
+      if (objIdx < 0) return sl;
+      found = true;
+      secChanged = true;
+      const objects = sl.objects.map((o, idx) => {
+        if (idx !== objIdx || o.type !== 'text') return o;
+        const { paras: _p, ...rest } = o;
+        return { ...rest, text };
+      });
+      return { ...sl, objects };
+    });
+    return secChanged ? { ...sec, slides } : sec;
+  });
+  if (!found) return s;
+  const nextResolved: ResolvedPlaylist = {
+    ...s.resolved,
+    presentations: {
+      ...s.resolved.presentations,
+      [presentationId]: { ...pres, sections },
+    },
+  };
+  const cues = expandCues(nextResolved);
+  return { ...s, resolved: nextResolved, cues };
+}
+
+function goTo(s: LiveState, index: number, at: number): LiveState {
+  let base = s;
+  let cue = base.cues[index];
+  if (!cue) return s;
+  // Explicitly jumping into a skipped item auto-unskips it so sequential Next continues cleanly (ADR 0015).
+  if (cue.skipped && base.resolved) {
+    const items = base.resolved.playlist.items;
+    const cur = items[cue.itemIndex];
+    if (cur?.skipped) {
+      const unskipped = { ...cur, skipped: undefined };
+      delete unskipped.skipped;
+      const nextResolved: ResolvedPlaylist = {
+        ...base.resolved,
+        playlist: {
+          ...base.resolved.playlist,
+          items: items.map((it, i) => (i === cue!.itemIndex ? unskipped : it)),
+        },
+      };
+      const cues = expandCues(nextResolved);
+      base = { ...base, resolved: nextResolved, cues };
+      cue = cues[index]!;
+    }
+  }
+  const seq = base.seq;
+  let out: LiveState = {
+    ...base,
     live: index,
-    armed: nextShownCue(s.cues, index),
+    armed: nextShownCue(base.cues, index),
     black: false,
-    audio: keepSlideAudio(s.audio, index, at, seq),
+    audio: keepSlideAudio(base.audio, index, at, seq),
   };
   switch (cue.kind) {
     case 'slide': {
@@ -695,7 +909,11 @@ export function isLiveEventShape(x: unknown): x is LiveEvent {
     x.k !== 'message.dismiss' &&
     x.k !== 'message.clear' &&
     x.k !== 'prerender.add' &&
-    x.k !== 'prerender.use';
+    x.k !== 'prerender.use' &&
+    x.k !== 'item.skip' &&
+    x.k !== 'item.arrange' &&
+    x.k !== 'item.hideSlides' &&
+    x.k !== 'slide.editText';
   if (needsAt && !isNum(x.at)) return false;
   switch (x.k) {
     case 'goLive': {
@@ -737,6 +955,19 @@ export function isLiveEventShape(x: unknown): x is LiveEvent {
       );
     case 'prerender.use':
       return typeof x.presentationId === 'string' && typeof x.slideId === 'string';
+    case 'item.skip':
+      return typeof x.itemId === 'string' && typeof x.skipped === 'boolean';
+    case 'item.arrange':
+      return typeof x.itemId === 'string' && (x.sections === null || Array.isArray(x.sections));
+    case 'item.hideSlides':
+      return typeof x.itemId === 'string' && Array.isArray(x.hiddenSlides);
+    case 'slide.editText':
+      return (
+        typeof x.presentationId === 'string' &&
+        typeof x.slideId === 'string' &&
+        typeof x.objectId === 'string' &&
+        typeof x.text === 'string'
+      );
     case 'endService':
     case 'next':
     case 'prev':

@@ -36,11 +36,15 @@ export function arrangementFor(p: Presentation, arrangementId?: string): Arrange
 }
 
 /** Sections of a presentation in arrangement order (repeats included). Unknown ids are skipped. */
-export function arrangedSections(p: Presentation, arrangementId?: string): Section[] {
-  const arr = arrangementFor(p, arrangementId);
+export function arrangedSections(
+  p: Presentation,
+  arrangementId?: string,
+  sectionsOverride?: readonly string[],
+): Section[] {
+  const sectionIds = sectionsOverride ?? arrangementFor(p, arrangementId).sectionIds;
   const byId = new Map(p.sections.map((s) => [s.id, s]));
   const out: Section[] = [];
-  for (const id of arr.sectionIds) {
+  for (const id of sectionIds) {
     const s = byId.get(id);
     if (s) out.push(s);
   }
@@ -54,11 +58,13 @@ export function expandCues(
   const cues: Cue[] = [];
   const presets = resolved.midiPresets;
   resolved.playlist.items.forEach((item, itemIndex) => {
+    const itemSkipped = item.skipped === true;
     if (item.kind === 'presentation') {
       const p = resolved.presentations[item.presentationId];
       if (!p) return;
       const itemMidi = resolveMidiTrigger(item.midi, presets);
-      const sections = arrangedSections(p, item.arrangementId);
+      const sections = arrangedSections(p, item.arrangementId, item.sections);
+      const hiddenSlideSet = item.hiddenSlides?.length ? new Set(item.hiddenSlides) : undefined;
       const slides = sections.flatMap((section, arrangementPos) =>
         section.slides.map((slide, slideIndexInSection) => ({
           section,
@@ -68,7 +74,10 @@ export function expandCues(
         })),
       );
       const first = cues.length;
-      const until = soundEnds(slides.map((x) => x.slide));
+      const until = soundEnds(
+        slides.map((x) => x.slide),
+        hiddenSlideSet,
+      );
       slides.forEach(({ section, arrangementPos, slide, slideIndexInSection }, k) => {
         const text = firstText(slide);
         const own = slideBackground(slide, resolved.media);
@@ -95,6 +104,7 @@ export function expandCues(
         const slideTrigger: MidiTrigger | undefined =
           slide.midi ?? (slide.midiCues?.length ? { kind: 'cues', cues: slide.midiCues } : undefined);
         const slideMidi = resolveMidiTrigger(slideTrigger, presets);
+        const hidden = slide.hidden === true || hiddenSlideSet?.has(slide.id) === true;
         cues.push({
           index: cues.length,
           itemId: item.id,
@@ -119,9 +129,10 @@ export function expandCues(
           autoAdvanceMs: p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,
           // On every cue of the item: the reducer starts it on whichever cue enters the item.
           ...(item.countdownTimer ? { timer: item.countdownTimer, timerId: `${item.id}-timer` } : {}),
-          // A hidden PowerPoint slide stays in the service (design/27 §9): sequential navigation skips its
-          // cue (`nextShownCue`), a GO with its index shows it.
-          ...(slide.hidden === true ? { hidden: true } : {}),
+          // A hidden PowerPoint slide or per-service hidden slide stays in the service (design/27 §9, ADR 0015):
+          // sequential navigation skips its cue (`nextShownCue`), a GO with its index shows it.
+          ...(hidden ? { hidden: true } : {}),
+          ...(itemSkipped ? { skipped: true as const } : {}),
           ...(backgroundMidi?.length ? { backgroundMidi } : {}),
           ...(itemMidi?.length ? { itemMidi } : {}),
           ...(sectionMidi?.length ? { sectionMidi } : {}),
@@ -145,6 +156,7 @@ export function expandCues(
         loop: item.loop ?? m.loop,
         onEnd: item.onEnd ?? 'hold',
         audio: item.audio ?? (m.audio ? { pairId: m.audio.pairId, gainDb: m.audio.gainDb } : undefined),
+        ...(itemSkipped ? { skipped: true as const } : {}),
         ...(itemMidi?.length ? { itemMidi } : {}),
       });
     } else if (item.kind === 'timer') {
@@ -161,6 +173,7 @@ export function expandCues(
         ),
         timerId: item.id,
         timer: item.timer,
+        ...(itemSkipped ? { skipped: true as const } : {}),
         ...(itemMidi?.length ? { itemMidi } : {}),
       });
     } else {
@@ -171,6 +184,7 @@ export function expandCues(
         kind: 'action',
         label: truncate(item.action, 80),
         action: item.action,
+        ...(itemSkipped ? { skipped: true as const } : {}),
       });
     }
   });
@@ -252,10 +266,10 @@ function slideCueMedia(
  * after `audio.slides` shown slides (the slide itself is the first; hidden slides do not count), else the
  * item's last slide. Without `slides`, a sound plays on its own slide only.
  */
-function soundEnds(slides: Slide[]): (k: number) => number {
+function soundEnds(slides: Slide[], hiddenSlideSet?: ReadonlySet<string>): (k: number) => number {
   const shown: number[] = [];
   slides.forEach((s, k) => {
-    if (s.hidden !== true) shown.push(k);
+    if (s.hidden !== true && !hiddenSlideSet?.has(s.id)) shown.push(k);
   });
   return (k) => {
     const n = slides[k]?.audio?.slides;
@@ -339,30 +353,36 @@ function truncate(raw: string, n: number): string {
 }
 
 /*
- * Hidden cues (design/27 §9). A hidden PowerPoint slide keeps its cue, flagged `hidden`. Sequential
- * navigation skips it: Next, Prev, the cue a GO arms, a loop's auto-advance, onEnd 'advance', Next item and
- * Previous item. A GO with its index (a click in the slide grid, goToSlide, a Stream Deck slide key) shows
- * it, as PowerPoint does. A jump to a named group of cues (a section key, a section header, a playlist item
- * picked in the playlist) lands on the group's first cue that is not hidden (`entryCue`).
+ * Hidden cues (design/27 §9) and skipped items (ADR 0015). A hidden slide keeps its cue, flagged `hidden`;
+ * a skipped playlist item keeps its cues, flagged `skipped`. Sequential navigation skips both: Next, Prev,
+ * the cue a GO arms, a loop's auto-advance, onEnd 'advance', Next item and Previous item. A GO with its
+ * index shows it (and auto-unskips the item if it was skipped).
  */
 
-/** Whether sequential navigation skips cue `c`: a hidden PowerPoint slide (design/27 §9). */
+/** Whether sequential navigation skips cue `c` because it is a hidden slide (design/27 §9, ADR 0015). */
 export function isHiddenCue(c: Pick<Cue, 'hidden'> | undefined): boolean {
   return c?.hidden === true;
 }
 
+/** Whether sequential navigation skips cue `c` because its playlist item is marked skipped (ADR 0015). */
+export function isSkippedCue(c: Pick<Cue, 'skipped'> | undefined): boolean {
+  return c?.skipped === true;
+}
+
 /**
- * The first cue after `from` that is not hidden: what Next goes to and what a GO on `from` arms. `from` -1
- * gives the first cue that is not hidden. Undefined when none follows.
+ * The first cue after `from` that is neither hidden nor skipped: what Next goes to and what a GO on `from`
+ * arms. `from` -1 gives the first shown cue. Undefined when none follows.
  */
 export function nextShownCue(cues: readonly Cue[], from: number): number | undefined {
-  for (let i = Math.max(0, Math.floor(from) + 1); i < cues.length; i++) if (!isHiddenCue(cues[i])) return i;
+  for (let i = Math.max(0, Math.floor(from) + 1); i < cues.length; i++)
+    if (!isHiddenCue(cues[i]) && !isSkippedCue(cues[i])) return i;
   return undefined;
 }
 
-/** The last cue before `from` that is not hidden: what Prev goes to. Undefined when none precedes. */
+/** The last cue before `from` that is neither hidden nor skipped: what Prev goes to. Undefined when none precedes. */
 export function prevShownCue(cues: readonly Cue[], from: number): number | undefined {
-  for (let i = Math.min(Math.ceil(from), cues.length) - 1; i >= 0; i--) if (!isHiddenCue(cues[i])) return i;
+  for (let i = Math.min(Math.ceil(from), cues.length) - 1; i >= 0; i--)
+    if (!isHiddenCue(cues[i]) && !isSkippedCue(cues[i])) return i;
   return undefined;
 }
 
