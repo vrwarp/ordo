@@ -24,7 +24,7 @@ export function buildChecklist(s: Settings, opUrl: string): ChecklistSection[] {
         'Turn on the projectors and TVs, then the presentation PC.',
         `Open Chrome and go to ${opUrl}. Sign in with the operate PIN (tick "Remember this device").`,
         'Check the top bar: Hub dot green.',
-        `Open Playlists, pick today's service, press Go live. Wait until Cache shows 100 % (green).`,
+        `Pick today's service in the top-left playlist menu (check the date), then press Go live. Wait until Cache shows 100 % (green).`,
         `Press Launch outputs (${keysFor(km, 'launchOutputs')}). Each window opens on its screen: ${outs
           .map((o) => `${o.name}${o.screen ? ` → ${o.screen.label}` : ''} (${lookName(o.lookId)})`)
           .join('; ')}.`,

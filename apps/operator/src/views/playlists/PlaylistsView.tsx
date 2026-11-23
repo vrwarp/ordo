@@ -1,10 +1,10 @@
 import { api } from '@ordo/client';
 import { newId, type Playlist } from '@ordo/domain';
-import { useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
-import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { PlaylistPicker } from '../../components/PlaylistPicker.tsx';
 import { useLivePlaylistId } from '../../hooks.ts';
 import { useProfile } from '../../lib/capabilities.ts';
+import { duplicatePlaylistPayload, nextSundayIso, sortPlaylistsUpcoming } from '../../lib/playlists.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
 import { discardPlaylistDraft } from '../../state/playlistOutbox.ts';
 import { currentRole } from '../../state/session.ts';
@@ -15,40 +15,32 @@ import { PlaylistEditor } from './PlaylistEditor.tsx';
 export function PlaylistsView({ id }: { id?: string }) {
   const playlists = useLibrary((s) => s.data.playlists);
   const liveId = useLivePlaylistId();
-  const [name, setName] = useState('');
   const role = currentRole();
   // An edit-profile device (an iPad) cannot launch outputs: no Go live there, a note instead.
   const profile = useProfile(role);
   const noteGoLive = role === 'operate' && profile === 'edit';
-  const sorted = [...playlists].sort(
-    (a, b) => (b.serviceDate ?? '').localeCompare(a.serviceDate ?? '') || a.name.localeCompare(b.name),
-  );
+  const sorted = sortPlaylistsUpcoming(playlists);
   const current = playlists.find((p) => p.id === id) ?? (id ? undefined : sorted[0]);
-  const create = async () => {
-    const n = name.trim() || `Service ${new Date().toISOString().slice(0, 10)}`;
+
+  const create = async (rawName: string) => {
+    const n = rawName.trim() || `Service ${new Date().toISOString().slice(0, 10)}`;
     try {
       const p = await api<Playlist>('/playlists', {
         method: 'POST',
-        json: { id: newId(), rev: 1, name: n, items: [], serviceDate: nextSunday() },
+        json: { id: newId(), rev: 1, name: n, items: [], serviceDate: nextSundayIso() },
       });
       upsertLocal('playlists', p);
-      setName('');
       navigate({ name: 'playlists', id: p.id });
     } catch (e) {
       toast(`Could not create playlist: ${errorText(e)}`, 'error');
     }
   };
+
   const duplicate = async (p: Playlist) => {
     try {
       const copy = await api<Playlist>('/playlists', {
         method: 'POST',
-        json: {
-          ...p,
-          id: newId(),
-          rev: 1,
-          name: `${p.name} (copy)`,
-          items: p.items.map((it) => ({ ...it, id: newId() })),
-        },
+        json: duplicatePlaylistPayload(p),
       });
       upsertLocal('playlists', copy);
       navigate({ name: 'playlists', id: copy.id });
@@ -56,6 +48,7 @@ export function PlaylistsView({ id }: { id?: string }) {
       toast(errorText(e), 'error');
     }
   };
+
   const del = async (p: Playlist) => {
     if (!(await confirmDialog('Delete playlist', `Delete “${p.name}”?`, 'Delete', true))) return;
     try {
@@ -67,6 +60,7 @@ export function PlaylistsView({ id }: { id?: string }) {
       toast(`Could not delete: ${errorText(e)}`, 'error');
     }
   };
+
   const editor = (p: Playlist) => (
     <PlaylistEditor
       key={p.id}
@@ -77,58 +71,19 @@ export function PlaylistsView({ id }: { id?: string }) {
       onDelete={() => void del(p)}
     />
   );
+
   return (
     <div className="split" style={{ gridTemplateColumns: '260px 1fr' }}>
-      <div className="side col" style={{ gap: 4 }}>
-        <h4>Playlists</h4>
-        <div className="row" style={{ marginBottom: 10 }}>
-          <input
-            className="grow"
-            placeholder="New playlist name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && void create()}
-          />
-          <button type="button" className="primary" onClick={() => void create()}>
-            +
-          </button>
-        </div>
-        {sorted.map((p) => (
-          <a
-            key={p.id}
-            href={`#/playlists/${p.id}`}
-            className={p.id === current?.id ? 'active' : ''}
-            onContextMenu={(e) => {
-              const isThisLive = p.id === liveId;
-              openContextMenu(
-                e,
-                [
-                  { label: 'Open playlist', onSelect: () => navigate({ name: 'playlists', id: p.id }) },
-                  { label: 'Duplicate playlist', onSelect: () => void duplicate(p) },
-                  { kind: 'separator' },
-                  {
-                    label: 'Delete playlist…',
-                    danger: true,
-                    disabled: isThisLive,
-                    onSelect: () => void del(p),
-                  },
-                ],
-                { ariaLabel: `${p.name} playlist actions` },
-              );
-            }}
-          >
-            <span className="col grow" style={{ gap: 2 }}>
-              <span className="ellipsis">
-                {p.id === liveId && <span style={{ color: 'var(--live)' }}>● </span>}
-                {p.name}
-              </span>
-              <span className="muted small">
-                {p.serviceDate ?? ''} · {p.items.length} items
-              </span>
-            </span>
-          </a>
-        ))}
-      </div>
+      <PlaylistPicker
+        variant="sidebar"
+        playlists={playlists}
+        selectedId={current?.id}
+        liveId={liveId}
+        onSelect={(pid) => navigate({ name: 'playlists', id: pid })}
+        onCreate={(rawName) => void create(rawName)}
+        onDuplicate={(p) => void duplicate(p)}
+        onDelete={(p) => void del(p)}
+      />
       <div style={{ minHeight: 0, overflow: 'hidden' }}>
         {current ? (
           noteGoLive ? (
@@ -148,10 +103,4 @@ export function PlaylistsView({ id }: { id?: string }) {
       </div>
     </div>
   );
-}
-
-function nextSunday(): string {
-  const d = new Date();
-  d.setDate(d.getDate() + ((7 - d.getDay()) % 7));
-  return d.toISOString().slice(0, 10);
 }

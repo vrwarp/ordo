@@ -18,3 +18,5 @@ before the service starts. Editing those entities is refused with 423 until End 
 - Fixing a typo mid-service means End service, edit, Go live again (the cache is
   content-addressed, so re-filling is near instant).
 - The operator top bar must show cache completeness.
+
+> Amended by [ADR 0015](0015-closed-manifest-live-adjustments.md): the asset and font manifest remains closed while live (brand-new items still require End service and Go live), while the booth operator may adjust off-air item skip, song section order, per-service hidden slides, and off-air native slide text through the shared reducer.

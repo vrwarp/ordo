@@ -1,27 +1,201 @@
 import { api, DEMO } from '@ordo/client';
-import { type Arrangement, newId, type Playlist, type PlaylistItem } from '@ordo/domain';
-import { useEffect, useState } from 'react';
+import {
+  type Arrangement,
+  type Cue,
+  expandCues,
+  isHiddenCue,
+  newId,
+  type Playlist,
+  type PlaylistItem,
+  type Presentation,
+  type Slide,
+  withoutBackdrops,
+} from '@ordo/domain';
+import { useEffect, useMemo, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
-import { midiTriggerBadge } from '../../components/MidiTriggerPicker.tsx';
+import { InlineArrangementStrip } from '../../components/InlineArrangementStrip.tsx';
+import { PlaylistItemRowContent } from '../../components/PlaylistItemRow.tsx';
+import { PlaylistReadinessStrip } from '../../components/PlaylistReadinessStrip.tsx';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { moveItem } from '../../lib/arrangement.ts';
 import { deviceProfile } from '../../lib/capabilities.ts';
-import { navigate } from '../../useRoute.ts';
+import { itemTitle } from '../../lib/playlistItems.ts';
+import { groupCues } from '../../lib/sections.ts';
+import { startService } from '../../lib/startService.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import { flushPlaylist, updatePlaylistDraft, usePlaylistOutbox } from '../../state/playlistOutbox.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
+import { setUi } from '../../state/ui.ts';
 import { useUnsaved } from '../../state/unsaved.ts';
-import { itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
+import { navigate } from '../../useRoute.ts';
+import { SlideThumb } from '../live/SlideThumb.tsx';
 import { AddItemsPanel } from './AddItemsPanel.tsx';
 import { ItemSettings } from './ItemSettings.tsx';
-import { startService } from '../../lib/startService.ts';
 import { OfflineControl } from './OfflineControl.tsx';
 
 /**
- * Build a service: rename, reorder (drag by the handle, touch included, or the arrow buttons), add from the library, per-item settings, go live (prd/02).
- * Changes save automatically (debounced) with the playlist's rev; the live playlist is read-only.
+ * Read-only slide preview of the selected playlist item on the Playlists page (N3: build with your eyes).
+ * Compact-safe: renders SlideThumb directly without importing the live controller.
+ */
+function SelectedItemSlidePreview({
+  item,
+  playlistName,
+  locked,
+  presentation,
+  op,
+  onChangeSections,
+  onToggleHiddenSlide,
+  onPromoteToSong,
+}: {
+  item: PlaylistItem;
+  playlistName: string;
+  locked: boolean;
+  presentation?: Presentation;
+  op: {
+    presentation: (id: string) => Presentation | undefined;
+    media: (id: string) => import('@ordo/domain').Media | undefined;
+    presentationsMap: Record<string, Presentation>;
+    mediaMap: Record<string, import('@ordo/domain').Media>;
+  };
+  onChangeSections: (sections: string[] | null) => void;
+  onToggleHiddenSlide: (slideId: string) => void;
+  onPromoteToSong: (sectionIds: string[]) => void;
+}) {
+  const cues: Cue[] = useMemo(() => {
+    const mini: Playlist = { id: '__preview', rev: 1, name: playlistName, items: [item] };
+    return expandCues({
+      playlist: mini,
+      presentations: op.presentationsMap,
+      media: op.mediaMap,
+    });
+  }, [item, playlistName, op.presentationsMap, op.mediaMap]);
+
+  const groups = useMemo(() => groupCues(cues), [cues]);
+  const isSong = presentation?.kind === 'song';
+
+  const slideOf = (c: Cue): Slide | undefined => {
+    if (!c.presentationId || !c.slideId || !presentation) return undefined;
+    for (const s of presentation.sections) for (const sl of s.slides) if (sl.id === c.slideId) return sl;
+    return undefined;
+  };
+
+  return (
+    <div className="card col" style={{ gap: 8, padding: 0, overflow: 'hidden' }} data-playlist-slide-preview>
+      <div
+        className="row"
+        style={{
+          padding: '8px 12px',
+          borderBottom: '1px solid var(--line)',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          background: 'var(--bg2)',
+        }}
+      >
+        <span className="small bold">
+          Slide preview · {itemTitle(item, op)} ({cues.length} {cues.length === 1 ? 'cue' : 'cues'})
+        </span>
+        {presentation && (
+          <a className="btn small" href={`#/edit/${presentation.id}`}>
+            Edit slides…
+          </a>
+        )}
+      </div>
+      {isSong && presentation && presentation.sections.length > 0 && item.kind === 'presentation' && (
+        <InlineArrangementStrip
+          presentation={presentation}
+          arrangementId={item.arrangementId}
+          sectionsOverride={item.sections}
+          locked={locked}
+          onChangeSections={onChangeSections}
+          onPromoteToSong={onPromoteToSong}
+        />
+      )}
+      <div className="col" style={{ gap: 8, padding: 10, maxHeight: 280, overflow: 'auto' }}>
+        {groups.map((g) => (
+          <div key={g.pos} className="col" style={{ gap: 4 }}>
+            {g.pos >= 0 && (
+              <div className="row" style={{ gap: 6, alignItems: 'center', fontSize: 11 }}>
+                <span className="tag">{g.short || g.label}</span>
+                <span className="muted">{g.label}</span>
+              </div>
+            )}
+            <div
+              className="slide-grid"
+              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}
+            >
+              {g.cues.map((c) => {
+                if (c.kind === 'slide') {
+                  const own = slideOf(c);
+                  const slide = c.backgroundOverride && own ? withoutBackdrops(own) : own;
+                  const hidden = isHiddenCue(c);
+                  const hiddenByService =
+                    item.kind === 'presentation' &&
+                    Boolean(c.slideId && item.hiddenSlides?.includes(c.slideId));
+                  return (
+                    <SlideThumb
+                      key={c.index}
+                      slide={slide}
+                      isSong={Boolean(isSong)}
+                      bgMediaId={c.backgroundMediaId}
+                      media={op.media}
+                      label={c.label}
+                      number={(c.slideIndexInSection ?? 0) + 1}
+                      marks={{ live: false, armed: false }}
+                      width={140}
+                      hidden={hidden}
+                      onContextMenu={
+                        !locked && c.slideId && item.kind === 'presentation'
+                          ? (e) =>
+                              openContextMenu(
+                                e,
+                                [
+                                  {
+                                    label: hiddenByService
+                                      ? 'Include slide in this service'
+                                      : 'Skip slide in this service',
+                                    onSelect: () => onToggleHiddenSlide(c.slideId!),
+                                  },
+                                ],
+                                { ariaLabel: `Slide ${c.label} actions` },
+                              )
+                          : undefined
+                      }
+                      footer={
+                        hidden ? (
+                          <span className="tag">{hiddenByService ? 'skipped' : 'hidden'}</span>
+                        ) : undefined
+                      }
+                    />
+                  );
+                }
+                return (
+                  <SlideThumb
+                    key={c.index}
+                    bgMediaId={c.mediaId}
+                    media={op.media}
+                    isSong={false}
+                    label={c.label}
+                    marks={{ live: false, armed: false }}
+                    width={140}
+                    footer={<span className="tag">{c.kind === 'media' ? c.mediaKind : c.kind}</span>}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        {cues.length === 0 && <div className="muted small">Nothing to preview for this item.</div>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Build a service: rename, reorder (drag by the handle, touch included, or the arrow buttons), add from the
+ * library, preview slides, per-item settings, go live (prd/02).
+ * Changes save automatically (debounced) with the playlist's rev; the live playlist is read-only here.
  */
 export function PlaylistEditor(props: {
   playlist: Playlist;
@@ -80,11 +254,23 @@ export function PlaylistEditor(props: {
     }
   };
 
-  const op = {
-    presentation: (id: string) => lib.presentations.find((p) => p.id === id),
-    media: (id: string) => lib.media.find((m) => m.id === id),
-  };
+  const op = useMemo(() => {
+    const presentationsMap: Record<string, Presentation> = {};
+    for (const p of lib.presentations) presentationsMap[p.id] = p;
+    const mediaMap: Record<string, (typeof lib.media)[number]> = {};
+    for (const m of lib.media) mediaMap[m.id] = m;
+    return {
+      presentation: (id: string) => presentationsMap[id],
+      media: (id: string) => mediaMap[id],
+      presentationsMap,
+      mediaMap,
+    };
+  }, [lib.presentations, lib.media]);
+
   const selected = draft.items.find((it) => it.id === sel);
+  const selectedPres =
+    selected?.kind === 'presentation' ? op.presentation(selected.presentationId) : undefined;
+
   return (
     <div
       style={{
@@ -104,8 +290,8 @@ export function PlaylistEditor(props: {
               </>
             ) : (
               <>
-                This playlist is <b>live</b>. It is locked until End service; its presentations are locked
-                too.
+                This playlist is <b>live</b>. Use the Live view to skip items, arrange upcoming songs, or
+                hotfix off-air text; End service to add new items.
               </>
             )}
           </div>
@@ -135,19 +321,32 @@ export function PlaylistEditor(props: {
         </div>
         <div className="row wrap">
           {props.canOperate && !props.locked && (
-            <button
-              type="button"
-              className="primary big"
-              disabled={isLive || draft.items.length === 0}
-              title={isLive ? 'Another playlist is live: End service first' : undefined}
-              onClick={async () => {
-                if (await startService(draft.id)) {
-                  location.hash = '#/live';
-                }
-              }}
-            >
-              Go live
-            </button>
+            <>
+              <button
+                type="button"
+                className="primary big"
+                disabled={isLive || draft.items.length === 0}
+                title={isLive ? 'Another playlist is live: End service first' : undefined}
+                onClick={async () => {
+                  await flushPlaylist(draft.id);
+                  if (await startService(draft.id)) {
+                    location.hash = '#/live';
+                  }
+                }}
+              >
+                Go live
+              </button>
+              <button
+                type="button"
+                className="big"
+                onClick={() => {
+                  setUi({ selectedPlaylistId: draft.id, followLive: true });
+                  navigate({ name: 'live' });
+                }}
+              >
+                Open on Live
+              </button>
+            </>
           )}
           {props.canOperate && props.locked && (
             <button type="button" className="big" onClick={() => (location.hash = '#/live')}>
@@ -162,7 +361,15 @@ export function PlaylistEditor(props: {
             Delete
           </button>
         </div>
-        {props.canOperate && !DEMO && <OfflineControl playlistId={draft.id} rev={draft.rev} />}
+        <PlaylistReadinessStrip
+          playlist={draft}
+          presentations={lib.presentations}
+          media={lib.media}
+          unsavedItems={unsavedItems}
+          offlineSlot={
+            props.canOperate && !DEMO ? <OfflineControl playlistId={draft.id} rev={draft.rev} /> : undefined
+          }
+        />
         <div
           ref={sort.ref}
           className="col pl-list"
@@ -191,6 +398,18 @@ export function PlaylistEditor(props: {
                           { kind: 'separator' as const },
                         ]
                       : []),
+                    {
+                      label: it.skipped ? 'Include item' : 'Skip item',
+                      disabled: locked,
+                      onSelect: () =>
+                        setItem(it.id, (x) => {
+                          if (x.skipped) {
+                            const { skipped: _s, ...rest } = x;
+                            return rest;
+                          }
+                          return { ...x, skipped: true };
+                        }),
+                    },
                     {
                       label: 'Duplicate item',
                       disabled: locked,
@@ -259,117 +478,55 @@ export function PlaylistEditor(props: {
               }}
               style={{ cursor: props.locked ? 'pointer' : 'grab' }}
             >
-              <DragHandle label="Drag to reorder" disabled={props.locked} {...sort.handle(i)} />
-              <span className="muted small" style={{ width: 22 }}>
-                {i + 1}
-              </span>
-              <span className="kind">
-                {it.kind === 'presentation'
-                  ? '♪'
-                  : it.kind === 'media'
-                    ? '▶'
-                    : it.kind === 'timer'
-                      ? '⏱'
-                      : '⚡'}
-              </span>
-              <span className="col grow" style={{ gap: 0 }}>
-                <span className="ellipsis row" style={{ gap: 6, alignItems: 'center' }}>
-                  <span className="ellipsis">{itemTitle(it, op)}</span>
-                  {it.kind === 'presentation' && Boolean(unsavedItems[`pres:${it.presentationId}`]) && (
-                    <span
-                      className="tag amber"
-                      style={{ fontSize: 10, padding: '1px 5px' }}
-                      title="Unsaved edits in editor"
-                    >
-                      unsaved
-                    </span>
-                  )}
-                  {it.kind === 'presentation' &&
-                    (() => {
-                      const p = op.presentation(it.presentationId);
-                      const effBgId = it.backgroundMediaId ?? p?.backgroundMediaId;
-                      const effBg = effBgId ? op.media(effBgId) : undefined;
-                      const bgb = effBg?.midi
-                        ? midiTriggerBadge(effBg.midi, lib.settings.surfaces.midiPresets)
-                        : null;
-                      if (!bgb) return null;
-                      return (
-                        <span
-                          className="tag"
-                          title={`From background (${effBg!.name}): ${bgb.title}`}
-                          style={{
-                            fontSize: 10,
-                            padding: '1px 5px',
-                            borderLeft: bgb.color ? `3px solid ${bgb.color}` : undefined,
-                            opacity: 0.85,
-                          }}
-                        >
-                          ● {bgb.label}
-                        </span>
-                      );
-                    })()}
-                  {it.kind !== 'action' &&
-                    it.midi &&
-                    (() => {
-                      const b = midiTriggerBadge(it.midi, lib.settings.surfaces.midiPresets);
-                      if (!b) return null;
-                      return (
-                        <span
-                          className="tag"
-                          title={b.title}
-                          style={{
-                            fontSize: 10,
-                            padding: '1px 5px',
-                            borderLeft: b.color ? `3px solid ${b.color}` : undefined,
-                            color: b.missing ? 'var(--warn, #d97706)' : undefined,
-                          }}
-                        >
-                          💡 {b.label}
-                        </span>
-                      );
-                    })()}
-                </span>
-                <span className="muted small ellipsis">{itemSubtitle(it, op)}</span>
-              </span>
-              {!props.locked && (
-                <>
-                  <button
-                    type="button"
-                    className="ghost small"
-                    disabled={i === 0}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) }));
-                    }}
-                    aria-label="Move up"
-                  >
-                    ↑<span className="touch-label">Up</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost small"
-                    disabled={i === draft.items.length - 1}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) }));
-                    }}
-                    aria-label="Move down"
-                  >
-                    ↓<span className="touch-label">Down</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost small"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      update((p) => ({ ...p, items: p.items.filter((x) => x.id !== it.id) }));
-                    }}
-                    title="Remove"
-                  >
-                    ✕<span className="touch-label">Remove</span>
-                  </button>
-                </>
-              )}
+              <PlaylistItemRowContent
+                item={it}
+                index={i}
+                lookup={op}
+                presets={lib.settings.surfaces.midiPresets}
+                unsaved={it.kind === 'presentation' && Boolean(unsavedItems[`pres:${it.presentationId}`])}
+                leading={<DragHandle label="Drag to reorder" disabled={props.locked} {...sort.handle(i)} />}
+                trailing={
+                  !props.locked && (
+                    <>
+                      <button
+                        type="button"
+                        className="ghost small"
+                        disabled={i === 0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) }));
+                        }}
+                        aria-label="Move up"
+                      >
+                        ↑<span className="touch-label">Up</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost small"
+                        disabled={i === draft.items.length - 1}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) }));
+                        }}
+                        aria-label="Move down"
+                      >
+                        ↓<span className="touch-label">Down</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          update((p) => ({ ...p, items: p.items.filter((x) => x.id !== it.id) }));
+                        }}
+                        title="Remove"
+                      >
+                        ✕<span className="touch-label">Remove</span>
+                      </button>
+                    </>
+                  )
+                }
+              />
             </div>
           ))}
           {draft.items.length === 0 && (
@@ -378,6 +535,53 @@ export function PlaylistEditor(props: {
             </div>
           )}
         </div>
+        {selected && (
+          <SelectedItemSlidePreview
+            item={selected}
+            playlistName={draft.name}
+            locked={props.locked}
+            presentation={selectedPres}
+            op={op}
+            onChangeSections={(sections) =>
+              setItem(selected.id, (it) => {
+                if (it.kind !== 'presentation') return it;
+                if (sections === null) {
+                  const { sections: _s, ...rest } = it;
+                  return rest;
+                }
+                return { ...it, sections };
+              })
+            }
+            onToggleHiddenSlide={(slideId) =>
+              setItem(selected.id, (it) => {
+                if (it.kind !== 'presentation') return it;
+                const cur = it.hiddenSlides ?? [];
+                const next = cur.includes(slideId) ? cur.filter((x) => x !== slideId) : [...cur, slideId];
+                if (!next.length) {
+                  const { hiddenSlides: _h, ...rest } = it;
+                  return rest;
+                }
+                return { ...it, hiddenSlides: next };
+              })
+            }
+            onPromoteToSong={async (sectionIds) => {
+              if (!selectedPres) return;
+              const arr: Arrangement = {
+                id: newId(),
+                name: draft.name,
+                sectionIds,
+              };
+              if (await saveArrangement(selectedPres.id, arr)) {
+                setItem(selected.id, (it) => {
+                  if (it.kind !== 'presentation') return it;
+                  const { sections: _s, ...rest } = it;
+                  return { ...rest, arrangementId: arr.id };
+                });
+                toast(`Saved "${arr.name}" to ${selectedPres.title}`);
+              }
+            }}
+          />
+        )}
         {selected && (
           <div className="card">
             <ItemSettings

@@ -42,7 +42,12 @@ export type CallName =
   | 'offlineDownload'
   | 'offlineCancel'
   /** W41's button: go live from the hub's saved copy instead of waiting for the library (design/29 M8). */
-  | 'goLiveSaved';
+  | 'goLiveSaved'
+  /** ADR 0015: closed-manifest live adjustments (operate role only). */
+  | 'skipItem'
+  | 'arrangeItem'
+  | 'hideItemSlides'
+  | 'editSlideText';
 
 /** A Go live being prepared on the hub (design/29 M8): W41's toast. */
 export type GoLivePrepare = {

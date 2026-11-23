@@ -8,6 +8,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   lastSlide: 'Last slide of item',
   nextItem: 'Next item',
   prevItem: 'Previous item',
+  skipNextItem: 'Skip next upcoming item',
   goToSection: 'Go to section (index)',
   goToSlide: 'Go to slide N of section',
   goToItem: 'Go to playlist item (index)',

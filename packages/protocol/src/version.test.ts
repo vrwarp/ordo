@@ -76,9 +76,14 @@ import { APP_VERSION } from './index.ts';
 // native slide's `pptx.artText` for a slide that holds such a picture (`importedText`: the words of the picture for the cue
 // label, the Stage and search). The sub-wave's one bump to 0.11.0, the last commit of the pull request, covers it, and the
 // integrator records the merged digest once after the last merge.
+// 0.12.0 for ADR 0015 (closed-manifest live adjustments and PlaylistItem overrides): schemas.ts adds optional
+// PlaylistItem.sections, hiddenSlides, and skipped plus ActionId 'skipNextItem'; cues.ts applies
+// sections/hiddenSlides/skipped and steps over skipped items in nextShownCue/prevShownCue; live.ts and
+// live-state add item.skip, item.arrange, item.hideSlides, and slide.editText events, skipNextItem action
+// mapping, and auto-unskip on explicit go.
 const RECORDED = {
-  version: '0.11.0',
-  digest: '4b9621ec4ea2e1d4ce6ef5b4220487fcd8d1e29bd7fd86831e444022e50511c6',
+  version: '0.12.0',
+  digest: 'bf95749fb52fb5e8a2e25337e744a9a20d8466141b9dc283e2bd322e91ec874c',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

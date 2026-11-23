@@ -1,10 +1,17 @@
-import { type ClientMessageBody, Emitter, type RtcSignalIn } from '@ordo/client';
-import type { LiveEvent, LiveState, ResolvedPlaylist, TimerSpec } from '@ordo/domain';
+import { api, type ClientMessageBody, Emitter, type RtcSignalIn } from '@ordo/client';
+import type { LiveEvent, LiveState, Playlist, Presentation, ResolvedPlaylist, TimerSpec } from '@ordo/domain';
 import { APP_VERSION, type OutputHealthEntry } from '@ordo/protocol';
 import type { Action } from '@ordo/surfaces';
 import { CoreClient } from '../core/client.ts';
 import type { CallName, Source, ViewModelMsg } from '../core/protocol.ts';
-import { applyCoreLibrary, connectLibrary, saveSettings, settings } from '../state/library.ts';
+import {
+  applyCoreLibrary,
+  connectLibrary,
+  saveSettings,
+  settings,
+  upsertLocal,
+  useLibrary,
+} from '../state/library.ts';
 import { useLive } from '../state/live.ts';
 import { refreshSession, useSession } from '../state/session.ts';
 import { errorText, toast } from '../state/toasts.ts';
@@ -319,8 +326,22 @@ export class Controller {
   offlineCancel(playlistId: string): void {
     this.call('offlineCancel', playlistId);
   }
+  skipItem(itemId: string, skipped: boolean): void {
+    this.call('skipItem', itemId, skipped);
+  }
+  arrangeItem(itemId: string, sections: string[] | null): void {
+    this.call('arrangeItem', itemId, sections);
+  }
+  hideItemSlides(itemId: string, hiddenSlides: string[]): void {
+    this.call('hideItemSlides', itemId, hiddenSlides);
+  }
+  editSlideText(presentationId: string, slideId: string, objectId: string, text: string): void {
+    this.call('editSlideText', presentationId, slideId, objectId, text);
+  }
   endService(): void {
+    const snap = useLive.getState().state.resolved;
     this.call('endService');
+    if (snap) void persistLiveAdjustmentsAfterEnd(snap);
   }
   sendMessage(text: string, ttlMs?: number): void {
     const t = text.trim();
@@ -441,4 +462,99 @@ export function startController(requested: 'operate' | 'edit'): Controller {
 /** Dispatch helper usable from components; no-op before login. */
 export function dispatch(a: Action, source: Source = 'ui'): void {
   current?.dispatch(a, source);
+}
+
+/**
+ * Silently persist ADR 0015 live adjustments (`sections`, `hiddenSlides`, `skipped`, and off-air text
+ * hotfixes) back to the library once End service unlocks the playlist. Never prompts or blocks End service.
+ */
+async function persistLiveAdjustmentsAfterEnd(snap: ResolvedPlaylist): Promise<void> {
+  const deadline = Date.now() + 4000;
+  while (useLive.getState().state.mode === 'live' && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  if (useLive.getState().state.mode === 'live') return;
+  const lib = useLibrary.getState().data;
+  const stored = lib.playlists.find((p) => p.id === snap.playlist.id);
+  if (stored) {
+    const liveById = new Map(snap.playlist.items.map((it) => [it.id, it]));
+    let playlistChanged = false;
+    const nextItems = stored.items.map((it) => {
+      const liveIt = liveById.get(it.id);
+      if (!liveIt || liveIt.kind !== it.kind) return it;
+      let changed = false;
+      const merged = { ...it };
+      if (Boolean(liveIt.skipped) !== Boolean(it.skipped)) {
+        if (liveIt.skipped) merged.skipped = true;
+        else delete merged.skipped;
+        changed = true;
+      }
+      if (it.kind === 'presentation' && liveIt.kind === 'presentation' && merged.kind === 'presentation') {
+        const sameArr = (a?: readonly string[], b?: readonly string[]) =>
+          (a?.length ?? 0) === (b?.length ?? 0) && (a ?? []).every((x, i) => x === b?.[i]);
+        if (!sameArr(liveIt.sections, it.sections)) {
+          if (liveIt.sections) merged.sections = [...liveIt.sections];
+          else delete merged.sections;
+          changed = true;
+        }
+        if (!sameArr(liveIt.hiddenSlides, it.hiddenSlides)) {
+          if (liveIt.hiddenSlides?.length) merged.hiddenSlides = [...liveIt.hiddenSlides];
+          else delete merged.hiddenSlides;
+          changed = true;
+        }
+      }
+      if (changed) playlistChanged = true;
+      return changed ? merged : it;
+    });
+    if (playlistChanged) {
+      try {
+        const saved = await api<Playlist>(`/playlists/${stored.id}`, {
+          method: 'PUT',
+          json: { ...stored, items: nextItems },
+        });
+        upsertLocal('playlists', saved);
+      } catch (e) {
+        log('warn', `could not save live playlist adjustments: ${errorText(e)}`);
+      }
+    }
+  }
+  // Persist any slide.editText hotfixes to presentations whose text changed while live.
+  for (const [presId, livePres] of Object.entries(snap.presentations)) {
+    const storedPres = lib.presentations.find((p) => p.id === presId);
+    if (!storedPres) continue;
+    const liveText = new Map<string, string>();
+    for (const sec of livePres.sections)
+      for (const sl of sec.slides)
+        for (const obj of sl.objects) if (obj.type === 'text') liveText.set(`${sl.id}:${obj.id}`, obj.text);
+    let presChanged = false;
+    const nextSections = storedPres.sections.map((sec) => {
+      let secChanged = false;
+      const slides = sec.slides.map((sl) => {
+        let slChanged = false;
+        const objects = sl.objects.map((obj) => {
+          if (obj.type !== 'text') return obj;
+          const t = liveText.get(`${sl.id}:${obj.id}`);
+          if (t === undefined || t === obj.text) return obj;
+          slChanged = true;
+          secChanged = true;
+          presChanged = true;
+          const { paras: _p, ...rest } = obj;
+          return { ...rest, text: t };
+        });
+        return slChanged ? { ...sl, objects } : sl;
+      });
+      return secChanged ? { ...sec, slides } : sec;
+    });
+    if (presChanged) {
+      try {
+        const saved = await api<Presentation>(`/presentations/${storedPres.id}`, {
+          method: 'PUT',
+          json: { ...storedPres, sections: nextSections },
+        });
+        upsertLocal('presentations', saved);
+      } catch (e) {
+        log('warn', `could not save live text hotfix for ${storedPres.title}: ${errorText(e)}`);
+      }
+    }
+  }
 }

@@ -1282,6 +1282,7 @@ export const ActionId = z.enum([
   'lastSlide',
   'nextItem',
   'prevItem',
+  'skipNextItem',
   'goToSection',
   'goToSlide',
   'goToItem',
@@ -1316,6 +1317,12 @@ export const PlaylistItem = z.discriminatedUnion('kind', [
     kind: z.literal('presentation'),
     presentationId: Id,
     arrangementId: Id.optional(),
+    /** Per-service section order override (design/28 §3.5, ADR 0015). When set, overrides arrangementId. */
+    sections: z.array(Id).max(500).optional(),
+    /** Slide ids hidden for this service only (design/28 §3.5, ADR 0015). */
+    hiddenSlides: z.array(Id).max(2000).optional(),
+    /** When true, sequential navigation steps over this item until unskipped or jumped to directly (ADR 0015). */
+    skipped: z.boolean().optional(),
     transition: Transition.optional(),
     backgroundMediaId: Id.optional(),
     keepBackground: z.boolean().optional(),
@@ -1328,6 +1335,7 @@ export const PlaylistItem = z.discriminatedUnion('kind', [
     id: Id,
     kind: z.literal('media'),
     mediaId: Id,
+    skipped: z.boolean().optional(),
     loop: z.boolean().optional(),
     onEnd: MediaOnEnd.optional(),
     audio: z.object({ pairId: Id.optional(), gainDb: z.number().min(-100).max(100).optional() }).optional(),
@@ -1338,10 +1346,11 @@ export const PlaylistItem = z.discriminatedUnion('kind', [
     id: Id,
     kind: z.literal('timer'),
     timer: TimerSpec,
+    skipped: z.boolean().optional(),
     /** Optional MIDI trigger fired once when entering this playlist item. */
     midi: MidiTrigger.optional().catch(undefined),
   }),
-  z.object({ id: Id, kind: z.literal('action'), action: ActionId }),
+  z.object({ id: Id, kind: z.literal('action'), action: ActionId, skipped: z.boolean().optional() }),
 ]);
 export type PlaylistItem = z.infer<typeof PlaylistItem>;
 
