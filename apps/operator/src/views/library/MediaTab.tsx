@@ -2,10 +2,15 @@ import { ApiFailure, api, fileUrl } from '@ordo/client';
 import { formatDuration, type Media, type MidiTrigger } from '@ordo/domain';
 import { PreviewPlayer } from '@ordo/audio';
 import { useMemo, useRef, useState } from 'react';
+import { create } from 'zustand';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Dialog } from '../../components/Dialog.tsx';
+import { Check, NumberField, PropertyRow, SegmentedControl, Select } from '../../components/fields.tsx';
+import { Icon } from '../../components/Icons.tsx';
 import { midiTriggerBadge, shouldShowMidiUi } from '../../components/MidiTriggerPicker.tsx';
+import { useCoarsePointer } from '../../components/pointer.ts';
+import { SplitPane } from '../../components/SplitPane.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLockedIds } from '../../hooks.ts';
 import {
@@ -14,13 +19,11 @@ import {
   playlistsUsing,
   presentationsUsing,
 } from '../../lib/mediaUse.ts';
+import { useSearch } from '../../services/search.ts';
 import { svgNote, tileHash } from '../../services/thumbs.ts';
 import { uploadMedia } from '../../services/upload.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
-import { useSearch } from '../../services/search.ts';
 import { errorText, toast } from '../../state/toasts.ts';
-import { create } from 'zustand';
-import { useCoarsePointer } from '../../components/pointer.ts';
 
 type UploadRow = { id: number; name: string; frac: number; error?: string; done?: boolean };
 export const useUploads = create<{ list: UploadRow[] }>(() => ({ list: [] }));
@@ -77,9 +80,7 @@ export function UploadProgress() {
 }
 
 /**
- * Drop files or click to choose. On a touch device (no drag and drop from the Files app into Safari is
- * assumed) it is a plain button that opens the native picker (Files, Photos, camera), with `touchLabel`
- * instead of the "drop here" text and `touchAccept` when the iPad needs a wider accept list.
+ * Drop files or click to choose. Kept exported for ImportTab / FontsTab / compact reuse.
  */
 export function DropZone(props: {
   onFiles: (f: File[]) => void;
@@ -145,11 +146,6 @@ export function DropZone(props: {
   );
 }
 
-/**
- * What the media picker offers. On iPad, image/* and video/* open Photos as well as Files: photos come
- * through as JPEG (Safari transcodes HEIC unless the accept list names HEIC, which the hub does not
- * take), videos as MOV (QuickTime, accepted) or MP4.
- */
 export const MEDIA_ACCEPT =
   'video/*,image/*,audio/*,.mov,.mp4,.m4v,.webm,.gif,.jpg,.jpeg,.png,.webp,.wav,.mp3,.aac,.flac,.ogg,.m4a';
 
@@ -173,13 +169,11 @@ function previewPlayer(): PreviewPlayer {
 
 /** A media item's preview dialog (a sheet on the compact layout, where the phone's Media tab opens it). */
 export function MediaPreview({ m, onClose }: { m: Media; onClose: () => void }) {
-  // An SVG previews as itself (an animated one moves here; the screens draw its still).
   const f = svgNote(m) ? m.original : (m.delivery ?? m.original);
   return (
     <Dialog title={m.name} onClose={onClose} width={760}>
       {m.kind === 'image' && <img src={fileUrl(f.hash)} alt={m.name} style={{ width: '100%' }} />}
       {m.kind === 'video' && (
-        // Muted: the operator auditions audio only on the preview device (prd/06).
         <video
           src={fileUrl(f.hash)}
           poster={m.poster ? fileUrl(m.poster.hash) : undefined}
@@ -204,14 +198,19 @@ export function MediaTab() {
   const coarse = useCoarsePointer();
   const pairs = lib.settings.audio.pairs;
   const locked = useLockedIds();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<'' | Media['kind']>('');
   const [bgOnly, setBgOnly] = useState(false);
-  // Pictures imports made for presentations (pages, PowerPoint pictures) stay out of the list by default.
   const [showPictures, setShowPictures] = useState(false);
   const [asBackground, setAsBackground] = useState(false);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [tileSize, setTileSize] = useState(168);
+  const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
+  const [dragOver, setDragOver] = useState(false);
   const [previewing, setPreviewing] = useState<Media>();
   const [playing, setPlaying] = useState<string>();
+
   const byId = useMemo(() => new Map(lib.media.map((m) => [m.id, m])), [lib.media]);
   const docs = useSearch(q, { kind: 'media' });
   const list = useMemo(
@@ -227,6 +226,14 @@ export function MediaTab() {
         ),
     [docs, kind, bgOnly, showPictures, byId],
   );
+
+  const selected = list.find((m) => m.id === selectedId) ?? list[0];
+
+  const handleUpload = async (files: File[]) => {
+    const added = await uploadFiles(files, { isBackground: asBackground });
+    if (added[0]) setSelectedId(added[0].id);
+  };
+
   const patch = async (m: Media, p: Record<string, unknown>) => {
     try {
       upsertLocal('media', await api<Media>(`/media/${m.id}`, { method: 'PUT', json: { ...p, rev: m.rev } }));
@@ -234,9 +241,8 @@ export function MediaTab() {
       toast(`Could not update ${m.name}: ${errorText(e)}`, 'error');
     }
   };
+
   const del = async (m: Media) => {
-    // Media that presentations or playlists use: the confirmation names them (a missing picture refuses
-    // goLive; a playlist item's missing music plays without it).
     const users = presentationsUsing(m.id, lib.presentations);
     const lists = playlistsUsing(m.id, lib.playlists);
     const used = users.length + lists.length > 0;
@@ -247,7 +253,6 @@ export function MediaTab() {
       try {
         await remove(used);
       } catch (e) {
-        // The hub knows of a use this library copy has not seen yet: ask again with its list.
         if (!(e instanceof ApiFailure && e.code === 'media_in_use')) throw e;
         if (!(await confirmDialog('Delete media', `${e.message} Delete it anyway?`, 'Delete', true))) return;
         await remove(true);
@@ -257,6 +262,7 @@ export function MediaTab() {
       toast(`Could not delete: ${errorText(e)}`, 'error');
     }
   };
+
   const audition = async (m: Media) => {
     const p = previewPlayer();
     if (playing === m.id) {
@@ -272,293 +278,476 @@ export function MediaTab() {
       toast(`Preview failed: ${errorText(e)}`, 'error');
     }
   };
-  return (
-    <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', height: '100%' }}>
-      <div className="col" style={{ padding: 10, borderBottom: '1px solid var(--line)' }}>
-        <div className="row wrap">
-          <input
-            className="grow"
-            placeholder="Search media"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          <select value={kind} onChange={(e) => setKind(e.target.value as '' | Media['kind'])}>
-            <option value="">All kinds</option>
-            <option value="video">Video</option>
-            <option value="image">Images</option>
-            <option value="audio">Audio</option>
-          </select>
-          <label className="check">
-            <input type="checkbox" checked={bgOnly} onChange={(e) => setBgOnly(e.target.checked)} />{' '}
-            Backgrounds only
-          </label>
-          <label className="check" title="Pages and pictures that imports made for presentations">
-            <input
-              type="checkbox"
-              checked={showPictures}
-              onChange={(e) => setShowPictures(e.target.checked)}
-            />{' '}
-            Show presentation pictures
-          </label>
-        </div>
-        <div className="row">
-          <div className="grow">
-            <DropZone
-              accept={MEDIA_ACCEPT}
-              label="Drop video, images or audio here (or click). Large files resume if interrupted."
-              touchLabel="Choose video, images or audio (Files or Photos)"
-              onFiles={(f) => void uploadFiles(f, { isBackground: asBackground })}
-            />
-          </div>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={asBackground}
-              onChange={(e) => setAsBackground(e.target.checked)}
-            />{' '}
-            Upload as backgrounds
-          </label>
-        </div>
-        <UploadProgress />
-      </div>
-      <VirtualList
-        items={list}
-        rowHeight={coarse ? 76 : 64}
-        keyOf={(m) => m.id}
-        onRowContextMenu={(e, m) => {
-          openContextMenu(
-            e,
-            [
-              { label: 'Preview', onSelect: () => setPreviewing(m) },
-              ...(m.kind !== 'image'
-                ? [
-                    {
-                      label: playing === m.id ? 'Stop audio preview' : 'Audition audio',
-                      onSelect: () => void audition(m),
-                    },
-                  ]
-                : []),
-              { kind: 'separator' },
-              ...(m.kind !== 'audio'
-                ? [
-                    {
-                      label: 'Show in background picker',
-                      checked: m.isBackground,
-                      onSelect: () => void patch(m, { isBackground: !m.isBackground }),
-                    },
-                  ]
-                : []),
-              ...(m.kind !== 'image'
-                ? [
-                    {
-                      label: 'Loop playback',
-                      checked: m.loop,
-                      onSelect: () => void patch(m, { loop: !m.loop }),
-                    },
-                  ]
-                : []),
-              ...(m.state === 'failed'
-                ? [
-                    { kind: 'separator' as const },
-                    {
-                      label: 'Retry processing',
-                      onSelect: () =>
-                        void api(`/media/${m.id}/retry`, { method: 'POST' }).catch((err) =>
-                          toast(errorText(err), 'error'),
-                        ),
-                    },
-                  ]
-                : []),
-              { kind: 'separator' },
-              { label: 'Delete…', danger: true, onSelect: () => void del(m) },
-            ],
-            { ariaLabel: `${m.name} media actions` },
-          );
-        }}
-        render={(m) => {
-          const still = tileHash(m);
-          const note = svgNote(m);
-          return (
-            <>
-              <div
-                style={{
-                  width: 96,
-                  height: 54,
-                  borderRadius: 4,
-                  background: still ? `#000 center/cover url(${fileUrl(still)})` : '#000',
-                  flex: 'none',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 20,
-                }}
-                onClick={() => setPreviewing(m)}
-              >
-                {!still && (m.kind === 'audio' ? '♫' : '▶')}
-              </div>
-              <span className="col grow" style={{ gap: 2 }}>
-                <span className="row" style={{ gap: 6, alignItems: 'center' }}>
-                  <b className="ellipsis">{m.name}</b> {stateTag(m)} {locked.size > 0 && null}
-                  {m.midi &&
-                    (() => {
-                      const b = midiTriggerBadge(m.midi, lib.settings.surfaces.midiPresets);
-                      if (!b) return null;
-                      return (
-                        <span
-                          className="tag"
-                          title={`Linked lighting (when used as background): ${b.title}`}
-                          style={{
-                            fontSize: 10,
-                            padding: '1px 5px',
-                            borderLeft: b.color ? `3px solid ${b.color}` : undefined,
-                            color: b.missing ? 'var(--warn, #d97706)' : undefined,
-                          }}
-                        >
-                          ● {b.label}
-                        </span>
-                      );
-                    })()}
-                </span>
-                <span className="muted small">
-                  {m.kind}
-                  {m.durationMs ? ` · ${formatDuration(m.durationMs)}` : ''}
-                  {m.width ? ` · ${m.width}×${m.height}` : ''}
-                  {m.error ? ` · ${m.error}` : ''}
-                  {note && (
-                    <span title={note} data-svg-note>
-                      {' '}
-                      · SVG: a still on screens, moves in previews only
-                    </span>
-                  )}
-                </span>
-              </span>
-              {m.kind !== 'audio' && (
-                <label className="check small" title="Show in the background picker">
-                  <input
-                    type="checkbox"
-                    checked={m.isBackground}
-                    onChange={(e) => void patch(m, { isBackground: e.target.checked })}
-                  />{' '}
-                  Background
-                </label>
-              )}
-              {m.kind !== 'audio' &&
-                shouldShowMidiUi(lib.settings.surfaces, Boolean(m.midi)) &&
-                (() => {
-                  const midiPresets = lib.settings.surfaces.midiPresets ?? [];
-                  const selectedId = m.midi?.kind === 'preset' ? m.midi.presetId : '';
-                  const isCustom = m.midi?.kind === 'cues';
-                  const missing = Boolean(selectedId && !midiPresets.some((p) => p.id === selectedId));
-                  return (
-                    <select
-                      value={isCustom ? '__custom' : selectedId}
-                      title="Linked lighting (when used as background)"
-                      aria-label="Linked lighting (when used as background)"
-                      style={{ maxWidth: 150 }}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (v === '__custom') return;
-                        const nextMidi: MidiTrigger | null = v ? { kind: 'preset', presetId: v } : null;
-                        void patch(m, { midi: nextMidi });
-                      }}
-                    >
-                      <option value="">💡 Bg lighting: None</option>
-                      {midiPresets.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          💡 {p.name}
-                        </option>
-                      ))}
-                      {missing && <option value={selectedId}>(missing preset)</option>}
-                      {isCustom && <option value="__custom">Custom MIDI</option>}
-                    </select>
-                  );
-                })()}
-              {m.kind !== 'image' && (
-                <label className="check small">
-                  <input
-                    type="checkbox"
-                    checked={m.loop}
-                    onChange={(e) => void patch(m, { loop: e.target.checked })}
-                  />{' '}
-                  Loop
-                </label>
-              )}
-              {m.kind !== 'image' && (
-                <>
-                  <select
-                    value={m.audio?.pairId ?? ''}
-                    title="Audio output pair"
-                    aria-label="Audio output pair"
-                    onChange={(e) =>
-                      void patch(m, {
-                        audio: { pairId: e.target.value || undefined, gainDb: m.audio?.gainDb ?? 0 },
-                      })
-                    }
-                  >
-                    <option value="">Default pair</option>
-                    {pairs.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="touch-label muted small">Gain dB</span>
-                  <input
-                    type="number"
-                    title="Gain (dB)"
-                    aria-label="Gain (dB)"
-                    style={{ width: 64 }}
-                    defaultValue={m.audio?.gainDb ?? 0}
-                    step={1}
-                    onBlur={(e) => {
-                      const v = Number(e.target.value);
-                      if (Number.isFinite(v) && v !== (m.audio?.gainDb ?? 0))
-                        void patch(m, { audio: { pairId: m.audio?.pairId, gainDb: v } });
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="small"
-                    disabled={m.state !== 'ready' && m.kind !== 'audio'}
-                    onClick={() => void audition(m)}
-                    title="Audition on the preview device"
-                  >
-                    {playing === m.id ? '■' : '🎧'}
-                    <span className="touch-label">{playing === m.id ? 'Stop' : 'Listen'}</span>
-                  </button>
-                </>
-              )}
-              <button
-                type="button"
-                className="small ghost"
-                onClick={() => {
-                  const n = prompt('Name', m.name);
-                  if (n?.trim()) void patch(m, { name: n.trim() });
-                }}
-              >
-                ✎<span className="touch-label">Rename</span>
-              </button>
-              {m.state === 'failed' && (
-                <button
-                  type="button"
-                  className="small"
-                  onClick={() =>
-                    void api(`/media/${m.id}/retry`, { method: 'POST' }).catch((e) =>
-                      toast(errorText(e), 'error'),
-                    )
-                  }
-                >
-                  Retry
-                </button>
-              )}
-              <button type="button" className="small ghost" onClick={() => void del(m)} aria-label="Delete">
-                🗑<span className="touch-label">Delete</span>
-              </button>
-            </>
-          );
+
+  const openMediaMenu = (e: React.MouseEvent, m: Media) => {
+    setSelectedId(m.id);
+    openContextMenu(
+      e,
+      [
+        { label: 'Preview', onSelect: () => setPreviewing(m) },
+        ...(m.kind !== 'image'
+          ? [
+              {
+                label: playing === m.id ? 'Stop audio preview' : 'Audition audio',
+                onSelect: () => void audition(m),
+              },
+            ]
+          : []),
+        { kind: 'separator' },
+        ...(m.kind !== 'audio'
+          ? [
+              {
+                label: 'Show in background picker',
+                checked: m.isBackground,
+                onSelect: () => void patch(m, { isBackground: !m.isBackground }),
+              },
+            ]
+          : []),
+        ...(m.kind !== 'image'
+          ? [
+              {
+                label: 'Loop playback',
+                checked: m.loop,
+                onSelect: () => void patch(m, { loop: !m.loop }),
+              },
+            ]
+          : []),
+        ...(m.state === 'failed'
+          ? [
+              { kind: 'separator' as const },
+              {
+                label: 'Retry processing',
+                onSelect: () =>
+                  void api(`/media/${m.id}/retry`, { method: 'POST' }).catch((err) =>
+                    toast(errorText(err), 'error'),
+                  ),
+              },
+            ]
+          : []),
+        { kind: 'separator' },
+        { label: 'Delete…', danger: true, onSelect: () => void del(m) },
+      ],
+      { ariaLabel: `${m.name} media actions` },
+    );
+  };
+
+  const browserPane = (
+    <div
+      className="pl-pane"
+      style={{ position: 'relative' }}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('Files')) {
+          e.preventDefault();
+          setDragOver(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const files = [...e.dataTransfer.files];
+        if (files.length) void handleUpload(files);
+      }}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept={MEDIA_ACCEPT}
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const files = [...(e.target.files ?? [])];
+          e.target.value = '';
+          if (files.length) void handleUpload(files);
         }}
       />
-      {previewing && <MediaPreview m={previewing} onClose={() => setPreviewing(undefined)} />}
+      <div className="pl-pane-head wrap" style={{ gap: 6 }}>
+        <input
+          className="grow"
+          style={{ minWidth: 150, maxWidth: 260 }}
+          placeholder="Search media…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <SegmentedControl<'' | Media['kind']>
+          size="xs"
+          ariaLabel="Filter media kind"
+          value={kind}
+          onChange={setKind}
+          options={[
+            { value: '', label: 'All' },
+            { value: 'video', label: 'Video' },
+            { value: 'image', label: 'Images' },
+            { value: 'audio', label: 'Audio' },
+          ]}
+        />
+        <label className="check small" style={{ gap: 5 }}>
+          <input type="checkbox" checked={bgOnly} onChange={(e) => setBgOnly(e.target.checked)} />
+          Backgrounds
+        </label>
+        <label
+          className="check small"
+          style={{ gap: 5 }}
+          title="Pages and pictures that imports made for presentations"
+        >
+          <input type="checkbox" checked={showPictures} onChange={(e) => setShowPictures(e.target.checked)} />
+          Slide pictures
+        </label>
+        <span className="spacer" />
+        {viewMode === 'grid' && (
+          <input
+            type="range"
+            min={120}
+            max={260}
+            step={16}
+            value={tileSize}
+            onChange={(e) => setTileSize(Number(e.target.value))}
+            title="Thumbnail size"
+            aria-label="Media thumbnail size"
+            style={{ width: 72 }}
+          />
+        )}
+        <SegmentedControl<'grid' | 'list'>
+          size="xs"
+          ariaLabel="Media view mode"
+          value={viewMode}
+          onChange={setViewMode}
+          options={[
+            { value: 'grid', label: <Icon name="grid" size={12} />, title: 'Grid view' },
+            { value: 'list', label: <Icon name="list" size={12} />, title: 'List view' },
+          ]}
+        />
+        <label className="check small" style={{ gap: 4 }} title="Mark newly uploaded files as backgrounds">
+          <input type="checkbox" checked={asBackground} onChange={(e) => setAsBackground(e.target.checked)} />
+          As bg
+        </label>
+        <button type="button" className="primary small" onClick={() => fileInputRef.current?.click()}>
+          <Icon name="upload" size={12} />
+          Import media
+        </button>
+      </div>
+
+      <div style={{ padding: '0 8px' }}>
+        <UploadProgress />
+      </div>
+
+      {viewMode === 'grid' ? (
+        <div className="pl-pane-scroll">
+          <div
+            className="media-grid"
+            style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${tileSize}px, 1fr))` }}
+          >
+            {list.map((m) => {
+              const still = tileHash(m);
+              const note = svgNote(m);
+              const isSel = selected?.id === m.id;
+              return (
+                <div
+                  key={m.id}
+                  className={`media-tile${isSel ? ' sel' : ''}`}
+                  onClick={() => setSelectedId(m.id)}
+                  onDoubleClick={() => setPreviewing(m)}
+                  onContextMenu={(e) => openMediaMenu(e, m)}
+                >
+                  <div
+                    className="media-tile-thumb"
+                    style={still ? { backgroundImage: `url(${fileUrl(still)})` } : undefined}
+                  >
+                    {!still && <Icon name={m.kind === 'audio' ? 'audio' : 'video'} size={22} />}
+                    <div className="media-tile-badges">
+                      {m.state !== 'ready' && stateTag(m)}
+                      {m.isBackground && (
+                        <span className="tag" style={{ background: 'rgba(0,0,0,0.65)', color: '#fff' }}>
+                          BG
+                        </span>
+                      )}
+                      {m.durationMs && (
+                        <span
+                          className="tag mono"
+                          style={{ background: 'rgba(0,0,0,0.65)', color: '#e7eaee' }}
+                        >
+                          {formatDuration(m.durationMs)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="media-tile-cap">
+                    <b className="ellipsis">{m.name}</b>
+                    <span className="muted ellipsis" style={{ fontSize: 10 }}>
+                      {m.kind}
+                      {m.width ? ` · ${m.width}×${m.height}` : ''}
+                      {note && (
+                        <span title={note} data-svg-note>
+                          {' '}
+                          · SVG: a still on screens, moves in previews only
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {list.length === 0 && (
+            <div className="center muted small" style={{ padding: 32 }}>
+              Drop video, images, or audio anywhere here — or click Import media.
+            </div>
+          )}
+        </div>
+      ) : (
+        <VirtualList
+          items={list}
+          rowHeight={coarse ? 64 : 44}
+          style={{ flex: 1 }}
+          keyOf={(m) => m.id}
+          rowClass={(m) => (selected?.id === m.id ? 'sel' : '')}
+          onRowClick={(m) => setSelectedId(m.id)}
+          onRowDoubleClick={(m) => setPreviewing(m)}
+          onRowContextMenu={openMediaMenu}
+          render={(m) => {
+            const still = tileHash(m);
+            const note = svgNote(m);
+            return (
+              <>
+                <div
+                  style={{
+                    width: 56,
+                    height: 32,
+                    borderRadius: 3,
+                    background: still ? `#000 center/cover url(${fileUrl(still)})` : '#07080a',
+                    flex: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: '1px solid var(--line)',
+                  }}
+                >
+                  {!still && (
+                    <Icon name={m.kind === 'audio' ? 'audio' : 'video'} size={14} className="muted" />
+                  )}
+                </div>
+                <span className="col grow" style={{ gap: 1, minWidth: 0 }}>
+                  <span className="row" style={{ gap: 6, alignItems: 'center' }}>
+                    <b className="ellipsis">{m.name}</b>
+                    {m.state !== 'ready' && stateTag(m)}
+                    {m.isBackground && <span className="tag">BG</span>}
+                  </span>
+                  <span className="muted" style={{ fontSize: 10.5 }}>
+                    {m.kind}
+                    {m.durationMs ? ` · ${formatDuration(m.durationMs)}` : ''}
+                    {m.width ? ` · ${m.width}×${m.height}` : ''}
+                    {note && (
+                      <span title={note} data-svg-note>
+                        {' '}
+                        · SVG: a still on screens, moves in previews only
+                      </span>
+                    )}
+                  </span>
+                </span>
+              </>
+            );
+          }}
+        />
+      )}
+
+      {dragOver && (
+        <div className="drop-overlay">
+          <Icon name="upload" size={28} />
+          <b>Drop video, images, or audio to import</b>
+        </div>
+      )}
     </div>
+  );
+
+  const inspectorPane = selected ? (
+    <div className="pl-pane pl-pane-alt">
+      <div className="pl-pane-head">
+        <span className="prop-section-title" style={{ margin: 0 }}>
+          Media Inspector
+        </span>
+        <span className="spacer" />
+        <button type="button" className="small" onClick={() => setPreviewing(selected)}>
+          <Icon name="eye" size={12} />
+          Preview
+        </button>
+      </div>
+      <div className="pl-pane-scroll">
+        <div style={{ padding: 8, borderBottom: '1px solid var(--line)', background: 'var(--bg)' }}>
+          <div
+            className="media-tile-thumb"
+            style={{
+              borderRadius: 3,
+              border: '1px solid var(--line)',
+              cursor: 'pointer',
+              ...(tileHash(selected)
+                ? { backgroundImage: `url(${fileUrl(tileHash(selected)!)})` }
+                : undefined),
+            }}
+            onClick={() => setPreviewing(selected)}
+          >
+            {!tileHash(selected) && <Icon name={selected.kind === 'audio' ? 'audio' : 'video'} size={24} />}
+          </div>
+          <div className="col" style={{ gap: 2, marginTop: 6 }}>
+            <b className="ellipsis" style={{ fontSize: 12.5 }}>
+              {selected.name}
+            </b>
+            <span className="muted" style={{ fontSize: 11 }}>
+              {selected.kind}
+              {selected.width && selected.height ? ` · ${selected.width}×${selected.height}` : ''}
+              {selected.durationMs ? ` · ${formatDuration(selected.durationMs)}` : ''}
+              {selected.hasAlpha ? ' · alpha' : ''}
+            </span>
+            {svgNote(selected) && (
+              <span className="muted" style={{ fontSize: 10.5 }} data-svg-note>
+                {svgNote(selected)}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="prop-section">
+          <div className="prop-section-title">Properties</div>
+          {selected.kind !== 'audio' && (
+            <PropertyRow label="Background">
+              <Check
+                label="Show in background picker"
+                value={selected.isBackground}
+                onChange={(isBackground) => void patch(selected, { isBackground })}
+              />
+            </PropertyRow>
+          )}
+          {selected.kind !== 'image' && (
+            <PropertyRow label="Loop">
+              <Check
+                label="Loop playback"
+                value={selected.loop}
+                onChange={(loop) => void patch(selected, { loop })}
+              />
+            </PropertyRow>
+          )}
+          {selected.kind !== 'audio' && shouldShowMidiUi(lib.settings.surfaces, Boolean(selected.midi)) && (
+            <PropertyRow label="Bg lighting">
+              {(() => {
+                const midiPresets = lib.settings.surfaces.midiPresets ?? [];
+                const selectedMidiId = selected.midi?.kind === 'preset' ? selected.midi.presetId : '';
+                const isCustom = selected.midi?.kind === 'cues';
+                const missing = Boolean(selectedMidiId && !midiPresets.some((p) => p.id === selectedMidiId));
+                return (
+                  <Select
+                    ariaLabel="Linked lighting (when used as background)"
+                    value={isCustom ? '__custom' : selectedMidiId}
+                    options={[
+                      { value: '', label: 'None' },
+                      ...midiPresets.map((p) => ({ value: p.id, label: p.name })),
+                      ...(missing ? [{ value: selectedMidiId, label: '(missing preset)' }] : []),
+                      ...(isCustom ? [{ value: '__custom', label: 'Custom MIDI' }] : []),
+                    ]}
+                    onChange={(v) => {
+                      if (v === '__custom') return;
+                      const nextMidi: MidiTrigger | null = v ? { kind: 'preset', presetId: v } : null;
+                      void patch(selected, { midi: nextMidi });
+                    }}
+                  />
+                );
+              })()}
+            </PropertyRow>
+          )}
+          {selected.kind !== 'image' && (
+            <>
+              <PropertyRow label="Audio pair">
+                <Select
+                  ariaLabel="Audio output pair"
+                  value={selected.audio?.pairId ?? ''}
+                  options={[
+                    { value: '', label: 'Default pair' },
+                    ...pairs.map((p) => ({ value: p.id, label: p.name })),
+                  ]}
+                  onChange={(pairId) =>
+                    void patch(selected, {
+                      audio: { pairId: pairId || undefined, gainDb: selected.audio?.gainDb ?? 0 },
+                    })
+                  }
+                />
+              </PropertyRow>
+              <PropertyRow label="Gain">
+                <NumberField
+                  value={selected.audio?.gainDb ?? 0}
+                  min={-40}
+                  max={20}
+                  step={1}
+                  suffix="dB"
+                  stepper
+                  width={58}
+                  onChange={(gainDb) =>
+                    void patch(selected, { audio: { pairId: selected.audio?.pairId, gainDb } })
+                  }
+                />
+              </PropertyRow>
+            </>
+          )}
+        </div>
+
+        <div className="prop-section">
+          <div className="row wrap" style={{ gap: 6 }}>
+            {selected.kind !== 'image' && (
+              <button type="button" className="small" onClick={() => void audition(selected)}>
+                <Icon name={playing === selected.id ? 'pause' : 'play'} size={12} />
+                {playing === selected.id ? 'Stop audition' : 'Audition'}
+              </button>
+            )}
+            {selected.state === 'failed' && (
+              <button
+                type="button"
+                className="small"
+                onClick={() =>
+                  void api(`/media/${selected.id}/retry`, { method: 'POST' }).catch((err) =>
+                    toast(errorText(err), 'error'),
+                  )
+                }
+              >
+                Retry
+              </button>
+            )}
+            <span className="spacer" />
+            <button
+              type="button"
+              className="danger small"
+              disabled={locked.has(selected.id)}
+              onClick={() => void del(selected)}
+            >
+              <Icon name="trash" size={12} />
+              Delete
+            </button>
+          </div>
+          {selected.midi &&
+            (() => {
+              const b = midiTriggerBadge(selected.midi, lib.settings.surfaces.midiPresets);
+              if (!b) return null;
+              return (
+                <span className="muted" style={{ fontSize: 10.5 }}>
+                  Linked lighting: {b.label}
+                </span>
+              );
+            })()}
+        </div>
+      </div>
+    </div>
+  ) : (
+    <div className="pl-pane pl-pane-alt center muted small">Select a media item to inspect.</div>
+  );
+
+  return (
+    <>
+      <SplitPane
+        storageKey="library-media"
+        panels={[
+          { id: 'media-bin', content: browserPane },
+          { id: 'media-inspector', size: 286, min: 230, max: 420, content: inspectorPane },
+        ]}
+      />
+      {previewing && <MediaPreview m={previewing} onClose={() => setPreviewing(undefined)} />}
+    </>
   );
 }

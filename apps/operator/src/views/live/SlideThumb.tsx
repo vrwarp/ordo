@@ -4,6 +4,7 @@ import type { OutputHealthEntry } from '@ordo/protocol';
 import { memo } from 'react';
 import { midiTriggerBadge, slideMidiTrigger } from '../../components/MidiTriggerPicker.tsx';
 import { useVisible } from '../../hooks.ts';
+import type { SectionTone } from '../../lib/sectionColors.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
 
@@ -13,6 +14,17 @@ export type ThumbMarks = {
   /** Per-output arm dots (only for the armed/live cue). */
   dots?: { id: string; name: string; dot: string }[];
   waiting?: boolean;
+};
+
+export type SlideSectionBand = {
+  label: string;
+  short?: string;
+  tone: SectionTone;
+  /** True on the first slide of a section group (shows the section badge + label). */
+  isFirst?: boolean;
+  onJump?: () => void;
+  onDoubleJump?: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
 };
 
 /** A slide thumbnail rendered by the worker, with a text fallback until it arrives. */
@@ -28,6 +40,8 @@ export const SlideThumb = memo(function SlideThumb(props: {
   width: number;
   /** A hidden slide (design/27 §9): drawn dimmed; Next skips it, a click still shows it. */
   hidden?: boolean;
+  /** ProPresenter-style color-coded footer band fused onto the slide frame (design/30 §5.1). */
+  sectionBand?: SlideSectionBand;
   onClick?: () => void;
   onDoubleClick?: () => void;
   onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
@@ -42,7 +56,9 @@ export const SlideThumb = memo(function SlideThumb(props: {
     { isSong: props.isSong, bg, media: props.media, look: props.look, width: props.width >= 260 ? 480 : 320 },
     visible,
   );
-  const cls = `thumb ${props.marks.live ? 'live' : ''} ${props.marks.armed && !props.marks.live ? 'armed' : ''}${props.hidden ? ' hidden-slide' : ''}`;
+  const isTransparent = !bg && props.isSong;
+  const cls = `thumb${props.marks.live ? ' live' : ''}${props.marks.armed && !props.marks.live ? ' armed' : ''}${props.hidden ? ' hidden-slide' : ''}${isTransparent ? ' is-transparent' : ''}`;
+  const band = props.sectionBand;
   return (
     <div
       ref={ref}
@@ -52,13 +68,15 @@ export const SlideThumb = memo(function SlideThumb(props: {
       onContextMenu={props.onContextMenu}
       title={props.label}
     >
-      {url || (!props.slide && bg && visible) ? (
-        <div className="img" style={{ backgroundImage: `url(${url ?? fileUrl(bg!)})` }} />
-      ) : (
-        <div className="fallback-text">
-          {props.slide ? firstText(props.slide) || props.label : props.label}
-        </div>
-      )}
+      <div className="img-canvas">
+        {url || (!props.slide && bg && visible) ? (
+          <div className="img" style={{ backgroundImage: `url(${url ?? fileUrl(bg!)})` }} />
+        ) : (
+          <div className="fallback-text">
+            {props.slide ? firstText(props.slide) || props.label : props.label}
+          </div>
+        )}
+      </div>
       {props.number !== undefined && <span className="num">{props.number}</span>}
       {props.marks.dots && props.marks.dots.length > 0 && (
         <span className="dots">
@@ -68,42 +86,111 @@ export const SlideThumb = memo(function SlideThumb(props: {
         </span>
       )}
       {props.marks.waiting && <span className="wait" title="Waiting for outputs to arm" />}
-      <div className="cap">
-        <span className="ellipsis grow">{props.label}</span>
-        {midiBadge && (
-          <span
-            className="tag"
-            title={midiBadge.title}
-            style={{
-              fontSize: 9,
-              padding: '1px 4px',
-              lineHeight: '12px',
-              background: 'var(--panel-alt)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 3,
-              maxWidth: 96,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {midiBadge.color && (
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: midiBadge.color,
-                  flexShrink: 0,
+      {band ? (
+        <div
+          className="cap-band"
+          style={{ background: band.tone.bg, color: band.tone.fg }}
+          onContextMenu={band.onContextMenu}
+        >
+          {band.isFirst ? (
+            band.onJump ? (
+              <button
+                type="button"
+                className="sec-jump-btn ellipsis grow"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  band.onJump?.();
                 }}
-              />
-            )}
-            <span className="ellipsis">{midiBadge.label}</span>
-          </span>
-        )}
-        {props.footer}
-      </div>
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  band.onDoubleJump?.();
+                }}
+                title={`Jump to ${band.label}`}
+              >
+                {band.short && <span className="sec-badge">{band.short}</span>}
+                <span className="ellipsis">{band.label}</span>
+              </button>
+            ) : (
+              <span className="row ellipsis grow" style={{ gap: 4, alignItems: 'center' }}>
+                {band.short && <span className="sec-badge">{band.short}</span>}
+                <span className="ellipsis">{band.label}</span>
+              </span>
+            )
+          ) : (
+            <span className="ellipsis grow" style={{ opacity: 0.85, fontWeight: 500 }}>
+              {props.label}
+            </span>
+          )}
+          {midiBadge && (
+            <span
+              className="tag"
+              title={midiBadge.title}
+              style={{
+                fontSize: 9,
+                padding: '0 4px',
+                lineHeight: '13px',
+                background: 'rgba(0,0,0,0.35)',
+                color: '#fff',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+                maxWidth: 88,
+              }}
+            >
+              {midiBadge.color && (
+                <span
+                  style={{
+                    width: 5,
+                    height: 5,
+                    borderRadius: '50%',
+                    background: midiBadge.color,
+                    flexShrink: 0,
+                  }}
+                />
+              )}
+              <span className="ellipsis">{midiBadge.label}</span>
+            </span>
+          )}
+          {props.footer}
+        </div>
+      ) : (
+        <div className="cap">
+          <span className="ellipsis grow">{props.label}</span>
+          {midiBadge && (
+            <span
+              className="tag"
+              title={midiBadge.title}
+              style={{
+                fontSize: 9,
+                padding: '1px 4px',
+                lineHeight: '12px',
+                background: 'var(--panel-alt)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+                maxWidth: 96,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {midiBadge.color && (
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: midiBadge.color,
+                    flexShrink: 0,
+                  }}
+                />
+              )}
+              <span className="ellipsis">{midiBadge.label}</span>
+            </span>
+          )}
+          {props.footer}
+        </div>
+      )}
     </div>
   );
 });

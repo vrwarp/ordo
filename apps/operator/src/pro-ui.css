@@ -1,0 +1,1146 @@
+/*
+ * Desktop pro-tool UX/UI layer (design/30-pro-tool-ui.md).
+ * Preserves Ordo's dark-slate hue family (#0e1013–#252a33) and #3b82f6 accent while replacing
+ * SaaS/web-form conventions with flush docked panes, compact desktop density, 2-column property
+ * inspectors, custom dark desktop controls, and broadcast tally chrome.
+ *
+ * Phone compact layout and coarse-pointer touch targets (`@media (pointer: coarse)`)
+ * are preserved intact.
+ */
+
+:root {
+  --line-strong: #343b48;
+  --checker-a: #14171d;
+  --checker-b: #1b2028;
+}
+
+/* ---- SVG icons ---- */
+.ico {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+/* ---- Keyboard shortcut keycap ---- */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--fg2);
+  letter-spacing: 0.01em;
+}
+
+/* ---- SplitPane (resizable 1px docked dividers) ---- */
+.split-pane {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.split-pane.split-h {
+  flex-direction: row;
+}
+.split-pane.split-v {
+  flex-direction: column;
+}
+.split-pane.is-dragging {
+  user-select: none;
+}
+.split-pane.is-dragging.split-h {
+  cursor: col-resize;
+}
+.split-pane.is-dragging.split-v {
+  cursor: row-resize;
+}
+.split-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.split-divider {
+  position: relative;
+  flex: 0 0 1px;
+  background: var(--line);
+  z-index: 5;
+  transition: background 0.1s ease;
+}
+.split-divider::after {
+  content: "";
+  position: absolute;
+  z-index: 6;
+}
+.split-divider-h {
+  width: 1px;
+  cursor: col-resize;
+}
+.split-divider-h::after {
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+.split-divider-v {
+  height: 1px;
+  cursor: row-resize;
+}
+.split-divider-v::after {
+  left: 0;
+  right: 0;
+  top: -3px;
+  bottom: -3px;
+}
+.split-divider:hover,
+.split-divider.active {
+  background: var(--accent);
+}
+
+/* ---- Segmented control ---- */
+.segmented {
+  display: inline-flex;
+  align-items: stretch;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px;
+  gap: 1px;
+}
+.segmented .seg-btn {
+  position: relative;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--fg2);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 0 8px;
+  min-height: 22px;
+  gap: 5px;
+}
+.segmented-xs .seg-btn {
+  font-size: 11px;
+  padding: 0 6px;
+  min-height: 20px;
+}
+.segmented .seg-btn:hover:not(:disabled):not(.active) {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--fg);
+}
+.segmented .seg-btn.active {
+  background: var(--bg4);
+  color: var(--fg);
+}
+.segmented .seg-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  flex-shrink: 0;
+}
+
+/* ---- 2-column PropertyRow inspector ---- */
+.prop-section {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.prop-section:last-child {
+  border-bottom: 0;
+}
+.prop-section-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg3);
+  margin: 0 0 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.prop-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 128px) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+}
+.prop-row.prop-row-start {
+  align-items: start;
+}
+.prop-row.prop-row-start .prop-label {
+  padding-top: 4px;
+}
+.prop-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--fg2);
+  min-width: 0;
+}
+.prop-hint-ico {
+  color: var(--fg3);
+  opacity: 0.75;
+}
+.prop-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.prop-control > .select-trigger,
+.prop-control > select,
+.prop-control > input:not([type="checkbox"]):not([type="color"]):not([type="number"]) {
+  max-width: 240px;
+  flex: 1 1 140px;
+}
+
+/* ---- Custom desktop Select & DateField popovers ---- */
+.select-trigger,
+.date-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  color: var(--fg);
+  padding: 0 7px;
+  min-height: 27px;
+  font-size: 12px;
+  font-weight: 400;
+  min-width: 90px;
+}
+.select-trigger:hover:not(:disabled),
+.date-trigger:hover:not(:disabled) {
+  background: var(--bg3);
+  border-color: #424b5b;
+}
+.select-trigger.open,
+.date-trigger.open {
+  border-color: var(--accent);
+  background: var(--bg3);
+}
+.select-caret {
+  color: var(--fg3);
+  flex-shrink: 0;
+}
+.select-popover {
+  z-index: 160;
+  background: var(--bg2);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 3px;
+  max-height: 280px;
+  overflow-y: auto;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.select-option {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-height: 25px;
+  padding: 2px 8px 2px 5px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+}
+.select-option.focused,
+.select-option:hover {
+  background: var(--bg4);
+}
+.select-option.selected {
+  color: #93c5fd;
+  font-weight: 500;
+}
+.select-opt-check {
+  width: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.date-popover {
+  z-index: 160;
+  width: 224px;
+  background: var(--bg2);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.58);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.date-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.date-weekdays span {
+  text-align: center;
+  font-size: 10px;
+  color: var(--fg3);
+  padding: 2px 0;
+}
+.date-cell {
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.date-cell:hover {
+  background: var(--bg4);
+}
+.date-cell.today {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.date-cell.selected {
+  background: var(--accent2);
+  color: #fff;
+  font-weight: 600;
+}
+.date-pop-foot {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+
+/* ---- NumberField stepper ---- */
+.num-step-btn {
+  min-height: 24px;
+  width: 22px;
+  padding: 0;
+  border-radius: 3px;
+}
+
+/* ---- Desktop pro-tool overrides (fine pointer, non-compact phone) ---- */
+@media (pointer: fine) {
+  :root {
+    --line: #262b34;
+    --radius: 3px;
+    --hit: 34px;
+    font-size: 12.5px;
+  }
+
+  /* Lock down accidental DOM text selection on app chrome; allow on text inputs & logs. */
+  .app {
+    user-select: none;
+  }
+  input,
+  textarea,
+  [contenteditable],
+  .live-notes-body,
+  .logbox,
+  pre,
+  code {
+    user-select: text;
+  }
+
+  /* Custom ultra-thin dark scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2f3642 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #2f3642;
+    border-radius: 3px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: #444e60;
+  }
+
+  /* Crisp desktop typography */
+  h2 {
+    font-size: 15px;
+  }
+  h3 {
+    font-size: 13px;
+  }
+  h4 {
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    color: var(--fg3);
+  }
+
+  /* Compact desktop controls */
+  button,
+  .btn {
+    min-height: 27px;
+    padding: 0 9px;
+    border-radius: 3px;
+    font-size: 12px;
+    gap: 5px;
+    border-color: var(--line-strong);
+  }
+  button.small,
+  .btn.small {
+    min-height: 23px;
+    padding: 0 7px;
+    font-size: 11.5px;
+  }
+  button.icon-btn {
+    min-height: 24px;
+    width: 24px;
+    padding: 0;
+  }
+  button.big {
+    min-height: 30px;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+  select,
+  textarea {
+    border-radius: 3px;
+    border-color: var(--line-strong);
+    min-height: 27px;
+    padding: 3px 7px;
+    font-size: 12px;
+  }
+  select {
+    padding-right: 22px;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 20 20' fill='none' stroke='%238a93a1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.5 7.5 10 12l4.5-4.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 6px center;
+  }
+  /* Hide browser number spin buttons on desktop */
+  input[type="number"] {
+    appearance: textfield;
+    -moz-appearance: textfield;
+    font-variant-numeric: tabular-nums;
+  }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  /* Custom crisp dark checkbox */
+  input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 15px;
+    height: 15px;
+    min-height: 15px;
+    border-radius: 3px;
+    border: 1px solid var(--line-strong);
+    background: var(--bg);
+    cursor: pointer;
+    display: inline-grid;
+    place-content: center;
+    flex-shrink: 0;
+    margin: 0;
+  }
+  input[type="checkbox"]:checked {
+    background: var(--accent2);
+    border-color: var(--accent);
+  }
+  input[type="checkbox"]:checked::after {
+    content: "";
+    width: 8px;
+    height: 5px;
+    border-left: 1.8px solid #fff;
+    border-bottom: 1.8px solid #fff;
+    transform: rotate(-45deg) translateY(-1px);
+  }
+
+  /* Sleek range slider */
+  input[type="range"] {
+    height: 4px;
+    min-height: 20px;
+    accent-color: var(--accent);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  /* Tighten tags & pills — no 9999px web pills */
+  .tag {
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 10.5px;
+  }
+  .card {
+    border-radius: 4px;
+    padding: 10px 12px;
+  }
+  .dialog {
+    border-radius: 4px;
+    border-color: var(--line-strong);
+  }
+  .dialog > header {
+    padding: 9px 12px;
+  }
+  .dialog > .body {
+    padding: 12px;
+  }
+  .dialog > footer {
+    padding: 8px 12px;
+  }
+
+  /* Compact desktop nav (36px instrument bar) */
+  .nav {
+    height: 36px;
+    padding: 0 8px;
+    gap: 2px;
+    background: var(--bg2);
+  }
+  .nav .brand {
+    font-size: 12.5px;
+    letter-spacing: 0.04em;
+    margin-right: 8px;
+    padding-left: 2px;
+  }
+  .nav .demo-badge-btn {
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 9.5px;
+    margin-left: 5px;
+  }
+  .nav a {
+    height: 26px;
+    padding: 0 9px;
+    border-radius: 3px;
+    font-size: 12px;
+    gap: 5px;
+  }
+  .nav a:hover:not(.active) {
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--fg);
+  }
+  .nav a.active {
+    background: var(--bg4);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+  .nav-divider {
+    height: 16px;
+    margin: 0 4px;
+  }
+  .unsaved-nav-pill {
+    height: 24px;
+    border-radius: 3px;
+    padding: 0 7px;
+    font-size: 11px;
+  }
+
+  /* Live operator tactical targets stay >= 34px while secondary controls stay compact 26-27px */
+  .op button,
+  .op .btn,
+  .op select,
+  .op input[type="text"],
+  .op input[type="range"] {
+    min-height: 26px;
+  }
+  .op label.check {
+    min-height: 24px;
+  }
+  .op input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+  }
+  .op .tactical-btn {
+    min-height: 34px;
+  }
+
+  /* Compact TopBar (36px broadcast tally & telemetry strip) */
+  .topbar {
+    min-height: 36px;
+    height: 36px;
+    padding: 0 8px;
+    gap: 8px;
+    background: #12151a;
+  }
+  .topbar .clock {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .topbar .stat {
+    font-size: 11px;
+    gap: 5px;
+  }
+  .topbar .dot {
+    width: 7px;
+    height: 7px;
+  }
+  .live-status-pill {
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-size: 10px;
+  }
+  .topbar-cell-sep {
+    width: 1px;
+    height: 16px;
+    background: var(--line);
+    flex-shrink: 0;
+  }
+
+  /* Dense rundown & sidebar rows */
+  .pl-item {
+    height: 32px;
+    padding: 0 8px;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .pl-item .kind {
+    width: 20px;
+    height: 20px;
+    border-radius: 3px;
+    font-size: 10px;
+  }
+  .side {
+    padding: 6px;
+    background: var(--bg2);
+  }
+  .side a,
+  .side .link {
+    min-height: 28px;
+    padding: 4px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    gap: 6px;
+  }
+  .pane-head {
+    padding: 5px 8px;
+    min-height: 34px;
+    gap: 6px;
+  }
+  .vrow {
+    padding: 0 8px;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  /* Hover-revealed row actions on desktop (always visible on focus-within) */
+  .row-hover-actions {
+    opacity: 0;
+    transition: opacity 0.1s ease;
+  }
+  .pl-item:hover .row-hover-actions,
+  .pl-item:focus-within .row-hover-actions,
+  .vrow:hover .row-hover-actions,
+  .vrow:focus-within .row-hover-actions {
+    opacity: 1;
+  }
+
+  /* Generous bottom scroll runway (scroll-beyond-last-item) so selecting any item brings it to the top */
+  .slides {
+    padding: 8px 10px 60vh;
+  }
+}
+
+/* ---- Session menu trigger in Nav ---- */
+.nav-session-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg2);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.nav-session-btn:hover,
+.nav-session-btn.on {
+  background: var(--bg3);
+  border-color: var(--line-strong);
+  color: var(--fg);
+}
+.session-popover {
+  z-index: 160;
+  min-width: 200px;
+  background: var(--bg2);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.session-pop-meta {
+  padding: 4px 6px 6px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ---- Slide thumbnails: ProPresenter-style color bands & transparent checkerboard ---- */
+.thumb {
+  border-radius: 3px;
+  border-width: 1.5px;
+}
+.thumb.is-transparent .img,
+.thumb.is-transparent .fallback-text {
+  background-color: var(--checker-a);
+  background-image:
+    linear-gradient(45deg, var(--checker-b) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--checker-b) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--checker-b) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--checker-b) 75%);
+  background-size: 12px 12px;
+  background-position:
+    0 0,
+    0 6px,
+    6px -6px,
+    -6px 0;
+}
+.thumb .img-canvas {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+  background: #000;
+}
+.thumb.is-transparent .img-canvas {
+  background-color: var(--checker-a);
+  background-image:
+    linear-gradient(45deg, var(--checker-b) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--checker-b) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--checker-b) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--checker-b) 75%);
+  background-size: 12px 12px;
+  background-position:
+    0 0,
+    0 6px,
+    6px -6px,
+    -6px 0;
+}
+.thumb .img-canvas .img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+.thumb .cap-band {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  min-height: 20px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #e7eaee;
+  background: var(--bg3);
+}
+.thumb .cap-band .sec-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.28);
+  color: inherit;
+  flex-shrink: 0;
+}
+.thumb .sec-jump-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  min-width: 0;
+}
+.thumb .sec-jump-btn:hover {
+  text-decoration: underline;
+}
+
+/* ---- Live right rail: primary monitor + VU meters + 2-up secondary + tabbed stage tools ---- */
+.op-right-rail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg2);
+  overflow: hidden;
+}
+.program-dock {
+  flex: 0 0 auto;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg);
+}
+.program-primary-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.program-primary-row .pv {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.program-vu-rail {
+  display: flex;
+  gap: 2px;
+  padding: 3px 2px;
+  background: #0a0c0f;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  align-items: stretch;
+}
+.program-vu-rail .meter {
+  width: 6px;
+  height: auto;
+  min-height: 60px;
+  background: #14171c;
+  border-radius: 1px;
+}
+.program-secondary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.program-dock .pv {
+  position: relative;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #050608;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.program-dock .pv.is-primary {
+  border-color: var(--line-strong);
+}
+.program-dock .pv video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.program-dock .pv .ov {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 2px 6px;
+  font-size: 10.5px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+}
+.pv-standby {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--fg3);
+  font-size: 11px;
+}
+
+.stage-dock {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.stage-dock-tabs {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg2);
+  flex-shrink: 0;
+}
+.stage-dock-tabs .segmented {
+  width: 100%;
+}
+.stage-dock-tabs .seg-btn {
+  flex: 1 1 0;
+  justify-content: center;
+}
+.stage-dock-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---- Tactical Console LayerBar (46px) ---- */
+.layerbar-console {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  min-height: 46px;
+  background: #12151a;
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.tally-key {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  max-width: 168px;
+  min-width: 84px;
+  padding: 0 8px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: var(--bg2);
+  color: var(--fg3);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: default;
+  flex-shrink: 0;
+}
+.tally-key.on {
+  background: #10261a;
+  border-color: #16a34a;
+  color: var(--fg);
+  cursor: pointer;
+}
+.tally-key.on:hover {
+  background: #163625;
+  border-color: #22c55e;
+}
+.tally-key-led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #374151;
+  flex-shrink: 0;
+}
+.tally-key.on .tally-key-led {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.7);
+}
+.tally-key-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+  flex: 1 1 0;
+}
+.tally-key-lbl {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg3);
+}
+.tally-key.on .tally-key-lbl {
+  color: #86efac;
+}
+.tally-key-val {
+  font-size: 11px;
+  color: var(--fg2);
+}
+.tally-key.on .tally-key-val {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.console-sep {
+  width: 1px;
+  height: 24px;
+  background: var(--line);
+  flex-shrink: 0;
+}
+.console-transport {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.console-time {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  color: var(--fg2);
+  font-variant-numeric: tabular-nums;
+  min-width: 78px;
+}
+.console-audio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.op .clear-all-console {
+  position: relative;
+  overflow: hidden;
+  min-height: 34px;
+  padding: 0 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.clear-all-console .hold-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: rgba(255, 255, 255, 0.24);
+  pointer-events: none;
+}
+.clear-all-console.holding .hold-fill {
+  width: 100%;
+  transition: width 1s linear;
+}
+
+/* ---- Playlists 4-pane workspace ---- */
+.pl-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+}
+.pl-pane-alt {
+  background: var(--bg2);
+}
+.pl-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg2);
+  flex-shrink: 0;
+}
+.pl-pane-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---- Library Media Bin grid + Inspector ---- */
+.lib-subbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  min-height: 34px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.media-grid {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+.media-tile {
+  display: flex;
+  flex-direction: column;
+  border-radius: 3px;
+  border: 1.5px solid var(--line);
+  background: var(--bg2);
+  overflow: hidden;
+  cursor: pointer;
+}
+.media-tile:hover {
+  border-color: #465063;
+}
+.media-tile.sel {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.media-tile-thumb {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  background: #07080a center / cover no-repeat;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg3);
+}
+.media-tile-badges {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 3px;
+}
+.media-tile-cap {
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 11px;
+}
+.drop-overlay {
+  position: absolute;
+  inset: 6px;
+  z-index: 30;
+  border: 2px dashed var(--accent);
+  border-radius: 4px;
+  background: rgba(14, 16, 19, 0.86);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--fg);
+  pointer-events: none;
+}
+
+/* ---- Settings & Setup desktop preferences layout ---- */
+.prefs-body {
+  padding: 12px 18px 28px;
+  max-width: 780px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}

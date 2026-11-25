@@ -15,7 +15,15 @@ import {
 import { effectiveCountdownPreset, propsModel, rasterProps } from '@ordo/renderer';
 import { useEffect, useRef, useState } from 'react';
 import { ArrangementEditor } from '../../components/ArrangementEditor.tsx';
-import { Check, Field, NumberField, Select, TextField, TransitionEditor } from '../../components/fields.tsx';
+import {
+  Check,
+  NumberField,
+  PropertyRow,
+  Select,
+  TextField,
+  TransitionEditor,
+} from '../../components/fields.tsx';
+import { Icon } from '../../components/Icons.tsx';
 import {
   countPresentationMidi,
   midiTriggerBadge,
@@ -57,7 +65,6 @@ function TimerPreviewCanvas({ timer, baseLook }: { timer: TimerSpec; baseLook: L
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, c.width, c.height);
 
-    // Subtle welcome-slide frame so corner vs center placement is immediately clear.
     ctx.save();
     ctx.strokeStyle = 'rgba(255,255,255,0.14)';
     ctx.lineWidth = 1;
@@ -112,17 +119,17 @@ function TimerPreviewCanvas({ timer, baseLook }: { timer: TimerSpec; baseLook: L
       width={320}
       height={180}
       style={{
-        width: 320,
+        width: 240,
         maxWidth: '100%',
         aspectRatio: '16 / 9',
-        borderRadius: 6,
+        borderRadius: 3,
         border: '1px solid var(--line)',
       }}
     />
   );
 }
 
-/** Settings for one playlist item, by kind. */
+/** Compact 2-column desktop inspector for one playlist item, by kind (design/30 §5.2). */
 export function ItemSettings(props: {
   item: PlaylistItem;
   disabled: boolean;
@@ -138,33 +145,52 @@ export function ItemSettings(props: {
     setPrevId(it.id);
     setEditing(null);
   }
+
   if (it.kind === 'presentation') {
     const p = lib.presentations.find((x) => x.id === it.presentationId);
-    if (!p) return <div className="banner red">This presentation no longer exists.</div>;
+    if (!p)
+      return (
+        <div className="prop-section">
+          <div className="banner red">This presentation no longer exists.</div>
+        </div>
+      );
     const current =
       p.arrangements.find((a) => a.id === it.arrangementId) ?? p.arrangements[0] ?? authoringArrangement(p);
+    const effBgId = it.backgroundMediaId ?? p.backgroundMediaId;
+    const effBg = effBgId ? lib.media.find((m) => m.id === effBgId) : undefined;
+    const bgBadge = effBg?.midi ? midiTriggerBadge(effBg.midi, lib.settings.surfaces.midiPresets) : null;
+    const inner = countPresentationMidi(p);
+    const hasAnyMidi = Boolean(it.midi || bgBadge || inner.sections > 0 || inner.slides > 0);
+    const audioFiles = lib.media.filter((m) => m.kind === 'audio');
+
     return (
-      <div className="col">
-        <h3>{p.title}</h3>
-        <Field label="Arrangement">
-          <div className="row wrap">
-            <select
+      <div className="col" style={{ gap: 0 }}>
+        <div className="prop-section">
+          <div className="prop-section-title">
+            <span>Playback &amp; Visuals</span>
+            {it.sections && (
+              <span className="tag amber" style={{ textTransform: 'none' }}>
+                Custom ({it.sections.length})
+              </span>
+            )}
+          </div>
+          <PropertyRow label="Arrangement">
+            <Select
               value={it.arrangementId ?? ''}
               disabled={props.disabled}
-              onChange={(e) => {
+              ariaLabel="Arrangement"
+              options={[
+                {
+                  value: '',
+                  label: p.arrangements[0] ? `${p.arrangements[0].name} (default)` : 'Authoring order',
+                },
+                ...p.arrangements.map((a) => ({ value: a.id, label: a.name })),
+              ]}
+              onChange={(v) => {
                 const { sections: _s, ...rest } = it;
-                props.onChange({ ...rest, arrangementId: e.target.value || undefined });
+                props.onChange({ ...rest, arrangementId: v || undefined });
               }}
-            >
-              <option value="">
-                {p.arrangements[0] ? `${p.arrangements[0].name} (default)` : 'Authoring order'}
-              </option>
-              {p.arrangements.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
+            />
             {it.sections && !props.disabled && (
               <button
                 type="button"
@@ -175,7 +201,7 @@ export function ItemSettings(props: {
                 }}
                 title="Clear per-service custom section order"
               >
-                Clear custom order
+                Clear custom
               </button>
             )}
             {!props.disabled && (
@@ -193,172 +219,159 @@ export function ItemSettings(props: {
                       name: `${lib.playlists.find((x) => x.items.some((y) => y.id === it.id))?.name ?? 'This service'}`,
                     })
                   }
-                  title="A new arrangement saved on the song"
+                  title="Create a new arrangement saved on the song"
                 >
-                  New for this service
+                  New…
                 </button>
               </>
             )}
-          </div>
-          {it.sections && (
-            <span className="muted small">
-              Using a custom section order for this service ({it.sections.length} sections).
-            </span>
-          )}
-        </Field>
-        {editing && (
-          <div className="card col">
-            <TextField
-              label="Arrangement name"
-              value={editing.name}
-              onChange={(name) => setEditing({ ...editing, name })}
-            />
-            <ArrangementEditor
-              presentation={p}
-              value={editing}
-              onChange={setEditing}
-              onAddSection={async (sec: Section) => {
-                const updated = { ...p, sections: [...p.sections, sec] };
-                try {
-                  const saved = await api<typeof p>(`/presentations/${p.id}`, {
-                    method: 'PUT',
-                    json: updated,
-                  });
-                  upsertLocal('presentations', saved);
-                } catch (e) {
-                  toast(`Could not save custom section: ${errorText(e)}`, 'error');
-                }
+          </PropertyRow>
+
+          {editing && (
+            <div
+              className="col"
+              style={{
+                padding: 8,
+                background: 'var(--bg)',
+                border: '1px solid var(--line-strong)',
+                borderRadius: 3,
+                gap: 8,
               }}
-            />
-            <div className="row">
-              <button
-                type="button"
-                className="primary small"
-                onClick={async () => {
-                  if (await props.onSaveArrangement(p.id, editing)) {
-                    props.onChange({ ...it, arrangementId: editing.id });
-                    setEditing(null);
+            >
+              <PropertyRow label="Name">
+                <TextField
+                  value={editing.name}
+                  onChange={(name) => setEditing({ ...editing, name })}
+                  style={{ flex: 1 }}
+                />
+              </PropertyRow>
+              <ArrangementEditor
+                presentation={p}
+                value={editing}
+                onChange={setEditing}
+                onAddSection={async (sec: Section) => {
+                  const updated = { ...p, sections: [...p.sections, sec] };
+                  try {
+                    const saved = await api<typeof p>(`/presentations/${p.id}`, {
+                      method: 'PUT',
+                      json: updated,
+                    });
+                    upsertLocal('presentations', saved);
+                  } catch (e) {
+                    toast(`Could not save custom section: ${errorText(e)}`, 'error');
                   }
                 }}
-              >
-                Save arrangement
-              </button>
-              <button type="button" className="small" onClick={() => setEditing(null)}>
-                Cancel
-              </button>
+              />
+              <div className="row" style={{ gap: 6 }}>
+                <button
+                  type="button"
+                  className="primary small"
+                  onClick={async () => {
+                    if (await props.onSaveArrangement(p.id, editing)) {
+                      props.onChange({ ...it, arrangementId: editing.id });
+                      setEditing(null);
+                    }
+                  }}
+                >
+                  Save arrangement
+                </button>
+                <button type="button" className="small" onClick={() => setEditing(null)}>
+                  Cancel
+                </button>
+              </div>
             </div>
-            <span className="muted small">
-              Arrangements are stored on the presentation; editing a section changes every arrangement using
-              it.
-            </span>
-          </div>
-        )}
-        <Field label="Transition for this item">
-          <TransitionEditor
-            value={it.transition}
-            allowInherit
-            onChange={(transition) => props.onChange({ ...it, transition })}
-          />
-        </Field>
-        <Field label="Background override">
-          <BackgroundPicker
-            value={it.backgroundMediaId}
-            onChange={(backgroundMediaId) => props.onChange({ ...it, backgroundMediaId })}
-            disabled={props.disabled}
-          />
-        </Field>
-        <Check
-          label="Continue previous background (medley / multi-deck)"
-          value={it.keepBackground ?? false}
-          disabled={props.disabled}
-          onChange={(keepBackground) =>
-            props.onChange({ ...it, keepBackground: keepBackground || undefined })
-          }
-        />
-        {(() => {
-          const effBgId = it.backgroundMediaId ?? p.backgroundMediaId;
-          const effBg = effBgId ? lib.media.find((m) => m.id === effBgId) : undefined;
-          const bgBadge = effBg?.midi
-            ? midiTriggerBadge(effBg.midi, lib.settings.surfaces.midiPresets)
-            : null;
-          const inner = countPresentationMidi(p);
-          const hasAny = Boolean(it.midi || bgBadge || inner.sections > 0 || inner.slides > 0);
-          if (!shouldShowMidiUi(lib.settings.surfaces, hasAny)) return null;
-          return (
-            <Field label="Lighting / MIDI on start">
-              <div className="col" style={{ gap: 6 }}>
+          )}
+
+          <PropertyRow label="Transition">
+            <TransitionEditor
+              value={it.transition}
+              allowInherit
+              disabled={props.disabled}
+              onChange={(transition) => props.onChange({ ...it, transition })}
+            />
+          </PropertyRow>
+
+          <PropertyRow label="Background" align="start">
+            <div className="col" style={{ gap: 4, flex: 1, minWidth: 0 }}>
+              <BackgroundPicker
+                value={it.backgroundMediaId}
+                onChange={(backgroundMediaId) => props.onChange({ ...it, backgroundMediaId })}
+                disabled={props.disabled}
+              />
+              <Check
+                label="Keep previous background (medley)"
+                value={it.keepBackground ?? false}
+                disabled={props.disabled}
+                onChange={(keepBackground) =>
+                  props.onChange({ ...it, keepBackground: keepBackground || undefined })
+                }
+              />
+            </div>
+          </PropertyRow>
+
+          {shouldShowMidiUi(lib.settings.surfaces, hasAnyMidi) && (
+            <PropertyRow
+              label="Lighting / MIDI"
+              hint="Fires once when entering this item (this service only)."
+              align="start"
+            >
+              <div className="col" style={{ gap: 5, flex: 1, minWidth: 0 }}>
                 {bgBadge && effBg && (
-                  <div className="row wrap small" style={{ gap: 6, alignItems: 'center' }}>
-                    <span className="muted">From background:</span>
+                  <div className="row wrap small" style={{ gap: 5, alignItems: 'center' }}>
+                    <span className="muted">From bg:</span>
                     <span
                       className="tag"
                       title={bgBadge.title}
-                      style={{
-                        borderLeft: bgBadge.color ? `3px solid ${bgBadge.color}` : undefined,
-                      }}
+                      style={{ borderLeft: bgBadge.color ? `3px solid ${bgBadge.color}` : undefined }}
                     >
-                      💡 {bgBadge.label}
+                      <Icon name="lights" size={10} /> {bgBadge.label}
                     </span>
-                    <span className="muted">({effBg.name})</span>
                   </div>
                 )}
                 <MidiTriggerPicker
                   value={it.midi}
                   disabled={props.disabled}
                   onChange={(midi) => props.onChange({ ...it, midi })}
-                  hint="Fires once when entering this item (this service only)."
                 />
                 {(inner.sections > 0 || inner.slides > 0) && (
-                  <span className="muted" style={{ fontSize: 11 }}>
-                    Also includes{' '}
-                    {[
-                      inner.sections > 0
-                        ? `${inner.sections} section lighting cue${inner.sections === 1 ? '' : 's'}`
-                        : '',
-                      inner.slides > 0
-                        ? `${inner.slides} slide MIDI cue${inner.slides === 1 ? '' : 's'}`
-                        : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' and ')}{' '}
-                    inside this presentation.
+                  <span className="muted" style={{ fontSize: 10.5 }}>
+                    +{inner.sections > 0 ? `${inner.sections} section` : ''}
+                    {inner.sections > 0 && inner.slides > 0 ? ', ' : ''}
+                    {inner.slides > 0 ? `${inner.slides} slide` : ''} cues inside presentation.
                   </span>
                 )}
               </div>
-            </Field>
-          );
-        })()}
+            </PropertyRow>
+          )}
+        </div>
+
         {p.kind === 'loop' && (
-          <div className="card col" style={{ gap: 8, marginTop: 4 }}>
-            <strong style={{ fontSize: 13 }}>Pre-Service Loop Automation</strong>
-            <span className="muted small">
-              Starting this loop can automatically start background music and an audience countdown. Leaving
-              this item automatically fades out the music and clears the countdown.
-            </span>
-            <label className="field">
-              <span>Background music</span>
-              <select
+          <div className="prop-section">
+            <div
+              className="prop-section-title"
+              title="Starting this loop can automatically start background music and an audience countdown. Leaving fades out the music and clears the countdown."
+            >
+              <span>Pre-Service Loop Automation</span>
+            </div>
+            <PropertyRow label="Background music">
+              <Select
                 value={it.audioMediaId ?? ''}
                 disabled={props.disabled}
-                onChange={(e) => props.onChange({ ...it, audioMediaId: e.target.value || undefined })}
-              >
-                <option value="">No background music</option>
-                {lib.media
-                  .filter((m) => m.kind === 'audio')
-                  .map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Countdown timer</span>
-              <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
+                ariaLabel="Background music"
+                options={[
+                  { value: '', label: 'None' },
+                  ...audioFiles.map((m) => ({ value: m.id, label: m.name })),
+                ]}
+                onChange={(v) => props.onChange({ ...it, audioMediaId: v || undefined })}
+              />
+            </PropertyRow>
+            <PropertyRow label="Countdown" align="start">
+              <div className="row wrap" style={{ gap: 5, alignItems: 'center' }}>
                 <input
                   type="time"
                   value={it.countdownTimer?.kind === 'countdownTo' ? it.countdownTimer.timeOfDay : ''}
                   disabled={props.disabled}
+                  style={{ width: 96 }}
                   onChange={(e) => {
                     const val = e.target.value.slice(0, 5);
                     const prev = it.countdownTimer?.kind === 'countdownTo' ? it.countdownTimer : undefined;
@@ -380,10 +393,10 @@ export function ItemSettings(props: {
                   <>
                     <input
                       type="text"
-                      placeholder="Label (e.g. Service starts in)"
+                      placeholder="Label"
                       value={it.countdownTimer.label ?? ''}
                       disabled={props.disabled}
-                      style={{ minWidth: 150, flex: '1 1 150px' }}
+                      style={{ width: 140 }}
                       onChange={(e) =>
                         props.onChange({
                           ...it,
@@ -394,11 +407,15 @@ export function ItemSettings(props: {
                         })
                       }
                     />
-                    <select
-                      aria-label="Countdown style"
+                    <Select
+                      ariaLabel="Countdown style"
                       value={it.countdownTimer.preset ?? ''}
                       disabled={props.disabled}
-                      onChange={(e) =>
+                      options={[
+                        { value: '', label: 'Look default' },
+                        ...COUNTDOWN_PRESETS.map((pr) => ({ value: pr.id, label: pr.label })),
+                      ]}
+                      onChange={(v) =>
                         props.onChange({
                           ...it,
                           countdownTimer: {
@@ -408,24 +425,21 @@ export function ItemSettings(props: {
                               it.countdownTimer!.kind === 'countdownTo'
                                 ? it.countdownTimer!.timeOfDay
                                 : '10:00',
-                            preset: (e.target.value || undefined) as CountdownPreset | undefined,
+                            preset: (v || undefined) as CountdownPreset | undefined,
                           },
                         })
                       }
-                    >
-                      <option value="">Look default</option>
-                      {COUNTDOWN_PRESETS.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.label}
-                        </option>
-                      ))}
-                    </select>
+                    />
                     {it.countdownTimer.preset !== 'centerHero' && (
-                      <select
-                        aria-label="Countdown corner"
+                      <Select
+                        ariaLabel="Countdown corner"
                         value={it.countdownTimer.corner ?? ''}
                         disabled={props.disabled}
-                        onChange={(e) =>
+                        options={[
+                          { value: '', label: 'Look corner' },
+                          ...COUNTDOWN_CORNERS.map((c) => ({ value: c.id, label: c.label })),
+                        ]}
+                        onChange={(v) =>
                           props.onChange({
                             ...it,
                             countdownTimer: {
@@ -435,18 +449,11 @@ export function ItemSettings(props: {
                                 it.countdownTimer!.kind === 'countdownTo'
                                   ? it.countdownTimer!.timeOfDay
                                   : '10:00',
-                              corner: (e.target.value || undefined) as CountdownCorner | undefined,
+                              corner: (v || undefined) as CountdownCorner | undefined,
                             },
                           })
                         }
-                      >
-                        <option value="">Look corner</option>
-                        {COUNTDOWN_CORNERS.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.label}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     )}
                     <button
                       type="button"
@@ -459,206 +466,223 @@ export function ItemSettings(props: {
                   </>
                 )}
               </div>
-            </label>
+            </PropertyRow>
           </div>
         )}
       </div>
     );
   }
+
   if (it.kind === 'media') {
     const m = lib.media.find((x) => x.id === it.mediaId);
     const pairs = lib.settings.audio.pairs;
     return (
-      <div className="col">
-        <h3>{m?.name ?? 'Missing media'}</h3>
+      <div className="prop-section">
+        <div className="prop-section-title">Media Item · {m?.name ?? 'Missing media'}</div>
         {m && m.kind !== 'image' && (
-          <Check
-            label="Loop"
-            value={it.loop ?? m.loop}
-            disabled={props.disabled}
-            onChange={(loop) => props.onChange({ ...it, loop })}
-          />
+          <PropertyRow label="Loop">
+            <Check
+              label="Loop playback"
+              value={it.loop ?? m.loop}
+              disabled={props.disabled}
+              onChange={(loop) => props.onChange({ ...it, loop })}
+            />
+          </PropertyRow>
         )}
         {m?.kind === 'video' && (
-          <Select
-            label="At the end"
-            value={it.onEnd ?? 'hold'}
-            disabled={props.disabled}
-            options={[
-              { value: 'hold', label: 'Hold the last frame' },
-              { value: 'black', label: 'Go to black' },
-              { value: 'advance', label: 'Advance to the next item' },
-            ]}
-            onChange={(onEnd) => props.onChange({ ...it, onEnd })}
-          />
-        )}
-        {m && m.kind !== 'image' && (
-          <div className="grid2">
+          <PropertyRow label="At end">
             <Select
-              label="Audio pair"
-              value={it.audio?.pairId ?? ''}
+              value={it.onEnd ?? 'hold'}
               disabled={props.disabled}
               options={[
-                { value: '', label: 'Media default' },
-                ...pairs.map((p) => ({ value: p.id, label: p.name })),
+                { value: 'hold', label: 'Hold last frame' },
+                { value: 'black', label: 'Go to black' },
+                { value: 'advance', label: 'Advance to next' },
               ]}
-              onChange={(pairId) =>
-                props.onChange({ ...it, audio: { ...it.audio, pairId: pairId || undefined } })
-              }
+              onChange={(onEnd) => props.onChange({ ...it, onEnd })}
             />
-            <NumberField
-              label="Gain (dB)"
-              value={it.audio?.gainDb ?? m.audio?.gainDb ?? 0}
-              min={-40}
-              max={20}
-              disabled={props.disabled}
-              onChange={(gainDb) => props.onChange({ ...it, audio: { ...it.audio, gainDb } })}
-            />
-          </div>
+          </PropertyRow>
+        )}
+        {m && m.kind !== 'image' && (
+          <>
+            <PropertyRow label="Audio pair">
+              <Select
+                value={it.audio?.pairId ?? ''}
+                disabled={props.disabled}
+                options={[
+                  { value: '', label: 'Media default' },
+                  ...pairs.map((p) => ({ value: p.id, label: p.name })),
+                ]}
+                onChange={(pairId) =>
+                  props.onChange({ ...it, audio: { ...it.audio, pairId: pairId || undefined } })
+                }
+              />
+            </PropertyRow>
+            <PropertyRow label="Gain">
+              <NumberField
+                value={it.audio?.gainDb ?? m.audio?.gainDb ?? 0}
+                min={-40}
+                max={20}
+                disabled={props.disabled}
+                suffix="dB"
+                stepper
+                width={58}
+                onChange={(gainDb) => props.onChange({ ...it, audio: { ...it.audio, gainDb } })}
+              />
+            </PropertyRow>
+          </>
         )}
         {shouldShowMidiUi(lib.settings.surfaces, Boolean(it.midi)) && (
-          <Field label="Lighting / MIDI on start">
+          <PropertyRow
+            label="Lighting / MIDI"
+            hint="Fires once when this media item goes live."
+            align="start"
+          >
             <MidiTriggerPicker
               value={it.midi}
               disabled={props.disabled}
               onChange={(midi) => props.onChange({ ...it, midi })}
-              hint="Fires once when this media item goes live."
             />
-          </Field>
+          </PropertyRow>
         )}
       </div>
     );
   }
+
   if (it.kind === 'timer') {
     const t = it.timer;
     const baseLook = lib.settings.looks.find((l) => l.kind === 'main') ?? LOOK_MAIN;
     const effectivePreset =
       t.kind === 'countdownTo' ? (t.preset ?? effectiveCountdownPreset(baseLook)) : 'cornerCircle';
     return (
-      <div className="row wrap" style={{ alignItems: 'flex-start', gap: 16 }}>
-        <div className="col grow" style={{ gap: 10, minWidth: 280 }}>
-          <h3 style={{ margin: 0 }}>Timer</h3>
-          <div className="grid2">
-            <Select
-              label="Kind"
-              value={t.kind}
-              disabled={props.disabled}
-              options={[
-                { value: 'countdownTo', label: 'Countdown to a time of day' },
-                { value: 'elapsed', label: 'Elapsed (starts when live)' },
-              ]}
-              onChange={(k) =>
-                props.onChange({
-                  ...it,
-                  timer:
-                    k === 'elapsed'
-                      ? { kind: 'elapsed', label: t.label }
-                      : { kind: 'countdownTo', timeOfDay: '10:00', label: t.label },
-                })
-              }
-            />
-            {t.kind === 'countdownTo' ? (
-              <Field label="Time (venue time zone)">
+      <div className="prop-section">
+        <div className="row wrap" style={{ alignItems: 'flex-start', gap: 12 }}>
+          <div className="col grow" style={{ gap: 6, minWidth: 240 }}>
+            <div className="prop-section-title">Timer Cue</div>
+            <PropertyRow label="Kind">
+              <Select
+                value={t.kind}
+                disabled={props.disabled}
+                options={[
+                  { value: 'countdownTo', label: 'Countdown to time of day' },
+                  { value: 'elapsed', label: 'Elapsed (starts when live)' },
+                ]}
+                onChange={(k) =>
+                  props.onChange({
+                    ...it,
+                    timer:
+                      k === 'elapsed'
+                        ? { kind: 'elapsed', label: t.label }
+                        : { kind: 'countdownTo', timeOfDay: '10:00', label: t.label },
+                  })
+                }
+              />
+            </PropertyRow>
+            {t.kind === 'countdownTo' && (
+              <PropertyRow label="Target time" hint="Venue time zone">
                 <input
                   type="time"
                   value={t.timeOfDay}
                   disabled={props.disabled}
+                  style={{ width: 96 }}
                   onChange={(e) => props.onChange({ ...it, timer: { ...t, timeOfDay: e.target.value } })}
                 />
-              </Field>
-            ) : (
-              <div />
+              </PropertyRow>
             )}
-          </div>
-          <TextField
-            label="Label"
-            value={t.label ?? ''}
-            placeholder="e.g. Service starts in, Baptism, Intermission"
-            disabled={props.disabled}
-            onChange={(label) => props.onChange({ ...it, timer: { ...t, label: label || undefined } })}
-          />
-          {t.kind === 'countdownTo' && (
-            <>
-              <Field label="Audience style">
-                <div className="ed-seg-bar">
-                  <button
-                    type="button"
-                    className={`small ${t.preset === undefined ? 'on' : ''}`}
-                    disabled={props.disabled}
-                    onClick={() => props.onChange({ ...it, timer: { ...t, preset: undefined } })}
-                  >
-                    Look default
-                  </button>
-                  {COUNTDOWN_PRESETS.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className={`small ${t.preset === p.id ? 'on' : ''}`}
-                      disabled={props.disabled}
-                      onClick={() => props.onChange({ ...it, timer: { ...t, preset: p.id } })}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-              </Field>
-              {effectivePreset !== 'centerHero' && (
-                <Field label="Corner">
-                  <div className="ed-seg-bar">
+            <PropertyRow label="Label">
+              <TextField
+                value={t.label ?? ''}
+                placeholder="e.g. Service starts in"
+                disabled={props.disabled}
+                onChange={(label) => props.onChange({ ...it, timer: { ...t, label: label || undefined } })}
+              />
+            </PropertyRow>
+            {t.kind === 'countdownTo' && (
+              <>
+                <PropertyRow label="Audience style">
+                  <div className="row wrap" style={{ gap: 3 }}>
                     <button
                       type="button"
-                      className={`small ${t.corner === undefined ? 'on' : ''}`}
+                      className={`small ${t.preset === undefined ? 'on' : ''}`}
                       disabled={props.disabled}
-                      onClick={() => props.onChange({ ...it, timer: { ...t, corner: undefined } })}
+                      onClick={() => props.onChange({ ...it, timer: { ...t, preset: undefined } })}
                     >
-                      Look default
+                      Default
                     </button>
-                    {COUNTDOWN_CORNERS.map((c) => (
+                    {COUNTDOWN_PRESETS.map((p) => (
                       <button
-                        key={c.id}
+                        key={p.id}
                         type="button"
-                        className={`small ${t.corner === c.id ? 'on' : ''}`}
+                        className={`small ${t.preset === p.id ? 'on' : ''}`}
                         disabled={props.disabled}
-                        onClick={() => props.onChange({ ...it, timer: { ...t, corner: c.id } })}
+                        onClick={() => props.onChange({ ...it, timer: { ...t, preset: p.id } })}
                       >
-                        {c.label}
+                        {p.label}
                       </button>
                     ))}
                   </div>
-                </Field>
-              )}
-            </>
-          )}
-          {shouldShowMidiUi(lib.settings.surfaces, Boolean(it.midi)) && (
-            <Field label="Lighting / MIDI on start">
-              <MidiTriggerPicker
-                value={it.midi}
-                disabled={props.disabled}
-                onChange={(midi) => props.onChange({ ...it, midi })}
-                hint="Fires once when this timer goes live."
-              />
-            </Field>
+                </PropertyRow>
+                {effectivePreset !== 'centerHero' && (
+                  <PropertyRow label="Corner">
+                    <div className="row wrap" style={{ gap: 3 }}>
+                      <button
+                        type="button"
+                        className={`small ${t.corner === undefined ? 'on' : ''}`}
+                        disabled={props.disabled}
+                        onClick={() => props.onChange({ ...it, timer: { ...t, corner: undefined } })}
+                      >
+                        Default
+                      </button>
+                      {COUNTDOWN_CORNERS.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className={`small ${t.corner === c.id ? 'on' : ''}`}
+                          disabled={props.disabled}
+                          onClick={() => props.onChange({ ...it, timer: { ...t, corner: c.id } })}
+                        >
+                          {c.label}
+                        </button>
+                      ))}
+                    </div>
+                  </PropertyRow>
+                )}
+              </>
+            )}
+            {shouldShowMidiUi(lib.settings.surfaces, Boolean(it.midi)) && (
+              <PropertyRow label="Lighting / MIDI" hint="Fires once when this timer goes live." align="start">
+                <MidiTriggerPicker
+                  value={it.midi}
+                  disabled={props.disabled}
+                  onChange={(midi) => props.onChange({ ...it, midi })}
+                />
+              </PropertyRow>
+            )}
+          </div>
+          {t.kind === 'countdownTo' && (
+            <div className="col" style={{ gap: 4 }}>
+              <span className="prop-section-title" style={{ margin: 0 }}>
+                Preview
+              </span>
+              <TimerPreviewCanvas timer={t} baseLook={baseLook} />
+            </div>
           )}
         </div>
-        {t.kind === 'countdownTo' && (
-          <div className="col" style={{ gap: 4 }}>
-            <span className="muted small">Audience preview</span>
-            <TimerPreviewCanvas timer={t} baseLook={baseLook} />
-          </div>
-        )}
       </div>
     );
   }
+
   return (
-    <div className="col">
-      <h3>Action</h3>
-      <Select
-        label="Action"
-        value={it.action}
-        disabled={props.disabled}
-        options={ACTIONS}
-        onChange={(action: ActionId) => props.onChange({ ...it, action })}
-      />
+    <div className="prop-section">
+      <div className="prop-section-title">Action Cue</div>
+      <PropertyRow label="Action">
+        <Select
+          value={it.action}
+          disabled={props.disabled}
+          options={ACTIONS}
+          onChange={(action: ActionId) => props.onChange({ ...it, action })}
+        />
+      </PropertyRow>
     </div>
   );
 }

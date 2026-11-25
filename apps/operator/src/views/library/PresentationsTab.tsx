@@ -4,7 +4,10 @@ import type { Folder } from '@ordo/protocol';
 import { useMemo, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { PropertyRow, Select } from '../../components/fields.tsx';
+import { Icon, playlistItemIconName } from '../../components/Icons.tsx';
 import { SlidePreviewRoll, slidePreviewRollHeight } from '../../components/SlidePreviewRoll.tsx';
+import { SplitPane } from '../../components/SplitPane.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLivePlaylistId, useLockedIds } from '../../hooks.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
@@ -285,169 +288,159 @@ export function PresentationsTab() {
     }
   };
 
-  return (
-    <div className="split">
-      <FolderSide folders={folders} tags={tags} tag={tag} setTag={setTag} />
-      <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', minHeight: 0 }}>
-        <div className="row wrap" style={{ padding: 10, borderBottom: '1px solid var(--line)' }}>
-          <input
-            className="grow"
-            style={{ minWidth: 240 }}
-            autoFocus
-            placeholder={`Search ${lib.presentations.length} presentations: title, lyrics, CCLI, tag`}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          <button type="button" className="primary" onClick={() => setNewSong(true)}>
-            New song
-          </button>
-          <button type="button" onClick={() => void createPresentation('slides', folderId ?? undefined)}>
-            New slides
-          </button>
-          <button type="button" onClick={() => void createPresentation('loop', folderId ?? undefined)}>
-            New announcement loop
-          </button>
-        </div>
-        <VirtualList
-          items={results}
-          rowHeight={(p) => (expandedId === p.id ? slidePreviewRollHeight(p, false) : 52)}
-          rowClass={(p) => (expandedId === p.id ? 'expanded' : '')}
-          keyOf={(p) => p.id}
-          onRowContextMenu={(e, p) => {
-            const isLocked = locked.has(p.id);
-            const isExpanded = expandedId === p.id;
-            const editablePlaylists = lib.playlists.filter((pl) => pl.id !== livePlaylistId);
-            openContextMenu(
-              e,
-              [
-                { label: 'Edit presentation', onSelect: () => navigate({ name: 'edit', id: p.id }) },
-                {
-                  label: isExpanded ? 'Collapse slide preview' : 'Preview slides',
-                  onSelect: () => setExpandedId(isExpanded ? null : p.id),
-                },
-                { label: 'Duplicate', onSelect: () => void duplicatePresentation(p) },
-                { kind: 'separator' },
-                ...(folders.length > 0
-                  ? [
-                      {
-                        kind: 'submenu' as const,
-                        label: 'Move to folder',
-                        disabled: isLocked,
-                        items: [
-                          {
-                            label: 'No folder',
-                            checked: !p.folderId,
-                            disabled: isLocked,
-                            onSelect: () => move(p, ''),
-                          },
-                          ...folders.map((f) => ({
-                            label: f.name,
-                            checked: p.folderId === f.id,
-                            disabled: isLocked,
-                            onSelect: () => move(p, f.id),
-                          })),
-                        ],
-                      },
-                    ]
-                  : []),
-                ...(editablePlaylists.length > 0
-                  ? [
-                      {
-                        kind: 'submenu' as const,
-                        label: 'Add to playlist',
-                        items: editablePlaylists.map((pl) => ({
-                          label: pl.name,
-                          onSelect: () => void addToPlaylist(p, pl),
+  const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
+  const selectedPres = results.find((p) => p.id === selectedId) ?? results[0];
+
+  const listPane = (
+    <div className="pl-pane">
+      <div className="pl-pane-head wrap" style={{ gap: 6 }}>
+        <input
+          className="grow"
+          style={{ minWidth: 180 }}
+          autoFocus
+          placeholder={`Search ${lib.presentations.length} presentations: title, lyrics, CCLI, tag…`}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <button type="button" className="primary small" onClick={() => setNewSong(true)}>
+          <Icon name="plus" size={12} />
+          New song
+        </button>
+        <button
+          type="button"
+          className="small"
+          onClick={() => void createPresentation('slides', folderId ?? undefined)}
+        >
+          New slides
+        </button>
+        <button
+          type="button"
+          className="small"
+          onClick={() => void createPresentation('loop', folderId ?? undefined)}
+        >
+          New announcement loop
+        </button>
+      </div>
+      <VirtualList
+        items={results}
+        style={{ flex: 1 }}
+        rowHeight={(p) => (expandedId === p.id ? slidePreviewRollHeight(p, false) : 40)}
+        rowClass={(p) => `${selectedPres?.id === p.id ? 'sel ' : ''}${expandedId === p.id ? 'expanded' : ''}`}
+        keyOf={(p) => p.id}
+        onRowClick={(p) => setSelectedId(p.id)}
+        onRowContextMenu={(e, p) => {
+          setSelectedId(p.id);
+          const isLocked = locked.has(p.id);
+          const isExpanded = expandedId === p.id;
+          const editablePlaylists = lib.playlists.filter((pl) => pl.id !== livePlaylistId);
+          openContextMenu(
+            e,
+            [
+              { label: 'Edit presentation', onSelect: () => navigate({ name: 'edit', id: p.id }) },
+              {
+                label: isExpanded ? 'Collapse slide preview' : 'Preview slides',
+                onSelect: () => setExpandedId(isExpanded ? null : p.id),
+              },
+              { label: 'Duplicate', onSelect: () => void duplicatePresentation(p) },
+              { kind: 'separator' },
+              ...(folders.length > 0
+                ? [
+                    {
+                      kind: 'submenu' as const,
+                      label: 'Move to folder',
+                      disabled: isLocked,
+                      items: [
+                        {
+                          label: 'No folder',
+                          checked: !p.folderId,
+                          disabled: isLocked,
+                          onSelect: () => move(p, ''),
+                        },
+                        ...folders.map((f) => ({
+                          label: f.name,
+                          checked: p.folderId === f.id,
+                          disabled: isLocked,
+                          onSelect: () => move(p, f.id),
                         })),
-                      },
+                      ],
+                    },
+                  ]
+                : []),
+              ...(editablePlaylists.length > 0
+                ? [
+                    {
+                      kind: 'submenu' as const,
+                      label: 'Add to playlist',
+                      items: editablePlaylists.map((pl) => ({
+                        label: pl.name,
+                        onSelect: () => void addToPlaylist(p, pl),
+                      })),
+                    },
+                  ]
+                : []),
+              {
+                label: p.archived ? 'Unarchive' : 'Archive',
+                disabled: isLocked,
+                onSelect: () => setArchived(p, !p.archived),
+              },
+              { kind: 'separator' },
+              {
+                label: 'Delete…',
+                danger: true,
+                disabled: isLocked,
+                onSelect: () => void del(p),
+              },
+            ],
+            { ariaLabel: `${p.title} actions` },
+          );
+        }}
+        onRowDoubleClick={(p) => navigate({ name: 'edit', id: p.id })}
+        render={(p) => {
+          const isExpanded = expandedId === p.id;
+          return (
+            <>
+              <div className="row" style={{ alignItems: 'center', gap: 7, width: '100%', minHeight: 34 }}>
+                <button
+                  type="button"
+                  className="ghost icon-btn"
+                  style={{ width: 20, height: 20, minHeight: 20 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedId(p.id);
+                    setExpandedId(isExpanded ? null : p.id);
+                  }}
+                  title={isExpanded ? 'Collapse preview' : 'Expand slide preview'}
+                  aria-label={isExpanded ? 'Collapse preview' : 'Expand slide preview'}
+                >
+                  <Icon name={isExpanded ? 'chevronDown' : 'chevronRight'} size={12} />
+                </button>
+                <Icon name={playlistItemIconName('presentation', p.kind)} size={13} className="muted" />
+                <div
+                  className="col grow"
+                  style={{ gap: 0, cursor: 'pointer', minWidth: 0 }}
+                  title="Click to inspect, double-click to edit"
+                >
+                  <span className="ellipsis row" style={{ gap: 5, alignItems: 'center' }}>
+                    <b className="ellipsis">{p.title}</b>
+                    {Boolean(unsavedItems[`pres:${p.id}`]) && <span className="tag amber">unsaved</span>}
+                    {locked.has(p.id) && <span className="tag red">live · locked</span>}
+                    {p.archived && <span className="tag">archived</span>}
+                  </span>
+                  <span className="muted ellipsis" style={{ fontSize: 10.5 }}>
+                    {[
+                      p.kind,
+                      p.meta.author,
+                      p.meta.ccli && `CCLI ${p.meta.ccli}`,
+                      `${p.sections.length} sections`,
+                      p.meta.tags?.length ? p.meta.tags.join(', ') : '',
                     ]
-                  : []),
-                {
-                  label: p.archived ? 'Unarchive' : 'Archive',
-                  disabled: isLocked,
-                  onSelect: () => setArchived(p, !p.archived),
-                },
-                { kind: 'separator' },
-                {
-                  label: 'Delete…',
-                  danger: true,
-                  disabled: isLocked,
-                  onSelect: () => void del(p),
-                },
-              ],
-              { ariaLabel: `${p.title} actions` },
-            );
-          }}
-          onRowDoubleClick={(p) => navigate({ name: 'edit', id: p.id })}
-          render={(p) => {
-            const isExpanded = expandedId === p.id;
-            return (
-              <>
-                <div className="row" style={{ alignItems: 'center', gap: 10, width: '100%', minHeight: 36 }}>
-                  <button
-                    type="button"
-                    className="ghost small"
-                    style={{
-                      width: 24,
-                      height: 24,
-                      padding: 0,
-                      fontSize: 13,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setExpandedId(isExpanded ? null : p.id);
-                    }}
-                    title={isExpanded ? 'Collapse preview' : 'Expand slide preview'}
-                  >
-                    {isExpanded ? '▾' : '▸'}
-                  </button>
-                  <span className="kind tag">{p.kind}</span>
-                  <div
-                    className="col grow"
-                    style={{ gap: 0, cursor: 'pointer' }}
-                    onClick={() => setExpandedId(isExpanded ? null : p.id)}
-                    title={`Click to ${isExpanded ? 'collapse' : 'preview slides'}, double-click to edit`}
-                  >
-                    <span className="ellipsis">
-                      <b>{p.title}</b>{' '}
-                      {Boolean(unsavedItems[`pres:${p.id}`]) && <span className="tag amber">unsaved</span>}{' '}
-                      {locked.has(p.id) && <span className="tag red">live · locked</span>}{' '}
-                      {p.archived && <span className="tag">archived</span>}
-                    </span>
-                    <span className="muted small ellipsis">
-                      {[
-                        p.meta.author,
-                        p.meta.ccli && `CCLI ${p.meta.ccli}`,
-                        `${p.sections.length} sections`,
-                        p.meta.tags?.length ? p.meta.tags.join(', ') : '',
-                        p.source?.kind && p.source.kind !== 'manual' && p.source.kind !== 'paste'
-                          ? `from ${p.source.kind}`
-                          : '',
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </span>
-                  </div>
-                  {folders.length > 0 && (
-                    <select
-                      value={p.folderId ?? ''}
-                      onChange={(e) => move(p, e.target.value)}
-                      title="Folder"
-                      style={{ maxWidth: 140 }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <option value="">No folder</option>
-                      {folders.map((f) => (
-                        <option key={f.id} value={f.id}>
-                          {f.name}
-                        </option>
-                      ))}
-                    </select>
-                  )}
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                </div>
+                <span className="row row-hover-actions" style={{ gap: 3, flexShrink: 0 }}>
                   <a className="btn small" href={`#/edit/${p.id}`} onClick={(e) => e.stopPropagation()}>
+                    <Icon name="edit" size={11} />
                     Edit
                   </a>
                   <button
@@ -462,62 +455,161 @@ export function PresentationsTab() {
                   </button>
                   <button
                     type="button"
-                    className="small ghost"
+                    className="ghost icon-btn"
                     onClick={(e) => {
                       e.stopPropagation();
                       void del(p);
                     }}
                     title="Delete"
+                    aria-label="Delete"
                   >
-                    🗑<span className="touch-label">Delete</span>
+                    <Icon name="trash" size={12} />
+                    <span className="touch-label">Delete</span>
                   </button>
-                </div>
-                {isExpanded && (
+                </span>
+              </div>
+              {isExpanded && (
+                <div
+                  className="col"
+                  style={{
+                    width: '100%',
+                    marginTop: 6,
+                    padding: '8px 10px',
+                    background: 'var(--bg)',
+                    borderRadius: 3,
+                    border: '1px solid var(--line)',
+                    gap: 8,
+                    boxSizing: 'border-box',
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <SlidePreviewRoll p={p} />
                   <div
-                    className="col"
+                    className="row"
                     style={{
-                      width: '100%',
-                      marginTop: 8,
-                      padding: '10px 14px',
-                      background: 'var(--bg)',
-                      borderRadius: 8,
-                      border: '1px solid var(--line)',
-                      gap: 10,
-                      boxSizing: 'border-box',
+                      justifyContent: 'flex-end',
+                      alignItems: 'center',
+                      paddingTop: 6,
+                      borderTop: '1px solid var(--line)',
+                      gap: 6,
+                      flexShrink: 0,
                     }}
-                    onClick={(e) => e.stopPropagation()}
                   >
-                    <SlidePreviewRoll p={p} />
-                    <div
-                      className="row"
-                      style={{
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        paddingTop: 8,
-                        borderTop: '1px solid var(--line)',
-                        flexShrink: 0,
-                      }}
-                    >
-                      <span className="muted small">
-                        Double-click row or click Open in Editor to modify slides.
-                      </span>
-                      <div className="row" style={{ gap: 8 }}>
-                        <button type="button" className="small" onClick={() => setExpandedId(null)}>
-                          Close preview
-                        </button>
-                        <a className="btn small primary" href={`#/edit/${p.id}`}>
-                          ✎ Open in Editor
-                        </a>
-                      </div>
-                    </div>
+                    <button type="button" className="small" onClick={() => setExpandedId(null)}>
+                      Close preview
+                    </button>
+                    <a className="btn small primary" href={`#/edit/${p.id}`}>
+                      <Icon name="edit" size={11} />
+                      Open in Editor
+                    </a>
                   </div>
-                )}
-              </>
-            );
-          }}
-        />
-      </div>
-      {newSong && <NewSongDialog onClose={() => setNewSong(false)} folderId={folderId ?? undefined} />}
+                </div>
+              )}
+            </>
+          );
+        }}
+      />
     </div>
+  );
+
+  const inspectorPane = selectedPres ? (
+    <div className="pl-pane pl-pane-alt">
+      <div className="pl-pane-head">
+        <span className="prop-section-title ellipsis grow" style={{ margin: 0 }}>
+          {selectedPres.title}
+        </span>
+        <a className="btn small primary" href={`#/edit/${selectedPres.id}`}>
+          <Icon name="edit" size={11} />
+          Edit
+        </a>
+      </div>
+      <div className="pl-pane-scroll">
+        <div className="prop-section">
+          <div className="prop-section-title">Slide Preview</div>
+          <SlidePreviewRoll p={selectedPres} compact />
+        </div>
+        <div className="prop-section">
+          <div className="prop-section-title">Metadata</div>
+          <PropertyRow label="Kind">
+            <span className="tag">{selectedPres.kind}</span>
+          </PropertyRow>
+          {folders.length > 0 && (
+            <PropertyRow label="Folder">
+              <Select
+                ariaLabel="Folder"
+                value={selectedPres.folderId ?? ''}
+                disabled={locked.has(selectedPres.id)}
+                options={[
+                  { value: '', label: 'No folder' },
+                  ...folders.map((f) => ({ value: f.id, label: f.name })),
+                ]}
+                onChange={(fid) => move(selectedPres, fid)}
+              />
+            </PropertyRow>
+          )}
+          {selectedPres.meta.author && (
+            <PropertyRow label="Author">
+              <span className="small">{selectedPres.meta.author}</span>
+            </PropertyRow>
+          )}
+          {selectedPres.meta.ccli && (
+            <PropertyRow label="CCLI">
+              <span className="small mono">{selectedPres.meta.ccli}</span>
+            </PropertyRow>
+          )}
+          <PropertyRow label="Sections">
+            <span className="small">{selectedPres.sections.length}</span>
+          </PropertyRow>
+        </div>
+        <div className="prop-section">
+          <div className="row wrap" style={{ gap: 6 }}>
+            <button type="button" className="small" onClick={() => void duplicatePresentation(selectedPres)}>
+              <Icon name="copy" size={12} />
+              Duplicate
+            </button>
+            <button
+              type="button"
+              className="small"
+              disabled={locked.has(selectedPres.id)}
+              onClick={() => setArchived(selectedPres, !selectedPres.archived)}
+            >
+              {selectedPres.archived ? 'Unarchive' : 'Archive'}
+            </button>
+            <span className="spacer" />
+            <button
+              type="button"
+              className="danger small"
+              disabled={locked.has(selectedPres.id)}
+              onClick={() => void del(selectedPres)}
+            >
+              <Icon name="trash" size={12} />
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : (
+    <div className="pl-pane pl-pane-alt center muted small">Select a presentation to preview.</div>
+  );
+
+  return (
+    <>
+      <SplitPane
+        storageKey="library-presentations"
+        panels={[
+          {
+            id: 'folders',
+            size: 192,
+            min: 150,
+            max: 300,
+            content: <FolderSide folders={folders} tags={tags} tag={tag} setTag={setTag} />,
+          },
+          { id: 'pres-list', content: listPane },
+          { id: 'pres-inspector', size: 296, min: 230, max: 440, content: inspectorPane },
+        ]}
+      />
+      {newSong && <NewSongDialog onClose={() => setNewSong(false)} folderId={folderId ?? undefined} />}
+    </>
   );
 }
