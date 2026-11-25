@@ -324,7 +324,7 @@ export function PresentationsTab() {
       <VirtualList
         items={results}
         style={{ flex: 1 }}
-        rowHeight={(p) => (expandedId === p.id ? slidePreviewRollHeight(p, false) : 40)}
+        rowHeight={(p) => (expandedId === p.id ? slidePreviewRollHeight(p, false) : 48)}
         rowClass={(p) => `${selectedPres?.id === p.id ? 'sel ' : ''}${expandedId === p.id ? 'expanded' : ''}`}
         keyOf={(p) => p.id}
         onRowClick={(p) => setSelectedId(p.id)}

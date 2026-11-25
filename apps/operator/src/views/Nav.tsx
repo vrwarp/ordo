@@ -375,10 +375,12 @@ export function Nav({
   role,
   route,
   profile = 'full',
+  onOpenPalette,
 }: {
   role: 'operate' | 'edit';
   route: Route;
   profile?: Profile;
+  onOpenPalette?: () => void;
 }) {
   const [demoOpen, setDemoOpen] = useState(false);
   const venue = useLibrary((s) => s.data.settings.general.venueName);
@@ -395,7 +397,7 @@ export function Nav({
     isOnAir = false,
   ) => (
     <a href={href} className={active ? 'active' : ''} aria-label={isOnAir ? `● ${label}` : undefined}>
-      {isOnAir ? <span className="dot sm red" aria-hidden="true" /> : <Icon name={icon} size={13} />}
+      {isOnAir ? <span className="dot sm red" aria-hidden="true" /> : <Icon name={icon} size={14} />}
       <span>{label}</span>
       {dirty && (
         <span className="unsaved-dot" title="Unsaved changes" aria-label="Unsaved changes">
@@ -426,6 +428,20 @@ export function Nav({
     </span>
   );
 
+  const cmdTrigger = onOpenPalette ? (
+    <button
+      type="button"
+      className="nav-cmd-btn"
+      onClick={onOpenPalette}
+      title="Command Palette (Ctrl+K / ⌘K)"
+      aria-label="Command palette"
+    >
+      <Icon name="search" size={13} />
+      <span className="nav-cmd-label">Search…</span>
+      <span className="kbd">⌘K</span>
+    </button>
+  ) : null;
+
   const signOutBtn = (
     <button
       type="button"
@@ -434,7 +450,7 @@ export function Nav({
       title="Sign out"
       aria-label="Sign out"
     >
-      <Icon name="logout" size={13} />
+      <Icon name="logout" size={14} />
     </button>
   );
 
@@ -455,6 +471,7 @@ export function Nav({
           {role === 'operate' &&
             link('#/settings/general', 'Settings', 'settings', route.name === 'settings', settingsDirty)}
           <span className="spacer" />
+          {cmdTrigger}
           <UnsavedNavControl />
           <LiveChip />
           {offline && <span className="tag amber">offline: hub unreachable</span>}
@@ -483,6 +500,7 @@ export function Nav({
           link('#/setup', 'Setup', 'setup', route.name === 'setup' || route.name === 'checklist')}
         {role === 'operate' && link('#/live', 'Live', 'live', route.name === 'live', false, live)}
         <span className="spacer" />
+        {cmdTrigger}
         <UnsavedNavControl />
         {offline && <span className="tag amber">offline: hub unreachable</span>}
         <SessionMenu role={role} />

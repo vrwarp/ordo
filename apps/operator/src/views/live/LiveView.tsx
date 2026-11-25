@@ -37,9 +37,9 @@ export function LiveView() {
         panels={[
           {
             id: 'rundown',
-            size: 256,
-            min: 200,
-            max: 420,
+            size: 280,
+            min: 220,
+            max: 440,
             content: <PlaylistPane op={op} viewItem={viewItem} />,
           },
           {
@@ -48,13 +48,28 @@ export function LiveView() {
           },
           {
             id: 'program',
-            size: 336,
-            min: 270,
-            max: 480,
+            size: 360,
+            min: 290,
+            max: 520,
             content: (
               <div className="op-right-rail">
-                <ProgramView />
-                <StageTools />
+                <SplitPane
+                  storageKey="live-right-rail"
+                  direction="vertical"
+                  panels={[
+                    {
+                      id: 'monitors',
+                      size: 410,
+                      min: 220,
+                      max: 680,
+                      content: <ProgramView />,
+                    },
+                    {
+                      id: 'stage-tools',
+                      content: <StageTools />,
+                    },
+                  ]}
+                />
               </div>
             ),
           },

@@ -2,6 +2,7 @@ import { parseSectionLabel, type Presentation, type Slide } from '@ordo/domain';
 import { type PointerEvent as ReactPointerEvent, useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { Icon } from '../../components/Icons.tsx';
 import { midiTriggerBadge, slideMidiTrigger } from '../../components/MidiTriggerPicker.tsx';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { type FlatEntry, flatSlideMove } from '../../components/sortableMath.ts';
@@ -285,7 +286,10 @@ export function SlidesPanel({
             onClick={onOpenDeckNotes}
             title="Open continuous Presenter Notes & Sermon Manuscript Studio"
           >
-            <span>📝 Presenter Notes</span>
+            <span className="row" style={{ gap: 6, alignItems: 'center' }}>
+              <Icon name="notes" size={14} />
+              <span>Presenter Notes</span>
+            </span>
             <span className="muted" style={{ fontSize: 11 }}>
               {p.sections.reduce(
                 (acc, sec) => acc + sec.slides.filter((sl) => Boolean(sl.notes?.trim())).length,

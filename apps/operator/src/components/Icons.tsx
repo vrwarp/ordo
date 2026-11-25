@@ -73,7 +73,19 @@ export type IconName =
   | 'backup'
   | 'activity'
   | 'shield'
-  | 'layers';
+  | 'layers'
+  | 'undo'
+  | 'redo'
+  | 'scissors'
+  | 'maximize'
+  | 'minimize'
+  | 'panelLeft'
+  | 'panelRight'
+  | 'command'
+  | 'star'
+  | 'history'
+  | 'zap'
+  | 'fileText';
 
 const PATHS: Record<IconName, string> = {
   playlists: 'M4 5h12M4 9.5h8M4 14h6M13.5 10v5.5M11 12.75h5',
@@ -150,6 +162,19 @@ const PATHS: Record<IconName, string> = {
   activity: 'M3.5 10h3l2-5 3 10 2-5h3',
   shield: 'M10 3.5 4.5 5.8v4.4c0 3.2 2.3 5.5 5.5 6.3 3.2-.8 5.5-3.1 5.5-6.3V5.8z',
   layers: 'M10 4 3.5 7.5 10 11l6.5-3.5zM3.5 11l6.5 3.5L16.5 11M3.5 14l6.5 3.5L16.5 14',
+  undo: 'M7 7.5H4.5V5M4.8 7.5a5.8 5.8 0 1 1-.6 5.5',
+  redo: 'M13 7.5h2.5V5M15.2 7.5a5.8 5.8 0 1 0 .6 5.5',
+  scissors:
+    'M6.5 6.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM6.5 13.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8.2 8.2 15.5 14.5M8.2 11.8 15.5 5.5',
+  maximize: 'M4 8V4h4M16 8V4h-4M4 12v4h4M16 12v4h-4',
+  minimize: 'M8 4v4H4M12 4v4h4M8 16v-4H4M12 16v-4h4',
+  panelLeft: 'M3.5 4.5h13v11h-13zM8 4.5v11',
+  panelRight: 'M3.5 4.5h13v11h-13zM12 4.5v11',
+  command: 'M7 7a2 2 0 1 1 2-2v10a2 2 0 1 1-2-2h6a2 2 0 1 1-2 2V5a2 2 0 1 1 2 2z',
+  star: 'M10 3.8l1.9 3.9 4.3.6-3.1 3 .7 4.3-3.8-2-3.8 2 .7-4.3-3.1-3 4.3-.6z',
+  history: 'M4.5 10a5.5 5.5 0 1 0 1.4-3.7M4.5 4.5v3h3M10 7v3.2l2.2 1.4',
+  zap: 'M11 3.5 5.5 10.5H10l-1 6 5.5-7H10l1-6z',
+  fileText: 'M5 3.5h6.5L15 7v9.5H5zM11.5 3.5V7H15M7.5 10.5h5M7.5 13.5h3.5',
 };
 
 export function Icon({

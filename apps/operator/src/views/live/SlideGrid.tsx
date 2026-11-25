@@ -277,6 +277,7 @@ function PlaylistItemSection({
             sectionsOverride={item.sections}
             liveMode={liveHere}
             locked={liveHere && isActiveItem}
+            hideLiveToggle={showArrange}
             onArrangeOpenChange={onArrangeOpenChange}
             onChangeSections={(sections) => {
               if (liveHere) {

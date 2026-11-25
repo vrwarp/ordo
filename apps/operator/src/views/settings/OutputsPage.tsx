@@ -332,6 +332,9 @@ export function OutputsPage() {
         })
       : '';
 
+  const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
+  const activeOutput = draft.find((x) => x.id === selectedId) ?? draft[0];
+
   const dirty = outputsDraft.dirty || looksDraft.dirty;
   const saving = outputsDraft.saving || looksDraft.saving;
 
@@ -348,18 +351,32 @@ export function OutputsPage() {
   };
 
   return (
-    <div className="col" style={{ gap: 14 }}>
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+    <div className="col" style={{ gap: 16 }}>
+      <div className="row wrap" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
         <div>
-          <h2>Screens</h2>
-          <p className="muted" style={{ margin: 0 }}>
-            Configure your physical audience displays, stage confidence monitors, and livestream bottom-third
-            keyers.
+          <h2 style={{ margin: '0 0 2px' }}>Screens</h2>
+          <p className="muted small" style={{ margin: 0 }}>
+            Select a display below to configure its physical screen, compositor look, keying, or stage layout.
           </p>
         </div>
-        <button type="button" onClick={() => void loadScreens()}>
-          Detect displays
-        </button>
+        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+          <button type="button" className="small" onClick={() => void loadScreens()}>
+            Detect displays
+          </button>
+          {dirty && (
+            <button type="button" className="small ghost" disabled={saving} onClick={handleRevert}>
+              Revert
+            </button>
+          )}
+          <button
+            type="button"
+            className="primary small"
+            disabled={!dirty || saving}
+            onClick={() => void handleSave()}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
       </div>
 
       {screens.length > 0 && (
@@ -368,7 +385,51 @@ export function OutputsPage() {
         </span>
       )}
 
-      {draft.map((o) => {
+      {/* Visual Display Arrangement Map */}
+      <div className="display-map" style={{ border: '1px solid var(--line)', borderRadius: 4 }}>
+        {draft.map((o) => {
+          const look = looks.find((l) => l.id === o.lookId);
+          const isStage = o.kind === 'stage' || look?.kind === 'stage';
+          const isLowerThird =
+            !isStage &&
+            (look?.kind === 'stream' ||
+              look?.kind === 'lowerThird' ||
+              look?.layers.slide.mode === 'lyricOnly');
+          const accent = isStage ? '#eab308' : isLowerThird ? '#06b6d4' : '#3b82f6';
+          const isOpen = Boolean(open[o.id] || outputWindows()?.isOpen(o.id));
+          const isSel = activeOutput?.id === o.id;
+          return (
+            <button
+              key={o.id}
+              type="button"
+              className={`display-map-screen${isSel ? ' sel' : ''}${!o.enabled ? ' disabled' : ''}`}
+              style={{ borderTop: `3px solid ${accent}` }}
+              onClick={() => setSelectedId(o.id)}
+            >
+              <div
+                className="row"
+                style={{ justifyContent: 'space-between', alignItems: 'center', width: '100%' }}
+              >
+                <span className="ellipsis" style={{ fontWeight: 600, fontSize: 13.5 }}>
+                  {o.name}
+                </span>
+                <span
+                  className={`dot sm ${!o.enabled ? '' : isOpen ? 'green' : 'amber'}`}
+                  title={!o.enabled ? 'Disabled' : isOpen ? 'Window open' : 'Ready'}
+                />
+              </div>
+              <div className="col" style={{ gap: 2 }}>
+                <span className="muted small ellipsis">{look?.name ?? 'Main'}</span>
+                <span className="muted" style={{ fontSize: 11 }}>
+                  {o.screen?.label || 'Auto screen'} · out{o.hostIndex}
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {(activeOutput ? [activeOutput] : []).map((o) => {
         const look = looks.find((l) => l.id === o.lookId);
         const isStage = o.kind === 'stage' || look?.kind === 'stage';
         const isLowerThird =

@@ -1,15 +1,21 @@
 /*
- * Desktop pro-tool UX/UI layer (design/30-pro-tool-ui.md).
- * Preserves Ordo's dark-slate hue family (#0e1013–#252a33) and #3b82f6 accent while replacing
- * SaaS/web-form conventions with flush docked panes, compact desktop density, 2-column property
- * inspectors, custom dark desktop controls, and broadcast tally chrome.
+ * Desktop pro-tool UX/UI layer (design/30-pro-tool-ui.md + Phase 2 Studio Unification).
+ * Preserves Ordo's dark-slate hue family (#090b0e–#252a33) and #3b82f6 accent while establishing:
+ * - Balanced Studio Typography (13.5px root, 14px list titles, 13px controls/labels, 12px meta, 11px floor)
+ * - Comfortable Studio Spacing (40–42px bars, 32px controls, 36px/44px rows, 14–16px pane gutters)
+ * - 3-tier surface luminance (--well recessed canvas/monitors, --panel sidebars, --surface raised headers)
+ * - Custom dark desktop controls (checkbox, radio, range fader, borderless studio textareas)
+ * - Persistent 26px Studio Status Bar and ⌘K Command Palette
  *
- * Phone compact layout and coarse-pointer touch targets (`@media (pointer: coarse)`)
- * are preserved intact.
+ * Phone compact UI and coarse-pointer touch targets (`@media (pointer: coarse)`) remain untouched.
  */
 
 :root {
+  --well: #090b0e;
+  --panel: #13161b;
+  --surface: #1b1f27;
   --line-strong: #343b48;
+  --bevel: inset 0 1px 0 rgba(255, 255, 255, 0.045);
   --checker-a: #14171d;
   --checker-b: #1b2028;
 }
@@ -27,15 +33,21 @@
   align-items: center;
   justify-content: center;
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   line-height: 1;
-  padding: 2px 4px;
+  padding: 3px 5px;
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.13);
   color: var(--fg2);
   letter-spacing: 0.01em;
+  flex-shrink: 0;
+}
+
+/* ---- App frame with persistent 26px Studio Status Bar ---- */
+.app.has-statusbar {
+  grid-template-rows: auto 1fr 26px;
 }
 
 /* ---- SplitPane (resizable 1px docked dividers) ---- */
@@ -110,28 +122,28 @@
 .segmented {
   display: inline-flex;
   align-items: stretch;
-  background: var(--bg);
+  background: var(--well);
   border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 1px;
-  gap: 1px;
+  border-radius: 4px;
+  padding: 2px;
+  gap: 2px;
 }
 .segmented .seg-btn {
   position: relative;
   border: 0;
-  border-radius: 2px;
+  border-radius: 3px;
   background: transparent;
   color: var(--fg2);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 500;
-  padding: 0 8px;
-  min-height: 22px;
-  gap: 5px;
+  padding: 0 10px;
+  min-height: 26px;
+  gap: 6px;
 }
 .segmented-xs .seg-btn {
-  font-size: 11px;
-  padding: 0 6px;
-  min-height: 20px;
+  font-size: 12px;
+  padding: 0 8px;
+  min-height: 24px;
 }
 .segmented .seg-btn:hover:not(:disabled):not(.active) {
   background: rgba(255, 255, 255, 0.05);
@@ -140,6 +152,7 @@
 .segmented .seg-btn.active {
   background: var(--bg4);
   color: var(--fg);
+  box-shadow: var(--bevel);
 }
 .segmented .seg-dot {
   width: 6px;
@@ -152,16 +165,16 @@
 /* ---- 2-column PropertyRow inspector ---- */
 .prop-section {
   border-bottom: 1px solid var(--line);
-  padding: 8px 10px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 .prop-section:last-child {
   border-bottom: 0;
 }
 .prop-section-title {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -170,26 +183,26 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 8px;
 }
 .prop-row {
   display: grid;
-  grid-template-columns: minmax(96px, 128px) minmax(0, 1fr);
+  grid-template-columns: minmax(108px, 140px) minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
-  min-height: 26px;
+  gap: 12px;
+  min-height: 32px;
 }
 .prop-row.prop-row-start {
   align-items: start;
 }
 .prop-row.prop-row-start .prop-label {
-  padding-top: 4px;
+  padding-top: 6px;
 }
 .prop-label {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11.5px;
+  gap: 5px;
+  font-size: 13px;
   color: var(--fg2);
   min-width: 0;
 }
@@ -200,15 +213,15 @@
 .prop-control {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   flex-wrap: wrap;
 }
 .prop-control > .select-trigger,
 .prop-control > select,
 .prop-control > input:not([type="checkbox"]):not([type="color"]):not([type="number"]) {
-  max-width: 240px;
-  flex: 1 1 140px;
+  max-width: 280px;
+  flex: 1 1 160px;
 }
 
 /* ---- Custom desktop Select & DateField popovers ---- */
@@ -216,21 +229,21 @@
 .date-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  background: var(--bg);
+  gap: 8px;
+  background: var(--well);
   border: 1px solid var(--line-strong);
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--fg);
-  padding: 0 7px;
-  min-height: 27px;
-  font-size: 12px;
+  padding: 0 10px;
+  min-height: 32px;
+  font-size: 13px;
   font-weight: 400;
-  min-width: 90px;
+  min-width: 100px;
 }
 .select-trigger:hover:not(:disabled),
 .date-trigger:hover:not(:disabled) {
   background: var(--bg3);
-  border-color: #424b5b;
+  border-color: #465063;
 }
 .select-trigger.open,
 .date-trigger.open {
@@ -243,30 +256,30 @@
 }
 .select-popover {
   z-index: 160;
-  background: var(--bg2);
+  background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 4px;
-  padding: 3px;
-  max-height: 280px;
+  padding: 4px;
+  max-height: 300px;
   overflow-y: auto;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.58);
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 .select-option {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
-  min-height: 25px;
-  padding: 2px 8px 2px 5px;
+  min-height: 30px;
+  padding: 3px 10px 3px 7px;
   border: 0;
   border-radius: 3px;
   background: transparent;
   color: var(--fg);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
   text-align: left;
 }
@@ -289,15 +302,15 @@
 
 .date-popover {
   z-index: 160;
-  width: 224px;
-  background: var(--bg2);
+  width: 248px;
+  background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 4px;
-  padding: 8px;
+  padding: 10px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.58);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 .date-grid {
   display: grid;
@@ -306,18 +319,18 @@
 }
 .date-weekdays span {
   text-align: center;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--fg3);
-  padding: 2px 0;
+  padding: 3px 0;
 }
 .date-cell {
-  min-height: 24px;
+  min-height: 28px;
   padding: 0;
   border: 0;
   border-radius: 3px;
   background: transparent;
   color: var(--fg);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
 }
 .date-cell:hover {
@@ -333,13 +346,13 @@
 }
 .date-pop-foot {
   border-top: 1px solid var(--line);
-  padding-top: 6px;
+  padding-top: 8px;
 }
 
 /* ---- NumberField stepper ---- */
 .num-step-btn {
-  min-height: 24px;
-  width: 22px;
+  min-height: 28px;
+  width: 26px;
   padding: 0;
   border-radius: 3px;
 }
@@ -348,9 +361,9 @@
 @media (pointer: fine) {
   :root {
     --line: #262b34;
-    --radius: 3px;
-    --hit: 34px;
-    font-size: 12.5px;
+    --radius: 4px;
+    --hit: 36px;
+    font-size: 13.5px;
   }
 
   /* Lock down accidental DOM text selection on app chrome; allow on text inputs & logs. */
@@ -367,83 +380,94 @@
     user-select: text;
   }
 
-  /* Custom ultra-thin dark scrollbars */
+  /* Custom thin dark scrollbars */
   * {
     scrollbar-width: thin;
     scrollbar-color: #2f3642 transparent;
   }
   *::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 7px;
+    height: 7px;
   }
   *::-webkit-scrollbar-track {
     background: transparent;
   }
   *::-webkit-scrollbar-thumb {
     background: #2f3642;
-    border-radius: 3px;
+    border-radius: 4px;
   }
   *::-webkit-scrollbar-thumb:hover {
     background: #444e60;
   }
 
-  /* Crisp desktop typography */
+  /* Balanced Studio Typography */
   h2 {
-    font-size: 15px;
+    font-size: 16px;
   }
   h3 {
-    font-size: 13px;
+    font-size: 14px;
   }
   h4 {
-    font-size: 10.5px;
+    font-size: 11px;
     letter-spacing: 0.06em;
     color: var(--fg3);
   }
+  .small {
+    font-size: 12px;
+  }
 
-  /* Compact desktop controls */
+  /* Comfortable desktop controls (32px default, 28px small) */
   button,
   .btn {
-    min-height: 27px;
-    padding: 0 9px;
-    border-radius: 3px;
-    font-size: 12px;
-    gap: 5px;
+    min-height: 32px;
+    padding: 0 12px;
+    border-radius: 4px;
+    font-size: 13px;
+    gap: 6px;
     border-color: var(--line-strong);
+    box-shadow: var(--bevel);
+  }
+  button.ghost,
+  .btn.ghost {
+    box-shadow: none;
   }
   button.small,
   .btn.small {
-    min-height: 23px;
-    padding: 0 7px;
-    font-size: 11.5px;
+    min-height: 28px;
+    padding: 0 10px;
+    font-size: 12.5px;
   }
   button.icon-btn {
-    min-height: 24px;
-    width: 24px;
+    min-height: 28px;
+    width: 28px;
     padding: 0;
   }
   button.big {
-    min-height: 30px;
-    padding: 0 12px;
-    font-size: 12px;
+    min-height: 36px;
+    padding: 0 14px;
+    font-size: 13.5px;
   }
 
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
   select,
   textarea {
-    border-radius: 3px;
+    border-radius: 4px;
     border-color: var(--line-strong);
-    min-height: 27px;
-    padding: 3px 7px;
-    font-size: 12px;
+    background-color: var(--well);
+    min-height: 32px;
+    padding: 5px 10px;
+    font-size: 13px;
+  }
+  textarea {
+    resize: none;
   }
   select {
-    padding-right: 22px;
+    padding-right: 26px;
     appearance: none;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 20 20' fill='none' stroke='%238a93a1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.5 7.5 10 12l4.5-4.5'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 6px center;
+    background-position: right 8px center;
   }
-  /* Hide browser number spin buttons on desktop */
   input[type="number"] {
     appearance: textfield;
     -moz-appearance: textfield;
@@ -459,17 +483,20 @@
   input[type="checkbox"] {
     appearance: none;
     -webkit-appearance: none;
-    width: 15px;
-    height: 15px;
-    min-height: 15px;
+    width: 16px;
+    height: 16px;
+    min-height: 16px;
     border-radius: 3px;
     border: 1px solid var(--line-strong);
-    background: var(--bg);
+    background: var(--well);
     cursor: pointer;
     display: inline-grid;
     place-content: center;
     flex-shrink: 0;
     margin: 0;
+  }
+  input[type="checkbox"]:hover:not(:disabled) {
+    border-color: #525d73;
   }
   input[type="checkbox"]:checked {
     background: var(--accent2);
@@ -479,176 +506,250 @@
     content: "";
     width: 8px;
     height: 5px;
-    border-left: 1.8px solid #fff;
-    border-bottom: 1.8px solid #fff;
+    border-left: 1.9px solid #fff;
+    border-bottom: 1.9px solid #fff;
     transform: rotate(-45deg) translateY(-1px);
   }
 
-  /* Sleek range slider */
-  input[type="range"] {
-    height: 4px;
-    min-height: 20px;
-    accent-color: var(--accent);
-    background: transparent;
+  /* Custom crisp dark radio button */
+  input[type="radio"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    min-height: 16px;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    background: var(--well);
     cursor: pointer;
+    display: inline-grid;
+    place-content: center;
+    flex-shrink: 0;
+    margin: 0;
+  }
+  input[type="radio"]:hover:not(:disabled) {
+    border-color: #525d73;
+  }
+  input[type="radio"]:checked {
+    border-color: var(--accent);
+    background: rgba(59, 130, 246, 0.16);
+  }
+  input[type="radio"]:checked::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
   }
 
-  /* Tighten tags & pills — no 9999px web pills */
+  /* Broadcast fader range slider (replaces giant Chromium circle thumb) */
+  input[type="range"] {
+    appearance: none;
+    -webkit-appearance: none;
+    height: 22px;
+    min-height: 22px;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    border: 0;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 2px;
+    background: #252b36;
+    border: 1px solid #303846;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 10px;
+    height: 16px;
+    border-radius: 2px;
+    background: #cbd5e1;
+    border: 1px solid #0e1013;
+    margin-top: -7px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+  }
+  input[type="range"]:hover::-webkit-slider-thumb {
+    background: #ffffff;
+  }
+  input[type="range"]::-moz-range-track {
+    height: 4px;
+    border-radius: 2px;
+    background: #252b36;
+    border: 1px solid #303846;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 10px;
+    height: 16px;
+    border-radius: 2px;
+    background: #cbd5e1;
+    border: 1px solid #0e1013;
+  }
+
+  /* Crisp tags & dialogs — 11px strict floor */
   .tag {
     border-radius: 3px;
-    padding: 1px 6px;
-    font-size: 10.5px;
+    padding: 2px 7px;
+    font-size: 11px;
   }
   .card {
     border-radius: 4px;
-    padding: 10px 12px;
+    padding: 14px 16px;
   }
   .dialog {
-    border-radius: 4px;
+    border-radius: 5px;
     border-color: var(--line-strong);
   }
   .dialog > header {
-    padding: 9px 12px;
+    padding: 12px 16px;
   }
   .dialog > .body {
-    padding: 12px;
+    padding: 16px;
   }
   .dialog > footer {
-    padding: 8px 12px;
+    padding: 12px 16px;
   }
 
-  /* Compact desktop nav (36px instrument bar) */
+  /* Studio Nav (42px instrument bar) */
   .nav {
-    height: 36px;
-    padding: 0 8px;
-    gap: 2px;
-    background: var(--bg2);
+    height: 42px;
+    padding: 0 14px;
+    gap: 4px;
+    background: var(--panel);
+    box-shadow: var(--bevel);
   }
   .nav .brand {
-    font-size: 12.5px;
+    font-size: 14px;
     letter-spacing: 0.04em;
-    margin-right: 8px;
+    margin-right: 12px;
     padding-left: 2px;
   }
   .nav .demo-badge-btn {
     border-radius: 3px;
-    padding: 1px 5px;
-    font-size: 9.5px;
-    margin-left: 5px;
+    padding: 2px 6px;
+    font-size: 11px;
+    margin-left: 6px;
   }
   .nav a {
-    height: 26px;
-    padding: 0 9px;
-    border-radius: 3px;
-    font-size: 12px;
-    gap: 5px;
+    height: 30px;
+    padding: 0 11px;
+    border-radius: 4px;
+    font-size: 13px;
+    gap: 6px;
+    text-decoration: none;
   }
   .nav a:hover:not(.active) {
-    background: rgba(255, 255, 255, 0.04);
+    background: rgba(255, 255, 255, 0.05);
     color: var(--fg);
   }
   .nav a.active {
     background: var(--bg4);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    box-shadow: var(--bevel);
   }
   .nav-divider {
-    height: 16px;
-    margin: 0 4px;
+    height: 18px;
+    margin: 0 6px;
   }
   .unsaved-nav-pill {
-    height: 24px;
-    border-radius: 3px;
-    padding: 0 7px;
-    font-size: 11px;
+    height: 28px;
+    border-radius: 4px;
+    padding: 0 9px;
+    font-size: 12px;
   }
 
-  /* Live operator tactical targets stay >= 34px while secondary controls stay compact 26-27px */
+  /* Live operator tactical targets stay >= 36px while secondary controls stay 28–32px */
   .op button,
   .op .btn,
   .op select,
   .op input[type="text"],
   .op input[type="range"] {
-    min-height: 26px;
+    min-height: 28px;
   }
   .op label.check {
-    min-height: 24px;
+    min-height: 28px;
+    gap: 7px;
+    font-size: 13px;
   }
   .op input[type="checkbox"] {
-    width: 15px;
-    height: 15px;
+    width: 16px;
+    height: 16px;
   }
   .op .tactical-btn {
-    min-height: 34px;
+    min-height: 36px;
   }
 
-  /* Compact TopBar (36px broadcast tally & telemetry strip) */
+  /* TopBar (40px broadcast tally & telemetry strip) */
   .topbar {
-    min-height: 36px;
-    height: 36px;
-    padding: 0 8px;
-    gap: 8px;
+    min-height: 40px;
+    height: 40px;
+    padding: 0 14px;
+    gap: 10px;
     background: #12151a;
   }
   .topbar .clock {
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 600;
     letter-spacing: 0.02em;
     font-variant-numeric: tabular-nums;
   }
   .topbar .stat {
-    font-size: 11px;
-    gap: 5px;
+    font-size: 12px;
+    gap: 6px;
   }
   .topbar .dot {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
   }
   .live-status-pill {
     border-radius: 3px;
-    padding: 2px 6px;
-    font-size: 10px;
+    padding: 3px 8px;
+    font-size: 11px;
   }
   .topbar-cell-sep {
     width: 1px;
-    height: 16px;
+    height: 18px;
     background: var(--line);
     flex-shrink: 0;
   }
 
-  /* Dense rundown & sidebar rows */
+  /* Comfortable rundown & sidebar rows (36px single-line, 44–46px two-line) */
   .pl-item {
-    height: 32px;
-    padding: 0 8px;
-    gap: 6px;
-    font-size: 12px;
+    min-height: 44px;
+    height: auto;
+    padding: 6px 12px;
+    gap: 8px;
+    font-size: 14px;
+    line-height: 1.25;
   }
   .pl-item .kind {
-    width: 20px;
-    height: 20px;
-    border-radius: 3px;
-    font-size: 10px;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    font-size: 11px;
   }
   .side {
-    padding: 6px;
-    background: var(--bg2);
+    padding: 10px;
+    background: var(--panel);
+    gap: 2px;
   }
   .side a,
   .side .link {
-    min-height: 28px;
-    padding: 4px 8px;
-    border-radius: 3px;
-    font-size: 12px;
-    gap: 6px;
+    min-height: 36px;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 13.5px;
+    gap: 8px;
+    text-decoration: none;
   }
   .pane-head {
-    padding: 5px 8px;
-    min-height: 34px;
-    gap: 6px;
+    padding: 6px 14px;
+    min-height: 42px;
+    gap: 10px;
   }
   .vrow {
-    padding: 0 8px;
-    gap: 6px;
-    font-size: 12px;
+    padding: 0 12px;
+    gap: 8px;
+    font-size: 13.5px;
   }
 
   /* Hover-revealed row actions on desktop (always visible on focus-within) */
@@ -663,25 +764,70 @@
     opacity: 1;
   }
 
-  /* Generous bottom scroll runway (scroll-beyond-last-item) so selecting any item brings it to the top */
+  /* Slide grid recessed well + generous section rhythm + bottom scroll runway */
   .slides {
-    padding: 8px 10px 60vh;
+    background: var(--well);
+    padding: 14px 16px 60vh;
+  }
+  .slides .sec-grid {
+    gap: 12px;
+  }
+  .slides [data-playlist-item-index] {
+    margin-bottom: 22px;
+  }
+  .slides [data-playlist-item-index]:last-child {
+    margin-bottom: 0;
+  }
+
+  /* Floating HUD toasts sit cleanly above the 26px status bar */
+  .toasts {
+    bottom: 36px;
+    right: 14px;
+  }
+  .toast {
+    border-radius: 4px;
+    padding: 10px 14px;
+    font-size: 13px;
   }
 }
 
-/* ---- Session menu trigger in Nav ---- */
+/* ---- Nav Command Palette trigger & Session menu ---- */
+.nav-cmd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px 0 10px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--well);
+  color: var(--fg3);
+  font-size: 12.5px;
+  font-weight: 400;
+  box-shadow: none;
+}
+.nav-cmd-btn:hover {
+  border-color: var(--line-strong);
+  color: var(--fg2);
+  background: #0d1015;
+}
+.nav-cmd-label {
+  padding-right: 12px;
+}
 .nav-session-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 8px;
-  border-radius: 3px;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 4px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--fg2);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 500;
+  box-shadow: none;
 }
 .nav-session-btn:hover,
 .nav-session-btn.on {
@@ -691,27 +837,214 @@
 }
 .session-popover {
   z-index: 160;
-  min-width: 200px;
-  background: var(--bg2);
+  min-width: 220px;
+  background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 4px;
-  padding: 6px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  padding: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.58);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 .session-pop-meta {
-  padding: 4px 6px 6px;
+  padding: 4px 6px 8px;
   border-bottom: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 
-/* ---- Slide thumbnails: ProPresenter-style color bands & transparent checkerboard ---- */
-.thumb {
+/* ---- Persistent 26px Studio Status Bar ---- */
+.studio-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 26px;
+  padding: 0 12px;
+  background: #0e1116;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--fg3);
+  overflow: hidden;
+  user-select: none;
+}
+.sb-left,
+.sb-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.sb-left {
+  flex: 1 1 0;
+}
+.sb-right {
+  flex: 0 0 auto;
+}
+.sb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: var(--fg2);
+}
+.sb-onair {
+  color: #fca5a5;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.sb-job {
+  color: #93c5fd;
+}
+.sb-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--line);
+  flex-shrink: 0;
+}
+.sb-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--fg);
+}
+.sb-notice-ok {
+  color: #86efac;
+}
+.sb-notice-info {
+  color: #93c5fd;
+}
+.sb-dismiss {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   border-radius: 3px;
+  color: var(--fg3);
+  cursor: pointer;
+}
+.sb-dismiss:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+}
+.sb-hints {
+  color: var(--fg3);
+  font-size: 11.5px;
+}
+.sb-cmd-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  height: 20px;
+  border-radius: 3px;
+  color: var(--fg2);
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.sb-cmd-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg);
+}
+
+/* ---- Global Command Palette (⌘K / Ctrl+K) ---- */
+.cmd-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(6, 8, 12, 0.65);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+.cmd-palette {
+  width: min(600px, calc(100vw - 32px));
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.72);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.cmd-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--well);
+}
+.cmd-input {
+  flex: 1 1 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 14.5px;
+  padding: 0;
+  min-height: 24px;
+  outline: none;
+  box-shadow: none;
+}
+.cmd-list {
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+}
+.cmd-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg3);
+  padding: 8px 10px 4px;
+}
+.cmd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  box-shadow: none;
+  cursor: pointer;
+}
+.cmd-item.active {
+  background: var(--bg4);
+}
+.cmd-item.danger.active {
+  background: rgba(220, 38, 38, 0.18);
+  color: #fecaca;
+}
+.cmd-item-title {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.cmd-item-sub {
+  font-size: 12px;
+  color: var(--fg3);
+}
+.cmd-empty {
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+}
+
+/* ---- Slide thumbnails: single-scanline color footer band & transparent checkerboard ---- */
+.thumb {
+  border-radius: 4px;
   border-width: 1.5px;
 }
 .thumb.is-transparent .img,
@@ -763,28 +1096,47 @@
 .thumb .cap-band {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 6px;
-  min-height: 20px;
-  font-size: 10.5px;
+  gap: 6px;
+  padding: 3px 8px;
+  min-height: 24px;
+  font-size: 12px;
   font-weight: 600;
-  color: #e7eaee;
-  background: var(--bg3);
+  color: #f1f5f9;
+  background: var(--surface);
 }
 .thumb .cap-band .sec-badge {
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 700;
-  padding: 0 4px;
+  padding: 1px 5px;
   border-radius: 2px;
-  background: rgba(0, 0, 0, 0.28);
+  background: rgba(0, 0, 0, 0.32);
   color: inherit;
   flex-shrink: 0;
+}
+.thumb .cap-band .num,
+.thumb .cap .num {
+  position: static;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+.thumb .cap {
+  min-height: 24px;
+  padding: 3px 8px;
+  font-size: 12px;
+  gap: 6px;
 }
 .thumb .sec-jump-btn {
   all: unset;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   cursor: pointer;
   min-width: 0;
 }
@@ -792,27 +1144,28 @@
   text-decoration: underline;
 }
 
-/* ---- Live right rail: primary monitor + VU meters + 2-up secondary + tabbed stage tools ---- */
+/* ---- Live right rail: vertical SplitPane (Program Monitors | Stage Tools) ---- */
 .op-right-rail {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--bg2);
+  background: var(--panel);
   overflow: hidden;
 }
 .program.program-dock {
-  flex: 0 0 auto;
-  padding: 8px;
-  border-bottom: 1px solid var(--line);
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  background: var(--bg);
+  gap: 10px;
+  background: var(--well);
 }
 .program-primary-row {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: stretch;
 }
 .program-primary-row .pv {
@@ -821,9 +1174,9 @@
 }
 .program-vu-rail {
   display: flex;
-  gap: 2px;
-  padding: 3px 2px;
-  background: #0a0c0f;
+  gap: 3px;
+  padding: 4px 3px;
+  background: #06080a;
   border: 1px solid var(--line);
   border-radius: 3px;
   align-items: stretch;
@@ -838,15 +1191,16 @@
 .program-secondary-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
+  gap: 8px;
 }
 .program-dock .pv {
   position: relative;
-  border-radius: 3px;
+  border-radius: 4px;
   overflow: hidden;
-  background: #050608;
+  background: #040507;
   aspect-ratio: 16 / 9;
   border: 1px solid var(--line);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
   cursor: pointer;
 }
 .program-dock .pv.is-primary {
@@ -864,11 +1218,11 @@
   right: 0;
   bottom: 0;
   display: flex;
-  gap: 5px;
+  gap: 6px;
   align-items: center;
-  padding: 2px 6px;
-  font-size: 10.5px;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+  padding: 4px 8px;
+  font-size: 11.5px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.88));
 }
 .pv-standby {
   position: absolute;
@@ -877,9 +1231,9 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 5px;
   color: var(--fg3);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .stage-dock {
@@ -888,11 +1242,12 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: var(--panel);
 }
 .stage-dock-tabs {
-  padding: 6px 8px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--line);
-  background: var(--bg2);
+  background: var(--panel);
   flex-shrink: 0;
 }
 .stage-dock-tabs .segmented {
@@ -906,19 +1261,19 @@
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
-/* ---- Tactical Console LayerBar (46px) ---- */
+/* ---- Tactical Console LayerBar (52px) ---- */
 .layerbar-console {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  min-height: 46px;
+  gap: 8px;
+  padding: 6px 12px;
+  min-height: 52px;
   background: #12151a;
   border-top: 1px solid var(--line);
   flex-shrink: 0;
@@ -928,16 +1283,16 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 34px;
-  max-width: 168px;
-  min-width: 84px;
-  padding: 0 8px;
-  border-radius: 3px;
+  gap: 7px;
+  min-height: 38px;
+  max-width: 184px;
+  min-width: 96px;
+  padding: 0 10px;
+  border-radius: 4px;
   border: 1px solid var(--line);
-  background: var(--bg2);
+  background: var(--panel);
   color: var(--fg3);
-  font-size: 11.5px;
+  font-size: 12px;
   text-align: left;
   cursor: default;
   flex-shrink: 0;
@@ -953,8 +1308,8 @@
   border-color: #22c55e;
 }
 .tally-key-led {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: #374151;
   flex-shrink: 0;
@@ -967,11 +1322,11 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  line-height: 1.15;
+  line-height: 1.2;
   flex: 1 1 0;
 }
 .tally-key-lbl {
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -981,7 +1336,7 @@
   color: #86efac;
 }
 .tally-key-val {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--fg2);
 }
 .tally-key.on .tally-key-val {
@@ -991,34 +1346,34 @@
 
 .console-sep {
   width: 1px;
-  height: 24px;
+  height: 26px;
   background: var(--line);
   flex-shrink: 0;
 }
 .console-transport {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-shrink: 0;
 }
 .console-time {
   font-family: ui-monospace, Consolas, monospace;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--fg2);
   font-variant-numeric: tabular-nums;
-  min-width: 78px;
+  min-width: 82px;
 }
 .console-audio {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex-shrink: 0;
 }
 .op .clear-all-console {
   position: relative;
   overflow: hidden;
-  min-height: 34px;
-  padding: 0 12px;
+  min-height: 38px;
+  padding: 0 14px;
   font-weight: 600;
   letter-spacing: 0.02em;
   flex-shrink: 0;
@@ -1037,25 +1392,26 @@
   transition: width 1s linear;
 }
 
-/* ---- Playlists 4-pane workspace ---- */
+/* ---- Playlists 4-pane workspace (3-tier surface separation) ---- */
 .pl-pane {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--bg);
+  background: var(--well);
 }
 .pl-pane-alt {
-  background: var(--bg2);
+  background: var(--panel);
 }
 .pl-pane-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  min-height: 34px;
+  gap: 8px;
+  padding: 6px 12px;
+  min-height: 42px;
   border-bottom: 1px solid var(--line);
-  background: var(--bg2);
+  background: var(--panel);
+  box-shadow: var(--bevel);
   flex-shrink: 0;
 }
 .pl-pane-scroll {
@@ -1064,28 +1420,33 @@
   overflow-y: auto;
 }
 
-/* ---- Library Media Bin grid + Inspector ---- */
+/* ---- Library sub-navigation (zero link underlines) & Media Bin ---- */
 .lib-subbar {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
-  min-height: 34px;
-  background: var(--bg2);
+  padding: 6px 14px;
+  min-height: 42px;
+  background: var(--panel);
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
+.lib-subbar a,
+.lib-subbar a:hover,
+.lib-subbar a:visited {
+  text-decoration: none;
+}
 .media-grid {
   display: grid;
-  gap: 8px;
-  padding: 10px;
+  gap: 12px;
+  padding: 14px 16px;
 }
 .media-tile {
   display: flex;
   flex-direction: column;
-  border-radius: 3px;
+  border-radius: 4px;
   border: 1.5px solid var(--line);
-  background: var(--bg2);
+  background: var(--panel);
   overflow: hidden;
   cursor: pointer;
 }
@@ -1108,39 +1469,228 @@
 }
 .media-tile-badges {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 6px;
+  right: 6px;
   display: flex;
-  gap: 3px;
+  gap: 4px;
 }
 .media-tile-cap {
-  padding: 4px 6px;
+  padding: 7px 9px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  font-size: 11px;
+  gap: 2px;
+  font-size: 12.5px;
 }
 .drop-overlay {
   position: absolute;
-  inset: 6px;
+  inset: 8px;
   z-index: 30;
   border: 2px dashed var(--accent);
-  border-radius: 4px;
-  background: rgba(14, 16, 19, 0.86);
+  border-radius: 5px;
+  background: rgba(9, 11, 14, 0.88);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
   color: var(--fg);
   pointer-events: none;
 }
 
-/* ---- Settings & Setup desktop preferences layout ---- */
+/* ---- Settings & Preferences desktop layout ---- */
 .prefs-body {
-  padding: 12px 18px 28px;
-  max-width: 780px;
+  padding: 18px 24px 36px;
+  max-width: 840px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+}
+
+/* ---- Editor & Reflow studio refinements (Stage 3) ---- */
+@media (pointer: fine) {
+  .ed-lens-dock {
+    border-radius: 0;
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+    padding: 6px 14px;
+    gap: 8px;
+  }
+  .ed-lens-pills {
+    border-radius: 4px;
+    background: var(--well);
+    border: 1px solid var(--line);
+    padding: 2px;
+    gap: 2px;
+  }
+  .ed-lens-pill {
+    border-radius: 3px;
+    min-height: 26px;
+    padding: 0 10px;
+    font-size: 12.5px;
+  }
+  .ed-seg-bar {
+    border-radius: 4px;
+  }
+  .ed-seg-bar button {
+    border-radius: 3px;
+    min-height: 26px;
+    font-size: 12.5px;
+  }
+  .ed-floating-bar,
+  .floating-bar {
+    border-radius: 4px;
+  }
+  .ed-slides-pane {
+    background: var(--panel);
+    height: 100%;
+    overflow-y: auto;
+  }
+  .ed-stage-well {
+    background: var(--well);
+  }
+  .ed-inspector-dock {
+    background: var(--panel);
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+}
+
+/* ---- Reflow Studio (ProPresenter-style two-pane lyric script) ---- */
+.reflow-section {
+  border-bottom: 1px solid var(--line);
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.reflow-slide-row {
+  display: flex;
+  align-items: stretch;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  overflow: hidden;
+  transition: border-color 0.1s ease;
+}
+.reflow-slide-row.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
+}
+.reflow-gutter {
+  width: 6px;
+  flex-shrink: 0;
+}
+.reflow-slide-body {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.reflow-textarea {
+  width: 100%;
+  border: 1px solid transparent;
+  background: var(--well);
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-radius: 4px;
+  resize: none;
+}
+.reflow-textarea:focus {
+  border-color: var(--accent);
+}
+.reflow-chord-input {
+  width: 100%;
+  background: rgba(245, 158, 11, 0.06);
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  color: #fde68a;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+
+/* ---- Display Arrangement Map (Settings > Screens) ---- */
+.display-map {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 16px;
+  background: var(--well);
+  border-bottom: 1px solid var(--line);
+  min-height: 120px;
+}
+.display-map-screen {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 176px;
+  height: 102px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  border: 1.5px solid var(--line-strong);
+  background: var(--panel);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+.display-map-screen:hover {
+  border-color: #525d73;
+  background: var(--surface);
+}
+.display-map-screen.sel {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.12);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.display-map-screen.disabled {
+  opacity: 0.5;
+}
+
+/* ---- Studio 2-pane empty / specimen wells ---- */
+.studio-well {
+  background: var(--well);
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.studio-sidebar {
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.studio-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.studio-list-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.studio-list-row.sel {
+  background: rgba(59, 130, 246, 0.14);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
