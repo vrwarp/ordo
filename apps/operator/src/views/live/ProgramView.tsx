@@ -177,7 +177,7 @@ export function ProgramView() {
   };
 
   return (
-    <div className="program-dock">
+    <div className="program program-dock">
       <div className="prop-section-title" style={{ margin: 0 }}>
         <span>Program</span>
         {primary && (

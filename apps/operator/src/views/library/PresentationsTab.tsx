@@ -516,7 +516,7 @@ export function PresentationsTab() {
     <div className="pl-pane pl-pane-alt">
       <div className="pl-pane-head">
         <span className="prop-section-title ellipsis grow" style={{ margin: 0 }}>
-          {selectedPres.title}
+          Presentation Inspector
         </span>
         <a className="btn small primary" href={`#/edit/${selectedPres.id}`}>
           <Icon name="edit" size={11} />

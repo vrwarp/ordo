@@ -374,9 +374,17 @@ export function PlaylistEditor(props: {
 
       {props.locked && (
         <div className="banner" style={{ margin: 6, padding: '6px 8px', fontSize: 11.5 }}>
-          {deviceProfile(currentRole()) === 'edit'
-            ? 'Live at the venue (read-only).'
-            : 'Live now. Use Live view for off-air adjustments.'}
+          {deviceProfile(currentRole()) === 'edit' ? (
+            <>
+              This playlist is <b>live</b> at the venue. It and its presentations can be edited again after
+              the service.
+            </>
+          ) : (
+            <>
+              This playlist is <b>live</b>. Use the Live view to skip items, arrange upcoming songs, or hotfix
+              off-air text; End service to add new items.
+            </>
+          )}
         </div>
       )}
 

@@ -801,7 +801,7 @@
   background: var(--bg2);
   overflow: hidden;
 }
-.program-dock {
+.program.program-dock {
   flex: 0 0 auto;
   padding: 8px;
   border-bottom: 1px solid var(--line);
