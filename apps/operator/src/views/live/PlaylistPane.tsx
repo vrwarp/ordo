@@ -2,6 +2,7 @@ import { api, DEMO } from '@ordo/client';
 import { newId, type Playlist, type PlaylistItem } from '@ordo/domain';
 import { useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { Icon } from '../../components/Icons.tsx';
 import { PlaylistItemRowContent } from '../../components/PlaylistItemRow.tsx';
 import { PlaylistPicker } from '../../components/PlaylistPicker.tsx';
 import { PlaylistReadinessStrip } from '../../components/PlaylistReadinessStrip.tsx';
@@ -193,7 +194,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
   };
 
   return (
-    <div className="pane" style={{ display: 'flex', flexDirection: 'column', position: 'relative' }}>
+    <div className="pane pl-pane pl-pane-alt" style={{ borderRight: 0, position: 'relative' }}>
       <div className="pane-head" style={{ alignItems: 'flex-start' }}>
         <PlaylistPicker
           variant="compact"
@@ -213,6 +214,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
                 type="button"
                 className="small"
                 onClick={() => navigate({ name: 'playlists', id: op.playlist!.id })}
+                title={op.live ? 'View playlist' : 'Edit in Playlists'}
               >
                 {op.live ? 'View' : 'Edit'}
               </button>
@@ -222,19 +224,20 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
       </div>
       {!op.live && op.playlist && (
         <>
-          <div style={{ padding: 10, borderBottom: '1px solid var(--line)' }}>
+          <div style={{ padding: '6px 8px', borderBottom: '1px solid var(--line)' }}>
             <button
               type="button"
-              className="primary big"
+              className="primary tactical-btn"
               style={{ width: '100%' }}
               disabled={items.length === 0}
               onClick={() => void handleGoLive()}
             >
+              <Icon name="live" size={13} />
               Go live with this playlist
             </button>
             {selectedId === undefined && (
-              <div className="muted small" style={{ marginTop: 6 }}>
-                Auto-selected next service. Confirm the date above before going live.
+              <div className="muted" style={{ marginTop: 4, fontSize: 10.5 }}>
+                Auto-selected next service. Confirm date before going live.
               </div>
             )}
           </div>
@@ -254,7 +257,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
       {op.live ? (
         <VirtualList
           items={items}
-          rowHeight={52}
+          rowHeight={34}
           style={{ flex: 1 }}
           keyOf={(it) => it.id}
           scrollToIndex={liveItem}
@@ -279,8 +282,8 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
                   !active && (
                     <button
                       type="button"
-                      className="ghost small"
-                      style={{ fontSize: 11, padding: '2px 6px', flexShrink: 0 }}
+                      className={`ghost small${it.skipped ? '' : ' row-hover-actions'}`}
+                      style={{ fontSize: 10.5, padding: '0 5px', flexShrink: 0 }}
                       onClick={(e) => {
                         e.stopPropagation();
                         controller()?.skipItem(it.id, !it.skipped);
@@ -319,8 +322,8 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
                 trailing={
                   <button
                     type="button"
-                    className="ghost small"
-                    style={{ padding: '2px 5px', flexShrink: 0 }}
+                    className="ghost icon-btn row-hover-actions"
+                    style={{ flexShrink: 0 }}
                     onClick={(e) => {
                       e.stopPropagation();
                       updatePreview((p) => ({ ...p, items: p.items.filter((x) => x.id !== it.id) }));
@@ -328,14 +331,14 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
                     title="Remove from playlist"
                     aria-label={`Remove ${itemTitle(it, op)}`}
                   >
-                    ✕
+                    <Icon name="close" size={12} />
                   </button>
                 }
               />
             </div>
           ))}
           {items.length === 0 && (
-            <div className="muted" style={{ padding: 16 }}>
+            <div className="muted" style={{ padding: 12, fontSize: 11.5 }}>
               This playlist is empty.
             </div>
           )}
@@ -343,7 +346,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
       )}
 
       {!op.live && op.playlist && (
-        <div style={{ padding: 8, borderTop: '1px solid var(--line)' }}>
+        <div style={{ padding: '5px 8px', borderTop: '1px solid var(--line)' }}>
           <button
             type="button"
             className="small"
@@ -351,22 +354,23 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
             onClick={() => setShowAdd((v) => !v)}
             data-live-add-toggle
           >
-            {showAdd ? 'Close add panel' : '+ Add song, media, timer…'}
+            <Icon name={showAdd ? 'close' : 'plus'} size={12} />
+            {showAdd ? 'Close add panel' : 'Add song, media, timer…'}
           </button>
         </div>
       )}
 
       {op.live && (
         <div
-          className="muted small"
+          className="muted"
           style={{
-            padding: '6px 10px',
+            padding: '5px 8px',
             borderTop: '1px solid var(--line)',
-            fontSize: 11,
-            lineHeight: 1.35,
+            fontSize: 10.5,
+            lineHeight: 1.3,
           }}
         >
-          Assets are cached for offline resilience. End service to add brand-new items.
+          Assets cached offline. End service to add new items.
         </div>
       )}
 
@@ -375,15 +379,15 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
           className="card"
           style={{
             position: 'absolute',
-            left: 8,
-            right: 8,
-            bottom: 46,
-            top: 56,
+            left: 6,
+            right: 6,
+            bottom: 38,
+            top: 44,
             zIndex: 30,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-            boxShadow: '0 12px 32px rgba(0, 0, 0, 0.5)',
+            boxShadow: '0 12px 32px rgba(0, 0, 0, 0.55)',
             padding: 0,
           }}
           data-live-add-popover
@@ -391,7 +395,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
           <div
             className="row"
             style={{
-              padding: '8px 10px',
+              padding: '6px 8px',
               borderBottom: '1px solid var(--line)',
               alignItems: 'center',
               justifyContent: 'space-between',

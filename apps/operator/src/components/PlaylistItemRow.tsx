@@ -1,7 +1,8 @@
 import type { Media, MidiPreset, PlaylistItem, Presentation } from '@ordo/domain';
 import type { ReactNode } from 'react';
+import { Icon, playlistItemIconName } from './Icons.tsx';
 import { midiTriggerBadge } from './MidiTriggerPicker.tsx';
-import { KIND_ICON, itemSubtitle, itemTitle } from '../lib/playlistItems.ts';
+import { itemSubtitle, itemTitle } from '../lib/playlistItems.ts';
 
 export type ItemLookup = {
   presentation: (id: string) => Presentation | undefined;
@@ -32,25 +33,35 @@ export function PlaylistItemRowContent({
   trailing?: ReactNode;
 }) {
   const skipped = item.skipped === true;
+  const pres = item.kind === 'presentation' ? lookup.presentation(item.presentationId) : undefined;
+  const iconName = playlistItemIconName(item.kind, pres?.kind);
   const midiBadge = item.kind !== 'action' && item.midi ? midiTriggerBadge(item.midi, presets) : null;
   const bgBadge =
     item.kind === 'presentation'
       ? (() => {
-          const p = lookup.presentation(item.presentationId);
-          const effBgId = item.backgroundMediaId ?? p?.backgroundMediaId;
+          const effBgId = item.backgroundMediaId ?? pres?.backgroundMediaId;
           const effBg = effBgId ? lookup.media(effBgId) : undefined;
           return effBg?.midi ? midiTriggerBadge(effBg.midi, presets) : null;
         })()
       : null;
 
+  const sub = itemSubtitle(item, lookup);
+
   return (
     <>
       {leading}
-      <span className="muted small" style={{ width: 20, textAlign: 'right', flexShrink: 0 }}>
+      <span
+        className="muted small"
+        style={{ width: 18, textAlign: 'right', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}
+      >
         {index + 1}
       </span>
       <span className={`kind ${isLive ? 'live' : ''}`} style={{ opacity: skipped ? 0.45 : undefined }}>
-        {isLive ? '●' : KIND_ICON[item.kind]}
+        {isLive ? (
+          <span className="dot sm" style={{ background: '#fff' }} />
+        ) : (
+          <Icon name={iconName} size={12} />
+        )}
       </span>
       <span className="col grow" style={{ gap: 0, minWidth: 0, opacity: skipped ? 0.55 : undefined }}>
         <span className="ellipsis row" style={{ gap: 5, alignItems: 'center' }}>
@@ -87,7 +98,7 @@ export function PlaylistItemRowContent({
                 opacity: 0.85,
               }}
             >
-              ● {bgBadge.label}
+              <Icon name="lights" size={9} /> {bgBadge.label}
             </span>
           )}
           {midiBadge && (
@@ -101,11 +112,15 @@ export function PlaylistItemRowContent({
                 color: midiBadge.missing ? 'var(--warn, #d97706)' : undefined,
               }}
             >
-              💡 {midiBadge.label}
+              <Icon name="lights" size={9} /> {midiBadge.label}
             </span>
           )}
         </span>
-        <span className="muted small ellipsis">{itemSubtitle(item, lookup)}</span>
+        {sub && (
+          <span className="muted ellipsis" style={{ fontSize: 10.5, lineHeight: 1.15 }}>
+            {sub}
+          </span>
+        )}
       </span>
       {trailing}
     </>

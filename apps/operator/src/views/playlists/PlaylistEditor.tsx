@@ -13,13 +13,19 @@ import {
 } from '@ordo/domain';
 import { useEffect, useMemo, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { DateField } from '../../components/fields.tsx';
+import { Icon } from '../../components/Icons.tsx';
 import { InlineArrangementStrip } from '../../components/InlineArrangementStrip.tsx';
+import { Menu } from '../../components/Menu.tsx';
 import { PlaylistItemRowContent } from '../../components/PlaylistItemRow.tsx';
 import { PlaylistReadinessStrip } from '../../components/PlaylistReadinessStrip.tsx';
+import { useCoarsePointer } from '../../components/pointer.ts';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
+import { SplitPane } from '../../components/SplitPane.tsx';
 import { moveItem } from '../../lib/arrangement.ts';
 import { deviceProfile } from '../../lib/capabilities.ts';
 import { itemTitle } from '../../lib/playlistItems.ts';
+import { sectionTone } from '../../lib/sectionColors.ts';
 import { groupCues } from '../../lib/sections.ts';
 import { startService } from '../../lib/startService.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
@@ -36,8 +42,8 @@ import { ItemSettings } from './ItemSettings.tsx';
 import { OfflineControl } from './OfflineControl.tsx';
 
 /**
- * Read-only slide preview of the selected playlist item on the Playlists page (N3: build with your eyes).
- * Compact-safe: renders SlideThumb directly without importing the live controller.
+ * Flush slide preview pane for the selected playlist item (design/30 §5.2).
+ * Renders continuous multi-column color-banded SlideThumbs with collapsible Arrange strip.
  */
 function SelectedItemSlidePreview({
   item,
@@ -63,6 +69,7 @@ function SelectedItemSlidePreview({
   onToggleHiddenSlide: (slideId: string) => void;
   onPromoteToSong: (sectionIds: string[]) => void;
 }) {
+  const [showArrange, setShowArrange] = useState(false);
   const cues: Cue[] = useMemo(() => {
     const mini: Playlist = { id: '__preview', rev: 1, name: playlistName, items: [item] };
     return expandCues({
@@ -74,6 +81,7 @@ function SelectedItemSlidePreview({
 
   const groups = useMemo(() => groupCues(cues), [cues]);
   const isSong = presentation?.kind === 'song';
+  const hasCustomOrder = item.kind === 'presentation' && item.sections !== undefined;
 
   const slideOf = (c: Cue): Slide | undefined => {
     if (!c.presentationId || !c.slideId || !presentation) return undefined;
@@ -81,113 +89,130 @@ function SelectedItemSlidePreview({
     return undefined;
   };
 
-  if (item.kind === 'timer' || item.kind === 'action') return null;
+  if (item.kind === 'timer' || item.kind === 'action') {
+    return (
+      <div className="pl-pane" data-playlist-slide-preview>
+        <div className="pl-pane-head">
+          <span className="small bold ellipsis grow">{itemTitle(item, op)}</span>
+          <span className="tag">{item.kind}</span>
+        </div>
+        <div className="center muted small" style={{ padding: 20 }}>
+          Configure this {item.kind} cue in the inspector below.
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="card col" style={{ gap: 8, padding: 0, overflow: 'hidden' }} data-playlist-slide-preview>
-      <div
-        className="row"
-        style={{
-          padding: '8px 12px',
-          borderBottom: '1px solid var(--line)',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          background: 'var(--bg2)',
-        }}
-      >
-        <span className="small bold">
-          Slide preview · {itemTitle(item, op)} ({cues.length} {cues.length === 1 ? 'cue' : 'cues'})
+    <div className="pl-pane" data-playlist-slide-preview>
+      <div className="pl-pane-head">
+        <span className="small bold ellipsis grow">
+          {itemTitle(item, op)}{' '}
+          <span className="muted" style={{ fontWeight: 400 }}>
+            · {cues.length} {cues.length === 1 ? 'cue' : 'cues'}
+          </span>
         </span>
+        {isSong && presentation && presentation.sections.length > 0 && item.kind === 'presentation' && (
+          <button
+            type="button"
+            className={showArrange || hasCustomOrder ? 'on small' : 'ghost small'}
+            onClick={() => setShowArrange((v) => !v)}
+            title="Show or hide song section order"
+          >
+            <Icon name="arrange" size={12} />
+            Arrange
+          </button>
+        )}
         {presentation && (
           <a className="btn small" href={`#/edit/${presentation.id}`}>
+            <Icon name="edit" size={11} />
             Edit slides…
           </a>
         )}
       </div>
-      {isSong && presentation && presentation.sections.length > 0 && item.kind === 'presentation' && (
-        <InlineArrangementStrip
-          presentation={presentation}
-          arrangementId={item.arrangementId}
-          sectionsOverride={item.sections}
-          locked={locked}
-          onChangeSections={onChangeSections}
-          onPromoteToSong={onPromoteToSong}
-        />
-      )}
-      <div className="col" style={{ gap: 8, padding: 10, maxHeight: 280, overflow: 'auto' }}>
-        {groups.map((g) => (
-          <div key={g.pos} className="col" style={{ gap: 4 }}>
-            {g.pos >= 0 && (
-              <div className="row" style={{ gap: 6, alignItems: 'center', fontSize: 11 }}>
-                <span className="tag">{g.short || g.label}</span>
-                <span className="muted">{g.label}</span>
-              </div>
-            )}
-            <div
-              className="slide-grid"
-              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}
-            >
-              {g.cues.map((c) => {
-                if (c.kind === 'slide') {
-                  const own = slideOf(c);
-                  const slide = c.backgroundOverride && own ? withoutBackdrops(own) : own;
-                  const hidden = isHiddenCue(c);
-                  const hiddenByService =
-                    item.kind === 'presentation' &&
-                    Boolean(c.slideId && item.hiddenSlides?.includes(c.slideId));
-                  return (
-                    <SlideThumb
-                      key={c.index}
-                      slide={slide}
-                      isSong={Boolean(isSong)}
-                      bgMediaId={c.backgroundMediaId}
-                      media={op.media}
-                      label={c.label}
-                      number={(c.slideIndexInSection ?? 0) + 1}
-                      marks={{ live: false, armed: false }}
-                      width={140}
-                      hidden={hidden}
-                      onContextMenu={
-                        !locked && c.slideId && item.kind === 'presentation'
-                          ? (e) =>
-                              openContextMenu(
-                                e,
-                                [
-                                  {
-                                    label: hiddenByService
-                                      ? 'Include slide in this service'
-                                      : 'Skip slide in this service',
-                                    onSelect: () => onToggleHiddenSlide(c.slideId!),
-                                  },
-                                ],
-                                { ariaLabel: `Slide ${c.label} actions` },
-                              )
-                          : undefined
-                      }
-                      footer={
-                        hidden ? (
-                          <span className="tag">{hiddenByService ? 'skipped' : 'hidden'}</span>
-                        ) : undefined
-                      }
-                    />
-                  );
-                }
+      {isSong &&
+        presentation &&
+        presentation.sections.length > 0 &&
+        item.kind === 'presentation' &&
+        (showArrange || hasCustomOrder) && (
+          <InlineArrangementStrip
+            presentation={presentation}
+            arrangementId={item.arrangementId}
+            sectionsOverride={item.sections}
+            locked={locked}
+            onChangeSections={onChangeSections}
+            onPromoteToSong={onPromoteToSong}
+          />
+        )}
+      <div className="pl-pane-scroll" style={{ padding: 10 }}>
+        <div className="slide-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))' }}>
+          {groups.flatMap((g) => {
+            const tone = g.pos >= 0 ? sectionTone(g.label, g.short) : undefined;
+            return g.cues.map((c, idxInGroup) => {
+              const band =
+                tone && g.pos >= 0
+                  ? { label: g.label, short: g.short, tone, isFirst: idxInGroup === 0 }
+                  : undefined;
+              if (c.kind === 'slide') {
+                const own = slideOf(c);
+                const slide = c.backgroundOverride && own ? withoutBackdrops(own) : own;
+                const hidden = isHiddenCue(c);
+                const hiddenByService =
+                  item.kind === 'presentation' &&
+                  Boolean(c.slideId && item.hiddenSlides?.includes(c.slideId));
                 return (
                   <SlideThumb
                     key={c.index}
-                    bgMediaId={c.mediaId}
+                    slide={slide}
+                    isSong={Boolean(isSong)}
+                    bgMediaId={c.backgroundMediaId}
                     media={op.media}
-                    isSong={false}
                     label={c.label}
+                    number={(c.slideIndexInSection ?? 0) + 1}
                     marks={{ live: false, armed: false }}
-                    width={140}
-                    footer={<span className="tag">{c.kind === 'media' ? c.mediaKind : c.kind}</span>}
+                    width={148}
+                    hidden={hidden}
+                    sectionBand={band}
+                    onContextMenu={
+                      !locked && c.slideId && item.kind === 'presentation'
+                        ? (e) =>
+                            openContextMenu(
+                              e,
+                              [
+                                {
+                                  label: hiddenByService
+                                    ? 'Include slide in this service'
+                                    : 'Skip slide in this service',
+                                  onSelect: () => onToggleHiddenSlide(c.slideId!),
+                                },
+                              ],
+                              { ariaLabel: `Slide ${c.label} actions` },
+                            )
+                        : undefined
+                    }
+                    footer={
+                      hidden ? (
+                        <span className="tag">{hiddenByService ? 'skipped' : 'hidden'}</span>
+                      ) : undefined
+                    }
                   />
                 );
-              })}
-            </div>
-          </div>
-        ))}
+              }
+              return (
+                <SlideThumb
+                  key={c.index}
+                  bgMediaId={c.mediaId}
+                  media={op.media}
+                  isSong={false}
+                  label={c.label}
+                  marks={{ live: false, armed: false }}
+                  width={148}
+                  footer={<span className="tag">{c.kind === 'media' ? c.mediaKind : c.kind}</span>}
+                />
+              );
+            });
+          })}
+        </div>
         {cues.length === 0 && <div className="muted small">Nothing to preview for this item.</div>}
       </div>
     </div>
@@ -195,9 +220,8 @@ function SelectedItemSlidePreview({
 }
 
 /**
- * Build a service: rename, reorder (drag by the handle, touch included, or the arrow buttons), add from the
- * library, preview slides, per-item settings, go live (prd/02).
- * Changes save automatically (debounced) with the playlist's rev; the live playlist is read-only here.
+ * Fixed 3-pane docked playlist editor (combined with PlaylistsView's sidebar for the 4-pane desktop workspace,
+ * design/30 §5.2): Rundown | Vertical Split(Slide Preview + Docked 2-col Inspector) | Library/Insert Browser.
  */
 export function PlaylistEditor(props: {
   playlist: Playlist;
@@ -269,49 +293,52 @@ export function PlaylistEditor(props: {
     };
   }, [lib.presentations, lib.media]);
 
-  const selected = draft.items.find((it) => it.id === sel);
+  const selected = draft.items.find((it) => it.id === sel) ?? draft.items[0];
   const selectedPres =
     selected?.kind === 'presentation' ? op.presentation(selected.presentationId) : undefined;
 
-  return (
-    <div
-      style={{
-        display: 'grid',
-        height: '100%',
-        minHeight: 0,
-      }}
-      className={`pl-editor ${props.locked ? 'locked' : ''}`}
-    >
-      <div className="col" style={{ minHeight: 0, overflow: 'auto', padding: 14, gap: 10 }}>
-        {props.locked && (
-          <div className="banner">
-            {deviceProfile(currentRole()) === 'edit' ? (
-              <>
-                This playlist is <b>live</b> at the venue. It and its presentations can be edited again after
-                the service.
-              </>
-            ) : (
-              <>
-                This playlist is <b>live</b>. Use the Live view to skip items, arrange upcoming songs, or
-                hotfix off-air text; End service to add new items.
-              </>
-            )}
-          </div>
-        )}
-        <div className="row wrap">
+  const rundownPane = (
+    <div className="pl-pane pl-pane-alt">
+      <div className="col" style={{ padding: '6px 8px', gap: 6, borderBottom: '1px solid var(--line)' }}>
+        <div className="row" style={{ gap: 4, alignItems: 'center' }}>
           <input
-            style={{ fontSize: 18, fontWeight: 600, flex: 1, minWidth: 200 }}
+            className="grow"
+            style={{ fontWeight: 600, fontSize: 13, minWidth: 0 }}
             value={draft.name}
             disabled={props.locked}
+            aria-label="Playlist name"
             onChange={(e) => update((p) => ({ ...p, name: e.target.value }))}
           />
-          <input
-            type="date"
+          <Menu
+            label="⋯"
+            align="right"
+            items={[
+              ...(props.canOperate && !props.locked
+                ? [
+                    {
+                      label: 'Open on Live',
+                      onSelect: () => {
+                        setUi({ selectedPlaylistId: draft.id, followLive: true });
+                        navigate({ name: 'live' });
+                      },
+                    },
+                  ]
+                : []),
+              ...(props.canOperate && props.locked
+                ? [{ label: 'Open operator view', onSelect: () => (location.hash = '#/live') }]
+                : []),
+              { label: 'Duplicate playlist', onSelect: props.onDuplicate },
+              { label: 'Delete playlist', danger: true, disabled: props.locked, onSelect: props.onDelete },
+            ]}
+          />
+        </div>
+        <div className="row" style={{ gap: 5, alignItems: 'center' }}>
+          <DateField
             value={draft.serviceDate ?? ''}
             disabled={props.locked}
-            onChange={(e) => update((p) => ({ ...p, serviceDate: e.target.value || undefined }))}
+            onChange={(iso) => update((p) => ({ ...p, serviceDate: iso || undefined }))}
           />
-          <span className="muted small" style={{ width: 70 }}>
+          <span className="muted" style={{ fontSize: 10.5 }}>
             {saving === 'pending'
               ? 'Unsaved'
               : saving === 'saving'
@@ -320,287 +347,424 @@ export function PlaylistEditor(props: {
                   ? 'Not saved'
                   : 'Saved'}
           </span>
-        </div>
-        <div className="row wrap">
+          <span className="spacer" />
           {props.canOperate && !props.locked && (
-            <>
-              <button
-                type="button"
-                className="primary big"
-                disabled={isLive || draft.items.length === 0}
-                title={isLive ? 'Another playlist is live: End service first' : undefined}
-                onClick={async () => {
-                  await flushPlaylist(draft.id);
-                  if (await startService(draft.id)) {
-                    location.hash = '#/live';
-                  }
-                }}
-              >
-                Go live
-              </button>
-              <button
-                type="button"
-                className="big"
-                onClick={() => {
-                  setUi({ selectedPlaylistId: draft.id, followLive: true });
-                  navigate({ name: 'live' });
-                }}
-              >
-                Open on Live
-              </button>
-            </>
-          )}
-          {props.canOperate && props.locked && (
-            <button type="button" className="big" onClick={() => (location.hash = '#/live')}>
-              Open operator view
+            <button
+              type="button"
+              className="primary small"
+              disabled={isLive || draft.items.length === 0}
+              title={isLive ? 'Another playlist is live: End service first' : 'Go live with this playlist'}
+              onClick={async () => {
+                await flushPlaylist(draft.id);
+                if (await startService(draft.id)) {
+                  location.hash = '#/live';
+                }
+              }}
+            >
+              <Icon name="live" size={12} />
+              Go live
             </button>
           )}
-          <span className="spacer" />
-          <button type="button" onClick={props.onDuplicate}>
-            Duplicate
-          </button>
-          <button type="button" className="danger" disabled={props.locked} onClick={props.onDelete}>
-            Delete
-          </button>
-        </div>
-        <PlaylistReadinessStrip
-          playlist={draft}
-          presentations={lib.presentations}
-          media={lib.media}
-          unsavedItems={unsavedItems}
-          offlineSlot={
-            props.canOperate && !DEMO ? <OfflineControl playlistId={draft.id} rev={draft.rev} /> : undefined
-          }
-        />
-        <div
-          ref={sort.ref}
-          className="col pl-list"
-          style={{ gap: 0, border: '1px solid var(--line)', borderRadius: 8 }}
-        >
-          {draft.items.map((it, i) => (
-            <div
-              key={it.id}
-              {...sort.item(i)}
-              {...sort.mouseArea(i)}
-              data-playlist-item={it.id}
-              className={`pl-item ${it.id === sel ? 'sel' : ''} ${sort.cls(i)}`}
-              onClick={() => setSel(it.id)}
-              onContextMenu={(e) => {
-                setSel(it.id);
-                const locked = props.locked;
-                openContextMenu(
-                  e,
-                  [
-                    ...(it.kind === 'presentation'
-                      ? [
-                          {
-                            label: 'Edit presentation…',
-                            onSelect: () => navigate(`#/edit/${it.presentationId}`),
-                          },
-                          { kind: 'separator' as const },
-                        ]
-                      : []),
-                    {
-                      label: it.skipped ? 'Include item' : 'Skip item',
-                      disabled: locked,
-                      onSelect: () =>
-                        setItem(it.id, (x) => {
-                          if (x.skipped) {
-                            const { skipped: _s, ...rest } = x;
-                            return rest;
-                          }
-                          return { ...x, skipped: true };
-                        }),
-                    },
-                    {
-                      label: 'Duplicate item',
-                      disabled: locked,
-                      onSelect: () => {
-                        const copy = { ...structuredClone(it), id: newId() };
-                        update((p) => {
-                          const list = [...p.items];
-                          list.splice(i + 1, 0, copy);
-                          return { ...p, items: list };
-                        });
-                        setSel(copy.id);
-                      },
-                    },
-                    ...(it.kind === 'presentation' && it.backgroundMediaId
-                      ? [
-                          {
-                            label: 'Clear background override',
-                            disabled: locked,
-                            onSelect: () =>
-                              setItem(it.id, (x) =>
-                                x.kind === 'presentation' ? { ...x, backgroundMediaId: undefined } : x,
-                              ),
-                          },
-                        ]
-                      : []),
-                    { kind: 'separator' },
-                    ...(i > 0
-                      ? [
-                          {
-                            label: 'Move to top',
-                            disabled: locked,
-                            onSelect: () => update((p) => ({ ...p, items: moveItem(p.items, i, 0) })),
-                          },
-                          {
-                            label: 'Move up',
-                            disabled: locked,
-                            onSelect: () => update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) })),
-                          },
-                        ]
-                      : []),
-                    ...(i < draft.items.length - 1
-                      ? [
-                          {
-                            label: 'Move down',
-                            disabled: locked,
-                            onSelect: () => update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) })),
-                          },
-                          {
-                            label: 'Move to bottom',
-                            disabled: locked,
-                            onSelect: () =>
-                              update((p) => ({ ...p, items: moveItem(p.items, i, p.items.length - 1) })),
-                          },
-                        ]
-                      : []),
-                    { kind: 'separator' },
-                    {
-                      label: 'Remove from playlist',
-                      danger: true,
-                      disabled: locked,
-                      onSelect: () => update((p) => ({ ...p, items: p.items.filter((x) => x.id !== it.id) })),
-                    },
-                  ],
-                  { ariaLabel: `${itemTitle(it, op)} actions` },
-                );
-              }}
-              style={{ cursor: props.locked ? 'pointer' : 'grab' }}
-            >
-              <PlaylistItemRowContent
-                item={it}
-                index={i}
-                lookup={op}
-                presets={lib.settings.surfaces.midiPresets}
-                unsaved={it.kind === 'presentation' && Boolean(unsavedItems[`pres:${it.presentationId}`])}
-                leading={<DragHandle label="Drag to reorder" disabled={props.locked} {...sort.handle(i)} />}
-                trailing={
-                  !props.locked && (
-                    <>
-                      <button
-                        type="button"
-                        className="ghost small"
-                        disabled={i === 0}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) }));
-                        }}
-                        aria-label="Move up"
-                      >
-                        ↑<span className="touch-label">Up</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost small"
-                        disabled={i === draft.items.length - 1}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) }));
-                        }}
-                        aria-label="Move down"
-                      >
-                        ↓<span className="touch-label">Down</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          update((p) => ({ ...p, items: p.items.filter((x) => x.id !== it.id) }));
-                        }}
-                        title="Remove"
-                      >
-                        ✕<span className="touch-label">Remove</span>
-                      </button>
-                    </>
-                  )
-                }
-              />
-            </div>
-          ))}
-          {draft.items.length === 0 && (
-            <div className="muted" style={{ padding: 16 }}>
-              Add songs, media, timers and actions from the panel on the right.
-            </div>
+          {props.canOperate && props.locked && (
+            <button type="button" className="small" onClick={() => (location.hash = '#/live')}>
+              Open Live
+            </button>
           )}
         </div>
-        {selected && (
-          <SelectedItemSlidePreview
-            item={selected}
-            playlistName={draft.name}
-            locked={props.locked}
-            presentation={selectedPres}
-            op={op}
-            onChangeSections={(sections) =>
-              setItem(selected.id, (it) => {
-                if (it.kind !== 'presentation') return it;
-                if (sections === null) {
-                  const { sections: _s, ...rest } = it;
-                  return rest;
-                }
-                return { ...it, sections };
-              })
-            }
-            onToggleHiddenSlide={(slideId) =>
-              setItem(selected.id, (it) => {
-                if (it.kind !== 'presentation') return it;
-                const cur = it.hiddenSlides ?? [];
-                const next = cur.includes(slideId) ? cur.filter((x) => x !== slideId) : [...cur, slideId];
-                if (!next.length) {
-                  const { hiddenSlides: _h, ...rest } = it;
-                  return rest;
-                }
-                return { ...it, hiddenSlides: next };
-              })
-            }
-            onPromoteToSong={async (sectionIds) => {
-              if (!selectedPres) return;
-              const arr: Arrangement = {
-                id: newId(),
-                name: draft.name,
-                sectionIds,
-              };
-              if (await saveArrangement(selectedPres.id, arr)) {
-                setItem(selected.id, (it) => {
-                  if (it.kind !== 'presentation') return it;
-                  const { sections: _s, ...rest } = it;
-                  return { ...rest, arrangementId: arr.id };
-                });
-                toast(`Saved "${arr.name}" to ${selectedPres.title}`);
-              }
+      </div>
+
+      {props.locked && (
+        <div className="banner" style={{ margin: 6, padding: '6px 8px', fontSize: 11.5 }}>
+          {deviceProfile(currentRole()) === 'edit' ? (
+            <>
+              This playlist is <b>live</b> at the venue. It and its presentations can be edited again after
+              the service.
+            </>
+          ) : (
+            <>
+              This playlist is <b>live</b>. Use the Live view to skip items, arrange upcoming songs, or hotfix
+              off-air text; End service to add new items.
+            </>
+          )}
+        </div>
+      )}
+
+      <PlaylistReadinessStrip
+        playlist={draft}
+        presentations={lib.presentations}
+        media={lib.media}
+        unsavedItems={unsavedItems}
+        compact
+        offlineSlot={
+          props.canOperate && !DEMO ? <OfflineControl playlistId={draft.id} rev={draft.rev} /> : undefined
+        }
+      />
+
+      <div
+        ref={sort.ref}
+        className="pl-pane-scroll pl-list"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (props.locked || !selected) return;
+          if (e.key === 'Delete' || e.key === 'Backspace') {
+            const target = e.target as HTMLElement | null;
+            if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return;
+            e.preventDefault();
+            update((p) => ({ ...p, items: p.items.filter((x) => x.id !== selected.id) }));
+          }
+        }}
+      >
+        {draft.items.map((it, i) => (
+          <div
+            key={it.id}
+            {...sort.item(i)}
+            {...sort.mouseArea(i)}
+            data-playlist-item={it.id}
+            className={`pl-item ${it.id === selected?.id ? 'sel' : ''} ${sort.cls(i)}`}
+            onClick={() => setSel(it.id)}
+            onContextMenu={(e) => {
+              setSel(it.id);
+              const locked = props.locked;
+              openContextMenu(
+                e,
+                [
+                  ...(it.kind === 'presentation'
+                    ? [
+                        {
+                          label: 'Edit presentation…',
+                          onSelect: () => navigate(`#/edit/${it.presentationId}`),
+                        },
+                        { kind: 'separator' as const },
+                      ]
+                    : []),
+                  {
+                    label: it.skipped ? 'Include item' : 'Skip item',
+                    disabled: locked,
+                    onSelect: () =>
+                      setItem(it.id, (x) => {
+                        if (x.skipped) {
+                          const { skipped: _s, ...rest } = x;
+                          return rest;
+                        }
+                        return { ...x, skipped: true };
+                      }),
+                  },
+                  {
+                    label: 'Duplicate item',
+                    disabled: locked,
+                    onSelect: () => {
+                      const copy = { ...structuredClone(it), id: newId() };
+                      update((p) => {
+                        const list = [...p.items];
+                        list.splice(i + 1, 0, copy);
+                        return { ...p, items: list };
+                      });
+                      setSel(copy.id);
+                    },
+                  },
+                  ...(it.kind === 'presentation' && it.backgroundMediaId
+                    ? [
+                        {
+                          label: 'Clear background override',
+                          disabled: locked,
+                          onSelect: () =>
+                            setItem(it.id, (x) =>
+                              x.kind === 'presentation' ? { ...x, backgroundMediaId: undefined } : x,
+                            ),
+                        },
+                      ]
+                    : []),
+                  { kind: 'separator' },
+                  ...(i > 0
+                    ? [
+                        {
+                          label: 'Move to top',
+                          disabled: locked,
+                          onSelect: () => update((p) => ({ ...p, items: moveItem(p.items, i, 0) })),
+                        },
+                        {
+                          label: 'Move up',
+                          disabled: locked,
+                          onSelect: () => update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) })),
+                        },
+                      ]
+                    : []),
+                  ...(i < draft.items.length - 1
+                    ? [
+                        {
+                          label: 'Move down',
+                          disabled: locked,
+                          onSelect: () => update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) })),
+                        },
+                        {
+                          label: 'Move to bottom',
+                          disabled: locked,
+                          onSelect: () =>
+                            update((p) => ({ ...p, items: moveItem(p.items, i, p.items.length - 1) })),
+                        },
+                      ]
+                    : []),
+                  { kind: 'separator' },
+                  {
+                    label: 'Remove from playlist',
+                    danger: true,
+                    disabled: locked,
+                    onSelect: () => update((p) => ({ ...p, items: p.items.filter((x) => x.id !== it.id) })),
+                  },
+                ],
+                { ariaLabel: `${itemTitle(it, op)} actions` },
+              );
             }}
-          />
-        )}
-        {selected && (
-          <div className="card">
-            <ItemSettings
-              key={selected.id}
-              item={selected}
-              disabled={props.locked}
-              onChange={(it) => setItem(selected.id, () => it)}
-              onSaveArrangement={saveArrangement}
+            style={{ cursor: props.locked ? 'pointer' : 'grab' }}
+          >
+            <PlaylistItemRowContent
+              item={it}
+              index={i}
+              lookup={op}
+              presets={lib.settings.surfaces.midiPresets}
+              unsaved={it.kind === 'presentation' && Boolean(unsavedItems[`pres:${it.presentationId}`])}
+              leading={<DragHandle label="Drag to reorder" disabled={props.locked} {...sort.handle(i)} />}
+              trailing={
+                !props.locked && (
+                  <span className="row row-hover-actions" style={{ gap: 1, flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      className="ghost icon-btn"
+                      disabled={i === 0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) }));
+                      }}
+                      aria-label="Move up"
+                      title="Move up"
+                    >
+                      <Icon name="arrowUp" size={11} />
+                      <span className="touch-label">Up</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost icon-btn"
+                      disabled={i === draft.items.length - 1}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) }));
+                      }}
+                      aria-label="Move down"
+                      title="Move down"
+                    >
+                      <Icon name="arrowDown" size={11} />
+                      <span className="touch-label">Down</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost icon-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        update((p) => ({ ...p, items: p.items.filter((x) => x.id !== it.id) }));
+                      }}
+                      title="Remove"
+                      aria-label="Remove"
+                    >
+                      <Icon name="close" size={11} />
+                      <span className="touch-label">Remove</span>
+                    </button>
+                  </span>
+                )
+              }
             />
+          </div>
+        ))}
+        {draft.items.length === 0 && (
+          <div className="muted" style={{ padding: 14, fontSize: 11.5 }}>
+            Add songs, media, timers, or actions from the Library Browser on the right.
           </div>
         )}
       </div>
-      {!props.locked && (
-        <div className="pl-add" style={{ minHeight: 0, overflow: 'hidden' }}>
-          <AddItemsPanel onAdd={addItems} />
+    </div>
+  );
+
+  const centerWorkspace = selected ? (
+    <SplitPane
+      storageKey="playlists-item-split"
+      direction="vertical"
+      panels={[
+        {
+          id: 'item-slides',
+          content: (
+            <SelectedItemSlidePreview
+              item={selected}
+              playlistName={draft.name}
+              locked={props.locked}
+              presentation={selectedPres}
+              op={op}
+              onChangeSections={(sections) =>
+                setItem(selected.id, (it) => {
+                  if (it.kind !== 'presentation') return it;
+                  if (sections === null) {
+                    const { sections: _s, ...rest } = it;
+                    return rest;
+                  }
+                  return { ...it, sections };
+                })
+              }
+              onToggleHiddenSlide={(slideId) =>
+                setItem(selected.id, (it) => {
+                  if (it.kind !== 'presentation') return it;
+                  const cur = it.hiddenSlides ?? [];
+                  const next = cur.includes(slideId) ? cur.filter((x) => x !== slideId) : [...cur, slideId];
+                  if (!next.length) {
+                    const { hiddenSlides: _h, ...rest } = it;
+                    return rest;
+                  }
+                  return { ...it, hiddenSlides: next };
+                })
+              }
+              onPromoteToSong={async (sectionIds) => {
+                if (!selectedPres) return;
+                const arr: Arrangement = {
+                  id: newId(),
+                  name: draft.name,
+                  sectionIds,
+                };
+                if (await saveArrangement(selectedPres.id, arr)) {
+                  setItem(selected.id, (it) => {
+                    if (it.kind !== 'presentation') return it;
+                    const { sections: _s, ...rest } = it;
+                    return { ...rest, arrangementId: arr.id };
+                  });
+                  toast(`Saved "${arr.name}" to ${selectedPres.title}`);
+                }
+              }}
+            />
+          ),
+        },
+        {
+          id: 'item-inspector',
+          size: 310,
+          min: 160,
+          max: 540,
+          content: (
+            <div className="pl-pane pl-pane-alt">
+              <div className="pl-pane-head">
+                <span className="prop-section-title" style={{ margin: 0 }}>
+                  Inspector · {itemTitle(selected, op)}
+                </span>
+              </div>
+              <div className="pl-pane-scroll">
+                <ItemSettings
+                  key={selected.id}
+                  item={selected}
+                  disabled={props.locked}
+                  onChange={(it) => setItem(selected.id, () => it)}
+                  onSaveArrangement={saveArrangement}
+                />
+              </div>
+            </div>
+          ),
+        },
+      ]}
+    />
+  ) : (
+    <div className="pl-pane center muted small">Select an item in the rundown to preview and inspect.</div>
+  );
+
+  const coarse = useCoarsePointer();
+
+  if (coarse) {
+    return (
+      <div
+        className={`pl-editor ${props.locked ? 'locked' : ''}`}
+        style={{ display: 'grid', height: '100%', minHeight: 0 }}
+      >
+        <div className="col" style={{ minHeight: 0, overflow: 'auto', padding: 10, gap: 10 }}>
+          {rundownPane}
+          {selected && (
+            <div style={{ border: '1px solid var(--line)', borderRadius: 4, overflow: 'hidden' }}>
+              <SelectedItemSlidePreview
+                item={selected}
+                playlistName={draft.name}
+                locked={props.locked}
+                presentation={selectedPres}
+                op={op}
+                onChangeSections={(sections) =>
+                  setItem(selected.id, (it) => {
+                    if (it.kind !== 'presentation') return it;
+                    if (sections === null) {
+                      const { sections: _s, ...rest } = it;
+                      return rest;
+                    }
+                    return { ...it, sections };
+                  })
+                }
+                onToggleHiddenSlide={(slideId) =>
+                  setItem(selected.id, (it) => {
+                    if (it.kind !== 'presentation') return it;
+                    const cur = it.hiddenSlides ?? [];
+                    const next = cur.includes(slideId) ? cur.filter((x) => x !== slideId) : [...cur, slideId];
+                    if (!next.length) {
+                      const { hiddenSlides: _h, ...rest } = it;
+                      return rest;
+                    }
+                    return { ...it, hiddenSlides: next };
+                  })
+                }
+                onPromoteToSong={async (sectionIds) => {
+                  if (!selectedPres) return;
+                  const arr: Arrangement = { id: newId(), name: draft.name, sectionIds };
+                  if (await saveArrangement(selectedPres.id, arr)) {
+                    setItem(selected.id, (it) => {
+                      if (it.kind !== 'presentation') return it;
+                      const { sections: _s, ...rest } = it;
+                      return { ...rest, arrangementId: arr.id };
+                    });
+                    toast(`Saved "${arr.name}" to ${selectedPres.title}`);
+                  }
+                }}
+              />
+            </div>
+          )}
+          {selected && (
+            <div style={{ border: '1px solid var(--line)', borderRadius: 4, background: 'var(--bg2)' }}>
+              <ItemSettings
+                key={selected.id}
+                item={selected}
+                disabled={props.locked}
+                onChange={(it) => setItem(selected.id, () => it)}
+                onSaveArrangement={saveArrangement}
+              />
+            </div>
+          )}
         </div>
-      )}
+        {!props.locked && (
+          <div className="pl-add" style={{ minHeight: 0, overflow: 'hidden' }}>
+            <AddItemsPanel onAdd={addItems} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`pl-editor ${props.locked ? 'locked' : ''}`} style={{ height: '100%', minHeight: 0 }}>
+      <SplitPane
+        storageKey="playlists-inner"
+        panels={[
+          { id: 'rundown', size: 254, min: 200, max: 380, content: rundownPane },
+          { id: 'workspace', content: centerWorkspace },
+          ...(!props.locked
+            ? [
+                {
+                  id: 'browser',
+                  size: 268,
+                  min: 210,
+                  max: 420,
+                  className: 'pl-add',
+                  content: <AddItemsPanel onAdd={addItems} />,
+                },
+              ]
+            : []),
+        ]}
+      />
     </div>
   );
 }

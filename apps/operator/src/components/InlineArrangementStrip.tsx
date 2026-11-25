@@ -1,12 +1,14 @@
 import { arrangementFor, type Presentation } from '@ordo/domain';
 import { useEffect, useState } from 'react';
+import { Icon } from './Icons.tsx';
 import { DragHandle, useSortable } from './Sortable.tsx';
 import { moveItem } from '../lib/arrangement.ts';
+import { sectionTone } from '../lib/sectionColors.ts';
 
 /**
  * Compact horizontal section-order strip for song items (ADR 0015 / design/28 §3.5).
  * Edits write to `PlaylistItem.sections` (per-service override) without polluting the shared song.
- * In Live mode, editing is guarded behind an explicit `✎ Arrange` toggle and disabled while the item is ON AIR.
+ * In Live mode, editing is guarded behind an explicit `Arrange` toggle and disabled while the item is ON AIR.
  */
 export function InlineArrangementStrip({
   presentation,
@@ -66,19 +68,23 @@ export function InlineArrangementStrip({
       style={{
         gap: 6,
         alignItems: 'center',
-        padding: '6px 10px',
+        padding: '4px 8px',
         background: canEdit && liveMode ? 'rgba(59, 130, 246, 0.1)' : 'var(--bg2)',
         borderBottom: '1px solid var(--line)',
-        fontSize: 12,
+        fontSize: 11.5,
       }}
       data-arrangement-strip
     >
-      <span className="muted small" style={{ fontSize: 11, flexShrink: 0 }}>
-        Order:
+      <span
+        className="muted small"
+        style={{ fontSize: 10.5, flexShrink: 0, textTransform: 'uppercase', letterSpacing: '0.04em' }}
+      >
+        Order
       </span>
       <div className="row wrap" ref={sort.ref} style={{ gap: 4, alignItems: 'center', flex: 1, minWidth: 0 }}>
         {validIds.map((id, i) => {
           const sec = byId.get(id)!;
+          const tone = sectionTone(sec.label, sec.short);
           const occ = validIds.slice(0, i).filter((x) => x === id).length;
           return (
             <span
@@ -89,9 +95,12 @@ export function InlineArrangementStrip({
               style={{
                 gap: 4,
                 alignItems: 'center',
-                padding: '2px 6px',
+                padding: '1px 6px',
                 cursor: canEdit ? 'grab' : 'default',
                 userSelect: 'none',
+                borderLeft: `3px solid ${tone.border}`,
+                background: 'var(--bg3)',
+                color: 'var(--fg)',
               }}
               title={sec.label}
               data-arr-strip-chip={i}
@@ -102,7 +111,7 @@ export function InlineArrangementStrip({
                 <button
                   type="button"
                   className="ghost"
-                  style={{ padding: '0 2px', minHeight: 16, minWidth: 16, fontSize: 11, lineHeight: 1 }}
+                  style={{ padding: 0, minHeight: 16, minWidth: 16, fontSize: 11, lineHeight: 1 }}
                   onClick={(e) => {
                     e.stopPropagation();
                     onChangeSections(validIds.filter((_, idx) => idx !== i));
@@ -110,7 +119,7 @@ export function InlineArrangementStrip({
                   aria-label={`Remove ${sec.label}`}
                   title="Remove occurrence"
                 >
-                  ×
+                  <Icon name="close" size={10} />
                 </button>
               )}
             </span>
@@ -124,7 +133,12 @@ export function InlineArrangementStrip({
                 key={s.id}
                 type="button"
                 className="ghost small"
-                style={{ padding: '1px 5px', fontSize: 11, border: '1px dashed var(--line)' }}
+                style={{
+                  padding: '0 5px',
+                  fontSize: 10.5,
+                  border: '1px dashed var(--line-strong)',
+                  minHeight: 20,
+                }}
                 onClick={() => onChangeSections([...validIds, s.id])}
                 title={`Append ${s.label}`}
               >
@@ -172,7 +186,8 @@ export function InlineArrangementStrip({
             title={locked ? 'Locked while this song is ON AIR' : 'Adjust section order for this service'}
             data-arrange-toggle
           >
-            {editingLive ? 'Done' : '✎ Arrange'}
+            <Icon name={editingLive ? 'check' : 'arrange'} size={12} />
+            {editingLive ? 'Done' : 'Arrange'}
           </button>
         )}
       </div>

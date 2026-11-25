@@ -2,6 +2,7 @@ import { api } from '@ordo/client';
 import { newId, type Playlist } from '@ordo/domain';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { PlaylistPicker } from '../../components/PlaylistPicker.tsx';
+import { SplitPane } from '../../components/SplitPane.tsx';
 import { useLivePlaylistId } from '../../hooks.ts';
 import { useProfile } from '../../lib/capabilities.ts';
 import { duplicatePlaylistPayload, nextSundayIso, sortPlaylistsUpcoming } from '../../lib/playlists.ts';
@@ -73,34 +74,45 @@ export function PlaylistsView({ id }: { id?: string }) {
   );
 
   return (
-    <div className="split" style={{ gridTemplateColumns: '260px 1fr' }}>
-      <PlaylistPicker
-        variant="sidebar"
-        playlists={playlists}
-        selectedId={current?.id}
-        liveId={liveId}
-        onSelect={(pid) => navigate({ name: 'playlists', id: pid })}
-        onCreate={(rawName) => void create(rawName)}
-        onDuplicate={(p) => void duplicate(p)}
-        onDelete={(p) => void del(p)}
-      />
-      <div style={{ minHeight: 0, overflow: 'hidden' }}>
-        {current ? (
-          noteGoLive ? (
-            // Edit profile: a one-line note above the editor (grid rows keep the editor's height: 100%).
-            <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', height: '100%' }}>
-              <div className="muted small go-live-note" data-go-live-note>
-                Go live from the venue PC.
+    <SplitPane
+      storageKey="playlists-outer"
+      panels={[
+        {
+          id: 'playlists-list',
+          size: 196,
+          min: 150,
+          max: 320,
+          content: (
+            <PlaylistPicker
+              variant="sidebar"
+              playlists={playlists}
+              selectedId={current?.id}
+              liveId={liveId}
+              onSelect={(pid) => navigate({ name: 'playlists', id: pid })}
+              onCreate={(rawName) => void create(rawName)}
+              onDuplicate={(p) => void duplicate(p)}
+              onDelete={(p) => void del(p)}
+            />
+          ),
+        },
+        {
+          id: 'playlist-workspace',
+          content: current ? (
+            noteGoLive ? (
+              <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', height: '100%' }}>
+                <div className="muted small go-live-note" data-go-live-note>
+                  Go live from the venue PC.
+                </div>
+                <div style={{ minHeight: 0 }}>{editor(current)}</div>
               </div>
-              <div style={{ minHeight: 0 }}>{editor(current)}</div>
-            </div>
+            ) : (
+              editor(current)
+            )
           ) : (
-            editor(current)
-          )
-        ) : (
-          <div className="center muted">Create a playlist to start building a service.</div>
-        )}
-      </div>
-    </div>
+            <div className="center muted">Create a playlist to start building a service.</div>
+          ),
+        },
+      ]}
+    />
   );
 }

@@ -3,6 +3,7 @@ import { formatClock } from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { Icon } from '../../components/Icons.tsx';
 import { cacheSummary, dotTitle, outputDot, outputIssues } from '../../lib/health.ts';
 import { hubStatus } from '../../lib/hubStatus.ts';
 import { useHubNow } from '../../hooks.ts';
@@ -82,21 +83,21 @@ export function TopBar() {
   };
   return (
     <div className={`topbar ${tone}`}>
-      <div className="col" style={{ gap: 2, minWidth: 160 }}>
-        <div className="row" style={{ gap: 6, alignItems: 'center' }}>
-          <span
-            className={`live-status-pill ${isLive ? 'live' : 'idle'}`}
-            data-live-status={isLive ? 'live' : 'idle'}
-          >
-            <span className={`dot sm ${isLive ? 'red' : 'grey'}`} />
-            {isLive ? 'ON AIR' : 'PREVIEW'}
-          </span>
-          <span className="muted small">{isLive ? 'LIVE' : 'Not live'}</span>
-        </div>
-        <b className="ellipsis" style={{ maxWidth: 240 }}>
-          {s.resolved?.playlist.name ?? '—'}
-        </b>
+      <div className="row" style={{ gap: 7, alignItems: 'center', minWidth: 0 }}>
+        <span
+          className={`live-status-pill ${isLive ? 'live' : 'idle'}`}
+          data-live-status={isLive ? 'live' : 'idle'}
+        >
+          <span className={`dot sm ${isLive ? 'red' : 'grey'}`} />
+          {isLive ? 'ON AIR' : 'STANDBY'}
+        </span>
+        {s.resolved?.playlist.name && (
+          <b className="ellipsis" style={{ maxWidth: 200, fontSize: 12 }}>
+            {s.resolved.playlist.name}
+          </b>
+        )}
       </div>
+      <span className="topbar-cell-sep" aria-hidden="true" />
       <span className="stat" title={hubText} data-hub-status>
         <span className={`dot ${hubDot}`} /> {hubText}
       </span>
@@ -104,37 +105,36 @@ export function TopBar() {
         <span className={`dot ${online ? 'green' : 'amber'}`} /> WAN
       </span>
       <span className="stat" title={`Service cache ${cache.ready}/${cache.total}`}>
-        <span className={`dot ${cacheDot}`} /> Cache {isLive ? `${Math.floor(cache.frac * 100)}%` : ''}
+        <span className={`dot ${cacheDot}`} /> Cache{isLive ? ` ${Math.floor(cache.frac * 100)}%` : ''}
       </span>
-      <span className="stat">
-        {outputs
-          .filter((o) => o.enabled)
-          .map((o) => {
-            const h = live.health[o.id];
-            const d = outputDot(h);
-            return (
-              <span
-                key={o.id}
-                className="row"
-                style={{ gap: 4 }}
-                title={dotTitle(h, o.name)}
-                onContextMenu={(e) => {
-                  openContextMenu(
-                    e,
-                    [
-                      { kind: 'label', label: o.name },
-                      { label: 'Open diagnostics…', onSelect: () => setUi({ showDiagnostics: true }) },
-                      { label: 'Configure outputs…', onSelect: () => navigate('#/settings/outputs') },
-                    ],
-                    { ariaLabel: `${o.name} status actions` },
-                  );
-                }}
-              >
-                <span className={`dot ${d}`} />
-                <span className="small">{o.name}</span>
-              </span>
-            );
-          })}
+      {enabled.length > 0 && <span className="topbar-cell-sep" aria-hidden="true" />}
+      <span className="stat" style={{ gap: 8 }}>
+        {enabled.map((o) => {
+          const h = live.health[o.id];
+          const d = outputDot(h);
+          return (
+            <span
+              key={o.id}
+              className="row"
+              style={{ gap: 4, cursor: 'default' }}
+              title={dotTitle(h, o.name)}
+              onContextMenu={(e) => {
+                openContextMenu(
+                  e,
+                  [
+                    { kind: 'label', label: o.name },
+                    { label: 'Open diagnostics…', onSelect: () => setUi({ showDiagnostics: true }) },
+                    { label: 'Configure outputs…', onSelect: () => navigate('#/settings/outputs') },
+                  ],
+                  { ariaLabel: `${o.name} status actions` },
+                );
+              }}
+            >
+              <span className={`dot ${d}`} />
+              <span>{o.name}</span>
+            </span>
+          );
+        })}
       </span>
       {notes.length > 0 && (
         <button
@@ -191,35 +191,38 @@ export function TopBar() {
       )}
       <span className="spacer" />
       <span className="clock">{formatClock(now, general.timeZone, general.clock24h)}</span>
+      <span className="topbar-cell-sep" aria-hidden="true" />
       <div className="topbar-actions-group">
         <button
           type="button"
-          className="big"
+          className="small"
           disabled={launch.busy}
           data-launch
           onClick={() => dispatch({ id: 'launchOutputs' })}
-          title="Ctrl+Shift+L"
+          title="Launch outputs (Ctrl+Shift+L)"
         >
+          <Icon name="external" size={12} />
           Launch outputs
         </button>
         <button
           type="button"
-          className="big"
+          className="small"
           disabled={launch.busy}
           data-launch
           onClick={() => dispatch({ id: 'relaunchOutputs' })}
-          title="Ctrl+Shift+R"
+          title="Relaunch outputs (Ctrl+Shift+R)"
         >
+          <Icon name="restart" size={12} />
           Relaunch
         </button>
       </div>
       {isLive && (
         <>
-          <span className="topbar-divider" />
+          <span className="topbar-cell-sep" aria-hidden="true" />
           <div className="topbar-danger-zone">
             <button
               type="button"
-              className="danger big"
+              className="danger small"
               onClick={async () => {
                 if (
                   await confirmDialog(
@@ -232,6 +235,7 @@ export function TopBar() {
                   controller()?.endService();
               }}
             >
+              <Icon name="power" size={12} />
               End service
             </button>
           </div>
@@ -239,11 +243,12 @@ export function TopBar() {
       )}
       <button
         type="button"
-        className="ghost"
+        className="ghost icon-btn"
         onClick={() => setUi({ showDiagnostics: true })}
         title="Diagnostics"
+        aria-label="Diagnostics"
       >
-        ⚙
+        <Icon name="activity" size={14} />
       </button>
     </div>
   );

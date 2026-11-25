@@ -8,6 +8,7 @@ import { installGlobalErrorLog } from './services/log.ts';
 import { browserSwEnv, registerServiceWorker } from './sw/register.ts';
 import './styles.css';
 import './ipad.css';
+import './pro-ui.css';
 // The compact layout's rules, every one under html[data-layout="compact"] (inert on the venue PC and the iPad).
 import './compact.css';
 

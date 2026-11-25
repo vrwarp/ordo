@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { SplitPane } from '../../components/SplitPane.tsx';
 import { useLive } from '../../state/live.ts';
 import { setUi, useUi } from '../../state/ui.ts';
 import { DegradedBanner } from './DegradedBanner.tsx';
@@ -9,11 +10,11 @@ import { ConflictDialog, GoLiveErrorDialog, LocalGoLiveDialog, PlacementDialog }
 import { PlaylistPane } from './PlaylistPane.tsx';
 import { ProgramView } from './ProgramView.tsx';
 import { SlideGrid } from './SlideGrid.tsx';
-import { LiveSpeakerNotesCard, StageTools } from './StageTools.tsx';
+import { StageTools } from './StageTools.tsx';
 import { TopBar } from './TopBar.tsx';
 import { useOperatorPlaylist } from './useOperatorPlaylist.ts';
 
-/** The operator view (prd/02 Layout). */
+/** The operator view (prd/02 Layout, design/30 §5.1). */
 export function LiveView() {
   const op = useOperatorPlaylist();
   const { followLive, viewItemIndex } = useUi();
@@ -30,15 +31,35 @@ export function LiveView() {
     <div className="op">
       <TopBar />
       <DegradedBanner />
-      <div className="op-main">
-        <PlaylistPane op={op} viewItem={viewItem} />
-        <SlideGrid op={op} viewItem={viewItem} />
-        <div className="pane">
-          <LiveSpeakerNotesCard />
-          <ProgramView />
-          <StageTools />
-        </div>
-      </div>
+      <SplitPane
+        storageKey="live-main"
+        className="op-main-split"
+        panels={[
+          {
+            id: 'rundown',
+            size: 256,
+            min: 200,
+            max: 420,
+            content: <PlaylistPane op={op} viewItem={viewItem} />,
+          },
+          {
+            id: 'slides',
+            content: <SlideGrid op={op} viewItem={viewItem} />,
+          },
+          {
+            id: 'program',
+            size: 336,
+            min: 270,
+            max: 480,
+            content: (
+              <div className="op-right-rail">
+                <ProgramView />
+                <StageTools />
+              </div>
+            ),
+          },
+        ]}
+      />
       <LayerBar op={op} />
       <PlacementDialog />
       <ConflictDialog />

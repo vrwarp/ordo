@@ -12,9 +12,11 @@ import {
 } from '@ordo/domain';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { Icon, playlistItemIconName } from '../../components/Icons.tsx';
 import { InlineArrangementStrip } from '../../components/InlineArrangementStrip.tsx';
 import { armDot, waitingForLive } from '../../lib/health.ts';
-import { KIND_ICON, itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
+import { itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
+import { sectionTone } from '../../lib/sectionColors.ts';
 import { type CueGroup, groupCues, sectionGoTarget } from '../../lib/sections.ts';
 import { slideMediaTags } from '../../lib/slideMedia.ts';
 import { controller, dispatch } from '../../services/controller.ts';
@@ -179,9 +181,11 @@ function PlaylistItemSection({
   headerRef: (el: HTMLElement | null) => void;
 }) {
   const [showSettings, setShowSettings] = useState(false);
+  const [showArrange, setShowArrange] = useState(false);
   const groups: CueGroup[] = useMemo(() => groupCues(cues), [cues]);
   const presentation = item.kind === 'presentation' ? op.presentation(item.presentationId) : undefined;
   const isSong = presentation?.kind === 'song';
+  const hasCustomOrder = item.kind === 'presentation' && item.sections !== undefined;
   const subtitle = itemSubtitle(item, op);
   const ctl = controller();
   const skipped = item.skipped === true;
@@ -212,12 +216,12 @@ function PlaylistItemSection({
       style={skipped ? { opacity: 0.6 } : undefined}
     >
       <div className={`playlist-item-head ${isLiveItem ? 'live-item' : ''}`}>
-        <div className="row" style={{ alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
-          <span className="muted small" style={{ minWidth: 18 }}>
+        <div className="row" style={{ alignItems: 'center', gap: 7, flex: 1, minWidth: 0 }}>
+          <span className="muted small" style={{ minWidth: 16, fontVariantNumeric: 'tabular-nums' }}>
             {itemIndex + 1}
           </span>
           <span className="kind-badge" title={item.kind}>
-            {KIND_ICON[item.kind]}
+            <Icon name={playlistItemIconName(item.kind, presentation?.kind)} size={12} />
           </span>
           <span className="bold ellipsis" style={skipped ? { textDecoration: 'line-through' } : undefined}>
             {itemTitle(item, op)}
@@ -230,65 +234,96 @@ function PlaylistItemSection({
             </span>
           )}
         </div>
-        <div className="row" style={{ alignItems: 'center', gap: 6 }}>
+        <div className="row" style={{ alignItems: 'center', gap: 4 }}>
+          {isSong && presentation && presentation.sections.length > 0 && item.kind === 'presentation' && (
+            <button
+              type="button"
+              className={showArrange || hasCustomOrder ? 'on small' : 'ghost small'}
+              onClick={() => setShowArrange((v) => !v)}
+              title="Show or hide song section order"
+              data-arrange-strip-toggle={item.id}
+            >
+              <Icon name="arrange" size={12} />
+              Arrange
+            </button>
+          )}
           <button
             type="button"
-            className={showSettings ? 'primary small' : 'ghost small'}
+            className={showSettings ? 'primary icon-btn' : 'ghost icon-btn'}
             onClick={() => setShowSettings((v) => !v)}
             title={liveHere ? 'View item settings (read-only while live)' : 'Item settings'}
             aria-label={`Settings for ${itemTitle(item, op)}`}
             data-item-settings-toggle={item.id}
           >
-            ⚙
+            <Icon name="sliders" size={13} />
           </button>
           {presentation && (
             <a className="btn small" href={`#/edit/${presentation.id}`}>
+              <Icon name="edit" size={11} />
               Edit
             </a>
           )}
         </div>
       </div>
 
-      {isSong && presentation && presentation.sections.length > 0 && item.kind === 'presentation' && (
-        <InlineArrangementStrip
-          presentation={presentation}
-          arrangementId={item.arrangementId}
-          sectionsOverride={item.sections}
-          liveMode={liveHere}
-          locked={liveHere && isActiveItem}
-          onArrangeOpenChange={onArrangeOpenChange}
-          onChangeSections={(sections) => {
-            if (liveHere) {
-              ctl?.arrangeItem(item.id, sections);
-            } else {
-              onUpdatePreviewItem((it) => {
-                if (it.kind !== 'presentation') return it;
-                if (sections === null) {
-                  const { sections: _s, ...rest } = it;
-                  return rest;
-                }
-                return { ...it, sections };
-              });
-            }
-          }}
-        />
-      )}
+      {isSong &&
+        presentation &&
+        presentation.sections.length > 0 &&
+        item.kind === 'presentation' &&
+        (showArrange || hasCustomOrder) && (
+          <InlineArrangementStrip
+            presentation={presentation}
+            arrangementId={item.arrangementId}
+            sectionsOverride={item.sections}
+            liveMode={liveHere}
+            locked={liveHere && isActiveItem}
+            onArrangeOpenChange={onArrangeOpenChange}
+            onChangeSections={(sections) => {
+              if (liveHere) {
+                ctl?.arrangeItem(item.id, sections);
+              } else {
+                onUpdatePreviewItem((it) => {
+                  if (it.kind !== 'presentation') return it;
+                  if (sections === null) {
+                    const { sections: _s, ...rest } = it;
+                    return rest;
+                  }
+                  return { ...it, sections };
+                });
+              }
+            }}
+          />
+        )}
 
       {showSettings && (
         <div
-          className="card"
-          style={{ margin: '8px 0 12px', border: '1px solid var(--line)' }}
+          style={{
+            margin: '4px 0 8px',
+            border: '1px solid var(--line)',
+            borderRadius: 3,
+            background: 'var(--bg2)',
+          }}
           data-item-settings-popover={item.id}
         >
           <div
             className="row"
-            style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}
+            style={{
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '5px 8px',
+              borderBottom: '1px solid var(--line)',
+            }}
           >
             <span className="muted small">
               {liveHere ? 'Item settings (read-only while live)' : 'Item settings'}
             </span>
-            <button type="button" className="ghost small" onClick={() => setShowSettings(false)}>
-              Close
+            <button
+              type="button"
+              className="ghost icon-btn"
+              onClick={() => setShowSettings(false)}
+              aria-label="Close"
+            >
+              <Icon name="close" size={12} />
             </button>
           </div>
           <ItemSettings
@@ -300,214 +335,93 @@ function PlaylistItemSection({
         </div>
       )}
 
-      {groups.map((g) => (
-        <div key={g.pos}>
-          {g.pos >= 0 && (
-            <div
-              className="section-head"
-              onContextMenu={(e) => {
-                const target = sectionGoTarget(g);
-                openContextMenu(
-                  e,
-                  [
-                    {
-                      label: `Go to ${g.label}`,
-                      disabled: !liveHere || target === undefined,
-                      onSelect: () => {
-                        if (liveHere && target !== undefined) ctl?.go(target);
+      <div
+        className="slide-grid"
+        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${thumbSize}px, 1fr))` }}
+      >
+        {groups.flatMap((g) => {
+          const tone = g.pos >= 0 ? sectionTone(g.label, g.short) : undefined;
+          const jumpToSection = () => {
+            const i = sectionGoTarget(g);
+            if (!liveHere || i === undefined) return;
+            if (isLiveItem || clickToGo) ctl?.go(i);
+            else ctl?.select(i);
+          };
+          const doubleJumpToSection = () => {
+            const i = sectionGoTarget(g);
+            if (liveHere && i !== undefined) ctl?.go(i);
+          };
+          const openSectionMenu = (e: React.MouseEvent) => {
+            e.stopPropagation();
+            const target = sectionGoTarget(g);
+            openContextMenu(
+              e,
+              [
+                {
+                  label: `Go to ${g.label}`,
+                  disabled: !liveHere || target === undefined,
+                  onSelect: () => {
+                    if (liveHere && target !== undefined) ctl?.go(target);
+                  },
+                },
+                {
+                  label: `Arm ${g.label}`,
+                  disabled: !liveHere || target === undefined,
+                  onSelect: () => {
+                    if (liveHere && target !== undefined) ctl?.select(target);
+                  },
+                },
+                ...(presentation
+                  ? [
+                      { kind: 'separator' as const },
+                      {
+                        label: 'Edit presentation…',
+                        onSelect: () => navigate(`#/edit/${presentation.id}`),
                       },
-                    },
-                    {
-                      label: `Arm ${g.label}`,
-                      disabled: !liveHere || target === undefined,
-                      onSelect: () => {
-                        if (liveHere && target !== undefined) ctl?.select(target);
-                      },
-                    },
-                    ...(presentation
-                      ? [
-                          { kind: 'separator' as const },
-                          {
-                            label: 'Edit presentation…',
-                            onSelect: () => navigate(`#/edit/${presentation.id}`),
-                          },
-                        ]
-                      : []),
-                  ],
-                  { ariaLabel: `Section ${g.label} actions` },
-                );
-              }}
-            >
-              <button
-                type="button"
-                className="small"
-                disabled={!liveHere}
-                onClick={() => {
-                  const i = sectionGoTarget(g);
-                  if (!liveHere || i === undefined) return;
-                  // Volunteer safety: single-click fires GO immediately only on the currently ON AIR item
-                  // (or when Click = GO is enabled); on other items single-click arms to avoid accidental output.
-                  if (isLiveItem || clickToGo) ctl?.go(i);
-                  else ctl?.select(i);
-                }}
-                onDoubleClick={() => {
-                  const i = sectionGoTarget(g);
-                  if (liveHere && i !== undefined) ctl?.go(i);
-                }}
-                title={
-                  !liveHere
-                    ? 'Go live to jump to sections'
-                    : isLiveItem || clickToGo
-                      ? 'Go to the first slide of this section'
-                      : 'Click to arm this section; double-click to go live'
-                }
-              >
-                {g.short || g.label}
-              </button>
-              <span className="muted">{g.label}</span>
-            </div>
-          )}
-          <div
-            className="slide-grid"
-            style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${thumbSize}px, 1fr))` }}
-          >
-            {g.cues.map((c) => {
-              const marks = marksFor(c);
-              if (c.kind === 'slide') {
-                const own = slideOf(c);
-                const slide = c.backgroundOverride && own ? withoutBackdrops(own) : own;
-                const tags = slideMediaTags(slide, op.media);
-                const hidden = isHiddenCue(c);
-                const hiddenByService =
-                  item.kind === 'presentation' &&
-                  Boolean(c.slideId && item.hiddenSlides?.includes(c.slideId));
-                const notesText = slide?.notes?.trim() ?? '';
-                const hasNotes = notesText.length > 0;
-                const slideText = slide ? firstText(slide).trim() : '';
-                const editObj = liveHere && !marks.live ? editableTextObject(own) : undefined;
-                return (
-                  <SlideThumb
-                    key={c.index}
-                    slide={slide}
-                    isSong={isSong}
-                    bgMediaId={c.backgroundMediaId}
-                    media={op.media}
-                    label={c.label}
-                    number={(c.slideIndexInSection ?? 0) + 1}
-                    marks={marks}
-                    width={thumbSize}
-                    hidden={hidden}
-                    onClick={() => onClick(c)}
-                    onDoubleClick={() => onDouble(c)}
-                    onContextMenu={(e) => {
-                      openContextMenu(
-                        e,
-                        [
-                          {
-                            label: 'Go live (Take)',
-                            disabled: !liveHere,
-                            onSelect: () => ctl?.go(c.index),
-                          },
-                          {
-                            label: 'Arm (Pre-load)',
-                            disabled: !liveHere,
-                            onSelect: () => ctl?.select(c.index),
-                          },
-                          ...(c.slideId && item.kind === 'presentation'
-                            ? [
-                                { kind: 'separator' as const },
-                                {
-                                  label: hiddenByService
-                                    ? 'Include slide in this service'
-                                    : 'Skip slide in this service',
-                                  onSelect: () => toggleHiddenSlide(c.slideId!),
-                                },
-                              ]
-                            : []),
-                          ...(editObj && c.presentationId && c.slideId
-                            ? [
-                                {
-                                  label: 'Edit words (typo hotfix)…',
-                                  onSelect: () =>
-                                    onStartHotfix({
-                                      presentationId: c.presentationId!,
-                                      slideId: c.slideId!,
-                                      objectId: editObj.id,
-                                      label: c.label,
-                                      initialText: editObj.text,
-                                    }),
-                                },
-                              ]
-                            : []),
-                          ...(marks.live
-                            ? [
-                                { kind: 'separator' as const },
-                                {
-                                  label: 'Clear slide layer',
-                                  shortcut: 'Esc',
-                                  onSelect: () => dispatch({ id: 'clearSlide' }),
-                                },
-                              ]
-                            : []),
-                          ...(slideText
-                            ? [
-                                { kind: 'separator' as const },
-                                {
-                                  label: 'Copy slide text',
-                                  onSelect: () => void navigator.clipboard?.writeText?.(slideText),
-                                },
-                              ]
-                            : []),
-                          ...(presentation
-                            ? [
-                                { kind: 'separator' as const },
-                                {
-                                  label: 'Edit presentation…',
-                                  onSelect: () => navigate(`#/edit/${presentation.id}`),
-                                },
-                              ]
-                            : []),
-                        ],
-                        { ariaLabel: `Slide ${c.label} actions` },
-                      );
-                    }}
-                    footer={
-                      tags.length > 0 || hidden || hasNotes ? (
-                        <>
-                          {hidden && (
-                            <span className="tag" title={HIDDEN_TITLE} data-hidden-slide>
-                              {hiddenByService ? 'skipped' : 'hidden'}
-                            </span>
-                          )}
-                          {hasNotes && (
-                            <span
-                              className="tag notes"
-                              title={`Speaker notes: ${notesText.slice(0, 160)}`}
-                              data-slide-notes
-                            >
-                              notes
-                            </span>
-                          )}
-                          {tags.map((t) => (
-                            <span key={t.kind} className={t.notice ? 'tag amber' : 'tag'} title={t.title}>
-                              {t.kind}
-                            </span>
-                          ))}
-                        </>
-                      ) : undefined
-                    }
-                  />
-                );
-              }
+                    ]
+                  : []),
+              ],
+              { ariaLabel: `Section ${g.label} actions` },
+            );
+          };
+          return g.cues.map((c, idxInGroup) => {
+            const marks = marksFor(c);
+            const band =
+              tone && g.pos >= 0
+                ? {
+                    label: g.label,
+                    short: g.short,
+                    tone,
+                    isFirst: idxInGroup === 0,
+                    onJump: liveHere ? jumpToSection : undefined,
+                    onDoubleJump: liveHere ? doubleJumpToSection : undefined,
+                    onContextMenu: openSectionMenu,
+                  }
+                : undefined;
+            if (c.kind === 'slide') {
+              const own = slideOf(c);
+              const slide = c.backgroundOverride && own ? withoutBackdrops(own) : own;
+              const tags = slideMediaTags(slide, op.media);
+              const hidden = isHiddenCue(c);
+              const hiddenByService =
+                item.kind === 'presentation' && Boolean(c.slideId && item.hiddenSlides?.includes(c.slideId));
+              const notesText = slide?.notes?.trim() ?? '';
+              const hasNotes = notesText.length > 0;
+              const slideText = slide ? firstText(slide).trim() : '';
+              const editObj = liveHere && !marks.live ? editableTextObject(own) : undefined;
               return (
                 <SlideThumb
                   key={c.index}
-                  bgMediaId={c.mediaId}
+                  slide={slide}
+                  isSong={isSong}
+                  bgMediaId={c.backgroundMediaId}
                   media={op.media}
-                  isSong={false}
                   label={c.label}
+                  number={(c.slideIndexInSection ?? 0) + 1}
                   marks={marks}
                   width={thumbSize}
+                  hidden={hidden}
+                  sectionBand={band}
                   onClick={() => onClick(c)}
                   onDoubleClick={() => onDouble(c)}
                   onContextMenu={(e) => {
@@ -524,26 +438,136 @@ function PlaylistItemSection({
                           disabled: !liveHere,
                           onSelect: () => ctl?.select(c.index),
                         },
-                        ...(marks.live && c.kind === 'media'
+                        ...(c.slideId && item.kind === 'presentation'
                           ? [
                               { kind: 'separator' as const },
                               {
-                                label: c.mediaKind === 'audio' ? 'Clear audio' : 'Clear media layer',
-                                onSelect: () => ctl?.clear(c.mediaKind === 'audio' ? 'audio' : 'media'),
+                                label: hiddenByService
+                                  ? 'Include slide in this service'
+                                  : 'Skip slide in this service',
+                                onSelect: () => toggleHiddenSlide(c.slideId!),
+                              },
+                            ]
+                          : []),
+                        ...(editObj && c.presentationId && c.slideId
+                          ? [
+                              {
+                                label: 'Edit words (typo hotfix)…',
+                                onSelect: () =>
+                                  onStartHotfix({
+                                    presentationId: c.presentationId!,
+                                    slideId: c.slideId!,
+                                    objectId: editObj.id,
+                                    label: c.label,
+                                    initialText: editObj.text,
+                                  }),
+                              },
+                            ]
+                          : []),
+                        ...(marks.live
+                          ? [
+                              { kind: 'separator' as const },
+                              {
+                                label: 'Clear slide layer',
+                                shortcut: 'Esc',
+                                onSelect: () => dispatch({ id: 'clearSlide' }),
+                              },
+                            ]
+                          : []),
+                        ...(slideText
+                          ? [
+                              { kind: 'separator' as const },
+                              {
+                                label: 'Copy slide text',
+                                onSelect: () => void navigator.clipboard?.writeText?.(slideText),
+                              },
+                            ]
+                          : []),
+                        ...(presentation
+                          ? [
+                              { kind: 'separator' as const },
+                              {
+                                label: 'Edit presentation…',
+                                onSelect: () => navigate(`#/edit/${presentation.id}`),
                               },
                             ]
                           : []),
                       ],
-                      { ariaLabel: `Cue ${c.label} actions` },
+                      { ariaLabel: `Slide ${c.label} actions` },
                     );
                   }}
-                  footer={<span className="tag">{c.kind === 'media' ? c.mediaKind : c.kind}</span>}
+                  footer={
+                    tags.length > 0 || hidden || hasNotes ? (
+                      <>
+                        {hidden && (
+                          <span className="tag" title={HIDDEN_TITLE} data-hidden-slide>
+                            {hiddenByService ? 'skipped' : 'hidden'}
+                          </span>
+                        )}
+                        {hasNotes && (
+                          <span
+                            className="tag notes"
+                            title={`Speaker notes: ${notesText.slice(0, 160)}`}
+                            data-slide-notes
+                          >
+                            notes
+                          </span>
+                        )}
+                        {tags.map((t) => (
+                          <span key={t.kind} className={t.notice ? 'tag amber' : 'tag'} title={t.title}>
+                            {t.kind}
+                          </span>
+                        ))}
+                      </>
+                    ) : undefined
+                  }
                 />
               );
-            })}
-          </div>
-        </div>
-      ))}
+            }
+            return (
+              <SlideThumb
+                key={c.index}
+                bgMediaId={c.mediaId}
+                media={op.media}
+                isSong={false}
+                label={c.label}
+                marks={marks}
+                width={thumbSize}
+                onClick={() => onClick(c)}
+                onDoubleClick={() => onDouble(c)}
+                onContextMenu={(e) => {
+                  openContextMenu(
+                    e,
+                    [
+                      {
+                        label: 'Go live (Take)',
+                        disabled: !liveHere,
+                        onSelect: () => ctl?.go(c.index),
+                      },
+                      {
+                        label: 'Arm (Pre-load)',
+                        disabled: !liveHere,
+                        onSelect: () => ctl?.select(c.index),
+                      },
+                      ...(marks.live && c.kind === 'media'
+                        ? [
+                            { kind: 'separator' as const },
+                            {
+                              label: c.mediaKind === 'audio' ? 'Clear audio' : 'Clear media layer',
+                              onSelect: () => ctl?.clear(c.mediaKind === 'audio' ? 'audio' : 'media'),
+                            },
+                          ]
+                        : []),
+                    ],
+                    { ariaLabel: `Cue ${c.label} actions` },
+                  );
+                }}
+                footer={<span className="tag">{c.kind === 'media' ? c.mediaKind : c.kind}</span>}
+              />
+            );
+          });
+        })}
+      </div>
       {cues.length === 0 && (
         <div className="muted small" style={{ padding: '6px 4px 12px' }}>
           Nothing to show for this item.
@@ -788,7 +812,9 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
       style={{ display: 'flex', flexDirection: 'column' }}
     >
       <div className="pane-head">
-        <b className="grow ellipsis">{op.playlist?.name ?? 'Playlist'}</b>
+        <b className="grow ellipsis" style={{ fontSize: 12.5 }}>
+          {op.playlist?.name ?? 'Playlist'}
+        </b>
         {showBackToOnAir && (
           <button
             type="button"
@@ -800,10 +826,11 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
             }}
             data-back-to-on-air
           >
-            Back to ON AIR ↑
+            <Icon name="arrowUp" size={11} />
+            Back to ON AIR
           </button>
         )}
-        <label className="check small" title="Single click goes live instead of arming">
+        <label className="check small" title="Single click goes live instead of arming" style={{ gap: 5 }}>
           <input
             type="checkbox"
             checked={clickToGo}
@@ -811,7 +838,7 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
           />
           Click = GO
         </label>
-        <label className="check small">
+        <label className="check small" style={{ gap: 5 }}>
           <input
             type="checkbox"
             checked={followLive}
@@ -822,21 +849,17 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
         <input
           type="range"
           min={140}
-          max={360}
+          max={320}
           step={20}
           value={thumbSize}
           onChange={(e) => setUi({ thumbSize: Number(e.target.value) })}
           title="Thumbnail size"
-          style={{ width: 90 }}
+          aria-label="Thumbnail size"
+          style={{ width: 82 }}
         />
       </div>
 
       <div className="slides">
-        {!liveHere && (
-          <div className="banner blue" style={{ marginBottom: 12 }}>
-            Preview. Arrange songs, adjust settings (⚙), or add items on the left, then press Go live.
-          </div>
-        )}
         {hotfix && liveHere && (
           <SlideTextHotfixCard
             target={hotfix}
