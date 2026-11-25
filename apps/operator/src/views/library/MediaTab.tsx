@@ -425,7 +425,7 @@ export function MediaTab() {
         </label>
         <button type="button" className="primary small" onClick={() => fileInputRef.current?.click()}>
           <Icon name="upload" size={12} />
-          Import media
+          {coarse ? 'Choose video, images or audio' : 'Import media'}
         </button>
       </div>
 
@@ -453,7 +453,11 @@ export function MediaTab() {
                 >
                   <div
                     className="media-tile-thumb"
-                    style={still ? { backgroundImage: `url(${fileUrl(still)})` } : undefined}
+                    style={
+                      still
+                        ? { background: `#07080a center/cover no-repeat url(${fileUrl(still)})` }
+                        : undefined
+                    }
                   >
                     {!still && <Icon name={m.kind === 'audio' ? 'audio' : 'video'} size={22} />}
                     <div className="media-tile-badges">
@@ -473,7 +477,7 @@ export function MediaTab() {
                       )}
                     </div>
                   </div>
-                  <div className="media-tile-cap">
+                  <span className="col media-tile-cap">
                     <b className="ellipsis">{m.name}</b>
                     <span className="muted ellipsis" style={{ fontSize: 10 }}>
                       {m.kind}
@@ -485,7 +489,7 @@ export function MediaTab() {
                         </span>
                       )}
                     </span>
-                  </div>
+                  </span>
                 </div>
               );
             })}

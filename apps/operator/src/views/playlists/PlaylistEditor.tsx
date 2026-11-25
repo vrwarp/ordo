@@ -19,6 +19,7 @@ import { InlineArrangementStrip } from '../../components/InlineArrangementStrip.
 import { Menu } from '../../components/Menu.tsx';
 import { PlaylistItemRowContent } from '../../components/PlaylistItemRow.tsx';
 import { PlaylistReadinessStrip } from '../../components/PlaylistReadinessStrip.tsx';
+import { useCoarsePointer } from '../../components/pointer.ts';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { SplitPane } from '../../components/SplitPane.tsx';
 import { moveItem } from '../../lib/arrangement.ts';
@@ -666,6 +667,82 @@ export function PlaylistEditor(props: {
   ) : (
     <div className="pl-pane center muted small">Select an item in the rundown to preview and inspect.</div>
   );
+
+  const coarse = useCoarsePointer();
+
+  if (coarse) {
+    return (
+      <div
+        className={`pl-editor ${props.locked ? 'locked' : ''}`}
+        style={{ display: 'grid', height: '100%', minHeight: 0 }}
+      >
+        <div className="col" style={{ minHeight: 0, overflow: 'auto', padding: 10, gap: 10 }}>
+          {rundownPane}
+          {selected && (
+            <div style={{ border: '1px solid var(--line)', borderRadius: 4, overflow: 'hidden' }}>
+              <SelectedItemSlidePreview
+                item={selected}
+                playlistName={draft.name}
+                locked={props.locked}
+                presentation={selectedPres}
+                op={op}
+                onChangeSections={(sections) =>
+                  setItem(selected.id, (it) => {
+                    if (it.kind !== 'presentation') return it;
+                    if (sections === null) {
+                      const { sections: _s, ...rest } = it;
+                      return rest;
+                    }
+                    return { ...it, sections };
+                  })
+                }
+                onToggleHiddenSlide={(slideId) =>
+                  setItem(selected.id, (it) => {
+                    if (it.kind !== 'presentation') return it;
+                    const cur = it.hiddenSlides ?? [];
+                    const next = cur.includes(slideId) ? cur.filter((x) => x !== slideId) : [...cur, slideId];
+                    if (!next.length) {
+                      const { hiddenSlides: _h, ...rest } = it;
+                      return rest;
+                    }
+                    return { ...it, hiddenSlides: next };
+                  })
+                }
+                onPromoteToSong={async (sectionIds) => {
+                  if (!selectedPres) return;
+                  const arr: Arrangement = { id: newId(), name: draft.name, sectionIds };
+                  if (await saveArrangement(selectedPres.id, arr)) {
+                    setItem(selected.id, (it) => {
+                      if (it.kind !== 'presentation') return it;
+                      const { sections: _s, ...rest } = it;
+                      return { ...rest, arrangementId: arr.id };
+                    });
+                    toast(`Saved "${arr.name}" to ${selectedPres.title}`);
+                  }
+                }}
+              />
+            </div>
+          )}
+          {selected && (
+            <div style={{ border: '1px solid var(--line)', borderRadius: 4, background: 'var(--bg2)' }}>
+              <ItemSettings
+                key={selected.id}
+                item={selected}
+                disabled={props.locked}
+                onChange={(it) => setItem(selected.id, () => it)}
+                onSaveArrangement={saveArrangement}
+              />
+            </div>
+          )}
+        </div>
+        {!props.locked && (
+          <div className="pl-add" style={{ minHeight: 0, overflow: 'hidden' }}>
+            <AddItemsPanel onAdd={addItems} />
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={`pl-editor ${props.locked ? 'locked' : ''}`} style={{ height: '100%', minHeight: 0 }}>

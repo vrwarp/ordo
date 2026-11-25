@@ -394,7 +394,7 @@ export function Nav({
     dirty = false,
     isOnAir = false,
   ) => (
-    <a href={href} className={active ? 'active' : ''}>
+    <a href={href} className={active ? 'active' : ''} aria-label={isOnAir ? `● ${label}` : undefined}>
       {isOnAir ? <span className="dot sm red" aria-hidden="true" /> : <Icon name={icon} size={13} />}
       <span>{label}</span>
       {dirty && (
@@ -426,6 +426,18 @@ export function Nav({
     </span>
   );
 
+  const signOutBtn = (
+    <button
+      type="button"
+      className="ghost icon-btn"
+      onClick={() => void guardedLogout()}
+      title="Sign out"
+      aria-label="Sign out"
+    >
+      <Icon name="logout" size={13} />
+    </button>
+  );
+
   if (profile === 'edit')
     return (
       <>
@@ -452,6 +464,7 @@ export function Nav({
             </span>
           )}
           <SessionMenu role={role} editDevice={role === 'operate'} />
+          {signOutBtn}
         </nav>
         {demoOpen && <DemoDialog onClose={() => setDemoOpen(false)} />}
       </>
@@ -473,6 +486,7 @@ export function Nav({
         <UnsavedNavControl />
         {offline && <span className="tag amber">offline: hub unreachable</span>}
         <SessionMenu role={role} />
+        {signOutBtn}
       </nav>
       {demoOpen && <DemoDialog onClose={() => setDemoOpen(false)} />}
     </>

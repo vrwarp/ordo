@@ -107,17 +107,21 @@ export const SlideThumb = memo(function SlideThumb(props: {
                 }}
                 title={`Jump to ${band.label}`}
               >
-                {band.short && <span className="sec-badge">{band.short}</span>}
-                <span className="ellipsis">{band.label}</span>
+                <span className="sec-badge">{band.short || band.label}</span>
+                <span className="ellipsis" style={{ fontWeight: 500, opacity: 0.92 }}>
+                  {props.label}
+                </span>
               </button>
             ) : (
               <span className="row ellipsis grow" style={{ gap: 4, alignItems: 'center' }}>
-                {band.short && <span className="sec-badge">{band.short}</span>}
-                <span className="ellipsis">{band.label}</span>
+                <span className="sec-badge">{band.short || band.label}</span>
+                <span className="ellipsis" style={{ fontWeight: 500, opacity: 0.92 }}>
+                  {props.label}
+                </span>
               </span>
             )
           ) : (
-            <span className="ellipsis grow" style={{ opacity: 0.85, fontWeight: 500 }}>
+            <span className="ellipsis grow" style={{ opacity: 0.88, fontWeight: 500 }}>
               {props.label}
             </span>
           )}
