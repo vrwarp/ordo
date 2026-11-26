@@ -326,4 +326,5 @@ export const DEFAULT_GENERAL: GeneralSettings = {
   clock24h: false,
   defaultLinesPerSlide: 2,
   defaultPreRollMs: 33,
+  clientVideoTranscode: true,
 };

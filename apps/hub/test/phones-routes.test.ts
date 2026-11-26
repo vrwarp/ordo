@@ -71,6 +71,7 @@ const LIBRARY_API: Row[] = [
   ['PUT', '/api/v1/media/:id', 'edit', 'light'],
   ['DELETE', '/api/v1/media/:id', 'edit', 'full'],
   ['POST', '/api/v1/media/:id/retry', 'edit', 'full'],
+  ['PUT', '/api/v1/media/:id/trim', 'edit', 'full'],
   ['PUT', '/api/v1/media/:id/still', 'edit', 'light'],
   ['POST', '/api/v1/media/uploads', 'edit', 'light'],
   ['GET', '/api/v1/media/uploads/:id', 'edit', 'light'],

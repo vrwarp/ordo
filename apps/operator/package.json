@@ -23,6 +23,7 @@
     "zustand": "^5.0.16",
     "dexie": "^4.4.7",
     "konva": "^10.9.1",
+    "mediabunny": "^1.66.5",
     "react-konva": "^19.3.2",
     "@ordo/client": "workspace:*"
   },

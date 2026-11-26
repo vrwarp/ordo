@@ -260,10 +260,10 @@ describe('media pickers take their kinds only (design/27 §11 item 6)', () => {
   it('limits the file chooser', () => {
     expect(mediaAccept(['image'])).toBe('image/*,.gif,.jpg,.jpeg,.png,.webp,.svg');
     expect(mediaAccept(['image'])).not.toMatch(/video|mp4|mov/);
-    expect(mediaAccept(['video'])).toBe('video/*,.mov,.mp4,.m4v,.webm');
+    expect(mediaAccept(['video'])).toBe('video/*,.mov,.mp4,.m4v,.webm,.mkv,.avi,.wmv,.asf,.mpg,.mpeg,.vob');
     expect(mediaAccept(['audio'])).toMatch(/^audio\/\*,/);
     expect(mediaAccept(['video', 'image'])).toBe(
-      'video/*,image/*,.mov,.mp4,.m4v,.webm,.gif,.jpg,.jpeg,.png,.webp,.svg',
+      'video/*,image/*,.mov,.mp4,.m4v,.webm,.mkv,.avi,.wmv,.asf,.mpg,.mpeg,.vob,.gif,.jpg,.jpeg,.png,.webp,.svg',
     );
   });
 

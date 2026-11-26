@@ -79,6 +79,11 @@ export function GeneralPage() {
         max={500}
         onChange={(defaultPreRollMs) => setDraft({ ...draft, defaultPreRollMs })}
       />
+      <Check
+        label="Prepare videos in this browser before uploading (faster uploads, less hub load)"
+        value={draft.clientVideoTranscode ?? true}
+        onChange={(clientVideoTranscode) => setDraft({ ...draft, clientVideoTranscode })}
+      />
       <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onRevert={revert} />
     </div>
   );

@@ -1,4 +1,4 @@
-import { ApiFailure, api, fileUrl } from '@ordo/client';
+import { ApiFailure, api, DEMO, fileUrl } from '@ordo/client';
 import { formatDuration, type Media, type MidiTrigger } from '@ordo/domain';
 import { PreviewPlayer } from '@ordo/audio';
 import { useMemo, useRef, useState } from 'react';
@@ -13,6 +13,7 @@ import { useCoarsePointer } from '../../components/pointer.ts';
 import { SplitPane } from '../../components/SplitPane.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLockedIds } from '../../hooks.ts';
+import { mediaAccept } from '../../lib/mediaKinds.ts';
 import {
   isPresentationPicture,
   mediaInUseText,
@@ -21,11 +22,20 @@ import {
 } from '../../lib/mediaUse.ts';
 import { useSearch } from '../../services/search.ts';
 import { svgNote, tileHash } from '../../services/thumbs.ts';
-import { uploadMedia } from '../../services/upload.ts';
+import { type UploadPhase, uploadMedia } from '../../services/upload.ts';
+import { canTrimMedia, formatTrimMs } from '../../lib/mediaTrim.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
 import { errorText, toast } from '../../state/toasts.ts';
+import type { MediaTrimDialog as MediaTrimDialogType } from './MediaTrimDialog.tsx';
 
-type UploadRow = { id: number; name: string; frac: number; error?: string; done?: boolean };
+type UploadRow = {
+  id: number;
+  name: string;
+  frac: number;
+  phase?: UploadPhase;
+  error?: string;
+  done?: boolean;
+};
 export const useUploads = create<{ list: UploadRow[] }>(() => ({ list: [] }));
 let uploadSeq = 0;
 
@@ -37,10 +47,17 @@ export async function uploadFiles(files: File[], opts: { isBackground?: boolean 
     const set = (patch: Partial<UploadRow>) =>
       useUploads.setState((s) => ({ list: s.list.map((r) => (r.id === id ? { ...r, ...patch } : r)) }));
     useUploads.setState((s) => ({
-      list: [...s.list.filter((r) => !r.done).slice(-20), { id, name: f.name, frac: 0 }],
+      list: [...s.list.filter((r) => !r.done).slice(-20), { id, name: f.name, frac: 0, phase: 'uploading' }],
     }));
     try {
-      const m = await uploadMedia(f, opts, (frac) => set({ frac }));
+      const m = await uploadMedia(
+        f,
+        {
+          ...opts,
+          onPhase: (phase, frac) => set({ phase, frac }),
+        },
+        (frac) => set({ frac }),
+      );
       upsertLocal('media', m);
       out.push(m);
       set({ frac: 1, done: true });
@@ -70,8 +87,14 @@ export function UploadProgress() {
               }}
             />
           </div>
-          <span className="muted" style={{ width: 120 }}>
-            {r.error ? 'failed' : r.done ? 'uploaded' : `${Math.round(r.frac * 100)}%`}
+          <span className="muted" style={{ width: 132 }}>
+            {r.error
+              ? 'failed'
+              : r.done
+                ? 'uploaded'
+                : r.phase === 'transcoding'
+                  ? `preparing ${Math.round(r.frac * 100)}%`
+                  : `${Math.round(r.frac * 100)}%`}
           </span>
         </div>
       ))}
@@ -146,8 +169,7 @@ export function DropZone(props: {
   );
 }
 
-export const MEDIA_ACCEPT =
-  'video/*,image/*,audio/*,.mov,.mp4,.m4v,.webm,.gif,.jpg,.jpeg,.png,.webp,.wav,.mp3,.aac,.flac,.ogg,.m4a';
+export const MEDIA_ACCEPT = mediaAccept(['video', 'image', 'audio']);
 
 export function stateTag(m: Media) {
   const cls = m.state === 'ready' ? 'green' : m.state === 'failed' ? 'red' : 'amber';
@@ -209,6 +231,8 @@ export function MediaTab() {
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [dragOver, setDragOver] = useState(false);
   const [previewing, setPreviewing] = useState<Media>();
+  const [trimming, setTrimming] = useState<Media>();
+  const [TrimDialogComp, setTrimDialogComp] = useState<typeof MediaTrimDialogType>();
   const [playing, setPlaying] = useState<string>();
 
   const byId = useMemo(() => new Map(lib.media.map((m) => [m.id, m])), [lib.media]);
@@ -631,6 +655,32 @@ export function MediaTab() {
               />
             </PropertyRow>
           )}
+          {!DEMO && canTrimMedia(selected) && (
+            <PropertyRow label="Trim">
+              <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                <span className="muted small grow ellipsis">
+                  {selected.trim
+                    ? `${formatTrimMs(selected.trim.startMs)} – ${formatTrimMs(selected.trim.endMs)}`
+                    : 'Full length'}
+                </span>
+                <button
+                  type="button"
+                  className="small"
+                  disabled={locked.has(selected.id) || selected.state === 'processing'}
+                  onClick={() => {
+                    setTrimming(selected);
+                    if (!TrimDialogComp) {
+                      void import('./MediaTrimDialog.tsx').then((mod) =>
+                        setTrimDialogComp(() => mod.MediaTrimDialog),
+                      );
+                    }
+                  }}
+                >
+                  Trim…
+                </button>
+              </div>
+            </PropertyRow>
+          )}
           {selected.kind !== 'audio' && shouldShowMidiUi(lib.settings.surfaces, Boolean(selected.midi)) && (
             <PropertyRow label="Bg lighting">
               {(() => {
@@ -752,6 +802,7 @@ export function MediaTab() {
         ]}
       />
       {previewing && <MediaPreview m={previewing} onClose={() => setPreviewing(undefined)} />}
+      {trimming && TrimDialogComp && <TrimDialogComp m={trimming} onClose={() => setTrimming(undefined)} />}
     </>
   );
 }

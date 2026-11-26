@@ -17,3 +17,6 @@ GIFs to one of those; audio files to AAC 256 kbps. Originals are kept.
 
 - The NAS transcodes; large uploads take minutes and the UI must show state.
 - The Docker image carries ffmpeg with libx264 and libvpx.
+- Amended by [ADR 0016](0016-client-webcodecs-and-hub-remux.md): compliant untrimmed H.264 + AAC
+  uploads (`<= 20 Mbps`) remux with `-c copy +faststart`, and capable Operator browsers may
+  pre-transcode non-compliant opaque videos to 1080p H.264 + AAC via WebCodecs before upload.

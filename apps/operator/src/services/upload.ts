@@ -1,5 +1,4 @@
 import { api, ApiFailure, upload } from '@ordo/client';
-import { API_PREFIX, HEADER_CLIENT } from '@ordo/protocol';
 import {
   isSvgMime,
   type Media,
@@ -8,10 +7,51 @@ import {
   svgIntrinsicSize,
   svgRasterSizeFor,
 } from '@ordo/domain';
+import { API_PREFIX, HEADER_CLIENT } from '@ordo/protocol';
+import { currentLayout, thisIsPhone } from '../lib/layout.ts';
+import { fileKind } from '../lib/mediaKinds.ts';
+import { useLibrary } from '../state/library.ts';
 
 const CHUNK = 8 * 1024 * 1024;
 const RESUMABLE_OVER = 24 * 1024 * 1024;
 const RESUME_KEY = 'ordo.op.uploads';
+
+/** Extensions whose containers WebCodecs + mediabunny can inspect/demux; legacy WMV/AVI/MPG go straight to the Hub. */
+const WEBCODECS_VIDEO_EXT = new Set(['mp4', 'm4v', 'mov', 'webm', 'mkv']);
+
+export type UploadPhase = 'transcoding' | 'uploading';
+export type VideoTranscoder = (
+  file: File,
+  onProgress: (frac: number) => void,
+  signal?: AbortSignal,
+) => Promise<File | undefined>;
+
+/** Whether a picked file is eligible to attempt client-side WebCodecs pre-transcoding. */
+export function isClientTranscodeCandidate(file: Pick<File, 'name' | 'type'>): boolean {
+  if (fileKind(file) !== 'video') return false;
+  const dot = file.name.lastIndexOf('.');
+  if (dot >= 0) {
+    const ext = file.name.slice(dot + 1).toLowerCase();
+    return WEBCODECS_VIDEO_EXT.has(ext);
+  }
+  return (file.type ?? '').startsWith('video/');
+}
+
+async function defaultTranscodeVideo(
+  file: File,
+  onProgress: (frac: number) => void,
+  signal?: AbortSignal,
+): Promise<File | undefined> {
+  if (!isClientTranscodeCandidate(file)) return undefined;
+  if (currentLayout() === 'compact' || thisIsPhone()) return undefined;
+  if (useLibrary.getState().data.settings.general.clientVideoTranscode === false) return undefined;
+  try {
+    const mod = await import('./videoTranscode.ts');
+    return await mod.maybeTranscodeVideo(file, onProgress, signal);
+  } catch {
+    return undefined;
+  }
+}
 
 type Resume = Record<string, { id: string; size: number }>;
 
@@ -126,21 +166,44 @@ export async function sendStill(
 }
 
 /**
- * Upload one media file with progress. Large files use the hub's resumable upload (create, then PATCH
- * chunks with Upload-Offset), so an interrupted upload from home continues where it stopped. An SVG goes in
- * one request with the still the screens draw (`rasterizeSvg`); one too large for that goes alone, and its
- * still follows once the hub has it (`sendStill`).
+ * Upload one media file with progress. Eligible modern videos are optionally pre-transcoded in a WebCodecs
+ * worker to a compliant 1080p H.264 + AAC `.mp4` (ADR 0016), falling back transparently to the raw file.
+ * Large files use the hub's resumable upload (create, then PATCH chunks with Upload-Offset), so an
+ * interrupted upload from home continues where it stopped. An SVG goes in one request with the still the
+ * screens draw (`rasterizeSvg`); one too large for that goes alone, and its still follows once the hub has
+ * it (`sendStill`).
  */
 export async function uploadMedia(
-  file: File,
-  opts: { isBackground?: boolean; tags?: string[] },
+  rawFile: File,
+  opts: {
+    isBackground?: boolean;
+    tags?: string[];
+    onPhase?: (phase: UploadPhase, frac: number) => void;
+    transcodeVideo?: VideoTranscoder;
+  },
   onProgress: (frac: number) => void,
   signal?: AbortSignal,
   rasterize: (f: File) => Promise<Blob | undefined> = rasterizeSvg,
 ): Promise<Media> {
+  const report = (phase: UploadPhase, frac: number) => {
+    opts.onPhase?.(phase, frac);
+    onProgress(frac);
+  };
+  let file = rawFile;
+  if (isClientTranscodeCandidate(rawFile)) {
+    const transcoder = opts.transcodeVideo ?? defaultTranscodeVideo;
+    const prepared = await transcoder(rawFile, (f) => report('transcoding', f), signal).catch(
+      () => undefined,
+    );
+    if (signal?.aborted) throw new ApiFailure(0, 'aborted', 'Upload cancelled');
+    if (prepared) file = prepared;
+  }
+  report('uploading', 0);
   if (file.size <= RESUMABLE_OVER) {
     const raster = isSvgFile(file) ? await rasterize(file) : undefined;
-    const r = await upload<Media | Media[]>('/media', mediaForm(file, opts, raster), onProgress);
+    const r = await upload<Media | Media[]>('/media', mediaForm(file, opts, raster), (f) =>
+      report('uploading', f),
+    );
     return Array.isArray(r) ? r[0]! : r;
   }
   const key = fileKey(file);
@@ -166,7 +229,7 @@ export async function uploadMedia(
   }
   for (;;) {
     if (signal?.aborted) throw new ApiFailure(0, 'aborted', 'Upload cancelled');
-    onProgress(offset / file.size);
+    report('uploading', offset / file.size);
     const end = Math.min(file.size, offset + CHUNK);
     const res = await fetch(`${API_PREFIX}/media/uploads/${session.id}`, {
       method: 'PATCH',
