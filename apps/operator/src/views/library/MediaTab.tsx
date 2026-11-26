@@ -449,7 +449,7 @@ export function MediaTab() {
         </label>
         <button type="button" className="primary small" onClick={() => fileInputRef.current?.click()}>
           <Icon name="upload" size={12} />
-          {coarse ? 'Choose video, images or audio' : 'Import media'}
+          {coarse ? 'Choose video, images or audio' : 'Upload media'}
         </button>
       </div>
 
@@ -520,7 +520,7 @@ export function MediaTab() {
           </div>
           {list.length === 0 && (
             <div className="center muted small" style={{ padding: 32 }}>
-              Drop video, images, or audio anywhere here — or click Import media.
+              Drop video, images, or audio anywhere here — or click Upload media.
             </div>
           )}
         </div>
@@ -583,7 +583,7 @@ export function MediaTab() {
       {dragOver && (
         <div className="drop-overlay">
           <Icon name="upload" size={28} />
-          <b>Drop video, images, or audio to import</b>
+          <b>Drop video, images, or audio to upload</b>
         </div>
       )}
     </div>
