@@ -93,7 +93,9 @@ const RECORDED = {
   // Countdown presets (same slide pixels, PRERENDER_VERSION unchanged): clamp.ts preserves optional `countdownPreset`
   // and `countdownCorner` on `PropsRule`, and raster.ts draws the progress ring in `rasterProps` (props layer only;
   // slide prerendering does not call `rasterProps` or read `PropsRule`).
-  digest: '96f567ff4456cad8cfe4e19dc6660e92427bd683be8fed7a3fd6b32fdda7ab1a',
+  // Song title slide & lyric blanking (same slide pixels, PRERENDER_VERSION unchanged): defaults.ts adds the
+  // `'Shift+F1': { id: 'toggleBlankText' }` entry to `DEFAULT_KEYMAP` (keyboard shortcut only; no slide pixels change).
+  digest: '650b953ebee41122e41e38c831e042a29344303ee6bc2e207b00c88290fe360d',
 };
 
 /** The source without comments and layout. */

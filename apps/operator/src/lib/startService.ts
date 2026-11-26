@@ -25,16 +25,18 @@ export function serviceRelevantUnsaved(playlistId: string): UnsavedItem[] {
 
   if (playlist) {
     const defaultThemeId = lib.settings.general.defaultThemeId ?? DEFAULT_THEME.id;
+    let hasTitleSlide = false;
     for (const item of playlist.items) {
       if (item.kind !== 'presentation') continue;
       add(items[`pres:${item.presentationId}`]);
       const p = lib.presentations.find((x) => x.id === item.presentationId);
+      if (p?.kind === 'song' && p.meta.titleSlide) hasTitleSlide = true;
       const themeId = p?.themeId ?? (p?.kind === 'song' ? defaultThemeId : undefined);
       if (themeId) add(items[`theme:${themeId}`]);
     }
+    if (hasTitleSlide) add(items['settings:general']);
   }
 
-  add(items['settings:general']);
   add(items['settings:outputs']);
   add(items['settings:looks']);
   add(items['settings:audio']);
