@@ -574,7 +574,7 @@ test('sign-in on a phone: cap light and never remembered, its line and host, the
     const card = await page.locator('[data-phone-signin]').boundingBox();
     expect(card!.y).toBeGreaterThanOrEqual(0);
     expect(await layoutChecks(page, `sign-in at ${land.width}x${land.height}`)).toEqual([]);
-    for (const name of ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '⌫', 'OK']) {
+    for (const name of ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'Backspace', 'OK']) {
       const key = page.locator('.keypad').getByRole('button', { name, exact: true });
       await key.scrollIntoViewIfNeeded();
       const b = (await key.boundingBox())!;

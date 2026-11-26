@@ -180,11 +180,23 @@ export function ProgramView() {
     <div className="program program-dock">
       <div className="prop-section-title" style={{ margin: 0 }}>
         <span>Program</span>
-        {primary && (
-          <span className="muted" style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
-            {primary.name}
-          </span>
-        )}
+        <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+          {primary && (
+            <span className="muted" style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
+              {primary.name}
+            </span>
+          )}
+          <button
+            type="button"
+            className="ghost icon-btn"
+            style={{ width: 22, height: 22, minHeight: 22 }}
+            onClick={() => setUi({ showDiagnostics: true })}
+            title="Diagnostics"
+            aria-label="Diagnostics"
+          >
+            <Icon name="activity" size={13} />
+          </button>
+        </div>
       </div>
       {fallback && !DEMO && (
         <span className="muted" style={{ fontSize: 10.5 }}>

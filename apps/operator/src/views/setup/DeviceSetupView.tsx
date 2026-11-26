@@ -185,9 +185,9 @@ export function DeviceSetupView() {
               <div className="pl-pane-head" style={{ justifyContent: 'space-between' }}>
                 <div className="row" style={{ gap: 8, alignItems: 'center' }}>
                   <Icon name="monitor" size={15} />
-                  <span className="prop-section-title" style={{ margin: 0 }}>
+                  <h2 className="prop-section-title" style={{ margin: 0 }}>
                     Display &amp; Output Patchbay
-                  </span>
+                  </h2>
                 </div>
                 <div className="row" style={{ gap: 8 }}>
                   <button

@@ -103,7 +103,7 @@ test('(c) the first open of the settings shows no Loading…', async ({ page }) 
   await page.evaluate(() => {
     location.hash = '#/setup';
   });
-  await expect(page.getByRole('heading', { name: 'Setup & Device Permissions' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Display & Output Patchbay' })).toBeVisible();
   await page.waitForTimeout(200);
   expect(await loadingSeen(page)).toEqual([]);
 });
