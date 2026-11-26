@@ -6,23 +6,30 @@ export type ProbeStream = {
   index: number;
   codec_type: 'video' | 'audio' | 'subtitle' | 'data' | string;
   codec_name?: string;
+  profile?: string;
   width?: number;
   height?: number;
   /** "num:den"; "1:1" for square pixels, "0:1" or absent when unknown (taken as square). */
   sample_aspect_ratio?: string;
   pix_fmt?: string;
+  field_order?: string;
   r_frame_rate?: string;
   avg_frame_rate?: string;
   nb_frames?: string;
+  bit_rate?: string;
   channels?: number;
   duration?: string;
   tags?: Record<string, string>;
   disposition?: Record<string, number>;
 };
-export type Probe = { format: { duration?: string; format_name?: string }; streams: ProbeStream[] };
+export type Probe = {
+  format: { duration?: string; format_name?: string; bit_rate?: string };
+  streams: ProbeStream[];
+};
 
 export type ProbeInfo = {
   durationMs?: number;
+  bitRateBps?: number;
   video?: ProbeStream & { fps?: number; hasAlpha: boolean };
   audio?: ProbeStream;
   formatName?: string;
@@ -54,8 +61,10 @@ export async function probe(file: string, timeoutMs: number): Promise<ProbeInfo>
   const v = p.streams.find((s) => s.codec_type === 'video' && !s.disposition?.attached_pic);
   const a = p.streams.find((s) => s.codec_type === 'audio');
   const dur = Number(p.format.duration ?? v?.duration ?? a?.duration);
+  const bps = Number(p.format.bit_rate);
   return {
     durationMs: Number.isFinite(dur) && dur > 0 ? Math.round(dur * 1000) : undefined,
+    bitRateBps: Number.isFinite(bps) && bps > 0 ? Math.round(bps) : undefined,
     formatName: p.format.format_name,
     video: v
       ? {
@@ -130,6 +139,75 @@ const BASE = ['-hide_banner', '-nostdin', '-y', '-loglevel', 'error'];
  */
 export function trimArgs(t: Trim | undefined): string[] {
   return t ? ['-ss', (t.startMs / 1000).toFixed(3), '-to', (t.endMs / 1000).toFixed(3)] : [];
+}
+
+/** Maximum video/container bitrate (bps) eligible for Hub `-c copy` passthrough (ADR 0016). */
+export const MAX_REMUX_BITRATE_BPS = 20_000_000;
+
+const H264_REMUX_PROFILES = new Set(['Baseline', 'Constrained Baseline', 'Main', 'High']);
+
+/**
+ * Whether an opaque, untrimmed video already satisfies Ordo's H.264 delivery spec and can be remuxed with
+ * `-c copy -movflags +faststart -map_metadata -1` instead of re-encoded with libx264 (ADR 0016).
+ */
+export function canRemuxH264(info: ProbeInfo, o: { noAudio?: boolean; trim?: Trim } = {}): boolean {
+  if (o.trim) return false;
+  const v = info.video;
+  if (!v || v.hasAlpha || v.codec_name !== 'h264' || v.pix_fmt !== 'yuv420p') return false;
+  if (v.profile && !H264_REMUX_PROFILES.has(v.profile)) return false;
+  if (v.field_order && v.field_order !== 'progressive' && v.field_order !== 'unknown') return false;
+  const w = v.width ?? 0;
+  const h = v.height ?? 0;
+  if (w <= 0 || h <= 0 || w > 1920 || h > 1080 || w % 2 !== 0 || h % 2 !== 0) return false;
+  const sar = v.sample_aspect_ratio;
+  if (sar && sar !== '1:1' && sar !== '0:1') return false;
+  if ((v.fps ?? 0) > 60.5) return false;
+  const vBps = Number(v.bit_rate);
+  const bps = Number.isFinite(vBps) && vBps > 0 ? vBps : (info.bitRateBps ?? 0);
+  if (bps > MAX_REMUX_BITRATE_BPS) return false;
+  const a = o.noAudio ? undefined : info.audio;
+  if (a && (a.codec_name !== 'aac' || !a.channels || a.channels < 1 || a.channels > 2)) return false;
+  return true;
+}
+
+/** Lossless remux of a compliant H.264 + AAC video to faststart MP4 with metadata stripped. */
+export async function remuxH264(
+  input: string,
+  output: string,
+  info: ProbeInfo,
+  o: TOpts & { noAudio?: boolean },
+): Promise<void> {
+  const audio = info.audio && !o.noAudio ? ['-map', '0:a:0', '-c:a', 'copy'] : ['-an'];
+  await runTool(
+    'ffmpeg',
+    [
+      ...BASE,
+      ...IN_SAFE,
+      '-i',
+      input,
+      '-map',
+      '0:v:0',
+      ...audio,
+      '-c:v',
+      'copy',
+      '-movflags',
+      '+faststart',
+      '-map_metadata',
+      '-1',
+      '-progress',
+      'pipe:1',
+      '-nostats',
+      output,
+    ],
+    {
+      timeoutMs: o.timeoutMs,
+      signal: o.signal,
+      onStdout: progressParser(o.durationMs, o.onProgress),
+      keepStdout: false,
+      nice: o.nice,
+      threads: o.threads,
+    },
+  );
 }
 
 /** H.264 High MP4, fit within 1920x1080, fps capped at 60, AAC 256k stereo, faststart. */

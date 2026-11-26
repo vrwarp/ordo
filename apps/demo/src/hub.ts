@@ -139,7 +139,7 @@ async function sha256(blob: Blob): Promise<string> {
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-const VIDEO = /\.(mp4|m4v|mov|webm)$/i;
+const VIDEO = /\.(mp4|m4v|mov|webm|mkv)$/i;
 const AUDIO = /\.(mp3|wav|m4a|aac|ogg|flac)$/i;
 const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
 
@@ -159,6 +159,7 @@ function mimeOf(name: string, given: string): string {
       m4v: 'video/mp4',
       mov: 'video/quicktime',
       webm: 'video/webm',
+      mkv: 'video/x-matroska',
       mp3: 'audio/mpeg',
       wav: 'audio/wav',
       m4a: 'audio/mp4',

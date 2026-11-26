@@ -1233,6 +1233,12 @@ export const Media = z.object({
     .min(0)
     .max(10 * MAX.ms)
     .optional(),
+  /** Full untrimmed duration of `original` (kept across non-destructive re-trims). */
+  sourceDurationMs: z
+    .number()
+    .min(0)
+    .max(10 * MAX.ms)
+    .optional(),
   width: z.number().min(0).max(MAX.coord).optional(),
   height: z.number().min(0).max(MAX.coord).optional(),
   hasAlpha: z.boolean().optional(),
@@ -1570,5 +1576,7 @@ export const GeneralSettings = z.object({
   ccliLicense: z.string().max(200).optional(),
   /** Whether newly created songs enable the auto-generated title slide by default. */
   defaultTitleSlide: z.boolean().optional(),
+  /** Whether the Operator browser pre-transcodes eligible videos with WebCodecs before upload. */
+  clientVideoTranscode: z.boolean().default(true).catch(true),
 });
 export type GeneralSettings = z.infer<typeof GeneralSettings>;

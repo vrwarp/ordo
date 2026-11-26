@@ -90,9 +90,11 @@ import { APP_VERSION } from './index.ts';
 // materialize optional song title slides; live.ts and live-state add blankText state/event and clearSlide
 // toggle restore.
 // 0.12.4 for tri-state clearSlide cycling (Blank slide -> Hold blank -> Show slide) in live-state actions.ts.
+// 0.12.5 for ADR 0016 (Hub H.264 remux, client WebCodecs pre-transcode, non-destructive trim): schemas.ts adds
+// optional Media.sourceDurationMs and GeneralSettings.clientVideoTranscode (default true).
 const RECORDED = {
-  version: '0.12.4',
-  digest: '8025e3f508b703162b570d9a51fe0f6947715af687491db3ec978b1125161ce5',
+  version: '0.12.5',
+  digest: 'a3c19a0e587f09339663ff3326cbc73fe2115ca5d4ab1c45db40cafd1683050f',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

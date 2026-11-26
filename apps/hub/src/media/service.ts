@@ -19,12 +19,14 @@ import type { Library } from '../library.ts';
 import { lightToolPace } from '../pacing.ts';
 import { extensionAgrees, extOf, hashFile, readHead, type Sniffed, sniff, type Store } from '../store.ts';
 import {
+  canRemuxH264,
   downscaleImage,
   firstFramePng,
   gifInfo,
   measureLoudness,
   poster,
   probe,
+  remuxH264,
   transcodeAudio,
   transcodeH264,
   transcodeVp9Alpha,
@@ -402,6 +404,36 @@ export class MediaService {
     return next;
   }
 
+  /**
+   * Non-destructively set, adjust, or clear a video/audio item's trim and re-process `delivery`,
+   * `poster`, `durationMs` and `loudnessLufs` from `original` (ADR 0016).
+   */
+  retrim(id: string, trim: MediaTrim | null): Media {
+    const m = this.lib.media.must(id);
+    if ((m.kind !== 'video' && m.kind !== 'audio') || m.original.mime === 'image/gif')
+      throw new HttpError(400, 'bad_trim', `${m.name}: only video and audio items can be trimmed`);
+    if (m.state === 'processing' || this.jobs.active('media', 'mediaId', id))
+      throw new HttpError(409, 'busy', `${m.name}: wait for processing to finish before trimming`);
+    let nextTrim: MediaTrim | undefined;
+    if (trim !== null) {
+      nextTrim = normTrim(trim);
+      if (!nextTrim) throw new HttpError(400, 'bad_trim', 'Trim end must be after start');
+      if (m.sourceDurationMs !== undefined && nextTrim.startMs >= m.sourceDurationMs)
+        throw new HttpError(
+          400,
+          'bad_trim',
+          `Trim starts at ${seconds(nextTrim.startMs)}, after the source ends (${seconds(m.sourceDurationMs)})`,
+        );
+    }
+    if (sameTrim(normTrim(m.trim), nextTrim) && m.state === 'ready') return m;
+    const base: Media = { ...m, state: 'uploaded', error: undefined };
+    if (nextTrim) base.trim = nextTrim;
+    else delete base.trim;
+    const next = this.save(base);
+    this.jobs.enqueue('media', { mediaId: id, name: m.name }, m.kind === 'video' ? 'heavy' : 'light');
+    return next;
+  }
+
   private save(m: Media): Media {
     const saved = this.lib.media.update(m.id, m);
     this.lib.emit([{ kind: 'media', id: saved.id, rev: saved.rev, entity: saved }]);
@@ -414,6 +446,8 @@ export class MediaService {
       ctx.log('media item was deleted');
       return { mediaId: ctx.payload.mediaId, state: 'deleted' };
     }
+    const prevDelivery = m0.delivery?.hash;
+    const prevPoster = m0.poster?.hash;
     let m = this.save({ ...m0, state: 'processing', error: undefined });
     ctx.log(`processing ${m.name} (${m.original.mime}, ${(m.original.bytes / 1e6).toFixed(1)} MB)`);
     try {
@@ -433,6 +467,10 @@ export class MediaService {
         state: 'ready',
         error: undefined,
       });
+      if (prevDelivery && prevDelivery !== m.delivery?.hash && prevDelivery !== m.original.hash)
+        await this.store.release(prevDelivery);
+      if (prevPoster && prevPoster !== m.poster?.hash && prevPoster !== m.original.hash)
+        await this.store.release(prevPoster);
       ctx.log(`ready${m.delivery ? ` (${m.delivery.mime}, ${(m.delivery.bytes / 1e6).toFixed(1)} MB)` : ''}`);
       return { mediaId: m.id, state: 'ready' };
     } catch (e) {
@@ -533,6 +571,7 @@ export class MediaService {
         kind: 'audio',
         delivery,
         durationMs: opts.durationMs,
+        sourceDurationMs: info.durationMs ?? m.sourceDurationMs,
         width: undefined,
         height: undefined,
         audio: { gainDb: m.audio?.gainDb ?? 0, pairId: m.audio?.pairId, loudnessLufs: lufs },
@@ -595,8 +634,21 @@ export class MediaService {
     const ext = alpha ? 'webm' : 'mp4';
     const out = this.store.tmpPath(ext);
     try {
-      if (alpha) await transcodeVp9Alpha(input, out, info, { ...opts, timeoutMs: t.transcode });
-      else await transcodeH264(input, out, info, { ...opts, timeoutMs: t.transcode });
+      if (alpha) {
+        await transcodeVp9Alpha(input, out, info, { ...opts, timeoutMs: t.transcode });
+      } else if (canRemuxH264(info, { trim: opts.trim })) {
+        ctx.log('remuxing compliant H.264 stream (no re-encode)');
+        try {
+          await remuxH264(input, out, info, { ...opts, timeoutMs: t.light });
+        } catch (e) {
+          if (ctx.signal.aborted) throw e;
+          await rm(out, { force: true });
+          ctx.log(`remux failed (${errorMessage(e)}); falling back to H.264 transcode`);
+          await transcodeH264(input, out, info, { ...opts, timeoutMs: t.transcode });
+        }
+      } else {
+        await transcodeH264(input, out, info, { ...opts, timeoutMs: t.transcode });
+      }
     } catch (e) {
       await rm(out, { force: true });
       throw e;
@@ -638,6 +690,7 @@ export class MediaService {
       delivery,
       poster: posterRef,
       durationMs: outInfo.durationMs ?? opts.durationMs,
+      sourceDurationMs: info.durationMs ?? m.sourceDurationMs,
       width: outInfo.video?.width,
       height: outInfo.video?.height,
       hasAlpha: alpha,

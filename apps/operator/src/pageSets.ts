@@ -45,6 +45,9 @@ export const COMPACT_FORBIDDEN: readonly string[] = [
   'packages/renderer/src/geom/presets.gen.ts',
   'packages/renderer/src/geom/textwarps.gen.ts',
   'workers/import.worker.ts',
+  'workers/videoTranscode.worker.ts',
+  'services/videoTranscode.ts',
+  'mediabunny',
 ];
 
 /** A source map's source without its leading `./` and `../` (and a virtual module's NUL). */

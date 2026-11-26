@@ -7,9 +7,22 @@ type Kind = Media['kind'];
  * MIME types keep the iPad's Photos source (photos arrive as JPEG, videos as MOV or MP4: design/15 "Touch").
  */
 const ACCEPT: Record<Kind, string[]> = {
-  video: ['video/*', '.mov', '.mp4', '.m4v', '.webm'],
+  video: [
+    'video/*',
+    '.mov',
+    '.mp4',
+    '.m4v',
+    '.webm',
+    '.mkv',
+    '.avi',
+    '.wmv',
+    '.asf',
+    '.mpg',
+    '.mpeg',
+    '.vob',
+  ],
   image: ['image/*', '.gif', '.jpg', '.jpeg', '.png', '.webp', '.svg'],
-  audio: ['audio/*', '.wav', '.mp3', '.aac', '.flac', '.ogg', '.m4a'],
+  audio: ['audio/*', '.wav', '.mp3', '.aac', '.flac', '.ogg', '.m4a', '.wma', '.aif', '.aiff', '.aifc'],
 };
 
 /** The `accept` list of a picker limited to `kinds`: an image picker opens images only. */
@@ -27,6 +40,11 @@ const EXT_KIND: Record<string, Kind> = {
   webm: 'video',
   mkv: 'video',
   avi: 'video',
+  wmv: 'video',
+  asf: 'video',
+  mpg: 'video',
+  mpeg: 'video',
+  vob: 'video',
   jpg: 'image',
   jpeg: 'image',
   png: 'image',
@@ -42,6 +60,10 @@ const EXT_KIND: Record<string, Kind> = {
   ogg: 'audio',
   oga: 'audio',
   opus: 'audio',
+  wma: 'audio',
+  aif: 'audio',
+  aiff: 'audio',
+  aifc: 'audio',
 };
 
 /** The media kind a file will become: by extension as the hub decides, else by its MIME type. */

@@ -23,7 +23,10 @@
   FLAC, OGG, WMA, AIFF. The older formats are common in church archives and PowerPoint decks.
 - The hub transcodes every video into one delivery format (H.264 High at the output's
   resolution, 1080p60 maximum, AAC stereo audio) and generates a poster frame and a loop
-  preview. Alpha WebM is stored as-is and delivered as VP9 with alpha; it is not required
+  preview. Compliant untrimmed H.264 + AAC uploads (`<= 20 Mbps`) remux with `-c copy +faststart`
+  without re-encoding, and capable desktop/tablet Operator browsers may pre-transcode
+  non-compliant opaque videos to 1080p60 H.264 + AAC via WebCodecs before upload (ADR 0016).
+  Alpha WebM is stored as-is and delivered as VP9 with alpha; it is not required
   at this venue and is a best-effort path.
 - Animated GIFs are converted to a looping H.264 video (opaque) or VP9 alpha video
   (transparent). Still GIFs become PNG.
@@ -39,7 +42,8 @@
   video soundtracks are loudness measured so the audio engine plays them at one level
   (design/18 "Gain staging").
 - Media have a name, tags, duration, loop flag, and a "background" flag for use in the
-  background picker.
+  background picker. Video and audio items also support non-destructive start/end trimming
+  from the Media Inspector (`PUT /media/:id/trim`), re-processed from `original`.
 - The media detail view shows the transcoding state. A media item is not selectable in
   a playlist until transcoding is done.
 

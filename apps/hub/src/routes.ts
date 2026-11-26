@@ -8,6 +8,7 @@ import {
   LiveCommand,
   type LiveState,
   type Media,
+  MediaTrim,
   MidiTrigger,
   newId,
   type Output,
@@ -110,6 +111,11 @@ const MediaPatch = z
       .object({ pairId: z.string().max(200).optional(), gainDb: z.number().min(-60).max(24).optional() })
       .strict()
       .optional(),
+  })
+  .strict();
+const MediaTrimPatch = z
+  .object({
+    trim: MediaTrim.nullable(),
   })
   .strict();
 const UploadCreate = z
@@ -1062,6 +1068,13 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     return reply.code(204).send();
   });
   route('POST', '/media/:id/retry', 'edit', 'full', async (req) => hub.media.retry(params(req).id!));
+  route('PUT', '/media/:id/trim', 'edit', 'full', async (req) => {
+    await room(req);
+    const id = params(req).id!;
+    if (live.locks().media.has(id)) throw locked('This media is used by the live playlist');
+    const body = validate(MediaTrimPatch, req.body);
+    return hub.media.retrim(id, body.trim);
+  });
   // An SVG's still sent after the SVG (field "raster"): the resumable upload carries the SVG alone, then the
   // uploading client draws its still and sends it here (design/12 "Media pipeline", MediaService.attachStill).
   route('PUT', '/media/:id/still', 'edit', 'light', async (req) => {
