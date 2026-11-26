@@ -83,9 +83,11 @@ import { APP_VERSION } from './index.ts';
 // mapping, and auto-unskip on explicit go.
 // 0.12.1 for countdown timer presets (PropsRule.countdownPreset, PropsRule.countdownCorner, and
 // TimerSpec.preset/corner in schemas.ts, which a stale client would strip when saving looks or playlists).
+// 0.12.2 for loop single-unit navigation and standby arming in live-state (nextManualCue, prevManualCue,
+// custom armed preservation across intra-loop advances, and Next firing armed when exiting a loop).
 const RECORDED = {
-  version: '0.12.1',
-  digest: 'fbcfa60b2877504f7c63f9260a84fcdbe9fe49b151dafbb92ba2a48d32721a76',
+  version: '0.12.2',
+  digest: 'a8456657d2d7447fc6fc65d4663416629a98121c996727731e5a7b5e422a34a3',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

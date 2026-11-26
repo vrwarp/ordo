@@ -133,11 +133,11 @@ describe('Next and Prev skip hidden cues; a GO with an index reaches them', () =
       [8, 12],
       [12, 13],
       [13, 14],
-      [14, 16],
-      [16, undefined],
-      [16, undefined],
-      [16, undefined],
-      [16, undefined],
+      [14, undefined],
+      [14, undefined],
+      [14, undefined],
+      [14, undefined],
+      [14, undefined],
     ]);
   });
 
@@ -149,7 +149,7 @@ describe('Next and Prev skip hidden cues; a GO with an index reaches them', () =
       walk.push(s.live);
       ok(s);
     }
-    expect(walk).toEqual([14, 13, 12, 8, 7, 2, 0, 0, 0]);
+    expect(walk).toEqual([13, 12, 8, 7, 2, 0, 0, 0, 0]);
   });
 
   it('a GO shows a hidden slide (a click in the grid); Next and Prev go on from it', () => {

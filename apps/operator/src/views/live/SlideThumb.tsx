@@ -14,6 +14,8 @@ export type ThumbMarks = {
   /** Per-output arm dots (only for the armed/live cue). */
   dots?: { id: string; name: string; dot: string }[];
   waiting?: boolean;
+  /** Active auto-advance countdown for a live loop slide. */
+  autoAdvance?: { durationMs: number; elapsedMs: number; key: string };
 };
 
 export type SlideSectionBand = {
@@ -74,6 +76,18 @@ export const SlideThumb = memo(function SlideThumb(props: {
         ) : (
           <div className="fallback-text">
             {props.slide ? firstText(props.slide) || props.label : props.label}
+          </div>
+        )}
+        {props.marks.autoAdvance && (
+          <div className="thumb-loop-progress" data-loop-progress aria-hidden="true">
+            <div
+              key={props.marks.autoAdvance.key}
+              className="thumb-loop-progress-fill"
+              style={{
+                animationDuration: `${props.marks.autoAdvance.durationMs}ms`,
+                animationDelay: `-${props.marks.autoAdvance.elapsedMs}ms`,
+              }}
+            />
           </div>
         )}
       </div>

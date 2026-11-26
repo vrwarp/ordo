@@ -677,6 +677,20 @@ table.list th {
   color: #fff;
   line-height: 1.2;
 }
+.loop-pill-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(249, 115, 22, 0.16);
+  color: #fb923c;
+  border: 1px solid rgba(249, 115, 22, 0.38);
+  line-height: 1.2;
+}
 @keyframes pulse-live {
   0%,
   100% {
@@ -815,6 +829,42 @@ table.list th {
   inset: 0;
   border: 3px dashed var(--amber);
   pointer-events: none;
+}
+.thumb-loop-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  z-index: 2;
+}
+.thumb-loop-progress-fill {
+  height: 100%;
+  width: 100%;
+  background: #f97316;
+  transform-origin: left center;
+  animation: loop-advance-fill linear forwards;
+}
+@keyframes loop-advance-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.loop-wrap-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  color: inherit;
+  opacity: 0.9;
+  flex-shrink: 0;
 }
 .fallback-text {
   aspect-ratio: 16 / 9;
