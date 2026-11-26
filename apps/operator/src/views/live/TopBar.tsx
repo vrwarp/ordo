@@ -34,6 +34,29 @@ function useOnline(): boolean {
   return on;
 }
 
+function LiveLampRing({ state }: { state: 'green' | 'amber' | 'off' }) {
+  if (state === 'green') {
+    return (
+      <svg width={15} height={15} viewBox="0 0 16 16" aria-hidden="true" className="ico lamp-ring-svg">
+        <circle cx={8} cy={8} r={5.5} fill="#22c55e" />
+      </svg>
+    );
+  }
+  const stroke = state === 'amber' ? '#f59e0b' : '#ef4444';
+  return (
+    <svg
+      width={15}
+      height={15}
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+      className="ico lamp-ring-svg"
+    >
+      <circle cx={8} cy={8} r={5} stroke={stroke} strokeWidth={2} />
+    </svg>
+  );
+}
+
 export function TopBar({ inline = false }: { inline?: boolean }) {
   const now = useHubNow(1000);
   const general = useLibrary((s) => s.data.settings.general);
@@ -45,11 +68,11 @@ export function TopBar({ inline = false }: { inline?: boolean }) {
     inline && typeof document !== 'undefined' ? document.getElementById('nav-live-slot') : null,
   );
   const [popOpen, setPopOpen] = useState(false);
-  const lampRef = useRef<HTMLButtonElement>(null);
+  const lampGroupRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number }>({ left: -9999, top: -9999 });
 
-  usePopupOf(popRef, lampRef, popOpen, () => setPopOpen(false));
+  usePopupOf(popRef, lampGroupRef, popOpen, () => setPopOpen(false));
 
   useLayoutEffect(() => {
     if (!inline) {
@@ -60,10 +83,10 @@ export function TopBar({ inline = false }: { inline?: boolean }) {
   }, [inline]);
 
   useLayoutEffect(() => {
-    if (!popOpen || !lampRef.current || !popRef.current) return;
+    if (!popOpen || !lampGroupRef.current || !popRef.current) return;
     const place = () => {
-      if (!lampRef.current || !popRef.current) return;
-      const tr = lampRef.current.getBoundingClientRect();
+      if (!lampGroupRef.current || !popRef.current) return;
+      const tr = lampGroupRef.current.getBoundingClientRect();
       const pr = popRef.current.getBoundingClientRect();
       const left = Math.max(8, Math.min(tr.right - pr.width, window.innerWidth - pr.width - 8));
       const top = Math.max(8, Math.min(tr.bottom + 6, window.innerHeight - pr.height - 8));
@@ -83,13 +106,13 @@ export function TopBar({ inline = false }: { inline?: boolean }) {
     const onOutside = (e: Event) => {
       const target = e.target as Node | null;
       if (!target) return;
-      if (!lampRef.current?.contains(target) && !popRef.current?.contains(target)) setPopOpen(false);
+      if (!lampGroupRef.current?.contains(target) && !popRef.current?.contains(target)) setPopOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
         setPopOpen(false);
-        lampRef.current?.focus();
+        lampGroupRef.current?.querySelector('button')?.focus();
       }
     };
     document.addEventListener('pointerdown', onOutside, true);
@@ -212,6 +235,16 @@ export function TopBar({ inline = false }: { inline?: boolean }) {
   );
 
   if (inline && slot) {
+    const audOutputs = enabled.filter((o) => o.kind !== 'stage');
+    const stgOutputs = enabled.filter((o) => o.kind === 'stage');
+    const groupState = (list: typeof enabled): 'green' | 'amber' | 'off' => {
+      const conn = list.filter((o) => live.health[o.id]?.connected);
+      if (conn.length === 0) return 'off';
+      if (conn.length < list.length) return 'amber';
+      const degraded = conn.some((o) => outputDot(live.health[o.id]) !== 'green');
+      return degraded ? 'amber' : 'green';
+    };
+
     const telemetryPopover = popOpen ? (
       <div
         ref={popRef}
@@ -221,12 +254,10 @@ export function TopBar({ inline = false }: { inline?: boolean }) {
         style={{ position: 'fixed', left: pos.left, top: pos.top }}
       >
         <div className="otp-head">
-          <span>Output Telemetry</span>
-          <div className="row" style={{ gap: 6 }}>
-            <span className="otp-meta" title={hubText}>
-              <span className={`dot sm ${hubDot}`} /> {hubText}
-            </span>
-          </div>
+          <span>Screen Telemetry</span>
+          <span className="otp-meta" title={hubText}>
+            <span className={`dot sm ${hubDot}`} /> {hubText}
+          </span>
         </div>
         <div className="otp-sys-row">
           <span className="otp-meta" title="Internet connection of this PC">
@@ -284,13 +315,14 @@ export function TopBar({ inline = false }: { inline?: boolean }) {
             type="button"
             className="small"
             disabled={launch.busy}
+            title="Close and reopen every output window (Ctrl+Shift+R)"
             onClick={() => {
               setPopOpen(false);
               dispatch({ id: 'relaunchOutputs' });
             }}
           >
             <Icon name="restart" size={12} />
-            Relaunch outputs
+            Relaunch all
           </button>
           <span className="spacer" />
           <button
@@ -330,68 +362,122 @@ export function TopBar({ inline = false }: { inline?: boolean }) {
             </span>
           )}
           {urgentBadges}
+
+          <div className="live-clock-bezel">
+            <span className="clock">{formatClock(now, general.timeZone, general.clock24h)}</span>
+            <span className="bezel-sep" aria-hidden="true" />
+            <span
+              className={`bezel-tally ${isLive ? 'live' : 'idle'}`}
+              data-live-status={isLive ? 'live' : 'idle'}
+            >
+              <span className={`dot sm ${isLive ? 'red' : 'grey'}`} />
+              {isLive ? 'ON AIR' : 'STANDBY'}
+            </span>
+          </div>
+
+          <span className="nav-divider" aria-hidden="true" />
+
           {enabled.length > 0 && (
-            <button
-              ref={lampRef}
-              type="button"
-              className={`output-lamp-cluster${popOpen ? ' on' : ''}`}
-              aria-haspopup="dialog"
-              aria-expanded={popOpen}
-              title="Output status & telemetry"
-              onClick={() => setPopOpen((o) => !o)}
-            >
-              {enabled.map((o) => {
-                const h = live.health[o.id];
-                const d = outputDot(h);
-                return (
-                  <span key={o.id} className="lamp-chip" title={dotTitle(h, o.name)}>
-                    <span className={`dot sm ${d}`} aria-hidden="true" />
-                    <span className="lamp-name">{o.name}</span>
+            <div ref={lampGroupRef} className="row" style={{ gap: 2 }}>
+              {audOutputs.length > 0 && (
+                <button
+                  type="button"
+                  className={`nav-mode-btn${popOpen ? ' active' : ''}`}
+                  aria-haspopup="dialog"
+                  aria-expanded={popOpen}
+                  title="Audience screens — click for telemetry & window controls"
+                  onClick={() => setPopOpen((o) => !o)}
+                >
+                  <span className="nav-mode-ico">
+                    <LiveLampRing state={groupState(audOutputs)} />
                   </span>
-                );
-              })}
-            </button>
+                  <span className="nav-mode-lbl">Audience</span>
+                </button>
+              )}
+              {stgOutputs.length > 0 && (
+                <button
+                  type="button"
+                  className={`nav-mode-btn${popOpen ? ' active' : ''}`}
+                  aria-haspopup="dialog"
+                  aria-expanded={popOpen}
+                  title="Stage display — click for telemetry & window controls"
+                  onClick={() => setPopOpen((o) => !o)}
+                >
+                  <span className="nav-mode-ico">
+                    <LiveLampRing state={groupState(stgOutputs)} />
+                  </span>
+                  <span className="nav-mode-lbl">Stage</span>
+                </button>
+              )}
+            </div>
           )}
-          <span className="topbar-cell-sep" aria-hidden="true" />
-          <span className="clock">{formatClock(now, general.timeZone, general.clock24h)}</span>
-          <span
-            className={`live-status-pill ${isLive ? 'live' : 'idle'}`}
-            data-live-status={isLive ? 'live' : 'idle'}
+
+          <button
+            type="button"
+            className="nav-mode-btn"
+            disabled={launch.busy}
+            data-launch
+            onClick={() => dispatch({ id: 'launchOutputs' })}
+            onContextMenu={(e) => {
+              openContextMenu(
+                e,
+                [
+                  {
+                    label: 'Launch outputs',
+                    shortcut: 'Ctrl+Shift+L',
+                    onSelect: () => dispatch({ id: 'launchOutputs' }),
+                  },
+                  {
+                    label: 'Relaunch all windows',
+                    shortcut: 'Ctrl+Shift+R',
+                    onSelect: () => dispatch({ id: 'relaunchOutputs' }),
+                  },
+                  { kind: 'separator' },
+                  { label: 'Configure screens…', onSelect: () => navigate('#/settings/outputs') },
+                ],
+                { ariaLabel: 'Output window actions' },
+              );
+            }}
+            title="Launch output windows (Ctrl+Shift+L) · Right-click to Relaunch"
+            aria-label="Launch outputs"
           >
-            <span className={`dot sm ${isLive ? 'red' : 'grey'}`} />
-            {isLive ? 'ON AIR' : 'STANDBY'}
-          </span>
-          <span className="topbar-cell-sep" aria-hidden="true" />
-          <div className="topbar-actions-group">
+            <span className="nav-mode-ico">
+              <Icon name="external" size={16} />
+            </span>
+            <span className="nav-mode-lbl">Outputs</span>
+          </button>
+
+          {linkMissing && (
             <button
               type="button"
-              className="small toolbar-flat-btn"
-              disabled={launch.busy}
-              data-launch
-              onClick={() => dispatch({ id: 'launchOutputs' })}
-              title="Launch outputs (Ctrl+Shift+L)"
-            >
-              <Icon name="external" size={13} />
-              Launch outputs
-            </button>
-            <button
-              type="button"
-              className="ghost icon-btn toolbar-flat-btn"
+              className="nav-mode-btn nav-warn-btn"
               disabled={launch.busy}
               data-launch
               onClick={() => dispatch({ id: 'relaunchOutputs' })}
-              title="Relaunch outputs (Ctrl+Shift+R)"
+              title="Take over and relaunch output windows opened in another tab (Ctrl+Shift+R)"
               aria-label="Relaunch"
             >
-              <Icon name="restart" size={14} />
+              <span className="nav-mode-ico">
+                <Icon name="restart" size={16} />
+              </span>
+              <span className="nav-mode-lbl">Relaunch</span>
             </button>
-            {isLive && (
-              <button type="button" className="danger small" onClick={() => void endService()}>
-                <Icon name="power" size={12} />
-                End service
-              </button>
-            )}
-          </div>
+          )}
+
+          {isLive && (
+            <button
+              type="button"
+              className="nav-mode-btn nav-end-btn"
+              onClick={() => void endService()}
+              title="Clear outputs and end live service"
+              aria-label="End service"
+            >
+              <span className="nav-mode-ico">
+                <Icon name="power" size={16} />
+              </span>
+              <span className="nav-mode-lbl">End service</span>
+            </button>
+          )}
         </div>
         {telemetryPopover && createPortal(telemetryPopover, document.body)}
       </>,

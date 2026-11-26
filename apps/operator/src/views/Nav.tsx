@@ -267,141 +267,82 @@ function UnsavedNavControl() {
   );
 }
 
-function SessionMenu({ role, editDevice }: { role: 'operate' | 'edit'; editDevice?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const popRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number }>({ left: -9999, top: -9999 });
-
-  usePopupOf(popRef, triggerRef, open, () => setOpen(false));
-
-  useLayoutEffect(() => {
-    if (!open || !triggerRef.current || !popRef.current) return;
-    const place = () => {
-      if (!triggerRef.current || !popRef.current) return;
-      const tr = triggerRef.current.getBoundingClientRect();
-      const pr = popRef.current.getBoundingClientRect();
-      const left = Math.max(8, Math.min(tr.right - pr.width, window.innerWidth - pr.width - 8));
-      const top = Math.max(8, Math.min(tr.bottom + 4, window.innerHeight - pr.height - 8));
-      setPos({ left: Math.round(left), top: Math.round(top) });
-    };
-    place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
-    return () => {
-      window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onOutside = (e: Event) => {
-      const target = e.target as Node | null;
-      if (!target) return;
-      if (!triggerRef.current?.contains(target) && !popRef.current?.contains(target)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
-    };
-    document.addEventListener('pointerdown', onOutside, true);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onOutside, true);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  const roleLabel = role === 'operate' ? 'Operator' : 'Editor';
-  const popover = open ? (
-    <div
-      ref={popRef}
-      className="session-popover"
-      role="dialog"
-      aria-label="Session menu"
-      style={{ position: 'fixed', left: pos.left, top: pos.top }}
-    >
-      <div className="session-pop-meta">
-        <span className="row" style={{ gap: 6, fontSize: 12, fontWeight: 600 }}>
-          <Icon name="shield" size={13} />
-          Role: {roleLabel}
-        </span>
-        {editDevice && (
-          <span className="muted small" data-edit-device-note>
-            This device edits; run services from the venue PC
-          </span>
-        )}
-      </div>
-      <button
-        type="button"
-        className="ghost small"
-        style={{ justifyContent: 'flex-start', width: '100%' }}
-        onClick={() => {
-          setOpen(false);
-          void guardedLogout();
-        }}
-      >
-        <Icon name="logout" size={13} />
-        Sign out
-      </button>
-    </div>
-  ) : null;
-
+/** ProPresenter-style 14px status ring/disc SVG: hollow coral ring when off, amber ring when degraded, solid green disc when live & healthy. */
+function LampRing({ state }: { state: 'green' | 'amber' | 'off' }) {
+  if (state === 'green') {
+    return (
+      <svg width={15} height={15} viewBox="0 0 16 16" aria-hidden="true" className="ico lamp-ring-svg">
+        <circle cx={8} cy={8} r={5.5} fill="#22c55e" />
+      </svg>
+    );
+  }
+  const stroke = state === 'amber' ? '#f59e0b' : '#ef4444';
   return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        className={`nav-session-btn icon-btn${open ? ' on' : ''}`}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={`Account (${roleLabel})`}
-        title={`Role: ${roleLabel}`}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Icon name="user" size={15} />
-      </button>
-      {popover && (typeof document !== 'undefined' ? createPortal(popover, document.body) : popover)}
-    </>
+    <svg
+      width={15}
+      height={15}
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+      className="ico lamp-ring-svg"
+    >
+      <circle cx={8} cy={8} r={5} stroke={stroke} strokeWidth={2} />
+    </svg>
   );
 }
 
-/** Compact hardware Audience / Stage output status lamps shown in the toolbar outside #/live. */
+/** ProPresenter-style Audience & Stage 42px icon-above-label ring lamps shown outside #/live. */
 function NavOutputLamps() {
   const outputs = useLibrary((s) => s.data.settings.outputs);
   const health = useLive((s) => s.health);
   const enabled = outputs.filter((o) => o.enabled);
   if (enabled.length === 0) return null;
-  const shown = enabled.slice(0, 4);
+
+  const aud = enabled.filter((o) => o.kind !== 'stage');
+  const stg = enabled.filter((o) => o.kind === 'stage');
+
+  const groupState = (list: typeof enabled): 'green' | 'amber' | 'off' => {
+    const conn = list.filter((o) => health[o.id]?.connected);
+    if (conn.length === 0) return 'off';
+    if (conn.length < list.length) return 'amber';
+    const degraded = conn.some((o) => {
+      const h = health[o.id];
+      return Boolean(h?.error || (h && h.cache.total > 0 && h.cache.ready < h.cache.total));
+    });
+    return degraded ? 'amber' : 'green';
+  };
+
   return (
-    <button
-      type="button"
-      className="output-lamp-cluster"
-      onClick={() => navigate('#/settings/outputs')}
-      title="Outputs status — click to configure screens"
-      aria-label="Outputs status"
-    >
-      {shown.map((o) => {
-        const h = health[o.id];
-        const dot = !h?.connected
-          ? 'grey'
-          : h.error
-            ? 'red'
-            : h.cache.total > 0 && h.cache.ready < h.cache.total
-              ? 'amber'
-              : 'green';
-        return (
-          <span key={o.id} className="lamp-chip">
-            <span className={`dot sm ${dot}`} aria-hidden="true" />
-            <span className="lamp-name">{o.name}</span>
+    <>
+      {aud.length > 0 && (
+        <button
+          type="button"
+          className="nav-mode-btn"
+          onClick={() => navigate('#/settings/outputs')}
+          title="Audience screens — click to configure outputs"
+          aria-label="Audience outputs"
+        >
+          <span className="nav-mode-ico">
+            <LampRing state={groupState(aud)} />
           </span>
-        );
-      })}
-    </button>
+          <span className="nav-mode-lbl">Audience</span>
+        </button>
+      )}
+      {stg.length > 0 && (
+        <button
+          type="button"
+          className="nav-mode-btn"
+          onClick={() => navigate('#/settings/outputs')}
+          title="Stage display — click to configure outputs"
+          aria-label="Stage outputs"
+        >
+          <span className="nav-mode-ico">
+            <LampRing state={groupState(stg)} />
+          </span>
+          <span className="nav-mode-lbl">Stage</span>
+        </button>
+      )}
+    </>
   );
 }
 
@@ -422,6 +363,8 @@ export function Nav({
   const live = useLive((s) => s.state.mode === 'live');
   const libDirty = useAnyLibraryDraftDirty();
   const settingsDirty = useAnySettingsDirty();
+  const roleLabel = role === 'operate' ? 'Operator' : 'Editor';
+
   const link = (
     href: string,
     label: string,
@@ -487,12 +430,15 @@ export function Nav({
   const signOutBtn = (
     <button
       type="button"
-      className="ghost icon-btn"
+      className="nav-mode-btn"
       onClick={() => void guardedLogout()}
-      title="Sign out"
+      title={`Sign out (${roleLabel})`}
       aria-label="Sign out"
     >
-      <Icon name="logout" size={15} />
+      <span className="nav-mode-ico">
+        <Icon name="logout" size={16} />
+      </span>
+      <span className="nav-mode-lbl">Sign out</span>
     </button>
   );
 
@@ -523,7 +469,7 @@ export function Nav({
               Edit device
             </span>
           )}
-          <SessionMenu role={role} editDevice={role === 'operate'} />
+          <span className="nav-divider" aria-hidden="true" />
           {signOutBtn}
         </nav>
         {demoOpen && <DemoDialog onClose={() => setDemoOpen(false)} />}
@@ -549,7 +495,6 @@ export function Nav({
         <UnsavedNavControl />
         {offline && <span className="tag amber">offline: hub unreachable</span>}
         <span className="nav-divider" aria-hidden="true" />
-        <SessionMenu role={role} />
         {signOutBtn}
       </nav>
       {demoOpen && <DemoDialog onClose={() => setDemoOpen(false)} />}
