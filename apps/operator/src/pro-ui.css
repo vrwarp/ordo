@@ -1124,6 +1124,78 @@
     background: var(--surface-active);
   }
 
+  /* Quiet Matte-Graphite context & dropdown menus (zero leaked bevels or browser focus rings) */
+  .menu-list,
+  .ctx-menu {
+    background: var(--panel);
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    padding: 4px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
+  }
+  .menu-list > button,
+  .ctx-menu > button.ctx-item,
+  .select-option,
+  .date-cell {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    outline: none;
+  }
+  .menu-list > button {
+    min-height: 28px;
+    padding: 4px 10px;
+    font-size: 12.5px;
+    border-radius: 4px;
+    color: var(--fg);
+  }
+  .ctx-menu > button.ctx-item {
+    min-height: 26px;
+    padding: 3px 10px;
+    font-size: 12.5px;
+    gap: 7px;
+    border-radius: 4px;
+    color: var(--fg);
+  }
+  .menu-list > button:hover:not(:disabled),
+  .menu-list > button:focus:not(:disabled),
+  .menu-list > button:focus-visible:not(:disabled),
+  .ctx-menu > button.ctx-item:hover:not(:disabled),
+  .ctx-menu > button.ctx-item:focus:not(:disabled),
+  .ctx-menu > button.ctx-item:focus-visible:not(:disabled),
+  .ctx-menu > button.ctx-item.ctx-sub-open:not(:disabled) {
+    background: var(--surface-active);
+    border-color: transparent;
+    box-shadow: none;
+    outline: none;
+    color: var(--fg);
+  }
+  .menu-list > button.danger-text,
+  .ctx-menu > button.ctx-item.danger-text {
+    color: #fca5a5;
+  }
+  .menu-list > button.danger-text:hover:not(:disabled),
+  .menu-list > button.danger-text:focus:not(:disabled),
+  .ctx-menu > button.ctx-item.danger-text:hover:not(:disabled),
+  .ctx-menu > button.ctx-item.danger-text:focus:not(:disabled) {
+    background: rgba(239, 68, 68, 0.18);
+    color: #fecaca;
+  }
+  .ctx-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--line);
+  }
+  .ctx-label {
+    padding: 4px 10px 2px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--fg3);
+  }
+  .ctx-menu.has-checks .ctx-label {
+    padding-left: 31px;
+  }
+
   /* Floating HUD toasts sit cleanly above the 26px status bar */
   .toasts {
     bottom: 36px;

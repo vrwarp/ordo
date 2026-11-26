@@ -303,11 +303,14 @@ function ContextMenuPanel({
   };
 
   const openSubEntry = openSub ? entries[openSub.index] : undefined;
+  const hasChecks = entries.some(
+    (e) => e.kind !== 'separator' && e.kind !== 'label' && e.kind !== 'submenu' && e.checked !== undefined,
+  );
 
   return (
     <div
       ref={panelRef}
-      className="menu-list ctx-menu"
+      className={`menu-list ctx-menu${hasChecks ? ' has-checks' : ''}`}
       role="menu"
       aria-label={ariaLabel}
       tabIndex={-1}
@@ -357,7 +360,7 @@ function ContextMenuPanel({
                 }
               }}
             >
-              <span className="ctx-check" aria-hidden="true" />
+              {hasChecks && <span className="ctx-check" aria-hidden="true" />}
               <span className="ctx-text">{entry.label}</span>
               <span className="ctx-arrow" aria-hidden="true">
                 ▸
@@ -382,9 +385,11 @@ function ContextMenuPanel({
               entry.onSelect();
             }}
           >
-            <span className="ctx-check" aria-hidden="true">
-              {entry.checked ? '✓' : ''}
-            </span>
+            {hasChecks && (
+              <span className="ctx-check" aria-hidden="true">
+                {entry.checked ? '✓' : ''}
+              </span>
+            )}
             <span className="ctx-text">{entry.label}</span>
             {entry.shortcut && <span className="ctx-shortcut">{entry.shortcut}</span>}
           </button>
