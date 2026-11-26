@@ -1,7 +1,7 @@
 import type { Media } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
 import { fileKind, mediaAccept } from '../src/lib/mediaKinds.ts';
-import { isClientTranscodeCandidate } from '../src/services/upload.ts';
+import { isClientTranscodeCandidate, usesResumableUpload } from '../src/services/upload.ts';
 import { mp4FileName, shouldClientTranscode } from '../src/services/videoTranscode.ts';
 import { canTrimMedia, formatTrimMs, parseTrimMs } from '../src/lib/mediaTrim.ts';
 
@@ -21,6 +21,11 @@ describe('mediaKinds video/audio parity with Hub', () => {
 });
 
 describe('client WebCodecs pre-transcode gating', () => {
+  it('uses chunked resumable uploads above 24 MB on the hub, but never in the browser demo', () => {
+    expect(usesResumableUpload(10 * 1024 * 1024, false)).toBe(false);
+    expect(usesResumableUpload(50 * 1024 * 1024, false)).toBe(true);
+    expect(usesResumableUpload(50 * 1024 * 1024, true)).toBe(false);
+  });
   it('selects modern video containers as candidates and skips legacy containers, images, and audio', () => {
     for (const name of ['a.mp4', 'b.MOV', 'c.m4v', 'd.webm', 'e.mkv']) {
       expect(isClientTranscodeCandidate({ name, type: '' })).toBe(true);
