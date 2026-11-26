@@ -30,6 +30,8 @@ type LibraryState = {
   error?: string;
   /** Revision of the core's library this read model reflects. */
   rev: number;
+  /** Incremented on every local write (`upsertLocal`/`removeLocal`) so search views refresh without waiting for a hub delta. */
+  localRev: number;
 };
 
 export const useLibrary = create<LibraryState>(() => ({
@@ -38,6 +40,7 @@ export const useLibrary = create<LibraryState>(() => ({
   attempted: false,
   source: 'none',
   rev: -1,
+  localRev: 0,
 }));
 
 let sink: ((op: LibOp) => void) | undefined;
@@ -85,8 +88,8 @@ export function loadLibrary(): void {
 }
 
 function local(op: LibOp): void {
-  useLibrary.setState((s) => ({ data: applyLibOp(s.data, op) }));
   sink?.(op);
+  useLibrary.setState((s) => ({ data: applyLibOp(s.data, op), localRev: s.localRev + 1 }));
 }
 
 export function upsertLocal<K extends LibKey>(key: K, entity: LibraryData[K][number]): void {

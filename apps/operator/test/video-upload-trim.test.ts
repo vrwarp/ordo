@@ -80,3 +80,25 @@ describe('MediaTrimDialog helpers', () => {
     expect(canTrimMedia({ kind: 'video', original: file('image/gif') })).toBe(false);
   });
 });
+
+describe('useLibrary localRev refresh', () => {
+  it('increments localRev on upsertLocal and removeLocal so useSearch refreshes without a hub delta', async () => {
+    const { removeLocal, upsertLocal, useLibrary } = await import('../src/state/library.ts');
+    const before = useLibrary.getState().localRev;
+    const item: Media = {
+      id: 'demo-vid-1',
+      rev: 1,
+      name: 'Demo Clip',
+      tags: [],
+      kind: 'video',
+      original: { hash: 'b'.repeat(64), bytes: 1000, mime: 'video/mp4', path: 'files/b' },
+      state: 'ready',
+      loop: false,
+      isBackground: false,
+    };
+    upsertLocal('media', item);
+    expect(useLibrary.getState().localRev).toBe(before + 1);
+    removeLocal('media', item.id);
+    expect(useLibrary.getState().localRev).toBe(before + 2);
+  });
+});
