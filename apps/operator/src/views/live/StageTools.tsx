@@ -1,7 +1,6 @@
 import {
   formatDuration,
   formatStageNotesPlain,
-  isHiddenCue,
   type LiveState,
   MANUAL_ELAPSED_TIMER_ID,
   nextTimeOfDay,
@@ -35,15 +34,6 @@ function cueSlide(state: LiveState, cueIndex: number | undefined): Slide | undef
   return undefined;
 }
 
-function nextVisibleCueIndex(state: LiveState): number | undefined {
-  if (state.live === undefined) return undefined;
-  for (let i = state.live + 1; i < state.cues.length; i++) {
-    const c = state.cues[i];
-    if (c && !isHiddenCue(c)) return i;
-  }
-  return undefined;
-}
-
 const TTLS = [
   { value: '0', label: 'Until dismissed' },
   { value: '30000', label: '30 s' },
@@ -64,8 +54,7 @@ export function timerText(t: Timer, now: number, timeZone: string): string {
 export function LiveSpeakerNotesCard() {
   const state = useLive((s) => s.state);
   const liveSlide = cueSlide(state, state.live);
-  const nextIdx = nextVisibleCueIndex(state);
-  const nextSlide = cueSlide(state, nextIdx);
+  const nextSlide = cueSlide(state, state.armed);
   const liveNotes = liveSlide?.notes?.trim() ?? '';
   const nextNotes = nextSlide?.notes?.trim() ?? '';
 

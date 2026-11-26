@@ -1,4 +1,4 @@
-import { api } from '@ordo/client';
+import { api, hubNow } from '@ordo/client';
 import {
   type Arrangement,
   type Cue,
@@ -10,12 +10,13 @@ import {
   isHiddenCue,
   withoutBackdrops,
 } from '@ordo/domain';
+import { autoAdvance } from '@ordo/live-state';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Icon, playlistItemIconName } from '../../components/Icons.tsx';
 import { InlineArrangementStrip } from '../../components/InlineArrangementStrip.tsx';
 import { armDot, waitingForLive } from '../../lib/health.ts';
-import { itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
+import { formatLoopSeconds, itemSubtitle, itemTitle } from '../../lib/playlistItems.ts';
 import { sectionTone } from '../../lib/sectionColors.ts';
 import { type CueGroup, groupCues, sectionGoTarget } from '../../lib/sections.ts';
 import { slideMediaTags } from '../../lib/slideMedia.ts';
@@ -150,6 +151,7 @@ function PlaylistItemSection({
   clickToGo,
   thumbSize,
   isLiveItem,
+  isLooping,
   isActiveItem,
   slideOf,
   marksFor,
@@ -169,6 +171,7 @@ function PlaylistItemSection({
   clickToGo: boolean;
   thumbSize: number;
   isLiveItem: boolean;
+  isLooping: boolean;
   isActiveItem: boolean;
   slideOf: (c: Cue) => Slide | undefined;
   marksFor: (c: Cue) => ThumbMarks;
@@ -185,6 +188,14 @@ function PlaylistItemSection({
   const groups: CueGroup[] = useMemo(() => groupCues(cues), [cues]);
   const presentation = item.kind === 'presentation' ? op.presentation(item.presentationId) : undefined;
   const isSong = presentation?.kind === 'song';
+  const isLoop = presentation?.kind === 'loop';
+  const lastShownLoopCueIndex = useMemo(() => {
+    if (!isLoop) return undefined;
+    const shown = cues.filter((c) => !isHiddenCue(c));
+    return shown.length > 1 ? shown[shown.length - 1]!.index : undefined;
+  }, [isLoop, cues]);
+  const defaultLoopMs =
+    presentation?.kind === 'loop' ? (presentation.loop?.defaultSlideMs ?? 8000) : undefined;
   const hasCustomOrder = item.kind === 'presentation' && item.sections !== undefined;
   const subtitle = itemSubtitle(item, op);
   const ctl = controller();
@@ -228,6 +239,16 @@ function PlaylistItemSection({
           </span>
           {subtitle && <span className="muted small ellipsis">{subtitle}</span>}
           {isLiveItem && <span className="live-pill-mini">ON AIR</span>}
+          {isLooping && (
+            <span
+              className="loop-pill-mini"
+              data-looping-pill
+              title="Auto-advancing loop; press Space/Next to advance to the armed slide"
+            >
+              <Icon name="loop" size={10} />
+              LOOPING
+            </span>
+          )}
           {skipped && (
             <span className="tag" style={{ fontSize: 10 }}>
               Skipped
@@ -498,7 +519,11 @@ function PlaylistItemSection({
                     );
                   }}
                   footer={
-                    tags.length > 0 || hidden || hasNotes ? (
+                    tags.length > 0 ||
+                    hidden ||
+                    hasNotes ||
+                    c.index === lastShownLoopCueIndex ||
+                    (isLoop && own?.durationMs !== undefined && own.durationMs !== defaultLoopMs) ? (
                       <>
                         {hidden && (
                           <span className="tag" title={HIDDEN_TITLE} data-hidden-slide>
@@ -519,6 +544,16 @@ function PlaylistItemSection({
                             {t.kind}
                           </span>
                         ))}
+                        {isLoop && own?.durationMs !== undefined && own.durationMs !== defaultLoopMs && (
+                          <span className="tag" title="Custom slide duration" data-slide-duration>
+                            {formatLoopSeconds(c.autoAdvanceMs ?? own.durationMs)}s
+                          </span>
+                        )}
+                        {c.index === lastShownLoopCueIndex && (
+                          <span className="loop-wrap-badge" title="Loops back to first slide" data-loop-wrap>
+                            <Icon name="loop" size={11} />
+                          </span>
+                        )}
                       </>
                     ) : undefined
                   }
@@ -691,15 +726,25 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
     }
   }, [items.length]);
 
-  // If followLive is on (and operator is not actively arranging or typing a hotfix), scroll the live slide into view
+  // If followLive is on (and operator is not actively arranging or typing a hotfix), scroll the live slide into view.
+  // Skip auto-scrolling on internal loop auto-advance ticks so operators can scroll down to prep upcoming items.
+  const prevLiveItemRef = useRef<number | undefined>(undefined);
   useEffect(() => {
+    const curCue = state.live !== undefined ? state.cues[state.live] : undefined;
+    const curItem = curCue?.itemIndex;
+    const sameLoop =
+      curCue?.autoAdvanceMs !== undefined &&
+      prevLiveItemRef.current !== undefined &&
+      prevLiveItemRef.current === curItem;
+    prevLiveItemRef.current = op.live ? curItem : undefined;
+    if (sameLoop) return;
     if (followLive && op.live && state.live !== undefined && arrangingOpenCount === 0 && !hotfix) {
       const el = scrollPaneRef.current?.querySelector('.thumb.live');
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     }
-  }, [followLive, op.live, state.live, arrangingOpenCount, hotfix]);
+  }, [followLive, op.live, state.live, state.cues, arrangingOpenCount, hotfix]);
 
   const storedBase: Playlist | undefined = op.playlist
     ? (lib.playlists.find((p) => p.id === op.playlist!.id) ?? op.playlist)
@@ -742,6 +787,8 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
     setArrangingOpenCount((c) => Math.max(0, c + (open ? 1 : -1)));
   }, []);
 
+  const activeAutoAdvance = useMemo(() => (liveHere ? autoAdvance(state) : null), [liveHere, state]);
+
   const marksFor = useCallback(
     (c: Cue): ThumbMarks => {
       if (!liveHere) return { live: false, armed: false };
@@ -756,9 +803,17 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
             }))
           : undefined;
       const waiting = live && audienceOutputs.some((o) => waitingForLive(health[o.id], state));
-      return { live, armed, dots, waiting };
+      const autoProgress =
+        live && activeAutoAdvance && activeAutoAdvance.target !== c.index && c.autoAdvanceMs
+          ? {
+              durationMs: c.autoAdvanceMs,
+              elapsedMs: Math.max(0, Math.min(c.autoAdvanceMs, hubNow() - state.layers.slide.at)),
+              key: `${c.index}:${state.layers.slide.seq}`,
+            }
+          : undefined;
+      return { live, armed, dots, waiting, autoAdvance: autoProgress };
     },
-    [liveHere, state, audienceOutputs, health],
+    [liveHere, state, audienceOutputs, health, activeAutoAdvance],
   );
 
   const onClick = useCallback(
@@ -827,6 +882,7 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
             clickToGo={clickToGo}
             thumbSize={thumbSize}
             isLiveItem={op.live && liveItem === itemIdx}
+            isLooping={op.live && liveItem === itemIdx && activeAutoAdvance !== null}
             isActiveItem={activeItemIndices.has(itemIdx)}
             slideOf={slideOf}
             marksFor={marksFor}
