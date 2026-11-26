@@ -103,7 +103,7 @@ export function actionToEvent(
     case 'clearSlide':
       if (s.blankText) return { k: 'blankText', on: false, at };
       if (!s.layers.slide.content && !s.black && s.live !== undefined && s.cues[s.live]?.kind === 'slide') {
-        return { k: 'go', cueIndex: s.live, at };
+        return { k: 'blankText', on: true, at };
       }
       return { k: 'clear', layer: 'slide', at };
     case 'toggleBlankText':

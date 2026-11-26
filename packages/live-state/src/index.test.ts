@@ -548,7 +548,7 @@ describe('actionToEvent with ProPresenter navigation actions', () => {
     expect(s.props.countdownTimerId).toBeUndefined();
   });
 
-  it('toggles clearSlide off and back onto the live slide while keeping background active', () => {
+  it('cycles clearSlide through blank -> hold blank -> show slide while keeping background active', () => {
     let s = reduceAll(initialState(), [
       { k: 'goLive', resolved: fixture() },
       { k: 'go', cueIndex: 1, at: 10 },
@@ -556,17 +556,27 @@ describe('actionToEvent with ProPresenter navigation actions', () => {
     expect(s.layers.slide.content?.cueIndex).toBe(1);
     expect(s.layers.background.content?.mediaId).toBe('bg1');
 
-    // First clearSlide blanks foreground text while keeping background:
+    // First clearSlide blanks foreground text (one-shot) while keeping background:
     const clearEv = actionToEvent(s, { id: 'clearSlide' }, 20);
     expect(clearEv).toEqual({ k: 'clear', layer: 'slide', at: 20 });
     s = reduce(s, clearEv!);
     expect(s.layers.slide.content).toBeNull();
+    expect(s.blankText).toBeUndefined();
     expect(s.layers.background.content?.mediaId).toBe('bg1');
 
-    // Second clearSlide restores the live slide onto the slide layer:
-    const showEv = actionToEvent(s, { id: 'clearSlide' }, 30);
-    expect(showEv).toEqual({ k: 'go', cueIndex: 1, at: 30 });
+    // Second clearSlide escalates to sticky Hold blank:
+    const holdEv = actionToEvent(s, { id: 'clearSlide' }, 30);
+    expect(holdEv).toEqual({ k: 'blankText', on: true, at: 30 });
+    s = reduce(s, holdEv!);
+    expect(s.blankText).toBe(true);
+    expect(s.layers.slide.content).toBeNull();
+    expect(s.layers.background.content?.mediaId).toBe('bg1');
+
+    // Third clearSlide exits Hold blank and restores the live slide onto the slide layer:
+    const showEv = actionToEvent(s, { id: 'clearSlide' }, 40);
+    expect(showEv).toEqual({ k: 'blankText', on: false, at: 40 });
     s = reduce(s, showEv!);
+    expect(s.blankText).toBeUndefined();
     expect(s.layers.slide.content?.cueIndex).toBe(1);
   });
 

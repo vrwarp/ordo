@@ -337,9 +337,13 @@ export function keyFace(
       else if (view.liveLabel) sub = view.liveLabel;
       break;
     case 'clearSlide':
-      if (view.blankText || view.slideBlanked) {
+      if (view.blankText) {
         label = key.label === 'Clear slide' || !key.label ? 'Show slide' : key.label;
-        sub = view.blankText ? 'held' : 'blank';
+        sub = 'held';
+        face = { ...face, ring: '#fbbf24' };
+      } else if (view.slideBlanked) {
+        label = key.label === 'Clear slide' || !key.label ? 'Hold blank' : key.label;
+        sub = 'blank';
         face = { ...face, ring: '#fbbf24' };
       }
       break;

@@ -2,9 +2,9 @@ import { formatDuration } from '@ordo/domain';
 import { mediaPlayTarget, pendingSlideSound } from '@ordo/live-state';
 import type { OutputHealthEntry } from '@ordo/protocol';
 import { useMemo, useState } from 'react';
-import { type ContextMenuEntry, openContextMenu } from '../../components/ContextMenu.tsx';
+import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { Kbd } from '../../components/fields.tsx';
-import { Icon, type IconName } from '../../components/Icons.tsx';
+import { Icon } from '../../components/Icons.tsx';
 import { Menu } from '../../components/Menu.tsx';
 import { useHubNow } from '../../hooks.ts';
 import { HoldGuard } from '../../lib/confirm.ts';
@@ -14,54 +14,6 @@ import { CLEAR_HOLD_MS, useSurfaces } from '../../services/surfaces.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import type { OperatorPlaylist } from './useOperatorPlaylist.ts';
-
-function TallyKey(props: {
-  label: string;
-  icon: IconName;
-  value?: string;
-  on: boolean;
-  onClear: () => void;
-  keyHint?: string;
-  extraMenu?: ContextMenuEntry[];
-}) {
-  return (
-    <button
-      type="button"
-      className={`tally-key tactical-btn${props.on ? ' on' : ''}`}
-      disabled={!props.on}
-      onClick={props.onClear}
-      title={
-        props.on
-          ? `Click to clear ${props.label.toLowerCase()}${props.keyHint ? ` (${props.keyHint})` : ''}`
-          : `${props.label}: idle${props.keyHint ? ` (${props.keyHint})` : ''}`
-      }
-      onContextMenu={(e) => {
-        openContextMenu(
-          e,
-          [
-            ...(props.extraMenu ?? []),
-            ...(props.extraMenu?.length ? [{ kind: 'separator' as const }] : []),
-            {
-              label: `Clear ${props.label.toLowerCase()}`,
-              shortcut: props.keyHint,
-              disabled: !props.on,
-              onSelect: props.onClear,
-            },
-          ],
-          { ariaLabel: `${props.label} layer actions` },
-        );
-      }}
-    >
-      <span className="tally-key-led" aria-hidden="true" />
-      <Icon name={props.icon} size={13} />
-      <span className="tally-key-meta">
-        <span className="tally-key-lbl">{props.label}</span>
-        <span className="tally-key-val ellipsis">{props.value ?? '—'}</span>
-      </span>
-      {props.keyHint && <Kbd>{props.keyHint}</Kbd>}
-    </button>
-  );
-}
 
 function masterHealth(
   h: Record<string, OutputHealthEntry>,
@@ -84,7 +36,6 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
   const [holdingClear, setHoldingClear] = useState(false);
   const ctl = controller();
   const L = s.layers;
-  const slideCue = L.slide.content ? s.cues[L.slide.content.cueIndex] : undefined;
   const liveCue = s.live !== undefined ? s.cues[s.live] : undefined;
   const canRestoreSlide = !s.black && !L.slide.content && liveCue?.kind === 'slide';
   const slideActiveOrRestorable = Boolean(L.slide.content || canRestoreSlide || s.blankText);
@@ -104,6 +55,11 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
   if (s.props.logo) propsList.push('Logo');
   if (s.props.countdownTimerId) propsList.push('Countdown');
   const pending = clearUntil !== undefined && clearUntil > Date.now();
+  const activeLayerCount =
+    (L.background.content ? 1 : 0) +
+    (L.lowerThird.content ? 1 : 0) +
+    (mediaC || audioC ? 1 : 0) +
+    (propsList.length > 0 ? 1 : 0);
 
   const hold = useMemo(() => new HoldGuard(CLEAR_HOLD_MS), []);
   const clearDown = () => {
@@ -121,76 +77,38 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
 
   return (
     <div className="layerbar-console">
-      <TallyKey
-        label="BG"
-        icon="bgLayer"
-        value={bgName}
-        on={!!L.background.content}
-        onClear={() => ctl?.clear('background')}
-      />
-      <TallyKey
-        label="Slide"
-        icon="slideLayer"
-        value={
-          slideCue?.label ??
-          (s.blankText
-            ? '(blank held — click to show)'
-            : canRestoreSlide
-              ? '(blanked — click to show)'
-              : undefined)
-        }
-        on={slideActiveOrRestorable}
-        onClear={() => dispatch({ id: 'clearSlide' })}
-        keyHint="Esc"
-        extraMenu={[
+      <Menu
+        label={activeLayerCount > 0 ? `Layers (${activeLayerCount})` : 'Layers'}
+        items={[
           {
-            label: s.blankText ? 'Turn off Hold Blank' : 'Hold Blank (keep text hidden across slides)',
-            shortcut: 'Shift+F1',
-            disabled: s.mode !== 'live',
-            onSelect: () => dispatch({ id: 'toggleBlankText' }),
+            label: bgName ? `Clear background (${bgName})` : 'Clear background',
+            name: 'Clear background',
+            disabled: !L.background.content,
+            onSelect: () => ctl?.clear('background'),
+          },
+          {
+            label: L.lowerThird.content?.text
+              ? `Clear banner (${L.lowerThird.content.text.slice(0, 28)}) — F3`
+              : 'Clear banner — F3',
+            name: 'Clear banner',
+            disabled: !L.lowerThird.content,
+            onSelect: () => dispatch({ id: 'clearLowerThird' }),
+          },
+          {
+            label: mediaRec
+              ? `Clear ${audioC && !mediaC ? 'audio' : 'media'} (${mediaRec.name})`
+              : 'Clear media',
+            name: 'Clear media',
+            disabled: !mediaC && !audioC,
+            onSelect: () => (mediaC ? ctl?.clear('media') : ctl?.clear('audio')),
+          },
+          {
+            label: propsList.length ? `Clear props (${propsList.join(', ')}) — F4` : 'Clear props — F4',
+            name: 'Clear props',
+            disabled: propsList.length === 0,
+            onSelect: () => dispatch({ id: 'clearProps' }),
           },
         ]}
-      />
-      <TallyKey
-        label="Banner"
-        icon="bannerLayer"
-        value={L.lowerThird.content?.text}
-        on={!!L.lowerThird.content}
-        onClear={() => dispatch({ id: 'clearLowerThird' })}
-        keyHint="F3"
-      />
-      <TallyKey
-        label={audioC && !mediaC ? 'Audio' : 'Media'}
-        icon={audioC && !mediaC ? 'audio' : 'mediaLayer'}
-        value={
-          mediaRec
-            ? `${mediaRec.name}${(mediaC ?? audioC)?.state === 'paused' ? ' (paused)' : (mediaC ?? audioC)?.state === 'ended' ? ' (ended)' : ''}`
-            : undefined
-        }
-        on={!!mediaC || !!audioC}
-        onClear={() => (mediaC ? ctl?.clear('media') : ctl?.clear('audio'))}
-        extraMenu={[
-          {
-            label: playing ? 'Pause' : 'Play',
-            shortcut: 'F8',
-            disabled: !target,
-            onSelect: () => dispatch({ id: 'mediaPlayPause' }),
-          },
-          {
-            label: 'Restart from beginning',
-            shortcut: 'Shift+F8',
-            disabled: !mediaC && !audioC && !waiting,
-            onSelect: () => dispatch({ id: 'mediaRestart' }),
-          },
-        ]}
-      />
-      <TallyKey
-        label="Props"
-        icon="propsLayer"
-        value={propsList.join(', ') || undefined}
-        on={propsList.length > 0}
-        onClear={() => dispatch({ id: 'clearProps' })}
-        keyHint="F4"
       />
 
       <span className="console-sep" aria-hidden="true" />
@@ -303,48 +221,69 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
 
       <span className="console-sep" aria-hidden="true" />
 
-      <div className="row" style={{ gap: 4, flexShrink: 0 }}>
-        <button
-          type="button"
-          className={`small tactical-btn${canRestoreSlide && !s.blankText ? ' on' : ''}`}
-          disabled={!slideActiveOrRestorable}
-          onClick={() => dispatch({ id: 'clearSlide' })}
-          data-blank-slide
-          title={
-            canRestoreSlide || s.blankText
-              ? 'Restore live slide text over the running background (Esc / F1)'
-              : 'Blank slide text temporarily while keeping the background running (Esc / F1)'
-          }
-          style={
-            canRestoreSlide && !s.blankText
-              ? { borderColor: 'var(--amber, #f59e0b)', color: 'var(--amber, #fbbf24)' }
-              : undefined
-          }
-        >
-          <span>{canRestoreSlide || s.blankText ? 'Show slide' : 'Blank slide'}</span>
-          <Kbd>F1</Kbd>
-        </button>
-        <button
-          type="button"
-          className={`small tactical-btn${s.blankText ? ' on' : ''}`}
-          disabled={s.mode !== 'live'}
-          aria-pressed={Boolean(s.blankText)}
-          onClick={() => dispatch({ id: 'toggleBlankText' })}
-          data-hold-blank
-          title="Hold blank text: pressing Space changes backgrounds and Stage Display while keeping audience text hidden until turned off (Shift+F1)"
-          style={
-            s.blankText
+      <button
+        type="button"
+        className={`small tactical-btn${s.blankText || canRestoreSlide ? ' on' : ''}`}
+        disabled={!slideActiveOrRestorable}
+        aria-pressed={Boolean(s.blankText || canRestoreSlide)}
+        onClick={() => dispatch({ id: 'clearSlide' })}
+        onContextMenu={(e) => {
+          openContextMenu(
+            e,
+            [
+              {
+                label: 'Blank slide (next cue shows)',
+                shortcut: 'F1',
+                disabled: !L.slide.content,
+                onSelect: () => ctl?.clear('slide'),
+              },
+              {
+                label: s.blankText ? 'Release Hold blank (show slide)' : 'Hold blank across cues',
+                shortcut: 'Shift+F1',
+                disabled: s.mode !== 'live',
+                onSelect: () => dispatch({ id: 'toggleBlankText' }),
+              },
+              ...(canRestoreSlide && !s.blankText && s.live !== undefined
+                ? [
+                    {
+                      label: 'Show slide now',
+                      onSelect: () => ctl?.go(s.live!),
+                    },
+                  ]
+                : []),
+            ],
+            { ariaLabel: 'Blank slide actions' },
+          );
+        }}
+        data-blank-slide
+        data-blank-state={s.blankText ? 'held' : canRestoreSlide ? 'blank' : 'showing'}
+        title={
+          s.blankText
+            ? 'Audience text is held blank across cues — click or press F1 to show the live slide'
+            : canRestoreSlide
+              ? 'Slide is blanked (next cue will show). Click again or press F1 to Hold blank across cues; right-click to Show slide.'
+              : 'Blank slide text while keeping the background running (F1). Press again to Hold blank across cues.'
+        }
+        style={
+          s.blankText
+            ? {
+                background: 'rgba(245, 158, 11, 0.22)',
+                borderColor: 'var(--amber, #f59e0b)',
+                color: '#fde68a',
+                flexShrink: 0,
+              }
+            : canRestoreSlide
               ? {
-                  background: 'rgba(245, 158, 11, 0.2)',
                   borderColor: 'var(--amber, #f59e0b)',
-                  color: '#fde68a',
+                  color: 'var(--amber, #fbbf24)',
+                  flexShrink: 0,
                 }
-              : undefined
-          }
-        >
-          <span>{s.blankText ? 'Blank held' : 'Hold blank'}</span>
-        </button>
-      </div>
+              : { flexShrink: 0 }
+        }
+      >
+        <span>{s.blankText ? 'Show slide' : canRestoreSlide ? 'Hold blank' : 'Blank slide'}</span>
+        <Kbd>F1</Kbd>
+      </button>
 
       <button
         type="button"
