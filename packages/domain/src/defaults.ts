@@ -184,6 +184,7 @@ export const DEFAULT_KEYMAP: KeyMap = {
   PageDown: { id: 'nextItem' },
   PageUp: { id: 'prevItem' },
   F1: { id: 'clearSlide' },
+  'Shift+F1': { id: 'toggleBlankText' },
   F2: { id: 'clearAll' },
   F3: { id: 'clearLowerThird' },
   F4: { id: 'clearProps' },

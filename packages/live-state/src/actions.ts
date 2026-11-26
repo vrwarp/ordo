@@ -101,7 +101,13 @@ export function actionToEvent(
       return target ? { k: 'go', cueIndex: target.index, at } : null;
     }
     case 'clearSlide':
+      if (s.blankText) return { k: 'blankText', on: false, at };
+      if (!s.layers.slide.content && !s.black && s.live !== undefined && s.cues[s.live]?.kind === 'slide') {
+        return { k: 'go', cueIndex: s.live, at };
+      }
       return { k: 'clear', layer: 'slide', at };
+    case 'toggleBlankText':
+      return { k: 'blankText', at };
     case 'clearAll':
       return { k: 'clear', layer: 'all', at };
     case 'clearLowerThird':

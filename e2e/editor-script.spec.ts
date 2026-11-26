@@ -174,3 +174,45 @@ test('typing and Alt+Enter in a formatted song keep its numbers and bold through
   expect(y!.midiCues).toBeUndefined();
   expect(y!.bottomThirdText).toBeUndefined();
 });
+
+test('Song Info & CCLI editor, movable Title Slide, and Blank step persist through Save and reload', async ({
+  page,
+}) => {
+  const a = await hubApi(PORT);
+  const song = (await (await a.post('import/songselect', { data: { text: SONG } })).json()) as { id: string };
+  await openSong(page, song.id);
+
+  // Open Song Info & CCLI panel and edit metadata directly in Lyric Script.
+  await page.locator('[data-song-info-toggle]').click();
+  const infoPanel = page.locator('[data-song-info-panel]');
+  await expect(infoPanel).toBeVisible();
+  await infoPanel.getByLabel('Author / Artist').fill('John Newton');
+  await infoPanel.getByLabel('CCLI Song #').fill('22025');
+  await infoPanel.getByLabel('Copyright').fill('Public Domain');
+
+  // Enable Title Slide and verify the live Title Slide preview card & TTL chip appear.
+  await page.locator('[data-title-slide-toggle]').click();
+  await expect(page.locator('#section-title-slide')).toBeVisible();
+  await expect(page.locator('#section-title-slide')).toContainText('John Newton');
+  await expect(page.locator('#section-title-slide')).toContainText('CCLI Song #22025');
+  await expect(page.locator('[data-arrangement-strip]')).toContainText('TTL');
+
+  // Insert a Blank step at the start: arrangement should place BLK before TTL.
+  await page.locator('[data-arrangement-strip]').getByRole('button', { name: '+ Step' }).click();
+  await page.getByRole('menuitem', { name: 'Blank at start' }).click();
+  await expect
+    .poll(async () => page.locator('[data-arrangement-strip] .song-arr-jump').allTextContents())
+    .toEqual(['BLK', 'TTL', 'V1', 'V2']);
+
+  // Save and reload: metadata, titleSlide flag, and BLK -> TTL arrangement survive.
+  const saved = await saveAndReloadSong(page, a, song.id);
+  expect((saved as unknown as { meta: Record<string, unknown> }).meta).toMatchObject({
+    author: 'John Newton',
+    ccli: '22025',
+    copyright: 'Public Domain',
+    titleSlide: true,
+  });
+  await expect
+    .poll(async () => page.locator('[data-arrangement-strip] .song-arr-jump').allTextContents())
+    .toEqual(['BLK', 'TTL', 'V1', 'V2']);
+});

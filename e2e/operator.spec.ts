@@ -69,6 +69,26 @@ test('a volunteer builds a service in the UI, goes live, launches outputs and ru
     await page.keyboard.press('F1');
     await expect.poll(() => cueOn(out1), { timeout: 15_000 }).toBe(null);
 
+    // Second F1 toggles the blanked slide back onto the audience screen.
+    await page.bringToFront();
+    await page.keyboard.press('F1');
+    await expect.poll(() => cueOn(out1), { timeout: 15_000 }).toBe(1);
+
+    // Shift+F1 activates sticky Hold blank: shows warning banner and keeps audience blank across ArrowRight.
+    await page.bringToFront();
+    await page.keyboard.press('Shift+F1');
+    await expect(page.locator('[data-hold-blank-banner]')).toBeVisible();
+    await expect.poll(() => cueOn(out1), { timeout: 15_000 }).toBe(null);
+    await page.bringToFront();
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(() => cueOn(out1), { timeout: 15_000 }).toBe(null);
+
+    // Releasing Hold blank from the banner reveals the newly advanced cue (2).
+    await page.bringToFront();
+    await page.locator('[data-release-hold-blank]').click();
+    await expect(page.locator('[data-hold-blank-banner]')).toBeHidden();
+    await expect.poll(() => cueOn(out1), { timeout: 15_000 }).toBe(2);
+
     // Health reaches the operator: the Audience 1 dot appears without errors.
     await page.bringToFront();
     await expect(page.getByText('Audience 1').first()).toBeVisible();

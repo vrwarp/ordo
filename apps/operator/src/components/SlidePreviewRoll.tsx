@@ -1,7 +1,15 @@
-import { firstText, type Media, type Presentation, type Section, type Slide } from '@ordo/domain';
+import {
+  firstText,
+  type Media,
+  type Presentation,
+  type Section,
+  type Slide,
+  withSongTitleSlide,
+} from '@ordo/domain';
 import { useMemo } from 'react';
 import { useMediaLookup, useVisible } from '../hooks.ts';
 import { stillHash, useThumb } from '../services/thumbs.ts';
+import { useLibrary } from '../state/library.ts';
 
 export function getSectionSlides(s: Section): { id: string; text: string }[] {
   return (s.slides ?? []).map((sl) => {
@@ -112,7 +120,7 @@ function SlideMiniThumb({
           {index + 1}
         </span>
       </div>
-      {text && (
+      {text ? (
         <span
           className="muted ellipsis"
           style={{
@@ -125,13 +133,26 @@ function SlideMiniThumb({
         >
           {text}
         </span>
-      )}
+      ) : p.kind === 'song' || (slide.objects?.length ?? 0) === 0 ? (
+        <span
+          className="muted ellipsis"
+          style={{
+            fontSize: compact ? 10.5 : 11.5,
+            lineHeight: 1.25,
+            width: cardWidth,
+            fontStyle: 'italic',
+            userSelect: 'none',
+          }}
+        >
+          (Blank)
+        </span>
+      ) : null}
     </div>
   );
 }
 
 export function SlidePreviewRoll({
-  p,
+  p: rawP,
   compact = false,
   onAddArrangement,
 }: {
@@ -140,6 +161,9 @@ export function SlidePreviewRoll({
   onAddArrangement?: (arrangementId?: string) => void;
 }) {
   const media = useMediaLookup();
+  const themes = useLibrary((s) => s.data.themes);
+  const ccliLicense = useLibrary((s) => s.data.settings.general.ccliLicense);
+  const p = useMemo(() => withSongTitleSlide(rawP, { themes, ccliLicense }), [rawP, themes, ccliLicense]);
   const byId = useMemo(() => new Map(p.sections.map((s) => [s.id, s])), [p.sections]);
 
   const entries = useMemo(() => {

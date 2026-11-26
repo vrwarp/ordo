@@ -2,7 +2,7 @@ import { type Arrangement, newId, type Presentation } from '@ordo/domain';
 import { useState } from 'react';
 import { ArrangementEditor } from '../../components/ArrangementEditor.tsx';
 import { confirmDialog } from '../../components/Confirm.tsx';
-import { NumberField, TextField, TransitionEditor } from '../../components/fields.tsx';
+import { Check, NumberField, TextField, TransitionEditor } from '../../components/fields.tsx';
 import { authoringArrangement, upsertArrangement } from '../../lib/arrangement.ts';
 import { useLibrary } from '../../state/library.ts';
 import { BackgroundPicker } from './BackgroundPicker.tsx';
@@ -149,6 +149,14 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
             disabled={readOnly}
             onChange={(copyright) =>
               set((q) => ({ ...q, meta: { ...q.meta, copyright: copyright || undefined } }), 'copyright')
+            }
+          />
+          <Check
+            label="Show auto-generated Title Slide (Title, Author, Copyright, CCLI)"
+            value={Boolean(meta.titleSlide)}
+            disabled={readOnly}
+            onChange={(on) =>
+              set((q) => ({ ...q, meta: { ...q.meta, titleSlide: on || undefined } }), 'titleSlide')
             }
           />
 

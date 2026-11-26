@@ -11,9 +11,10 @@ import { useLibrary } from '../../state/library.ts';
 import { useSearch } from '../../services/search.ts';
 import { stateTag } from '../library/MediaTab.tsx';
 
-const ACTIONS: { value: ActionId; label: string }[] = [
+export const ACTIONS: { value: ActionId; label: string }[] = [
   { value: 'clearAll', label: 'Clear all to black' },
-  { value: 'clearSlide', label: 'Clear slide' },
+  { value: 'clearSlide', label: 'Blank slide (keep background)' },
+  { value: 'toggleBlankText', label: 'Toggle hold blank text' },
   { value: 'clearLowerThird', label: 'Clear lower third' },
   { value: 'clearProps', label: 'Clear props' },
   { value: 'clearMedia', label: 'Clear media' },
@@ -387,5 +388,3 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
     </div>
   );
 }
-
-export { ACTIONS };

@@ -34,6 +34,7 @@ export function serviceRelevantUnsaved(playlistId: string): UnsavedItem[] {
     }
   }
 
+  add(items['settings:general']);
   add(items['settings:outputs']);
   add(items['settings:looks']);
   add(items['settings:audio']);

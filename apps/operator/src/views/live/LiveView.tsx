@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
+import { Kbd } from '../../components/fields.tsx';
 import { useCoarsePointer } from '../../components/pointer.ts';
 import { SplitPane } from '../../components/SplitPane.tsx';
+import { dispatch } from '../../services/controller.ts';
 import { useLive } from '../../state/live.ts';
 import { setUi, useUi } from '../../state/ui.ts';
 import { DegradedBanner } from './DegradedBanner.tsx';
@@ -14,6 +16,39 @@ import { SlideGrid } from './SlideGrid.tsx';
 import { StageTools } from './StageTools.tsx';
 import { TopBar } from './TopBar.tsx';
 import { useOperatorPlaylist } from './useOperatorPlaylist.ts';
+
+function HoldBlankBanner() {
+  const active = useLive((s) => s.state.mode === 'live' && Boolean(s.state.blankText));
+  if (!active) return null;
+  return (
+    <div
+      className="banner row"
+      role="status"
+      data-hold-blank-banner
+      style={{
+        margin: '6px 12px',
+        padding: '7px 12px',
+        alignItems: 'center',
+        gap: 12,
+        background: 'rgba(245, 158, 11, 0.16)',
+        border: '1px solid rgba(245, 158, 11, 0.55)',
+      }}
+    >
+      <span className="grow">
+        <b>Audience text is held blank</b> — backgrounds, MIDI cues, and Stage Display still advance, while
+        audience &amp; livestream text stay hidden.
+      </span>
+      <button
+        type="button"
+        className="small primary"
+        onClick={() => dispatch({ id: 'clearSlide' })}
+        data-release-hold-blank
+      >
+        Show slide <Kbd>F1</Kbd>
+      </button>
+    </div>
+  );
+}
 
 /** The operator view (prd/02 Layout, design/30 §5.1). */
 export function LiveView() {
@@ -33,6 +68,7 @@ export function LiveView() {
     <div className="op">
       <TopBar inline={!coarse} />
       <DegradedBanner />
+      <HoldBlankBanner />
       <SplitPane
         storageKey="live-main"
         className="op-main-split"

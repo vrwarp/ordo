@@ -41,6 +41,8 @@ function StripSlide(props: { p: Presentation; slide: Slide; index: number; selec
  */
 export function PreviewsView({ id, slideId }: { id?: string; slideId?: string }) {
   const presentations = useLibrary((s) => s.data.presentations);
+  const themes = useLibrary((s) => s.data.themes);
+  const ccliLicense = useLibrary((s) => s.data.settings.general.ccliLicense);
   const unsavedItems = useUnsaved((s) => s.items);
   const [filter, setFilter] = useState('');
   const list = useMemo(() => {
@@ -50,7 +52,7 @@ export function PreviewsView({ id, slideId }: { id?: string; slideId?: string })
       .sort((a, b) => a.title.localeCompare(b.title));
   }, [presentations, filter]);
   const current = presentations.find((p) => p.id === id);
-  const slides = current ? flatSlides(current) : [];
+  const slides = current ? flatSlides(current, { themes, ccliLicense }) : [];
   const sel = slides.find((s) => s.id === slideId) ?? slides[0];
   const currentHasUnsaved = Boolean(current && unsavedItems[`pres:${current.id}`]);
   return (

@@ -1,4 +1,5 @@
 import type { Cue, ResolvedMidiCue, ResolvedPlaylist } from './live.ts';
+import { withSongTitleSlide } from './lyrics.ts';
 import { extraText } from './m9-readers.ts';
 import { readableText } from './readable.ts';
 import { playingObject } from './resolve.ts';
@@ -60,8 +61,9 @@ export function expandCues(
   resolved.playlist.items.forEach((item, itemIndex) => {
     const itemSkipped = item.skipped === true;
     if (item.kind === 'presentation') {
-      const p = resolved.presentations[item.presentationId];
-      if (!p) return;
+      const rawP = resolved.presentations[item.presentationId];
+      if (!rawP) return;
+      const p = withSongTitleSlide(rawP);
       const itemMidi = resolveMidiTrigger(item.midi, presets);
       const sections = arrangedSections(p, item.arrangementId, item.sections);
       const hiddenSlideSet = item.hiddenSlides?.length ? new Set(item.hiddenSlides) : undefined;

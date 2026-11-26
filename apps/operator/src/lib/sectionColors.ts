@@ -15,11 +15,15 @@ const TONES: Record<string, SectionTone> = {
   bridge: { bg: '#b45309', fg: '#fffbeb', border: '#f59e0b' },
   tag: { bg: '#0f766e', fg: '#f0fdfa', border: '#14b8a6' },
   intro: { bg: '#6d28d9', fg: '#f5f3ff', border: '#8b5cf6' },
+  title: { bg: '#0369a1', fg: '#f0f9ff', border: '#38bdf8' },
+  blank: { bg: '#1f2937', fg: '#cbd5e1', border: '#64748b' },
   default: { bg: '#333a47', fg: '#e7eaee', border: '#4b5563' },
 };
 
 export function sectionTone(label: string, short?: string): SectionTone {
   const s = `${label} ${short ?? ''}`.toLowerCase();
+  if (/^title\b|\bttl\b/.test(s)) return TONES.title!;
+  if (/\bblank\b|\bblk\b/.test(s)) return TONES.blank!;
   if (/pre[-\s]?chorus|\bpc\d*\b/.test(s)) return TONES.prechorus!;
   if (/chorus|refrain|\bc\d*\b/.test(s)) return TONES.chorus!;
   if (/bridge|\bb\d*\b/.test(s)) return TONES.bridge!;

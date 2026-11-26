@@ -85,6 +85,9 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
   const ctl = controller();
   const L = s.layers;
   const slideCue = L.slide.content ? s.cues[L.slide.content.cueIndex] : undefined;
+  const liveCue = s.live !== undefined ? s.cues[s.live] : undefined;
+  const canRestoreSlide = !s.black && !L.slide.content && liveCue?.kind === 'slide';
+  const slideActiveOrRestorable = Boolean(L.slide.content || canRestoreSlide || s.blankText);
   const bgName = L.background.content ? op.media(L.background.content.mediaId)?.name : undefined;
   const mediaC = L.media.content;
   const audioC = s.audio.content;
@@ -128,10 +131,25 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
       <TallyKey
         label="Slide"
         icon="slideLayer"
-        value={slideCue?.label}
-        on={!!L.slide.content}
+        value={
+          slideCue?.label ??
+          (s.blankText
+            ? '(blank held — click to show)'
+            : canRestoreSlide
+              ? '(blanked — click to show)'
+              : undefined)
+        }
+        on={slideActiveOrRestorable}
         onClear={() => dispatch({ id: 'clearSlide' })}
-        keyHint="F1"
+        keyHint="Esc"
+        extraMenu={[
+          {
+            label: s.blankText ? 'Turn off Hold Blank' : 'Hold Blank (keep text hidden across slides)',
+            shortcut: 'Shift+F1',
+            disabled: s.mode !== 'live',
+            onSelect: () => dispatch({ id: 'toggleBlankText' }),
+          },
+        ]}
       />
       <TallyKey
         label="Banner"
@@ -284,6 +302,49 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
       </div>
 
       <span className="console-sep" aria-hidden="true" />
+
+      <div className="row" style={{ gap: 4, flexShrink: 0 }}>
+        <button
+          type="button"
+          className={`small tactical-btn${canRestoreSlide && !s.blankText ? ' on' : ''}`}
+          disabled={!slideActiveOrRestorable}
+          onClick={() => dispatch({ id: 'clearSlide' })}
+          data-blank-slide
+          title={
+            canRestoreSlide || s.blankText
+              ? 'Restore live slide text over the running background (Esc / F1)'
+              : 'Blank slide text temporarily while keeping the background running (Esc / F1)'
+          }
+          style={
+            canRestoreSlide && !s.blankText
+              ? { borderColor: 'var(--amber, #f59e0b)', color: 'var(--amber, #fbbf24)' }
+              : undefined
+          }
+        >
+          <span>{canRestoreSlide || s.blankText ? 'Show slide' : 'Blank slide'}</span>
+          <Kbd>F1</Kbd>
+        </button>
+        <button
+          type="button"
+          className={`small tactical-btn${s.blankText ? ' on' : ''}`}
+          disabled={s.mode !== 'live'}
+          aria-pressed={Boolean(s.blankText)}
+          onClick={() => dispatch({ id: 'toggleBlankText' })}
+          data-hold-blank
+          title="Hold blank text: pressing Space changes backgrounds and Stage Display while keeping audience text hidden until turned off (Shift+F1)"
+          style={
+            s.blankText
+              ? {
+                  background: 'rgba(245, 158, 11, 0.2)',
+                  borderColor: 'var(--amber, #f59e0b)',
+                  color: '#fde68a',
+                }
+              : undefined
+          }
+        >
+          <span>{s.blankText ? 'Blank held' : 'Hold blank'}</span>
+        </button>
+      </div>
 
       <button
         type="button"

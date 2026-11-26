@@ -46,10 +46,24 @@ export function buildView(i: ViewInput): StageView {
       return def;
     }
   };
-  const p = i.shown ? state.resolved?.presentations[i.shown.presentationId] : undefined;
+  const liveSlideCue =
+    !i.shown && state.blankText && !state.black && state.live !== undefined
+      ? state.cues[state.live]
+      : undefined;
+  const stageShown: SlideContent | null =
+    i.shown ??
+    (liveSlideCue?.kind === 'slide' && liveSlideCue.presentationId && liveSlideCue.slideId
+      ? {
+          kind: 'slide',
+          cueIndex: liveSlideCue.index,
+          presentationId: liveSlideCue.presentationId,
+          slideId: liveSlideCue.slideId,
+        }
+      : null);
+  const p = stageShown ? state.resolved?.presentations[stageShown.presentationId] : undefined;
   const isSong = p?.kind === 'song';
-  const notes = layout.notes ? safe(() => notesText(state, i.shown), null) : null;
-  const nextNotes = layout.notes ? safe(() => nextNotesText(state, i.shown), null) : null;
+  const notes = layout.notes ? safe(() => notesText(state, stageShown), null) : null;
+  const nextNotes = layout.notes ? safe(() => nextNotesText(state, stageShown), null) : null;
   const messages = layout.messages
     ? safe(() => activeMessages(state.messages, now), []).map((m) => ({ id: m.id, text: m.text }))
     : [];
@@ -88,10 +102,13 @@ export function buildView(i: ViewInput): StageView {
   }
 
   // Add slide position ("3/12") onto non-song current slide kickers so preachers have deck progress
-  const current = safe(() => currentText(state, i.shown, activeLayout), null);
-  const lecternSlides = safe(() => buildLecternSlides(state, i.shown), []);
-  if (current && !isSong && lecternSlides.length > 1 && i.shown?.slideId && !current.position) {
-    const idx = lecternSlides.findIndex((s) => s.slideId === i.shown?.slideId);
+  const current = safe(() => currentText(state, stageShown, activeLayout), null);
+  if (current && !i.shown && state.blankText) {
+    current.label = current.label ? `${current.label} · Audience Blank` : 'Audience Blank';
+  }
+  const lecternSlides = safe(() => buildLecternSlides(state, stageShown), []);
+  if (current && !isSong && lecternSlides.length > 1 && stageShown?.slideId && !current.position) {
+    const idx = lecternSlides.findIndex((s) => s.slideId === stageShown?.slideId);
     if (idx >= 0) {
       current.label = current.label ?? p?.title ?? 'Slide';
       current.position = `${idx + 1}/${lecternSlides.length}`;
@@ -103,10 +120,10 @@ export function buildView(i: ViewInput): StageView {
     bus: i.bus,
     layout: activeLayout,
     current,
-    next: safe(() => nextText(state, i.shown, activeLayout), null),
+    next: safe(() => nextText(state, stageShown, activeLayout), null),
     notes,
     nextNotes,
-    activeSlideId: i.shown?.slideId,
+    activeSlideId: stageShown?.slideId,
     presentationTitle: p?.title,
     isSong,
     lecternSlides,

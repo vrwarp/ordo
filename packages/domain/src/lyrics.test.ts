@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatSongCredits,
+  formatSongStreamCredits,
   isChordLine,
+  isTitleSectionId,
+  isTitleSlideId,
   nextFreeLabel,
   parseLyrics,
   parseSectionLabel,
   sectionSlideTexts,
+  songBlankSection,
   songFromParsed,
+  titleSectionId,
+  titleSlideId,
+  withSongTitleSlide,
 } from './lyrics.ts';
 import { expandCues } from './cues.ts';
 
@@ -230,5 +238,99 @@ describe('slides and arrangements', () => {
     // V1 has 4 lines -> 2 slides, chorus 1 slide, V2 1 slide, chorus 1 slide
     expect(cues.map((c) => c.sectionShort)).toEqual(['V1', 'V1', 'C', 'V2', 'C']);
     expect(cues.map((c) => c.arrangementPos)).toEqual([0, 0, 1, 2, 3]);
+  });
+
+  it('recognises Blank and Turnaround section headers and creates empty Blank sections', () => {
+    expect(parseSectionLabel('Blank')).toEqual({ label: 'Blank', short: 'BLK' });
+    expect(parseSectionLabel('[Blank 2]')).toEqual({ label: 'Blank 2', short: 'BLK2' });
+    expect(parseSectionLabel('Turnaround')).toEqual({ label: 'Blank', short: 'BLK' });
+    const blank = songBlankSection();
+    expect(blank.short).toBe('BLK');
+    expect(blank.slides).toHaveLength(1);
+    expect(blank.slides[0]!.objects[0]?.type === 'text' ? blank.slides[0]!.objects[0].text : '').toBe('');
+    const blank2 = songBlankSection(undefined, 'Blank 2', 'BLK2');
+    expect(blank2.label).toBe('Blank 2');
+    expect(blank2.short).toBe('BLK2');
+  });
+
+  it('formats CCLI credits and materializes optional song title slides idempotently', () => {
+    const p = songFromParsed(parseLyrics(SONGSELECT), { linesPerSlide: 2, titleSlide: true });
+    expect(p.meta.titleSlide).toBe(true);
+    expect(
+      formatSongCredits(
+        { tags: [], author: 'Some Writer', copyright: '© 2020 Some Publisher', ccli: '1234567' },
+        '99999',
+      ),
+    ).toBe('Some Writer\n© 2020 Some Publisher · CCLI Song #1234567 · CCLI License #99999');
+    expect(formatSongCredits({ tags: [], author: 'Writer', copyright: '2024 Pub', ccli: '555' })).toBe(
+      'Writer\n© 2024 Pub · CCLI Song #555',
+    );
+    expect(formatSongStreamCredits({ tags: [], author: 'Writer', ccli: '555' }, '888')).toBe(
+      'Writer · CCLI #555 · Lic #888',
+    );
+
+    const withTitle = withSongTitleSlide(p, { ccliLicense: '99999' });
+    expect(isTitleSectionId(titleSectionId(p.id))).toBe(true);
+    expect(isTitleSlideId(titleSlideId(p.id))).toBe(true);
+    expect(withTitle.sections[0]?.id).toBe(titleSectionId(p.id));
+    expect(withTitle.sections[0]?.short).toBe('TTL');
+    expect(withTitle.arrangements[0]?.sectionIds[0]).toBe(titleSectionId(p.id));
+
+    // Idempotent when applied twice:
+    const twice = withSongTitleSlide(withTitle, { ccliLicense: '99999' });
+    expect(twice.sections.filter((s) => isTitleSectionId(s.id))).toHaveLength(1);
+    expect(twice.arrangements[0]?.sectionIds.filter((id) => isTitleSectionId(id))).toHaveLength(1);
+
+    // Stripped cleanly when toggled off:
+    const stripped = withSongTitleSlide({ ...withTitle, meta: { ...withTitle.meta, titleSlide: false } });
+    expect(stripped.sections.some((s) => isTitleSectionId(s.id))).toBe(false);
+    expect(stripped.arrangements[0]?.sectionIds.some((id) => isTitleSectionId(id))).toBe(false);
+
+    // expandCues includes TTL and Blank steps in cue sequence:
+    const blank = songBlankSection();
+    const pWithBlank = {
+      ...p,
+      sections: [...p.sections, blank],
+      arrangements: [
+        {
+          ...p.arrangements[0]!,
+          sectionIds: [...p.arrangements[0]!.sectionIds, blank.id],
+        },
+      ],
+    };
+    const cues = expandCues({
+      playlist: {
+        id: 'pl',
+        rev: 1,
+        name: 'x',
+        items: [{ id: 'i1', kind: 'presentation', presentationId: pWithBlank.id }],
+      },
+      presentations: { [pWithBlank.id]: pWithBlank },
+      media: {},
+    });
+    expect(cues.map((c) => c.sectionShort)).toEqual(['TTL', 'V1', 'V1', 'C', 'V2', 'C', 'BLK']);
+
+    // Custom arrangement placement (Blank -> Title -> Verse 1...) is preserved:
+    const pBlankFirst = {
+      ...p,
+      sections: [...p.sections, blank],
+      arrangements: [
+        {
+          ...p.arrangements[0]!,
+          sectionIds: [blank.id, titleSectionId(p.id), ...p.arrangements[0]!.sectionIds],
+        },
+      ],
+    };
+    const cuesBlankFirst = expandCues({
+      playlist: {
+        id: 'pl',
+        rev: 1,
+        name: 'x',
+        items: [{ id: 'i1', kind: 'presentation', presentationId: pBlankFirst.id }],
+      },
+      presentations: { [pBlankFirst.id]: pBlankFirst },
+      media: {},
+    });
+    expect(cuesBlankFirst.map((c) => c.sectionShort)).toEqual(['BLK', 'TTL', 'V1', 'V1', 'C', 'V2', 'C']);
   });
 });

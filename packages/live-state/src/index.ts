@@ -12,9 +12,11 @@ import {
   expandCues,
   isHiddenCue,
   isSkippedCue,
+  isTitleSlideId,
   nextShownCue,
   prevShownCue,
   sectionsOfItem,
+  songTitleSlide,
 } from '@ordo/domain';
 
 const MAX_MESSAGES = 10;
@@ -121,6 +123,8 @@ export function reduce(prev: LiveState, e: LiveEvent): LiveState {
     }
     case 'clear':
       return clear(s, e.layer, e.at);
+    case 'blankText':
+      return setBlankText(s, e.on ?? !s.blankText, e.at);
     case 'logo':
       return { ...s, black: false, props: { ...s.props, logo: !s.props.logo, at: e.at, seq } };
     case 'lowerThird':
@@ -383,7 +387,7 @@ function applySlideEditText(
   )
     return s;
   const pres = s.resolved.presentations[presentationId];
-  if (!pres) return s;
+  if (!pres || isTitleSlideId(slideId)) return s;
   let found = false;
   const sections = pres.sections.map((sec) => {
     let secChanged = false;
@@ -449,17 +453,21 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
   switch (cue.kind) {
     case 'slide': {
       const layers = { ...out.layers };
-      layers.slide = {
-        content: {
-          kind: 'slide',
-          cueIndex: index,
-          presentationId: cue.presentationId!,
-          slideId: cue.slideId!,
-        },
-        at,
-        seq,
-        transition: cue.transition,
-      };
+      layers.slide = base.blankText
+        ? layers.slide.content
+          ? { content: null, at, seq, transition: cue.transition }
+          : layers.slide
+        : {
+            content: {
+              kind: 'slide',
+              cueIndex: index,
+              presentationId: cue.presentationId!,
+              slideId: cue.slideId!,
+            },
+            at,
+            seq,
+            transition: cue.transition,
+          };
       // Entry effects (the background clear, the item's countdown) apply on whichever cue enters the item:
       // its first slide may be hidden, or the operator may click further in, jump to it, or step back into it.
       const enteringItem = s.live === undefined || s.cues[s.live]?.itemId !== cue.itemId;
@@ -476,7 +484,11 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
           transition: cue.transition,
         };
       }
-      layers.media = slideMediaLayer(layers.media, cue, index, at, seq);
+      layers.media = base.blankText
+        ? layers.media.content?.objectId
+          ? { content: null, at, seq, transition: cue.transition }
+          : layers.media
+        : slideMediaLayer(layers.media, cue, index, at, seq);
       let nextProps = out.props.logo ? { ...out.props, logo: false, at, seq } : out.props;
       let nextTimers = out.timers;
       if (cue.timer && cue.timerId && enteringItem) {
@@ -725,6 +737,8 @@ function applyAction(s: LiveState, action: ActionId, at: number): LiveState {
   switch (action) {
     case 'clearSlide':
       return clear(s, 'slide', at);
+    case 'toggleBlankText':
+      return setBlankText(s, !s.blankText, at);
     case 'clearAll':
       return clear(s, 'all', at);
     case 'clearLowerThird':
@@ -742,6 +756,40 @@ function applyAction(s: LiveState, action: ActionId, at: number): LiveState {
   }
 }
 
+function setBlankText(s: LiveState, on: boolean, at: number): LiveState {
+  if (s.mode !== 'live') return s;
+  const seq = s.seq;
+  if (on) {
+    const cleared = clear(s, 'slide', at);
+    return { ...cleared, blankText: true };
+  }
+  const base: LiveState = { ...s };
+  delete base.blankText;
+  if (!base.black && base.live !== undefined && base.cues[base.live]?.kind === 'slide') {
+    const cue = base.cues[base.live]!;
+    return {
+      ...base,
+      layers: {
+        ...base.layers,
+        slide: {
+          content: {
+            kind: 'slide',
+            cueIndex: base.live,
+            presentationId: cue.presentationId!,
+            slideId: cue.slideId!,
+          },
+          at,
+          seq,
+          transition: cue.transition,
+        },
+        media: slideMediaLayer(base.layers.media, cue, base.live, at, seq),
+      },
+      audio: slideAudioLayer(base.audio, cue, base.live, at, seq),
+    };
+  }
+  return base;
+}
+
 function clear(
   s: LiveState,
   layer: 'slide' | 'lowerThird' | 'props' | 'media' | 'background' | 'audio' | 'all',
@@ -754,14 +802,17 @@ function clear(
       return { ...s, props: { logo: false, countdownTimerId: undefined, at, seq } };
     case 'audio':
       return { ...s, audio: empty };
-    case 'all':
-      return {
+    case 'all': {
+      const next: LiveState = {
         ...s,
         black: true,
         layers: { background: empty, slide: empty, lowerThird: empty, media: empty },
         props: { logo: false, countdownTimerId: undefined, at, seq },
         audio: empty,
       };
+      delete next.blankText;
+      return next;
+    }
     case 'slide':
       // The slide's own video and sound go with it (design/27 §8).
       return {
@@ -854,6 +905,7 @@ export function slideFor(s: LiveState, presentationId: string, slideId: string) 
   const p = s.resolved?.presentations[presentationId];
   if (!p) return undefined;
   for (const sec of p.sections) for (const sl of sec.slides) if (sl.id === slideId) return sl;
+  if (p.kind === 'song' && p.meta?.titleSlide && isTitleSlideId(slideId)) return songTitleSlide(p);
   return undefined;
 }
 
@@ -890,6 +942,7 @@ export function isLiveStateShape(x: unknown): x is LiveState {
   if (!isObj(props) || typeof props.logo !== 'boolean' || !isNum(props.at) || !isNum(props.seq)) return false;
   if (!isLayer(x.audio)) return false;
   if (!isObj(x.timers) || !Array.isArray(x.messages) || typeof x.black !== 'boolean') return false;
+  if (x.blankText !== undefined && typeof x.blankText !== 'boolean') return false;
   if (x.prerendered !== undefined && !Array.isArray(x.prerendered)) return false;
   if (x.drawOverride !== undefined && !Array.isArray(x.drawOverride)) return false;
   if (x.resolved !== undefined) {
@@ -935,6 +988,8 @@ export function isLiveEventShape(x: unknown): x is LiveEvent {
       return isNum(x.sectionIndex);
     case 'clear':
       return typeof x.layer === 'string';
+    case 'blankText':
+      return x.on === undefined || typeof x.on === 'boolean';
     case 'lowerThird':
       return typeof x.text === 'string';
     case 'timer.start':

@@ -1156,6 +1156,8 @@ export const Presentation = z.object({
        * would refuse a new top-level key, while `meta` strips what it does not know.
        */
       draw: DrawAs.optional().catch(undefined),
+      /** Optional auto-generated title slide from song metadata (title, author, copyright, CCLI #). */
+      titleSlide: z.boolean().optional().catch(undefined),
     })
     .default({ tags: [] }),
   folderId: Id.optional(),
@@ -1298,6 +1300,7 @@ export const ActionId = z.enum([
   'goToItem',
   'goToSlideItem',
   'clearSlide',
+  'toggleBlankText',
   'clearAll',
   'clearLowerThird',
   'clearProps',
@@ -1563,5 +1566,9 @@ export const GeneralSettings = z.object({
   defaultThemeId: Id.optional(),
   defaultLinesPerSlide: z.number().int().min(0).max(100).default(2),
   defaultPreRollMs: z.number().int().min(0).max(60_000).default(33),
+  /** Venue CCLI Church Copyright License number displayed on song title slides. */
+  ccliLicense: z.string().max(200).optional(),
+  /** Whether newly created songs enable the auto-generated title slide by default. */
+  defaultTitleSlide: z.boolean().optional(),
 });
 export type GeneralSettings = z.infer<typeof GeneralSettings>;

@@ -39,7 +39,10 @@ function formatKeyCombo(combo: string): string {
 function actionCategory(id: string): 'nav' | 'clear' | 'outputs' | 'other' {
   if (['next', 'prev', 'nextSection', 'prevSection', 'firstSlide', 'lastSlide', 'go'].includes(id))
     return 'nav';
-  if (['clearSlide', 'clearBackground', 'clearAudio', 'clearProps', 'clearAll'].includes(id)) return 'clear';
+  if (
+    ['clearSlide', 'toggleBlankText', 'clearBackground', 'clearAudio', 'clearProps', 'clearAll'].includes(id)
+  )
+    return 'clear';
   if (['launchOutputs', 'relaunchOutputs', 'showDiagnostics', 'fullscreen'].includes(id)) return 'outputs';
   return 'other';
 }

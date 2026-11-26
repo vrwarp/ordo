@@ -216,6 +216,9 @@ const arbEvent: fc.Arbitrary<LiveEvent> = fc.oneof(
   fc.constant({ k: 'media.pause' as const, at: 6 }),
   fc.constant({ k: 'media.ended' as const, cueIndex: 3, at: 7 }),
   fc.constant({ k: 'goToSection' as const, sectionIndex: 1, at: 8 }),
+  fc
+    .option(fc.boolean(), { nil: undefined })
+    .map((on) => ({ k: 'blankText' as const, ...(on !== undefined ? { on } : {}), at: 9 })),
 );
 
 describe('a slide that clears the background', () => {
@@ -471,5 +474,68 @@ describe('actionToEvent with ProPresenter navigation actions', () => {
     // Step out of the loop into the opening song -> countdown automatically clears!
     s = reduce(s, { k: 'go', cueIndex: 5, at: 300 });
     expect(s.props.countdownTimerId).toBeUndefined();
+  });
+
+  it('toggles clearSlide off and back onto the live slide while keeping background active', () => {
+    let s = reduceAll(initialState(), [
+      { k: 'goLive', resolved: fixture() },
+      { k: 'go', cueIndex: 1, at: 10 },
+    ]);
+    expect(s.layers.slide.content?.cueIndex).toBe(1);
+    expect(s.layers.background.content?.mediaId).toBe('bg1');
+
+    // First clearSlide blanks foreground text while keeping background:
+    const clearEv = actionToEvent(s, { id: 'clearSlide' }, 20);
+    expect(clearEv).toEqual({ k: 'clear', layer: 'slide', at: 20 });
+    s = reduce(s, clearEv!);
+    expect(s.layers.slide.content).toBeNull();
+    expect(s.layers.background.content?.mediaId).toBe('bg1');
+
+    // Second clearSlide restores the live slide onto the slide layer:
+    const showEv = actionToEvent(s, { id: 'clearSlide' }, 30);
+    expect(showEv).toEqual({ k: 'go', cueIndex: 1, at: 30 });
+    s = reduce(s, showEv!);
+    expect(s.layers.slide.content?.cueIndex).toBe(1);
+  });
+
+  it('supports sticky blankText mode across song transitions and restores live text when un-blanked', () => {
+    let s = reduceAll(initialState(), [
+      { k: 'goLive', resolved: fixture() },
+      { k: 'go', cueIndex: 2, at: 10 },
+    ]);
+    expect(s.layers.slide.content?.cueIndex).toBe(2);
+    expect(s.layers.background.content?.mediaId).toBe('bg1');
+
+    // Hold blank turns blankText on and clears audience text while keeping background:
+    const holdEv = actionToEvent(s, { id: 'toggleBlankText' }, 20);
+    expect(holdEv).toEqual({ k: 'blankText', at: 20 });
+    s = reduce(s, holdEv!);
+    expect(s.blankText).toBe(true);
+    expect(s.layers.slide.content).toBeNull();
+    expect(s.layers.background.content?.mediaId).toBe('bg1');
+    expect(isLiveStateShape(s)).toBe(true);
+    expect(isLiveEventShape(holdEv)).toBe(true);
+
+    // Jump to Song 2 (cue 4) while blankText is held: background switches to bg2, audience text stays null!
+    s = reduce(s, { k: 'go', cueIndex: 4, at: 30 });
+    expect(s.live).toBe(4);
+    expect(s.blankText).toBe(true);
+    expect(s.layers.slide.content).toBeNull();
+    expect(s.layers.background.content?.mediaId).toBe('bg2');
+
+    // Pressing clearSlide (Esc/F1) or toggleBlankText exits blankText and reveals cue 4's lyric!
+    const releaseEv = actionToEvent(s, { id: 'clearSlide' }, 40);
+    expect(releaseEv).toEqual({ k: 'blankText', on: false, at: 40 });
+    s = reduce(s, releaseEv!);
+    expect(s.blankText).toBeUndefined();
+    expect(s.layers.slide.content?.cueIndex).toBe(4);
+    expect(s.layers.background.content?.mediaId).toBe('bg2');
+
+    // Clear all also resets blankText:
+    s = reduce(s, { k: 'blankText', on: true, at: 50 });
+    expect(s.blankText).toBe(true);
+    s = reduce(s, { k: 'clear', layer: 'all', at: 60 });
+    expect(s.blankText).toBeUndefined();
+    expect(s.black).toBe(true);
   });
 });

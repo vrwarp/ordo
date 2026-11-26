@@ -972,3 +972,71 @@ describe('stage text direction (design/27 §6)', () => {
     expect(stageParagraphs(w.notes!)).toEqual(['שלום', 'Peace']);
   });
 });
+
+describe('blanked audience text & song title slides on stage display', () => {
+  it('keeps next-slide look-ahead visible when audience slide layer is cleared', () => {
+    const { s } = live();
+    const layout = stageLayout(LOOK_STAGE);
+    const cleared = reduce(s, { k: 'clear', layer: 'slide', at: 1500 });
+    expect(cleared.layers.slide.content).toBeNull();
+    expect(currentText(cleared, cleared.layers.slide.content, layout)).toBeNull();
+    // Worship band can still see the upcoming slide that Next (Space) will advance to:
+    expect(nextText(cleared, cleared.layers.slide.content, layout)).toEqual({
+      text: 'Line three\nLine four',
+    });
+  });
+
+  it('keeps current lyrics, look-ahead, and Audience Blank indicator visible during sticky blankText mode', () => {
+    const { s } = live();
+    let held = reduce(s, { k: 'blankText', on: true, at: 1500 });
+    expect(held.blankText).toBe(true);
+    expect(held.layers.slide.content).toBeNull();
+    let v = view(held, LOOK_STAGE);
+    expect(v.current).toMatchObject({
+      text: 'Line one\nLine two',
+      label: 'Verse 1 · Audience Blank',
+      position: '1/2',
+    });
+    expect(v.next).toEqual({ text: 'Line three\nLine four' });
+
+    // Advancing while held updates stage display for the band while audience remains blank
+    held = reduce(held, { k: 'next', at: 2000 });
+    expect(held.layers.slide.content).toBeNull();
+    v = view(held, LOOK_STAGE);
+    expect(v.current).toMatchObject({
+      text: 'Line three\nLine four',
+      label: 'Verse 1 · Audience Blank',
+      position: '2/2',
+    });
+    expect(v.next).toEqual({ text: 'Sing it loud\nSing it proud', label: 'Chorus' });
+  });
+
+  it('renders optional song title slide and looks ahead to Verse 1', () => {
+    const p = songFromParsed(
+      parseLyrics(
+        'Amazing Grace\n\nVerse 1\nAmazing grace\nHow sweet the sound\n\nCCLI Song # 22025\nJohn Newton',
+      ),
+      { linesPerSlide: 2, titleSlide: true },
+    );
+    const resolved: ResolvedPlaylist = {
+      playlist: {
+        id: 'pl',
+        rev: 1,
+        name: 'Sunday',
+        items: [{ id: 'i1', kind: 'presentation', presentationId: p.id }],
+      },
+      presentations: { [p.id]: p },
+      media: {},
+      fonts: [],
+      looks: DEFAULT_LOOKS,
+      files: [],
+      manifestId: 'm',
+    };
+    let s = reduce(initialState(), { k: 'goLive', resolved });
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 1000 });
+    const v = view(s, LOOK_STAGE);
+    expect(v.current?.label).toBe('Title');
+    expect(v.current?.text).toContain('Amazing Grace');
+    expect(v.next).toEqual({ text: 'Amazing grace\nHow sweet the sound', label: 'Verse 1' });
+  });
+});

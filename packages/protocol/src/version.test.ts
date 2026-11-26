@@ -83,9 +83,13 @@ import { APP_VERSION } from './index.ts';
 // mapping, and auto-unskip on explicit go.
 // 0.12.1 for countdown timer presets (PropsRule.countdownPreset, PropsRule.countdownCorner, and
 // TimerSpec.preset/corner in schemas.ts, which a stale client would strip when saving looks or playlists).
+// 0.12.2 for song title slides and audience lyric blanking: schemas.ts adds Presentation.meta.titleSlide,
+// ActionId 'toggleBlankText', and GeneralSettings.ccliLicense/defaultTitleSlide; cues.ts and plan.ts
+// materialize optional song title slides; live.ts and live-state add blankText state/event and clearSlide
+// toggle restore.
 const RECORDED = {
-  version: '0.12.1',
-  digest: 'fbcfa60b2877504f7c63f9260a84fcdbe9fe49b151dafbb92ba2a48d32721a76',
+  version: '0.12.2',
+  digest: '1b4971b33b48721f4ac01c599201de5180cdccd26dae318e21351bdd5cdaff6a',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */
