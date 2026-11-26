@@ -29,6 +29,7 @@ describe('desktop pro-tool UI foundation (design/30)', () => {
     expect(proCss).toContain('@media (pointer: fine)');
     expect(proCss).not.toContain('data-layout');
     expect(proCss).toContain('.tactical-btn');
-    expect(proCss).toContain('min-height: 34px');
+    expect(proCss).toContain('min-height: 36px');
+    expect(proCss).toContain('.studio-statusbar');
   });
 });

@@ -1,6 +1,7 @@
 import { type Arrangement, type MidiTrigger, newId, type Presentation, type Section } from '@ordo/domain';
 import { type ReactNode, useMemo, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { Icon } from '../../components/Icons.tsx';
 import { Menu } from '../../components/Menu.tsx';
 import {
   midiTriggerBadge,
@@ -8,7 +9,9 @@ import {
   shouldShowMidiUi,
   slideMidiTrigger,
 } from '../../components/MidiTriggerPicker.tsx';
+import { SplitPane } from '../../components/SplitPane.tsx';
 import { authoringArrangement } from '../../lib/arrangement.ts';
+import { sectionTone } from '../../lib/sectionColors.ts';
 import { useLibrary } from '../../state/library.ts';
 import { BackgroundPicker } from './BackgroundPicker.tsx';
 import { composing } from './editorKeys.ts';
@@ -377,501 +380,502 @@ export function SongReflowEditor(props: {
       {banners}
 
       {/* Main Two-Column Reflow Workspace */}
-      <div
-        className="row grow"
-        style={{ minHeight: 0, height: '100%', maxHeight: '100%', overflow: 'hidden' }}
-      >
-        {/* Left Column: Fast Section Cards & Lyrics */}
-        <div
-          className="col grow"
-          style={{
-            minHeight: 0,
-            height: '100%',
-            maxHeight: '100%',
-            overflowY: 'auto',
-            padding: 16,
-            gap: 16,
-          }}
-        >
-          {p.sections.map((sec) => (
-            <div
-              key={sec.id}
-              id={`section-${sec.id}`}
-              className="card col"
-              style={{
-                gap: 12,
-                borderLeft: '4px solid var(--primary, #3b82f6)',
-                background: 'var(--card-bg, #1e1e24)',
-              }}
-            >
-              {/* Section Header */}
-              <div
-                className="row"
-                style={{ justifyContent: 'space-between', alignItems: 'center' }}
-                onContextMenu={(e) => {
-                  openContextMenu(
-                    e,
-                    [
-                      {
-                        label: 'Add to arrangement',
-                        disabled: readOnly,
-                        onSelect: () => setArrangementSections([...activeArrangement.sectionIds, sec.id]),
-                      },
-                      ...(p.sections.length > 1
-                        ? [
-                            { kind: 'separator' as const },
-                            {
-                              label: 'Delete section',
-                              danger: true,
-                              disabled: readOnly,
-                              onSelect: () => removeSection(sec.id),
-                            },
-                          ]
-                        : []),
-                    ],
-                    { ariaLabel: `${sec.label} section actions` },
-                  );
-                }}
-              >
-                <div className="row" style={{ alignItems: 'center', gap: 8 }}>
-                  <input
-                    type="text"
-                    value={sec.label}
-                    disabled={readOnly}
-                    placeholder="Section name"
-                    style={{
-                      fontWeight: 700,
-                      fontSize: 15,
-                      background: 'transparent',
-                      border: 'none',
-                      borderBottom: '1px dashed var(--line)',
-                      borderRadius: 0,
-                      padding: '2px 4px',
-                      color: 'var(--fg)',
-                      width: 140,
-                    }}
-                    onChange={(e) => {
-                      const newLabel = e.target.value;
-                      change(
-                        (prev) => ({
-                          ...prev,
-                          sections: prev.sections.map((s) =>
-                            s.id === sec.id
-                              ? { ...s, label: newLabel, short: newLabel.slice(0, 3).toUpperCase() }
-                              : s,
-                          ),
-                        }),
-                        `sec-label:${sec.id}`,
-                      );
-                    }}
-                  />
-                  <span className="muted small">
-                    {sec.slides.length} slide{sec.slides.length > 1 ? 's' : ''}
-                  </span>
-                </div>
-                <div className="row" style={{ gap: 6, alignItems: 'center' }}>
-                  {showMidi &&
-                    (() => {
-                      const badge = midiTriggerBadge(sec.midi, midiPresets);
-                      const key = `sec:${sec.id}`;
-                      const isOpen = openMidiKey === key;
-                      return (
-                        <button
-                          type="button"
-                          className={`small ${isOpen ? 'on' : badge ? '' : 'ghost'}`}
-                          title={
-                            badge
-                              ? `Section lighting (on entering ${sec.label}): ${badge.title}`
-                              : `Set lighting / MIDI on entering ${sec.label}`
-                          }
-                          style={{
-                            borderLeft: badge?.color ? `3px solid ${badge.color}` : undefined,
+      <div className="grow" style={{ minHeight: 0, height: '100%', overflow: 'hidden' }}>
+        <SplitPane
+          storageKey="editor-reflow-split"
+          panels={[
+            {
+              id: 'reflow-script',
+              content: (
+                <div className="studio-well col" style={{ padding: 0 }}>
+                  {p.sections.map((sec) => {
+                    const tone = sectionTone(sec.label, sec.short);
+                    return (
+                      <div key={sec.id} id={`section-${sec.id}`} className="reflow-section">
+                        {/* Section Header */}
+                        <div
+                          className="row"
+                          style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10 }}
+                          onContextMenu={(e) => {
+                            openContextMenu(
+                              e,
+                              [
+                                {
+                                  label: 'Add to arrangement',
+                                  disabled: readOnly,
+                                  onSelect: () =>
+                                    setArrangementSections([...activeArrangement.sectionIds, sec.id]),
+                                },
+                                ...(p.sections.length > 1
+                                  ? [
+                                      { kind: 'separator' as const },
+                                      {
+                                        label: 'Delete section',
+                                        danger: true,
+                                        disabled: readOnly,
+                                        onSelect: () => removeSection(sec.id),
+                                      },
+                                    ]
+                                  : []),
+                              ],
+                              { ariaLabel: `${sec.label} section actions` },
+                            );
                           }}
-                          onClick={() => setOpenMidiKey(isOpen ? null : key)}
                         >
-                          💡 {badge ? badge.label : 'Lights'}
-                        </button>
-                      );
-                    })()}
-                  <button
-                    type="button"
-                    className="small"
-                    disabled={readOnly}
-                    onClick={() => addSlideToSection(sec.id)}
-                  >
-                    + Add Slide
-                  </button>
-                  {p.sections.length > 1 && !readOnly && (
-                    <button
-                      type="button"
-                      className="small ghost danger"
-                      title="Delete section"
-                      onClick={() => removeSection(sec.id)}
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {openMidiKey === `sec:${sec.id}` && (
-                <div className="card col small" style={{ gap: 6, background: 'var(--bg)', padding: 10 }}>
-                  <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                    <b>Lighting / MIDI when entering “{sec.label}”</b>
-                    <button type="button" className="small ghost" onClick={() => setOpenMidiKey(null)}>
-                      Done
-                    </button>
-                  </div>
-                  <MidiTriggerPicker
-                    value={sec.midi}
-                    disabled={readOnly}
-                    compact
-                    onChange={(midi) => setSectionMidi(sec.id, midi)}
-                    hint="Saved on this song — applies to all services (fires on every repeat in the arrangement)."
-                  />
-                </div>
-              )}
-
-              {/* Slide Text Blocks */}
-              <div className="col" style={{ gap: 10 }}>
-                {sec.slides.map((slide, sIdx) => {
-                  const isSelected = slide.id === (selectedSlideId ?? ed.slideId);
-                  // The lyric object's own text (never `firstText`, which adds automatic numbers).
-                  const text = scriptText(slide);
-                  const nonEmptyLines = scriptLines(text).length;
-                  const overflowsStream = nonEmptyLines > 2;
-                  const hasCustom =
-                    slide.objects.length > 1 ||
-                    slide.objects.some((o) => o.type !== 'text') ||
-                    (slide.overrides?.length ?? 0) > 0;
-                  const slideTrigger = slideMidiTrigger(slide);
-                  const slideMidiBadge = midiTriggerBadge(slideTrigger, midiPresets);
-                  const slideMidiKey = `sl:${slide.id}`;
-                  const slideMidiOpen = openMidiKey === slideMidiKey;
-
-                  return (
-                    <div
-                      key={slide.id}
-                      onClick={() => selectSlide(slide.id)}
-                      onContextMenu={(e) => {
-                        if (!showMidi || readOnly) return;
-                        selectSlide(slide.id);
-                        openContextMenu(
-                          e,
-                          [
-                            {
-                              label: slideMidiBadge
-                                ? 'Edit slide lighting / MIDI…'
-                                : 'Add slide lighting / MIDI…',
-                              onSelect: () => setOpenMidiKey(slideMidiKey),
-                            },
-                            ...(slideTrigger
-                              ? [
-                                  {
-                                    label: 'Remove slide lighting / MIDI',
-                                    danger: true,
-                                    onSelect: () => {
-                                      setSlideMidi(slide.id, undefined);
-                                      if (slideMidiOpen) setOpenMidiKey(null);
-                                    },
-                                  },
-                                ]
-                              : []),
-                          ],
-                          { ariaLabel: `Slide ${sIdx + 1} actions` },
-                        );
-                      }}
-                      style={{
-                        padding: 10,
-                        borderRadius: 6,
-                        border: isSelected ? '2px solid var(--primary, #3b82f6)' : '1px solid var(--line)',
-                        background: isSelected ? 'rgba(59, 130, 246, 0.08)' : 'var(--bg)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                      }}
-                    >
-                      <div
-                        className="row wrap"
-                        style={{ justifyContent: 'space-between', alignItems: 'center', gap: 6 }}
-                      >
-                        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-                          <span className="muted small" style={{ fontWeight: 600 }}>
-                            Slide {sIdx + 1}
-                          </span>
-                          {overflowsStream ? (
+                          <div className="row" style={{ alignItems: 'center', gap: 10 }}>
                             <span
-                              className="tag amber"
-                              title="Livestream lower-third straps fit 2 lines cleanly"
-                            >
-                              ⚠ {nonEmptyLines} lines · Clips 2-line Stream
-                            </span>
-                          ) : nonEmptyLines > 0 ? (
-                            <span className="muted" style={{ fontSize: 11 }}>
-                              ✓ {nonEmptyLines} line{nonEmptyLines === 1 ? '' : 's'}
-                            </span>
-                          ) : null}
-                          {slideMidiBadge && (
-                            <button
-                              type="button"
-                              className={`small ${slideMidiOpen ? 'on' : ''}`}
-                              title={`Slide MIDI: ${slideMidiBadge.title}`}
+                              className="tag"
                               style={{
-                                padding: '1px 6px',
-                                fontSize: 11,
-                                borderLeft: slideMidiBadge.color
-                                  ? `3px solid ${slideMidiBadge.color}`
-                                  : undefined,
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenMidiKey(slideMidiOpen ? null : slideMidiKey);
+                                background: tone.bg,
+                                color: tone.fg,
+                                fontWeight: 700,
+                                border: 'none',
                               }}
                             >
-                              ⚡ {slideMidiBadge.label}
-                            </button>
-                          )}
-                        </div>
-
-                        <div className="row" style={{ gap: 6, alignItems: 'center' }}>
-                          {showMidi && !slideMidiBadge && isSelected && !readOnly && (
-                            <button
-                              type="button"
-                              className={`small ghost ${slideMidiOpen ? 'on' : ''}`}
-                              title="Add a lighting / MIDI cue on this specific slide"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenMidiKey(slideMidiOpen ? null : slideMidiKey);
+                              {sec.short || sec.label}
+                            </span>
+                            <input
+                              type="text"
+                              value={sec.label}
+                              disabled={readOnly}
+                              placeholder="Section name"
+                              style={{
+                                fontWeight: 600,
+                                fontSize: 15,
+                                background: 'transparent',
+                                border: '1px solid transparent',
+                                padding: '3px 6px',
+                                color: 'var(--fg)',
+                                width: 170,
                               }}
-                            >
-                              ⚡ Lighting
-                            </button>
-                          )}
-                          {overflowsStream && !readOnly && (
+                              onChange={(e) => {
+                                const newLabel = e.target.value;
+                                change(
+                                  (prev) => ({
+                                    ...prev,
+                                    sections: prev.sections.map((s) =>
+                                      s.id === sec.id
+                                        ? { ...s, label: newLabel, short: newLabel.slice(0, 3).toUpperCase() }
+                                        : s,
+                                    ),
+                                  }),
+                                  `sec-label:${sec.id}`,
+                                );
+                              }}
+                            />
+                            <span className="muted small">
+                              {sec.slides.length} slide{sec.slides.length > 1 ? 's' : ''}
+                            </span>
+                          </div>
+                          <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                            {showMidi &&
+                              (() => {
+                                const badge = midiTriggerBadge(sec.midi, midiPresets);
+                                const key = `sec:${sec.id}`;
+                                const isOpen = openMidiKey === key;
+                                return (
+                                  <button
+                                    type="button"
+                                    className={`small ${isOpen ? 'on' : badge ? '' : 'ghost'}`}
+                                    title={
+                                      badge
+                                        ? `Section lighting (on entering ${sec.label}): ${badge.title}`
+                                        : `Set lighting / MIDI on entering ${sec.label}`
+                                    }
+                                    style={{
+                                      borderLeft: badge?.color ? `3px solid ${badge.color}` : undefined,
+                                    }}
+                                    onClick={() => setOpenMidiKey(isOpen ? null : key)}
+                                  >
+                                    <Icon name="lights" size={13} />
+                                    <span>{badge ? badge.label : 'Lights'}</span>
+                                  </button>
+                                );
+                              })()}
                             <button
                               type="button"
                               className="small"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                splitInto(slide.id, twoLinePieces);
-                              }}
-                              title="Automatically split into 2-line slides for livestream lower thirds"
+                              disabled={readOnly}
+                              onClick={() => addSlideToSection(sec.id)}
                             >
-                              Auto-Split (2 lines)
+                              <Icon name="plus" size={13} />
+                              Add Slide
                             </button>
-                          )}
-                          {!readOnly && text.trim().length > 0 && (
-                            <button
-                              type="button"
-                              className="small ghost"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                splitAtCursor(slide.id);
-                              }}
-                              title="Split slide at cursor position (Alt+Enter / Opt+Enter)"
-                            >
-                              ✂ Split at Cursor
-                            </button>
-                          )}
-                          {hasCustom && (
-                            <span
-                              className="tag"
-                              style={{ background: 'rgba(234, 179, 8, 0.2)', color: '#eab308' }}
-                            >
-                              Custom Layout
-                            </span>
-                          )}
-                          {hasCustom && !readOnly && (
-                            <button
-                              type="button"
-                              className="small ghost"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                change((prev) =>
-                                  updateSlide(prev, slide.id, (sl) =>
-                                    resetSlideToTheme(sl, themeOf(prev, themes)),
-                                  ),
-                                );
-                              }}
-                              title="Reset positions and formatting back to theme defaults"
-                            >
-                              Reset to Theme
-                            </button>
-                          )}
-                          {sec.slides.length > 1 && !readOnly && (
-                            <button
-                              type="button"
-                              className="small ghost danger"
-                              title="Remove slide"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                removeSlide(sec.id, slide.id);
-                              }}
-                            >
-                              ✕
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      {slideMidiOpen && (
-                        <div
-                          className="card col small"
-                          style={{ gap: 6, background: 'var(--panel)', padding: 8 }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div
-                            className="row"
-                            style={{ justifyContent: 'space-between', alignItems: 'center' }}
-                          >
-                            <b>Lighting / MIDI on Slide {sIdx + 1}</b>
-                            <button
-                              type="button"
-                              className="small ghost"
-                              onClick={() => setOpenMidiKey(null)}
-                            >
-                              Done
-                            </button>
+                            {p.sections.length > 1 && !readOnly && (
+                              <button
+                                type="button"
+                                className="small ghost danger icon-btn"
+                                title="Delete section"
+                                aria-label={`Delete ${sec.label}`}
+                                onClick={() => removeSection(sec.id)}
+                              >
+                                <Icon name="close" size={13} />
+                              </button>
+                            )}
                           </div>
-                          <MidiTriggerPicker
-                            value={slideTrigger}
-                            disabled={readOnly}
-                            compact
-                            onChange={(midi) => setSlideMidi(slide.id, midi)}
-                            hint="Fires when landing on this specific slide."
-                          />
                         </div>
-                      )}
 
-                      {/* Lyric Textarea */}
-                      <textarea
-                        data-reflow-slide={slide.id}
-                        rows={Math.max(2, text.split('\n').length)}
-                        value={text}
-                        disabled={readOnly}
-                        placeholder="Enter lyrics (Opt+Enter or --- to split into next slide)…"
-                        style={{
-                          fontSize: 15,
-                          lineHeight: 1.4,
-                          resize: 'vertical',
-                          fontFamily: 'inherit',
-                          padding: 8,
-                        }}
-                        onFocus={() => selectSlide(slide.id)}
-                        onKeyDown={(e) => {
-                          if (!composing(e) && e.altKey && e.key === 'Enter') {
-                            e.preventDefault();
-                            splitAtCursor(slide.id);
-                          }
-                        }}
-                        onChange={(e) => updateSlideText(slide.id, e.target.value, e.target.selectionEnd)}
-                      />
-
-                      {/* Inline Chords / Musician Notes */}
-                      <div className="col" style={{ gap: 4 }}>
-                        <div
-                          className="row wrap"
-                          style={{ justifyContent: 'space-between', alignItems: 'center', gap: 6 }}
-                        >
-                          <span className="muted small" style={{ fontSize: 11 }}>
-                            🎸 Band Chords &amp; Stage Cues:
-                          </span>
-                          {!readOnly && (
-                            <div className="row" style={{ gap: 4 }}>
-                              {(['[BUILD]', '[SOFT / PADS]', '[HOLD]'] as const).map((cue) => (
-                                <button
-                                  key={cue}
-                                  type="button"
-                                  className="small ghost"
-                                  style={{ padding: '1px 6px', fontSize: 10.5 }}
-                                  onClick={() => {
-                                    const cur = slide.notes?.trim() ?? '';
-                                    updateSlideNotes(slide.id, cur ? `${cur} ${cue}` : cue);
-                                  }}
-                                >
-                                  + {cue}
-                                </button>
-                              ))}
+                        {openMidiKey === `sec:${sec.id}` && (
+                          <div
+                            className="card col small"
+                            style={{ gap: 8, background: 'var(--panel)', padding: 12 }}
+                          >
+                            <div
+                              className="row"
+                              style={{ justifyContent: 'space-between', alignItems: 'center' }}
+                            >
+                              <b>Lighting / MIDI when entering “{sec.label}”</b>
+                              <button
+                                type="button"
+                                className="small ghost"
+                                onClick={() => setOpenMidiKey(null)}
+                              >
+                                Done
+                              </button>
                             </div>
-                          )}
+                            <MidiTriggerPicker
+                              value={sec.midi}
+                              disabled={readOnly}
+                              compact
+                              onChange={(midi) => setSectionMidi(sec.id, midi)}
+                              hint="Saved on this song — applies to all services (fires on every repeat in the arrangement)."
+                            />
+                          </div>
+                        )}
+
+                        {/* Slide Text Blocks */}
+                        <div className="col" style={{ gap: 10 }}>
+                          {sec.slides.map((slide, sIdx) => {
+                            const isSelected = slide.id === (selectedSlideId ?? ed.slideId);
+                            const text = scriptText(slide);
+                            const nonEmptyLines = scriptLines(text).length;
+                            const overflowsStream = nonEmptyLines > 2;
+                            const hasCustom =
+                              slide.objects.length > 1 ||
+                              slide.objects.some((o) => o.type !== 'text') ||
+                              (slide.overrides?.length ?? 0) > 0;
+                            const slideTrigger = slideMidiTrigger(slide);
+                            const slideMidiBadge = midiTriggerBadge(slideTrigger, midiPresets);
+                            const slideMidiKey = `sl:${slide.id}`;
+                            const slideMidiOpen = openMidiKey === slideMidiKey;
+
+                            return (
+                              <div
+                                key={slide.id}
+                                className={`reflow-slide-row${isSelected ? ' active' : ''}`}
+                                onClick={() => selectSlide(slide.id)}
+                                onContextMenu={(e) => {
+                                  if (!showMidi || readOnly) return;
+                                  selectSlide(slide.id);
+                                  openContextMenu(
+                                    e,
+                                    [
+                                      {
+                                        label: slideMidiBadge
+                                          ? 'Edit slide lighting / MIDI…'
+                                          : 'Add slide lighting / MIDI…',
+                                        onSelect: () => setOpenMidiKey(slideMidiKey),
+                                      },
+                                      ...(slideTrigger
+                                        ? [
+                                            {
+                                              label: 'Remove slide lighting / MIDI',
+                                              danger: true,
+                                              onSelect: () => {
+                                                setSlideMidi(slide.id, undefined);
+                                                if (slideMidiOpen) setOpenMidiKey(null);
+                                              },
+                                            },
+                                          ]
+                                        : []),
+                                    ],
+                                    { ariaLabel: `Slide ${sIdx + 1} actions` },
+                                  );
+                                }}
+                              >
+                                <div className="reflow-gutter" style={{ background: tone.bg }} />
+                                <div className="reflow-slide-body">
+                                  <div
+                                    className="row wrap"
+                                    style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+                                  >
+                                    <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                                      <span className="muted small" style={{ fontWeight: 600 }}>
+                                        Slide {sIdx + 1}
+                                      </span>
+                                      {overflowsStream ? (
+                                        <span
+                                          className="tag amber row"
+                                          style={{ gap: 4 }}
+                                          title="Livestream lower-third straps fit 2 lines cleanly"
+                                        >
+                                          <Icon name="warning" size={12} />
+                                          {nonEmptyLines} lines · Clips 2-line Stream
+                                        </span>
+                                      ) : nonEmptyLines > 0 ? (
+                                        <span className="muted small row" style={{ gap: 4 }}>
+                                          <Icon name="check" size={12} />
+                                          {nonEmptyLines} line{nonEmptyLines === 1 ? '' : 's'}
+                                        </span>
+                                      ) : null}
+                                      {slideMidiBadge && (
+                                        <button
+                                          type="button"
+                                          className={`small ${slideMidiOpen ? 'on' : ''}`}
+                                          title={`Slide MIDI: ${slideMidiBadge.title}`}
+                                          style={{
+                                            borderLeft: slideMidiBadge.color
+                                              ? `3px solid ${slideMidiBadge.color}`
+                                              : undefined,
+                                          }}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setOpenMidiKey(slideMidiOpen ? null : slideMidiKey);
+                                          }}
+                                        >
+                                          <Icon name="zap" size={12} />
+                                          {slideMidiBadge.label}
+                                        </button>
+                                      )}
+                                    </div>
+
+                                    <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                                      {showMidi && !slideMidiBadge && isSelected && !readOnly && (
+                                        <button
+                                          type="button"
+                                          className={`small ghost ${slideMidiOpen ? 'on' : ''}`}
+                                          title="Add a lighting / MIDI cue on this specific slide"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setOpenMidiKey(slideMidiOpen ? null : slideMidiKey);
+                                          }}
+                                        >
+                                          <Icon name="zap" size={12} />
+                                          Lighting
+                                        </button>
+                                      )}
+                                      {overflowsStream && !readOnly && (
+                                        <button
+                                          type="button"
+                                          className="small"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            splitInto(slide.id, twoLinePieces);
+                                          }}
+                                          title="Automatically split into 2-line slides for livestream lower thirds"
+                                        >
+                                          Auto-Split (2 lines)
+                                        </button>
+                                      )}
+                                      {!readOnly && text.trim().length > 0 && (
+                                        <button
+                                          type="button"
+                                          className="small ghost"
+                                          onMouseDown={(e) => e.preventDefault()}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            splitAtCursor(slide.id);
+                                          }}
+                                          title="Split slide at cursor position (Alt+Enter / Opt+Enter)"
+                                        >
+                                          <Icon name="scissors" size={13} />
+                                          Split at Cursor
+                                        </button>
+                                      )}
+                                      {hasCustom && (
+                                        <span
+                                          className="tag"
+                                          style={{ background: 'rgba(234, 179, 8, 0.2)', color: '#eab308' }}
+                                        >
+                                          Custom Layout
+                                        </span>
+                                      )}
+                                      {hasCustom && !readOnly && (
+                                        <button
+                                          type="button"
+                                          className="small ghost"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            change((prev) =>
+                                              updateSlide(prev, slide.id, (sl) =>
+                                                resetSlideToTheme(sl, themeOf(prev, themes)),
+                                              ),
+                                            );
+                                          }}
+                                          title="Reset positions and formatting back to theme defaults"
+                                        >
+                                          Reset to Theme
+                                        </button>
+                                      )}
+                                      {sec.slides.length > 1 && !readOnly && (
+                                        <button
+                                          type="button"
+                                          className="small ghost danger icon-btn"
+                                          title="Remove slide"
+                                          aria-label={`Remove slide ${sIdx + 1}`}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            removeSlide(sec.id, slide.id);
+                                          }}
+                                        >
+                                          <Icon name="close" size={13} />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {slideMidiOpen && (
+                                    <div
+                                      className="card col small"
+                                      style={{ gap: 6, background: 'var(--well)', padding: 10 }}
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <div
+                                        className="row"
+                                        style={{ justifyContent: 'space-between', alignItems: 'center' }}
+                                      >
+                                        <b>Lighting / MIDI on Slide {sIdx + 1}</b>
+                                        <button
+                                          type="button"
+                                          className="small ghost"
+                                          onClick={() => setOpenMidiKey(null)}
+                                        >
+                                          Done
+                                        </button>
+                                      </div>
+                                      <MidiTriggerPicker
+                                        value={slideTrigger}
+                                        disabled={readOnly}
+                                        compact
+                                        onChange={(midi) => setSlideMidi(slide.id, midi)}
+                                        hint="Fires when landing on this specific slide."
+                                      />
+                                    </div>
+                                  )}
+
+                                  {/* Lyric Textarea */}
+                                  <textarea
+                                    className="reflow-textarea"
+                                    data-reflow-slide={slide.id}
+                                    rows={Math.max(2, text.split('\n').length)}
+                                    value={text}
+                                    disabled={readOnly}
+                                    placeholder="Enter lyrics (Opt+Enter or --- to split into next slide)…"
+                                    onFocus={() => selectSlide(slide.id)}
+                                    onKeyDown={(e) => {
+                                      if (!composing(e) && e.altKey && e.key === 'Enter') {
+                                        e.preventDefault();
+                                        splitAtCursor(slide.id);
+                                      }
+                                    }}
+                                    onChange={(e) =>
+                                      updateSlideText(slide.id, e.target.value, e.target.selectionEnd)
+                                    }
+                                  />
+
+                                  {/* Inline Chords / Musician Notes */}
+                                  <div className="col" style={{ gap: 6 }}>
+                                    <div
+                                      className="row wrap"
+                                      style={{
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        gap: 6,
+                                      }}
+                                    >
+                                      <span className="muted small row" style={{ gap: 5 }}>
+                                        <Icon name="music" size={13} />
+                                        <span>Band Chords &amp; Stage Cues</span>
+                                      </span>
+                                      {!readOnly && (
+                                        <div className="row" style={{ gap: 4 }}>
+                                          {(['[BUILD]', '[SOFT / PADS]', '[HOLD]'] as const).map((cue) => (
+                                            <button
+                                              key={cue}
+                                              type="button"
+                                              className="small ghost"
+                                              onClick={() => {
+                                                const cur = slide.notes?.trim() ?? '';
+                                                updateSlideNotes(slide.id, cur ? `${cur} ${cue}` : cue);
+                                              }}
+                                            >
+                                              + {cue}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <textarea
+                                      className="reflow-chord-input"
+                                      rows={Math.max(1, Math.min(4, (slide.notes ?? '').split('\n').length))}
+                                      value={slide.notes ?? ''}
+                                      disabled={readOnly}
+                                      placeholder="e.g. Key: G · Capo 2 | G - C - Em - D (shown in amber on Stage Display)"
+                                      onFocus={() => selectSlide(slide.id)}
+                                      onChange={(e) => updateSlideNotes(slide.id, e.target.value)}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                        <textarea
-                          rows={Math.max(1, Math.min(4, (slide.notes ?? '').split('\n').length))}
-                          value={slide.notes ?? ''}
-                          disabled={readOnly}
-                          placeholder="e.g. Key: G · Capo 2 | G - C - Em - D (shown in amber on Stage Display)"
-                          style={{
-                            fontSize: 12.5,
-                            lineHeight: 1.35,
-                            padding: '5px 8px',
-                            resize: 'vertical',
-                            fontFamily: 'inherit',
-                          }}
-                          onFocus={() => selectSlide(slide.id)}
-                          onChange={(e) => updateSlideNotes(slide.id, e.target.value)}
-                        />
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+                    );
+                  })}
 
-          {/* Quick Add Section Bar */}
-          <div className="row wrap" style={{ gap: 8, alignItems: 'center', padding: '8px 0' }}>
-            <span className="muted small">Add section:</span>
-            {['Verse', 'Chorus', 'Bridge', 'Tag', 'Outro'].map((kind) => {
-              const count = p.sections.filter((s) => s.label.startsWith(kind)).length;
-              const nextLabel =
-                count > 0 && kind !== 'Chorus' && kind !== 'Tag' ? `${kind} ${count + 1}` : kind;
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  className="small"
-                  disabled={readOnly}
-                  onClick={() => addSection(nextLabel)}
-                >
-                  + {nextLabel}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Right Column: 3-Screen Live Preview Strip */}
-        <div
-          className="col"
-          style={{
-            width: 320,
-            minWidth: 320,
-            height: '100%',
-            maxHeight: '100%',
-            borderLeft: '1px solid var(--line)',
-            background: 'var(--subtle, #141416)',
-            padding: 12,
-            gap: 12,
-            overflowY: 'auto',
-          }}
-        >
-          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-            <strong style={{ fontSize: 13 }}>Screen Previews</strong>
-            <button
-              type="button"
-              className="small ghost"
-              onClick={onSwitchToCanvas}
-              title="Open full visual slide editor"
-            >
-              Canvas &amp; Settings &rarr;
-            </button>
-          </div>
-          <span className="muted small" style={{ marginTop: -6 }}>
-            Live preview across Audience, Stage, and Stream:
-          </span>
-          <LookPreviews presentation={p} slideId={selectedSlideId ?? ed.slideId} compact />
-        </div>
+                  {/* Quick Add Section Bar */}
+                  <div className="row wrap" style={{ gap: 8, alignItems: 'center', padding: '14px 18px' }}>
+                    <span className="muted small">Add section:</span>
+                    {['Verse', 'Chorus', 'Bridge', 'Tag', 'Outro'].map((kind) => {
+                      const count = p.sections.filter((s) => s.label.startsWith(kind)).length;
+                      const nextLabel =
+                        count > 0 && kind !== 'Chorus' && kind !== 'Tag' ? `${kind} ${count + 1}` : kind;
+                      return (
+                        <button
+                          key={kind}
+                          type="button"
+                          className="small"
+                          disabled={readOnly}
+                          onClick={() => addSection(nextLabel)}
+                        >
+                          <Icon name="plus" size={12} />
+                          {nextLabel}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ),
+            },
+            {
+              id: 'reflow-previews',
+              size: 350,
+              min: 280,
+              max: 520,
+              content: (
+                <div className="studio-sidebar">
+                  <div className="pl-pane-head" style={{ justifyContent: 'space-between' }}>
+                    <strong style={{ fontSize: 13.5 }}>Screen Previews</strong>
+                    <button
+                      type="button"
+                      className="small ghost"
+                      onClick={onSwitchToCanvas}
+                      title="Open full visual slide editor"
+                    >
+                      <span>Canvas &amp; Settings</span>
+                      <Icon name="chevronRight" size={13} />
+                    </button>
+                  </div>
+                  <div className="pl-pane-scroll col" style={{ padding: 14, gap: 12 }}>
+                    <span className="muted small">Live preview across Audience, Stage, and Stream:</span>
+                    <LookPreviews presentation={p} slideId={selectedSlideId ?? ed.slideId} compact />
+                  </div>
+                </div>
+              ),
+            },
+          ]}
+        />
       </div>
     </div>
   );

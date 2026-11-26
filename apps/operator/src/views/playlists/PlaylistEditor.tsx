@@ -227,6 +227,8 @@ export function PlaylistEditor(props: {
   playlist: Playlist;
   locked: boolean;
   canOperate: boolean;
+  showPlaylistsSidebar?: boolean;
+  onTogglePlaylistsSidebar?: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
 }) {
@@ -237,6 +239,24 @@ export function PlaylistEditor(props: {
   const draft = outboxEntry ? outboxEntry.draft : props.playlist;
   const saving = outboxEntry ? outboxEntry.status : 'idle';
   const [sel, setSel] = useState<string | undefined>(draft.items[0]?.id);
+  const [showBrowser, setShowBrowser] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('ordo.playlists.showBrowser') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const toggleBrowser = () => {
+    setShowBrowser((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem('ordo.playlists.showBrowser', next ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
 
   // Flush any debounced playlist save immediately when switching away from this playlist.
   useEffect(() => () => void flushPlaylist(props.playlist.id), [props.playlist.id]);
@@ -299,16 +319,38 @@ export function PlaylistEditor(props: {
 
   const rundownPane = (
     <div className="pl-pane pl-pane-alt">
-      <div className="col" style={{ padding: '6px 8px', gap: 6, borderBottom: '1px solid var(--line)' }}>
-        <div className="row" style={{ gap: 4, alignItems: 'center' }}>
+      <div className="col" style={{ padding: '10px 12px', gap: 8, borderBottom: '1px solid var(--line)' }}>
+        <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+          {props.onTogglePlaylistsSidebar && (
+            <button
+              type="button"
+              className={`ghost icon-btn${props.showPlaylistsSidebar ? ' on' : ''}`}
+              onClick={props.onTogglePlaylistsSidebar}
+              title={props.showPlaylistsSidebar ? 'Hide playlists sidebar' : 'Show playlists sidebar'}
+              aria-label={props.showPlaylistsSidebar ? 'Hide playlists sidebar' : 'Show playlists sidebar'}
+            >
+              <Icon name="panelLeft" size={14} />
+            </button>
+          )}
           <input
             className="grow"
-            style={{ fontWeight: 600, fontSize: 13, minWidth: 0 }}
+            style={{ fontWeight: 600, fontSize: 14, minWidth: 0 }}
             value={draft.name}
             disabled={props.locked}
             aria-label="Playlist name"
             onChange={(e) => update((p) => ({ ...p, name: e.target.value }))}
           />
+          {!props.locked && (
+            <button
+              type="button"
+              className={`ghost icon-btn${showBrowser ? ' on' : ''}`}
+              onClick={toggleBrowser}
+              title={showBrowser ? 'Hide library browser' : 'Show library browser'}
+              aria-label={showBrowser ? 'Hide library browser' : 'Show library browser'}
+            >
+              <Icon name="panelRight" size={14} />
+            </button>
+          )}
           <Menu
             label="⋯"
             align="right"
@@ -332,13 +374,13 @@ export function PlaylistEditor(props: {
             ]}
           />
         </div>
-        <div className="row" style={{ gap: 5, alignItems: 'center' }}>
+        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
           <DateField
             value={draft.serviceDate ?? ''}
             disabled={props.locked}
             onChange={(iso) => update((p) => ({ ...p, serviceDate: iso || undefined }))}
           />
-          <span className="muted" style={{ fontSize: 10.5 }}>
+          <span className="muted" style={{ fontSize: 12 }}>
             {saving === 'pending'
               ? 'Unsaved'
               : saving === 'saving'
@@ -351,7 +393,7 @@ export function PlaylistEditor(props: {
           {props.canOperate && !props.locked && (
             <button
               type="button"
-              className="primary small"
+              className="primary small btn-golive"
               disabled={isLive || draft.items.length === 0}
               title={isLive ? 'Another playlist is live: End service first' : 'Go live with this playlist'}
               onClick={async () => {
@@ -749,14 +791,14 @@ export function PlaylistEditor(props: {
       <SplitPane
         storageKey="playlists-inner"
         panels={[
-          { id: 'rundown', size: 254, min: 200, max: 380, content: rundownPane },
+          { id: 'rundown', size: 300, min: 240, max: 440, content: rundownPane },
           { id: 'workspace', content: centerWorkspace },
-          ...(!props.locked
+          ...(!props.locked && showBrowser
             ? [
                 {
                   id: 'browser',
-                  size: 268,
-                  min: 210,
+                  size: 280,
+                  min: 220,
                   max: 420,
                   className: 'pl-add',
                   content: <AddItemsPanel onAdd={addItems} />,

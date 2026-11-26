@@ -41,14 +41,20 @@ export function OfflineControl(props: { playlistId: string; rev: number }) {
   if (entry?.error && !downloading) status += ` (${entry.error})`;
 
   return (
-    <div className="row wrap" data-offline-control style={{ gap: 8, alignItems: 'center' }}>
+    <div
+      className="row"
+      data-offline-control
+      style={{ gap: 8, alignItems: 'center', minWidth: 0, flexWrap: 'nowrap' }}
+    >
       {downloading ? (
-        <button type="button" onClick={() => controller()?.offlineCancel(playlistId)}>
+        <button type="button" className="small" onClick={() => controller()?.offlineCancel(playlistId)}>
           Cancel download
         </button>
       ) : (
         <button
           type="button"
+          className="small"
+          style={{ flexShrink: 0 }}
           data-offline-download
           disabled={!hubConnected || (check ? !check.ok : false)}
           title={hubConnected ? undefined : 'The hub is unreachable: files can only be downloaded from it'}
@@ -58,9 +64,11 @@ export function OfflineControl(props: { playlistId: string; rev: number }) {
         </button>
       )}
       <span
-        className={`small ${tone === 'muted' ? 'muted' : ''}`}
+        className={`small ellipsis ${tone === 'muted' ? 'muted' : ''}`}
         data-offline-status={tone}
+        title={status}
         style={{
+          minWidth: 0,
           color:
             tone === 'green'
               ? 'var(--ok, #4ade80)'
@@ -74,7 +82,7 @@ export function OfflineControl(props: { playlistId: string; rev: number }) {
         {status}
       </span>
       {downloading && entry.total > 0 && (
-        <progress max={entry.total} value={entry.ready} style={{ width: 120 }} />
+        <progress max={entry.total} value={entry.ready} style={{ width: 96, flexShrink: 0 }} />
       )}
     </div>
   );

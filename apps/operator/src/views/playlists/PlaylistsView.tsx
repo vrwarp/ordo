@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { api } from '@ordo/client';
 import { newId, type Playlist } from '@ordo/domain';
 import { confirmDialog } from '../../components/Confirm.tsx';
@@ -13,15 +14,35 @@ import { errorText, toast } from '../../state/toasts.ts';
 import { navigate } from '../../useRoute.ts';
 import { PlaylistEditor } from './PlaylistEditor.tsx';
 
+const SIDEBAR_KEY = 'ordo.playlists.showSidebar';
+
 export function PlaylistsView({ id }: { id?: string }) {
   const playlists = useLibrary((s) => s.data.playlists);
   const liveId = useLivePlaylistId();
   const role = currentRole();
-  // An edit-profile device (an iPad) cannot launch outputs: no Go live there, a note instead.
   const profile = useProfile(role);
   const noteGoLive = role === 'operate' && profile === 'edit';
   const sorted = sortPlaylistsUpcoming(playlists);
   const current = playlists.find((p) => p.id === id) ?? (id ? undefined : sorted[0]);
+  const [showSidebar, setShowSidebar] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_KEY) !== '0';
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleSidebar = () => {
+    setShowSidebar((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem(SIDEBAR_KEY, next ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
 
   const create = async (rawName: string) => {
     const n = rawName.trim() || `Service ${new Date().toISOString().slice(0, 10)}`;
@@ -68,6 +89,8 @@ export function PlaylistsView({ id }: { id?: string }) {
       playlist={p}
       locked={p.id === liveId}
       canOperate={role === 'operate' && profile === 'full'}
+      showPlaylistsSidebar={showSidebar}
+      onTogglePlaylistsSidebar={toggleSidebar}
       onDuplicate={() => void duplicate(p)}
       onDelete={() => void del(p)}
     />
@@ -77,24 +100,28 @@ export function PlaylistsView({ id }: { id?: string }) {
     <SplitPane
       storageKey="playlists-outer"
       panels={[
-        {
-          id: 'playlists-list',
-          size: 196,
-          min: 150,
-          max: 320,
-          content: (
-            <PlaylistPicker
-              variant="sidebar"
-              playlists={playlists}
-              selectedId={current?.id}
-              liveId={liveId}
-              onSelect={(pid) => navigate({ name: 'playlists', id: pid })}
-              onCreate={(rawName) => void create(rawName)}
-              onDuplicate={(p) => void duplicate(p)}
-              onDelete={(p) => void del(p)}
-            />
-          ),
-        },
+        ...(showSidebar
+          ? [
+              {
+                id: 'playlists-list',
+                size: 210,
+                min: 170,
+                max: 320,
+                content: (
+                  <PlaylistPicker
+                    variant="sidebar"
+                    playlists={playlists}
+                    selectedId={current?.id}
+                    liveId={liveId}
+                    onSelect={(pid) => navigate({ name: 'playlists', id: pid })}
+                    onCreate={(rawName) => void create(rawName)}
+                    onDuplicate={(p) => void duplicate(p)}
+                    onDelete={(p) => void del(p)}
+                  />
+                ),
+              },
+            ]
+          : []),
         {
           id: 'playlist-workspace',
           content: current ? (

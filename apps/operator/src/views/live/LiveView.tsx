@@ -1,11 +1,12 @@
 import { useEffect } from 'react';
+import { useCoarsePointer } from '../../components/pointer.ts';
 import { SplitPane } from '../../components/SplitPane.tsx';
 import { useLive } from '../../state/live.ts';
 import { setUi, useUi } from '../../state/ui.ts';
 import { DegradedBanner } from './DegradedBanner.tsx';
 import { DiagnosticsPanel } from './DiagnosticsPanel.tsx';
-import { LayerBar } from './LayerBar.tsx';
 import { GoLivePrepareToast } from './GoLiveToast.tsx';
+import { LayerBar } from './LayerBar.tsx';
 import { ConflictDialog, GoLiveErrorDialog, LocalGoLiveDialog, PlacementDialog } from './LiveDialogs.tsx';
 import { PlaylistPane } from './PlaylistPane.tsx';
 import { ProgramView } from './ProgramView.tsx';
@@ -16,6 +17,7 @@ import { useOperatorPlaylist } from './useOperatorPlaylist.ts';
 
 /** The operator view (prd/02 Layout, design/30 §5.1). */
 export function LiveView() {
+  const coarse = useCoarsePointer();
   const op = useOperatorPlaylist();
   const { followLive, viewItemIndex } = useUi();
   const liveItem = useLive((s) => {
@@ -29,7 +31,7 @@ export function LiveView() {
   }, [followLive, op.live, liveItem, viewItemIndex]);
   return (
     <div className="op">
-      <TopBar />
+      <TopBar inline={!coarse} />
       <DegradedBanner />
       <SplitPane
         storageKey="live-main"
@@ -37,9 +39,9 @@ export function LiveView() {
         panels={[
           {
             id: 'rundown',
-            size: 256,
-            min: 200,
-            max: 420,
+            size: 280,
+            min: 220,
+            max: 440,
             content: <PlaylistPane op={op} viewItem={viewItem} />,
           },
           {
@@ -48,13 +50,28 @@ export function LiveView() {
           },
           {
             id: 'program',
-            size: 336,
-            min: 270,
-            max: 480,
+            size: 360,
+            min: 290,
+            max: 520,
             content: (
               <div className="op-right-rail">
-                <ProgramView />
-                <StageTools />
+                <SplitPane
+                  storageKey="live-right-rail"
+                  direction="vertical"
+                  panels={[
+                    {
+                      id: 'monitors',
+                      size: 410,
+                      min: 220,
+                      max: 680,
+                      content: <ProgramView />,
+                    },
+                    {
+                      id: 'stage-tools',
+                      content: <StageTools />,
+                    },
+                  ]}
+                />
               </div>
             ),
           },

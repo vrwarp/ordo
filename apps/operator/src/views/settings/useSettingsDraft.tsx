@@ -34,30 +34,20 @@ export function SaveBar(props: {
   onSave: () => void;
   onRevert: () => void;
 }) {
+  if (!props.dirty && !props.saving) return null;
   return (
-    <div
-      className="row"
-      style={{
-        position: 'sticky',
-        bottom: 0,
-        padding: '10px 0',
-        background: 'var(--bg)',
-        borderTop: '1px solid var(--line)',
-        marginTop: 16,
-      }}
-    >
-      <button
-        type="button"
-        className="primary big"
-        disabled={!props.dirty || props.saving}
-        onClick={props.onSave}
-      >
-        {props.saving ? 'Saving…' : 'Save'}
-      </button>
-      <button type="button" disabled={!props.dirty || props.saving} onClick={props.onRevert}>
+    <div className="studio-savebar">
+      <span className="row" style={{ gap: 6, fontSize: 12.5, color: 'var(--fg2)' }}>
+        <span className="dot sm amber" aria-hidden="true" />
+        Unsaved changes
+      </span>
+      <span className="spacer" />
+      <button type="button" className="small ghost" disabled={props.saving} onClick={props.onRevert}>
         Revert
       </button>
-      {props.dirty && <span className="muted small">Unsaved changes</span>}
+      <button type="button" className="primary small" disabled={props.saving} onClick={props.onSave}>
+        {props.saving ? 'Saving…' : 'Save'}
+      </button>
     </div>
   );
 }

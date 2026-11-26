@@ -77,7 +77,6 @@ export const SlideThumb = memo(function SlideThumb(props: {
           </div>
         )}
       </div>
-      {props.number !== undefined && <span className="num">{props.number}</span>}
       {props.marks.dots && props.marks.dots.length > 0 && (
         <span className="dots">
           {props.marks.dots.map((d) => (
@@ -108,21 +107,26 @@ export const SlideThumb = memo(function SlideThumb(props: {
                 title={`Jump to ${band.label}`}
               >
                 <span className="sec-badge">{band.short || band.label}</span>
-                <span className="ellipsis" style={{ fontWeight: 500, opacity: 0.92 }}>
+                {props.number !== undefined && <span className="num">{props.number}</span>}
+                <span className="ellipsis" style={{ fontWeight: 500, opacity: 0.94 }}>
                   {props.label}
                 </span>
               </button>
             ) : (
-              <span className="row ellipsis grow" style={{ gap: 4, alignItems: 'center' }}>
+              <span className="row ellipsis grow" style={{ gap: 5, alignItems: 'center' }}>
                 <span className="sec-badge">{band.short || band.label}</span>
-                <span className="ellipsis" style={{ fontWeight: 500, opacity: 0.92 }}>
+                {props.number !== undefined && <span className="num">{props.number}</span>}
+                <span className="ellipsis" style={{ fontWeight: 500, opacity: 0.94 }}>
                   {props.label}
                 </span>
               </span>
             )
           ) : (
-            <span className="ellipsis grow" style={{ opacity: 0.88, fontWeight: 500 }}>
-              {props.label}
+            <span className="row ellipsis grow" style={{ gap: 5, alignItems: 'center' }}>
+              {props.number !== undefined && <span className="num">{props.number}</span>}
+              <span className="ellipsis" style={{ opacity: 0.9, fontWeight: 500 }}>
+                {props.label}
+              </span>
             </span>
           )}
           {midiBadge && (
@@ -130,22 +134,22 @@ export const SlideThumb = memo(function SlideThumb(props: {
               className="tag"
               title={midiBadge.title}
               style={{
-                fontSize: 9,
-                padding: '0 4px',
-                lineHeight: '13px',
+                fontSize: 11,
+                padding: '0 5px',
+                lineHeight: '15px',
                 background: 'rgba(0,0,0,0.35)',
                 color: '#fff',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 3,
-                maxWidth: 88,
+                maxWidth: 96,
               }}
             >
               {midiBadge.color && (
                 <span
                   style={{
-                    width: 5,
-                    height: 5,
+                    width: 6,
+                    height: 6,
                     borderRadius: '50%',
                     background: midiBadge.color,
                     flexShrink: 0,
@@ -159,6 +163,7 @@ export const SlideThumb = memo(function SlideThumb(props: {
         </div>
       ) : (
         <div className="cap">
+          {props.number !== undefined && <span className="num">{props.number}</span>}
           <span className="ellipsis grow">{props.label}</span>
           {midiBadge && (
             <span

@@ -1,6 +1,7 @@
 import { api, ApiFailure } from '@ordo/client';
 import { type AuthPinReq, type AuthPinRes, ROUTES } from '@ordo/protocol';
 import { useState } from 'react';
+import { Icon } from '../../components/Icons.tsx';
 import { t } from '../../i18n/index.ts';
 import { thisIsPhone, useCurrentLayout } from '../../lib/layout.ts';
 import {
@@ -105,8 +106,8 @@ function Keypad(props: {
           {d}
         </button>
       ))}
-      <button type="button" onClick={() => setPin((p) => p.slice(0, -1))}>
-        ⌫
+      <button type="button" aria-label="Backspace" onClick={() => setPin((p) => p.slice(0, -1))}>
+        <Icon name="backspace" size={18} />
       </button>
       <button type="button" onClick={() => press('0')}>
         0

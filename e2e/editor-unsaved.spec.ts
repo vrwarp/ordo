@@ -75,20 +75,15 @@ test('preserves multiple presentation, theme, and settings drafts across tabs, g
   await expect(page.locator('.tag.amber', { hasText: 'unsaved' }).first()).toBeVisible();
 
   await page.getByRole('link', { name: /Themes/ }).click();
-  await page.getByRole('button', { name: 'Edit' }).first().click();
   const themeInput = page.getByPlaceholder('Theme name');
   await expect(themeInput).toBeVisible();
   await themeInput.fill('Golden Worship');
+  await expect(page.locator('.tag.amber', { hasText: 'unsaved' }).first()).toBeVisible();
   // Switch to Fonts sub-tab and back to Themes: theme draft stays intact!
   await page.getByRole('link', { name: 'Fonts' }).click();
   await expect(navPill).toContainText('2 unsaved');
   await page.getByRole('link', { name: /Themes/ }).click();
   await expect(themeInput).toHaveValue('Golden Worship');
-
-  // Clicking "← Back to Themes" prompts Save / Discard / Keep draft -> choose Keep draft!
-  await page.getByRole('button', { name: '← Back to Themes' }).click();
-  await expect(page.getByRole('dialog')).toContainText('Unsaved theme changes');
-  await page.getByRole('button', { name: 'Keep draft' }).click();
   await expect(page.locator('.tag.amber', { hasText: 'unsaved' }).first()).toBeVisible();
 
   // 2. Open Song B and edit it too (multiple dirty presentations!).

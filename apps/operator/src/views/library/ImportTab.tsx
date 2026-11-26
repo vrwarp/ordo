@@ -2,6 +2,7 @@ import { api, upload } from '@ordo/client';
 import type { Presentation } from '@ordo/domain';
 import type { HubCapabilities, Job } from '@ordo/protocol';
 import { useEffect, useState } from 'react';
+import { SplitPane } from '../../components/SplitPane.tsx';
 import { loadHubCaps, useHubCaps } from '../../lib/hubCaps.ts';
 import {
   documentAccept,
@@ -275,103 +276,143 @@ export function ImportTab() {
   };
 
   return (
-    <div className="page-pad" style={{ overflow: 'auto', height: '100%' }}>
-      <div className="grid2" style={{ gap: 16, alignItems: 'start' }}>
-        <div className="col" style={{ gap: 16 }}>
-          <div className="card col">
-            <h3>ProPresenter 7</h3>
-            <span className="muted small">
-              Drop individual .pro presentations, playlists, bundles or a .zip of the ProPresenter library
-              here. Media found alongside is uploaded. Builds, macros, timers, looks and stage layouts are
-              skipped and listed in the log.
-            </span>
-            <DropZone
-              accept=".pro,.proplaylist,.probundle,.zip,application/zip"
-              touchAccept=".pro,.proplaylist,.probundle,.zip,application/zip"
-              label="Drop ProPresenter files or a library .zip"
-              touchLabel="Choose ProPresenter files or a library .zip"
-              onFiles={(f) => void pro7Upload(f)}
-            />
-            <div className="row">
-              <input
-                className="grow"
-                placeholder="…or a folder or file path on the NAS, e.g. /import/ProPresenter"
-                value={nasPath}
-                onChange={(e) => setNasPath(e.target.value)}
-              />
-              <button type="button" disabled={!nasPath.trim()} onClick={() => void pro7Path()}>
-                Import path
-              </button>
+    <SplitPane
+      storageKey="library-import-split"
+      panels={[
+        {
+          id: 'import-sources',
+          content: (
+            <div className="pl-pane">
+              <div className="pl-pane-head">
+                <span className="prop-section-title" style={{ margin: 0 }}>
+                  Import Sources
+                </span>
+              </div>
+              <div className="studio-well">
+                <div className="prop-section">
+                  <span className="prop-section-title">ProPresenter 7</span>
+                  <span className="muted small">
+                    Drop individual .pro presentations, playlists, bundles or a .zip of the ProPresenter
+                    library here. Media found alongside is uploaded. Builds, macros, timers, looks and stage
+                    layouts are skipped and listed in the log.
+                  </span>
+                  <DropZone
+                    accept=".pro,.proplaylist,.probundle,.zip,application/zip"
+                    touchAccept=".pro,.proplaylist,.probundle,.zip,application/zip"
+                    label="Drop ProPresenter files or a library .zip"
+                    touchLabel="Choose ProPresenter files or a library .zip"
+                    onFiles={(f) => void pro7Upload(f)}
+                  />
+                  <div className="row" style={{ gap: 8 }}>
+                    <input
+                      className="grow"
+                      placeholder="…or a folder or file path on the NAS, e.g. /import/ProPresenter"
+                      value={nasPath}
+                      onChange={(e) => setNasPath(e.target.value)}
+                    />
+                    <button type="button" disabled={!nasPath.trim()} onClick={() => void pro7Path()}>
+                      Import path
+                    </button>
+                  </div>
+                </div>
+
+                <div className="prop-section">
+                  <span className="prop-section-title">SongSelect (CCLI / ChordPro)</span>
+                  <span className="muted small">
+                    ChordPro (.chordpro, .cho) or lyrics text (.txt) downloaded from CCLI SongSelect. Chords
+                    are kept but not shown.
+                  </span>
+                  <DropZone
+                    accept=".txt,.chordpro,.cho,.chopro,.pro,.crd"
+                    touchAccept=""
+                    label="Drop SongSelect files"
+                    touchLabel="Choose SongSelect files"
+                    onFiles={(f) => void songselectFiles(f)}
+                  />
+                  <textarea
+                    rows={5}
+                    placeholder="…or paste the SongSelect lyrics or ChordPro text"
+                    value={pasted}
+                    onChange={(e) => setPasted(e.target.value)}
+                  />
+                  <div className="row" style={{ justifyContent: 'flex-end' }}>
+                    <button type="button" disabled={!pasted.trim()} onClick={() => void songselectPaste()}>
+                      Import pasted text
+                    </button>
+                  </div>
+                </div>
+
+                <div className="prop-section">
+                  <span className="prop-section-title">PowerPoint &amp; PDF</span>
+                  <span className="muted small">
+                    PowerPoint slides (.pptx, .ppsx, .potx, .pptm) become slides you can edit
+                    {caps?.pptx.pictures === false ? '' : ', or one picture each if you prefer'}. PDF pages
+                    become picture slides at 1920×1080.
+                  </span>
+                  {caps && !caps.pdf && (
+                    <span className="muted small" data-no-pdf>
+                      PDF import needs poppler-utils on the hub.
+                    </span>
+                  )}
+                  <PptxImportChoices
+                    value={choice}
+                    caps={caps}
+                    onChange={(c) => {
+                      setChoice(c);
+                      writeImportChoice(storage(), c);
+                    }}
+                  />
+                  <DropZone
+                    accept={documentAccept(caps)}
+                    touchAccept={`${documentAccept(caps)},application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation`}
+                    label={caps && !caps.pdf ? 'Drop PowerPoint files' : 'Drop PowerPoint or PDF files'}
+                    touchLabel={
+                      caps && !caps.pdf ? 'Choose PowerPoint files' : 'Choose PowerPoint or PDF files'
+                    }
+                    onFiles={(f) => void documents(f)}
+                  />
+                </div>
+                {progress !== undefined && (
+                  <div className="prop-section">
+                    <JobProgress value={progress} label="Upload progress" />
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-          <div className="card col">
-            <h3>SongSelect</h3>
-            <span className="muted small">
-              ChordPro (.chordpro, .cho) or lyrics text (.txt) downloaded from CCLI SongSelect. Chords are
-              kept but not shown.
-            </span>
-            <DropZone
-              accept=".txt,.chordpro,.cho,.chopro,.pro,.crd"
-              // The iPad Files picker greys out extensions it has no type for (.cho, .chordpro): offer
-              // every file there; the hub checks what it gets.
-              touchAccept=""
-              label="Drop SongSelect files"
-              touchLabel="Choose SongSelect files"
-              onFiles={(f) => void songselectFiles(f)}
-            />
-            <textarea
-              rows={6}
-              placeholder="…or paste the SongSelect lyrics or ChordPro text"
-              value={pasted}
-              onChange={(e) => setPasted(e.target.value)}
-            />
-            <button type="button" disabled={!pasted.trim()} onClick={() => void songselectPaste()}>
-              Import pasted text
-            </button>
-          </div>
-          <div className="card col">
-            <h3>PowerPoint and PDF</h3>
-            <span className="muted small">
-              PowerPoint slides (.pptx, .ppsx, .potx, .pptm) become slides you can edit
-              {caps?.pptx.pictures === false ? '' : ', or one picture each if you prefer'}. PDF pages become
-              picture slides at 1920×1080.
-            </span>
-            {caps && !caps.pdf && (
-              <span className="muted small" data-no-pdf>
-                PDF import needs poppler-utils on the hub.
-              </span>
-            )}
-            <PptxImportChoices
-              value={choice}
-              caps={caps}
-              onChange={(c) => {
-                setChoice(c);
-                writeImportChoice(storage(), c);
-              }}
-            />
-            <DropZone
-              accept={documentAccept(caps)}
-              touchAccept={`${documentAccept(caps)},application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation`}
-              label={caps && !caps.pdf ? 'Drop PowerPoint files' : 'Drop PowerPoint or PDF files'}
-              touchLabel={caps && !caps.pdf ? 'Choose PowerPoint files' : 'Choose PowerPoint or PDF files'}
-              onFiles={(f) => void documents(f)}
-            />
-          </div>
-          {progress !== undefined && <JobProgress value={progress} label="Upload progress" />}
-        </div>
-        <div className="col">
-          <h3>Import jobs</h3>
-          {jobs.map((j) => (
-            <ImportJobCard key={j.id} {...j} />
-          ))}
-          {recent
-            .filter((r) => !jobs.some((j) => j.id === r.id))
-            .map((r) => (
-              <ImportJobCard key={r.id} id={r.id} kind={r.kind} title={importJobTitle(r)} />
-            ))}
-          {!jobs.length && !recent.length && <span className="muted">No imports yet.</span>}
-        </div>
-      </div>
-    </div>
+          ),
+        },
+        {
+          id: 'import-jobs',
+          size: 440,
+          min: 300,
+          max: 680,
+          content: (
+            <div className="studio-sidebar">
+              <div className="pl-pane-head">
+                <span className="prop-section-title" style={{ margin: 0 }}>
+                  Import Jobs ({jobs.length + recent.filter((r) => !jobs.some((j) => j.id === r.id)).length})
+                </span>
+              </div>
+              <div className="pl-pane-scroll col" style={{ padding: 14, gap: 12 }}>
+                {jobs.map((j) => (
+                  <ImportJobCard key={j.id} {...j} />
+                ))}
+                {recent
+                  .filter((r) => !jobs.some((j) => j.id === r.id))
+                  .map((r) => (
+                    <ImportJobCard key={r.id} id={r.id} kind={r.kind} title={importJobTitle(r)} />
+                  ))}
+                {!jobs.length && !recent.length && (
+                  <div className="muted small" style={{ padding: 8 }}>
+                    No imports yet. Drop a ProPresenter, SongSelect, PowerPoint, or PDF file on the left to
+                    track conversion progress and logs here.
+                  </div>
+                )}
+              </div>
+            </div>
+          ),
+        },
+      ]}
+    />
   );
 }

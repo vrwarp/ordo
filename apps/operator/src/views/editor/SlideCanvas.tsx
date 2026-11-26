@@ -1238,7 +1238,7 @@ export function SlideCanvas(props: {
           fbarSize,
           {
             hasRotateHandle: !lockedSel,
-            avoidInsideTop: !!editingObj,
+            avoidInsideTop: !!editingObj || (selected.length === 1 && isTable(selected[0]!)),
             avoidTopRight: props.avoidTopRight,
           },
         )

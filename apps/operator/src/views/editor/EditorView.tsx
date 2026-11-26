@@ -4,6 +4,7 @@ import { FindReplaceDialog } from './FindReplaceDialog.tsx';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
 import { ErrorBoundary, PaneError } from '../../components/ErrorBoundary.tsx';
 import { DeckSwatchesSource, type SwatchSource } from '../../components/deckSwatches.ts';
+import { Icon } from '../../components/Icons.tsx';
 import { installKeepVisible } from '../../components/keepVisible.ts';
 import { Menu } from '../../components/Menu.tsx';
 import { useCoarsePointer, useMedia } from '../../components/pointer.ts';
@@ -952,8 +953,10 @@ export function EditorView({ id }: { id: string }) {
             disabled={readOnly || !ed.canUndo}
             onClick={undo}
             title="Undo (Ctrl+Z)"
+            aria-label="Undo"
           >
-            ↶<span className="touch-label">Undo</span>
+            <Icon name="undo" size={14} />
+            <span className="touch-label">Undo</span>
           </button>
           <button
             type="button"
@@ -961,8 +964,10 @@ export function EditorView({ id }: { id: string }) {
             disabled={readOnly || !ed.canRedo}
             onClick={redo}
             title="Redo (Ctrl+Y)"
+            aria-label="Redo"
           >
-            ↷<span className="touch-label">Redo</span>
+            <Icon name="redo" size={14} />
+            <span className="touch-label">Redo</span>
           </button>
 
           <span className="spacer" />
@@ -1154,7 +1159,8 @@ export function EditorView({ id }: { id: string }) {
               title="Toggle full screen canvas (hide side panels)"
               aria-label={focusMode ? 'Exit Full Screen' : 'Full Screen'}
             >
-              {focusMode ? 'Exit Full Screen' : '⛶'}
+              <Icon name={focusMode ? 'minimize' : 'maximize'} size={14} />
+              {focusMode && <span>Exit</span>}
             </button>
           </div>
         </div>
@@ -1493,12 +1499,12 @@ export function EditorView({ id }: { id: string }) {
                 {!coarse && (
                   <button
                     type="button"
-                    className="small ghost"
+                    className="small ghost icon-btn"
                     aria-label="Close inspector"
                     title="Close inspector drawer"
                     onClick={() => setDrawerOpen(false)}
                   >
-                    ✕
+                    <Icon name="close" size={13} />
                   </button>
                 )}
               </div>

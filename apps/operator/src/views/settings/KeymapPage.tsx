@@ -7,6 +7,35 @@ import { toast } from '../../state/toasts.ts';
 import { ACTION_OPTIONS, ACTIONS_WITH_ARG, parseArg } from './actions.ts';
 import { SaveBar, useSettingsDraft } from './useSettingsDraft.tsx';
 
+function formatKeyCombo(combo: string): string {
+  return combo
+    .split('+')
+    .map((part) => {
+      if (part.startsWith('Digit')) return part.slice(5);
+      if (part.startsWith('Key')) return part.slice(3);
+      if (part.startsWith('Numpad')) return `Num ${part.slice(6)}`;
+      switch (part) {
+        case 'ArrowRight':
+          return '→';
+        case 'ArrowLeft':
+          return '←';
+        case 'ArrowUp':
+          return '↑';
+        case 'ArrowDown':
+          return '↓';
+        case 'Escape':
+          return 'Esc';
+        case 'PageUp':
+          return 'PgUp';
+        case 'PageDown':
+          return 'PgDn';
+        default:
+          return part;
+      }
+    })
+    .join(' + ');
+}
+
 function actionCategory(id: string): 'nav' | 'clear' | 'outputs' | 'other' {
   if (['next', 'prev', 'nextSection', 'prevSection', 'firstSlide', 'lastSlide', 'go'].includes(id))
     return 'nav';
@@ -132,7 +161,11 @@ export function KeymapPage() {
                   className={`small ${recording === combo ? 'on' : ''}`}
                   onClick={() => setRecording(combo)}
                 >
-                  {recording === combo ? 'Press a key…' : <span className="kbd">{combo}</span>}
+                  {recording === combo ? (
+                    'Press a key…'
+                  ) : (
+                    <span className="kbd">{formatKeyCombo(combo)}</span>
+                  )}
                 </button>
               </td>
               <td>

@@ -1,5 +1,6 @@
 import type { Presentation, Slide } from '@ordo/domain';
 import { type PointerEvent as ReactPointerEvent, useRef, useState } from 'react';
+import { Icon } from '../../components/Icons.tsx';
 import { change } from './editorStore.ts';
 import { applyNoteFormatting, handleSpeakerNoteKeyDown, type NoteFormatAction } from './noteEditing.ts';
 import { updateSlide } from './ops.ts';
@@ -75,7 +76,7 @@ export function SpeakerNotesDock(props: {
           }}
           title="Open speaker notes dock (Alt+N)"
         >
-          <span className="ed-notes-icon">📝</span>
+          <Icon name="notes" size={14} className="ed-notes-icon" />
           <strong className="ed-notes-label">Speaker Notes</strong>
           <span className={`ed-notes-snippet${trimmed ? ' has-text' : ''}`}>
             {trimmed
@@ -92,7 +93,8 @@ export function SpeakerNotesDock(props: {
             onClick={onOpenStudio}
             title="Open full-deck Presenter Notes Studio"
           >
-            Manuscript Studio ↗
+            Manuscript Studio
+            <Icon name="external" size={12} />
           </button>
         )}
       </div>
@@ -113,9 +115,11 @@ export function SpeakerNotesDock(props: {
             className="small ghost"
             onClick={() => onToggleOpen(false)}
             title="Collapse speaker notes dock (Alt+N)"
-            style={{ fontWeight: 700, padding: '2px 6px' }}
+            style={{ fontWeight: 700, padding: '2px 8px' }}
           >
-            📝 Speaker Notes ▾
+            <Icon name="notes" size={14} />
+            <span>Speaker Notes</span>
+            <Icon name="chevronDown" size={12} />
           </button>
           <span className="ed-notes-stage-hint">
             {p.kind === 'song' ? 'Stage: Band Cue · 42pt' : 'Stage: Preacher Split · 58pt'}

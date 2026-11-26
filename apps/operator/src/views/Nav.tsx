@@ -267,106 +267,81 @@ function UnsavedNavControl() {
   );
 }
 
-function SessionMenu({ role, editDevice }: { role: 'operate' | 'edit'; editDevice?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const popRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number }>({ left: -9999, top: -9999 });
-
-  usePopupOf(popRef, triggerRef, open, () => setOpen(false));
-
-  useLayoutEffect(() => {
-    if (!open || !triggerRef.current || !popRef.current) return;
-    const place = () => {
-      if (!triggerRef.current || !popRef.current) return;
-      const tr = triggerRef.current.getBoundingClientRect();
-      const pr = popRef.current.getBoundingClientRect();
-      const left = Math.max(8, Math.min(tr.right - pr.width, window.innerWidth - pr.width - 8));
-      const top = Math.max(8, Math.min(tr.bottom + 4, window.innerHeight - pr.height - 8));
-      setPos({ left: Math.round(left), top: Math.round(top) });
-    };
-    place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
-    return () => {
-      window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onOutside = (e: Event) => {
-      const target = e.target as Node | null;
-      if (!target) return;
-      if (!triggerRef.current?.contains(target) && !popRef.current?.contains(target)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
-    };
-    document.addEventListener('pointerdown', onOutside, true);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onOutside, true);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  const roleLabel = role === 'operate' ? 'Operator' : 'Editor';
-  const popover = open ? (
-    <div
-      ref={popRef}
-      className="session-popover"
-      role="dialog"
-      aria-label="Session menu"
-      style={{ position: 'fixed', left: pos.left, top: pos.top }}
+/** ProPresenter-style 14px status ring/disc SVG: hollow coral ring when off, amber ring when degraded, solid green disc when live & healthy. */
+function LampRing({ state }: { state: 'green' | 'amber' | 'off' }) {
+  if (state === 'green') {
+    return (
+      <svg width={15} height={15} viewBox="0 0 16 16" aria-hidden="true" className="ico lamp-ring-svg">
+        <circle cx={8} cy={8} r={5.5} fill="#22c55e" />
+      </svg>
+    );
+  }
+  const stroke = state === 'amber' ? '#f59e0b' : '#ef4444';
+  return (
+    <svg
+      width={15}
+      height={15}
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+      className="ico lamp-ring-svg"
     >
-      <div className="session-pop-meta">
-        <span className="row" style={{ gap: 6, fontSize: 12, fontWeight: 600 }}>
-          <Icon name="shield" size={13} />
-          Role: {roleLabel}
-        </span>
-        {editDevice && (
-          <span className="muted small" data-edit-device-note>
-            This device edits; run services from the venue PC
-          </span>
-        )}
-      </div>
-      <button
-        type="button"
-        className="ghost small"
-        style={{ justifyContent: 'flex-start', width: '100%' }}
-        onClick={() => {
-          setOpen(false);
-          void guardedLogout();
-        }}
-      >
-        <Icon name="logout" size={13} />
-        Sign out
-      </button>
-    </div>
-  ) : null;
+      <circle cx={8} cy={8} r={5} stroke={stroke} strokeWidth={2} />
+    </svg>
+  );
+}
+
+/** ProPresenter-style Audience & Stage 42px icon-above-label ring lamps shown outside #/live. */
+function NavOutputLamps() {
+  const outputs = useLibrary((s) => s.data.settings.outputs);
+  const health = useLive((s) => s.health);
+  const enabled = outputs.filter((o) => o.enabled);
+  if (enabled.length === 0) return null;
+
+  const aud = enabled.filter((o) => o.kind !== 'stage');
+  const stg = enabled.filter((o) => o.kind === 'stage');
+
+  const groupState = (list: typeof enabled): 'green' | 'amber' | 'off' => {
+    const conn = list.filter((o) => health[o.id]?.connected);
+    if (conn.length === 0) return 'off';
+    if (conn.length < list.length) return 'amber';
+    const degraded = conn.some((o) => {
+      const h = health[o.id];
+      return Boolean(h?.error || (h && h.cache.total > 0 && h.cache.ready < h.cache.total));
+    });
+    return degraded ? 'amber' : 'green';
+  };
 
   return (
     <>
-      <button
-        ref={triggerRef}
-        type="button"
-        className={`nav-session-btn${open ? ' on' : ''}`}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        title={`Role: ${roleLabel}`}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Icon name="user" size={13} />
-        <span>{roleLabel}</span>
-        <Icon name="chevronDown" size={11} />
-      </button>
-      {popover && (typeof document !== 'undefined' ? createPortal(popover, document.body) : popover)}
+      {aud.length > 0 && (
+        <button
+          type="button"
+          className="nav-mode-btn"
+          onClick={() => navigate('#/settings/outputs')}
+          title="Audience screens — click to configure outputs"
+          aria-label="Audience outputs"
+        >
+          <span className="nav-mode-ico">
+            <LampRing state={groupState(aud)} />
+          </span>
+          <span className="nav-mode-lbl">Audience</span>
+        </button>
+      )}
+      {stg.length > 0 && (
+        <button
+          type="button"
+          className="nav-mode-btn"
+          onClick={() => navigate('#/settings/outputs')}
+          title="Stage display — click to configure outputs"
+          aria-label="Stage outputs"
+        >
+          <span className="nav-mode-ico">
+            <LampRing state={groupState(stg)} />
+          </span>
+          <span className="nav-mode-lbl">Stage</span>
+        </button>
+      )}
     </>
   );
 }
@@ -375,10 +350,12 @@ export function Nav({
   role,
   route,
   profile = 'full',
+  onOpenPalette,
 }: {
   role: 'operate' | 'edit';
   route: Route;
   profile?: Profile;
+  onOpenPalette?: () => void;
 }) {
   const [demoOpen, setDemoOpen] = useState(false);
   const venue = useLibrary((s) => s.data.settings.general.venueName);
@@ -386,6 +363,8 @@ export function Nav({
   const live = useLive((s) => s.state.mode === 'live');
   const libDirty = useAnyLibraryDraftDirty();
   const settingsDirty = useAnySettingsDirty();
+  const roleLabel = role === 'operate' ? 'Operator' : 'Editor';
+
   const link = (
     href: string,
     label: string,
@@ -394,14 +373,21 @@ export function Nav({
     dirty = false,
     isOnAir = false,
   ) => (
-    <a href={href} className={active ? 'active' : ''} aria-label={isOnAir ? `● ${label}` : undefined}>
-      {isOnAir ? <span className="dot sm red" aria-hidden="true" /> : <Icon name={icon} size={13} />}
-      <span>{label}</span>
-      {dirty && (
-        <span className="unsaved-dot" title="Unsaved changes" aria-label="Unsaved changes">
-          ●
-        </span>
-      )}
+    <a
+      href={href}
+      className={`nav-mode-btn${active ? ' active' : ''}${isOnAir ? ' on-air' : ''}`}
+      aria-label={isOnAir ? `● ${label}` : undefined}
+    >
+      <span className="nav-mode-ico">
+        <Icon name={icon} size={17} />
+        {isOnAir && <span className="dot sm red nav-live-pip" aria-hidden="true" />}
+        {dirty && (
+          <span className="unsaved-dot nav-dirty-pip" title="Unsaved changes" aria-label="Unsaved changes">
+            ●
+          </span>
+        )}
+      </span>
+      <span className="nav-mode-lbl">{label}</span>
     </a>
   );
 
@@ -410,7 +396,7 @@ export function Nav({
 
   const brandElement = (
     <span className="brand">
-      {brandName}
+      <span className="brand-name">{brandName}</span>
       {isDemo && (
         <button
           type="button"
@@ -426,15 +412,33 @@ export function Nav({
     </span>
   );
 
+  const cmdTrigger = onOpenPalette ? (
+    <button
+      type="button"
+      className="nav-mode-btn nav-cmd-btn"
+      onClick={onOpenPalette}
+      title="Command Palette (Ctrl+K / ⌘K)"
+      aria-label="Command palette"
+    >
+      <span className="nav-mode-ico">
+        <Icon name="search" size={16} />
+      </span>
+      <span className="nav-mode-lbl">Search</span>
+    </button>
+  ) : null;
+
   const signOutBtn = (
     <button
       type="button"
-      className="ghost icon-btn"
+      className="nav-mode-btn"
       onClick={() => void guardedLogout()}
-      title="Sign out"
+      title={`Sign out (${roleLabel})`}
       aria-label="Sign out"
     >
-      <Icon name="logout" size={13} />
+      <span className="nav-mode-ico">
+        <Icon name="logout" size={16} />
+      </span>
+      <span className="nav-mode-lbl">Sign out</span>
     </button>
   );
 
@@ -443,6 +447,8 @@ export function Nav({
       <>
         <nav className="nav no-print" data-profile="edit">
           {brandElement}
+          {cmdTrigger}
+          <span className="nav-divider" aria-hidden="true" />
           {link('#/playlists', 'Playlists', 'playlists', route.name === 'playlists')}
           {link(
             '#/library',
@@ -463,7 +469,7 @@ export function Nav({
               Edit device
             </span>
           )}
-          <SessionMenu role={role} editDevice={role === 'operate'} />
+          <span className="nav-divider" aria-hidden="true" />
           {signOutBtn}
         </nav>
         {demoOpen && <DemoDialog onClose={() => setDemoOpen(false)} />}
@@ -474,18 +480,21 @@ export function Nav({
     <>
       <nav className="nav no-print">
         {brandElement}
+        {cmdTrigger}
+        <span className="nav-divider" aria-hidden="true" />
         {link('#/playlists', 'Playlists', 'playlists', route.name === 'playlists')}
         {link('#/library', 'Library', 'library', route.name === 'library' || route.name === 'edit', libDirty)}
-        {role === 'operate' &&
-          link('#/settings/outputs', 'Settings', 'settings', route.name === 'settings', settingsDirty)}
-        {role === 'operate' && <span className="nav-divider" aria-hidden="true" />}
+        {role === 'operate' && link('#/live', 'Live', 'live', route.name === 'live', false, live)}
         {role === 'operate' &&
           link('#/setup', 'Setup', 'setup', route.name === 'setup' || route.name === 'checklist')}
-        {role === 'operate' && link('#/live', 'Live', 'live', route.name === 'live', false, live)}
+        {role === 'operate' &&
+          link('#/settings/outputs', 'Settings', 'settings', route.name === 'settings', settingsDirty)}
         <span className="spacer" />
+        {role === 'operate' && route.name === 'live' && <div id="nav-live-slot" className="nav-live-slot" />}
+        {role === 'operate' && route.name !== 'live' && <NavOutputLamps />}
         <UnsavedNavControl />
         {offline && <span className="tag amber">offline: hub unreachable</span>}
-        <SessionMenu role={role} />
+        <span className="nav-divider" aria-hidden="true" />
         {signOutBtn}
       </nav>
       {demoOpen && <DemoDialog onClose={() => setDemoOpen(false)} />}

@@ -16,6 +16,7 @@ export function InlineArrangementStrip({
   sectionsOverride,
   liveMode,
   locked,
+  hideLiveToggle,
   onChangeSections,
   onArrangeOpenChange,
   onPromoteToSong,
@@ -26,11 +27,13 @@ export function InlineArrangementStrip({
   liveMode?: boolean;
   /** True when the item is currently ON AIR or the user cannot edit. */
   locked?: boolean;
+  /** When the parent item header already owns the Arrange toggle button, skip duplicating it inside the strip. */
+  hideLiveToggle?: boolean;
   onChangeSections: (sections: string[] | null) => void;
   onArrangeOpenChange?: (open: boolean) => void;
   onPromoteToSong?: (sectionIds: string[]) => void;
 }) {
-  const [editingLive, setEditingLive] = useState(false);
+  const [editingLive, setEditingLive] = useState(Boolean(hideLiveToggle && !locked));
 
   // If the item becomes locked (e.g. went ON AIR), close live editing immediately.
   useEffect(() => {
@@ -45,7 +48,7 @@ export function InlineArrangementStrip({
   const byId = new Map(presentation.sections.map((s) => [s.id, s]));
   const validIds = activeIds.filter((id) => byId.has(id));
   const isCustom = sectionsOverride !== undefined;
-  const canEdit = !locked && (!liveMode || editingLive);
+  const canEdit = !locked && (!liveMode || editingLive || Boolean(hideLiveToggle));
 
   const sort = useSortable({
     group: `inline-arr-${presentation.id}`,
@@ -177,7 +180,7 @@ export function InlineArrangementStrip({
             Save to song…
           </button>
         )}
-        {liveMode && (
+        {liveMode && !hideLiveToggle && (
           <button
             type="button"
             className={editingLive ? 'primary small' : 'small'}
