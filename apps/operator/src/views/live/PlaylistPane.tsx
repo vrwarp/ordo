@@ -195,7 +195,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
 
   return (
     <div className="pane pl-pane pl-pane-alt" style={{ borderRight: 0, position: 'relative' }}>
-      <div className="pane-head" style={{ alignItems: 'flex-start' }}>
+      <div className="pane-head" style={{ alignItems: 'flex-start', padding: '10px 12px 8px' }}>
         <PlaylistPicker
           variant="compact"
           playlists={playlists}

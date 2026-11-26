@@ -258,7 +258,7 @@ function PlaylistItemSection({
             <Icon name="sliders" size={13} />
           </button>
           {presentation && (
-            <a className="btn small" href={`#/edit/${presentation.id}`}>
+            <a className="btn ghost small" href={`#/edit/${presentation.id}`}>
               <Icon name="edit" size={11} />
               Edit
             </a>

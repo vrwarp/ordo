@@ -1015,12 +1015,17 @@
     text-decoration: none;
   }
   .pane-head {
-    padding: 3px 10px;
-    min-height: 30px;
+    padding: 7px 12px;
+    min-height: 38px;
     gap: 8px;
     background: var(--surface);
     border-bottom: 1px solid var(--chassis);
     box-shadow: var(--bevel);
+  }
+  a.btn,
+  a.btn:hover,
+  a.btn:visited {
+    text-decoration: none;
   }
   .vrow {
     padding: 0 12px;
@@ -1357,6 +1362,9 @@
   min-height: 24px;
   outline: none;
   box-shadow: none;
+}
+.cmd-input:focus {
+  outline: none;
 }
 .cmd-list {
   max-height: min(420px, 60vh);
@@ -1831,8 +1839,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 10px;
-  min-height: 30px;
+  padding: 7px 12px;
+  min-height: 38px;
   border-bottom: 1px solid var(--chassis, var(--line));
   background: var(--surface);
   box-shadow: var(--bevel);

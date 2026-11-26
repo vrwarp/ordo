@@ -124,7 +124,7 @@ function SelectedItemSlidePreview({
           </button>
         )}
         {presentation && (
-          <a className="btn small" href={`#/edit/${presentation.id}`}>
+          <a className="btn ghost small" href={`#/edit/${presentation.id}`}>
             <Icon name="edit" size={11} />
             Edit slides…
           </a>
