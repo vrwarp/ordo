@@ -89,9 +89,10 @@ import { APP_VERSION } from './index.ts';
 // ActionId 'toggleBlankText', and GeneralSettings.ccliLicense/defaultTitleSlide; cues.ts and plan.ts
 // materialize optional song title slides; live.ts and live-state add blankText state/event and clearSlide
 // toggle restore.
+// 0.12.4 for tri-state clearSlide cycling (Blank slide -> Hold blank -> Show slide) in live-state actions.ts.
 const RECORDED = {
-  version: '0.12.3',
-  digest: '2e4533092e70b6b0f70d0b8611233f00e1c785c22681e1763a441f9947d2557b',
+  version: '0.12.4',
+  digest: '8025e3f508b703162b570d9a51fe0f6947715af687491db3ec978b1125161ce5',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

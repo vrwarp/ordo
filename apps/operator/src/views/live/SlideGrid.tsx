@@ -13,6 +13,7 @@ import {
 import { autoAdvance } from '@ordo/live-state';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { Kbd } from '../../components/fields.tsx';
 import { Icon, playlistItemIconName } from '../../components/Icons.tsx';
 import { InlineArrangementStrip } from '../../components/InlineArrangementStrip.tsx';
 import { armDot, waitingForLive } from '../../lib/health.ts';
@@ -862,6 +863,39 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
   return (
     <div className="pane slides-pane-shell">
       <div ref={scrollPaneRef} onScroll={onScroll} className="slides" data-slide-grid-pane>
+        {state.mode === 'live' && state.blankText && (
+          <div
+            className="banner row"
+            role="status"
+            data-hold-blank-banner
+            style={{
+              position: 'sticky',
+              top: 0,
+              zIndex: 20,
+              margin: '0 0 10px',
+              padding: '7px 12px',
+              alignItems: 'center',
+              gap: 12,
+              background: 'rgba(38, 28, 10, 0.94)',
+              backdropFilter: 'blur(6px)',
+              border: '1px solid rgba(245, 158, 11, 0.55)',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.35)',
+            }}
+          >
+            <span className="grow">
+              <b>Audience text is held blank</b> — backgrounds, MIDI cues, and Stage Display still advance,
+              while audience &amp; livestream text stay hidden.
+            </span>
+            <button
+              type="button"
+              className="small primary"
+              onClick={() => dispatch({ id: 'clearSlide' })}
+              data-release-hold-blank
+            >
+              Show slide <Kbd>F1</Kbd>
+            </button>
+          </div>
+        )}
         {hotfix && liveHere && (
           <SlideTextHotfixCard
             target={hotfix}
