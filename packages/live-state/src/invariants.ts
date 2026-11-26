@@ -89,6 +89,12 @@ export function checkInvariants(s: LiveState): string[] {
         v.push('draw overrides exceed the bound');
       else if (s.mode === 'idle' && s.drawOverride.length) v.push('idle state has draw overrides');
     }
+    if (s.blankText !== undefined) {
+      if (typeof s.blankText !== 'boolean') v.push('blankText is not a boolean');
+      else if (s.mode === 'idle' && s.blankText) v.push('idle state has blankText');
+      else if (s.blankText && s.layers?.slide?.content)
+        v.push('blankText is on while slide layer has content');
+    }
   } catch (err) {
     v.push(`invariant check threw: ${(err as Error).message}`);
   }

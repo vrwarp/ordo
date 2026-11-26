@@ -8,8 +8,10 @@ import {
   type Rgba,
   type Slide,
   type Transition,
+  isTitleSlideId,
   nextShownCue,
   playableFile,
+  songTitleSlide,
   withoutBackdrops,
 } from '@ordo/domain';
 import { CLAMP, clampLook, clampSlide, clampText } from './clamp.ts';
@@ -145,6 +147,9 @@ export function findSlide(
   for (const sec of p.sections) {
     if (!sec || !Array.isArray(sec.slides)) continue;
     for (const slide of sec.slides) if (slide && slide.id === slideId) return { slide, presentation: p };
+  }
+  if (p.kind === 'song' && p.meta?.titleSlide && isTitleSlideId(slideId)) {
+    return { slide: songTitleSlide(p), presentation: p };
   }
   return undefined;
 }

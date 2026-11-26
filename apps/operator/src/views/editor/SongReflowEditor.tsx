@@ -1,6 +1,17 @@
-import { type Arrangement, type MidiTrigger, newId, type Presentation, type Section } from '@ordo/domain';
+import {
+  type Arrangement,
+  formatSongCredits,
+  type MidiTrigger,
+  newId,
+  parseSectionLabel,
+  type Presentation,
+  type Section,
+  titleSectionId,
+  titleSlideId,
+} from '@ordo/domain';
 import { type ReactNode, useMemo, useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
+import { Check, NumberField, TextField } from '../../components/fields.tsx';
 import { Icon } from '../../components/Icons.tsx';
 import { Menu } from '../../components/Menu.tsx';
 import {
@@ -37,11 +48,14 @@ export function SongReflowEditor(props: {
 }) {
   const { presentation: p, readOnly, selectedSlideId, onSwitchToCanvas, banners } = props;
   const themes = useLibrary((s) => s.data.themes);
+  const ccliLicense = useLibrary((s) => s.data.settings.general.ccliLicense);
   const surfacesSettings = useLibrary((s) => s.data.settings.surfaces);
   const midiPresets = surfacesSettings.midiPresets ?? [];
   const theme = themeOf(p, themes);
   const ed = useEditor();
   const [openMidiKey, setOpenMidiKey] = useState<string | null>(null);
+  const [showSongInfo, setShowSongInfo] = useState(false);
+  const [previewingTitle, setPreviewingTitle] = useState(false);
 
   const hasAnyMidi = useMemo(
     () =>
@@ -63,9 +77,17 @@ export function SongReflowEditor(props: {
     change((prev) => updateSlide(prev, slideId, (sl) => ({ ...sl, midi, midiCues: undefined })));
   };
 
+  const titleSecId = titleSectionId(p.id);
   const activeArrangement: Arrangement = useMemo(() => {
     return p.arrangements[0] ?? authoringArrangement(p);
   }, [p]);
+
+  const arrangementIds = useMemo(() => {
+    if (!p.meta.titleSlide) return activeArrangement.sectionIds.filter((id) => id !== titleSecId);
+    return activeArrangement.sectionIds.includes(titleSecId)
+      ? activeArrangement.sectionIds
+      : [titleSecId, ...activeArrangement.sectionIds];
+  }, [activeArrangement.sectionIds, p.meta.titleSlide, titleSecId]);
 
   const setArrangementSections = (nextSectionIds: string[]) => {
     if (readOnly) return;
@@ -74,6 +96,60 @@ export function SongReflowEditor(props: {
       const updated: Arrangement = { ...cur, sectionIds: nextSectionIds };
       return {
         ...prev,
+        arrangements: prev.arrangements.length > 0 ? [updated, ...prev.arrangements.slice(1)] : [updated],
+      };
+    });
+  };
+
+  const toggleTitleSlide = (nextOn: boolean) => {
+    if (readOnly) return;
+    change((prev) => {
+      const tSecId = titleSectionId(prev.id);
+      const arrangements = nextOn
+        ? prev.arrangements.length > 0
+          ? prev.arrangements.map((a) => ({
+              ...a,
+              sectionIds: a.sectionIds.includes(tSecId) ? a.sectionIds : [tSecId, ...a.sectionIds],
+            }))
+          : [{ ...authoringArrangement(prev), sectionIds: [tSecId, ...prev.sections.map((s) => s.id)] }]
+        : prev.arrangements.map((a) => ({
+            ...a,
+            sectionIds: a.sectionIds.filter((id) => id !== tSecId),
+          }));
+      return {
+        ...prev,
+        meta: { ...prev.meta, titleSlide: nextOn || undefined },
+        arrangements,
+      };
+    });
+    setPreviewingTitle(nextOn);
+  };
+
+  /** Insert a Blank step into the arrangement (reusing an existing Blank section if present). */
+  const insertBlankStep = (where: 'start' | 'end') => {
+    if (readOnly) return;
+    change((prev) => {
+      const existing = prev.sections.find(
+        (s) => s.label.toLowerCase() === 'blank' || s.short.toLowerCase() === 'blk',
+      );
+      const blankSec: Section = existing ?? {
+        id: newId(),
+        label: 'Blank',
+        short: 'BLK',
+        slides: [newSlideFor(prev, themeOf(prev, themes), '')],
+      };
+      const sections = existing ? prev.sections : [...prev.sections, blankSec];
+      const cur = prev.arrangements[0] ?? authoringArrangement(prev);
+      const tSecId = titleSectionId(prev.id);
+      const baseIds =
+        prev.meta.titleSlide && !cur.sectionIds.includes(tSecId)
+          ? [tSecId, ...cur.sectionIds]
+          : cur.sectionIds;
+      const nextIds = where === 'start' ? [blankSec.id, ...baseIds] : [...baseIds, blankSec.id];
+      const updated: Arrangement = { ...cur, sectionIds: nextIds };
+      return {
+        ...prev,
+        sections,
         arrangements: prev.arrangements.length > 0 ? [updated, ...prev.arrangements.slice(1)] : [updated],
       };
     });
@@ -97,6 +173,7 @@ export function SongReflowEditor(props: {
     });
     if (!focusSlideId) return false;
     const targetId = focusSlideId;
+    setPreviewingTitle(false);
     selectSlide(targetId);
     requestAnimationFrame(() => {
       const el = document.querySelector<HTMLTextAreaElement>(`textarea[data-reflow-slide="${targetId}"]`);
@@ -147,6 +224,7 @@ export function SongReflowEditor(props: {
         sec.id === sectionId ? { ...sec, slides: [...sec.slides, slide] } : sec,
       ),
     }));
+    setPreviewingTitle(false);
     selectSlide(slide.id);
     requestAnimationFrame(() => {
       const el = document.querySelector<HTMLTextAreaElement>(`textarea[data-reflow-slide="${slide.id}"]`);
@@ -156,10 +234,11 @@ export function SongReflowEditor(props: {
 
   const addSection = (label: string) => {
     if (readOnly) return;
+    const parsedLbl = parseSectionLabel(label);
     const newSec: Section = {
       id: newId(),
       label,
-      short: label.slice(0, 3).toUpperCase(),
+      short: parsedLbl?.short ?? label.slice(0, 3).toUpperCase(),
       slides: [newSlideFor(p, theme, '')],
     };
     change((prev) => ({
@@ -173,6 +252,7 @@ export function SongReflowEditor(props: {
           : prev.arrangements,
     }));
     const firstId = newSec.slides[0]!.id;
+    setPreviewingTitle(false);
     selectSlide(firstId);
     requestAnimationFrame(() => {
       const el = document.querySelector<HTMLTextAreaElement>(`textarea[data-reflow-slide="${firstId}"]`);
@@ -215,6 +295,15 @@ export function SongReflowEditor(props: {
     if (fallbackId) selectSlide(fallbackId);
   };
 
+  const infoSummaryParts: string[] = [];
+  if (p.meta.author) infoSummaryParts.push(p.meta.author);
+  if (p.meta.ccli) infoSummaryParts.push(`CCLI #${p.meta.ccli}`);
+  if (p.meta.key) infoSummaryParts.push(`Key: ${p.meta.key}`);
+  const creditsPreview = formatSongCredits(p.meta, ccliLicense);
+  const titleTone = sectionTone('Title', 'TTL');
+  const effectivePreviewSlideId =
+    previewingTitle && p.meta.titleSlide ? titleSlideId(p.id) : (selectedSlideId ?? ed.slideId);
+
   return (
     <div className="ed-reflow col grow" style={{ minHeight: 0, overflow: 'hidden' }}>
       {/* Top Reflow Studio Header + Interactive Arrangement Strip */}
@@ -256,6 +345,31 @@ export function SongReflowEditor(props: {
           />
         </label>
 
+        <button
+          type="button"
+          className={`small ${showSongInfo ? 'on' : 'ghost'}`}
+          onClick={() => setShowSongInfo((v) => !v)}
+          data-song-info-toggle
+          title="Edit song author, CCLI number, copyright, key, and tempo"
+        >
+          <Icon name="sliders" size={13} />
+          <span className="ellipsis" style={{ maxWidth: 220 }}>
+            {infoSummaryParts.length > 0 ? infoSummaryParts.join(' · ') : 'Song Info & CCLI'}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className={`small ${p.meta.titleSlide ? 'on' : 'ghost'}`}
+          disabled={readOnly}
+          aria-pressed={Boolean(p.meta.titleSlide)}
+          onClick={() => toggleTitleSlide(!p.meta.titleSlide)}
+          data-title-slide-toggle
+          title="Include an auto-generated Title Slide at the start of this song (Title, Author, Copyright, CCLI)"
+        >
+          <span>{p.meta.titleSlide ? '✓ Title Slide' : '+ Title Slide'}</span>
+        </button>
+
         <span className="spacer" />
 
         {/* Interactive Arrangement Pill Strip */}
@@ -263,77 +377,105 @@ export function SongReflowEditor(props: {
           <span className="muted">{activeArrangement.name}:</span>
           {(() => {
             const seen = new Map<string, number>();
-            return activeArrangement.sectionIds.map((secId, arrIdx) => {
+            return arrangementIds.map((secId, arrIdx) => {
               const occ = (seen.get(secId) ?? 0) + 1;
               seen.set(secId, occ);
-              const sec = p.sections.find((s) => s.id === secId);
-              if (!sec) return null;
+              const isTitle = secId === titleSecId;
+              const sec = isTitle ? undefined : p.sections.find((s) => s.id === secId);
+              if (!isTitle && !sec) return null;
+              const label = isTitle ? 'Title' : sec!.label;
+              const short = isTitle ? 'TTL' : sec!.short || sec!.label;
+              const removeStep = () => {
+                const next = arrangementIds.filter((_, j) => j !== arrIdx);
+                if (isTitle && !next.includes(titleSecId)) {
+                  toggleTitleSlide(false);
+                } else {
+                  setArrangementSections(next);
+                }
+              };
               return (
                 <span
                   key={`${secId}#${occ}`}
                   className="song-arr-pill"
+                  style={isTitle ? { borderLeft: `3px solid ${titleTone.border}` } : undefined}
                   onContextMenu={(e) => {
                     openContextMenu(
                       e,
                       [
-                        {
-                          label: `Jump to ${sec.label}`,
-                          onSelect: () => {
-                            const targetEl = document.getElementById(`section-${secId}`);
-                            targetEl?.scrollIntoView({ behavior: 'smooth' });
-                          },
-                        },
-                        {
-                          label: 'Duplicate step in arrangement',
-                          disabled: readOnly,
-                          onSelect: () => {
-                            const next = [...activeArrangement.sectionIds];
-                            next.splice(arrIdx + 1, 0, secId);
-                            setArrangementSections(next);
-                          },
-                        },
+                        isTitle
+                          ? {
+                              label: 'Preview Title Slide',
+                              onSelect: () => {
+                                setPreviewingTitle(true);
+                                document
+                                  .getElementById('section-title-slide')
+                                  ?.scrollIntoView({ behavior: 'smooth' });
+                              },
+                            }
+                          : {
+                              label: `Jump to ${label}`,
+                              onSelect: () => {
+                                const targetEl = document.getElementById(`section-${secId}`);
+                                targetEl?.scrollIntoView({ behavior: 'smooth' });
+                              },
+                            },
+                        ...(isTitle
+                          ? [
+                              {
+                                label: 'Edit Song Info & CCLI…',
+                                onSelect: () => setShowSongInfo(true),
+                              },
+                            ]
+                          : [
+                              {
+                                label: 'Duplicate step in arrangement',
+                                disabled: readOnly,
+                                onSelect: () => {
+                                  const next = [...arrangementIds];
+                                  next.splice(arrIdx + 1, 0, secId);
+                                  setArrangementSections(next);
+                                },
+                              },
+                            ]),
                         ...(arrIdx > 0
                           ? [
                               {
                                 label: 'Move step left',
                                 disabled: readOnly,
                                 onSelect: () => {
-                                  const next = [...activeArrangement.sectionIds];
+                                  const next = [...arrangementIds];
                                   [next[arrIdx - 1], next[arrIdx]] = [next[arrIdx]!, next[arrIdx - 1]!];
                                   setArrangementSections(next);
                                 },
                               },
                             ]
                           : []),
-                        ...(arrIdx < activeArrangement.sectionIds.length - 1
+                        ...(arrIdx < arrangementIds.length - 1
                           ? [
                               {
                                 label: 'Move step right',
                                 disabled: readOnly,
                                 onSelect: () => {
-                                  const next = [...activeArrangement.sectionIds];
+                                  const next = [...arrangementIds];
                                   [next[arrIdx], next[arrIdx + 1]] = [next[arrIdx + 1]!, next[arrIdx]!];
                                   setArrangementSections(next);
                                 },
                               },
                             ]
                           : []),
-                        ...(activeArrangement.sectionIds.length > 1
+                        ...(arrangementIds.length > 1 || isTitle
                           ? [
                               { kind: 'separator' as const },
                               {
-                                label: 'Remove step from arrangement',
+                                label: isTitle ? 'Turn off Title Slide' : 'Remove step from arrangement',
                                 danger: true,
                                 disabled: readOnly,
-                                onSelect: () =>
-                                  setArrangementSections(
-                                    activeArrangement.sectionIds.filter((_, j) => j !== arrIdx),
-                                  ),
+                                onSelect: removeStep,
                               },
                             ]
                           : []),
                       ],
-                      { ariaLabel: `${sec.label} arrangement step actions` },
+                      { ariaLabel: `${label} arrangement step actions` },
                     );
                   }}
                 >
@@ -341,21 +483,26 @@ export function SongReflowEditor(props: {
                     type="button"
                     className="song-arr-jump"
                     onClick={() => {
-                      const targetEl = document.getElementById(`section-${secId}`);
-                      targetEl?.scrollIntoView({ behavior: 'smooth' });
+                      if (isTitle) {
+                        setPreviewingTitle(true);
+                        document
+                          .getElementById('section-title-slide')
+                          ?.scrollIntoView({ behavior: 'smooth' });
+                      } else {
+                        const targetEl = document.getElementById(`section-${secId}`);
+                        targetEl?.scrollIntoView({ behavior: 'smooth' });
+                      }
                     }}
                   >
-                    {sec.short || sec.label}
+                    {short}
                   </button>
-                  {!readOnly && activeArrangement.sectionIds.length > 1 && (
+                  {!readOnly && (arrangementIds.length > 1 || isTitle) && (
                     <button
                       type="button"
                       className="song-arr-rm"
-                      aria-label={`Remove ${sec.label} from arrangement`}
-                      title="Remove step from arrangement"
-                      onClick={() =>
-                        setArrangementSections(activeArrangement.sectionIds.filter((_, j) => j !== arrIdx))
-                      }
+                      aria-label={isTitle ? 'Turn off Title Slide' : `Remove ${label} from arrangement`}
+                      title={isTitle ? 'Turn off Title Slide' : 'Remove step from arrangement'}
+                      onClick={removeStep}
                     >
                       ×
                     </button>
@@ -367,15 +514,130 @@ export function SongReflowEditor(props: {
           {!readOnly && p.sections.length > 0 && (
             <Menu
               label="+ Step"
-              items={p.sections.map((sec) => ({
-                label: `+ ${sec.label}`,
-                name: sec.label,
-                onSelect: () => setArrangementSections([...activeArrangement.sectionIds, sec.id]),
-              }))}
+              items={[
+                ...p.sections.map((sec) => ({
+                  label: `+ ${sec.label}`,
+                  name: sec.label,
+                  onSelect: () => setArrangementSections([...arrangementIds, sec.id]),
+                })),
+                {
+                  label: '+ Blank at start (intro / transition)',
+                  name: 'Blank at start',
+                  onSelect: () => insertBlankStep('start'),
+                },
+                {
+                  label: '+ Blank at end (outro / transition)',
+                  name: 'Blank at end',
+                  onSelect: () => insertBlankStep('end'),
+                },
+              ]}
             />
           )}
         </div>
       </div>
+
+      {/* Collapsible Song Metadata & CCLI Editor right inside Lyric Script */}
+      {showSongInfo && (
+        <div
+          className="col"
+          data-song-info-panel
+          style={{
+            padding: '12px 18px',
+            background: 'var(--bg2)',
+            borderBottom: '1px solid var(--line)',
+            gap: 10,
+          }}
+        >
+          <div className="row wrap" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <strong style={{ fontSize: 13 }}>Song Details &amp; CCLI Attribution</strong>
+            <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+              <span className="muted small">
+                {ccliLicense ? (
+                  <>Venue CCLI License #{ccliLicense}</>
+                ) : (
+                  <>
+                    Venue CCLI License # not set (<a href="#/settings/general">Settings → General</a>)
+                  </>
+                )}
+              </span>
+              <button type="button" className="small ghost" onClick={() => setShowSongInfo(false)}>
+                Done
+              </button>
+            </div>
+          </div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: 10,
+              alignItems: 'end',
+            }}
+          >
+            <TextField
+              label="Song title"
+              value={p.title}
+              disabled={readOnly}
+              onChange={(title) => change((q) => ({ ...q, title }), 'pres:title')}
+            />
+            <TextField
+              label="Author / Artist"
+              value={p.meta.author ?? ''}
+              placeholder="e.g. John Newton / Chris Tomlin"
+              disabled={readOnly}
+              onChange={(author) =>
+                change((q) => ({ ...q, meta: { ...q.meta, author: author || undefined } }), 'meta:author')
+              }
+            />
+            <TextField
+              label="CCLI Song #"
+              value={p.meta.ccli ?? ''}
+              placeholder="e.g. 7073332"
+              disabled={readOnly}
+              onChange={(ccli) =>
+                change((q) => ({ ...q, meta: { ...q.meta, ccli: ccli || undefined } }), 'meta:ccli')
+              }
+            />
+            <TextField
+              label="Copyright"
+              value={p.meta.copyright ?? ''}
+              placeholder="e.g. 2016 Hillsong Music Publishing"
+              disabled={readOnly}
+              onChange={(copyright) =>
+                change(
+                  (q) => ({ ...q, meta: { ...q.meta, copyright: copyright || undefined } }),
+                  'meta:copyright',
+                )
+              }
+            />
+            <TextField
+              label="Key"
+              value={p.meta.key ?? ''}
+              placeholder="e.g. G"
+              disabled={readOnly}
+              onChange={(key) =>
+                change((q) => ({ ...q, meta: { ...q.meta, key: key || undefined } }), 'meta:key')
+              }
+            />
+            <NumberField
+              label="Tempo (BPM)"
+              value={p.meta.tempo ?? 0}
+              min={0}
+              disabled={readOnly}
+              onChange={(tempo) =>
+                change((q) => ({ ...q, meta: { ...q.meta, tempo: tempo || undefined } }), 'meta:tempo')
+              }
+            />
+          </div>
+          <div className="row wrap" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <Check
+              label="Show auto-generated Title Slide at the start of this song (updates automatically from fields above)"
+              value={Boolean(p.meta.titleSlide)}
+              disabled={readOnly}
+              onChange={toggleTitleSlide}
+            />
+          </div>
+        </div>
+      )}
 
       {banners}
 
@@ -388,6 +650,70 @@ export function SongReflowEditor(props: {
               id: 'reflow-script',
               content: (
                 <div className="studio-well col" style={{ padding: 0 }}>
+                  {p.meta.titleSlide && (
+                    <div id="section-title-slide" className="reflow-section" data-title-slide-card>
+                      <div
+                        className="row"
+                        style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10 }}
+                      >
+                        <div className="row" style={{ alignItems: 'center', gap: 10 }}>
+                          <span
+                            className="tag"
+                            style={{
+                              background: titleTone.bg,
+                              color: titleTone.fg,
+                              fontWeight: 700,
+                              border: 'none',
+                            }}
+                          >
+                            TTL
+                          </span>
+                          <span style={{ fontWeight: 600, fontSize: 15 }}>Title Slide</span>
+                          <span className="muted small">Auto-generated from Song Info</span>
+                        </div>
+                        <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            className="small ghost"
+                            onClick={() => setShowSongInfo((v) => !v)}
+                          >
+                            <Icon name="edit" size={12} />
+                            Edit Info
+                          </button>
+                          {!readOnly && (
+                            <button
+                              type="button"
+                              className="small ghost danger icon-btn"
+                              title="Turn off Title Slide"
+                              aria-label="Turn off Title Slide"
+                              onClick={() => toggleTitleSlide(false)}
+                            >
+                              <Icon name="close" size={13} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div
+                        className={`reflow-slide-row${previewingTitle ? ' active' : ''}`}
+                        onClick={() => setPreviewingTitle(true)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <div className="reflow-gutter" style={{ background: titleTone.bg }} />
+                        <div className="reflow-slide-body" style={{ gap: 4 }}>
+                          <div style={{ fontWeight: 700, fontSize: 15 }}>{p.title || 'Untitled song'}</div>
+                          {creditsPreview ? (
+                            <div className="muted small" style={{ whiteSpace: 'pre-line', lineHeight: 1.4 }}>
+                              {creditsPreview}
+                            </div>
+                          ) : (
+                            <div className="muted small" style={{ fontStyle: 'italic' }}>
+                              No author, copyright, or CCLI number set yet — click Edit Info to add them.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {p.sections.map((sec) => {
                     const tone = sectionTone(sec.label, sec.short);
                     return (
@@ -546,7 +872,8 @@ export function SongReflowEditor(props: {
                         {/* Slide Text Blocks */}
                         <div className="col" style={{ gap: 10 }}>
                           {sec.slides.map((slide, sIdx) => {
-                            const isSelected = slide.id === (selectedSlideId ?? ed.slideId);
+                            const isSelected =
+                              !previewingTitle && slide.id === (selectedSlideId ?? ed.slideId);
                             const text = scriptText(slide);
                             const nonEmptyLines = scriptLines(text).length;
                             const overflowsStream = nonEmptyLines > 2;
@@ -563,9 +890,13 @@ export function SongReflowEditor(props: {
                               <div
                                 key={slide.id}
                                 className={`reflow-slide-row${isSelected ? ' active' : ''}`}
-                                onClick={() => selectSlide(slide.id)}
+                                onClick={() => {
+                                  setPreviewingTitle(false);
+                                  selectSlide(slide.id);
+                                }}
                                 onContextMenu={(e) => {
                                   if (!showMidi || readOnly) return;
+                                  setPreviewingTitle(false);
                                   selectSlide(slide.id);
                                   openContextMenu(
                                     e,
@@ -617,7 +948,14 @@ export function SongReflowEditor(props: {
                                           <Icon name="check" size={12} />
                                           {nonEmptyLines} line{nonEmptyLines === 1 ? '' : 's'}
                                         </span>
-                                      ) : null}
+                                      ) : (
+                                        <span
+                                          className="tag small"
+                                          title="Shows only the song's background on audience screens (useful for intros, instrumentals, and transitions)"
+                                        >
+                                          Blank (background only)
+                                        </span>
+                                      )}
                                       {slideMidiBadge && (
                                         <button
                                           type="button"
@@ -760,8 +1098,11 @@ export function SongReflowEditor(props: {
                                     rows={Math.max(2, text.split('\n').length)}
                                     value={text}
                                     disabled={readOnly}
-                                    placeholder="Enter lyrics (Opt+Enter or --- to split into next slide)…"
-                                    onFocus={() => selectSlide(slide.id)}
+                                    placeholder="Enter lyrics (leave empty for a Blank background-only slide, or Opt+Enter / --- to split)…"
+                                    onFocus={() => {
+                                      setPreviewingTitle(false);
+                                      selectSlide(slide.id);
+                                    }}
                                     onKeyDown={(e) => {
                                       if (!composing(e) && e.altKey && e.key === 'Enter') {
                                         e.preventDefault();
@@ -811,7 +1152,10 @@ export function SongReflowEditor(props: {
                                       value={slide.notes ?? ''}
                                       disabled={readOnly}
                                       placeholder="e.g. Key: G · Capo 2 | G - C - Em - D (shown in amber on Stage Display)"
-                                      onFocus={() => selectSlide(slide.id)}
+                                      onFocus={() => {
+                                        setPreviewingTitle(false);
+                                        selectSlide(slide.id);
+                                      }}
                                       onChange={(e) => updateSlideNotes(slide.id, e.target.value)}
                                     />
                                   </div>
@@ -827,17 +1171,25 @@ export function SongReflowEditor(props: {
                   {/* Quick Add Section Bar */}
                   <div className="row wrap" style={{ gap: 8, alignItems: 'center', padding: '14px 18px' }}>
                     <span className="muted small">Add section:</span>
-                    {['Verse', 'Chorus', 'Bridge', 'Tag', 'Outro'].map((kind) => {
+                    {['Verse', 'Chorus', 'Bridge', 'Tag', 'Outro', 'Instrumental', 'Blank'].map((kind) => {
                       const count = p.sections.filter((s) => s.label.startsWith(kind)).length;
                       const nextLabel =
-                        count > 0 && kind !== 'Chorus' && kind !== 'Tag' ? `${kind} ${count + 1}` : kind;
+                        count > 0 && kind !== 'Chorus' && kind !== 'Tag' && kind !== 'Blank'
+                          ? `${kind} ${count + 1}`
+                          : kind;
                       return (
                         <button
                           key={kind}
                           type="button"
                           className="small"
                           disabled={readOnly}
-                          onClick={() => addSection(nextLabel)}
+                          onClick={() => {
+                            if (kind === 'Blank' && count > 0) {
+                              insertBlankStep('end');
+                            } else {
+                              addSection(nextLabel);
+                            }
+                          }}
                         >
                           <Icon name="plus" size={12} />
                           {nextLabel}
@@ -869,7 +1221,7 @@ export function SongReflowEditor(props: {
                   </div>
                   <div className="pl-pane-scroll col" style={{ padding: 14, gap: 12 }}>
                     <span className="muted small">Live preview across Audience, Stage, and Stream:</span>
-                    <LookPreviews presentation={p} slideId={selectedSlideId ?? ed.slideId} compact />
+                    <LookPreviews presentation={p} slideId={effectivePreviewSlideId} compact />
                   </div>
                 </div>
               ),

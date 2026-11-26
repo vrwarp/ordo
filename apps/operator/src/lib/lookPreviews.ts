@@ -1,4 +1,11 @@
-import { arrangedSections, type Look, type Presentation, type Slide } from '@ordo/domain';
+import {
+  arrangedSections,
+  type Look,
+  type Presentation,
+  type Slide,
+  type Theme,
+  withSongTitleSlide,
+} from '@ordo/domain';
 
 const KIND_ORDER: Record<Look['kind'], number> = { main: 0, lowerThird: 1, stream: 2, stage: 3, custom: 4 };
 
@@ -19,9 +26,12 @@ export function previewLooks(looks: readonly Look[]): Look[] {
     .map((x) => x.l);
 }
 
-/** Every slide of a presentation in authoring order. */
-export function flatSlides(p: Presentation): Slide[] {
-  return p.sections.flatMap((s) => s.slides);
+/** Every slide of a presentation in authoring order (with optional title slide materialized). */
+export function flatSlides(
+  p: Presentation,
+  opts?: { themes?: readonly Theme[]; ccliLicense?: string },
+): Slide[] {
+  return withSongTitleSlide(p, opts).sections.flatMap((s) => s.slides);
 }
 
 /**
@@ -34,8 +44,10 @@ export function flatSlides(p: Presentation): Slide[] {
 export function slideAndNext(
   p: Presentation,
   slideId?: string,
+  opts?: { themes?: readonly Theme[]; ccliLicense?: string },
 ): { slide?: Slide; next?: Slide; index: number } {
-  const all = arrangedSections(p).flatMap((s) => s.slides);
+  const effective = withSongTitleSlide(p, opts);
+  const all = arrangedSections(effective).flatMap((s) => s.slides);
   let index = slideId ? all.findIndex((s) => s.id === slideId) : 0;
   if (index < 0) index = 0;
   return { slide: all[index], next: all.slice(index + 1).find((s) => !s.hidden), index };

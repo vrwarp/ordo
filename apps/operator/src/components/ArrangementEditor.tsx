@@ -6,6 +6,8 @@ import {
   type Presentation,
   type Section,
   type TextObject,
+  titleSectionId,
+  withSongTitleSlide,
 } from '@ordo/domain';
 import { useState } from 'react';
 import { DragHandle, useSortable } from './Sortable.tsx';
@@ -35,14 +37,33 @@ function getSectionSlidesLyrics(s: Section): { id: string; text: string }[] {
  * sequence text box at the top, and option to add custom verses/lyrics.
  */
 export function ArrangementEditor(props: {
-  presentation: Pick<Presentation, 'sections'> & { id?: string };
+  presentation: Pick<Presentation, 'sections'> &
+    Partial<Pick<Presentation, 'id' | 'title' | 'kind' | 'meta' | 'arrangements'>>;
   value: Arrangement;
   onChange: (a: Arrangement) => void;
   onAddSection?: (sec: Section) => void;
   disabled?: boolean;
 }) {
-  const { presentation: p, value: rawArrangement } = props;
-  const a = pruneArrangement(rawArrangement, p);
+  const { presentation: rawP, value: rawArrangement } = props;
+  const p =
+    rawP.id && rawP.kind === 'song' && rawP.meta?.titleSlide
+      ? withSongTitleSlide({
+          id: rawP.id,
+          rev: 1,
+          title: rawP.title ?? 'Untitled song',
+          kind: 'song',
+          meta: rawP.meta,
+          sections: rawP.sections,
+          arrangements: rawP.arrangements ?? [],
+          archived: false,
+        })
+      : rawP;
+  const tSecId = rawP.id && rawP.kind === 'song' && rawP.meta?.titleSlide ? titleSectionId(rawP.id) : null;
+  const normalizedArrangement =
+    tSecId && !rawArrangement.sectionIds.includes(tSecId)
+      ? { ...rawArrangement, sectionIds: [tSecId, ...rawArrangement.sectionIds] }
+      : rawArrangement;
+  const a = pruneArrangement(normalizedArrangement, p);
   const [prevId, setPrevId] = useState(`${p.id ?? ''}:${a.id}`);
   const [picked, setPicked] = useState<number | null>(null);
   const [text, setText] = useState<string | null>(null);
@@ -162,15 +183,49 @@ export function ArrangementEditor(props: {
             </button>
           ))}
           {props.onAddSection && (
-            <button
-              type="button"
-              className="small ghost"
-              style={{ border: '1px dashed var(--line)' }}
-              onClick={() => setShowCustom(!showCustom)}
-              title="Add a custom one-off verse or spontaneous lyric"
-            >
-              + Custom verse…
-            </button>
+            <>
+              <button
+                type="button"
+                className="small ghost"
+                style={{ border: '1px dashed var(--line)' }}
+                onClick={() => {
+                  const existingBlank = p.sections.find(
+                    (s) => s.label.toLowerCase() === 'blank' || s.short.toLowerCase() === 'blk',
+                  );
+                  if (existingBlank) {
+                    props.onChange(insertSection(a, existingBlank.id));
+                    return;
+                  }
+                  const sampleTextObj = p.sections
+                    .flatMap((sec) => sec.slides)
+                    .flatMap((sl) => sl.objects)
+                    .find((obj): obj is TextObject => obj.type === 'text');
+                  const theme = sampleTextObj
+                    ? { lyricBox: sampleTextObj.box, text: sampleTextObj.style }
+                    : DEFAULT_THEME;
+                  const blankSec: Section = {
+                    id: newId(),
+                    label: 'Blank',
+                    short: 'BLK',
+                    slides: [lyricSlide('', theme)],
+                  };
+                  props.onAddSection?.(blankSec);
+                  props.onChange(insertSection(a, blankSec.id));
+                }}
+                title="Insert a blank slide step (keeps background, clears lyrics)"
+              >
+                + Blank
+              </button>
+              <button
+                type="button"
+                className="small ghost"
+                style={{ border: '1px dashed var(--line)' }}
+                onClick={() => setShowCustom(!showCustom)}
+                title="Add a custom one-off verse or spontaneous lyric"
+              >
+                + Custom verse…
+              </button>
+            </>
           )}
         </div>
       )}

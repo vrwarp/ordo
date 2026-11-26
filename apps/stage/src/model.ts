@@ -9,6 +9,8 @@ import {
   type GeneralSettings,
   importedText,
   isHiddenCue,
+  isSkippedCue,
+  isTitleSlideId,
   LOOK_STAGE,
   type LiveState,
   type Look,
@@ -18,6 +20,7 @@ import {
   type Rgba,
   type Slide,
   type SlideContent,
+  songTitleSlide,
   type StageMessage,
   type StageNotesScale,
   stageNotesEnabled,
@@ -287,6 +290,9 @@ function findSlide(
   const p = s.resolved?.presentations[presentationId];
   if (!p) return undefined;
   for (const sec of p.sections) for (const sl of sec.slides) if (sl.id === slideId) return sl;
+  if (p.kind === 'song' && p.meta?.titleSlide && isTitleSlideId(slideId)) {
+    return songTitleSlide(p);
+  }
   return undefined;
 }
 
@@ -335,16 +341,30 @@ export function currentText(
 
 /**
  * The next slide after the displayed one, as Next goes: the following slide cue of the same item, else the
- * next item's first slide (labelled with its title). Hidden slides are skipped (design/27 §9).
+ * next item's first slide (labelled with its title). Hidden and skipped slides are skipped (design/27 §9).
+ * When the audience Slide layer is cleared (but not blacked out), keeps previewing from `s.live` (or the
+ * armed cue before the first GO) so the worship band retains look-ahead during transitions.
  */
 export function nextText(s: LiveState, content: SlideContent | null, layout: StageLayout): StageText | null {
-  if (!content || !layout.next) return null;
-  const cur = s.cues[content.cueIndex];
+  if (!layout.next || s.black) return null;
+  const refIndex = content?.cueIndex ?? s.live;
+  if (refIndex === undefined) {
+    if (s.mode !== 'live' || s.armed === undefined) return null;
+    const first = s.cues[s.armed];
+    if (!first || isHiddenCue(first) || isSkippedCue(first)) return null;
+    if (first.kind !== 'slide') return { text: '', label: first.label ? `Next: ${first.label}` : undefined };
+    const p = first.presentationId ? s.resolved?.presentations[first.presentationId] : undefined;
+    const text =
+      slideText(findSlide(s, first.presentationId, first.slideId)) ||
+      (p?.kind !== 'song' ? (p?.title ?? '') : '');
+    return { text, label: `Next: ${p?.title ?? first.label}` };
+  }
+  const cur = s.cues[refIndex];
   if (!cur) return null;
   const curPres = cur.presentationId ? s.resolved?.presentations[cur.presentationId] : undefined;
-  for (let i = content.cueIndex + 1; i < s.cues.length; i++) {
+  for (let i = refIndex + 1; i < s.cues.length; i++) {
     const c = s.cues[i]!;
-    if (isHiddenCue(c)) continue;
+    if (isHiddenCue(c) || isSkippedCue(c)) continue;
     // An announcement loop stays within its own item; stage should look ahead to the next item
     if (curPres?.kind === 'loop' && c.itemIndex === cur.itemIndex) continue;
     if (c.kind !== 'slide') {

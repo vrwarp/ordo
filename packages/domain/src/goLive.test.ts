@@ -63,4 +63,54 @@ describe('resolvePlaylist (shared by the hub and the operator PC)', () => {
     const r = resolvePlaylist(inputs({ presentation: () => broken }), 'pl', { digest: localDigest });
     expect(r.degraded?.[0]?.reason).toMatch(/invalid/);
   });
+
+  it('materializes optional song title slides with venue CCLI license and hashes them into manifestId', () => {
+    const titled = songFromParsed(parseLyrics(SONG_WITH_META), {
+      title: 'Cornerstone',
+      titleSlide: true,
+    });
+    const pl = {
+      id: 'pl',
+      rev: 1,
+      name: 'Sunday',
+      items: [{ id: 'i', kind: 'presentation' as const, presentationId: titled.id }],
+    };
+    const r1 = resolvePlaylist(
+      inputs({
+        playlist: pl,
+        presentation: (id) => (id === titled.id ? titled : undefined),
+        general: { ...DEFAULT_GENERAL, ccliLicense: '112233' },
+      }),
+      'pl',
+      { digest: localDigest },
+    );
+    const resolvedSong = r1.presentations[titled.id]!;
+    expect(resolvedSong.sections[0]?.short).toBe('TTL');
+    const allTexts = resolvedSong.sections[0]!.slides[0]!.objects.map((o) =>
+      o.type === 'text' ? o.text : '',
+    ).join('\n');
+    expect(allTexts).toContain('Cornerstone');
+    expect(allTexts).toContain('CCLI Song #777777');
+    expect(allTexts).toContain('CCLI License #112233');
+
+    const r2 = resolvePlaylist(
+      inputs({
+        playlist: pl,
+        presentation: (id) => (id === titled.id ? titled : undefined),
+        general: { ...DEFAULT_GENERAL, ccliLicense: '999999' },
+      }),
+      'pl',
+      { digest: localDigest },
+    );
+    expect(r2.manifestId).not.toBe(r1.manifestId);
+  });
 });
+
+const SONG_WITH_META = `Cornerstone
+
+Verse 1
+My hope is built on nothing less
+
+CCLI Song # 777777
+Edward Mote
+© 2012 Hillsong Music`;

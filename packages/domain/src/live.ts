@@ -251,6 +251,8 @@ export type LiveState = {
   messages: StageMessage[];
   /** Set on clear-all; outputs fade audio and draw clear colour. */
   black: boolean;
+  /** Sticky blank-text mute: keeps the audience/stream slide layer empty while advancing cues and backgrounds. */
+  blankText?: boolean;
   /**
    * design/29 §1.7: pictures the go-live bake made during the service (`prerender.add`, the hub's), newest last,
    * at most `PRERENDERED_MAX`; `resolved` stays as it went live. Absent until the first; cleared at End service.
@@ -294,6 +296,7 @@ const CLIENT_EVENTS = [
       at,
     })
     .strict(),
+  z.object({ k: z.literal('blankText'), on: z.boolean().optional(), at }).strict(),
   z.object({ k: z.literal('logo'), at }).strict(),
   z.object({ k: z.literal('lowerThird'), text: z.string().max(2000), at }).strict(),
   z.object({ k: z.literal('media.play'), at }).strict(),

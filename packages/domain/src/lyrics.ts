@@ -17,6 +17,7 @@ const SECTION_PATTERNS: { full: string; abbr: string; label: string; short: stri
   { full: 'instrumental', abbr: 'IN', label: 'Instrumental', short: 'IN' },
   { full: 'refrain', abbr: 'R', label: 'Refrain', short: 'R' },
   { full: 'vamp', abbr: 'VA', label: 'Vamp', short: 'VA' },
+  { full: 'blank|turnaround', abbr: 'BLK', label: 'Blank', short: 'BLK' },
   { full: 'misc', abbr: 'M', label: 'Misc', short: 'M' },
 ].map((p) => p);
 /** A number with an optional letter suffix (`1`, `1a`), as SongSelect and CCLI exports use. */
@@ -390,10 +391,221 @@ export function lyricSlide(text: string, theme: Pick<Theme, 'lyricBox' | 'text'>
   };
 }
 
+export function titleSectionId(presentationId: string): string {
+  return `${presentationId}:title-sec`;
+}
+
+export function titleSlideId(presentationId: string): string {
+  return `${presentationId}:title`;
+}
+
+export function isTitleSectionId(id: string): boolean {
+  return id.endsWith(':title-sec');
+}
+
+export function isTitleSlideId(id: string): boolean {
+  return id.endsWith(':title');
+}
+
+/** Format full multi-line song attribution & CCLI credit block for the audience title slide. */
+export function formatSongCredits(meta: Presentation['meta'], ccliLicense?: string): string {
+  const lines: string[] = [];
+  const author = meta.author?.trim();
+  if (author) lines.push(clip(author, LYRIC_META_MAX));
+  const legal: string[] = [];
+  const copy = meta.copyright?.trim();
+  if (copy) {
+    const withSym = /^©|^copyright\b/i.test(copy) ? copy : `© ${copy}`;
+    legal.push(clip(withSym, LYRIC_META_MAX));
+  }
+  const ccli = meta.ccli?.trim().replace(/^#/, '');
+  if (ccli) legal.push(`CCLI Song #${clip(ccli, 60)}`);
+  const lic = ccliLicense?.trim().replace(/^#/, '');
+  if (lic) legal.push(`CCLI License #${clip(lic, 60)}`);
+  if (legal.length > 0) lines.push(legal.join(' · '));
+  return lines.join('\n');
+}
+
+/** Compact single-line credit summary so 2-line livestream lower thirds fit cleanly under the song title. */
+export function formatSongStreamCredits(meta: Presentation['meta'], ccliLicense?: string): string {
+  const parts: string[] = [];
+  const author = meta.author?.trim();
+  if (author) parts.push(clip(author, 120));
+  const ccli = meta.ccli?.trim().replace(/^#/, '');
+  if (ccli) parts.push(`CCLI #${clip(ccli, 40)}`);
+  const lic = ccliLicense?.trim().replace(/^#/, '');
+  if (lic) parts.push(`Lic #${clip(lic, 40)}`);
+  if (parts.length === 0 && meta.copyright?.trim()) {
+    const copy = meta.copyright.trim();
+    parts.push(clip(/^©|^copyright\b/i.test(copy) ? copy : `© ${copy}`, 120));
+  }
+  return parts.join(' · ');
+}
+
+/** Build the deterministic auto-generated title slide for a song from its title, metadata, and theme. */
+export function songTitleSlide(
+  p: Pick<Presentation, 'id' | 'title' | 'meta'>,
+  opts: { theme?: Pick<Theme, 'lyricBox' | 'text'>; ccliLicense?: string } = {},
+): Slide {
+  const theme = opts.theme ?? DEFAULT_THEME;
+  const box = theme.lyricBox;
+  const titleText = clip(p.title.trim() || 'Untitled song', LYRIC_META_MAX);
+  const credits = formatSongCredits(p.meta, opts.ccliLicense);
+  const streamSub = formatSongStreamCredits(p.meta, opts.ccliLicense);
+  const titleObjId = `${p.id}:title-obj`;
+  const creditsObjId = `${p.id}:credits-obj`;
+  const titleFontSize = Math.min(200, Math.max(40, Math.round(theme.text.fontSizePx * 1.12)));
+
+  if (!credits) {
+    return {
+      id: titleSlideId(p.id),
+      objects: [
+        {
+          id: titleObjId,
+          type: 'text',
+          box: { ...box },
+          text: titleText,
+          style: {
+            ...theme.text,
+            fontSizePx: titleFontSize,
+            align: 'center',
+            valign: 'middle',
+            autofit: 'shrink',
+          },
+          opacity: 1,
+        },
+      ],
+      lyricObjectId: titleObjId,
+      bottomThirdText: titleText,
+    };
+  }
+
+  const gap = Math.max(16, Math.round(box.h * 0.04));
+  const titleH = Math.max(120, Math.round(box.h * 0.6));
+  const creditsY = box.y + titleH + gap;
+  const creditsH = Math.max(80, box.h - titleH - gap);
+  const creditsFontSize = Math.max(24, Math.min(42, Math.round(theme.text.fontSizePx * 0.36)));
+
+  return {
+    id: titleSlideId(p.id),
+    objects: [
+      {
+        id: titleObjId,
+        type: 'text',
+        box: { ...box, h: titleH },
+        text: titleText,
+        style: {
+          ...theme.text,
+          fontSizePx: titleFontSize,
+          align: 'center',
+          valign: 'bottom',
+          autofit: 'shrink',
+        },
+        opacity: 1,
+      },
+      {
+        id: creditsObjId,
+        type: 'text',
+        box: { ...box, y: creditsY, h: creditsH },
+        text: credits,
+        style: {
+          ...theme.text,
+          fontWeight: 500,
+          fontSizePx: creditsFontSize,
+          lineHeight: 1.35,
+          align: 'center',
+          valign: 'top',
+          transform: 'none',
+          autofit: 'shrink',
+          ...(theme.text.outline
+            ? { outline: { ...theme.text.outline, width: Math.min(2, theme.text.outline.width) } }
+            : {}),
+        },
+        opacity: 0.86,
+      },
+    ],
+    lyricObjectId: titleObjId,
+    bottomThirdText: streamSub ? `${titleText}\n${streamSub}` : titleText,
+  };
+}
+
+/**
+ * Materialize the dynamic Title section on a song presentation when `p.meta.titleSlide` is enabled.
+ * Idempotent: calling it again refreshes the title slide in place without duplicating the section or step.
+ */
+export function withSongTitleSlide(
+  p: Presentation,
+  opts: { themes?: readonly Theme[]; theme?: Pick<Theme, 'lyricBox' | 'text'>; ccliLicense?: string } = {},
+): Presentation {
+  const secId = titleSectionId(p.id);
+  if (p.kind !== 'song' || !p.meta.titleSlide) {
+    if (!p.sections.some((s) => s.id === secId)) return p;
+    return {
+      ...p,
+      sections: p.sections.filter((s) => s.id !== secId),
+      arrangements: p.arrangements.map((a) => ({
+        ...a,
+        sectionIds: a.sectionIds.filter((id) => id !== secId),
+      })),
+    };
+  }
+  const resolvedTheme =
+    opts.theme ??
+    (p.themeId ? opts.themes?.find((t) => t.id === p.themeId) : undefined) ??
+    opts.themes?.[0] ??
+    DEFAULT_THEME;
+  const titleSec: Section = {
+    id: secId,
+    label: 'Title',
+    short: 'TTL',
+    slides: [songTitleSlide(p, { theme: resolvedTheme, ccliLicense: opts.ccliLicense })],
+  };
+  if (p.sections[0]?.id === secId) {
+    return {
+      ...p,
+      sections: [titleSec, ...p.sections.slice(1)],
+    };
+  }
+  const restSections = p.sections.filter((s) => s.id !== secId);
+  const authoring = restSections.map((s) => s.id);
+  const arrangements =
+    p.arrangements.length > 0
+      ? p.arrangements.map((a) => ({
+          ...a,
+          sectionIds: a.sectionIds.includes(secId) ? a.sectionIds : [secId, ...a.sectionIds],
+        }))
+      : [{ id: `${p.id}:default-arr`, name: 'Default', sectionIds: [secId, ...authoring] }];
+  return {
+    ...p,
+    sections: [titleSec, ...restSections],
+    arrangements,
+  };
+}
+
+/** Create a reusable Blank section (1 empty slide) for intros, instrumentals, or song transitions. */
+export function songBlankSection(
+  theme: Pick<Theme, 'lyricBox' | 'text'> = DEFAULT_THEME,
+  label = 'Blank',
+  short = 'BLK',
+): Section {
+  return {
+    id: newId(),
+    label,
+    short,
+    slides: [lyricSlide('', theme)],
+  };
+}
+
 /** Build a song presentation from parsed lyrics. */
 export function songFromParsed(
   parsed: ParsedSong,
-  opts: { title?: string; linesPerSlide?: number; theme?: Theme; source?: Presentation['source'] } = {},
+  opts: {
+    title?: string;
+    linesPerSlide?: number;
+    theme?: Theme;
+    source?: Presentation['source'];
+    titleSlide?: boolean;
+  } = {},
 ): Presentation {
   const lps = opts.linesPerSlide ?? 2;
   const theme = opts.theme ?? DEFAULT_THEME;
@@ -421,6 +633,7 @@ export function songFromParsed(
       copyright: parsed.copyright,
       key: parsed.key,
       tempo: parsed.tempo,
+      ...(opts.titleSlide ? { titleSlide: true } : {}),
       tags: [],
     },
     themeId: opts.theme?.id,

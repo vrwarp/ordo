@@ -198,6 +198,7 @@ const PRESENTATION_FIELDS: Record<string, string> = {
   'meta.key': 'the key',
   'meta.tempo': 'the tempo',
   'meta.tags': 'the tags',
+  'meta.titleSlide': 'whether it shows a title slide',
   folderId: 'the folder',
   themeId: 'the theme',
   backgroundMediaId: 'the default background',

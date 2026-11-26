@@ -154,8 +154,10 @@ export function SingleLookStagePreview(props: {
   onBackToCanvas: () => void;
 }) {
   const media = useMediaLookup();
+  const themes = useLibrary((s) => s.data.themes);
+  const ccliLicense = useLibrary((s) => s.data.settings.general.ccliLicense);
   const p = useDebounced(props.presentation, 100);
-  const { slide, next } = slideAndNext(p, props.slideId);
+  const { slide, next } = slideAndNext(p, props.slideId, { themes, ccliLicense });
   const isKey = isKeyLook(props.look);
   const [rawKey, setRawKey] = useState(false);
 
@@ -234,9 +236,11 @@ export function LookPreviews(props: {
   onSelectLook?: (lookId: string) => void;
 }) {
   const looks = useLibrary((s) => s.data.settings.looks);
+  const themes = useLibrary((s) => s.data.themes);
+  const ccliLicense = useLibrary((s) => s.data.settings.general.ccliLicense);
   const media = useMediaLookup();
   const p = useDebounced(props.presentation, 150);
-  const { slide, next } = slideAndNext(p, props.slideId);
+  const { slide, next } = slideAndNext(p, props.slideId, { themes, ccliLicense });
   const width = props.compact ? 480 : 960;
   if (!slide) return <div className="muted small">No slide to preview.</div>;
   return (

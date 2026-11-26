@@ -59,6 +59,19 @@ export function GeneralPage() {
         max={12}
         onChange={(defaultLinesPerSlide) => setDraft({ ...draft, defaultLinesPerSlide })}
       />
+      <TextField
+        label="CCLI Church Copyright License number (optional)"
+        value={draft.ccliLicense ?? ''}
+        placeholder="e.g. 123456 — shown on song title slides"
+        onChange={(v) => setDraft({ ...draft, ccliLicense: v.trim() ? v : undefined })}
+      />
+      <Check
+        label="Include auto-generated title slide on new songs by default"
+        value={Boolean(draft.defaultTitleSlide)}
+        onChange={(defaultTitleSlide) =>
+          setDraft({ ...draft, defaultTitleSlide: defaultTitleSlide || undefined })
+        }
+      />
       <NumberField
         label="GO lead time (ms)"
         value={draft.defaultPreRollMs}

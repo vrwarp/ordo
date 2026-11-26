@@ -1,4 +1,11 @@
-import { type Cue, expandCues, type Media, type Playlist, type Presentation } from '@ordo/domain';
+import {
+  type Cue,
+  expandCues,
+  type Media,
+  type Playlist,
+  type Presentation,
+  withSongTitleSlide,
+} from '@ordo/domain';
 import { useMemo } from 'react';
 import { pickDefaultPlaylist } from '../../lib/playlists.ts';
 import { useLibrary } from '../../state/library.ts';
@@ -39,7 +46,12 @@ export function useOperatorPlaylist(): OperatorPlaylist {
     const base = pickDefaultPlaylist(lib.playlists, selectedId);
     const playlist = base ? (outbox[base.id]?.draft ?? base) : undefined;
     const presMap: Record<string, Presentation> = {};
-    for (const p of lib.presentations) presMap[p.id] = p;
+    for (const p of lib.presentations) {
+      presMap[p.id] = withSongTitleSlide(p, {
+        themes: lib.themes,
+        ccliLicense: lib.settings.general.ccliLicense,
+      });
+    }
     const mediaMap: Record<string, Media> = {};
     for (const m of lib.media) mediaMap[m.id] = m;
     const cues = playlist
@@ -63,7 +75,9 @@ export function useOperatorPlaylist(): OperatorPlaylist {
     state.cues,
     lib.playlists,
     lib.presentations,
+    lib.themes,
     lib.media,
+    lib.settings.general.ccliLicense,
     lib.settings.surfaces.midiPresets,
     selectedId,
     outbox,

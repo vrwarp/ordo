@@ -7,6 +7,10 @@ export type DeckView = {
   nextItems: string[];
   black: boolean;
   logo: boolean;
+  /** Sticky blank-text mute is active. */
+  blankText?: boolean;
+  /** A live slide cue's text is currently cleared from the Slide layer. */
+  slideBlanked?: boolean;
   /** Whether the play/pause key's target (F8's, live-state mediaPlayTarget) is playing. */
   mediaPlaying: boolean;
   /** The live slide's click-start sound waits for the play key, which starts it before anything else. */
@@ -247,6 +251,7 @@ function actionColor(id: ActionId): string {
     case 'clearAll':
       return COLORS.clearAll;
     case 'clearSlide':
+    case 'toggleBlankText':
     case 'clearLowerThird':
     case 'clearProps':
     case 'clearMedia':
@@ -330,6 +335,17 @@ export function keyFace(
     case 'go':
       if (!view.connected) sub = 'offline';
       else if (view.liveLabel) sub = view.liveLabel;
+      break;
+    case 'clearSlide':
+      if (view.blankText || view.slideBlanked) {
+        label = key.label === 'Clear slide' || !key.label ? 'Show slide' : key.label;
+        sub = view.blankText ? 'held' : 'blank';
+        face = { ...face, ring: '#fbbf24' };
+      }
+      break;
+    case 'toggleBlankText':
+      if (view.blankText) face = { ...face, bg: COLORS.on, fg: '#000000', ring: '#ffffff' };
+      sub = view.blankText ? 'on' : undefined;
       break;
     case 'clearAll':
       if (opts.confirming) {

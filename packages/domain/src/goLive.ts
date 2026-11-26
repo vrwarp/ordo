@@ -1,6 +1,7 @@
 import { expandCues } from './cues.ts';
 import { newId } from './ids.ts';
 import { type ManifestFile, PRERENDERS_MAX, type PrerenderSize, type ResolvedPlaylist } from './live.ts';
+import { withSongTitleSlide } from './lyrics.ts';
 import { drawnShapeFileRefs } from './m9-readers.ts';
 import { type MissingKind, missingKinds, missingLabel } from './missing.ts';
 import { PRERENDER_ON, resolveDraw } from './prerender.ts';
@@ -24,6 +25,7 @@ import {
   Presentation,
   Section,
   Slide,
+  type Theme,
 } from './schemas.ts';
 import { resolvedBytes, resolvedSizeRefusal, resolvedSizeWarning } from './size.ts';
 
@@ -44,7 +46,9 @@ export type GoLiveInputs = {
   media(id: string): Media | undefined;
   fonts(): Font[];
   looks: Look[];
-  general: Pick<GeneralSettings, 'logoMediaId'>;
+  general: Pick<GeneralSettings, 'logoMediaId' | 'ccliLicense'>;
+  /** Themes used to style dynamic song title slides (optional; falls back to DEFAULT_THEME). */
+  themes?: Theme[];
   /** Venue MIDI presets snapshotted into the live service (optional for backwards compatibility). */
   midiPresets?: MidiPreset[];
   /**
@@ -280,7 +284,10 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
     if (raw === undefined || raw === null)
       throw new GoLiveRejection(`Presentation ${item.presentationId} in the playlist no longer exists`);
     const q = quarantinePresentation(raw, item.presentationId);
-    presentations[item.presentationId] = q.presentation;
+    presentations[item.presentationId] = withSongTitleSlide(q.presentation, {
+      themes: inputs.themes,
+      ccliLicense: inputs.general.ccliLicense,
+    });
     problems.push(...q.problems);
   }
   const looks = inputs.looks;
@@ -329,6 +336,11 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
   problems.push(...geoms.problems);
   const parts = [`${playlist.id}:${playlist.rev}`];
   for (const p of Object.values(presentations)) parts.push(`${p.id}:${p.rev}`);
+  if (Object.values(presentations).some((p) => p.kind === 'song' && p.meta.titleSlide)) {
+    if (inputs.general.ccliLicense) parts.push(`ccli:${inputs.general.ccliLicense}`);
+    if (inputs.themes?.length)
+      parts.push(`themes:${inputs.themes.map((t) => `${t.id}:${t.rev ?? 0}`).join(',')}`);
+  }
   for (const f of files) parts.push(f.hash);
   parts.push(JSON.stringify(looks));
   const midiPresets = inputs.midiPresets?.length ? inputs.midiPresets : undefined;

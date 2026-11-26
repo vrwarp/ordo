@@ -29,12 +29,15 @@ export function deckView(s: LiveState, connected: boolean, masterDb?: number): D
     target === 'video'
       ? s.layers.media.content?.state === 'playing'
       : target === 'audio' && s.audio.content?.state === 'playing';
+  const slideBlanked = !s.black && !s.layers.slide.content && liveCue?.kind === 'slide';
   return {
     sections: secs.map((x) => ({ short: x.short, label: x.label, pos: x.pos })),
     liveSectionPos: liveCue?.arrangementPos,
     nextItems,
     black: s.black,
     logo: s.props.logo,
+    ...(s.blankText ? { blankText: true } : {}),
+    ...(slideBlanked ? { slideBlanked: true } : {}),
     mediaPlaying,
     ...(target === 'slideSound' ? { slideSoundWaiting: true } : {}),
     liveLabel: liveCue?.label,

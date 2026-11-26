@@ -331,6 +331,7 @@ export async function createLibraryProcess(
       fonts: lib.listFonts(),
       looks: settings.looks,
       general: settings.general,
+      themes: lib.themes.list(),
       midiPresets: settings.surfaces.midiPresets,
     };
   });

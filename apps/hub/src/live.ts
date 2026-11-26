@@ -161,6 +161,7 @@ export function librarySource(lib: Library): LiveSource {
         fonts: () => lib.listFonts(),
         looks: s.looks,
         general: s.general,
+        themes: lib.themes.list(),
         midiPresets: s.surfaces.midiPresets,
       };
     },
