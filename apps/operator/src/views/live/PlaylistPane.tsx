@@ -227,7 +227,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
           <div style={{ padding: '6px 8px', borderBottom: '1px solid var(--line)' }}>
             <button
               type="button"
-              className="primary tactical-btn"
+              className="primary tactical-btn btn-golive"
               style={{ width: '100%' }}
               disabled={items.length === 0}
               onClick={() => void handleGoLive()}

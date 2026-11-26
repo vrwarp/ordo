@@ -805,62 +805,8 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
     );
 
   return (
-    <div
-      ref={scrollPaneRef}
-      onScroll={onScroll}
-      className="pane"
-      data-slide-grid-pane
-      style={{ display: 'flex', flexDirection: 'column' }}
-    >
-      <div className="pane-head">
-        <b className="grow ellipsis" style={{ fontSize: 12.5 }}>
-          {op.playlist?.name ?? 'Playlist'}
-        </b>
-        {showBackToOnAir && (
-          <button
-            type="button"
-            className="primary small"
-            onClick={() => {
-              setUi({ followLive: true });
-              if (liveItem !== undefined) requestScrollToPlaylistItem(liveItem);
-              setUi({ followLive: true });
-            }}
-            data-back-to-on-air
-          >
-            <Icon name="arrowUp" size={11} />
-            Back to ON AIR
-          </button>
-        )}
-        <label className="check small" title="Single click goes live instead of arming" style={{ gap: 5 }}>
-          <input
-            type="checkbox"
-            checked={clickToGo}
-            onChange={(e) => setUi({ clickToGo: e.target.checked })}
-          />
-          Click = GO
-        </label>
-        <label className="check small" style={{ gap: 5 }}>
-          <input
-            type="checkbox"
-            checked={followLive}
-            onChange={(e) => setUi({ followLive: e.target.checked })}
-          />
-          Follow live
-        </label>
-        <input
-          type="range"
-          min={140}
-          max={320}
-          step={20}
-          value={thumbSize}
-          onChange={(e) => setUi({ thumbSize: Number(e.target.value) })}
-          title="Thumbnail size"
-          aria-label="Thumbnail size"
-          style={{ width: 82 }}
-        />
-      </div>
-
-      <div className="slides">
+    <div className="pane slides-pane-shell">
+      <div ref={scrollPaneRef} onScroll={onScroll} className="slides" data-slide-grid-pane>
         {hotfix && liveHere && (
           <SlideTextHotfixCard
             target={hotfix}
@@ -895,6 +841,57 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: n
             }}
           />
         ))}
+      </div>
+      <div className="slides-util-bar">
+        <span className="muted small ellipsis" style={{ maxWidth: 220, fontWeight: 500 }}>
+          {op.playlist?.name ?? 'Playlist'}
+        </span>
+        {showBackToOnAir && (
+          <button
+            type="button"
+            className="small btn-golive"
+            onClick={() => {
+              setUi({ followLive: true });
+              if (liveItem !== undefined) requestScrollToPlaylistItem(liveItem);
+              setUi({ followLive: true });
+            }}
+            data-back-to-on-air
+          >
+            <Icon name="arrowUp" size={11} />
+            Back to ON AIR
+          </button>
+        )}
+        <label className="check small" title="Single click goes live instead of arming" style={{ gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={clickToGo}
+            onChange={(e) => setUi({ clickToGo: e.target.checked })}
+          />
+          Click = GO
+        </label>
+        <label className="check small" style={{ gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={followLive}
+            onChange={(e) => setUi({ followLive: e.target.checked })}
+          />
+          Follow live
+        </label>
+        <span className="spacer" />
+        <span className="muted small" style={{ fontSize: 11 }}>
+          Size
+        </span>
+        <input
+          type="range"
+          min={140}
+          max={320}
+          step={20}
+          value={thumbSize}
+          onChange={(e) => setUi({ thumbSize: Number(e.target.value) })}
+          title="Thumbnail size"
+          aria-label="Thumbnail size"
+          style={{ width: 92 }}
+        />
       </div>
     </div>
   );

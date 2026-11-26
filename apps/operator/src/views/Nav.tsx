@@ -356,18 +356,52 @@ function SessionMenu({ role, editDevice }: { role: 'operate' | 'edit'; editDevic
       <button
         ref={triggerRef}
         type="button"
-        className={`nav-session-btn${open ? ' on' : ''}`}
+        className={`nav-session-btn icon-btn${open ? ' on' : ''}`}
         aria-haspopup="dialog"
         aria-expanded={open}
+        aria-label={`Account (${roleLabel})`}
         title={`Role: ${roleLabel}`}
         onClick={() => setOpen((o) => !o)}
       >
-        <Icon name="user" size={13} />
-        <span>{roleLabel}</span>
-        <Icon name="chevronDown" size={11} />
+        <Icon name="user" size={15} />
       </button>
       {popover && (typeof document !== 'undefined' ? createPortal(popover, document.body) : popover)}
     </>
+  );
+}
+
+/** Compact hardware Audience / Stage output status lamps shown in the toolbar outside #/live. */
+function NavOutputLamps() {
+  const outputs = useLibrary((s) => s.data.settings.outputs);
+  const health = useLive((s) => s.health);
+  const enabled = outputs.filter((o) => o.enabled);
+  if (enabled.length === 0) return null;
+  const shown = enabled.slice(0, 4);
+  return (
+    <button
+      type="button"
+      className="output-lamp-cluster"
+      onClick={() => navigate('#/settings/outputs')}
+      title="Outputs status — click to configure screens"
+      aria-label="Outputs status"
+    >
+      {shown.map((o) => {
+        const h = health[o.id];
+        const dot = !h?.connected
+          ? 'grey'
+          : h.error
+            ? 'red'
+            : h.cache.total > 0 && h.cache.ready < h.cache.total
+              ? 'amber'
+              : 'green';
+        return (
+          <span key={o.id} className="lamp-chip">
+            <span className={`dot sm ${dot}`} aria-hidden="true" />
+            <span className="lamp-name">{o.name}</span>
+          </span>
+        );
+      })}
+    </button>
   );
 }
 
@@ -396,14 +430,21 @@ export function Nav({
     dirty = false,
     isOnAir = false,
   ) => (
-    <a href={href} className={active ? 'active' : ''} aria-label={isOnAir ? `● ${label}` : undefined}>
-      {isOnAir ? <span className="dot sm red" aria-hidden="true" /> : <Icon name={icon} size={14} />}
-      <span>{label}</span>
-      {dirty && (
-        <span className="unsaved-dot" title="Unsaved changes" aria-label="Unsaved changes">
-          ●
-        </span>
-      )}
+    <a
+      href={href}
+      className={`nav-mode-btn${active ? ' active' : ''}${isOnAir ? ' on-air' : ''}`}
+      aria-label={isOnAir ? `● ${label}` : undefined}
+    >
+      <span className="nav-mode-ico">
+        <Icon name={icon} size={17} />
+        {isOnAir && <span className="dot sm red nav-live-pip" aria-hidden="true" />}
+        {dirty && (
+          <span className="unsaved-dot nav-dirty-pip" title="Unsaved changes" aria-label="Unsaved changes">
+            ●
+          </span>
+        )}
+      </span>
+      <span className="nav-mode-lbl">{label}</span>
     </a>
   );
 
@@ -412,7 +453,7 @@ export function Nav({
 
   const brandElement = (
     <span className="brand">
-      {brandName}
+      <span className="brand-name">{brandName}</span>
       {isDemo && (
         <button
           type="button"
@@ -431,14 +472,15 @@ export function Nav({
   const cmdTrigger = onOpenPalette ? (
     <button
       type="button"
-      className="nav-cmd-btn"
+      className="nav-mode-btn nav-cmd-btn"
       onClick={onOpenPalette}
       title="Command Palette (Ctrl+K / ⌘K)"
       aria-label="Command palette"
     >
-      <Icon name="search" size={13} />
-      <span className="nav-cmd-label">Search…</span>
-      <span className="kbd">⌘K</span>
+      <span className="nav-mode-ico">
+        <Icon name="search" size={16} />
+      </span>
+      <span className="nav-mode-lbl">Search</span>
     </button>
   ) : null;
 
@@ -450,7 +492,7 @@ export function Nav({
       title="Sign out"
       aria-label="Sign out"
     >
-      <Icon name="logout" size={14} />
+      <Icon name="logout" size={15} />
     </button>
   );
 
@@ -459,6 +501,8 @@ export function Nav({
       <>
         <nav className="nav no-print" data-profile="edit">
           {brandElement}
+          {cmdTrigger}
+          <span className="nav-divider" aria-hidden="true" />
           {link('#/playlists', 'Playlists', 'playlists', route.name === 'playlists')}
           {link(
             '#/library',
@@ -471,7 +515,6 @@ export function Nav({
           {role === 'operate' &&
             link('#/settings/general', 'Settings', 'settings', route.name === 'settings', settingsDirty)}
           <span className="spacer" />
-          {cmdTrigger}
           <UnsavedNavControl />
           <LiveChip />
           {offline && <span className="tag amber">offline: hub unreachable</span>}
@@ -491,18 +534,21 @@ export function Nav({
     <>
       <nav className="nav no-print">
         {brandElement}
+        {cmdTrigger}
+        <span className="nav-divider" aria-hidden="true" />
         {link('#/playlists', 'Playlists', 'playlists', route.name === 'playlists')}
         {link('#/library', 'Library', 'library', route.name === 'library' || route.name === 'edit', libDirty)}
-        {role === 'operate' &&
-          link('#/settings/outputs', 'Settings', 'settings', route.name === 'settings', settingsDirty)}
-        {role === 'operate' && <span className="nav-divider" aria-hidden="true" />}
+        {role === 'operate' && link('#/live', 'Live', 'live', route.name === 'live', false, live)}
         {role === 'operate' &&
           link('#/setup', 'Setup', 'setup', route.name === 'setup' || route.name === 'checklist')}
-        {role === 'operate' && link('#/live', 'Live', 'live', route.name === 'live', false, live)}
+        {role === 'operate' &&
+          link('#/settings/outputs', 'Settings', 'settings', route.name === 'settings', settingsDirty)}
         <span className="spacer" />
-        {cmdTrigger}
+        {role === 'operate' && route.name === 'live' && <div id="nav-live-slot" className="nav-live-slot" />}
+        {role === 'operate' && route.name !== 'live' && <NavOutputLamps />}
         <UnsavedNavControl />
         {offline && <span className="tag amber">offline: hub unreachable</span>}
+        <span className="nav-divider" aria-hidden="true" />
         <SessionMenu role={role} />
         {signOutBtn}
       </nav>

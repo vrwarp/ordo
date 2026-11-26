@@ -393,7 +393,7 @@ export function PlaylistEditor(props: {
           {props.canOperate && !props.locked && (
             <button
               type="button"
-              className="primary small"
+              className="primary small btn-golive"
               disabled={isLive || draft.items.length === 0}
               title={isLive ? 'Another playlist is live: End service first' : 'Go live with this playlist'}
               onClick={async () => {

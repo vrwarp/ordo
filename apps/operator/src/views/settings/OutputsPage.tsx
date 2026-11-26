@@ -363,19 +363,6 @@ export function OutputsPage() {
           <button type="button" className="small" onClick={() => void loadScreens()}>
             Detect displays
           </button>
-          {dirty && (
-            <button type="button" className="small ghost" disabled={saving} onClick={handleRevert}>
-              Revert
-            </button>
-          )}
-          <button
-            type="button"
-            className="primary small"
-            disabled={!dirty || saving}
-            onClick={() => void handleSave()}
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </button>
         </div>
       </div>
 
