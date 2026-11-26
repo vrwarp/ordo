@@ -27,6 +27,16 @@ test('loop items arm the next item, preserve custom armed slides across ticks, e
     });
     expect(auth.ok()).toBe(true);
 
+    const textStyle = {
+      fontFamily: 'Inter',
+      fontWeight: 600,
+      fontSizePx: 72,
+      color: { r: 255, g: 255, b: 255, a: 1 },
+      align: 'left' as const,
+      valign: 'middle' as const,
+      padding: 24,
+    };
+
     // Create a 2-slide announcement loop with mixed durations (2s default, 3s slide 2)
     const loop = await json<{ id: string }>(
       page.request.post(`http://localhost:${PORT}/api/v1/presentations`, {
@@ -48,6 +58,7 @@ test('loop items arm the next item, preserve custom armed slides across ticks, e
                       type: 'text',
                       box: { x: 100, y: 100, w: 1000, h: 200, rotation: 0 },
                       text: 'Welcome Slide One',
+                      style: textStyle,
                     },
                   ],
                 },
@@ -60,6 +71,7 @@ test('loop items arm the next item, preserve custom armed slides across ticks, e
                       type: 'text',
                       box: { x: 100, y: 100, w: 1000, h: 200, rotation: 0 },
                       text: 'Welcome Slide Two',
+                      style: textStyle,
                     },
                   ],
                 },
@@ -92,10 +104,10 @@ test('loop items arm the next item, preserve custom armed slides across ticks, e
     );
 
     // Go live via API so we start directly in the live view
-    const goLiveRes = await page.request.post(`http://localhost:${PORT}/api/v1/live/event`, {
-      data: { k: 'goLive', playlistId: pl.id },
+    const goLiveRes = await page.request.post(`http://localhost:${PORT}/api/v1/live/events`, {
+      data: { id: `loop-nav-golive-${Date.now()}`, event: { k: 'goLive', playlistId: pl.id } },
     });
-    expect(goLiveRes.ok()).toBe(true);
+    expect(goLiveRes.ok(), await goLiveRes.text()).toBe(true);
 
     await page.goto(`${op}/`);
     await page.locator('input.pin').fill('246810');
