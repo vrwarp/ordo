@@ -85,13 +85,26 @@ export function reduce(prev: LiveState, e: LiveEvent): LiveState {
       return goTo(s, e.cueIndex, e.at);
     case 'next': {
       // Before the first GO, the armed cue (which `select` may have set to a hidden one).
-      const target =
-        s.live === undefined ? (s.armed ?? nextShownCue(s.cues, -1)) : nextShownCue(s.cues, s.live);
+      // While a loop is live, Next fires the armed standby cue (custom-selected or default next item).
+      let target: number | undefined;
+      if (s.live === undefined) {
+        target = s.armed ?? nextShownCue(s.cues, -1);
+      } else if (
+        s.cues[s.live]?.autoAdvanceMs !== undefined &&
+        s.armed !== undefined &&
+        s.cues[s.armed] !== undefined &&
+        !isHiddenCue(s.cues[s.armed]) &&
+        !isSkippedCue(s.cues[s.armed])
+      ) {
+        target = s.armed;
+      } else {
+        target = nextManualCue(s.cues, s.live);
+      }
       return target === undefined ? s : goTo(s, target, e.at);
     }
     case 'prev': {
       if (s.live === undefined) return s;
-      const target = prevShownCue(s.cues, s.live);
+      const target = prevManualCue(s.cues, s.live);
       return target === undefined ? s : goTo(s, target, e.at);
     }
     case 'nextItem': {
@@ -247,6 +260,54 @@ function isItemActive(s: LiveState, itemIndex: number): boolean {
   return false;
 }
 
+/**
+ * The next cue for manual `next` and auto-arming after `from`.
+ * For a loop cue (`autoAdvanceMs !== undefined`), manual navigation treats the whole loop as one step and
+ * targets the first non-hidden, non-skipped cue of a later playlist item (`undefined` if the loop is the
+ * last item, e.g. a post-service loop). Otherwise returns `nextShownCue(cues, from)`.
+ */
+function nextManualCue(cues: readonly Cue[], from: number): number | undefined {
+  const cur = cues[from];
+  if (cur?.autoAdvanceMs !== undefined) {
+    for (let i = from + 1; i < cues.length; i++) {
+      const c = cues[i]!;
+      if (c.itemIndex > cur.itemIndex && !isHiddenCue(c) && !isSkippedCue(c)) return i;
+    }
+    return undefined;
+  }
+  return nextShownCue(cues, from);
+}
+
+/**
+ * The previous cue for manual `prev` from `from`.
+ * Treats loop items (`autoAdvanceMs !== undefined`) as a single unit:
+ * - From inside a loop, jumps to the previous playlist item (or restarts the loop's first shown slide if first).
+ * - Stepping back into a loop lands on the loop's first shown slide instead of its last.
+ */
+function prevManualCue(cues: readonly Cue[], from: number): number | undefined {
+  const cur = cues[from];
+  if (!cur) return undefined;
+  let prev: number | undefined;
+  if (cur.autoAdvanceMs !== undefined) {
+    const firstOfItem = cues.findIndex((c) => c.itemIndex === cur.itemIndex);
+    prev = prevShownCue(cues, firstOfItem);
+    if (prev === undefined) {
+      return cues.find((c) => c.itemIndex === cur.itemIndex && !isHiddenCue(c) && !isSkippedCue(c))?.index;
+    }
+  } else {
+    prev = prevShownCue(cues, from);
+    if (prev === undefined) return undefined;
+  }
+  const prevCue = cues[prev]!;
+  if (prevCue.autoAdvanceMs !== undefined) {
+    return (
+      cues.find((c) => c.itemIndex === prevCue.itemIndex && !isHiddenCue(c) && !isSkippedCue(c))?.index ??
+      prev
+    );
+  }
+  return prev;
+}
+
 function applyItemSkip(s: LiveState, itemId: string, skipped: boolean): LiveState {
   if (s.mode !== 'live' || !s.resolved) return s;
   const items = s.resolved.playlist.items;
@@ -268,7 +329,7 @@ function applyItemSkip(s: LiveState, itemId: string, skipped: boolean): LiveStat
   const armed =
     s.armed !== undefined && cues[s.armed]?.skipped
       ? s.live !== undefined
-        ? nextShownCue(cues, s.live)
+        ? nextManualCue(cues, s.live)
         : nextShownCue(cues, -1)
       : s.armed;
   return { ...s, resolved: nextResolved, cues, armed };
@@ -306,7 +367,7 @@ function applyItemArrange(s: LiveState, itemId: string, sections: string[] | nul
     s.armed !== undefined && s.cues[s.armed]?.itemIndex !== itemIndex
       ? remap(s.armed)
       : live !== undefined
-        ? nextShownCue(newCues, live)
+        ? nextManualCue(newCues, live)
         : nextShownCue(newCues, -1);
   const slideContent = s.layers.slide.content
     ? { ...s.layers.slide.content, cueIndex: remap(s.layers.slide.content.cueIndex) }
@@ -360,7 +421,7 @@ function applyItemHideSlides(s: LiveState, itemId: string, hiddenSlides: string[
   const armed =
     s.armed !== undefined && cues[s.armed]?.hidden
       ? s.live !== undefined
-        ? nextShownCue(cues, s.live)
+        ? nextManualCue(cues, s.live)
         : nextShownCue(cues, -1)
       : s.armed;
   return { ...s, resolved: nextResolved, cues, armed };
@@ -443,10 +504,20 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
     }
   }
   const seq = base.seq;
+  const prevCue = base.live !== undefined ? base.cues[base.live] : undefined;
+  const sameLoopItem =
+    cue.autoAdvanceMs !== undefined && prevCue !== undefined && prevCue.itemIndex === cue.itemIndex;
+  const keepArmed =
+    sameLoopItem &&
+    base.armed !== undefined &&
+    base.armed !== index &&
+    base.cues[base.armed] !== undefined &&
+    !isHiddenCue(base.cues[base.armed]) &&
+    !isSkippedCue(base.cues[base.armed]);
   let out: LiveState = {
     ...base,
     live: index,
-    armed: nextShownCue(base.cues, index),
+    armed: keepArmed ? base.armed : nextManualCue(base.cues, index),
     black: false,
     audio: keepSlideAudio(base.audio, index, at, seq),
   };

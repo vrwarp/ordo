@@ -60,6 +60,7 @@ export const PORT_TABLE = {
     spec: 'surfaces-upgrade.spec.ts',
     what: 'hub (restarted on a seeded surfaces row)',
   },
+  'loop-navigation': { offset: 14, count: 1, spec: 'loop-navigation.spec.ts', what: 'hub' },
   'link-silent-hub': { offset: 20, count: 2, spec: 'link-silent-hub.spec.ts', what: '0 TCP proxy, 1 hub' },
   'link-blip': { offset: 22, count: 2, spec: 'link-blip.spec.ts', what: '0 TCP proxy, 1 hub' },
   'link-fallback-leave': { offset: 24, count: 1, spec: 'link-fallback-leave.spec.ts', what: 'hub' },

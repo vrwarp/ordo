@@ -189,6 +189,78 @@ describe('reduce', () => {
     expect(autoAdvance(s)?.target).toBe(8);
   });
 
+  it('pins armed to the first shown cue after a loop and exits the loop on manual Next from any slide', () => {
+    const f = fixture();
+    // Put the loop item (i5) first, followed by song a (i0) and song b (i2)
+    const reordered: ResolvedPlaylist = {
+      ...f,
+      playlist: {
+        ...f.playlist,
+        items: [f.playlist.items[5]!, f.playlist.items[0]!, f.playlist.items[2]!],
+      },
+    };
+    let s = reduce(initialState(), { k: 'goLive', resolved: reordered });
+    // Before first GO, armed is slide 1 of the loop (cue 0)
+    expect(s.armed).toBe(0);
+
+    // Enter loop slide 1 (cue 0): armed jumps past the loop to the first slide of song a (cue 2)
+    s = reduce(s, { k: 'next', at: 100 });
+    expect(s.live).toBe(0);
+    expect(s.armed).toBe(2);
+    expect(autoAdvance(s)).toEqual({ dueAt: 5100, target: 1 });
+
+    // Auto-advance to loop slide 2 (cue 1): armed stays pinned to cue 2, auto-advance wraps to cue 0
+    s = reduce(s, { k: 'go', cueIndex: 1, at: 5100 });
+    expect(s.live).toBe(1);
+    expect(s.armed).toBe(2);
+    expect(autoAdvance(s)).toEqual({ dueAt: 10100, target: 0 });
+
+    // Manual Next from slide 1 of the loop exits directly to song a (cue 2)
+    const fromFirst = reduce(reduce(s, { k: 'go', cueIndex: 0, at: 10100 }), { k: 'next', at: 10200 });
+    expect(fromFirst.live).toBe(2);
+    expect(fromFirst.armed).toBe(3);
+
+    // Manual Next from slide 2 of the loop also exits directly to song a (cue 2)
+    const fromSecond = reduce(s, { k: 'next', at: 6000 });
+    expect(fromSecond.live).toBe(2);
+    expect(fromSecond.armed).toBe(3);
+
+    // Stepping Prev from song a slide 1 (cue 2) back into the loop lands on the loop's FIRST shown slide (cue 0), not last
+    const backIntoLoop = reduce(fromSecond, { k: 'prev', at: 7000 });
+    expect(backIntoLoop.live).toBe(0);
+    expect(backIntoLoop.armed).toBe(2);
+
+    // Pressing Prev from slide 2 of a leading loop restarts slide 1 of the loop (cue 0)
+    const prevInFirstLoop = reduce(s, { k: 'prev', at: 6500 });
+    expect(prevInFirstLoop.live).toBe(0);
+
+    // Custom pre-arming (select) during a loop survives 8s loop auto-advance ticks and is fired by Next
+    let custom = reduce(s, { k: 'select', cueIndex: 5 }); // Song b slide 1
+    expect(custom.armed).toBe(5);
+    custom = reduce(custom, { k: 'go', cueIndex: 0, at: 10100 }); // Loop wraps 1 -> 0
+    expect(custom.live).toBe(0);
+    expect(custom.armed).toBe(5); // Preserved!
+    custom = reduce(custom, { k: 'next', at: 10500 }); // Space/Next fires custom armed cue 5
+    expect(custom.live).toBe(5);
+  });
+
+  it('leaves armed undefined for a trailing (post-service) loop while auto-advance still wraps', () => {
+    const s = reduceAll(initialState(), [
+      { k: 'goLive', resolved: fixture() },
+      { k: 'go', cueIndex: 8, at: 100 },
+    ]);
+    expect(s.live).toBe(8);
+    expect(s.armed).toBeUndefined();
+    expect(autoAdvance(s)).toEqual({ dueAt: 5100, target: 7 });
+    // Manual Next holds on the current slide when nothing follows the loop
+    const afterNext = reduce(s, { k: 'next', at: 200 });
+    expect(afterNext.live).toBe(8);
+    expect(afterNext.armed).toBeUndefined();
+    // Manual Prev from slide 2 of the trailing loop exits backward to the previous playlist item (cue 6)
+    const afterPrev = reduce(s, { k: 'prev', at: 300 });
+    expect(afterPrev.live).toBe(6);
+  });
+
   it('messages keep newest first and dismiss', () => {
     let s = reduce(initialState(), { k: 'message.send', id: 'm1', text: 'hi', ttlMs: 1000, at: 5 });
     s = reduce(s, { k: 'message.send', id: 'm2', text: 'yo', at: 6 });
