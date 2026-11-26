@@ -95,7 +95,9 @@ const RECORDED = {
   // slide prerendering does not call `rasterProps` or read `PropsRule`).
   // Song title slide & lyric blanking (same slide pixels, PRERENDER_VERSION unchanged): defaults.ts adds the
   // `'Shift+F1': { id: 'toggleBlankText' }` entry to `DEFAULT_KEYMAP` (keyboard shortcut only; no slide pixels change).
-  digest: '650b953ebee41122e41e38c831e042a29344303ee6bc2e207b00c88290fe360d',
+  // ADR 0016 (same slide pixels, PRERENDER_VERSION unchanged): defaults.ts adds `clientVideoTranscode: true`
+  // to `DEFAULT_GENERAL` (upload setting only; no slide pixels change).
+  digest: 'a0e4e7cb8df2367817fb571a3ad26dc432a8b45bf144947f49a0538601be0f6c',
 };
 
 /** The source without comments and layout. */
