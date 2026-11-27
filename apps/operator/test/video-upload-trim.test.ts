@@ -1,7 +1,7 @@
 import type { Media } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
 import { fileKind, mediaAccept } from '../src/lib/mediaKinds.ts';
-import { isClientTranscodeCandidate } from '../src/services/upload.ts';
+import { isClientTranscodeCandidate, usesResumableUpload } from '../src/services/upload.ts';
 import { mp4FileName, shouldClientTranscode } from '../src/services/videoTranscode.ts';
 import { canTrimMedia, formatTrimMs, parseTrimMs } from '../src/lib/mediaTrim.ts';
 
@@ -21,6 +21,11 @@ describe('mediaKinds video/audio parity with Hub', () => {
 });
 
 describe('client WebCodecs pre-transcode gating', () => {
+  it('uses chunked resumable uploads above 24 MB on the hub, but never in the browser demo', () => {
+    expect(usesResumableUpload(10 * 1024 * 1024, false)).toBe(false);
+    expect(usesResumableUpload(50 * 1024 * 1024, false)).toBe(true);
+    expect(usesResumableUpload(50 * 1024 * 1024, true)).toBe(false);
+  });
   it('selects modern video containers as candidates and skips legacy containers, images, and audio', () => {
     for (const name of ['a.mp4', 'b.MOV', 'c.m4v', 'd.webm', 'e.mkv']) {
       expect(isClientTranscodeCandidate({ name, type: '' })).toBe(true);
@@ -73,5 +78,27 @@ describe('MediaTrimDialog helpers', () => {
     expect(canTrimMedia({ kind: 'audio', original: file('audio/mpeg') })).toBe(true);
     expect(canTrimMedia({ kind: 'image', original: file('image/png') })).toBe(false);
     expect(canTrimMedia({ kind: 'video', original: file('image/gif') })).toBe(false);
+  });
+});
+
+describe('useLibrary localRev refresh', () => {
+  it('increments localRev on upsertLocal and removeLocal so useSearch refreshes without a hub delta', async () => {
+    const { removeLocal, upsertLocal, useLibrary } = await import('../src/state/library.ts');
+    const before = useLibrary.getState().localRev;
+    const item: Media = {
+      id: 'demo-vid-1',
+      rev: 1,
+      name: 'Demo Clip',
+      tags: [],
+      kind: 'video',
+      original: { hash: 'b'.repeat(64), bytes: 1000, mime: 'video/mp4', path: 'files/b' },
+      state: 'ready',
+      loop: false,
+      isBackground: false,
+    };
+    upsertLocal('media', item);
+    expect(useLibrary.getState().localRev).toBe(before + 1);
+    removeLocal('media', item.id);
+    expect(useLibrary.getState().localRev).toBe(before + 2);
   });
 });

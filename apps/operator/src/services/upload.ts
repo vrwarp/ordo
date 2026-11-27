@@ -1,4 +1,4 @@
-import { api, ApiFailure, upload } from '@ordo/client';
+import { api, ApiFailure, DEMO, upload } from '@ordo/client';
 import {
   isSvgMime,
   type Media,
@@ -15,6 +15,11 @@ import { useLibrary } from '../state/library.ts';
 const CHUNK = 8 * 1024 * 1024;
 const RESUMABLE_OVER = 24 * 1024 * 1024;
 const RESUME_KEY = 'ordo.op.uploads';
+
+/** Whether an upload should use chunked `/media/uploads`: never in the browser demo (local SW hub). */
+export function usesResumableUpload(bytes: number, demo = DEMO): boolean {
+  return !demo && bytes > RESUMABLE_OVER;
+}
 
 /** Extensions whose containers WebCodecs + mediabunny can inspect/demux; legacy WMV/AVI/MPG go straight to the Hub. */
 const WEBCODECS_VIDEO_EXT = new Set(['mp4', 'm4v', 'mov', 'webm', 'mkv']);
@@ -199,7 +204,7 @@ export async function uploadMedia(
     if (prepared) file = prepared;
   }
   report('uploading', 0);
-  if (file.size <= RESUMABLE_OVER) {
+  if (!usesResumableUpload(file.size)) {
     const raster = isSvgFile(file) ? await rasterize(file) : undefined;
     const r = await upload<Media | Media[]>('/media', mediaForm(file, opts, raster), (f) =>
       report('uploading', f),

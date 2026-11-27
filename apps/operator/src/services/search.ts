@@ -19,6 +19,7 @@ function searchLocally(q: string, f: SearchFilter): SearchHit[] {
  */
 export function useSearch(q: string, f: SearchFilter): SearchHit[] {
   const rev = useLibrary((s) => s.rev);
+  const localRev = useLibrary((s) => s.localRev);
   const key = JSON.stringify(f);
   const [hits, setHits] = useState<SearchHit[]>(() => (controller() ? [] : searchLocally(q, f)));
   const seq = useRef(0);
@@ -34,6 +35,6 @@ export function useSearch(q: string, f: SearchFilter): SearchHit[] {
       if (n !== seq.current) return;
       setHits(res ?? searchLocally(q, f));
     });
-  }, [q, key, rev]);
+  }, [q, key, rev, localRev]);
   return hits;
 }
