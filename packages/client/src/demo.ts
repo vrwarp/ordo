@@ -148,6 +148,22 @@ function vmCapable(): boolean {
   );
 }
 
+/**
+ * Was this site built with the VM hub? A site built without it (ORDO_VM=off: PR previews) has no vm/manifest.json,
+ * and a host that answers a missing path with the app's index.html (Cloudflare Pages, a 200) must not read as one
+ * that has it: the manifest must parse and be one.
+ */
+async function vmBuilt(root: URL): Promise<boolean> {
+  try {
+    const r = await fetch(new URL('vm/manifest.json', root), { cache: 'no-cache' });
+    if (!r.ok) return false;
+    const m = (await r.json()) as { version?: unknown; id?: unknown; snapshot?: { path?: unknown } };
+    return m.version === 1 && typeof m.id === 'string' && typeof m.snapshot?.path === 'string';
+  } catch {
+    return false;
+  }
+}
+
 /** Tell the service worker the mode and wait until it keeps it. */
 async function setServiceWorkerMode(mode: DemoHubMode): Promise<void> {
   const sw = navigator.serviceWorker.controller;
@@ -228,10 +244,7 @@ async function chooseHub(scope: string, host: boolean): Promise<boolean> {
   }
   const params = new URLSearchParams(location.search);
   const root = new URL(scope, location.href);
-  // A site built without the VM hub (ORDO_VM=off) has no vm/manifest.json.
-  const built = await fetch(new URL('vm/manifest.json', root), { method: 'HEAD', cache: 'no-cache' })
-    .then((r) => r.ok)
-    .catch(() => false);
+  const built = await vmBuilt(root);
   const mode: DemoHubMode = params.get('hub') === 'legacy' || !built || !vmCapable() ? 'legacy' : 'vm';
   await setServiceWorkerMode(mode);
   modeNow = mode;
