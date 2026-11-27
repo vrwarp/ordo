@@ -1025,6 +1025,14 @@ export async function handle(req: Request): Promise<Res> {
         const rasters = form.getAll('raster').filter((f): f is File => f instanceof File);
         if (rasters.length && (rasters.length > 1 || files.length > 1))
           return fail(400, 'bad_request', 'A still picture (field "raster") comes with exactly one file');
+        const posters = form.getAll('poster').filter((f): f is File => f instanceof File);
+        const posInt = (k: string): number | undefined => {
+          const v = Number(form.get(k));
+          return Number.isFinite(v) && v > 0 ? Math.round(v) : undefined;
+        };
+        const formWidth = files.length === 1 ? posInt('width') : undefined;
+        const formHeight = files.length === 1 ? posInt('height') : undefined;
+        const formDurationMs = files.length === 1 ? posInt('durationMs') : undefined;
         const isBackground = form.get('isBackground') === 'true' || form.get('isBackground') === '1';
         const out: Media[] = [];
         let media = l.media;
@@ -1037,9 +1045,43 @@ export async function handle(req: Request): Promise<Res> {
               return fail(400, 'bad_raster', `${f.name}: ${(e as Error).message}`);
             }
           }
+          if (item.kind === 'video') {
+            if (posters[0] && files.length === 1 && posters[0].size > 0) {
+              const pMime = posters[0].type || 'image/jpeg';
+              const pHash = await sha256(posters[0]);
+              await putFile(pHash, new Blob([posters[0]], { type: pMime }));
+              item = {
+                ...item,
+                poster: { hash: pHash, bytes: posters[0].size, mime: pMime, path: `files/${pHash}` },
+              };
+            }
+            if (formWidth && !item.width) item = { ...item, width: formWidth };
+            if (formHeight && !item.height) item = { ...item, height: formHeight };
+            if (formDurationMs && !item.durationMs) item = { ...item, durationMs: formDurationMs };
+          }
           const same = media.find((x) => x.original.hash === item.original.hash);
-          if (same) out.push(same);
-          else {
+          if (same) {
+            if (
+              (!same.poster && item.poster) ||
+              (!same.width && item.width) ||
+              (!same.height && item.height) ||
+              (!same.durationMs && item.durationMs)
+            ) {
+              const patched: Media = {
+                ...same,
+                poster: same.poster ?? item.poster,
+                width: same.width ?? item.width,
+                height: same.height ?? item.height,
+                durationMs: same.durationMs ?? item.durationMs,
+                rev: same.rev + 1,
+                updatedAt: nowIso(),
+              };
+              media = upsert(media, patched);
+              out.push(patched);
+            } else {
+              out.push(same);
+            }
+          } else {
             media = [...media, item];
             out.push(item);
           }

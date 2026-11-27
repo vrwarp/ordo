@@ -1,7 +1,12 @@
 import type { Media } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
 import { fileKind, mediaAccept } from '../src/lib/mediaKinds.ts';
-import { isClientTranscodeCandidate, usesResumableUpload } from '../src/services/upload.ts';
+import {
+  isClientTranscodeCandidate,
+  mediaForm,
+  posterSizeFor,
+  usesResumableUpload,
+} from '../src/services/upload.ts';
 import { mp4FileName, shouldClientTranscode } from '../src/services/videoTranscode.ts';
 import { canTrimMedia, formatTrimMs, parseTrimMs } from '../src/lib/mediaTrim.ts';
 
@@ -26,6 +31,26 @@ describe('client WebCodecs pre-transcode gating', () => {
     expect(usesResumableUpload(50 * 1024 * 1024, false)).toBe(true);
     expect(usesResumableUpload(50 * 1024 * 1024, true)).toBe(false);
   });
+
+  it('scales video posters to fit 640x360 with even dimensions without upscaling', () => {
+    expect(posterSizeFor(1920, 1080)).toEqual({ width: 640, height: 360 });
+    expect(posterSizeFor(1080, 1920)).toEqual({ width: 202, height: 360 });
+    expect(posterSizeFor(320, 240)).toEqual({ width: 320, height: 240 });
+    expect(posterSizeFor(0, 0)).toEqual({ width: 640, height: 360 });
+  });
+
+  it('attaches video poster and metadata fields to mediaForm when provided', () => {
+    const clip = new File(['video'], 'sermon.mp4', { type: 'video/mp4' });
+    const poster = new Blob(['jpeg'], { type: 'image/jpeg' });
+    const fd = mediaForm(clip, {}, undefined, { poster, width: 1920, height: 1080, durationMs: 12500 });
+    const p = fd.get('poster');
+    expect(p).toBeInstanceOf(File);
+    expect((p as File).name).toBe('sermon.jpg');
+    expect(fd.get('width')).toBe('1920');
+    expect(fd.get('height')).toBe('1080');
+    expect(fd.get('durationMs')).toBe('12500');
+  });
+
   it('selects modern video containers as candidates and skips legacy containers, images, and audio', () => {
     for (const name of ['a.mp4', 'b.MOV', 'c.m4v', 'd.webm', 'e.mkv']) {
       expect(isClientTranscodeCandidate({ name, type: '' })).toBe(true);
