@@ -20,7 +20,6 @@ import {
   createKernel,
   decodeSnapshot,
   type DiskSnapshotState,
-  encodeSnapshot,
   gzipBlob,
   importDataDisk,
   type WorkerKernel,
@@ -175,9 +174,42 @@ async function gunzip(data: Blob | Uint8Array): Promise<Uint8Array> {
   const stream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
-async function gzip(bytes: Uint8Array): Promise<Blob> {
-  const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new CompressionStream('gzip'));
-  return new Response(stream).blob();
+
+/**
+ * A saved machine's memory, encoded (unkernel's snapshot format) and gzipped in a worker of its own: the memory is
+ * hundreds of MiB, and this thread relays the apps' hub sockets, which must not stall meanwhile. The memory is
+ * transferred, not copied.
+ */
+function packSnapshot(snap: KernelSnapshot): Promise<Blob> {
+  // Next to this file in the site (vm/unkernel/web.mjs, copied by scripts/build-vm.ts), resolved when it runs.
+  const sdk = new URL(/* @vite-ignore */ './unkernel/web.mjs', import.meta.url).href;
+  const code = `import { encodeSnapshot } from ${JSON.stringify(sdk)};
+onmessage = async (e) => {
+  try {
+    const bytes = encodeSnapshot(e.data);
+    const gz = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+    postMessage({ blob: await new Response(gz).blob() });
+  } catch (err) {
+    postMessage({ error: String(err) });
+  }
+};`;
+  const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+  const worker = new Worker(url, { type: 'module', name: 'ordo-vm-checkpoint' });
+  URL.revokeObjectURL(url);
+  return new Promise<Blob>((resolve, reject) => {
+    worker.onmessage = (ev: MessageEvent<{ blob?: Blob; error?: string }>) => {
+      worker.terminate();
+      if (ev.data.blob) resolve(ev.data.blob);
+      else reject(new Error(ev.data.error ?? 'the checkpoint worker failed'));
+    };
+    worker.onerror = (ev) => {
+      worker.terminate();
+      reject(new Error(ev.message || 'the checkpoint worker failed'));
+    };
+    const memory = snap.memory;
+    const transfer = memory.buffer instanceof ArrayBuffer ? [memory.buffer] : [];
+    worker.postMessage(snap, transfer);
+  });
 }
 
 // ---------------------------------------------------------------- HTTP/1.1 into the guest
@@ -766,9 +798,15 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
   let syncAgain: Promise<unknown> | undefined;
   const durable = (): Promise<unknown> => {
     if (!syncing) {
-      syncing = machine.sync({ timeout: 5000 }).finally(() => {
-        syncing = undefined;
-      });
+      syncing = machine
+        .sync({ timeout: 5000 })
+        .then((ok) => {
+          if (!ok) console.warn('[vm] the guest did not confirm its disks within 5 s');
+          return ok;
+        })
+        .finally(() => {
+          syncing = undefined;
+        });
       return syncing;
     }
     syncAgain ??= syncing.then(() => {
@@ -802,9 +840,9 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
           },
         });
         if (!captured) throw new Error('nothing captured');
-        const memory = encodeSnapshot(captured.snap);
+        // Encoded and compressed off this thread: it carries the apps' hub sockets, which must not stall.
+        const [snapshot, disk] = await Promise.all([packSnapshot(captured.snap), gzipBlob(captured.parts)]);
         captured.snap = undefined as unknown as KernelSnapshot;
-        const [snapshot, disk] = await Promise.all([gzip(memory), gzipBlob(captured.parts)]);
         const cp: Checkpoint = { build: meta!.build, at, snapshot, disk };
         meta = { ...meta!, checkpointAt: at };
         await kvPut({ checkpoint: cp, meta });
@@ -868,21 +906,29 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
         req.headers,
         req.body ? new Uint8Array(req.body) : null,
       );
-      post({
+      const head: RelayReply = {
         t: 'head',
         status: r.status,
         statusText: r.statusText,
         headers: r.headers.filter(([k]) => !DROP_RESPONSE.has(k)),
-      });
-      for await (const chunk of r.body) {
+      };
+      const send = (chunk: Uint8Array) => {
         const data = chunk.buffer.byteLength === chunk.byteLength ? chunk.buffer : chunk.slice().buffer;
         post({ t: 'chunk', data: data as ArrayBuffer }, [data as ArrayBuffer]);
-      }
-      if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && r.status < 400) {
+      };
+      if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || r.status >= 400) {
+        post(head);
+        for await (const chunk of r.body) send(chunk);
+      } else {
+        // A change, as a hub on a server answers it: once it is on disk. The answer waits until the guest has written
+        // its files back and the data disk has saved to IndexedDB (tens of milliseconds), so a tab closed right after
+        // keeps the change.
+        const parts: Uint8Array[] = [];
+        for await (const chunk of r.body) parts.push(chunk);
         markWrite();
-        // As a hub on a server: a change is on disk once it is answered. The guest writes back its files and the data
-        // disk saves to IndexedDB before the response ends (tens of milliseconds), so a tab closed right after keeps it.
         await durable();
+        post(head);
+        for (const p of parts) send(p);
       }
       post({ t: 'end' });
     } catch (e) {

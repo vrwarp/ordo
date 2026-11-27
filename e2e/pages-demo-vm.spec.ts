@@ -147,6 +147,7 @@ test('the Pages demo runs the real hub in the browser: resume, relay, save, live
   await saved(page);
   await page.reload();
   expect(await vmUp(page)).toBe('checkpoint');
+  await expect(page.getByText('Hub connected')).toBeVisible({ timeout: 30_000 });
   await page.evaluate(() => {
     location.hash = '#/library';
   });

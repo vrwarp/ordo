@@ -70,13 +70,16 @@ GitHub releases; `ORDO_VM_EXTRA_CA` adds a CA for a TLS-inspecting proxy, `ORDO_
   worker and the output and stage link workers. It talks to the host over the BroadcastChannel `ordo-vm-ws`; the host
   opens the real `/ws` in the guest (RFC 6455 client in `vm-host.ts`), with the session cookie for the operator and
   the token alone for an output or stage. Heartbeats both ways close sockets whose window or host went away.
+- **Writes.** As a hub on a server, a change is answered once it is on disk: for any write the host waits until the
+  guest has written its files back and the data disk has saved to IndexedDB (`sync`), then sends the status and body.
 - **Saving.** The guest's disk changes every second (logs, SQLite), so a saved machine is a pair taken at one held
   instant: `snapshot({ commit, hold })` holds the kernel at its consistent point while the host copies the data disk
-  (`exportDisk`), then lets it go on (about 0.5 s of pause); both go to IndexedDB `ordo-vm` gzipped. A save follows
-  every API write and live command once the hub has been quiet for 3 s (at most 20 s after the first change), and
-  when the tab is hidden. A load resumes the latest save when it holds every change (`lastWriteAt`); when it does
-  not (the tab closed within those seconds), the machine boots on the visitor's disk instead (about a minute) and
-  keeps everything; a resumed hub that does not answer in 60 s is given up for that boot too.
+  (`exportDisk`), then lets it go on (about 0.5 to 0.8 s of pause). The memory is encoded and gzipped in a worker of
+  its own (the page's thread relays the apps' hub sockets and must not stall), and both go to IndexedDB `ordo-vm`. A
+  save follows every API write and live command once the hub has been quiet for 3 s (at most 20 s after the first
+  change), and when the tab is hidden. A load resumes the latest save when it holds every change (`lastWriteAt`);
+  when it does not (the tab closed within those seconds), the machine boots on the visitor's disk instead (about a
+  minute and a half) and keeps everything; a resumed hub that does not answer in 60 s is given up for that boot too.
 - **Reset demo** stops the machine and deletes its disk, its save and the cookie jar with the rest of the demo's
   storage.
 
@@ -86,10 +89,10 @@ GitHub releases; `ORDO_VM_EXTRA_CA` adds a CA for a TLS-inspecting proxy, `ORDO_
 | ---------------------------------------------------------- | ------------------------------------------ |
 | First visit to the operator app, files local               | 6 s (the PIN check about 3 s of it)        |
 | Reload resuming a save                                     | 2 to 3 s                                   |
-| Boot on the visitor's disk (no save holds the last change) | 60 to 90 s                                 |
-| A save: hub paused / written                               | 0.3 to 0.5 s / 7 to 10 s in the background |
+| Boot on the visitor's disk (no save holds the last change) | 60 to 100 s                                |
+| A save: hub paused / written                               | 0.4 to 1.0 s / 7 to 10 s in the background |
 
-Download on a first visit: the snapshot (about 56 MiB gzip), the kernel (11 MiB), the data disk (1 MiB) and what the
+Download on a first visit: the snapshot (about 56 MiB gzip), the kernel (11 MiB), the data disk (about 5 MiB gzip) and what the
 machine reads of the system image by range.
 
 ## The demo hub (service worker)
@@ -180,5 +183,5 @@ builds the site before the end-to-end suite; locally the spec skips when `site/`
 - In the machine: no LibreOffice and no Chromium (the hub's pictures of whole slides and many-point shapes are off,
   as on a hub installed without them); ffmpeg runs emulated, so transcoding a video is slow.
 - A change made in the last seconds before the tab closes is not in the latest save: the next load boots the machine
-  (about a minute) to keep it.
+  (about a minute and a half) to keep it.
 - PR previews (Cloudflare Pages, 25 MiB per file) are built without the VM hub (`ORDO_VM=off`).
