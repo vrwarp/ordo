@@ -39,15 +39,30 @@ ZLIB_SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
 
 log() { printf '[ffmpeg] %s\n' "$*" >&2; }
 
-# fetch URL FILE [SHA256]: download once into the cache, checked when a checksum is given.
+# fetch FILE SHA256 URL...: download once into the cache from the first source that gives the expected bytes (with no
+# checksum, the first that answers). A source that answers with something else (a challenge or error page) is reported
+# and the next one tried; nothing that failed its check stays in the cache.
 fetch() {
-	local url=$1 file=$CACHE/$2 sum=${3:-}
-	if [ ! -s "$file" ]; then
+	local file=$CACHE/$1 sum=$2 url
+	shift 2
+	if [ -s "$file" ] && { [ -z "$sum" ] || echo "$sum  $file" | sha256sum -c --quiet 2>/dev/null; }; then return; fi
+	rm -f "$file"
+	for url in "$@"; do
 		log "download $url"
-		curl -fsSL --retry 4 -o "$file.part" "$url"
+		if ! curl -fsSL --retry 4 -o "$file.part" "$url"; then
+			log "  failed: $url"
+			continue
+		fi
+		if [ -n "$sum" ] && ! echo "$sum  $file.part" | sha256sum -c --quiet 2>/dev/null; then
+			log "  not the expected file ($(stat -c %s "$file.part") bytes, $(file -b "$file.part" | cut -c1-60)): $url"
+			rm -f "$file.part"
+			continue
+		fi
 		mv "$file.part" "$file"
-	fi
-	if [ -n "$sum" ]; then echo "$sum  $file" | sha256sum -c --quiet; fi
+		return
+	done
+	log "no source gave $1"
+	exit 1
 }
 
 # git_at URL COMMIT DIR: a checkout of exactly COMMIT (shallow), cached.
@@ -65,11 +80,11 @@ git_at() {
 # ---------------------------------------------------------------- the cross compiler: zig, wrapped as a toolchain
 
 case "$(uname -m)" in
-	x86_64) ZIG_HOST=x86_64-linux ;;
-	aarch64 | arm64) ZIG_HOST=aarch64-linux ;;
+	x86_64) ZIG_HOST=x86_64-linux ZIG_SHA256=24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c ;;
+	aarch64 | arm64) ZIG_HOST=aarch64-linux ZIG_SHA256= ;;
 	*) log "no zig for host $(uname -m)"; exit 1 ;;
 esac
-fetch "https://ziglang.org/download/$ZIG_VERSION/zig-$ZIG_HOST-$ZIG_VERSION.tar.xz" "zig-$ZIG_HOST-$ZIG_VERSION.tar.xz"
+fetch "zig-$ZIG_HOST-$ZIG_VERSION.tar.xz" "$ZIG_SHA256" "https://ziglang.org/download/$ZIG_VERSION/zig-$ZIG_HOST-$ZIG_VERSION.tar.xz"
 ZIG_DIR=$CACHE/zig-$ZIG_HOST-$ZIG_VERSION
 [ -x "$ZIG_DIR/zig" ] || tar -C "$CACHE" -xf "$CACHE/zig-$ZIG_HOST-$ZIG_VERSION.tar.xz"
 
@@ -98,13 +113,17 @@ CFLAGS_COMMON="-O2 -fPIC"
 
 # ---------------------------------------------------------------- the libraries
 
-fetch "https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz" "zlib-$ZLIB_VERSION.tar.gz" "$ZLIB_SHA256"
+fetch "zlib-$ZLIB_VERSION.tar.gz" "$ZLIB_SHA256" \
+	"https://github.com/madler/zlib/releases/download/v$ZLIB_VERSION/zlib-$ZLIB_VERSION.tar.gz" \
+	"https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz"
 log "zlib $ZLIB_VERSION"
 tar -C "$WORK" -xzf "$CACHE/zlib-$ZLIB_VERSION.tar.gz"
 (cd "$WORK/zlib-$ZLIB_VERSION" && CFLAGS="$CFLAGS_COMMON" ./configure --static --prefix="$PREFIX" >/dev/null &&
 	make -s -j"$JOBS" install >/dev/null)
 
-fetch "https://downloads.xiph.org/releases/opus/opus-$OPUS_VERSION.tar.gz" "opus-$OPUS_VERSION.tar.gz" "$OPUS_SHA256"
+fetch "opus-$OPUS_VERSION.tar.gz" "$OPUS_SHA256" \
+	"https://downloads.xiph.org/releases/opus/opus-$OPUS_VERSION.tar.gz" \
+	"https://github.com/xiph/opus/releases/download/v$OPUS_VERSION/opus-$OPUS_VERSION.tar.gz"
 log "opus $OPUS_VERSION"
 tar -C "$WORK" -xzf "$CACHE/opus-$OPUS_VERSION.tar.gz"
 (cd "$WORK/opus-$OPUS_VERSION" && CFLAGS="$CFLAGS_COMMON" ./configure -q --host=$TRIPLE --prefix="$PREFIX" \
@@ -129,7 +148,9 @@ cp -a "$CACHE/libvpx" "$WORK/libvpx"
 
 # ---------------------------------------------------------------- ffmpeg
 
-fetch "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" "ffmpeg-$FFMPEG_VERSION.tar.xz" "$FFMPEG_SHA256"
+fetch "ffmpeg-$FFMPEG_VERSION.tar.xz" "$FFMPEG_SHA256" \
+	"https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" \
+	"https://www.ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz"
 log "ffmpeg $FFMPEG_VERSION"
 tar -C "$WORK" -xJf "$CACHE/ffmpeg-$FFMPEG_VERSION.tar.xz"
 
@@ -186,7 +207,7 @@ ffmpeg $FFMPEG_VERSION (https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.x
 x264 $X264_COMMIT (https://code.videolan.org/videolan/x264): GPL-2.0-or-later
 libvpx $LIBVPX_TAG (https://chromium.googlesource.com/webm/libvpx): BSD-3-Clause
 opus $OPUS_VERSION (https://downloads.xiph.org/releases/opus/): BSD-3-Clause
-zlib $ZLIB_VERSION (https://zlib.net/): Zlib
+zlib $ZLIB_VERSION (https://zlib.net/, https://github.com/madler/zlib): Zlib
 Built by apps/demo/scripts/build-ffmpeg.sh with zig $ZIG_VERSION for $TRIPLE, statically linked.
 EOF
 ls -l "$OUT/ffmpeg" "$OUT/ffprobe" >&2
