@@ -95,6 +95,13 @@ jobs:
       # The demo's VM hub (apps/demo/scripts/build-vm.ts) needs Node 24 (unkernel); the rest stays on Node 22.
       - name: Node 24 for the VM hub build
         run: npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/node24" node@24.22.3
+      # The VM build's downloads and its minimal ffmpeg (apps/demo/scripts/build-ffmpeg.sh, about 5 minutes to build),
+      # kept between runs; a changed script builds ffmpeg again.
+      - uses: actions/cache@v4
+        with:
+          path: .cache/vm
+          key: vm-${{ hashFiles('apps/demo/scripts/build-ffmpeg.sh', 'pnpm-lock.yaml') }}
+          restore-keys: vm-
       - run: pnpm build:pages
         env:
           ORDO_VM_NODE: ${{ runner.temp }}/node24/node_modules/.bin/node

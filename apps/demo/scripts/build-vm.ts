@@ -7,11 +7,14 @@
  *
  * Needs Node 24 (unkernel's floor; Node 24 runs this TypeScript file as it is), `pnpm build` done (apps/hub/dist and
  * the apps' dist), npm, tar and network access to Alpine's package mirror, the unkernel release (the Alpine image)
- * and GitHub releases (better-sqlite3's prebuilt binary). `<seed-data-dir>` is the hub data folder scripts/seed.ts
+ * and GitHub releases (better-sqlite3's prebuilt binary); for the minimal ffmpeg (scripts/build-ffmpeg.sh, cached) also
+ * bash, curl, git, make, binutils and pkg-config, and ziglang.org, ffmpeg.org, code.videolan.org,
+ * chromium.googlesource.com, downloads.xiph.org and zlib.net. `<seed-data-dir>` is the hub data folder scripts/seed.ts
  * kept (ORDO_SEED_KEEP_DATA): the sample service as the real hub wrote it.
  *
  * Two machines run here:
- * 1. The system image. Alpine boots with a scratch data disk; Node, ffmpeg, poppler and fonts are installed (GUEST_PACKAGES); the hub and the apps go to
+ * 1. The system image. Alpine boots with a scratch data disk; Node, poppler and fonts are installed (GUEST_PACKAGES), and
+ *    a minimal ffmpeg and ffprobe built here (scripts/build-ffmpeg.sh); the hub and the apps go to
  *    /app; the root (Alpine's image plus those changes, without unkernel's own layer) is packed into an erofs image
  *    labelled kwroot, with unkernel's distro header ("ordo"). Visitors read it lazily by range requests.
  * 2. The snapshot. That image boots with a fresh data disk; the seeded data folder goes to /data/ordo; the hub starts
@@ -81,13 +84,13 @@ const OUT = join(SITE, 'vm');
 const CACHE = resolve(process.env.ORDO_VM_CACHE ?? join(REPO, '.cache/vm'));
 process.env.UNKERNEL_CACHE_DIR ??= join(CACHE, 'unkernel');
 /**
- * What the image adds to Alpine: Node for the hub, ffmpeg (media probing and transcoding) and poppler-utils (PDF pages),
- * as in the container (Dockerfile), and fonts the hub registers as bundled library fonts (ORDO_FONTS_DIR; the
- * container's metric-compatible set where Alpine has it). erofs-utils packs the image. LibreOffice and Chromium stay out.
+ * What the image adds to Alpine: Node for the hub and poppler-utils (PDF pages), as in the container (Dockerfile), and
+ * fonts the hub registers as bundled library fonts (ORDO_FONTS_DIR; the container's metric-compatible set where Alpine
+ * has it). erofs-utils packs the image. ffmpeg is not Alpine's (93 MiB of codec libraries): a minimal static build made
+ * here (scripts/build-ffmpeg.sh, `buildFfmpeg`). LibreOffice and Chromium stay out.
  */
 const GUEST_PACKAGES = [
   'nodejs',
-  'ffmpeg',
   'poppler-utils',
   'font-carlito',
   'font-liberation',
@@ -167,6 +170,27 @@ function stageApp(): string {
   return stage;
 }
 
+/**
+ * The minimal ffmpeg and ffprobe (scripts/build-ffmpeg.sh, about 5 minutes on 4 cores), kept in the cache under the
+ * script's hash: a changed script builds again, an unchanged one is reused. Copied to `<stage>/ffmpeg/`.
+ */
+function buildFfmpeg(stage: string): void {
+  const script = join(here, 'build-ffmpeg.sh');
+  const key = createHash('sha256').update(readFileSync(script)).digest('hex').slice(0, 16);
+  const done = join(CACHE, `ffmpeg-${key}`);
+  if (!existsSync(join(done, 'ffprobe'))) {
+    log('ffmpeg: building the minimal static ffmpeg (scripts/build-ffmpeg.sh)');
+    rmSync(done, { recursive: true, force: true });
+    execFileSync('bash', [script, `${done}.tmp`, join(CACHE, 'ffmpeg-src')], {
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+    rmSync(done, { recursive: true, force: true });
+    cpSync(`${done}.tmp`, done, { recursive: true });
+    rmSync(`${done}.tmp`, { recursive: true, force: true });
+  } else log(`ffmpeg: the cached build ${key}`);
+  cpSync(done, join(stage, 'ffmpeg'), { recursive: true });
+}
+
 async function fetchSqlite(stage: string, abi: string): Promise<void> {
   const v = pkgVersion(requireHub, 'better-sqlite3');
   const name = `better-sqlite3-v${v}-node-v${abi}-linuxmusl-arm64.tar.gz`;
@@ -223,7 +247,7 @@ async function buildSystemImage(module: WebAssembly.Module, stage: string): Prom
         'cp /etc/ssl/certs/ca-certificates.crt /tmp/ca.orig && cat /mnt/stage/extra-ca.crt >> /etc/ssl/certs/ca-certificates.crt',
       );
     log(`system image: apk add ${GUEST_PACKAGES.join(' ')}`);
-    // ffmpeg is in Alpine's community repository (the image starts with main only).
+    // erofs-utils is in Alpine's community repository (the image starts with main only).
     await sh(
       vm,
       `sed -n 1p /etc/apk/repositories | sed 's#/main$#/community#' >> /etc/apk/repositories && apk update -q && apk add -q ${GUEST_PACKAGES.join(' ')}`,
@@ -235,6 +259,11 @@ async function buildSystemImage(module: WebAssembly.Module, stage: string): Prom
     log(`system image: guest Node ${nodeVersion} (ABI ${abi})`);
     await fetchSqlite(stage, abi);
     await sh(vm, 'rm -rf /app && mkdir -p /app && cp -a /mnt/stage/app/apps /app/', 'copy the app');
+    await sh(
+      vm,
+      'install -m 755 /mnt/stage/ffmpeg/ffmpeg /mnt/stage/ffmpeg/ffprobe /usr/bin/ && mkdir -p /usr/share/licenses/ordo-ffmpeg && cp /mnt/stage/ffmpeg/SOURCES /usr/share/licenses/ordo-ffmpeg/ && ffmpeg -hide_banner -version | head -n 1 && ffprobe -hide_banner -version | head -n 1',
+      'install ffmpeg',
+    );
     await sh(
       vm,
       `cd /app/apps/hub && node -e "const D=require('better-sqlite3');new D(':memory:').prepare('select 1').get();require('@node-rs/argon2').hashSync('x')"`,
@@ -376,6 +405,7 @@ async function main(): Promise<void> {
   if (!existsSync(join(SEED, 'ordo.db'))) throw new Error(`${SEED} is not a hub data folder (no ordo.db)`);
   const module = await WebAssembly.compile(readFileSync(bundledKernelUrl));
   const stage = stageApp();
+  buildFfmpeg(stage);
   const image = await buildSystemImage(module, stage);
   const { snapshot, data } = await snapshotHub(module, image);
 

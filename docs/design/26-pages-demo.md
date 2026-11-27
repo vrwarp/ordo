@@ -35,10 +35,22 @@ apps behave as with a hub on a server: hub-authoritative live state, the output 
 
 ### Build (`apps/demo/scripts/build-vm.ts`, Node 24)
 
-1. **System image.** Alpine boots under unkernel with a scratch disk; `apk add` installs Node, ffmpeg, poppler-utils
-   and the fonts the container ships where Alpine has them; the hub (`apps/hub/dist`, with `better-sqlite3` and
+1. **System image.** Alpine boots under unkernel with a scratch disk; `apk add` installs Node, poppler-utils and the
+   fonts the container ships where Alpine has them, and ffmpeg and ffprobe come from `scripts/build-ffmpeg.sh` (below);
+   the hub (`apps/hub/dist`, with `better-sqlite3` and
    `@node-rs/argon2` for linux-arm64-musl) and the apps go to `/app`. The root, without unkernel's own layer, is packed
    as an erofs image (uncompressed: Alpine's mkfs.erofs has no zstd, and the kernel fails lz4) labelled `kwroot` with unkernel's distro header (name `ordo`).
+   **ffmpeg** (`scripts/build-ffmpeg.sh`): Alpine's ffmpeg brings 93 MiB of codec libraries, which the guest's loader
+   reads in full (about 90 MiB of range requests) the first time the hub probes a media item. The demo's is static
+   (linux-arm64, musl) with only what the hub asks of it (`apps/hub/src/media/ffmpeg.ts`): ffprobe; libx264, aac,
+   libvpx-vp9 with libopus, mjpeg, png and rawvideo encoders; ffmpeg's own decoders for the common video, picture and
+   audio formats (H.264, HEVC, VP8/VP9 with libvpx for alpha, MPEG-1/2/4, WMV/VC-1, ProRes, DNxHD, DV, PNG, JPEG,
+   GIF, WebP, BMP, TIFF, AAC, MP3, AC-3, Opus, Vorbis, FLAC, ALAC, WMA, PCM); the containers those come in; the
+   filters the hub's command lines use; file and pipe only. Not in it: AV1 decoding, network protocols, hardware
+   acceleration. Two binaries, about 21 MiB together. Cross-compiled with zig (no cross toolchain, no root) from pinned
+   sources (ffmpeg 8.1.3, x264, libvpx 1.15.2, opus 1.5.2, zlib 1.3.1) in about 5 minutes on 4 cores, and cached
+   under the script's hash (`ORDO_VM_CACHE`; CI keeps `.cache/vm`). x264 makes the build GPL-2.0-or-later; what went
+   in is in `/usr/share/licenses/ordo-ffmpeg/SOURCES` in the image.
 2. **Snapshot.** That image boots with a fresh data disk; the data folder `scripts/seed.ts` made with the real hub
    (`ORDO_SEED_KEEP_DATA`) goes to `/data/ordo`; the hub starts with the environment in `src/vm-config.ts`, answers,
    is signed in to and warmed, and the machine is saved and stopped.
@@ -181,7 +193,8 @@ builds the site before the end-to-end suite; locally the spec skips when `site/`
 - The VM hub lives in the operator tab: closing or reloading it stops the hub for its output and stage windows until
   the tab is back. It is reachable only from windows of the same browser, so multi-device sync is not part of the demo.
 - In the machine: no LibreOffice and no Chromium (the hub's pictures of whole slides and many-point shapes are off,
-  as on a hub installed without them); ffmpeg runs emulated, so transcoding a video is slow.
+  as on a hub installed without them); ffmpeg runs emulated, so transcoding a video is slow (a 3-second 720p clip
+  to H.264 took about 3 minutes, 2026-11-27), and AV1 video is not decoded.
 - A change made in the last seconds before the tab closes is not in the latest save: the next load boots the machine
   (about a minute and a half) to keep it.
 - PR previews (Cloudflare Pages, 25 MiB per file) are built without the VM hub (`ORDO_VM=off`).
