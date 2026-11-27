@@ -62,6 +62,14 @@ export type VmHost = {
   checkpoint(force?: boolean): Promise<boolean>;
   /** Where saving stands (diagnostics and tests): a change not yet in a checkpoint has `lastWriteAt > checkpointAt`. */
   status(): { lastWriteAt: number; checkpointAt: number; saving: boolean };
+  /**
+   * Everything for debugging the hub in one .tar.gz (Settings → Diagnostics, the demo dialog): the hub's log and
+   * supervisor state, the machine's kernel log, processes, memory and disks, and this page's side (the host's log,
+   * the build, how the hub started, saving, unkernel's counters, the browser).
+   */
+  downloadLogs(): Promise<{ name: string; blob: Blob }>;
+  /** A root shell in the machine, in a terminal over the page (vm-console.ts). */
+  showConsole(): Promise<void>;
   /** The kernel (diagnostics and tests). */
   readonly vm: WorkerKernel;
 };
@@ -99,6 +107,36 @@ const MAX_DIRTY_MS = 20_000;
 const BOOT_SETTLE_MS = 20_000;
 /** A resumed hub that has not answered in this long is given up for a boot. */
 const RESUME_HEALTHY_MS = 60_000;
+
+// ---------------------------------------------------------------- the host's own log
+
+/** The host's log lines, kept for the log download (`downloadLogs`): the last LOG_LINES, with times. */
+const LOG_LINES = 2000;
+const logRing: string[] = [];
+function record(level: string, args: unknown[]): void {
+  const text = args
+    .map((a) =>
+      a instanceof Error
+        ? `${a.message}${a.stack ? `\n${a.stack}` : ''}`
+        : typeof a === 'string'
+          ? a
+          : JSON.stringify(a),
+    )
+    .join(' ');
+  logRing.push(`${new Date().toISOString()} ${level} ${text}`);
+  if (logRing.length > LOG_LINES) logRing.splice(0, logRing.length - LOG_LINES);
+}
+/** console.debug / console.warn, recorded. */
+const vmLog = {
+  debug: (...args: unknown[]) => {
+    record('debug', args);
+    console.debug(...args);
+  },
+  warn: (...args: unknown[]) => {
+    record('warn', args);
+    console.warn(...args);
+  },
+};
 
 // ---------------------------------------------------------------- small IndexedDB key-value store
 
@@ -510,13 +548,13 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
   const t0 = performance.now();
   const progress = (p: VmProgress) => {
     if (p.frac === undefined)
-      console.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: ${p.stage}: ${p.text}`);
+      vmLog.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: ${p.stage}: ${p.text}`);
     opts.onProgress?.(p);
   };
   const support = await checkSupport();
   if (!support.ok) throw new Error(`This browser cannot run the demo's hub: ${support.problems.join('; ')}`);
 
-  console.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: support checked`);
+  vmLog.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: support checked`);
   // One tab owns the machine. The lock is held until this tab goes away.
   const owner = await new Promise<boolean>((resolve) => {
     void navigator.locks.request(OWNER_LOCK, { ifAvailable: true }, (lock) => {
@@ -524,7 +562,7 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
       return lock ? new Promise<void>(() => {}) : undefined;
     });
   });
-  console.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: owner ${owner}`);
+  vmLog.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: owner ${owner}`);
   if (!owner) return null;
 
   progress({ stage: 'manifest', text: 'Preparing the hub' });
@@ -587,10 +625,10 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
         transferRestore: true,
         distro: rootUrl,
         disks: [dataSpec],
-        log: (m) => console.debug('[vm]', m),
+        log: (m) => vmLog.debug('[vm]', m),
       })) as WorkerKernel;
     } catch (e) {
-      console.warn('[vm] the saved machine did not resume; booting it', e);
+      vmLog.warn('[vm] the saved machine did not resume; booting it', e);
       started = 'boot';
     }
   }
@@ -602,7 +640,7 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
       distro: rootUrl,
       disks: [dataSpec],
       memoryMiB: manifest.memoryMiB,
-      log: (m) => console.debug('[vm]', m),
+      log: (m) => vmLog.debug('[vm]', m),
     });
     const r = await k.exec('sh', ['-c', VM_GUEST.startCommand], { user: 'root' });
     if (r.exitCode !== 0) throw new Error(`the hub did not start: ${r.stderr}`);
@@ -732,7 +770,7 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
     return { status: r.status, json: text ? (JSON.parse(text) as Record<string, unknown>) : {} };
   };
 
-  console.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: machine running (${started})`);
+  vmLog.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: machine running (${started})`);
   /** Wait until the hub answers with its library process up (a booted machine takes a while). */
   const healthy = async (limitMs: number): Promise<boolean> => {
     const end = Date.now() + limitMs;
@@ -747,7 +785,7 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
         why = e instanceof Error ? e.message : String(e);
       }
       if (Date.now() - said > 10_000) {
-        console.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: waiting for the hub (${why})`);
+        vmLog.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: waiting for the hub (${why})`);
         said = Date.now();
       }
       if (Date.now() > end) return false;
@@ -757,7 +795,7 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
   if (!(await healthy(started === 'boot' ? 15 * 60_000 : RESUME_HEALTHY_MS))) {
     if (started === 'boot') throw new Error('the hub did not start');
     // A resumed hub that never answers: boot the machine on the visitor's disk instead (the disk is consistent).
-    console.warn('[vm] the resumed hub did not answer; booting the machine');
+    vmLog.warn('[vm] the resumed hub did not answer; booting the machine');
     await kernel.stop().catch(() => undefined);
     started = 'boot';
     kernel = await bootMachine();
@@ -765,9 +803,9 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
   }
   (globalThis as { __ordoVmKernel?: WorkerKernel }).__ordoVmKernel = kernel;
   const machine = kernel;
-  void machine.exited.then((x) => console.warn('[vm] the machine ended', x));
+  void machine.exited.then((x) => vmLog.warn('[vm] the machine ended', x));
 
-  console.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: hub healthy`);
+  vmLog.debug(`[vm] ${(performance.now() - t0).toFixed(0)} ms: hub healthy`);
   // The demo signs the operator in with its published PIN, so the visitor never types it.
   progress({ stage: 'sign-in', text: 'Signing in' });
   const me = await hubJson('GET', 'auth/me');
@@ -801,7 +839,7 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
       syncing = machine
         .sync({ timeout: 5000 })
         .then((ok) => {
-          if (!ok) console.warn('[vm] the guest did not confirm its disks within 5 s');
+          if (!ok) vmLog.warn('[vm] the guest did not confirm its disks within 5 s');
           return ok;
         })
         .finally(() => {
@@ -846,12 +884,12 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
         const cp: Checkpoint = { build: meta!.build, at, snapshot, disk };
         meta = { ...meta!, checkpointAt: at };
         await kvPut({ checkpoint: cp, meta });
-        console.debug(
+        vmLog.debug(
           `[vm] checkpoint saved: ${(snapshot.size / 1048576).toFixed(1)} MiB machine, ${(disk.size / 1048576).toFixed(1)} MiB disk; hub paused ${heldMs} ms, saved in ${Date.now() - at} ms`,
         );
         return true;
       } catch (e) {
-        console.warn('[vm] checkpoint failed; retrying soon', e);
+        vmLog.warn('[vm] checkpoint failed; retrying soon', e);
         if (wasDirty && !dirtySince) dirtySince = wasDirty;
         clearTimeout(quietTimer);
         quietTimer = setTimeout(() => void checkpoint(), QUIET_MS);
@@ -1013,5 +1051,66 @@ export async function startVmHost(opts: VmHostOptions): Promise<VmHost | null> {
     checkpointAt: meta!.checkpointAt,
     saving: saving !== undefined,
   });
-  return { started, reset, checkpoint, status, vm: kernel };
+
+  const downloadLogs = async (): Promise<{ name: string; blob: Blob }> => {
+    const now = new Date();
+    const stamp = now.toISOString().replace(/[:.]/g, '-');
+    const dir = `/tmp/ordo-vm-logs-${stamp}`;
+    const storage = await navigator.storage?.estimate?.().catch(() => undefined);
+    const page = {
+      at: now.toISOString(),
+      build: manifest,
+      started,
+      saving: status(),
+      unkernel: machine.stats(),
+      browser: {
+        userAgent: navigator.userAgent,
+        crossOriginIsolated: globalThis.crossOriginIsolated,
+        hardwareConcurrency: navigator.hardwareConcurrency,
+        deviceMemory: (navigator as { deviceMemory?: number }).deviceMemory,
+        storage,
+      },
+    };
+    const put = async (file: string, text: string) => {
+      const r = await machine.exec('sh', ['-c', `mkdir -p ${dir} && cat > ${dir}/${file}`], {
+        user: 'root',
+        input: text,
+      });
+      if (r.exitCode !== 0) throw new Error(`writing ${file} in the machine: ${r.stderr}`);
+    };
+    await put('page.json', `${JSON.stringify(page, null, 2)}\n`);
+    await put('host.log', `${logRing.join('\n')}\n`);
+    // What the machine has; a missing file is left out, never an error.
+    const d = VM_GUEST.dataDir;
+    const collect = [
+      `cd ${dir}`,
+      `cp ${d}/hub.log hub.log 2>/dev/null`,
+      `cp ${d}/supervisor.json supervisor.json 2>/dev/null`,
+      'dmesg > dmesg.txt 2>&1',
+      'ps -o pid,ppid,user,stat,vsz,rss,time,args > ps.txt 2>&1 || ps > ps.txt 2>&1',
+      '{ uptime; echo; free -m; echo; df -h; echo; cat /proc/meminfo; echo; cat /proc/loadavg; } > system.txt 2>&1',
+      `ls -laR ${d} > data-dir.txt 2>&1`,
+      'cat /etc/os-release /usr/lib/kw-distro /usr/share/licenses/ordo-ffmpeg/SOURCES > image.txt 2>/dev/null',
+      'node --version >> image.txt 2>&1',
+      `cd /tmp && tar czf - ${dir.slice('/tmp/'.length)} && rm -rf ${dir}`,
+    ].join('; ');
+    const r = await machine.exec('sh', ['-c', collect], {
+      user: 'root',
+      encoding: 'buffer',
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    if (r.exitCode !== 0 || !r.stdout.byteLength)
+      throw new Error(`collecting the logs in the machine failed: ${new TextDecoder().decode(r.stderr)}`);
+    return {
+      name: `ordo-vm-logs-${manifest.id}-${stamp}.tar.gz`,
+      blob: new Blob([r.stdout as BlobPart], { type: 'application/gzip' }),
+    };
+  };
+
+  const showConsole = async () => {
+    const mod = await import('./vm-console.ts');
+    await mod.openConsole(machine);
+  };
+
+  return { started, reset, checkpoint, status, downloadLogs, showConsole, vm: kernel };
 }

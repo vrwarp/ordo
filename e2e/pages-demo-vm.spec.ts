@@ -1,4 +1,5 @@
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { extname, join, resolve } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
@@ -11,7 +12,8 @@ import { portOf } from './ports.ts';
  * Needs `pnpm build && pnpm build:pages` with the VM hub (CI builds it); skipped when site/vm/ is missing.
  * Its port: e2e/ports.ts row 'pages-demo-vm'.
  *
- * One visitor's path: the first visit resumes the build's snapshot signed in; a ProPresenter import goes through the
+ * One visitor's path: the first visit resumes the build's snapshot signed in; the hub's diagnostics export, the VM
+ * logs download and the hub console work; a ProPresenter import goes through the
  * relay into the real hub; the hub is saved and a reload resumes that save; Go live, the output window follows the
  * hub over its socket (bus 'hub', not the fallback bus); a change the hub had no time to save boots the machine on
  * the visitor's disk on the next load and keeps it; Reset demo starts again from the build's snapshot.
@@ -129,6 +131,52 @@ test('the Pages demo runs the real hub in the browser: resume, relay, save, live
     location.hash = '#/library';
   });
   await expect(page.getByText('Amazing Grace', { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+
+  // Diagnostics. The hub's own export goes through the relay as on a server.
+  const exported = await page.evaluate(async () => {
+    const r = await fetch('api/v1/diagnostics/export');
+    const b = new Uint8Array(await r.arrayBuffer());
+    return { status: r.status, type: r.headers.get('content-type'), zip: b[0] === 0x50 && b[1] === 0x4b };
+  });
+  expect(exported).toMatchObject({ status: 200, zip: true });
+  // The demo dialog's VM logs: one .tar.gz with the hub's log, the machine's and this page's side.
+  await page.locator('[data-demo-banner]').click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download', { timeout: 60_000 }),
+    page.getByRole('button', { name: 'Download VM logs' }).click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^ordo-vm-logs-[0-9a-f]+-.+\.tar\.gz$/);
+  const logs = test.info().outputPath('vm-logs.tar.gz');
+  await download.saveAs(logs);
+  const listed = execFileSync('tar', ['tzf', logs], { encoding: 'utf8' });
+  for (const f of [
+    'hub.log',
+    'supervisor.json',
+    'dmesg.txt',
+    'ps.txt',
+    'system.txt',
+    'page.json',
+    'host.log',
+  ])
+    expect(listed, `${f} in the VM logs`).toContain(`/${f}`);
+  const pageJson = JSON.parse(
+    execFileSync('tar', ['xzOf', logs, '--wildcards', '*/page.json'], { encoding: 'utf8' }),
+  ) as { started: string; build: { id: string } };
+  expect(pageJson.started).toBe('snapshot');
+  const hubLog = execFileSync('tar', ['xzOf', logs, '--wildcards', '*/hub.log'], { encoding: 'utf8' });
+  expect(hubLog).toContain('child process ready');
+  expect(readFileSync(logs).byteLength).toBeGreaterThan(1000);
+  // The hub console: a root shell in the machine.
+  await page.getByRole('button', { name: 'Hub console' }).click();
+  const consoleBox = page.locator('[data-vm-console]');
+  await expect(consoleBox).toBeVisible();
+  // The shell's prompt names its working directory, the hub's data folder.
+  await expect(consoleBox.locator('.xterm-rows')).toContainText('/data/ordo', { timeout: 30_000 });
+  await consoleBox.locator('.xterm').click();
+  await page.keyboard.type('echo ordo-$((6*7)) $(whoami) $(test -f /data/ordo/ordo.db && echo db)\n');
+  await expect(consoleBox.locator('.xterm-rows')).toContainText('ordo-42 root db', { timeout: 30_000 });
+  await consoleBox.locator('[data-vm-console-close]').click();
+  await expect(consoleBox).toHaveCount(0);
 
   // A ProPresenter bundle, uploaded through the relay and imported by the real hub.
   await page.evaluate(() => {
