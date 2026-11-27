@@ -1,4 +1,4 @@
-import { api, DEMO } from '@ordo/client';
+import { api, demoWithoutHub } from '@ordo/client';
 import {
   type Arrangement,
   type Cue,
@@ -438,7 +438,9 @@ export function PlaylistEditor(props: {
         unsavedItems={unsavedItems}
         compact
         offlineSlot={
-          props.canOperate && !DEMO ? <OfflineControl playlistId={draft.id} rev={draft.rev} /> : undefined
+          props.canOperate && !demoWithoutHub() ? (
+            <OfflineControl playlistId={draft.id} rev={draft.rev} />
+          ) : undefined
         }
       />
 

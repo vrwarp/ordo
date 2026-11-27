@@ -1,5 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "lib": ["ES2022", "WebWorker"], "types": [] },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/vm-host.ts"]
 }

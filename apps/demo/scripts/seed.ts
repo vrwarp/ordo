@@ -7,9 +7,11 @@
  *
  * The content is public domain or invented: hymns by Newton, Heber and Robinson; Luke 10 in the World
  * English Bible; a welcome loop; backgrounds drawn here.
+ *
+ * With ORDO_SEED_KEEP_DATA=<dir> the hub's data folder is kept there after a clean stop (the VM build uses it).
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { deflateSync } from 'node:zlib';
@@ -527,7 +529,17 @@ async function main() {
       `demo seed: ${snap.presentations.length} presentations, ${snap.playlists.length} playlist(s), ${snap.media.length} media, ${hashes.size} file(s)`,
     );
   } finally {
-    hub.kill('SIGKILL');
+    const keep = process.env.ORDO_SEED_KEEP_DATA;
+    if (keep) {
+      // The VM build (scripts/build-vm.ts) starts the demo's in-browser hub on this very data folder: stop the hub
+      // cleanly first, so SQLite checkpoints its journal, and hand the folder over.
+      const exited = new Promise<void>((r) => hub.once('exit', () => r()));
+      hub.kill('SIGTERM');
+      await Promise.race([exited, new Promise((r) => setTimeout(r, 8000))]);
+      hub.kill('SIGKILL');
+      rmSync(keep, { recursive: true, force: true });
+      cpSync(data, keep, { recursive: true });
+    } else hub.kill('SIGKILL');
     rmSync(data, { recursive: true, force: true });
   }
 }

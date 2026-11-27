@@ -1,4 +1,4 @@
-import { DEMO } from '@ordo/client';
+import { demoWithoutHub } from '@ordo/client';
 import { formatClock } from '@ordo/domain';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -128,8 +128,9 @@ export function TopBar({ inline = false }: { inline?: boolean }) {
   const status = hubStatus(live);
   const { fallback } = status;
   // The GitHub Pages demo has no hub by design: say so instead of "Connecting…".
-  const hubDot = DEMO ? (live.held ? 'amber' : 'green') : status.dot;
-  const hubText = DEMO
+  const noHub = demoWithoutHub();
+  const hubDot = noHub ? (live.held ? 'amber' : 'green') : status.dot;
+  const hubText = noHub
     ? live.held
       ? 'Demo: live in this browser'
       : 'Demo: runs in this browser'

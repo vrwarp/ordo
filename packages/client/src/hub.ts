@@ -1,4 +1,4 @@
-import { DEMO } from './demo.ts';
+import { DEMO, demoHubMode, openHubSocket } from './demo.ts';
 import {
   type Bye,
   type ClientMessage,
@@ -144,8 +144,13 @@ export class HubConnection extends Emitter<HubEvents> {
 
   start(): void {
     this.stopped = false;
-    // The GitHub Pages demo has no hub to connect to (demo.ts): stay disconnected.
-    if (DEMO) return;
+    // The GitHub Pages demo (demo.ts): with the VM hub, connect as to any hub; without one, stay disconnected.
+    if (DEMO) {
+      void demoHubMode().then((mode) => {
+        if (mode === 'vm' && !this.stopped) this.open();
+      });
+      return;
+    }
     this.open();
   }
 
@@ -244,7 +249,7 @@ export class HubConnection extends Emitter<HubEvents> {
     if (this.stopped) return;
     let ws: WebSocket;
     try {
-      ws = new WebSocket(this.url());
+      ws = openHubSocket(this.url());
     } catch {
       this.scheduleReconnect();
       return;

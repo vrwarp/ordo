@@ -2,7 +2,8 @@ import { CacheApiStore, fillCache, type JsonStore } from '@ordo/cache';
 import {
   ErrorBudget,
   FallbackHost,
-  DEMO,
+  demoHubMode,
+  demoWithoutHub,
   fileUrl,
   HubConnection,
   portEndpoint,
@@ -263,6 +264,8 @@ export class CoreEngine {
   // ------------------------------------------------------------------ lifecycle
 
   async init(m: Extract<MainToCore, { t: 'init' }>): Promise<void> {
+    // The demo's hub mode (packages/client demo.ts) decides below whether this core waits for a hub at all.
+    await demoHubMode();
     if (this.started) return;
     this.started = true;
     this.role = m.role;
@@ -302,7 +305,7 @@ export class CoreEngine {
         }
       })
       .catch(() => undefined);
-    if (DEMO) {
+    if (demoWithoutHub()) {
       this.core.activateFallback({ hold: true, quiet: true });
     } else if (seed && snap?.held && this.now() - snap.at < RESUME_HELD_MS) {
       // A service this PC started without the hub: the hub never had it, so take it back.
@@ -1361,7 +1364,7 @@ export class CoreEngine {
         return;
       case 'local-live':
         this.log('warn', `went live from this PC without the hub: ${n.playlist}`);
-        if (!DEMO)
+        if (!demoWithoutHub())
           this.toast(
             `Live from this PC: ${n.playlist}. The outputs follow this PC until End service.`,
             'warn',

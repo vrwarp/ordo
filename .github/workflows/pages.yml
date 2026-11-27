@@ -20,7 +20,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -33,7 +33,20 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # The demo's VM hub (apps/demo/scripts/build-vm.ts) runs under unkernel, which needs Node 24; the rest of the
+      # build stays on the repository's Node. It also downloads Alpine packages and the unkernel release.
+      - name: Node 24 for the VM hub build
+        run: npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/node24" node@24.22.3
+      # The VM build's downloads and its minimal ffmpeg (apps/demo/scripts/build-ffmpeg.sh, about 5 minutes to build),
+      # kept between runs; a changed script builds ffmpeg again.
+      - uses: actions/cache@v4
+        with:
+          path: .cache/vm
+          key: vm-${{ hashFiles('apps/demo/scripts/build-ffmpeg.sh', 'pnpm-lock.yaml') }}
+          restore-keys: vm-
       - run: pnpm build:pages
+        env:
+          ORDO_VM_NODE: ${{ runner.temp }}/node24/node_modules/.bin/node
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

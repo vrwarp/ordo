@@ -38,6 +38,13 @@ import type {
 } from './ipc.ts';
 
 export const BUDGET = { max: 5, windowMs: 60_000 };
+
+/**
+ * The clock heartbeats, silences and boot times are measured on: monotonic, so a step of the wall clock (an NTP
+ * correction on a NAS, a virtual machine resumed from a snapshot: the GitHub Pages demo's VM hub, design/26) is never
+ * read as a child that went silent.
+ */
+const monotonicMs = (): number => performance.now();
 /** Delay before restart n (1-based) within the budget window; all under a second. */
 export const RESTART_DELAYS_MS = [100, 200, 400, 800, 1000];
 export const START_WAIT_MS = 15_000;
@@ -161,7 +168,7 @@ export class Supervisor {
     }
     c.proc = proc;
     c.url = undefined;
-    c.lastBeat = Date.now();
+    c.lastBeat = monotonicMs();
     c.spawnedAt = c.lastBeat;
     c.silentKill = false;
     c.status = { ...c.status, state: 'starting', pid: proc.pid };
@@ -186,14 +193,14 @@ export class Supervisor {
 
   private onMessage(c: Child, proc: ChildProcess, m: FromChild): void {
     if (c.proc !== proc || !m || typeof m !== 'object') return;
-    c.lastBeat = Date.now();
+    c.lastBeat = monotonicMs();
     switch (m.t) {
       case 'beat':
         return;
       case 'ready': {
         c.url = m.url;
         c.status = { ...c.status, state: 'up' };
-        c.bootMs = Date.now() - c.spawnedAt;
+        c.bootMs = monotonicMs() - c.spawnedAt;
         c.silentStarts = 0;
         this.opts.log.info(
           { child: c.name, pid: proc.pid, url: m.url, bootMs: c.bootMs },
@@ -323,7 +330,7 @@ export class Supervisor {
   }
 
   private checkHeartbeats(): void {
-    const now = Date.now();
+    const now = monotonicMs();
     for (const c of Object.values(this.children)) {
       if (!c.proc || this.stopping) continue;
       const stall = this.opts.stallMs?.[c.name] ?? STALL_MS[c.name];

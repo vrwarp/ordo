@@ -23,8 +23,8 @@ applyLayout(layout);
 preloadFor(layout, deviceProfile('operate'), thisIsPhone());
 
 if (DEMO) {
-  // The GitHub Pages demo: the hub is a service worker at the site root (apps/demo).
-  void ensureDemoHub('./hub-sw.js').then((ok) => {
+  // The GitHub Pages demo: the hub sits behind a service worker at the site root (apps/demo); this page starts it.
+  void ensureDemoHub('./hub-sw.js', './', { host: true }).then((ok) => {
     if (ok) createRoot(document.getElementById('root')!).render(<App />);
   });
 } else {

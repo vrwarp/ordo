@@ -1,4 +1,4 @@
-import { api, ApiFailure, DEMO, upload } from '@ordo/client';
+import { api, ApiFailure, demoWithoutHub, upload } from '@ordo/client';
 import {
   isSvgMime,
   type Media,
@@ -17,7 +17,7 @@ const RESUMABLE_OVER = 24 * 1024 * 1024;
 const RESUME_KEY = 'ordo.op.uploads';
 
 /** Whether an upload should use chunked `/media/uploads`: never in the browser demo (local SW hub). */
-export function usesResumableUpload(bytes: number, demo = DEMO): boolean {
+export function usesResumableUpload(bytes: number, demo = demoWithoutHub()): boolean {
   return !demo && bytes > RESUMABLE_OVER;
 }
 
@@ -308,7 +308,7 @@ export async function uploadMedia(
   if (!usesResumableUpload(file.size)) {
     const raster = isSvgFile(file) ? await rasterize(file) : undefined;
     const video =
-      DEMO && fileKind(file) === 'video' && file.type !== 'image/gif'
+      demoWithoutHub() && fileKind(file) === 'video' && file.type !== 'image/gif'
         ? await probeVideoPoster(file)
         : undefined;
     const r = await upload<Media | Media[]>('/media', mediaForm(file, opts, raster, video), (f) =>

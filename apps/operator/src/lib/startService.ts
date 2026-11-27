@@ -1,4 +1,4 @@
-import { DEMO } from '@ordo/client';
+import { demoWithoutHub } from '@ordo/client';
 import { DEFAULT_THEME } from '@ordo/domain';
 import { choiceDialog } from '../components/Confirm.tsx';
 import { controller } from '../services/controller.ts';
@@ -76,8 +76,8 @@ export async function startService(playlistId: string): Promise<boolean> {
   }
 
   const s = useLive.getState();
-  // The GitHub Pages demo has no hub: every service runs in the browser, without asking.
-  if (DEMO) {
+  // The GitHub Pages demo without its VM hub: every service runs in the browser, without asking.
+  if (demoWithoutHub()) {
     controller()?.goLiveLocal(playlistId);
     return true;
   }

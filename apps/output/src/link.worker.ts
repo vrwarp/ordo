@@ -6,12 +6,16 @@ import {
   portEndpoint,
   reportFatal,
   startHeartbeat,
+  demoHubMode,
 } from '@ordo/client';
 import { APP_VERSION } from '@ordo/protocol';
 import { MuxEndpoint } from './bus.ts';
 import type { LinkToMain, MainToLink } from './host-protocol.ts';
 import { LinkCore } from './link-core.ts';
 import { MemoryStreamStore, OpfsStreamStore, type StreamStore } from './opfs.ts';
+
+// The demo's hub mode (packages/client demo.ts), asked once now: the link reads it when the operator says the hub is up.
+void demoHubMode();
 
 /**
  * Link worker (design/25): the output window's networking, live state, service cache, persistence,

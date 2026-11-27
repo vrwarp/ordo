@@ -111,8 +111,11 @@ Two workflows handle the image:
 ## GitHub Pages demo
 
 `pnpm build && pnpm build:pages` writes `site/`: the operator, output and stage apps running entirely in the
-browser, with a service worker in place of the hub and a sample service ([design/26](docs/design/26-pages-demo.md)).
-Visitors can import ProPresenter files, edit, go live and open output windows; nothing leaves their browser.
+browser with a sample service ([design/26](docs/design/26-pages-demo.md)). The hub is the real one, in a Linux machine
+(unkernel) that the operator tab runs and resumes from a snapshot the build took; browsers that cannot run it get a
+service worker in its place. Visitors can import ProPresenter files, edit, go live and open output windows; nothing
+leaves their browser. The VM build needs Node 24 (`ORDO_VM_NODE` when the build runs on Node 22) and network access
+to Alpine's mirrors; `ORDO_VM=off` builds the demo without it.
 `.github/workflows/pages.yml` publishes it on every merge to `main`; in the repository settings, Pages →
 Build and deployment → Source must be **GitHub Actions**.
 
