@@ -351,7 +351,7 @@ async function snapshotHub(
     await waitHealthy(vm, 10 * 60_000);
     log(`snapshot: hub healthy after ${((Date.now() - started) / 1000).toFixed(0)} s`);
     // Warm the routes a visitor hits first, so their first answers are not the slow first runs.
-    const login = await hubFetch(vm, '/api/v1/auth/pin', {
+    const login = await vm.fetch(`http://localhost:${VM_GUEST.port}/api/v1/auth/pin`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-ordo': '1' },
       body: JSON.stringify({ pin: VM_GUEST.pin }),
