@@ -10,6 +10,9 @@ import { portOf } from './ports.ts';
  * The GitHub Pages demo (apps/demo), served exactly as Pages serves a project site: static files under
  * /ordo/. Needs `pnpm build && pnpm build:pages` (CI runs both); skipped when site/ is missing.
  * Its port: e2e/ports.ts row 'pages-demo'.
+ *
+ * This spec drives the demo's service-worker hub (`?hub=legacy`, packages/client demo.ts): the one browsers that
+ * cannot run the VM hub get. pages-demo-vm.spec.ts drives the VM hub, the demo's default.
  */
 const SITE = resolve('site');
 const PORT = portOf('pages-demo');
@@ -58,7 +61,7 @@ test('the Pages demo runs with no hub: sample service, ProPresenter import, go l
   test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto(BASE);
+  await page.goto(`${BASE}?hub=legacy`);
   // The first visit installs the demo hub and reloads under it; no sign-in.
   await expect(page.locator('[data-demo-banner]')).toBeVisible({ timeout: 30_000 });
   await page.evaluate(() => {
@@ -282,7 +285,7 @@ test('the Pages demo imports PowerPoint without LibreOffice: classes, missing li
   test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto(BASE);
+  await page.goto(`${BASE}?hub=legacy`);
   await expect(page.locator('[data-demo-banner]')).toBeVisible({ timeout: 30_000 });
   await page.evaluate(() => {
     location.hash = '#/library/import';

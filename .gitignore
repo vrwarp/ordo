@@ -25,3 +25,4 @@ apps/operator/public/stage
 
 # Golden runs: the pictures a failing case drew next to its expected image (also in test-results/golden)
 packages/renderer/golden/expected/*.actual.png
+.cache/

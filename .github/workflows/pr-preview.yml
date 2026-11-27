@@ -36,7 +36,11 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # Without the demo's VM hub: Cloudflare Pages refuses files over 25 MiB, and the VM's system image and snapshot
+      # are larger. The preview runs the service-worker hub (docs/design/26-pages-demo.md).
       - run: pnpm build:pages
+        env:
+          ORDO_VM: "off"
       - name: Deploy preview to Cloudflare Pages
         id: deploy
         uses: cloudflare/wrangler-action@v4

@@ -89,6 +89,27 @@ describe('supervisor', () => {
     expect(file.processes.every((p) => typeof p.pid === 'number')).toBe(true);
   });
 
+  it('reads a step of the wall clock as no silence: children keep running (a VM resumed from a snapshot)', async () => {
+    const { cap, sup: s } = make({}, { stallMs: { live: 1000, library: 1000 } });
+    await s.start();
+    await until(() => s.status().every((p) => p.state === 'up'), 5000, 'both up');
+    // The wall clock steps an hour on and then runs 1000 times too fast: every gap between two heartbeats looks
+    // like minutes on it, so a watchdog that read it would kill both children at its next check.
+    const realNow = Date.now;
+    const t0 = realNow();
+    Date.now = () => t0 + 3_600_000 + (realNow() - t0) * 1000;
+    try {
+      await sleep(2500);
+    } finally {
+      Date.now = realNow;
+    }
+    expect(s.status().map((p) => [p.name, p.state, p.restarts])).toEqual([
+      ['library', 'up', 0],
+      ['live', 'up', 0],
+    ]);
+    expect(cap.has(/stalled; killing it/)).toBe(false);
+  });
+
   it('relays the library size to the live process, and again to a restarted one', async () => {
     const { cap, sup: s } = make({ FIXTURE_STATS: '1' });
     await s.start();

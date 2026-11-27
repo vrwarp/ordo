@@ -104,6 +104,12 @@ export const PORT_TABLE = {
     what: 'static server of the Pages build',
   },
   'pro7-import': { offset: 86, count: 1, spec: 'pro7-import.spec.ts', what: 'hub' },
+  'pages-demo-vm': {
+    offset: 87,
+    count: 1,
+    spec: 'pages-demo-vm.spec.ts',
+    what: 'static server of the Pages build (with range requests)',
+  },
   'editor-m4': { offset: 100, count: 1, spec: 'editor-m4.spec.ts', what: 'hub' },
   'editor-text': { offset: 101, count: 1, spec: 'editor-text.spec.ts', what: 'hub' },
   'editor-group': { offset: 102, count: 1, spec: 'editor-group.spec.ts', what: 'hub' },

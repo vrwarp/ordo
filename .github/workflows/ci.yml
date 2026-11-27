@@ -49,8 +49,11 @@ jobs:
       - run: pnpm build
       - name: Bundle budget (each app's initial JavaScript against tools/bundle-baseline.json, +8 % at most; the operator's compact first load at most 600 KB gzip, with no editor, live or output code)
         run: node tools/bundle-report.mjs --check --json test-results/bundle.json
-      # The GitHub Pages demo (apps/demo); e2e/pages-demo.spec.ts serves and drives it.
+      # The GitHub Pages demo (apps/demo); e2e/pages-demo.spec.ts serves and drives it. Without the VM hub here: the
+      # end-to-end jobs build that and drive it (e2e/pages-demo-vm.spec.ts).
       - run: pnpm build:pages
+        env:
+          ORDO_VM: "off"
       # Advisories in third-party packages must not block an unrelated merge; the weekly audit
       # workflow (.github/workflows/audit.yml) reports them on its own schedule.
       - name: Audit dependencies (advisory only)
@@ -89,7 +92,12 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # The demo's VM hub (apps/demo/scripts/build-vm.ts) needs Node 24 (unkernel); the rest stays on Node 22.
+      - name: Node 24 for the VM hub build
+        run: npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/node24" node@24.22.3
       - run: pnpm build:pages
+        env:
+          ORDO_VM_NODE: ${{ runner.temp }}/node24/node_modules/.bin/node
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
       # iPad editing (design/15): the webkit-ipad and webkit-ipad-portrait projects run in the same `pnpm e2e`.
@@ -133,6 +141,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm build:pages
+        env:
+          ORDO_VM: "off"
       - name: Install Playwright Chromium and WebKit
         run: pnpm exec playwright install --with-deps chromium webkit
       - name: End-to-end tests (WebKit iPhone, Chromium Android phone and tablet)

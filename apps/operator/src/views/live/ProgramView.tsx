@@ -1,4 +1,4 @@
-import { DEMO } from '@ordo/client';
+import { demoWithoutHub } from '@ordo/client';
 import type { Look, Media, Output, Presentation, Slide } from '@ordo/domain';
 import type { OutputHealthEntry } from '@ordo/protocol';
 import { useEffect, useRef, useState } from 'react';
@@ -198,7 +198,7 @@ export function ProgramView() {
           </button>
         </div>
       </div>
-      {fallback && !DEMO && (
+      {fallback && !demoWithoutHub() && (
         <span className="muted" style={{ fontSize: 10.5 }}>
           Program view paused while hub is unreachable.
         </span>

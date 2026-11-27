@@ -1,4 +1,4 @@
-import { api, DEMO } from '@ordo/client';
+import { api, demoWithoutHub } from '@ordo/client';
 import { newId, type Playlist, type PlaylistItem } from '@ordo/domain';
 import { useState } from 'react';
 import { openContextMenu } from '../../components/ContextMenu.tsx';
@@ -248,7 +248,9 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
             unsavedItems={unsavedItems}
             compact
             offlineSlot={
-              !DEMO ? <OfflineControl playlistId={op.playlist.id} rev={op.playlist.rev} /> : undefined
+              !demoWithoutHub() ? (
+                <OfflineControl playlistId={op.playlist.id} rev={op.playlist.rev} />
+              ) : undefined
             }
           />
         </>

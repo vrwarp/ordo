@@ -7,11 +7,15 @@ import {
   portEndpoint,
   reportFatal,
   startHeartbeat,
+  demoHubMode,
 } from '@ordo/client';
 import { APP_VERSION, type OutputConfigRes, ROUTES } from '@ordo/protocol';
 import { MuxEndpoint } from './bus.ts';
 import { StageLinkCore } from './link-core.ts';
 import type { LinkToMain, MainToLink } from './protocol.ts';
+
+// The demo's hub mode (packages/client demo.ts), asked once now: the link reads it when the operator says the hub is up.
+void demoHubMode();
 
 /**
  * Stage link worker (design/16, design/25): the stage window's socket, live mirror, config, fonts,
