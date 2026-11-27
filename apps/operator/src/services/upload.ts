@@ -308,7 +308,7 @@ export async function uploadMedia(
   if (!usesResumableUpload(file.size)) {
     const raster = isSvgFile(file) ? await rasterize(file) : undefined;
     const video =
-      DEMO && fileKind(file) === 'video' && file.type !== 'image/gif'
+      demoWithoutHub() && fileKind(file) === 'video' && file.type !== 'image/gif'
         ? await probeVideoPoster(file)
         : undefined;
     const r = await upload<Media | Media[]>('/media', mediaForm(file, opts, raster, video), (f) =>
