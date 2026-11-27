@@ -95,6 +95,19 @@ GitHub releases; `ORDO_VM_EXTRA_CA` adds a CA for a TLS-inspecting proxy, `ORDO_
 - **Reset demo** stops the machine and deletes its disk, its save and the cookie jar with the rest of the demo's
   storage.
 
+### Diagnostics
+
+The demo dialog (the DEMO badge) has two tools while the VM hub runs, and the hub's own diagnostics export (Settings →
+Diagnostics) works as on a server, through the relay.
+
+- **Hub console** (`src/vm-console.ts`): a root shell in the machine (`/data/ordo`, where `hub.log` is), in an xterm.js
+  terminal over the page. Loaded only when opened (its own chunk in `vm/`); closing it ends the shell.
+- **Download VM logs** (`VmHost.downloadLogs`): one `.tar.gz` packed in the machine: `hub.log`, `supervisor.json`,
+  `dmesg.txt`, `ps.txt`, `system.txt` (uptime, memory, disks), `data-dir.txt`, `image.txt` (the image's distro,
+  Node and ffmpeg sources), and the page's side: `host.log` (the VM host's last 2000 log lines: start stages, saves,
+  sync warnings) and `page.json` (the build manifest, how the hub started, the save status, unkernel's counters, the
+  browser).
+
 ### Measured (headless Chromium, localhost, 2026-11-27)
 
 | Step                                                       | Time                                       |
@@ -170,7 +183,8 @@ playlist. One audience output and the stage display are enabled.
 ## Tests
 
 `e2e/pages-demo-vm.spec.ts` drives the VM hub, served with range requests: the first visit resumes the build's
-snapshot signed in with the hub socket connected; a ProPresenter bundle goes through the relay into the real hub; the
+snapshot signed in with the hub socket connected; the hub's diagnostics export, the VM logs download (its
+files checked) and the hub console running a command; a ProPresenter bundle goes through the relay into the real hub; the
 save and a reload that resumes it; Go live on the hub, Launch outputs, the output on the hub's socket showing the slide,
 End service; a change made just before a reload that boots the machine on the visitor's disk and keeps it; Reset demo.
 

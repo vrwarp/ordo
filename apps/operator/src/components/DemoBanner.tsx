@@ -1,5 +1,64 @@
+import { useState } from 'react';
+import { toast } from '../state/toasts.ts';
 import { confirmDialog } from './Confirm.tsx';
 import { Dialog } from './Dialog.tsx';
+
+/** The demo's VM hub, when this page runs it (apps/demo/src/vm-host.ts; packages/client demo.ts sets it). */
+type VmHub = {
+  downloadLogs(): Promise<{ name: string; blob: Blob }>;
+  showConsole(): Promise<void>;
+};
+const vmHub = (): VmHub | undefined => (globalThis as { __ordoVm?: VmHub | null }).__ordoVm ?? undefined;
+
+/** The hub's diagnostics for the demo's VM hub: a console into its machine, and every log in one file. */
+function VmHubTools({ onClose }: { onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const vm = vmHub();
+  if (!vm) return null;
+  const download = async () => {
+    setBusy(true);
+    try {
+      const { name, blob } = await vm.downloadLogs();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      toast(`The logs could not be collected: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="col" style={{ gap: 8 }} data-demo-vm-tools>
+      <p className="small muted" style={{ margin: 0, lineHeight: 1.5 }}>
+        The hub runs here, in a Linux machine inside this tab. For debugging: a shell in that machine, or its
+        logs and this page's in one file (the hub's own export is in Settings → Diagnostics).
+      </p>
+      <div className="row" style={{ gap: 8 }}>
+        <button
+          type="button"
+          className="small"
+          onClick={() => {
+            onClose();
+            void vm
+              .showConsole()
+              .catch((e: unknown) => toast(`The console did not open: ${String(e)}`, 'error'));
+          }}
+        >
+          Hub console
+        </button>
+        <button type="button" className="small" disabled={busy} onClick={() => void download()}>
+          {busy ? 'Collecting logs…' : 'Download VM logs'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /**
  * The IndexedDB databases the demo's pages keep: the demo hub's (apps/demo/src/store.ts) and the JsonStore
@@ -92,6 +151,7 @@ export function DemoDialog({ onClose }: { onClose: () => void }) {
           Everything runs in this browser and stays in it: import a ProPresenter song or playlist, edit the
           sample service, press <b>Go live</b> and <b>Launch outputs</b>.
         </p>
+        <VmHubTools onClose={onClose} />
       </div>
     </Dialog>
   );
