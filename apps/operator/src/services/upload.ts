@@ -127,15 +127,116 @@ export async function rasterizeSvg(file: Blob): Promise<Blob | undefined> {
   }
 }
 
+export type VideoMeta = {
+  poster?: Blob;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+};
+
+/** 640x360 fit (even dimensions, no upscaling) matching the Hub's FFmpeg poster scale. */
+export function posterSizeFor(w: number, h: number): { width: number; height: number } {
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return { width: 640, height: 360 };
+  const scale = Math.min(1, 640 / w, 360 / h);
+  return {
+    width: Math.max(2, Math.round((w * scale) / 2) * 2),
+    height: Math.max(2, Math.round((h * scale) / 2) * 2),
+  };
+}
+
+function waitVideoEvent(video: HTMLVideoElement, event: string, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const done = (ok: boolean) => {
+      clearTimeout(timer);
+      video.removeEventListener(event, onOk);
+      video.removeEventListener('error', onErr);
+      if (ok) resolve();
+      else reject(new Error(`video ${event} failed`));
+    };
+    const onOk = () => done(true);
+    const onErr = () => done(false);
+    const timer = setTimeout(() => done(false), timeoutMs);
+    video.addEventListener(event, onOk, { once: true });
+    video.addEventListener('error', onErr, { once: true });
+  });
+}
+
+/**
+ * Extract a JPEG poster frame (at min(1 s, duration/2), matching the Hub's FFmpeg poster) and basic
+ * metadata (width, height, durationMs) from a browser-playable video. Used in the browser demo where
+ * there is no server-side FFmpeg/ffprobe.
+ */
+export async function probeVideoPoster(file: Blob): Promise<VideoMeta | undefined> {
+  if (typeof document === 'undefined' || typeof URL === 'undefined' || !URL.createObjectURL) return undefined;
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  try {
+    const metaReady = waitVideoEvent(video, 'loadedmetadata', RASTER_TIMEOUT_MS);
+    video.src = url;
+    await metaReady;
+    const width = video.videoWidth > 0 ? video.videoWidth : undefined;
+    const height = video.videoHeight > 0 ? video.videoHeight : undefined;
+    const durationSec = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : undefined;
+    const durationMs = durationSec !== undefined ? Math.round(durationSec * 1000) : undefined;
+    const target = durationSec !== undefined ? Math.min(1, durationSec / 2) : 0;
+    try {
+      if (target > 0) {
+        const seeked = waitVideoEvent(video, 'seeked', RASTER_TIMEOUT_MS);
+        video.currentTime = target;
+        await seeked;
+      } else if (video.readyState < 2) {
+        await waitVideoEvent(video, 'loadeddata', RASTER_TIMEOUT_MS);
+      }
+    } catch {
+      /* draw whatever frame is ready, or return metadata alone */
+    }
+    let poster: Blob | undefined;
+    if (width && height && video.readyState >= 2) {
+      const size = posterSizeFor(width, height);
+      const canvas = document.createElement('canvas');
+      canvas.width = size.width;
+      canvas.height = size.height;
+      const ctx = canvas.getContext('2d');
+      try {
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, size.width, size.height);
+          poster =
+            (await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', 0.85))) ?? undefined;
+        }
+      } finally {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    }
+    return poster || width || height || durationMs ? { poster, width, height, durationMs } : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    URL.revokeObjectURL(url);
+  }
+}
+
 /** The form of a one-request upload: the file, its still beside it (field "raster") and the fields. */
 export function mediaForm(
   file: File,
   opts: { isBackground?: boolean; tags?: string[] },
   raster?: Blob,
+  video?: VideoMeta,
 ): FormData {
   const fd = new FormData();
+  const base = file.name.replace(/\.[^.]*$/, '') || 'still';
   fd.append('file', file, file.name);
-  if (raster) fd.append('raster', raster, `${file.name.replace(/\.[^.]*$/, '') || 'still'}.png`);
+  if (raster) fd.append('raster', raster, `${base}.png`);
+  if (video?.poster) fd.append('poster', video.poster, `${base}.jpg`);
+  if (video?.width) fd.append('width', String(video.width));
+  if (video?.height) fd.append('height', String(video.height));
+  if (video?.durationMs) fd.append('durationMs', String(video.durationMs));
   if (opts.isBackground) fd.append('isBackground', 'true');
   if (opts.tags?.length) fd.append('tags', opts.tags.join(','));
   return fd;
@@ -206,7 +307,11 @@ export async function uploadMedia(
   report('uploading', 0);
   if (!usesResumableUpload(file.size)) {
     const raster = isSvgFile(file) ? await rasterize(file) : undefined;
-    const r = await upload<Media | Media[]>('/media', mediaForm(file, opts, raster), (f) =>
+    const video =
+      DEMO && fileKind(file) === 'video' && file.type !== 'image/gif'
+        ? await probeVideoPoster(file)
+        : undefined;
+    const r = await upload<Media | Media[]>('/media', mediaForm(file, opts, raster, video), (f) =>
       report('uploading', f),
     );
     return Array.isArray(r) ? r[0]! : r;
