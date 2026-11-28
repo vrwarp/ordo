@@ -108,7 +108,6 @@ test('picture-filled text imported in the browser and by the hub draws its lette
     await expect(page.getByText(/anything it cannot draw is listed on the import card/)).toBeVisible({
       timeout: 30_000,
     });
-    await page.locator('input[name="pptx-import-mode"][value="native"]').check();
     await page.locator('input[type=file][accept*=".pptx"]').setInputFiles(deck);
     await expect(
       page

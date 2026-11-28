@@ -439,8 +439,8 @@ test.describe('without LibreOffice on the hub (ORDO_LIBREOFFICE=off)', () => {
       await page.evaluate(() => {
         location.hash = '#/library/import';
       });
-      await expect(page.getByRole('radio', { name: /Editable \(recommended\)/ })).toBeChecked();
-      await expect(page.getByRole('radio', { name: /Pictures \(LibreOffice\)/ })).toHaveCount(0);
+      await expect(page.locator('[data-pptx-import-mode]')).toContainText('Editable slides');
+      await expect(page.getByRole('radio')).toHaveCount(0);
       // Through the import screen's drop zone, as a volunteer adds it.
       const card = page.locator('section[data-pptx-import]').filter({ hasText: 'Giving.pptx' });
       await page.locator('input[type="file"][accept*=".pptx"]').first().setInputFiles(deck);

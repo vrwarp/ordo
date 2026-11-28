@@ -130,8 +130,8 @@ test('without LibreOffice the import screen offers editable slides only', async 
     await page.evaluate(() => {
       location.hash = '#/library/import';
     });
-    await expect(page.getByRole('radio', { name: /Editable \(recommended\)/ })).toBeChecked();
-    await expect(page.getByRole('radio', { name: /Pictures \(LibreOffice\)/ })).toHaveCount(0);
+    await expect(page.locator('[data-pptx-import-mode]')).toContainText('Editable slides');
+    await expect(page.getByRole('radio')).toHaveCount(0);
     await expect(
       page.getByText('This hub has no LibreOffice, so PowerPoint files are imported as editable slides.'),
     ).toBeVisible();
