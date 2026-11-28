@@ -226,7 +226,9 @@ test('a dense deck on the Import tab: the browser parses 12 MB and declines 80 M
     await page.evaluate(() => {
       location.hash = '#/library/import';
     });
-    await page.locator('input[name="pptx-import-mode"][value="native"]').check();
+    await expect(page.getByText(/anything it cannot draw is listed on the import card/)).toBeVisible({
+      timeout: 30_000,
+    });
 
     const jobsNow = async () => {
       const jobs = (await (await a.get('jobs')).json()) as Job[] | { jobs: Job[] };

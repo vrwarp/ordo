@@ -67,7 +67,7 @@ export function RegularFrame({ role, route, profile, signedOut, fallback, body }
           {body}
         </ErrorBoundary>
       </div>
-      {!coarse && <StatusBar route={route} onOpenPalette={() => setPaletteOpen(true)} />}
+      {!coarse && <StatusBar />}
       {paletteOpen && !signedOut && (
         <Suspense fallback={null}>
           <CommandPalette role={role} profile={profile} onClose={() => setPaletteOpen(false)} />

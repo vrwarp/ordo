@@ -130,10 +130,12 @@ textarea {
   padding: 8px;
   resize: vertical;
 }
-input[type="checkbox"] {
+input[type="checkbox"],
+input[type="radio"] {
   min-height: 0;
   width: 18px;
   height: 18px;
+  padding: 0;
 }
 input[type="color"] {
   padding: 2px;

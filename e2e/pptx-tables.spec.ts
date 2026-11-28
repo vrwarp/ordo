@@ -318,7 +318,6 @@ test('tables imported in the browser for a hub without LibreOffice are table obj
     await expect(page.getByText(/anything it cannot draw is listed on the import card/)).toBeVisible({
       timeout: 30_000,
     });
-    await page.locator('input[name="pptx-import-mode"][value="native"]').check();
     await page.locator('input[type=file][accept*=".pptx"]').setInputFiles(deck);
     const card = page.locator('[data-pptx-import]').first();
     await expect(card.getByText(/^done$/)).toBeVisible({ timeout: 120_000 });
@@ -488,7 +487,6 @@ test('a table with East Asian vertical cells is the table object on both kinds o
       await expect(page.getByText(/anything it cannot draw is listed on the import card/)).toBeVisible({
         timeout: 30_000,
       });
-      await page.locator('input[name="pptx-import-mode"][value="native"]').check();
       await page.locator('input[type=file][accept*=".pptx"]').setInputFiles(deck);
       const card = page.locator('[data-pptx-import]').first();
       await expect(card.getByText(/^done$/)).toBeVisible({ timeout: 120_000 });

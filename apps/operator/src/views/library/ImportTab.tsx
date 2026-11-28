@@ -99,45 +99,52 @@ export function PptxImportChoices(props: {
   // A remembered 'Pictures' choice where the hub cannot make them: editable slides.
   const mode = c.mode === 'libreoffice' && !offered ? 'native' : c.mode;
   const set = (patch: Partial<PptxImportChoice>) => props.onChange({ ...c, ...patch });
+  const editableDescription =
+    props.caps && !props.caps.pptx.art
+      ? 'Text, pictures, shapes, charts, SmartArt, 3D and WordArt become objects ordo draws; anything it cannot draw is listed on the import card.'
+      : 'Text, pictures and shapes become objects you can edit. What ordo cannot draw (a chart, SmartArt, 3D) becomes a picture on its slide.';
   return (
     <fieldset className="col" style={{ gap: 6, border: 0, margin: 0, padding: 0 }} data-pptx-import-mode>
       <legend className="small" style={{ padding: 0, marginBottom: 4, color: 'var(--fg2)' }}>
         PowerPoint slides
       </legend>
-      <label className="check" style={{ alignItems: 'flex-start' }}>
-        <input
-          type="radio"
-          name="pptx-import-mode"
-          value="native"
-          checked={mode === 'native'}
-          onChange={() => set({ mode: 'native' })}
-        />
-        <span className="col" style={{ gap: 2 }}>
-          <span>Editable (recommended)</span>
-          <span className="muted small">
-            {props.caps && !props.caps.pptx.art
-              ? 'Text, pictures, shapes, charts, SmartArt, 3D and WordArt become objects ordo draws; anything it cannot draw is listed on the import card.'
-              : 'Text, pictures and shapes become objects you can edit. What ordo cannot draw (a chart, SmartArt, 3D) becomes a picture on its slide.'}
-          </span>
-        </span>
-      </label>
-      {offered && (
-        <label className="check" style={{ alignItems: 'flex-start' }}>
-          <input
-            type="radio"
-            name="pptx-import-mode"
-            value="libreoffice"
-            checked={mode === 'libreoffice'}
-            onChange={() => set({ mode: 'libreoffice' })}
-          />
-          <span className="col" style={{ gap: 2 }}>
-            <span>Pictures (LibreOffice)</span>
-            <span className="muted small">
-              Each slide becomes one picture, as LibreOffice draws it. Its text can be made editable later,
-              slide by slide.
+      {offered ? (
+        <>
+          <label className="check" style={{ alignItems: 'flex-start' }}>
+            <input
+              type="radio"
+              name="pptx-import-mode"
+              value="native"
+              checked={mode === 'native'}
+              onChange={() => set({ mode: 'native' })}
+            />
+            <span className="col" style={{ gap: 2 }}>
+              <span>Editable (recommended)</span>
+              <span className="muted small">{editableDescription}</span>
             </span>
-          </span>
-        </label>
+          </label>
+          <label className="check" style={{ alignItems: 'flex-start' }}>
+            <input
+              type="radio"
+              name="pptx-import-mode"
+              value="libreoffice"
+              checked={mode === 'libreoffice'}
+              onChange={() => set({ mode: 'libreoffice' })}
+            />
+            <span className="col" style={{ gap: 2 }}>
+              <span>Pictures (LibreOffice)</span>
+              <span className="muted small">
+                Each slide becomes one picture, as LibreOffice draws it. Its text can be made editable later,
+                slide by slide.
+              </span>
+            </span>
+          </label>
+        </>
+      ) : (
+        <div className="col" style={{ gap: 2 }}>
+          <span>Editable slides</span>
+          <span className="muted small">{editableDescription}</span>
+        </div>
       )}
       {props.caps && !offered && c.mode === 'libreoffice' && (
         <span className="muted small" data-no-libreoffice>
