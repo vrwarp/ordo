@@ -304,15 +304,15 @@ const LITE: HubCapabilities = {
 };
 
 describe('without LibreOffice on the hub (design/27 M9)', () => {
-  it('the Pictures (LibreOffice) choice is hidden', () => {
+  it('the Pictures (LibreOffice) choice is hidden and no lone radio button is rendered', () => {
     const html = renderToStaticMarkup(
       createElement(PptxImportChoices, { value: DEFAULT_PPTX_CHOICE, onChange: noop, caps: LITE }),
     );
     const radios = html.match(/<input type="radio"[^>]*>/g) ?? [];
-    expect(radios).toHaveLength(1);
-    expect(radios[0]).toContain('value="native"');
-    expect(radios[0]).toContain('checked');
+    expect(radios).toHaveLength(0);
     const t = text(html);
+    expect(t).toContain('Editable slides');
+    expect(t).not.toContain('(recommended)');
     expect(t).not.toContain('LibreOffice');
     expect(t).toContain('anything it cannot draw is listed on the import card');
     expect(html.match(/<input type="checkbox"[^>]*>/)![0]).not.toContain('disabled');
@@ -320,7 +320,7 @@ describe('without LibreOffice on the hub (design/27 M9)', () => {
     const unknown = renderToStaticMarkup(
       createElement(PptxImportChoices, { value: DEFAULT_PPTX_CHOICE, onChange: noop }),
     );
-    expect(unknown.match(/<input type="radio"[^>]*>/g)).toHaveLength(1);
+    expect(unknown.match(/<input type="radio"[^>]*>/g) ?? []).toHaveLength(0);
   });
 
   it('a stored libreoffice choice imports as editable and says so', () => {
@@ -328,7 +328,7 @@ describe('without LibreOffice on the hub (design/27 M9)', () => {
     const html = renderToStaticMarkup(
       createElement(PptxImportChoices, { value: stored, onChange: noop, caps: LITE }),
     );
-    expect(html.match(/<input type="radio"[^>]*>/g)![0]).toContain('checked');
+    expect(html.match(/<input type="radio"[^>]*>/g) ?? []).toHaveLength(0);
     expect(text(html)).toContain(
       'This hub has no LibreOffice, so PowerPoint files are imported as editable slides.',
     );
@@ -341,8 +341,8 @@ describe('without LibreOffice on the hub (design/27 M9)', () => {
     // shows meanwhile: 'Editable' (M9 wave 1 repair: one rule for the screen and the upload).
     expect(documentFields('Sunday.pptx', stored, LEGACY_CAPABILITIES)).toEqual([['renderer', 'libreoffice']]);
     const before = renderToStaticMarkup(createElement(PptxImportChoices, { value: stored, onChange: noop }));
-    expect(before.match(/<input type="radio"[^>]*>/g)).toHaveLength(1);
-    expect(before.match(/<input type="radio"[^>]*>/g)![0]).toContain('checked');
+    expect(before.match(/<input type="radio"[^>]*>/g) ?? []).toHaveLength(0);
+    expect(text(before)).toContain('Editable slides');
     expect(documentFields('Sunday.pptx', stored)).toEqual([
       ['renderer', 'native'],
       ['extendBackgrounds', '1'],
